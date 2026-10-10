@@ -16,7 +16,7 @@ export interface CodexOrdewellBinding extends OrdewellToolBinding<CodexAsk> {
   /** What a task thread's instructions say about the tools. */
   taskInstructions(): string;
   /** What a planner thread's instructions add about the tools (ADR-0026), and where its web reads go (ADR-0027). */
-  plannerInstructions(nativeSearch: boolean): string;
+  plannerInstructions(nativeSearch: boolean, hidden?: readonly string[]): string;
   /** The planner thread's `web_search` mode. */
   plannerWebSearch(nativeSearch: boolean): CodexWebSearchMode;
 }
@@ -54,6 +54,7 @@ export const CODEX_ORDEWELL: CodexOrdewellBinding = {
   // Codex names a call by server and tool; the model reaches the tool by Claude Code's name for it.
   toolName: MCP_CLIENT_TOOL_NAMES.toolName,
   toolNames: MCP_CLIENT_TOOL_NAMES.toolNames,
+  plannerHidden: () => [],
   /** An elicitation Codex raises for one of the server's tools: an approval the grant should have made unnecessary. */
   isOrdewellAsk: ({ method, params }) => method === 'mcpServer/elicitation/request' && params.serverName === ORDEWELL_MCP_SERVER_NAME,
   /** `mcpServer/startupStatus/updated`'s status, unsent until the thread has tried to connect. */
@@ -94,11 +95,11 @@ export const CODEX_ORDEWELL: CodexOrdewellBinding = {
    * sandboxed without network, so `gh`, a cloud CLI or `curl` fails there, and
    * a model that tried its shell first concludes the command cannot run.
    */
-  plannerInstructions(nativeSearch) {
-    const tools = ordewellToolNames('planner');
+  plannerInstructions(nativeSearch, hidden) {
+    const tools = ordewellToolNames('planner', hidden);
     return [
       `You have ${countOf(tools)} tools from the \`${ORDEWELL_MCP_SERVER_NAME}\` MCP server: ${quoted(tools)}.`,
-      `They are not in your tool list up front. Find them with the tool discovery you have (the \`exec\` tool's \`ALL_TOOLS\` list) and call them by their full names, ${quoted(this.toolNames('planner'))}.`,
+      `They are not in your tool list up front. Find them with the tool discovery you have (the \`exec\` tool's \`ALL_TOOLS\` list) and call them by their full names, ${quoted(this.toolNames('planner', hidden))}.`,
       `Run shell commands with \`${this.toolName('run_command')}\`, not your own shell: yours is sandboxed without network, so git remotes, gh and cloud CLIs fail there.`,
       `Fetch web pages with \`${this.toolName('fetch')}\`, not curl or your shell.`,
       nativeSearch

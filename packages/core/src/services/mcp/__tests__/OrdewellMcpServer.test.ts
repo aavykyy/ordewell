@@ -92,6 +92,16 @@ describe('OrdewellMcpServer', () => {
     expect(submitPlan).not.toHaveBeenCalled();
   });
 
+  it('keeps the tools a planner token hides out of its list, and refuses a call to one', async () => {
+    const server = newServer();
+    const fetch = vi.fn(async () => ({ text: 'page' }));
+    const planner = await connect(await server.issuePlannerToken({ sessionId: 's1', hidden: ['fetch', 'web_search'] }, { fetch }));
+
+    expect((await planner.listTools()).tools.map((t) => t.name).sort()).toEqual(['edit_plan', 'list_models', 'list_runners', 'load_skill', 'run_command', 'submit_plan', 'task_output', 'task_query']);
+    await expect(planner.callTool({ name: 'fetch', arguments: { url: 'https://example.com' } })).rejects.toThrow(/Unknown tool/);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("routes each token's calls to the handler it was issued with", async () => {
     const server = newServer();
     const calls: string[] = [];

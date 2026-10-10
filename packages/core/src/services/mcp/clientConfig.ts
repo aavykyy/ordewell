@@ -11,6 +11,8 @@ export interface McpClientConfig {
   name: typeof ORDEWELL_MCP_SERVER_NAME;
   url: string;
   headers: Record<string, string>;
+  /** Planner tools the token hides: a runner must neither pre-allow nor mention them. */
+  hidden?: readonly string[];
 }
 
 /**
@@ -24,6 +26,7 @@ export function mcpClientConfig(credential: McpCredential): McpClientConfig {
     name: ORDEWELL_MCP_SERVER_NAME,
     url: credential.url,
     headers: { Authorization: bearerHeaderValue(credential.token) },
+    ...(credential.hidden?.length ? { hidden: credential.hidden } : {}),
   };
 }
 

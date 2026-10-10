@@ -1,4 +1,6 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { CONNECTORS } from '../harness/connectors';
 import type { AgentEvent, AgentStartOptions } from '../harness/AgentAdapter';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
@@ -21,6 +23,16 @@ const RUNNER_NAME: Record<string, (tool: string) => string> = {
   'claude-code': (tool) => `mcp__ordewell__${tool}`,
   codex: (tool) => `mcp__ordewell__${tool}`,
   opencode: (tool) => `ordewell_${tool}`,
+};
+
+/**
+ * The planner tools each runner carries natively instead of Ordewell's, as
+ * ADR-0027's table assigns them: Claude Code searches and fetches natively.
+ */
+const NATIVE_INSTEAD: Record<string, string[]> = {
+  'claude-code': ['fetch', 'web_search'],
+  codex: [],
+  opencode: [],
 };
 
 const mcp = mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok-secret' });
@@ -52,6 +64,7 @@ afterEach(async () => {
 it('has a fake for every connector and a runner name for every connector that takes the tools', () => {
   expect(Object.keys(FAKE_RUNNERS).sort()).toEqual(Object.keys(CONNECTORS).sort());
   expect(Object.keys(RUNNER_NAME).sort()).toEqual([...runners].sort());
+  expect(Object.keys(NATIVE_INSTEAD).sort()).toEqual([...runners].sort());
 });
 
 it('offers a harness planner for exactly the runners with a connector', () => {
@@ -60,9 +73,12 @@ it('offers a harness planner for exactly the runners with a connector', () => {
 
 describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
   const name = RUNNER_NAME[runner];
+  const hidden = NATIVE_INSTEAD[runner];
+  const plannerTools = PLANNER_TOOLS.filter((tool) => !hidden.includes(tool.name));
+  const hiddenPlannerStart: AgentStartOptions = { ...plannerStart, mcp: { ...mcp, hidden } };
   const roles = [
     ['task', () => taskStart(runner), TASK_TOOLS],
-    ['planner', () => plannerStart, PLANNER_TOOLS],
+    ['planner', () => hiddenPlannerStart, plannerTools],
   ] as const;
 
   it.each(roles)('hands a %s the server, the token never on the command line', async (_role, start) => {
@@ -76,10 +92,47 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
   it.each(roles)('lets a %s run each of its tools unasked, under the runner\'s name for it', async (role, start, tools) => {
     const { fake, adapter } = await opened(runner, start());
 
-    expect(CONNECTORS[runner].ordewellTools!.toolNames(role)).toEqual(tools.map((tool) => name(tool.name)));
+    expect(CONNECTORS[runner].ordewellTools!.toolNames(role, role === 'planner' ? hidden : [])).toEqual(tools.map((tool) => name(tool.name)));
     for (const tool of tools) expect(fake.preAllows(name(tool.name)), tool.name).toBe(true);
     expect(fake.preAllows('bash')).toBe(false);
     adapter.dispose();
+  });
+
+  it('neither pre-allows nor mentions a planner tool the runner carries natively', async () => {
+    const { fake, adapter } = await opened(runner, hiddenPlannerStart);
+
+    for (const tool of hidden) {
+      expect(fake.preAllows(name(tool)), tool).toBe(false);
+      expect(fake.instructions(), tool).not.toContain(name(tool));
+    }
+    adapter.dispose();
+  });
+
+  it('starts a planner on a token that serves exactly the tools the runner is given', async () => {
+    const server = new OrdewellMcpServer();
+    servers.push(server);
+    const issued = vi.spyOn(server, 'issuePlannerToken');
+    const fake = FAKE_RUNNERS[runner]({ attach: 'connected', reply: planJson(runner) });
+    const svc = new CliAgentAiService(fakeConfig({ aiProvider: providerForRunner(runner)!, enabledRunners: [runner] }), { ...fake.deps, workspaceRoot: () => '/repo', mcpServer: server });
+
+    await svc.startConversation({
+      goal: 'Add the thing',
+      runners: [runner],
+      modelsByRunner: { [runner]: [{ modelId: 'sonnet', modelLabel: 'Sonnet', variants: [] }] },
+      fs: fakeFileSystem(),
+      onProgress: () => {},
+      plannerTools: { sessionId: 's1', handler: {} },
+    }).catch(() => undefined);
+    const credential = await issued.mock.results[0].value;
+    const config = mcpClientConfig(credential);
+    const client = new Client({ name: 'test', version: '0.0.0' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers: config.headers } }));
+
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(plannerTools.map((tool) => tool.name));
+    for (const tool of plannerTools) expect(fake.preAllows(name(tool.name)), tool.name).toBe(true);
+    for (const tool of hidden) expect(fake.preAllows(name(tool)), tool).toBe(false);
+    await client.close();
+    svc.reset();
   });
 
   it.each(roles)('shows a %s calling each of its tools under that name', async (_role, start, tools) => {

@@ -39,12 +39,20 @@ export interface TaskTokenScope {
 
 export interface PlannerTokenScope {
   sessionId: string;
+  /**
+   * Planner tools this token neither lists nor serves, by their names on the
+   * server: the ones a runner carries natively instead (ADR-0027), which a
+   * model would otherwise pick over its own.
+   */
+  hidden?: readonly string[];
 }
 
 /** Where a runner reaches the server and what it presents there. Never put either half in a prompt. */
 export interface McpCredential {
   url: string;
   token: string;
+  /** The planner tools the token hides ({@link PlannerTokenScope.hidden}), so the runner is told of and pre-allows only what it is served. */
+  hidden?: readonly string[];
 }
 
 type Grant =
@@ -72,8 +80,10 @@ export class OrdewellMcpServer {
     return this.issue({ role: 'task', scope: { ...scope }, handler, revoked: new AbortController() });
   }
 
-  issuePlannerToken(scope: PlannerTokenScope, handler: PlannerToolHandler = {}): Promise<McpCredential> {
-    return this.issue({ role: 'planner', scope: { ...scope }, handler, revoked: new AbortController() });
+  async issuePlannerToken(scope: PlannerTokenScope, handler: PlannerToolHandler = {}): Promise<McpCredential> {
+    const hidden = [...(scope.hidden ?? [])];
+    const credential = await this.issue({ role: 'planner', scope: { ...scope, hidden }, handler, revoked: new AbortController() });
+    return hidden.length > 0 ? { ...credential, hidden } : credential;
   }
 
   /** Every token still good here: secrets the outbound check keeps out of a URL (ADR-0027). */
@@ -162,7 +172,7 @@ export class OrdewellMcpServer {
     // list and every call are fixed by the token on that very request.
     const mcp = new McpProtocolServer({ name: 'ordewell', version: '1' }, { capabilities: { tools: {} } });
     if (grant.role === 'task') serveTools(mcp, TASK_TOOLS, grant.handler, grant.revoked.signal, this.heartbeatMs);
-    else serveTools(mcp, PLANNER_TOOLS, grant.handler, grant.revoked.signal, this.heartbeatMs);
+    else serveTools(mcp, PLANNER_TOOLS.filter((tool) => !grant.scope.hidden?.includes(tool.name)), grant.handler, grant.revoked.signal, this.heartbeatMs);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
       void transport.close();

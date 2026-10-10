@@ -35,7 +35,7 @@ import { runnerForProvider } from '../ProviderRegistry';
 import { collectResearchContext } from '../ContextCollector';
 import { sensitiveEnvValues } from '../outboundSecrets';
 import type { AgentAdapter, AgentEvent, AgentProcessDeps, PlannerStartOptions } from './AgentAdapter';
-import { createPlannerAdapter } from './connectors';
+import { connectorFor, createPlannerAdapter } from './connectors';
 import { mapAgentTool, normalizeAgentArgs } from './agentTools';
 import { decidePlannerPermission, type PlannerPermissionGate } from './plannerPermissions';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
@@ -556,7 +556,7 @@ export class CliAgentAiService implements IAiService {
     }
     let credential: McpCredential;
     try {
-      credential = await server.issuePlannerToken({ sessionId: tools.sessionId }, tools.handler);
+      credential = await server.issuePlannerToken({ sessionId: tools.sessionId, hidden: connectorFor(this.runner)?.ordewellTools.plannerHidden(opts) }, tools.handler);
     } catch (err) {
       adapter.dispose();
       return `Ordewell's MCP server could not issue a token (${err instanceof Error ? err.message : String(err)})`;

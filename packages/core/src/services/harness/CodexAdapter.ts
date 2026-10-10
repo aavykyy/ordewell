@@ -454,7 +454,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       // replaces it — which takes Codex's description of its own tools with
       // it, and a planner that has forgotten it can read the workspace
       // answers from a web search instead.
-      developerInstructions: [opts?.systemPrompt, opts?.mcp ? CODEX_ORDEWELL.plannerInstructions(nativeSearch) : ''].filter(Boolean).join('\n\n') || undefined,
+      developerInstructions: [opts?.systemPrompt, opts?.mcp ? CODEX_ORDEWELL.plannerInstructions(nativeSearch, opts.mcp.hidden) : ''].filter(Boolean).join('\n\n') || undefined,
     };
   }
 
