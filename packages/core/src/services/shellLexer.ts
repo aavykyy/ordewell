@@ -100,6 +100,9 @@ export function dialectFor(dialect: ShellDialect | undefined): Dialect {
 export interface Segment {
   binary: string;
   args: string[];
+  /** End offsets of the original words, for inserting startup suppression without rebuilding shell syntax. */
+  wordEnds?: number[];
+  nested?: boolean;
   /**
    * Leading `VAR=value` tokens, as written.
    *
@@ -386,6 +389,7 @@ export function lex(command: string, nested: string[], dialect: Dialect): Lexed 
   let bareSegment = false;
 
   let tokens: string[] = [];
+  let wordEnds: number[] = [];
   let expandable = false;
   let globbed = false;
   let current = '';
@@ -443,7 +447,7 @@ export function lex(command: string, nested: string[], dialect: Dialect): Lexed 
       started = false;
       return;
     }
-    if (started) tokens.push(current);
+    if (started) { tokens.push(current); wordEnds.push(i); }
     current = '';
     started = false;
   };
@@ -472,13 +476,14 @@ export function lex(command: string, nested: string[], dialect: Dialect): Lexed 
     if (tokens.length > 0) {
       const seg = toSegment(tokens, piped, dialect);
       if (!seg.binary) { followable = false; bareSegment = true; }
-      segments.push({ ...seg, expandable, globbed, stdinRedirected, inputs, joinedBy });
+      segments.push({ ...seg, expandable, globbed, stdinRedirected, inputs, joinedBy, wordEnds });
     } else if (!last || segments.length > 0 || joinedBy !== undefined) {
       // Nothing ran here, or only a redirect did, yet an operator still joined it.
       followable = false;
       bareSegment = true;
     }
     tokens = [];
+    wordEnds = [];
     inputs = [];
     expandable = false;
     globbed = false;
@@ -743,7 +748,7 @@ export function lexAll(command: string, dialect: Dialect, cdpathSet = false): Le
   // Bounded: a pathological `$($($(…)))` must not spin here.
   for (let depth = 0; depth < 32 && queue.length > 0; depth++) {
     const inner = lex(queue.shift()!, queue, dialect);
-    all.segments.push(...inner.segments.filter((s) => s.binary));
+    all.segments.push(...inner.segments.filter((s) => s.binary).map((s) => ({ ...s, nested: true })));
     all.unsafeRedirect ??= inner.unsafeRedirect;
     all.processSubstitution ||= inner.processSubstitution;
     all.unbalanced ||= inner.unbalanced;
