@@ -8,7 +8,7 @@ import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
 import { markedLines } from './fileDiff';
 import { probeCodexSandbox, codexSandboxUnavailableMessage, type CodexSandboxDecision } from './codexSandbox';
 import { ORDEWELL_MCP_SERVER_NAME } from '../mcp';
-import { CODEX_ORDEWELL, CODEX_SEARCH_PROVIDER } from './codexOrdewell';
+import { CODEX_ORDEWELL } from './codexOrdewell';
 import { awaitAttach, type AttachState } from './ordewellBinding';
 import { CodexRpc, type RpcMessage, type RpcResponse } from './codexRpc';
 import { settleWithin } from './settleWithin';
@@ -213,6 +213,21 @@ function webSearchSummary(item: ThreadItem): string {
       return `find ${JSON.stringify(action.pattern ?? '')} in ${action.url ?? '(no URL)'}`;
     default:
       return item.query ?? '';
+  }
+}
+
+/** A completed `webSearch` item's call, in the fields its action carries. */
+function webSearchArgs(item: ThreadItem): Record<string, unknown> {
+  const action = item.action;
+  switch (action?.type) {
+    case 'search':
+      return action.queries?.length ? { queries: action.queries } : { query: action.query ?? item.query ?? '' };
+    case 'openPage':
+      return { url: action.url ?? '' };
+    case 'findInPage':
+      return { url: action.url ?? '', pattern: action.pattern ?? '' };
+    default:
+      return { query: item.query ?? '' };
   }
 }
 
@@ -437,7 +452,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         ...threadConfig,
       };
     }
-    const nativeSearch = opts?.searchesUnasked?.(CODEX_SEARCH_PROVIDER) ?? false;
+    const nativeSearch = opts?.nativeSearch ?? false;
     return {
       ...common,
       sandbox: 'read-only',
@@ -941,8 +956,8 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       case 'dynamicToolCall':
         emit({ type: 'tool_call', id: item.id, name: item.tool ?? 'tool', args: item.arguments ?? {}, ...(subagentId ? { subagentId } : {}) });
         return;
+      // Announced on completion instead: at start the query is still empty.
       case 'webSearch':
-        emit({ type: 'tool_call', id: item.id, name: 'web_search', args: { query: item.query }, ...(subagentId ? { subagentId } : {}) });
         return;
       case 'fileChange': {
         const paths = (item.changes ?? []).map((change) => change.path).filter((path): path is string => !!path);
@@ -1011,8 +1026,9 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         });
         return;
       // The query is empty when the search starts and filled when it lands, so
-      // the result — not the call — is what carries what was actually searched.
+      // the call is announced only now, with what was actually searched.
       case 'webSearch':
+        emit({ type: 'tool_call', id, name: 'web_search', args: webSearchArgs(item), ...(subagentId ? { subagentId } : {}) });
         emit({ type: 'tool_result', id, name: 'web_search', output: webSearchSummary(item), success: true, ...(subagentId ? { subagentId } : {}) });
         return;
       case 'fileChange':

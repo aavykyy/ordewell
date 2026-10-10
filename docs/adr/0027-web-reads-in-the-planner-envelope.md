@@ -356,3 +356,26 @@ filed as its own issue.
   runner's pre-allowed tools and instructions follow it; Claude's token hides
   `fetch` and `web_search`, which the live check saw it pick over its native
   tools.
+- 2026-10-11 — Codex: the session-wide search decision is made once per
+  planner spawn, before its token, so the thread's `web_search` and the token
+  agree; with native search on, the token hides Ordewell's `web_search` (its
+  `fetch` stays). The decision is asked again before every turn, and a change
+  (Full to Guarded, a `!web_search:*` exclusion, a zero budget) respawns the
+  planner on `thread/resume` with the new config and a new token. Checked live
+  on codex-cli 0.162.0: `thread/resume` applies `config.web_search` in both
+  directions; neither a top-level `web_search = "live"` nor the legacy
+  `[tools] web_search` overrides a thread's `disabled`; profiles cannot
+  override it either, since `app-server` refuses `--profile` and a legacy
+  `profile =` selector fails the whole config load, so no profile-level
+  override is needed. Task threads are unchanged.
+- 2026-10-11 — OpenCode 2.x: with no search provider chosen, `websearch` asks
+  the user to pick one through `question`, which a planner is denied, so the
+  search ends "Web search cancelled", which a model takes for a refusal
+  (2.0.26). A 2.x
+  planner session now reads the last config layer that sets `websearch` from
+  `/api/config`; without a provider there, `websearch` and `codesearch` are
+  denied on the session and its instructions name Ordewell's `web_search`. A
+  provider picked in OpenCode's own UI lives in its database, out of the API's
+  reach, so such a planner also uses Ordewell's. Every OpenCode planner is told
+  to fall back to Ordewell's `web_search` when `websearch` fails or is
+  cancelled. Both cases checked live. Task sessions are unchanged.

@@ -135,12 +135,13 @@ export interface PlannerStartOptions extends AgentStartCommon {
   /** The Ordewell MCP server to inject, pre-authorized (ADR-0022). Only for an adapter with {@link AgentAdapter.mcpAttached}. */
   mcp?: McpClientConfig;
   /**
-   * Whether the web-read policy would let a search through `provider` run
-   * without asking, for a runner whose own search raises no permission
-   * request and is set on or off when its session starts (ADR-0027). Absent
-   * means it would not.
+   * Whether the runner's own search is on, for a runner whose search raises
+   * no permission request and is set on or off when its session starts
+   * (ADR-0027). Decided once, before the planner token is issued, so the
+   * tools the token serves and the session's config cannot disagree. Absent
+   * means off.
    */
-  searchesUnasked?(provider: string): boolean;
+  nativeSearch?: boolean;
 }
 
 /**

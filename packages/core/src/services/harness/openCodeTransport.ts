@@ -59,8 +59,8 @@ export function openCodePlannerAsk(
 }
 
 /** A planner's system prompt and, when it has the Ordewell server, where its web reads go (ADR-0027). */
-export function plannerSystem(opts: Pick<PlannerStartOptions, 'systemPrompt' | 'mcp'>): { system?: string } {
-  const system = [opts.systemPrompt, opts.mcp ? OPENCODE_ORDEWELL.plannerInstructions() : ''].filter(Boolean).join('\n\n');
+export function plannerSystem(opts: Pick<PlannerStartOptions, 'systemPrompt' | 'mcp'>, ownSearch = true): { system?: string } {
+  const system = [opts.systemPrompt, opts.mcp ? OPENCODE_ORDEWELL.plannerInstructions(ownSearch) : ''].filter(Boolean).join('\n\n');
   return system ? { system } : {};
 }
 

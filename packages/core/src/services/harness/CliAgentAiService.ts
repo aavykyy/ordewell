@@ -132,9 +132,17 @@ export class CliAgentAiService implements IAiService {
   private lastNativeSessionId: string | null = null;
   /** `gate` is what the agent's own tool requests are decided against; absent, only Ordewell's tools are allowed (ADR-0026). */
   private conversation: { startOptions: PlannerStartOptions; tools: PlannerToolsOffer; gate?: PlannerPermissionGate } | null = null;
+  /**
+   * What the runner's own session-wide search is decided against
+   * (ADR-0027), asked again before every turn: the session's mode, its
+   * exclusions or its budget can change between turns. Absent, it is off.
+   */
+  private searchesUnasked: ((provider: string) => boolean) | undefined;
   private readonly mcpServer: OrdewellMcpServer | undefined;
   /** The planner token the running process was spawned with; revoked with the process (ADR-0022, A3). */
   private plannerToken: string | null = null;
+  /** The {@link PlannerStartOptions.nativeSearch} the running process was spawned with. */
+  private adapterNativeSearch = false;
   private activeAbort: AbortController | null = null;
   /**
    * Every subagent this conversation has reported starting, and finishing.
@@ -199,6 +207,7 @@ export class CliAgentAiService implements IAiService {
     // the previous goal's agent session.
     this.lastNativeSessionId = null;
     this.conversation = null;
+    this.searchesUnasked = undefined;
     this.subagents.started.clear();
     this.subagents.finished.clear();
   }
@@ -229,9 +238,9 @@ export class CliAgentAiService implements IAiService {
       systemPrompt,
       model: this.plannerModel(),
       effort: this.config.plannerThinkingEffort,
-      // Without an approval channel there is no gate, so nothing would decide a search.
-      ...(req.approval && fetcher?.searchesUnasked ? { searchesUnasked: (provider: string) => fetcher.searchesUnasked?.(provider) ?? false } : {}),
     };
+    // Without an approval channel there is no gate, so nothing would decide a search.
+    if (req.approval && fetcher?.searchesUnasked) this.searchesUnasked = (provider) => fetcher.searchesUnasked?.(provider) ?? false;
     const tools = req.plannerTools;
     await this.startAdapter(startOptions, tools);
 
@@ -554,15 +563,17 @@ export class CliAgentAiService implements IAiService {
       adapter.dispose();
       return `${this.runner} cannot be handed Ordewell's MCP server`;
     }
+    // Decided once, here, so the token's tools and the session's config are the same decision.
+    const start: PlannerStartOptions = { ...opts, nativeSearch: this.nativeSearch() };
     let credential: McpCredential;
     try {
-      credential = await server.issuePlannerToken({ sessionId: tools.sessionId, hidden: connectorFor(this.runner)?.ordewellTools.plannerHidden(opts) }, tools.handler);
+      credential = await server.issuePlannerToken({ sessionId: tools.sessionId, hidden: connectorFor(this.runner)?.ordewellTools.plannerHidden(start) }, tools.handler);
     } catch (err) {
       adapter.dispose();
       return `Ordewell's MCP server could not issue a token (${err instanceof Error ? err.message : String(err)})`;
     }
     try {
-      await adapter.start({ ...opts, mcp: mcpClientConfig(credential) });
+      await adapter.start({ ...start, mcp: mcpClientConfig(credential) });
     } catch (err) {
       adapter.dispose();
       server.revoke(credential.token);
@@ -573,6 +584,7 @@ export class CliAgentAiService implements IAiService {
       if (await adapter.mcpAttached()) {
         this.adapter = adapter;
         this.plannerToken = credential.token;
+        this.adapterNativeSearch = start.nativeSearch ?? false;
         return adapter;
       }
     } catch (err) {
@@ -591,14 +603,26 @@ export class CliAgentAiService implements IAiService {
     this.plannerToken = null;
   }
 
+  /** Whether the web-read policy lets the runner's own session-wide search run unasked now (ADR-0027). */
+  private nativeSearch(): boolean {
+    const provider = connectorFor(this.runner)?.ordewellTools.sessionSearchProvider;
+    return provider !== undefined && (this.searchesUnasked?.(provider) ?? false);
+  }
+
   /**
    * The live agent process, restarted from its own session id if it died
    * between turns. Resume is a hint: when it fails, the caller's next
    * `startConversation` reseeds from Ordewell's transcript, which is the same
    * degradation `restoreChat` already performs on every surface.
+   *
+   * Also restarted when the policy's decision on the runner's own search has
+   * changed since the process was spawned: the running thread would otherwise
+   * keep searching unasked after Full turned Guarded. Codex 0.162 applies
+   * `thread/resume`'s `config.web_search` either way (checked live).
    */
   private async ensureAdapter(): Promise<AgentAdapter> {
-    if (this.adapter) return this.adapter;
+    if (this.adapter && this.adapterNativeSearch === this.nativeSearch()) return this.adapter;
+    this.disposeAdapter();
     const conversation = this.conversation;
     if (!conversation) throw new Error('No active planner conversation.');
     await this.startAdapter({ ...conversation.startOptions, resumeSessionId: this.lastNativeSessionId ?? undefined }, conversation.tools);
@@ -648,8 +672,11 @@ export class CliAgentAiService implements IAiService {
     const previousConversation = this.conversation;
     const previousSessionId = this.lastNativeSessionId;
     const previousToken = this.plannerToken;
+    const previousNativeSearch = this.adapterNativeSearch;
+    const previousSearchesUnasked = this.searchesUnasked;
     this.adapter = null;
     this.plannerToken = null;
+    this.searchesUnasked = undefined;
 
     let submitted: Task[] | undefined;
     let refused: string[] = [];
@@ -715,6 +742,8 @@ export class CliAgentAiService implements IAiService {
       if (this.plannerToken) this.mcpServer?.revoke(this.plannerToken);
       this.adapter = previous;
       this.plannerToken = previousToken;
+      this.adapterNativeSearch = previousNativeSearch;
+      this.searchesUnasked = previousSearchesUnasked;
       this.conversation = previousConversation;
       // The one-shot's own agent session must not become the conversation's
       // resume hint: restarting the chat into a plan-generation session would

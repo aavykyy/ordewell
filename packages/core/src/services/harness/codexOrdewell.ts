@@ -54,7 +54,9 @@ export const CODEX_ORDEWELL: CodexOrdewellBinding = {
   // Codex names a call by server and tool; the model reaches the tool by Claude Code's name for it.
   toolName: MCP_CLIENT_TOOL_NAMES.toolName,
   toolNames: MCP_CLIENT_TOOL_NAMES.toolNames,
-  plannerHidden: () => [],
+  // With its own search on, a model offered Ordewell's too tends to take that instead. Codex has no fetch of its own.
+  plannerHidden: (start) => (start.nativeSearch ? ['web_search'] : []),
+  sessionSearchProvider: CODEX_SEARCH_PROVIDER,
   /** An elicitation Codex raises for one of the server's tools: an approval the grant should have made unnecessary. */
   isOrdewellAsk: ({ method, params }) => method === 'mcpServer/elicitation/request' && params.serverName === ORDEWELL_MCP_SERVER_NAME,
   /** `mcpServer/startupStatus/updated`'s status, unsent until the thread has tried to connect. */

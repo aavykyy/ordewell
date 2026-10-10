@@ -25,6 +25,14 @@ const RULE = NAMES.toolName('*');
  * instead. `websearch` (both versions) and `codesearch` (1.x) ask, so the
  * web-read policy decides each as a search.
  */
+/**
+ * The rules that turn a planner's own search off, after
+ * {@link OPENCODE_PLANNER_PERMISSION}: for a 2.x session whose OpenCode has
+ * no search provider chosen, where `websearch` would ask the user to pick one
+ * through `question`, which the planner is denied.
+ */
+export const OPENCODE_SEARCH_OFF: Record<string, OpenCodeSessionRule['effect']> = { websearch: 'deny', codesearch: 'deny' };
+
 export const OPENCODE_PLANNER_PERMISSION: Record<string, OpenCodeSessionRule['effect']> = {
   '*': 'ask',
   read: 'allow', glob: 'allow', grep: 'allow', list: 'allow', lsp: 'allow',
@@ -60,8 +68,11 @@ export interface OpenCodeOrdewellBinding extends OrdewellToolBinding<string> {
   configContent(existing: string | undefined, mcp: McpClientConfig | null, role: 'planner' | 'task'): string | null;
   /** The rules a 2.x session is created with so the server's tools never wait on a person (ADR-0022, S3). */
   sessionRules(): OpenCodeSessionRule[];
-  /** What a planner's instructions add about web reads (ADR-0027). */
-  plannerInstructions(): string;
+  /**
+   * What a planner's instructions add about web reads (ADR-0027). `ownSearch`
+   * false: its `websearch` is off for the session, and Ordewell's is the search.
+   */
+  plannerInstructions(ownSearch?: boolean): string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -155,8 +166,11 @@ export const OPENCODE_ORDEWELL: OpenCodeOrdewellBinding = {
   attachState: (status) => (status === 'connected' ? 'connected' : status === undefined || status === null || status === 'pending' ? 'pending' : 'failed'),
   configContent: mergeOrdewellConfig,
   sessionRules: () => [{ action: RULE, resource: '*', effect: 'allow' }],
-  plannerInstructions: () => [
+  plannerInstructions: (ownSearch = true) => [
     `Read web pages with \`${NAMES.toolName('fetch')}\`. Your own \`webfetch\` is off while planning: it follows redirects Ordewell cannot check.`,
-    `Search the web with your own \`websearch\` first. Use \`${NAMES.toolName('web_search')}\` only if \`websearch\` is unavailable for your provider.`,
+    ownSearch
+      // A failed or cancelled search reads to a model as a refusal, so it is told the fallback is open.
+      ? `Search the web with your own \`websearch\` first. If \`websearch\` fails, is cancelled or is unavailable for your provider, search with \`${NAMES.toolName('web_search')}\` instead.`
+      : `Your own \`websearch\` is off for this session: no search provider is chosen in OpenCode. Search the web with \`${NAMES.toolName('web_search')}\`.`,
   ].join(' '),
 };

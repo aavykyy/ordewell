@@ -6,7 +6,7 @@ import type { AgentAdapterFactory, AgentEvent, AgentProcessDeps, SpawnFn, TaskMo
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
 import { createTaskAdapter } from '../harness/connectors';
 import type { RunnerManifest } from '../../plugins/types';
-import type { McpCredential, OrdewellMcpServer, PlannerToolHandler } from '../mcp';
+import type { McpCredential, OrdewellMcpServer, PlannerTokenScope, PlannerToolHandler } from '../mcp';
 
 /**
  * The one test seam for harness planners (ADR-0009): a fake process boundary,
@@ -220,12 +220,15 @@ export type FakeMcpServer = OrdewellMcpServer & {
   readonly revoked: string[];
   /** The handler each planner token was issued with, in order: what a fake agent's tool calls reach. */
   readonly plannerHandlers: PlannerToolHandler[];
+  /** The scope each planner token was issued for, in order. */
+  readonly plannerScopes: PlannerTokenScope[];
 };
 
 export function fakeMcpServer(): FakeMcpServer {
   const issued: string[] = [];
   const revoked: string[] = [];
   const plannerHandlers: PlannerToolHandler[] = [];
+  const plannerScopes: PlannerTokenScope[] = [];
   const issue = async (): Promise<McpCredential> => {
     const token = `tok-${issued.length + 1}`;
     issued.push(token);
@@ -235,11 +238,14 @@ export function fakeMcpServer(): FakeMcpServer {
     issued,
     revoked,
     plannerHandlers,
+    plannerScopes,
     heldTokens: () => issued.filter((token) => !revoked.includes(token)),
     issueTaskToken: issue,
-    issuePlannerToken: async (_scope: unknown, handler: PlannerToolHandler = {}) => {
+    issuePlannerToken: async (scope: PlannerTokenScope, handler: PlannerToolHandler = {}) => {
+      plannerScopes.push(scope);
       plannerHandlers.push(handler);
-      return issue();
+      const credential = await issue();
+      return scope.hidden?.length ? { ...credential, hidden: [...scope.hidden] } : credential;
     },
     revoke: (token: string) => { revoked.push(token); },
   };

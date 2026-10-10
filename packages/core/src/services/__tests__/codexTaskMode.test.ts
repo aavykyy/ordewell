@@ -1032,7 +1032,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
     async function plannerThread(policy?: WebReadPolicy) {
       const { spawned, processDeps } = deps(plannerHandshake());
       const adapter = new CodexAdapter(processDeps);
-      await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN', mcp, ...(policy ? { searchesUnasked: (provider: string) => policy.searchesUnasked(provider) } : {}) });
+      await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN', mcp, ...(policy ? { nativeSearch: policy.searchesUnasked(CODEX_ORDEWELL.sessionSearchProvider!) } : {}) });
       const [thread] = sentNamed(spawned.processes[0].written, 'thread/start');
       adapter.dispose();
       return thread.params as { config: Record<string, unknown>; developerInstructions: string };
@@ -1056,6 +1056,29 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       expect((await plannerThread()).config.web_search).toBe('disabled');
     });
 
+    // Planner-only: a task, an ops task above all (ADR-0020), keeps the user's own search setting.
+    it.each(modeIds(CODEX_MANIFEST))('leaves a %s task thread with no search setting of Ordewell\'s, fresh or resumed', async (mode) => {
+      const { spawned, processDeps } = deps([...handshake(), ...handshake()]);
+      const opened: RpcLine[] = [];
+      for (const resumeSessionId of [undefined, 'thr-task-1']) {
+        const adapter = new CodexAdapter(processDeps);
+        await adapter.start(taskStart(mode, { mcp, ...(resumeSessionId ? { resumeSessionId } : {}) }));
+        opened.push(...written(spawned.processes.at(-1)!.written).filter((msg) => msg.method === 'thread/start' || msg.method === 'thread/resume'));
+        adapter.dispose();
+      }
+
+      const { approvalPolicy, approvalsReviewer } = taskStart(mode).flags.modeSettings;
+      const expected = {
+        cwd: '/repo',
+        sandbox: taskStart(mode).flags.permissionMode,
+        ...(approvalPolicy ? { approvalPolicy } : {}),
+        ...(approvalsReviewer ? { approvalsReviewer } : {}),
+        developerInstructions: CODEX_ORDEWELL.taskInstructions(),
+        config: { mcp_servers: { ordewell: ordewellServer } },
+      };
+      expect(opened.map((msg) => msg.params)).toEqual([expected, { threadId: 'thr-task-1', ...expected }]);
+    });
+
     it('is never live, which opens pages the model chose', () => {
       expect([CODEX_ORDEWELL.plannerWebSearch(true), CODEX_ORDEWELL.plannerWebSearch(false)]).toEqual(['cached', 'disabled']);
     });
@@ -1074,6 +1097,8 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
   it('shows what each built-in search did: every query, and the page it opened or searched in', async () => {
     const search = (id: string, action: Record<string, unknown> | null, query = '') => line({ method: 'item/completed', params: { threadId: 'thr-task-1', turnId: 'turn-a', item: { id, type: 'webSearch', query, action, results: null } } });
     const { adapter, events } = await openTurn([
+      // Codex starts every search with an empty query; the call must not carry it.
+      line({ method: 'item/started', params: { threadId: 'thr-task-1', turnId: 'turn-a', item: { id: 'w1', type: 'webSearch', query: '', action: { type: 'other' } } } }),
       search('w1', { type: 'search', query: 'tokio 1.40 changelog', queries: null }),
       search('w2', { type: 'search', query: null, queries: ['hono routing', 'hono middleware'] }),
       search('w3', { type: 'openPage', url: 'https://hono.dev/docs' }),
@@ -1088,6 +1113,15 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       'find "basePath" in https://hono.dev/docs',
       'legacy query',
     ]);
+    expect(events.filter((e) => e.type === 'tool_call').map((e) => (e.type === 'tool_call' ? [e.id, e.args] : []))).toEqual([
+      ['w1', { query: 'tokio 1.40 changelog' }],
+      ['w2', { queries: ['hono routing', 'hono middleware'] }],
+      ['w3', { url: 'https://hono.dev/docs' }],
+      ['w4', { url: 'https://hono.dev/docs', pattern: 'basePath' }],
+      ['w5', { query: 'legacy query' }],
+    ]);
+    // Each call lands right before its result, so no row waits with an empty query.
+    expect(events.filter((e) => e.type === 'tool_call' || e.type === 'tool_result').map((e) => e.type)).toEqual(Array(5).fill(['tool_call', 'tool_result']).flat());
     adapter.dispose();
   });
 
