@@ -16,7 +16,7 @@
  *   - an **MCP tool rule**, `mcp:find-*`: a glob over the tool's own name,
  *     without the server, case-insensitive.
  *   - a **scope pattern**, anything starting with `/`, `~`, `http://`,
- *     `https://`, `mcp__` or a drive letter: matched against an approval's
+ *     `https://`, `web_search:`, `mcp__` or a drive letter: matched against an approval's
  *     scope as ADR-0008 always matched pre-approved entries, `*` matching any
  *     run of characters.
  *
@@ -82,7 +82,7 @@ function exclusionWord(pattern: string): RuleWord {
 }
 
 function isScopePattern(entry: string): boolean {
-  return /^(\/|~|https?:\/\/|mcp__|[A-Za-z]:[\\/])/.test(entry);
+  return /^(\/|~|https?:\/\/|web_search:|mcp__|[A-Za-z]:[\\/])/.test(entry);
 }
 
 export function parseAllowlist(entries: readonly string[]): PlannerAllowlist {

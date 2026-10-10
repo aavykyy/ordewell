@@ -11,7 +11,7 @@ import { decidePlannerPermission } from '../harness/plannerPermissions';
 import { openCodePlannerAsk } from '../harness/openCodeTransport';
 
 const PUBLIC_IP = '93.184.215.14';
-const SEARCH_PAGE = '<a class="result-link" href="https://hono.dev/docs">Hono docs</a><td class="result-snippet">Routing</td>';
+const SEARCH_PAGE = `<a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fhono.dev%2Fdocs&amp;rut=abc" class='result-link'>Hono docs</a><table><tr><td class='result-snippet'>Routing</td></tr></table>`;
 
 const servers: OrdewellMcpServer[] = [];
 const clients: Client[] = [];

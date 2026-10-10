@@ -180,13 +180,20 @@ so a later backend is one class, not a refactor.
 - **The provider names itself to the policy.** The provider id flows into the
   `search` decision, so Guarded's once-per-session approval names the backend
   and says a third party receives the query.
-- **A backend that pushes back is backed off.** A 429 or 403, or a
-  challenge/captcha page instead of results, marks the provider unavailable for
-  a short cooldown shared across sessions in the process, growing on repeated
-  push-backs and reset by a successful search. During the cooldown a search
-  answers at once — no request goes out — telling the planner to fetch a
-  documentation URL it already knows. A plain parse miss on a 200 with no
-  challenge marker is not a block.
+- **A backend that pushes back is backed off.** A 429 or 403, an HTTP 202
+  (lite answers 202 only to serve its challenge), or a results-less page
+  carrying DuckDuckGo's challenge markup (`challenge-form`, `anomaly.js`,
+  `anomaly-modal`) marks the provider unavailable for a short cooldown shared
+  across sessions in the process, growing on repeated push-backs and reset by a
+  successful search. The page is parsed first, and the markers are matched as
+  markup, never as words, because lite echoes the query: a search for
+  "recaptcha react" must not start a cooldown. Searches blocked together in
+  one cooldown window count once. The cooldown is checked before the
+  web-read policy, so a search that would only answer "temporarily
+  unavailable" neither prompts a Guarded user nor spends budget; it answers at
+  once — no request goes out — telling the planner to fetch a documentation URL
+  it already knows. A plain parse miss on a 200 with no challenge markup is
+  not a block.
 - **A shared, short-lived cache of public responses.** Results and pages
   fetched without credentials, and not marked private by the response, are
   shared between planners for a short time. A cache hit still passes the

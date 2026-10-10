@@ -75,6 +75,22 @@ describe('approval card', () => {
     expect(card.querySelectorAll('button')).toHaveLength(0);
   });
 
+  it.each([
+    [true, 'mode', 'Auto-approved (policy)'],
+    [true, 'pre-approved', 'Auto-approved (pre-approved)'],
+    [true, 'remembered', 'Auto-approved (remembered)'],
+    [false, 'mode', 'Auto-denied (policy)'],
+    [false, 'remembered', 'Auto-denied (remembered)'],
+    [false, 'no-channel', 'Auto-denied (no approval channel)'],
+  ] as const)('renders a subagent web-read decision (%s, %s)', (granted, source, label) => {
+    host.session({ type: 'approval_decided', kind: 'web_search', subject: 'tokio', scope: 'web_search:duckduckgo', granted, source });
+
+    const card = document.querySelector('.approval-card')!;
+    expect(card.textContent).toContain(label);
+    expect(card.textContent).toContain('tokio');
+    expect(card.querySelectorAll('button')).toHaveLength(0);
+  });
+
   it('shows an external path as a workspace escape, not a command', () => {
     host.session({ type: 'approval_request', id: 'ap-2', kind: 'external_path', subject: '/tmp/dump/a.log', scope: '/tmp/dump/*' });
 

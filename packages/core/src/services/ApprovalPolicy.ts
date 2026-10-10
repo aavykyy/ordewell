@@ -1,4 +1,4 @@
-import { approvalScopes, type IApproval, type ApprovalKind, type ApprovalRequest } from '../interfaces/IApproval';
+import { approvalScopes, type IApproval, type ApprovalKind, type ApprovalRequest, type StandingDecision } from '../interfaces/IApproval';
 import { parseAllowlist, scopeAllowed, toolAllowed, type PlannerAllowlist } from './plannerAllowlist';
 import type { CommandPolicyOptions } from './commandPolicy';
 
@@ -156,14 +156,14 @@ export class ApprovalPolicy implements IApproval {
    * prompt (a research subagent): the same standing grants, remembered
    * refusals and mode the interactive path uses, stopping at `ask`.
    */
-  peek(req: ApprovalRequest): 'allow' | 'deny' | 'ask' {
+  peek(req: ApprovalRequest): StandingDecision {
     const { scopes, key, open } = this.standing(req);
-    if (open.length === 0) return 'allow';
-    if (scopes.some((s) => this.refused.has(s)) || this.refused.has(key)) return 'deny';
+    if (open.length === 0) return { decision: 'allow', source: scopes.every((s) => this.granted.has(s)) ? 'remembered' : 'pre-approved' };
+    if (scopes.some((s) => this.refused.has(s)) || this.refused.has(key)) return { decision: 'deny', source: 'remembered' };
     const mode = this.modeOf(req.kind);
-    if (mode === 'allow') return 'allow';
-    if (mode === 'deny') return 'deny';
-    return 'ask';
+    if (mode === 'allow') return { decision: 'allow', source: 'mode' };
+    if (mode === 'deny') return { decision: 'deny', source: 'mode' };
+    return { decision: 'ask', source: 'no-channel' };
   }
 
   private standing(req: ApprovalRequest): { scopes: string[]; key: string; open: string[] } {

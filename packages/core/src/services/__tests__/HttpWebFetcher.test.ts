@@ -1,11 +1,16 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo, LookupFunction } from 'node:net';
 import { brotliCompressSync, gzipSync } from 'node:zlib';
 import { HttpWebFetcher, pinnedTransport, type HttpWebFetcherOptions } from '../HttpWebFetcher';
 import { WebReadPolicy } from '../webReadPolicy';
+import { ApprovalPolicy, effectiveApprovalMode } from '../ApprovalPolicy';
 import { DuckDuckGoSearchProvider } from '../DuckDuckGoSearchProvider';
-import type { IApproval } from '../../interfaces/IApproval';
+import type { ApprovalRequest, IApproval } from '../../interfaces/IApproval';
+
+const lite = (name: string) => readFileSync(join(__dirname, 'fixtures', 'duckduckgo', name), 'utf8');
 
 const allow: IApproval = { request: async () => true };
 const deny: IApproval = { request: async () => false };
@@ -130,22 +135,17 @@ describe('HttpWebFetcher.fetch', () => {
 });
 
 describe('HttpWebFetcher.search', () => {
-  const RESULTS = `
-    <html><body>
-      <a class="result__a" href="https://hono.dev/docs/routing">Hono Routing</a>
-      <a class="result__snippet">Define routes with app.get.</a>
-      <a class="result__a" href="https://github.com/honojs/hono">honojs/hono</a>
-    </body></html>`;
+  const RESULTS = lite('lite-results-typescript.html');
 
-  it('returns numbered titles with their URLs', async () => {
+  it('returns numbered titles with the real URLs, not DuckDuckGo redirects', async () => {
     const fetcher = makeFetcher({ approval: allow, fetchImpl: async () => response(RESULTS) });
 
-    const result = await fetcher.search('hono routing');
+    const result = await fetcher.search('typescript');
 
     expect(result.success).toBe(true);
-    expect(result.output).toContain('Hono Routing');
-    expect(result.output).toContain('https://hono.dev/docs/routing');
-    expect(result.output).toContain('honojs/hono');
+    expect(result.output).toContain('1. TypeScript: JavaScript With Syntax For Types.\n   https://www.typescriptlang.org/\n');
+    expect(result.output).toContain('https://github.com/microsoft/TypeScript');
+    expect(result.output).not.toContain('duckduckgo.com/l/');
   });
 
   it('tells the planner what to do when the search returns nothing usable', async () => {
@@ -217,7 +217,7 @@ describe('HttpWebFetcher.search back-off', () => {
 
   it('starts a cooldown on a challenge page rather than reporting a parse miss', async () => {
     const provider = new DuckDuckGoSearchProvider(() => 1_000);
-    const fetchImpl = vi.fn().mockResolvedValue(response('Please complete the CAPTCHA to continue'));
+    const fetchImpl = vi.fn().mockResolvedValue(response(lite('lite-challenge-202.html'), { status: 202 }));
     const fetcher = makeFetcher({ approval: allow, fetchImpl, searchProvider: provider });
 
     const result = await fetcher.search('hono');
@@ -227,10 +227,25 @@ describe('HttpWebFetcher.search back-off', () => {
     expect(result.output).toMatch(/temporarily unavailable/i);
   });
 
+  it('answers a cooling-down search before the policy, so nobody is asked and no budget is spent', async () => {
+    const provider = new DuckDuckGoSearchProvider(() => 1_000);
+    const decide = vi.fn().mockResolvedValue({ allowed: true });
+    const fetchImpl = vi.fn().mockResolvedValue(response('', { status: 429 }));
+    const fetcher = new HttpWebFetcher({ policy: { decide }, fetchImpl, searchProvider: provider });
+    await fetcher.search('hono');
+    expect(decide).toHaveBeenCalledTimes(1);
+
+    const result = await fetcher.search('serde');
+
+    expect(result.output).toMatch(/temporarily unavailable/i);
+    expect(decide).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('resets the cooldown after a successful search', async () => {
     let now = 1_000;
     const provider = new DuckDuckGoSearchProvider(() => now);
-    const results = '<a class="result__a" href="https://hono.dev/docs/routing">Hono Routing</a>';
+    const results = `<a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fhono.dev%2Fdocs%2Frouting" class='result-link'>Hono Routing</a>`;
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(response('nope', { status: 429 }))
       .mockResolvedValue(response(results));
@@ -290,11 +305,11 @@ describe('HttpWebFetcher SSRF guard', () => {
 
 describe('HttpWebFetcher redirect handling', () => {
   // A 302 to a private IP would bypass the policy's origin check — the classic
-  // SSRF-via-redirect — so each hop is re-checked against the blocklist.
+  // SSRF-via-redirect — so a hop to another origin is decided like a new fetch.
   it('refuses a redirect to a blocked host even when the origin was approved', async () => {
     const fetchImpl = vi.fn().mockImplementation((url: string) => {
       if (url === 'https://api.example.com/x') {
-        return response('', { status: 302, headers: { location: 'http://169.254.169.254/' } });
+        return response('', { status: 302, headers: { location: 'https://169.254.169.254/' } });
       }
       return response('ok');
     });
@@ -303,7 +318,8 @@ describe('HttpWebFetcher redirect handling', () => {
     const result = await fetcher.fetch('https://api.example.com/x');
 
     expect(result.success).toBe(false);
-    expect(result.output).toContain('blocked host');
+    expect(result.output).toContain('link-local address 169.254.169.254');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   // WHATWG URL serializes this as [::ffff:a9fe:a9fe]; a dotted-form string
@@ -311,7 +327,7 @@ describe('HttpWebFetcher redirect handling', () => {
   it('refuses a redirect to an IPv4-mapped IPv6 metadata address', async () => {
     const fetchImpl = vi.fn().mockImplementation((url: string) => {
       if (url === 'https://api.example.com/x') {
-        return response('', { status: 302, headers: { location: 'http://[::ffff:169.254.169.254]/latest/meta-data/' } });
+        return response('', { status: 302, headers: { location: 'https://[::ffff:169.254.169.254]/latest/meta-data/' } });
       }
       return response('credentials');
     });
@@ -320,7 +336,7 @@ describe('HttpWebFetcher redirect handling', () => {
     const result = await fetcher.fetch('https://api.example.com/x');
 
     expect(result.success).toBe(false);
-    expect(result.output).toContain('blocked host');
+    expect(result.output).toContain('link-local address 169.254.169.254');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
@@ -337,7 +353,7 @@ describe('HttpWebFetcher redirect handling', () => {
     const result = await fetcher.fetch('https://api.example.com/x');
 
     expect(result.success).toBe(false);
-    expect(result.output).toContain('blocked host');
+    expect(result.output).toContain('private address 10.1.2.3');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
@@ -385,6 +401,99 @@ describe('HttpWebFetcher redirect handling', () => {
   });
 });
 
+// The policy decided the first URL only; a hop to another origin is a new read
+// and gets the same decision, or a redirect would launder an origin past it.
+describe('HttpWebFetcher cross-origin redirects', () => {
+  function redirecting(location: string) {
+    return vi.fn().mockImplementation((url: string) => (url === 'https://docs.example.com/moved'
+      ? response('', { status: 302, headers: { location } })
+      : response('<p>elsewhere</p>')));
+  }
+
+  it('asks about the new origin in Guarded, and stops when it is declined', async () => {
+    const request = vi.fn(async (req: ApprovalRequest) => req.scope === 'https://docs.example.com/*');
+    const fetchImpl = redirecting('https://collect.example.net/page');
+    const fetcher = makeFetcher({ approval: { request }, fetchImpl });
+
+    const result = await fetcher.fetch('https://docs.example.com/moved');
+
+    expect(result.success).toBe(false);
+    expect(result.output).toMatch(/redirect/i);
+    expect(result.output).toContain('Fetch not approved: https://collect.example.net/*');
+    expect(request.mock.calls.map(([req]) => req.scope)).toEqual(['https://docs.example.com/*', 'https://collect.example.net/*']);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops at an excluded origin in Full', async () => {
+    const approval = new ApprovalPolicy({
+      mode: (kind) => effectiveApprovalMode('auto', true, kind),
+      preApproved: ['!https://collect.example.net/*'],
+      ask: async () => true,
+    });
+    const fetchImpl = redirecting('https://collect.example.net/page');
+    const fetcher = makeFetcher({ approval, fetchImpl });
+
+    const result = await fetcher.fetch('https://docs.example.com/moved');
+
+    expect(result.success).toBe(false);
+    expect(result.output).toMatch(/excluded/);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a downgrade from https to http, even on the same host', async () => {
+    const request = vi.fn(async () => true);
+    const fetchImpl = redirecting('http://docs.example.com/plain');
+    const fetcher = makeFetcher({ approval: { request }, fetchImpl });
+
+    const result = await fetcher.fetch('https://docs.example.com/moved');
+
+    expect(result.success).toBe(false);
+    expect(result.output).toMatch(/https to plain http/);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts a cross-origin hop against the budget', async () => {
+    const fetchImpl = redirecting('https://elsewhere.example.net/page');
+    const fetcher = new HttpWebFetcher({
+      policy: new WebReadPolicy({ approval: allow, env: () => ({}), resolveHost: async () => [PUBLIC_IP], budget: () => 1 }),
+      fetchImpl,
+      resolveHost: async () => [PUBLIC_IP],
+    });
+
+    const result = await fetcher.fetch('https://docs.example.com/moved');
+
+    expect(result.output).toMatch(/budget/);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets a research subagent follow only to an origin already standing', async () => {
+    const approval = new ApprovalPolicy({
+      mode: (kind) => effectiveApprovalMode('auto', false, kind),
+      preApproved: ['https://docs.example.com/*'],
+      ask: async () => true,
+    });
+    const fetchImpl = redirecting('https://collect.example.net/page');
+    const subagent = makeFetcher({ approval, fetchImpl }).forSubagent();
+
+    const result = await subagent.fetch('https://docs.example.com/moved');
+
+    expect(result.success).toBe(false);
+    expect(result.output).toMatch(/research agents/);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('follows a hop to an origin the policy allows', async () => {
+    const fetchImpl = redirecting('https://elsewhere.example.net/page');
+    const fetcher = makeFetcher({ approval: allow, fetchImpl });
+
+    const result = await fetcher.fetch('https://docs.example.com/moved');
+
+    expect(result.output).toContain('elsewhere');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('HttpWebFetcher connection pinning', () => {
   // The policy vets the name, then the transport resolves it again to connect.
   // A rebinding DNS server answers public for the first lookup and private for
@@ -404,13 +513,16 @@ describe('HttpWebFetcher connection pinning', () => {
   });
 });
 
+// A name is resolved only after the approval (a lookup is itself a request),
+// so these are refused after the person said yes, never before.
 describe('HttpWebFetcher multi-answer DNS', () => {
   it('refuses a name when any one of its DNS answers is private', async () => {
-    const request = vi.fn();
-    const fetcher = makeFetcher({ approval: { request }, resolveHost: async () => [PUBLIC_IP, '2606:4700::1', 'fd00::5'] });
+    const fetchImpl = vi.fn();
+    const fetcher = makeFetcher({ approval: allow, fetchImpl, resolveHost: async () => [PUBLIC_IP, '2606:4700::1', 'fd00::5'] });
 
     expect(await allowed(fetcher, 'https://split.example/')).toBe(false);
-    expect(request).not.toHaveBeenCalled();
+    expect((await fetcher.fetch('https://split.example/')).output).toMatch(/unique-local/);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 
@@ -419,11 +531,9 @@ describe('HttpWebFetcher isBlockedHost null-address guard', () => {
   // treats an empty hostname as loopback-ish but doesn't throw) — isPrivateIp
   // must fail closed on that instead of every regex quietly missing `null`.
   it('blocks a host that resolves to a null address', async () => {
-    const request = vi.fn();
-    const fetcher = makeFetcher({ approval: { request }, resolveHost: async () => [null as unknown as string] });
+    const fetcher = makeFetcher({ approval: allow, resolveHost: async () => [null as unknown as string] });
 
     expect(await allowed(fetcher, 'https://weird-host.example/')).toBe(false);
-    expect(request).not.toHaveBeenCalled();
   });
 });
 
@@ -447,6 +557,9 @@ describe('HttpWebFetcher body byte cap', () => {
     expect(result.output.length).toBeLessThan(2000);
   });
 });
+
+// 64 MB of zeros, compressed to a few tens of kilobytes.
+const BOMB = gzipSync(Buffer.alloc(64 * 1024 * 1024));
 
 // The guard refuses loopback by design, so the transport is exercised here with
 // a stand-in lookup that sends every name to a local server; the vetting
@@ -476,6 +589,17 @@ describe('pinnedTransport', () => {
         res.end(req.url === '/gzip' ? gzipSync(text) : brotliCompressSync(text));
         return;
       }
+      if (req.url === '/drip') {
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        const drip = setInterval(() => res.write('.'), 20);
+        res.on('close', () => clearInterval(drip));
+        return;
+      }
+      if (req.url === '/bomb') {
+        res.writeHead(200, { 'content-type': 'text/plain', 'content-encoding': 'gzip' });
+        res.end(BOMB);
+        return;
+      }
       if (req.url === '/redirect') {
         res.writeHead(302, { location: 'http://elsewhere.example/' });
         res.end();
@@ -487,7 +611,10 @@ describe('pinnedTransport', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     port = (server.address() as AddressInfo).port;
   });
-  afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  afterAll(() => new Promise<void>((resolve) => {
+    server.closeAllConnections();
+    server.close(() => resolve());
+  }));
 
   it('connects through the given lookup and sends a plain GET with only the given headers', async () => {
     const res = await pinnedTransport(toLocalServer)(`http://user:secret@docs.example:${port}/page?q=1`, init());
@@ -520,6 +647,30 @@ describe('pinnedTransport', () => {
     expect(res.ok).toBe(false);
     expect(res.headers.get('location')).toBe('http://elsewhere.example/');
     expect(seen.filter((r) => r.url === '/redirect')).toHaveLength(1);
+  });
+
+  // The policy is stubbed here: the test server's port is not one the guard allows.
+  const throughPinned = (opts: Partial<HttpWebFetcherOptions> = {}) => new HttpWebFetcher({
+    policy: { decide: async () => ({ allowed: true }) },
+    fetchImpl: pinnedTransport(toLocalServer),
+    ...opts,
+  });
+
+  it('gives up on a body that trickles in past the timeout', async () => {
+    const started = Date.now();
+    const result = await throughPinned({ timeoutMs: 300 }).fetch(`http://docs.example:${port}/drip`);
+
+    expect(result.success).toBe(false);
+    expect(result.output).toContain('timed out');
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it('caps a gzip bomb at the byte limit while decoding it', async () => {
+    const result = await throughPinned({ maxChars: 100 }).fetch(`http://docs.example:${port}/bomb`);
+
+    expect(result.success).toBe(true);
+    expect(result.truncated).toBe(true);
+    expect(result.output).toContain('total 2000000+, body was byte-capped');
   });
 
   it('rejects with the lookup error when the lookup refuses the host', async () => {

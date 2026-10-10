@@ -289,7 +289,7 @@ export function createSession(deps: SessionDeps): Session {
     },
   });
   deps.fsAdapter.setApproval?.(approvalPolicy);
-  const outboundSecrets = () => [...configSecrets(deps.config), ...mcpServer.heldTokens()];
+  const outboundSecrets = () => [...configSecrets(deps.config), ...mcpServer.heldTokens(), ...(aiService().heldSecrets?.() ?? [])];
   deps.fsAdapter.setOutboundSecrets?.(outboundSecrets);
   const webReads = new WebReadPolicy({
     approval: approvalPolicy,

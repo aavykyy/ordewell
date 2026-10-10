@@ -235,6 +235,7 @@ export function fakeMcpServer(): FakeMcpServer {
     issued,
     revoked,
     plannerHandlers,
+    heldTokens: () => issued.filter((token) => !revoked.includes(token)),
     issueTaskToken: issue,
     issuePlannerToken: async (_scope: unknown, handler: PlannerToolHandler = {}) => {
       plannerHandlers.push(handler);

@@ -33,6 +33,7 @@ import { redactSecrets } from '../../utils/redactSecrets';
 import { abortScope } from '../../utils/abortScope';
 import { runnerForProvider } from '../ProviderRegistry';
 import { collectResearchContext } from '../ContextCollector';
+import { sensitiveEnvValues } from '../outboundSecrets';
 import type { AgentAdapter, AgentEvent, AgentProcessDeps, PlannerStartOptions } from './AgentAdapter';
 import { createPlannerAdapter } from './connectors';
 import { mapAgentTool, normalizeAgentArgs } from './agentTools';
@@ -120,6 +121,7 @@ export class CliAgentAiService implements IAiService {
   private readonly processDeps: AgentProcessDeps;
   private readonly makeAdapter: (runner: string, deps: AgentProcessDeps) => AgentAdapter | null;
   private readonly workspaceRoot: () => string;
+  private environmentSecrets: string[] = [];
 
   private adapter: AgentAdapter | null = null;
   /**
@@ -145,13 +147,19 @@ export class CliAgentAiService implements IAiService {
     const runner = runnerForProvider(config.aiProvider);
     if (!runner) throw new Error(`${config.aiProvider} is not a coding-agent planner.`);
     this.runner = runner;
+    const spawn = deps.spawn ?? nodeSpawn;
     this.processDeps = {
-      spawn: deps.spawn ?? nodeSpawn,
+      spawn: (command, args, options) => {
+        const child = spawn(command, args, options);
+        this.environmentSecrets = sensitiveEnvValues(options.env);
+        return child;
+      },
       fetch: deps.fetch ?? globalThis.fetch,
       resolvePath: deps.resolvePath,
       platform: deps.platform,
       isDirectory: deps.isDirectory,
       exists: deps.exists,
+      workspaceEnv: deps.workspaceEnv,
     };
     this.makeAdapter = deps.createAdapter ?? createPlannerAdapter;
     this.workspaceRoot = deps.workspaceRoot ?? (() => process.cwd());
@@ -180,10 +188,13 @@ export class CliAgentAiService implements IAiService {
   /** The agent's own session id, a resumption hint only — Ordewell's transcript is authoritative (T4). */
   nativeSessionId(): string | null { return this.adapter?.nativeSessionId() ?? null; }
 
+  heldSecrets(): readonly string[] { return this.environmentSecrets; }
+
   reset(): void {
     this.activeAbort?.abort();
     this.activeAbort = null;
     this.disposeAdapter();
+    this.environmentSecrets = [];
     // Session boundaries are hard (ADR-0008): the next goal must not resume
     // the previous goal's agent session.
     this.lastNativeSessionId = null;

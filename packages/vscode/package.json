@@ -290,7 +290,7 @@
           "type": "array",
           "items": { "type": "string" },
           "default": [],
-          "description": "Extra planner allowlist entries. A command rule such as \"gh issue list\" or \"gcloud * * list\" covers commands whose leading words match it; \"mcp:find-*\" covers MCP tools by name; \"https://docs.example.com/*\" or \"/opt/data/*\" covers fetches and outside reads. A leading \"!\" excludes, and an exclusion wins."
+          "description": "Extra planner allowlist entries. A command rule such as \"gh issue list\" or \"gcloud * * list\" covers commands whose leading words match it; \"mcp:find-*\" covers MCP tools by name; \"https://docs.example.com/*\" or \"/opt/data/*\" covers fetches and outside reads; \"web_search:duckduckgo\" covers one search provider. A leading \"!\" excludes, and an exclusion wins in every mode. To turn web reads off, add all three entries: \"!web_search:*\", \"!https://*\" and \"!http://*\"."
         },
         "ordewell.plannerWebReadBudget": {
           "scope": "application",
