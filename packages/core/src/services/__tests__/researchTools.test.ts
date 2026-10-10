@@ -30,11 +30,9 @@ describe('researchTools', () => {
     });
   });
 
-  it('subagent toolset drops the network tools (they can block on user confirmation) and never recurses', () => {
+  it('subagent toolset keeps the read-only and web tools but never recurses', () => {
     const names = subagentToolSpecs().map((t) => t.name);
-    expect(names).toEqual(['read_file', 'read_files', 'glob', 'grep', 'find_symbol', 'list_dir', 'bash']);
-    expect(names).not.toContain('fetch');
-    expect(names).not.toContain('web_search');
+    expect(names).toEqual(['read_file', 'read_files', 'glob', 'grep', 'find_symbol', 'list_dir', 'bash', 'fetch', 'web_search']);
     expect(names).not.toContain('spawn_research_agent');
   });
 

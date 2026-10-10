@@ -16,6 +16,8 @@ import { RunnerApprovals } from './RunnerApprovals';
 import { approvalScopes, isRunnerApproval, type ApprovalAnswer, type ApprovalRequest } from '../interfaces/IApproval';
 import { HttpWebFetcher } from './HttpWebFetcher';
 import { WebReadPolicy } from './webReadPolicy';
+import { sharedWebResponseCache } from './WebResponseCache';
+import { sharedSearchProvider } from './DuckDuckGoSearchProvider';
 import { ALL_PROVIDERS } from './ProviderRegistry';
 import { ModelResolver } from './ModelResolver';
 import { coerceAssignments } from './ModelAllowlistResolver';
@@ -325,7 +327,9 @@ export function createSession(deps: SessionDeps): Session {
     approvalPolicy,
     // Every planner's web reads, carried here or natively, are decided by the
     // one policy, which asks through the same channel as paths and commands.
-    fetcher: new HttpWebFetcher({ policy: webReads }),
+    // The response cache and search provider are process-wide, so parallel
+    // sessions and their subagents share bytes and the search cooldown.
+    fetcher: new HttpWebFetcher({ policy: webReads, cache: sharedWebResponseCache, searchProvider: sharedSearchProvider }),
     skillsService: deps.skillsService ?? new SkillsService(deps.workspaceRoot()),
     saveSession: deps.saveSession ?? saveSession,
     conversation: (host) => (conversation = new PlannerConversation(host)),

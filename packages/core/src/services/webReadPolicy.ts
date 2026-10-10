@@ -17,6 +17,15 @@ export type WebRead =
 /** A refusal's `reason` is written for the planner: it says what to do next. */
 export type WebReadDecision = { allowed: true } | { allowed: false; reason: string };
 
+export interface DecideOptions {
+  /**
+   * Research subagents run in the background where nothing can prompt
+   * (ADR-0008, T6). When false, a read that would ask is refused with the gap
+   * to report, rather than raising a prompt nobody can answer.
+   */
+  prompting?: boolean;
+}
+
 export interface WebReadPolicyOptions {
   approval: IApproval;
   /** The secrets Ordewell holds — provider keys, MCP tokens — read per request. */
@@ -53,7 +62,7 @@ export class WebReadPolicy {
     this.resolveHost = opts.resolveHost ?? resolveAll;
   }
 
-  async decide(read: WebRead): Promise<WebReadDecision> {
+  async decide(read: WebRead, opts: DecideOptions = {}): Promise<WebReadDecision> {
     const target = read.kind === 'fetch' ? await this.vetFetch(read.url) : this.vetSearch(read);
     const { request, label } = target;
     if (target.refused) return this.refuse(request, target.refused.source, target.refused.reason);
@@ -70,11 +79,25 @@ export class WebReadPolicy {
     if (!spent) {
       return this.refuse(request, 'budget', `${label} refused: this planner turn has used its web-read budget (${this.budget()}). Continue with what you have, and tell the user that more reading would need a higher budget.`);
     }
+    if (opts.prompting === false) {
+      // A subagent may never prompt: only what is already standing — a grant,
+      // the allowlist, or Full's mode — lets the read through.
+      if ((this.approval.peek?.(request) ?? 'ask') === 'allow') return ALLOWED;
+      this.refund(spent.turn);
+      return this.subagentRefusal(read, request);
+    }
     if (await this.approval.request(request)) return ALLOWED;
     this.refund(spent.turn);
     return { allowed: false, reason: read.kind === 'fetch'
       ? `Fetch not approved: ${request.scope}. Continue without it, or ask the user to approve this origin or add it to the planner allowlist.`
       : 'Web search not approved. Continue without it, or fetch a documentation URL you already know.' };
+  }
+
+  private subagentRefusal(read: WebRead, request: ApprovalRequest): WebReadDecision {
+    this.approval.record?.(request, false, 'no-channel');
+    return { allowed: false, reason: read.kind === 'fetch'
+      ? `Fetch refused: ${request.scope} is not approved in this session, and research agents run in the background where nothing can be approved. Note the gap in your digest; the planner can fetch it directly.`
+      : 'Web search refused: research agents run in the background where nothing can be approved. Note the gap in your digest; the planner can search directly.' };
   }
 
   /**
@@ -124,7 +147,10 @@ export class WebReadPolicy {
 
   private vetSearch({ query, provider, providerLabel, note }: Extract<WebRead, { kind: 'search' }>): Target {
     const label = 'Web search';
-    const detail = `Planner research wants to search the web with ${providerLabel ?? provider}${note ? `. ${note}` : ''}`;
+    // A bare id is one of Ordewell's own backends, so the prompt says plainly
+    // that the query leaves for a third party; a labelled runner-native search
+    // points at the provider's own request instead, where `note` explains it.
+    const detail = `Planner research wants to search the web with ${providerLabel ?? provider}${providerLabel ? '' : ', a third party that receives the query'}${note ? `. ${note}` : ''}`;
     const request = (subject: string): ApprovalRequest =>
       ({ kind: 'web_search', subject, scope: searchScope(provider), detail });
     if (this.carriesSecret([query])) {

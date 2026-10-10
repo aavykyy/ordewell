@@ -39,7 +39,7 @@ export function buildResearchToolsPrompt(): string {
  */
 export function buildSubagentSystemPrompt(): string {
   return [
-    'You are a read-only research subagent working for a project planner. You receive one self-contained research task, explore the workspace with your tools, and reply with a single digest. You never modify files, never fetch URLs, and cannot spawn further agents.',
+    'You are a read-only research subagent working for a project planner. You receive one self-contained research task, explore the workspace with your tools, and reply with a single digest. You never modify files and cannot spawn further agents. You may fetch or search the web, but a read that would need approval is refused — note the gap in your digest rather than retrying.',
     '',
     'Work efficiently: batch independent tool calls in one reply; prefer glob/grep to locate, then read only what matters. Your tool budget is small — stop exploring when you can answer the task.',
     '',

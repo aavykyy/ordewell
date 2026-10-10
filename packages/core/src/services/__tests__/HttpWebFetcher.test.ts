@@ -4,6 +4,7 @@ import type { AddressInfo, LookupFunction } from 'node:net';
 import { brotliCompressSync, gzipSync } from 'node:zlib';
 import { HttpWebFetcher, pinnedTransport, type HttpWebFetcherOptions } from '../HttpWebFetcher';
 import { WebReadPolicy } from '../webReadPolicy';
+import { DuckDuckGoSearchProvider } from '../DuckDuckGoSearchProvider';
 import type { IApproval } from '../../interfaces/IApproval';
 
 const allow: IApproval = { request: async () => true };
@@ -193,6 +194,57 @@ describe('HttpWebFetcher.search', () => {
 
     expect(result.success).toBe(false);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe('HttpWebFetcher.search back-off', () => {
+  it('starts a cooldown on a 429 and sends no request for the next search', async () => {
+    const provider = new DuckDuckGoSearchProvider(() => 1_000);
+    const fetchImpl = vi.fn().mockResolvedValue(response('too many requests', { status: 429 }));
+    const fetcher = makeFetcher({ approval: allow, fetchImpl, searchProvider: provider });
+
+    const first = await fetcher.search('hono');
+    expect(first.success).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    const second = await fetcher.search('serde');
+    expect(second.success).toBe(false);
+    expect(second.output).toMatch(/temporarily unavailable/i);
+    expect(second.output).toMatch(/fetch/i);
+    // No request went out for the second search.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts a cooldown on a challenge page rather than reporting a parse miss', async () => {
+    const provider = new DuckDuckGoSearchProvider(() => 1_000);
+    const fetchImpl = vi.fn().mockResolvedValue(response('Please complete the CAPTCHA to continue'));
+    const fetcher = makeFetcher({ approval: allow, fetchImpl, searchProvider: provider });
+
+    const result = await fetcher.search('hono');
+
+    expect(result.success).toBe(false);
+    expect(provider.coolingDown()).toBe(true);
+    expect(result.output).toMatch(/temporarily unavailable/i);
+  });
+
+  it('resets the cooldown after a successful search', async () => {
+    let now = 1_000;
+    const provider = new DuckDuckGoSearchProvider(() => now);
+    const results = '<a class="result__a" href="https://hono.dev/docs/routing">Hono Routing</a>';
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(response('nope', { status: 429 }))
+      .mockResolvedValue(response(results));
+    const fetcher = makeFetcher({ approval: allow, fetchImpl, searchProvider: provider });
+
+    await fetcher.search('hono');
+    expect(provider.coolingDown()).toBe(true);
+
+    now += 60_000;
+    expect(provider.coolingDown()).toBe(false);
+    const result = await fetcher.search('serde');
+
+    expect(result.success).toBe(true);
+    expect(provider.coolingDown()).toBe(false);
   });
 });
 

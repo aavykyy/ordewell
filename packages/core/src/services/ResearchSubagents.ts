@@ -5,6 +5,7 @@ import { resolveResearchShell, researchPolicyOptions } from './researchShell';
 import { resolveWithin, resolveRef } from './pathScope';
 import { classifyOutcome } from './researchStepSummary';
 import type { IFileSystem, ToolOutcome } from '../interfaces/IFileSystem';
+import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { ResearchChat, ToolResult } from './BaseAiService';
 import type { ResearchProgress, ResearchStep } from '../models/Task';
 import type { UsageRecord, UsageTotals } from '../models/Usage';
@@ -37,6 +38,13 @@ export interface SubagentDeps {
   createChat: (onReasoning: (delta: string) => void, onUsage: (record: UsageRecord) => void) => ResearchChat;
   fs: IFileSystem;
   signal?: AbortSignal;
+  /**
+   * The fetcher the subagent's `fetch`/`web_search` calls go through, already
+   * a non-prompting variant: a read that would ask is refused, with the gap to
+   * report (ADR-0027). Absent means the web tools report themselves
+   * unavailable.
+   */
+  fetcher?: IWebFetcher;
   /** This subagent's id, stamped on its progress events and its step ids so a replay can regroup them. */
   subagentId?: string;
   /** The model this subagent runs on, shown with its lifecycle events. */
@@ -126,11 +134,11 @@ async function runLoop(prompt: string, deps: SubagentDeps): Promise<string> {
     if (deps.signal?.aborted) return `[research agent aborted] Partial findings:\n${turn.text}`;
     const results: ToolResult[] = [];
     for (const tc of turn.toolCalls) {
-      // Anything outside the read-only allowlist (fetch, recursive spawn,
-      // hallucinated write tools) is refused with a synthetic result — never
-      // dispatched — so the API history stays valid and nothing executes.
+      // Anything outside the read-only allowlist (recursive spawn, hallucinated
+      // write tools) is refused with a synthetic result — never dispatched — so
+      // the API history stays valid and nothing executes.
       if (!ALLOWED_TOOL_NAMES.has(tc.name)) {
-        const refusal = `Tool "${tc.name}" is not available. You are a read-only research subagent: your only tools are ${[...ALLOWED_TOOL_NAMES].join(', ')}. You cannot fetch URLs, spawn further agents, or modify files. If a specific URL or resource would have answered your question, name it in your digest so the planner can fetch it directly. Otherwise continue with the available tools, then reply with your digest.`;
+        const refusal = `Tool "${tc.name}" is not available. You are a read-only research subagent: your only tools are ${[...ALLOWED_TOOL_NAMES].join(', ')}. You cannot spawn further agents or modify files. If a specific resource would have answered your question, name it in your digest so the planner can fetch it directly. Otherwise continue with the available tools, then reply with your digest.`;
         results.push({ name: tc.name, output: refusal, truncated: false, totalChars: refusal.length, id: tc.id });
         continue;
       }
@@ -141,7 +149,7 @@ async function runLoop(prompt: string, deps: SubagentDeps): Promise<string> {
       // Signal-aware per call, not just per round: a subagent round routinely
       // carries several calls, and a stop that only lands between rounds still
       // waits out every one of them.
-      const res = await executeTool(tc.name, args, fs, undefined, deps.signal);
+      const res = await executeTool(tc.name, args, fs, deps.fetcher, deps.signal);
       const output = res.output.length > SUBAGENT_LIMITS.toolOutputMaxChars
         ? res.output.slice(0, SUBAGENT_LIMITS.toolOutputMaxChars) + `\n[... truncated to ${SUBAGENT_LIMITS.toolOutputMaxChars} chars, total ${res.output.length}]`
         : res.output;

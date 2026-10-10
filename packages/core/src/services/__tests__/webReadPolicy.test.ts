@@ -81,6 +81,9 @@ describe('WebReadPolicy in Guarded', () => {
 
     expect(ask).toHaveBeenCalledTimes(1);
     expect(ask.mock.calls[0][0]).toMatchObject({ kind: 'web_search', subject: 'tokio changelog', scope: 'web_search:duckduckgo' });
+    // The prompt names the backend and says a third party receives the query.
+    expect(ask.mock.calls[0][0].detail).toMatch(/duckduckgo/i);
+    expect(ask.mock.calls[0][0].detail).toMatch(/third party/i);
   });
 
   it('lets an allowlisted origin run without asking', async () => {
