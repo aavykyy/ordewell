@@ -18,6 +18,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { parseAllowlist } from '../plannerAllowlist';
 import { classifyCommand } from '../commandPolicy';
 import { CORPUS, KNOWN_GAPS, type CorpusEntry, type KnownGap } from './fixtures/commandCorpus';
 
@@ -50,9 +51,13 @@ describe('command classification corpus', () => {
     const expected: Record<string, string> = {};
 
     for (const entry of CORPUS) {
-      const result = classifyCommand(entry.command, { dialect: entry.dialect ?? 'posix' });
+      const result = classifyCommand(entry.command, { dialect: entry.dialect ?? 'posix', autonomous: entry.autonomous, approvalMode: entry.approvalMode, allow: entry.allow ? parseAllowlist(entry.allow) : undefined });
       actual[key(entry)] = render(result.tier, result.scope, entry.scope !== undefined);
       expected[key(entry)] = expectedFor(entry);
+      if (entry.perInvocation !== undefined) {
+        actual[key(entry)] += ` — per invocation ${result.perInvocation ?? false}`;
+        expected[key(entry)] += ` — per invocation ${entry.perInvocation}`;
+      }
     }
 
     expect(actual).toEqual(expected);

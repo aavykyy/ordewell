@@ -44,6 +44,7 @@ function plannerAsk(name: string, input: Record<string, unknown>, server: string
     return { kind: 'mcp', scope: name, tool: tool || name, ...(server ? { server } : {}) };
   }
   if (name === 'WebFetch' && typeof input.url === 'string') return { kind: 'fetch', url: input.url };
+  if (name === 'WebSearch' && typeof input.query === 'string') return { kind: 'search', query: input.query, provider: 'anthropic' };
   const pathTool = PATH_TOOLS[name];
   const target = pathTool ? input[pathTool.field] : undefined;
   if (pathTool && typeof target === 'string') return { kind: 'path', path: target, directory: pathTool.directory };

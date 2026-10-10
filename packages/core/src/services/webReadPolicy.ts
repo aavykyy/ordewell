@@ -12,7 +12,7 @@ import { carriesSecret, sensitiveEnvValues } from './outboundSecrets';
 export type WebRead =
   | { kind: 'fetch'; url: string }
   /** `provider` keys the grant; `providerLabel`, when given, names it to the person asked. */
-  | { kind: 'search'; query: string; provider: string; providerLabel?: string };
+  | { kind: 'search'; query: string; provider: string; providerLabel?: string; note?: string };
 
 /** A refusal's `reason` is written for the planner: it says what to do next. */
 export type WebReadDecision = { allowed: true } | { allowed: false; reason: string };
@@ -122,10 +122,11 @@ export class WebReadPolicy {
     return { label, request: request(raw, `${url.origin}/*`, url.origin) };
   }
 
-  private vetSearch({ query, provider, providerLabel }: Extract<WebRead, { kind: 'search' }>): Target {
+  private vetSearch({ query, provider, providerLabel, note }: Extract<WebRead, { kind: 'search' }>): Target {
     const label = 'Web search';
+    const detail = `Planner research wants to search the web with ${providerLabel ?? provider}${note ? `. ${note}` : ''}`;
     const request = (subject: string): ApprovalRequest =>
-      ({ kind: 'web_search', subject, scope: searchScope(provider), detail: `Planner research wants to search the web with ${providerLabel ?? provider}` });
+      ({ kind: 'web_search', subject, scope: searchScope(provider), detail });
     if (this.carriesSecret([query])) {
       return { label, request: request(WITHHELD), refused: { source: 'secret', reason: secretRefusal(label, 'query') } };
     }

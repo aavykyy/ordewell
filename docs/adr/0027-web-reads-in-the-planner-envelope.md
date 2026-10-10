@@ -206,17 +206,26 @@ Research subagents get `fetch` and `web_search`, and still never prompt
   and a command naming several origins asks for each in one prompt (ADR-0008).
 - **The host passes the SSRF guard** before the command is asked about.
 - **Flags are a positive list.** Only flags known not to write, send data or
-  read a config run; any other flag refuses. So `-o`, `-O`, `--output-dir`,
-  `-D`, `-c` and the trace and save flags are refused, and so is `wget`
-  unless its output is standard output.
+  read a config run without a fresh approval; the data and credential flags
+  below are the exceptions, and any other flag refuses. So `-o`, `-O`,
+  `--output-dir`, `-D`, `-c`, uploads (`-T`) and the trace and save flags are
+  refused. The only curl output path admitted is `/dev/null`. `wget` refuses
+  unless its output is standard output or it is `--spider`.
 - **Data and credential flags ask every time** and are never remembered:
-  `-d` and the `--data` family, `-F`, `-T`, `-u`, `-H`, `-b`.
+  `-d` and the `--data` family, `-F`, `-u`, `-H`, `-b`, `-e`, `--netrc`, a URL
+  with userinfo, and `-X` other than GET or HEAD. Literal `--data-urlencode`
+  with `-G` is a query; reading its data from a file still asks every time.
 - **Following redirects asks every time,** since the origin it reaches is not
   the one approved: `curl -L`, and `wget` unless redirects are turned off.
 - **Startup files are not read.** The run disables `.curlrc` and `.wgetrc`,
   which a workspace environment (ADR-0016) could otherwise point at a file the
-  repository ships.
-- **In Full, `curl` and `wget` stay refused,** whatever the allowlist says.
+  repository ships. Curl gets `-q` as its first argument; wget gets
+  `--no-config`, `--no-hsts` and `--no-netrc` so its cache cannot write and its
+  default credential file cannot attach credentials. Both clients disable
+  environment-selected proxies. These flags are inserted before classification,
+  so the classifier reads exactly the string that runs (ADR-0011, B6).
+- **In Full and allowlist mode, `curl` and `wget` stay refused,** whatever
+  the allowlist says.
   Every planner has a vetted `fetch`, and a command line's redirect, resolve
   and config surface is not something an allowlist rule can bound.
 
@@ -283,6 +292,7 @@ filed as its own issue.
   web reads, hardened SSRF guard with pinned connections, outbound secret
   check, pluggable search providers, web reads for research subagents,
   per-origin `curl`/`wget`; an egress proxy planned as phase 2.
+- 2026-10-10 — implemented the `run_command` curl/wget restrictions.
 - 2026-10-10 — OpenCode's `websearch` and `codesearch` stay native, asked as
   kind `search`, instead of being denied; Ordewell's `fetch` and
   `web_search` are fallbacks for harness planners; Codex's modes verified on

@@ -14,6 +14,8 @@ import type { ApprovalRequest } from '../../interfaces/IApproval';
 import { addPlannerUsage, plannerContextFill } from '../../models/Usage';
 import { TurnStream } from '../replyStream';
 import { Planner } from '../Planner';
+import { WebReadPolicy, type WebRead } from '../webReadPolicy';
+import { summarizeToolCall } from '../researchStepSummary';
 import { createTask } from '../../models/Task';
 
 /**
@@ -421,6 +423,64 @@ describe('CliAgentAiService — Claude Code', () => {
 
     expect(decide).toHaveBeenCalledWith({ kind: 'fetch', url: 'https://docs.example.com/x' });
     expect(controlAnswer(spawned.processes[0])).toMatchObject({ behavior: 'deny', message: expect.stringContaining('looks like a secret') });
+  });
+
+  it('decides a WebSearch through the web-read policy as a search at Anthropic', async () => {
+    const decide = vi.fn().mockResolvedValue({ allowed: false, reason: 'Web search refused: the query contains what looks like a secret.' });
+    const fetcher = { decide, fetch: vi.fn() };
+    const { svc, spawned } = service('claude-code', reachingFor('WebSearch', { query: 'tokio 1.40 changelog' }));
+    await svc.startConversation(request({ approval: approvalSpy(true), fetcher }));
+
+    expect(decide).toHaveBeenCalledWith(expect.objectContaining({ kind: 'search', query: 'tokio 1.40 changelog', provider: 'anthropic' }));
+    expect(controlAnswer(spawned.processes[0])).toMatchObject({ behavior: 'deny', message: expect.stringContaining('looks like a secret') });
+  });
+
+  it('asks once for a WebSearch, saying Anthropic already sees the conversation, and lets it run once approved', async () => {
+    const approval = approvalSpy(true);
+    const reads = new WebReadPolicy({ approval, env: () => ({}) });
+    const fetcher = { decide: (read: WebRead) => reads.decide(read), fetch: vi.fn() };
+    const { svc, spawned } = service('claude-code', reachingFor('WebSearch', { query: 'tokio 1.40 changelog' }));
+    await svc.startConversation(request({ approval, fetcher }));
+
+    expect(approval.request).toHaveBeenCalledTimes(1);
+    expect(approval.request.mock.calls[0][0]).toMatchObject({
+      kind: 'web_search',
+      subject: 'tokio 1.40 changelog',
+      scope: 'web_search:anthropic',
+      detail: expect.stringContaining('already sees this planner\'s conversation'),
+    });
+    expect(controlAnswer(spawned.processes[0])).toEqual({ behavior: 'allow', updatedInput: { query: 'tokio 1.40 changelog' } });
+  });
+
+  it('shows a WebSearch in the timeline under its own name, with the query visible', async () => {
+    const { svc } = service('claude-code', reachingFor('WebSearch', { query: 'tokio 1.40 changelog' }));
+    const { events, onProgress } = collector();
+    const fetcher = { decide: vi.fn().mockResolvedValue({ allowed: true }), fetch: vi.fn() };
+    await svc.startConversation(request({ onProgress, approval: approvalSpy(true), fetcher }));
+
+    const call = events.find((e) => e.type === 'tool_call');
+    expect(call).toMatchObject({ tool: 'web_search', toolLabel: 'WebSearch' });
+    expect(summarizeToolCall(call!.tool!, call!.toolArgs!, call!.toolLabel)).toBe('web_search "tokio 1.40 changelog"');
+  });
+
+  it('shows a WebFetch in the timeline under its own name, with the URL visible', async () => {
+    const { svc } = service('claude-code', reachingFor('WebFetch', { url: 'https://docs.example.com/x', prompt: 'summarize' }));
+    const { events, onProgress } = collector();
+    const fetcher = { decide: vi.fn().mockResolvedValue({ allowed: true }), fetch: vi.fn() };
+    await svc.startConversation(request({ onProgress, approval: approvalSpy(true), fetcher }));
+
+    const call = events.find((e) => e.type === 'tool_call');
+    expect(call).toMatchObject({ tool: 'fetch', toolLabel: 'WebFetch' });
+    expect(summarizeToolCall(call!.tool!, call!.toolArgs!, call!.toolLabel)).toBe('fetch https://docs.example.com/x');
+  });
+
+  it('denies a tool the envelope has no rule for without claiming it tried to change a file', async () => {
+    const { svc, spawned } = service('claude-code', reachingFor('TodoWrite', { todos: [] }));
+    await svc.startConversation(request({ approval: approvalSpy(true) }));
+
+    const answer = controlAnswer(spawned.processes[0]);
+    expect(answer).toMatchObject({ behavior: 'deny', message: expect.stringContaining('no rule for this tool') });
+    expect(answer?.message).not.toContain('changes no files');
   });
 
   it('surfaces a mid-turn process death as a visible chat error', async () => {

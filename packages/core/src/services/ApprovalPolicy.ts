@@ -1,5 +1,6 @@
 import { approvalScopes, type IApproval, type ApprovalKind, type ApprovalRequest } from '../interfaces/IApproval';
 import { parseAllowlist, scopeAllowed, toolAllowed, type PlannerAllowlist } from './plannerAllowlist';
+import type { CommandPolicyOptions } from './commandPolicy';
 
 /**
  * Decides whether one out-of-envelope capability may run, and remembers the
@@ -55,6 +56,7 @@ export function parseApprovalModeSetting(raw: string | undefined): ApprovalModeS
 export interface ApprovalPolicyOptions {
   /** Read per request, for the kind being asked about. */
   mode?: ApprovalMode | ((kind: ApprovalKind) => ApprovalMode);
+  autonomous?: () => boolean;
   /** Allowlist entries granted up front from config (ADR-0026). */
   preApproved?: readonly string[] | (() => readonly string[]);
   /** The human channel. Absent means there is nobody to ask. */
@@ -75,6 +77,7 @@ export type ApprovalSource = 'pre-approved' | 'remembered' | 'mode' | 'asked' | 
 
 export class ApprovalPolicy implements IApproval {
   private readonly modeOf: (kind: ApprovalKind) => ApprovalMode;
+  private readonly autonomousOf: () => boolean;
   private readonly entriesOf: () => readonly string[];
   private parsed: { key: string; list: PlannerAllowlist } | null = null;
   private readonly asker?: (req: ApprovalRequest) => Promise<boolean>;
@@ -92,6 +95,7 @@ export class ApprovalPolicy implements IApproval {
   constructor(opts: ApprovalPolicyOptions = {}) {
     const { mode = 'ask', preApproved = [] } = opts;
     this.modeOf = typeof mode === 'function' ? mode : () => mode;
+    this.autonomousOf = opts.autonomous ?? (() => false);
     this.entriesOf = typeof preApproved === 'function' ? preApproved : () => preApproved;
     this.asker = opts.ask;
     this.onDecision = opts.onDecision;
@@ -104,6 +108,11 @@ export class ApprovalPolicy implements IApproval {
     };
 
     const scopes = approvalScopes(req);
+    if (req.perInvocation) {
+      if (this.modeOf(req.kind) === 'deny' || this.autonomousOf()) return decide(false, 'mode');
+      if (!this.asker) return decide(false, 'no-channel');
+      return decide(await this.asker(req).catch(() => false), 'asked');
+    }
     // A denial of several scopes is keyed on all of them together: the "no"
     // may have been about any one, so it refuses none of them on its own.
     const key = scopes.join('\n');
@@ -145,6 +154,10 @@ export class ApprovalPolicy implements IApproval {
       else this.refused.add(key);
     }
     return decide(answer, 'asked');
+  }
+
+  commandPolicy(): Pick<CommandPolicyOptions, 'autonomous' | 'approvalMode'> {
+    return { autonomous: this.autonomousOf(), approvalMode: this.modeOf('shell_command') };
   }
 
   /** Report a decision a guard reached before this policy was asked. */
