@@ -271,6 +271,8 @@ const MULTIPLEXERS = ['git', 'npm', 'yarn', 'pnpm', 'npx', 'cargo', 'go', 'dotne
  */
 export interface CommandPolicyOptions {
   dialect?: ShellDialect;
+  /** Only flags generated from vetted DNS answers by BaseFileSystem, never caller input. */
+  trustedWebResolves?: ReadonlySet<string>;
   autonomous?: boolean;
   approvalMode?: 'ask' | 'allow' | 'deny';
   /**
@@ -292,6 +294,7 @@ export interface CommandClassification {
   /** Separate grants for commands that name several origins. */
   scopes?: string[];
   webUrls?: URL[];
+  webUrlTexts?: string[];
   /** What a grant covers, for `ask`. Derived from the non-auto segments only. */
   scope: string;
   /** Populated for `refuse`: why, in a sentence the model can act on. */
@@ -545,8 +548,8 @@ function isAuto(seg: Segment, opts: CommandPolicyOptions): boolean {
   return sub !== undefined && GIT_READONLY_SUBCOMMANDS.includes(sub);
 }
 
-function refusalFor(seg: Segment): string | undefined {
-  const web = webCommand(seg);
+function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string | undefined {
+  const web = webCommand(seg, trustedResolves);
   if (web?.reason) return web.reason;
   // Nothing else about the segment means anything when the name of what runs
   // is only known once the shell has run the substitution or read the variable.
@@ -801,18 +804,18 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
   // Every segment is reduced to the command that will actually execute first,
   // so `env`, `nice`, `timeout` and friends decide nothing about the answer.
   const unwrapped = segments.map((seg) => unwrap(seg, dialect));
-  if (segments.some((seg, i) => seg.nested && webCommand(unwrapped[i].seg))) {
+  if (segments.some((seg, i) => seg.nested && webCommand(unwrapped[i].seg, opts.trustedWebResolves))) {
     return { tier: 'refuse', scope: '', reason: 'A curl or wget command inside a substitution cannot have its startup files disabled safely. Run it directly, or use the Ordewell fetch tool.' };
   }
 
   for (const { seg, wrappers, runner, reason: wrapperReason } of unwrapped) {
     if (wrapperReason) return { tier: 'refuse', scope: '', reason: wrapperReason };
-    if (webCommand(seg) && (opts.autonomous || opts.approvalMode === 'deny')) {
+    if (webCommand(seg, opts.trustedWebResolves) && (opts.autonomous || opts.approvalMode === 'deny')) {
       return { tier: 'refuse', scope: '', reason: 'curl and wget are refused in Full and allowlist mode. Use the Ordewell fetch tool instead.' };
     }
     // Matched case-insensitively: cmd.exe builtins and the default macOS and
     // Windows filesystems all take `RM` or `Del` for the refused name.
-    const reason = refusalFor({ ...seg, binary: seg.binary.toLowerCase() });
+    const reason = refusalFor({ ...seg, binary: seg.binary.toLowerCase() }, opts.trustedWebResolves);
     if (reason) return { tier: 'refuse', scope: '', reason: withWrapperNote(reason, wrappers) };
     if (runner && !XARGS_TARGETS.includes(seg.binary)) {
       return {
@@ -843,7 +846,8 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
     const name = u.seg.binary.toLowerCase();
     return name === 'cd' || (name !== 'command' && SHELL_STATE_COMMANDS.has(name));
   });
-  const webUrls = nonAuto.flatMap((u) => webCommand(u.seg)?.urls ?? []);
+  const webUrls = nonAuto.flatMap((u) => webCommand(u.seg, opts.trustedWebResolves)?.urls ?? []);
+  const webUrlTexts = nonAuto.flatMap((u) => webCommand(u.seg, opts.trustedWebResolves)?.urlTexts ?? []);
   if (lineScoped && webUrls.length === 0) {
     return { tier: 'ask', scope: trimmed };
   }
@@ -853,16 +857,16 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
   // and under a runner it names the command run, so approving `xargs grep`
   // never covers `xargs cat`.
   const scopes = [...new Set(nonAuto.flatMap((u) => {
-    const web = webCommand(u.seg);
-    return web ? web.urls.map((url) => `${u.seg.binaryPath ?? u.seg.binary} ${url.origin}/*`)
+    const web = webCommand(u.seg, opts.trustedWebResolves);
+    return web ? web.urls.map((url) => `${u.seg.binary.toLowerCase().replace(/\.exe$/, '')} ${url.origin}/*`)
       : [lineScoped ? trimmed : u.runner ? `${u.runner} ${scopeFor(u.seg)}` : scopeFor(u.seg)];
   }))].sort();
   const scope = scopes.join(' + ');
-  const perInvocation = nonAuto.some((u) => webCommand(u.seg)?.perInvocation);
-  const allowedBy = opts.allow && !perInvocation && !lineScoped ? allowlistRule(nonAuto, opts.allow) : undefined;
+  const perInvocation = nonAuto.some((u) => webCommand(u.seg, opts.trustedWebResolves)?.perInvocation);
+  const allowedBy = opts.allow && !perInvocation && !lineScoped ? allowlistRule(nonAuto, opts.allow, opts.trustedWebResolves) : undefined;
   return {
     tier: 'ask', scope,
-    ...(webUrls.length ? { webUrls } : {}),
+    ...(webUrls.length ? { webUrls, webUrlTexts } : {}),
     ...(scopes.length > 1 && webUrls.length ? { scopes } : {}),
     ...(perInvocation ? { perInvocation } : {}),
     ...(allowedBy ? { allowedBy } : {}),
@@ -876,11 +880,11 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
  * leading assignment redirects the program (`GH_HOST=… gh issue list` sends
  * the token elsewhere), or a path names a file in place of the program.
  */
-function allowlistRule(parts: { seg: Segment; runner?: string }[], allow: PlannerAllowlist): string | undefined {
+function allowlistRule(parts: { seg: Segment; runner?: string }[], allow: PlannerAllowlist, trustedResolves?: ReadonlySet<string>): string | undefined {
   const rules: string[] = [];
   for (const { seg, runner } of parts) {
     if (runner || seg.expandable || seg.globbed || seg.binaryPath !== undefined || seg.assignments.length > 0) return undefined;
-    const web = webCommand(seg);
+    const web = webCommand(seg, trustedResolves);
     if (web) {
       for (const url of web.urls) {
         const rule = commandAllowedBy(allow, { binary: seg.binary, args: [`${url.origin}/*`], scopeWords: 1 });

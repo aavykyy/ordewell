@@ -7,7 +7,7 @@ const PUBLIC_IP = '93.184.215.14';
 
 const RESULTS = `
   <html><body>
-    <a class="result__a" href="https://hono.dev/docs/routing">Hono Routing</a>
+    <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fhono.dev%2Fdocs%2Frouting&amp;rut=abc" class='result-link'>Hono Routing</a>
   </body></html>`;
 
 function response(body: string) {

@@ -1,5 +1,5 @@
 import type { IApproval, ApprovalRequest } from '../interfaces/IApproval';
-import { resolveAll, vetEgress, type ResolveAll } from './egressGuard';
+import { resolveAll, vetEgress, vetEgressUnresolved, type ResolveAll } from './egressGuard';
 import { scopeExcluded } from './plannerAllowlist';
 import type { ApprovalSource } from './ApprovalPolicy';
 import { carriesSecret, sensitiveEnvValues } from './outboundSecrets';
@@ -62,8 +62,14 @@ export class WebReadPolicy {
     this.resolveHost = opts.resolveHost ?? resolveAll;
   }
 
+  /**
+   * Every check that needs no network runs first, then the budget and the
+   * approval, and only then is a fetch's host resolved: a lookup is itself a
+   * request, so `<data>.attacker.example` would leave through DNS even for a
+   * read that is then excluded, over budget or declined.
+   */
   async decide(read: WebRead, opts: DecideOptions = {}): Promise<WebReadDecision> {
-    const target = read.kind === 'fetch' ? await this.vetFetch(read.url) : this.vetSearch(read);
+    const target = read.kind === 'fetch' ? this.vetFetch(read.url) : this.vetSearch(read);
     const { request, label } = target;
     if (target.refused) return this.refuse(request, target.refused.source, target.refused.reason);
 
@@ -82,19 +88,30 @@ export class WebReadPolicy {
     if (opts.prompting === false) {
       // A subagent may never prompt: only what is already standing — a grant,
       // the allowlist, or Full's mode — lets the read through.
-      if ((this.approval.peek?.(request) ?? 'ask') === 'allow') return ALLOWED;
+      const standing = this.approval.peek?.(request);
+      if (standing?.decision === 'allow') {
+        this.approval.record?.(request, true, standing.source);
+        return this.resolved(target, spent.turn);
+      }
       this.refund(spent.turn);
-      return this.subagentRefusal(read, request);
+      return this.subagentRefusal(read, request, standing?.source ?? 'no-channel');
     }
-    if (await this.approval.request(request)) return ALLOWED;
+    if (await this.approval.request(request)) return this.resolved(target, spent.turn);
     this.refund(spent.turn);
     return { allowed: false, reason: read.kind === 'fetch'
       ? `Fetch not approved: ${request.scope}. Continue without it, or ask the user to approve this origin or add it to the planner allowlist.`
       : 'Web search not approved. Continue without it, or fetch a documentation URL you already know.' };
   }
 
-  private subagentRefusal(read: WebRead, request: ApprovalRequest): WebReadDecision {
-    this.approval.record?.(request, false, 'no-channel');
+  private subagentRefusal(read: WebRead, request: ApprovalRequest, source: ApprovalSource): WebReadDecision {
+    const label = read.kind === 'fetch' ? 'Fetch' : 'Web search';
+    if (source === 'mode') {
+      return this.refuse(request, source, `${label} refused: ${request.scope} is not covered by the planner allowlist in allowlist mode. Note the gap in your digest; the user must add a standing approval or change the approval mode.`);
+    }
+    if (source === 'remembered') {
+      return this.refuse(request, source, `${label} refused: ${request.scope} was previously refused in this session. Note the gap in your digest; the user must add a standing approval or start a new session.`);
+    }
+    this.approval.record?.(request, false, source);
     return { allowed: false, reason: read.kind === 'fetch'
       ? `Fetch refused: ${request.scope} is not approved in this session, and research agents run in the background where nothing can be approved. Note the gap in your digest; the planner can fetch it directly.`
       : 'Web search refused: research agents run in the background where nothing can be approved. Note the gap in your digest; the planner can search directly.' };
@@ -103,14 +120,24 @@ export class WebReadPolicy {
   /**
    * Whether a search through `provider` would run without asking anyone, for
    * a runner whose own search raises no request and is set on or off when
-   * its session starts (ADR-0027). No query is known yet, so neither the
-   * secret check nor the budget can apply.
+   * its session starts (ADR-0027). A zero budget disables it; no query is
+   * known yet, so secrets and individual reads cannot be checked or counted.
    */
   searchesUnasked(provider: string): boolean {
+    if (this.budget() === 0) return false;
     const scope = searchScope(provider);
     const list = this.approval.allowlist?.();
     if (list && scopeExcluded(list, scope)) return false;
     return this.approval.grantsUnasked?.({ kind: 'web_search', scope }) ?? false;
+  }
+
+  /** The last check, the one that leaves the machine: every DNS answer for the host must be public. */
+  private async resolved(target: Target, turn: string | undefined): Promise<WebReadDecision> {
+    if (!target.resolve) return ALLOWED;
+    const egress = await vetEgress(target.resolve.hostname, target.resolve.port, this.resolveHost);
+    if (egress.ok) return ALLOWED;
+    this.refund(turn);
+    return this.refuse(target.request, 'guard', guardRefusal(egress.reason));
   }
 
   private refuse(request: ApprovalRequest, source: ApprovalSource, reason: string): WebReadDecision {
@@ -118,7 +145,7 @@ export class WebReadPolicy {
     return { allowed: false, reason };
   }
 
-  private async vetFetch(raw: string): Promise<Target> {
+  private vetFetch(raw: string): Target {
     const label = 'Fetch';
     const request = (subject: string, scope: string, origin = scope): ApprovalRequest =>
       ({ kind: 'url_fetch', subject, scope, detail: `Planner research wants to fetch ${origin}` });
@@ -138,11 +165,12 @@ export class WebReadPolicy {
     if (url.protocol !== 'https:' && url.protocol !== 'http:') {
       return { label, request: request(raw, raw), refused: { source: 'guard', reason: 'Fetch refused: only http and https URLs can be fetched.' } };
     }
-    const egress = await vetEgress(url.hostname, url.port, this.resolveHost);
-    if (!egress.ok) {
-      return { label, request: request(raw, `${url.origin}/*`, url.origin), refused: { source: 'guard', reason: `Fetch refused: ${egress.reason}. Private, local and non-web addresses are never fetched.` } };
+    const fetchRequest = request(raw, `${url.origin}/*`, url.origin);
+    const egress = vetEgressUnresolved(url.hostname, url.port);
+    if (egress && !egress.ok) {
+      return { label, request: fetchRequest, refused: { source: 'guard', reason: guardRefusal(egress.reason) } };
     }
-    return { label, request: request(raw, `${url.origin}/*`, url.origin) };
+    return { label, request: fetchRequest, ...(egress ? {} : { resolve: { hostname: url.hostname, port: url.port } }) };
   }
 
   private vetSearch({ query, provider, providerLabel, note }: Extract<WebRead, { kind: 'search' }>): Target {
@@ -181,12 +209,18 @@ interface Target {
   /** What is asked, or recorded when refused before asking. */
   request: ApprovalRequest;
   refused?: { source: ApprovalSource; reason: string };
+  /** A host name still to be resolved and vetted, once the read is otherwise allowed. */
+  resolve?: { hostname: string; port: string };
 }
 
 const WITHHELD = '(withheld: it contains a secret)';
 
 function searchScope(provider: string): string {
   return `web_search:${provider}`;
+}
+
+function guardRefusal(reason: string): string {
+  return `Fetch refused: ${reason}. Private, local and non-web addresses are never fetched.`;
 }
 
 /** Names no part of what was refused: the reason reaches the model and the session's record. */

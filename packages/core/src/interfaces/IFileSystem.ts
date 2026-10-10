@@ -81,4 +81,6 @@ export interface IFileSystem {
    * test doubles stay small; every adapter extending `BaseFileSystem` has it.
    */
   setApproval?(approval: import('./IApproval').IApproval): void;
+  /** Held credentials read live by the outbound secret check. */
+  setOutboundSecrets?(secrets: () => Iterable<string>): void;
 }

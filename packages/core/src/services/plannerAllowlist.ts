@@ -16,7 +16,7 @@
  *   - an **MCP tool rule**, `mcp:find-*`: a glob over the tool's own name,
  *     without the server, case-insensitive.
  *   - a **scope pattern**, anything starting with `/`, `~`, `http://`,
- *     `https://`, `mcp__` or a drive letter: matched against an approval's
+ *     `https://`, `web_search:`, `mcp__` or a drive letter: matched against an approval's
  *     scope as ADR-0008 always matched pre-approved entries, `*` matching any
  *     run of characters.
  *
@@ -82,7 +82,7 @@ function exclusionWord(pattern: string): RuleWord {
 }
 
 function isScopePattern(entry: string): boolean {
-  return /^(\/|~|https?:\/\/|mcp__|[A-Za-z]:[\\/])/.test(entry);
+  return /^(\/|~|https?:\/\/|web_search:|mcp__|[A-Za-z]:[\\/])/.test(entry);
 }
 
 export function parseAllowlist(entries: readonly string[]): PlannerAllowlist {
@@ -121,6 +121,11 @@ function ruleCovers(rule: CommandRule, command: CommandWords): boolean {
 }
 
 function exclusionCovers(rule: CommandRule, command: CommandWords): boolean {
+  // The global URL exclusion guards commands with caller-selected endpoints;
+  // vetted web scopes have their own per-origin rules. Specific exclusions still win.
+  if (/^!\* \*https?:\/\/\*$/.test(rule.text)
+    && /^(curl|wget)$/.test(command.binary) && command.args.length === 1
+    && /^https?:\/\/\S+\/\*$/.test(command.args[0])) return false;
   if (rule.binary !== '*' && rule.binary !== command.binary) return false;
   let next = 0;
   for (const arg of command.args) {
