@@ -1,6 +1,6 @@
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { AgentEvent, PlannerStartOptions, TaskStartOptions } from './AgentAdapter';
-import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION, type OpenCodeSessionRule as SessionRule } from './openCodeOrdewell';
+import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION, OPENCODE_SEARCH_OFF, type OpenCodeSessionRule as SessionRule } from './openCodeOrdewell';
 import { hunksOf } from './fileDiff';
 import {
   OpenCodePermissions, autoApproves, delay, interruptAcknowledged, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, settleTurn, splitModelId, streamTurn,
@@ -17,6 +17,8 @@ const IDLE_POLLS_BEFORE_START = 3;
  * matches, after the agent's and the user's own.
  */
 const PLANNER_RULES: SessionRule[] = Object.entries(OPENCODE_PLANNER_PERMISSION)
+  .map(([action, effect]) => ({ action, resource: '*', effect }));
+const SEARCH_OFF_RULES: SessionRule[] = Object.entries(OPENCODE_SEARCH_OFF)
   .map(([action, effect]) => ({ action, resource: '*', effect }));
 /** A task asks its user in plain text for now, through its runner session. */
 const TASK_RULES: SessionRule[] = [{ action: 'question', resource: '*', effect: 'deny' }];
@@ -58,6 +60,35 @@ interface V2Frame {
     /** On a delegating call's progress, the child session it runs; on a file edit's success, the diff of each file it changed. */
     metadata?: { sessionID?: string; status?: string; files?: unknown };
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Whether OpenCode would send a `websearch` somewhere without asking which
+ * provider (checked against 2.0.26): the last config layer that sets
+ * `websearch` names one, as OpenCode reads it. A pick made in OpenCode's own
+ * UI is stored where its API does not reach, so it is not seen here; such a
+ * planner searches through Ordewell's tool instead.
+ */
+function searchProviderChosen(config: unknown): boolean {
+  const layers = Array.isArray(config) ? config : isRecord(config) && Array.isArray(config.data) ? config.data : [];
+  for (let i = layers.length - 1; i >= 0; i--) {
+    const layer: unknown = layers[i];
+    if (!isRecord(layer) || layer.type !== 'document' || !isRecord(layer.info) || layer.info.websearch === undefined) continue;
+    const setting = layer.info.websearch;
+    return isRecord(setting) && typeof setting.provider === 'string' && setting.provider !== '';
+  }
+  return false;
+}
+
+/** Whether a session's own rules turn its search off, as {@link SEARCH_OFF_RULES} do. */
+function rulesDenySearch(rules: unknown): boolean {
+  if (!Array.isArray(rules)) return false;
+  const last = [...rules].reverse().find((rule: unknown) => isRecord(rule) && rule.action === 'websearch' && (rule.resource === '*' || rule.resource === undefined));
+  return isRecord(last) && last.effect === 'deny';
 }
 
 interface V2Message {
@@ -144,6 +175,8 @@ export class OpenCodeV2 {
   private agent: string;
   private turn: Turn | null = null;
   private interruptRequested = false;
+  /** Whether a planner's own `websearch` is on for its session (ADR-0027). */
+  private ownSearch = true;
   private readonly permissions = new OpenCodePermissions(
     (id, sessionId, decision) => this.replyPermission(id, sessionId, decision),
     () => this.opts.mcp,
@@ -167,9 +200,11 @@ export class OpenCodeV2 {
     const resume = this.opts.resumeSessionId;
     if (resume) {
       // A resume id names a session on disk, not on this process — so it is checked rather than trusted.
-      const existing = await this.host.json<{ data?: { id?: string } }>('GET', `/api/session/${resume}`).catch(() => null);
+      const existing = await this.host.json<{ data?: { id?: string; permissions?: unknown } }>('GET', `/api/session/${resume}`).catch(() => null);
       if (existing?.data?.id) {
         this.sessionId = existing.data.id;
+        // Its rules are the ones it was created with, which no route changes; the instructions follow them.
+        if (this.role === 'planner') this.ownSearch = !rulesDenySearch(existing.data.permissions);
         // The session keeps the model and agent it last ran with, which the plan may have changed since.
         if (this.model) await this.host.request('POST', `/api/session/${this.sessionId}/model`, { model: this.model }).catch(() => undefined);
         await this.host.request('POST', `/api/session/${this.sessionId}/agent`, { agent: this.agent }).catch(() => undefined);
@@ -180,10 +215,13 @@ export class OpenCodeV2 {
       // transcript. A task's continue without its session would run against none of the work it continues.
       if (this.opts.kind === 'task') throw new Error(`OpenCode could not resume session ${resume}: the server does not know it.`);
     }
+    // With no provider chosen, 2.x's `websearch` asks the user to pick one through `question`, which a
+    // planner is denied: the search ends "cancelled", and the model reads that as a refusal (ADR-0027).
+    if (this.role === 'planner') this.ownSearch = searchProviderChosen(await this.host.json<unknown>('GET', '/api/config').catch(() => null));
     const created = await this.host.json<{ data?: { id?: string } }>('POST', '/api/session', {
       agent: this.agent,
       ...(this.model ? { model: this.model } : {}),
-      permissions: [...(this.role === 'planner' ? PLANNER_RULES : TASK_RULES), ...this.ordewellRules()],
+      permissions: [...(this.role === 'planner' ? [...PLANNER_RULES, ...(this.ownSearch ? [] : SEARCH_OFF_RULES)] : TASK_RULES), ...this.ordewellRules()],
     });
     if (!created?.data?.id) throw new Error(`The OpenCode ${this.role} server did not return a session id.`);
     this.sessionId = created.data.id;
@@ -213,7 +251,7 @@ export class OpenCodeV2 {
   /** The planner's system prompt rides on the session as an instruction entry — a prompt has no system field. */
   private async applyInstructions(): Promise<void> {
     if (this.opts.kind !== 'planner') return;
-    const { system } = plannerSystem(this.opts);
+    const { system } = plannerSystem(this.opts, this.ownSearch);
     if (!system) return;
     const response = await this.host.request('PUT', `/api/experimental/session/${this.sessionId}/instructions/entries/ordewell-planner`, { value: system });
     if (!response.ok) throw new Error(`OpenCode did not take the planner instructions: ${response.status} ${response.statusText}`);

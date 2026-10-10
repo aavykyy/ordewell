@@ -35,6 +35,14 @@ export interface OrdewellToolBinding<Ask = never> {
    * both tends to take from Ordewell instead.
    */
   plannerHidden(start: PlannerStartOptions): string[];
+  /**
+   * Who receives the runner's own search when that search raises no
+   * permission request and is set on or off for the whole session
+   * (ADR-0027), so the web-read policy decides it at session start, as
+   * {@link PlannerStartOptions.nativeSearch}. Absent for a runner whose
+   * searches are asked one by one.
+   */
+  sessionSearchProvider?: string;
   /** Whether a permission request is for one of the server's tools, which is never refused or left waiting (ADR-0022, S3). */
   isOrdewellAsk(ask: Ask): boolean;
   /** What the runner's own status word for the server says about its connection. */

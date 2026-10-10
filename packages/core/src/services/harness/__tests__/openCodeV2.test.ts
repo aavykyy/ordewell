@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { OpenCodeAdapter } from '../OpenCodeAdapter';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, SpawnFn, TaskStartOptions } from '../AgentAdapter';
 import { fakeSpawn, sseResponse, type FakeEventStream } from '../../__tests__/harnessTestKit';
-import { OPENCODE_PLANNER_PERMISSION } from '../openCodeOrdewell';
+import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION, OPENCODE_SEARCH_OFF } from '../openCodeOrdewell';
+import { mcpClientConfig } from '../../mcp';
 
 /**
  * OpenCode 2.x (`opencode serve`, the `/api` surface), recorded at v2.0.22: a
@@ -152,7 +153,7 @@ describe('OpenCode 2.x — start', () => {
   });
 
   it('creates the planner session read-only: plan agent, model, and Ordewell\'s permission policy', async () => {
-    const server = fakeServer();
+    const server = fakeServer({ 'GET /api/config': () => [document({ websearch: { provider: 'exa' } })] });
     const { adapter } = await start(server, plannerStart({ effort: 'high' }));
 
     const created = server.requests.find((r) => r.method === 'POST' && r.path === '/api/session');
@@ -199,6 +200,85 @@ describe('OpenCode 2.x — start', () => {
 
     await expect(start(fakeServer({ [`GET /api/session/${SES}`]: gone }), taskStart({ resumeSessionId: SES })))
       .rejects.toThrow(/could not resume session/);
+  });
+});
+
+const rules = (policy: Record<string, string>) => Object.entries(policy).map(([action, effect]) => ({ action, resource: '*', effect }));
+const document = (info: Record<string, unknown>) => ({ type: 'document', path: '/home/u/.config/opencode/opencode.jsonc', info });
+
+// 2.0.26's `websearch` with no provider chosen asks the user to pick one through `question`, which a planner is denied.
+describe('OpenCode 2.x — a planner\'s own search (ADR-0027)', () => {
+  const mcp = mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok' });
+  const ordewellAllow = OPENCODE_ORDEWELL.sessionRules();
+
+  async function planner(config: unknown, overrides: Record<string, unknown> = {}) {
+    const server = fakeServer({ 'GET /api/config': () => config });
+    const { adapter } = await start(server, plannerStart({ mcp, ...overrides }));
+    const created = server.requests.find((r) => r.method === 'POST' && r.path === '/api/session')?.body as { permissions: unknown[] } | undefined;
+    const instructions = server.requests.find((r) => r.path.endsWith('/instructions/entries/ordewell-planner'))?.body as { value: string } | undefined;
+    adapter.dispose();
+    return { server, permissions: created?.permissions, system: instructions?.value ?? '' };
+  }
+
+  it('keeps websearch, asked through the policy, where OpenCode\'s config names a provider', async () => {
+    const { permissions, system } = await planner([{ type: 'directory', path: '/x' }, document({ websearch: { provider: 'exa' } })]);
+
+    expect(permissions).toEqual([...rules(OPENCODE_PLANNER_PERMISSION), ...ordewellAllow]);
+    expect(system).toBe(`PLAN\n\n${OPENCODE_ORDEWELL.plannerInstructions(true)}`);
+  });
+
+  it.each([
+    ['no layer sets websearch', [document({ mcp: {} })]],
+    ['websearch is disabled', [document({ websearch: false })]],
+    ['the last layer that sets it disables it', [document({ websearch: { provider: 'exa' } }), document({ websearch: false })]],
+    ['the config cannot be read', { status: 500 }],
+  ])('denies websearch and codesearch, and points at Ordewell\'s web_search, where %s', async (_label, config) => {
+    const { permissions, system } = await planner(config);
+
+    expect(permissions).toEqual([...rules(OPENCODE_PLANNER_PERMISSION), ...rules(OPENCODE_SEARCH_OFF), ...ordewellAllow]);
+    expect(system).toBe(`PLAN\n\n${OPENCODE_ORDEWELL.plannerInstructions(false)}`);
+  });
+
+  it('takes the last layer that sets websearch, as OpenCode does', async () => {
+    const { permissions } = await planner([document({ websearch: false }), document({ theme: 'x' }), document({ websearch: { provider: 'random' } })]);
+
+    expect(permissions).not.toEqual(expect.arrayContaining([{ action: 'websearch', resource: '*', effect: 'deny' }]));
+  });
+
+  it.each([
+    ['created with search off', [...rules(OPENCODE_PLANNER_PERMISSION), ...rules(OPENCODE_SEARCH_OFF)], false],
+    ['created with search on', rules(OPENCODE_PLANNER_PERMISSION), true],
+  ])('tells a resumed session %s what its own rules allow', async (_label, permissions, ownSearch) => {
+    const server = fakeServer({ [`GET /api/session/${SES}`]: () => ({ data: { id: SES, permissions } }), 'GET /api/config': () => [document({ websearch: { provider: 'exa' } })] });
+    const { adapter } = await start(server, plannerStart({ mcp, resumeSessionId: SES }));
+
+    const instructions = server.requests.find((r) => r.path.endsWith('/instructions/entries/ordewell-planner'))?.body as { value: string };
+    expect(instructions.value).toBe(`PLAN\n\n${OPENCODE_ORDEWELL.plannerInstructions(ownSearch)}`);
+    adapter.dispose();
+  });
+
+  it('says in every case where to search when websearch fails or is cancelled', () => {
+    expect(OPENCODE_ORDEWELL.plannerInstructions(true)).toMatch(/If `websearch` fails, is cancelled or is unavailable for your provider, search with `ordewell_web_search`/);
+    expect(OPENCODE_ORDEWELL.plannerInstructions(false)).toContain('Search the web with `ordewell_web_search`');
+  });
+
+  // Planner-only: a task, an ops task above all (ADR-0020), keeps OpenCode's own search as the user set it up.
+  it.each([
+    ['without the server', {}],
+    ['with the server', { mcp }],
+  ])('leaves a task session exactly as it was, %s, and never reads the search config', async (_label, overrides) => {
+    const server = fakeServer({ 'GET /api/config': () => [document({ websearch: false })] });
+    const { adapter, env } = await start(server, taskStart(overrides));
+
+    const created = server.requests.find((r) => r.method === 'POST' && r.path === '/api/session');
+    expect(created?.body).toEqual({
+      agent: 'build',
+      model: { providerID: 'opencode-go', id: 'deepseek-v4.1-flash' },
+      permissions: [{ action: 'question', resource: '*', effect: 'deny' }, ...('mcp' in overrides ? ordewellAllow : [])],
+    });
+    expect(server.requests.some((r) => r.path === '/api/config')).toBe(false);
+    expect(env.OPENCODE_CONFIG_CONTENT ?? '').not.toContain('websearch');
+    adapter.dispose();
   });
 });
 

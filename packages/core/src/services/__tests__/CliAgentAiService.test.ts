@@ -820,6 +820,78 @@ describe('CliAgentAiService — Codex', () => {
     expect(JSON.parse(spawned.processes[0].written[1]).params.config.web_search).toBe('disabled');
   });
 
+  /** A fetcher whose session-wide search decision is `unasked()`, asked fresh each time. */
+  const searchFetcher = (unasked: () => boolean) => ({
+    decide: async () => ({ allowed: false as const, reason: 'no' }),
+    fetch: async () => ({ success: false, output: '', truncated: false }),
+    searchesUnasked: vi.fn(unasked),
+  });
+  const approval = { request: async () => false };
+
+  it.each([
+    ['on: the token hides Ordewell\'s web_search', true, 'cached', ['web_search']],
+    ['off: Ordewell\'s web_search is served instead', false, 'disabled', []],
+  ])('gives the token and the thread one search decision — %s, and fetch either way', async (_label, unasked, mode, hidden) => {
+    const mcp = fakeMcpServer();
+    const { svc, spawned } = service('codex', [...codexHandshake(), fixture('codex', 'tools')], {}, {}, mcp);
+    await svc.startConversation(request({ runners: ['codex'], approval, fetcher: searchFetcher(() => unasked) }));
+
+    expect(mcp.plannerScopes[0].hidden).toEqual(hidden);
+    const thread = JSON.parse(spawned.processes[0].written[1]).params as { config: { web_search: string }; developerInstructions: string };
+    expect(thread.config.web_search).toBe(mode);
+    expect(thread.developerInstructions.includes('mcp__ordewell__web_search')).toBe(!unasked);
+    expect(thread.developerInstructions).toContain('mcp__ordewell__fetch');
+  });
+
+  // The policy flipping between the token and the thread config must not split them.
+  it('asks the policy once per spawn, so a flip between token and thread cannot split them', async () => {
+    const mcp = fakeMcpServer();
+    let calls = 0;
+    const { svc, spawned } = service('codex', [...codexHandshake(), ...codexHandshake(), fixture('codex', 'tools')], {}, {}, mcp);
+    await svc.startConversation(request({ runners: ['codex'], approval, fetcher: searchFetcher(() => ++calls === 1) }));
+
+    expect(mcp.plannerScopes[0].hidden).toEqual(['web_search']);
+    expect(JSON.parse(spawned.processes[0].written[1]).params.config.web_search).toBe('cached');
+    // The flip is seen before the turn, which runs on a thread respawned with search off.
+    expect(mcp.revoked).toContain('tok-1');
+    expect(mcp.plannerScopes[1].hidden).toEqual([]);
+    expect(JSON.parse(spawned.processes[1].written[1]).params.config.web_search).toBe('disabled');
+    expect(spawned.processes[0].written.some((line) => line.includes('"turn/start"'))).toBe(false);
+  });
+
+  // Full→Guarded, a `!web_search:*` exclusion or a zero budget between turns (ADR-0027).
+  it('reopens the thread with search off, and Ordewell\'s web_search served, once the policy stops allowing it', async () => {
+    const mcp = fakeMcpServer();
+    let unasked = true;
+    const { svc, spawned } = service('codex', [
+      ...codexHandshake(), fixture('codex', 'tools'),
+      fixture('codex', 'handshake'), fixture('codex', 'new-conversation'), fixture('codex', 'tools'),
+    ], {}, {}, mcp);
+    await svc.startConversation(request({ runners: ['codex'], approval, fetcher: searchFetcher(() => unasked) }));
+    unasked = false;
+    await svc.continueConversation('Carry on', () => {});
+
+    expect(spawned.processes).toHaveLength(2);
+    expect(mcp.revoked).toContain('tok-1');
+    expect(mcp.plannerScopes.map((scope) => scope.hidden)).toEqual([['web_search'], []]);
+    const resume = JSON.parse(spawned.processes[1].written[1]);
+    expect(resume.method).toBe('thread/resume');
+    expect(resume.params.threadId).toBe('thr-codex-1');
+    expect(resume.params.config.web_search).toBe('disabled');
+    expect(resume.params.developerInstructions).toContain('search with `mcp__ordewell__web_search`');
+  });
+
+  it('keeps the running thread while the decision stands', async () => {
+    const mcp = fakeMcpServer();
+    const { svc, spawned } = service('codex', [...codexHandshake(), fixture('codex', 'tools'), fixture('codex', 'tools').replaceAll('turn-1', 'turn-2')], {}, {}, mcp);
+    await svc.startConversation(request({ runners: ['codex'], approval, fetcher: searchFetcher(() => true) }));
+    await svc.continueConversation('Carry on', () => {});
+
+    expect(spawned.processes).toHaveLength(1);
+    expect(mcp.issued).toHaveLength(1);
+    expect(mcp.revoked).toEqual([]);
+  });
+
   it('flattens reasoning blocks and drops the empty ones the real CLI emits', async () => {
     const { svc } = service('codex', [...codexHandshake(), fixture('codex', 'tools')]);
     const { events, onProgress } = collector();
