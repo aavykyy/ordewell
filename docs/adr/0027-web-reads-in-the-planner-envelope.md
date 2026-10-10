@@ -220,7 +220,19 @@ Research subagents get `fetch` and `web_search`, and still never prompt
 - **Approval is per origin.** The scope is the program and the origin
   (`curl https://api.github.com/*`), so approving one site approves no other,
   and a command naming several origins asks for each in one prompt (ADR-0008).
+  The program is the lower-cased basename, with a trailing `.exe` removed,
+  including under POSIX for Git Bash. Web scopes never match filesystem path
+  patterns. Default command URL exclusions do not exclude this vetted scope
+  form; explicit origin and command exclusions still win.
+- **Every URL passes the outbound secret check before DNS or approval.**
+  The same helper and live held credentials as the web-read policy apply;
+  refusals withhold the command and URL.
 - **The host passes the SSRF guard** before the command is asked about.
+  Curl receives a `--resolve host:port:address` entry for each URL hostname,
+  using an address the guard vetted, with IPv6 addresses bracketed. The
+  inserted entries follow the initial `-q`, and the final command is
+  classified again with only those exact generated resolve values trusted.
+  Caller-supplied `--resolve` stays refused.
 - **Flags are a positive list.** Only flags known not to write, send data or
   read a config run without a fresh approval; the data and credential flags
   below are the exceptions, and any other flag refuses. So `-o`, `-O`,
@@ -240,10 +252,27 @@ Research subagents get `fetch` and `web_search`, and still never prompt
   default credential file cannot attach credentials. Both clients disable
   environment-selected proxies. These flags are inserted before classification,
   so the classifier reads exactly the string that runs (ADR-0011, B6).
+  Only GNU Wget 1.x is supported. Wget2 is refused, including when installed
+  as `wget`: after approval, a config-disabled version probe redirects XDG
+  paths to `/dev/null` and Windows `LOCALAPPDATA` to `NUL`, preventing the
+  probe itself from creating a home directory. The probe follows certain
+  literal `cd` targets; uncertain navigation with a relative executable
+  refuses. The host used for verification has GNU Wget 1.21.4. An extracted
+  GNU Wget2 2.1.0 reproduced writes to `.wget-ocsp` and `.wget-ocsp_hosts`
+  under its XDG data directory with the old suppression flags. Its ordinary
+  version probe also created the data directory; the redirected probe left
+  the temporary home empty. Wget2's [database initialization and defaults](https://github.com/rockdaboot/wget2/blob/master/src/options.c)
+  and [database saving](https://github.com/rockdaboot/wget2/blob/master/src/wget.c)
+  include HPKP, OCSP and TLS-session storage beyond Wget 1.x's HSTS cache.
 - **In Full and allowlist mode, `curl` and `wget` stay refused,** whatever
   the allowlist says.
   Every planner has a vetted `fetch`, and a command line's redirect, resolve
   and config surface is not something an allowlist rule can bound.
+
+GNU Wget 1.x has no curl-style host-to-address override preserving the
+original hostname for HTTP and TLS, so it still resolves again at connection
+time. Curl pins the named URL hosts, but an explicitly approved redirect to
+another host is still outside that pin set. Both residuals require phase 2.
 
 ### Phase 2: filtering at the network
 
@@ -318,3 +347,4 @@ filed as its own issue.
 - 2026-10-10 — search is zero-configuration: provider-native for harness
   planners, one internal DuckDuckGo provider for API planners and as fallback,
   with a shared back-off and cache.
+- 2026-10-11 — shell web-command bypasses closed, outbound secrets checked, curl DNS pinned, and Wget2 refused after verifying its persistent database writes.

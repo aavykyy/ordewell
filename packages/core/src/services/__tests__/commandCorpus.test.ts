@@ -51,9 +51,13 @@ describe('command classification corpus', () => {
     const expected: Record<string, string> = {};
 
     for (const entry of CORPUS) {
-      const result = classifyCommand(entry.command, { dialect: entry.dialect ?? 'posix', autonomous: entry.autonomous, approvalMode: entry.approvalMode, allow: entry.allow ? parseAllowlist(entry.allow) : undefined });
+      const result = classifyCommand(entry.command, { trustedWebResolves: entry.trustedWebResolves ? new Set(entry.trustedWebResolves) : undefined, dialect: entry.dialect ?? 'posix', autonomous: entry.autonomous, approvalMode: entry.approvalMode, allow: entry.allow ? parseAllowlist(entry.allow) : undefined });
       actual[key(entry)] = render(result.tier, result.scope, entry.scope !== undefined);
       expected[key(entry)] = expectedFor(entry);
+      if (entry.allowedBy !== undefined) {
+        actual[key(entry)] += ` — allowed by ${result.allowedBy ?? null}`;
+        expected[key(entry)] += ` — allowed by ${entry.allowedBy}`;
+      }
       if (entry.perInvocation !== undefined) {
         actual[key(entry)] += ` — per invocation ${result.perInvocation ?? false}`;
         expected[key(entry)] += ` — per invocation ${entry.perInvocation}`;

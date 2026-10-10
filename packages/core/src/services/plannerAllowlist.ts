@@ -121,6 +121,11 @@ function ruleCovers(rule: CommandRule, command: CommandWords): boolean {
 }
 
 function exclusionCovers(rule: CommandRule, command: CommandWords): boolean {
+  // The global URL exclusion guards commands with caller-selected endpoints;
+  // vetted web scopes have their own per-origin rules. Specific exclusions still win.
+  if (/^!\* \*https?:\/\/\*$/.test(rule.text)
+    && /^(curl|wget)$/.test(command.binary) && command.args.length === 1
+    && /^https?:\/\/\S+\/\*$/.test(command.args[0])) return false;
   if (rule.binary !== '*' && rule.binary !== command.binary) return false;
   let next = 0;
   for (const arg of command.args) {

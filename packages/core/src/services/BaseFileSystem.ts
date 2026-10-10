@@ -13,7 +13,8 @@ import { resolveResearchShell, researchShellWarning, researchPolicyOptions, type
 import { resolveWithin, resolveRef, grantScopeFor, isInertDevice } from './pathScope';
 import { definitionPattern, referencePattern, languageForId, includeGlobFor } from './symbolPatterns';
 import { resolveAll, vetEgress, type ResolveAll } from './egressGuard';
-import { disableWebCommandStartup } from './webCommands';
+import { carriesSecret, sensitiveEnvValues } from './outboundSecrets';
+import { disableWebCommandStartup, pinWebCommandAddresses, wgetVersionCommands } from './webCommands';
 
 export { AUTO_COMMANDS, GIT_READONLY_SUBCOMMANDS, REFUSED_COMMANDS, classifyCommand, pathLikeArgs } from './commandPolicy';
 
@@ -31,6 +32,7 @@ export { AUTO_COMMANDS, GIT_READONLY_SUBCOMMANDS, REFUSED_COMMANDS, classifyComm
  */
 export abstract class BaseFileSystem implements IFileSystem {
   private approval: IApproval = DENY_ALL;
+  private outboundSecrets: () => Iterable<string> = () => [];
 
   constructor(private readonly resolveWebHost: ResolveAll = resolveAll) {}
 
@@ -45,6 +47,10 @@ export abstract class BaseFileSystem implements IFileSystem {
   /** Surfaces inject the human channel here; without it, external access is denied. */
   setApproval(approval: IApproval): void {
     this.approval = approval;
+  }
+
+  setOutboundSecrets(secrets: () => Iterable<string>): void {
+    this.outboundSecrets = secrets;
   }
 
   abstract getWorkspaceRoot(): string;
@@ -212,7 +218,7 @@ export abstract class BaseFileSystem implements IFileSystem {
   async bash(command: string, signal?: AbortSignal): Promise<ToolOutcome> {
     command = disableWebCommandStartup(command, this.researchShell.dialect);
     const allow = this.approval.allowlist?.();
-    const { tier, scope, reason, allowedBy, perInvocation, scopes: commandScopes, webUrls } = classifyCommand(command, {
+    const { tier, scope, reason, allowedBy, perInvocation, scopes: commandScopes, webUrls, webUrlTexts } = classifyCommand(command, {
       ...this.policyOptions(), ...this.approval.commandPolicy?.(), ...(allow ? { allow } : {}),
     });
 
@@ -220,9 +226,15 @@ export abstract class BaseFileSystem implements IFileSystem {
       return { success: false, output: `Command refused: ${reason}`, truncated: false };
     }
 
+    if (webUrls?.length && carriesSecret([...(webUrlTexts ?? []), ...webUrls.map((url) => url.href)], [...this.outboundSecrets(), ...sensitiveEnvValues(process.env)])) {
+      return { success: false, output: 'Command refused: a web URL contains what looks like a secret. Use the Ordewell fetch tool without credentials.', truncated: false };
+    }
+
+    const vettedAddresses = new Map<string, string>();
     for (const url of webUrls ?? []) {
       const check = await vetEgress(url.hostname, url.port, this.resolveWebHost);
       if (!check.ok) return { success: false, output: `Command refused: Blocked host: ${check.reason}. Use the Ordewell fetch tool instead.`, truncated: false };
+      vettedAddresses.set(url.origin, check.addresses[0]);
     }
 
     const outside = this.outsidePaths(command);
@@ -255,6 +267,21 @@ export abstract class BaseFileSystem implements IFileSystem {
 
     if (webUrls?.length) {
       const latest = classifyCommand(command, { ...this.policyOptions(), ...this.approval.commandPolicy?.() });
+      if (latest.tier === 'refuse') return { success: false, output: `Command refused: ${latest.reason}`, truncated: false };
+    }
+
+    for (const probe of wgetVersionCommands(command, this.researchShell.dialect)) {
+      if (!probe) return { success: false, output: 'Command refused: the wget executable cannot be checked in an uncertain working directory. Use the Ordewell fetch tool instead.', truncated: false };
+      const version = await this.execBashImpl(probe, signal);
+      if (!version.success || !/^GNU Wget 1\./.test(version.output)) {
+        return { success: false, output: 'Command refused: only GNU Wget 1.x is supported; wget2 can write persistent databases. Use the Ordewell fetch tool instead.', truncated: false };
+      }
+    }
+
+    const pinned = pinWebCommandAddresses(command, vettedAddresses, this.researchShell.dialect);
+    command = pinned.command;
+    if (webUrls?.length) {
+      const latest = classifyCommand(command, { ...this.policyOptions(), ...this.approval.commandPolicy?.(), trustedWebResolves: pinned.resolves });
       if (latest.tier === 'refuse') return { success: false, output: `Command refused: ${latest.reason}`, truncated: false };
     }
     const outcome = await this.execBashImpl(command, signal);
