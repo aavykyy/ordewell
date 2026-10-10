@@ -1,4 +1,5 @@
 import type { PlannerAllowlist } from '../services/plannerAllowlist';
+import type { ApprovalSource } from '../services/ApprovalPolicy';
 
 /**
  * The planner's single approval seam. Every capability that reaches beyond the
@@ -18,9 +19,10 @@ import type { PlannerAllowlist } from '../services/plannerAllowlist';
  * for an answer as long as it takes, and never passes through the planner's
  * policy — the runner's mode already decided it needed asking. `mcp_tool` is
  * a harness planner reaching for an MCP tool the user configured (ADR-0026),
- * scoped to that one tool.
+ * scoped to that one tool. `web_search` is scoped to the search provider, the
+ * party that receives every query (ADR-0027).
  */
-export type ApprovalKind = 'external_path' | 'shell_command' | 'url_fetch' | 'mcp_tool' | 'runner_tool';
+export type ApprovalKind = 'external_path' | 'shell_command' | 'url_fetch' | 'web_search' | 'mcp_tool' | 'runner_tool';
 
 export interface ApprovalRequest {
   kind: ApprovalKind;
@@ -87,6 +89,8 @@ export interface IApproval {
   request(req: ApprovalRequest): Promise<boolean>;
   /** The standing approvals a command is classified against, when this approval has any (ADR-0026). */
   allowlist?(): PlannerAllowlist;
+  /** Surface a decision reached before `request` was called, as `request`'s own are. */
+  record?(req: ApprovalRequest, granted: boolean, source: ApprovalSource): void;
 }
 
 /** Denies everything. The safe default when a surface wires no approval channel. */

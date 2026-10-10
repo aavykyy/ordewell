@@ -76,6 +76,11 @@ export class OrdewellMcpServer {
     return this.issue({ role: 'planner', scope: { ...scope }, handler, revoked: new AbortController() });
   }
 
+  /** Every token still good here: secrets the outbound check keeps out of a URL (ADR-0027). */
+  heldTokens(): string[] {
+    return [...this.grants.keys()];
+  }
+
   /** Refuse every later request carrying `token`, and abort the calls it has in flight. */
   revoke(token: string): void {
     const grant = this.grants.get(token);

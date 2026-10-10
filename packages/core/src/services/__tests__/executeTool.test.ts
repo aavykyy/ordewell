@@ -19,7 +19,7 @@ function fakeFs(overrides?: Partial<IFileSystem>): IFileSystem {
 
 function fakeFetcher(overrides?: Partial<IWebFetcher>): IWebFetcher {
   return {
-    confirm: vi.fn().mockResolvedValue(true),
+    decide: vi.fn().mockResolvedValue({ allowed: true }),
     fetch: vi.fn().mockResolvedValue({ success: true, output: '<h1>Docs</h1>', truncated: false }),
     ...overrides,
   };
@@ -34,21 +34,11 @@ describe('executeTool', () => {
       expect(result.output).toContain('not available');
     });
 
-    it('returns an error when user denies the URL', async () => {
-      const fetcher = fakeFetcher({ confirm: vi.fn().mockResolvedValue(false) });
-      const result = await executeTool('fetch', { url: 'https://example.com' }, fakeFs(), fetcher);
-
-      expect(fetcher.confirm).toHaveBeenCalledWith('https://example.com');
-      expect(fetcher.fetch).not.toHaveBeenCalled();
-      expect(result.success).toBe(false);
-      expect(result.output).toContain('denied');
-    });
-
-    it('calls fetcher.fetch when user approves the URL', async () => {
+    it('leaves the decision to the fetcher, so a read is decided once', async () => {
       const fetcher = fakeFetcher();
       const result = await executeTool('fetch', { url: 'https://docs.rs' }, fakeFs(), fetcher);
 
-      expect(fetcher.confirm).toHaveBeenCalledWith('https://docs.rs');
+      expect(fetcher.decide).not.toHaveBeenCalled();
       expect(fetcher.fetch).toHaveBeenCalledWith('https://docs.rs');
       expect(result.success).toBe(true);
     });

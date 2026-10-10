@@ -89,6 +89,8 @@ export interface IConfig {
   approvalPreApproved: string[];
   /** Whether the built-in allowlist of read-only command families and MCP tools applies. */
   approvalDefaults: boolean;
+  /** How many fetches and searches one planner turn may make (ADR-0027). User-only, like the approval settings. */
+  webReadBudget: number;
 
   /** Get the base URL for an OpenAI-compatible provider. */
   getProviderBaseUrl(provider: AiProvider): string;

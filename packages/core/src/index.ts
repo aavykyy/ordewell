@@ -10,6 +10,8 @@ export type { CommandTier, CommandClassification } from './services/commandPolic
 export { resolveWithin, grantScopeFor } from './services/pathScope';
 export * from './interfaces/IApproval';
 export { ApprovalPolicy, effectiveApprovalMode, parseApprovalModeSetting } from './services/ApprovalPolicy';
+export { DEFAULT_WEB_READ_BUDGET } from './services/webReadPolicy';
+export type { WebRead, WebReadDecision } from './services/webReadPolicy';
 export type { ApprovalMode, ApprovalModeSetting, ApprovalPolicyOptions, ApprovalSource } from './services/ApprovalPolicy';
 export { DEFAULT_PLANNER_ALLOWLIST, parseAllowlist, commandAllowedBy, toolAllowed, scopeAllowed } from './services/plannerAllowlist';
 export type { PlannerAllowlist, CommandWords } from './services/plannerAllowlist';

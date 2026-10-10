@@ -89,10 +89,7 @@ async function runTool(
     case 'bash': return fs.bash(String(args.command ?? ''), signal);
     case 'fetch': {
       if (!fetcher) return { success: false, output: 'Web fetching is not available in this environment.', truncated: false };
-      const url = String(args.url ?? '');
-      const allowed = await fetcher.confirm(url);
-      if (!allowed) return { success: false, output: `URL fetch denied by user: ${url}`, truncated: false };
-      return fetcher.fetch(url);
+      return fetcher.fetch(String(args.url ?? ''));
     }
     case 'web_search': {
       if (!fetcher?.search) {

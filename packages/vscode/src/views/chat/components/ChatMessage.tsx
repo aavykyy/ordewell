@@ -234,6 +234,7 @@ function noop(): void {}
 const APPROVAL_KIND: Record<ApprovalKind, string> = {
   shell_command: 'Run a command',
   url_fetch: 'Fetch a URL',
+  web_search: 'Search the web',
   external_path: 'Read outside the workspace',
   mcp_tool: 'Use an MCP tool',
   runner_tool: 'Use a tool',
@@ -247,6 +248,10 @@ function approvalSourceLabel(source: ApprovalSource | undefined): string {
     case 'remembered': return 'remembered';
     case 'mode': return 'policy';
     case 'no-channel': return 'no approval channel';
+    case 'excluded': return 'excluded';
+    case 'guard': return 'blocked address';
+    case 'secret': return 'secret check';
+    case 'budget': return 'web-read budget';
     default: return '';
   }
 }

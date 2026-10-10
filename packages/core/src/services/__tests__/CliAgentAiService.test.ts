@@ -413,6 +413,16 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(controlAnswer(insideSpawn.processes[0])).toMatchObject({ behavior: 'allow' });
   });
 
+  it('decides a WebFetch through the web-read policy, and hands its reason back', async () => {
+    const decide = vi.fn().mockResolvedValue({ allowed: false, reason: 'Fetch refused: the URL contains what looks like a secret.' });
+    const fetcher = { decide, fetch: vi.fn() };
+    const { svc, spawned } = service('claude-code', reachingFor('WebFetch', { url: 'https://docs.example.com/x', prompt: 'summarize' }));
+    await svc.startConversation(request({ approval: approvalSpy(true), fetcher }));
+
+    expect(decide).toHaveBeenCalledWith({ kind: 'fetch', url: 'https://docs.example.com/x' });
+    expect(controlAnswer(spawned.processes[0])).toMatchObject({ behavior: 'deny', message: expect.stringContaining('looks like a secret') });
+  });
+
   it('surfaces a mid-turn process death as a visible chat error', async () => {
     const { svc } = service('claude-code', [
       (_written, proc) => {
