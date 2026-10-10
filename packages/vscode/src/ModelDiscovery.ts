@@ -1,6 +1,6 @@
 import type * as vscode from 'vscode';
 import {
-  getProviderMeta, ModelResolver, PROVIDER_LABEL, PROVIDER_PRIORITY, PROVIDER_SHORT_LABEL,
+  getProviderMeta, ModelResolver, PROVIDER_LABEL, PROVIDER_PRIORITY, PROVIDER_SHORT_LABEL, runnerForProvider,
   type AiProvider, type DiscoveredModel, type RunnerInstallation, type RunnerRegistry,
 } from '@ordewell/core';
 import type { ChatViewProvider } from './providers/ChatViewProvider';
@@ -120,6 +120,8 @@ export class ModelDiscovery {
 
     this.options().then((opts) => {
       d.chatProvider.setModelOptions(opts);
+      // The vendor label reads the catalog, which only now has the options.
+      this.sendModelConfig();
       // Flag any configured provider whose catalog fetch failed — both in the
       // webview (persistent banner) and as a one-shot toast.
       const errors = d.modelResolver.getDiscoveryErrors();
@@ -157,7 +159,7 @@ export class ModelDiscovery {
   }
 
   sendModelConfig(): void {
-    sendModelConfig(this.deps.config, this.deps.chatProvider);
+    sendModelConfig(this.deps.config, this.deps.chatProvider, this.deps.modelResolver);
   }
 
   async options(): Promise<PickerOption[]> {
@@ -279,20 +281,29 @@ export class ModelDiscovery {
   }
 }
 
-export function sendModelConfig(config: VsCodeConfig, chatProvider: ChatViewProvider): void {
+export function sendModelConfig(config: VsCodeConfig, chatProvider: ChatViewProvider, modelResolver: ModelResolver): void {
   chatProvider.setModelConfig({
     orchestrator: config.orchestratorModel,
-    orchestratorProvider: providerLabelForId(config.rawOrchestratorModel),
+    orchestratorProvider: plannerProviderLabel(
+      config.aiProvider, config.rawOrchestratorModel, modelResolver.getCachedPickerOptions(),
+    ),
   });
 }
 
-function providerLabelForId(id: string): string {
-  if (!id) return '';
-  for (const provider of PROVIDER_PRIORITY) {
-    const meta = getProviderMeta(provider);
-    if (meta?.modelPrefix && id.startsWith(meta.modelPrefix)) return meta.shortLabel;
-  }
-  return 'OpenRouter';
+/**
+ * Names who serves the planner model, or '' when that can't be known. A harness
+ * planner is its own backend; a vendor planner's provider is whatever the
+ * discovered option says, never a guess from the id string.
+ */
+export function plannerProviderLabel(
+  provider: AiProvider,
+  modelId: string,
+  options: readonly { id: string; apiProvider?: AiProvider }[],
+): string {
+  if (runnerForProvider(provider)) return PROVIDER_SHORT_LABEL[provider] ?? '';
+  if (!modelId) return '';
+  const apiProvider = options.find((o) => o.id === modelId)?.apiProvider;
+  return apiProvider ? PROVIDER_SHORT_LABEL[apiProvider] ?? '' : '';
 }
 
 function modelQuickPickItem(o: PickerOption): vscode.QuickPickItem & { modelId: string } {

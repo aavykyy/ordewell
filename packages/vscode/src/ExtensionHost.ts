@@ -155,7 +155,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     plannerModelMemory: services.plannerModelMemory,
     runnerInstallation: services.runnerInstallation,
     chatProvider: services.chatProvider,
-    sendModelConfig: () => sendModelConfig(services.config, services.chatProvider),
+    sendModelConfig: () => sendModelConfig(services.config, services.chatProvider, services.modelResolver),
     log,
   });
   const discovery = new ModelDiscovery({
