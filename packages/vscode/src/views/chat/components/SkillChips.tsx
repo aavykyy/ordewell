@@ -31,7 +31,7 @@ export default function SkillChips({ idPrefix, taskId, skills = [], catalog = []
         {canAdd && (
           <select id={`${idPrefix}-skill-${taskId}`} className="task-skill-add" value=""
             onChange={(e) => { if (e.target.value) onChange?.(taskId, [...skills, e.target.value]); }}>
-            <option value="">+ skill</option>
+            <option value="" disabled>Add skill…</option>
             {addable.map((s) => (
               <option key={s.name} value={s.name}>{s.description ? `${s.name} — ${s.description}` : s.name}</option>
             ))}
