@@ -7,7 +7,7 @@ import { awaitAttach } from './ordewellBinding';
 import type { McpClientConfig } from '../mcp';
 import { hunksOf, markedLines } from './fileDiff';
 import {
-  OpenCodePermissions, PendingSteers, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePlannerAsk, openEventStream, permissionReply, settleTurn, splitModelId,
+  OpenCodePermissions, PendingSteers, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, settleTurn, splitModelId,
   streamTurn, turnLatch, usageRecord, type PermissionAnswer, type PermissionRequest, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
@@ -436,7 +436,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
         tools: DISABLED_TOOLS,
         ...(model ? { model } : {}),
         ...(this.planner?.effort ? { variant: this.planner.effort } : {}),
-        ...(this.planner?.systemPrompt ? { system: this.planner.systemPrompt } : {}),
+        ...(this.planner ? plannerSystem(this.planner) : {}),
       };
       const reply = await this.json<OpenCodeMessageResponse>('POST', `/session/${this.sessionId}/message`, body, signal);
 

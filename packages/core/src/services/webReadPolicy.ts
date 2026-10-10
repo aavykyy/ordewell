@@ -11,7 +11,8 @@ import { carriesSecret, sensitiveEnvValues } from './outboundSecrets';
  */
 export type WebRead =
   | { kind: 'fetch'; url: string }
-  | { kind: 'search'; query: string; provider: string };
+  /** `provider` keys the grant; `providerLabel`, when given, names it to the person asked. */
+  | { kind: 'search'; query: string; provider: string; providerLabel?: string; note?: string };
 
 /** A refusal's `reason` is written for the planner: it says what to do next. */
 export type WebReadDecision = { allowed: true } | { allowed: false; reason: string };
@@ -99,6 +100,19 @@ export class WebReadPolicy {
       : 'Web search refused: research agents run in the background where nothing can be approved. Note the gap in your digest; the planner can search directly.' };
   }
 
+  /**
+   * Whether a search through `provider` would run without asking anyone, for
+   * a runner whose own search raises no request and is set on or off when
+   * its session starts (ADR-0027). No query is known yet, so neither the
+   * secret check nor the budget can apply.
+   */
+  searchesUnasked(provider: string): boolean {
+    const scope = searchScope(provider);
+    const list = this.approval.allowlist?.();
+    if (list && scopeExcluded(list, scope)) return false;
+    return this.approval.grantsUnasked?.({ kind: 'web_search', scope }) ?? false;
+  }
+
   private refuse(request: ApprovalRequest, source: ApprovalSource, reason: string): WebReadDecision {
     this.approval.record?.(request, false, source);
     return { allowed: false, reason };
@@ -131,10 +145,14 @@ export class WebReadPolicy {
     return { label, request: request(raw, `${url.origin}/*`, url.origin) };
   }
 
-  private vetSearch({ query, provider }: Extract<WebRead, { kind: 'search' }>): Target {
+  private vetSearch({ query, provider, providerLabel, note }: Extract<WebRead, { kind: 'search' }>): Target {
     const label = 'Web search';
+    // A bare id is one of Ordewell's own backends, so the prompt says plainly
+    // that the query leaves for a third party; a labelled runner-native search
+    // points at the provider's own request instead, where `note` explains it.
+    const detail = `Planner research wants to search the web with ${providerLabel ?? provider}${providerLabel ? '' : ', a third party that receives the query'}${note ? `. ${note}` : ''}`;
     const request = (subject: string): ApprovalRequest =>
-      ({ kind: 'web_search', subject, scope: `web_search:${provider}`, detail: `Planner research wants to search the web with ${provider}, a third party that receives the query` });
+      ({ kind: 'web_search', subject, scope: searchScope(provider), detail });
     if (this.carriesSecret([query])) {
       return { label, request: request(WITHHELD), refused: { source: 'secret', reason: secretRefusal(label, 'query') } };
     }
@@ -166,6 +184,10 @@ interface Target {
 }
 
 const WITHHELD = '(withheld: it contains a secret)';
+
+function searchScope(provider: string): string {
+  return `web_search:${provider}`;
+}
 
 /** Names no part of what was refused: the reason reaches the model and the session's record. */
 function secretRefusal(label: string, what: string): string {

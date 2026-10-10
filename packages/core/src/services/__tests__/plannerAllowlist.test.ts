@@ -147,3 +147,11 @@ describe('allowlist entries', () => {
     expect(scopeAllowed(list, 'https://example.com/*')).toBe(false);
   });
 });
+
+it('matches each curl origin after safe flags and requires coverage of every URL', () => {
+  const list = parseAllowlist(['curl https://*.example/*']);
+  expect(allowedBy('curl -s https://docs.example/a https://api.example/b', list)).toBe('curl https://*.example/*');
+  expect(allowedBy('curl -s https://docs.example/a https://evil.test/b', list)).toBeUndefined();
+  expect(scopeAllowed(list, 'curl https://docs.example/*')).toBe(true);
+  expect(scopeAllowed(list, 'curl https://evil.test/*')).toBe(false);
+});

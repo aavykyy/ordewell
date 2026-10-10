@@ -442,6 +442,19 @@ describe('ApprovalPolicy — the planner allowlist (ADR-0026)', () => {
     expect(await policy.request(req({ kind: 'web_search', subject: 'tokio', scope: 'web_search:duckduckgo' }))).toBe(true);
     expect(await policy.request(req({ kind: 'mcp_tool', subject: 'jira · create', scope: 'mcp__jira__create' }))).toBe(false);
   });
+
+  it('reads the shell mode for each sensitive invocation and never remembers its answer', async () => {
+    const mode = vi.fn((kind: ApprovalRequest['kind']) => effectiveApprovalMode('auto', false, kind));
+    const ask = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const policy = new ApprovalPolicy({ mode, ask, preApproved: ['curl https://docs.example.com/*'] });
+    const request = req({ subject: 'curl -L https://docs.example.com/a', scope: 'curl https://docs.example.com/*', perInvocation: true });
+
+    expect(await policy.request(request)).toBe(true);
+    expect(await policy.request(request)).toBe(false);
+    expect(mode.mock.calls).toEqual([['shell_command'], ['shell_command']]);
+    expect(ask).toHaveBeenCalledTimes(2);
+    expect(policy.grantedScopes()).toEqual([]);
+  });
 });
 
 describe('the configured approval mode', () => {

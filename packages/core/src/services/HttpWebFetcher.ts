@@ -42,7 +42,7 @@ export type WebTransport = (
 ) => Promise<WebResponse>;
 
 export interface HttpWebFetcherOptions {
-  policy: Pick<WebReadPolicy, 'decide'>;
+  policy: WebReadDecider;
   /**
    * Injected in tests; defaults to a node:http(s) transport whose sockets
    * connect only to addresses `resolveHost` answered and the guard vetted.
@@ -125,8 +125,10 @@ function isPrivateResponse(cacheControl: string, setCookie: string | null): bool
   return /(?:^|,)\s*(?:no-store|private)\b/i.test(cacheControl);
 }
 
+type WebReadDecider = Pick<WebReadPolicy, 'decide'> & Partial<Pick<WebReadPolicy, 'searchesUnasked'>>;
+
 export class HttpWebFetcher implements IWebFetcher {
-  private readonly policy: Pick<WebReadPolicy, 'decide'>;
+  private readonly policy: WebReadDecider;
   private readonly fetchImpl: WebTransport;
   private readonly maxChars: number;
   private readonly timeoutMs: number;
@@ -169,6 +171,10 @@ export class HttpWebFetcher implements IWebFetcher {
       searchProvider: this.searchProvider,
       prompting: false,
     });
+  }
+
+  searchesUnasked(provider: string): boolean {
+    return this.policy.searchesUnasked?.(provider) ?? false;
   }
 
   async fetch(url: string): Promise<ToolOutcome> {

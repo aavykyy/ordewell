@@ -8,7 +8,7 @@ import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
 import { markedLines } from './fileDiff';
 import { probeCodexSandbox, codexSandboxUnavailableMessage, type CodexSandboxDecision } from './codexSandbox';
 import { ORDEWELL_MCP_SERVER_NAME } from '../mcp';
-import { CODEX_ORDEWELL } from './codexOrdewell';
+import { CODEX_ORDEWELL, CODEX_SEARCH_PROVIDER } from './codexOrdewell';
 import { awaitAttach, type AttachState } from './ordewellBinding';
 import { CodexRpc, type RpcMessage, type RpcResponse } from './codexRpc';
 import { settleWithin } from './settleWithin';
@@ -40,6 +40,8 @@ interface ThreadItem {
   status?: string;
   success?: boolean;
   query?: string;
+  /** `webSearch`: what the search did, which the bare `query` leaves out for a page it opened. */
+  action?: WebSearchAction | null;
   /** `final_answer` vs `commentary`; both are prose the user should see. */
   phase?: string;
   /** `collabAgentToolCall`: the brief a spawned subagent was given. */
@@ -54,6 +56,15 @@ interface ThreadItem {
   agentsStates?: Record<string, { status?: string; message?: string | null } | undefined>;
   /** `userMessage`: the `clientUserMessageId` the input was steered under. */
   clientId?: string | null;
+}
+
+/** codex-cli 0.162.0's v2 `WebSearchAction`. */
+interface WebSearchAction {
+  type?: string;
+  query?: string | null;
+  queries?: string[] | null;
+  url?: string | null;
+  pattern?: string | null;
 }
 
 /** A message steered into a turn (ADR-0023), until its `userMessage` item shows the model has it. */
@@ -181,6 +192,28 @@ interface TaskApproval {
 function shownToolName(item: ThreadItem): string {
   const tool = item.tool ?? 'mcp_tool';
   return item.server === ORDEWELL_MCP_SERVER_NAME ? CODEX_ORDEWELL.toolName(tool) : tool;
+}
+
+/**
+ * What a `webSearch` item read, for the research timeline: every query it
+ * sent, and the URL of a page it opened or searched in. A planner thread runs
+ * cached search, but the action is shown whatever the mode, so a page opened
+ * is never silent.
+ */
+function webSearchSummary(item: ThreadItem): string {
+  const action = item.action;
+  switch (action?.type) {
+    case 'search': {
+      const queries = action.queries?.length ? action.queries : [action.query ?? item.query ?? ''];
+      return queries.filter(Boolean).join('\n');
+    }
+    case 'openPage':
+      return `open ${action.url ?? '(no URL)'}`;
+    case 'findInPage':
+      return `find ${JSON.stringify(action.pattern ?? '')} in ${action.url ?? '(no URL)'}`;
+    default:
+      return item.query ?? '';
+  }
 }
 
 const REVIEW_DECISIONS = { allow: 'accept', allowForTask: 'acceptForSession', deny: 'decline' } as const;
@@ -404,6 +437,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         ...threadConfig,
       };
     }
+    const nativeSearch = opts?.searchesUnasked?.(CODEX_SEARCH_PROVIDER) ?? false;
     return {
       ...common,
       sandbox: 'read-only',
@@ -412,13 +446,15 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       // changes it asks about are still declined: the sandbox holds, and commands go
       // through Ordewell's `run_command`.
       approvalPolicy: 'on-request',
-      ...threadConfig,
+      // Codex's search raises no request the policy could decide call by
+      // call, so it is decided once here (ADR-0027).
+      config: { ...config, web_search: CODEX_ORDEWELL.plannerWebSearch(nativeSearch) },
       // `developerInstructions` layers on top of Codex's own base prompt, the
       // way Claude Code's `--append-system-prompt` does. `baseInstructions`
       // replaces it — which takes Codex's description of its own tools with
       // it, and a planner that has forgotten it can read the workspace
       // answers from a web search instead.
-      developerInstructions: [opts?.systemPrompt, opts?.mcp ? CODEX_ORDEWELL.plannerInstructions() : ''].filter(Boolean).join('\n\n') || undefined,
+      developerInstructions: [opts?.systemPrompt, opts?.mcp ? CODEX_ORDEWELL.plannerInstructions(nativeSearch) : ''].filter(Boolean).join('\n\n') || undefined,
     };
   }
 
@@ -977,7 +1013,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       // The query is empty when the search starts and filled when it lands, so
       // the result — not the call — is what carries what was actually searched.
       case 'webSearch':
-        emit({ type: 'tool_result', id, name: 'web_search', output: item.query ?? '', success: true, ...(subagentId ? { subagentId } : {}) });
+        emit({ type: 'tool_result', id, name: 'web_search', output: webSearchSummary(item), success: true, ...(subagentId ? { subagentId } : {}) });
         return;
       case 'fileChange':
         this.fileChangePaths.delete(id);

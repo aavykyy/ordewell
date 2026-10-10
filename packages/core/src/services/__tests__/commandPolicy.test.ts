@@ -64,7 +64,7 @@ describe('classifyCommand', () => {
       ['gh pr list --state open', 'gh pr list'],
       ['kubectl get pods', 'kubectl get pods'],
       ['docker ps', 'docker ps'],
-      ['curl https://api.example.com/health', 'curl'],
+      ['curl https://api.example.com/health', 'curl https://api.example.com/*'],
     ])('%s asks, scoped to %s', (cmd, scope) => {
       const result = classifyCommand(cmd);
       expect(result.tier).toBe('ask');
@@ -822,7 +822,6 @@ describe('a grant covers the command that was approved, not its family', () => {
 
   it('leaves a non-multiplexer scoped to its binary', () => {
     expect(scopeOf('pytest -q')).toBe('pytest');
-    expect(scopeOf('curl https://api.example.com/health')).toBe('curl');
   });
 });
 

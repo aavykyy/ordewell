@@ -63,8 +63,8 @@ reads without asking; nothing else in Full changes.
 | planner | search | fetch |
 | --- | --- | --- |
 | Claude Code | native `WebSearch`, asked as kind `search` | native `WebFetch`, asked as kind `fetch` |
-| Codex | native `web_search`, set from the policy at thread start | Ordewell `fetch` (MCP tool) |
-| OpenCode | Ordewell `web_search` (MCP tool) | Ordewell `fetch` (MCP tool); native `webfetch` denied |
+| Codex | native `web_search`, set from the policy at thread start (`cached` or `disabled`) | Ordewell `fetch` (MCP tool) |
+| OpenCode | native `websearch` (and 1.x `codesearch`), asked as kind `search` | Ordewell `fetch` (MCP tool); native `webfetch` denied |
 | API | Ordewell `web_search` | Ordewell `fetch` |
 
 - **Claude Code.** `plannerAsk` gains a `search` kind for `WebSearch`, so it
@@ -76,22 +76,39 @@ reads without asking; nothing else in Full changes.
   on the version in use.
 - **Codex.** `web_search` runs at OpenAI and raises no permission request, so
   the policy cannot decide it call by call. It is set when the planner thread
-  starts: on where the policy would allow a search without asking, off
-  otherwise, and then the planner searches through Ordewell's `web_search`,
-  which can ask. What the implementation verifies about it on the running
-  codex-cli — which mode a planner thread gets, and whether that mode opens
-  pages the model chose — is recorded with it; if live mode opens
-  model-chosen URLs, planner threads pin it to the cached mode. Codex's shell
-  has no network (ADR-0026), so it fetches through Ordewell's `fetch`.
+  starts: on where the policy would allow a search through OpenAI without
+  asking, off otherwise, and then the planner searches through Ordewell's
+  `web_search`, which can ask. Codex has four modes: `disabled`; `cached`,
+  answered from an OpenAI-maintained index with no external access;
+  `indexed`, which reaches out where the index gates it; and `live`, which
+  retrieves without restriction and whose `openPage` and `findInPage`
+  actions open URLs the model chose. A planner thread is pinned to `cached`
+  when on, never to the `live` a full-access sandbox or a user's config
+  would otherwise pick. Each search's queries, and any page it opened or
+  searched in, are shown in the research timeline. Because the query never
+  reaches Ordewell, neither the secret check nor the budget applies to it,
+  and a change of autonomy level mid-conversation reaches it only with the
+  next planner thread. Codex's shell has no network (ADR-0026), so it
+  fetches through Ordewell's `fetch`.
 - **OpenCode.** `webfetch` is denied: OpenCode follows redirects itself, and
-  Ordewell would vet only the first URL. `websearch` and `codesearch` leave
-  `allow` and are denied too; they send the query to a third party just as
-  Ordewell's search does, and Ordewell's tools are the path the policy
-  decides.
+  Ordewell would vet only the first URL. `websearch` and `codesearch` stay
+  native and ask, so the policy decides each as a search: once per session
+  in Guarded, without asking in Full, with the secret check and the budget
+  applied to the query. They send it to a third party — Exa in 1.x, and in
+  2.x the search provider chosen in OpenCode, Exa unless another was picked
+  — and the approval names that party. They stay native because a
+  provider's own search carries its own limits, while Ordewell's DuckDuckGo
+  search is a single scraped endpoint that would carry every OpenCode
+  planner's searches alone.
 - **Ordewell's tools for harness planners.** The Ordewell MCP server's planner
   tools gain `fetch` and `web_search`, the same tools the API planner has,
   behind the same policy. Every harness pre-authorizes the server's tools
-  (ADR-0022), so the policy, not the harness, decides each call.
+  (ADR-0022), so the policy, not the harness, decides each call. For a
+  harness planner they are fallbacks: their descriptions send the model to
+  its own web fetch or web search first, so Claude Code keeps its native
+  `WebFetch` and `WebSearch`, Codex fetches through Ordewell and searches
+  natively when its search is on, and OpenCode fetches through Ordewell and
+  searches with `websearch` unless its provider has none.
 
 ### The policy
 
@@ -198,17 +215,26 @@ Research subagents get `fetch` and `web_search`, and still never prompt
   and a command naming several origins asks for each in one prompt (ADR-0008).
 - **The host passes the SSRF guard** before the command is asked about.
 - **Flags are a positive list.** Only flags known not to write, send data or
-  read a config run; any other flag refuses. So `-o`, `-O`, `--output-dir`,
-  `-D`, `-c` and the trace and save flags are refused, and so is `wget`
-  unless its output is standard output.
+  read a config run without a fresh approval; the data and credential flags
+  below are the exceptions, and any other flag refuses. So `-o`, `-O`,
+  `--output-dir`, `-D`, `-c`, uploads (`-T`) and the trace and save flags are
+  refused. The only curl output path admitted is `/dev/null`. `wget` refuses
+  unless its output is standard output or it is `--spider`.
 - **Data and credential flags ask every time** and are never remembered:
-  `-d` and the `--data` family, `-F`, `-T`, `-u`, `-H`, `-b`.
+  `-d` and the `--data` family, `-F`, `-u`, `-H`, `-b`, `-e`, `--netrc`, a URL
+  with userinfo, and `-X` other than GET or HEAD. Literal `--data-urlencode`
+  with `-G` is a query; reading its data from a file still asks every time.
 - **Following redirects asks every time,** since the origin it reaches is not
   the one approved: `curl -L`, and `wget` unless redirects are turned off.
 - **Startup files are not read.** The run disables `.curlrc` and `.wgetrc`,
   which a workspace environment (ADR-0016) could otherwise point at a file the
-  repository ships.
-- **In Full, `curl` and `wget` stay refused,** whatever the allowlist says.
+  repository ships. Curl gets `-q` as its first argument; wget gets
+  `--no-config`, `--no-hsts` and `--no-netrc` so its cache cannot write and its
+  default credential file cannot attach credentials. Both clients disable
+  environment-selected proxies. These flags are inserted before classification,
+  so the classifier reads exactly the string that runs (ADR-0011, B6).
+- **In Full and allowlist mode, `curl` and `wget` stay refused,** whatever
+  the allowlist says.
   Every planner has a vetted `fetch`, and a command line's redirect, resolve
   and config surface is not something an allowlist rule can bound.
 
@@ -260,6 +286,14 @@ filed as its own issue.
 - **Keep OpenCode's `webfetch`, vetting its first URL.** Rejected: OpenCode
   follows redirects itself, so the check would not see the address that is
   read.
+- **Deny OpenCode's `websearch` and `codesearch`, searching through
+  Ordewell's `web_search`.** First chosen, then dropped: both already reach
+  the policy once they ask, so denying them bought no control, and it moved
+  every OpenCode planner's searches onto one scraped endpoint built for
+  people.
+- **Leave Codex's search mode to its defaults.** Rejected: a full-access
+  sandbox or a user's config selects `live`, which opens pages the model
+  chose with no guard Ordewell runs.
 
 ## History
 
@@ -267,6 +301,13 @@ filed as its own issue.
   web reads, hardened SSRF guard with pinned connections, outbound secret
   check, pluggable search providers, web reads for research subagents,
   per-origin `curl`/`wget`; an egress proxy planned as phase 2.
+- 2026-10-10 — implemented the `run_command` curl/wget restrictions.
+- 2026-10-10 — OpenCode's `websearch` and `codesearch` stay native, asked as
+  kind `search`, instead of being denied; Ordewell's `fetch` and
+  `web_search` are fallbacks for harness planners; Codex's modes verified on
+  codex-cli 0.162.0 (`disabled`, `cached`, `indexed`, `live`, with `live`
+  opening model-chosen pages), and planner threads pinned to `cached` when
+  on.
 - 2026-10-10 — search is zero-configuration: provider-native for harness
   planners, one internal DuckDuckGo provider for API planners and as fallback,
   with a shared back-off and cache.

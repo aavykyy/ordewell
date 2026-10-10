@@ -14,17 +14,23 @@ const RULE = NAMES.toolName('*');
  * A planner server's whole permission policy (ADR-0026), in order: OpenCode
  * applies the last rule that matches, so the catch-all comes first. Anything
  * not named asks, which reaches the planner's envelope: a user's MCP tool, a
- * fetch, a read outside the workspace. OpenCode's own read tools run, and
+ * search, a read outside the workspace. OpenCode's own read tools run, and
  * everything that writes or runs is denied — its shell too, since the
  * planner's commands go through Ordewell's `run_command`. 2.x renamed `bash`
  * to `shell` and `task` to `subagent`, and added a `browser` that clicks
  * through pages; both spellings are listed. Checked against 1.18.35 and 2.0.26.
+ *
+ * Web reads (ADR-0027): `webfetch` follows redirects itself, so Ordewell would
+ * vet only the first URL, and the planner fetches through Ordewell's `fetch`
+ * instead. `websearch` (both versions) and `codesearch` (1.x) ask, so the
+ * web-read policy decides each as a search.
  */
 export const OPENCODE_PLANNER_PERMISSION: Record<string, OpenCodeSessionRule['effect']> = {
   '*': 'ask',
   read: 'allow', glob: 'allow', grep: 'allow', list: 'allow', lsp: 'allow',
-  skill: 'allow', todoread: 'allow', websearch: 'allow', codesearch: 'allow',
-  webfetch: 'ask', external_directory: 'ask',
+  skill: 'allow', todoread: 'allow',
+  websearch: 'ask', codesearch: 'ask', external_directory: 'ask',
+  webfetch: 'deny',
   edit: 'deny', write: 'deny', patch: 'deny', apply_patch: 'deny', multiedit: 'deny',
   bash: 'deny', task: 'deny', question: 'deny', todowrite: 'deny',
   shell: 'deny', subagent: 'deny', browser: 'deny',
@@ -40,11 +46,22 @@ export interface OpenCodeSessionRule {
   effect: 'allow' | 'deny' | 'ask';
 }
 
+/**
+ * Who receives an OpenCode search. 1.x sends `websearch` and `codesearch` to
+ * Exa's hosted MCP server; 2.x sends `websearch` to the search provider chosen
+ * in OpenCode, Exa unless another was picked (checked against 1.18.35 and
+ * 2.0.26). Either way the query leaves for a third party, which the approval
+ * names.
+ */
+export const OPENCODE_SEARCH_PROVIDER = { provider: 'opencode', providerLabel: 'OpenCode\'s web search (Exa, unless another search provider is chosen in OpenCode)' } as const;
+
 export interface OpenCodeOrdewellBinding extends OrdewellToolBinding<string> {
   /** The 1.x server's `OPENCODE_CONFIG_CONTENT` with the server added — see {@link mergeOrdewellConfig}. */
   configContent(existing: string | undefined, mcp: McpClientConfig | null, role: 'planner' | 'task'): string | null;
   /** The rules a 2.x session is created with so the server's tools never wait on a person (ADR-0022, S3). */
   sessionRules(): OpenCodeSessionRule[];
+  /** What a planner's instructions add about web reads (ADR-0027). */
+  plannerInstructions(): string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -137,4 +154,8 @@ export const OPENCODE_ORDEWELL: OpenCodeOrdewellBinding = {
   attachState: (status) => (status === 'connected' ? 'connected' : status === undefined || status === null || status === 'pending' ? 'pending' : 'failed'),
   configContent: mergeOrdewellConfig,
   sessionRules: () => [{ action: RULE, resource: '*', effect: 'allow' }],
+  plannerInstructions: () => [
+    `Read web pages with \`${NAMES.toolName('fetch')}\`. Your own \`webfetch\` is off while planning: it follows redirects Ordewell cannot check.`,
+    `Search the web with your own \`websearch\` first. Use \`${NAMES.toolName('web_search')}\` only if \`websearch\` is unavailable for your provider.`,
+  ].join(' '),
 };

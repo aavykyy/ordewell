@@ -267,6 +267,7 @@ export function createSession(deps: SessionDeps): Session {
   });
 
   const approvalPolicy = new ApprovalPolicy({
+    autonomous: () => deps.config.autonomousMode,
     // Read per request, so a change of autonomy level or allowlist applies to the next call.
     mode: (kind) => effectiveApprovalMode(deps.config.approvalMode, deps.config.autonomousMode, kind),
     preApproved: () => [...(deps.config.approvalDefaults ? DEFAULT_PLANNER_ALLOWLIST : []), ...deps.config.approvalPreApproved],
@@ -435,6 +436,8 @@ export class Session {
     lastAttempt: (taskId) => lastAttemptDigest(this.taskLogLocation, taskId),
     taskSkills: () => this.workspaceSkills(),
     runCommand: (command, signal) => this.fsAdapter.bash(command, signal),
+    fetchUrl: (url) => this.fetcher.fetch(url),
+    webSearch: async (query) => this.fetcher.search?.(query),
   });
 
   constructor(parts: SessionParts) {

@@ -48,6 +48,7 @@ import { REFUSED_RUNNERS, XARGS_TARGETS, unwrap } from './commandRunners';
 import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, subcommandOf, takesNextToken, valueFlagIn } from './flagPolicy';
 import { AWK_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, sedProgramArgs, sedRefusal } from './filterPrograms';
 import { commandAllowedBy, type PlannerAllowlist } from './plannerAllowlist';
+import { webCommand } from './webCommands';
 
 export type { Dialect } from './shellLexer';
 
@@ -270,6 +271,8 @@ const MULTIPLEXERS = ['git', 'npm', 'yarn', 'pnpm', 'npx', 'cargo', 'go', 'dotne
  */
 export interface CommandPolicyOptions {
   dialect?: ShellDialect;
+  autonomous?: boolean;
+  approvalMode?: 'ask' | 'allow' | 'deny';
   /**
    * `CDPATH` is set in the environment the command will run in. A relative
    * `cd` may then land in a directory the command line never names, so `cd`
@@ -284,6 +287,11 @@ export type CommandTier = 'auto' | 'ask' | 'refuse';
 
 export interface CommandClassification {
   tier: CommandTier;
+  /** A human must approve this invocation even when its origin was already granted. */
+  perInvocation?: boolean;
+  /** Separate grants for commands that name several origins. */
+  scopes?: string[];
+  webUrls?: URL[];
   /** What a grant covers, for `ask`. Derived from the non-auto segments only. */
   scope: string;
   /** Populated for `refuse`: why, in a sentence the model can act on. */
@@ -538,6 +546,8 @@ function isAuto(seg: Segment, opts: CommandPolicyOptions): boolean {
 }
 
 function refusalFor(seg: Segment): string | undefined {
+  const web = webCommand(seg);
+  if (web?.reason) return web.reason;
   // Nothing else about the segment means anything when the name of what runs
   // is only known once the shell has run the substitution or read the variable.
   if (seg.computedBinary !== undefined) {
@@ -791,9 +801,15 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
   // Every segment is reduced to the command that will actually execute first,
   // so `env`, `nice`, `timeout` and friends decide nothing about the answer.
   const unwrapped = segments.map((seg) => unwrap(seg, dialect));
+  if (segments.some((seg, i) => seg.nested && webCommand(unwrapped[i].seg))) {
+    return { tier: 'refuse', scope: '', reason: 'A curl or wget command inside a substitution cannot have its startup files disabled safely. Run it directly, or use the Ordewell fetch tool.' };
+  }
 
   for (const { seg, wrappers, runner, reason: wrapperReason } of unwrapped) {
     if (wrapperReason) return { tier: 'refuse', scope: '', reason: wrapperReason };
+    if (webCommand(seg) && (opts.autonomous || opts.approvalMode === 'deny')) {
+      return { tier: 'refuse', scope: '', reason: 'curl and wget are refused in Full and allowlist mode. Use the Ordewell fetch tool instead.' };
+    }
     // Matched case-insensitively: cmd.exe builtins and the default macOS and
     // Windows filesystems all take `RM` or `Del` for the refused name.
     const reason = refusalFor({ ...seg, binary: seg.binary.toLowerCase() });
@@ -823,10 +839,12 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
   // approving `cd "$HOME"` once would wave through `cd "$HOME" && cat
   // .ssh/id_rsa` later. Its grant is the line the human read. `command` is
   // left out: `command cd` is unwrapped to `cd`, so what remains is a lookup.
-  if (nonAuto.some((u) => {
+  const lineScoped = nonAuto.some((u) => {
     const name = u.seg.binary.toLowerCase();
     return name === 'cd' || (name !== 'command' && SHELL_STATE_COMMANDS.has(name));
-  })) {
+  });
+  const webUrls = nonAuto.flatMap((u) => webCommand(u.seg)?.urls ?? []);
+  if (lineScoped && webUrls.length === 0) {
     return { tier: 'ask', scope: trimmed };
   }
 
@@ -834,10 +852,21 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
   // `az group list | head` is remembered as `az group`, not the whole line —
   // and under a runner it names the command run, so approving `xargs grep`
   // never covers `xargs cat`.
-  const scope = [...new Set(nonAuto.map((u) => (u.runner ? `${u.runner} ${scopeFor(u.seg)}` : scopeFor(u.seg))))]
-    .sort().join(' + ');
-  const allowedBy = opts.allow ? allowlistRule(nonAuto, opts.allow) : undefined;
-  return { tier: 'ask', scope, ...(allowedBy ? { allowedBy } : {}) };
+  const scopes = [...new Set(nonAuto.flatMap((u) => {
+    const web = webCommand(u.seg);
+    return web ? web.urls.map((url) => `${u.seg.binaryPath ?? u.seg.binary} ${url.origin}/*`)
+      : [lineScoped ? trimmed : u.runner ? `${u.runner} ${scopeFor(u.seg)}` : scopeFor(u.seg)];
+  }))].sort();
+  const scope = scopes.join(' + ');
+  const perInvocation = nonAuto.some((u) => webCommand(u.seg)?.perInvocation);
+  const allowedBy = opts.allow && !perInvocation && !lineScoped ? allowlistRule(nonAuto, opts.allow) : undefined;
+  return {
+    tier: 'ask', scope,
+    ...(webUrls.length ? { webUrls } : {}),
+    ...(scopes.length > 1 && webUrls.length ? { scopes } : {}),
+    ...(perInvocation ? { perInvocation } : {}),
+    ...(allowedBy ? { allowedBy } : {}),
+  };
 }
 
 /**
@@ -851,6 +880,15 @@ function allowlistRule(parts: { seg: Segment; runner?: string }[], allow: Planne
   const rules: string[] = [];
   for (const { seg, runner } of parts) {
     if (runner || seg.expandable || seg.globbed || seg.binaryPath !== undefined || seg.assignments.length > 0) return undefined;
+    const web = webCommand(seg);
+    if (web) {
+      for (const url of web.urls) {
+        const rule = commandAllowedBy(allow, { binary: seg.binary, args: [`${url.origin}/*`], scopeWords: 1 });
+        if (!rule) return undefined;
+        rules.push(rule);
+      }
+      continue;
+    }
     const rule = commandAllowedBy(allow, { binary: seg.binary, args: seg.args, scopeWords: scopeFor(seg).split(' ').length - 1 });
     if (!rule) return undefined;
     rules.push(rule);
