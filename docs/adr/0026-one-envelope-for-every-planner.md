@@ -228,3 +228,6 @@ refused from a workspace's environment files (ADR-0016).
   the settings are user-only. OpenCode 2.0.26 checked live: its MCP status
   moved to `/api/mcp`, which the attach check now reads, and code mode hid
   `task_complete` from tasks until Ordewell's server was listed outside it.
+- 2026-10-10 — web reads join the envelope under one web-read policy; Full
+  allows them without asking, every other command stays on the allowlist
+  ([ADR-0027](0027-web-reads-in-the-planner-envelope.md)).
