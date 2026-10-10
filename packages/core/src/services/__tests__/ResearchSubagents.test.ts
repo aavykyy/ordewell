@@ -231,7 +231,7 @@ describe('runResearchAgent', () => {
 
   it('does not report progress for refused tool calls', async () => {
     const chat = scriptedChat([
-      { text: '', hasToolCalls: true, toolCalls: [{ name: 'fetch', args: { url: 'https://x.test' }, id: 'f1' }] },
+      { text: '', hasToolCalls: true, toolCalls: [{ name: 'write_file', args: { path: 'a.ts' }, id: 'w1' }] },
       textTurn('digest'),
     ]);
     const { fs } = fakeFs();
@@ -242,13 +242,12 @@ describe('runResearchAgent', () => {
     expect(events.filter((e) => (e as { type: string }).type === 'tool_call' || (e as { type: string }).type === 'tool_result')).toEqual([]);
   });
 
-  it('refuses fetch, recursive spawn, and hallucinated write tools without touching the filesystem', async () => {
+  it('refuses recursive spawn and hallucinated write tools without touching the filesystem', async () => {
     const chat = scriptedChat([
       {
         text: '',
         hasToolCalls: true,
         toolCalls: [
-          { name: 'fetch', args: { url: 'https://x.test' }, id: 'f1' },
           { name: 'spawn_research_agent', args: { prompt: 'nested' }, id: 's1' },
           { name: 'write_file', args: { path: 'a.ts', content: 'x' }, id: 'w1' },
         ],
@@ -263,15 +262,42 @@ describe('runResearchAgent', () => {
     expect(touched).toEqual([]);
     expect(createChat).toHaveBeenCalledTimes(1); // no recursive spawn
     // Every refused call still gets a result keyed by its id — API history stays valid.
-    expect(chat.received[0].map((r) => r.id)).toEqual(['f1', 's1', 'w1']);
+    expect(chat.received[0].map((r) => r.id)).toEqual(['s1', 'w1']);
     for (const r of chat.received[0]) {
       expect(r.output).toMatch(/read-only research subagent/i);
     }
     // T6: a refused capability must tell the subagent to report the gap in its
     // digest so the planner can request it directly — otherwise the gap is
     // silently dropped.
-    expect(chat.received[0].find((r) => r.id === 'f1')!.output).toMatch(/digest/i);
+    expect(chat.received[0].find((r) => r.id === 'w1')!.output).toMatch(/digest/i);
     expect(result.output).toContain('digest after refusals');
+  });
+
+  // The network tools are now part of the subagent's set, but they run behind
+  // the non-prompting fetcher the caller hands in — never the planner's own.
+  it('dispatches fetch and web_search through the provided fetcher', async () => {
+    const chat = scriptedChat([
+      {
+        text: '',
+        hasToolCalls: true,
+        toolCalls: [
+          { name: 'fetch', args: { url: 'https://docs.example.com/x' }, id: 'f1' },
+          { name: 'web_search', args: { query: 'hono routing' }, id: 'q1' },
+        ],
+      },
+      textTurn('digest'),
+    ]);
+    const { fs } = fakeFs();
+    const fetcher = {
+      decide: vi.fn(),
+      fetch: vi.fn().mockResolvedValue({ success: true, output: 'page body', truncated: false }),
+      search: vi.fn().mockResolvedValue({ success: true, output: '1. Hono', truncated: false }),
+    };
+
+    await runResearchAgent('brief', { createChat: () => chat, fs, fetcher });
+
+    expect(fetcher.fetch).toHaveBeenCalledWith('https://docs.example.com/x');
+    expect(fetcher.search).toHaveBeenCalledWith('hono routing');
   });
 
   // T6: an ask-tier bash command from a subagent is refused (subagents can

@@ -151,25 +151,34 @@ hold without one:
 
 ### Search backends
 
-Search goes through a pluggable search provider: DuckDuckGo stays as the
-zero-configuration fallback; the Brave Search API and a self-hosted SearXNG
-are the others.
+Search is zero-configuration. A harness planner uses its provider's own search
+— Claude Code's `WebSearch`, Codex's `web_search`, OpenCode's `websearch` —
+which needs no setup and carries the provider's own limits. Ordewell's own
+`web_search` serves API planners, and is the fallback for a harness planner
+whose provider-side search the policy turned off. It goes through a small
+internal provider seam whose only implementation today is DuckDuckGo's lite
+endpoint, reached through the same pinned transport as a fetch; the seam exists
+so a later backend is one class, not a refactor.
 
-- **Configured from user-only settings,** never from the repository, as
-  ADR-0026 and ADR-0016 do for the approval settings: a VS Code user setting
-  that a workspace cannot override, or an `ORDEWELL_` variable refused from a
-  workspace's environment files. An API key is a secret, and an endpoint the
-  repository could choose would receive every query.
-- **The configured endpoint is the only address that skips the SSRF guard,**
-  because a self-hosted SearXNG usually sits on a private address, and the
-  user, not the planner, named it. It is used for the search call alone,
-  never for a fetch.
+- **The provider names itself to the policy.** The provider id flows into the
+  `search` decision, so Guarded's once-per-session approval names the backend
+  and says a third party receives the query.
+- **A backend that pushes back is backed off.** A 429 or 403, or a
+  challenge/captcha page instead of results, marks the provider unavailable for
+  a short cooldown shared across sessions in the process, growing on repeated
+  push-backs and reset by a successful search. During the cooldown a search
+  answers at once — no request goes out — telling the planner to fetch a
+  documentation URL it already knows. A plain parse miss on a 200 with no
+  challenge marker is not a block.
 - **A shared, short-lived cache of public responses.** Results and pages
   fetched without credentials, and not marked private by the response, are
   shared between planners for a short time. A cache hit still passes the
   policy: a page cached for one session is not read by a Guarded session that
   has not been granted its origin, and an excluded origin is excluded from
   the cache too.
+
+**Later.** Keyed search backends (the Brave Search API, a self-hosted SearXNG)
+and provider-native search for API planners are deferred to their own issue.
 
 ### Research subagents
 
@@ -258,3 +267,6 @@ filed as its own issue.
   web reads, hardened SSRF guard with pinned connections, outbound secret
   check, pluggable search providers, web reads for research subagents,
   per-origin `curl`/`wget`; an egress proxy planned as phase 2.
+- 2026-10-10 — search is zero-configuration: provider-native for harness
+  planners, one internal DuckDuckGo provider for API planners and as fallback,
+  with a shared back-off and cache.

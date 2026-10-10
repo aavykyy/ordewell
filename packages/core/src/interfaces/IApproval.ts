@@ -91,6 +91,13 @@ export interface IApproval {
   allowlist?(): PlannerAllowlist;
   /** Surface a decision reached before `request` was called, as `request`'s own are. */
   record?(req: ApprovalRequest, granted: boolean, source: ApprovalSource): void;
+  /**
+   * Resolve a request without a person (ADR-0027): `allow` when it is already
+   * granted or the mode allows without asking, `deny` when a refusal is
+   * remembered or the mode forbids, `ask` when it would still need a prompt. A
+   * background research subagent never prompts, so `ask` means refused.
+   */
+  peek?(req: ApprovalRequest): 'allow' | 'deny' | 'ask';
 }
 
 /** Denies everything. The safe default when a surface wires no approval channel. */

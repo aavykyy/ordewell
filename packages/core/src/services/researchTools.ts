@@ -133,17 +133,16 @@ export const RESEARCH_TOOLS: ResearchToolSpec[] = [
 ];
 
 /**
- * The toolset a research subagent gets: the read-only exploration tools minus
- * the network tools (`fetch`/`web_search` can pause on user confirmation, which
- * a background subagent must never do) and minus the spawn tool itself (no
- * recursion). `bash` stays, but its own approval gate means a subagent can only
- * ever run the auto-tier read-only commands — an ask-tier command from a
- * background agent resolves to denied rather than prompting.
+ * The toolset a research subagent gets: the same read-only exploration tools
+ * the planner has, minus the spawn tool itself (no recursion). `fetch` and
+ * `web_search` are included, but a subagent reaches them through a
+ * non-prompting fetcher (ADR-0027, ADR-0008 T6): in Full they run as the
+ * planner's do, and in Guarded only an origin or search already granted or
+ * allowlisted succeeds — anything that would ask is refused, never prompted.
+ * `bash` stays gated the same way at the capability boundary.
  */
-const SUBAGENT_EXCLUDED = new Set(['fetch', 'web_search']);
-
 export function subagentToolSpecs(): ResearchToolSpec[] {
-  return RESEARCH_TOOLS.filter((t) => !SUBAGENT_EXCLUDED.has(t.name));
+  return RESEARCH_TOOLS;
 }
 
 function withSpawn(): ResearchToolSpec[] {

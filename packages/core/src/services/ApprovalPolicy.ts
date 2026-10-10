@@ -103,16 +103,7 @@ export class ApprovalPolicy implements IApproval {
       return granted;
     };
 
-    const scopes = approvalScopes(req);
-    // A denial of several scopes is keyed on all of them together: the "no"
-    // may have been about any one, so it refuses none of them on its own.
-    const key = scopes.join('\n');
-    const list = this.allowlist();
-    // The first scope is the command's or tool's own: an allowlist rule covers it, never an outside directory.
-    const preApproved = (scope: string, i: number) => scopeAllowed(list, scope) || (i === 0 && (
-      (req.kind === 'shell_command' && req.allowedBy !== undefined)
-      || (req.kind === 'mcp_tool' && req.tool !== undefined && toolAllowed(list, req.tool))));
-    const open = scopes.filter((s, i) => !this.granted.has(s) && !preApproved(s, i));
+    const { scopes, key, open } = this.standing(req);
     if (open.length === 0) {
       return decide(true, scopes.every((s) => this.granted.has(s)) ? 'remembered' : 'pre-approved');
     }
@@ -145,6 +136,35 @@ export class ApprovalPolicy implements IApproval {
       else this.refused.add(key);
     }
     return decide(answer, 'asked');
+  }
+
+  /**
+   * What `request` would answer without a person, for a caller that may never
+   * prompt (a research subagent): the same standing grants, remembered
+   * refusals and mode the interactive path uses, stopping at `ask`.
+   */
+  peek(req: ApprovalRequest): 'allow' | 'deny' | 'ask' {
+    const { scopes, key, open } = this.standing(req);
+    if (open.length === 0) return 'allow';
+    if (scopes.some((s) => this.refused.has(s)) || this.refused.has(key)) return 'deny';
+    const mode = this.modeOf(req.kind);
+    if (mode === 'allow') return 'allow';
+    if (mode === 'deny') return 'deny';
+    return 'ask';
+  }
+
+  private standing(req: ApprovalRequest): { scopes: string[]; key: string; open: string[] } {
+    const scopes = approvalScopes(req);
+    // A denial of several scopes is keyed on all of them together: the "no"
+    // may have been about any one, so it refuses none of them on its own.
+    const key = scopes.join('\n');
+    const list = this.allowlist();
+    // The first scope is the command's or tool's own: an allowlist rule covers it, never an outside directory.
+    const preApproved = (scope: string, i: number) => scopeAllowed(list, scope) || (i === 0 && (
+      (req.kind === 'shell_command' && req.allowedBy !== undefined)
+      || (req.kind === 'mcp_tool' && req.tool !== undefined && toolAllowed(list, req.tool))));
+    const open = scopes.filter((s, i) => !this.granted.has(s) && !preApproved(s, i));
+    return { scopes, key, open };
   }
 
   /** Report a decision a guard reached before this policy was asked. */

@@ -160,6 +160,7 @@ export abstract class BaseAiService {
     onProgress: (progress: ResearchProgress) => void,
     signal: AbortSignal | undefined,
     subagentId: string,
+    fetcher: IWebFetcher | undefined,
   ): Promise<{ success: boolean; output: string; truncated: boolean }> {
     const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : '';
     if (!prompt) {
@@ -178,6 +179,10 @@ export abstract class BaseAiService {
       fs,
       signal,
       subagentId,
+      // The subagent gets web tools only behind a non-prompting gate: no
+      // approval channel exists in the background, so a read that would ask is
+      // refused instead (ADR-0027, ADR-0008 T6).
+      fetcher: fetcher?.forSubagent?.(),
       model: this.config.researchSubagentModel,
       usage: () => usage,
       onProgress: (progress) => {
@@ -238,7 +243,7 @@ export abstract class BaseAiService {
           const subagentId = uuidv4();
           spawnSubagentIds.set(i, subagentId);
           onProgress({ type: 'tool_call', tool: toolCalls[i].name, toolArgs: JSON.stringify(toolCalls[i].args), subagentId, toolCallId: toolCalls[i].id });
-          precomputed.set(i, await this.executeSpawnAgent({ ...toolCalls[i].args }, fs, onProgress, signal, subagentId));
+          precomputed.set(i, await this.executeSpawnAgent({ ...toolCalls[i].args }, fs, onProgress, signal, subagentId, fetcher));
         })
         : Promise.resolve(),
       parallelIndexes.length > 1

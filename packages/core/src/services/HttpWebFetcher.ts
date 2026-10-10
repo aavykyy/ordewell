@@ -5,8 +5,12 @@ import type { LookupFunction } from 'node:net';
 import { pipeline, type Readable } from 'node:stream';
 import * as zlib from 'node:zlib';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
+import type { SearchHit, SearchPage } from '../interfaces/ISearchProvider';
+import type { ISearchProvider } from '../interfaces/ISearchProvider';
 import type { ToolOutcome } from '../interfaces/IFileSystem';
 import { guardedLookup, resolveAll, vetEgress, type ResolveAll } from './egressGuard';
+import { DuckDuckGoSearchProvider } from './DuckDuckGoSearchProvider';
+import { WebResponseCache } from './WebResponseCache';
 import type { WebRead, WebReadDecision, WebReadPolicy } from './webReadPolicy';
 
 /**
@@ -18,7 +22,9 @@ import type { WebRead, WebReadDecision, WebReadPolicy } from './webReadPolicy';
  *
  * Whether a read happens is the web-read policy's to decide (ADR-0027); this
  * carries it. Redirect hops are vetted here, since the policy saw only the
- * first URL.
+ * first URL. Search goes through a pluggable provider behind the same
+ * transport; results and pages are cached in an injected, process-wide cache
+ * that saves the network but never the decision.
  */
 
 /** The slice of a `fetch` Response the fetcher reads; the platform `fetch` satisfies it. */
@@ -46,6 +52,12 @@ export interface HttpWebFetcherOptions {
   timeoutMs?: number;
   /** Override DNS resolution (every answer for a name) in tests. */
   resolveHost?: ResolveAll;
+  /** Shared across sessions in production; a fresh one per instance is the test default. */
+  cache?: WebResponseCache;
+  /** Shared across sessions so the search cooldown is process-wide. */
+  searchProvider?: ISearchProvider;
+  /** False for a research subagent, which must never prompt (see {@link forSubagent}). */
+  prompting?: boolean;
 }
 
 const DEFAULT_MAX_CHARS = 40_000;
@@ -55,14 +67,8 @@ const MAX_REDIRECTS = 5;
 /** A default UA gets refused by enough sites that it is not worth the confusing failures. */
 const USER_AGENT = 'Mozilla/5.0 (compatible; Ordewell-Planner/1.0; +https://github.com/ordewell)';
 
-/**
- * DuckDuckGo's lite endpoint: no API key, no account, and stable enough for
- * "find me the docs URL". It is HTML scraping, so it is the most brittle thing
- * here by construction — every failure path degrades to a tool result that
- * tells the planner to fall back to `fetch` with a known URL.
- */
-const SEARCH_ENDPOINT = 'https://lite.duckduckgo.com/lite/?q=';
-const SEARCH_PROVIDER = 'duckduckgo';
+const SEARCH_COOLDOWN_OUTPUT =
+  'Web search is temporarily unavailable: the search provider backed off after pushing back on automated queries. Do not retry now; fetch a documentation URL you already know instead.';
 
 function decodeEntities(text: string): string {
   return text
@@ -93,25 +99,11 @@ function htmlToText(html: string): string {
     .trim();
 }
 
-interface SearchHit { title: string; url: string; snippet?: string }
-
-/** Pull result links out of the lite endpoint's markup. */
-function parseSearchHits(html: string): SearchHit[] {
-  const hits: SearchHit[] = [];
-  const linkPattern = /<a\b[^>]*class="[^"]*result(?:-link|__a)[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-  const snippetPattern = /class="[^"]*result(?:-snippet|__snippet)[^"]*"[^>]*>([\s\S]*?)</gi;
-
-  const snippets: string[] = [];
-  for (let m = snippetPattern.exec(html); m; m = snippetPattern.exec(html)) {
-    snippets.push(decodeEntities(m[1].replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim());
-  }
-
-  for (let m = linkPattern.exec(html); m; m = linkPattern.exec(html)) {
-    const title = decodeEntities(m[2].replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
-    if (!title) continue;
-    hits.push({ title, url: decodeEntities(m[1]), snippet: snippets[hits.length] });
-  }
-  return hits;
+function formatHits(hits: SearchHit[]): ToolOutcome {
+  const output = hits
+    .map((hit, i) => `${i + 1}. ${hit.title}\n   ${hit.url}${hit.snippet ? `\n   ${hit.snippet}` : ''}`)
+    .join('\n\n');
+  return { success: true, output, truncated: false };
 }
 
 function sanitizeError(err: unknown): string {
@@ -122,12 +114,26 @@ function sanitizeError(err: unknown): string {
   return msg.replace(/https?:\/\/\S+/g, '<url>');
 }
 
+/** A complete, non-private GET response; a response under the byte cap or marked private is not cacheable. */
+type FetchedPage =
+  | { ok: true; status: number; body: string; isHtml: boolean; truncated: boolean; cacheable: boolean }
+  | { ok: false; status?: number; error: string };
+
+/** `no-store`/`private` or a `Set-Cookie` marks a response as session-specific, so it never enters a shared cache. */
+function isPrivateResponse(cacheControl: string, setCookie: string | null): boolean {
+  if (setCookie) return true;
+  return /(?:^|,)\s*(?:no-store|private)\b/i.test(cacheControl);
+}
+
 export class HttpWebFetcher implements IWebFetcher {
   private readonly policy: Pick<WebReadPolicy, 'decide'>;
   private readonly fetchImpl: WebTransport;
   private readonly maxChars: number;
   private readonly timeoutMs: number;
   private readonly resolveHost: ResolveAll;
+  private readonly cache: WebResponseCache;
+  private readonly searchProvider: ISearchProvider;
+  private readonly prompting: boolean;
 
   constructor(opts: HttpWebFetcherOptions) {
     this.policy = opts.policy;
@@ -135,6 +141,9 @@ export class HttpWebFetcher implements IWebFetcher {
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.resolveHost = opts.resolveHost ?? resolveAll;
     this.fetchImpl = opts.fetchImpl ?? pinnedTransport(guardedLookup(this.resolveHost));
+    this.cache = opts.cache ?? new WebResponseCache();
+    this.searchProvider = opts.searchProvider ?? new DuckDuckGoSearchProvider();
+    this.prompting = opts.prompting ?? true;
   }
 
   private async isBlockedHost(host: string, port: string): Promise<boolean> {
@@ -142,55 +151,97 @@ export class HttpWebFetcher implements IWebFetcher {
   }
 
   decide(read: WebRead): Promise<WebReadDecision> {
-    return this.policy.decide(read);
+    return this.policy.decide(read, this.decideOptions);
+  }
+
+  private get decideOptions(): { prompting: boolean } {
+    return { prompting: this.prompting };
+  }
+
+  forSubagent(): IWebFetcher {
+    return new HttpWebFetcher({
+      policy: this.policy,
+      fetchImpl: this.fetchImpl,
+      maxChars: this.maxChars,
+      timeoutMs: this.timeoutMs,
+      resolveHost: this.resolveHost,
+      cache: this.cache,
+      searchProvider: this.searchProvider,
+      prompting: false,
+    });
   }
 
   async fetch(url: string): Promise<ToolOutcome> {
-    const decision = await this.policy.decide({ kind: 'fetch', url });
+    const decision = await this.policy.decide({ kind: 'fetch', url }, this.decideOptions);
     if (!decision.allowed) return { success: false, output: decision.reason, truncated: false };
     return this.get(url, 'Fetch');
   }
 
   async search(query: string): Promise<ToolOutcome> {
-    const decision = await this.policy.decide({ kind: 'search', query, provider: SEARCH_PROVIDER });
+    const provider = this.searchProvider;
+    const decision = await this.policy.decide({ kind: 'search', query, provider: provider.id }, this.decideOptions);
     if (!decision.allowed) return { success: false, output: decision.reason, truncated: false };
 
-    const url = SEARCH_ENDPOINT + encodeURIComponent(query);
-    const page = await this.request(url);
-    if (!page.ok) return { success: false, output: `Web search failed: ${page.error}`, truncated: false };
+    // The cooldown short-circuits the search entirely: no request goes out, and
+    // the planner is pointed at `fetch` for URLs it already knows.
+    if (provider.coolingDown()) return { success: false, output: SEARCH_COOLDOWN_OUTPUT, truncated: false };
 
-    const hits = parseSearchHits(page.body).slice(0, 10);
-    if (hits.length === 0) {
-      return {
-        success: false,
-        output: `No results could be parsed for "${query}". Search is best-effort; if you already know a documentation URL, use the fetch tool directly.`,
-        truncated: false,
-      };
+    // The cache saves the network, never the decision: the policy ran first, so
+    // a hit is refused by an exclusion, the secret check, a Guarded approval or
+    // the budget exactly as a live search would be.
+    const cacheKey = `${provider.id}\u0000${query}`;
+    const cached = this.cache.getSearch(cacheKey);
+    if (cached) return formatHits(cached);
+
+    const outcome = await provider.search(query, (url) => this.getSearchPage(url));
+    switch (outcome.kind) {
+      case 'hits':
+        this.cache.setSearch(cacheKey, outcome.hits);
+        return formatHits(outcome.hits);
+      case 'none':
+        return {
+          success: false,
+          output: `No results could be parsed for "${query}". Search is best-effort; if you already know a documentation URL, use the fetch tool directly.`,
+          truncated: false,
+        };
+      case 'blocked':
+        return { success: false, output: SEARCH_COOLDOWN_OUTPUT, truncated: false };
+      case 'error':
+        return { success: false, output: `Web search failed: ${outcome.error}`, truncated: false };
     }
-
-    const output = hits
-      .map((hit, i) => `${i + 1}. ${hit.title}\n   ${hit.url}${hit.snippet ? `\n   ${hit.snippet}` : ''}`)
-      .join('\n\n');
-    return { success: true, output, truncated: false };
   }
 
   private async get(url: string, label: string): Promise<ToolOutcome> {
+    const cached = this.cache.getFetch(url);
+    if (cached) return this.render(label, cached.body, cached.isHtml, false);
+
     const page = await this.request(url);
     if (!page.ok) return { success: false, output: `${label} failed: ${page.error}`, truncated: false };
+    if (page.cacheable && !page.truncated) this.cache.setFetch(url, { body: page.body, isHtml: page.isHtml });
+    return this.render(label, page.body, page.isHtml, page.truncated);
+  }
 
-    const text = page.isHtml ? htmlToText(page.body) : page.body;
-    if (page.truncated || text.length > this.maxChars) {
+  private render(label: string, body: string, isHtml: boolean, byteTruncated: boolean): ToolOutcome {
+    const text = isHtml ? htmlToText(body) : body;
+    if (byteTruncated || text.length > this.maxChars) {
       const sliced = text.slice(0, this.maxChars);
       return {
         success: true,
-        output: `${sliced}\n\n[... truncated to ${this.maxChars} chars, total ${text.length}${page.truncated ? '+, body was byte-capped at the source' : ''}]`,
+        output: `${sliced}\n\n[... truncated to ${this.maxChars} chars, total ${text.length}${byteTruncated ? '+, body was byte-capped at the source' : ''}]`,
         truncated: true,
       };
     }
     return { success: true, output: text, truncated: false };
   }
 
-  private async request(url: string): Promise<{ ok: true; body: string; isHtml: boolean; truncated: boolean } | { ok: false; error: string }> {
+  private async getSearchPage(url: string): Promise<SearchPage> {
+    const page = await this.request(url);
+    return page.ok
+      ? { ok: true, status: page.status, body: page.body }
+      : { ok: false, status: page.status, error: page.error };
+  }
+
+  private async request(url: string): Promise<FetchedPage> {
     let current = url;
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
       const controller = new AbortController();
@@ -203,7 +254,7 @@ export class HttpWebFetcher implements IWebFetcher {
         });
         if (res.status >= 300 && res.status < 400) {
           const location = res.headers.get('location');
-          if (!location) return { ok: false, error: `redirect (${res.status}) with no Location` };
+          if (!location) return { ok: false, status: res.status, error: `redirect (${res.status}) with no Location` };
           const next = new URL(location, current).href;
           // Re-check the destination the same way `confirm` checked the origin:
           // a redirect to a private IP, or to a non-http(s) scheme like
@@ -211,19 +262,20 @@ export class HttpWebFetcher implements IWebFetcher {
           // the initial URL.
           const nextParsed = new URL(next);
           if (nextParsed.protocol !== 'https:' && nextParsed.protocol !== 'http:') {
-            return { ok: false, error: 'redirect to a non-HTTP scheme' };
+            return { ok: false, status: res.status, error: 'redirect to a non-HTTP scheme' };
           }
           if (await this.isBlockedHost(nextParsed.hostname, nextParsed.port)) {
-            return { ok: false, error: 'redirect to a blocked host' };
+            return { ok: false, status: res.status, error: 'redirect to a blocked host' };
           }
           current = next;
           continue;
         }
-        if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+        if (!res.ok) return { ok: false, status: res.status, error: `HTTP ${res.status}` };
 
         const contentType = res.headers.get('content-type') ?? '';
+        const cacheable = !isPrivateResponse(res.headers.get('cache-control') ?? '', res.headers.get('set-cookie'));
         const { body, truncated } = await readBounded(res, MAX_BODY_BYTES);
-        return { ok: true, body, isHtml: /html|xml/i.test(contentType), truncated };
+        return { ok: true, status: res.status, body, isHtml: /html|xml/i.test(contentType), truncated, cacheable };
       } catch (err) {
         return { ok: false, error: sanitizeError(err) };
       } finally {
