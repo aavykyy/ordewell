@@ -95,6 +95,8 @@ export interface IApproval {
   commandPolicy?(): Pick<CommandPolicyOptions, 'autonomous' | 'approvalMode'>;
   /** Surface a decision reached before `request` was called, as `request`'s own are. */
   record?(req: ApprovalRequest, granted: boolean, source: ApprovalSource): void;
+  /** Whether `request` would grant this scope now without asking anyone. Nothing is asked or recorded. */
+  grantsUnasked?(req: Pick<ApprovalRequest, 'kind' | 'scope'>): boolean;
 }
 
 /** Denies everything. The safe default when a surface wires no approval channel. */

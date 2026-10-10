@@ -104,8 +104,11 @@ export type PlannerAsk =
   /** `scope` is the tool's full name as the runner reports it; `tool` its own name, without the server. */
   | { kind: 'mcp'; scope: string; tool: string; server?: string }
   | { kind: 'fetch'; url: string }
-  /** A search the runner carries itself, at `provider`; Ordewell decides it, it does not run it. */
-  | { kind: 'search'; query: string; provider: string }
+  /**
+   * A search the runner carries itself, at `provider`; Ordewell decides it, it does not run it.
+   * `providerLabel` names that party in the approval.
+   */
+  | { kind: 'search'; query: string; provider: string; providerLabel?: string }
   | { kind: 'path'; path: string; directory: boolean }
   | { kind: 'other' };
 
@@ -131,6 +134,13 @@ export interface PlannerStartOptions extends AgentStartCommon {
   effort?: string;
   /** The Ordewell MCP server to inject, pre-authorized (ADR-0022). Only for an adapter with {@link AgentAdapter.mcpAttached}. */
   mcp?: McpClientConfig;
+  /**
+   * Whether the web-read policy would let a search through `provider` run
+   * without asking, for a runner whose own search raises no permission
+   * request and is set on or off when its session starts (ADR-0027). Absent
+   * means it would not.
+   */
+  searchesUnasked?(provider: string): boolean;
 }
 
 /**

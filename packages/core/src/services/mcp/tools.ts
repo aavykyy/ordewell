@@ -32,6 +32,14 @@ const runCommandInput = z.object({
   command: z.string().min(1).describe('One shell command line, run from the workspace root.'),
 });
 
+const fetchInput = z.object({
+  url: z.string().min(1).describe('The http or https URL to read.'),
+});
+
+const webSearchInput = z.object({
+  query: z.string().trim().min(1).describe('What to search for.'),
+});
+
 const loadSkillInput = z.object({
   name: z.string().min(1).describe('The name of an Ordewell planner skill to load.'),
 });
@@ -107,6 +115,8 @@ export type ListRunnersArgs = z.infer<typeof listRunnersInput>;
 export type ListModelsArgs = z.infer<typeof listModelsInput>;
 export type LoadSkillArgs = z.infer<typeof loadSkillInput>;
 export type RunCommandArgs = z.infer<typeof runCommandInput>;
+export type FetchArgs = z.infer<typeof fetchInput>;
+export type WebSearchArgs = z.infer<typeof webSearchInput>;
 export type SubmitPlanArgs = z.infer<typeof submitPlanInput>;
 export type EditPlanArgs = z.infer<typeof editPlanInput>;
 export type TaskQueryArgs = z.infer<typeof taskQueryInput>;
@@ -152,6 +162,8 @@ export interface TaskToolHandler {
 export interface PlannerToolHandler {
   loadSkill?: Run<LoadSkillArgs>;
   runCommand?: Run<RunCommandArgs>;
+  fetch?: Run<FetchArgs>;
+  webSearch?: Run<WebSearchArgs>;
   listRunners?: Run<ListRunnersArgs>;
   listModels?: Run<ListModelsArgs>;
   submitPlan?: Run<SubmitPlanArgs>;
@@ -205,8 +217,9 @@ export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
  * A harness plan mode refuses an MCP tool that does not declare itself
  * read-only, pre-allowed or not. True of the workspace for every planner tool:
  * `submit_plan` and `edit_plan` write only Ordewell's plan, through the same
- * validation as the envelopes (ADR-0022, P1/P2), and `run_command` refuses
- * every write the classifier sees (ADR-0026).
+ * validation as the envelopes (ADR-0022, P1/P2), `run_command` refuses
+ * every write the classifier sees (ADR-0026), and `fetch` and `web_search`
+ * only send a GET (ADR-0027).
  */
 const PLANNER_READ_ONLY = { readOnlyHint: true };
 
@@ -225,6 +238,13 @@ export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     taskOutputInput, (h) => h.taskOutput?.bind(h), PLANNER_READ_ONLY),
   tool('run_command', 'Run a shell command for research: git, gh, az, kubectl, the project\'s own tooling, anything you need to look at. Read-only commands run at once; others ask the user, once per command family; commands that write files are refused. Use it instead of a shell of your own.',
     runCommandInput, (h) => h.runCommand?.bind(h), PLANNER_READ_ONLY),
+  // Fallbacks (ADR-0027): a runner's own fetch or search, where it has one, is
+  // decided by the same policy and carries the provider's own summaries, so
+  // the descriptions send the model there first.
+  tool('fetch', 'Read a web page over http or https: documentation, a changelog, an API reference. A fallback: if you have a built-in web fetch tool, use that instead. Whether a site may be read is up to the user\'s settings, and a refusal says why; private and local addresses and URLs that carry a credential are always refused, and each planning turn has a limited number of web reads.',
+    fetchInput, (h) => h.fetch?.bind(h), PLANNER_READ_ONLY),
+  tool('web_search', 'Search the web for result titles, URLs and snippets, then read the most promising result with a fetch. A fallback: if you have a built-in web search tool, use that instead. Whether a search may run is up to the user\'s settings, and a refusal says why; a query that carries a credential is refused, and searches count toward the turn\'s web reads.',
+    webSearchInput, (h) => h.webSearch?.bind(h), PLANNER_READ_ONLY),
   tool('load_skill', 'Load an Ordewell planner skill by name. Returns its instructions; only model-invocable planner skills can be loaded.',
     loadSkillInput, (h) => h.loadSkill?.bind(h), PLANNER_READ_ONLY),
 ];

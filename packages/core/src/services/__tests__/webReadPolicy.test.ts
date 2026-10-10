@@ -300,3 +300,38 @@ describe('WebReadPolicy record', () => {
     expect(JSON.stringify(decisions)).not.toContain(HELD);
   });
 });
+
+// A runner's own search raises no request, so it is switched on at session
+// start only where the policy would allow it without asking (ADR-0027).
+describe('WebReadPolicy.searchesUnasked', () => {
+  it.each<[string, Setup, boolean]>([
+    ['Full under auto', { autonomous: true }, true],
+    ['an explicit allow', { setting: 'allow' }, true],
+    ['Guarded under auto', {}, false],
+    ['an explicit ask', { setting: 'ask', autonomous: true }, false],
+    ['an explicit allowlist, in Full', { setting: 'deny', autonomous: true }, false],
+    ['Guarded, with the provider on the allowlist', { allow: ['web_search:openai'] }, true],
+  ])('%s → %s', (_label, given, expected) => {
+    const { reads, ask, decisions } = setup(given);
+
+    expect(reads.searchesUnasked('openai')).toBe(expected);
+    expect(ask).not.toHaveBeenCalled();
+    expect(decisions).toEqual([]);
+  });
+
+  it('follows a session grant of the same provider, and no other', async () => {
+    const { reads } = setup();
+    await reads.decide({ kind: 'search', query: 'tokio', provider: 'openai' });
+
+    expect(reads.searchesUnasked('openai')).toBe(true);
+    expect(reads.searchesUnasked('duckduckgo')).toBe(false);
+  });
+
+  it('names a provider by its label when it asks, and grants by its id', async () => {
+    const { reads, ask } = setup();
+
+    await reads.decide({ kind: 'search', query: 'hono', provider: 'opencode', providerLabel: 'OpenCode\'s web search (Exa)' });
+
+    expect(ask.mock.calls[0][0]).toMatchObject({ scope: 'web_search:opencode', detail: 'Planner research wants to search the web with OpenCode\'s web search (Exa)' });
+  });
+});

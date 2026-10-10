@@ -141,7 +141,7 @@ describe('the Claude Code planner with the Ordewell server injected', () => {
     expect(args[args.indexOf('--allowedTools') + 1].split(',')).toEqual([
       'mcp__ordewell__list_runners', 'mcp__ordewell__list_models', 'mcp__ordewell__submit_plan',
       'mcp__ordewell__edit_plan', 'mcp__ordewell__task_query', 'mcp__ordewell__task_output',
-      'mcp__ordewell__run_command', 'mcp__ordewell__load_skill',
+      'mcp__ordewell__run_command', 'mcp__ordewell__fetch', 'mcp__ordewell__web_search', 'mcp__ordewell__load_skill',
     ]);
     expect(args[args.indexOf('--permission-mode') + 1]).toBe('default');
   });
@@ -1257,6 +1257,8 @@ describe('a submission whose planner turn ends while its skill check runs', () =
       liveOutput: () => null,
       lastAttempt: () => null,
       runCommand: async () => ({ success: true, output: '', truncated: false }),
+      fetchUrl: async () => ({ success: true, output: '', truncated: false }),
+      webSearch: async () => undefined,
       taskSkills: () => ({
         findSkill: (name) => (name === 'tdd' ? tdd : undefined),
         searchedDirs: () => [],

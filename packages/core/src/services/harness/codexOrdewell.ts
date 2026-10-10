@@ -15,9 +15,25 @@ export interface CodexOrdewellBinding extends OrdewellToolBinding<CodexAsk> {
   threadServers(mcp: McpClientConfig): Record<string, unknown>;
   /** What a task thread's instructions say about the tools. */
   taskInstructions(): string;
-  /** What a planner thread's instructions add about the tools (ADR-0026). */
-  plannerInstructions(): string;
+  /** What a planner thread's instructions add about the tools (ADR-0026), and where its web reads go (ADR-0027). */
+  plannerInstructions(nativeSearch: boolean): string;
+  /** The planner thread's `web_search` mode. */
+  plannerWebSearch(nativeSearch: boolean): CodexWebSearchMode;
 }
+
+/** Who receives a Codex planner's own search: it runs at OpenAI, inside the model's turn. */
+export const CODEX_SEARCH_PROVIDER = 'openai';
+
+/**
+ * Codex's `web_search` config modes (codex-cli 0.162.0). `cached` answers from
+ * an OpenAI-maintained index with no external access; `indexed` reaches out
+ * when the index gates it; `live` retrieves without restriction, and its
+ * `openPage` and `findInPage` actions open URLs the model chose, which no
+ * Ordewell guard would see. A planner thread therefore gets `cached` or
+ * `disabled`, never the default a user's config or a full-access sandbox
+ * would pick.
+ */
+export type CodexWebSearchMode = 'disabled' | 'cached' | 'indexed' | 'live';
 
 /**
  * The environment variables that carry the server's headers to Codex, by
@@ -74,16 +90,22 @@ export const CODEX_ORDEWELL: CodexOrdewellBinding = {
 
   /**
    * The same discovery note for a planner, which also needs to know that its
-   * commands go through `run_command`: Codex's own shell is sandboxed without
-   * network, so `gh` or a cloud CLI fails there, and a model that tried its
-   * shell first concludes the command cannot run.
+   * commands and fetches go through Ordewell's tools: Codex's own shell is
+   * sandboxed without network, so `gh`, a cloud CLI or `curl` fails there, and
+   * a model that tried its shell first concludes the command cannot run.
    */
-  plannerInstructions() {
+  plannerInstructions(nativeSearch) {
     const tools = ordewellToolNames('planner');
     return [
       `You have ${countOf(tools)} tools from the \`${ORDEWELL_MCP_SERVER_NAME}\` MCP server: ${quoted(tools)}.`,
       `They are not in your tool list up front. Find them with the tool discovery you have (the \`exec\` tool's \`ALL_TOOLS\` list) and call them by their full names, ${quoted(this.toolNames('planner'))}.`,
       `Run shell commands with \`${this.toolName('run_command')}\`, not your own shell: yours is sandboxed without network, so git remotes, gh and cloud CLIs fail there.`,
+      `Fetch web pages with \`${this.toolName('fetch')}\`, not curl or your shell.`,
+      nativeSearch
+        ? 'Search the web with your built-in web search.'
+        : `Your built-in web search is off for this session; search with \`${this.toolName('web_search')}\`.`,
     ].join(' ');
   },
+
+  plannerWebSearch: (nativeSearch) => (nativeSearch ? 'cached' : 'disabled'),
 };

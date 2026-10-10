@@ -211,12 +211,15 @@ export class CliAgentAiService implements IAiService {
       { harness: true, isolatedExecution: req.isolatedExecution, skills: req.skills },
     );
 
+    const fetcher = req.fetcher;
     const startOptions: PlannerStartOptions = {
       kind: 'planner',
       cwd: this.workspaceRoot(),
       systemPrompt,
       model: this.plannerModel(),
       effort: this.config.plannerThinkingEffort,
+      // Without an approval channel there is no gate, so nothing would decide a search.
+      ...(req.approval && fetcher?.searchesUnasked ? { searchesUnasked: (provider: string) => fetcher.searchesUnasked?.(provider) ?? false } : {}),
     };
     const tools = req.plannerTools;
     await this.startAdapter(startOptions, tools);

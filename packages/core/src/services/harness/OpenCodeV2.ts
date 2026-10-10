@@ -3,7 +3,7 @@ import type { AgentEvent, PlannerStartOptions, TaskStartOptions } from './AgentA
 import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION, type OpenCodeSessionRule as SessionRule } from './openCodeOrdewell';
 import { hunksOf } from './fileDiff';
 import {
-  OpenCodePermissions, autoApproves, delay, interruptAcknowledged, openCodePlannerAsk, openEventStream, permissionReply, settleTurn, splitModelId, streamTurn,
+  OpenCodePermissions, autoApproves, delay, interruptAcknowledged, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, settleTurn, splitModelId, streamTurn,
   turnLatch, usageRecord, type OpenCodeTokens, type PermissionRequest, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
 /** A turn's end is also read from `/api/session/active`, behind the stream, which can drop a frame. */
@@ -212,8 +212,10 @@ export class OpenCodeV2 {
 
   /** The planner's system prompt rides on the session as an instruction entry — a prompt has no system field. */
   private async applyInstructions(): Promise<void> {
-    if (this.opts.kind !== 'planner' || !this.opts.systemPrompt) return;
-    const response = await this.host.request('PUT', `/api/experimental/session/${this.sessionId}/instructions/entries/ordewell-planner`, { value: this.opts.systemPrompt });
+    if (this.opts.kind !== 'planner') return;
+    const { system } = plannerSystem(this.opts);
+    if (!system) return;
+    const response = await this.host.request('PUT', `/api/experimental/session/${this.sessionId}/instructions/entries/ordewell-planner`, { value: system });
     if (!response.ok) throw new Error(`OpenCode did not take the planner instructions: ${response.status} ${response.statusText}`);
   }
 

@@ -165,6 +165,12 @@ export class ApprovalPolicy implements IApproval {
     this.onDecision?.(req, granted, source);
   }
 
+  grantsUnasked({ kind, scope }: Pick<ApprovalRequest, 'kind' | 'scope'>): boolean {
+    if (this.granted.has(scope) || scopeAllowed(this.allowlist(), scope)) return true;
+    if (this.refused.has(scope)) return false;
+    return this.modeOf(kind) === 'allow';
+  }
+
   /** The standing approvals, parsed from the entries in force now. */
   allowlist(): PlannerAllowlist {
     const entries = this.entriesOf();

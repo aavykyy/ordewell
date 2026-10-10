@@ -63,8 +63,8 @@ reads without asking; nothing else in Full changes.
 | planner | search | fetch |
 | --- | --- | --- |
 | Claude Code | native `WebSearch`, asked as kind `search` | native `WebFetch`, asked as kind `fetch` |
-| Codex | native `web_search`, set from the policy at thread start | Ordewell `fetch` (MCP tool) |
-| OpenCode | Ordewell `web_search` (MCP tool) | Ordewell `fetch` (MCP tool); native `webfetch` denied |
+| Codex | native `web_search`, set from the policy at thread start (`cached` or `disabled`) | Ordewell `fetch` (MCP tool) |
+| OpenCode | native `websearch` (and 1.x `codesearch`), asked as kind `search` | Ordewell `fetch` (MCP tool); native `webfetch` denied |
 | API | Ordewell `web_search` | Ordewell `fetch` |
 
 - **Claude Code.** `plannerAsk` gains a `search` kind for `WebSearch`, so it
@@ -76,22 +76,39 @@ reads without asking; nothing else in Full changes.
   on the version in use.
 - **Codex.** `web_search` runs at OpenAI and raises no permission request, so
   the policy cannot decide it call by call. It is set when the planner thread
-  starts: on where the policy would allow a search without asking, off
-  otherwise, and then the planner searches through Ordewell's `web_search`,
-  which can ask. What the implementation verifies about it on the running
-  codex-cli — which mode a planner thread gets, and whether that mode opens
-  pages the model chose — is recorded with it; if live mode opens
-  model-chosen URLs, planner threads pin it to the cached mode. Codex's shell
-  has no network (ADR-0026), so it fetches through Ordewell's `fetch`.
+  starts: on where the policy would allow a search through OpenAI without
+  asking, off otherwise, and then the planner searches through Ordewell's
+  `web_search`, which can ask. Codex has four modes: `disabled`; `cached`,
+  answered from an OpenAI-maintained index with no external access;
+  `indexed`, which reaches out where the index gates it; and `live`, which
+  retrieves without restriction and whose `openPage` and `findInPage`
+  actions open URLs the model chose. A planner thread is pinned to `cached`
+  when on, never to the `live` a full-access sandbox or a user's config
+  would otherwise pick. Each search's queries, and any page it opened or
+  searched in, are shown in the research timeline. Because the query never
+  reaches Ordewell, neither the secret check nor the budget applies to it,
+  and a change of autonomy level mid-conversation reaches it only with the
+  next planner thread. Codex's shell has no network (ADR-0026), so it
+  fetches through Ordewell's `fetch`.
 - **OpenCode.** `webfetch` is denied: OpenCode follows redirects itself, and
-  Ordewell would vet only the first URL. `websearch` and `codesearch` leave
-  `allow` and are denied too; they send the query to a third party just as
-  Ordewell's search does, and Ordewell's tools are the path the policy
-  decides.
+  Ordewell would vet only the first URL. `websearch` and `codesearch` stay
+  native and ask, so the policy decides each as a search: once per session
+  in Guarded, without asking in Full, with the secret check and the budget
+  applied to the query. They send it to a third party — Exa in 1.x, and in
+  2.x the search provider chosen in OpenCode, Exa unless another was picked
+  — and the approval names that party. They stay native because a
+  provider's own search carries its own limits, while Ordewell's DuckDuckGo
+  search is a single scraped endpoint that would carry every OpenCode
+  planner's searches alone.
 - **Ordewell's tools for harness planners.** The Ordewell MCP server's planner
   tools gain `fetch` and `web_search`, the same tools the API planner has,
   behind the same policy. Every harness pre-authorizes the server's tools
-  (ADR-0022), so the policy, not the harness, decides each call.
+  (ADR-0022), so the policy, not the harness, decides each call. For a
+  harness planner they are fallbacks: their descriptions send the model to
+  its own web fetch or web search first, so Claude Code keeps its native
+  `WebFetch` and `WebSearch`, Codex fetches through Ordewell and searches
+  natively when its search is on, and OpenCode fetches through Ordewell and
+  searches with `websearch` unless its provider has none.
 
 ### The policy
 
@@ -260,6 +277,14 @@ filed as its own issue.
 - **Keep OpenCode's `webfetch`, vetting its first URL.** Rejected: OpenCode
   follows redirects itself, so the check would not see the address that is
   read.
+- **Deny OpenCode's `websearch` and `codesearch`, searching through
+  Ordewell's `web_search`.** First chosen, then dropped: both already reach
+  the policy once they ask, so denying them bought no control, and it moved
+  every OpenCode planner's searches onto one scraped endpoint built for
+  people.
+- **Leave Codex's search mode to its defaults.** Rejected: a full-access
+  sandbox or a user's config selects `live`, which opens pages the model
+  chose with no guard Ordewell runs.
 
 ## History
 
@@ -268,3 +293,9 @@ filed as its own issue.
   check, pluggable search providers, web reads for research subagents,
   per-origin `curl`/`wget`; an egress proxy planned as phase 2.
 - 2026-10-10 — implemented the `run_command` curl/wget restrictions.
+- 2026-10-10 — OpenCode's `websearch` and `codesearch` stay native, asked as
+  kind `search`, instead of being denied; Ordewell's `fetch` and
+  `web_search` are fallbacks for harness planners; Codex's modes verified on
+  codex-cli 0.162.0 (`disabled`, `cached`, `indexed`, `live`, with `live`
+  opening model-chosen pages), and planner threads pinned to `cached` when
+  on.

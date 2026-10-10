@@ -59,6 +59,7 @@ export async function decidePlannerPermission(
         kind: 'search',
         query: ask.query,
         provider: ask.provider,
+        providerLabel: ask.providerLabel,
         // It runs at the provider, which already holds the conversation the query came from.
         note: `${ask.provider} runs this search itself and already sees this planner's conversation.`,
       });

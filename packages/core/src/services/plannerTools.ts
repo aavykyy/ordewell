@@ -43,6 +43,10 @@ export interface PlannerToolsHost {
   taskSkills(): SkillLookup;
   /** The planner's research shell: classified, confined and approved as the API planner's `bash` is (ADR-0026). */
   runCommand(command: string, signal: AbortSignal): Promise<ToolOutcome>;
+  /** A fetch through the session's web fetcher, whose web-read policy decides it (ADR-0027). */
+  fetchUrl(url: string): Promise<ToolOutcome>;
+  /** A search the same way; undefined when the fetcher has no search. */
+  webSearch(query: string): Promise<ToolOutcome | undefined>;
 }
 
 /**
@@ -87,6 +91,16 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     async runCommand({ command }, { signal }) {
       const outcome = await host.runCommand(command, signal);
       return { text: outcome.output || (outcome.success ? '(no output)' : 'The command failed with no output.'), ...(outcome.success ? {} : { isError: true }) };
+    },
+
+    async fetch({ url }) {
+      return outcomeReply(await host.fetchUrl(url));
+    },
+
+    async webSearch({ query }) {
+      const outcome = await host.webSearch(query);
+      if (!outcome) return { isError: true, text: 'Web search is not available in this session. If you already know a documentation URL, fetch it instead.' };
+      return outcomeReply(outcome);
     },
 
     async listRunners() {
@@ -264,6 +278,10 @@ function catalogDetail(catalog: TaskQueryCatalog) {
       };
     }),
   };
+}
+
+function outcomeReply(outcome: ToolOutcome): McpToolReply {
+  return { text: outcome.output || (outcome.success ? '(nothing returned)' : 'The read failed with no message.'), ...(outcome.success ? {} : { isError: true }) };
 }
 
 function answer(body: unknown): McpToolReply {

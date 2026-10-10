@@ -8,6 +8,8 @@ export interface IWebFetcher {
    * `fetch` and `search` decide for themselves; never call both.
    */
   decide(read: WebRead): Promise<WebReadDecision>;
+  /** Whether a runner's own search through `provider` would run unasked; see `WebReadPolicy.searchesUnasked`. */
+  searchesUnasked?(provider: string): boolean;
   fetch(url: string): Promise<ToolOutcome>;
   /**
    * Optional web search. A fetcher without it makes the `web_search` tool
