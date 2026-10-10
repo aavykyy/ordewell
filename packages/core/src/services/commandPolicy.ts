@@ -48,7 +48,7 @@ import { REFUSED_RUNNERS, XARGS_TARGETS, unwrap } from './commandRunners';
 import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, subcommandOf, takesNextToken, valueFlagIn } from './flagPolicy';
 import { AWK_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, sedProgramArgs, sedRefusal } from './filterPrograms';
 import { commandAllowedBy, type PlannerAllowlist } from './plannerAllowlist';
-import { webCommand } from './webCommands';
+import { EFFECT_REFUSAL_HINT, READ_REFUSAL_HINT, webCommand } from './webCommands';
 
 export type { Dialect } from './shellLexer';
 
@@ -804,14 +804,20 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
   // Every segment is reduced to the command that will actually execute first,
   // so `env`, `nice`, `timeout` and friends decide nothing about the answer.
   const unwrapped = segments.map((seg) => unwrap(seg, dialect));
-  if (segments.some((seg, i) => seg.nested && webCommand(unwrapped[i].seg, opts.trustedWebResolves))) {
-    return { tier: 'refuse', scope: '', reason: 'A curl or wget command inside a substitution cannot have its startup files disabled safely. Run it directly, or use the Ordewell fetch tool.' };
+  const nestedWeb = segments.flatMap((seg, i) => seg.nested ? [webCommand(unwrapped[i].seg, opts.trustedWebResolves)] : []).find((web) => web);
+  if (nestedWeb) {
+    return {
+      tier: 'refuse',
+      scope: '',
+      reason: `A curl or wget command inside a substitution cannot have its startup files disabled safely. ${nestedWeb.effect ? EFFECT_REFUSAL_HINT : `Run it directly, or ${READ_REFUSAL_HINT.charAt(0).toLowerCase()}${READ_REFUSAL_HINT.slice(1)}`}`,
+    };
   }
 
   for (const { seg, wrappers, runner, reason: wrapperReason } of unwrapped) {
     if (wrapperReason) return { tier: 'refuse', scope: '', reason: wrapperReason };
-    if (webCommand(seg, opts.trustedWebResolves) && (opts.autonomous || opts.approvalMode === 'deny')) {
-      return { tier: 'refuse', scope: '', reason: 'curl and wget are refused in Full and allowlist mode. Use the Ordewell fetch tool instead.' };
+    const web = webCommand(seg, opts.trustedWebResolves);
+    if (web && (opts.autonomous || opts.approvalMode === 'deny')) {
+      return { tier: 'refuse', scope: '', reason: `curl and wget are refused in Full and allowlist mode. ${web.effect ? EFFECT_REFUSAL_HINT : READ_REFUSAL_HINT}` };
     }
     // Matched case-insensitively: cmd.exe builtins and the default macOS and
     // Windows filesystems all take `RM` or `Del` for the refused name.

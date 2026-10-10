@@ -787,7 +787,7 @@ describe('web commands in the planner shell', () => {
     for (const command of ['curl https://93.184.216.34/a', 'wget --spider --max-redirect=0 https://93.184.216.34/a']) {
       const result = await fs.bash(command);
       expect(result.success).toBe(false);
-      expect(result.output).toContain('Ordewell fetch tool');
+      expect(result.output).toContain('web fetch tool');
     }
     expect(ask).not.toHaveBeenCalled();
     expect(fs.bashCalls).toEqual([]);
@@ -799,7 +799,7 @@ describe('web commands in the planner shell', () => {
     fs.setApproval(new ApprovalPolicy({ autonomous: () => autonomous, ask: async () => { autonomous = true; return true; } }));
     const result = await fs.bash('curl https://93.184.216.34/a');
     expect(result.success).toBe(false);
-    expect(result.output).toContain('Ordewell fetch tool');
+    expect(result.output).toContain('web fetch tool');
     expect(fs.bashCalls).toEqual([]);
   });
 
@@ -885,7 +885,7 @@ describe('web commands in the planner shell', () => {
     fs.setApproval(new ApprovalPolicy({ mode: 'allow', autonomous: () => true, ask, preApproved: ['curl https://93.184.216.34/*'] }));
     const result = await fs.bash('curl https://93.184.216.34/a');
     expect(result.success).toBe(false);
-    expect(result.output).toContain('Ordewell fetch tool');
+    expect(result.output).toContain('web fetch tool');
     expect(ask).not.toHaveBeenCalled();
     expect(fs.bashCalls).toEqual([]);
   });
