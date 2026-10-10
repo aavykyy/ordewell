@@ -625,16 +625,20 @@ token is narrower than a session), "attempt id", "API key".
 conversation to the *Ordewell MCP server*. It lists only the planner tools:
 `list_runners`, `list_models`, `task_query`, `task_output` and `load_skill`,
 which read Ordewell state and the planner skill catalog; `run_command`, the
-planner's research shell, inside the planner's envelope (ADR-0026); and
+planner's research shell, inside the planner's envelope (ADR-0026); `fetch`
+and `web_search`, behind the *web-read policy* (ADR-0027); and
 `submit_plan` and `edit_plan`, the only writes, which
 go through the same validation and commit path as the plan and `taskOps`
-envelopes. Revoked when the planner process is disposed.
+envelopes. A token can hide planner tools a runner already has natively:
+Claude Code's hides `fetch` and `web_search`, Codex's hides `web_search`
+while its own search is on. Revoked when the planner process is disposed.
 *Avoid:* "session token", "admin token", and describing the planner as
 write-capable — it writes nothing but the plan, and only through validation.
 
 **Planner allowlist** — the planner's standing approvals (ADR-0026): command
 rules (`gh issue list`, `gcloud * * list`), MCP tool rules (`mcp:find-*`) and
-scope patterns, with `!` exclusions that always win. What it covers runs
+scope patterns (`https://docs.example.com/*`, `web_search:<provider>`), with
+`!` exclusions that always win. What it covers runs
 without asking anyone, in every *approval mode*; file writes are refused
 whatever it says. `curl` and `wget` command rules cover origins, and never
 permit those programs in Full or allowlist mode. Data, credentials and redirects
@@ -646,8 +650,24 @@ operation by its words, a scope is what one approval remembers).
 **Approval mode** — what happens to a planner request the *planner allowlist*
 does not cover: `ask` the user, refuse it (`allowlist`), or run it (`allow`).
 The default, `auto`, follows the autonomy level: Guarded asks, Full refuses
-and the plan carries the change as an *ops task*.
+and the plan carries the change as an *ops task*. Web reads are the one
+exception: Full allows them (ADR-0027).
 *Avoid:* conflating it with a task's mode or the autonomy level itself.
+
+**Web-read policy** — the one decision every planner fetch and search goes
+through, on every runner, whichever path carries the bytes (ADR-0027,
+`webReadPolicy.ts`). A fetch is scoped by origin, a search by the provider
+that receives the query (`web_search:anthropic`, `openai`, `opencode`,
+`duckduckgo`). It runs the secret check, the *planner allowlist*'s
+exclusions, the *web-read budget* and the *approval mode*, and resolves a
+fetch's host only after all of them. Planner-only: tasks never pass through it.
+*Avoid:* "SSRF check" for the whole decision (the guard is its last step).
+
+**Web-read budget** — how many web reads one planner turn may make in a
+session, the planner's and its research subagents' together
+(`plannerWebReadBudget`, `ORDEWELL_WEB_READ_BUDGET`); 0 turns web reads off.
+*Avoid:* "per-planner budget" (it is per session and turn, shared with
+subagents), "query budget" (that is the *Task query* read budget).
 
 **Completion call** — a `task_complete({status, summary, reason?})` call made
 with a task's *task token*: the only runner completion evidence. It is handed

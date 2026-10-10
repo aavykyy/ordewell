@@ -63,8 +63,8 @@ reads without asking; nothing else in Full changes.
 | planner | search | fetch |
 | --- | --- | --- |
 | Claude Code | native `WebSearch`, asked as kind `search` | native `WebFetch`, asked as kind `fetch` |
-| Codex | native `web_search`, set from the policy at thread start (`cached` or `disabled`) | Ordewell `fetch` (MCP tool) |
-| OpenCode | native `websearch` (and 1.x `codesearch`), asked as kind `search` | Ordewell `fetch` (MCP tool); native `webfetch` denied |
+| Codex | native `web_search` (`cached`) where the policy would allow it unasked; otherwise Ordewell `web_search` | Ordewell `fetch` (MCP tool) |
+| OpenCode | native `websearch` (and 1.x `codesearch`), asked as kind `search`; Ordewell `web_search` on 2.x with no search provider chosen | Ordewell `fetch` (MCP tool); native `webfetch` denied |
 | API | Ordewell `web_search` | Ordewell `fetch` |
 
 - **Claude Code.** `plannerAsk` gains a `search` kind for `WebSearch`, so it
@@ -73,23 +73,37 @@ reads without asking; nothing else in Full changes.
   `WebFetch` stays native because it does not follow a redirect to another
   host: it hands the new URL back, and fetching it is a new request the policy
   decides. It stays native only while that holds; the live check confirms it
-  on the version in use.
+  on the version in use. Claude Code raises `can_use_tool` only when its own
+  rules say ask, so an allow rule — the user's, or one a repository commits
+  to `.claude/settings.json` — would run a web read past the policy. The
+  planner is launched with `--settings` ask rules for `WebFetch`, `WebSearch`
+  and `mcp__*`; an ask rule beats an allow rule from any source,
+  `--allowedTools` included, so every web read reaches the policy. Project
+  settings still load (ADR-0026, History): dropping them would also drop
+  local- and project-scope MCP servers and the project's CLAUDE.md.
 - **Codex.** `web_search` runs at OpenAI and raises no permission request, so
-  the policy cannot decide it call by call. It is set when the planner thread
-  starts: on where the policy would allow a search through OpenAI without
-  asking, off otherwise, and then the planner searches through Ordewell's
-  `web_search`, which can ask. Codex has four modes: `disabled`; `cached`,
-  answered from an OpenAI-maintained index with no external access;
-  `indexed`, which reaches out where the index gates it; and `live`, which
-  retrieves without restriction and whose `openPage` and `findInPage`
+  the policy cannot decide it call by call. It is decided once per planner
+  spawn, before the planner's token is issued, so the thread's search and
+  the token agree: on where the policy would allow a search through OpenAI
+  without asking — Full, `allow`, or a `web_search:openai` allowlist entry,
+  and never past a `!web_search:*` exclusion or a zero budget — off
+  otherwise, and then the planner searches through Ordewell's `web_search`,
+  which can ask. The decision is asked again before every turn; when it
+  changes, the planner is respawned on `thread/resume` with the new
+  `web_search` and a new token, so a change of autonomy level, an exclusion
+  or a budget of 0 reaches the next turn. Codex has four modes: `disabled`;
+  `cached`, answered from an OpenAI-maintained index with no external
+  access; `indexed`, which reaches out where the index gates it; and `live`,
+  which retrieves without restriction and whose `openPage` and `findInPage`
   actions open URLs the model chose. A planner thread is pinned to `cached`
   when on, never to the `live` a full-access sandbox or a user's config
-  would otherwise pick. Each search's queries, and any page it opened or
-  searched in, are shown in the research timeline. Because the query never
-  reaches Ordewell, neither the secret check nor the budget applies to it,
-  and a change of autonomy level mid-conversation reaches it only with the
-  next planner thread. Codex's shell has no network (ADR-0026), so it
-  fetches through Ordewell's `fetch`.
+  would otherwise pick: a thread's `disabled` holds against a top-level
+  `web_search = "live"` and the legacy `[tools] web_search`, and profiles
+  cannot override it, since `app-server` refuses `--profile`. Each search's
+  queries, and any page it opened or searched in, are shown in the research
+  timeline. Because the query never reaches Ordewell, neither the secret
+  check nor the budget applies to it. Codex's shell has no network
+  (ADR-0026), so it fetches through Ordewell's `fetch`.
 - **OpenCode.** `webfetch` is denied: OpenCode follows redirects itself, and
   Ordewell would vet only the first URL. `websearch` and `codesearch` stay
   native and ask, so the policy decides each as a search: once per session
@@ -99,30 +113,54 @@ reads without asking; nothing else in Full changes.
   — and the approval names that party. They stay native because a
   provider's own search carries its own limits, while Ordewell's DuckDuckGo
   search is a single scraped endpoint that would carry every OpenCode
-  planner's searches alone.
+  planner's searches alone. On 2.x with no search provider chosen,
+  `websearch` asks the user to pick one through `question`, which a planner
+  is denied, so the search ends "Web search cancelled" and the model takes
+  it for a refusal. A 2.x planner session therefore reads the last config
+  layer that sets `websearch` from `/api/config`; with no provider there,
+  `websearch` and `codesearch` are denied on the session and its
+  instructions name Ordewell's `web_search`. A provider picked in
+  OpenCode's own UI lives in its database, out of the API's reach, so such
+  a planner also searches through Ordewell. Every OpenCode planner is told
+  to fall back to Ordewell's `web_search` when `websearch` fails or is
+  cancelled.
 - **Ordewell's tools for harness planners.** The Ordewell MCP server's planner
   tools gain `fetch` and `web_search`, the same tools the API planner has,
   behind the same policy. Every harness pre-authorizes the server's tools
   (ADR-0022), so the policy, not the harness, decides each call. For a
   harness planner they are fallbacks: their descriptions send the model to
-  its own web fetch or web search first. A Claude Code planner's token hides
+  its own web fetch or web search first. What each runner is offered
+  follows what it already has. A planner token can hide planner tools: they
+  are left out of the list, refused when called, and left out of the
+  runner's pre-allowed tools and instructions. Claude Code's token hides
   both, since offered both it took Ordewell's over its native `WebFetch` and
-  `WebSearch`; Codex fetches through Ordewell and searches
-  natively when its search is on, and OpenCode fetches through Ordewell and
-  searches with `websearch` unless its provider has none.
+  `WebSearch`. Codex's token hides `web_search` while its native search is
+  on and keeps `fetch` always. OpenCode is offered both: `fetch` because its
+  `webfetch` is denied, `web_search` as the fallback above.
 
 ### The policy
 
 | approval mode | fetch | search |
 | --- | --- | --- |
-| `auto`, Guarded | asks once per origin | asks once per session |
+| `auto`, Guarded | asks once per origin | asks once per session per provider |
 | `auto`, Full | allowed without asking | allowed without asking |
-| `ask` | asks once per origin | asks once per session |
-| `allowlist` | only an origin the allowlist names; otherwise refused | refused |
+| `ask` | asks once per origin | asks once per session per provider |
+| `allowlist` | only an origin the allowlist names; otherwise refused | only a provider the allowlist names; otherwise refused |
 | `allow` | allowed | allowed |
 
+- **A fetch is scoped by origin, a search by provider.** A fetch's scope is
+  `<origin>/*`; a search's is `web_search:<provider>`, where the provider is
+  who receives the query: `anthropic` (Claude Code's `WebSearch`), `openai`
+  (Codex's), `opencode` (OpenCode's `websearch` and `codesearch`) or
+  `duckduckgo` (Ordewell's `web_search`). Allowlist entries use the same
+  form, so `web_search:duckduckgo` lets Ordewell's search run without asking
+  in every mode, `allowlist` included.
 - **An `!` exclusion wins in every mode.** `!https://internal.example.com/*`
-  holds in Full as it does in Guarded.
+  holds in Full as it does in Guarded, and `!web_search:*` refuses every
+  search on every runner, Codex's native one included.
+- **Web reads can be turned off.** `!web_search:*`, `!https://*` and
+  `!http://*` together refuse every web read; a web-read budget of 0 does
+  the same. The planner allowlist setting and the CLI help say so.
 - **The allowlist still applies in every mode,** so a scope pattern
   (`https://docs.example.com/*`) lets a Guarded fetch run without asking.
 - **The policy reads the configured setting, not only the effective mode.**
@@ -151,17 +189,34 @@ hold without one:
   checked, and the connection goes to an address that passed, so a second
   resolution cannot swap it. This is required, and it applies to every
   redirect hop, not only the first URL.
+- **DNS last.** A lookup is itself a request: `<data>.attacker.example`
+  would leave through DNS even for a read that is then refused. So the
+  checks that need no network run first — the secret check on the text as
+  given, then the scheme and any literal address — then the exclusion, the
+  budget and the approval, and only a read that passed all of them has its
+  host resolved and every answer vetted.
+- **A redirect to another origin is a new read.** Ordewell follows
+  redirects itself, one hop at a time. A hop to the same origin is followed;
+  a hop to another origin is put to the policy again, with its exclusion,
+  grant and budget, so a redirect cannot carry a fetch past any of them. A
+  redirect to a non-HTTP scheme, or from https to http, is refused.
 - **GET or HEAD only, with nothing attached.** Ordewell sends no credentials,
   cookies or auth headers of its own.
 - **An outbound secret check on every URL and every query.** It looks for the
   secrets Ordewell holds (task and planner tokens, provider keys), the values
   of sensitive environment variables, and well-known token formats. A hit is
-  refused. Encoding defeats it: a secret in base64, reversed or split across
-  requests passes. It narrows exfiltration through a URL; it does not close
-  it.
-- **Per-planner request budgets.** Fetches and searches are counted per
-  planner; past the budget they are refused with a message the planner can
-  report.
+  refused, and recorded without the URL or query. Encoding defeats it: a
+  secret in base64, reversed or split across requests passes. It narrows
+  exfiltration through a URL; it does not close it.
+- **A web-read budget per planner turn.** A session counts the fetches and
+  searches of each planner turn — the planner's and its research subagents'
+  together, every runner's path that reaches the policy, a cross-origin
+  redirect hop included — against `plannerWebReadBudget`
+  (`ORDEWELL_WEB_READ_BUDGET`), and a new turn starts a new count. A read is
+  counted before its approval resolves, so reads raised in parallel cannot
+  all pass at once, and given back if it does not happen. Past the budget,
+  reads are refused with a message the planner can report. A budget of 0
+  turns web reads off.
 - **Every decision is recorded in the research log**: what was asked, the path
   that carried it, and why it was allowed or refused (mode, grant, allowlist,
   exclusion, SSRF guard, secret check, budget), so the timeline shows it in
@@ -200,7 +255,9 @@ so a later backend is one class, not a refactor.
   shared between planners for a short time. A cache hit still passes the
   policy: a page cached for one session is not read by a Guarded session that
   has not been granted its origin, and an excluded origin is excluded from
-  the cache too.
+  the cache too. A page is keyed by the URL asked for, so a body another
+  origin answered through a redirect is never cached; neither is a truncated
+  one. The cache is bounded by entry count and by total bytes.
 
 **Later.** Keyed search backends (the Brave Search API, a self-hosted SearXNG)
 and provider-native search for API planners are deferred to their own issue.
@@ -215,6 +272,8 @@ Research subagents get `fetch` and `web_search`, and still never prompt
   the allowlist, and search only once the session has granted it. Anything
   that would ask is refused, with the message to report the gap in the
   digest.
+- **They share the planner's budget.** A subagent's reads go through the
+  session's one policy and count toward the same turn.
 
 ### `curl` and `wget` in `run_command`
 
@@ -229,7 +288,8 @@ Research subagents get `fetch` and `web_search`, and still never prompt
   The same helper and live held credentials as the web-read policy apply;
   refusals withhold the command and URL.
 - **The host passes the SSRF guard** before the command is asked about.
-  Curl receives a `--resolve host:port:address` entry for each URL hostname,
+  Unlike a fetch, its host is resolved before the approval, so the name of a
+  command that is then declined has already been looked up. Curl receives a `--resolve host:port:address` entry for each URL hostname,
   using an address the guard vetted, with IPv6 addresses bracketed. The
   inserted entries follow the initial `-q`, and the final command is
   classified again with only those exact generated resolve values trusted.
@@ -269,6 +329,12 @@ Research subagents get `fetch` and `web_search`, and still never prompt
   the allowlist says.
   Every planner has a vetted `fetch`, and a command line's redirect, resolve
   and config surface is not something an allowlist rule can bound.
+- **A refusal says where the work belongs.** A refused read sends the
+  planner to its own web fetch tool — `WebFetch` for Claude Code, Ordewell's
+  `fetch` for the rest — which the policy decides. A refused command that
+  sends data or changes something (`-d`, `-T`, `-O`, `wget -P`, `--post-data`
+  and the like) says the planner should not do it itself, and sends it to
+  the plan as an ops task, with a change task beside it if it writes files.
 
 GNU Wget 1.x has no curl-style host-to-address override preserving the
 original hostname for HTTP and TLS, so it still resolves again at connection
@@ -290,12 +356,22 @@ filed as its own issue.
 - **Full reads; it still does not act.** Web reads are the only thing Full
   gains. Commands, MCP tools and paths keep ADR-0026's allowlist, and `curl`
   stays refused.
+- **The envelope bounds the planner, not the work.** It governs what the
+  planner does while it researches. Effects belong in ops tasks
+  (ADR-0020), which run in the session's mode and keep every native
+  capability of their runner: a Claude task loads the user's and the
+  project's settings and MCP servers with no ask rule added and no tool
+  hidden, a Codex task thread keeps its own `web_search` and config, an
+  OpenCode task session keeps its own permissions, and no task passes
+  through the web-read policy, the budget or `run_command`'s `curl`/`wget`
+  rules. How an ops task is authorized beyond plan approval — the mandate,
+  issue #23 — is deliberately out of scope here.
 - **Absent is denial (T5).** A Guarded web read with no approval channel, a
   dismissed card or a timeout is refused, as before.
 - **The secret check narrows, it does not close.** A Full planner that read
   an injected instruction can still put data in a URL, encoded past the check,
   to an origin the injection named. The tasks it plans already have that
-  channel; budgets and the research log bound and record it.
+  channel; the budget and the research log bound and record it.
 - **The native paths keep residuals until phase 2.** The pinned connection is
   Ordewell's: Claude's `WebFetch` resolves the host itself, so rebinding
   against it is open, and the provider-side searches run where Ordewell cannot
@@ -334,48 +410,25 @@ filed as its own issue.
 
 ## History
 
-- 2026-10-10 — accepted: one web-read policy for every planner, Full allows
-  web reads, hardened SSRF guard with pinned connections, outbound secret
-  check, pluggable search providers, web reads for research subagents,
-  per-origin `curl`/`wget`; an egress proxy planned as phase 2.
-- 2026-10-10 — implemented the `run_command` curl/wget restrictions.
-- 2026-10-10 — OpenCode's `websearch` and `codesearch` stay native, asked as
-  kind `search`, instead of being denied; Ordewell's `fetch` and
-  `web_search` are fallbacks for harness planners; Codex's modes verified on
-  codex-cli 0.162.0 (`disabled`, `cached`, `indexed`, `live`, with `live`
-  opening model-chosen pages), and planner threads pinned to `cached` when
-  on.
-- 2026-10-10 — search is zero-configuration: provider-native for harness
-  planners, one internal DuckDuckGo provider for API planners and as fallback,
-  with a shared back-off and cache.
-- 2026-10-11 — shell web-command bypasses closed, outbound secrets checked, curl DNS pinned, and Wget2 refused after verifying its persistent database writes.
-- 2026-10-11 — a Claude planner's `WebFetch` and `WebSearch` always ask, so
-  no allow rule, the user's or a repository's, skips the policy (ADR-0026,
-  History); checked live on Claude Code 2.1.296. The planner token gains the
-  tools it hides, filtered from the list and refused when called, and the
-  runner's pre-allowed tools and instructions follow it; Claude's token hides
-  `fetch` and `web_search`, which the live check saw it pick over its native
-  tools.
-- 2026-10-11 — Codex: the session-wide search decision is made once per
-  planner spawn, before its token, so the thread's `web_search` and the token
-  agree; with native search on, the token hides Ordewell's `web_search` (its
-  `fetch` stays). The decision is asked again before every turn, and a change
-  (Full to Guarded, a `!web_search:*` exclusion, a zero budget) respawns the
-  planner on `thread/resume` with the new config and a new token. Checked live
-  on codex-cli 0.162.0: `thread/resume` applies `config.web_search` in both
-  directions; neither a top-level `web_search = "live"` nor the legacy
-  `[tools] web_search` overrides a thread's `disabled`; profiles cannot
-  override it either, since `app-server` refuses `--profile` and a legacy
-  `profile =` selector fails the whole config load, so no profile-level
-  override is needed. Task threads are unchanged.
-- 2026-10-11 — OpenCode 2.x: with no search provider chosen, `websearch` asks
-  the user to pick one through `question`, which a planner is denied, so the
-  search ends "Web search cancelled", which a model takes for a refusal
-  (2.0.26). A 2.x
-  planner session now reads the last config layer that sets `websearch` from
-  `/api/config`; without a provider there, `websearch` and `codesearch` are
-  denied on the session and its instructions name Ordewell's `web_search`. A
-  provider picked in OpenCode's own UI lives in its database, out of the API's
-  reach, so such a planner also uses Ordewell's. Every OpenCode planner is told
-  to fall back to Ordewell's `web_search` when `websearch` fails or is
-  cancelled. Both cases checked live. Task sessions are unchanged.
+- 2026-10-10 — accepted and implemented: one web-read policy for every
+  planner, Full allows web reads, a hardened SSRF guard with pinned
+  connections, the outbound secret check, a zero-configuration search
+  (provider-native for harness planners, one internal DuckDuckGo provider for
+  API planners and as fallback, with a shared back-off and cache), web reads
+  for research subagents and per-origin `curl`/`wget`; an egress proxy planned
+  as phase 2. OpenCode's `websearch` and `codesearch` stay native instead of
+  being denied, and Codex's modes were verified on codex-cli 0.162.0.
+- 2026-10-11 — reconciled with what shipped and checked live (Claude Code
+  2.1.296, codex-cli 0.162.0, OpenCode 2.0.26): DuckDuckGo results parsed from
+  real markup, with challenge detection and the cooldown ahead of the policy;
+  DNS resolved only after the exclusion, the budget and the approval;
+  cross-origin redirects re-decided and never cached; a bounded cache; search
+  scoped by provider, with `web_search:<provider>` allowlist entries, `!`
+  exclusions and a budget of 0 to turn reads off; one budget per session and
+  turn, shared with subagents; Claude planners given ask rules for `WebFetch`
+  and `WebSearch`; per-runner exposure of Ordewell's `fetch` and
+  `web_search`; Codex's search re-decided before every turn; the OpenCode 2.x
+  no-provider fallback; `curl` pinned with `--resolve`, the shell's web
+  commands secret-checked, Wget2 refused; refusals pointing reads to the
+  planner's own fetch tool and effects to an ops task. Task launches are
+  unchanged.

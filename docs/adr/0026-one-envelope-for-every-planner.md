@@ -63,7 +63,7 @@ web fetcher, and answers through the adapter.
 | --- | --- |
 | an Ordewell tool | allowed by the adapter at once (ADR-0022, S3) |
 | another MCP tool | kind `mcp_tool`, scoped to the tool's full name |
-| a fetch | the web fetcher's check: SSRF guard, then per origin |
+| a fetch or a search | the web-read policy ([ADR-0027](0027-web-reads-in-the-planner-envelope.md)): exclusion, budget, approval, then the SSRF guard |
 | a read outside the workspace | kind `external_path`, scoped as ADR-0008 scopes a path |
 | anything else | denied |
 

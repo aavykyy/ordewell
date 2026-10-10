@@ -134,8 +134,10 @@ Environment:
                              allowlist or allow. File writes are always refused
   ORDEWELL_APPROVAL_ALLOW    Extra allowlist entries, comma-separated: "gh issue list",
                              "gcloud * * list", "mcp:find-*", "https://docs.example.com/*";
-                             "web_search:duckduckgo" covers one search provider; a leading ! excludes.
-                             To turn web reads off: !web_search:*, !https://*, !http://*
+                             "web_search:<provider>" covers one search provider (anthropic, openai,
+                             opencode or duckduckgo); a leading ! excludes, and !web_search:* turns
+                             every search off. To turn web reads off: !web_search:*, !https://*,
+                             !http://*, or ORDEWELL_WEB_READ_BUDGET=0
   ORDEWELL_APPROVAL_DEFAULTS false: drop the built-in read-only allowlist
   ORDEWELL_WEB_READ_BUDGET   Fetches and web searches the planner may make per turn
                              (default: 40; 0 turns web reads off)
