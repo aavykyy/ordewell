@@ -1,3 +1,7 @@
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
 import { BaseFileSystem } from '../BaseFileSystem';
 import { ApprovalPolicy } from '../ApprovalPolicy';
@@ -625,3 +629,143 @@ describe('BaseFileSystem research-shell coupling', () => {
     expect(fs.bashCalls).toEqual(['ls -la src']);
   });
 });
+
+describe('web commands in the planner shell', () => {
+  it('refuses the pending command if the user switches to Full while approving it', async () => {
+    const fs = new TestFileSystem();
+    let autonomous = false;
+    fs.setApproval(new ApprovalPolicy({ autonomous: () => autonomous, ask: async () => { autonomous = true; return true; } }));
+    const result = await fs.bash('curl https://93.184.216.34/a');
+    expect(result.success).toBe(false);
+    expect(result.output).toContain('Ordewell fetch tool');
+    expect(fs.bashCalls).toEqual([]);
+  });
+
+  it('prevents wget from sending credentials from its default netrc file', async () => {
+    const fs = new TestFileSystem();
+    fs.setApproval(new ApprovalPolicy({ ask: async () => true }));
+    await fs.bash('wget --spider https://93.184.216.34/a');
+    expect(fs.bashCalls).toEqual(['wget --no-config --no-hsts --no-proxy --no-netrc --spider https://93.184.216.34/a']);
+  });
+
+  it('keeps startup and proxy suppression valid under cmd.exe quoting', async () => {
+    const fs = new DialectFileSystem('cmd');
+    fs.setApproval(new ApprovalPolicy({ ask: async () => true }));
+    const result = await fs.bash('curl.exe https://93.184.216.34/a');
+    expect(result.success).toBe(true);
+    expect(fs.bashCalls).toEqual(['curl.exe -q --noproxy "*" https://93.184.216.34/a']);
+  });
+
+  it('keeps web host checks when navigation needs a whole-command approval', async () => {
+    const fs = new TestFileSystem(async () => ['127.0.0.1']);
+    const ask = vi.fn().mockResolvedValue(true);
+    fs.setApproval(new ApprovalPolicy({ ask }));
+    const result = await fs.bash('cd "$HOME" && curl https://private.example/a');
+    expect(result.success).toBe(false);
+    expect(result.output).toContain('Blocked host');
+    expect(ask).not.toHaveBeenCalled();
+    expect(fs.bashCalls).toEqual([]);
+  });
+
+  it('disables environment-selected proxies for both clients', async () => {
+    const fs = new TestFileSystem();
+    fs.setApproval(new ApprovalPolicy({ ask: async () => true }));
+    await fs.bash('curl https://93.184.216.34/a');
+    await fs.bash('wget -O - https://93.184.216.34/a');
+    expect(fs.bashCalls).toEqual(["curl -q --noproxy '*' https://93.184.216.34/a", 'wget --no-config --no-hsts --no-proxy --no-netrc -O - https://93.184.216.34/a']);
+  });
+
+  it('disables wget startup files and its persistent HSTS cache on the command that runs', async () => {
+    const fs = new TestFileSystem();
+    fs.setApproval(new ApprovalPolicy({ ask: async () => true }));
+    await fs.bash('wget -qO- --max-redirect=0 https://93.184.216.34/a');
+    expect(fs.bashCalls).toEqual(['wget --no-config --no-hsts --no-proxy --no-netrc -qO- --max-redirect=0 https://93.184.216.34/a']);
+  });
+
+  it('disables startup files on the exact wrapped command it classifies and runs', async () => {
+    const fs = new TestFileSystem();
+    const ask = vi.fn().mockResolvedValue(true);
+    fs.setApproval(new ApprovalPolicy({ ask }));
+    await fs.bash('timeout 5 curl -s https://93.184.216.34/a | head -1');
+    expect(fs.bashCalls).toEqual(["timeout 5 curl -q --noproxy '*' -s https://93.184.216.34/a | head -1"]);
+    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ subject: "timeout 5 curl -q --noproxy '*' -s https://93.184.216.34/a | head -1" }));
+  });
+
+  it('vets every DNS answer for every origin before asking, including allowlisted hosts', async () => {
+    const resolve = vi.fn(async (host: string) => host === 'private.example' ? ['93.184.216.34', '127.0.0.1'] : ['93.184.216.34']);
+    const fs = new TestFileSystem(resolve);
+    const ask = vi.fn().mockResolvedValue(true);
+    fs.setApproval(new ApprovalPolicy({ ask, preApproved: ['curl https://private.example/*'] }));
+    const result = await fs.bash('curl https://public.example/a https://private.example/b');
+    expect(result.success).toBe(false);
+    expect(result.output).toContain('Blocked host');
+    expect(resolve).toHaveBeenCalledWith('public.example');
+    expect(resolve).toHaveBeenCalledWith('private.example');
+    expect(ask).not.toHaveBeenCalled();
+    expect(fs.bashCalls).toEqual([]);
+  });
+
+  it('prompts once for all origins and remembers each without granting other hosts', async () => {
+    const fs = new TestFileSystem();
+    const ask = vi.fn().mockResolvedValue(true);
+    fs.setApproval(new ApprovalPolicy({ ask }));
+    await fs.bash('curl https://93.184.216.34/a https://8.8.8.8/b');
+    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ scopes: ['curl https://8.8.8.8/*', 'curl https://93.184.216.34/*'] }));
+    await fs.bash('curl https://8.8.8.8/next');
+    expect(ask).toHaveBeenCalledTimes(1);
+    await fs.bash('curl https://1.1.1.1/other');
+    expect(ask).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses an allowlisted curl in Full even when the approval setting is allow', async () => {
+    const fs = new TestFileSystem();
+    const ask = vi.fn().mockResolvedValue(true);
+    fs.setApproval(new ApprovalPolicy({ mode: 'allow', autonomous: () => true, ask, preApproved: ['curl https://93.184.216.34/*'] }));
+    const result = await fs.bash('curl https://93.184.216.34/a');
+    expect(result.success).toBe(false);
+    expect(result.output).toContain('Ordewell fetch tool');
+    expect(ask).not.toHaveBeenCalled();
+    expect(fs.bashCalls).toEqual([]);
+  });
+
+  it('asks for every credential-bearing invocation even with a remembered or allowlisted origin', async () => {
+    const fs = new TestFileSystem();
+    const ask = vi.fn().mockResolvedValue(true);
+    const policy = new ApprovalPolicy({ ask, preApproved: ['curl https://93.184.216.34/*'] });
+    fs.setApproval(policy);
+    expect((await fs.bash('curl -u user:secret https://93.184.216.34/a')).success).toBe(true);
+    expect((await fs.bash('curl -u user:secret https://93.184.216.34/a')).success).toBe(true);
+    expect(ask).toHaveBeenCalledTimes(2);
+    expect(policy.grantedScopes()).toEqual([]);
+  });
+});
+
+it.runIf(process.platform !== 'win32' && ['curl', 'wget'].every((binary) => spawnSync(binary, ['--version']).status === 0))(
+  'runs the installed clients without reading environment-selected startup files', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-web-startup-'));
+    const missing = join(dir, 'missing-config');
+    const wgetrc = join(dir, 'wgetrc');
+    writeFileSync(join(dir, '.curlrc'), `config = ${missing}\n`);
+    writeFileSync(wgetrc, 'unknown_ordewell_config_option = yes\n');
+    class ExecutingFileSystem extends TestFileSystem {
+      protected async execBashImpl(command: string): Promise<ToolOutcome> {
+        const result = spawnSync('/bin/sh', ['-c', command], {
+          env: { ...process.env, CURL_HOME: dir, WGETRC: wgetrc }, encoding: 'utf8', timeout: 5000,
+        });
+        return { success: result.status === 0, output: result.stdout + result.stderr, truncated: false };
+      }
+    }
+    try {
+      const fs = new ExecutingFileSystem();
+      fs.setApproval(new ApprovalPolicy({ ask: async () => true }));
+      const curl = await fs.bash('curl --version https://93.184.216.34/a');
+      expect(curl.success).toBe(true);
+      expect(curl.output).not.toContain(missing);
+      const wget = await fs.bash('wget --spider --version https://93.184.216.34/a');
+      expect(wget.success).toBe(true);
+      expect(wget.output).not.toContain('unknown_ordewell_config_option');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);

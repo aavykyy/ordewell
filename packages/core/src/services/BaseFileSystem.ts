@@ -12,6 +12,8 @@ import { classifyCommand, pathRefs, type CommandPolicyOptions } from './commandP
 import { resolveResearchShell, researchShellWarning, researchPolicyOptions, type ResearchShell } from './researchShell';
 import { resolveWithin, resolveRef, grantScopeFor, isInertDevice } from './pathScope';
 import { definitionPattern, referencePattern, languageForId, includeGlobFor } from './symbolPatterns';
+import { resolveAll, vetEgress, type ResolveAll } from './egressGuard';
+import { disableWebCommandStartup } from './webCommands';
 
 export { AUTO_COMMANDS, GIT_READONLY_SUBCOMMANDS, REFUSED_COMMANDS, classifyCommand, pathLikeArgs } from './commandPolicy';
 
@@ -29,6 +31,8 @@ export { AUTO_COMMANDS, GIT_READONLY_SUBCOMMANDS, REFUSED_COMMANDS, classifyComm
  */
 export abstract class BaseFileSystem implements IFileSystem {
   private approval: IApproval = DENY_ALL;
+
+  constructor(private readonly resolveWebHost: ResolveAll = resolveAll) {}
 
   /**
    * The interpreter `execBashImpl` will hand the command to. Owned here rather
@@ -206,21 +210,30 @@ export abstract class BaseFileSystem implements IFileSystem {
    * directory the next command names.
    */
   async bash(command: string, signal?: AbortSignal): Promise<ToolOutcome> {
+    command = disableWebCommandStartup(command, this.researchShell.dialect);
     const allow = this.approval.allowlist?.();
-    const { tier, scope, reason, allowedBy } = classifyCommand(command, { ...this.policyOptions(), ...(allow ? { allow } : {}) });
+    const { tier, scope, reason, allowedBy, perInvocation, scopes: commandScopes, webUrls } = classifyCommand(command, {
+      ...this.policyOptions(), ...this.approval.commandPolicy?.(), ...(allow ? { allow } : {}),
+    });
 
     if (tier === 'refuse') {
       return { success: false, output: `Command refused: ${reason}`, truncated: false };
+    }
+
+    for (const url of webUrls ?? []) {
+      const check = await vetEgress(url.hostname, url.port, this.resolveWebHost);
+      if (!check.ok) return { success: false, output: `Command refused: Blocked host: ${check.reason}. Use the Ordewell fetch tool instead.`, truncated: false };
     }
 
     const outside = this.outsidePaths(command);
     const asks = tier === 'ask';
     if (asks || outside.length > 0) {
       const root = this.getWorkspaceRoot();
-      const scopes = [...(asks ? [scope] : []), ...outside.map((o) => o.scope)];
+      const scopes = [...(asks ? commandScopes ?? [scope] : []), ...outside.map((o) => o.scope)];
       const touched = outside.map((o) => o.abs).join(', ');
       const granted = await this.approval.request({
         kind: asks ? 'shell_command' : 'external_path',
+        ...(perInvocation ? { perInvocation } : {}),
         subject: asks ? command : outside[0].abs,
         scope: scopes[0],
         ...(scopes.length > 1 ? { scopes } : {}),
@@ -240,6 +253,10 @@ export abstract class BaseFileSystem implements IFileSystem {
       }
     }
 
+    if (webUrls?.length) {
+      const latest = classifyCommand(command, { ...this.policyOptions(), ...this.approval.commandPolicy?.() });
+      if (latest.tier === 'refuse') return { success: false, output: `Command refused: ${latest.reason}`, truncated: false };
+    }
     const outcome = await this.execBashImpl(command, signal);
     if (outcome.success) return outcome;
 

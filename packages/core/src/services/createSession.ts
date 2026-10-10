@@ -262,6 +262,7 @@ export function createSession(deps: SessionDeps): Session {
   });
 
   const approvalPolicy = new ApprovalPolicy({
+    autonomous: () => deps.config.autonomousMode,
     // Read per request, so a change of autonomy level or allowlist applies to the next call.
     mode: () => effectiveApprovalMode(deps.config.approvalMode, deps.config.autonomousMode),
     preApproved: () => [...(deps.config.approvalDefaults ? DEFAULT_PLANNER_ALLOWLIST : []), ...deps.config.approvalPreApproved],

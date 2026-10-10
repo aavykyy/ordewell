@@ -636,7 +636,10 @@ write-capable — it writes nothing but the plan, and only through validation.
 rules (`gh issue list`, `gcloud * * list`), MCP tool rules (`mcp:find-*`) and
 scope patterns, with `!` exclusions that always win. What it covers runs
 without asking anyone, in every *approval mode*; file writes are refused
-whatever it says. The built-in list holds read-only families only.
+whatever it says. `curl` and `wget` command rules cover origins, and never
+permit those programs in Full or allowlist mode. Data, credentials and redirects
+require fresh approval on every invocation. The built-in list holds read-only
+families only.
 *Avoid:* "whitelist", "pre-approved scopes" for the rules (a rule names an
 operation by its words, a scope is what one approval remembers).
 

@@ -1,4 +1,5 @@
 import type { PlannerAllowlist } from '../services/plannerAllowlist';
+import type { CommandPolicyOptions } from '../services/commandPolicy';
 
 /**
  * The planner's single approval seam. Every capability that reaches beyond the
@@ -24,6 +25,8 @@ export type ApprovalKind = 'external_path' | 'shell_command' | 'url_fetch' | 'mc
 
 export interface ApprovalRequest {
   kind: ApprovalKind;
+  /** Credentials, data and redirects need a fresh human answer for each invocation. */
+  perInvocation?: boolean;
   /** The concrete thing being asked about: an absolute path, a command line, a URL. */
   subject: string;
   /**
@@ -87,6 +90,7 @@ export interface IApproval {
   request(req: ApprovalRequest): Promise<boolean>;
   /** The standing approvals a command is classified against, when this approval has any (ADR-0026). */
   allowlist?(): PlannerAllowlist;
+  commandPolicy?(): Pick<CommandPolicyOptions, 'autonomous' | 'approvalMode'>;
 }
 
 /** Denies everything. The safe default when a surface wires no approval channel. */
