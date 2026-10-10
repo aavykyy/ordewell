@@ -51,6 +51,11 @@ export async function decidePlannerPermission(
       const decision = await gate.fetcher.decide({ kind: 'fetch', url: ask.url });
       return decision.allowed ? ALLOW : deny(decision.reason);
     }
+    case 'search': {
+      if (!gate.fetcher) return deny('This search cannot be approved here.');
+      const decision = await gate.fetcher.decide({ kind: 'search', query: ask.query, provider: ask.provider, providerLabel: ask.providerLabel });
+      return decision.allowed ? ALLOW : deny(decision.reason);
+    }
     case 'path': {
       const { abs, inside } = resolveWithin(gate.workspaceRoot, ask.path);
       if (inside) return ALLOW;

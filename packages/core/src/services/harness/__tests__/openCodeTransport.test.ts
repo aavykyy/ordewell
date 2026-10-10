@@ -5,9 +5,10 @@ import type { AgentEvent, TaskStartOptions } from '../AgentAdapter';
 import { mcpClientConfig } from '../../mcp';
 import { sseResponse } from '../../__tests__/harnessTestKit';
 import {
-  ChildSessions, OpenCodePermissions, PendingSteers, ReplyText, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePlannerAsk, openEventStream, permissionReply, settleTurn,
+  ChildSessions, OpenCodePermissions, PendingSteers, ReplyText, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePlannerAsk, openEventStream, permissionReply, plannerSystem, settleTurn,
   splitModelId, turnLatch, usageRecord, type PermissionRequest,
 } from '../openCodeTransport';
+import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION } from '../openCodeOrdewell';
 
 /**
  * The protocol work OpenCode 1.x and 2.x share, driven directly. The adapter
@@ -434,18 +435,28 @@ describe('openEventStream', () => {
 describe('openCodePlannerAsk', () => {
   const servers = ['todoist', 'todoist_beta'];
 
-  it('reads a fetch and an outside read from the request', () => {
-    expect(openCodePlannerAsk('webfetch', { metadata: { url: 'https://example.com' } }, servers)).toEqual({ kind: 'fetch', url: 'https://example.com' });
+  it('reads an outside read from the request', () => {
     expect(openCodePlannerAsk('external_directory', { metadata: { filepath: '/etc/hostname', parentDir: '/etc' } }, servers))
       .toEqual({ kind: 'path', path: '/etc/hostname', directory: false });
     expect(openCodePlannerAsk('external_directory', { patterns: ['/opt/data/*'] }, servers)).toEqual({ kind: 'path', path: '/opt/data', directory: true });
   });
 
   it('falls back to the request\'s pattern, and takes a request that names nothing for one it cannot approve', () => {
-    expect(openCodePlannerAsk('webfetch', { patterns: ['https://example.com/a'] }, servers)).toEqual({ kind: 'fetch', url: 'https://example.com/a' });
     expect(openCodePlannerAsk('external_directory', { metadata: { parentDir: '/srv' } }, servers)).toEqual({ kind: 'path', path: '/srv', directory: true });
-    expect(openCodePlannerAsk('webfetch', {}, servers)).toEqual({ kind: 'other' });
+    expect(openCodePlannerAsk('websearch', {}, servers)).toEqual({ kind: 'other' });
     expect(openCodePlannerAsk('external_directory', {}, servers)).toEqual({ kind: 'other' });
+  });
+
+  // OpenCode sends both to a third party, Exa by default, so the policy decides them as searches (ADR-0027).
+  it('reads websearch and codesearch as searches, in 1.x metadata and in 2.x resources', () => {
+    const search = (query: string) => ({ kind: 'search', query, provider: 'opencode', providerLabel: expect.stringContaining('Exa') });
+    expect(openCodePlannerAsk('websearch', { metadata: { query: 'hono routing', numResults: 8 }, patterns: ['hono routing'] }, servers)).toEqual(search('hono routing'));
+    expect(openCodePlannerAsk('codesearch', { metadata: { query: 'zod v4 refine' } }, servers)).toEqual(search('zod v4 refine'));
+    expect(openCodePlannerAsk('websearch', { patterns: ['tokio changelog'] }, servers)).toEqual(search('tokio changelog'));
+  });
+
+  it('never reads a webfetch as a fetch to approve: it follows redirects Ordewell cannot see', () => {
+    expect(openCodePlannerAsk('webfetch', { metadata: { url: 'https://example.com' }, patterns: ['https://example.com'] }, servers)).toEqual({ kind: 'other' });
   });
 
   it('names an MCP tool by the longest server it starts with', () => {
@@ -457,5 +468,28 @@ describe('openCodePlannerAsk', () => {
     for (const name of ['bash', 'edit', 'write', 'task', 'question', 'notebook_edit']) {
       expect(openCodePlannerAsk(name, {}, servers), name).toEqual({ kind: 'other' });
     }
+  });
+});
+
+describe('an OpenCode planner\'s web reads (ADR-0027)', () => {
+  const mcp = mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok' });
+
+  it('denies webfetch and asks about websearch and codesearch, in both versions\' policy', () => {
+    expect(OPENCODE_PLANNER_PERMISSION).toMatchObject({ webfetch: 'deny', websearch: 'ask', codesearch: 'ask' });
+  });
+
+  it('tells a planner with the server to fetch through Ordewell and to search with websearch first', () => {
+    const { system } = plannerSystem({ systemPrompt: 'PLAN', mcp });
+    const instructions = OPENCODE_ORDEWELL.plannerInstructions();
+
+    expect(system).toBe(`PLAN\n\n${instructions}`);
+    expect(instructions).toContain('`ordewell_fetch`');
+    expect(instructions.indexOf('`websearch`')).toBeGreaterThanOrEqual(0);
+    expect(instructions.indexOf('`websearch`')).toBeLessThan(instructions.indexOf('`ordewell_web_search`'));
+  });
+
+  it('adds nothing to a planner without the server', () => {
+    expect(plannerSystem({ systemPrompt: 'PLAN' })).toEqual({ system: 'PLAN' });
+    expect(plannerSystem({ systemPrompt: '' })).toEqual({});
   });
 });

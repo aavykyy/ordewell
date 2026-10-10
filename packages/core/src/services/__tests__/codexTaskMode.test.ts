@@ -8,6 +8,8 @@ import { StructuredRunner } from '../StructuredRunner';
 import type { StructuredEvent } from '../../interfaces/IRunner';
 import { mcpClientConfig } from '../mcp';
 import { CODEX_ORDEWELL } from '../harness/codexOrdewell';
+import { ApprovalPolicy, effectiveApprovalMode, type ApprovalModeSetting } from '../ApprovalPolicy';
+import { WebReadPolicy } from '../webReadPolicy';
 import { modeIds, fakeSpawn, fixture, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
 
 /**
@@ -647,6 +649,7 @@ describe('CodexAdapter planner boundary (ADR-0008/0009)', () => {
       cwd: '/repo',
       sandbox: 'read-only',
       approvalPolicy: 'on-request',
+      config: { web_search: 'disabled' },
       developerInstructions: 'PLAN',
     });
     adapter.dispose();
@@ -842,11 +845,11 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       cwd: '/repo',
       sandbox: 'read-only',
       approvalPolicy: 'on-request',
-      config: { mcp_servers: { ordewell: ordewellServer } },
-      developerInstructions: `PLAN\n\n${CODEX_ORDEWELL.plannerInstructions()}`,
+      config: { mcp_servers: { ordewell: ordewellServer }, web_search: 'disabled' },
+      developerInstructions: `PLAN\n\n${CODEX_ORDEWELL.plannerInstructions(false)}`,
     });
     // Codex lists MCP tools only behind its own discovery, and its shell has no network (ADR-0026).
-    expect(CODEX_ORDEWELL.plannerInstructions()).toContain('`mcp__ordewell__run_command`');
+    expect(CODEX_ORDEWELL.plannerInstructions(false)).toContain('`mcp__ordewell__run_command`');
     expect(spawned.lastEnv().ORDEWELL_MCP_TOKEN_0).toBe('Bearer tok-secret');
     adapter.dispose();
   });
@@ -1016,6 +1019,75 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       ['tool_result', 'create_issue'],
     ]);
     expect(events.find((e) => e.type === 'tool_result')).toMatchObject({ output: 'Recorded.', success: true });
+    adapter.dispose();
+  });
+
+  // Codex's search raises no request, so the policy decides it once, at thread start (ADR-0027).
+  describe('a planner thread\'s built-in web search', () => {
+    function reads(setting: ApprovalModeSetting, autonomous: boolean, allow: string[] = []) {
+      const approval = new ApprovalPolicy({ mode: (kind) => effectiveApprovalMode(setting, autonomous, kind), preApproved: allow });
+      return new WebReadPolicy({ approval, env: () => ({}) });
+    }
+
+    async function plannerThread(policy?: WebReadPolicy) {
+      const { spawned, processDeps } = deps(plannerHandshake());
+      const adapter = new CodexAdapter(processDeps);
+      await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN', mcp, ...(policy ? { searchesUnasked: (provider: string) => policy.searchesUnasked(provider) } : {}) });
+      const [thread] = sentNamed(spawned.processes[0].written, 'thread/start');
+      adapter.dispose();
+      return thread.params as { config: Record<string, unknown>; developerInstructions: string };
+    }
+
+    it.each<[string, ApprovalModeSetting, boolean, string[], 'cached' | 'disabled']>([
+      ['Full under auto', 'auto', true, [], 'cached'],
+      ['an explicit allow', 'allow', false, [], 'cached'],
+      ['Guarded under auto', 'auto', false, [], 'disabled'],
+      ['an explicit ask', 'ask', true, [], 'disabled'],
+      ['an explicit allowlist, in Full', 'deny', true, [], 'disabled'],
+      ['an explicit allowlist that names OpenAI search', 'deny', true, ['web_search:openai'], 'cached'],
+    ])('is %s → %s', async (_label, setting, autonomous, allow, mode) => {
+      const thread = await plannerThread(reads(setting, autonomous, allow));
+
+      expect(thread.config.web_search).toBe(mode);
+      expect(thread.developerInstructions).toContain(CODEX_ORDEWELL.plannerInstructions(mode === 'cached'));
+    });
+
+    it('is off when nothing can decide it', async () => {
+      expect((await plannerThread()).config.web_search).toBe('disabled');
+    });
+
+    it('is never live, which opens pages the model chose', () => {
+      expect([CODEX_ORDEWELL.plannerWebSearch(true), CODEX_ORDEWELL.plannerWebSearch(false)]).toEqual(['cached', 'disabled']);
+    });
+
+    it('is named first when on, and Ordewell\'s web_search only when off; pages are fetched through Ordewell either way', () => {
+      const on = CODEX_ORDEWELL.plannerInstructions(true);
+      const off = CODEX_ORDEWELL.plannerInstructions(false);
+
+      expect(on).toContain('Search the web with your built-in web search.');
+      expect(on).not.toContain('Your built-in web search is off');
+      expect(off).toContain('search with `mcp__ordewell__web_search`');
+      for (const text of [on, off]) expect(text).toContain('Fetch web pages with `mcp__ordewell__fetch`, not curl');
+    });
+  });
+
+  it('shows what each built-in search did: every query, and the page it opened or searched in', async () => {
+    const search = (id: string, action: Record<string, unknown> | null, query = '') => line({ method: 'item/completed', params: { threadId: 'thr-task-1', turnId: 'turn-a', item: { id, type: 'webSearch', query, action, results: null } } });
+    const { adapter, events } = await openTurn([
+      search('w1', { type: 'search', query: 'tokio 1.40 changelog', queries: null }),
+      search('w2', { type: 'search', query: null, queries: ['hono routing', 'hono middleware'] }),
+      search('w3', { type: 'openPage', url: 'https://hono.dev/docs' }),
+      search('w4', { type: 'findInPage', url: 'https://hono.dev/docs', pattern: 'basePath' }),
+      search('w5', null, 'legacy query'),
+    ]);
+
+    expect(events.filter((e) => e.type === 'tool_result').map((e) => (e.type === 'tool_result' ? e.output : ''))).toEqual([
+      'tokio 1.40 changelog',
+      'hono routing\nhono middleware',
+      'open https://hono.dev/docs',
+      'find "basePath" in https://hono.dev/docs',
+      'legacy query',
+    ]);
     adapter.dispose();
   });
 

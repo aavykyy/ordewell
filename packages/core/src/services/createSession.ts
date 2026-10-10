@@ -431,6 +431,8 @@ export class Session {
     lastAttempt: (taskId) => lastAttemptDigest(this.taskLogLocation, taskId),
     taskSkills: () => this.workspaceSkills(),
     runCommand: (command, signal) => this.fsAdapter.bash(command, signal),
+    fetchUrl: (url) => this.fetcher.fetch(url),
+    webSearch: async (query) => this.fetcher.search?.(query),
   });
 
   constructor(parts: SessionParts) {

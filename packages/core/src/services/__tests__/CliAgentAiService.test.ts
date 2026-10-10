@@ -737,6 +737,29 @@ describe('CliAgentAiService — Codex', () => {
     expect(threadStart.params.approvalPolicy).toBe('on-request');
   });
 
+  // The policy decides Codex's own search once, as its thread starts (ADR-0027).
+  it.each([
+    ['on, cached, where the policy would search unasked', true, 'cached'],
+    ['off where it would ask', false, 'disabled'],
+  ])('opens the thread with its built-in search %s', async (_label, unasked, mode) => {
+    const { svc, spawned } = service('codex', [...codexHandshake(), fixture('codex', 'tools')]);
+    const searchesUnasked = vi.fn(() => unasked);
+    const fetcher = { decide: async () => ({ allowed: false as const, reason: 'no' }), fetch: async () => ({ success: false, output: '', truncated: false }), searchesUnasked };
+    await svc.startConversation(request({ runners: ['codex'], approval: { request: async () => false }, fetcher }));
+
+    const threadStart = JSON.parse(spawned.processes[0].written[1]);
+    expect(threadStart.params.config.web_search).toBe(mode);
+    expect(searchesUnasked).toHaveBeenCalledWith('openai');
+  });
+
+  it('opens the thread with its built-in search off when nobody could approve a read', async () => {
+    const { svc, spawned } = service('codex', [...codexHandshake(), fixture('codex', 'tools')]);
+    const fetcher = { decide: async () => ({ allowed: true as const }), fetch: async () => ({ success: true, output: '', truncated: false }), searchesUnasked: () => true };
+    await svc.startConversation(request({ runners: ['codex'], fetcher }));
+
+    expect(JSON.parse(spawned.processes[0].written[1]).params.config.web_search).toBe('disabled');
+  });
+
   it('flattens reasoning blocks and drops the empty ones the real CLI emits', async () => {
     const { svc } = service('codex', [...codexHandshake(), fixture('codex', 'tools')]);
     const { events, onProgress } = collector();

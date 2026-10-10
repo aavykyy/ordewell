@@ -2,8 +2,8 @@ import { randomBytes } from 'crypto';
 import { partedPromptUsage, type UsageRecord } from '../../models/Usage';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { McpClientConfig } from '../mcp';
-import { LineBuffer, type AgentEvent, type PlannerAsk, type TaskStartOptions } from './AgentAdapter';
-import { OPENCODE_ORDEWELL } from './openCodeOrdewell';
+import { LineBuffer, type AgentEvent, type PlannerAsk, type PlannerStartOptions, type TaskStartOptions } from './AgentAdapter';
+import { OPENCODE_ORDEWELL, OPENCODE_SEARCH_PROVIDER } from './openCodeOrdewell';
 import { settleWithin } from './settleWithin';
 
 /**
@@ -42,9 +42,10 @@ export function openCodePlannerAsk(
 ): PlannerAsk {
   const meta = details.metadata ?? {};
   const pattern = details.patterns?.[0];
-  if (permission === 'webfetch') {
-    const url = typeof meta.url === 'string' ? meta.url : pattern;
-    return url ? { kind: 'fetch', url } : { kind: 'other' };
+  // `webfetch` is denied in the planner's policy and never asks, so it is left to `other`.
+  if (permission === 'websearch' || permission === 'codesearch') {
+    const query = typeof meta.query === 'string' ? meta.query : pattern;
+    return query ? { kind: 'search', query, ...OPENCODE_SEARCH_PROVIDER } : { kind: 'other' };
   }
   if (permission === 'external_directory') {
     if (typeof meta.filepath === 'string') return { kind: 'path', path: meta.filepath, directory: false };
@@ -55,6 +56,12 @@ export function openCodePlannerAsk(
   const server = servers.filter((s) => permission.startsWith(`${s}_`)).sort((a, b) => b.length - a.length)[0];
   if (!server) return { kind: 'other' };
   return { kind: 'mcp', scope: permission, tool: permission.slice(server.length + 1), server };
+}
+
+/** A planner's system prompt and, when it has the Ordewell server, where its web reads go (ADR-0027). */
+export function plannerSystem(opts: Pick<PlannerStartOptions, 'systemPrompt' | 'mcp'>): { system?: string } {
+  const system = [opts.systemPrompt, opts.mcp ? OPENCODE_ORDEWELL.plannerInstructions() : ''].filter(Boolean).join('\n\n');
+  return system ? { system } : {};
 }
 
 /**
