@@ -176,7 +176,10 @@ function fakeResolver(modelsByRunner: Partial<Record<string, DiscoveredModel[]>>
     refresh: vi.fn(async () => {}),
     invalidate: vi.fn(),
     getDiscoveryErrors: vi.fn(() => ({})),
-  };
+    getCachedRunnerModels: vi.fn((runner: string) => modelsByRunner[runner] ?? []),
+    getCachedPickerOptions: vi.fn(() => []),
+    contextWindowFor: vi.fn(() => undefined),
+  } satisfies Record<keyof ModelResolver, unknown>;
 }
 
 function fakeRunnerInstallation(installed: string[]) {
