@@ -141,9 +141,14 @@ export function toolAllowed(list: PlannerAllowlist, tool: string): boolean {
   return list.tools.some((re) => re.test(tool));
 }
 
+/** Whether an `!` entry excludes an approval scope. */
+export function scopeExcluded(list: PlannerAllowlist, scope: string): boolean {
+  return list.scopeExclusions.some((re) => re.test(scope));
+}
+
 /** Whether an approval scope — a directory, an origin, a tool's full name — is pre-approved. */
 export function scopeAllowed(list: PlannerAllowlist, scope: string): boolean {
-  if (list.scopeExclusions.some((re) => re.test(scope))) return false;
+  if (scopeExcluded(list, scope)) return false;
   const web = /^(curl|wget) (https?:\/\/\S+\/\*)$/.exec(scope);
   if (web) return commandAllowedBy(list, { binary: web[1], args: [web[2]], scopeWords: 1 }) !== undefined;
   return list.scopes.some((re) => re.test(scope)) || list.commands.some((rule) => rule.text === scope);

@@ -104,6 +104,8 @@ export type PlannerAsk =
   /** `scope` is the tool's full name as the runner reports it; `tool` its own name, without the server. */
   | { kind: 'mcp'; scope: string; tool: string; server?: string }
   | { kind: 'fetch'; url: string }
+  /** A search the runner carries itself, at `provider`; Ordewell decides it, it does not run it. */
+  | { kind: 'search'; query: string; provider: string }
   | { kind: 'path'; path: string; directory: boolean }
   | { kind: 'other' };
 

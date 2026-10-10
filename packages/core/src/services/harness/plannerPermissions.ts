@@ -5,8 +5,8 @@ import type { PlannerAsk } from './AgentAdapter';
 
 /**
  * What a harness planner's own tool requests are decided against (ADR-0026):
- * the session's approval policy, the API planner's, and the web fetcher whose
- * SSRF guard a fetch must pass first. Absent means nobody can be asked.
+ * the session's approval policy, the API planner's, and the web fetcher, whose
+ * web-read policy decides a fetch (ADR-0027). Absent means nobody can be asked.
  */
 export interface PlannerPermissionGate {
   approval: IApproval;
@@ -14,7 +14,9 @@ export interface PlannerPermissionGate {
   workspaceRoot: string;
 }
 
-const READ_ONLY_DENIAL = 'The Ordewell planner is read-only: it changes no files. Use run_command for commands; changes belong to the plan\'s tasks.';
+// `other` is not always a write: a read the envelope has no rule for lands here
+// too, so the message names the envelope rather than claiming an edit was tried.
+const UNKNOWN_TOOL_DENIAL = 'The Ordewell planner is read-only and its envelope has no rule for this tool, so it did not run. Read with the read tools, use run_command for commands and fetch or web_search for the web; changes belong to the plan\'s tasks.';
 const OPS_HINT = 'Continue without it. If it would change something outside the repository, add it to the plan as an ops task; if it only reads, ask the user to approve it or add it to the planner allowlist.';
 
 const ALLOW: ApprovalDecision = { decision: 'allow' };
@@ -30,7 +32,7 @@ export async function decidePlannerPermission(
   input: Record<string, unknown>,
   gate: PlannerPermissionGate | undefined,
 ): Promise<ApprovalDecision> {
-  if (!ask || ask.kind === 'other') return deny(READ_ONLY_DENIAL);
+  if (!ask || ask.kind === 'other') return deny(UNKNOWN_TOOL_DENIAL);
   if (!gate) return deny('Nobody can approve this here. Continue without it.');
 
   switch (ask.kind) {
@@ -46,9 +48,22 @@ export async function decidePlannerPermission(
       });
       return granted ? ALLOW : deny(`Not approved: ${ask.scope}. ${OPS_HINT}`);
     }
-    case 'fetch':
+    case 'fetch': {
       if (!gate.fetcher) return deny('This fetch cannot be approved here.');
-      return (await gate.fetcher.confirm(ask.url)) ? ALLOW : deny(`Fetch denied (blocked host or not approved): ${ask.url}. ${OPS_HINT}`);
+      const decision = await gate.fetcher.decide({ kind: 'fetch', url: ask.url });
+      return decision.allowed ? ALLOW : deny(decision.reason);
+    }
+    case 'search': {
+      if (!gate.fetcher) return deny('This search cannot be approved here.');
+      const decision = await gate.fetcher.decide({
+        kind: 'search',
+        query: ask.query,
+        provider: ask.provider,
+        // It runs at the provider, which already holds the conversation the query came from.
+        note: `${ask.provider} runs this search itself and already sees this planner's conversation.`,
+      });
+      return decision.allowed ? ALLOW : deny(decision.reason);
+    }
     case 'path': {
       const { abs, inside } = resolveWithin(gate.workspaceRoot, ask.path);
       if (inside) return ALLOW;

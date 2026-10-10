@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
 import { BaseFileSystem } from '../BaseFileSystem';
-import { ApprovalPolicy } from '../ApprovalPolicy';
+import { ApprovalPolicy, effectiveApprovalMode, type ApprovalModeSetting } from '../ApprovalPolicy';
 import type { GrepOptions, ReadFileOpts, ToolOutcome } from '../../interfaces/IFileSystem';
 
 const ROOT = '/repo';
@@ -631,6 +631,33 @@ describe('BaseFileSystem research-shell coupling', () => {
 });
 
 describe('web commands in the planner shell', () => {
+  it.each<[boolean, ApprovalModeSetting, boolean]>([
+    [true, 'auto', true],
+    [true, 'allow', true],
+    [true, 'ask', false],
+    [false, 'deny', false],
+  ])('keeps fetch and shell decisions separate with autonomous=%s and mode=%s', async (autonomous, setting, fetchAllowed) => {
+    const fs = new TestFileSystem();
+    const ask = vi.fn().mockResolvedValue(false);
+    const policy = new ApprovalPolicy({
+      mode: (kind) => effectiveApprovalMode(setting, autonomous, kind),
+      autonomous: () => autonomous,
+      preApproved: ['curl https://93.184.216.34/*', 'wget https://93.184.216.34/*'],
+      ask,
+    });
+    fs.setApproval(policy);
+
+    expect(await policy.request({ kind: 'url_fetch', subject: 'https://93.184.216.34/a', scope: 'https://93.184.216.34/*' })).toBe(fetchAllowed);
+    ask.mockClear();
+    for (const command of ['curl https://93.184.216.34/a', 'wget --spider --max-redirect=0 https://93.184.216.34/a']) {
+      const result = await fs.bash(command);
+      expect(result.success).toBe(false);
+      expect(result.output).toContain('Ordewell fetch tool');
+    }
+    expect(ask).not.toHaveBeenCalled();
+    expect(fs.bashCalls).toEqual([]);
+  });
+
   it('refuses the pending command if the user switches to Full while approving it', async () => {
     const fs = new TestFileSystem();
     let autonomous = false;

@@ -5,9 +5,9 @@ import type { LookupFunction } from 'node:net';
 import { pipeline, type Readable } from 'node:stream';
 import * as zlib from 'node:zlib';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
-import type { IApproval } from '../interfaces/IApproval';
 import type { ToolOutcome } from '../interfaces/IFileSystem';
 import { guardedLookup, resolveAll, vetEgress, type ResolveAll } from './egressGuard';
+import type { WebRead, WebReadDecision, WebReadPolicy } from './webReadPolicy';
 
 /**
  * The concrete `fetch`/`web_search` implementation, in core so the web server
@@ -16,8 +16,9 @@ import { guardedLookup, resolveAll, vetEgress, type ResolveAll } from './egressG
  * planner and always answered "not available in this environment" — a tool the
  * model could see, choose, and never use.
  *
- * Approval is per origin, not per URL: reading three pages of one library's
- * docs is one decision, not three.
+ * Whether a read happens is the web-read policy's to decide (ADR-0027); this
+ * carries it. Redirect hops are vetted here, since the policy saw only the
+ * first URL.
  */
 
 /** The slice of a `fetch` Response the fetcher reads; the platform `fetch` satisfies it. */
@@ -35,7 +36,7 @@ export type WebTransport = (
 ) => Promise<WebResponse>;
 
 export interface HttpWebFetcherOptions {
-  approval: IApproval;
+  policy: Pick<WebReadPolicy, 'decide'>;
   /**
    * Injected in tests; defaults to a node:http(s) transport whose sockets
    * connect only to addresses `resolveHost` answered and the guard vetted.
@@ -61,6 +62,7 @@ const USER_AGENT = 'Mozilla/5.0 (compatible; Ordewell-Planner/1.0; +https://gith
  * tells the planner to fall back to `fetch` with a known URL.
  */
 const SEARCH_ENDPOINT = 'https://lite.duckduckgo.com/lite/?q=';
+const SEARCH_PROVIDER = 'duckduckgo';
 
 function decodeEntities(text: string): string {
   return text
@@ -121,14 +123,14 @@ function sanitizeError(err: unknown): string {
 }
 
 export class HttpWebFetcher implements IWebFetcher {
-  private readonly approval: IApproval;
+  private readonly policy: Pick<WebReadPolicy, 'decide'>;
   private readonly fetchImpl: WebTransport;
   private readonly maxChars: number;
   private readonly timeoutMs: number;
   private readonly resolveHost: ResolveAll;
 
   constructor(opts: HttpWebFetcherOptions) {
-    this.approval = opts.approval;
+    this.policy = opts.policy;
     this.maxChars = opts.maxChars ?? DEFAULT_MAX_CHARS;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.resolveHost = opts.resolveHost ?? resolveAll;
@@ -139,43 +141,21 @@ export class HttpWebFetcher implements IWebFetcher {
     return !(await vetEgress(host, port, this.resolveHost)).ok;
   }
 
-  async confirm(url: string): Promise<boolean> {
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      return false;
-    }
-    // Only the two network schemes. `file:` would turn this into a second,
-    // unconfined path reader that bypasses the filesystem's confinement.
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
-
-    if (await this.isBlockedHost(parsed.hostname, parsed.port)) return false;
-
-    return this.approval.request({
-      kind: 'url_fetch',
-      subject: url,
-      scope: `${parsed.origin}/*`,
-      detail: `Planner research wants to fetch ${parsed.origin}`,
-    });
+  decide(read: WebRead): Promise<WebReadDecision> {
+    return this.policy.decide(read);
   }
 
   async fetch(url: string): Promise<ToolOutcome> {
-    // Gate on the same confirm search uses, so the SSRF guard and the
-    // per-origin approval both run even when a caller invokes fetch directly
-    // rather than through executeTool.
-    if (!await this.confirm(url)) {
-      return { success: false, output: `Fetch denied (blocked host or not approved): ${url}. Continue without it, or ask the user to approve this origin or add it to the planner allowlist.`, truncated: false };
-    }
+    const decision = await this.policy.decide({ kind: 'fetch', url });
+    if (!decision.allowed) return { success: false, output: decision.reason, truncated: false };
     return this.get(url, 'Fetch');
   }
 
   async search(query: string): Promise<ToolOutcome> {
-    const url = SEARCH_ENDPOINT + encodeURIComponent(query);
-    if (!await this.confirm(url)) {
-      return { success: false, output: `Web search denied by user for query: ${query}`, truncated: false };
-    }
+    const decision = await this.policy.decide({ kind: 'search', query, provider: SEARCH_PROVIDER });
+    if (!decision.allowed) return { success: false, output: decision.reason, truncated: false };
 
+    const url = SEARCH_ENDPOINT + encodeURIComponent(query);
     const page = await this.request(url);
     if (!page.ok) return { success: false, output: `Web search failed: ${page.error}`, truncated: false };
 

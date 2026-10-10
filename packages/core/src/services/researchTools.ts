@@ -116,7 +116,7 @@ export const RESEARCH_TOOLS: ResearchToolSpec[] = [
   },
   {
     name: 'fetch',
-    description: 'Fetch content from a URL (HTTP/HTTPS). Use for reading API documentation, library references, or package docs. URL confirmation is required — the tool may pause while awaiting approval.',
+    description: 'Fetch content from a URL (HTTP/HTTPS). Use for reading API documentation, library references, or package docs. Depending on the approval settings, the first fetch from a site may wait for the user to approve it. Private and local addresses are always refused, as is a URL that contains a credential, and each turn has a limited number of web reads; a refusal says why.',
     properties: {
       url: { type: 'string', description: 'The URL to fetch' },
     },
@@ -124,7 +124,7 @@ export const RESEARCH_TOOLS: ResearchToolSpec[] = [
   },
   {
     name: 'web_search',
-    description: 'Search the web for result titles, URLs and snippets. When to use: you need docs for an unfamiliar library or API and have no URL yet — search first, then fetch the most promising result. When NOT to use: anything answerable from the workspace itself (use grep or find_symbol).',
+    description: 'Search the web for result titles, URLs and snippets. When to use: you need docs for an unfamiliar library or API and have no URL yet — search first, then fetch the most promising result. When NOT to use: anything answerable from the workspace itself (use grep or find_symbol). Depending on the approval settings, the first search may wait for the user to approve it; a query that contains a credential is refused, and searches count toward the turn\'s web reads.',
     properties: {
       query: { type: 'string', description: 'Search query' },
     },

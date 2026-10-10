@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { summarizeToolCall } from '../researchStepSummary';
+import { classifyOutcome, summarizeToolCall } from '../researchStepSummary';
 import { mapAgentTool, normalizeAgentArgs } from '../harness/agentTools';
 
 describe('summarizeToolCall', () => {
@@ -71,5 +71,15 @@ describe('harness planner tool naming (ADR-0009)', () => {
     expect(normalizeAgentArgs('read_file', { file_path: '/repo/a.ts' }).path).toBe('/repo/a.ts');
     // Codex hands a command over as argv; the summary wants one string.
     expect(normalizeAgentArgs('bash', { command: ['rg', '-n', 'foo'] }).command).toBe('rg -n foo');
+  });
+});
+
+describe('classifyOutcome for web reads', () => {
+  it('shows a guard\'s refusal as refused and a declined approval as denied', () => {
+    expect(classifyOutcome(false, 'Fetch refused: loopback address 127.0.0.1. Private, local and non-web addresses are never fetched.')).toBe('refused');
+    expect(classifyOutcome(false, 'Web search refused: this planner turn has used its web-read budget (40).')).toBe('refused');
+    expect(classifyOutcome(false, 'Fetch not approved: https://docs.example.com/*. Continue without it.')).toBe('denied');
+    expect(classifyOutcome(false, 'Web search not approved. Continue without it.')).toBe('denied');
+    expect(classifyOutcome(false, 'Fetch failed: HTTP 404')).toBe('failure');
   });
 });

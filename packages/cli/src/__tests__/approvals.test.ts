@@ -50,6 +50,12 @@ describe('describeApproval', () => {
     expect(text).toMatch(/fetch/i);
   });
 
+  it('describes a web search', () => {
+    const text = describeApproval({ ...PATH_EVENT, kind: 'web_search', subject: 'tokio changelog', scope: 'web_search:duckduckgo' });
+    expect(text).toContain('tokio changelog');
+    expect(text).toMatch(/search the web/i);
+  });
+
   it('surfaces detail, since an auto-tier command touching an outside path otherwise reads identically to a plain read', () => {
     expect(describeApproval(SHELL_EVENT)).toContain('Planner research wants to run: npm test');
   });
@@ -154,6 +160,13 @@ describe('describeApprovalDecision', () => {
     expect(text).toMatch(/auto-approved/i);
     expect(text).toContain('pre-approved');
     expect(text).toContain('npm test');
+  });
+
+  it('names the web-read guard behind a refusal', () => {
+    expect(describeApprovalDecision({ type: 'approval_decided', subject: 'http://10.0.0.1/', granted: false, source: 'guard' })).toContain('blocked address');
+    expect(describeApprovalDecision({ type: 'approval_decided', subject: '(withheld)', granted: false, source: 'secret' })).toContain('secret check');
+    expect(describeApprovalDecision({ type: 'approval_decided', subject: 'tokio', granted: false, source: 'budget' })).toContain('web-read budget');
+    expect(describeApprovalDecision({ type: 'approval_decided', subject: 'https://intra.example/', granted: false, source: 'excluded' })).toContain('excluded');
   });
 
   it('labels a remembered grant', () => {

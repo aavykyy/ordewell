@@ -15,6 +15,8 @@ import { PendingApprovals, type PendingApproval } from './PendingApprovals';
 import { RunnerApprovals } from './RunnerApprovals';
 import { approvalScopes, isRunnerApproval, type ApprovalAnswer, type ApprovalRequest } from '../interfaces/IApproval';
 import { HttpWebFetcher } from './HttpWebFetcher';
+import { WebReadPolicy } from './webReadPolicy';
+import { ALL_PROVIDERS } from './ProviderRegistry';
 import { ModelResolver } from './ModelResolver';
 import { coerceAssignments } from './ModelAllowlistResolver';
 import { plannerModesFrom } from './plannerModes';
@@ -199,7 +201,8 @@ function isPlannerApproval(request: ApprovalRequest): boolean {
  */
 export function createSession(deps: SessionDeps): Session {
   const pinnedAiService = deps.aiService;
-  const aiService = pinnedAiService ? () => pinnedAiService : liveAiService(deps.config, deps.workspaceRoot, deps.mcpServer ?? sharedMcpServer());
+  const mcpServer = deps.mcpServer ?? sharedMcpServer();
+  const aiService = pinnedAiService ? () => pinnedAiService : liveAiService(deps.config, deps.workspaceRoot, mcpServer);
   const store = new PlanStore();
   const taskLogs = new TaskLogRecorder({
     broadcast: deps.broadcast,
@@ -264,7 +267,7 @@ export function createSession(deps: SessionDeps): Session {
   const approvalPolicy = new ApprovalPolicy({
     autonomous: () => deps.config.autonomousMode,
     // Read per request, so a change of autonomy level or allowlist applies to the next call.
-    mode: () => effectiveApprovalMode(deps.config.approvalMode, deps.config.autonomousMode),
+    mode: (kind) => effectiveApprovalMode(deps.config.approvalMode, deps.config.autonomousMode, kind),
     preApproved: () => [...(deps.config.approvalDefaults ? DEFAULT_PLANNER_ALLOWLIST : []), ...deps.config.approvalPreApproved],
     ask: (req) => approvals.ask(req),
     // The interactive path (`asked`) already broadcasts approval_request +
@@ -284,6 +287,12 @@ export function createSession(deps: SessionDeps): Session {
     },
   });
   deps.fsAdapter.setApproval?.(approvalPolicy);
+  const webReads = new WebReadPolicy({
+    approval: approvalPolicy,
+    secrets: () => [...configSecrets(deps.config), ...mcpServer.heldTokens()],
+    budget: () => deps.config.webReadBudget,
+    turn: () => conversation?.currentTurnId,
+  });
 
   const catalog = new SessionCatalog({
     config: deps.config,
@@ -314,14 +323,23 @@ export function createSession(deps: SessionDeps): Session {
     usage,
     approvals,
     approvalPolicy,
-    // `fetch`/`web_search` route through the same approval channel as paths and
-    // commands — one decision surface for everything that leaves the workspace.
-    fetcher: new HttpWebFetcher({ approval: approvalPolicy }),
+    // Every planner's web reads, carried here or natively, are decided by the
+    // one policy, which asks through the same channel as paths and commands.
+    fetcher: new HttpWebFetcher({ policy: webReads }),
     skillsService: deps.skillsService ?? new SkillsService(deps.workspaceRoot()),
     saveSession: deps.saveSession ?? saveSession,
     conversation: (host) => (conversation = new PlannerConversation(host)),
   });
   return session;
+}
+
+/** Every credential the config holds, read afresh so a key set mid-session is covered. */
+function configSecrets(config: IConfig): string[] {
+  const providers = Object.keys(ALL_PROVIDERS) as AiProvider[];
+  return [
+    config.apiKey, config.openAiApiKey, config.openrouterKey, config.geminiKey, config.openaiCompatibleApiKey,
+    ...providers.map((provider) => config.getProviderApiKey(provider)),
+  ];
 }
 
 /** What {@link createSession} hands a Session: every collaborator, already built and wired. */

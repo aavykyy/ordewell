@@ -424,6 +424,37 @@ describe('ApprovalPolicy — the planner allowlist (ADR-0026)', () => {
     mode = 'allow';
     expect(await policy.request(req({ scope: 'az vm list', subject: 'az vm list' }))).toBe(true);
   });
+
+  it('does not remember a grant the mode gave, so a stricter mode later still decides', async () => {
+    let mode: ApprovalMode = 'allow';
+    const policy = new ApprovalPolicy({ mode: () => mode });
+
+    expect(await policy.request(req({ kind: 'url_fetch', subject: 'https://a.example/x', scope: 'https://a.example/*' }))).toBe(true);
+    mode = 'deny';
+    expect(await policy.request(req({ kind: 'url_fetch', subject: 'https://a.example/y', scope: 'https://a.example/*' }))).toBe(false);
+    expect(policy.grantedScopes()).toEqual([]);
+  });
+
+  it('reads the mode for the kind being asked about', async () => {
+    const policy = new ApprovalPolicy({ mode: (kind) => effectiveApprovalMode('auto', true, kind) });
+
+    expect(await policy.request(req({ kind: 'url_fetch', subject: 'https://a.example/x', scope: 'https://a.example/*' }))).toBe(true);
+    expect(await policy.request(req({ kind: 'web_search', subject: 'tokio', scope: 'web_search:duckduckgo' }))).toBe(true);
+    expect(await policy.request(req({ kind: 'mcp_tool', subject: 'jira · create', scope: 'mcp__jira__create' }))).toBe(false);
+  });
+
+  it('reads the shell mode for each sensitive invocation and never remembers its answer', async () => {
+    const mode = vi.fn((kind: ApprovalRequest['kind']) => effectiveApprovalMode('auto', false, kind));
+    const ask = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const policy = new ApprovalPolicy({ mode, ask, preApproved: ['curl https://docs.example.com/*'] });
+    const request = req({ subject: 'curl -L https://docs.example.com/a', scope: 'curl https://docs.example.com/*', perInvocation: true });
+
+    expect(await policy.request(request)).toBe(true);
+    expect(await policy.request(request)).toBe(false);
+    expect(mode.mock.calls).toEqual([['shell_command'], ['shell_command']]);
+    expect(ask).toHaveBeenCalledTimes(2);
+    expect(policy.grantedScopes()).toEqual([]);
+  });
 });
 
 describe('the configured approval mode', () => {
@@ -432,6 +463,16 @@ describe('the configured approval mode', () => {
     expect(effectiveApprovalMode('auto', false)).toBe('ask');
     expect(effectiveApprovalMode('ask', true)).toBe('ask');
     expect(effectiveApprovalMode('allow', false)).toBe('allow');
+  });
+
+  it('lets Full read the web under auto, and nothing else (ADR-0027)', () => {
+    expect(effectiveApprovalMode('auto', true, 'url_fetch')).toBe('allow');
+    expect(effectiveApprovalMode('auto', true, 'web_search')).toBe('allow');
+    expect(effectiveApprovalMode('auto', true, 'shell_command')).toBe('deny');
+    expect(effectiveApprovalMode('auto', true, 'mcp_tool')).toBe('deny');
+    expect(effectiveApprovalMode('auto', true, 'external_path')).toBe('deny');
+    expect(effectiveApprovalMode('auto', false, 'url_fetch')).toBe('ask');
+    expect(effectiveApprovalMode('deny', true, 'url_fetch')).toBe('deny');
   });
 
   it('reads allowlist as deny, and anything unknown as auto', () => {

@@ -76,6 +76,12 @@ describe('approval overlay rendering', () => {
     expect(out).toMatch(/fetch/i);
   });
 
+  it('labels a search request as a web search', () => {
+    const out = screenWith({ id: 'ap-5', kind: 'web_search', subject: 'tokio changelog', scope: 'web_search:duckduckgo' });
+    expect(out).toContain('tokio changelog');
+    expect(out).toMatch(/search the web/i);
+  });
+
   it('surfaces detail, since an auto-tier command touching an outside path otherwise reads identically to a plain read', () => {
     const out = screenWith({
       id: 'ap-4',

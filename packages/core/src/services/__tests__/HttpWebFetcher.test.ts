@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo, LookupFunction } from 'node:net';
 import { brotliCompressSync, gzipSync } from 'node:zlib';
-import { HttpWebFetcher, pinnedTransport } from '../HttpWebFetcher';
+import { HttpWebFetcher, pinnedTransport, type HttpWebFetcherOptions } from '../HttpWebFetcher';
+import { WebReadPolicy } from '../webReadPolicy';
 import type { IApproval } from '../../interfaces/IApproval';
 
 const allow: IApproval = { request: async () => true };
@@ -24,16 +25,21 @@ function response(body: string, init: { status?: number; contentType?: string; h
 // before any lookup, so SSRF cases still exercise the real guard.
 const PUBLIC_IP = '93.184.215.14';
 
-function makeFetcher(opts: ConstructorParameters<typeof HttpWebFetcher>[0]) {
-  return new HttpWebFetcher({ resolveHost: async () => [PUBLIC_IP], ...opts });
+function makeFetcher({ approval, ...opts }: Omit<HttpWebFetcherOptions, 'policy'> & { approval: IApproval }) {
+  const resolveHost = opts.resolveHost ?? (async () => [PUBLIC_IP]);
+  return new HttpWebFetcher({ policy: new WebReadPolicy({ approval, env: () => ({}), resolveHost }), ...opts, resolveHost });
 }
 
-describe('HttpWebFetcher.confirm', () => {
+async function allowed(fetcher: HttpWebFetcher, url: string): Promise<boolean> {
+  return (await fetcher.decide({ kind: 'fetch', url })).allowed;
+}
+
+describe('HttpWebFetcher.decide', () => {
   it('asks per origin, so a second page on the same host does not re-prompt', async () => {
     const request = vi.fn().mockResolvedValue(true);
     const fetcher = makeFetcher({ approval: { request } });
 
-    await fetcher.confirm('https://docs.rs/tokio/latest/tokio/');
+    await fetcher.decide({ kind: 'fetch', url: 'https://docs.rs/tokio/latest/tokio/' });
 
     expect(request).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'url_fetch',
@@ -46,17 +52,28 @@ describe('HttpWebFetcher.confirm', () => {
     const request = vi.fn();
     const fetcher = makeFetcher({ approval: { request } });
 
-    expect(await fetcher.confirm('file:///etc/passwd')).toBe(false);
+    expect(await allowed(fetcher, 'file:///etc/passwd')).toBe(false);
     expect(request).not.toHaveBeenCalled();
   });
 
   it('refuses a malformed URL rather than throwing mid-turn', async () => {
     const fetcher = makeFetcher({ approval: allow });
-    expect(await fetcher.confirm('not a url')).toBe(false);
+    expect(await allowed(fetcher, 'not a url')).toBe(false);
   });
 });
 
 describe('HttpWebFetcher.fetch', () => {
+  it('hands the policy\'s reason back when the fetch is refused', async () => {
+    const fetchImpl = vi.fn();
+    const fetcher = makeFetcher({ approval: deny, fetchImpl });
+
+    const result = await fetcher.fetch('https://docs.rs/tokio');
+
+    expect(result.success).toBe(false);
+    expect(result.output).toMatch(/^Fetch not approved: https:\/\/docs\.rs\/\*/);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('returns readable text with the markup stripped', async () => {
     const html = '<html><head><style>a{}</style></head><body><h1>Tokio</h1><p>An async runtime.</p></body></html>';
     const fetcher = makeFetcher({ approval: allow, fetchImpl: async () => response(html) });
@@ -148,15 +165,24 @@ describe('HttpWebFetcher.search', () => {
     expect(result.output).toContain('offline');
   });
 
-  it('asks for approval once for the search engine itself', async () => {
+  it('asks the web-read policy about the query, scoped to the search provider', async () => {
     const request = vi.fn().mockResolvedValue(true);
     const fetcher = makeFetcher({ approval: { request }, fetchImpl: async () => response(RESULTS) });
 
     await fetcher.search('hono');
-    await fetcher.search('zod');
 
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request.mock.calls[0][0]).toMatchObject({ kind: 'url_fetch' });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0][0]).toMatchObject({ kind: 'web_search', subject: 'hono', scope: 'web_search:duckduckgo' });
+  });
+
+  it('hands the policy\'s reason back when the search is refused', async () => {
+    const fetcher = makeFetcher({ approval: allow, fetchImpl: vi.fn() });
+
+    const result = await fetcher.search('ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8');
+
+    expect(result.success).toBe(false);
+    expect(result.output).toMatch(/secret/);
+    expect(result.output).not.toContain('ghp_');
   });
 
   it('does not search when approval is refused', async () => {
@@ -194,7 +220,7 @@ describe('HttpWebFetcher SSRF guard', () => {
     const fetchImpl = vi.fn();
     const fetcher = makeFetcher({ approval: { request }, fetchImpl });
 
-    expect(await fetcher.confirm(url)).toBe(false);
+    expect(await allowed(fetcher, url)).toBe(false);
     expect(request).not.toHaveBeenCalled();
     // A direct fetch must also fail rather than reach the network.
     const result = await fetcher.fetch(url);
@@ -205,13 +231,13 @@ describe('HttpWebFetcher SSRF guard', () => {
   it('refuses a non-HTTP(S) port', async () => {
     const request = vi.fn();
     const fetcher = makeFetcher({ approval: { request } });
-    expect(await fetcher.confirm('https://internal.example:6379/')).toBe(false);
+    expect(await allowed(fetcher, 'https://internal.example:6379/')).toBe(false);
     expect(request).not.toHaveBeenCalled();
   });
 });
 
 describe('HttpWebFetcher redirect handling', () => {
-  // A 302 to a private IP would bypass confirm's origin check — the classic
+  // A 302 to a private IP would bypass the policy's origin check — the classic
   // SSRF-via-redirect — so each hop is re-checked against the blocklist.
   it('refuses a redirect to a blocked host even when the origin was approved', async () => {
     const fetchImpl = vi.fn().mockImplementation((url: string) => {
@@ -287,7 +313,7 @@ describe('HttpWebFetcher redirect handling', () => {
     expect(result.output).toMatch(/redirect/i);
   });
 
-  // confirm() rejects non-HTTP schemes up front, but a redirect hop only ever
+  // the policy rejects non-HTTP schemes up front, but a redirect hop only ever
   // re-checked the host blocklist — a 302 to `file:///etc/passwd` skipped the
   // scheme check entirely and would have been followed.
   it('refuses a redirect to a non-HTTP scheme', async () => {
@@ -308,14 +334,14 @@ describe('HttpWebFetcher redirect handling', () => {
 });
 
 describe('HttpWebFetcher connection pinning', () => {
-  // confirm() vets the name, then the transport resolves it again to connect.
+  // The policy vets the name, then the transport resolves it again to connect.
   // A rebinding DNS server answers public for the first lookup and private for
   // the second, so the connect-time lookup must be vetted too.
   it('refuses a host that rebinds to a private address between check and connect', async () => {
     const resolveHost = vi.fn()
       .mockResolvedValueOnce([PUBLIC_IP])
       .mockResolvedValue(['169.254.169.254']);
-    const fetcher = new HttpWebFetcher({ approval: allow, resolveHost, timeoutMs: 2_000 });
+    const fetcher = makeFetcher({ approval: allow, resolveHost, timeoutMs: 2_000 });
 
     const result = await fetcher.fetch('http://rebind.example/latest/meta-data/');
 
@@ -331,7 +357,7 @@ describe('HttpWebFetcher multi-answer DNS', () => {
     const request = vi.fn();
     const fetcher = makeFetcher({ approval: { request }, resolveHost: async () => [PUBLIC_IP, '2606:4700::1', 'fd00::5'] });
 
-    expect(await fetcher.confirm('https://split.example/')).toBe(false);
+    expect(await allowed(fetcher, 'https://split.example/')).toBe(false);
     expect(request).not.toHaveBeenCalled();
   });
 });
@@ -344,7 +370,7 @@ describe('HttpWebFetcher isBlockedHost null-address guard', () => {
     const request = vi.fn();
     const fetcher = makeFetcher({ approval: { request }, resolveHost: async () => [null as unknown as string] });
 
-    expect(await fetcher.confirm('https://weird-host.example/')).toBe(false);
+    expect(await allowed(fetcher, 'https://weird-host.example/')).toBe(false);
     expect(request).not.toHaveBeenCalled();
   });
 });

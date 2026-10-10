@@ -306,6 +306,18 @@ describe('approval cards (ADR-0018, A1)', () => {
     if (over.note) expect(getByText(`Note to the agent: ${over.note}`)).toBeTruthy();
   });
 
+  it.each<[Partial<ApprovalBlock>, string, string]>([
+    [{ kind: 'web_search', subject: 'tokio changelog', status: 'granted', decidedBy: 'mode' }, 'Search the web', 'Auto-approved (policy)'],
+    [{ kind: 'url_fetch', subject: 'http://10.0.0.1/', status: 'denied', decidedBy: 'guard' }, 'Fetch a URL', 'Auto-denied (blocked address)'],
+    [{ kind: 'url_fetch', subject: '(withheld)', status: 'denied', decidedBy: 'secret' }, 'Fetch a URL', 'Auto-denied (secret check)'],
+    [{ kind: 'web_search', subject: 'tokio', status: 'denied', decidedBy: 'budget' }, 'Search the web', 'Auto-denied (web-read budget)'],
+    [{ kind: 'url_fetch', subject: 'https://intra.example/', status: 'denied', decidedBy: 'excluded' }, 'Fetch a URL', 'Auto-denied (excluded)'],
+  ])('names a web read and why it was decided without asking (%o)', (over, kind, label) => {
+    const { getByText } = draw(card({ allowForTask: false, ...over }));
+    expect(getByText(kind)).toBeTruthy();
+    expect(getByText(label)).toBeTruthy();
+  });
+
   it('keeps a planner\'s request on its own Allow/Deny card, answered yes or no', () => {
     const { getByText, queryByText, onAnswerApproval, onResolveApproval } = draw(card({
       kind: 'shell_command', subject: 'npm test', scope: 'npm test', allowForTask: undefined,

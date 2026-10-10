@@ -36,9 +36,11 @@ export function describeApproval(event: ApprovalEvent): string {
     ? `The planner wants to run a command:\n    ${subject}`
     : event.kind === 'url_fetch'
       ? `The planner wants to fetch a URL:\n    ${subject}`
-      : event.kind === 'mcp_tool'
-        ? `The planner wants to use an MCP tool:\n    ${subject}`
-        : `The planner wants to read a path outside the workspace:\n    ${subject}`;
+      : event.kind === 'web_search'
+        ? `The planner wants to search the web:\n    ${subject}`
+        : event.kind === 'mcp_tool'
+          ? `The planner wants to use an MCP tool:\n    ${subject}`
+          : `The planner wants to read a path outside the workspace:\n    ${subject}`;
 
   // `detail` disambiguates the `external_path` case in particular: an
   // auto-tier command like `cat` touching an outside path reads identically
@@ -62,6 +64,10 @@ export function describeApprovalDecision(event: ApprovalEvent & { granted?: unkn
   const label = source === 'pre-approved' ? 'pre-approved'
     : source === 'remembered' ? 'remembered'
     : source === 'mode' ? 'policy'
+    : source === 'excluded' ? 'excluded'
+    : source === 'guard' ? 'blocked address'
+    : source === 'secret' ? 'secret check'
+    : source === 'budget' ? 'web-read budget'
     : 'no approval channel';
   return `${event.granted ? 'Auto-approved' : 'Auto-denied'} (${label}): ${subject}`;
 }

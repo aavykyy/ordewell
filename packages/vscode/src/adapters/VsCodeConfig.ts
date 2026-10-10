@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { AiProvider, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, parseMaxParallel, normalizeGeminiModel, resolveProvider, ALL_PROVIDERS, getProviderMeta, configuredProviders, parseApprovalModeSetting } from '@ordewell/core';
+import { AiProvider, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, parseMaxParallel, normalizeGeminiModel, resolveProvider, ALL_PROVIDERS, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET } from '@ordewell/core';
 import type { ProviderModelLists } from '@ordewell/core';
 import { SecretStore, type ApiProvider, type SecretKey } from './SecretStore';
 
@@ -236,6 +236,11 @@ export class VsCodeConfig extends BaseConfig {
   get approvalDefaults() {
     if (process.env.ORDEWELL_APPROVAL_DEFAULTS !== undefined) return super.approvalDefaults;
     return this.config.get<boolean>('plannerAllowlistDefaults', true);
+  }
+  get webReadBudget() {
+    if (process.env.ORDEWELL_WEB_READ_BUDGET !== undefined) return super.webReadBudget;
+    const configured = this.config.get<number>('plannerWebReadBudget', DEFAULT_WEB_READ_BUDGET);
+    return Number.isInteger(configured) && configured >= 0 ? configured : DEFAULT_WEB_READ_BUDGET;
   }
   get worktreeIsolation() {
     if (process.env.ORDEWELL_WORKTREE_ISOLATION !== undefined) return super.worktreeIsolation;
