@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo, LookupFunction } from 'node:net';
 import { brotliCompressSync, gzipSync } from 'node:zlib';
@@ -6,6 +8,8 @@ import { HttpWebFetcher, pinnedTransport, type HttpWebFetcherOptions } from '../
 import { WebReadPolicy } from '../webReadPolicy';
 import { DuckDuckGoSearchProvider } from '../DuckDuckGoSearchProvider';
 import type { IApproval } from '../../interfaces/IApproval';
+
+const lite = (name: string) => readFileSync(join(__dirname, 'fixtures', 'duckduckgo', name), 'utf8');
 
 const allow: IApproval = { request: async () => true };
 const deny: IApproval = { request: async () => false };
@@ -130,22 +134,17 @@ describe('HttpWebFetcher.fetch', () => {
 });
 
 describe('HttpWebFetcher.search', () => {
-  const RESULTS = `
-    <html><body>
-      <a class="result__a" href="https://hono.dev/docs/routing">Hono Routing</a>
-      <a class="result__snippet">Define routes with app.get.</a>
-      <a class="result__a" href="https://github.com/honojs/hono">honojs/hono</a>
-    </body></html>`;
+  const RESULTS = lite('lite-results-typescript.html');
 
-  it('returns numbered titles with their URLs', async () => {
+  it('returns numbered titles with the real URLs, not DuckDuckGo redirects', async () => {
     const fetcher = makeFetcher({ approval: allow, fetchImpl: async () => response(RESULTS) });
 
-    const result = await fetcher.search('hono routing');
+    const result = await fetcher.search('typescript');
 
     expect(result.success).toBe(true);
-    expect(result.output).toContain('Hono Routing');
-    expect(result.output).toContain('https://hono.dev/docs/routing');
-    expect(result.output).toContain('honojs/hono');
+    expect(result.output).toContain('1. TypeScript: JavaScript With Syntax For Types.\n   https://www.typescriptlang.org/\n');
+    expect(result.output).toContain('https://github.com/microsoft/TypeScript');
+    expect(result.output).not.toContain('duckduckgo.com/l/');
   });
 
   it('tells the planner what to do when the search returns nothing usable', async () => {
@@ -217,7 +216,7 @@ describe('HttpWebFetcher.search back-off', () => {
 
   it('starts a cooldown on a challenge page rather than reporting a parse miss', async () => {
     const provider = new DuckDuckGoSearchProvider(() => 1_000);
-    const fetchImpl = vi.fn().mockResolvedValue(response('Please complete the CAPTCHA to continue'));
+    const fetchImpl = vi.fn().mockResolvedValue(response(lite('lite-challenge-202.html'), { status: 202 }));
     const fetcher = makeFetcher({ approval: allow, fetchImpl, searchProvider: provider });
 
     const result = await fetcher.search('hono');
@@ -227,10 +226,25 @@ describe('HttpWebFetcher.search back-off', () => {
     expect(result.output).toMatch(/temporarily unavailable/i);
   });
 
+  it('answers a cooling-down search before the policy, so nobody is asked and no budget is spent', async () => {
+    const provider = new DuckDuckGoSearchProvider(() => 1_000);
+    const decide = vi.fn().mockResolvedValue({ allowed: true });
+    const fetchImpl = vi.fn().mockResolvedValue(response('', { status: 429 }));
+    const fetcher = new HttpWebFetcher({ policy: { decide }, fetchImpl, searchProvider: provider });
+    await fetcher.search('hono');
+    expect(decide).toHaveBeenCalledTimes(1);
+
+    const result = await fetcher.search('serde');
+
+    expect(result.output).toMatch(/temporarily unavailable/i);
+    expect(decide).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('resets the cooldown after a successful search', async () => {
     let now = 1_000;
     const provider = new DuckDuckGoSearchProvider(() => now);
-    const results = '<a class="result__a" href="https://hono.dev/docs/routing">Hono Routing</a>';
+    const results = `<a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fhono.dev%2Fdocs%2Frouting" class='result-link'>Hono Routing</a>`;
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(response('nope', { status: 429 }))
       .mockResolvedValue(response(results));
