@@ -1,11 +1,12 @@
 import { isIP } from 'node:net';
-import { dialectFor, lex, type Segment } from './shellLexer';
+import { dialectFor, lex, lexAll, type Segment } from './shellLexer';
 import { unwrap } from './commandRunners';
 import type { ShellDialect } from './researchShell';
 import { blockedAddressReason } from './egressGuard';
 
 interface WebCommand {
   urls: URL[];
+  urlTexts?: string[];
   perInvocation?: boolean;
   reason?: string;
 }
@@ -18,13 +19,16 @@ const CURL_SENSITIVE = new Set(['d', 'F', 'u', 'H', 'b', 'e', 'X', '--data', '--
 const WGET_SWITCHES = new Set(['q', 'S', 'v', '--quiet', '--server-response', '--verbose', '--no-verbose', '--spider', '--no-config', '--no-hsts', '--no-proxy', '--no-netrc', '--version']);
 const WGET_VALUES = new Set(['O', 'U', 'T', '--output-document', '--user-agent', '--timeout', '--connect-timeout', '--read-timeout', '--max-redirect']);
 
-export function webCommand(seg: Segment): WebCommand | undefined {
-  const binary = seg.binary.toLowerCase();
+export function webCommand(seg: Segment, trustedResolves?: ReadonlySet<string>): WebCommand | undefined {
+  const binary = seg.binary.toLowerCase().replace(/\.exe$/, '');
+  if (binary === 'wget2') return { urls: [], reason: 'wget2 can write persistent databases. Use the Ordewell fetch tool instead.' };
   if (binary !== 'curl' && binary !== 'wget') return undefined;
   const urls: URL[] = [];
+  const urlTexts: string[] = [];
   const switches = binary === 'curl' ? CURL_SWITCHES : WGET_SWITCHES;
   const values = binary === 'curl' ? CURL_VALUES : WGET_VALUES;
   let stdout = false;
+  let spider = false;
   let perInvocation = false;
   let redirects = binary === 'wget';
   let getQuery = false;
@@ -47,6 +51,7 @@ export function webCommand(seg: Segment): WebCommand | undefined {
       }
       if (url.username || url.password) perInvocation = true;
       urls.push(url);
+      urlTexts.push(arg);
       continue;
     }
     const long = arg.startsWith('--');
@@ -60,15 +65,18 @@ export function webCommand(seg: Segment): WebCommand | undefined {
       }
       if (switches.has(flag)) {
         if (long && arg.includes('=')) return refused(arg);
+        if (flag === '--spider') spider = true;
         if (flag === 'L' || flag === '--location') redirects = true;
         if (flag === 'G' || flag === '--get') getQuery = true;
         continue;
       }
       const sensitive = binary === 'curl' && CURL_SENSITIVE.has(flag);
-      if (!values.has(flag) && !sensitive) return refused(arg);
+      const trustedResolve = binary === 'curl' && flag === '--resolve' && trustedResolves !== undefined;
+      if (!values.has(flag) && !sensitive && !trustedResolve) return refused(arg);
       const attached = long ? (arg.includes('=') ? arg.slice(flag.length + 1) : undefined) : flags.slice(j + 1).join('') || undefined;
       const value = attached ?? seg.args[++i];
       if (value === undefined) return refused(arg);
+      if (trustedResolve && !trustedResolves?.has(value)) return refused(arg);
       if (flag === '--noproxy' && value !== '*') return refused(arg);
       if (binary === 'wget' && flag === '--max-redirect') redirects = value !== '0';
       if (sensitive) {
@@ -85,8 +93,8 @@ export function webCommand(seg: Segment): WebCommand | undefined {
     }
   }
   if (urls.length === 0) return refused('without a literal HTTP(S) URL');
-  if (binary === 'wget' && !stdout && !seg.args.includes('--spider')) return refused('without stdout or --spider');
-  return { urls, ...(perInvocation || redirects || (queryData && !getQuery) ? { perInvocation: true } : {}) };
+  if (binary === 'wget' && !stdout && !spider) return refused('without stdout or --spider');
+  return { urls, urlTexts, ...(perInvocation || redirects || (queryData && !getQuery) ? { perInvocation: true } : {}) };
 }
 
 export function disableWebCommandStartup(command: string, dialect?: ShellDialect): string {
@@ -94,7 +102,7 @@ export function disableWebCommandStartup(command: string, dialect?: ShellDialect
   const edits: Array<{ end: number; flags: string }> = [];
   for (const original of lex(command, [], syntax).segments) {
     const { seg } = unwrap(original, syntax);
-    const binary = seg.binary.toLowerCase();
+    const binary = seg.binary.toLowerCase().replace(/\.exe$/, '');
     if (binary !== 'curl' && binary !== 'wget') continue;
     const ends = original.wordEnds ?? [];
     const end = ends[ends.length - seg.args.length - 1];
@@ -105,4 +113,51 @@ export function disableWebCommandStartup(command: string, dialect?: ShellDialect
     command = command.slice(0, end) + flags + command.slice(end);
   }
   return command;
+}
+
+export function pinWebCommandAddresses(command: string, addresses: ReadonlyMap<string, string>, dialect?: ShellDialect): { command: string; resolves: ReadonlySet<string> } {
+  const syntax = dialectFor(dialect);
+  const resolves = new Set<string>();
+  const edits: Array<{ end: number; flags: string }> = [];
+  for (const original of lex(command, [], syntax).segments) {
+    const { seg } = unwrap(original, syntax);
+    if (seg.binary.toLowerCase().replace(/\.exe$/, '') !== 'curl') continue;
+    const web = webCommand(seg);
+    if (!web || web.reason) continue;
+    const flags = [...new Set(web.urls.map((url) => url.origin))].flatMap((origin) => {
+      const url = new URL(origin);
+      if (isIP(url.hostname.replace(/^\[|\]$/g, ''))) return [];
+      const address = addresses.get(origin);
+      if (!address) throw new Error('Missing vetted curl address');
+      const value = `${url.hostname}:${url.port || (url.protocol === 'https:' ? '443' : '80')}:${isIP(address) === 6 ? `[${address}]` : address}`;
+      resolves.add(value);
+      return [` --resolve ${syntax.escape === '^' ? `"${value}"` : `'${value}'`}`];
+    }).join('');
+    const ends = original.wordEnds ?? [];
+    const end = ends[ends.length - seg.args.length - (seg.args[0] === '-q' ? 0 : 1)];
+    if (end !== undefined && flags) edits.push({ end, flags });
+  }
+  for (const { end, flags } of edits.sort((a, b) => b.end - a.end)) {
+    command = command.slice(0, end) + flags + command.slice(end);
+  }
+  return { command, resolves };
+}
+
+export function wgetVersionCommands(command: string, dialect?: ShellDialect): Array<string | undefined> {
+  const syntax = dialectFor(dialect);
+  const { segments } = lexAll(command, syntax, !!process.env.CDPATH);
+  const quote = (word: string) => syntax.escape === '^' ? `"${word}"` : `'${word.replace(/'/g, "'\\''")}'`;
+  return [...new Set(segments.flatMap((original) => {
+    const { seg } = unwrap(original, syntax);
+    if (seg.binary.toLowerCase().replace(/\.exe$/, '') !== 'wget') return [];
+    const executable = seg.binaryPath ?? seg.binary;
+    if (!/^(\/|[A-Za-z]:[\\/])/.test(executable)
+      && original.cwd === undefined && segments.some((s) => /^(cd|pushd|popd)$/i.test(s.binary))) return [undefined];
+    const navigation = (original.cwd ?? []).map((target) => `cd ${quote(target)} && `).join('');
+    // Wget2 creates its data directory even for --version, before parsing flags.
+    const env = syntax.escape === '^'
+      ? 'set "XDG_DATA_HOME=/dev/null" && set "XDG_CONFIG_HOME=/dev/null" && set "LOCALAPPDATA=NUL" && '
+      : 'XDG_DATA_HOME=/dev/null XDG_CONFIG_HOME=/dev/null LOCALAPPDATA=NUL ';
+    return [`${navigation}${env}${quote(executable)} --no-config --version`];
+  }))];
 }

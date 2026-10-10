@@ -507,6 +507,7 @@ export function lex(command: string, nested: string[], dialect: Dialect): Lexed 
     // `quote` is '' or '"' here — the single-quote run returned above.
     if (c === dialect.escape && (quote === '' || dialect.escapeInQuotes)) {
       const next = command[i + 1];
+      if (dialect.escape === '\\' && next === '\n') { i += 2; continue; }
       if (redirectTarget === 'heredoc') hereDocQuoted = true;
       if (next !== undefined && !(quote === '' && nameDelimiter(next))) { current += next; started = true; }
       i += 2; continue;

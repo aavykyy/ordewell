@@ -289,9 +289,11 @@ export function createSession(deps: SessionDeps): Session {
     },
   });
   deps.fsAdapter.setApproval?.(approvalPolicy);
+  const outboundSecrets = () => [...configSecrets(deps.config), ...mcpServer.heldTokens()];
+  deps.fsAdapter.setOutboundSecrets?.(outboundSecrets);
   const webReads = new WebReadPolicy({
     approval: approvalPolicy,
-    secrets: () => [...configSecrets(deps.config), ...mcpServer.heldTokens()],
+    secrets: outboundSecrets,
     budget: () => deps.config.webReadBudget,
     turn: () => conversation?.currentTurnId,
   });
