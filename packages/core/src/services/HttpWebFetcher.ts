@@ -8,23 +8,20 @@ import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { SearchHit, SearchPage } from '../interfaces/ISearchProvider';
 import type { ISearchProvider } from '../interfaces/ISearchProvider';
 import type { ToolOutcome } from '../interfaces/IFileSystem';
-import { guardedLookup, resolveAll, vetEgress, type ResolveAll } from './egressGuard';
+import { guardedLookup, resolveAll, type ResolveAll } from './egressGuard';
 import { DuckDuckGoSearchProvider } from './DuckDuckGoSearchProvider';
 import { WebResponseCache } from './WebResponseCache';
 import type { WebRead, WebReadDecision, WebReadPolicy } from './webReadPolicy';
 
 /**
  * The concrete `fetch`/`web_search` implementation, in core so the web server
- * and the VS Code extension share one behavior. Until now `IWebFetcher` had no
- * implementation anywhere, which meant the `fetch` tool was declared to every
- * planner and always answered "not available in this environment" — a tool the
- * model could see, choose, and never use.
+ * and the VS Code extension share one behavior.
  *
  * Whether a read happens is the web-read policy's to decide (ADR-0027); this
- * carries it. Redirect hops are vetted here, since the policy saw only the
- * first URL. Search goes through a pluggable provider behind the same
- * transport; results and pages are cached in an injected, process-wide cache
- * that saves the network but never the decision.
+ * carries it. A redirect to another origin is put to the policy again here,
+ * since it saw only the first URL. Search goes through a pluggable provider
+ * behind the same transport; results and pages are cached in an injected,
+ * process-wide cache that saves the network but never the decision.
  */
 
 /** The slice of a `fetch` Response the fetcher reads; the platform `fetch` satisfies it. */
@@ -114,15 +111,21 @@ function sanitizeError(err: unknown): string {
   return msg.replace(/https?:\/\/\S+/g, '<url>');
 }
 
-/** A complete, non-private GET response; a response under the byte cap or marked private is not cacheable. */
+/** `origin` is where the body came from, after any redirect; `cacheFor` is from {@link sharedLifetime}. */
 type FetchedPage =
-  | { ok: true; status: number; body: string; isHtml: boolean; truncated: boolean; cacheable: boolean }
+  | { ok: true; status: number; origin: string; body: string; isHtml: boolean; truncated: boolean; cacheFor: number }
   | { ok: false; status?: number; error: string };
 
-/** `no-store`/`private` or a `Set-Cookie` marks a response as session-specific, so it never enters a shared cache. */
-function isPrivateResponse(cacheControl: string, setCookie: string | null): boolean {
-  if (setCookie) return true;
-  return /(?:^|,)\s*(?:no-store|private)\b/i.test(cacheControl);
+/**
+ * How long, in ms, a response may sit in the shared cache; 0 is never and
+ * `Infinity` leaves it to the cache's own TTL. `no-store`/`private` or a
+ * `Set-Cookie` marks a response session-specific, and `no-cache` asks for a
+ * revalidation this cache cannot make.
+ */
+function sharedLifetime(cacheControl: string, setCookie: string | null): number {
+  if (setCookie || /(?:^|,)\s*(?:no-store|private|no-cache)\b/i.test(cacheControl)) return 0;
+  const ages = [...cacheControl.matchAll(/(?:^|,)\s*(?:s-)?max-age\s*=\s*"?(\d+)/gi)].map((m) => Number(m[1]) * 1000);
+  return ages.length ? Math.min(...ages) : Infinity;
 }
 
 type WebReadDecider = Pick<WebReadPolicy, 'decide'> & Partial<Pick<WebReadPolicy, 'searchesUnasked'>>;
@@ -146,10 +149,6 @@ export class HttpWebFetcher implements IWebFetcher {
     this.cache = opts.cache ?? new WebResponseCache();
     this.searchProvider = opts.searchProvider ?? new DuckDuckGoSearchProvider();
     this.prompting = opts.prompting ?? true;
-  }
-
-  private async isBlockedHost(host: string, port: string): Promise<boolean> {
-    return !(await vetEgress(host, port, this.resolveHost)).ok;
   }
 
   decide(read: WebRead): Promise<WebReadDecision> {
@@ -223,7 +222,11 @@ export class HttpWebFetcher implements IWebFetcher {
 
     const page = await this.request(url);
     if (!page.ok) return { success: false, output: `${label} failed: ${page.error}`, truncated: false };
-    if (page.cacheable && !page.truncated) this.cache.setFetch(url, { body: page.body, isHtml: page.isHtml });
+    // Keyed by the URL asked for, so a body another origin answered would reach
+    // later sessions that were never decided for that origin.
+    if (page.cacheFor > 0 && !page.truncated && page.origin === new URL(url).origin) {
+      this.cache.setFetch(url, { body: page.body, isHtml: page.isHtml }, page.cacheFor);
+    }
     return this.render(label, page.body, page.isHtml, page.truncated);
   }
 
@@ -248,50 +251,61 @@ export class HttpWebFetcher implements IWebFetcher {
   }
 
   private async request(url: string): Promise<FetchedPage> {
-    let current = url;
+    let current = new URL(url);
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-      try {
-        const res = await this.fetchImpl(current, {
-          signal: controller.signal,
-          headers: { 'user-agent': USER_AGENT, accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8' },
-          redirect: 'manual',
-        });
-        if (res.status >= 300 && res.status < 400) {
-          const location = res.headers.get('location');
-          if (!location) return { ok: false, status: res.status, error: `redirect (${res.status}) with no Location` };
-          const next = new URL(location, current).href;
-          // Re-check the destination the same way `confirm` checked the origin:
-          // a redirect to a private IP, or to a non-http(s) scheme like
-          // `file:`, would otherwise bypass both guards `confirm` applies to
-          // the initial URL.
-          const nextParsed = new URL(next);
-          if (nextParsed.protocol !== 'https:' && nextParsed.protocol !== 'http:') {
-            return { ok: false, status: res.status, error: 'redirect to a non-HTTP scheme' };
-          }
-          if (await this.isBlockedHost(nextParsed.hostname, nextParsed.port)) {
-            return { ok: false, status: res.status, error: 'redirect to a blocked host' };
-          }
-          current = next;
-          continue;
-        }
-        if (!res.ok) return { ok: false, status: res.status, error: `HTTP ${res.status}` };
-
-        const contentType = res.headers.get('content-type') ?? '';
-        const cacheable = !isPrivateResponse(res.headers.get('cache-control') ?? '', res.headers.get('set-cookie'));
-        const { body, truncated } = await readBounded(res, MAX_BODY_BYTES);
-        return { ok: true, status: res.status, body, isHtml: /html|xml/i.test(contentType), truncated, cacheable };
-      } catch (err) {
-        return { ok: false, error: sanitizeError(err) };
-      } finally {
-        clearTimeout(timer);
-        // Releases the socket of a redirect or error response whose body was
-        // never read; a no-op once the body has been consumed.
-        controller.abort();
-      }
+      const result = await this.hop(current);
+      if (!('redirect' in result)) return result;
+      // Decided outside the hop's timer: in Guarded it may wait on a person.
+      const refused = await this.refuseRedirect(current, result.redirect);
+      if (refused) return { ok: false, status: result.status, error: refused };
+      current = result.redirect;
     }
     return { ok: false, error: `too many redirects (>${MAX_REDIRECTS})` };
+  }
+
+  /**
+   * Why a redirect must not be followed, or `undefined` if it may. The policy
+   * decided only the first URL, so a hop to another origin is a new read with
+   * the same decision; otherwise a redirect would carry the fetch past an
+   * exclusion, a Guarded grant or the budget.
+   */
+  private async refuseRedirect(from: URL, to: URL): Promise<string | undefined> {
+    if (to.protocol !== 'https:' && to.protocol !== 'http:') return 'redirect to a non-HTTP scheme';
+    if (from.protocol === 'https:' && to.protocol === 'http:') return 'redirect from https to plain http';
+    if (to.origin === from.origin) return undefined;
+    const decision = await this.policy.decide({ kind: 'fetch', url: to.href }, this.decideOptions);
+    // The new URL is left out: the policy's reason already names what it may.
+    return decision.allowed ? undefined : `the page redirected to another origin, which was refused. ${decision.reason}`;
+  }
+
+  private async hop(url: URL): Promise<FetchedPage | { redirect: URL; status: number }> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const res = await this.fetchImpl(url.href, {
+        signal: controller.signal,
+        headers: { 'user-agent': USER_AGENT, accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8' },
+        redirect: 'manual',
+      });
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get('location');
+        if (!location) return { ok: false, status: res.status, error: `redirect (${res.status}) with no Location` };
+        return { redirect: new URL(location, url), status: res.status };
+      }
+      if (!res.ok) return { ok: false, status: res.status, error: `HTTP ${res.status}` };
+
+      const contentType = res.headers.get('content-type') ?? '';
+      const cacheFor = sharedLifetime(res.headers.get('cache-control') ?? '', res.headers.get('set-cookie'));
+      const { body, truncated } = await readBounded(res, MAX_BODY_BYTES);
+      return { ok: true, status: res.status, origin: url.origin, body, isHtml: /html|xml/i.test(contentType), truncated, cacheFor };
+    } catch (err) {
+      return { ok: false, error: sanitizeError(err) };
+    } finally {
+      clearTimeout(timer);
+      // Releases the socket of a redirect or error response whose body was
+      // never read; a no-op once the body has been consumed.
+      controller.abort();
+    }
   }
 }
 

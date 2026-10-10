@@ -10,13 +10,18 @@ import type { SearchHit } from '../interfaces/ISearchProvider';
  * live read can.
  *
  * Only complete, non-private responses are stored: nothing denied or errored
- * ever reaches the cache, a response under the byte cap is not (its tail is
- * missing), and a `no-store`/`private` `Cache-Control` or a `Set-Cookie`
- * header keeps a session-specific body out of it.
+ * ever reaches the cache, a response cut at the byte cap is not (its tail is
+ * missing), nor is one another origin answered through a redirect (it is keyed
+ * by the URL asked for). A `no-store`/`private` `Cache-Control` or a
+ * `Set-Cookie` header keeps a session-specific body out, `no-cache` keeps out
+ * one that would need revalidating, and a shorter `max-age` shortens the TTL.
+ * Entries are bounded by count and by total bytes.
  */
 
 const DEFAULT_TTL_MS = 5 * 60_000;
 const DEFAULT_MAX_ENTRIES = 100;
+/** A count alone would let every entry be a byte-capped 2 MB page. */
+const DEFAULT_MAX_BYTES = 20_000_000;
 
 export interface CachedPage {
   body: string;
@@ -26,18 +31,22 @@ export interface CachedPage {
 export interface WebResponseCacheOptions {
   ttlMs?: number;
   maxEntries?: number;
+  maxBytes?: number;
   now?: () => number;
 }
 
 export class WebResponseCache {
-  private readonly entries = new Map<string, { value: unknown; expiresAt: number }>();
+  private readonly entries = new Map<string, { value: unknown; bytes: number; expiresAt: number }>();
   private readonly ttlMs: number;
   private readonly maxEntries: number;
+  private readonly maxBytes: number;
   private readonly now: () => number;
+  private bytes = 0;
 
   constructor(opts: WebResponseCacheOptions = {}) {
     this.ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
     this.maxEntries = opts.maxEntries ?? DEFAULT_MAX_ENTRIES;
+    this.maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
     this.now = opts.now ?? Date.now;
   }
 
@@ -45,8 +54,9 @@ export class WebResponseCache {
     return this.get<CachedPage>(`get\u0000${url}`);
   }
 
-  setFetch(url: string, page: CachedPage): void {
-    this.set(`get\u0000${url}`, page);
+  /** `maxAgeMs` is the response's own freshness; it shortens the TTL, never extends it. */
+  setFetch(url: string, page: CachedPage, maxAgeMs = Infinity): void {
+    this.set(`get\u0000${url}`, page, Buffer.byteLength(page.body), maxAgeMs);
   }
 
   getSearch(providerAndQuery: string): SearchHit[] | undefined {
@@ -54,14 +64,15 @@ export class WebResponseCache {
   }
 
   setSearch(providerAndQuery: string, hits: SearchHit[]): void {
-    this.set(`search\u0000${providerAndQuery}`, hits);
+    const bytes = hits.reduce((sum, h) => sum + Buffer.byteLength(h.title) + Buffer.byteLength(h.url) + Buffer.byteLength(h.snippet ?? ''), 0);
+    this.set(`search\u0000${providerAndQuery}`, hits, bytes, Infinity);
   }
 
   private get<T>(key: string): T | undefined {
     const entry = this.entries.get(key);
     if (!entry) return undefined;
     if (entry.expiresAt <= this.now()) {
-      this.entries.delete(key);
+      this.delete(key);
       return undefined;
     }
     // Re-insert so the least-recently-used entry is the one evicted.
@@ -70,14 +81,23 @@ export class WebResponseCache {
     return entry.value as T;
   }
 
-  private set(key: string, value: unknown): void {
-    this.entries.delete(key);
-    this.entries.set(key, { value, expiresAt: this.now() + this.ttlMs });
-    while (this.entries.size > this.maxEntries) {
+  private set(key: string, value: unknown, bytes: number, maxAgeMs: number): void {
+    this.delete(key);
+    if (bytes > this.maxBytes) return;
+    this.entries.set(key, { value, bytes, expiresAt: this.now() + Math.min(this.ttlMs, maxAgeMs) });
+    this.bytes += bytes;
+    while (this.entries.size > this.maxEntries || this.bytes > this.maxBytes) {
       const oldest = this.entries.keys().next().value;
       if (oldest === undefined) break;
-      this.entries.delete(oldest);
+      this.delete(oldest);
     }
+  }
+
+  private delete(key: string): void {
+    const entry = this.entries.get(key);
+    if (!entry) return;
+    this.entries.delete(key);
+    this.bytes -= entry.bytes;
   }
 }
 

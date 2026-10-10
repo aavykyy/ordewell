@@ -120,14 +120,21 @@ function stripBrackets(host: string): string {
   return host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
 }
 
-async function vetHost(host: string, resolve: ResolveAll): Promise<EgressCheck> {
+function vetHostUnresolved(host: string): EgressCheck | undefined {
   const bare = stripBrackets(host);
   if (isIP(bare)) {
     const reason = blockedAddressReason(bare);
     return reason ? { ok: false, reason } : { ok: true, addresses: [bare] };
   }
   if (LOCAL_NAMES.has(bare.toLowerCase())) return { ok: false, reason: `local host name ${bare}` };
+  return undefined;
+}
 
+async function vetHost(host: string, resolve: ResolveAll): Promise<EgressCheck> {
+  const settled = vetHostUnresolved(host);
+  if (settled) return settled;
+
+  const bare = stripBrackets(host);
   let addresses: string[];
   try {
     addresses = await resolve(bare);
@@ -149,8 +156,18 @@ async function vetHost(host: string, resolve: ResolveAll): Promise<EgressCheck> 
  * the connection could land on either.
  */
 export async function vetEgress(host: string, port: string, resolve: ResolveAll = resolveAll): Promise<EgressCheck> {
+  return vetEgressUnresolved(host, port) ?? vetHost(host, resolve);
+}
+
+/**
+ * The part of {@link vetEgress} that needs no DNS: the port, an IP literal and
+ * a local name. `undefined` means the host is a name still to be resolved. A
+ * lookup is itself a request that leaves the machine, so a caller that may yet
+ * refuse for another reason checks this first and resolves last.
+ */
+export function vetEgressUnresolved(host: string, port: string): EgressCheck | undefined {
   if (!ALLOWED_PORTS.has(port)) return { ok: false, reason: `port ${port} is not 80 or 443` };
-  return vetHost(host, resolve);
+  return vetHostUnresolved(host);
 }
 
 /**
