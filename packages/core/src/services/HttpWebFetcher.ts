@@ -184,12 +184,15 @@ export class HttpWebFetcher implements IWebFetcher {
 
   async search(query: string): Promise<ToolOutcome> {
     const provider = this.searchProvider;
+
+    // Before the policy: a search that would only answer "temporarily
+    // unavailable" must not prompt a Guarded user or spend a budgeted read. No
+    // request goes out, and the planner is pointed at `fetch` for URLs it
+    // already knows.
+    if (provider.coolingDown()) return { success: false, output: SEARCH_COOLDOWN_OUTPUT, truncated: false };
+
     const decision = await this.policy.decide({ kind: 'search', query, provider: provider.id }, this.decideOptions);
     if (!decision.allowed) return { success: false, output: decision.reason, truncated: false };
-
-    // The cooldown short-circuits the search entirely: no request goes out, and
-    // the planner is pointed at `fetch` for URLs it already knows.
-    if (provider.coolingDown()) return { success: false, output: SEARCH_COOLDOWN_OUTPUT, truncated: false };
 
     // The cache saves the network, never the decision: the policy ran first, so
     // a hit is refused by an exclusion, the secret check, a Guarded approval or
