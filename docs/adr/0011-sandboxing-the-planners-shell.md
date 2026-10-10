@@ -120,3 +120,10 @@ ADR-0008 stay as they are.
   ADR-0008 gives for keeping a real shell: the planner's research needs the
   project's own tooling (`git log`, `npm ls`, `cargo metadata`), which no fixed
   tool set reproduces.
+
+## History
+
+- 2026-10-01 — accepted.
+- 2026-10-10 — `curl`/`wget` approved per origin and refused in Full; an
+  egress filtering proxy through this sandbox's network namespace planned as
+  phase 2 ([ADR-0027](0027-web-reads-in-the-planner-envelope.md)).

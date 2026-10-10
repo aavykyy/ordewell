@@ -387,3 +387,4 @@ model's refusal to write were never security evidence.
 - 2026-10-07 — here-document skipping fails closed outside a provable `<<` (comment, `${…}`/`$[…]`, `(( ))`); cmd.exe command words holding `/` or `=` refuse and never scope to a bare drive, `call` unwrapped and `start` refused; interpreter families match a version or suffix.
 - 2026-10-09 — Claude harness planners deny shell tools and native plan-mode transitions; the OpenCode shell enforcement gap is recorded.
 - 2026-10-10 — harness planners research inside this envelope through `run_command`, every planner's own requests reach `IApproval`, and pre-approved entries become allowlist rules with a mode tied to autonomy (ADR-0026).
+- 2026-10-10 — web reads decided by one policy for every planner, a hardened SSRF guard with pinned connections, `fetch`/`web_search` for research subagents without prompting, and `curl`/`wget` approved per origin ([ADR-0027](0027-web-reads-in-the-planner-envelope.md)).
