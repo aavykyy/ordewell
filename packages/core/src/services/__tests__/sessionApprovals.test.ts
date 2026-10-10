@@ -5,6 +5,7 @@ import { fakeConfig } from '../../testing';
 import type { SessionMessage } from '../SessionMessage';
 import type { ConversationRequest } from '../AiService';
 import type { GrepOptions, ReadFileOpts, ToolOutcome } from '../../interfaces/IFileSystem';
+import type { WebRead, WebReadDecision } from '../webReadPolicy';
 
 /**
  * The approval round-trip as every surface sees it: research asks, the Session
@@ -462,5 +463,59 @@ describe('Session approval flow', () => {
       expect(approvalDecisions(messages)).toHaveLength(0);
       expect(approvalRequests(messages)).toHaveLength(0);
     });
+  });
+});
+
+// The session's fetcher is the one every planner's web reads are decided by
+// (ADR-0027); a turn hands it to the planner, so read it from there.
+describe('Session web reads', () => {
+  const PROVIDER_KEY = 'held-provider-Zq81vXk2mPw9Lr4T';
+  const PUBLIC_URL = 'https://93.184.215.14/docs';
+
+  async function decideInTurn(configOverrides: Parameters<typeof fakeConfig>[0], reads: WebRead[]) {
+    const messages: SessionMessage[] = [];
+    const decisions: WebReadDecision[] = [];
+    const session = makeSession({
+      fsAdapter: new ProbeFileSystem(),
+      config: fakeConfig({ getProviderApiKey: () => PROVIDER_KEY, ...configOverrides }),
+      broadcast: (msg) => { messages.push(msg); },
+      aiService: {
+        startConversation: vi.fn(async (req: ConversationRequest) => {
+          for (const read of reads) decisions.push(await req.fetcher!.decide(read));
+          return { kind: 'message' as const, text: 'Read it.', researchLog: [] };
+        }),
+        hasActiveConversation: () => true,
+      },
+    });
+    await session.startPlanning('upgrade the library', ['claude-code']);
+    return { decisions, messages };
+  }
+
+  it('lets a Full planner read under auto without asking, and records it', async () => {
+    const { decisions, messages } = await decideInTurn({ approvalMode: 'auto', autonomousMode: true }, [{ kind: 'fetch', url: PUBLIC_URL }]);
+
+    expect(decisions).toEqual([{ allowed: true }]);
+    expect(approvalRequests(messages)).toHaveLength(0);
+    expect(approvalDecisions(messages)).toEqual([expect.objectContaining({ kind: 'url_fetch', granted: true, source: 'mode' })]);
+  });
+
+  it('refuses a URL carrying a provider key the session holds, and broadcasts none of it', async () => {
+    const { decisions, messages } = await decideInTurn(
+      { approvalMode: 'auto', autonomousMode: true },
+      [{ kind: 'fetch', url: `${PUBLIC_URL}?k=${encodeURIComponent(PROVIDER_KEY)}` }],
+    );
+
+    expect(decisions[0].allowed).toBe(false);
+    expect(approvalDecisions(messages)).toEqual([expect.objectContaining({ granted: false, source: 'secret' })]);
+    expect(JSON.stringify(messages)).not.toContain(PROVIDER_KEY);
+  });
+
+  it('holds a turn to the configured web-read budget', async () => {
+    const { decisions } = await decideInTurn(
+      { approvalMode: 'auto', autonomousMode: true, webReadBudget: 1 },
+      [{ kind: 'fetch', url: PUBLIC_URL }, { kind: 'search', query: 'tokio changelog', provider: 'duckduckgo' }],
+    );
+
+    expect(decisions.map((d) => d.allowed)).toEqual([true, false]);
   });
 });

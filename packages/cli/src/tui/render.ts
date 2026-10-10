@@ -394,9 +394,11 @@ function renderOverlay(state: TuiState, rows: number, cols: number): string[] {
       ? 'The planner wants to run a command'
       : request.kind === 'url_fetch'
         ? 'The planner wants to fetch a URL'
-        : request.kind === 'mcp_tool'
-          ? 'The planner wants to use an MCP tool'
-          : 'The planner wants to read a path outside the workspace';
+        : request.kind === 'web_search'
+          ? 'The planner wants to search the web'
+          : request.kind === 'mcp_tool'
+            ? 'The planner wants to use an MCP tool'
+            : 'The planner wants to read a path outside the workspace';
     const queued = state.pendingApprovals.length;
 
     return frame(

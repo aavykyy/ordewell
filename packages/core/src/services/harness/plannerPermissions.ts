@@ -5,8 +5,8 @@ import type { PlannerAsk } from './AgentAdapter';
 
 /**
  * What a harness planner's own tool requests are decided against (ADR-0026):
- * the session's approval policy, the API planner's, and the web fetcher whose
- * SSRF guard a fetch must pass first. Absent means nobody can be asked.
+ * the session's approval policy, the API planner's, and the web fetcher, whose
+ * web-read policy decides a fetch (ADR-0027). Absent means nobody can be asked.
  */
 export interface PlannerPermissionGate {
   approval: IApproval;
@@ -46,9 +46,11 @@ export async function decidePlannerPermission(
       });
       return granted ? ALLOW : deny(`Not approved: ${ask.scope}. ${OPS_HINT}`);
     }
-    case 'fetch':
+    case 'fetch': {
       if (!gate.fetcher) return deny('This fetch cannot be approved here.');
-      return (await gate.fetcher.confirm(ask.url)) ? ALLOW : deny(`Fetch denied (blocked host or not approved): ${ask.url}. ${OPS_HINT}`);
+      const decision = await gate.fetcher.decide({ kind: 'fetch', url: ask.url });
+      return decision.allowed ? ALLOW : deny(decision.reason);
+    }
     case 'path': {
       const { abs, inside } = resolveWithin(gate.workspaceRoot, ask.path);
       if (inside) return ALLOW;

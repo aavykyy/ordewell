@@ -1,5 +1,6 @@
 import { IConfig, AiProvider } from './IConfig';
 import { parseApprovalModeSetting, type ApprovalModeSetting } from '../services/ApprovalPolicy';
+import { DEFAULT_WEB_READ_BUDGET } from '../services/webReadPolicy';
 import type { ProviderModelLists } from '../services/ProviderRouting';
 import { ALL_PROVIDERS, getProviderMeta, PROVIDER_DETECT_PRIORITY } from '../services/ProviderRegistry';
 import { DEFAULT_MAX_PARALLEL, parseMaxParallel } from '../utils/maxParallel';
@@ -128,6 +129,8 @@ export abstract class BaseConfig implements IConfig {
   get conflictRepairAttempts(): number { return nonNegativeInt(process.env.ORDEWELL_CONFLICT_REPAIR_ATTEMPTS, 2); }
 
   get approvalMode(): ApprovalModeSetting { return parseApprovalModeSetting(process.env.ORDEWELL_APPROVAL_MODE); }
+
+  get webReadBudget(): number { return nonNegativeInt(process.env.ORDEWELL_WEB_READ_BUDGET, DEFAULT_WEB_READ_BUDGET); }
 
   get approvalDefaults(): boolean { return process.env.ORDEWELL_APPROVAL_DEFAULTS !== 'false' && process.env.ORDEWELL_APPROVAL_DEFAULTS !== '0'; }
 

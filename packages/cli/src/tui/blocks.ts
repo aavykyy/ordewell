@@ -296,6 +296,7 @@ function subagentLines(block: SubagentBlock, cols: number, detailAll: boolean): 
 const APPROVAL_KIND: Record<ApprovalKind, string> = {
   shell_command: 'Run a command',
   url_fetch: 'Fetch a URL',
+  web_search: 'Search the web',
   external_path: 'Read outside the workspace',
   mcp_tool: 'Use an MCP tool',
   runner_tool: 'Use a tool',
@@ -307,6 +308,10 @@ const DECIDED_BY: Record<Exclude<ApprovalSource, 'asked'>, string> = {
   remembered: 'remembered',
   mode: 'policy',
   'no-channel': 'no approval channel',
+  excluded: 'excluded',
+  guard: 'blocked address',
+  secret: 'secret check',
+  budget: 'web-read budget',
 };
 
 /** Status first, so a long subject is what the pane cuts. */

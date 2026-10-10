@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { __setConfig, __resetConfig } from '../../test/vscode.mock';
 import { VsCodeConfig } from '../VsCodeConfig';
 import { SecretStore } from '../SecretStore';
+import { DEFAULT_WEB_READ_BUDGET } from '@ordewell/core';
 
 /** Build a loaded SecretStore backed by an in-memory map. */
 async function makeStore(initial: Record<string, string> = {}) {
@@ -26,7 +27,7 @@ async function makeStore(initial: Record<string, string> = {}) {
 
 // Every ORDEWELL_* var BaseConfig or VsCodeConfig reads, so a developer shell
 // (the local .envrc exports several) cannot leak in and move a default.
-const ENV_KEYS = ['ORDEWELL_WORKTREE_ISOLATION', 'ORDEWELL_WORKTREE_SETUP', 'ORDEWELL_CONFLICT_REPAIR_ATTEMPTS', 'ORDEWELL_WORKSPACE_REPOS', 'ORDEWELL_WORKTREE_LINKS', 'ORDEWELL_MAX_PARALLEL', 'ORDEWELL_RESEARCH_ENABLED', 'ORDEWELL_RESEARCH_MAX_STEPS', 'ORDEWELL_RESEARCH_MAX_FILE_SIZE', 'ORDEWELL_PLAN_MAP_ENABLED', 'ORDEWELL_AUTONOMOUS_MODE', 'ORDEWELL_APPROVAL_MODE', 'ORDEWELL_APPROVAL_ALLOW', 'ORDEWELL_SUBAGENT_MODEL', 'ORDEWELL_PLANNER_EFFORT', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'ORCHESTRATOR_MODEL', 'AI_PROVIDER'];
+const ENV_KEYS = ['ORDEWELL_WORKTREE_ISOLATION', 'ORDEWELL_WORKTREE_SETUP', 'ORDEWELL_CONFLICT_REPAIR_ATTEMPTS', 'ORDEWELL_WORKSPACE_REPOS', 'ORDEWELL_WORKTREE_LINKS', 'ORDEWELL_MAX_PARALLEL', 'ORDEWELL_RESEARCH_ENABLED', 'ORDEWELL_RESEARCH_MAX_STEPS', 'ORDEWELL_RESEARCH_MAX_FILE_SIZE', 'ORDEWELL_PLAN_MAP_ENABLED', 'ORDEWELL_AUTONOMOUS_MODE', 'ORDEWELL_APPROVAL_MODE', 'ORDEWELL_APPROVAL_ALLOW', 'ORDEWELL_WEB_READ_BUDGET', 'ORDEWELL_SUBAGENT_MODEL', 'ORDEWELL_PLANNER_EFFORT', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'ORCHESTRATOR_MODEL', 'AI_PROVIDER'];
 let savedEnv: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -109,6 +110,21 @@ describe('VsCodeConfig.conflictRepairAttempts', () => {
     __setConfig({ conflictRepairAttempts: 3 });
     process.env.ORDEWELL_CONFLICT_REPAIR_ATTEMPTS = '0';
     expect(new VsCodeConfig(await makeStore({})).conflictRepairAttempts).toBe(0);
+  });
+});
+
+describe('VsCodeConfig.webReadBudget', () => {
+  it('reads the setting, and keeps the default for one that is not a non-negative integer', async () => {
+    __setConfig({ plannerWebReadBudget: 12 });
+    expect(new VsCodeConfig(await makeStore({})).webReadBudget).toBe(12);
+    __setConfig({ plannerWebReadBudget: -3 });
+    expect(new VsCodeConfig(await makeStore({})).webReadBudget).toBe(DEFAULT_WEB_READ_BUDGET);
+  });
+
+  it('lets ORDEWELL_WEB_READ_BUDGET override the setting', async () => {
+    __setConfig({ plannerWebReadBudget: 12 });
+    process.env.ORDEWELL_WEB_READ_BUDGET = '0';
+    expect(new VsCodeConfig(await makeStore({})).webReadBudget).toBe(0);
   });
 });
 

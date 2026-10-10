@@ -1317,6 +1317,17 @@ describe('approvals', () => {
     expect(blockRows(heard(80, decided(true, 'pre-approved')), '✓')).toEqual(['✓ Auto-approved (pre-approved) · Fetch a URL: https://example.com']);
     expect(blockRows(heard(80, decided(false, 'mode')), '⊘')).toEqual(['⊘ Auto-denied (policy) · Fetch a URL: https://example.com']);
   });
+
+  it('names the web-read guard that refused a read before anyone could be asked', () => {
+    const refused = (kind: 'url_fetch' | 'web_search', subject: string, source: 'excluded' | 'guard' | 'secret' | 'budget'): SessionMessage => ({
+      type: 'approval_decided', kind, subject, scope: subject, granted: false, source,
+    });
+
+    expect(blockRows(heard(80, refused('url_fetch', 'http://10.0.0.1/', 'guard')), '⊘')).toEqual(['⊘ Auto-denied (blocked address) · Fetch a URL: http://10.0.0.1/']);
+    expect(blockRows(heard(80, refused('url_fetch', 'https://intra.example/', 'excluded')), '⊘')).toEqual(['⊘ Auto-denied (excluded) · Fetch a URL: https://intra.example/']);
+    expect(blockRows(heard(80, refused('web_search', 'tokio', 'budget')), '⊘')).toEqual(['⊘ Auto-denied (web-read budget) · Search the web: tokio']);
+    expect(blockRows(heard(80, refused('web_search', '(withheld)', 'secret')), '⊘')).toEqual(['⊘ Auto-denied (secret check) · Search the web: (withheld)']);
+  });
 });
 
 describe('plan markers', () => {

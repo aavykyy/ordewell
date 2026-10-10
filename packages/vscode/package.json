@@ -277,7 +277,7 @@
           "type": "string",
           "enum": ["auto", "ask", "allowlist", "allow"],
           "enumDescriptions": [
-            "Follow the autonomy level: Guarded asks you, Full runs only the allowlist and asks nobody.",
+            "Follow the autonomy level: Guarded asks you, Full runs only the allowlist and web reads, and asks nobody.",
             "Ask you before any command, MCP tool, fetch or outside read the allowlist does not cover.",
             "Run only what the allowlist covers and refuse the rest without asking.",
             "Run everything except file writes, which are always refused."
@@ -291,6 +291,13 @@
           "items": { "type": "string" },
           "default": [],
           "description": "Extra planner allowlist entries. A command rule such as \"gh issue list\" or \"gcloud * * list\" covers commands whose leading words match it; \"mcp:find-*\" covers MCP tools by name; \"https://docs.example.com/*\" or \"/opt/data/*\" covers fetches and outside reads. A leading \"!\" excludes, and an exclusion wins."
+        },
+        "ordewell.plannerWebReadBudget": {
+          "scope": "application",
+          "type": "integer",
+          "minimum": 0,
+          "default": 40,
+          "description": "How many fetches and web searches the planner may make in one turn. Past it, web reads are refused and the planner says so. 0 turns web reads off."
         },
         "ordewell.plannerAllowlistDefaults": {
           "scope": "application",

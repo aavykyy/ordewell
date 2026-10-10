@@ -1,4 +1,4 @@
-import { approvalScopes, type IApproval, type ApprovalRequest } from '../interfaces/IApproval';
+import { approvalScopes, type IApproval, type ApprovalKind, type ApprovalRequest } from '../interfaces/IApproval';
 import { parseAllowlist, scopeAllowed, toolAllowed, type PlannerAllowlist } from './plannerAllowlist';
 
 /**
@@ -31,9 +31,18 @@ export type ApprovalMode = 'ask' | 'allow' | 'deny';
  */
 export type ApprovalModeSetting = ApprovalMode | 'auto';
 
-export function effectiveApprovalMode(setting: ApprovalModeSetting, autonomous: boolean): ApprovalMode {
+/**
+ * Web reads change nothing and Full's tasks already have the network, so Full
+ * lets the planner read too (ADR-0027). Only `auto` grants this: an explicit
+ * `allowlist` maps to the same `deny` for every other kind, and keeps web
+ * reads refused.
+ */
+const FULL_ALLOWS: ReadonlySet<ApprovalKind> = new Set(['url_fetch', 'web_search']);
+
+export function effectiveApprovalMode(setting: ApprovalModeSetting, autonomous: boolean, kind?: ApprovalKind): ApprovalMode {
   if (setting !== 'auto') return setting;
-  return autonomous ? 'deny' : 'ask';
+  if (!autonomous) return 'ask';
+  return kind !== undefined && FULL_ALLOWS.has(kind) ? 'allow' : 'deny';
 }
 
 /** A configured mode as written: `allowlist` is the user-facing name of `deny`, and anything unknown is `auto`. */
@@ -44,7 +53,8 @@ export function parseApprovalModeSetting(raw: string | undefined): ApprovalModeS
 }
 
 export interface ApprovalPolicyOptions {
-  mode?: ApprovalMode | (() => ApprovalMode);
+  /** Read per request, for the kind being asked about. */
+  mode?: ApprovalMode | ((kind: ApprovalKind) => ApprovalMode);
   /** Allowlist entries granted up front from config (ADR-0026). */
   preApproved?: readonly string[] | (() => readonly string[]);
   /** The human channel. Absent means there is nobody to ask. */
@@ -53,10 +63,18 @@ export interface ApprovalPolicyOptions {
   onDecision?: (req: ApprovalRequest, granted: boolean, source: ApprovalSource) => void;
 }
 
-export type ApprovalSource = 'pre-approved' | 'remembered' | 'mode' | 'asked' | 'no-channel';
+/**
+ * Why a request was decided as it was. The last four are refusals reached
+ * before the policy itself is consulted (ADR-0027's web-read guards), handed
+ * to {@link ApprovalPolicy.record} so they surface like any other decision:
+ * an `!` allowlist exclusion, the scheme and SSRF guard, the outbound secret
+ * check, and the per-turn web-read budget.
+ */
+export type ApprovalSource = 'pre-approved' | 'remembered' | 'mode' | 'asked' | 'no-channel'
+  | 'excluded' | 'guard' | 'secret' | 'budget';
 
 export class ApprovalPolicy implements IApproval {
-  private readonly modeOf: () => ApprovalMode;
+  private readonly modeOf: (kind: ApprovalKind) => ApprovalMode;
   private readonly entriesOf: () => readonly string[];
   private parsed: { key: string; list: PlannerAllowlist } | null = null;
   private readonly asker?: (req: ApprovalRequest) => Promise<boolean>;
@@ -101,9 +119,10 @@ export class ApprovalPolicy implements IApproval {
     // After the allowlist, so an entry added since a "no" is honoured.
     if (scopes.some((s) => this.refused.has(s)) || this.refused.has(key)) return decide(false, 'remembered');
 
-    const mode = this.modeOf();
-    if (mode === 'allow') { open.forEach((s) => this.granted.add(s)); return decide(true, 'mode'); }
-    // Not remembered: it is the mode's answer, not a person's, and the mode can change.
+    const mode = this.modeOf(req.kind);
+    // Neither is remembered: it is the mode's answer, not a person's, and the
+    // mode can change — a Full grant must not outlive a switch to Guarded.
+    if (mode === 'allow') return decide(true, 'mode');
     if (mode === 'deny') return decide(false, 'mode');
     if (!this.asker) return decide(false, 'no-channel');
 
@@ -126,6 +145,11 @@ export class ApprovalPolicy implements IApproval {
       else this.refused.add(key);
     }
     return decide(answer, 'asked');
+  }
+
+  /** Report a decision a guard reached before this policy was asked. */
+  record(req: ApprovalRequest, granted: boolean, source: ApprovalSource): void {
+    this.onDecision?.(req, granted, source);
   }
 
   /** The standing approvals, parsed from the entries in force now. */
