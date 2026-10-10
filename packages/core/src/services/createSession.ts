@@ -291,7 +291,7 @@ export function createSession(deps: SessionDeps): Session {
   deps.fsAdapter.setApproval?.(approvalPolicy);
   const webReads = new WebReadPolicy({
     approval: approvalPolicy,
-    secrets: () => [...configSecrets(deps.config), ...mcpServer.heldTokens()],
+    secrets: () => [...configSecrets(deps.config), ...mcpServer.heldTokens(), ...(aiService().heldSecrets?.() ?? [])],
     budget: () => deps.config.webReadBudget,
     turn: () => conversation?.currentTurnId,
   });

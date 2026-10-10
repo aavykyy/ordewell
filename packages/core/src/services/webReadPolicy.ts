@@ -88,9 +88,13 @@ export class WebReadPolicy {
     if (opts.prompting === false) {
       // A subagent may never prompt: only what is already standing — a grant,
       // the allowlist, or Full's mode — lets the read through.
-      if ((this.approval.peek?.(request) ?? 'ask') === 'allow') return this.resolved(target, spent.turn);
+      const standing = this.approval.peek?.(request);
+      if (standing?.decision === 'allow') {
+        this.approval.record?.(request, true, standing.source);
+        return this.resolved(target, spent.turn);
+      }
       this.refund(spent.turn);
-      return this.subagentRefusal(read, request);
+      return this.subagentRefusal(read, request, standing?.source ?? 'no-channel');
     }
     if (await this.approval.request(request)) return this.resolved(target, spent.turn);
     this.refund(spent.turn);
@@ -99,8 +103,15 @@ export class WebReadPolicy {
       : 'Web search not approved. Continue without it, or fetch a documentation URL you already know.' };
   }
 
-  private subagentRefusal(read: WebRead, request: ApprovalRequest): WebReadDecision {
-    this.approval.record?.(request, false, 'no-channel');
+  private subagentRefusal(read: WebRead, request: ApprovalRequest, source: ApprovalSource): WebReadDecision {
+    const label = read.kind === 'fetch' ? 'Fetch' : 'Web search';
+    if (source === 'mode') {
+      return this.refuse(request, source, `${label} refused: ${request.scope} is not covered by the planner allowlist in allowlist mode. Note the gap in your digest; the user must add a standing approval or change the approval mode.`);
+    }
+    if (source === 'remembered') {
+      return this.refuse(request, source, `${label} refused: ${request.scope} was previously refused in this session. Note the gap in your digest; the user must add a standing approval or start a new session.`);
+    }
+    this.approval.record?.(request, false, source);
     return { allowed: false, reason: read.kind === 'fetch'
       ? `Fetch refused: ${request.scope} is not approved in this session, and research agents run in the background where nothing can be approved. Note the gap in your digest; the planner can fetch it directly.`
       : 'Web search refused: research agents run in the background where nothing can be approved. Note the gap in your digest; the planner can search directly.' };
@@ -109,10 +120,11 @@ export class WebReadPolicy {
   /**
    * Whether a search through `provider` would run without asking anyone, for
    * a runner whose own search raises no request and is set on or off when
-   * its session starts (ADR-0027). No query is known yet, so neither the
-   * secret check nor the budget can apply.
+   * its session starts (ADR-0027). A zero budget disables it; no query is
+   * known yet, so secrets and individual reads cannot be checked or counted.
    */
   searchesUnasked(provider: string): boolean {
+    if (this.budget() === 0) return false;
     const scope = searchScope(provider);
     const list = this.approval.allowlist?.();
     if (list && scopeExcluded(list, scope)) return false;
