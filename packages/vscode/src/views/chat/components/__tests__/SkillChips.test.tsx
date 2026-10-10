@@ -17,4 +17,30 @@ describe('SkillChips unresolved attachments', () => {
     expect(screen.getByText('not-created')).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
+
+  describe('add-skill select', () => {
+    const catalog = [{ name: 'lint', description: 'Lint it' }, { name: 'docs', description: '' }];
+
+    it('shows a disabled "Add skill…" prompt as the selected entry', () => {
+      render(<SkillChips idPrefix="task" taskId="t1" catalog={catalog} onChange={vi.fn()} />);
+      const select = screen.getByRole('combobox');
+      expect(select).toHaveValue('');
+      const prompt = screen.getByRole('option', { name: 'Add skill…' });
+      expect(prompt).toBeDisabled();
+    });
+
+    it('adds the picked skill', () => {
+      const onChange = vi.fn();
+      render(<SkillChips idPrefix="task" taskId="t1" skills={['docs']} catalog={catalog} onChange={onChange} />);
+      fireEvent.change(screen.getByRole('combobox'), { target: { value: 'lint' } });
+      expect(onChange).toHaveBeenCalledWith('t1', ['docs', 'lint']);
+    });
+
+    it('adds nothing when the prompt value is selected', () => {
+      const onChange = vi.fn();
+      render(<SkillChips idPrefix="task" taskId="t1" catalog={catalog} onChange={onChange} />);
+      fireEvent.change(screen.getByRole('combobox'), { target: { value: '' } });
+      expect(onChange).not.toHaveBeenCalled();
+    });
+  });
 });
