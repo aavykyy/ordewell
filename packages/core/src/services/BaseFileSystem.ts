@@ -14,7 +14,7 @@ import { resolveWithin, resolveRef, grantScopeFor, isInertDevice } from './pathS
 import { definitionPattern, referencePattern, languageForId, includeGlobFor } from './symbolPatterns';
 import { resolveAll, vetEgress, type ResolveAll } from './egressGuard';
 import { carriesSecret, sensitiveEnvValues } from './outboundSecrets';
-import { disableWebCommandStartup, pinWebCommandAddresses, wgetVersionCommands } from './webCommands';
+import { READ_REFUSAL_HINT, disableWebCommandStartup, pinWebCommandAddresses, wgetVersionCommands } from './webCommands';
 
 export { AUTO_COMMANDS, GIT_READONLY_SUBCOMMANDS, REFUSED_COMMANDS, classifyCommand, pathLikeArgs } from './commandPolicy';
 
@@ -227,13 +227,13 @@ export abstract class BaseFileSystem implements IFileSystem {
     }
 
     if (webUrls?.length && carriesSecret([...(webUrlTexts ?? []), ...webUrls.map((url) => url.href)], [...this.outboundSecrets(), ...sensitiveEnvValues(process.env)])) {
-      return { success: false, output: 'Command refused: a web URL contains what looks like a secret. Use the Ordewell fetch tool without credentials.', truncated: false };
+      return { success: false, output: 'Command refused: a web URL contains what looks like a secret. Fetch the page with your web fetch tool, without credentials.', truncated: false };
     }
 
     const vettedAddresses = new Map<string, string>();
     for (const url of webUrls ?? []) {
       const check = await vetEgress(url.hostname, url.port, this.resolveWebHost);
-      if (!check.ok) return { success: false, output: `Command refused: Blocked host: ${check.reason}. Use the Ordewell fetch tool instead.`, truncated: false };
+      if (!check.ok) return { success: false, output: `Command refused: Blocked host: ${check.reason}. ${READ_REFUSAL_HINT}`, truncated: false };
       vettedAddresses.set(url.origin, check.addresses[0]);
     }
 
@@ -271,10 +271,10 @@ export abstract class BaseFileSystem implements IFileSystem {
     }
 
     for (const probe of wgetVersionCommands(command, this.researchShell.dialect)) {
-      if (!probe) return { success: false, output: 'Command refused: the wget executable cannot be checked in an uncertain working directory. Use the Ordewell fetch tool instead.', truncated: false };
+      if (!probe) return { success: false, output: `Command refused: the wget executable cannot be checked in an uncertain working directory. ${READ_REFUSAL_HINT}`, truncated: false };
       const version = await this.execBashImpl(probe, signal);
       if (!version.success || !/^GNU Wget 1\./.test(version.output)) {
-        return { success: false, output: 'Command refused: only GNU Wget 1.x is supported; wget2 can write persistent databases. Use the Ordewell fetch tool instead.', truncated: false };
+        return { success: false, output: `Command refused: only GNU Wget 1.x is supported; wget2 can write persistent databases. ${READ_REFUSAL_HINT}`, truncated: false };
       }
     }
 

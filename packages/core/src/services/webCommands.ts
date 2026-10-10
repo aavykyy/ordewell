@@ -9,7 +9,20 @@ interface WebCommand {
   urlTexts?: string[];
   perInvocation?: boolean;
   reason?: string;
+  /** The command sends data or writes something; a fetch tool would not do the same job. */
+  effect?: boolean;
 }
+
+// Runner-neutral on purpose: the planner's fetch tool is Ordewell's `fetch` for
+// some runners and a native tool for others, and a name that is hidden from the
+// model it is shown to only misleads it.
+export const READ_REFUSAL_HINT = 'Fetch the page with your web fetch tool instead.';
+export const EFFECT_REFUSAL_HINT = 'This sends data or changes something, so the planner should not do it itself: add it to the plan as an ops task (and, if it writes files, a change task).';
+
+const CURL_EFFECT = new Set(['d', 'F', 'T', 'O', 'D', 'c', 'J', '--data', '--data-raw', '--data-binary', '--data-ascii', '--data-urlencode', '--form', '--form-string',
+  '--json', '--upload-file', '--remote-name', '--remote-name-all', '--dump-header', '--cookie-jar', '--create-dirs', '--output-dir', '--remote-header-name']);
+const WGET_EFFECT = new Set(['P', 'r', 'm', 'N', 'c', 'a', 'o', '--post-data', '--post-file', '--body-data', '--body-file', '--method', '--output-file', '--append-output',
+  '--directory-prefix', '--recursive', '--mirror', '--timestamping', '--continue', '--save-headers', '--content-disposition', '--input-file', '--warc-file', '--save-cookies']);
 
 const CURL_SWITCHES = new Set(['s', 'S', 'f', 'i', 'I', 'v', 'L', 'q', 'G',
   '--silent', '--show-error', '--fail', '--include', '--head', '--verbose', '--location', '--disable', '--get', '--compressed', '--version']);
@@ -21,7 +34,7 @@ const WGET_VALUES = new Set(['O', 'U', 'T', '--output-document', '--user-agent',
 
 export function webCommand(seg: Segment, trustedResolves?: ReadonlySet<string>): WebCommand | undefined {
   const binary = seg.binary.toLowerCase().replace(/\.exe$/, '');
-  if (binary === 'wget2') return { urls: [], reason: 'wget2 can write persistent databases. Use the Ordewell fetch tool instead.' };
+  if (binary === 'wget2') return { urls: [], reason: `wget2 can write persistent databases. ${READ_REFUSAL_HINT}` };
   if (binary !== 'curl' && binary !== 'wget') return undefined;
   const urls: URL[] = [];
   const urlTexts: string[] = [];
@@ -33,7 +46,11 @@ export function webCommand(seg: Segment, trustedResolves?: ReadonlySet<string>):
   let redirects = binary === 'wget';
   let getQuery = false;
   let queryData = false;
-  const refused = (flag: string): WebCommand => ({ urls, reason: `"${binary} ${flag}" is not known to be a read-only web command. Use the Ordewell fetch tool instead.` });
+  let effect = false;
+  const effectFlags = binary === 'curl' ? CURL_EFFECT : WGET_EFFECT;
+  const refused = (flag: string, sends = false): WebCommand => sends
+    ? { urls, effect: true, reason: `"${binary} ${flag}" is not a read-only web command. ${EFFECT_REFUSAL_HINT}` }
+    : { urls, reason: `"${binary} ${flag}" is not known to be a read-only web command. ${READ_REFUSAL_HINT}` };
   if (seg.expandable || seg.globbed) return refused('with shell expansions or globbing');
   for (let i = 0; i < seg.args.length; i++) {
     const arg = seg.args[i];
@@ -47,7 +64,7 @@ export function webCommand(seg: Segment, trustedResolves?: ReadonlySet<string>):
       if (/[[\]]/.test(withoutHost)) return refused(arg);
       if (isIP(host)) {
         const reason = blockedAddressReason(host);
-        if (reason) return { urls, reason: `Blocked host: ${reason}. Use the Ordewell fetch tool instead.` };
+        if (reason) return { urls, reason: `Blocked host: ${reason}. ${READ_REFUSAL_HINT}` };
       }
       if (url.username || url.password) perInvocation = true;
       urls.push(url);
@@ -71,6 +88,8 @@ export function webCommand(seg: Segment, trustedResolves?: ReadonlySet<string>):
         continue;
       }
       const sensitive = binary === 'curl' && CURL_SENSITIVE.has(flag);
+      const sends = effectFlags.has(flag) && !sensitive;
+      if (sends && !(binary === 'wget' && (flag === 'O' || flag === '--output-document'))) return refused(arg, true);
       const trustedResolve = binary === 'curl' && flag === '--resolve' && trustedResolves !== undefined;
       if (!values.has(flag) && !sensitive && !trustedResolve) return refused(arg);
       const attached = long ? (arg.includes('=') ? arg.slice(flag.length + 1) : undefined) : flags.slice(j + 1).join('') || undefined;
@@ -81,20 +100,23 @@ export function webCommand(seg: Segment, trustedResolves?: ReadonlySet<string>):
       if (binary === 'wget' && flag === '--max-redirect') redirects = value !== '0';
       if (sensitive) {
         if (flag === '--data-urlencode' && !value.includes('@')) queryData = true;
-        else if (!((flag === 'X' || flag === '--request') && (value === 'GET' || value === 'HEAD'))) perInvocation = true;
+        else if (!((flag === 'X' || flag === '--request') && (value === 'GET' || value === 'HEAD'))) {
+          perInvocation = true;
+          effect = true;
+        }
       }
       if (binary === 'wget' && (flag === 'O' || flag === '--output-document')) {
-        if (value !== '-') return refused(arg);
+        if (value !== '-') return refused(arg, true);
         stdout = true;
       }
-      if ((flag === 'o' || flag === '--output') && value !== '/dev/null') return refused(arg);
+      if ((flag === 'o' || flag === '--output') && value !== '/dev/null') return refused(arg, binary === 'curl');
       if ((flag === 'w' || flag === '--write-out') && (value.startsWith('@') || value.includes('%output{'))) return refused(arg);
       break;
     }
   }
   if (urls.length === 0) return refused('without a literal HTTP(S) URL');
   if (binary === 'wget' && !stdout && !spider) return refused('without stdout or --spider');
-  return { urls, urlTexts, ...(perInvocation || redirects || (queryData && !getQuery) ? { perInvocation: true } : {}) };
+  return { urls, urlTexts, ...(effect ? { effect } : {}), ...(perInvocation || redirects || (queryData && !getQuery) ? { perInvocation: true } : {}) };
 }
 
 export function disableWebCommandStartup(command: string, dialect?: ShellDialect): string {

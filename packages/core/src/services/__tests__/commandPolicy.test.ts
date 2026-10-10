@@ -1591,3 +1591,44 @@ describe('G1 — interpreter family matches version and suffix', () => {
     expect(classifyCommand('bundle exec rspec').tier).not.toBe('refuse');
   });
 });
+
+describe('curl and wget refusal notes', () => {
+  const url = 'https://api.example.com/x';
+  const effectShaped = [
+    `curl --json '{}' ${url}`,
+    `curl -T file.txt ${url}`,
+    `curl --upload-file file.txt ${url}`,
+    `curl -O ${url}`,
+    `curl -o out.bin ${url}`,
+    `wget --post-data=a=b -O - ${url}`,
+    `wget --method=DELETE -O - ${url}`,
+    `wget -O out.html ${url}`,
+  ];
+
+  it.each(effectShaped)('%s points to an ops task, not the fetch tool', (cmd) => {
+    const result = classifyCommand(cmd);
+    expect(result.tier).toBe('refuse');
+    expect(result.reason).toContain('ops task');
+    expect(result.reason).not.toMatch(/fetch/i);
+  });
+
+  it.each([`curl -d a=b ${url}`, `curl -X POST ${url}`, `curl -F f=@x ${url}`])('%s is an ops task in Full', (cmd) => {
+    const result = classifyCommand(cmd, { autonomous: true });
+    expect(result.tier).toBe('refuse');
+    expect(result.reason).toContain('ops task');
+    expect(result.reason).not.toMatch(/fetch/i);
+  });
+
+  it('points a plain GET refused in Full to the runner-neutral fetch tool', () => {
+    const result = classifyCommand(`curl ${url}`, { autonomous: true });
+    expect(result.reason).toContain('web fetch tool');
+    expect(result.reason).not.toContain('Ordewell fetch');
+    expect(result.reason).not.toContain('ops task');
+  });
+
+  it('points an unknown read flag to the fetch tool', () => {
+    const result = classifyCommand(`curl --frobnicate ${url}`);
+    expect(result.tier).toBe('refuse');
+    expect(result.reason).toContain('web fetch tool');
+  });
+});
