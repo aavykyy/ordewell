@@ -105,8 +105,9 @@ reads without asking; nothing else in Full changes.
   behind the same policy. Every harness pre-authorizes the server's tools
   (ADR-0022), so the policy, not the harness, decides each call. For a
   harness planner they are fallbacks: their descriptions send the model to
-  its own web fetch or web search first, so Claude Code keeps its native
-  `WebFetch` and `WebSearch`, Codex fetches through Ordewell and searches
+  its own web fetch or web search first. A Claude Code planner's token hides
+  both, since offered both it took Ordewell's over its native `WebFetch` and
+  `WebSearch`; Codex fetches through Ordewell and searches
   natively when its search is on, and OpenCode fetches through Ordewell and
   searches with `websearch` unless its provider has none.
 
@@ -311,3 +312,10 @@ filed as its own issue.
 - 2026-10-10 — search is zero-configuration: provider-native for harness
   planners, one internal DuckDuckGo provider for API planners and as fallback,
   with a shared back-off and cache.
+- 2026-10-11 — a Claude planner's `WebFetch` and `WebSearch` always ask, so
+  no allow rule, the user's or a repository's, skips the policy (ADR-0026,
+  History); checked live on Claude Code 2.1.296. The planner token gains the
+  tools it hides, filtered from the list and refused when called, and the
+  runner's pre-allowed tools and instructions follow it; Claude's token hides
+  `fetch` and `web_search`, which the live check saw it pick over its native
+  tools.

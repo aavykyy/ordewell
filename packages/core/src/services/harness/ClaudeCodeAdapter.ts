@@ -29,6 +29,18 @@ const DISALLOWED_TOOLS = [
  */
 const PLANNER_PERMISSION_MODE = 'default';
 
+/**
+ * Claude Code sends `can_use_tool` only when its own rules say ask, so an
+ * allow rule — the user's, or one a repository commits to
+ * `.claude/settings.json` — would run a web read or an MCP tool past the
+ * planner's policy, record and budget. An ask rule beats an allow rule from
+ * any source, `--allowedTools` included (checked live on 2.1.296), so these
+ * always reach the envelope; Ordewell's own tools are then allowed by the
+ * adapter at once. Project settings stay loaded: without them the CLI also
+ * drops local- and project-scope MCP servers and the project's CLAUDE.md.
+ */
+const PLANNER_SETTINGS = JSON.stringify({ permissions: { ask: ['WebFetch', 'WebSearch', 'mcp__*'] } });
+
 /** Claude Code's read tools, by the input field that names their path. */
 const PATH_TOOLS: Record<string, { field: string; directory: boolean }> = {
   Read: { field: 'file_path', directory: false },
@@ -312,6 +324,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       '--permission-prompt-tool', 'stdio',
       '--permission-mode', PLANNER_PERMISSION_MODE,
       '--disallowedTools', DISALLOWED_TOOLS.join(','),
+      '--settings', PLANNER_SETTINGS,
       '--append-system-prompt', opts.systemPrompt,
     ];
     if (opts.mcp) args.push(...this.ordewellServerArgs(opts.mcp, 'planner'));
@@ -524,8 +537,9 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         const id = msg.request_id ?? '';
         const name = msg.request.tool_name ?? 'unknown';
         if (this.givenOrdewell && CLAUDE_ORDEWELL.isOrdewellAsk(name)) {
-          // `--allowedTools` should have settled it already. A completion that
-          // waited on a person would hold the verdict hostage (ADR-0022, S3).
+          // A task's `--allowedTools` should have settled it already; a
+          // planner's arrives through its ask rule. A completion that waited
+          // on a person would hold the verdict hostage (ADR-0022, S3).
           this.writeLine({ type: 'control_response', response: { subtype: 'success', request_id: id, response: { behavior: 'allow', updatedInput: input } } });
           emit({ type: 'permission_request', id, name, detail: JSON.stringify(input), input, decided: { decision: 'allow' } });
           return;

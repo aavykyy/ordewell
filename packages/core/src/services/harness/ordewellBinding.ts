@@ -1,4 +1,5 @@
 import { ORDEWELL_MCP_SERVER_NAME, PLANNER_TOOLS, TASK_TOOLS } from '../mcp';
+import type { PlannerStartOptions } from './AgentAdapter';
 
 export class McpAttachError extends Error {
   constructor(message: string) {
@@ -26,24 +27,30 @@ export type AttachState = 'connected' | 'pending' | 'failed';
 export interface OrdewellToolBinding<Ask = never> {
   /** The name the runner calls an Ordewell tool by, and reports its calls and requests under. */
   toolName(tool: string): string;
-  /** Every tool `role` is given, under the runner's names, in the server's order. */
-  toolNames(role: OrdewellToolRole): string[];
+  /** Every tool `role` is given, under the runner's names, in the server's order, less those its token hides. */
+  toolNames(role: OrdewellToolRole, hidden?: readonly string[]): string[];
+  /**
+   * The planner tools this runner's planner token hides, by their names on
+   * the server: those it carries natively (ADR-0027), which a model offered
+   * both tends to take from Ordewell instead.
+   */
+  plannerHidden(start: PlannerStartOptions): string[];
   /** Whether a permission request is for one of the server's tools, which is never refused or left waiting (ADR-0022, S3). */
   isOrdewellAsk(ask: Ask): boolean;
   /** What the runner's own status word for the server says about its connection. */
   attachState(status: string | null | undefined): AttachState;
 }
 
-/** The tools of a role, by their names on the server. */
-export function ordewellToolNames(role: OrdewellToolRole): string[] {
-  return (role === 'task' ? TASK_TOOLS : PLANNER_TOOLS).map((tool) => tool.name);
+/** The tools of a role, by their names on the server, less `hidden`. */
+export function ordewellToolNames(role: OrdewellToolRole, hidden: readonly string[] = []): string[] {
+  return (role === 'task' ? TASK_TOOLS : PLANNER_TOOLS).map((tool) => tool.name).filter((tool) => !hidden.includes(tool));
 }
 
 /** The naming half of a binding for a runner that names a server's tool `<prefix><tool>`. */
 export function prefixedToolNames(prefix: string): Pick<OrdewellToolBinding, 'toolName' | 'toolNames'> & { hasPrefix(name: string): boolean } {
   return {
     toolName: (tool) => `${prefix}${tool}`,
-    toolNames: (role) => ordewellToolNames(role).map((tool) => `${prefix}${tool}`),
+    toolNames: (role, hidden) => ordewellToolNames(role, hidden).map((tool) => `${prefix}${tool}`),
     hasPrefix: (name) => name.startsWith(prefix),
   };
 }

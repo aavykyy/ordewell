@@ -189,9 +189,10 @@ refused from a workspace's environment files (ADR-0016).
   credentials from leaving for an address the command chose, not every read
   from carrying data. A project that cares excludes those families.
 - **The user's saved allow rules still apply** to the Claude planner, for the
-  tools it is allowed to have; the shell and edit tools are disallowed
-  outright, and a disallowed tool wins over an allow rule. An OpenCode
-  planner's policy is Ordewell's alone.
+  tools it is allowed to have, except `WebFetch`, `WebSearch` and MCP tools,
+  which always ask; the shell and edit tools are disallowed outright, and a
+  disallowed tool wins over an allow rule. An OpenCode planner's policy is
+  Ordewell's alone.
 - **A command's output is research.** `run_command` renders as the planner's
   `bash` step in every surface.
 
@@ -231,3 +232,15 @@ refused from a workspace's environment files (ADR-0016).
 - 2026-10-10 — web reads join the envelope under one web-read policy; Full
   allows them without asking, every other command stays on the allowlist
   ([ADR-0027](0027-web-reads-in-the-planner-envelope.md)).
+- 2026-10-11 — an allow rule, the user's or one a repository commits to
+  `.claude/settings.json`, ran a Claude planner's `WebFetch`, `WebSearch` or
+  MCP tool with no `can_use_tool`, past the envelope. The planner is now
+  launched with `--settings` ask rules for `WebFetch`, `WebSearch` and
+  `mcp__*`; checked live on Claude Code 2.1.296 in a trusted workspace, ask
+  wins over a project allow rule and over `--allowedTools`, so Ordewell's
+  own tools now arrive as requests the adapter allows at once.
+  `--setting-sources user` was tried and not taken: it also drops local- and
+  project-scope MCP servers, which the MCP-tool path serves, and the
+  project's CLAUDE.md. Project settings still load, so a trusted
+  repository's hooks and `enableAllProjectMcpServers` still apply to the
+  planner.

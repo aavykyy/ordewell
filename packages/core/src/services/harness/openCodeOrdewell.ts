@@ -148,6 +148,7 @@ function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig 
 export const OPENCODE_ORDEWELL: OpenCodeOrdewellBinding = {
   toolName: NAMES.toolName,
   toolNames: NAMES.toolNames,
+  plannerHidden: () => [],
   /** A permission request's `permission`, which for a tool is its name. */
   isOrdewellAsk: (permission) => NAMES.hasPrefix(permission),
   /** `/mcp` lists a server only once it has started connecting, as `pending` until it settles. */

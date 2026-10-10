@@ -15,6 +15,8 @@ export interface ClaudeOrdewellBinding extends OrdewellToolBinding<string> {
 export const CLAUDE_ORDEWELL: ClaudeOrdewellBinding = {
   toolName: MCP_CLIENT_TOOL_NAMES.toolName,
   toolNames: MCP_CLIENT_TOOL_NAMES.toolNames,
+  /** ADR-0027: `WebSearch` and `WebFetch` carry Claude's web reads, both asked through the policy. */
+  plannerHidden: () => ['fetch', 'web_search'],
   /** `can_use_tool`'s `tool_name`. */
   isOrdewellAsk: (toolName: string) => MCP_CLIENT_TOOL_NAMES.hasPrefix(toolName),
   /** `mcp_status` reports `pending` until the CLI's connection attempt settles. */
@@ -31,6 +33,6 @@ export const CLAUDE_ORDEWELL: ClaudeOrdewellBinding = {
     const config = ownerOnlyConfigFile('mcp.json', JSON.stringify({
       mcpServers: { [mcp.name]: { type: 'http', url: mcp.url, headers: mcp.headers, alwaysLoad: true } },
     }));
-    return { args: ['--mcp-config', config.path, '--allowedTools', MCP_CLIENT_TOOL_NAMES.toolNames(role).join(',')], config };
+    return { args: ['--mcp-config', config.path, '--allowedTools', MCP_CLIENT_TOOL_NAMES.toolNames(role, mcp.hidden).join(',')], config };
   },
 };
