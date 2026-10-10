@@ -27,6 +27,37 @@ function setup({ setting = 'auto', autonomous = false, allow = [], answer = true
 }
 
 describe('WebReadPolicy in Full', () => {
+  it('turns web reads off with search and both scheme exclusions for every origin', async () => {
+    for (const mode of [{}, { autonomous: true }, { setting: 'allow' as const }, { setting: 'ask' as const }, { setting: 'deny' as const }]) {
+      const { reads, ask, decisions } = setup({ ...mode, allow: ['!web_search:*', '!https://*', '!http://*'] });
+      for (const url of [
+        'https://docs.example.com/a', 'http://docs.example.com/',
+        'https://docs.example.com:80/a', 'http://93.184.215.14:443/',
+        'https://[2606:4700:4700::1111]/', 'https://bücher.example/',
+      ]) expect(await reads.decide({ kind: 'fetch', url })).toMatchObject({ allowed: false, reason: expect.stringContaining('excluded') });
+      for (const provider of ['duckduckgo', 'openai', 'opencode', 'anthropic']) {
+        expect(await reads.decide({ kind: 'search', query: 'tokio', provider })).toMatchObject({ allowed: false, reason: expect.stringContaining('excluded') });
+        expect(reads.searchesUnasked(provider)).toBe(false);
+      }
+      expect(ask).not.toHaveBeenCalled();
+      expect(decisions).toHaveLength(10);
+      expect(decisions.every((d) => !d.granted && d.source === 'excluded')).toBe(true);
+    }
+  });
+
+  it('honours exact and wildcard search exclusions in every mode, including native search', async () => {
+    for (const mode of [{}, { autonomous: true }, { setting: 'allow' as const }, { setting: 'ask' as const }, { setting: 'deny' as const }]) {
+      for (const exclusion of ['!web_search:duckduckgo', '!web_search:*']) {
+        const { reads, ask, decisions } = setup({ ...mode, allow: ['web_search:*', exclusion] });
+        expect(await reads.decide({ kind: 'search', query: 'tokio', provider: 'duckduckgo' })).toMatchObject({ allowed: false });
+        expect(reads.searchesUnasked('duckduckgo')).toBe(false);
+        expect(reads.searchesUnasked('openai')).toBe(exclusion === '!web_search:duckduckgo');
+        expect(ask).not.toHaveBeenCalled();
+        expect(decisions).toEqual([expect.objectContaining({ granted: false, source: 'excluded' })]);
+      }
+    }
+  });
+
   it('allows a public fetch under auto without asking anyone', async () => {
     const { reads, ask } = setup({ autonomous: true });
 
@@ -155,6 +186,66 @@ describe('WebReadPolicy egress guard', () => {
 });
 
 describe('WebReadPolicy secret check', () => {
+  it('withholds Google, GitLab, Stripe, Hugging Face and npm token shapes without an environment value', async () => {
+    const tokens = [
+      'AIzaSyB7nQ2xR9mP4vK8tW6cH1zL5dF0gA3sE7uV',
+      'glpat-B7nQ2xR9mP4vK8tW6cH1',
+      'sk_live_B7nQ2xR9mP4vK8tW6cH1zL5dF',
+      'rk_live_B7nQ2xR9mP4vK8tW6cH1zL5dF',
+      'hf_B7nQ2xR9mP4vK8tW6cH1zL5dF0gA3sE',
+      'npm_B7nQ2xR9mP4vK8tW6cH1zL5dF0gA3sE',
+    ];
+    for (const token of tokens) {
+      const { reads, ask, decisions } = setup({ autonomous: true });
+      const encoded = token.replace(/./g, (char) => `%${char.charCodeAt(0).toString(16)}`);
+      for (const read of [
+        { kind: 'search' as const, query: `help with ${token}`, provider: 'duckduckgo' },
+        { kind: 'search' as const, query: encoded, provider: 'duckduckgo' },
+        { kind: 'fetch' as const, url: `https://docs.example.com/?key=${encoded}` },
+      ]) expect(await reads.decide(read)).toMatchObject({ allowed: false, reason: expect.stringContaining('secret') });
+      expect(ask).not.toHaveBeenCalled();
+      expect(JSON.stringify(decisions)).not.toContain(token);
+      expect(JSON.stringify(decisions)).not.toContain(encoded);
+      expect(decisions.map((d) => d.source)).toEqual(['secret', 'secret', 'secret']);
+    }
+  });
+
+  it('does not treat URLs and credential file paths in the environment as secret values', async () => {
+    const env = {
+      KEYCLOAK_URL: 'https://keycloak.example.com',
+      AZURE_KEY_VAULT_URL: 'https://vault.example.com',
+      API_KEY: 'https://keys.example.com',
+      SERVICE_TOKEN_FILE: '/home/user/credentials/token.txt',
+      PRIVATE_KEY: 'C:\\Users\\user\\credentials\\private.key',
+      SECRET_FILE: '~/credentials/service.json',
+      CREDENTIAL_FILE: './credentials/service.json',
+      PASSWORD_FILE: '../credentials/password.txt',
+      ACCESS_KEY_FILE: '\\\\server\\credentials\\private.key',
+      GOOGLE_CREDENTIAL: 'file:///home/user/credentials/service.json',
+    };
+    const { reads } = setup({ autonomous: true, policy: { env: () => env } });
+    for (const url of ['https://keycloak.example.com/', 'https://vault.example.com/', 'https://keys.example.com/']) {
+      expect(await reads.decide({ kind: 'fetch', url })).toEqual({ allowed: true });
+    }
+    for (const value of Object.values(env)) {
+      expect(await reads.decide({ kind: 'search', query: `how to configure ${value}`, provider: 'duckduckgo' })).toEqual({ allowed: true });
+    }
+  });
+
+  it('uses credential words at underscore boundaries, rather than substrings in environment names', async () => {
+    const credential = 'private-value-8Hd3nZp7Qr';
+    const ordinary = 'docs.example.com';
+    for (const name of ['KEY', 'API_KEY', 'SERVICE_TOKEN', 'CLIENT_SECRET', 'DB_PASSWORD', 'SERVICE_CREDENTIAL', 'ACCESS_KEY_ID']) {
+      const { reads, decisions } = setup({ autonomous: true, policy: { env: () => ({ [name]: credential }) } });
+      expect(await reads.decide({ kind: 'search', query: credential, provider: 'duckduckgo' })).toMatchObject({ allowed: false });
+      expect(JSON.stringify(decisions)).not.toContain(credential);
+    }
+    for (const name of ['KEYCLOAK_URL', 'MONKEY', 'TOKENIZER', 'SECRETARY', 'PASSWORDLESS']) {
+      const { reads } = setup({ autonomous: true, policy: { env: () => ({ [name]: ordinary }) } });
+      expect(await reads.decide({ kind: 'fetch', url: 'https://docs.example.com/' })).toEqual({ allowed: true });
+    }
+  });
+
   const HELD = 'or-held-Zq81vXk2mPw9';
   const ENV_VALUE = 'envSecret-77Hq2LmN';
 
@@ -268,6 +359,49 @@ describe('WebReadPolicy budget', () => {
 });
 
 describe('WebReadPolicy record', () => {
+  it('records the actual subagent refusal and reports a gap only the planner can resolve', async () => {
+    for (const kind of ['fetch', 'search'] as const) {
+      const read = kind === 'fetch'
+        ? { kind, url: 'https://docs.example.com/' }
+        : { kind, query: 'tokio', provider: 'duckduckgo' };
+      const mode = setup({ setting: 'deny', policy: { budget: () => 1 } });
+      const remembered = setup({ answer: false, policy: { budget: () => 1 } });
+      const missing = setup({ policy: { budget: () => 1 } });
+      await remembered.reads.decide(read);
+      remembered.decisions.length = 0;
+      remembered.ask.mockClear();
+      for (const [given, source, reason] of [[mode, 'mode', /allowlist mode/], [remembered, 'remembered', /previously refused/], [missing, 'no-channel', /planner can (fetch|search)(?: it)? directly/]] as const) {
+        const decision = await given.reads.decide(read, { prompting: false });
+        expect(decision).toMatchObject({ allowed: false, reason: expect.stringMatching(reason) });
+        if (source !== 'no-channel') expect(decision.allowed === false && decision.reason).not.toMatch(/planner can (fetch|search)(?: it)? directly/);
+        expect(given.decisions).toEqual([expect.objectContaining({ granted: false, source })]);
+        expect(given.ask).not.toHaveBeenCalled();
+        expect(await given.reads.decide({ kind: 'search', query: 'other', provider: 'other' })).not.toMatchObject({ reason: expect.stringContaining('budget') });
+      }
+    }
+  });
+
+  it('records subagent grants from the mode, allowlist and remembered approval', async () => {
+    const full = setup({ autonomous: true });
+    const listed = setup({ allow: ['https://docs.example.com/*', 'web_search:duckduckgo'] });
+    const remembered = setup();
+    const reads = [
+      { kind: 'fetch' as const, url: 'https://docs.example.com/' },
+      { kind: 'search' as const, query: 'tokio', provider: 'duckduckgo' },
+    ];
+    for (const read of reads) await remembered.reads.decide(read);
+    remembered.decisions.length = 0;
+    remembered.ask.mockClear();
+
+    for (const [given, source] of [[full, 'mode'], [listed, 'pre-approved'], [remembered, 'remembered']] as const) {
+      for (const read of reads) expect(await given.reads.decide(read, { prompting: false })).toEqual({ allowed: true });
+      expect(given.ask).not.toHaveBeenCalled();
+      expect(given.decisions.map((d) => [d.req.kind, d.granted, d.source])).toEqual([
+        ['url_fetch', true, source], ['web_search', true, source],
+      ]);
+    }
+  });
+
   it('records every decision, refusals before the approval included, with why', async () => {
     const HELD = 'or-held-Zq81vXk2mPw9';
     const { reads, decisions } = setup({
@@ -307,6 +441,19 @@ describe('WebReadPolicy record', () => {
 // A runner's own search raises no request, so it is switched on at session
 // start only where the policy would allow it without asking (ADR-0027).
 describe('WebReadPolicy.searchesUnasked', () => {
+  it('turns native search and policy reads off when the live budget is zero', async () => {
+    for (const mode of [{ autonomous: true }, { setting: 'allow' as const }, { allow: ['web_search:*', 'https://*'] }]) {
+      let budget = 0;
+      const { reads, ask } = setup({ ...mode, policy: { budget: () => budget } });
+      expect(reads.searchesUnasked('openai')).toBe(false);
+      expect(await reads.decide({ kind: 'search', query: 'tokio', provider: 'openai' })).toMatchObject({ allowed: false, reason: expect.stringContaining('budget (0)') });
+      expect(await reads.decide({ kind: 'fetch', url: 'https://docs.example.com/' })).toMatchObject({ allowed: false });
+      expect(ask).not.toHaveBeenCalled();
+      budget = 1;
+      expect(reads.searchesUnasked('openai')).toBe(true);
+    }
+  });
+
   it.each<[string, Setup, boolean]>([
     ['Full under auto', { autonomous: true }, true],
     ['an explicit allow', { setting: 'allow' }, true],

@@ -6,6 +6,9 @@ import type { SessionMessage } from '../SessionMessage';
 import type { ConversationRequest } from '../AiService';
 import type { GrepOptions, ReadFileOpts, ToolOutcome } from '../../interfaces/IFileSystem';
 import type { WebRead, WebReadDecision } from '../webReadPolicy';
+import { CliAgentAiService } from '../harness/CliAgentAiService';
+import { fakeMcpServer, fakeSpawn, fixture } from './harnessTestKit';
+import type { McpToolReply } from '../mcp/tools';
 
 /**
  * The approval round-trip as every surface sees it: research asks, the Session
@@ -469,10 +472,45 @@ describe('Session approval flow', () => {
 // The session's fetcher is the one every planner's web reads are decided by
 // (ADR-0027); a turn hands it to the planner, so read it from there.
 describe('Session web reads', () => {
+  it('withholds secrets from the environment the harness planner actually started under', async () => {
+    const secret = 'workspace-8Hd3nZp7Qr';
+    const mcp = fakeMcpServer();
+    const answers: McpToolReply[] = [];
+    const spawned = fakeSpawn([(_written, proc) => {
+      void (async () => {
+        const handler = mcp.plannerHandlers.at(-1)!;
+        const context = { signal: new AbortController().signal };
+        answers.push(await handler.fetch!({ url: `https://93.184.215.14/?key=${secret}` }, context));
+        answers.push(await handler.webSearch!({ query: secret }, context));
+        proc.emitStdout(fixture('claude-code', 'prose'));
+      })();
+    }]);
+    const config = fakeConfig({ aiProvider: 'claude-code', autonomousMode: true, webReadBudget: 0 });
+    const svc = new CliAgentAiService(config, {
+      spawn: spawned.spawn, resolvePath: async () => '/usr/bin', platform: 'linux',
+      isDirectory: () => true, exists: () => true, workspaceRoot: () => '/repo',
+      workspaceEnv: async () => ({ WORKSPACE_API_KEY: secret }), mcpServer: mcp,
+    });
+    const messages: SessionMessage[] = [];
+    const session = makeSession({ config, aiService: svc, mcpServer: mcp, broadcast: (msg) => { messages.push(msg); } });
+    try {
+      await session.startPlanning('upgrade the library', ['claude-code']);
+      expect(spawned.lastEnv().WORKSPACE_API_KEY).toBe(secret);
+      expect(approvalDecisions(messages)).toEqual([
+        expect.objectContaining({ granted: false, source: 'secret' }),
+        expect.objectContaining({ granted: false, source: 'secret' }),
+      ]);
+      expect(JSON.stringify(answers)).not.toContain(secret);
+      expect(JSON.stringify(messages)).not.toContain(secret);
+    } finally {
+      session.destroy();
+    }
+  });
+
   const PROVIDER_KEY = 'held-provider-Zq81vXk2mPw9Lr4T';
   const PUBLIC_URL = 'https://93.184.215.14/docs';
 
-  async function decideInTurn(configOverrides: Parameters<typeof fakeConfig>[0], reads: WebRead[]) {
+  async function decideInTurn(configOverrides: Parameters<typeof fakeConfig>[0], reads: WebRead[], subagent = false) {
     const messages: SessionMessage[] = [];
     const decisions: WebReadDecision[] = [];
     const session = makeSession({
@@ -481,7 +519,8 @@ describe('Session web reads', () => {
       broadcast: (msg) => { messages.push(msg); },
       aiService: {
         startConversation: vi.fn(async (req: ConversationRequest) => {
-          for (const read of reads) decisions.push(await req.fetcher!.decide(read));
+          const fetcher = subagent ? req.fetcher!.forSubagent!() : req.fetcher!;
+          for (const read of reads) decisions.push(await fetcher.decide(read));
           return { kind: 'message' as const, text: 'Read it.', researchLog: [] };
         }),
         hasActiveConversation: () => true,
@@ -497,6 +536,20 @@ describe('Session web reads', () => {
     expect(decisions).toEqual([{ allowed: true }]);
     expect(approvalRequests(messages)).toHaveLength(0);
     expect(approvalDecisions(messages)).toEqual([expect.objectContaining({ kind: 'url_fetch', granted: true, source: 'mode' })]);
+  });
+
+  it('broadcasts subagent web-read grants and mode refusals to every surface', async () => {
+    for (const [approvalMode, granted] of [['auto', true], ['deny', false]] as const) {
+      const { decisions, messages } = await decideInTurn({ approvalMode, autonomousMode: true }, [
+        { kind: 'fetch', url: PUBLIC_URL }, { kind: 'search', query: 'tokio', provider: 'duckduckgo' },
+      ], true);
+      expect(decisions.map((decision) => decision.allowed)).toEqual([granted, granted]);
+      expect(approvalRequests(messages)).toHaveLength(0);
+      expect(approvalDecisions(messages)).toEqual([
+        expect.objectContaining({ kind: 'url_fetch', granted, source: 'mode' }),
+        expect.objectContaining({ kind: 'web_search', granted, source: 'mode' }),
+      ]);
+    }
   });
 
   it('refuses a URL carrying a provider key the session holds, and broadcasts none of it', async () => {

@@ -88,6 +88,10 @@ export function isRunnerApproval(request: ApprovalRequest): boolean {
   return request.kind === 'runner_tool';
 }
 
+export type StandingDecision =
+  | { decision: 'allow' | 'deny'; source: 'pre-approved' | 'remembered' | 'mode' }
+  | { decision: 'ask'; source: 'no-channel' };
+
 export interface IApproval {
   request(req: ApprovalRequest): Promise<boolean>;
   /** The standing approvals a command is classified against, when this approval has any (ADR-0026). */
@@ -101,7 +105,7 @@ export interface IApproval {
    * remembered or the mode forbids, `ask` when it would still need a prompt. A
    * background research subagent never prompts, so `ask` means refused.
    */
-  peek?(req: ApprovalRequest): 'allow' | 'deny' | 'ask';
+  peek?(req: ApprovalRequest): StandingDecision;
   /** Whether `request` would grant this scope now without asking anyone. Nothing is asked or recorded. */
   grantsUnasked?(req: Pick<ApprovalRequest, 'kind' | 'scope'>): boolean;
 }

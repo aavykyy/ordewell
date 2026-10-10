@@ -90,6 +90,8 @@ export type ConversationTurn =
   | { kind: 'task_query'; query: import('./TaskQuery').TaskQuery; text: string; researchLog: ResearchLogEntry[] };
 
 export interface IAiService {
+  /** Credential values from the harness planner's effective environment, for the outbound secret check. */
+  heldSecrets?(): readonly string[];
   /**
    * Begin the planner conversation: collect workspace context, run the
    * research/tool loop, and return the first planner turn. The service
