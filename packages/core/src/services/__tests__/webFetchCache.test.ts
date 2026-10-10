@@ -104,6 +104,46 @@ describe('shared web-response cache', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  // The cache cannot revalidate, so a response that must be revalidated is
+  // one it cannot reuse.
+  it('does not cache a response marked no-cache', async () => {
+    const cache = new WebResponseCache();
+    const fetchImpl = vi.fn().mockResolvedValue(response('<p>page</p>', { headers: { 'cache-control': 'public, no-cache' } }));
+    const fetcher = makeFetcher({ approval: allow, fetchImpl, cache });
+
+    await fetcher.fetch('https://docs.example.com/a');
+    await fetcher.fetch('https://docs.example.com/a');
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a response only for its max-age when that is shorter than the TTL', async () => {
+    let now = 0;
+    const cache = new WebResponseCache({ ttlMs: 300_000, now: () => now });
+    const fetchImpl = vi.fn().mockResolvedValue(response('<p>page</p>', { headers: { 'cache-control': 'public, max-age=10' } }));
+    const fetcher = makeFetcher({ approval: allow, fetchImpl, cache });
+
+    await fetcher.fetch('https://docs.example.com/a');
+    now = 9_000;
+    await fetcher.fetch('https://docs.example.com/a');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    now = 10_001;
+    await fetcher.fetch('https://docs.example.com/a');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not cache a response with max-age=0', async () => {
+    const cache = new WebResponseCache();
+    const fetchImpl = vi.fn().mockResolvedValue(response('<p>page</p>', { headers: { 'cache-control': 'max-age=0' } }));
+    const fetcher = makeFetcher({ approval: allow, fetchImpl, cache });
+
+    await fetcher.fetch('https://docs.example.com/a');
+    await fetcher.fetch('https://docs.example.com/a');
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it('does not cache a response that was byte-capped', async () => {
     const cache = new WebResponseCache();
     const huge = 'x'.repeat(2_500_000);
@@ -114,6 +154,35 @@ describe('shared web-response cache', () => {
 
     await fetcher.fetch('https://docs.example.com/big');
     await fetcher.fetch('https://docs.example.com/big');
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  // The key is the URL asked for. Caching what another origin answered under
+  // it would hand that body to every session that later asks for the first
+  // URL, without the second origin ever being decided for them.
+  it('does not cache a body that came from another origin', async () => {
+    const cache = new WebResponseCache();
+    const fetchImpl = vi.fn().mockImplementation((url: string) => (url === 'https://docs.example.com/moved'
+      ? response('', { status: 302, headers: { location: 'https://elsewhere.example.net/page' } })
+      : response('<p>elsewhere</p>')));
+    const fetcher = makeFetcher({ approval: allow, fetchImpl, cache });
+
+    await fetcher.fetch('https://docs.example.com/moved');
+    await fetcher.fetch('https://docs.example.com/moved');
+
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it('caches a body reached through a same-origin redirect', async () => {
+    const cache = new WebResponseCache();
+    const fetchImpl = vi.fn().mockImplementation((url: string) => (url === 'https://docs.example.com/moved'
+      ? response('', { status: 301, headers: { location: '/page' } })
+      : response('<p>page</p>')));
+    const fetcher = makeFetcher({ approval: allow, fetchImpl, cache });
+
+    await fetcher.fetch('https://docs.example.com/moved');
+    await fetcher.fetch('https://docs.example.com/moved');
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
@@ -129,5 +198,41 @@ describe('shared web-response cache', () => {
     await fetcher.fetch('https://docs.example.com/a');
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});
+
+// A count alone lets 100 entries of a 2 MB page each sit in every process.
+describe('WebResponseCache bounds', () => {
+  const page = (bytes: number) => ({ body: 'x'.repeat(bytes), isHtml: false });
+
+  it('evicts the least recently used entries once the total bytes pass the cap', () => {
+    const cache = new WebResponseCache({ maxBytes: 100 });
+    cache.setFetch('https://a.example/', page(40));
+    cache.setFetch('https://b.example/', page(40));
+    cache.getFetch('https://a.example/');
+    cache.setFetch('https://c.example/', page(40));
+
+    expect(cache.getFetch('https://b.example/')).toBeUndefined();
+    expect(cache.getFetch('https://a.example/')).toBeDefined();
+    expect(cache.getFetch('https://c.example/')).toBeDefined();
+  });
+
+  it('does not store an entry larger than the whole cap', () => {
+    const cache = new WebResponseCache({ maxBytes: 100 });
+    cache.setFetch('https://a.example/', page(40));
+    cache.setFetch('https://huge.example/', page(101));
+
+    expect(cache.getFetch('https://huge.example/')).toBeUndefined();
+    expect(cache.getFetch('https://a.example/')).toBeDefined();
+  });
+
+  it('counts a search result by its text', () => {
+    const cache = new WebResponseCache({ maxBytes: 100 });
+    const hit = { title: 't'.repeat(30), url: 'https://u.example/', snippet: 's'.repeat(30) };
+    cache.setSearch('ddg\u0000a', [hit]);
+    cache.setSearch('ddg\u0000b', [hit]);
+
+    expect(cache.getSearch('ddg\u0000a')).toBeUndefined();
+    expect(cache.getSearch('ddg\u0000b')).toEqual([hit]);
   });
 });

