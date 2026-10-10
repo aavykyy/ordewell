@@ -1,7 +1,13 @@
-import { lookup } from 'node:dns/promises';
+import * as http from 'node:http';
+import * as https from 'node:https';
+import type { IncomingMessage } from 'node:http';
+import type { LookupFunction } from 'node:net';
+import { pipeline, type Readable } from 'node:stream';
+import * as zlib from 'node:zlib';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { IApproval } from '../interfaces/IApproval';
 import type { ToolOutcome } from '../interfaces/IFileSystem';
+import { guardedLookup, resolveAll, vetEgress, type ResolveAll } from './egressGuard';
 
 /**
  * The concrete `fetch`/`web_search` implementation, in core so the web server
@@ -14,16 +20,31 @@ import type { ToolOutcome } from '../interfaces/IFileSystem';
  * docs is one decision, not three.
  */
 
+/** The slice of a `fetch` Response the fetcher reads; the platform `fetch` satisfies it. */
+export interface WebResponse {
+  ok: boolean;
+  status: number;
+  headers: { get(name: string): string | null };
+  body: unknown;
+  text(): Promise<string>;
+}
+
+export type WebTransport = (
+  url: string,
+  init: { signal: AbortSignal; headers: Record<string, string>; redirect: 'manual' },
+) => Promise<WebResponse>;
+
 export interface HttpWebFetcherOptions {
   approval: IApproval;
-  /** Injected in tests; defaults to the platform `fetch`. */
-  fetchImpl?: typeof fetch;
+  /**
+   * Injected in tests; defaults to a node:http(s) transport whose sockets
+   * connect only to addresses `resolveHost` answered and the guard vetted.
+   */
+  fetchImpl?: WebTransport;
   maxChars?: number;
   timeoutMs?: number;
-  /** Override the SSRF / private-host guard in tests. */
-  isBlockedHost?: (host: string, port: string) => Promise<boolean>;
-  /** Override DNS resolution in tests. */
-  resolveHost?: (host: string) => Promise<string[]>;
+  /** Override DNS resolution (every answer for a name) in tests. */
+  resolveHost?: ResolveAll;
 }
 
 const DEFAULT_MAX_CHARS = 40_000;
@@ -91,34 +112,6 @@ function parseSearchHits(html: string): SearchHit[] {
   return hits;
 }
 
-/**
- * Reject hosts that resolve to (or literally name) loopback, link-local, or
- * RFC1918 private space — the SSRF surface. `fetch` is the one capability that
- * leaves the machine, so an unguarded `http://169.254.169.254/` would hand a
- * prompt-injected planner the cloud metadata credentials.
- */
-function isPrivateIp(ip: string): boolean {
-  // `dns.lookup('')` resolves rather than rejecting, with `address: null` —
-  // fail closed instead of letting a falsy/non-string address slip past every
-  // regex below untested.
-  if (!ip) return true;
-  if (ip === '0.0.0.0' || ip === '::' || ip === '::1' || ip === '::ffff:127.0.0.1') return true;
-  if (/^127\./.test(ip)) return true;
-  if (/^169\.254\./.test(ip)) return true;
-  if (/^10\./.test(ip)) return true;
-  if (/^192\.168\./.test(ip)) return true;
-  // 172.16.0.0/12 = 172.16.0.0 – 172.31.255.255
-  const m172 = /^172\.(\d+)\./.exec(ip);
-  if (m172 && Number(m172[1]) >= 16 && Number(m172[1]) <= 31) return true;
-  // fe80::/10 link-local IPv6
-  if (/^fe[89ab][0-9a-f]/i.test(ip)) return true;
-  return false;
-}
-
-function isIpLiteral(host: string): boolean {
-  return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || /^\[?[0-9a-fA-F:]+\]?$/i.test(host);
-}
-
 function sanitizeError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
   if (/abort/i.test(msg)) return 'timed out';
@@ -129,33 +122,21 @@ function sanitizeError(err: unknown): string {
 
 export class HttpWebFetcher implements IWebFetcher {
   private readonly approval: IApproval;
-  private readonly fetchImpl: typeof fetch;
+  private readonly fetchImpl: WebTransport;
   private readonly maxChars: number;
   private readonly timeoutMs: number;
-  private readonly isBlockedHost: (host: string, port: string) => Promise<boolean>;
-  private readonly resolveHost: (host: string) => Promise<string[]>;
+  private readonly resolveHost: ResolveAll;
 
   constructor(opts: HttpWebFetcherOptions) {
     this.approval = opts.approval;
-    this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
     this.maxChars = opts.maxChars ?? DEFAULT_MAX_CHARS;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.isBlockedHost = opts.isBlockedHost ?? this.defaultIsBlocked.bind(this);
-    this.resolveHost = opts.resolveHost ?? (async (h) => { const r = await lookup(h); return [r.address]; });
+    this.resolveHost = opts.resolveHost ?? resolveAll;
+    this.fetchImpl = opts.fetchImpl ?? pinnedTransport(guardedLookup(this.resolveHost));
   }
 
-  private async defaultIsBlocked(host: string, port: string): Promise<boolean> {
-    if (!['', '80', '443'].includes(port)) return true;
-    if (isIpLiteral(host)) return isPrivateIp(host.startsWith('[') ? host.slice(1, -1) : host);
-    const lower = host.toLowerCase();
-    if (lower === 'localhost' || lower === 'ip6-localhost' || lower === 'ip6-loopback') return true;
-    try {
-      const addrs = await this.resolveHost(host);
-      if (addrs.some((a) => isPrivateIp(a))) return true;
-    } catch {
-      return true;
-    }
-    return false;
+  private async isBlockedHost(host: string, port: string): Promise<boolean> {
+    return !(await vetEgress(host, port, this.resolveHost)).ok;
   }
 
   async confirm(url: string): Promise<boolean> {
@@ -267,17 +248,21 @@ export class HttpWebFetcher implements IWebFetcher {
         return { ok: false, error: sanitizeError(err) };
       } finally {
         clearTimeout(timer);
+        // Releases the socket of a redirect or error response whose body was
+        // never read; a no-op once the body has been consumed.
+        controller.abort();
       }
     }
     return { ok: false, error: `too many redirects (>${MAX_REDIRECTS})` };
   }
 }
 
-async function readBounded(res: Response, maxBytes: number): Promise<{ body: string; truncated: boolean }> {
-  const reader = res.body?.[Symbol.asyncIterator]
-    ? readFromIterable(res.body as unknown as AsyncIterable<Uint8Array>, maxBytes)
-    : readFromText(res, maxBytes);
-  return reader;
+function isAsyncIterable(value: unknown): value is AsyncIterable<Uint8Array> {
+  return typeof value === 'object' && value !== null && Symbol.asyncIterator in value;
+}
+
+async function readBounded(res: WebResponse, maxBytes: number): Promise<{ body: string; truncated: boolean }> {
+  return isAsyncIterable(res.body) ? readFromIterable(res.body, maxBytes) : readFromText(res, maxBytes);
 }
 
 async function readFromIterable(source: AsyncIterable<Uint8Array>, maxBytes: number): Promise<{ body: string; truncated: boolean }> {
@@ -298,8 +283,75 @@ async function readFromIterable(source: AsyncIterable<Uint8Array>, maxBytes: num
   return { body: Buffer.concat(chunks).toString('utf8'), truncated };
 }
 
-async function readFromText(res: Response, maxBytes: number): Promise<{ body: string; truncated: boolean }> {
+async function readFromText(res: WebResponse, maxBytes: number): Promise<{ body: string; truncated: boolean }> {
   const text = await res.text();
   if (Buffer.byteLength(text, 'utf8') <= maxBytes) return { body: text, truncated: false };
   return { body: Buffer.from(text, 'utf8').subarray(0, maxBytes).toString('utf8'), truncated: true };
+}
+
+function headerGetter(res: IncomingMessage): WebResponse['headers'] {
+  return {
+    get: (name) => {
+      const value = res.headers[name.toLowerCase()];
+      if (value === undefined) return null;
+      return Array.isArray(value) ? value.join(', ') : value;
+    },
+  };
+}
+
+function decodedBody(res: IncomingMessage): Readable {
+  const encoding = String(res.headers['content-encoding'] ?? '').trim().toLowerCase();
+  const decoder = encoding === 'gzip' || encoding === 'x-gzip' ? zlib.createGunzip()
+    : encoding === 'deflate' ? zlib.createInflate()
+      : encoding === 'br' ? zlib.createBrotliDecompress()
+        : undefined;
+  if (!decoder) return res;
+  // pipeline forwards a source or decode error to the decoder, where the
+  // bounded reader's iteration surfaces it.
+  pipeline(res, decoder, () => undefined);
+  return decoder;
+}
+
+/**
+ * GET over node:http(s) with the vetted `lookup`, replacing the platform
+ * `fetch`, which resolves names itself and so cannot be pinned. Redirects are
+ * left to the caller (each hop gets its own vetted connection), and nothing
+ * from the URL's userinfo is sent.
+ */
+export function pinnedTransport(lookup: LookupFunction): WebTransport {
+  return (url, init) => new Promise<WebResponse>((resolve, reject) => {
+    const target = new URL(url);
+    const client = target.protocol === 'https:' ? https : http;
+    const req = client.request(
+      {
+        protocol: target.protocol,
+        hostname: target.hostname.replace(/^\[|\]$/g, ''),
+        port: target.port || undefined,
+        path: `${target.pathname}${target.search}`,
+        method: 'GET',
+        // Sent, and decoded below, because the platform fetch did the same and
+        // some hosts challenge clients that don't.
+        headers: { ...init.headers, 'accept-encoding': 'gzip, deflate, br' },
+        signal: init.signal,
+        lookup,
+        // A pooled keep-alive socket would be reused without a fresh lookup.
+        agent: false,
+      },
+      (res) => {
+        // The fetcher aborts once it is done with a response; without a
+        // listener that teardown error on an unread body would be uncaught.
+        res.on('error', () => undefined);
+        const body = decodedBody(res);
+        resolve({
+          ok: res.statusCode !== undefined && res.statusCode >= 200 && res.statusCode < 300,
+          status: res.statusCode ?? 0,
+          headers: headerGetter(res),
+          body,
+          text: async () => (await readFromIterable(body, Infinity)).body,
+        });
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
 }
