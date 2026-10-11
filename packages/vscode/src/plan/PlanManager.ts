@@ -202,7 +202,7 @@ export async function handleSplitPlan(taskId: string, deps: PlanManagerDeps): Pr
  * (ADR-0029), so it is checked and kept in the timeline with who asked. A
  * refusal is thrown, so the caller's existing catch shows it.
  */
-async function executeUserCommand(session: Pick<Session, 'execute'>, command: ExecutionCommand): Promise<void> {
+export async function executeUserCommand(session: Pick<Session, 'execute'>, command: ExecutionCommand): Promise<void> {
   const outcome = await session.execute(command, { kind: 'user' });
   if (!outcome.ok) throw new Error(outcome.message);
 }

@@ -449,7 +449,9 @@ export class Session {
   /** Supervisor commands at the seam right now: a run they open continues the user's, rather than starting one. */
   private supervisorActing = 0;
   /** Starts the open turn asked for that wait on its own held edit; run once its reply lands. */
-  private deferred: { command: ExecutionCommand; actor: ExecutionActor }[] = [];
+  private deferred: { command: ExecutionCommand; actor: ExecutionActor; intent: string }[] = [];
+  /** The open turn's task edit landed, so what it deferred runs as edited. */
+  private editLanded = false;
   private unlistenApprovals: (() => void) | null;
   private readonly plannerTools: PlannerToolHandler = plannerToolHandler({
     skills: () => this.workspaceSkills().listSkills(),
@@ -540,6 +542,7 @@ export class Session {
         // the next turn's log cannot absorb a previous turn's uncommitted activity.
         this.events.dropSubagentRuns();
         this.deferred = [];
+        this.editLanded = false;
         const reply = (turnSignal: AbortSignal | undefined, wakeUp?: WakeUpTurn) =>
           this.conversation.reply(prompt, { signal: turnSignal, onCommit: taken, wakeUps: prompt.wakeUps, ...(wakeUp ? { wakeUp } : {}) });
         // Wake-ups that ride with a user's message are context for the user's turn.
@@ -619,11 +622,17 @@ export class Session {
   /**
    * The starts a turn deferred behind its own held edit, now that it landed:
    * each goes through the seam again, so it is checked against the edited
-   * plan, and the supervisor's at the level it has by now.
+   * plan, and the supervisor's at the level it has by now. An edit that never
+   * landed — the turn stopped, or the edit refused as it landed — takes its
+   * starts with it: run on the unedited plan, they would not be what was asked.
    */
   private runDeferred(): void {
     const due = this.deferred;
     this.deferred = [];
+    if (!this.editLanded) {
+      for (const { intent } of due) this.notice('warn', `Not done: ${intent} waited for an edit that did not land.`);
+      return;
+    }
     void (async () => {
       for (const { command, actor } of due) {
         const now: ExecutionActor = actor.kind === 'supervisor' ? { kind: 'supervisor', level: this.supervisor.level } : actor;
@@ -665,7 +674,7 @@ export class Session {
       record: (record, text) => this.recordExecution(record, text),
       guardTripped: (trip) => this.guardTripped(trip),
       heldEdit: (taskId) => this.heldEdit(taskId),
-      deferUntilLanded: (command, actor) => { this.deferred.push({ command, actor }); },
+      deferUntilLanded: (command, actor, intent) => { this.deferred.push({ command, actor, intent }); },
     };
   }
 
@@ -1298,10 +1307,11 @@ export class Session {
 
   /**
    * Load planner-produced tasks, coerced to the allowlist read live — it may
-   * have changed since planning started. Tasks adopted on an armed scheduler are
-   * reconciled rather than reloaded: `loadPlan` clears the on-hold set and the
-   * review approval, so a task the user cancelled would be re-armed and
-   * re-spawned by the re-tick that follows.
+   * have changed since planning started. Tasks adopted on an armed scheduler,
+   * or on a run a failure halted, are reconciled rather than reloaded:
+   * `loadPlan` clears the on-hold set and the review approval, so a task the
+   * user cancelled would be re-armed and re-spawned by the re-tick that
+   * follows, and a retry after the edit would no longer resume the run.
    *
    * A whole-plan commit is the planner restating every task, so it is laid
    * over the plan's execution state rather than replacing it: a planner that
@@ -1310,6 +1320,7 @@ export class Session {
    * tasks, and `rearm`, the one op meant to change a status, must stand.
    */
   private adoptPlannerTasks(tasks: readonly Task[], how: 'edit' | 'commit'): number {
+    if (how === 'edit') this.editLanded = true;
     const runners = this.plan!.runners;
     const before = this.store.planTasks;
     let coerced = coerceAssignments(tasks, this.catalog.allowlist(), runners, this.catalog.models());
@@ -1322,7 +1333,7 @@ export class Session {
       this.approve(added);
       this.guards.edited(before, coerced);
     }
-    if (this.orchestrator.isRunning) {
+    if (this.orchestrator.isRunning || this.orchestrator.isHaltedByFailure) {
       this.orchestrator.reconcilePlan(coerced, runners);
     } else {
       this.orchestrator.loadPlan(coerced, runners);

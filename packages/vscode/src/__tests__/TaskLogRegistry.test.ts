@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as vscode from 'vscode';
-import { createTask, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
+import { createTask, type CommandOutcome, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { TaskLogRegistry } from '../providers/TaskLogRegistry';
 import type { HostToTaskLog } from '../shared/taskLogProtocol';
 import { __panels, __resetPanels } from '../test/vscode.mock';
@@ -22,12 +22,11 @@ function harness(attempts: Record<number, TaskLogEvent[]> = { 1: attemptOne }) {
   const session = {
     taskLogAttempts: vi.fn(() => Object.keys(attempts).map(Number).sort((a, b) => a - b)),
     taskLog: vi.fn((_taskId: string, attempt: number) => attempts[attempt] ?? []),
-    sendTaskMessage: vi.fn(() => 'm1'),
+    execute: vi.fn(async (_command: ExecutionCommand, _actor: ExecutionActor): Promise<CommandOutcome> => ({ ok: true, message: 'done' })),
     removeQueuedTaskMessage: vi.fn(() => true),
     forceSendTaskMessage: vi.fn(() => 'm2'),
     forceSendQueuedTaskMessage: vi.fn(() => true),
     interruptTask: vi.fn(async () => {}),
-    continueTask: vi.fn(async () => {}),
     cancelScheduledResume: vi.fn(() => true),
     pending: [] as PendingApproval[],
     outstandingApprovals: vi.fn((): PendingApproval[] => session.pending),
@@ -76,9 +75,9 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     const registry = new TaskLogRegistry({
       extensionUri: vscode.Uri.file('/ext'),
       session: () => ({
-        taskLogAttempts: () => [], taskLog: () => [], sendTaskMessage: () => 'm', removeQueuedTaskMessage: () => false, interruptTask: async () => {},
+        taskLogAttempts: () => [], taskLog: () => [], execute: async () => ({ ok: true, message: '' }), removeQueuedTaskMessage: () => false, interruptTask: async () => {},
         forceSendTaskMessage: () => 'm', forceSendQueuedTaskMessage: () => false,
-        continueTask: async () => {}, cancelScheduledResume: () => false, outstandingApprovals: () => [], resolveApproval: () => false,
+        cancelScheduledResume: () => false, outstandingApprovals: () => [], resolveApproval: () => false,
       }),
       getTask: () => undefined,
       log: vi.fn(),
@@ -127,7 +126,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     expect(posted(__panels[0])[0]).toMatchObject({ type: 'init', status: { attempt: 1 } });
   });
 
-  it('routes a message, a removal and an interrupt to the Session', async () => {
+  it('sends a message through the command seam as the user, and routes a removal and an interrupt to the Session', async () => {
     const h = harness();
     h.registry.open('t1');
 
@@ -135,7 +134,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     __panels[0].__receive({ type: 'removeQueuedTaskMessage', id: 'q1' });
     __panels[0].__receive({ type: 'interruptTask' });
 
-    expect(h.session.sendTaskMessage).toHaveBeenCalledWith('t1', 'use Postgres');
+    await vi.waitFor(() => expect(h.session.execute).toHaveBeenCalledWith({ command: 'message_task', task: 't1', text: 'use Postgres' }, { kind: 'user' }));
     expect(h.session.removeQueuedTaskMessage).toHaveBeenCalledWith('t1', 'q1');
     await vi.waitFor(() => expect(h.session.interruptTask).toHaveBeenCalledWith('t1'));
   });
@@ -168,16 +167,16 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     ]);
   });
 
-  it('shows the Session\u2019s refusal of a task that cannot take a message', () => {
+  it('shows the seam\u2019s refusal of a task that cannot take a message', async () => {
     const h = harness();
-    h.session.sendTaskMessage.mockImplementation(() => { throw new Error('Task is not running.'); });
+    h.session.execute.mockResolvedValue({ ok: false, outcome: 'refused', message: 'Task is not running.' });
     h.registry.open('t1');
     __panels[0].__receive({ type: 'ready' });
     __panels[0].webview.postMessage.mockClear();
 
     __panels[0].__receive({ type: 'sendTaskMessage', text: 'hello' });
 
-    expect(posted(__panels[0])).toContainEqual({ type: 'showError', error: 'Task is not running.' });
+    await vi.waitFor(() => expect(posted(__panels[0])).toContainEqual({ type: 'showError', error: 'Task is not running.' }));
   });
 
   it('closing the tab never touches the task, and reopening loads it afresh', () => {
@@ -185,7 +184,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     h.registry.open('t1');
     __panels[0].__fireDispose();
 
-    expect(h.session.sendTaskMessage).not.toHaveBeenCalled();
+    expect(h.session.execute).not.toHaveBeenCalled();
     expect(h.session.interruptTask).not.toHaveBeenCalled();
 
     h.registry.open('t1');
@@ -220,7 +219,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     expect(posted(__panels[0]).find((m) => m.type === 'status')).toMatchObject({ status: { continuable: true } });
   });
 
-  it('continues the task through the Session and follows the new attempt, even from an earlier one', async () => {
+  it('continues the task through the command seam as the user and follows the new attempt, even from an earlier one', async () => {
     const h = harness({ 1: attemptOne, 2: attemptTwo });
     h.task.status = 'completed';
     h.task.runnerSessionId = 'sess-1';
@@ -229,16 +228,16 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     __panels[0].__receive({ type: 'selectAttempt', attempt: 1 });
 
     __panels[0].__receive({ type: 'continueTask', text: 'also handle arrays' });
-    await vi.waitFor(() => expect(h.session.continueTask).toHaveBeenCalledWith('t1', 'also handle arrays'));
+    await vi.waitFor(() => expect(h.session.execute).toHaveBeenCalledWith({ command: 'retry_task', task: 't1', from: 'session', message: 'also handle arrays' }, { kind: 'user' }));
 
     __panels[0].webview.postMessage.mockClear();
     h.registry.receive({ type: 'task_log', taskId: 't1', attempt: 3, events: [{ type: 'turn_start', message: 'also handle arrays' }] });
     expect(posted(__panels[0]).at(-1)).toMatchObject({ type: 'init', status: { attempt: 3, attempts: [1, 2, 3] } });
   });
 
-  it('shows the Session’s refusal of a continue', async () => {
+  it('shows the seam’s refusal of a continue', async () => {
     const h = harness();
-    h.session.continueTask.mockImplementation(async () => { throw new Error('Task "Parse JSON" cannot be continued: its runner left no saved session to resume.'); });
+    h.session.execute.mockResolvedValue({ ok: false, outcome: 'refused', message: 'Task "Parse JSON" cannot be continued: its runner left no saved session to resume.' });
     h.registry.open('t1');
     __panels[0].__receive({ type: 'ready' });
 

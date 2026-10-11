@@ -137,6 +137,22 @@ describe('live planner turns during a run', () => {
     await vi.waitFor(() => expect(spawnedIds()).toEqual(['t1', 't2']));
   });
 
+  it('keeps a run a failure halted through an edit to the failed task, so its retry resumes the run', async () => {
+    const { session, calls, runner, spawnedIds, finish } = await liveRun();
+    runner.spawn.mock.results[0].value.then((s: FakeRunnerSession) => s.reportComplete({ status: 'failed', summary: '', reason: 'wrong import' }));
+    await vi.waitFor(() => expect(taskOf(session, 't1')!.status).toBe('failed'));
+
+    const answered = session.continueConversation('fix the import in task 1');
+    calls[0].finish(ops({ op: 'update', taskId: 't1', changes: { prompt: 'do first, importing from ./lib' } }));
+    await answered;
+    expect(taskOf(session, 't1')).toMatchObject({ prompt: 'do first, importing from ./lib', status: 'failed' });
+
+    await session.retryTask('t1');
+    await vi.waitFor(() => expect(spawnedIds()).toEqual(['t1', 't1']));
+    finish('t1');
+    await vi.waitFor(() => expect(spawnedIds()).toEqual(['t1', 't1', 't2']));
+  });
+
   it('applies an edit to a task that has not started before it starts', async () => {
     const { session, calls, spawnedIds, promptOf, finish } = await liveRun();
     const answered = session.continueConversation('make task 2 add tests too');

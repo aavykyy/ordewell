@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { canContinue, resumeLabel, type ApprovalAnswer, type DisplayBlock, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
+import { canContinue, resumeLabel, type ApprovalAnswer, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { EMPTY_TASK_LOG, reduceTaskLog, replayTaskLog, type TaskLogView } from '@ordewell/core/plan-utils';
 import { diffConversation } from '../shared/conversationPatch';
 import { renderWebviewHtml } from './webviewHtml';
@@ -13,12 +13,12 @@ import type { HostToTaskLog, TaskLogStatus, TaskLogToHost } from '../shared/task
 export interface TaskLogSession {
   taskLogAttempts(taskId: string): number[];
   taskLog(taskId: string, attempt: number): TaskLogEvent[];
-  sendTaskMessage(taskId: string, text: string): string;
+  /** A message and a continue are execution buttons: they go through the command seam as the user (ADR-0029). */
+  execute(command: ExecutionCommand, actor: ExecutionActor): Promise<CommandOutcome>;
   removeQueuedTaskMessage(taskId: string, id: string): boolean;
   forceSendTaskMessage(taskId: string, text: string): string;
   forceSendQueuedTaskMessage(taskId: string, id: string): boolean;
   interruptTask(taskId: string): Promise<void>;
-  continueTask(taskId: string, message: string): Promise<void>;
   cancelScheduledResume(taskId: string): boolean;
   outstandingApprovals(): PendingApproval[];
   resolveApproval(id: string, answer: ApprovalAnswer): boolean;
@@ -117,7 +117,7 @@ export class TaskLogPanel {
         this.selectAttempt(msg.attempt);
         return;
       case 'sendTaskMessage':
-        this.control(() => { this.deps.session.sendTaskMessage(this.taskId, msg.text); });
+        this.controlAsync(() => this.userCommand({ command: 'message_task', task: this.taskId, text: msg.text }));
         return;
       case 'removeQueuedTaskMessage':
         this.control(() => { this.deps.session.removeQueuedTaskMessage(this.taskId, msg.id); });
@@ -141,7 +141,7 @@ export class TaskLogPanel {
       case 'continueTask':
         // The continue is a new attempt: show it, even from an earlier one.
         this.followLive = true;
-        this.controlAsync(() => this.deps.session.continueTask(this.taskId, msg.text));
+        this.controlAsync(() => this.userCommand({ command: 'retry_task', task: this.taskId, from: 'session', message: msg.text }));
         return;
       // The card settles when the task log reports the answer.
       case 'answerApproval':
@@ -244,6 +244,11 @@ export class TaskLogPanel {
     } catch (err) {
       this.showError(err);
     }
+  }
+
+  private async userCommand(command: ExecutionCommand): Promise<void> {
+    const outcome = await this.deps.session.execute(command, { kind: 'user' });
+    if (!outcome.ok) throw new Error(outcome.message);
   }
 
   private controlAsync(run: () => Promise<void>): void {

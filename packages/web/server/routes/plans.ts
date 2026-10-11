@@ -206,12 +206,12 @@ export function plansRoute(pool: OrchestratorPool) {
   // the reason. Force send
   // (ADR-0023, F1) is the same request: it interrupts the running turn and
   // delivers this message next, ahead of anything queued.
-  const messageHandler = (send: (session: ReturnType<typeof pool.session>, taskId: string, text: string) => string) => async (c: Context<Env, '/:sessionId/tasks/:taskId/messages'>) => {
+  const messageHandler = (send: (session: ReturnType<typeof pool.session>, taskId: string, text: string) => string | Promise<string>) => async (c: Context<Env, '/:sessionId/tasks/:taskId/messages'>) => {
     try {
       const body: unknown = await c.req.json().catch(() => ({}));
       const text = typeof body === 'object' && body !== null && 'text' in body ? body.text : undefined;
       if (typeof text !== 'string' || !text.trim()) return c.json({ error: 'text is required' }, 400);
-      const id = send(pool.session(c.req.param('sessionId')), c.req.param('taskId'), text);
+      const id = await send(pool.session(c.req.param('sessionId')), c.req.param('taskId'), text);
       return c.json({ id } satisfies TaskMessageResponse);
     } catch (err) {
       return failure(c, err, 'task edit');
@@ -220,17 +220,8 @@ export function plansRoute(pool: OrchestratorPool) {
 
   // A plain message reaches the task through the command seam as the user (ADR-0029),
   // so it lands in the timeline; force send has no command and stays on the Session.
-  router.post('/:sessionId/tasks/:taskId/messages', async (c) => {
-    try {
-      const body: unknown = await c.req.json().catch(() => ({}));
-      const text = typeof body === 'object' && body !== null && 'text' in body ? body.text : undefined;
-      if (typeof text !== 'string' || !text.trim()) return c.json({ error: 'text is required' }, 400);
-      const outcome = await runUserCommand(pool.session(c.req.param('sessionId')), { command: 'message_task', task: c.req.param('taskId'), text });
-      return c.json({ id: outcome.id ?? '' } satisfies TaskMessageResponse);
-    } catch (err) {
-      return failure(c, err, 'task edit');
-    }
-  });
+  router.post('/:sessionId/tasks/:taskId/messages', messageHandler(async (session, taskId, text) =>
+    (await runUserCommand(session, { command: 'message_task', task: taskId, text })).id ?? ''));
   router.post('/:sessionId/tasks/:taskId/messages/now', messageHandler((session, taskId, text) => session.forceSendTaskMessage(taskId, text)));
 
   // Force send a message still queued; `sent` is false once the runner has it.
