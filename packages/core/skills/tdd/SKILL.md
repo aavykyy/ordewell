@@ -2,7 +2,6 @@
 name: tdd
 description: Work test-first in red-green slices. Attach to tasks that implement or change behaviour; not to verification-only, docs or ops tasks.
 applies-to: task
-disable-model-invocation: true
 ---
 
 Work test-first in vertical slices at the seams your task prompt names. A seam is the public boundary you test at — if the prompt names none, identify the highest public interface and test there, never against internals.

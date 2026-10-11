@@ -36,7 +36,10 @@ is case-exact on the folder name on every OS, so a `Review/` folder is never
 found as `review`.
 
 Leave the two invocation fields out and both you and a model may invoke the
-skill. The built-in skills are all user-only.
+skill. Of the built-in skills, `tdd` is open to the planner, which attaches it
+to tasks that implement or change behaviour; the other three are user-only. To
+keep `tdd` from being offered, add `disable-model-invocation: true` to your copy
+in `~/.ordewell/skills/tdd/SKILL.md`; Ordewell will not overwrite it.
 
 A planner skill:
 

@@ -55,7 +55,7 @@ describe('task skill catalog', () => {
     expect(catalog).not.toMatch(/tdd|review|SECRET BODY/);
   });
 
-  it('omits the catalog when no task skill is model-invocable, as with the built-ins', () => {
+  it('omits the catalog when no task skill is model-invocable', () => {
     for (const text of [prompt([]), prompt([skill('tdd', { modelInvocable: false })]), prompt([])]) {
       expect(text).not.toContain('Task skills you may attach:');
     }

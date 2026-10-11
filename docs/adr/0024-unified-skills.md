@@ -1,6 +1,6 @@
 # 0024 — Unified skills: one format, one loader, two audiences
 
-**Status:** accepted
+**Status:** accepted — built-in task skills may be model-invocable, see [Amendment (2026-10-11)](#amendment-2026-10-11)
 
 ## Context
 
@@ -34,7 +34,8 @@ a name gets a warning:
   `/name` and a model may invoke it.
 - **Every built-in is user-only** (`disable-model-invocation: true`), the new
   `tdd` task skill included. No model sees a built-in in a catalog or can pick
-  one on its own; the user opts in.
+  one on its own; the user opts in. *(Amended 2026-10-11: `tdd` is no longer
+  user-only; the other three are. See the Amendment below.)*
 
 **Two scopes.** Global `~/.ordewell/skills/` holds the built-in seeds and the
 user's own skills, and is written by the user only. Workspace
@@ -142,6 +143,40 @@ skills reach worktrees through git),
 unedited), [ADR-0022](0022-ordewell-mcp-server.md) (`load_skill` lives on that
 server).
 
+## Amendment (2026-10-11): built-in task skills may be model-invocable
+
+**Changed.** "Every built-in is user-only" now reads: a built-in **task** skill
+may be model-invocable when its description states where it applies. `tdd` is
+the first: its seed drops `disable-model-invocation: true`, so the planner's
+catalog of task skills lists it and the planner attaches it on its own to the
+tasks it fits (its description: tasks that implement or change behaviour; not
+verification-only, docs or ops tasks). Typing `/tdd` still works and is still a
+directive to attach.
+
+**Unchanged.**
+- The three planner built-ins (`grilling`, `to-spec`,
+  `improve-codebase-architecture`) remain user-only. A planner skill steers the
+  whole conversation, and nothing in its description bounds when that is right.
+- Only the planner ever picks a task skill, and only by attaching it to a plan
+  task; the user reviews that plan.
+- A user opts out by setting `disable-model-invocation: true` in their own copy
+  in `~/.ordewell/skills/tdd/`.
+
+**Refresh.** No change to the refresh rules ([ADR-0021](0021-built-in-skill-seeds-refresh.md)):
+an installed `tdd` still equal to the hash recorded when it was seeded (the
+manifest has recorded `tdd` since it was first written) is replaced and so
+loses the flag; one the user edited, including by adding the flag to a copy
+already carrying the new frontmatter, is kept. A copy that is byte-identical to
+the old seed is indistinguishable from an unedited one, so a user who wants the
+old behaviour sets the flag after the refresh, not before.
+
+**Rejected.** *Keeping every built-in user-only.* It left the one skill with a
+written "when it applies" rule unused unless the user remembered to type it,
+which is the failure the planner's catalog exists to remove. *A new frontmatter
+field for built-ins.* The invocation field already says it, and a user's opt-out
+needs no separate mechanism.
+
 ## History
 
 - 2026-10-09 — accepted: one format and loader; planner and task skills; the `tdd` and `verify` toggles dropped.
+- 2026-10-11 — amended: the `tdd` built-in is model-invocable (see Amendment).
