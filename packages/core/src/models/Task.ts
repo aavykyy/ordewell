@@ -3,6 +3,8 @@ import type { PlanIsolation } from '../interfaces/IWorktreeIsolation';
 import type { AttemptUsage, PlannerUsage, UsageRecord, UsageTotals } from './Usage';
 import type { ExecutionRecord, SupervisorLevel } from './Execution';
 import type { SkillSource } from '../services/SkillsService';
+import type { SupervisionMemorySnapshot } from '../services/LoopGuards';
+import type { SupervisorSnapshot } from '../services/Supervisor';
 import { SKILL_NAME_PATTERN } from '../conversation/skillTokens';
 
 export interface UserStep {
@@ -439,6 +441,17 @@ export interface RunSettings {
   unsupervised?: string;
 }
 
+/**
+ * What supervision remembers across a daemon restart (ADR-0029): the loop
+ * guards' memory and the wake-up state not yet delivered with a turn.
+ */
+export interface SupervisionSnapshot {
+  /** Retries, failed-attempt shapes, the supervisor's edits and what the user was told. */
+  guards?: SupervisionMemorySnapshot;
+  /** The events inside their debounce window and the wake-up rate's timestamps. */
+  wake?: SupervisorSnapshot;
+}
+
 export interface LegacyPlanState {
   /** Changes during a run apply at its next start (ADR-0029). */
   mergeAtGatesAutomatically?: boolean;
@@ -449,6 +462,8 @@ export interface LegacyPlanState {
   /** Retries an Act supervisor may make of one task in a run (a loop guard, ADR-0029); a default when absent. */
   supervisorRetryLimit?: number;
   runSettings?: RunSettings;
+  /** What supervision remembers across a daemon restart (ADR-0029); absent on plans saved before it existed. */
+  supervision?: SupervisionSnapshot;
   tasks: Task[];
   generatedAt: string;
   status: PlanStatus;
