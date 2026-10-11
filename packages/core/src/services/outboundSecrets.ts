@@ -60,20 +60,10 @@ function forms(text: string): string[] {
 
 /** The values of environment variables named like a credential. */
 export function sensitiveEnvValues(env: Record<string, string | undefined>): string[] {
+  // A slash or colon can be part of a secret, so only the name identifies a reference.
   return Object.entries(env)
-    .filter(([name, value]) => SENSITIVE_ENV_NAME.test(name) && value !== undefined)
-    .map(([, value]) => (value ?? '').trim())
-    .filter((value) => !isReference(value));
-}
-
-function isReference(value: string): boolean {
-  if (/^(?:[A-Za-z]:[\\/]|[\\/]|\.{1,2}[\\/]|~[\\/])/.test(value)) return true;
-  try {
-    new URL(value);
-    return true;
-  } catch {
-    return false;
-  }
+    .filter(([name, value]) => SENSITIVE_ENV_NAME.test(name) && !/_(?:URL|URI|PATH|FILE|DIR)$/i.test(name) && value !== undefined)
+    .map(([, value]) => (value ?? '').trim());
 }
 
 /** Whether any of `texts`, raw or decoded, contains a held secret or a well-known token. */

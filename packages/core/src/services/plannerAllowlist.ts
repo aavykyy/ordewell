@@ -148,7 +148,8 @@ export function toolAllowed(list: PlannerAllowlist, tool: string): boolean {
 
 /** Whether an `!` entry excludes an approval scope. */
 export function scopeExcluded(list: PlannerAllowlist, scope: string): boolean {
-  return list.scopeExclusions.some((re) => re.test(scope));
+  const origin = /^(?:curl|wget) (https?:\/\/\S+\/\*)$/.exec(scope)?.[1];
+  return list.scopeExclusions.some((re) => re.test(scope) || (origin !== undefined && re.test(origin)));
 }
 
 /** Whether an approval scope — a directory, an origin, a tool's full name — is pre-approved. */

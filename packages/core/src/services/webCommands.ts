@@ -6,7 +6,7 @@ import { blockedAddressReason } from './egressGuard';
 
 interface WebCommand {
   urls: URL[];
-  urlTexts?: string[];
+  outboundTexts?: string[];
   perInvocation?: boolean;
   reason?: string;
   /** The command sends data or writes something; a fetch tool would not do the same job. */
@@ -36,8 +36,9 @@ export function webCommand(seg: Segment, trustedResolves?: ReadonlySet<string>):
   const binary = seg.binary.toLowerCase().replace(/\.exe$/, '');
   if (binary === 'wget2') return { urls: [], reason: `wget2 can write persistent databases. ${READ_REFUSAL_HINT}` };
   if (binary !== 'curl' && binary !== 'wget') return undefined;
+  if (seg.binaryPath !== undefined) return { urls: [], reason: `Call ${binary} by name so the research shell resolves it from PATH. ${READ_REFUSAL_HINT}` };
   const urls: URL[] = [];
-  const urlTexts: string[] = [];
+  const outboundTexts: string[] = [];
   const switches = binary === 'curl' ? CURL_SWITCHES : WGET_SWITCHES;
   const values = binary === 'curl' ? CURL_VALUES : WGET_VALUES;
   let stdout = false;
@@ -60,6 +61,11 @@ export function webCommand(seg: Segment, trustedResolves?: ReadonlySet<string>):
       try { url = new URL(arg); } catch { return refused(arg); }
       if (!/^https?:\/\//i.test(arg) || /[\\\s{}]/.test(arg)) return refused(arg);
       const host = url.hostname.replace(/^\[|\]$/g, '');
+      const authority = /^https?:\/\/([^/?#]*)/i.exec(arg)?.[1] ?? '';
+      const rawHost = authority.slice(authority.lastIndexOf('@') + 1).replace(/:\d*$/, '');
+      // URL normalizes IDNs and percent escapes before curl parses the original text.
+      if (binary === 'curl' && !/^[A-Za-z0-9.-]+$/.test(rawHost)
+        && !(/^\[[0-9A-Fa-f:.]+\]$/.test(rawHost) && isIP(host) === 6)) return refused('with a non-literal ASCII hostname');
       const withoutHost = arg.replace(url.hostname, '');
       if (/[[\]]/.test(withoutHost)) return refused(arg);
       if (isIP(host)) {
@@ -68,7 +74,7 @@ export function webCommand(seg: Segment, trustedResolves?: ReadonlySet<string>):
       }
       if (url.username || url.password) perInvocation = true;
       urls.push(url);
-      urlTexts.push(arg);
+      outboundTexts.push(arg);
       continue;
     }
     const long = arg.startsWith('--');
@@ -95,6 +101,7 @@ export function webCommand(seg: Segment, trustedResolves?: ReadonlySet<string>):
       const attached = long ? (arg.includes('=') ? arg.slice(flag.length + 1) : undefined) : flags.slice(j + 1).join('') || undefined;
       const value = attached ?? seg.args[++i];
       if (value === undefined) return refused(arg);
+      outboundTexts.push(value);
       if (trustedResolve && !trustedResolves?.has(value)) return refused(arg);
       if (flag === '--noproxy' && value !== '*') return refused(arg);
       if (binary === 'wget' && flag === '--max-redirect') redirects = value !== '0';
@@ -116,7 +123,7 @@ export function webCommand(seg: Segment, trustedResolves?: ReadonlySet<string>):
   }
   if (urls.length === 0) return refused('without a literal HTTP(S) URL');
   if (binary === 'wget' && !stdout && !spider) return refused('without stdout or --spider');
-  return { urls, urlTexts, ...(effect ? { effect } : {}), ...(perInvocation || redirects || (queryData && !getQuery) ? { perInvocation: true } : {}) };
+  return { urls, outboundTexts, ...(effect ? { effect } : {}), ...(perInvocation || redirects || (queryData && !getQuery) ? { perInvocation: true } : {}) };
 }
 
 export function disableWebCommandStartup(command: string, dialect?: ShellDialect): string {
@@ -172,9 +179,11 @@ export function wgetVersionCommands(command: string, dialect?: ShellDialect): Ar
   return [...new Set(segments.flatMap((original) => {
     const { seg } = unwrap(original, syntax);
     if (seg.binary.toLowerCase().replace(/\.exe$/, '') !== 'wget') return [];
-    const executable = seg.binaryPath ?? seg.binary;
-    if (!/^(\/|[A-Za-z]:[\\/])/.test(executable)
-      && original.cwd === undefined && segments.some((s) => /^(cd|pushd|popd)$/i.test(s.binary))) return [undefined];
+    if (seg.binaryPath !== undefined) return [undefined];
+    const executable = seg.binary;
+    if (original.cwd === undefined && segments.some((s) => /^(cd|pushd|popd)$/i.test(s.binary))) return [undefined];
+    // cmd quoting can expose metacharacters or expand variables when a probe is rebuilt.
+    if (syntax.escape === '^' && [...(original.cwd ?? []), executable].some((word) => /["%&|<>^()!]/.test(word))) return [undefined];
     const navigation = (original.cwd ?? []).map((target) => `cd ${quote(target)} && `).join('');
     // Wget2 creates its data directory even for --version, before parsing flags.
     const env = syntax.escape === '^'
