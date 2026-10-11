@@ -680,7 +680,7 @@ describe('the command seam\'s extension points', () => {
 
     expect(await commands.run(retry, PLANNER)).toMatchObject({ ok: true, message: expect.stringMatching(/^Queued: retry task #1 "Task t1" happens once your edit lands/) });
     expect(host.heldEdit).toHaveBeenCalledWith('t1');
-    expect(host.deferUntilLanded).toHaveBeenCalledWith(retry, PLANNER);
+    expect(host.deferUntilLanded).toHaveBeenCalledWith(retry, PLANNER, 'retry task #1 "Task t1"');
     expect(host.startTask).not.toHaveBeenCalled();
     expect(host.retryTask).not.toHaveBeenCalled();
   });

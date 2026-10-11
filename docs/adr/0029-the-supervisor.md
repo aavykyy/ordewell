@@ -98,7 +98,8 @@ built. The attention events are:
   Every task one runner's limit pauses is one entry.
 
 A pass never wakes it. Passes ride along as "since last time: tasks 2, 3, 4
-passed". Events close together are merged into one wake-up. The policy is code,
+passed". Events close together — within five seconds of the first — are merged
+into one wake-up; the run's end is delivered at once. The policy is code,
 not prompt text, so when the supervisor speaks is testable without a model.
 
 A due batch reaches the conversation as a **run update**: one line per event,
@@ -131,7 +132,7 @@ a user message during a wake-up turn is held as a queued prompt.
   edits can leave running work as it is.
 - **Inputs that arrive during a turn are taken together by the next one**, in
   order, through one entry (`PlanTurns.enqueue`) that names who the input is
-  from. The hold also lapses after a set time, after which the turn goes on
+  from. The hold also lapses after five minutes, after which the turn goes on
   without holding the run: an edit is checked against the tasks as they stand
   when it applies, so a task that started meanwhile refuses it.
 - **Pending turns are persisted on the plan**, so a daemon restart neither
@@ -146,7 +147,8 @@ a user message during a wake-up turn is held as a queued prompt.
   diff on request. A supervisor deciding whether to retry needs what the task
   did, not only what it said.
 - **In a wake-up turn the per-message read cap is replaced by a per-turn read
-  budget set on the plan.** The user's turns keep today's caps
+  budget set on the plan**, 12 reads unless the plan sets another. The user's
+  turns keep today's caps
   (`MAX_TASK_QUERIES`, ADR-0022 P3). A wake-up has no user message to bound it,
   and a supervisor reading three things before it must land would miss the one
   that explains a failure.
@@ -170,7 +172,10 @@ the same seam through its own tool definitions.
 
 A start the turn asks for after editing that task in the same reply — an edit
 held until the reply ends — waits for the edit to land and then goes through
-the seam again, so it runs as edited: the plan holds what runs. In a wake-up
+the seam again, so it runs as edited: the plan holds what runs. An edit that
+never lands — the turn stopped, or the edit refused as it landed — drops the
+start, and the user is told; run on the unedited plan, it would not be what was
+asked. In a wake-up
 turn at Act the supervisor edits task by task; a whole new plan is refused,
 since only edits let the user follow what changed.
 
@@ -217,26 +222,30 @@ Checked at the seam, where the action executes:
   model as the failed attempt is refused. Something has to change.
 - **No oscillating edits**: re-adding a task it removed this run, or reverting
   its own edit, is refused.
-- **Wake-up rate**: more than a set number of wake-ups in a short window with
-  no pass in between drops the run to Watch, with a notice. A supervisor that
-  keeps waking and nothing passes is spinning.
+- **Wake-up rate**: more than six wake-ups within 30 minutes with no pass in
+  between drops the run to Watch, with a notice. A supervisor that keeps waking
+  and nothing passes is spinning.
 
 A start of a task that failed is a retry however it is asked for — `run_task`,
 or `run_plan`, which would start every failed task again. What the guards
 remember lasts from the user's start of a run to their next: a run the
 supervisor restarts itself, or a usage-limit reset resumes, continues the one
 before, its level as lowered included, or each restart would wipe the count.
+A run a failure halted stays halted through an edit to the failed task, so the
+supervisor's retry after that edit resumes the run rather than starting the one
+task on its own.
 
 A refusal is a plain note back to the model naming the guard and what would be
 accepted. Each tripped guard also posts a supervisor message to the user.
 
 ### Failure handling: the run never depends on the supervisor
 
-- **A wake-up turn has a timeout.** On a crash or hang the planner is restarted
-  by its saved native session id (ADR-0009's resume path) and the turn retried
-  once. A turn that does not end when stopped has the conversation taken back
-  from it, and what it wrote is undone as a failure's would be. A planner turn
-  that ends without a reply — a dead agent — is a crash here, not a note.
+- **A wake-up turn has a timeout** of ten minutes. On a crash or hang the
+  planner is restarted by its saved native session id (ADR-0009's resume path)
+  and the turn retried once. A turn that does not end when stopped has the
+  conversation taken back from it, and what it wrote is undone as a failure's
+  would be. A planner turn that ends without a reply — a dead agent — is a
+  crash here, not a note.
 - **Then the run goes unsupervised**: it carries on as Off, with a visible
   notice. Wake-ups not delivered are persisted and handed over whole at the
   next successful turn or user message, so nothing that happened is lost to
@@ -359,3 +368,13 @@ until #30 exists.
   methods: the seam has no command for the first three, and its `merge_all` is
   the supervisor's — it flattens the structured merge result the Merge all card
   renders.
+- 2026-10-11 — final verification of the merged slices. A planner edit adopted
+  while a failure halts the run is reconciled into the run instead of reloading
+  the plan, and keeps the failed task failed, so the retry after it resumes the
+  run (before, the reload dropped the review approval and the retried task ran
+  alone, its dependents never starting). A start deferred behind a held edit
+  that never lands is dropped with a notice. VS Code's task-log message and
+  Continue, and its Retry and Cancel task commands, reach the seam as the user,
+  as the other surfaces' buttons do. The defaults are stated in the body: retry
+  limit 2, wake-up read budget 12, wake-up debounce 5 s, wake-up turn timeout
+  10 min, start-hold lapse 5 min, wake-up rate more than 6 in 30 min.

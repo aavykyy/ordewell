@@ -1,6 +1,6 @@
 import { McpAttachError } from './harness/ordewellBinding';
 import * as path from 'path';
-import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasksWithParents, taskOrderLabel, waitsForReset } from '../models/Task';
+import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasks, flattenTasksWithParents, taskOrderLabel, waitsForReset } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
 import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
@@ -588,6 +588,8 @@ export class TaskOrchestrator {
   get isReviewApproved(): boolean { return this.reviewApproved; }
   /** The scheduler is driving the plan: ready tasks start on their own as slots free. Narrower than {@link isRunning}. */
   get isScheduling(): boolean { return this.running; }
+  /** A full-plan run a failure paused, which a retry of the failed task resumes. */
+  get isHaltedByFailure(): boolean { return this.haltedByFailure && !this.running; }
   get status(): 'approved' | 'running' | 'completed' { return this.planStatus; }
   get activeTaskIds(): string[] { return [...this.activeSessionMap.keys()]; }
   /** Task id → session id of every attempt whose runner is up; a spawn in flight has no session yet. */
@@ -709,6 +711,9 @@ export class TaskOrchestrator {
    * carried over (its verdict still has to land somewhere), and one whose status
    * the snapshot predates is put back to `in_progress` — adopting the snapshot's
    * "pending" would offer the scheduler work a runner is already doing.
+   *
+   * A failed task stays failed, unlike a plan load's fresh chance: an edit is
+   * not a retry, and a run a failure halted waits for that retry.
    */
   reconcilePlan(newTasks: Task[], planRunners: RunnerId[] = [...DEFAULT_RUNNERS]): void {
     const adopted = [...newTasks];
@@ -726,7 +731,10 @@ export class TaskOrchestrator {
     }
 
     this.store.load(adopted, planRunners);
-    this.planStatus = 'running';
+    for (const t of flattenTasks(adopted)) {
+      if (t.status === 'failed') this.store.markFailed(t.id);
+    }
+    if (this.isRunning) this.planStatus = 'running';
   }
 
   async start(): Promise<void> {

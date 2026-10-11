@@ -116,8 +116,8 @@ export interface ExecutionHost {
    * named — that lands only when its reply ends.
    */
   heldEdit(taskId?: string): boolean;
-  /** Run the command again, as the same actor, once the open turn's reply has landed its edit. */
-  deferUntilLanded(command: ExecutionCommand, actor: ExecutionActor): void;
+  /** Run the command again, as the same actor, once the open turn's reply has landed its edit; `intent` names it if it never does. */
+  deferUntilLanded(command: ExecutionCommand, actor: ExecutionActor, intent: string): void;
 }
 
 export interface ExecutionCommandsDeps {
@@ -180,8 +180,9 @@ export class ExecutionCommands {
     if (consent.kind === 'refuse') return this.refuse(command, actor, located, consent.reason);
     // The plan holds what runs (ADR-0029): a start the turn's own held edit changes waits for that edit to land.
     if (actor.kind !== 'user' && startsFromPrompt(command) && this.host.heldEdit(located?.task.id)) {
-      this.host.deferUntilLanded(command, actor);
-      return { ok: true, message: `Queued: ${this.intent(command, located)} happens once your edit lands, as this reply ends, so it runs as edited. Say so in your reply; you are not told how it goes.` };
+      const intent = this.intent(command, located);
+      this.host.deferUntilLanded(command, actor, intent);
+      return { ok: true, message: `Queued: ${intent} happens once your edit lands, as this reply ends, so it runs as edited. Say so in your reply; you are not told how it goes.` };
     }
 
     const first = this.prepare(command, actor, located);

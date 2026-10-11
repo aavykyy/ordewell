@@ -781,6 +781,18 @@ registry keyed by task let the old attempt's exit unregister the new one.
 field of the attempt. Do not add another per-task map to the orchestrator for
 state that ends with the run; put it on the attempt.
 
+**Halted run** (`TaskOrchestrator.isHaltedByFailure`) — a full-plan run a
+failed task stopped from starting more work: attempts already running finish,
+nothing new spawns, and the run waits for the user — or an Act supervisor — to
+retry the failed task, which resumes the run where it stopped. A planner edit
+made meanwhile is reconciled into the halted run rather than reloaded over it,
+and leaves the failed task failed: an edit is not a retry, and a reload would
+drop the review approval the resume needs. A usage-limit pause holds the run
+the same way until its reset. A stop is not a halt: a stopped run waits for the
+user to start it again.
+*Avoid:* "paused" for it — a paused task is one waiting on a usage-limit reset;
+*Avoid:* "stopped".
+
 **Attempt usage** (`AttemptUsage`, `Task.attemptUsage`) — the persisted ledger
 of one task attempt: its number, runner, start and end timestamps, wall time,
 and reported usage totals. Reports are grouped by source and the model that
@@ -1743,7 +1755,9 @@ plan); a start from anyone else is refused for a task outside that set, so a
 task the planner added since waits for the user.
 A task an Act supervisor adds is approved as its edit lands. A start a planner
 turn asks for after editing that task in the same reply waits for the held
-edit to land, then goes through the seam again. `merge_all` is refused in a
+edit to land, then goes through the seam again; an edit that never lands — the
+turn stopped, or the edit refused as it landed — drops the start, with a
+notice, rather than running it on the unedited plan. `merge_all` is refused in a
 user-started turn — the user presses Merge all — and allowed only to a
 supervisor at Act.
 `answer_approval` denies or escalates, never allows: allowing would widen the
@@ -1758,7 +1772,9 @@ prompt and model unchanged, at the Command seam — a start of a failed task is 
 retry however it is asked for; no re-adding a task it removed or reverting its
 own edit, on the edit path; and a wake-up-rate limit (`WAKE_UP_RATE`) in the
 `Supervisor`, which drops the run to Watch. What they remember
-(`SupervisionMemory`) lasts from the user's start of a run to their next. Each
+(`SupervisionMemory`) lasts from the user's start of a run to their next, and is
+saved on the plan (`supervision`, beside the wake policy's undelivered events)
+so a daemon restart picks it up where it was. Each
 refusal is a note to the model naming the guard and what would be accepted;
 each tripped guard posts a supervisor message to the user, once.
 *Avoid:* "rate limit" for the set — only one guard is about rate.

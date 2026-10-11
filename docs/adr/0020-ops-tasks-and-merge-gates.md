@@ -98,8 +98,9 @@ that depends on.**
   run. At a gate Ordewell runs Merge all itself through the same queue; a
   conflict or dirty overlap aborts with the tree untouched and the gate waits
   for the user, with a notice and an `onAutoMerge` observer event. A failed
-  automatic merge waits for a user merge or the next run before automatic
-  merging resumes. The timeline records
+  automatic merge waits for a Merge all that goes through — the user's, or an
+  Act supervisor's `merge_all` — or the next run before automatic merging
+  resumes. The timeline records
   "auto-merged for task N", attributed to Ordewell setting. A supervisor at Act
   may also call `merge_all`.
 - The plan shows it: an ops task carries an `ops` mark, and a gated task "waits
@@ -212,3 +213,4 @@ it.
 - 2026-10-11 — merge at gates automatically, and the supervisor's `merge_all` ([ADR-0029](0029-the-supervisor.md)).
 - 2026-10-11 — implemented the automatic gate setting and core merge_all action.
 - 2026-10-11 — `merge_all` reaches the planner as a tool through the command seam, allowed only to a supervisor at Act ([ADR-0029](0029-the-supervisor.md)).
+- 2026-10-11 — wording: automatic merging resumes after any Merge all that goes through, an Act supervisor's `merge_all` included, as the code always did.

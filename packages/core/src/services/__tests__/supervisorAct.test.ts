@@ -247,6 +247,25 @@ describe('the loop guards', () => {
     expect(env.session.planState!.conversationHistory!.at(-1)).toMatchObject({ kind: 'execution', content: 'Retried task #1 "Task t1" — by supervisor.' });
   });
 
+  it('drops a start queued behind an edit that never landed, and says so', async () => {
+    const env = await supervised([task('t1', 1)], { plan: { supervisorLevel: 'off' }, config: { autonomousMode: true } });
+    env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
+    await until(() => taskOf(env.session, 't1')!.status === 'failed');
+    const answered = env.session.continueConversation('fix the import in task 1 and retry it');
+    await until(() => env.planner.calls.length === 1);
+
+    await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#1', changes: { prompt: 'do t1, importing from ./lib' } }] }, ctx);
+    const retry = await env.planner.tools().retryTask!({ task: '1', from: 'fresh' }, ctx);
+    expect(JSON.parse(retry.text).result).toMatch(/^Queued: retry task #1 "Task t1" happens once your edit lands/);
+    env.session.abortPlannerTurn();
+    await answered;
+    await settled();
+
+    expect(taskOf(env.session, 't1')).toMatchObject({ prompt: 'do t1', status: 'failed' });
+    expect(env.run.spawnedIds()).toEqual(['t1']);
+    expect(env.notices).toContainEqual(expect.objectContaining({ level: 'warn', message: 'Not done: retry task #1 "Task t1" waited for an edit that did not land.' }));
+  });
+
   it('refuses re-adding a task it removed this run, and undoing its own edit', async () => {
     const env = await wokenUp(ACT, [task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { dependencies: ['t1'] })]);
     await env.planner.tools().editPlan!({ ops: [{ op: 'remove', taskId: '#3' }, { op: 'update', taskId: '#2', changes: { prompt: 'do t2 with Postgres' } }] }, ctx);

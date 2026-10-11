@@ -7,6 +7,7 @@ import {
   listSessions, loadSession,
   SettingsService,
   type AiProvider,
+  type ExecutionCommand,
   type IRunner,
 } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
@@ -16,7 +17,7 @@ import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import { SecretStore, type ApiProvider } from '../adapters/SecretStore';
 import { configureModelAllowlist } from './configureModelAllowlist';
-import { confirmPastGate, handleNewSession, plannerPreflightError } from '../plan/PlanManager';
+import { confirmPastGate, executeUserCommand, handleNewSession, plannerPreflightError } from '../plan/PlanManager';
 
 export interface CommandDeps {
   session: Session;
@@ -87,6 +88,15 @@ function applyLoadedSession(
 }
 
 export function registerCommands(context: vscode.ExtensionContext, deps: CommandDeps): void {
+  // The plan pane's buttons and these commands run one path: the command seam, as the user (ADR-0029).
+  const userCommand = async (command: ExecutionCommand): Promise<void> => {
+    try {
+      await executeUserCommand(deps.session, command);
+    } catch (err) {
+      vscode.window.showErrorMessage(err instanceof Error ? err.message : String(err));
+    }
+    deps.persistState();
+  };
   context.subscriptions.push(
     vscode.commands.registerCommand('ordewell.focusChat', () => vscode.commands.executeCommand('ordewellChatView.focus')),
   );
@@ -290,16 +300,14 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
     vscode.commands.registerCommand('ordewell.retryTask', async (taskItem?: Task) => {
       const taskId = taskItem?.id;
       if (!taskId) return;
-      await deps.session.retryTask(taskId);
-      deps.persistState();
+      await userCommand({ command: 'retry_task', task: taskId, from: 'fresh' });
     }),
   );
   context.subscriptions.push(
     vscode.commands.registerCommand('ordewell.cancelTask', async (taskItem?: Task) => {
       const taskId = taskItem?.id;
       if (!taskId) return;
-      await deps.session.cancelTask(taskId);
-      deps.persistState();
+      await userCommand({ command: 'stop_task', task: taskId });
     }),
   );
   context.subscriptions.push(
