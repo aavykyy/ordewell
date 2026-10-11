@@ -1022,9 +1022,16 @@ export class TaskOrchestrator {
     if (!this.running) return { ready: [], candidateCount: 0, excluded: [], gated: [] };
     const maxParallel = this.config.maxParallelSessions;
     const active = this.attempts.size;
+    const waitingRunners = new Set(this.store.allTasks
+      .filter((t) => t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit')
+      .map((t) => this.store.resolveTaskRunner(t)));
+    const onHold = new Set(this.onHold);
+    for (const t of this.store.allTasks) {
+      if (waitingRunners.has(this.store.resolveTaskRunner(t))) onHold.add(t.id);
+    }
     const readiness = selectReadyTasks({
       store: this.store,
-      onHold: this.onHold,
+      onHold,
       runs: this.runs,
       active,
       maxParallel,
@@ -1249,6 +1256,24 @@ export class TaskOrchestrator {
     this.emit('onUsageLimitWait', { taskId, runner, resumeAt: null, cancelled: true });
     this.emit('onTaskChanged');
     return true;
+  }
+
+  /** Run before writing assignments so cancellation sees the old runner's shared wait. */
+  releaseMovedResume(taskId: string, changes: Partial<Task>): Partial<Task> {
+    const task = this.store.get(taskId);
+    if (!task || task.status !== 'awaiting_user' || task.awaitingReason !== 'usage-limit') return changes;
+    const next = { ...task, ...changes };
+    // The limit belongs to the runner's account, so a model change on that
+    // same runner must keep waiting for its reset.
+    if ((next.assignedRunner ?? this.store.planRunners[0]) === this.store.resolveTaskRunner(task)) return changes;
+    this.cancelScheduledResume(taskId);
+    this.onHold.delete(taskId);
+    if (this.haltedByFailure && !this.store.isAnyFailed()) {
+      this.running = true;
+      this.haltedByFailure = false;
+      this.planStatus = 'running';
+    }
+    return { ...changes, status: 'pending', awaitingReason: undefined, resumeAt: undefined };
   }
 
   /**

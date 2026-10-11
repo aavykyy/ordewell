@@ -62,6 +62,7 @@ function setup(opts: { plan?: boolean; allowlist?: Partial<Record<RunnerId, stri
     return plan;
   });
   const scheduler = {
+    releaseMovedResume: (_taskId: string, changes: Partial<Task>) => changes,
     tick: vi.fn(async () => { events.push('tick'); }),
     releaseTask: vi.fn(async (taskId: string) => { events.push(`release:${taskId}`); }),
   };

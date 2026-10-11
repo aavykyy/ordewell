@@ -250,8 +250,11 @@ accepted. Each tripped guard also posts a supervisor message to the user.
 
 A task paused on a usage limit wakes the supervisor with its resume time. Under
 Act it may move pending tasks to another allowed runner. That is a recorded
-plan edit, and it cancels those tasks' scheduled auto-resume; moving a running
-task is refused like any edit to a running task.
+plan edit, and it cancels those tasks' scheduled auto-resume and makes them
+ready for the next scheduler slot. Direct user edits follow the same rule.
+Other tasks on the old runner keep their shared wait. Changing only the model
+on the same runner keeps the resume because the limit belongs to that runner's
+account. Moving a running task is refused like any edit to a running task.
 
 ### Merge at gates automatically
 
@@ -343,3 +346,4 @@ until #30 exists.
 - 2026-10-11 — live planner turns implemented (`PlanTurns`); the pending plan edit queue, its drain and `modifyDuringExecution` removed.
 - 2026-10-11 — the Watch level (`Supervisor`): wake-ups from run events, `usage_limit` coalesced per runner, run updates, the wake-up read budget, refusals at Watch, failure handling and persistence. Surfaces offer Off and Watch; a plan set to Act runs as Watch until Act's rules land.
 - 2026-10-11 — the Act level: every execution command without asking, `merge_all` as a planner tool (refused in user-started turns), edits in wake-up turns (a whole plan refused), tasks the supervisor adds approved and marked `addedBy: 'supervisor'`, a moved task's scheduled resume cancelled, and the loop guards (`LoopGuards`; retry limit `supervisorRetryLimit`, default 2). Added: the user may lower a running supervisor at once (the downward exception above), a start waits for the same reply's held edit, and a start of a failed task counts as a retry however asked. Surfaces offer Act, saying what it allows.
+- 2026-10-11 — moved tasks become ready on their new runner through the same resume decision as direct user edits; same-runner model changes keep the wait.

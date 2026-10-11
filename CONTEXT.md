@@ -525,6 +525,10 @@ the hold on the run is released once nothing waits on a reset and no task has
 failed. A plan loaded after its time resumes at once. Without a time, after a
 cancel or a stop, or when the resumed attempt hits the limit again at once, the
 task waits for a manual retry. Surfaces show "Resumes at 8:10pm" with a cancel.
+A runner change, whether a direct edit or a planner edit, cancels that task's
+resume and makes it ready for the next scheduler slot on its new runner.
+Other tasks on the old runner keep their shared wait; changing only the model
+keeps the resume because the limit belongs to the runner's account.
 *Avoid:* "rate limit" for it — a provider's per-minute throttle is retried
 inside the runner and is not this; "paused" for any other wait.
 

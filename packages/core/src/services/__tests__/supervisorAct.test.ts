@@ -123,7 +123,9 @@ describe('tasks the supervisor adds at Act', () => {
 
 /** Task 1 paused on claude-code's usage limit, and the supervisor woken to it at Act. */
 async function limited(tasks = [task('t1', 1), task('t2', 2)], pause: string[] = ['t1']): Promise<Env> {
-  const env = await supervised(tasks, ACT);
+  const env = await supervised(tasks, {
+    plan: { ...ACT.plan, runners: ['claude-code', 'codex'] }, config: { enabledRunners: ['claude-code', 'codex'] },
+  });
   for (const id of pause) hitLimit(env.run.of(id));
   await settled();
   await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
@@ -135,7 +137,7 @@ async function limited(tasks = [task('t1', 1), task('t2', 2)], pause: string[] =
 const moveToOpus = { op: 'update', taskId: '#1', changes: { assignedModel: { modelId: 'claude-opus-4', modelLabel: 'Opus' } } } as const;
 
 describe('moving a task paused on a usage limit', () => {
-  it('cancels its scheduled resume: it waits for a retry on what it was moved to', async () => {
+  it('keeps its scheduled resume when only its model changes on the same runner', async () => {
     const env = await limited();
 
     await env.planner.tools().editPlan!({ ops: [moveToOpus] }, ctx);
@@ -144,25 +146,29 @@ describe('moving a task paused on a usage limit', () => {
 
     const t1 = taskOf(env.session, 't1')!;
     expect(t1.assignedModel?.modelId).toBe('claude-opus-4');
-    expect([t1.status, t1.awaitingReason, t1.resumeAt]).toEqual(['awaiting_user', 'usage-limit', undefined]);
+    expect([t1.status, t1.awaitingReason, t1.resumeAt]).toEqual(['awaiting_user', 'usage-limit', RESUME_AT]);
     await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now() + 1000);
     await settled();
-    expect(env.run.spawnedIds().filter((id) => id === 't1')).toHaveLength(1);
+    await until(() => env.run.spawnedIds().filter((id) => id === 't1').length === 2);
+    expect(env.run.runner.spawn.mock.calls.at(-1)![0].modelId).toBe('claude-opus-4');
   });
 
   it('leaves the resume of every other paused task alone, with nothing else running', async () => {
     const env = await limited([task('t1', 1), task('t2', 2)], ['t1', 't2']);
     expect(env.session.isExecuting).toBe(false);
 
-    await env.planner.tools().editPlan!({ ops: [moveToOpus] }, ctx);
-    env.planner.calls[0].finish(prose('Moved task 1 to Opus.'));
+    const edit = await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#1', changes: { assignedRunner: 'codex' } }] }, ctx);
+    expect(edit.isError, edit.text).toBeFalsy();
+    env.planner.calls[0].finish(prose('Moved task 1 to Codex.'));
     await settled();
 
     expect(taskOf(env.session, 't1')!.resumeAt).toBeUndefined();
+    await until(() => env.run.spawnedIds().filter((id) => id === 't1').length === 2);
+    expect(env.run.runner.spawn.mock.calls.at(-1)![0]).toMatchObject({ taskId: 't1', runner: 'codex' });
     expect(taskOf(env.session, 't2')!.resumeAt).toBe(RESUME_AT);
     await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now() + 1000);
     await until(() => env.run.spawnedIds().filter((id) => id === 't2').length === 2);
-    expect(env.run.spawnedIds().filter((id) => id === 't1')).toHaveLength(1);
+    expect(env.run.spawnedIds().filter((id) => id === 't1')).toHaveLength(2);
   });
 });
 
