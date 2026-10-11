@@ -40,8 +40,8 @@ import { mapAgentTool, normalizeAgentArgs } from './agentTools';
 import { decidePlannerPermission, type PlannerPermissionGate } from './plannerPermissions';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
 import { mcpClientConfig, sharedMcpServer, type McpCredential, type OrdewellMcpServer } from '../mcp';
-import { instructionsBlock, repoRoot, type ProjectMcpServer } from './repoConfig';
-import { decideProjectServers, fileProjectServerApprovals, type ProjectServerApprovals } from './projectServers';
+import { instructionsBlock, repoRoot } from './repoConfig';
+import { NOT_APPROVED, decideProjectServers, fileProjectServerApprovals, heldServersNote, recordUnusable, type ProjectServerApprovals } from './projectServers';
 import type { IApproval } from '../../interfaces/IApproval';
 
 /**
@@ -250,7 +250,8 @@ export class CliAgentAiService implements IAiService {
     // Without an approval channel there is no gate, so nothing would decide a search.
     if (req.approval && fetcher?.searchesUnasked) this.searchesUnasked = (provider) => fetcher.searchesUnasked?.(provider) ?? false;
     const tools = req.plannerTools;
-    await this.startAdapter(startOptions, tools);
+    const adapter = await this.startAdapter(startOptions, tools);
+    recordUnusable(adapter.unusableProjectServers?.() ?? [], req.approval);
 
     const gate = req.approval ? { approval: req.approval, fetcher: req.fetcher, workspaceRoot: startOptions.cwd } : undefined;
     this.conversation = { startOptions, tools, gate };
@@ -649,7 +650,7 @@ export class CliAgentAiService implements IAiService {
     const found = reader.projectServers(cwd);
     const { started, held } = await decideProjectServers(found.servers, { repoRoot: repoRoot(cwd), approval, approvals: this.projectServerApprovals });
     return {
-      systemPrompt: [systemPrompt, instructionsBlock(reader.instructions(cwd)), heldServersNote(held, found.unreadable)].filter(Boolean).join('\n\n'),
+      systemPrompt: [systemPrompt, instructionsBlock(reader.instructions(cwd)), heldServersNote(held.map((server) => ({ server, reason: NOT_APPROVED })), found.unreadable)].filter(Boolean).join('\n\n'),
       ...(started.length > 0 ? { projectServers: started } : {}),
     };
   }
@@ -849,16 +850,6 @@ export class CliAgentAiService implements IAiService {
   ): Promise<Task[]> {
     return (await this.submittedPlan(prompt, { runners, runnerModes, autonomousDefault })).tasks;
   }
-}
-
-/** What the planner is told of the repository's servers it does not have, so it plans their work into tasks instead of guessing. */
-function heldServersNote(held: ProjectMcpServer[], unreadable: { source: string; reason: string }[]): string {
-  const lines = [
-    ...held.map((server) => `- ${server.name} (${server.source}): not approved for planning`),
-    ...unreadable.map((file) => `- ${file.source}: Ordewell could not read it (${file.reason})`),
-  ];
-  if (lines.length === 0) return '';
-  return ['The repository declares MCP servers that were not started for you; their tools are not available while planning. Work that needs them belongs in the plan\'s tasks.', ...lines].join('\n');
 }
 
 function oneShotCatalog(

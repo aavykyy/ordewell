@@ -175,6 +175,11 @@ describe('describeApprovalDecision', () => {
     expect(describeApprovalDecision({ type: 'approval_decided', subject: 'https://intra.example/', granted: false, source: 'excluded' })).toContain('excluded');
   });
 
+  it('says an approved project server is not usable on the runner\'s version', () => {
+    expect(describeApprovalDecision({ type: 'approval_decided', subject: 'probe: ./serve.sh', granted: false, source: 'unsupported' }))
+      .toBe('Auto-denied (not usable on this runner version): probe: ./serve.sh');
+  });
+
   it('labels a remembered grant', () => {
     const text = describeApprovalDecision({ type: 'approval_decided', subject: '/tmp/dump/b.log', granted: true, source: 'remembered' });
     expect(text).toContain('remembered');

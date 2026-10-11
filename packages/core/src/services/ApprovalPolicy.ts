@@ -66,14 +66,16 @@ export interface ApprovalPolicyOptions {
 }
 
 /**
- * Why a request was decided as it was. The last four are refusals reached
+ * Why a request was decided as it was. The next four are refusals reached
  * before the policy itself is consulted (ADR-0027's web-read guards), handed
  * to {@link ApprovalPolicy.record} so they surface like any other decision:
  * an `!` allowlist exclusion, the scheme and SSRF guard, the outbound secret
- * check, and the per-turn web-read budget.
+ * check, and the per-turn web-read budget. `unsupported` comes after: an
+ * approved project MCP server the planner's runner version cannot give the
+ * planner as tools of their own (ADR-0028).
  */
 export type ApprovalSource = 'pre-approved' | 'remembered' | 'mode' | 'asked' | 'no-channel'
-  | 'excluded' | 'guard' | 'secret' | 'budget';
+  | 'excluded' | 'guard' | 'secret' | 'budget' | 'unsupported';
 
 export class ApprovalPolicy implements IApproval {
   private readonly modeOf: (kind: ApprovalKind) => ApprovalMode;

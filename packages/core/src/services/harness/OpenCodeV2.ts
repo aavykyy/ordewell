@@ -2,6 +2,8 @@ import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { AgentEvent, PlannerStartOptions, TaskStartOptions } from './AgentAdapter';
 import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION, OPENCODE_SEARCH_OFF, type OpenCodeSessionRule as SessionRule } from './openCodeOrdewell';
 import { hunksOf } from './fileDiff';
+import { heldServersNote } from './projectServers';
+import type { ProjectMcpServer } from './repoConfig';
 import {
   OpenCodePermissions, autoApproves, delay, interruptAcknowledged, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, settleTurn, splitModelId, streamTurn,
   turnLatch, usageRecord, type OpenCodeTokens, type PermissionRequest, type StreamTurn, type TurnLatch,
@@ -20,6 +22,8 @@ const PLANNER_RULES: SessionRule[] = Object.entries(OPENCODE_PLANNER_PERMISSION)
   .map(([action, effect]) => ({ action, resource: '*', effect }));
 const SEARCH_OFF_RULES: SessionRule[] = Object.entries(OPENCODE_SEARCH_OFF)
   .map(([action, effect]) => ({ action, resource: '*', effect }));
+/** Why an approved project server's tools are missing, when this OpenCode cannot list them as tools of their own. */
+const UNUSABLE = 'not usable on this OpenCode version: its tools are only reachable through code mode\'s `execute`, which the planner may not use';
 /** A task asks its user in plain text for now, through its runner session. */
 const TASK_RULES: SessionRule[] = [{ action: 'question', resource: '*', effect: 'deny' }];
 
@@ -89,6 +93,16 @@ function rulesDenySearch(rules: unknown): boolean {
   if (!Array.isArray(rules)) return false;
   const last = [...rules].reverse().find((rule: unknown) => isRecord(rule) && rule.action === 'websearch' && (rule.resource === '*' || rule.resource === undefined));
   return isRecord(last) && last.effect === 'deny';
+}
+
+/**
+ * What of a project server's 1.x definition starts it: the command and its
+ * variables, or the URL and its headers. The rest is left out, as 2.x's route
+ * refuses some of it — a 1.x `timeout` is a number, a 2.x one an object.
+ */
+function transportFields(definition: Record<string, unknown>): Record<string, unknown> {
+  const fields = definition.type === 'remote' ? ['type', 'url', 'headers'] : ['type', 'command', 'environment'];
+  return Object.fromEntries(fields.filter((field) => definition[field] !== undefined).map((field) => [field, definition[field]]));
 }
 
 interface V2Message {
@@ -177,6 +191,10 @@ export class OpenCodeV2 {
   private interruptRequested = false;
   /** Whether a planner's own `websearch` is on for its session (ADR-0027). */
   private ownSearch = true;
+  /** Approved project servers whose tools are listed as tools of their own. */
+  private exposed: string[] = [];
+  /** Approved project servers whose tools this OpenCode would list only inside `execute`, which a planner may not use. */
+  private unusable: ProjectMcpServer[] = [];
   private readonly permissions = new OpenCodePermissions(
     (id, sessionId, decision) => this.replyPermission(id, sessionId, decision),
     () => this.opts.mcp,
@@ -195,8 +213,10 @@ export class OpenCodeV2 {
 
   nativeSessionId(): string | null { return this.sessionId; }
 
+  unusableProjectServers(): ProjectMcpServer[] { return [...this.unusable]; }
+
   async start(): Promise<void> {
-    await this.exposeOrdewellTools();
+    await this.exposeServers();
     const resume = this.opts.resumeSessionId;
     if (resume) {
       // A resume id names a session on disk, not on this process — so it is checked rather than trusted.
@@ -230,17 +250,29 @@ export class OpenCodeV2 {
 
   /**
    * 2.x lists an MCP server's tools inside its code-mode `execute` tool, where
-   * a model told to call `task_complete` does not look for it. The server is
-   * replaced at runtime with `codemode: false`, which lists its tools as tools
-   * of their own: the config it started with is in the 1.x shape both versions
-   * read, and that shape drops the setting. If the route is gone, the tools
-   * are still reachable through `execute`.
+   * a model told to call `task_complete` does not look for it, and where a
+   * planner may not reach them: `execute` runs model-written code over every
+   * tool at once, past per-tool approval. Each server is replaced at runtime
+   * with `codemode: false`, which lists its tools as tools of their own: the
+   * config it started with is in the 1.x shape both versions read, and that
+   * shape drops the setting. Replaced before anything lists the servers, a
+   * local one starts once; replaced later, OpenCode stops it and starts the
+   * new one. If the route is gone, Ordewell's tools are still reachable
+   * through `execute`, and a project server's are not reachable at all.
    */
-  private async exposeOrdewellTools(): Promise<void> {
+  private async exposeServers(): Promise<void> {
     const mcp = this.opts.mcp;
-    if (!mcp) return;
-    await this.host.request('PUT', `/api/experimental/mcp/${mcp.name}`, { config: { type: 'remote', url: mcp.url, headers: mcp.headers, codemode: false } })
-      .catch(() => undefined);
+    if (mcp) await this.expose(mcp.name, { type: 'remote', url: mcp.url, headers: mcp.headers });
+    const project = this.opts.kind === 'planner' ? this.opts.projectServers ?? [] : [];
+    for (const server of project) {
+      if (await this.expose(server.name, transportFields(server.definition))) this.exposed.push(server.name);
+      else this.unusable.push(server);
+    }
+  }
+
+  private async expose(name: string, config: Record<string, unknown>): Promise<boolean> {
+    return this.host.request('PUT', `/api/experimental/mcp/${name}`, { config: { ...config, codemode: false } })
+      .then((response) => response.ok, () => false);
   }
 
   /** Allow the Ordewell server's tools, so a call never waits on a person (ADR-0022, S3). */
@@ -251,7 +283,8 @@ export class OpenCodeV2 {
   /** The planner's system prompt rides on the session as an instruction entry — a prompt has no system field. */
   private async applyInstructions(): Promise<void> {
     if (this.opts.kind !== 'planner') return;
-    const { system } = plannerSystem(this.opts, this.ownSearch);
+    const unusable = heldServersNote(this.unusable.map((server) => ({ server, reason: UNUSABLE })));
+    const system = [plannerSystem(this.opts, this.ownSearch).system, unusable].filter(Boolean).join('\n\n');
     if (!system) return;
     const response = await this.host.request('PUT', `/api/experimental/session/${this.sessionId}/instructions/entries/ordewell-planner`, { value: system });
     if (!response.ok) throw new Error(`OpenCode did not take the planner instructions: ${response.status} ${response.statusText}`);
@@ -535,7 +568,10 @@ export class OpenCodeV2 {
     const request = this.permissionRequest(ask);
     if (!request) return;
     if (this.role !== 'task') {
-      const target = openCodePlannerAsk(request.name, { patterns: ask.resources }, this.host.mcpServers?.() ?? []);
+      // `/api/mcp` may have been read before OpenCode listed the approved servers; they are known from the start.
+      // An unusable one is running too, but what reaches its tools is `execute`, and the planner was told it has none.
+      const listed = (this.host.mcpServers?.() ?? []).filter((name) => !this.unusable.some((server) => server.name === name));
+      const target = openCodePlannerAsk(request.name, { patterns: ask.resources }, [...listed, ...this.exposed]);
       this.permissions.ask({ ...request, ask: target }, session, false, state.seen, onEvent);
     } else this.permissions.ask(request, session, this.opts.kind === 'task' && autoApproves(this.opts), state.seen, onEvent);
   }

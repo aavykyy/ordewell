@@ -68,6 +68,11 @@ function describe(server: ProjectMcpServer, scope: string): string {
   ].join(' ');
 }
 
+function startRequest(server: ProjectMcpServer): ApprovalRequest {
+  const scope = projectServerScope(server);
+  return { kind: 'mcp_server', subject: `${server.name}: ${server.target}`, scope, detail: describe(server, scope) };
+}
+
 export interface ProjectServerDecision {
   started: ProjectMcpServer[];
   held: ProjectMcpServer[];
@@ -86,8 +91,8 @@ export async function decideProjectServers(
 ): Promise<ProjectServerDecision> {
   const decision: ProjectServerDecision = { started: [], held: [] };
   for (const server of servers) {
-    const scope = projectServerScope(server);
-    const req: ApprovalRequest = { kind: 'mcp_server', subject: `${server.name}: ${server.target}`, scope, detail: describe(server, scope) };
+    const req = startRequest(server);
+    const { scope } = req;
     const list = opts.approval?.allowlist?.();
     let started = false;
     if (list && scopeExcluded(list, scope)) {
@@ -103,4 +108,31 @@ export async function decideProjectServers(
     (started ? decision.started : decision.held).push(server);
   }
   return decision;
+}
+
+/**
+ * Approved servers the planner's runner started but cannot give it as tools
+ * of their own, shown as refused after their approval: the approval alone
+ * would read as the planner having them.
+ */
+export function recordUnusable(servers: ProjectMcpServer[], approval: IApproval | undefined): void {
+  for (const server of servers) approval?.record?.(startRequest(server), false, 'unsupported');
+}
+
+/** A server the planner was told about but cannot use, and why. */
+export interface UnavailableServer {
+  server: ProjectMcpServer;
+  reason: string;
+}
+
+export const NOT_APPROVED = 'not approved for planning';
+
+/** What the planner is told of the repository's servers it does not have, so it plans their work into tasks instead of guessing. */
+export function heldServersNote(held: UnavailableServer[], unreadable: { source: string; reason: string }[] = []): string {
+  const lines = [
+    ...held.map(({ server, reason }) => `- ${server.name} (${server.source}): ${reason}`),
+    ...unreadable.map((file) => `- ${file.source}: Ordewell could not read it (${file.reason})`),
+  ];
+  if (lines.length === 0) return '';
+  return ['The repository declares MCP servers whose tools are not available to you while planning. Work that needs them belongs in the plan\'s tasks.', ...lines].join('\n');
 }
