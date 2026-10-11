@@ -9,6 +9,7 @@ import { WebReadPolicy } from '../webReadPolicy';
 import { ApprovalPolicy, effectiveApprovalMode } from '../ApprovalPolicy';
 import { DuckDuckGoSearchProvider } from '../DuckDuckGoSearchProvider';
 import type { ApprovalRequest, IApproval } from '../../interfaces/IApproval';
+import { fakeSecret } from './fakeSecret';
 
 const lite = (name: string) => readFileSync(join(__dirname, 'fixtures', 'duckduckgo', name), 'utf8');
 
@@ -179,7 +180,7 @@ describe('HttpWebFetcher.search', () => {
   it('hands the policy\'s reason back when the search is refused', async () => {
     const fetcher = makeFetcher({ approval: allow, fetchImpl: vi.fn() });
 
-    const result = await fetcher.search('ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8');
+    const result = await fetcher.search(fakeSecret('github'));
 
     expect(result.success).toBe(false);
     expect(result.output).toMatch(/secret/);
