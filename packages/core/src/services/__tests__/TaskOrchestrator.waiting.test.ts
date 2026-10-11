@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { TaskOrchestrator, TaskControlError } from '../TaskOrchestrator';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
+import { IDLE_TIMEOUT_MS } from '../VerdictEngine';
 import { serializeTaskStatus, type SessionMessage } from '../SessionMessage';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { fakeConfig, FakeRunnerSession, flushMicrotasks } from '../../testing';
@@ -102,11 +103,11 @@ describe('a structured turn that ends without a task_complete call', () => {
       structured.emitOutput('working\n');
       structured.emitTurnEnd('completed');
 
-      vi.advanceTimersByTime(120_000);
+      vi.advanceTimersByTime(2 * IDLE_TIMEOUT_MS);
       expect(orchestrator.getIdleSince('t1')).toBeNull();
 
       orchestrator.sendTaskMessage('t1', 'go on');
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
       expect(orchestrator.getIdleSince('t1')).not.toBeNull();
     } finally {
       vi.useRealTimers();

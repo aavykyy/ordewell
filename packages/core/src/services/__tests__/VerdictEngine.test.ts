@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { VerdictEngine } from '../VerdictEngine';
+import { VerdictEngine, IDLE_TIMEOUT_MS } from '../VerdictEngine';
 import { createTask, type Task, type Verdict } from '../../models/Task';
 import { FakeRunnerSession, flushMicrotasks } from '../../testing';
 
@@ -343,7 +343,11 @@ describe('VerdictEngine', () => {
       vi.useRealTimers();
     });
 
-    it('sets idleSince after 60s of no output on a running task', () => {
+    it('waits five minutes: a minute of silence is an ordinary long turn', () => {
+      expect(IDLE_TIMEOUT_MS).toBe(5 * 60_000);
+    });
+
+    it('sets idleSince after the idle window of no output on a running task', () => {
       const engine = new VerdictEngine();
       const idleEvents: { taskId: string; idleSince: string | null }[] = [];
       engine.onIdleChange((taskId, idleSince) => idleEvents.push({ taskId, idleSince }));
@@ -353,7 +357,10 @@ describe('VerdictEngine', () => {
       session.emit('working...');
       expect(engine.getIdleSince('t1')).toBeNull();
 
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS - 1);
+      expect(engine.getIdleSince('t1')).toBeNull();
+
+      vi.advanceTimersByTime(1);
 
       expect(engine.getIdleSince('t1')).not.toBeNull();
       expect(idleEvents).toHaveLength(1);
@@ -368,7 +375,7 @@ describe('VerdictEngine', () => {
 
       engine.watch(buildTask(), session);
       session.emit('working...');
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
       expect(engine.getIdleSince('t1')).not.toBeNull();
 
       session.emit('more output');
@@ -386,14 +393,14 @@ describe('VerdictEngine', () => {
 
       engine.watch(task, session);
       session.emit('working...');
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
       expect(engine.getIdleSince('t1')).not.toBeNull();
 
       engine.clear(task); // simulates retry
       expect(engine.getIdleSince('t1')).toBeNull();
       idleEvents.length = 0; // drop the teardown transition recorded by clear()
 
-      vi.advanceTimersByTime(120_000); // well past another 60s window
+      vi.advanceTimersByTime(2 * IDLE_TIMEOUT_MS); // well past another idle window
 
       expect(engine.getIdleSince('t1')).toBeNull();
       expect(idleEvents).toHaveLength(0);
@@ -408,14 +415,14 @@ describe('VerdictEngine', () => {
 
       engine.watch(task, session);
       session.emit('working...');
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
       expect(engine.getIdleSince('t1')).not.toBeNull();
 
       engine.reset(); // simulates stop
       expect(engine.getIdleSince('t1')).toBeNull();
       idleEvents.length = 0;
 
-      vi.advanceTimersByTime(120_000);
+      vi.advanceTimersByTime(2 * IDLE_TIMEOUT_MS);
 
       expect(engine.getIdleSince('t1')).toBeNull();
       expect(idleEvents).toHaveLength(0);
@@ -437,7 +444,7 @@ describe('VerdictEngine', () => {
       engine.watch(buildTask(), session);
 
       session.emitOutput('› Bash(npm test)\n');
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
 
       expect(engine.getIdleSince('t1')).not.toBeNull();
     });
@@ -450,11 +457,11 @@ describe('VerdictEngine', () => {
       session.emitTurnEnd('completed');
 
       engine.pauseIdle('t1');
-      vi.advanceTimersByTime(120_000);
+      vi.advanceTimersByTime(2 * IDLE_TIMEOUT_MS);
       expect(engine.getIdleSince('t1')).toBeNull();
 
       session.sendMessage('carry on');
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
       expect(engine.getIdleSince('t1')).not.toBeNull();
     });
 
@@ -465,7 +472,7 @@ describe('VerdictEngine', () => {
       const session = new FakeRunnerSession();
       engine.watch(buildTask(), session);
       session.emitOutput('working\n');
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
 
       engine.pauseIdle('t1');
 
@@ -480,11 +487,11 @@ describe('VerdictEngine', () => {
       void session.callCheckpoint('ok?');
 
       engine.pauseIdle('t1');
-      vi.advanceTimersByTime(120_000);
+      vi.advanceTimersByTime(2 * IDLE_TIMEOUT_MS);
       expect(engine.getIdleSince('t1')).toBeNull();
 
       engine.approveCheckpoint('t1');
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
       expect(engine.getIdleSince('t1')).not.toBeNull();
     });
     it('does not flag a task waiting on a tool approval, and resumes once the last one is answered', () => {
@@ -495,15 +502,15 @@ describe('VerdictEngine', () => {
 
       session.requestPermission('p1', 'Bash', { command: 'npm test' });
       session.requestPermission('p2', 'Edit', { file_path: 'a.ts' });
-      vi.advanceTimersByTime(120_000);
+      vi.advanceTimersByTime(2 * IDLE_TIMEOUT_MS);
       expect(engine.getIdleSince('t1')).toBeNull();
 
       session.answerPermission('p1', { decision: 'allow' });
-      vi.advanceTimersByTime(120_000);
+      vi.advanceTimersByTime(2 * IDLE_TIMEOUT_MS);
       expect(engine.getIdleSince('t1')).toBeNull();
 
       session.withdrawPermission('p2');
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
       expect(engine.getIdleSince('t1')).not.toBeNull();
     });
 
@@ -514,7 +521,7 @@ describe('VerdictEngine', () => {
       const session = new FakeRunnerSession();
       engine.watch(buildTask(), session);
       session.emitOutput('working\n');
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
 
       session.requestPermission('p1', 'Bash', { command: 'npm test' });
 
@@ -529,7 +536,7 @@ describe('VerdictEngine', () => {
       session.emitOutput('working\n');
 
       session.emitEvent({ type: 'permission_request', id: 'p1', name: 'Read', detail: '{}', decided: { decision: 'allow' } });
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
 
       expect(engine.getIdleSince('t1')).not.toBeNull();
     });
@@ -542,7 +549,7 @@ describe('VerdictEngine', () => {
       engine.pauseIdle('t1');
 
       session.answerPermission('p1', { decision: 'allow' });
-      vi.advanceTimersByTime(120_000);
+      vi.advanceTimersByTime(2 * IDLE_TIMEOUT_MS);
 
       expect(engine.getIdleSince('t1')).toBeNull();
     });

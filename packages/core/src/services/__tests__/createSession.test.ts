@@ -4,6 +4,7 @@ import type { SkillInfo } from '../SkillsService';
 import { makeSession, FakeRunnerSession, fakeConfig, taskOf, queue, saves } from './sessionTestKit';
 import { scriptedAdapter, fakeMcpServer } from './harnessTestKit';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
+import { IDLE_TIMEOUT_MS } from '../VerdictEngine';
 import type { IRunner } from '../../interfaces/IRunner';
 import { parsePlanJson } from '../PlanValidator';
 import { PlannerTurnStoppedError } from '../PlannerConversation';
@@ -1608,7 +1609,7 @@ describe('idleSince on the status_update broadcast', () => {
     fakeSession.emitOutput('working...');
     broadcast.mockClear();
 
-    vi.advanceTimersByTime(60_000);
+    vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
 
     const idleUpdates = broadcast.mock.calls
       .map((c: unknown[]) => c[0] as { type: string; tasks?: Array<{ id: string; idleSince?: string | null }> })

@@ -9,8 +9,12 @@ export type CheckpointWithdrawnListener = (taskId: string) => void;
 /** Fires on every idleSince transition (null→timestamp on silence, timestamp→null on resume/teardown). */
 export type IdleListener = (taskId: string, idleSince: string | null) => void;
 
-/** No output for this long marks a running task idle (advisory, UI-only). */
-const IDLE_TIMEOUT_MS = 60_000;
+/**
+ * No output for this long marks a running task idle (advisory, UI-only). Long
+ * model turns and slow builds routinely go quiet for minutes, so a shorter
+ * window flagged healthy tasks as Stalled.
+ */
+export const IDLE_TIMEOUT_MS = 5 * 60_000;
 
 
 export class VerdictEngine {
