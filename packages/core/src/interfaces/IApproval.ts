@@ -23,9 +23,10 @@ import type { ApprovalSource } from '../services/ApprovalPolicy';
  * scoped to that one tool. `web_search` is scoped to the search provider, the
  * party that receives every query (ADR-0027). `mcp_server` is starting an MCP
  * server the repository declares for a planner, scoped to its definition
- * (ADR-0028).
+ * (ADR-0028). `task_start` is the planner asking to start work through the
+ * command seam in Guarded (ADR-0029), asked afresh every time.
  */
-export type ApprovalKind = 'external_path' | 'shell_command' | 'url_fetch' | 'web_search' | 'mcp_tool' | 'mcp_server' | 'runner_tool';
+export type ApprovalKind = 'external_path' | 'shell_command' | 'url_fetch' | 'web_search' | 'mcp_tool' | 'mcp_server' | 'runner_tool' | 'task_start';
 
 export interface ApprovalRequest {
   kind: ApprovalKind;

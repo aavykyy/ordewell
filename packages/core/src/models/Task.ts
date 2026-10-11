@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { PlanIsolation } from '../interfaces/IWorktreeIsolation';
 import type { PlannerUsage, UsageRecord, UsageTotals } from './Usage';
+import type { ExecutionRecord } from './Execution';
 import type { SkillSource } from '../services/SkillsService';
 import { SKILL_NAME_PATTERN } from '../conversation/skillTokens';
 
@@ -329,12 +330,15 @@ export interface ConversationMessage {
    * user-triggered compaction left in place of the earlier messages — always
    * the transcript's first entry. 'skill_load' is a skill loaded into the
    * conversation, its snapshot in `skill`; one the user invoked follows the
-   * message that named it. Absent for ordinary chat turns, so sessions saved
-   * before markers existed degrade gracefully.
+   * message that named it. 'execution' is a call at the command seam
+   * (ADR-0029), its record in `execution`. Absent for ordinary chat turns, so
+   * sessions saved before markers existed degrade gracefully.
    */
-  kind?: 'plan_generated' | 'system' | 'compaction' | 'skill_load';
+  kind?: 'plan_generated' | 'system' | 'compaction' | 'skill_load' | 'execution';
   /** Present exactly when `kind` is 'skill_load'. */
   skill?: SkillLoad;
+  /** Present exactly when `kind` is 'execution'. */
+  execution?: ExecutionRecord;
 }
 
 /**
@@ -408,6 +412,13 @@ export interface LegacyPlanState {
   isolation?: PlanIsolation;
   /** Kept so a reopened session shows the same token line (#49). */
   plannerUsage?: PlannerUsage;
+  /**
+   * The tasks the user approved to run: every task when they executed the
+   * plan, and each one they started or retried themselves since. A command
+   * from anyone else starts only these (ADR-0029); a task the planner added
+   * after the approval waits for the user's.
+   */
+  approvedTasks?: string[];
 }
 
 export interface Message {

@@ -10,9 +10,11 @@ import { settleReply, type ReplyAttempt } from './settleReply';
 import { compactResearchResults, withProactiveCompaction } from './contextCompaction';
 import type { RunnerModeInfo } from './ModeResolver';
 import { collectResearchContext } from './ContextCollector';
-import { executeTool } from './executeTool';
+import { executeTool, STOPPED_TOOL_RESULT } from './executeTool';
 import { runResearchAgent, mapWithConcurrency, SUBAGENT_LIMITS } from './ResearchSubagents';
-import { SPAWN_RESEARCH_AGENT } from './researchTools';
+import { SPAWN_RESEARCH_AGENT, isExecutionTool } from './researchTools';
+import { PLANNER_EXECUTION_TOOLS, type PlannerToolHandler } from './mcp/tools';
+import type { ToolOutcome } from '../interfaces/IFileSystem';
 import { classifyOutcome } from './researchStepSummary';
 import { addUsage, type UsageTotals } from '../models/Usage';
 import type { ConversationTurn } from './AiService';
@@ -29,6 +31,27 @@ const PARALLEL_SAFE_TOOLS = new Set(['read_file', 'read_files', 'glob', 'grep', 
 
 /** Concurrency for the read-only pre-pass. Bounded so a wide round cannot exhaust file handles. */
 const TOOL_ROUND_CONCURRENCY = 8;
+
+/**
+ * An execution tool call (ADR-0029), answered by the session's command seam
+ * through the same handler and argument check the MCP route uses. Undefined
+ * for any other tool, or when the session offered no handler.
+ */
+async function callExecutionTool(handler: PlannerToolHandler | undefined, name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ToolOutcome | undefined> {
+  const tool = handler ? PLANNER_EXECUTION_TOOLS.find((t) => t.name === name) : undefined;
+  if (!handler || !tool) return undefined;
+  if (signal?.aborted) return { success: false, output: STOPPED_TOOL_RESULT, truncated: false };
+  const reply = await tool.call(handler, args, { signal: signal ?? new AbortController().signal });
+  return { success: !reply.isError, output: reply.text, truncated: false };
+}
+
+/**
+ * How a step names its tool: an execution tool has no research tool type, so
+ * it is an agent tool under its own name, as a harness planner's is.
+ */
+function stepTool(name: string, handler: PlannerToolHandler | undefined): { tool: string; toolLabel?: string } {
+  return handler && isExecutionTool(name) ? { tool: 'agent_tool', toolLabel: name } : { tool: name };
+}
 
 export interface ToolCall {
   name: string;
@@ -76,6 +99,8 @@ export interface ConversationTurnContext {
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
   autonomousDefault?: boolean;
   fetcher?: IWebFetcher;
+  /** The session's planner tools; the conversation offers their execution tools (ADR-0029) when set. */
+  plannerTools?: PlannerToolHandler;
 }
 
 export abstract class BaseAiService {
@@ -209,6 +234,7 @@ export abstract class BaseAiService {
     stepIndex: number,
     thinking: string,
     signal?: AbortSignal,
+    plannerTools?: PlannerToolHandler,
   ): Promise<{ toolResults: ToolResult[]; logEntries: ResearchStep[]; resultsText: string }> {
     const toolResults: ToolResult[] = [];
     const logEntries: ResearchStep[] = [];
@@ -258,14 +284,17 @@ export abstract class BaseAiService {
       const toolArgs = normalizedArgs[index];
 
       const preResult = precomputed.get(index);
-      if (!preResult) onProgress({ type: 'tool_call', tool: tc.name, toolArgs: JSON.stringify(tc.args), toolCallId: tc.id });
+      const named = stepTool(tc.name, plannerTools);
+      if (!preResult) onProgress({ type: 'tool_call', ...named, toolArgs: JSON.stringify(tc.args), toolCallId: tc.id });
 
       // The serial tail of the round is where a stop actually lands: `bash`,
       // `fetch` and `web_search` run one after another and can each sit on an
       // approval prompt, so by the time the user hits ESC there are usually
       // calls here that have not started. `executeTool` answers those without
       // running them, the same way the budget-exhaustion path above does.
-      const toolResult = preResult ?? await executeTool(tc.name, toolArgs, fs, fetcher, signal);
+      const toolResult = preResult
+        ?? await callExecutionTool(plannerTools, tc.name, toolArgs, signal)
+        ?? await executeTool(tc.name, toolArgs, fs, fetcher, signal);
 
       const MAX_RESPONSE_CHARS = 50000;
       const truncatedResponse = toolResult.success && (toolResult.truncated || toolResult.output.length > MAX_RESPONSE_CHARS);
@@ -277,7 +306,8 @@ export abstract class BaseAiService {
       const outcome = classifyOutcome(toolResult.success, toolResult.output);
       const stepEntry: ResearchStep = {
         id: `rs-${Date.now()}-${stepIndex}-${logEntries.length}`,
-        tool: tc.name as ResearchStep['tool'],
+        tool: named.tool as ResearchStep['tool'],
+        ...(named.toolLabel ? { toolLabel: named.toolLabel } : {}),
         args: JSON.stringify(tc.args),
         result: toolResult.output.length > LOG_MAX
           ? toolResult.output.slice(0, LOG_MAX) + `\n[... truncated, total ${toolResult.output.length} chars]`
@@ -400,7 +430,7 @@ export abstract class BaseAiService {
       }
       const thinking = turn.reasoning ? turn.reasoning.slice(-200) : '';
       const { toolResults, logEntries } = await this.executeToolCalls(
-        turn.toolCalls, ctx.fs, onProgress, ctx.fetcher, step, thinking, signal,
+        turn.toolCalls, ctx.fs, onProgress, ctx.fetcher, step, thinking, signal, ctx.plannerTools,
       );
       researchLog.push(...logEntries);
       BaseAiService.appendBudgetCountdown(toolResults, MAX_STEPS - step - 1, 'reply to the user (summary, question, or plan JSON)');

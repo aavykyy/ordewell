@@ -53,17 +53,24 @@ describe('OrdewellMcpServer', () => {
 
     const names = async (client: Client) => (await client.listTools()).tools.map((t) => t.name).sort();
     expect(await names(task)).toEqual(['checkpoint', 'task_complete']);
-    expect(await names(planner)).toEqual(['edit_plan', 'fetch', 'list_models', 'list_runners', 'load_skill', 'run_command', 'submit_plan', 'task_output', 'task_query', 'web_search']);
+    expect(await names(planner)).toEqual([
+      'answer_approval', 'edit_plan', 'fetch', 'list_models', 'list_runners', 'load_skill', 'message_task', 'retry_task', 'run_command',
+      'run_plan', 'run_task', 'stop_run', 'stop_task', 'submit_plan', 'task_output', 'task_query', 'web_search',
+    ]);
   });
 
   // Claude Code in plan mode refuses any MCP tool not marked read-only, even
-  // one pre-allowed with --allowedTools (verified against 2.1.289).
-  it('marks every planner tool read-only, and no task tool', async () => {
+  // one pre-allowed with --allowedTools (verified against 2.1.289). The
+  // execution tools change what runs, and say so (ADR-0029).
+  it('marks every planner read and plan write read-only, the execution tools not, and no task tool', async () => {
     const server = newServer();
     const task = await connect(await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1 }));
     const planner = await connect(await server.issuePlannerToken({ sessionId: 's1' }));
 
-    expect((await planner.listTools()).tools.map((t) => t.annotations?.readOnlyHint)).toEqual(Array(10).fill(true));
+    const hints = Object.fromEntries((await planner.listTools()).tools.map((t) => [t.name, t.annotations?.readOnlyHint]));
+    const executing = ['run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'message_task', 'answer_approval'];
+    for (const [name, hint] of Object.entries(hints)) expect(hint, name).toBe(!executing.includes(name));
+    expect(Object.keys(hints)).toHaveLength(17);
     expect((await task.listTools()).tools.map((t) => t.annotations?.readOnlyHint)).toEqual([undefined, undefined]);
   });
 
@@ -97,7 +104,10 @@ describe('OrdewellMcpServer', () => {
     const fetch = vi.fn(async () => ({ text: 'page' }));
     const planner = await connect(await server.issuePlannerToken({ sessionId: 's1', hidden: ['fetch', 'web_search'] }, { fetch }));
 
-    expect((await planner.listTools()).tools.map((t) => t.name).sort()).toEqual(['edit_plan', 'list_models', 'list_runners', 'load_skill', 'run_command', 'submit_plan', 'task_output', 'task_query']);
+    expect((await planner.listTools()).tools.map((t) => t.name).sort()).toEqual([
+      'answer_approval', 'edit_plan', 'list_models', 'list_runners', 'load_skill', 'message_task', 'retry_task', 'run_command',
+      'run_plan', 'run_task', 'stop_run', 'stop_task', 'submit_plan', 'task_output', 'task_query',
+    ]);
     await expect(planner.callTool({ name: 'fetch', arguments: { url: 'https://example.com' } })).rejects.toThrow(/Unknown tool/);
     expect(fetch).not.toHaveBeenCalled();
   });

@@ -42,5 +42,7 @@ export function forkPlanState(plan: LegacyPlanState, tasks: readonly Task[], dia
     conversationHistory: dialogue.conversationHistory,
     researchLog: dialogue.researchLog,
     ...(plan.prdMarkdown !== undefined ? { prdMarkdown: plan.prdMarkdown } : {}),
+    // The user's approval is of the tasks, which travel; without it a fork of an executed plan would count every task approved.
+    ...(plan.approvedTasks !== undefined ? { approvedTasks: [...plan.approvedTasks] } : {}),
   };
 }

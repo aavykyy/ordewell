@@ -296,7 +296,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
       req.runners,
       req.runnerModes,
       req.autonomousDefault ?? true,
-      { isolatedExecution: req.isolatedExecution, skills: req.skills },
+      { isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined },
     );
 
     const userText = req.goal;
@@ -313,7 +313,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
       messages,
       () => this.getClient(),
       () => this.requireModel('orchestratorModel', this.config.orchestratorModel),
-      toOpenAiTools(),
+      toOpenAiTools(req.plannerTools !== undefined),
       (delta, segmentId) => currentProgress({ type: 'thinking', text: delta, segmentId }),
       (delta, segmentId) => currentProgress({ type: 'text_delta', text: delta, segmentId }),
       () => this.config.aiProvider,
@@ -328,6 +328,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
       runnerModes: req.runnerModes,
       autonomousDefault: req.autonomousDefault,
       fetcher: req.fetcher,
+      plannerTools: req.plannerTools?.handler,
     };
 
     this.conversation = {

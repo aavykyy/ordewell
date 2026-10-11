@@ -25,7 +25,7 @@ function fromEntry(entry: SerializedConversationMessage, loaded: readonly SkillL
     return (id) => skillLoadBlock(id(), skillLoadNotice(skill));
   }
   if (entry.role === 'user' && !entry.kind) return (id) => userMessage(id(), entry.content, loaded.map(skillLoadNotice));
-  const role = entry.kind === 'system' || entry.kind === 'compaction' ? 'system' : entry.role === 'user' ? 'user' : 'planner';
+  const role = entry.kind === 'system' || entry.kind === 'compaction' || entry.kind === 'execution' ? 'system' : entry.role === 'user' ? 'user' : 'planner';
   return (id) => settledMessage(id(), role, entry.content);
 }
 
