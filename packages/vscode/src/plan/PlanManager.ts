@@ -3,6 +3,7 @@ import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
   saveState, clearState, ModelResolver, RunnerRegistry, isCliProvider, taskStartedNotice,
   createEmptyPlan, markRequestFor, pastGateConfirmation, titledRefs, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner, type TaskRowAction,
+  type ExecutionCommand,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit } from '../shared/protocol';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
@@ -196,6 +197,16 @@ export async function handleSplitPlan(taskId: string, deps: PlanManagerDeps): Pr
   });
 }
 
+/**
+ * One execution button's command, run as the user through the command seam
+ * (ADR-0029), so it is checked and kept in the timeline with who asked. A
+ * refusal is thrown, so the caller's existing catch shows it.
+ */
+async function executeUserCommand(session: Pick<Session, 'execute'>, command: ExecutionCommand): Promise<void> {
+  const outcome = await session.execute(command, { kind: 'user' });
+  if (!outcome.ok) throw new Error(outcome.message);
+}
+
 function approvedTasks(tasks: Task[]): Task[] {
   return tasks.map((t) => ({
     ...t,
@@ -224,9 +235,9 @@ export async function handleApprovePlan(deps: PlanManagerDeps): Promise<void> {
   saveState(plan, deps.fsAdapter.getWorkspaceRoot());
   deps.saveCurrentSession();
   try {
-    deps.log('Calling session.executePlan()...');
-    await deps.session.executePlan();
-    deps.log(`executePlan() returned. isRunning=${deps.session.isExecuting}, status=${deps.session.status}`);
+    deps.log('Running the plan through the command seam...');
+    await executeUserCommand(deps.session, { command: 'run_plan' });
+    deps.log(`run_plan returned. isRunning=${deps.session.isExecuting}, status=${deps.session.status}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     deps.log(`Orchestrator start failed: ${msg}`);
@@ -356,7 +367,7 @@ export async function handleTaskControl(
   deps: Pick<PlanManagerDeps, 'session'>,
 ): Promise<void> {
   try {
-    if (control.kind === 'message') deps.session.sendTaskMessage(taskId, control.text);
+    if (control.kind === 'message') await executeUserCommand(deps.session, { command: 'message_task', task: taskId, text: control.text });
     else if (control.kind === 'messageNow') deps.session.forceSendTaskMessage(taskId, control.text);
     else if (control.kind === 'removeQueued') deps.session.removeQueuedTaskMessage(taskId, control.id);
     else if (control.kind === 'queuedNow') {
@@ -423,41 +434,51 @@ export async function handleSystemCommand(
   taskId: string,
   deps: PlanManagerDeps,
 ): Promise<void> {
-  switch (command) {
-    case 'cancel':
-      await deps.session.cancelTask(taskId);
-      break;
-    case 'cancelResume':
-      deps.session.cancelScheduledResume(taskId);
-      break;
-    case 'retry':
-      await deps.session.retryTask(taskId);
-      break;
-    case 'skip':
-    case 'markComplete':
-    case 'markIncomplete':
-      await (markRequestFor(ROW_ACTION[command]) === 'uncomplete'
-        ? deps.session.markTaskIncomplete(taskId)
-        : deps.session.markTaskComplete(taskId));
-      break;
-    case 'forceStart':
-      if (!(await confirmPastGate(taskId, deps.session))) return;
-      deps.chatProvider.clearIsolationHandoff();
-      await deps.session.forceStartTask(taskId);
-      break;
-    case 'runTask':
-      if (!(await confirmPastGate(taskId, deps.session))) return;
-      deps.chatProvider.clearIsolationHandoff();
-      await deps.session.runTask(taskId);
-      break;
-    case 'executePlan':
-      await handleApprovePlan(deps);
-      break;
-    case 'stopExecution':
-      deps.session.stopExecution();
-      deps.runner.stopAll();
-      deps.chatProvider.setState('planDraft');
-      break;
+  try {
+    switch (command) {
+      case 'cancel':
+        await executeUserCommand(deps.session, { command: 'stop_task', task: taskId });
+        break;
+      case 'cancelResume':
+        deps.session.cancelScheduledResume(taskId);
+        break;
+      case 'retry':
+        await executeUserCommand(deps.session, { command: 'retry_task', task: taskId, from: 'fresh' });
+        break;
+      case 'skip':
+      case 'markComplete':
+      case 'markIncomplete':
+        await (markRequestFor(ROW_ACTION[command]) === 'uncomplete'
+          ? deps.session.markTaskIncomplete(taskId)
+          : deps.session.markTaskComplete(taskId));
+        break;
+      case 'forceStart':
+        if (!(await confirmPastGate(taskId, deps.session))) return;
+        deps.chatProvider.clearIsolationHandoff();
+        await deps.session.forceStartTask(taskId);
+        break;
+      case 'runTask': {
+        // A start past a merge gate is a force start, which the seam has no
+        // command for; the confirmation stays, and the seam runs an ungated one.
+        const gated = deps.session.mergeGate(taskId).length > 0;
+        if (!(await confirmPastGate(taskId, deps.session))) return;
+        deps.chatProvider.clearIsolationHandoff();
+        if (gated) await deps.session.forceStartTask(taskId);
+        else await executeUserCommand(deps.session, { command: 'run_task', task: taskId });
+        break;
+      }
+      case 'executePlan':
+        await handleApprovePlan(deps);
+        break;
+      case 'stopExecution':
+        // A stop with nothing running is a no-op, not a refusal: the button already said stopped.
+        await deps.session.execute({ command: 'stop_run' }, { kind: 'user' });
+        deps.runner.stopAll();
+        deps.chatProvider.setState('planDraft');
+        break;
+    }
+  } catch (err) {
+    void vscode.window.showWarningMessage(err instanceof Error ? err.message : String(err));
   }
   deps.chatProvider.showPlan(deps.getCurrentPlan());
   deps.persistState();

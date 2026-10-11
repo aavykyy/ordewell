@@ -347,3 +347,14 @@ until #30 exists.
 - 2026-10-11 — the Watch level (`Supervisor`): wake-ups from run events, `usage_limit` coalesced per runner, run updates, the wake-up read budget, refusals at Watch, failure handling and persistence. Surfaces offer Off and Watch; a plan set to Act runs as Watch until Act's rules land.
 - 2026-10-11 — the Act level: every execution command without asking, `merge_all` as a planner tool (refused in user-started turns), edits in wake-up turns (a whole plan refused), tasks the supervisor adds approved and marked `addedBy: 'supervisor'`, a moved task's scheduled resume cancelled, and the loop guards (`LoopGuards`; retry limit `supervisorRetryLimit`, default 2). Added: the user may lower a running supervisor at once (the downward exception above), a start waits for the same reply's held edit, and a start of a failed task counts as a retry however asked. Surfaces offer Act, saying what it allows.
 - 2026-10-11 — moved tasks become ready on their new runner through the same resume decision as direct user edits; same-runner model changes keep the wait.
+- 2026-10-11 — the surfaces' execution buttons reach the seam as the user, so
+  their actions appear in the timeline as the planner's and the supervisor's do:
+  Execute plan (`run_plan`), Run task (`run_task`), Retry (`retry_task` from
+  `fresh`), Continue (`retry_task` from `session`), Stop/cancel (`stop_task`),
+  Stop execution (`stop_run`), a task message (`message_task`) and a runner
+  approval's deny (`answer_approval`). `approveReview` approves every task in
+  the plan, as executing it does. Force start past a merge gate, Mark
+  complete/incomplete, Skip and the user's Merge all stay on their Session
+  methods: the seam has no command for the first three, and its `merge_all` is
+  the supervisor's — it flattens the structured merge result the Merge all card
+  renders.

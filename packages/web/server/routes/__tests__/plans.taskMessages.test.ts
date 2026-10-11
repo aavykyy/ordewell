@@ -25,21 +25,21 @@ function request(app: Hono, method: string, path: string, body?: unknown) {
 }
 
 describe('talking to a structured task over the daemon (ADR-0018, M1)', () => {
-  it('sends a message and answers with its queued id', async () => {
-    const sendTaskMessage = vi.fn(() => 'msg-1');
-    const res = await request(appFor({ sendTaskMessage }), 'POST', '/messages', { text: 'use Postgres' });
+  it('sends a message through the command seam as the user, answering its queued id', async () => {
+    const execute = vi.fn().mockResolvedValue({ ok: true, message: 'Sent to task #1 "Build".', id: 'msg-1' });
+    const res = await request(appFor({ execute }), 'POST', '/messages', { text: 'use Postgres' });
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ id: 'msg-1' });
-    expect(sendTaskMessage).toHaveBeenCalledWith('t1', 'use Postgres');
+    expect(execute).toHaveBeenCalledWith({ command: 'message_task', task: 't1', text: 'use Postgres' }, { kind: 'user' });
   });
 
   it('asks for the text rather than sending an empty message', async () => {
-    const sendTaskMessage = vi.fn();
-    const res = await request(appFor({ sendTaskMessage }), 'POST', '/messages', { text: '  ' });
+    const execute = vi.fn();
+    const res = await request(appFor({ execute }), 'POST', '/messages', { text: '  ' });
 
     expect(res.status).toBe(400);
-    expect(sendTaskMessage).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it('takes back a queued message, saying whether it was still there', async () => {
@@ -104,7 +104,7 @@ describe('talking to a structured task over the daemon (ADR-0018, M1)', () => {
   it('answers a refusal for a task that is not running with 400 and the reason', async () => {
     const refusal = new TaskControlError('Task "Only" is not running, so there is no turn to send a message to.');
     const app = appFor({
-      sendTaskMessage: () => { throw refusal; },
+      execute: async () => ({ ok: false, outcome: 'refused', message: refusal.message }),
       removeQueuedTaskMessage: () => { throw refusal; },
       interruptTask: async () => { throw refusal; },
     });
@@ -126,28 +126,28 @@ describe('talking to a structured task over the daemon (ADR-0018, M1)', () => {
 });
 
 describe('continuing a finished structured task over the daemon (ADR-0018, K1)', () => {
-  it('continues it with the message', async () => {
-    const continueTask = vi.fn(async () => {});
-    const res = await request(appFor({ continueTask }), 'POST', '/continue', { text: 'also handle arrays' });
+  it('continues it with the message through the command seam as the user', async () => {
+    const execute = vi.fn().mockResolvedValue({ ok: true, message: 'Continuing task #1 "Build" in its saved session with your message.' });
+    const res = await request(appFor({ execute }), 'POST', '/continue', { text: 'also handle arrays' });
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
-    expect(continueTask).toHaveBeenCalledWith('t1', 'also handle arrays');
+    expect(execute).toHaveBeenCalledWith({ command: 'retry_task', task: 't1', from: 'session', message: 'also handle arrays' }, { kind: 'user' });
   });
 
   it('asks for the text rather than continuing with nothing', async () => {
-    const continueTask = vi.fn();
-    const res = await request(appFor({ continueTask }), 'POST', '/continue', {});
+    const execute = vi.fn();
+    const res = await request(appFor({ execute }), 'POST', '/continue', {});
 
     expect(res.status).toBe(400);
-    expect(continueTask).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it('answers a refusal — a conflict, say — with 400 and the reason', async () => {
-    const refusal = new TaskControlError('Task "Only" cannot be continued: its work is waiting on a merge conflict. Resolve or repair the conflict instead.');
-    const res = await request(appFor({ continueTask: async () => { throw refusal; } }), 'POST', '/continue', { text: 'go on' });
+    const refusal = 'Task "Only" cannot be continued: its work is waiting on a merge conflict. Resolve or repair the conflict instead.';
+    const res = await request(appFor({ execute: async () => ({ ok: false, outcome: 'refused', message: refusal }) }), 'POST', '/continue', { text: 'go on' });
 
     expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: refusal.message, code: 'refused' });
+    expect(await res.json()).toEqual({ error: refusal, code: 'refused' });
   });
 });

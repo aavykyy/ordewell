@@ -196,11 +196,25 @@ describe('webview messages reach the session through one entry point each', () =
       expect(saved?.plan.tasks.find((t) => t.id === 't1')?.status).toBe('completed');
     });
 
-    it('retry reaches the session', async () => {
-      const retry = vi.spyOn(h.session, 'retryTask').mockResolvedValue();
+    it('retry reaches the command seam as the user', async () => {
+      const execute = vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'Retrying task #2 "Stream it".' });
       await h.route({ type: 'sendSystemCommand', command: 'retry', taskId: 't2' });
 
-      expect(retry).toHaveBeenCalledWith('t2');
+      expect(execute).toHaveBeenCalledWith({ command: 'retry_task', task: 't2', from: 'fresh' }, { kind: 'user' });
+    });
+
+    it('execute, stop, cancel and run reach the command seam as the user', async () => {
+      const execute = vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'done' });
+
+      await h.route({ type: 'sendSystemCommand', command: 'executePlan', taskId: '' });
+      await h.route({ type: 'sendSystemCommand', command: 'stopExecution', taskId: '' });
+      await h.route({ type: 'sendSystemCommand', command: 'cancel', taskId: 't1' });
+      await h.route({ type: 'sendSystemCommand', command: 'runTask', taskId: 't2' });
+
+      expect(execute).toHaveBeenCalledWith({ command: 'run_plan' }, { kind: 'user' });
+      expect(execute).toHaveBeenCalledWith({ command: 'stop_run' }, { kind: 'user' });
+      expect(execute).toHaveBeenCalledWith({ command: 'stop_task', task: 't1' }, { kind: 'user' });
+      expect(execute).toHaveBeenCalledWith({ command: 'run_task', task: 't2' }, { kind: 'user' });
     });
 
     it('removes a task only once the user confirms, naming what depends on it', async () => {
@@ -233,8 +247,8 @@ describe('webview messages reach the session through one entry point each', () =
       expect(reject).toHaveBeenCalledWith('t2', 'wrong approach');
     });
 
-    it('sends, takes back and interrupts on a structured task through the Session', async () => {
-      const send = vi.spyOn(h.session, 'sendTaskMessage').mockReturnValue('msg-1');
+    it('sends a message through the command seam as the user; takes back and interrupts on the Session', async () => {
+      const execute = vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'Sent to task #1 "Parse JSON".' });
       const remove = vi.spyOn(h.session, 'removeQueuedTaskMessage').mockReturnValue(true);
       const interrupt = vi.spyOn(h.session, 'interruptTask').mockResolvedValue();
 
@@ -242,7 +256,7 @@ describe('webview messages reach the session through one entry point each', () =
       await h.route({ type: 'removeQueuedTaskMessage', taskId: 't1', id: 'msg-1' });
       await h.route({ type: 'interruptTask', taskId: 't1' });
 
-      expect(send).toHaveBeenCalledWith('t1', 'use Postgres');
+      expect(execute).toHaveBeenCalledWith({ command: 'message_task', task: 't1', text: 'use Postgres' }, { kind: 'user' });
       expect(remove).toHaveBeenCalledWith('t1', 'msg-1');
       expect(interrupt).toHaveBeenCalledWith('t1');
     });

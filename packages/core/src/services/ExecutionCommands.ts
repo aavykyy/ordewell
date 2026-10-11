@@ -19,9 +19,13 @@ export type ExecutionCommand =
   /** Merge all: the run's landed work into the user's branch (ADR-0013). */
   | { command: 'merge_all' };
 
-/** What a call came to: `message` is written for the caller, a model included, to act on. */
+/**
+ * What a call came to: `message` is written for the caller, a model included,
+ * to act on. `id` is the queued message's id for `message_task`, the value the
+ * surface's button already answered with.
+ */
 export type CommandOutcome =
-  | { ok: true; message: string }
+  | { ok: true; message: string; id?: string }
   | { ok: false; outcome: 'refused' | 'declined'; message: string };
 
 /** What the seam does with a valid command: run it, ask the user first, or refuse with a note the caller can act on. */
@@ -99,7 +103,7 @@ export interface ExecutionHost {
   stopRun(): void;
   retryTask(taskId: string): Promise<void>;
   continueTask(taskId: string, message: string): Promise<void>;
-  messageTask(taskId: string, text: string): void;
+  messageTask(taskId: string, text: string): string;
   denyRequest(requestId: string, note?: string): boolean;
   /** Merge all, through the queue landings and the user's Merge all share. */
   mergeAll(): Promise<IsolationMergeResult>;
@@ -137,7 +141,12 @@ interface Located {
   ref: string;
 }
 
-type Prepared = { refusal: string } | { act: () => Promise<string> };
+interface Acted {
+  message: string;
+  id?: string;
+}
+
+type Prepared = { refusal: string } | { act: () => Promise<Acted> };
 
 /**
  * The command seam (ADR-0029, #91): the one place an execution action from
@@ -199,9 +208,9 @@ export class ExecutionCommands {
       act = again.act;
     }
 
-    let message: string;
+    let acted: Acted;
     try {
-      message = await act();
+      acted = await act();
     } catch (err) {
       return this.refuse(command, actor, located, err instanceof Error ? err.message : String(err));
     }
@@ -209,7 +218,7 @@ export class ExecutionCommands {
       this.host.approve(located ? withSubtasks(located.task) : this.all().map(({ task }) => task.id));
     }
     this.keep(command, actor, located, 'done', doneDetail(command));
-    return { ok: true, message };
+    return { ok: true, message: acted.message, ...(acted.id !== undefined ? { id: acted.id } : {}) };
   }
 
   /**
@@ -264,11 +273,13 @@ export class ExecutionCommands {
     return {
       act: async () => {
         await this.host.runPlan();
-        if (this.host.runBlocked()) return BLOCKED_RUN;
+        if (this.host.runBlocked()) return { message: BLOCKED_RUN };
         const started = this.all().filter(({ task }) => this.host.running(task.id));
-        return started.length === 0
-          ? 'The plan is running; nothing could start yet. Read the plan to see what each task waits on.'
-          : `The plan is running: ${named(started)} started, and the rest start as their dependencies finish.`;
+        return {
+          message: started.length === 0
+            ? 'The plan is running; nothing could start yet. Read the plan to see what each task waits on.'
+            : `The plan is running: ${named(started)} started, and the rest start as their dependencies finish.`,
+        };
       },
     };
   }
@@ -318,11 +329,13 @@ export class ExecutionCommands {
         // The Retry button's own path: it restarts a run a failure halted, and hands the task to a scheduler that runs.
         if (settled) await this.host.retryTask(task.id);
         if (!this.host.running(task.id) && !(settled && this.host.scheduling())) await this.host.startTask(task.id);
-        if (this.host.runBlocked()) return BLOCKED_RUN;
+        if (this.host.runBlocked()) return { message: BLOCKED_RUN };
         const verb = how === 'run' ? 'Started' : 'Retrying';
-        return this.host.running(task.id)
-          ? `${verb} ${label}.`
-          : `${capitalize(label)} is back in the run and starts when a slot is free.`;
+        return {
+          message: this.host.running(task.id)
+            ? `${verb} ${label}.`
+            : `${capitalize(label)} is back in the run and starts when a slot is free.`,
+        };
       },
     };
   }
@@ -341,8 +354,8 @@ export class ExecutionCommands {
     return {
       act: async () => {
         await this.host.continueTask(task.id, message);
-        if (this.host.runBlocked()) return BLOCKED_RUN;
-        return `Continuing ${label} in its saved session with your message.`;
+        if (this.host.runBlocked()) return { message: BLOCKED_RUN };
+        return { message: `Continuing ${label} in its saved session with your message.` };
       },
     };
   }
@@ -356,7 +369,7 @@ export class ExecutionCommands {
     return {
       act: async () => {
         await this.host.stopTask(task.id);
-        return `Stopped ${label}: it is back to not started and held until it is retried, and its open approvals were denied.${task.ops ? ' A retry is told what this attempt did.' : ''}`;
+        return { message: `Stopped ${label}: it is back to not started and held until it is retried, and its open approvals were denied.${task.ops ? ' A retry is told what this attempt did.' : ''}` };
       },
     };
   }
@@ -367,9 +380,11 @@ export class ExecutionCommands {
     return {
       act: async () => {
         this.host.stopRun();
-        return live.length > 0
-          ? `Stopped the run: ${named(live)} ${live.length === 1 ? 'is' : 'are'} back to not started, and the plan is kept. Start again with run_plan or run_task.`
-          : 'Stopped the run; nothing was running. The plan is kept.';
+        return {
+          message: live.length > 0
+            ? `Stopped the run: ${named(live)} ${live.length === 1 ? 'is' : 'are'} back to not started, and the plan is kept. Start again with run_plan or run_task.`
+            : 'Stopped the run; nothing was running. The plan is kept.',
+        };
       },
     };
   }
@@ -378,8 +393,8 @@ export class ExecutionCommands {
     const label = describe(located);
     return {
       act: async () => {
-        this.host.messageTask(located.task.id, text);
-        return `Sent to ${label}. The runner reads it at its next step, or when its turn ends.`;
+        const id = this.host.messageTask(located.task.id, text);
+        return { message: `Sent to ${label}. The runner reads it at its next step, or when its turn ends.`, id };
       },
     };
   }
@@ -402,9 +417,9 @@ export class ExecutionCommands {
     }
     return {
       act: async () => {
-        if (answer === 'escalate') return `Left ${label}'s request (${request.subject}) for the user to answer. Tell them why in your reply.`;
+        if (answer === 'escalate') return { message: `Left ${label}'s request (${request.subject}) for the user to answer. Tell them why in your reply.` };
         if (!this.host.denyRequest(request.id, command.note?.trim() || undefined)) throw new Error(`The request ${request.id} was answered meanwhile.`);
-        return `Denied ${label}'s request (${request.subject}).${command.note?.trim() ? ' The runner is given your note.' : ''}`;
+        return { message: `Denied ${label}'s request (${request.subject}).${command.note?.trim() ? ' The runner is given your note.' : ''}` };
       },
     };
   }
@@ -414,7 +429,7 @@ export class ExecutionCommands {
       act: async () => {
         const result = await this.host.mergeAll();
         if (result.outcome !== 'merged') throw new Error(`Merge all stopped: ${mergeStopped(result)}. Nothing was merged; tell the user, who resolves it.`);
-        return 'Merged the run\'s landed work into the user\'s branch. Tasks waiting at a merge gate for it can start.';
+        return { message: 'Merged the run\'s landed work into the user\'s branch. Tasks waiting at a merge gate for it can start.' };
       },
     };
   }

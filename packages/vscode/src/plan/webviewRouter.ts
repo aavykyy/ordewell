@@ -120,7 +120,15 @@ export async function routeWebviewMessage(msg: WebviewToHost, deps: WebviewRoute
     // broadcasts `approval_settled`, which redraws the card with its outcome.
     case 'resolveApproval':
       try {
-        deps.session.resolveApproval(msg.id, msg.granted);
+        const request = deps.session.outstandingApprovals().find((pending) => pending.id === msg.id)?.request;
+        // A runner request the user denies reaches the command seam, so it is
+        // kept in the timeline; an allow must reach the approval path, which
+        // the seam never allows, and the user's own Allow is legitimate.
+        if (!msg.granted && request?.taskId) {
+          await deps.session.execute({ command: 'answer_approval', task: request.taskId, approval: msg.id, answer: 'deny' }, { kind: 'user' });
+        } else {
+          deps.session.resolveApproval(msg.id, msg.granted);
+        }
       } catch (err) {
         deps.log(`Approval ${msg.id} could not be resolved: ${err instanceof Error ? err.message : String(err)}`);
       }
