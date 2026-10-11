@@ -4,6 +4,7 @@ import type { AgentEvent, AgentProcessDeps, AgentStartOptions, SpawnFn, TaskStar
 import { fakeSpawn, sseResponse, type FakeEventStream } from '../../__tests__/harnessTestKit';
 import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION, OPENCODE_SEARCH_OFF } from '../openCodeOrdewell';
 import { mcpClientConfig } from '../../mcp';
+import type { ProjectMcpServer } from '../repoConfig';
 
 /**
  * OpenCode 2.x (`opencode serve`, the `/api` surface), recorded at v2.0.22: a
@@ -496,6 +497,18 @@ describe('OpenCode 2.x — permission requests', () => {
   });
 });
 
+const ORDEWELL = { name: 'ordewell', url: 'http://127.0.0.1:1/mcp', headers: { authorization: 'Bearer t' } };
+
+/** Approved project servers (ADR-0028), as `opencode.json` declares them. */
+const PROBE: ProjectMcpServer = {
+  name: 'probe', source: 'opencode.json', transport: 'stdio', target: 'node serve.js', names: ['TOKEN'],
+  definition: { type: 'local', command: ['node', 'serve.js'], environment: { TOKEN: 'x' }, timeout: 5000 },
+};
+const DOCS: ProjectMcpServer = {
+  name: 'docs', source: 'opencode.json', transport: 'remote', target: 'https://docs.example/mcp', names: ['Authorization'],
+  definition: { type: 'remote', url: 'https://docs.example/mcp', headers: { Authorization: 'Bearer d' } },
+};
+
 describe('OpenCode 2.x — MCP servers', () => {
   it('lists Ordewell\'s tools as tools of their own, not inside code mode\'s `execute`', async () => {
     const server = fakeServer();
@@ -504,6 +517,69 @@ describe('OpenCode 2.x — MCP servers', () => {
     const replaced = server.requests.find((r) => r.method === 'PUT' && r.path === '/api/experimental/mcp/ordewell');
     expect(replaced?.body).toEqual({ config: { type: 'remote', url: 'http://127.0.0.1:1/mcp', headers: { authorization: 'Bearer t' }, codemode: false } });
     expect(server.requests.indexOf(replaced!)).toBeLessThan(server.requests.findIndex((r) => r.path === '/api/session'));
+    adapter.dispose();
+  });
+
+  it('lists a planner\'s approved project servers\' tools as tools of their own, each replaced once in its own shape', async () => {
+    const server = fakeServer();
+    const { adapter } = await start(server, plannerStart({ mcp: ORDEWELL, projectServers: [PROBE, DOCS] }));
+
+    const replaced = server.requests.filter((r) => r.method === 'PUT' && r.path.startsWith('/api/experimental/mcp/'));
+    expect(replaced.map((r) => [r.path, r.body])).toEqual([
+      ['/api/experimental/mcp/ordewell', { config: { type: 'remote', url: 'http://127.0.0.1:1/mcp', headers: { authorization: 'Bearer t' }, codemode: false } }],
+      // A 1.x `timeout` is a number, which 2.x's route refuses: only what reaches the server is handed over.
+      ['/api/experimental/mcp/probe', { config: { type: 'local', command: ['node', 'serve.js'], environment: { TOKEN: 'x' }, codemode: false } }],
+      ['/api/experimental/mcp/docs', { config: { type: 'remote', url: 'https://docs.example/mcp', headers: { Authorization: 'Bearer d' }, codemode: false } }],
+    ]);
+    expect(server.requests.indexOf(replaced[2])).toBeLessThan(server.requests.findIndex((r) => r.path === '/api/session'));
+    adapter.dispose();
+  });
+
+  it('tells the planner, and reports, an approved server whose tools this OpenCode cannot list as tools of their own', async () => {
+    const server = fakeServer({ 'PUT /api/experimental/mcp/probe': () => ({ status: 404 }) });
+    const { adapter } = await start(server, plannerStart({ mcp: ORDEWELL, projectServers: [PROBE, DOCS] }));
+
+    expect(adapter.unusableProjectServers()).toEqual([PROBE]);
+    const instructions = server.requests.find((r) => r.path.endsWith('/instructions/entries/ordewell-planner'))?.body as { value: string };
+    expect(instructions.value).toContain('- probe (opencode.json): not usable on this OpenCode version');
+    expect(instructions.value).not.toContain('- docs');
+    adapter.dispose();
+  });
+
+  it('never takes a request for an unusable server\'s tool for an MCP tool, though OpenCode lists the server', async () => {
+    const server = fakeServer({
+      'PUT /api/experimental/mcp/probe': () => ({ status: 404 }),
+      'GET /api/mcp': () => ({ data: [{ name: 'ordewell', status: { status: 'connected' } }, { name: 'probe', status: { status: 'connected' } }] }),
+    });
+    const { adapter } = await start(server, plannerStart({ mcp: ORDEWELL, projectServers: [PROBE] }));
+    await adapter.mcpAttached();
+
+    const events: AgentEvent[] = [];
+    void adapter.send('go', (e) => events.push(e));
+    const stream = await server.stream();
+    await until(() => server.requests.some((r) => r.path.endsWith('/prompt')));
+    stream.push(started());
+    stream.push({ type: 'permission.asked', data: { id: 'per_1', sessionID: SES, action: 'probe_echo', resources: ['*'] } });
+    await until(() => events.some((e) => e.type === 'permission_request'));
+
+    expect(events.flatMap((e) => (e.type === 'permission_request' ? [e.ask] : []))).toEqual([{ kind: 'other' }]);
+    adapter.dispose();
+  });
+
+  it('takes a planner request for an approved project server\'s tool as that tool, before /api/mcp lists the server', async () => {
+    const server = fakeServer({ 'GET /api/mcp': () => ({ data: [{ name: 'ordewell', status: { status: 'connected' } }] }) });
+    const { adapter } = await start(server, plannerStart({ mcp: ORDEWELL, projectServers: [PROBE] }));
+    expect(await adapter.mcpAttached()).toBe(true);
+
+    const events: AgentEvent[] = [];
+    void adapter.send('go', (e) => events.push(e));
+    const stream = await server.stream();
+    await until(() => server.requests.some((r) => r.path.endsWith('/prompt')));
+    stream.push(started());
+    stream.push({ type: 'permission.asked', data: { id: 'per_1', sessionID: SES, action: 'probe_echo', resources: ['*'] } });
+    await until(() => events.some((e) => e.type === 'permission_request'));
+
+    expect(events.flatMap((e) => (e.type === 'permission_request' ? [e.ask] : []))).toEqual([{ kind: 'mcp', scope: 'probe_echo', tool: 'echo', server: 'probe' }]);
     adapter.dispose();
   });
 

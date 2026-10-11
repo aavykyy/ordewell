@@ -254,3 +254,22 @@ and its launch is byte for byte what it was.
   empty key, as that fixture meant it to); OpenCode's task loaded the plugin;
   the Codex and OpenCode tasks answered. Codex's trust entry in its config
   was unchanged after the planner's untrusted thread.
+- 2026-10-11 — OpenCode 2.x finding and fix. On 2.0.26 an approved project
+  server started, but the planner's call to its tool failed ("Unable to
+  execute"): the server is passed in the 1.x config shape, which drops
+  `codemode`, so 2.x listed its tools only inside code mode's `execute`, and
+  the planner's request was not read as that server's tool. Now a 2.x
+  planner's approved servers are replaced at runtime with `codemode: false`,
+  as Ordewell's own server already was, from the transport fields of the
+  definition shown (a local server's command and environment, a remote one's
+  URL and headers); held servers are never sent. Replaced before anything
+  lists the servers, a local one starts once; replaced later, OpenCode stops
+  it and starts the new one. Its tools are then asked about as `mcp_tool`, as
+  on 1.x, Claude Code and Codex. `execute` stays refused for planners: it runs
+  model-written code over every MCP tool, past per-tool approval, and its
+  refusal says to call the tool directly. On a 2.x without the runtime route,
+  the planner is told the server is not usable on its OpenCode version, and
+  the timeline shows it refused as `unsupported`. Checked live on 2.0.26:
+  Guarded, approved — the server started once and the planner's call went
+  through the approval and returned; Full with no allowlist entry — not
+  started, no marker.

@@ -313,6 +313,7 @@ describe('approval cards (ADR-0018, A1)', () => {
     [{ kind: 'web_search', subject: 'tokio', status: 'denied', decidedBy: 'budget' }, 'Search the web', 'Auto-denied (web-read budget)'],
     [{ kind: 'url_fetch', subject: 'https://intra.example/', status: 'denied', decidedBy: 'excluded' }, 'Fetch a URL', 'Auto-denied (excluded)'],
     [{ kind: 'mcp_server', subject: 'probe: ./serve.sh', status: 'denied', decidedBy: 'mode' }, 'Start a project MCP server', 'Auto-denied (policy)'],
+    [{ kind: 'mcp_server', subject: 'probe: ./serve.sh', status: 'denied', decidedBy: 'unsupported' }, 'Start a project MCP server', 'Auto-denied (not usable on this runner version)'],
   ])('names a web read and why it was decided without asking (%o)', (over, kind, label) => {
     const { getByText } = draw(card({ allowForTask: false, ...over }));
     expect(getByText(kind)).toBeTruthy();

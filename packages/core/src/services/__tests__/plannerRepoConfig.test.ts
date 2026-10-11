@@ -10,7 +10,7 @@ import type { ApprovalRequest, IApproval } from '../../interfaces/IApproval';
 import { ApprovalPolicy } from '../ApprovalPolicy';
 import type { ProjectServerApprovals } from '../harness/projectServers';
 import { createTaskAdapter } from '../harness/connectors';
-import type { AgentProcessDeps, TaskStartOptions } from '../harness/AgentAdapter';
+import type { AgentProcessDeps, PlannerStartOptions, TaskStartOptions } from '../harness/AgentAdapter';
 import { fakeMcpServer, fakeSpawn, fixture, type FakeAgentProcess, type ScriptedReply } from './harnessTestKit';
 
 /**
@@ -459,6 +459,38 @@ describe('OpenCode planner launch (ADR-0028)', () => {
     const mcp = openCodeConfig(spawned.lastEnv()).mcp ?? {};
     expect(Object.keys(mcp).sort()).toEqual(['docs', 'ordewell', 'probe']);
     expect(mcp.probe).toEqual({ type: 'local', command: ['./serve.sh', '--marker'], environment: { TOKEN: 'x' } });
+  });
+});
+
+describe('an approved project server the runner cannot hand the planner (ADR-0028)', () => {
+  it('shows it in the timeline as not usable, after its approval', async () => {
+    const root = repo(OPENCODE_REPO_CONFIG);
+    const decided: { subject: string; granted: boolean; source: string }[] = [];
+    const approval = new ApprovalPolicy({ mode: 'ask', ask: async () => true, onDecision: (req, granted, source) => decided.push({ subject: req.subject, granted, source }) });
+    const svc = new CliAgentAiService(fakeConfig({ aiProvider: 'opencode', enabledRunners: ['opencode'] }), {
+      workspaceRoot: () => root,
+      mcpServer: fakeMcpServer(),
+      projectServerApprovals: memory(),
+      createAdapter: () => {
+        let started: PlannerStartOptions | null = null;
+        return {
+          agentId: 'opencode',
+          start: async (opts) => { if (opts.kind === 'planner') started = opts; },
+          send: async (_message, onEvent) => onEvent({ type: 'turn_end' }),
+          nativeSessionId: () => null,
+          dispose: () => {},
+          mcpAttached: async () => true,
+          unusableProjectServers: () => (started?.projectServers ?? []).filter((server) => server.name === 'probe'),
+        };
+      },
+    });
+    await svc.startConversation(request({ runners: ['opencode'], approval }));
+
+    expect(decided).toEqual([
+      { subject: 'probe: ./serve.sh --marker', granted: true, source: 'asked' },
+      { subject: 'docs: https://docs.example/mcp', granted: true, source: 'asked' },
+      { subject: 'probe: ./serve.sh --marker', granted: false, source: 'unsupported' },
+    ]);
   });
 });
 

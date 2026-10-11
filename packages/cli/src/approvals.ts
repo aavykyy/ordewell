@@ -70,6 +70,7 @@ export function describeApprovalDecision(event: ApprovalEvent & { granted?: unkn
     : source === 'guard' ? 'blocked address'
     : source === 'secret' ? 'secret check'
     : source === 'budget' ? 'web-read budget'
+    : source === 'unsupported' ? 'not usable on this runner version'
     : 'no approval channel';
   return `${event.granted ? 'Auto-approved' : 'Auto-denied'} (${label}): ${subject}`;
 }

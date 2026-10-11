@@ -313,6 +313,7 @@ const DECIDED_BY: Record<Exclude<ApprovalSource, 'asked'>, string> = {
   guard: 'blocked address',
   secret: 'secret check',
   budget: 'web-read budget',
+  unsupported: 'not usable on this runner version',
 };
 
 /** Status first, so a long subject is what the pane cuts. */

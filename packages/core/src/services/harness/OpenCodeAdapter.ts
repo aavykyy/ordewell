@@ -5,6 +5,7 @@ import { OpenCodeV2 } from './OpenCodeV2';
 import { OPENCODE_CONFIG_VARIABLE, OPENCODE_ORDEWELL, OPENCODE_PLANNER_ENV } from './openCodeOrdewell';
 import { awaitAttach } from './ordewellBinding';
 import type { McpClientConfig } from '../mcp';
+import type { ProjectMcpServer } from './repoConfig';
 import { hunksOf, markedLines } from './fileDiff';
 import {
   OpenCodePermissions, PendingSteers, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, settleTurn, splitModelId,
@@ -980,6 +981,8 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
   }
 
   nativeSessionId(): string | null { return this.sessionId; }
+
+  unusableProjectServers(): ProjectMcpServer[] { return this.v2?.unusableProjectServers() ?? []; }
 
   /** Asks the server, which lists every MCP server it has with the state of its connection. */
   async mcpAttached(): Promise<boolean> {

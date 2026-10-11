@@ -253,6 +253,7 @@ function approvalSourceLabel(source: ApprovalSource | undefined): string {
     case 'guard': return 'blocked address';
     case 'secret': return 'secret check';
     case 'budget': return 'web-read budget';
+    case 'unsupported': return 'not usable on this runner version';
     default: return '';
   }
 }

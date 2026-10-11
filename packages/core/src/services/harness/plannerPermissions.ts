@@ -49,7 +49,7 @@ export async function decidePlannerPermission(
   input: Record<string, unknown>,
   gate: PlannerPermissionGate | undefined,
 ): Promise<ApprovalDecision> {
-  if (!ask || ask.kind === 'other') return deny(UNKNOWN_TOOL_DENIAL);
+  if (!ask || ask.kind === 'other') return deny(ask?.note ?? UNKNOWN_TOOL_DENIAL);
   if (!gate) return deny('Nobody can approve this here. Continue without it.');
 
   switch (ask.kind) {

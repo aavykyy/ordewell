@@ -1328,6 +1328,11 @@ describe('approvals', () => {
     expect(blockRows(heard(80, refused('web_search', 'tokio', 'budget')), '⊘')).toEqual(['⊘ Auto-denied (web-read budget) · Search the web: tokio']);
     expect(blockRows(heard(80, refused('web_search', '(withheld)', 'secret')), '⊘')).toEqual(['⊘ Auto-denied (secret check) · Search the web: (withheld)']);
   });
+
+  it('says an approved project server is not usable on the runner\'s version', () => {
+    const unusable: SessionMessage = { type: 'approval_decided', kind: 'mcp_server', subject: 'probe: ./serve.sh', scope: 'mcp-server:probe@abc', granted: false, source: 'unsupported' };
+    expect(blockRows(heard(100, unusable), '⊘')).toEqual(['⊘ Auto-denied (not usable on this runner version) · Start a project MCP server: probe: ./serve.sh']);
+  });
 });
 
 describe('plan markers', () => {

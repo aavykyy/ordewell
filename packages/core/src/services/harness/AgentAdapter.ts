@@ -111,7 +111,8 @@ export type PlannerAsk =
    */
   | { kind: 'search'; query: string; provider: string; providerLabel?: string }
   | { kind: 'path'; path: string; directory: boolean }
-  | { kind: 'other' };
+  /** `note` is why, for a tool the runner knows the planner must not use, in place of the envelope's generic refusal. */
+  | { kind: 'other'; note?: string };
 
 interface AgentStartCommon {
   /** Workspace root. The agent works from here and, in read-only mode, cannot leave it. */
@@ -228,6 +229,13 @@ export interface AgentAdapter {
    * adapter that cannot inject the server at all, which cannot run tasks.
    */
   mcpAttached?(): Promise<boolean>;
+
+  /**
+   * The approved project servers (ADR-0028) this runner started but cannot
+   * give the planner as tools of their own, known once `start` resolved.
+   * Absent on an adapter that gives the planner every one it starts.
+   */
+  unusableProjectServers?(): ProjectMcpServer[];
 
   /**
    * Answer an open `permission_request`. False when the id is not open — it
