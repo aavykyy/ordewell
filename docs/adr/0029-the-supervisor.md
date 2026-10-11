@@ -305,4 +305,9 @@ until #30 exists.
 ## History
 
 - 2026-10-11 — accepted.
+- 2026-10-11 — the command seam and the planner's execution tools (#91), less
+  `merge_all`: user-started turns only; the supervisor is refused until its
+  levels land. Plan approval is kept on the plan as the tasks the user
+  approved — every task when they execute it, and each one they start or retry
+  themselves — and a Guarded start asks on the planner's approval card.
 - 2026-10-11 — live planner turns implemented (`PlanTurns`); the pending plan edit queue, its drain and `modifyDuringExecution` removed.

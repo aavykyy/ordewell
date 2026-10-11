@@ -302,6 +302,7 @@ const APPROVAL_KIND: Record<ApprovalKind, string> = {
   mcp_tool: 'Use an MCP tool',
   mcp_server: 'Start a project MCP server',
   runner_tool: 'Use a tool',
+  task_start: 'Start work',
 };
 
 // A request the user answered reads "Approved": naming `asked` would state the obvious.

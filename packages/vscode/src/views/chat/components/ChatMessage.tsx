@@ -239,6 +239,7 @@ const APPROVAL_KIND: Record<ApprovalKind, string> = {
   mcp_tool: 'Use an MCP tool',
   mcp_server: 'Start a project MCP server',
   runner_tool: 'Use a tool',
+  task_start: 'Start work',
 };
 
 // The source the policy decided under. `asked` is omitted: a card a user
@@ -314,11 +315,14 @@ export function ApprovalCard({ block, onResolve }: { block: ApprovalBlock; onRes
       </div>
       <code className="approval-card-subject">{block.subject}</code>
       {block.detail && <div className="approval-card-detail">{block.detail}</div>}
-      <div className="approval-card-scope">
-        {block.status === 'pending'
-          ? `Approving also allows ${block.scope} for the rest of this session.`
-          : `Scope: ${block.scope}`}
-      </div>
+      {/* A start is asked every time (ADR-0029), so its answer grants nothing more. */}
+      {block.kind !== 'task_start' && (
+        <div className="approval-card-scope">
+          {block.status === 'pending'
+            ? `Approving also allows ${block.scope} for the rest of this session.`
+            : `Scope: ${block.scope}`}
+        </div>
+      )}
       {block.status === 'pending' && block.approvalId && (
         <div className="approval-card-actions">
           <button type="button" className="approval-card-allow" onClick={() => onResolve(block.approvalId!, true)}>Allow</button>

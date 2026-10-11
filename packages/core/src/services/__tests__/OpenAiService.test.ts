@@ -299,3 +299,41 @@ describe('OpenAiService planner skill catalog', () => {
     expect(messages[0].content).not.toMatch(/review-plan|load_skill/);
   });
 });
+
+describe('OpenAiService execution tools (ADR-0029)', () => {
+  beforeEach(() => createSpy.mockReset());
+
+  const toolNames = (call: number) => ((createSpy.mock.calls[call][0] as { tools: Array<{ function: { name: string } }> }).tools).map((t) => t.function.name);
+  const systemPrompt = () => ((createSpy.mock.calls[0][0] as { messages: Array<{ role: string; content: string }> }).messages[0].content);
+
+  it('declares them when the session offers its planner tools, and answers a call through the offered handler', async () => {
+    createSpy
+      .mockReturnValueOnce(streamOf([{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call-1', function: { name: 'stop_task', arguments: '{"task":"2"}' } }] }, finish_reason: 'tool_calls' }] }]))
+      .mockReturnValueOnce(streamOf([{ choices: [{ delta: { content: 'Stopped task 2.' }, finish_reason: 'stop' }] }]));
+    const stopTask = vi.fn(async () => ({ text: '{"ok":true,"result":"Stopped task #2."}' }));
+    const progress: ResearchProgress[] = [];
+
+    const turn = await new OpenAiService(cfg({ researchMaxSteps: 10 } as Partial<IConfig>)).startConversation({
+      goal: 'stop task 2', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem(), onProgress: (p) => progress.push(p),
+      plannerTools: { sessionId: 's1', handler: { stopTask } },
+    });
+
+    expect(toolNames(0)).toEqual(expect.arrayContaining(['run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'message_task', 'answer_approval']));
+    expect(systemPrompt()).toContain('RUNNING THE PLAN:');
+    expect(stopTask).toHaveBeenCalledWith({ task: '2' }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    const fedBack = (createSpy.mock.calls[1][0] as { messages: Array<{ role: string; content: string }> }).messages.find((m) => m.role === 'tool');
+    expect(fedBack?.content).toBe('{"ok":true,"result":"Stopped task #2."}');
+    // Named as a harness planner's own tool is: the research tool union has no member for it.
+    expect(progress.find((p) => p.type === 'tool_call')).toMatchObject({ tool: 'agent_tool', toolLabel: 'stop_task' });
+    expect(turn.researchLog[0]).toMatchObject({ tool: 'agent_tool', toolLabel: 'stop_task', success: true });
+  });
+
+  it('neither declares them nor describes them without the offer', async () => {
+    createSpy.mockReturnValueOnce(streamOf([{ choices: [{ delta: { content: 'Hello.' }, finish_reason: 'stop' }] }]));
+
+    await new OpenAiService(cfg()).startConversation({ goal: 'hi', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem(), onProgress: () => {} });
+
+    expect(toolNames(0)).not.toContain('run_task');
+    expect(systemPrompt()).not.toContain('RUNNING THE PLAN:');
+  });
+});

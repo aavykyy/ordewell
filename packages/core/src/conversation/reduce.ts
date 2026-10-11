@@ -285,6 +285,8 @@ export function reduceConversation(view: ConversationView, input: ConversationIn
       return settleApproval(view, input);
     case 'approval_decided':
       return decideApproval(view, input);
+    case 'execution_action':
+      return append(view, (id) => settledMessage(id, 'system', input.text));
     case 'planner_usage':
       return reportUsage(view, input);
     default:

@@ -129,7 +129,26 @@ export interface ConversationVariant {
   skills?: readonly SkillInfo[];
   /** Every AI task gets its own worktree (ADR-0013), so file overlap no longer forces an order; of every repo of a group (ADR-0014). */
   isolatedExecution?: IsolatedExecution;
+  /** The session offers the execution tools (ADR-0029), as MCP tools or the API planner's own. */
+  execution?: boolean;
 }
+
+/**
+ * The execution tools (ADR-0029), in brief: what each does is in its own
+ * description, and what may be done is decided at the command seam, never
+ * here, so this only says where they fit in the conversation.
+ */
+const EXECUTION_TOOLS_SECTION = [
+  'RUNNING THE PLAN:',
+  'When the user asks you to start, stop or retry work, do it with these tools rather than telling them which button to press. Ordewell checks every call, may ask the user first, and a refusal says why and what would be accepted.',
+  '- run_plan starts the whole plan; run_task starts one task now.',
+  '- stop_task stops one running task; stop_run stops every running task and keeps the plan.',
+  '- retry_task starts a new attempt of a failed, stopped or waiting task: "fresh" from its prompt, or "session" to continue its saved session with a message. To change what it is told, edit its prompt with edit_plan first.',
+  '- message_task sends a running task a message, or answers one waiting for input.',
+  '- answer_approval denies a request a task\'s runner is waiting on, with a note saying what to do instead, or escalates it to the user. It never allows.',
+  'Only tasks the user approved start: a task you added since waits for the user. Merge all is always the user\'s.',
+  '',
+];
 
 /**
  * The parallelism rule for tasks that each run in their own worktree. Only
@@ -350,6 +369,7 @@ function buildConversationBody(
       'You may also call task_query, task_output and task_diff when offered. task_output accepts attempt and kinds to read a saved structured log (latest attempt by default); task_diff lists changed files by repo, or reads one patch with path and repo. Both page with since/nextOffset. These calls share the taskQuery read cap. Without attempt or kinds, task_output keeps the live tail/outcome behavior. A shared run without recorded changes has no task diff.',
     ]),
     '',
+    ...(variant.execution ? EXECUTION_TOOLS_SECTION : []),
     context ? `PROJECT CONTEXT:\n${context}\n` : '',
     `USER GOAL: ${goal}`,
   ].join('\n');

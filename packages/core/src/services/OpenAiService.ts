@@ -296,7 +296,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
       req.runners,
       req.runnerModes,
       req.autonomousDefault ?? true,
-      { isolatedExecution: req.isolatedExecution, skills: req.skills },
+      { isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined },
     );
 
     const userText = req.goal;
@@ -328,7 +328,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
       runnerModes: req.runnerModes,
       autonomousDefault: req.autonomousDefault,
       fetcher: req.fetcher,
-      plannerReads: req.plannerTools?.handler,
+      plannerTools: req.plannerTools?.handler,
     };
 
     this.conversation = {

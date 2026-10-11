@@ -47,7 +47,8 @@ type ConversationMessage = Extract<
       | 'planner_skill_loaded'
       | 'planner_text_retracted' | 'plan_token' | 'plan_generated' | 'research_step' | 'research_step_done'
       | 'subagent_started' | 'subagent_finished' | 'planner_usage' | 'planner_liveness'
-      | 'approval_request' | 'approval_settled' | 'approval_decided';
+      | 'approval_request' | 'approval_settled' | 'approval_decided'
+      | 'execution_action';
   }
 >;
 
@@ -60,6 +61,7 @@ const CONVERSATION_TYPES: ReadonlySet<string> = new Set<ConversationMessage['typ
   'planner_text_retracted', 'plan_token', 'plan_generated', 'research_step', 'research_step_done',
   'subagent_started', 'subagent_finished', 'planner_usage', 'planner_liveness',
   'approval_request', 'approval_settled', 'approval_decided',
+  'execution_action',
 ]);
 
 function isStreamed(event: WsEvent): event is Streamed {

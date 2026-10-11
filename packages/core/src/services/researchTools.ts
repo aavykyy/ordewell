@@ -1,4 +1,4 @@
-import { PLANNER_TASK_READ_TOOLS } from './mcp/tools';
+import { PLANNER_EXECUTION_TOOLS, PLANNER_TASK_READ_TOOLS, type McpTool, type PlannerToolHandler } from './mcp/tools';
 import type OpenAI from 'openai';
 import { SchemaType, type FunctionDeclaration, type Schema } from '@google/generative-ai';
 
@@ -150,6 +150,56 @@ function withSpawn(): ResearchToolSpec[] {
   return [...RESEARCH_TOOLS, SPAWN_RESEARCH_AGENT_SPEC];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+const JSON_PARAM_TYPES: Record<string, ParamType> = { string: 'string', number: 'number', integer: 'number', boolean: 'boolean', array: 'array' };
+
+/**
+ * One MCP tool's input as a research tool spec. A union (a task named by id
+ * or by order) is declared a string, which every provider's schema can say and
+ * the MCP schema still accepts.
+ */
+function specFromMcp(tool: McpTool<PlannerToolHandler>): ResearchToolSpec {
+  const properties = isRecord(tool.inputSchema.properties) ? tool.inputSchema.properties : {};
+  const required = Array.isArray(tool.inputSchema.required) ? tool.inputSchema.required.filter((r): r is string => typeof r === 'string') : [];
+  return {
+    name: tool.name,
+    description: tool.description,
+    properties: Object.fromEntries(Object.entries(properties).map(([key, raw]) => {
+      const schema = isRecord(raw) ? raw : {};
+      const values = Array.isArray(schema.enum) ? schema.enum.filter((v): v is string => typeof v === 'string') : [];
+      const param: ResearchToolParam = {
+        type: (typeof schema.type === 'string' ? JSON_PARAM_TYPES[schema.type] : undefined) ?? 'string',
+        description: typeof schema.description === 'string' ? schema.description : '',
+        ...(values.length > 0 ? { enum: values } : {}),
+      };
+      return [key, param];
+    })),
+    required,
+  };
+}
+
+/**
+ * The planner's execution tools (ADR-0029) as the API planner declares them:
+ * read off the Ordewell MCP server's own schemas, so both routes to the
+ * command seam take the same arguments.
+ */
+export function executionToolSpecs(): ResearchToolSpec[] {
+  return PLANNER_EXECUTION_TOOLS.map(specFromMcp);
+}
+
+/** Whether `name` is one of {@link executionToolSpecs}. */
+export function isExecutionTool(name: string): boolean {
+  return PLANNER_EXECUTION_TOOLS.some((tool) => tool.name === name);
+}
+
+/** The conversation's tools: the research tools, and the execution tools when the session offers them. */
+function conversationSpecs(execution: boolean): ResearchToolSpec[] {
+  return execution ? [...withSpawn(), ...executionToolSpecs()] : withSpawn();
+}
+
 function projectOpenAi(specs: ResearchToolSpec[]): OpenAI.Chat.Completions.ChatCompletionTool[] {
   return specs.map((t) => ({
     type: 'function',
@@ -170,9 +220,9 @@ function projectOpenAi(specs: ResearchToolSpec[]): OpenAI.Chat.Completions.ChatC
   }));
 }
 
-/** Project the canonical tools into OpenAI's chat-completions tool format. */
-export function toOpenAiTools(taskReads = false): OpenAI.Chat.Completions.ChatCompletionTool[] {
-  return [...projectOpenAi(withSpawn()), ...(taskReads ? PLANNER_TASK_READ_TOOLS.map((t): OpenAI.Chat.Completions.ChatCompletionTool => ({
+/** Project the canonical tools into OpenAI's chat-completions tool format; `plannerTools` adds the task reads and the execution tools. */
+export function toOpenAiTools(plannerTools = false): OpenAI.Chat.Completions.ChatCompletionTool[] {
+  return [...projectOpenAi(conversationSpecs(plannerTools)), ...(plannerTools ? PLANNER_TASK_READ_TOOLS.map((t): OpenAI.Chat.Completions.ChatCompletionTool => ({
     type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema },
   })) : [])];
 }
@@ -189,9 +239,9 @@ const SCHEMA_TYPE: Record<ParamType, SchemaType> = {
   boolean: SchemaType.BOOLEAN,
 };
 
-/** Project the canonical tools into Gemini's function-declaration format. */
-export function toGeminiToolDeclarations(taskReads = false): FunctionDeclaration[] {
-  const tools = withSpawn().map((t) => {
+/** Project the canonical tools into Gemini's function-declaration format; `plannerTools` adds the task reads and the execution tools. */
+export function toGeminiToolDeclarations(plannerTools = false): FunctionDeclaration[] {
+  const tools = conversationSpecs(plannerTools).map((t) => {
     const properties: Record<string, Schema> = {};
     for (const [key, param] of Object.entries(t.properties)) {
       properties[key] = {
@@ -201,13 +251,12 @@ export function toGeminiToolDeclarations(taskReads = false): FunctionDeclaration
         ...(param.enum ? { format: 'enum', enum: param.enum } : {}),
       };
     }
-    return {
-      name: t.name,
-      description: t.description,
-      parameters: { type: SchemaType.OBJECT, properties, required: t.required },
-    };
+    // Gemini refuses an object schema with no properties, so a tool that takes none declares no parameters.
+    return Object.keys(properties).length === 0
+      ? { name: t.name, description: t.description }
+      : { name: t.name, description: t.description, parameters: { type: SchemaType.OBJECT, properties, required: t.required } };
   });
-  const reads = taskReads ? PLANNER_TASK_READ_TOOLS.map((t): FunctionDeclaration => {
+  const reads = plannerTools ? PLANNER_TASK_READ_TOOLS.map((t): FunctionDeclaration => {
     const schema = geminiSchema(t.inputSchema);
     return { name: t.name, description: t.description,
       parameters: { ...schema, type: SchemaType.OBJECT, properties: schema.properties ?? {} },

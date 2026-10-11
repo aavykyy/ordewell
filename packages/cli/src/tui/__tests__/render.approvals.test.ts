@@ -122,3 +122,14 @@ describe('approval overlay rendering', () => {
     expect(() => render(initialState({ rows: 8, cols: 20, overlay: { kind: 'approval', request: SHELL } }))).not.toThrow();
   });
 });
+
+describe('a planner asking to start work (ADR-0029)', () => {
+  const START: ApprovalRequestView = { id: 'ap-9', kind: 'task_start', subject: 'Start task #2 "Add the cache"', scope: 'Start task #2 "Add the cache"' };
+
+  it('says what would start, and promises no wider grant, since a start is asked every time', () => {
+    const out = screenWith(START);
+    expect(out).toContain('The planner wants to start work');
+    expect(out).toContain('Start task #2 "Add the cache"');
+    expect(out).not.toMatch(/also allows/i);
+  });
+});

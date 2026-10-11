@@ -42,13 +42,17 @@ export function describeApproval(event: ApprovalEvent): string {
           ? `The planner wants to use an MCP tool:\n    ${subject}`
           : event.kind === 'mcp_server'
             ? `The planner wants to start an MCP server the repository declares:\n    ${subject}`
-            : `The planner wants to read a path outside the workspace:\n    ${subject}`;
+            : event.kind === 'task_start'
+              ? `The planner wants to start work:\n    ${subject}`
+              : `The planner wants to read a path outside the workspace:\n    ${subject}`;
 
   // `detail` disambiguates the `external_path` case in particular: an
   // auto-tier command like `cat` touching an outside path reads identically
   // to a plain `read_file` without it.
   const detailLine = detail ? `\n  ${detail}` : '';
 
+  // A start is asked every time (ADR-0029), so its answer grants nothing more.
+  if (event.kind === 'task_start') return `${headline}${detailLine}`;
   // The grant is deliberately wider than the request, so say so rather than
   // letting the user discover it when the next call does not prompt.
   return `${headline}${detailLine}\n  Approving also allows: ${scope}`;

@@ -400,7 +400,9 @@ function renderOverlay(state: TuiState, rows: number, cols: number): string[] {
             ? 'The planner wants to use an MCP tool'
             : request.kind === 'mcp_server'
               ? 'The planner wants to start a project MCP server'
-              : 'The planner wants to read a path outside the workspace';
+              : request.kind === 'task_start'
+                ? 'The planner wants to start work'
+                : 'The planner wants to read a path outside the workspace';
     const queued = state.pendingApprovals.length;
 
     return frame(
@@ -415,8 +417,9 @@ function renderOverlay(state: TuiState, rows: number, cols: number): string[] {
         // `read_file` without it.
         ...(request.detail ? [style.grey(request.detail), ''] : []),
         // The grant is wider than the request, so name it rather than letting
-        // the user discover it when the next call silently does not prompt.
-        style.grey(`Approving also allows ${request.scope} for the rest of this session.`),
+        // the user discover it when the next call silently does not prompt. A
+        // start is asked every time (ADR-0029), so it grants nothing more.
+        ...(request.kind === 'task_start' ? [] : [style.grey(`Approving also allows ${request.scope} for the rest of this session.`)]),
         ...(queued > 0 ? [style.grey(`${queued} more waiting.`)] : []),
         '',
         // ESC is not "deny" while a turn is in flight — it kills the turn and
