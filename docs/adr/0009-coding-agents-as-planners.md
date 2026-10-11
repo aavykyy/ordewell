@@ -91,6 +91,12 @@ model's behalf, which is precisely what a coding agent replaces.
   denial. Enforcement comes
   from fixed spawn controls and tool denials, not prompt instructions; native
   plan mode alone cannot supply the invariant.
+  *Amended by [ADR-0029](0029-the-supervisor.md):* the planner's execution
+  tools (`run_plan`, `run_task`, `stop_task`, `stop_run`, `retry_task`,
+  `message_task`, `answer_approval`, `merge_all`) are a further explicit
+  exception. They change what runs, through one core command seam that checks
+  the supervisor level and the plan's approval; they edit no file and run
+  nothing outside the envelope, so mutation still belongs to the runners.
   Read-only mode covers what the agent *does*; it does not cover what the agent
   can *ask for*, and three of those turned out to hang a turn indefinitely
   rather than fail it. Each is answered, not ignored: OpenCode's `question` tool
@@ -269,3 +275,4 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-10-09 — Claude planners use `dontAsk` with edit, shell and native plan-mode tools denied; OpenCode shell limitations are made explicit (ADR-0008).
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
 - 2026-10-10 — harness planners research inside ADR-0008's envelope (ADR-0026).
+- 2026-10-11 — execution tools through the command seam, a further exception to read-only planners ([ADR-0029](0029-the-supervisor.md)).
