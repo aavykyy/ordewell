@@ -55,7 +55,7 @@ describe('CliAgentAiService start boundary', () => {
   it('starts a planner for every one-shot path', async () => {
     const { svc, starts } = recordingService([planTurn, planTurn], { submits: true });
     await svc.researchAndPlan('Add a cache', ['claude-code'], {}, fakeFileSystem(), () => {});
-    await svc.sendPlanningPrompt('Plan a cache', ['claude-code']);
+    await svc.generatePlanDirect('Plan a cache', ['claude-code']);
     expect(starts).toHaveLength(2);
     expect(starts.map((s) => s.kind)).toEqual(['planner', 'planner']);
   });

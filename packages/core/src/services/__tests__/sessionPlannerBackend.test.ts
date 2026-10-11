@@ -18,7 +18,6 @@ vi.mock('../AiService', async (importOriginal) => {
         researchAndPlan: vi.fn(),
         generatePlanDirect: vi.fn(),
         modifyPlan: vi.fn(),
-        sendPlanningPrompt: vi.fn(),
       } as unknown as IAiService;
       created.push({ provider: config.aiProvider, service, workspaceRoot: deps?.workspaceRoot });
       return service;

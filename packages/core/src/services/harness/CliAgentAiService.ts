@@ -847,15 +847,6 @@ export class CliAgentAiService implements IAiService {
       throw new Error(`Plan modification failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-
-  async sendPlanningPrompt(
-    prompt: string,
-    runners: RunnerId[],
-    runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-    autonomousDefault = true,
-  ): Promise<Task[]> {
-    return (await this.submittedPlan(prompt, { runners, runnerModes, autonomousDefault })).tasks;
-  }
 }
 
 function oneShotCatalog(

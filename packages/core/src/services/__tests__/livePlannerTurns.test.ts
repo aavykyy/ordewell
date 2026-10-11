@@ -207,6 +207,27 @@ describe('live planner turns during a run', () => {
     expect(snapshots.at(-1)!.pendingTurns).toEqual([]);
   });
 
+  it('replays a message a background save caught mid-turn exactly once', async () => {
+    const { session, calls, finish } = await liveRun();
+
+    const answered = session.continueConversation('rename task 2');
+    // A task settles while the turn is in flight, so the daemon saves the plan
+    // with the message still un-answered.
+    finish('t1');
+    await vi.waitFor(() => expect(taskOf(session, 't1')!.status).toBe('completed'));
+    const savedMidTurn = structuredClone(saves(session).mock.calls.at(-1)![0]);
+    expect(savedMidTurn.pendingTurns?.map((t) => t.text)).toEqual(['rename task 2']);
+
+    session.loadPlan(savedMidTurn, 'build it', testWorkspace);
+    await expect(answered).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
+    expect(calls).toHaveLength(2);
+    calls[1].finish(prose('Noted.'));
+    await vi.waitFor(() => expect(session.isPlannerBusy).toBe(false));
+
+    const said = (session.planState!.conversationHistory ?? []).filter((e) => e.content === 'rename task 2');
+    expect(said).toHaveLength(1);
+  });
+
   it('replays a message no turn answered once, after a reload', async () => {
     const { aiService, calls } = heldPlanner();
     const session = makeSession({ aiService });
