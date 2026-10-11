@@ -126,19 +126,6 @@ export abstract class BaseAiService {
     this.activeAbort = null;
   }
 
-  async sendPlanningPrompt(
-    prompt: string,
-    runners: RunnerId[],
-    runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-    autonomousDefault = true,
-  ): Promise<Task[]> {
-    this.ensureInit();
-    return generatePlanWithRepair(
-      (repairHint) => this.streamPlanText(prompt, repairHint, () => {}),
-      runners, 2, runnerModes, autonomousDefault,
-    );
-  }
-
   async continueConversation(
     userMessage: string,
     onProgress: (progress: ResearchProgress) => void,

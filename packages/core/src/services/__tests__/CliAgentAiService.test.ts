@@ -1603,7 +1603,7 @@ describe('CliAgentAiService — one-shot plan generation', () => {
   it('generates the plan its submit_plan call recorded through a Codex session', async () => {
     const mcp = fakeMcpServer();
     const { svc, spawned } = service('codex', [...codexHandshake(), submitting(mcp, planTasks('codex'), fixture('codex', 'plan', { PLAN: 'Submitted.' }))], {}, {}, mcp);
-    const tasks = await svc.sendPlanningPrompt('Plan the thing', ['codex']);
+    const tasks = await svc.generatePlanDirect('Plan the thing', ['codex']);
 
     expect(tasks).toHaveLength(1);
     expect(spawned.processes[0].killed).toBe(true);
@@ -1614,7 +1614,7 @@ describe('CliAgentAiService — one-shot plan generation', () => {
   it('fails clearly when no submit_plan call is accepted, after one corrective session, and never reads the reply\'s JSON', async () => {
     const { svc, spawned } = service('claude-code', [claudeSays(planJson()), claudeSays(planJson())]);
 
-    await expect(svc.sendPlanningPrompt('Plan the thing', ['claude-code'])).rejects.toThrow(/claude-code planner produced no plan: no submit_plan call was accepted/);
+    await expect(svc.generatePlanDirect('Plan the thing', ['claude-code'])).rejects.toThrow(/claude-code planner produced no plan: no submit_plan call was accepted/);
     expect(spawned.processes).toHaveLength(2);
     expect(spawned.lastArgs().join('\n')).toContain('the agent ended its turn without calling submit_plan. Call submit_plan with the COMPLETE corrected plan');
     expect(spawned.processes.every((p) => p.killed)).toBe(true);
@@ -1629,7 +1629,7 @@ describe('CliAgentAiService — one-shot plan generation', () => {
       submitting(mcp, planTasks(), claudeSays('Fixed and submitted.'), answers),
     ], {}, {}, mcp);
 
-    const tasks = await svc.sendPlanningPrompt('Plan the thing', ['claude-code']);
+    const tasks = await svc.generatePlanDirect('Plan the thing', ['claude-code']);
 
     expect(answers.map((a) => a.isError ?? false)).toEqual([true, false]);
     const corrective = spawned.lastArgs().join('\n');
@@ -1671,7 +1671,7 @@ describe('CliAgentAiService — one-shot plan generation', () => {
       },
     ]);
 
-    await expect(svc.sendPlanningPrompt('Plan the thing', ['claude-code'])).rejects.toThrow(/login|exited/i);
+    await expect(svc.generatePlanDirect('Plan the thing', ['claude-code'])).rejects.toThrow(/login|exited/i);
   });
 
   it('keeps a one-shot from becoming the open chat\'s resume hint', async () => {
@@ -1689,7 +1689,7 @@ describe('CliAgentAiService — one-shot plan generation', () => {
       fixture('claude-code', 'prose'),
     ], {}, {}, mcp);
     await svc.startConversation(request({ signal: controller.signal }));
-    await svc.sendPlanningPrompt('Plan the thing', ['claude-code']);
+    await svc.generatePlanDirect('Plan the thing', ['claude-code']);
     await svc.continueConversation('Carry on', () => {});
 
     const args = spawned.lastArgs();

@@ -19,7 +19,6 @@ function fakeAiService(): IAiService {
     researchAndPlan: vi.fn().mockResolvedValue({ tasks: [], researchLog: [], researchResults: '' }),
     generatePlanDirect: vi.fn().mockResolvedValue([]),
     modifyPlan: vi.fn().mockResolvedValue({ tasks: [] }),
-    sendPlanningPrompt: vi.fn().mockResolvedValue([]),
     reset: vi.fn(),
   };
 }

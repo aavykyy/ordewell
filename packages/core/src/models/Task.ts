@@ -982,25 +982,6 @@ export function validateModifiedPlan(original: Task[], modified: Task[]): PlanMo
   return warnings;
 }
 
-export interface ActiveTaskSession {
-  id: string;
-  taskId: string;
-}
-
-export interface ValidationResult {
-  valid: boolean;
-  errors: string[];
-}
-
-export interface ValidationContext {
-  executionLog: TaskSnapshot[];
-  oldPending: Task[];
-  newPending: Task[];
-  activeSessions: Map<string, ActiveTaskSession>;
-}
-
-export type ValidationCheck = (ctx: ValidationContext) => ValidationResult;
-
 export function warningsText(w: PlanModificationWarnings): string | null {
   const lines: string[] = [];
   if (w.deletedCompleted.length) lines.push(`Completed tasks deleted: ${w.deletedCompleted.join(', ')}`);
