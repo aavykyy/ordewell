@@ -6,6 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { BaseFileSystem } from '../BaseFileSystem';
 import { ApprovalPolicy, effectiveApprovalMode, type ApprovalModeSetting } from '../ApprovalPolicy';
 import type { GrepOptions, ReadFileOpts, ToolOutcome } from '../../interfaces/IFileSystem';
+import { fakeSecret } from './fakeSecret';
 
 const ROOT = '/repo';
 
@@ -819,7 +820,7 @@ describe('web commands in the planner shell', () => {
     const fs = new TestFileSystem(resolve);
     const ask = vi.fn().mockResolvedValue(true);
     fs.setApproval(new ApprovalPolicy({ ask }));
-    const result = await fs.bash('curl https://docs.example/ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789');
+    const result = await fs.bash(`curl https://docs.example/${fakeSecret('github')}`);
     expect(result.success).toBe(false);
     expect(result.output).toContain('secret');
     expect(result.output).not.toContain('ABCDEFGHIJKLMNOPQRSTUVWXYZ');

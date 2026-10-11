@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { redactSecrets } from '../redactSecrets';
+import { fakeSecret } from '../../services/__tests__/fakeSecret';
 
 /**
  * Two halves, and the second matters as much as the first: a planner reading a
@@ -25,7 +26,7 @@ describe('redactSecrets — credential material', () => {
   });
 
   it('redacts a named credential in JSON, keeping the key visible', () => {
-    const out = redactSecrets('{ "apiKey": "AIzaSyD-9fK2mQ7xR1tV4wY6zB8cE0gJ3lN5pS7u" }');
+    const out = redactSecrets(`{ "apiKey": "${fakeSecret('google')}" }`);
 
     expect(out).not.toContain('AIzaSyD');
     expect(out).toContain('"apiKey": "[REDACTED');
@@ -33,12 +34,12 @@ describe('redactSecrets — credential material', () => {
 
   it('redacts provider key prefixes wherever they appear', () => {
     const secrets = [
-      'sk-proj-T3BlbkFJa1b2c3d4e5f6g7h8i9j0k1l2',
-      'sk-ant-api03-9fK2mQ7xR1tV4wY6zB8cE0gJ3lN5pS7u',
-      'ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8',
-      'xoxb-123456789012-1234567890123-aBcDeFgHiJkLmNoP',
-      'rk_live_a1b2c3d4e5f6g7h8i9j0k1l2',
-      'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk',
+      fakeSecret('openai'),
+      fakeSecret('anthropic'),
+      fakeSecret('github'),
+      fakeSecret('slack'),
+      fakeSecret('stripeRestricted'),
+      fakeSecret('jwt'),
     ];
 
     for (const secret of secrets) {
@@ -50,9 +51,9 @@ describe('redactSecrets — credential material', () => {
   });
 
   it('redacts a cloud access key identifier printed on its own', () => {
-    const out = redactSecrets('User: arn:aws:iam::123456789012:user/dev (AKIAIOSFODNN7EXAMPLE)');
+    const out = redactSecrets(`User: arn:aws:iam::123456789012:user/dev (${fakeSecret('aws')})`);
 
-    expect(out).not.toContain('AKIAIOSFODNN7EXAMPLE');
+    expect(out).not.toContain(fakeSecret('aws'));
     expect(out).toContain('[REDACTED access key id: 20 chars]');
   });
 
@@ -81,11 +82,11 @@ describe('redactSecrets — credential material', () => {
   });
 
   it('redacts through the line prefixes read_file and grep add', () => {
-    const numbered = redactSecrets('  12|STRIPE_SECRET_KEY=sk_live_a1b2c3d4e5f6g7h8i9j0k1l2');
+    const numbered = redactSecrets(`  12|STRIPE_SECRET_KEY=${fakeSecret('stripeLive')}`);
     expect(numbered).not.toContain('sk_live_a1b2c3');
     expect(numbered).toContain('  12|STRIPE_SECRET_KEY=');
 
-    const grepped = redactSecrets('config/.env:3:export GITHUB_TOKEN=ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8');
+    const grepped = redactSecrets(`config/.env:3:export GITHUB_TOKEN=${fakeSecret('github')}`);
     expect(grepped).not.toContain('ghp_a1b2c3');
     expect(grepped).toContain('config/.env:3:export GITHUB_TOKEN=');
   });

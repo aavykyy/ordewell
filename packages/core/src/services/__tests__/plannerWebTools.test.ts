@@ -9,6 +9,7 @@ import { HttpWebFetcher, type WebResponse, type WebTransport } from '../HttpWebF
 import type { ApprovalRequest } from '../../interfaces/IApproval';
 import { decidePlannerPermission } from '../harness/plannerPermissions';
 import { openCodePlannerAsk } from '../harness/openCodeTransport';
+import { fakeSecret } from './fakeSecret';
 
 const PUBLIC_IP = '93.184.215.14';
 const SEARCH_PAGE = `<a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fhono.dev%2Fdocs&amp;rut=abc" class='result-link'>Hono docs</a><table><tr><td class='result-snippet'>Routing</td></tr></table>`;
@@ -173,7 +174,7 @@ describe('a runner\'s own search, asked as kind search', () => {
     expect(await decidePlannerPermission(websearch, {}, allowlist)).toEqual({ decision: 'deny', note: expect.stringMatching(/^Web search not approved/) });
 
     const { ask, gate: full } = gate('auto', true, true);
-    const leaky = openCodePlannerAsk('websearch', { metadata: { query: 'ghp_0123456789abcdefghijklmnopqrstuvwxyzAB' } }, []);
+    const leaky = openCodePlannerAsk('websearch', { metadata: { query: fakeSecret('github') } }, []);
     expect(await decidePlannerPermission(leaky, {}, full)).toEqual({ decision: 'deny', note: expect.stringMatching(/^Web search refused: the query contains what looks like a secret/) });
     expect(ask).not.toHaveBeenCalled();
   });
