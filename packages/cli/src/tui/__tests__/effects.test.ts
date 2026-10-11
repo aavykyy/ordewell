@@ -1256,6 +1256,42 @@ describe('the armed stop expiring', () => {
   });
 });
 
+describe('loading an in-flight conversation', () => {
+  it('hydrates pending inputs through the shared view and shows the reply they caused', async () => {
+    const h = harness({ adoptSession: vi.fn().mockResolvedValue({ goal: 'Build it', plan: {
+      tasks: [], conversationHistory: [], pendingTurns: [
+        { id: 'p1', source: 'user', text: '/tdd add tests', timestamp: '2026-10-11T10:00:00Z', skills: [
+          { invokedBy: 'user', name: 'tdd', source: 'global', path: '~/tdd/SKILL.md' },
+        ] },
+        { id: 'p2', source: 'supervisor', text: 'Run update: task 1 failed', timestamp: '2026-10-11T10:00:01Z' },
+      ],
+    } }) });
+    await runEffect({ type: 'loadSession', sessionId: 's1' }, h.deps);
+    let state = h.actions.reduce((s, action) => reduce(s, action).state, initialState());
+    state = reduce(state, { type: 'sessionMessage', sessionId: 's1', message: { type: 'planner_text_delta', turnId: 't1', segmentId: 's1', text: 'Checking tests.' } }).state;
+
+    expect(messagesOf(state).map((b) => [b.role, b.text])).toEqual([
+      ['user', '/tdd add tests'], ['wake_up', 'Run update: task 1 failed'], ['system', 'Loaded "Build it".'], ['planner', 'Checking tests.'],
+    ]);
+    expect(state.conversation.blocks.filter((b) => b.type === 'skill_load')).toMatchObject([{ name: 'tdd', path: '~/tdd/SKILL.md' }]);
+  });
+
+  it('keeps a send failure visible and accepts the same prompt again', async () => {
+    let state = initialState({ sessionId: 's1' });
+    state = { ...state, editor: { ...state.editor, text: 'check tests', cursor: 11 } };
+    const sent = reduce(state, { type: 'key', key: { name: 'enter' } });
+    state = sent.state;
+    const h = harness({ sendConversationMessage: vi.fn().mockRejectedValue(new Error('planner down')) }, {
+      dispatch: (action) => { state = reduce(state, action).state; },
+    });
+    await runEffect(sent.effects[0], h.deps);
+
+    expect(messagesOf(state).map((b) => [b.role, b.text])).toEqual([['user', 'check tests'], ['error', 'planner down']]);
+    state = { ...state, editor: { ...state.editor, text: 'check tests', cursor: 11 } };
+    expect(reduce(state, { type: 'key', key: { name: 'enter' } }).effects).toEqual([{ type: 'sendMessage', sessionId: 's1', message: 'check tests' }]);
+  });
+});
+
 describe('exit', () => {
   it('asks the runtime to shut down', async () => {
     const h = harness();

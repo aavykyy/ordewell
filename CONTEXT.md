@@ -1557,7 +1557,9 @@ the block list is the contract (ADR-0017); *Avoid:* storing per-block UI state
 **Conversation view** (`reduceConversation`, `EMPTY_CONVERSATION`) — the
 stateful accumulator behind the blocks: every `SessionMessage` in and the view
 out. Pure and reusable per surface, including `fromTranscript`, which rebuilds
-the saved subset for a reloaded session. The newest transcript entry the view
+the saved subset and pending turn inputs for a reloaded session. Pending inputs
+follow the landed records with their skill loads and wake-up roles, and are
+adopted when the live turn or landed transcript accounts for them. The newest transcript entry the view
 accounts for (`transcriptAt`) is what tells a reconnecting surface what is new.
 *Avoid:* calling it a chat log or a message list — it is a reducer over
 messages to a drawing, and streamed semi-states live in it;

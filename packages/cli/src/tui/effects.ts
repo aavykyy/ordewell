@@ -705,12 +705,13 @@ async function converse(deps: EffectDeps, sessionId: string, call: () => Promise
 
 /** The conversation a saved plan reopens with: its transcript, research log and token line. */
 function restoredChat(plan: unknown, sessionId: string): Action {
-  const saved = plan as Pick<SurfacePlan, 'conversationHistory' | 'researchLog' | 'plannerUsage'> | null;
+  const saved = plan as Pick<SurfacePlan, 'conversationHistory' | 'researchLog' | 'plannerUsage' | 'pendingTurns'> | null;
   return {
     type: 'chatRestored',
     history: saved?.conversationHistory ?? [],
     ...(saved?.researchLog ? { researchLog: saved.researchLog } : {}),
     ...(saved?.plannerUsage ? { plannerUsage: saved.plannerUsage } : {}),
+    ...(saved?.pendingTurns ? { pendingTurns: saved.pendingTurns } : {}),
     sessionId,
   };
 }

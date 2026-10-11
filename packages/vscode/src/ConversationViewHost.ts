@@ -10,7 +10,7 @@ import type { HostToWebview } from './shared/protocol';
 
 const FLUSH_MS = 30;
 
-export type SavedConversation = Pick<LegacyPlanState, 'conversationHistory' | 'researchLog' | 'plannerUsage'>;
+export type SavedConversation = Pick<LegacyPlanState, 'conversationHistory' | 'researchLog' | 'plannerUsage' | 'pendingTurns'>;
 
 /**
  * The planner conversation the chat webview draws (#53), held on the host:
@@ -103,7 +103,7 @@ export class ConversationViewHost {
 
   /** The view a saved session reopens with, built from its records alone (#51). */
   reload(saved: SavedConversation): void {
-    this.replace(fromTranscript(saved.conversationHistory, saved.researchLog, saved.plannerUsage));
+    this.replace(fromTranscript(saved.conversationHistory, saved.researchLog, saved.plannerUsage, saved.pendingTurns));
   }
 
   reset(): void {

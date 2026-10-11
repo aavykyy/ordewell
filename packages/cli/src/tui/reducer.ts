@@ -74,7 +74,7 @@ function reduceAction(state: TuiState, action: Action): Step {
 
     case 'chatRestored':
       if (stale(state, action.sessionId)) return step(state);
-      return step({ ...state, conversation: fromTranscript(action.history, action.researchLog, action.plannerUsage), scroll: 0 });
+      return step({ ...state, conversation: fromTranscript(action.history, action.researchLog, action.plannerUsage, action.pendingTurns), scroll: 0 });
 
     case 'planUpdated': {
       if (stale(state, action.sessionId)) return step(state);
