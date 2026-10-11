@@ -10,7 +10,7 @@ const SENSITIVE_ENV_NAME = /(?:^|_)(?:KEY|API_KEY|TOKEN|SECRET|PASSWORD|CREDENTI
 const MIN_SECRET_LENGTH = 8;
 const MAX_DECODE_ROUNDS = 3;
 
-const TOKEN_SHAPES: RegExp[] = [
+export const TOKEN_SHAPES: RegExp[] = [
   /\bgh[pousr]_[A-Za-z0-9]{36,}/,
   /\bgithub_pat_[A-Za-z0-9_]{22,}/,
   /\bAIza[A-Za-z0-9_-]{30,}/,

@@ -3,6 +3,7 @@ import { BaseAiService, type ResearchChat, type ResearchTurn, type ToolResult, t
 import { executeTool } from '../executeTool';
 import type { ResearchProgress } from '../../models/Task';
 import { fakeConfig, fakeFileSystem } from '../../testing';
+import { fakeSecret } from './fakeSecret';
 
 /**
  * Redaction is applied once, where a tool result is constructed. These check
@@ -13,11 +14,11 @@ import { fakeConfig, fakeFileSystem } from '../../testing';
 
 const DOTENV = [
   'DATABASE_URL=postgres://localhost:5432/app',
-  'OPENAI_API_KEY=sk-proj-T3BlbkFJa1b2c3d4e5f6g7h8i9j0k1l2',
-  'AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE',
+  `OPENAI_API_KEY=${fakeSecret('openai')}`,
+  `AWS_ACCESS_KEY_ID=${fakeSecret('aws')}`,
 ].join('\n');
 
-const SECRETS = ['sk-proj-T3BlbkFJ', 'AKIAIOSFODNN7EXAMPLE'];
+const SECRETS = ['sk-proj-T3BlbkFJ', fakeSecret('aws')];
 
 class ScriptedChat implements ResearchChat {
   toolResultsSent: ToolResult[][] = [];

