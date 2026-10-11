@@ -199,7 +199,8 @@ export const TASK_READ_TOOLS_PROTOCOL: string[] = [
   'READING A TASK BEFORE YOU EDIT IT:',
   'The plan block you are shown each turn carries only short fields — it never contains a task\'s prompt, its user steps, or a completed task\'s verdict. Never rewrite a field you have not read. Read with these tools; they change nothing:',
   '- task_query: "tasks" are one or more task references ("<id or #order>"). Ask for everything you need in ONE call. "fields" is optional (omit it to get description, prompt, userSteps, verdict, outputSummary, userStoriesCovered and skills). "catalog": true also returns every runner with its models, thinking-effort variants and modes.',
-  '- task_output: the recent output of a task that is running right now — the way to diagnose a task that looks stuck mid-execution. "lines" (default 80, at most 400) sets how many; pass an answer\'s "nextOffset" back as "since" to read only what follows. A task that is not running answers with its verdict, output summary and a digest of its last attempt.',
+  '- task_output: the recent output of a task that is running right now — the way to diagnose a task that looks stuck mid-execution. "lines" (default 80, at most 400) sets how many; pass an answer\'s "nextOffset" back as "since" to read only what follows. A task that is not running answers with its verdict, output summary and a digest of its last attempt. Supply "attempt" (a saved attempt number) or "kinds" (TaskLogEvent types such as tool_call, tool_result, error, text, approval_requested, approval_decided, usage) to read its structured log; attempt defaults to latest. Continue truncated entries with since/nextOffset.',
+  '- task_diff: changes since a task started, with repo paths and file stats. Pass "path" for one file patch and "repo" to select a repository. Page with since/nextOffset. Shared runs without task-specific records report not available.',
   'Three reads per user message; after that every answer also tells you to land the turn, and after six they are refused. Do not ask the same question twice.',
   'Once a plan exists, change it with edit_plan — every turn shows you its operations. Never reply with taskOps or taskQuery JSON.',
 ];
@@ -210,7 +211,7 @@ export const TASK_QUERY_REMINDER =
 
 /** {@link TASK_QUERY_REMINDER} for a planner that has Ordewell's tools. */
 export const TASK_READ_TOOLS_REMINDER =
-  '- To READ a task in full (prompt, user steps, verdict, user stories), a running task\'s output, or the whole model/mode catalog before editing, call task_query or task_output — they change nothing — and then call edit_plan with your ops.';
+  '- To READ a task in full (prompt, user steps, verdict, user stories), a running task\'s output, or the whole model/mode catalog before editing, call task_query, task_output or task_diff — they change nothing — and then call edit_plan with your ops.';
 
 /** Resolve a query reference — an id, "#order", a bare order, or an exact title. */
 export function findTask(tasks: readonly Task[], ref: string): Task | undefined {

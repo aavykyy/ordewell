@@ -26,7 +26,7 @@ import type { UserSettings } from './SettingsService';
 import { SkillsService } from './SkillsService';
 import { plannerMessage, resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
 import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
-import type { MergeGateView, SessionBroadcaster, SessionNotice } from './SessionMessage';
+import type { RunMergeView, SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { SessionEventRelay } from './SessionEventRelay';
 import { saveSession } from '../utils/sessionStore';
 import { listTaskLogAttempts, readTaskLog, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
@@ -436,6 +436,9 @@ export class Session {
     read: (signature, answer) => this.conversation.read(signature, answer),
     liveOutput: (taskId, opts) => this.orchestrator.getLiveOutput(taskId, opts),
     lastAttempt: (taskId) => lastAttemptDigest(this.taskLogLocation, taskId),
+    taskLogAttempts: (taskId) => this.taskLogAttempts(taskId),
+    taskLog: (taskId, attempt) => this.taskLog(taskId, attempt),
+    taskDiff: (taskId, options) => this.runs.taskDiff(taskId, options),
     taskSkills: () => this.workspaceSkills(),
     runCommand: (command, signal) => this.fsAdapter.bash(command, signal),
     fetchUrl: (url) => this.fetcher.fetch(url),
@@ -579,6 +582,10 @@ export class Session {
       // it mid-run, so a crash would otherwise lose every verdict since the
       // last Session operation.
       onTaskSettled: () => this.persist({ background: true }),
+      onUsageChanged: () => {
+        this.persist({ background: true });
+        relay.onUsageChanged();
+      },
       onIsolationChanged: () => {
         // The run record names branches and worktrees on disk, so it is saved
         // as it changes rather than at the end: a crash must still find them.
@@ -1280,9 +1287,9 @@ export class Session {
     return this.orchestrator.getMergeGate(taskId);
   }
 
-  /** What Merge all would merge mid-run, while any task waits at a merge gate; null otherwise. */
-  mergeGateView(): MergeGateView | null {
-    return this.orchestrator.mergeGateView();
+  /** What Merge all would merge now; null once everything landed is merged. */
+  runMergeView(): RunMergeView | null {
+    return this.orchestrator.runMergeView();
   }
 
   /** The run's integration branch against its base ref, as a unified diff. */

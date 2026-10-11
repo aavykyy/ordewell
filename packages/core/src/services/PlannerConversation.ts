@@ -94,8 +94,14 @@ export class PlannerTurn {
  */
 type TurnAdmission = { refuseAs: string } | 'supersede';
 
+/**
+ * A backend's turn, or the turn a submission made of it. `said` is then the
+ * reply's prose, which the user reads beside the plan or edit it carried; an
+ * envelope reply's text is the envelope itself, and is never shown.
+ */
+type ClaimedTurn = ConversationTurn & { said?: string };
 /** A turn with every read already drained — what the settle path actually commits. */
-type SettleableTurn = Exclude<ConversationTurn, { kind: 'task_query' }>;
+type SettleableTurn = Exclude<ClaimedTurn, { kind: 'task_query' }>;
 type CommitTurn = Exclude<SettleableTurn, { kind: 'task_ops' }>;
 
 /** One user turn, from the message to its settled outcome: every backend call it makes streams through `stream`. */
@@ -931,14 +937,17 @@ export class PlannerConversation {
    * rejected edit must not settle on the same submission again. A stopped
    * turn commits nothing, the same as a stopped reply with a plan in it.
    */
-  private claimSubmission(turn: ConversationTurn, userTurn: UserTurn): ConversationTurn {
+  private claimSubmission(turn: ConversationTurn, userTurn: UserTurn): ClaimedTurn {
     const submitted = userTurn.submitted;
     userTurn.submitted = undefined;
     if (!submitted || userTurn.signal.aborted) return turn;
     const { text, researchLog } = turn;
+    // The backend settled its reply as a message and took back what it
+    // streamed, so the reply is shown again from here or not at all.
+    const said = text.trim() ? { said: text } : {};
     return submitted.kind === 'plan'
-      ? { kind: 'plan', tasks: submitted.tasks, text, researchLog }
-      : { kind: 'task_ops', ops: submitted.ops, text, researchLog };
+      ? { kind: 'plan', tasks: submitted.tasks, text, researchLog, ...said }
+      : { kind: 'task_ops', ops: submitted.ops, text, researchLog, ...said };
   }
 
   /**
@@ -1028,7 +1037,7 @@ export class PlannerConversation {
   }
 
   /** Validate + commit a task_ops turn atomically. Returns the errors on rejection (plan untouched). */
-  private async applyTaskOps(turn: Extract<ConversationTurn, { kind: 'task_ops' }>, userTurn: UserTurn): Promise<{ plan: LegacyPlanState } | { errors: string[] }> {
+  private async applyTaskOps(turn: Extract<SettleableTurn, { kind: 'task_ops' }>, userTurn: UserTurn): Promise<{ plan: LegacyPlanState } | { errors: string[] }> {
     this.requirePlan();
     const { turnId } = userTurn.stream;
     const skills = await checkOpSkills(turn.ops, this.host.taskSkills());
@@ -1043,11 +1052,13 @@ export class PlannerConversation {
       () => {
         this.recordResearch(turn.researchLog);
         this.host.adoptTasks(result.tasks, 'edit');
+        if (turn.said) this.append('assistant', turn.said, { timestamp: now });
         this.append('assistant', content, { timestamp: now });
         this.recordSkillWarnings(skills.warnings, now);
         return true;
       },
       () => {
+        if (turn.said) this.host.broadcast({ type: 'planner_message', content: turn.said, timestamp: now, turnId });
         this.host.broadcast({ type: 'planner_message', content, timestamp: now, turnId });
         this.host.broadcastPlan();
       },
@@ -1068,10 +1079,14 @@ export class PlannerConversation {
         // capture the PRD here too so it isn't dropped with the plan preamble.
         this.host.capturePrd(turn.text);
         const count = this.host.adoptTasks(turn.tasks, 'commit');
+        if (turn.said) this.append('assistant', turn.said, { timestamp: now });
         this.append('assistant', `Plan generated with ${count} task${count === 1 ? '' : 's'}.`, { timestamp: now, kind: 'plan_generated' });
         this.recordSkillWarnings(skillWarnings, now);
         return true;
-      }, () => this.host.broadcastPlan(turnId))!;
+      }, () => {
+        if (turn.said) this.host.broadcast({ type: 'planner_message', content: turn.said, timestamp: now, turnId });
+        this.host.broadcastPlan(turnId);
+      })!;
     }
 
     // Budget models occasionally return an empty content turn after tool use —

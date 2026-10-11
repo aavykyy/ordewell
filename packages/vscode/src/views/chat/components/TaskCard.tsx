@@ -1,3 +1,4 @@
+import TaskUsage from './TaskUsage';
 import React, { useState } from 'react';
 import SubTaskCard from './SubTaskCard';
 import ModelSelector, { getModelClass, providerLabel } from './ModelSelector';
@@ -316,6 +317,7 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
         {/* The awaiting reason is a badge in its own right (ADR-0018, W1): a
             task held for the user must read as such whether or not a run is
             still being drawn as active. */}
+        <TaskUsage usage={row.usage} />
         {(isExecuting || row.status === 'failed' || row.status === 'awaiting') && (
           <>
             <span className={`task-status-dot ${status.cls}`} title={status.label} />

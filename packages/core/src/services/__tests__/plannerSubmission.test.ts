@@ -60,26 +60,39 @@ async function sessionAnswering(answer: (session: Session) => ConversationTurn) 
   return { session, broadcast };
 }
 
-/** The committed outcome with the per-turn noise (ids, clocks) taken out. */
-function committed(session: Session, broadcast: ReturnType<typeof vi.fn>) {
+/**
+ * The committed outcome with the per-turn noise (ids, clocks) taken out, and
+ * without the reply a submission's turn says beside it: an envelope reply has
+ * no prose to keep.
+ */
+function committed(session: Session, broadcast: ReturnType<typeof vi.fn<(msg: SessionMessage) => void>>, said?: string) {
   const last = session.planState?.conversationHistory?.at(-1);
   return {
     tasks: session.planTasks,
     runners: session.planState?.runners,
     lastMessage: { role: last?.role, content: last?.content, kind: last?.kind },
-    broadcasts: broadcast.mock.calls.map(([msg]) => msg.type),
+    broadcasts: broadcast.mock.calls.filter(([msg]) => !(msg.type === 'planner_message' && msg.content === said)).map(([msg]) => msg.type),
+  };
+}
+
+/** The reply prose the turn kept: in the transcript just before its outcome, and broadcast as a planner message. */
+function kept(session: Session, broadcast: ReturnType<typeof vi.fn<(msg: SessionMessage) => void>>, said: string) {
+  return {
+    transcript: session.planState?.conversationHistory?.at(-2)?.content,
+    broadcast: broadcast.mock.calls.some(([msg]) => msg.type === 'planner_message' && msg.content === said),
   };
 }
 
 describe('a plan handed in during a planner turn', () => {
-  it('commits exactly as the same plan sent as the JSON envelope', async () => {
+  it('commits exactly as the same plan sent as the JSON envelope, and keeps the reply beside it', async () => {
     const viaJson = await sessionAnswering(() => replyTurn(JSON.stringify(PLAN)));
     const viaSubmit = await sessionAnswering((session) => {
       expect(session.submitToTurn({ kind: 'plan', tasks: validTasks(PLAN) })).toBe(true);
       return replyTurn('Submitted the plan.');
     });
 
-    expect(committed(viaSubmit.session, viaSubmit.broadcast)).toEqual(committed(viaJson.session, viaJson.broadcast));
+    expect(committed(viaSubmit.session, viaSubmit.broadcast, 'Submitted the plan.')).toEqual(committed(viaJson.session, viaJson.broadcast));
+    expect(kept(viaSubmit.session, viaSubmit.broadcast, 'Submitted the plan.')).toEqual({ transcript: 'Submitted the plan.', broadcast: true });
     expect(viaSubmit.session.planTasks.map((t) => t.assignedModel?.modelId)).toEqual(['claude-sonnet-4', 'claude-sonnet-4']);
   });
 });
@@ -104,7 +117,7 @@ describe('what a submission wins over', () => {
 });
 
 describe('task ops handed in during a planner turn', () => {
-  it('apply exactly as the same taskOps sent as the JSON envelope', async () => {
+  it('apply exactly as the same taskOps sent as the JSON envelope, and keep the reply beside them', async () => {
     const ops = { taskOps: [{ op: 'update', taskId: '#1', changes: { title: 'Schema and migration' } }] };
     const run = async (answer: (s: Session) => ConversationTurn) => {
       const { session, broadcast } = await sessionAnswering((s) => {
@@ -127,7 +140,8 @@ describe('task ops handed in during a planner turn', () => {
       return replyTurn('Renamed it.');
     });
 
-    expect(committed(viaSubmit.session, viaSubmit.broadcast)).toEqual(committed(viaJson.session, viaJson.broadcast));
+    expect(committed(viaSubmit.session, viaSubmit.broadcast, 'Renamed it.')).toEqual(committed(viaJson.session, viaJson.broadcast));
+    expect(kept(viaSubmit.session, viaSubmit.broadcast, 'Renamed it.')).toEqual({ transcript: 'Renamed it.', broadcast: true });
     expect(viaSubmit.session.planTasks[0].title).toBe('Schema and migration');
   });
 });

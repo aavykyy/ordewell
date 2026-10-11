@@ -35,7 +35,7 @@ import { resolveWorkspaceEnv, type WorkspaceEnv } from './workspaceEnv';
 import { supportsTaskMode } from './harness/connectors';
 import { continuability } from './continuation';
 import { quotedList } from '../utils/quotedList';
-import type { MergeGateView } from './SessionMessage';
+import type { RunMergeView } from './SessionMessage';
 import { resumeTime } from '../taskRow/status';
 
 /**
@@ -54,6 +54,7 @@ export interface OrchestratorObserver {
    */
   onTaskSettled?(data: { taskId: string }): void;
   onTick?(): void;
+  onUsageChanged?(): void;
   onExecutionComplete?(): void;
   /** The run is parked behind queued user messages, with nothing live, until they are drained. */
   onQueueReady?(): void;
@@ -108,7 +109,7 @@ const CONTROL_WORDS = {
  */
 interface TaskAttempt {
   readonly taskId: string;
-  /** 1-based count of spawns this task has had since the plan was loaded. */
+  /** 1-based count of spawns, continued from the persisted attempt ledgers. */
   readonly attempt: number;
   /**
    * `starting` while the async spawn is in flight; `session` is null until
@@ -619,12 +620,13 @@ export class TaskOrchestrator {
   /**
    * The run as a surface offers Merge all mid-run (ADR-0020): what has landed
    * and is not merged, and whether the run is paused at its gates with nothing
-   * else running. Null while no task waits at a gate.
+   * else running. Null once everything landed is merged.
    */
-  mergeGateView(): MergeGateView | null {
+  runMergeView(): RunMergeView | null {
     const handoff = this.runs.view()?.handoff;
-    if (!handoff || !this.store.allTasks.some((t) => this.getMergeGate(t.id).length > 0)) return null;
-    return { paused: this.running && this.attempts.size === 0, repos: handoff.repos, landed: handoff.landed };
+    if (!handoff?.landed.length) return null;
+    const waitingAtGate = this.store.allTasks.some((t) => this.getMergeGate(t.id).length > 0);
+    return { waitingAtGate, paused: waitingAtGate && this.running && this.attempts.size === 0, repos: handoff.repos, landed: handoff.landed };
   }
 
   /**
@@ -1502,7 +1504,7 @@ export class TaskOrchestrator {
     if (this.attempts.has(task.id) || !this.store.get(task.id)) return;
     const attempt: TaskAttempt = {
       taskId: task.id,
-      attempt: (this.spawnCounts.get(task.id) ?? 0) + 1,
+      attempt: Math.max(this.spawnCounts.get(task.id) ?? 0, ...task.attemptUsage?.map((u) => u.attempt) ?? []) + 1,
       phase: 'starting',
       session: null,
       runner: this.store.resolveTaskRunner(task),
@@ -1519,6 +1521,7 @@ export class TaskOrchestrator {
     };
     this.spawnCounts.set(task.id, attempt.attempt);
     this.attempts.set(task.id, attempt);
+    this.store.startAttemptUsage(task.id, attempt.attempt, attempt.runner, attempt.startedAt);
     this.store.markInProgress(task.id);
     this.emit('onTaskChanged');
 
@@ -1613,6 +1616,11 @@ export class TaskOrchestrator {
 
       // Attached before the verifier, so the summary of the call that settles
       // the attempt is captured before its verdict asks for the final text.
+      session.onEvent((event) => {
+        if (event.type !== 'usage' || this.attempts.get(task.id) !== attempt) return;
+        this.store.recordAttemptUsage(task.id, attempt.attempt, event.record, new Date().toISOString());
+        this.emit('onUsageChanged');
+      });
       this.output.attach(task.id, session);
       this.verifier.watch(task, session);
       session.onEvent((event) => {
@@ -1761,7 +1769,10 @@ export class TaskOrchestrator {
   private endAttempt(taskId: string, reason: AttemptEnd): TaskAttempt | undefined {
     const attempt = this.attempts.get(taskId);
     this.attempts.delete(taskId);
-    if (attempt) this.output.detach(taskId);
+    if (attempt) {
+      this.store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString());
+      this.output.detach(taskId);
+    }
     const session = attempt?.session ?? null;
     if (session) this.saveNativeSession(taskId, session.nativeSessionId());
     if (stopsRunner(reason)) {

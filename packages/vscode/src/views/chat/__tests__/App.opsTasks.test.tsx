@@ -29,6 +29,7 @@ const plan = {
 
 const landed = [{ taskId: 't1', order: 1, title: 'Bump the version' }];
 const gate = {
+  waitingAtGate: true,
   paused: true,
   repos: [{ path: '.', integrationBranch: 'ordewell/run-1/integration', baseRef: 'abcdef0123456789', landed }],
   landed,
@@ -47,7 +48,7 @@ describe('App — ops tasks and merge gates (ADR-0020)', () => {
 
   it('marks a task that waits at its merge gate, and offers Merge all mid-run without the end-of-run actions', () => {
     send({ type: 'planUpdated', plan });
-    send({ type: 'mergeGate', gate, tasks: { o2: ['t1'] } });
+    send({ type: 'runMerge', runMerge: gate, tasks: { o2: ['t1'] } });
 
     expect(screen.getByText('Waits for Merge all')).toBeTruthy();
     expect(screen.getByText(/Paused for Merge all/)).toBeTruthy();
@@ -55,8 +56,26 @@ describe('App — ops tasks and merge gates (ADR-0020)', () => {
     fireEvent.click(document.querySelector('.isolation-handoff .task-action-btn.run')!);
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'isolationAction', action: 'merge', taskId: undefined });
 
-    send({ type: 'mergeGate', gate: null, tasks: {} });
+    send({ type: 'runMerge', runMerge: null, tasks: {} });
     expect(screen.queryByText('Waits for Merge all')).toBeNull();
+    expect(document.querySelector('.isolation-handoff')).toBeNull();
+  });
+
+  it('offers Merge all quietly mid-run without a gate, and removes it after merging', () => {
+    send({ type: 'planUpdated', plan: { ...plan, status: 'running' } });
+    send({ type: 'isolationHandoff', ...gate });
+    send({ type: 'runMerge', runMerge: { ...gate, waitingAtGate: false, paused: false }, tasks: {} });
+
+    expect(screen.getByText('1 landed task not merged')).toBeTruthy();
+    expect(screen.getByText('1 unmerged')).toBeTruthy();
+    expect(screen.queryByText('Waits for Merge all')).toBeNull();
+    expect(document.querySelector('.isolation-handoff')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Merge all' }));
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'isolationAction', action: 'merge', taskId: undefined });
+
+    send({ type: 'runMerge', runMerge: null, tasks: {} });
+    expect(screen.queryByRole('button', { name: 'Merge all' })).toBeNull();
+    expect(screen.queryByText('1 unmerged')).toBeNull();
     expect(document.querySelector('.isolation-handoff')).toBeNull();
   });
 

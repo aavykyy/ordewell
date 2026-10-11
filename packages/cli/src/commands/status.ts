@@ -1,7 +1,8 @@
+import { taskUsageText } from '../tui/blocks';
 import { writeFileSync } from 'fs';
 import { flag, hasFlag, readLastSession } from '../utils';
 import { iconFor } from '../utils/output';
-import { taskOrderLabel } from '@ordewell/core';
+import { taskOrderLabel, taskRowView, planUsage } from '@ordewell/core';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, type SessionMeta } from '../apiClient';
 
@@ -79,16 +80,22 @@ function printOneSession(
   console.log(`Phase:    ${plan?.phase || 'unknown'}  |  Created: ${meta.createdAt}`);
   console.log(`Tasks:    ${allTasks.length} total  |  ${completed} done  |  ${failed} failed  |  ${running} running  |  ${blocked} blocked\n`);
 
+  const usage = planUsage(allTasks);
+  if (usage.attempts) console.log(`Tasks total: ${taskUsageText(usage)}`);
   for (const t of allTasks) {
     const icon = iconFor(t.status);
     const model = t.assignedModel ? ` (${t.assignedModel.modelLabel})` : '';
     const shortId = (t.id ?? '').slice(-8);
     console.log(`  ${taskOrderLabel(t).padStart(2)}. ${icon} [${shortId}] ${t.title}${model}`);
+    const row = taskRowView({ ...t, dependencies: t.dependencies ?? [] });
+    if (row.usage) console.log(`      ${taskUsageText(row.usage)}`);
     for (const sub of t.subtasks || []) {
       const subIcon = iconFor(sub.status);
       const subModel = sub.assignedModel ? ` (${sub.assignedModel.modelLabel})` : '';
       const subShortId = (sub.id ?? '').slice(-8);
       console.log(`    ${taskOrderLabel(sub, t)}. ${subIcon} [${subShortId}] ${sub.title}${subModel}`);
+      const subRow = taskRowView({ ...sub, dependencies: sub.dependencies ?? [] });
+      if (subRow.usage) console.log(`        ${taskUsageText(subRow.usage)}`);
     }
   }
 }

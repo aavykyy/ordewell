@@ -40,7 +40,7 @@ export default function App() {
     runnerList, enabledRunnerIds, runners, pendingEdits, held, unsent, modesByRunner, modelConfig,
     modelOptions, configuredProviders, planner, isReady, modelDiscoveryErrors,
     skills, taskSkills, checkpoint, taskOutput, taskIdle, taskApprovals, taskIsolation, handoff,
-    mergeResult, mergeGate, taskGates, dockExpanded, dockHeight,
+    mergeResult, runMerge, taskGates, dockExpanded, dockHeight,
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
   const setIsResearchActive = useCallback((v: boolean) => dispatch({ type: 'patchResearchActive', active: v }), []);
@@ -572,6 +572,7 @@ export default function App() {
               say when a task is blocked on the user, or the approval would sit
               unseen behind it. */}
           {checkpoint && <span className="plan-dock-approval">1 awaiting approval</span>}
+          {runMerge && <span className="plan-dock-summary">{runMerge.landed.length} unmerged</span>}
         </button>
         <div
           className="plan-dock-body"
@@ -587,6 +588,12 @@ export default function App() {
               onApprove={handleApproveCheckpoint}
               onReject={handleRejectCheckpoint}
             />
+          )}
+          {runMerge && !runMerge.waitingAtGate && isExecuting && (
+            <div className="plan-merge-actions">
+              <span>{runMerge.landed.length} landed task{runMerge.landed.length === 1 ? '' : 's'} not merged</span>
+              <button className="task-action-btn run" onClick={() => handleIsolationAction('merge')}>Merge all</button>
+            </div>
           )}
           <PlanCardGroup
             tasks={plan.tasks}
@@ -627,7 +634,7 @@ export default function App() {
             onResolveConflict={handleResolveConflict}
             onOpenLog={handleOpenTaskLog}
           />
-          {handoff && !mergeGate && (
+          {handoff && !isExecuting && !runMerge?.waitingAtGate && (
             <HandoffCard
               repos={handoff.repos}
               landed={handoff.landed}
@@ -635,12 +642,12 @@ export default function App() {
               onAction={(action) => handleIsolationAction(action)}
             />
           )}
-          {mergeGate && (
+          {runMerge?.waitingAtGate && (
             <HandoffCard
-              repos={mergeGate.repos}
-              landed={mergeGate.landed}
+              repos={runMerge.repos}
+              landed={runMerge.landed}
               mergeResult={mergeResult}
-              midRun={{ paused: mergeGate.paused }}
+              midRun={{ paused: runMerge.paused }}
               onAction={(action) => handleIsolationAction(action)}
             />
           )}

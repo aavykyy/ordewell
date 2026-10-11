@@ -5,7 +5,8 @@
 Task completion and checkpoints need signals bound to the current attempt,
 independent of text meant for people. Coding-agent planners also need access
 to the live catalog and validated plan operations. An injected MCP server
-provides both without user registration. API planners retain JSON envelopes.
+provides both without user registration. API planners retain JSON envelopes
+and call the same task read handlers directly from their tool loop.
 
 ## Decision
 
@@ -14,7 +15,7 @@ which tools the caller sees and what they act on.** Task runners complete and
 ask checkpoints through it; coding-agent planners read the live catalog and
 submit plans through it. Attachment is required before any coding-agent prompt:
 check after spawn, respawn once with a fresh token, then fail if it still cannot
-connect (ADR-0025). API planners keep JSON envelopes; completion and checkpoint
+connect (ADR-0025). API planners keep JSON envelopes and the same task read tools; completion and checkpoint
 text markers have no role.
 
 ### Tools per token
@@ -22,7 +23,7 @@ text markers have no role.
 | token | bound to | tools |
 |---|---|---|
 | **Task token** | one session, one task, one attempt generation | `task_complete({status: 'done' \| 'blocked' \| 'failed', summary, reason?})`, `checkpoint({question})` |
-| **Planner token** | one session's planner conversation | `list_runners()`, `list_models({runner})`, `submit_plan({tasks})`, `edit_plan({ops})`, `task_query({...})`, `task_output({task, ...})`, `load_skill({name})` (a model-invocable planner skill's instructions; [ADR-0024](0024-unified-skills.md)) |
+| **Planner token** | one session's planner conversation | `list_runners()`, `list_models({runner})`, `submit_plan({tasks})`, `edit_plan({ops})`, `task_query({...})`, `task_output({task, attempt?, kinds?, ...})`, `task_diff({task, repo?, path?, ...})`, `load_skill({name})` (a model-invocable planner skill's instructions; [ADR-0024](0024-unified-skills.md)) |
 
 #37's runner-facing tools (`board_post`, `report`, …) join the task side later,
 on the same mechanism.
@@ -80,7 +81,7 @@ on the same mechanism.
 
 - **Task runners and the three coding-agent planners (S1).** Claude Code,
   Codex and OpenCode use the required server. API planners (`OpenAiService`,
-  `GeminiService`) keep envelopes and their existing query read loop.
+  `GeminiService`) keep envelopes and their existing query read loop, alongside direct task read tool calls.
 - **Tools or nothing (S2).** Neither a task nor a coding-agent planner runs
   without its tools. One automatic respawn is allowed; a second attach failure
   fails the task or planner turn. There is no marker fallback.
@@ -130,9 +131,10 @@ planner tools are recorded here as an explicit entry against both:
 - **The tools read Ordewell state and planner skills (P1).** No arbitrary
   filesystem, shell or network access. `load_skill` reads a model-invocable
   planner skill from the resolved catalog (ADR-0024). `list_runners` and `list_models` read settings and the discovery
-  cache; `task_query` and `task_output` read the plan and the output Ordewell
-  itself captured — the same answer the `taskQuery` envelope gives (ADR-0012,
-  including its `output` field), not a path into `.ordewell/`.
+  cache; `task_query` and `task_output` read the plan and captured output or
+  saved attempt logs; `task_diff` reads task-owned git changes against the
+  recorded starting commit. These are bounded answers, not a path into
+  `.ordewell/` or an arbitrary git ref (ADR-0012).
 - **The only writes are `submit_plan` and `edit_plan` (P2).** They go through
   the same validation and commit path as the envelopes they replace: the live
   catalog, `coerceAssignments` (ADR-0003: a stray model id is coerced to
@@ -141,7 +143,17 @@ planner tools are recorded here as an explicit entry against both:
   tasks produce the same plan by either route, and the plan stays the source
   of truth (ADR-0001). A structural edit during a live run is queued as a
   pending plan edit, exactly as an envelope edit is.
-- **Reads keep today's caps (P3).** `task_query` and `task_output` share the
+  *Amended by [ADR-0029](0029-the-supervisor.md):* the pending plan edit is
+  gone; a mid-run edit is applied at once to tasks not yet started and refused,
+  with a note, for a running or finished task.
+- **Execution tools are a further explicit entry (P5).** *Added by
+  [ADR-0029](0029-the-supervisor.md).* `run_plan`, `run_task`, `stop_task`,
+  `stop_run`, `retry_task`, `message_task`, `answer_approval` (deny or
+  escalate, never allow) and `merge_all` change what runs, not files. They
+  reach the scheduler only through one core command seam, which checks the
+  supervisor level, who started the turn and the plan's approval; `task_diff`
+  joins the reads. Absent a grant at the seam, the call is refused.
+- **Reads keep today's caps (P3).** `task_query`, `task_output` and `task_diff` share the
   per-user-turn read budget the envelope has (`MAX_TASK_QUERIES`,
   `MAX_TASK_QUERIES_HARD` in `PlannerConversation`) and the same escalation:
   a nudge to land the turn past the soft cap, a forced landing at the hard
@@ -149,6 +161,8 @@ planner tools are recorded here as an explicit entry against both:
   costs.
 - **Waking the planner during a run is out of scope (P4).** So is any write it
   makes then. Both stay with #27 and #29.
+  *Superseded by [ADR-0029](0029-the-supervisor.md):* wake-up turns, live
+  planner turns and a per-turn read budget for wake-ups.
 
 ### Planner: the catalog is read when the plan is submitted
 
@@ -230,9 +244,12 @@ planner tools are recorded here as an explicit entry against both:
 
 ## History
 
+- 2026-10-11 — saved attempt log reads and task diffs share the existing read cap; API planners use the same read handlers without MCP.
+
 - 2026-10-05 — proposed.
 - 2026-10-05 — V5 amended: checked against Claude Code 2.1.289, its hard cap on a tool call is 1e8 ms, but an HTTP call silent for 300s is aborted. Progress notifications reset that, so the server heartbeats instead of the configuration raising a timeout.
 - 2026-10-05 — Codex checked against 0.160.0: the server is injected per thread (`mcp_servers.ordewell` in the thread config, token read from the environment), pre-authorized with `default_tools_approval_mode = "approve"`; a 200s `checkpoint` call survives on the heartbeat with no timeout raised. Codex keeps MCP tools out of the model's tool list, so a task thread's instructions say where to find them.
 - 2026-10-05 — OpenCode checked against 1.18.34: the server and an allow rule for `ordewell_*` go in `OPENCODE_CONFIG_CONTENT`, deep-merged over what is already there. A tool is named `ordewell_<tool>`. A `checkpoint` call held for 130s returned its answer, past the 5s `timeout` a remote entry defaults to and the MCP client's 60s request timeout, so no timeout is configured.
 - 2026-10-09 — `load_skill` added to the planner tools (ADR-0024).
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
+- 2026-10-11 — execution tools and `task_diff`, live planner turns, wake-up turns ([ADR-0029](0029-the-supervisor.md)).

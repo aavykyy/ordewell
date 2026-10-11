@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Task, DiscoveredModel, ResearchStep, ResearchLogEntry, ResearchProgress, RunnerId } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
-import { IFileSystem } from '../interfaces/IFileSystem';
+import { IFileSystem, type ToolOutcome } from '../interfaces/IFileSystem';
 import { IWebFetcher } from '../interfaces/IWebFetcher';
 import { buildPlanWithResults } from './PlanPrompts';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
@@ -10,6 +10,8 @@ import { settleReply, type ReplyAttempt } from './settleReply';
 import { compactResearchResults, withProactiveCompaction } from './contextCompaction';
 import type { RunnerModeInfo } from './ModeResolver';
 import { collectResearchContext } from './ContextCollector';
+import { PLANNER_TASK_READ_TOOLS, type PlannerToolHandler } from './mcp/tools';
+import { redactSecrets } from '../utils/redactSecrets';
 import { executeTool } from './executeTool';
 import { runResearchAgent, mapWithConcurrency, SUBAGENT_LIMITS } from './ResearchSubagents';
 import { SPAWN_RESEARCH_AGENT } from './researchTools';
@@ -76,6 +78,7 @@ export interface ConversationTurnContext {
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
   autonomousDefault?: boolean;
   fetcher?: IWebFetcher;
+  plannerReads?: PlannerToolHandler;
 }
 
 export abstract class BaseAiService {
@@ -209,6 +212,7 @@ export abstract class BaseAiService {
     stepIndex: number,
     thinking: string,
     signal?: AbortSignal,
+    plannerReads?: PlannerToolHandler,
   ): Promise<{ toolResults: ToolResult[]; logEntries: ResearchStep[]; resultsText: string }> {
     const toolResults: ToolResult[] = [];
     const logEntries: ResearchStep[] = [];
@@ -265,7 +269,12 @@ export abstract class BaseAiService {
       // approval prompt, so by the time the user hits ESC there are usually
       // calls here that have not started. `executeTool` answers those without
       // running them, the same way the budget-exhaustion path above does.
-      const toolResult = preResult ?? await executeTool(tc.name, toolArgs, fs, fetcher, signal);
+      const taskRead = PLANNER_TASK_READ_TOOLS.find((t) => t.name === tc.name);
+      const toolResult: ToolOutcome = preResult ?? (taskRead && plannerReads && !signal?.aborted
+        ? await taskRead.call(plannerReads, toolArgs, { signal: signal ?? new AbortController().signal }).then((reply) => ({
+          success: !reply.isError, output: redactSecrets(reply.text), truncated: false,
+        }))
+        : await executeTool(tc.name, toolArgs, fs, fetcher, signal));
 
       const MAX_RESPONSE_CHARS = 50000;
       const truncatedResponse = toolResult.success && (toolResult.truncated || toolResult.output.length > MAX_RESPONSE_CHARS);
@@ -400,7 +409,7 @@ export abstract class BaseAiService {
       }
       const thinking = turn.reasoning ? turn.reasoning.slice(-200) : '';
       const { toolResults, logEntries } = await this.executeToolCalls(
-        turn.toolCalls, ctx.fs, onProgress, ctx.fetcher, step, thinking, signal,
+        turn.toolCalls, ctx.fs, onProgress, ctx.fetcher, step, thinking, signal, ctx.plannerReads,
       );
       researchLog.push(...logEntries);
       BaseAiService.appendBudgetCountdown(toolResults, MAX_STEPS - step - 1, 'reply to the user (summary, question, or plan JSON)');

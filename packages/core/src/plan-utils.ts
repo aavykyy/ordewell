@@ -19,3 +19,5 @@ export { taskOrderLabel, taskRef, titledTaskRef } from './order-labels';
 // The one runner default, shared with the webview so its initial state cannot
 // drift from the plans the host builds.
 export { DEFAULT_RUNNERS } from './models/Task';
+
+export * from './models/Usage';

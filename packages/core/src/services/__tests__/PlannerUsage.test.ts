@@ -12,6 +12,7 @@ describe('PlannerUsageLedger', () => {
       turnId: 't1',
       totals: { inputTokens: 1400, outputTokens: 140 },
       bySubagent: { sa1: { inputTokens: 400, outputTokens: 40 } },
+      byModel: [{ source: 'claude-code', totals: { inputTokens: 1400, outputTokens: 140 } }],
       contextFill: { usedTokens: 1000, windowTokens: 200000 },
     });
   });
@@ -29,7 +30,7 @@ describe('PlannerUsageLedger', () => {
     const ledger = new PlannerUsageLedger();
     ledger.record({ source: 'openai', inputTokens: 10 });
 
-    expect(ledger.message()).toEqual({ type: 'planner_usage', totals: { inputTokens: 10 } });
+    expect(ledger.message()).toEqual({ type: 'planner_usage', totals: { inputTokens: 10 }, byModel: [{ source: 'openai', totals: { inputTokens: 10 } }] });
   });
 
   it('has usage only once something was measured — a bare window or an empty ledger says nothing', () => {
@@ -52,7 +53,9 @@ describe('PlannerUsageLedger', () => {
       totals: { inputTokens: 2200 },
       bySubagent: { sa1: { inputTokens: 900 } },
       lastPromptTokens: 700,
-      contextWindow: 200000,
+      source: 'claude-code',
+      model: undefined,
+      byModel: [{ source: 'claude-code', totals: { inputTokens: 700 } }],
     });
   });
 
@@ -74,6 +77,6 @@ describe('PlannerUsageLedger', () => {
     const saved = ledger.snapshot();
     ledger.record({ source: 'openai', inputTokens: 5, reportedCost: { amount: 1, currency: 'USD' } });
 
-    expect(saved).toEqual({ totals: { inputTokens: 10, reportedCost: { USD: 1 } }, lastPromptTokens: 10 });
+    expect(saved).toEqual({ totals: { inputTokens: 10, reportedCost: { USD: 1 } }, lastPromptTokens: 10, source: 'openai', model: undefined, byModel: [{ source: 'openai', totals: { inputTokens: 10, reportedCost: { USD: 1 } } }] });
   });
 });

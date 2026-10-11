@@ -11,6 +11,7 @@ import {
   type SessionNotice,
 } from './SessionMessage';
 import { surfaceStep } from '../conversation/records';
+import { planUsage } from '../models/Usage';
 import type { LegacyPlanState, ResearchLogEntry, ResearchProgress, ResearchStep, SubagentLogEntry } from '../models/Task';
 
 export interface SessionEventRelayDeps {
@@ -18,7 +19,7 @@ export interface SessionEventRelayDeps {
   /** Where isolation notices go, for a host whose notifications are not seen by the user. */
   onNotice?: (notice: SessionNotice) => void;
   store: Pick<PlanStore, 'allTasks' | 'snapshot'>;
-  orchestrator: Pick<TaskOrchestrator, 'getIdleSince' | 'getQueuedTaskMessages' | 'getMergeGate' | 'mergeGateView'>;
+  orchestrator: Pick<TaskOrchestrator, 'getIdleSince' | 'getQueuedTaskMessages' | 'getMergeGate' | 'runMergeView'>;
   runs: Pick<IsolationRunController, 'taskIsolation'>;
   /** Shared with the Session, which snapshots, restores and clears it. */
   usage: PlannerUsageLedger;
@@ -87,6 +88,7 @@ export class SessionEventRelay {
         this.broadcast({ type: 'checkpoint', taskId: data.taskId, taskTitle: data.taskTitle, summary: data.summary });
       },
       onTick: () => this.status(plan()),
+      onUsageChanged: () => this.status(plan()),
       onIsolationChanged: () => this.status(plan()),
       onIsolationBlocked: ({ reason, repos }) => {
         const where = repos.length > 0 ? ` in ${repos.join(', ')}` : '';
@@ -114,9 +116,10 @@ export class SessionEventRelay {
     // Hosts that render from the plan object (VS Code) read statuses off it
     // when a status_update arrives, so it has to be current by then.
     plan.tasks = this.store.snapshot();
-    const gate = this.orchestrator.mergeGateView();
+    const runMerge = this.orchestrator.runMergeView();
     this.broadcast({
       type: 'status_update',
+      usage: planUsage(plan.tasks),
       tasks: this.store.allTasks.map((t) => serializeTaskStatus(
         t,
         this.orchestrator.getIdleSince(t.id),
@@ -126,7 +129,7 @@ export class SessionEventRelay {
         this.orchestrator.getMergeGate(t.id),
         this.checkpointQuestion(t.id),
       )),
-      ...(gate ? { gate } : {}),
+      ...(runMerge ? { runMerge } : {}),
     });
   }
 
