@@ -1,3 +1,4 @@
+import type { TaskDiffRead, TaskDiffResult } from '../services/taskDiffRead';
 import type { Task } from '../models/Task';
 
 /**
@@ -46,6 +47,10 @@ export type IsolationTaskStatus = 'active' | 'kept' | 'conflict' | 'repairing' |
 
 /** One repo's share of a task: its worktree inside the task workspace. */
 export interface IsolationTaskRepo {
+  /** Integration tip when this task started; absent in older saved runs. */
+  baseRef?: string;
+  /** Task branch tip before integration removes it; excludes concurrent landings. */
+  taskTip?: string;
   /** Absolute path of this repo's worktree: the task workspace joined with the repo's path. */
   worktree: string;
   /**
@@ -451,6 +456,7 @@ export interface IWorktreeIsolation {
 
   /** Unified diff of each repo's integration branch against its base ref. */
   reviewDiff(run: IsolationRun): Promise<string>;
+  taskDiff?(run: IsolationRun, taskId: string, options: TaskDiffRead): Promise<TaskDiffResult>;
 
   /**
    * Mark the landed tasks whose work the checked-out HEAD now contains in

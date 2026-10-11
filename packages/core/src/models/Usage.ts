@@ -11,6 +11,8 @@ export interface UsageRecord {
   /** The provider or runner id that reported the call — `openai`, `claude-code`, … */
   source: string;
   model?: string;
+  /** A session breakdown can name a model without identifying the current context. */
+  aggregate?: true;
   inputTokens?: number;
   outputTokens?: number;
   /** The share of `inputTokens` served from the provider's prompt cache. */
@@ -79,20 +81,31 @@ export function addUsage(totals: UsageTotals, record: UsageRecord): UsageTotals 
 export interface PlannerUsage {
   totals: UsageTotals;
   bySubagent?: Record<string, UsageTotals>;
+  byModel?: ModelUsage[];
+  source?: string;
+  model?: string;
   lastPromptTokens?: number;
   contextWindow?: number;
 }
 
 export function addPlannerUsage(usage: PlannerUsage, record: UsageRecord): PlannerUsage {
-  const next: PlannerUsage = { ...usage, totals: addUsage(usage.totals, record) };
+  const next: PlannerUsage = { ...usage, totals: addUsage(usage.totals, record), byModel: addModelUsage(usage.byModel ?? [], record) };
   if (record.subagentId) {
     next.bySubagent = { ...usage.bySubagent, [record.subagentId]: addUsage(usage.bySubagent?.[record.subagentId] ?? {}, record) };
     return next;
   }
+  if (!record.aggregate) {
+    if (record.source !== usage.source || record.model !== usage.model) {
+      delete next.lastPromptTokens;
+      delete next.contextWindow;
+    }
+    next.source = record.source;
+    next.model = record.model;
+  }
   if (record.inputTokens !== undefined) next.lastPromptTokens = record.inputTokens;
   // A reported window of 0 means "not known", not "no room": keep it out so the
   // fill is omitted rather than shown against a guessed zero.
-  if (record.contextWindow !== undefined && record.contextWindow > 0) next.contextWindow = record.contextWindow;
+  if (record.contextWindow !== undefined) next.contextWindow = record.contextWindow > 0 ? record.contextWindow : undefined;
   return next;
 }
 
@@ -104,6 +117,8 @@ export function isMeasured(totals: UsageTotals): boolean {
 
 /** What the token line shows of a ledger — live from its broadcast, or reloaded from the saved one. */
 export interface UsageLine {
+  byModel?: ModelUsage[];
+  model?: string;
   totals: UsageTotals;
   bySubagent?: Record<string, UsageTotals>;
   contextFill?: { usedTokens: number; windowTokens: number };
@@ -113,6 +128,8 @@ export function usageLine(usage: PlannerUsage): UsageLine {
   const contextFill = plannerContextFill(usage);
   return {
     totals: usage.totals,
+    ...(usage.byModel ? { byModel: usage.byModel } : {}),
+    ...(usage.model ? { model: usage.model } : {}),
     ...(usage.bySubagent ? { bySubagent: usage.bySubagent } : {}),
     ...(contextFill ? { contextFill } : {}),
   };
@@ -128,4 +145,75 @@ export function usageLine(usage: PlannerUsage): UsageLine {
 export function plannerContextFill(usage: PlannerUsage): { usedTokens: number; windowTokens: number } | undefined {
   if (usage.lastPromptTokens === undefined || usage.contextWindow === undefined || usage.contextWindow <= 0) return undefined;
   return { usedTokens: usage.lastPromptTokens, windowTokens: usage.contextWindow };
+}
+
+export interface ModelUsage {
+  source: string;
+  model?: string;
+  totals: UsageTotals;
+}
+
+export function addModelUsage(models: readonly ModelUsage[], record: UsageRecord): ModelUsage[] {
+  const index = models.findIndex((m) => m.source === record.source && m.model === record.model);
+  if (index < 0) return [...models, { source: record.source, ...(record.model ? { model: record.model } : {}), totals: addUsage({}, record) }];
+  return models.map((m, i) => i === index ? { ...m, totals: addUsage(m.totals, record) } : m);
+}
+
+export interface AttemptUsage extends PlannerUsage {
+  attempt: number;
+  runner: string;
+  startedAt: string;
+  endedAt?: string;
+  wallTimeMs: number;
+}
+
+export function startAttemptUsage(attempt: number, runner: string, startedAt: string): AttemptUsage {
+  return { attempt, runner, startedAt, wallTimeMs: 0, totals: {}, byModel: [] };
+}
+
+export function addAttemptUsage(usage: AttemptUsage, record: UsageRecord, now: string): AttemptUsage {
+  const folded = addPlannerUsage(usage, record);
+  return { ...usage, ...folded, lastPromptTokens: folded.lastPromptTokens, contextWindow: folded.contextWindow, wallTimeMs: Math.max(0, Date.parse(now) - Date.parse(usage.startedAt)) };
+}
+
+export function endAttemptUsage(usage: AttemptUsage, now: string): AttemptUsage {
+  return { ...usage, endedAt: now, wallTimeMs: Math.max(0, Date.parse(now) - Date.parse(usage.startedAt)) };
+}
+
+export interface PlanUsage {
+  totals: UsageTotals;
+  byModel: ModelUsage[];
+  wallTimeMs: number;
+  attempts: number;
+}
+
+export function addUsageTotals(totals: UsageTotals, addition: UsageTotals): UsageTotals {
+  let next = addUsage(totals, { source: '', inputTokens: addition.inputTokens, outputTokens: addition.outputTokens, cachedInputTokens: addition.cachedInputTokens });
+  for (const [currency, amount] of Object.entries(addition.reportedCost ?? {})) next = addUsage(next, { source: '', reportedCost: { currency, amount } });
+  return next;
+}
+
+interface UsageTask { attemptUsage?: readonly AttemptUsage[]; subtasks?: readonly UsageTask[] }
+
+export function planUsage(tasks: readonly UsageTask[]): PlanUsage {
+  const result: PlanUsage = { totals: {}, byModel: [], wallTimeMs: 0, attempts: 0 };
+  for (const task of tasks) {
+    const child = planUsage(task.subtasks ?? []);
+    result.totals = addUsageTotals(result.totals, child.totals);
+    result.wallTimeMs += child.wallTimeMs;
+    result.attempts += child.attempts;
+    const models = [...child.byModel];
+    for (const usage of task.attemptUsage ?? []) {
+      result.totals = addUsageTotals(result.totals, usage.totals);
+      result.wallTimeMs += usage.wallTimeMs;
+      result.attempts++;
+      models.push(...usage.byModel ?? []);
+    }
+    for (const model of models) {
+      const existing = result.byModel.find((m) => m.source === model.source && m.model === model.model);
+      if (existing) existing.totals = addUsageTotals(existing.totals, model.totals);
+      else result.byModel.push({ ...model, totals: addUsageTotals({}, model.totals) });
+    }
+  }
+  return result;
 }

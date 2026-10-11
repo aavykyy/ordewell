@@ -12,6 +12,10 @@ import type { SessionRuntimeSettings } from '../createSession';
 import { surfacePlan, type SessionMessage, type SessionNotice } from '../SessionMessage';
 import type { SkillInfo, SkillsService } from '../SkillsService';
 import { createTask, type DiscoveredModel, type Task } from '../../models/Task';
+import { execFileSync } from 'child_process';
+import { writeFileSync } from 'fs';
+import { createWorktreeIsolation } from '../GitWorktreeIsolation';
+import type { IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { FakeRunnerSession, makeSession, saves } from './sessionTestKit';
 import type { IRunner } from '../../interfaces/IRunner';
@@ -141,7 +145,7 @@ describe('the Claude Code planner with the Ordewell server injected', () => {
     expect(args.join(' ')).not.toContain(bearer(injected));
     expect(args[args.indexOf('--allowedTools') + 1].split(',')).toEqual([
       'mcp__ordewell__list_runners', 'mcp__ordewell__list_models', 'mcp__ordewell__submit_plan',
-      'mcp__ordewell__edit_plan', 'mcp__ordewell__task_query', 'mcp__ordewell__task_output',
+      'mcp__ordewell__edit_plan', 'mcp__ordewell__task_query', 'mcp__ordewell__task_output', 'mcp__ordewell__task_diff',
       'mcp__ordewell__run_command', 'mcp__ordewell__load_skill',
     ]);
     expect(args[args.indexOf('--permission-mode') + 1]).toBe('default');
@@ -217,7 +221,7 @@ describe('a planner the server did not reach', () => {
   });
 });
 /** A planning session on a real harness planner, whose settings the test rewrites the way a settings write would. */
-function plannerSession(claude: FakeSpawnResult, initial: Partial<SessionRuntimeSettings> = {}, { runner, skills = [], skillsService, onNotice }: { runner?: IRunner; skills?: SkillInfo[]; skillsService?: Pick<SkillsService, 'findSkill' | 'listSkills'>; onNotice?: (notice: SessionNotice) => void } = {}) {
+function plannerSession(claude: FakeSpawnResult, initial: Partial<SessionRuntimeSettings> = {}, { runner, isolation, skills = [], skillsService, onNotice }: { runner?: IRunner; isolation?: IWorktreeIsolation; skills?: SkillInfo[]; skillsService?: Pick<SkillsService, 'findSkill' | 'listSkills'>; onNotice?: (notice: SessionNotice) => void } = {}) {
   const server = newServer();
   let settings: SessionRuntimeSettings = { enabledRunners: ['claude-code'], ...initial };
   const ai = service(claude, server);
@@ -226,6 +230,7 @@ function plannerSession(claude: FakeSpawnResult, initial: Partial<SessionRuntime
     aiService: ai,
     mcpServer: server,
     runner,
+    isolation,
     skillsService: skillsService ?? { findSkill: (name: string) => skills.find((sk) => sk.name === name) },
     modelResolver: {
       modelsForRunners: vi.fn(async (runners: string[]) => Object.fromEntries(runners.map((r) => [r, CATALOG[r] ?? []]))),
@@ -764,7 +769,7 @@ describe('what the planner is told', () => {
       expect(prompt).toMatch(/task_output/);
       expect(prompt).not.toContain('"taskQuery"');
       expect(perTurn).toMatch(/call edit_plan/);
-      expect(perTurn).toMatch(/call task_query or task_output/);
+      expect(perTurn).toMatch(/call task_query, task_output or task_diff/);
       expect(perTurn).not.toMatch(/"taskOps"|"taskQuery"|reply with ONLY/);
     });
 
@@ -1112,7 +1117,7 @@ describe('the read budget of a user message', () => {
     const { session } = await planThen(async (mcp, message) => {
       if (message.includes('SECOND')) answers.push(await call(mcp!, 'task_query', { tasks: ['#1'] }));
       else {
-        for (let n = 0; n < 6; n++) answers.push(await call(mcp!, n % 2 ? 'task_query' : 'task_output', n % 2 ? read(n) : { task: '#1', lines: n + 1 }));
+        for (let n = 0; n < 6; n++) answers.push(await call(mcp!, ['task_query', 'task_output', 'task_diff'][n % 3], n % 3 === 0 ? read(n) : { task: '#1', lines: n + 1, ...(n === 4 ? { kinds: ['error'] } : {}) }));
         answers.push(await call(mcp!, 'task_query', { tasks: ['#2'] }));
       }
       return 'Read.';
@@ -1313,6 +1318,9 @@ describe('a submission whose planner turn ends while its skill check runs', () =
       read: async (_signature, answerRead) => ({ status: 'answered', value: await answerRead(), landNow: false }),
       liveOutput: () => null,
       lastAttempt: () => null,
+      taskLogAttempts: () => [],
+      taskLog: () => [],
+      taskDiff: async () => ({ available: false, reason: 'not available' }),
       runCommand: async () => ({ success: true, output: '', truncated: false }),
       fetchUrl: async () => ({ success: true, output: '', truncated: false }),
       webSearch: async () => undefined,
@@ -1380,5 +1388,128 @@ describe('a one-shot coding-agent planner', () => {
     expect(spawned.processes).toHaveLength(2);
     expect(spawned.processes.every((process) => process.killed)).toBe(true);
     expect(spawned.processes.flatMap((process) => process.written).some((line) => JSON.parse(line).type === 'user')).toBe(false);
+  });
+});
+
+describe('saved attempt reads through MCP', () => {
+  interface Page { output: string; nextOffset: number; hasMore: boolean; attempt: number; attempts: number[] }
+
+  async function withLogs(turn: (client: Client) => Promise<void>) {
+    const workspace = mkdtempSync(join(tmpdir(), 'ordewell-attempt-read-'));
+    const { session } = plannerSession(fakeClaude({ turn: async (mcp) => { await turn(mcp!); return 'Read it.'; } }));
+    session.loadPlan({
+      tasks: [createTask({ id: 'a', order: 1, title: 'Setup', assignedRunner: 'claude-code', status: 'failed' })],
+      generatedAt: '2026-10-05T09:00:00Z', lastUpdated: '2026-10-05T09:00:00Z', status: 'approved', runners: ['claude-code'],
+      conversationHistory: [{ role: 'user', content: 'set it up', timestamp: '2026-10-05T09:00:00Z' }],
+    }, 'set it up', workspace, { persist: false });
+    const location = { baseDir: workspace, sessionId: session.sessionId };
+    openTaskLog(location, 'a').append([
+      { type: 'tool_call', id: 'call1', name: 'Bash', args: '{"command":"npm test"}' },
+      { type: 'tool_result', id: 'call1', output: 'failed', success: false },
+      { type: 'error', message: 'first attempt error' },
+      { type: 'text', text: 'first message' },
+      { type: 'approval_requested', approvalId: 'approval1', tool: 'Bash', args: '{}', allowForTask: false },
+      { type: 'usage', record: { source: 'codex', inputTokens: 100, outputTokens: 20 } },
+    ]);
+    openTaskLog(location, 'a').append([
+      { type: 'error', message: 'latest attempt error' },
+      { type: 'text', text: 'start-' + 'x'.repeat(24000) + '-end' },
+    ]);
+    try { await session.continueConversation('read the attempts'); }
+    finally { rmSync(workspace, { recursive: true, force: true }); }
+  }
+
+  it('selects an earlier attempt and filters by event kinds; omitting attempt selects the latest', async () => {
+    const pages: Page[] = [];
+    await withLogs(async (mcp) => {
+      pages.push((await call(mcp, 'task_output', { task: '#1', attempt: 1, kinds: ['tool_call', 'approval_requested', 'usage'] })).body as Page);
+      pages.push((await call(mcp, 'task_output', { task: 'Setup', kinds: ['error'] })).body as Page);
+    });
+    expect(pages[0]).toMatchObject({ attempt: 1, attempts: [1, 2], hasMore: false });
+    expect(pages[0].output).toContain('Bash {"command":"npm test"}');
+    expect(pages[0].output).toContain('approval_requested');
+    expect(pages[0].output).toContain('inputTokens=100');
+    expect(pages[0].output).not.toContain('first message');
+    expect(pages[0].output).not.toContain('tool_result');
+    expect(pages[1]).toMatchObject({ attempt: 2, output: '[1 error] latest attempt error\n' });
+  });
+
+  it('pages the remainder of a long entry instead of permanently discarding it', async () => {
+    const pages: Page[] = [];
+    await withLogs(async (mcp) => {
+      let since = 0;
+      do {
+        const page = (await call(mcp, 'task_output', { task: 'a', attempt: 2, kinds: ['text'], since })).body as Page;
+        pages.push(page);
+        since = page.nextOffset;
+      } while (pages.at(-1)!.hasMore);
+    });
+    expect(pages.length).toBeGreaterThan(1);
+    expect(pages[0].output).toContain(`[truncated; continue with since: ${pages[0].nextOffset}]`);
+    expect(pages.map((p) => p.output.replace(/\n\[truncated; continue with since: \d+\]$/, '')).join('')).toBe('[2 text] start-' + 'x'.repeat(24000) + '-end\n');
+  });
+
+  it('reports missing attempts and shared-run diffs clearly, with no filesystem paths disclosed', async () => {
+    const answers: { isError: boolean; body: unknown }[] = [];
+    await withLogs(async (mcp) => {
+      answers.push(await call(mcp, 'task_output', { task: '#1', attempt: 9 }));
+      answers.push(await call(mcp, 'task_diff', { task: '#1' }));
+      answers.push(await call(mcp, 'task_diff', { task: '#9' }));
+    });
+    expect(answers[0]).toEqual({ isError: true, body: { ok: false, error: 'No saved log for attempt 9.', attempts: [1, 2] } });
+    expect(answers[1]).toMatchObject({ isError: true, body: { error: expect.stringContaining('not available for this run') } });
+    expect(answers[2]).toMatchObject({ isError: true, body: { error: expect.stringContaining('No task matches') } });
+    expect(JSON.stringify(answers)).not.toContain('.ordewell/sessions');
+  });
+});
+
+describe('task_diff through the planner handler', () => {
+  it('pages a kept isolated task file list and single-file patch through MCP', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'ordewell-task-diff-handler-'));
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: workspace, encoding: 'utf8' }).trim();
+    const iso = createWorktreeIsolation({ config: fakeConfig({ worktreeIsolation: true }), resolvePath: async () => process.env.PATH ?? '' });
+    const answers: Array<{ output: string; nextOffset: number; hasMore: boolean }> = [];
+    try {
+      git('init', '-q', '-b', 'main');
+      git('config', 'user.name', 'Test');
+      git('config', 'user.email', 'test@example.com');
+      git('config', 'commit.gpgsign', 'false');
+      writeFileSync(join(workspace, 'a.txt'), 'before\n');
+      git('add', '.');
+      git('commit', '-q', '-m', 'initial');
+      const run = await iso.startRun(workspace);
+      const task = createTask({ id: 'a', order: 1, title: 'Change files', assignedRunner: 'claude-code', status: 'failed' });
+      const { cwd } = await iso.prepare(task, run);
+      writeFileSync(join(cwd, 'a.txt'), 'after\n');
+      writeFileSync(join(cwd, 'b.txt'), 'new\n');
+      await iso.release(run, task.id, { keep: true });
+      const { session } = plannerSession(fakeClaude({ turn: async (mcp) => {
+        answers.push((await call(mcp!, 'task_diff', { task: '#1', lines: 1 })).body as typeof answers[number]);
+        answers.push((await call(mcp!, 'task_diff', { task: '#1', lines: 1, since: answers[0].nextOffset })).body as typeof answers[number]);
+        answers.push((await call(mcp!, 'task_diff', { task: '#1', repo: '.', path: 'a.txt', lines: 3 })).body as typeof answers[number]);
+        answers.push((await call(mcp!, 'task_diff', { task: '#1', repo: '.', path: 'a.txt', lines: 400, since: answers[2].nextOffset })).body as typeof answers[number]);
+        return 'Read it.';
+      } }), {}, { isolation: iso });
+      session.loadPlan({ tasks: [task], generatedAt: '2026-10-05T09:00:00Z', lastUpdated: '2026-10-05T09:00:00Z', status: 'approved', runners: ['claude-code'], isolation: { run, resolvers: {} },
+        conversationHistory: [{ role: 'user', content: 'change files', timestamp: '2026-10-05T09:00:00Z' }],
+      }, 'change files', workspace, { persist: false });
+      await session.continueConversation('inspect the work');
+      expect(answers[0]).toMatchObject({ output: expect.stringContaining('[repo .] a.txt: +1 -1'), hasMore: true });
+      expect(answers[1]).toMatchObject({ output: '[repo .] b.txt: +1 -0\n', hasMore: false });
+      expect(answers[2].hasMore).toBe(true);
+      expect(answers[3]).toMatchObject({ output: expect.stringContaining('+after'), hasMore: false });
+    } finally { rmSync(workspace, { recursive: true, force: true }); }
+  });
+});
+
+describe('a task without saved logs', () => {
+  it('answers a structured log request with an explicit refusal', async () => {
+    let answer: { isError: boolean; body: unknown } | undefined;
+    const { session } = await planThen(async (mcp) => {
+      answer = await call(mcp!, 'task_output', { task: '#1', kinds: ['error'] });
+      return 'There is no log yet.';
+    });
+    await session.continueConversation('read errors');
+    expect(answer).toEqual({ isError: true, body: { ok: false, error: 'No saved task log is available for this task.', attempts: [] } });
   });
 });

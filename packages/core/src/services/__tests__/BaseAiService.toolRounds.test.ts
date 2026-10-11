@@ -242,3 +242,40 @@ describe('tool rounds — an abort reaches the call in flight', () => {
     expect(second.output).toMatch(/stopped/i);
   });
 });
+
+describe('API planner task reads', () => {
+  it('routes task reads to session handlers using the same validation as MCP', async () => {
+    const taskOutput = vi.fn(async () => ({ text: 'saved log' }));
+    const taskDiff = vi.fn(async () => ({ text: 'file patch' }));
+    const taskQuery = vi.fn(async () => ({ text: 'task body' }));
+    const chat = new ScriptedChat([
+      toolTurn([
+        { name: 'task_output', args: { task: '#1', attempt: 2, kinds: ['tool_call'] }, id: '1' },
+        { name: 'task_diff', args: { task: '#1', repo: '.', path: 'file.ts' }, id: '2' },
+        { name: 'task_query', args: { tasks: ['#1'] }, id: '3' },
+        { name: 'task_output', args: { task: '#1', attempt: -1 }, id: '4' },
+      ]),
+      proseTurn('Read it.'),
+    ]);
+    await new TestService(fakeConfig()).runTurn({ ...ctxFor(chat, fakeFileSystem()), plannerReads: { taskOutput, taskDiff, taskQuery } });
+    expect(taskOutput).toHaveBeenCalledOnce();
+    expect(taskOutput.mock.calls[0]).toBeDefined();
+    expect(taskDiff).toHaveBeenCalledOnce();
+    expect(taskQuery).toHaveBeenCalledOnce();
+    expect(chat.toolResultsSent[0].map((r) => r.output)).toEqual(['saved log', 'file patch', 'task body', expect.stringContaining('Invalid task_output arguments')]);
+  });
+
+  it('does not execute task reads after the turn is stopped', async () => {
+    const controller = new AbortController();
+    const taskOutput = vi.fn(async () => { controller.abort(); return { text: 'first' }; });
+    const taskDiff = vi.fn(async () => ({ text: 'patch' }));
+    const chat = new ScriptedChat([
+      toolTurn([{ name: 'task_output', args: { task: '#1' } }, { name: 'task_diff', args: { task: '#1' } }]),
+      proseTurn('stopped'),
+    ]);
+    await new TestService(fakeConfig()).runTurn({ ...ctxFor(chat, fakeFileSystem()), plannerReads: { taskOutput, taskDiff } }, () => {}, controller.signal);
+    expect(taskOutput).toHaveBeenCalledOnce();
+    expect(taskDiff).not.toHaveBeenCalled();
+    expect(chat.toolResultsSent[0][1].output).toContain('Stopped by the user');
+  });
+});

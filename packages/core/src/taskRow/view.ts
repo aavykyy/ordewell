@@ -1,3 +1,4 @@
+import { usageLine, type AttemptUsage, type UsageLine } from '../models/Usage';
 import type { AwaitingReason } from '../models/Task';
 import type { TaskIsolationState } from '../interfaces/IWorktreeIsolation';
 import { taskOrderLabel, taskRef } from '../order-labels';
@@ -24,6 +25,7 @@ export interface TaskRowSubject {
   isolation?: TaskRowIsolation | null;
   mergeGate?: readonly string[];
   forcedPastGate?: readonly string[];
+  attemptUsage?: readonly AttemptUsage[];
 }
 
 export interface TaskRowIsolation {
@@ -49,7 +51,13 @@ export interface TaskRowContext {
 /** Whether the row stands for an AI task, a manual one, or an ops task (ADR-0020). */
 export type TaskRowKind = 'ai' | 'user' | 'ops';
 
+export interface TaskRowUsage extends UsageLine {
+  attempt: number;
+  wallTimeMs?: number;
+}
+
 export interface TaskRowView {
+  usage: TaskRowUsage | null;
   /** "2", or "2.1" for a subtask. */
   orderLabel: string;
   kind: TaskRowKind;
@@ -106,7 +114,9 @@ const filesOf = (files: string[] | undefined): string | null => (files?.length ?
 export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}): TaskRowView {
   const parent = context.parent ?? undefined;
   const isolation = task.isolation && task.isolation.state !== 'none' ? task.isolation : null;
+  const latestUsage = task.attemptUsage?.at(-1);
   return {
+    usage: latestUsage ? { ...usageLine(latestUsage), attempt: latestUsage.attempt, wallTimeMs: latestUsage.wallTimeMs, byModel: latestUsage.byModel } : task.type === 'ai' && ['completed', 'failed', 'in_progress', 'awaiting_user'].includes(task.status) ? { totals: {}, attempt: 0, byModel: [] } : null,
     orderLabel: taskOrderLabel(task, parent),
     kind: task.type === 'user' ? 'user' : task.ops ? 'ops' : 'ai',
     status: taskStatusKind(task),

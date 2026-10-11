@@ -1,5 +1,6 @@
 import { z } from 'zod/v4';
 import { TASK_QUERY_TASK_FIELDS, OUTPUT_LINES_MAX } from '../TaskQuery';
+import { TASK_LOG_KINDS } from '../taskLogRead';
 
 /**
  * The tools of the Ordewell MCP server, per token role (ADR-0022), and the
@@ -104,9 +105,19 @@ const taskQueryInput = z.object({
 }).refine((q) => (q.tasks?.length ?? 0) > 0 || q.catalog === true, { message: 'Name at least one task, or set catalog: true.' });
 
 const taskOutputInput = z.object({
+  attempt: z.number().int().min(1).optional().describe('Read this saved attempt; omit for the latest. Supplying attempt or kinds selects the structured log.'),
+  kinds: z.array(z.enum(TASK_LOG_KINDS)).optional().describe('Only these TaskLogEvent types. Commands appear in tool_call and tool_result; runner messages in text/text_delta.'),
   task: taskRef,
   lines: z.number().int().min(1).optional().describe(`How many lines to return; the default is 80 and anything over ${OUTPUT_LINES_MAX} is cut to ${OUTPUT_LINES_MAX}.`),
   since: z.number().int().min(0).optional().describe("A previous answer's nextOffset: return only what came after it."),
+});
+
+const taskDiffInput = z.object({
+  task: taskRef,
+  repo: z.string().min(1).optional().describe('A repository path from the file list; default is every repo.'),
+  path: z.string().min(1).optional().describe('A literal repo-relative file path from the list. Omit for file change stats.'),
+  lines: z.number().int().min(1).optional().describe('Maximum lines per page (default 80, cap 400).'),
+  since: z.number().int().min(0).optional().describe('A previous nextOffset, in characters of this diff or file list.'),
 });
 
 export type TaskCompleteArgs = z.infer<typeof taskCompleteInput>;
@@ -121,6 +132,7 @@ export type SubmitPlanArgs = z.infer<typeof submitPlanInput>;
 export type EditPlanArgs = z.infer<typeof editPlanInput>;
 export type TaskQueryArgs = z.infer<typeof taskQueryInput>;
 export type TaskOutputArgs = z.infer<typeof taskOutputInput>;
+export type TaskDiffArgs = z.infer<typeof taskDiffInput>;
 
 /** What a handler answers with. `isError` marks a refusal the caller should act on. */
 export interface McpToolReply {
@@ -170,6 +182,7 @@ export interface PlannerToolHandler {
   editPlan?: Run<EditPlanArgs>;
   taskQuery?: Run<TaskQueryArgs>;
   taskOutput?: Run<TaskOutputArgs>;
+  taskDiff?: Run<TaskDiffArgs>;
 }
 
 export interface McpTool<H> {
@@ -234,8 +247,10 @@ export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     editPlanInput, (h) => h.editPlan?.bind(h), PLANNER_READ_ONLY),
   tool('task_query', 'Read the long fields of plan tasks that the plan summary leaves out (prompt, user steps, verdict, output summary, attached skills), and optionally the live runner catalog. Read a task before you rewrite it.',
     taskQueryInput, (h) => h.taskQuery?.bind(h), PLANNER_READ_ONLY),
-  tool('task_output', "Read the recent output of a running task, to check what its runner is doing; paged by offset. A task that is not running answers with its verdict, output summary and a digest of its last attempt.",
+  tool('task_output', "Read the recent output of a running task, to check what its runner is doing; paged by offset. A task that is not running answers with its verdict, output summary and a digest of its last attempt. Supply attempt or kinds to page a saved structured log, latest by default.",
     taskOutputInput, (h) => h.taskOutput?.bind(h), PLANNER_READ_ONLY),
+  tool('task_diff', 'Read what a task changed since it started: file stats with repository paths, or a single file patch with path and repo. Paged by since/nextOffset. Shared runs without recorded changes report not available.',
+    taskDiffInput, (h) => h.taskDiff?.bind(h), PLANNER_READ_ONLY),
   tool('run_command', 'Run a shell command for research: git, gh, az, kubectl, the project\'s own tooling, anything you need to look at. Read-only commands run at once; others ask the user, once per command family; commands that write files are refused. Use it instead of a shell of your own.',
     runCommandInput, (h) => h.runCommand?.bind(h), PLANNER_READ_ONLY),
   // Fallbacks (ADR-0027): a runner's own fetch or search, where it has one, is
@@ -248,3 +263,5 @@ export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
   tool('load_skill', 'Load an Ordewell planner skill by name. Returns its instructions; only model-invocable planner skills can be loaded.',
     loadSkillInput, (h) => h.loadSkill?.bind(h), PLANNER_READ_ONLY),
 ];
+
+export const PLANNER_TASK_READ_TOOLS = PLANNER_TOOLS.filter((t) => ['task_query', 'task_output', 'task_diff'].includes(t.name));

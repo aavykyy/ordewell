@@ -55,6 +55,7 @@ export interface OrchestratorObserver {
   /** A gate's automatic merge settled; failures are attention events for a supervisor. */
   onAutoMerge?(data: { taskId: string; result: IsolationMergeResult }): void;
   onTick?(): void;
+  onUsageChanged?(): void;
   onExecutionComplete?(): void;
   /** The run is parked behind queued user messages, with nothing live, until they are drained. */
   onQueueReady?(): void;
@@ -102,7 +103,7 @@ const CONTROL_WORDS = {
  */
 interface TaskAttempt {
   readonly taskId: string;
-  /** 1-based count of spawns this task has had since the plan was loaded. */
+  /** 1-based count of spawns, continued from the persisted attempt ledgers. */
   readonly attempt: number;
   /**
    * `starting` while the async spawn is in flight; `session` is null until
@@ -1418,7 +1419,7 @@ export class TaskOrchestrator {
     if (this.attempts.has(task.id) || !this.store.get(task.id)) return;
     const attempt: TaskAttempt = {
       taskId: task.id,
-      attempt: (this.spawnCounts.get(task.id) ?? 0) + 1,
+      attempt: Math.max(this.spawnCounts.get(task.id) ?? 0, ...task.attemptUsage?.map((u) => u.attempt) ?? []) + 1,
       phase: 'starting',
       session: null,
       runner: this.store.resolveTaskRunner(task),
@@ -1433,6 +1434,7 @@ export class TaskOrchestrator {
     };
     this.spawnCounts.set(task.id, attempt.attempt);
     this.attempts.set(task.id, attempt);
+    this.store.startAttemptUsage(task.id, attempt.attempt, attempt.runner, attempt.startedAt);
     this.store.markInProgress(task.id);
     this.emit('onTaskChanged');
 
@@ -1527,6 +1529,11 @@ export class TaskOrchestrator {
 
       // Attached before the verifier, so the summary of the call that settles
       // the attempt is captured before its verdict asks for the final text.
+      session.onEvent((event) => {
+        if (event.type !== 'usage' || this.attempts.get(task.id) !== attempt) return;
+        this.store.recordAttemptUsage(task.id, attempt.attempt, event.record, new Date().toISOString());
+        this.emit('onUsageChanged');
+      });
       this.output.attach(task.id, session);
       this.verifier.watch(task, session);
       session.onTurnEnd(() => this.onTurnEnd(task.id, attempt, session));
@@ -1671,7 +1678,10 @@ export class TaskOrchestrator {
   private endAttempt(taskId: string, reason: AttemptEnd): TaskAttempt | undefined {
     const attempt = this.attempts.get(taskId);
     this.attempts.delete(taskId);
-    if (attempt) this.output.detach(taskId);
+    if (attempt) {
+      this.store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString());
+      this.output.detach(taskId);
+    }
     const session = attempt?.session ?? null;
     if (session) this.saveNativeSession(taskId, session.nativeSessionId());
     if (stopsRunner(reason)) {

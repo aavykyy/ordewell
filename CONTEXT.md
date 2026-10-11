@@ -519,7 +519,9 @@ and tail), subagents, usage, turns, the message queue and runner approvals
 `task_log` and appended to `.ordewell/sessions/<session>/tasks/<task>/<attempt>.jsonl`,
 one file per attempt, numbered from what is on disk. `reduceTaskLog` folds the
 same events into display blocks live and on reload, so the two draw alike. The
-file goes with its session. Every task attempt uses this log.
+file goes with its session. Every task attempt uses this log. The planner reads
+a saved attempt with `task_output` (optional `attempt` and event-type `kinds`),
+through bounded text pages and its shared task read budget.
 *Avoid:* "transcript" (the planner conversation's saved record), "output"
 (the lossy plain-text channel `VerdictEngine` reads — nothing that needs
 fidelity reads it), and reading a verdict from the log.
@@ -750,6 +752,20 @@ registry keyed by task let the old attempt's exit unregister the new one.
 *Avoid:* "session" for this concept — the session is the runner's process, one
 field of the attempt. Do not add another per-task map to the orchestrator for
 state that ends with the run; put it on the attempt.
+
+**Attempt usage** (`AttemptUsage`, `Task.attemptUsage`) — the persisted ledger
+of one task attempt: its number, runner, start and end timestamps, wall time,
+and reported usage totals. Reports are grouped by source and the model that
+actually ran; an unreported model stays unknown. Subagent shares are included
+in totals once. The attempt number continues across reloads. A new attempt
+starts a fresh ledger without dropping earlier attempts. Context fill follows
+the latest main-runner model and clears on a switch until the new model reports
+both prompt tokens and its window. `planUsage` sums all task attempts,
+including subtasks, separately from the planner's own ledger. Status updates
+carry both the task ledgers and the plan roll-up; surfaces reuse their planner
+usage formatting. Absent measures mean unknown, never zero or an estimate.
+*Avoid:* attributing a session cost to its last model without a reported
+breakdown; *Avoid:* mixing planner usage into task totals.
 
 **Attempt kind** (`AttemptKind`, `attemptKind.ts`) — what one attempt of a task
 is: `change`, `ops`, `repair` (a *conflict repair*, ADR-0015) or `continuation`
@@ -1004,7 +1020,10 @@ mid-run does not retarget the run.
 isolation: the `IsolationRun` record holding the run id, the repo group (`repos`:
 each repo's path, root, base ref and integration branch; a single repository is
 one repo at `.`), the shared paths, each task's branch, task workspace,
-per-repo worktree and status, and the *landing* in flight, if any. It is plain JSON so it
+per-repo worktree and status, and the *landing* in flight, if any. Each new
+task record keeps the integration tip it started from per repo and the task
+branch tip before landing removes it. `task_diff` compares against that task
+start, so predecessor changes are excluded even after the worktree is gone. It is plain JSON so it
 can persist with the plan state, and a new run mints a new record. Task ids are
 only unique within one plan, so every operation that acts on a task takes the run
 it belongs to.

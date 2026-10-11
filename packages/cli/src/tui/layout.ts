@@ -1,11 +1,11 @@
-import { pad, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
+import { pad, sanitize, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
 import { cursorInLines, type CursorPosition } from './editor';
-import { checkpointCardLines, conversationLines, tokenLine } from './blocks';
+import { checkpointCardLines, conversationLines, taskUsageText, usageMeasures, tokenLine } from './blocks';
 import { chatEditorRoomFor, chatPaneWidth, planPaneWidth } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
 import { findTask, planRows, plannerInFlight, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
 import { modesForTask } from './taskAssignment';
-import { ALL_PROVIDERS, approvalLabel, awaitingLabel, hasHiddenDetail, markAction, runnerForProvider, taskRowView, type AiProvider, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
+import { ALL_PROVIDERS, approvalLabel, awaitingLabel, hasHiddenDetail, markAction, runnerForProvider, taskRowView, planUsage, type AiProvider, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -481,10 +481,9 @@ export interface PlanLayout {
   maxScroll: number;
 }
 
-const FIRST_ROW_LINE = 3;
-
 export function planLayout(state: TuiState, rows: number, cols: number): PlanLayout {
   const done = state.tasks.filter((t) => t.status === 'completed').length;
+  const totalUsage = planUsage(state.tasks);
   const unmerged = state.runMerge?.handoff.landed.length ?? 0;
   const changedMergeSetting = state.status === 'executing' && state.runAutoMerge !== null
     && state.runAutoMerge !== state.mergeAtGatesAutomatically;
@@ -494,8 +493,14 @@ export function planLayout(state: TuiState, rows: number, cols: number): PlanLay
   const lines = [
     style.bold(truncate(`Plan ${done}/${state.tasks.length}${nextRun}`, cols)),
     style.dim(truncate(`G Merge at gates automatically: ${state.mergeAtGatesAutomatically ? 'on' : 'off'}`, cols)),
-    unmerged > 0 ? style.dim(truncate(`${unmerged} landed task${unmerged === 1 ? '' : 's'} not merged — /handoff merge`, cols)) : '',
+    totalUsage.attempts ? style.grey(truncate(`Tasks total: ${taskUsageText(totalUsage)}`, cols)) : '',
   ];
+  if (unmerged > 0) {
+    const hint = style.dim(truncate(`${unmerged} landed task${unmerged === 1 ? '' : 's'} not merged — /handoff merge`, cols));
+    if (totalUsage.attempts) lines.push(hint);
+    else lines[2] = hint;
+  }
+  const firstRowLine = lines.length;
 
   const rowSpans: LineSpan[] = [];
   const orderOf = new Map(state.tasks.map((task) => [task.id, task.order]));
@@ -513,7 +518,7 @@ export function planLayout(state: TuiState, rows: number, cols: number): PlanLay
     rowSpans.push({ start: taskStart, end: lines.length - 1 });
   });
 
-  const selected = rowSpans[state.selectedTask] ?? { start: FIRST_ROW_LINE, end: FIRST_ROW_LINE };
+  const selected = rowSpans[state.selectedTask] ?? { start: firstRowLine, end: firstRowLine };
   const anchor = editorLine === undefined ? selected : { start: editorLine, end: editorLine };
   return { lines, rowSpans, anchor, rows, maxScroll: Math.max(0, lines.length - rows) };
 }
@@ -531,7 +536,7 @@ const clampOffset = (layout: PlanLayout, offset: number): number =>
 export function revealOffset(layout: PlanLayout, offset: number, span: LineSpan): number {
   const at = clampOffset(layout, offset);
   const bodyHeight = layout.rows - 1;
-  const first = span.start <= FIRST_ROW_LINE ? 0 : span.start - 1;
+  const first = span.start <= (layout.rowSpans[0]?.start ?? layout.anchor.start) ? 0 : span.start - 1;
   if (span.start < 1 + at || span.end - span.start + 1 > bodyHeight) return clampOffset(layout, first);
   if (span.end > at + layout.rows - 1) return clampOffset(layout, span.end - layout.rows + 1);
   return at;
@@ -590,7 +595,7 @@ export function planScrollExtent(state: TuiState): PlanLayout {
   // A pane too narrow to show has nothing to scroll; measuring it anyway would
   // wrap every title to a column and invent an offset the user can never see.
   if (cols === 0) {
-    return { lines: [], rowSpans: [], anchor: { start: FIRST_ROW_LINE, end: FIRST_ROW_LINE }, rows: 0, maxScroll: 0 };
+    return { lines: [], rowSpans: [], anchor: { start: 0, end: 0 }, rows: 0, maxScroll: 0 };
   }
   return planLayout(state, bodyRows(state), cols);
 }
@@ -635,7 +640,9 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
     return prefix + (selected ? style.bold(line) : line);
   });
 
-  const model = task.assignedModel?.modelLabel ?? (task.type === 'ai' ? 'default model' : '');
+  const model = row.usage
+    ? [...new Set((row.usage.byModel ?? []).map((m) => sanitize(m.model ?? 'model unknown')))].join(', ') || 'model unknown'
+    : task.assignedModel?.modelLabel ?? (task.type === 'ai' ? 'default model' : '');
   const effort = task.type === 'ai'
     ? `effort: ${task.assignedModel?.thinkingEffort ?? 'default'}`
     : '';
@@ -654,6 +661,10 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   const skills = (task.skills ?? []).join(' · ');
   const meta = [activity, runner, model].filter(Boolean).join(' · ');
   if (meta) lines.push(style.grey(truncate(`${bodyPad}${meta}`, cols)));
+  if (row.usage) lines.push(style.grey(truncate(`${bodyPad}${taskUsageText(row.usage)}`, cols)));
+  if (expanded && row.usage) {
+    for (const model of row.usage.byModel ?? []) lines.push(...wrap(`${bodyPad}${sanitize(model.model ?? 'model unknown')}: ${usageMeasures(model.totals, true).join(' · ')}`, cols).map(style.grey));
+  }
   if (skills) lines.push(style.grey(truncate(`${bodyPad}skills: ${skills}`, cols)));
   if (effort || mode) lines.push(style.grey(truncate(`${bodyPad}${[effort, mode].filter(Boolean).join(' · ')}`, cols)));
   // The one isolation state that needs the user; every other stays out of the
