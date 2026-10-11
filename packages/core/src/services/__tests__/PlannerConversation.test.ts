@@ -124,6 +124,20 @@ describe('PlannerConversation transcript', () => {
     expect(state.persists).toBe(1);
   });
 
+  it('keeps an automatic merge record when undoing a failed planner turn', () => {
+    const { conversation, state } = fakeHost(fakeAi());
+    const snap = conversation.snapshot()!;
+    conversation.append('user', 'unsent');
+    const action = { role: 'assistant' as const, kind: 'system' as const,
+      actor: 'Ordewell setting' as const, content: 'Ordewell setting: auto-merged for task 2',
+      timestamp: '2026-01-01T00:00:03Z' };
+    state.plan!.conversationHistory = [...state.plan!.conversationHistory!, action];
+    conversation.markPersisted({ background: true });
+    expect(conversation.restore(snap)).toBe(true);
+    expect(state.plan!.conversationHistory).toEqual([...snap.history!, action]);
+    expect(state.persists).toBe(1);
+  });
+
   it('restore saves nothing when no save caught the turn', () => {
     const { conversation, state } = fakeHost(fakeAi());
     const snap = conversation.snapshot()!;

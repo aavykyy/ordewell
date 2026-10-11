@@ -58,8 +58,10 @@ than cached or replayed.
 ## Key properties
 
 - **One read contract, two transports (T1).** API planners use the `taskQuery`
-  text envelope taught by `TASK_QUERY_PROTOCOL`. Coding-agent planners use the
-  required `task_query` and `task_output` MCP tools (ADR-0022, ADR-0025). Both
+  text envelope taught by `TASK_QUERY_PROTOCOL`. They also receive
+  `task_query`, `task_output` and `task_diff` as function tools backed by the
+  session handlers. Coding-agent planners use those MCP tools (ADR-0022,
+  ADR-0025). Both
   read the same live state through the same validation and query budget.
 - **Reads are free of the repair budget (T2).** `drainTaskQueries` runs before
   `repairLoop` is entered for the first reply, and is threaded through
@@ -114,16 +116,13 @@ than cached or replayed.
 
 ## Considered options
 
-- **Register `read_task` as a tool call (M1).** Rejected as the transport
-  (T1): only the API-backed planner has a tool loop Ordewell owns. A harness
-  planner (Claude Code, Codex, OpenCode running *as* the planner) brings its
-  own tools and its own loop; Ordewell can hand it appended system-prompt
-  text but not a callable function. Registering a tool for one backend and a
-  text protocol for the other is the fork ADR-0009 was written specifically
-  to avoid.
+- **A separate API-only `read_task` tool (M1).** Rejected: a backend-specific
+  read contract would split what each planner can inspect. Both transports now
+  use `task_query`, `task_output` and `task_diff` with shared handlers and
+  validation; the API text envelope remains on the same budget.
 - **Only text envelopes for coding-agent reads and edits (M2).** Previously
   adopted while MCP injection was absent; rejected now because the injected
-  server provides `task_query`, `task_output`, and validated edits (ADR-0022).
+  server provides `task_query`, `task_output`, `task_diff`, and validated edits (ADR-0022).
   The text read channel serves API planners; coding-agent planners require
   their connected tools (ADR-0025).
 - **Silently coerce an invalid model/mode instead of refusing (M3).**
@@ -164,7 +163,7 @@ than cached or replayed.
 
 ## Live output field
 
-**Amended 2026-09-24.** A query's `fields` may now include `output`: the
+A query's `fields` may include `output`: the
 recent clean-rendered tail of a task that is running right now, answered from
 `TaskOrchestrator.getLiveOutput` (the in-memory capture every runner session
 feeds; the same render the VS Code task card reads). The query carries two
@@ -210,5 +209,40 @@ reads exactly as one in the workspace root, and one whose merge conflicted has
 ended its attempt and is answered like any other task that is not running — a
 pointer to its `outputSummary` and `verdict`, with `[awaiting_user]` in its
 header. The answer does not name the conflict; the user's surfaces do.
+
+## Saved logs and task diffs
+
+`task_output` keeps its live-tail/outcome answer when `attempt` and `kinds`
+are absent. Either option selects the saved structured task log: `attempt`
+names its saved number (default latest), and `kinds` filters by `TaskLogEvent`
+type, including tool calls and results, messages, errors, approvals and usage.
+The answer lists available attempts and renders events as compact text. `since`
+and `nextOffset` are character offsets within that filtered text. Line and
+character caps bound each page; a truncation marker names the next offset,
+including when one event spans several pages. Content already omitted when a
+tool result was saved cannot be recovered.
+
+`task_diff` lists files with change stats and a repository path on every entry.
+`path` reads one literal repo-relative file patch, with optional `repo` selecting
+its repository. File lists and patches use the same bounded pages. An isolated
+task records each repository's starting integration tip and its task branch tip
+before landing removes the branch; comparison uses those commits, or the live
+worktree while it remains. Predecessor and concurrent landing changes therefore
+do not enter the task's diff. Untracked files are included while the worktree
+exists, and linked/shared paths and Ordewell state paths are excluded. Older
+records without a starting commit report the missing evidence. Shared runs
+without task-specific recorded changes report that a diff is not available;
+the workspace's current diff is never attributed to one task.
+
+Both tools use the same handlers and read budget for MCP and API planners.
+These reads disclose captured logs and task-owned git changes, never log file
+paths or an arbitrary filesystem read. Git reads disable external diff,
+textconv, clean/process filters and fsmonitor, and do not update the index.
+ADR-0008's exploration envelope is unchanged.
+
+## History
+
+- 2026-09-24 — live output field added.
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
+- 2026-10-11 — saved attempt log reads and task diffs, paged through the shared read budget on both planner transports.
 - 2026-10-11 — mid-run edits are applied or refused at once, with no queue for a read to wait behind ([ADR-0029](0029-the-supervisor.md)).

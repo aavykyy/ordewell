@@ -19,11 +19,11 @@ import { inboundFor } from './inbound';
  */
 export type OrdewellApi = Pick<ApiClient,
   | 'startConversation' | 'sendConversationMessage' | 'executePlan' | 'stopExecution' | 'cancelPlanning'
-  | 'taskControl' | 'markTaskComplete' | 'markTaskIncomplete'
+  | 'taskControl' | 'markTaskComplete' | 'markTaskIncomplete' | 'cancelResume'
   | 'getTaskLogAttempts' | 'getTaskLog'
   | 'sendTaskMessage' | 'removeQueuedTaskMessage' | 'forceSendTaskMessage' | 'forceSendQueuedTaskMessage'
   | 'interruptTask' | 'approveTaskCheckpoint' | 'rejectTaskCheckpoint' | 'continueTask'
-  | 'addTask' | 'updateTask' | 'removeTask'
+  | 'addTask' | 'updateTask' | 'removeTask' | 'setMergeAtGatesAutomatically'
   | 'getSessions' | 'getSession' | 'adoptSession' | 'deleteSession' | 'closeSession'
   | 'forkConversation' | 'rewindTargets' | 'rewindConversation' | 'compactConversation'
   | 'reviewRunDiff' | 'mergeRun' | 'discardRun' | 'cleanupRun' | 'continueWithStash' | 'continueWithoutIsolation' | 'resolveConflictAsTask'
@@ -211,6 +211,12 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
 
     case 'taskAction': {
       const { sessionId, taskId, action } = effect;
+      if (action === 'cancel-resume') {
+        const { cancelled } = await api.cancelResume(sessionId, taskId);
+        dispatch({ type: 'notice', message: cancelled ? 'Resume cancelled: retry the task once the limit resets.' : 'That task had no resume scheduled.' });
+        await refreshPlan(deps, sessionId);
+        return;
+      }
       const request =
         action === 'cancel' || action === 'retry' || action === 'force-start'
           ? () => api.taskControl(sessionId, taskId, action)
@@ -231,6 +237,11 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       await refreshPlan(deps, effect.sessionId);
       return;
     }
+
+    case 'setAutoMerge':
+      await api.setMergeAtGatesAutomatically(effect.sessionId, effect.enabled);
+      await refreshPlan(deps, effect.sessionId);
+      return;
 
     case 'updateTask':
       await api.updateTask(effect.sessionId, effect.taskId, effect.changes);

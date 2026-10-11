@@ -11,6 +11,10 @@ import type { TaskOp } from './TaskOps';
 import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
 import type { ToolRead } from './PlannerConversation';
 import type { McpToolReply, PlannerToolHandler } from './mcp';
+import type { TaskLogEvent } from '../models/TaskLog';
+import { renderTaskLog } from './taskLogRead';
+import { taskReadPage } from './taskReadPage';
+import type { TaskDiffRead, TaskDiffResult } from './taskDiffRead';
 import type { ToolOutcome } from '../interfaces/IFileSystem';
 
 /**
@@ -39,6 +43,9 @@ export interface PlannerToolsHost {
   liveOutput: LiveOutputLookup;
   /** What a task's newest saved attempt did, or null when it left nothing to report. */
   lastAttempt(taskId: string): string | null;
+  taskLogAttempts(taskId: string): number[];
+  taskLog(taskId: string, attempt: number): TaskLogEvent[];
+  taskDiff(taskId: string, options: TaskDiffRead): Promise<TaskDiffResult>;
   /** The catalog a plan's tasks will see where they run, which attached skill names are checked against. */
   taskSkills(): SkillLookup;
   /** The planner's research shell: classified, confined and approved as the API planner's `bash` is (ADR-0026). */
@@ -167,12 +174,21 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       }));
     },
 
-    async taskOutput({ task: ref, lines, since }) {
-      const task = findTask(host.tasks(), String(ref));
+    async taskOutput({ task: ref, lines, since, attempt, kinds }) {
+      const task = findTask(flattenTasks(host.tasks()), String(ref));
       if (!task) return { isError: true, text: JSON.stringify({ ok: false, error: `No task matches "${ref}" in the current plan.` }) };
       const maxLines = Math.min(lines ?? OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX);
-      return read(host, JSON.stringify(['output', task.id, maxLines, since ?? null]), async () => {
+      return read(host, JSON.stringify(['output', task.id, maxLines, since ?? null, attempt ?? null, kinds ? [...kinds].sort() : null]), async () => {
         const head = { task: { id: task.id, order: task.order, title: task.title, status: task.status } };
+        if (attempt !== undefined || kinds !== undefined) {
+          const attempts = host.taskLogAttempts(task.id);
+          const selected = attempt ?? attempts.at(-1);
+          if (selected === undefined || !attempts.includes(selected)) {
+            return { ok: false, error: selected === undefined ? 'No saved task log is available for this task.' : `No saved log for attempt ${selected}.`, attempts };
+          }
+          const output = renderTaskLog(host.taskLog(task.id, selected), kinds);
+          return { ...head, attempt: selected, attempts, ...taskReadPage(output, { lines: maxLines, since }) };
+        }
         const tail = host.liveOutput(task.id, { maxLines, sinceOffset: since });
         if (tail?.running) {
           const fitted = fitTail(tail.text, OUTPUT_TAIL_MAX_CHARS);
@@ -186,6 +202,16 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
           outputSummary: outputSummaryDetail(task),
           lastAttempt: host.lastAttempt(task.id),
         };
+      });
+    },
+
+    async taskDiff({ task: ref, ...options }) {
+      const task = findTask(flattenTasks(host.tasks()), String(ref));
+      if (!task) return { isError: true, text: JSON.stringify({ ok: false, error: `No task matches "${ref}" in the current plan.` }) };
+      return read(host, JSON.stringify(['diff', task.id, options]), async () => {
+        const result = await host.taskDiff(task.id, options);
+        if (!result.available) return { ok: false, error: result.reason };
+        return { task: { id: task.id, order: task.order, title: task.title, status: task.status }, ...taskReadPage(result.text, options) };
       });
     },
 
@@ -220,7 +246,7 @@ async function read(host: PlannerToolsHost, signature: string, answerRead: () =>
   if (result.status === 'refused') {
     return { isError: true, text: JSON.stringify({ ok: false, error: 'You have used every read this message allows. Nothing was read: answer the user in prose, or call edit_plan for the change you came to make.' }) };
   }
-  return answer({ ...result.value, ...(result.landNow ? { note: TASK_READ_ANSWER_OR_EDIT } : {}) });
+  return { ...answer({ ...result.value, ...(result.landNow ? { note: TASK_READ_ANSWER_OR_EDIT } : {}) }), ...('ok' in result.value && result.value.ok === false ? { isError: true } : {}) };
 }
 
 function verdictDetail(verdict: Verdict | undefined) {
@@ -238,7 +264,7 @@ function outputSummaryDetail({ outputSummary }: Task) {
 
 /** A requested field with nothing in it reads `null`, so a missing answer is never mistaken for a field not asked for. */
 function taskDetail(plan: readonly Task[], ref: string, fields: readonly TaskQueryField[]) {
-  const task = findTask(plan, ref);
+  const task = findTask(flattenTasks(plan), ref);
   if (!task) return { ref, error: 'no task matches this reference in the current plan.' };
   const wants = (field: TaskQueryField) => fields.includes(field);
   return {

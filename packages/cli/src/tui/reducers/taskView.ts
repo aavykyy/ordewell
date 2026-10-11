@@ -1,4 +1,4 @@
-import { EMPTY_TASK_LOG, reduceTaskLog, replayTaskLog, runnerToolSubject, truncateCheckpointSummary, type ApprovalDecision, type TaskLogEvent } from '@ordewell/core';
+import { EMPTY_TASK_LOG, reduceTaskLog, replayTaskLog, resumeLabel, runnerToolSubject, truncateCheckpointSummary, type ApprovalDecision, type TaskLogEvent } from '@ordewell/core';
 import { commit } from '../editor';
 import type { Key } from '../keys';
 import { continuesTask, findTask, waitingApproval, waitingCheckpoint, type TaskLogState, type TuiState } from '../state';
@@ -240,6 +240,9 @@ export function handleTaskViewKey(state: TuiState, key: Key): Step | null {
   if (key.name === 'ctrl-s') return sendNow(state, tv, state.sessionId);
 
   if (key.name === 'ctrl-x') {
+    // Paused on a usage limit there is no turn to interrupt, only a resume to cancel.
+    const task = findTask(state.tasks, tv.taskId);
+    if (task && resumeLabel(task)) return step(state, [{ type: 'taskAction', sessionId: state.sessionId, taskId: tv.taskId, action: 'cancel-resume' }]);
     return step(state, [{ type: 'interruptTask', sessionId: state.sessionId, taskId: tv.taskId }]);
   }
 

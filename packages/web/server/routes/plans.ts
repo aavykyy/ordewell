@@ -21,6 +21,7 @@ import {
   type StopResponse,
   type TaskMessageResponse,
   type CancelPlanningResponse,
+  type CancelResumeResponse,
 } from '@ordewell/core';
 import { OrchestratorPool } from '../pool/orchestratorPool';
 import { failure, refuse } from './errors';
@@ -48,6 +49,19 @@ export function plansRoute(pool: OrchestratorPool) {
       return c.json({ plan: surfacePlanState(plan), models, modelsByRunner, ...(notes.length > 0 ? { notes } : {}) } satisfies GeneratePlanResponse);
     } catch (err) {
       return failure(c, err, 'generate', { message: 'Plan generation failed' });
+    }
+  });
+
+  router.patch('/:sessionId/settings', async (c) => {
+    const body: unknown = await c.req.json();
+    const enabled = typeof body === 'object' && body !== null && 'mergeAtGatesAutomatically' in body
+      ? body.mergeAtGatesAutomatically : undefined;
+    if (typeof enabled !== 'boolean') return c.json({ error: 'mergeAtGatesAutomatically must be a boolean' }, 400);
+    try {
+      pool.session(c.req.param('sessionId')).setMergeAtGatesAutomatically(enabled);
+      return c.json({ ok: true } satisfies OkResponse);
+    } catch (err) {
+      return failure(c, err, 'change merge setting');
     }
   });
 
@@ -88,6 +102,17 @@ export function plansRoute(pool: OrchestratorPool) {
       return c.json({ ok: true } satisfies OkResponse);
     } catch (err) {
       return failure(c, err, 'mark incomplete', { fallback: 404, message: 'Not found' });
+    }
+  });
+
+  // A task paused on a usage limit then waits for a manual retry; `cancelled`
+  // is false when no resume was scheduled for it.
+  router.post('/:sessionId/tasks/:taskId/resume/cancel', (c) => {
+    try {
+      const cancelled = pool.session(c.req.param('sessionId')).cancelScheduledResume(c.req.param('taskId'));
+      return c.json({ cancelled } satisfies CancelResumeResponse);
+    } catch (err) {
+      return failure(c, err, 'cancel resume', { fallback: 404, message: 'Not found' });
     }
   });
 

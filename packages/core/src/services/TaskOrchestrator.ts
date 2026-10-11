@@ -3,7 +3,7 @@ import * as path from 'path';
 import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasksWithParents, taskOrderLabel } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
-import type { IRunner, IRunnerSession, QueuedTaskMessage } from '../interfaces/IRunner';
+import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
 import { summarizeOutput } from './promptAugment';
 import { VerdictEngine } from './VerdictEngine';
 import { BufferedTaskOutputSource } from './BufferedTaskOutputSource';
@@ -20,7 +20,8 @@ import { createWorktreeIsolation } from './GitWorktreeIsolation';
 import { SELF_REPO } from './isolationRecord';
 import { IsolationRunController } from './IsolationRunController';
 import { completesTask, Landing, type LandingMessage, type LandingOutcome, type UnlandedOutcome } from './Landing';
-import { classifyRunnerStop, stopsRunner, type AttemptEnd } from './runnerExit';
+import { classifyRunnerStop, readUsageLimitReset, stopsRunner, type AttemptEnd } from './runnerExit';
+import { UsageLimitWaits } from './UsageLimitWaits';
 import { mergeGate, selectReadyTasks, type Readiness } from './readiness';
 import {
   attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, mergeExcludes, takesSkills,
@@ -33,7 +34,8 @@ import { resolveWorkspaceEnv, type WorkspaceEnv } from './workspaceEnv';
 import { supportsTaskMode } from './harness/connectors';
 import { continuability } from './continuation';
 import { quotedList } from '../utils/quotedList';
-import type { MergeGateView } from './SessionMessage';
+import type { RunMergeView } from './SessionMessage';
+import { resumeTime } from '../taskRow/status';
 
 /**
  * The one notification channel out of the orchestrator. Everything that used
@@ -50,8 +52,19 @@ export interface OrchestratorObserver {
    * save the outcome before any surface is told.
    */
   onTaskSettled?(data: { taskId: string }): void;
+  onRunStarted?(settings: { mergeAtGatesAutomatically: boolean }): void;
+  /** A gate's automatic merge settled; failures are attention events for a supervisor. */
+  onAutoMerge?(data: { taskId: string; result: IsolationMergeResult }): void;
   onTick?(): void;
+  onUsageChanged?(): void;
   onExecutionComplete?(): void;
+  /**
+   * A task paused on its runner's usage limit, or its resume changed:
+   * `resumeAt` is when it resumes on its own (ISO time), null when it waits
+   * for a manual retry — the reset could not be read, the resume was
+   * cancelled, or the resumed attempt hit the limit again at once.
+   */
+  onUsageLimitWait?(data: { taskId: string; runner: string; resumeAt: string | null }): void;
   onReviewNeeded?(data: { tasks: Task[]; planRunners: RunnerId[] }): void;
   onReviewApproved?(data: { tasks: Task[] }): void;
   onCheckpoint?(data: { taskId: string; taskTitle: string; summary: string }): void;
@@ -96,7 +109,7 @@ const CONTROL_WORDS = {
  */
 interface TaskAttempt {
   readonly taskId: string;
-  /** 1-based count of spawns this task has had since the plan was loaded. */
+  /** 1-based count of spawns, continued from the persisted attempt ledgers. */
   readonly attempt: number;
   /**
    * `starting` while the async spawn is in flight; `session` is null until
@@ -126,6 +139,10 @@ interface TaskAttempt {
   decided: boolean;
   /** The task skills put in this attempt's prompt, as read from where it runs. */
   skills: readonly TaskSkillSnapshot[];
+  /** Started by a usage limit's reset rather than by the user or the scheduler; see {@link RELAPSE_MS}. */
+  readonly autoResumed: boolean;
+  /** The runner's own words for why the running turn failed, if it did. */
+  turnError: string | null;
 }
 
 type AttemptPhase = 'starting' | 'running' | 'integrating';
@@ -211,6 +228,10 @@ export class TaskOrchestrator {
   /** Planner turns in flight that new starts wait for (ADR-0029); running attempts carry on. */
   private startHolds = 0;
   private reviewApproved = false;
+  private nextAutoMerge = false;
+  private autoMerge = false;
+  private autoMergeBlocked = false;
+  private mergesInFlight = 0;
   /*
    * Retry counts, spawn counts and holds describe a task across attempts, so
    * they deliberately live outside the attempt record: ending an attempt must
@@ -244,6 +265,8 @@ export class TaskOrchestrator {
    * with no attempt for as long as that takes, and not orphans for it.
    */
   private completing = new Set<string>();
+  /** One wait per runner for its usage limit to reset; the tasks it resumes, and when, are on the plan (#84). */
+  private limitWaits = new UsageLimitWaits((runner) => this.unawaited(this.resumeAfterLimit(runner), `Could not resume the tasks paused on the usage limit of ${runner}`));
 
   /**
    * The plan's isolation run and the open run's lifecycle (ADR-0013); see
@@ -496,7 +519,7 @@ export class TaskOrchestrator {
    * same turn already has it waiting, or a queued message went straight out —
    * the session never passes through idle then, so nothing flickers.
    */
-  private onTurnEnd(taskId: string, attempt: TaskAttempt, session: IRunnerSession): void {
+  private onTurnEnd(taskId: string, attempt: TaskAttempt, session: IRunnerSession, reason: StructuredTurnEnd): void {
     if (this.attempts.get(taskId) !== attempt || attempt.phase !== 'running' || attempt.decided) return;
     if (session.turnState() === 'working') {
       this.emit('onTaskChanged');
@@ -507,6 +530,11 @@ export class TaskOrchestrator {
       // There is no session to wait in. Ending the runner hands the attempt to
       // its verdict, which fails it for want of a `task_complete` call.
       session.kill();
+      return;
+    }
+    if (reason === 'failed' && attempt.turnError !== null && classifyRunnerStop(attempt.turnError) === 'usage-limit') {
+      // The runner is still up, but no turn can run until the limit resets.
+      this.unawaited(this.stopOnLimit(taskId, attempt), `Could not pause task "${this.store.get(taskId)?.title ?? taskId}" on its usage limit`);
       return;
     }
     this.store.markAwaitingUser(taskId, 'input');
@@ -592,17 +620,32 @@ export class TaskOrchestrator {
    * Never alongside ops work, either way round ({@link mergeExcludes}).
    */
   async mergeRun(): Promise<IsolationMergeResult> {
+    return this.mergeForGate();
+  }
+
+  private async mergeForGate(gate?: Readonly<Task>): Promise<IsolationMergeResult> {
     const excluded = [...this.attempts.values()].find((a) => mergeExcludes(a.kind));
     if (excluded) {
       const title = this.store.get(excluded.taskId)?.title ?? excluded.taskId;
       throw new TaskControlError(`Ops task "${title}" is running in your checkout — Merge all once it has finished.`);
     }
+    this.mergesInFlight++;
     this.merging = true;
     let result: IsolationMergeResult;
     try {
       result = await this.runs.merge();
+    } catch (err) {
+      if (!gate) throw err;
+      result = { outcome: 'failed', repo: SELF_REPO };
+      this.tell('error', `Automatic Merge all could not finish: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
-      this.merging = false;
+      this.merging = --this.mergesInFlight > 0;
+    }
+    if (!gate && result.outcome === 'merged') this.autoMergeBlocked = false;
+    if (gate) {
+      this.autoMergeBlocked = result.outcome !== 'merged';
+      this.emit('onAutoMerge', { taskId: gate.id, result });
+      if (this.autoMergeBlocked) this.tell('warn', `Automatic Merge all for task ${gate.order} stopped. The merge gate is waiting for you.`);
     }
     await this.tick();
     return result;
@@ -611,12 +654,13 @@ export class TaskOrchestrator {
   /**
    * The run as a surface offers Merge all mid-run (ADR-0020): what has landed
    * and is not merged, and whether the run is paused at its gates with nothing
-   * else running. Null while no task waits at a gate.
+   * else running. Null once everything landed is merged.
    */
-  mergeGateView(): MergeGateView | null {
+  runMergeView(): RunMergeView | null {
     const handoff = this.runs.view()?.handoff;
-    if (!handoff || !this.store.allTasks.some((t) => this.getMergeGate(t.id).length > 0)) return null;
-    return { paused: this.running && this.attempts.size === 0, repos: handoff.repos, landed: handoff.landed };
+    if (!handoff?.landed.length) return null;
+    const waitingAtGate = this.store.allTasks.some((t) => this.getMergeGate(t.id).length > 0);
+    return { waitingAtGate, paused: waitingAtGate && this.running && this.attempts.size === 0, repos: handoff.repos, landed: handoff.landed };
   }
 
   /**
@@ -643,6 +687,7 @@ export class TaskOrchestrator {
     this.spawnCounts.clear();
     this.onHold.clear();
     this.recoverOrphans();
+    this.rearmLimitWaits();
   }
 
   /**
@@ -686,7 +731,7 @@ export class TaskOrchestrator {
       this.emit('onReviewNeeded', { tasks: this.store.planTasks, planRunners: this.store.planRunners });
       return;
     }
-    this.runs.open();
+    this.openRun();
     console.log(`[TaskOrchestrator] Starting with ${this.store.allTasks.length} tasks (${this.store.allTasks.filter(t => t.type === 'ai' && t.prompt).length} AI ready)`);
     this.running = true;
     this.haltedByFailure = false;
@@ -723,6 +768,8 @@ export class TaskOrchestrator {
     }
     this.runs.interrupt();
     this.onHold.clear();
+    // A stopped run does not start itself again: what waited on a reset waits for the user now.
+    for (const t of this.store.allTasks.filter(waitsForReset)) this.cancelScheduledResume(t.id);
     this.sayStopped(stopped);
     this.recoverOrphans();
     this.emit('onTaskChanged');
@@ -859,13 +906,7 @@ export class TaskOrchestrator {
     } else if (landing) {
       await this.applyLanding(task, landing, () => this.notifications.info(`Task "${task.title}" completed.`));
     } else if (classifyRunnerStop(attempt.session?.getOutput() ?? '') === 'usage-limit') {
-      // No completion call, but what stopped the runner was its account rather than the
-      // work. Failing would paint a red X on a task the user can simply retry,
-      // and spawning more tasks would only spend the same exhausted limit, so
-      // the task pauses and the run holds until the user resumes it.
-      this.store.markAwaitingUser(taskId);
-      this.haltOnFailure();
-      this.tell('warn', `Task "${task.title}" stopped before it reported completion: ${attempt.runner} hit its usage limit. Retry it once the limit resets${attempt.worktree ? ' — its worktree is kept' : ''}.`);
+      this.pauseOnLimit(task, attempt, attempt.session?.getOutput() ?? '');
       if (attempt.worktree) await this.runs.release(taskId, { keep: true });
     } else {
       this.store.markFailed(taskId);
@@ -988,13 +1029,26 @@ export class TaskOrchestrator {
     return readiness;
   }
 
+  setMergeAtGatesAutomatically(enabled: boolean): void {
+    this.nextAutoMerge = enabled;
+  }
+
+  private openRun(): void {
+    if (!this.runs.isOpen) {
+      this.autoMerge = this.nextAutoMerge;
+      this.autoMergeBlocked = false;
+      this.emit('onRunStarted', { mergeAtGatesAutomatically: this.autoMerge });
+    }
+    this.runs.open();
+  }
+
   /**
    * Open the run a task starts in, and decide whether it isolates if the
    * task's next attempt needs that ({@link decidesIsolation}). False while a
    * dirty tree waits on the user; `resume` is what their choice replays.
    */
   private async openFor(taskId: string, resume: () => Promise<void>): Promise<boolean> {
-    this.runs.open();
+    this.openRun();
     return !decidesIsolation(this.nextAttemptKind(taskId)) || this.runs.decide(resume);
   }
 
@@ -1172,6 +1226,125 @@ export class TaskOrchestrator {
   }
 
   /**
+   * Keep a task paused on its runner's usage limit from resuming on its own:
+   * it waits for a manual retry, as one whose reset time could not be read
+   * does. What a surface's cancel calls, and what moving the task to another
+   * runner has to call first. False when no resume was scheduled for it.
+   */
+  cancelScheduledResume(taskId: string): boolean {
+    const task = this.store.get(taskId);
+    if (!task || !waitsForReset(task)) return false;
+    const runner = this.store.resolveTaskRunner(task);
+    this.store.setTaskResumeAt(taskId, undefined);
+    if (this.waitingOn(runner).length === 0) this.limitWaits.disarm(runner);
+    this.emit('onUsageLimitWait', { taskId, runner, resumeAt: null });
+    this.emit('onTaskChanged');
+    return true;
+  }
+
+  /**
+   * A task's attempt stopped on its runner's usage limit, without a
+   * completion call. Failing would paint a red X on a task that only has to
+   * wait, and spawning more tasks would spend the same exhausted limit, so the
+   * task pauses and the run holds. When the runner said when its limit
+   * resets, the task joins its runner's wait and resumes on its own then
+   * (#84); otherwise, or when it was resumed a moment ago and hit the limit
+   * again, it waits for the user to retry it.
+   */
+  private pauseOnLimit(task: Readonly<Task>, attempt: TaskAttempt, said: string): void {
+    this.store.markAwaitingUser(task.id, 'usage-limit');
+    this.haltOnFailure();
+    const kept = attempt.worktree ? ' — its worktree is kept' : '';
+    const reset = readUsageLimitReset(attempt.runner, said);
+    const relapsed = attempt.autoResumed && Date.now() - Date.parse(attempt.startedAt) < RELAPSE_MS;
+    if (!reset || relapsed) {
+      const why = relapsed
+        ? 'hit its usage limit again right after it was resumed, so it is not resumed on its own again'
+        : 'hit its usage limit';
+      this.tell('warn', `Task "${task.title}" stopped before it reported completion: ${attempt.runner} ${why}. Retry it once the limit resets${kept}.`);
+      this.emit('onUsageLimitWait', { taskId: task.id, runner: attempt.runner, resumeAt: null });
+      return;
+    }
+    this.store.setTaskResumeAt(task.id, new Date(reset.getTime() + RESUME_MARGIN_MS).toISOString());
+    const resumeAt = this.armLimitWait(attempt.runner);
+    this.tell('info', `Task "${task.title}" paused: ${attempt.runner} hit its usage limit. It resumes on its own at ${resumeTime(resumeAt)}${kept}.`);
+    this.emit('onUsageLimitWait', { taskId: task.id, runner: attempt.runner, resumeAt: resumeAt.toISOString() });
+  }
+
+  /**
+   * The limit arrived as the turn's error with the runner still up: the
+   * attempt ends here, as its verdict would have ended it, so a resume is a
+   * continue in a fresh process (ADR-0018, L1/K1).
+   */
+  private async stopOnLimit(taskId: string, attempt: TaskAttempt): Promise<void> {
+    const task = this.store.get(taskId);
+    if (!task) return;
+    attempt.decided = true;
+    const summary = this.output.finalText(taskId);
+    this.endAttempt(taskId, 'usage-limit');
+    this.pauseOnLimit(task, attempt, attempt.turnError ?? '');
+    this.store.setTaskOutputSummary(taskId, summarizeOutput(attempt.turnError ?? `${attempt.runner} hit its usage limit`, summary));
+    if (attempt.worktree) await this.runs.release(taskId, { keep: true });
+    await this.afterVerdict(taskId);
+  }
+
+  /** The tasks waiting on `runner`'s reset to resume on their own. */
+  private waitingOn(runner: string): Readonly<Task>[] {
+    return this.store.allTasks.filter((t) => waitsForReset(t) && this.store.resolveTaskRunner(t) === runner);
+  }
+
+  /**
+   * Arm `runner`'s one wait for the latest resume time among its tasks, and
+   * put that time on each of them, so they resume together.
+   */
+  private armLimitWait(runner: string): Date {
+    const latest = Math.max(...this.waitingOn(runner).map((t) => Date.parse(t.resumeAt ?? '')));
+    const at = this.limitWaits.arm(runner, new Date(latest));
+    for (const t of this.waitingOn(runner)) this.store.setTaskResumeAt(t.id, at.toISOString());
+    return at;
+  }
+
+  /**
+   * The waits a loaded plan still owes. A resume time that passed while
+   * nothing was running — the daemon was down, say — resumes at once.
+   */
+  private rearmLimitWaits(): void {
+    this.limitWaits.clear();
+    for (const t of this.store.allTasks.filter(waitsForReset)) {
+      if (Number.isNaN(Date.parse(t.resumeAt ?? ''))) this.store.setTaskResumeAt(t.id, undefined);
+    }
+    const runners = new Set(this.store.allTasks.filter(waitsForReset).map((t) => this.store.resolveTaskRunner(t)));
+    for (const runner of runners) this.armLimitWait(runner);
+  }
+
+  private async resumeAfterLimit(runner: string): Promise<void> {
+    const due = this.waitingOn(runner);
+    if (due.length === 0) return;
+    this.tell('info', `The usage limit of ${runner} has reset: resuming ${quotedList(due.map((t) => t.title))}.`);
+    await Promise.all(due.map((t) => this.resumeTask(t.id)));
+  }
+
+  /**
+   * Retry a task paused on a usage limit, continuing its saved session where
+   * it left one (ADR-0018, K1), then release the hold the pause put on the
+   * run — once nothing else waits on a reset, and never past a failure, which
+   * waits for the user.
+   */
+  private async resumeTask(taskId: string): Promise<void> {
+    if (!(await this.openFor(taskId, () => this.resumeTask(taskId)))) return;
+    const task = this.store.get(taskId);
+    if (!task || !waitsForReset(task) || this.attempts.has(taskId)) return;
+    const resumeSessionId = task.runnerSessionId;
+    this.retryCounts.set(taskId, (this.retryCounts.get(taskId) ?? 0) + 1);
+    this.store.retry(taskId);
+    this.onHold.delete(taskId);
+    const continuation = resumeSessionId ? { message: LIMIT_RESET_MESSAGE, resumeSessionId } : null;
+    const started = this.startTask(task, continuation, { autoResumed: true });
+    if (this.haltedByFailure && !this.running && !this.store.isAnyFailed() && !this.store.allTasks.some(waitsForReset)) await this.start();
+    await started;
+  }
+
+  /**
    * Manually start a single AI task right now, bypassing dependency/readiness
    * gating (the "force start" affordance on a task card). Reuses the scheduler's
    * own startTask so a force-started task gets the same augmented prompt, session
@@ -1261,7 +1434,23 @@ export class TaskOrchestrator {
     // Work merged by hand opens a gate as Merge all does; only git can tell.
     // A user task's gate counts too, though the scheduler never starts one.
     const atGate = readiness.gated.length > 0 || this.store.allTasks.some((t) => t.type === 'user' && this.getMergeGate(t.id).length > 0);
-    if (atGate && (await this.runs.refreshInHead())) readiness = this.readiness();
+    if (atGate && (await this.runs.refreshInHead())) {
+      this.autoMergeBlocked = false;
+      readiness = this.readiness();
+    }
+    if (!this.running) return;
+    if (this.autoMerge && !this.autoMergeBlocked && !this.merging
+      && ![...this.attempts.values()].some((a) => mergeExcludes(a.kind))) {
+      const gate = this.store.allTasks.find((t) => this.getMergeGate(t.id).length > 0
+        && !this.onHold.has(t.id) && t.dependencies.every((id) => this.store.isCompleted(id)));
+      if (gate) {
+        // Another landing must not repeatedly attempt a merge the user now
+        // needs to resolve. A user merge or a new run releases this hold.
+        this.autoMergeBlocked = true;
+        await this.mergeForGate(gate);
+        readiness = this.readiness();
+      }
+    }
     if (!this.running) return;
     const { ready } = readiness;
     console.log(`[TaskOrchestrator] tick(): ${ready.length} ready, ${this.attempts.size} active, held=${this.startHolds}`);
@@ -1347,11 +1536,11 @@ export class TaskOrchestrator {
     if (notice) this.tell('info', notice);
   }
 
-  private async startTask(task: Task, continuation: Continuation | null = null): Promise<void> {
+  private async startTask(task: Task, continuation: Continuation | null = null, opts: { autoResumed?: boolean } = {}): Promise<void> {
     if (this.attempts.has(task.id) || !this.store.get(task.id)) return;
     const attempt: TaskAttempt = {
       taskId: task.id,
-      attempt: (this.spawnCounts.get(task.id) ?? 0) + 1,
+      attempt: Math.max(this.spawnCounts.get(task.id) ?? 0, ...task.attemptUsage?.map((u) => u.attempt) ?? []) + 1,
       phase: 'starting',
       session: null,
       runner: this.store.resolveTaskRunner(task),
@@ -1363,9 +1552,12 @@ export class TaskOrchestrator {
       startedAt: new Date().toISOString(),
       decided: false,
       skills: [],
+      autoResumed: opts.autoResumed === true,
+      turnError: null,
     };
     this.spawnCounts.set(task.id, attempt.attempt);
     this.attempts.set(task.id, attempt);
+    this.store.startAttemptUsage(task.id, attempt.attempt, attempt.runner, attempt.startedAt);
     this.store.markInProgress(task.id);
     this.emit('onTaskChanged');
 
@@ -1460,9 +1652,18 @@ export class TaskOrchestrator {
 
       // Attached before the verifier, so the summary of the call that settles
       // the attempt is captured before its verdict asks for the final text.
+      session.onEvent((event) => {
+        if (event.type !== 'usage' || this.attempts.get(task.id) !== attempt) return;
+        this.store.recordAttemptUsage(task.id, attempt.attempt, event.record, new Date().toISOString());
+        this.emit('onUsageChanged');
+      });
       this.output.attach(task.id, session);
       this.verifier.watch(task, session);
-      session.onTurnEnd(() => this.onTurnEnd(task.id, attempt, session));
+      session.onEvent((event) => {
+        if (event.type === 'turn_start') attempt.turnError = null;
+        else if (event.type === 'error') attempt.turnError = event.message;
+      });
+      session.onTurnEnd((reason) => this.onTurnEnd(task.id, attempt, session, reason));
       return true;
     } catch (err) {
       if (this.attempts.get(task.id) !== attempt) {
@@ -1604,7 +1805,10 @@ export class TaskOrchestrator {
   private endAttempt(taskId: string, reason: AttemptEnd): TaskAttempt | undefined {
     const attempt = this.attempts.get(taskId);
     this.attempts.delete(taskId);
-    if (attempt) this.output.detach(taskId);
+    if (attempt) {
+      this.store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString());
+      this.output.detach(taskId);
+    }
     const session = attempt?.session ?? null;
     if (session) this.saveNativeSession(taskId, session.nativeSessionId());
     if (stopsRunner(reason)) {
@@ -1627,6 +1831,24 @@ export class TaskOrchestrator {
     if (reason === 'load') this.output.reset();
     return ended;
   }
+}
+
+/** How long after its limit resets a task resumes: the runner's clock and ours need not agree to the second. */
+const RESUME_MARGIN_MS = 60_000;
+
+/** A resumed attempt that hits the limit again within this did not get past the reset, so it is not resumed again. */
+const RELAPSE_MS = 5 * 60_000;
+
+/**
+ * The turn a resumed session is continued with. In an isolated run the
+ * continue starts from the integration tip (K1), so what the paused attempt
+ * left uncommitted is on its kept branch, not in the new worktree.
+ */
+const LIMIT_RESET_MESSAGE = 'Your usage limit has reset. Carry on with the task from where you stopped. Check the working tree first: changes you had not committed may not be in it.';
+
+/** A task paused on a usage limit that resumes on its own. */
+function waitsForReset(task: Readonly<Task>): boolean {
+  return task.status === 'awaiting_user' && task.awaitingReason === 'usage-limit' && !!task.resumeAt;
 }
 
 /** How much of an ops task's last attempt the next one is shown. */

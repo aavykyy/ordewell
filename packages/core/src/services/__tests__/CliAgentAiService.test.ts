@@ -1727,7 +1727,8 @@ describe('CliAgentAiService — Claude Code partial messages, usage and subagent
     expect(usageRecords(events)).toEqual([
       { source: 'claude-code', model: 'claude-sonnet-5', inputTokens: 18604, cachedInputTokens: 9428, outputTokens: 162 },
       { source: 'claude-code', model: 'claude-sonnet-5', inputTokens: 20025, cachedInputTokens: 18602, outputTokens: 14 },
-      { source: 'claude-code', reportedCost: { amount: 0.049754, currency: 'USD' }, contextWindow: 1000000 },
+      { source: 'claude-code', model: 'claude-sonnet-5', aggregate: true, reportedCost: { amount: 0.049754, currency: 'USD' } },
+      { source: 'claude-code', model: 'claude-sonnet-5', contextWindow: 1000000 },
     ]);
     const usage = usageRecords(events).reduce(addPlannerUsage, { totals: {} });
     expect(usage.totals).toEqual({
@@ -1768,6 +1769,28 @@ describe('CliAgentAiService — Claude Code partial messages, usage and subagent
     expect(costs(first.events)[0]).toBeCloseTo(0.075482, 10);
     expect(costs(second.events)).toHaveLength(1);
     expect(costs(second.events)[0]).toBeCloseTo(0.0111424, 10);
+  });
+
+  it('attributes cumulative costs to the models in the runner report across a switch', async () => {
+    const turn = (model: string, input: number, modelUsage: Record<string, { costUSD: number; contextWindow: number }>, total: number) => [
+      { type: 'stream_event', event: { type: 'message_start', message: { model } } },
+      { type: 'stream_event', event: { type: 'message_delta', usage: { input_tokens: input, output_tokens: 1 } } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Done.' }] } },
+      { type: 'result', subtype: 'success', total_cost_usd: total, modelUsage },
+    ].map((line) => `${JSON.stringify(line)}\n`).join('');
+    const { svc } = service('claude-code', [
+      turn('a', 80, { a: { costUSD: 1, contextWindow: 100 } }, 1),
+      turn('b', 10, { a: { costUSD: 1, contextWindow: 100 }, b: { costUSD: 2, contextWindow: 200 } }, 3),
+    ]);
+    const first = collector();
+    await svc.startConversation(request({ onProgress: first.onProgress }));
+    const second = collector();
+    await svc.continueConversation('Use b', second.onProgress);
+    const usage = [...usageRecords(first.events), ...usageRecords(second.events)].reduce(addPlannerUsage, { totals: {} });
+    expect(usage.byModel?.find((m) => m.model === 'a')?.totals.reportedCost).toEqual({ USD: 1 });
+    expect(usage.byModel?.find((m) => m.model === 'b')?.totals.reportedCost).toEqual({ USD: 2 });
+    expect(usage.totals.reportedCost).toEqual({ USD: 3 });
+    expect(plannerContextFill(usage)).toEqual({ usedTokens: 10, windowTokens: 200 });
   });
 
   // A resumed session restores its running total (recorded: 0.0943048 on the

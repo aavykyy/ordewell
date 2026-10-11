@@ -20,6 +20,7 @@ describe('what a task log header says (ADR-0018, V1)', () => {
     ['input', 'waiting', 'Waiting for your input'],
     ['checkpoint', 'checkpoint', 'Waiting at a checkpoint'],
     ['conflict', 'waiting', 'Waiting on a merge conflict'],
+    ['usage-limit', 'waiting', 'Paused on a usage limit'],
   ] as const)('a task waiting on %s is shown as %s', (awaitingReason, kind, label) => {
     expect(taskLogState(status({ awaitingReason }))).toMatchObject({ kind, label });
   });

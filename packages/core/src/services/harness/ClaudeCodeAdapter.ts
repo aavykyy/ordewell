@@ -188,7 +188,7 @@ interface ClaudeLine {
   tool_use_result?: unknown;
   /** Cumulative over the whole agent session — including turns before a `--resume`. */
   total_cost_usd?: number;
-  modelUsage?: Record<string, { contextWindow?: number }>;
+  modelUsage?: Record<string, { contextWindow?: number; costUSD?: number }>;
   /** `background_tasks_changed`: every background task still running, not just the change. */
   tasks?: unknown[];
   /** `task_notification`: which `Agent` call finished, how, and what it reported. */
@@ -291,6 +291,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * already counted of it is not ours to know here.
    */
   private reportedCostUsd: number | undefined = 0;
+  private reportedModelCostUsd = new Map<string, number>();
   /**
    * Subagents started and not yet finished, keyed by the `Agent` call's id.
    * Kept across turns: a backgrounded one reports after its turn has ended.
@@ -783,16 +784,23 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * cannot be told apart from them.
    */
   private reportSessionCost(msg: ClaudeLine, emit: (event: AgentEvent) => void): void {
-    const record: UsageRecord = { source: 'claude-code' };
     const total = msg.total_cost_usd;
-    if (typeof total === 'number') {
-      if (this.reportedCostUsd !== undefined && total > this.reportedCostUsd) {
-        record.reportedCost = { amount: total - this.reportedCostUsd, currency: 'USD' };
+    const canReport = this.reportedCostUsd !== undefined;
+    const modelCosts = Object.entries(msg.modelUsage ?? {}).filter((entry): entry is [string, { contextWindow?: number; costUSD: number }] => typeof entry[1].costUSD === 'number');
+    if (modelCosts.length > 0) {
+      for (const [model, usage] of modelCosts) {
+        const previous = this.reportedModelCostUsd.get(model) ?? 0;
+        const amount = usage.costUSD - previous;
+        if (canReport && amount >= 0) emit({ type: 'usage', record: { source: 'claude-code', model, aggregate: true, reportedCost: { amount, currency: 'USD' } } });
+        this.reportedModelCostUsd.set(model, usage.costUSD);
       }
-      this.reportedCostUsd = total;
+    } else if (typeof total === 'number' && canReport && total >= this.reportedCostUsd!) {
+      // Without the model breakdown, a session total cannot be attributed to
+      // the last model: it also includes earlier models and subagents.
+      emit({ type: 'usage', record: { source: 'claude-code', aggregate: true, reportedCost: { amount: total - this.reportedCostUsd!, currency: 'USD' } } });
     }
+    if (typeof total === 'number') this.reportedCostUsd = total;
     const contextWindow = this.plannerModel ? msg.modelUsage?.[this.plannerModel]?.contextWindow : undefined;
-    if (contextWindow !== undefined) record.contextWindow = contextWindow;
-    if (record.reportedCost || record.contextWindow !== undefined) emit({ type: 'usage', record });
+    if (contextWindow !== undefined) emit({ type: 'usage', record: { source: 'claude-code', model: this.plannerModel, contextWindow } });
   }
 }

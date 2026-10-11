@@ -2,6 +2,7 @@ import {
   diffRows, diffSummary, loadedSkillTokens, outputLines, outputPreview,
   type DiffRow, type DiffStat,
   type ApprovalBlock, type ApprovalKind, type ApprovalSource, type DisplayBlock, type MessageBlock, type MessageRole, type PlanBlock,
+  type UsageLine, type UsageTotals,
   type SkillLoadBlock, type SubagentBlock, type SubagentStatus, type ThinkingDisplayBlock, type ToolBlock,
 } from '@ordewell/core';
 import { sanitize, style, truncate, width, wrap, wrapLines } from './ansi';
@@ -437,12 +438,26 @@ function formatCost(currency: string, amount: number): string {
 export function tokenLine(blocks: readonly DisplayBlock[], cols: number): string | null {
   const usage = blocks[blocks.length - 1];
   if (usage?.type !== 'usage') return null;
-  const { totals, contextFill } = usage;
-  const parts = [
-    ...(totals.inputTokens !== undefined ? [`${compactCount(totals.inputTokens)} in`] : []),
-    ...(totals.outputTokens !== undefined ? [`${compactCount(totals.outputTokens)} out`] : []),
-    ...(contextFill ? [`${Math.round((contextFill.usedTokens / contextFill.windowTokens) * 100)}% ctx`] : []),
-    ...Object.entries(totals.reportedCost ?? {}).map(([currency, amount]) => formatCost(currency, amount)),
-  ];
+  const parts = usageMeasures(usage.totals, false);
+  if (usage.model && !usage.contextFill) parts.push('ctx unknown');
+  if (usage.contextFill) parts.splice(2, 0, `${Math.round((usage.contextFill.usedTokens / usage.contextFill.windowTokens) * 100)}% ctx`);
   return parts.length > 0 ? style.grey(truncate(parts.join(' · '), cols)) : null;
+}
+
+export function usageMeasures(totals: UsageTotals, unknown: boolean): string[] {
+  return [
+    ...(totals.inputTokens !== undefined ? [`${compactCount(totals.inputTokens)} in`] : unknown ? ['unknown in'] : []),
+    ...(totals.outputTokens !== undefined ? [`${compactCount(totals.outputTokens)} out`] : unknown ? ['unknown out'] : []),
+    ...(totals.cachedInputTokens !== undefined ? [`${compactCount(totals.cachedInputTokens)} cached`] : []),
+    ...Object.entries(totals.reportedCost ?? {}).map(([currency, amount]) => formatCost(currency, amount)),
+    ...(unknown && !Object.keys(totals.reportedCost ?? {}).length ? ['cost unknown'] : []),
+  ];
+}
+
+export function taskUsageText(usage: UsageLine & { wallTimeMs?: number; attempt?: number }): string {
+  return [
+    ...usageMeasures(usage.totals, true),
+    ...(usage.attempt !== undefined ? [usage.contextFill ? `${Math.round((usage.contextFill.usedTokens / usage.contextFill.windowTokens) * 100)}% ctx` : 'ctx unknown'] : []),
+    usage.wallTimeMs !== undefined ? `${Math.floor(usage.wallTimeMs / 1000)}s` : 'time unknown',
+  ].join(' · ');
 }

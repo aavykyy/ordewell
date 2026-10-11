@@ -121,7 +121,7 @@ export type {
   SessionNotice,
   SerializedTask,
   SerializedTaskStatus,
-  MergeGateView,
+  RunMergeView,
   SerializedPlan,
   SerializedConversationMessage,
   SerializedPendingTurn,

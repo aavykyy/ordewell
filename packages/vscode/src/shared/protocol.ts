@@ -1,5 +1,5 @@
 import type {
-  AiProvider, DisplayBlock, DiscoveredModel, IsolationHandoff, IsolationMergeResult, MergeGateView, PromptHold, RunnerId, SurfacePlan,
+  AiProvider, DisplayBlock, DiscoveredModel, IsolationHandoff, IsolationMergeResult, RunMergeView, PromptHold, RunnerId, SurfacePlan,
   TaskIsolation, TaskModelAssignment,
 } from '@ordewell/core';
 
@@ -45,7 +45,7 @@ export interface ModelOption {
 
 export type ChatState = 'empty' | 'researching' | 'planDraft' | 'approved' | 'error';
 
-export type SystemCommand = 'cancel' | 'skip' | 'retry' | 'forceStart' | 'runTask' | 'markComplete' | 'markIncomplete' | 'stopExecution' | 'executePlan';
+export type SystemCommand = 'cancel' | 'cancelResume' | 'skip' | 'retry' | 'forceStart' | 'runTask' | 'markComplete' | 'markIncomplete' | 'stopExecution' | 'executePlan';
 
 /**
  * One field edit from a task card. Named by kind rather than read off which
@@ -139,6 +139,7 @@ export type WebviewToHost =
   | { type: 'openTaskLog'; taskId: string }
   /** The plan dock's dragged height in px, saved on release so every later session opens at it. */
   | { type: 'setPlanDockHeight'; height: number }
+  | { type: 'setAutoMerge'; enabled: boolean }
   /** Who plans (ADR-0009) — a vendor provider id or one of the harness planners. */
   | { type: 'setPlanner'; provider: string }
   /** The planner's own model and thinking effort, a pair so neither can outlive the other. */
@@ -197,7 +198,7 @@ export type HostToWebview =
   | { type: 'isolationCleared' }
   // Merge gates (ADR-0020): which tasks wait for Merge all, on which
   // dependencies, and — while any does — what Merge all would merge now.
-  | { type: 'mergeGate'; gate: MergeGateView | null; tasks: Record<string, string[]> }
+  | { type: 'runMerge'; runMerge: RunMergeView | null; tasks: Record<string, string[]> }
   /**
    * A session was (re)loaded: the webview drops the previous session's plan,
    * task output, isolation and any stuck busy state. The conversation itself

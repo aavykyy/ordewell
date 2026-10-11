@@ -1,17 +1,19 @@
 import type { AiProvider, ApprovalDecision, AwaitingReason, PlannerUsage, ResearchLogEntry, SerializedConversationMessage, SessionMessage, SettingsResponse, TaskLogEvent } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
-  GateView, HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
+  RunMergeView, HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
   TaskIsolationView, TuiState,
 } from '../state';
 import { say } from '../transcript';
 
 /** One task's entry in a daemon `status_update`, as the TUI keeps it. */
 export interface TaskStatusUpdate {
+  attemptUsage?: import('@ordewell/core').AttemptUsage[];
   status: string;
   idleSince?: string | null;
   isolation?: TaskIsolationView;
   awaitingReason?: AwaitingReason;
+  resumeAt?: string;
   checkpoint?: string;
   continuable?: boolean;
   awaitingApproval?: number;
@@ -48,7 +50,7 @@ export type Effect =
   | { type: 'compactConversation'; sessionId: string }
   | { type: 'isolationReviewDiff'; sessionId: string }
   /** `branch` is only for the words the result is reported in; `repaired` likewise (ADR-0015). */
-  /** `midRun`: merged at a merge gate (ADR-0020), so the run and its record stay. */
+  /** `midRun`: the run and its record stay for later landings (ADR-0020). */
   | { type: 'isolationMerge'; sessionId: string; branch: string; group?: boolean; repaired?: LandedTaskView[]; midRun?: boolean }
   | { type: 'isolationDiscard'; sessionId: string; branch: string }
   | { type: 'isolationCleanup'; sessionId: string; branch: string }
@@ -65,6 +67,7 @@ export type Effect =
   /** `watch` asks the runtime to hold the execution stream open for this action — see `taskActionEffect`. */
   | { type: 'taskAction'; sessionId: string; taskId: string; action: TaskAction; watch?: boolean }
   | { type: 'addTask'; sessionId: string; title: string }
+  | { type: 'setAutoMerge'; sessionId: string; enabled: boolean }
   | { type: 'updateTask'; sessionId: string; taskId: string; changes: Record<string, unknown>; message: string }
   | { type: 'removeTask'; sessionId: string; taskId: string }
   /** Reads a structured task's saved log (ADR-0018, P1) so its view opens with its history. */
@@ -91,7 +94,7 @@ export type Effect =
   | { type: 'refresh'; announce?: boolean }
   | { type: 'exit' };
 
-export type TaskAction = 'complete' | 'uncomplete' | 'skip' | 'retry' | 'cancel' | 'force-start';
+export type TaskAction = 'complete' | 'uncomplete' | 'skip' | 'retry' | 'cancel' | 'force-start' | 'cancel-resume';
 
 export type Action =
   | { type: 'key'; key: Key }
@@ -112,7 +115,7 @@ export type Action =
   /** A task asked a checkpoint question; the chat pane says so, and where to answer. */
   | { type: 'taskCheckpoint'; taskId: string; title: string; summary: string; sessionId?: string }
   | { type: 'taskStatus'; taskId: string; status: string; sessionId?: string }
-  | { type: 'tasksStatus'; updates: Record<string, TaskStatusUpdate>; gate?: GateView | null; sessionId?: string }
+  | { type: 'tasksStatus'; updates: Record<string, TaskStatusUpdate>; runMerge?: RunMergeView | null; sessionId?: string }
   | { type: 'isolationBlocked'; message: string; repos?: string[]; sessionId?: string }
   | { type: 'isolationHandoff'; handoff: HandoffView; sessionId?: string }
   | { type: 'handoffDiff'; diff: string; sessionId?: string }

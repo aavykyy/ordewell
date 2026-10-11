@@ -343,16 +343,17 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
           idleSince: task.idleSince ?? null,
           isolation: task.isolation,
           awaitingReason: isAwaitingReason(task.awaitingReason) ? task.awaitingReason : undefined,
+          ...(typeof task.resumeAt === 'string' ? { resumeAt: task.resumeAt } : {}),
           ...(typeof task.checkpoint === 'string' && task.checkpoint ? { checkpoint: sanitize(task.checkpoint) } : {}),
           ...(task.continuable ? { continuable: true } : {}),
           awaitingApproval: typeof task.awaitingApproval === 'number' && task.awaitingApproval > 0 ? task.awaitingApproval : undefined,
           ...(task.mergeGate?.length ? { mergeGate: task.mergeGate.map(String) } : {}),
+          ...(Array.isArray(task.attemptUsage) ? { attemptUsage: task.attemptUsage as TaskStatusUpdate['attemptUsage'] } : {}),
           ...(task.forcedPastGate?.length ? { forcedPastGate: task.forcedPastGate.map(String) } : {}),
         };
       }
-      // Absent means no task waits at a gate any more, which is news too.
-      const gate = event.gate ? { paused: event.gate.paused === true, handoff: { repos: event.gate.repos, landed: event.gate.landed } } : null;
-      dispatch({ type: 'tasksStatus', updates, gate, sessionId });
+      const runMerge = event.runMerge ? { waitingAtGate: event.runMerge.waitingAtGate === true, paused: event.runMerge.paused === true, handoff: { repos: event.runMerge.repos, landed: event.runMerge.landed } } : null;
+      dispatch({ type: 'tasksStatus', updates, runMerge, sessionId });
       return;
     }
 

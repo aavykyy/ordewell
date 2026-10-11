@@ -161,18 +161,20 @@ everything below applies per repo of the group.
   files hard links, copied only when a hard link is impossible (a different
   volume), with a notice. Copies are what make the recorded link list matter
   there, since a copied `.envrc` is a plain untracked file.
-- **Never merged for the user.** Ordewell never merges into the checked-out
-  branch on its own. When an isolated run settles, `handoff` runs and
+- **Merge into the user's branch requires consent.** Ordewell merges into
+  the checked-out branch when the user presses Merge all, or opts into one of
+  ADR-0029's per-plan settings. When an isolated run settles, `handoff` runs and
   `isolation_handoff` (integration branches, base refs, what landed) is broadcast
   *before* `execution_complete` — the TUI closes its execution stream on the
   latter, so anything after it is lost. What follows is the user's: review the
   diff against the base refs (one section per repo), *Merge all* (preflighted in
   every repo, merging all or none, ADR-0014; a normal `git merge`, aborted on
   conflict so the user's tree is left as it was), clean up, or discard. Merge
-  all is also how the user opens a merge gate during a run (ADR-0020); it takes
+  all is available whenever a run has unmerged landings, including to open a
+  merge gate during a run (ADR-0020); it takes
   turns with the landing queue, so it never reads an integration branch
   mid-landing.
-  *Amended by [ADR-0029](0029-the-supervisor.md):* two exits the user opts
+  [ADR-0029](0029-the-supervisor.md) defines two settings the user opts
   into per plan, both saved at run start. *Merge at gates automatically* runs
   Merge all when a task reaches a merge gate, and a supervisor at Act may call
   `merge_all` in its wake-up turns. Both go through the same queue and
@@ -265,8 +267,9 @@ everything below applies per repo of the group.
   [review|merge|discard|cleanup]` and `ordewell run --stash` /
   `--without-isolation`. VS Code shows the same marks on its task cards, a
   handoff card, and a host modal for a blocked run; merge and discard are
-  confirmed first everywhere. While tasks wait at a merge gate, each surface
-  offers Merge all mid-run (ADR-0020). The stream reports isolation only as it changes,
+  confirmed first everywhere. Each surface offers Merge all mid-run whenever
+  landed work is unmerged, with a quiet count; a gated task still waits for
+  Merge all (ADR-0020). The stream reports isolation only as it changes,
   so a surface that was not listening is re-told from the record:
   `Session.isolationView` reads the marks and the handoff from the run record;
   VS Code replays it when its webview reconnects or a session is loaded (the
@@ -371,4 +374,6 @@ everything below applies per repo of the group.
 - 2026-10-03 — a blocked run's execution stream stays open for the ops tasks still running; the choice's stream replaces it.
 - 2026-10-09 — `.ordewell/skills/` committed and reaching worktrees through git (ADR-0024).
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
+- 2026-10-11 — Merge all exposed throughout a run for unmerged landings (#85).
 - 2026-10-11 — merge at gates automatically, and the supervisor's `merge_all` at Act, as opt-in exits from "never merged for the user" ([ADR-0029](0029-the-supervisor.md)).
+- 2026-10-11 — implemented the automatic gate setting and core merge_all action.

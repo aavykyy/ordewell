@@ -219,6 +219,13 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
     expect(api).toContain('"fields"');
     const harness = variant(true);
     expect(harness).toContain('task_query');
+    for (const prompt of [api, harness]) {
+      expect(prompt).toContain('task_output');
+      expect(prompt).toContain('task_diff');
+      expect(prompt).toContain('attempt');
+      expect(prompt).toContain('kinds');
+      expect(prompt).toContain('nextOffset');
+    }
     expect(harness).not.toContain('"taskQuery"');
   });
   it('submits through submit_plan where the API variant emits the JSON envelope', () => {

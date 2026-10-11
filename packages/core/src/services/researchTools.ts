@@ -1,3 +1,4 @@
+import { PLANNER_TASK_READ_TOOLS } from './mcp/tools';
 import type OpenAI from 'openai';
 import { SchemaType, type FunctionDeclaration, type Schema } from '@google/generative-ai';
 
@@ -170,8 +171,10 @@ function projectOpenAi(specs: ResearchToolSpec[]): OpenAI.Chat.Completions.ChatC
 }
 
 /** Project the canonical tools into OpenAI's chat-completions tool format. */
-export function toOpenAiTools(): OpenAI.Chat.Completions.ChatCompletionTool[] {
-  return projectOpenAi(withSpawn());
+export function toOpenAiTools(taskReads = false): OpenAI.Chat.Completions.ChatCompletionTool[] {
+  return [...projectOpenAi(withSpawn()), ...(taskReads ? PLANNER_TASK_READ_TOOLS.map((t): OpenAI.Chat.Completions.ChatCompletionTool => ({
+    type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema },
+  })) : [])];
 }
 
 /** The subagent's own tool list in OpenAI format. */
@@ -187,8 +190,8 @@ const SCHEMA_TYPE: Record<ParamType, SchemaType> = {
 };
 
 /** Project the canonical tools into Gemini's function-declaration format. */
-export function toGeminiToolDeclarations(): FunctionDeclaration[] {
-  return withSpawn().map((t) => {
+export function toGeminiToolDeclarations(taskReads = false): FunctionDeclaration[] {
+  const tools = withSpawn().map((t) => {
     const properties: Record<string, Schema> = {};
     for (const [key, param] of Object.entries(t.properties)) {
       properties[key] = {
@@ -204,4 +207,24 @@ export function toGeminiToolDeclarations(): FunctionDeclaration[] {
       parameters: { type: SchemaType.OBJECT, properties, required: t.required },
     };
   });
+  const reads = taskReads ? PLANNER_TASK_READ_TOOLS.map((t): FunctionDeclaration => {
+    const schema = geminiSchema(t.inputSchema);
+    return { name: t.name, description: t.description,
+      parameters: { ...schema, type: SchemaType.OBJECT, properties: schema.properties ?? {} },
+    };
+  }) : [];
+  return [...tools, ...reads];
+}
+
+function geminiSchema(value: unknown): Schema {
+  const raw = value as { type?: string; description?: string; enum?: string[]; properties?: Record<string, unknown>; required?: string[]; items?: unknown; anyOf?: unknown[] };
+  if (raw.anyOf) return { ...geminiSchema(raw.anyOf[0]), ...(raw.description ? { description: raw.description } : {}) };
+  const description = raw.description ? { description: raw.description } : {};
+  if (raw.type === 'object') return { type: SchemaType.OBJECT, ...description,
+    properties: Object.fromEntries(Object.entries(raw.properties ?? {}).map(([k, v]) => [k, geminiSchema(v)])), required: raw.required ?? [],
+  };
+  if (raw.type === 'array') return { type: SchemaType.ARRAY, ...description, items: geminiSchema(raw.items) };
+  if (raw.type === 'integer' || raw.type === 'number') return { type: SchemaType.NUMBER, ...description };
+  if (raw.type === 'boolean') return { type: SchemaType.BOOLEAN, ...description };
+  return { type: SchemaType.STRING, ...description, ...(raw.enum ? { format: 'enum', enum: raw.enum } : {}) };
 }

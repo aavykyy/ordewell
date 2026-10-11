@@ -427,6 +427,9 @@ export async function handleSystemCommand(
     case 'cancel':
       await deps.session.cancelTask(taskId);
       break;
+    case 'cancelResume':
+      deps.session.cancelScheduledResume(taskId);
+      break;
     case 'retry':
       await deps.session.retryTask(taskId);
       break;
@@ -500,10 +503,15 @@ export function handleSessionMessage(
         if (task.isolation) deps.chatProvider.sendTaskIsolation(task.id, task.isolation);
         if (task.mergeGate) gates[task.id] = task.mergeGate;
       }
-      deps.chatProvider.showMergeGate(msg.gate ?? null, gates);
+      deps.chatProvider.showRunMerge(msg.runMerge ?? null, gates);
       deps.chatProvider.showPlan(plan);
       break;
     }
+    // The Session changes the plan itself (a live turn's edits, a run setting)
+    // and announces the result; the card follows it.
+    case 'plan_generated':
+      deps.chatProvider.showPlan(deps.getCurrentPlan());
+      break;
     case 'execution_complete': {
       const plan = deps.getCurrentPlan();
       deps.chatProvider.showPlan(plan);
@@ -536,7 +544,6 @@ export function handleSessionMessage(
     // Named so a new SessionMessage variant fails to compile until someone
     // decides what it means here.
     case 'planner_message':
-    case 'plan_generated':
     case 'plan_token':
     case 'planner_text_delta':
     case 'planner_thinking_delta':

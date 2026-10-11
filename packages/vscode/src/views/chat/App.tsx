@@ -40,7 +40,7 @@ export default function App() {
     runnerList, enabledRunnerIds, runners, held, unsent, modesByRunner, modelConfig,
     modelOptions, configuredProviders, planner, isReady, modelDiscoveryErrors,
     skills, taskSkills, checkpoint, taskOutput, taskIdle, taskApprovals, taskIsolation, handoff,
-    mergeResult, mergeGate, taskGates, dockExpanded, dockHeight,
+    mergeResult, runMerge, taskGates, dockExpanded, dockHeight,
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
   const setIsResearchActive = useCallback((v: boolean) => dispatch({ type: 'patchResearchActive', active: v }), []);
@@ -274,6 +274,12 @@ export default function App() {
     const taskTitle = planRef.current?.tasks.find((t) => t.id === taskId)?.title ?? taskId;
     vscode.postMessage({ type: 'sendSystemCommand', command: 'cancel', taskId });
     pushSystem(`Task "${taskTitle}" cancelled.`);
+  }, [pushSystem]);
+
+  const handleCancelResume = useCallback((taskId: string) => {
+    const taskTitle = planRef.current?.tasks.find((t) => t.id === taskId)?.title ?? taskId;
+    vscode.postMessage({ type: 'sendSystemCommand', command: 'cancelResume', taskId });
+    pushSystem(`Task "${taskTitle}" will not resume on its own: retry it once the usage limit resets.`);
   }, [pushSystem]);
 
   // No notice of its own: the task's start comes back from the session and
@@ -551,11 +557,14 @@ export default function App() {
             </svg>
           </span>
           <span className="plan-dock-title">Plan</span>
+          {(isExecuting ? plan.runSettings?.mergeAtGatesAutomatically : plan.mergeAtGatesAutomatically)
+            && <span className="plan-dock-summary">Merge at gates automatically</span>}
           <span className="plan-dock-summary">{planSummaryLabel(plan.tasks)}</span>
           {/* A collapse is always honoured, including mid-run — so the bar has to
               say when a task is blocked on the user, or the approval would sit
               unseen behind it. */}
           {checkpoint && <span className="plan-dock-approval">1 awaiting approval</span>}
+          {runMerge && <span className="plan-dock-summary">{runMerge.landed.length} unmerged</span>}
         </button>
         <div
           className="plan-dock-body"
@@ -572,8 +581,17 @@ export default function App() {
               onReject={handleRejectCheckpoint}
             />
           )}
+          {runMerge && !runMerge.waitingAtGate && isExecuting && (
+            <div className="plan-merge-actions">
+              <span>{runMerge.landed.length} landed task{runMerge.landed.length === 1 ? '' : 's'} not merged</span>
+              <button className="task-action-btn run" onClick={() => handleIsolationAction('merge')}>Merge all</button>
+            </div>
+          )}
           <PlanCardGroup
             tasks={plan.tasks}
+            mergeAtGatesAutomatically={plan.mergeAtGatesAutomatically}
+            runAutoMerge={plan.runSettings?.mergeAtGatesAutomatically}
+            onAutoMergeChange={(enabled) => vscode.postMessage({ type: 'setAutoMerge', enabled })}
             models={models}
             modelsByRunner={modelsByRunner}
             modesByRunner={modesByRunner}
@@ -598,6 +616,7 @@ export default function App() {
             onRetry={handleRetry}
             onSkip={handleSkip}
             onCancel={handleCancel}
+            onCancelResume={handleCancelResume}
             onForceStart={handleForceStart}
             onMarkComplete={handleMarkComplete}
             onMarkIncomplete={handleMarkIncomplete}
@@ -610,7 +629,7 @@ export default function App() {
             onResolveConflict={handleResolveConflict}
             onOpenLog={handleOpenTaskLog}
           />
-          {handoff && !mergeGate && (
+          {handoff && !isExecuting && !runMerge?.waitingAtGate && (
             <HandoffCard
               repos={handoff.repos}
               landed={handoff.landed}
@@ -618,12 +637,12 @@ export default function App() {
               onAction={(action) => handleIsolationAction(action)}
             />
           )}
-          {mergeGate && (
+          {runMerge?.waitingAtGate && (
             <HandoffCard
-              repos={mergeGate.repos}
-              landed={mergeGate.landed}
+              repos={runMerge.repos}
+              landed={runMerge.landed}
               mergeResult={mergeResult}
-              midRun={{ paused: mergeGate.paused }}
+              midRun={{ paused: runMerge.paused }}
               onAction={(action) => handleIsolationAction(action)}
             />
           )}

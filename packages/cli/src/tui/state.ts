@@ -1,9 +1,10 @@
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, NO_TURN, isTaskRunning, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type TaskLogEvent, type TaskLogView, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, NO_TURN, isTaskRunning, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type TaskLogEvent, type TaskLogView, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 
 export type RunStatus = 'idle' | 'planning' | 'researching' | 'executing';
 
 export interface TaskView {
+  attemptUsage?: AttemptUsage[];
   id: string;
   order: number;
   title: string;
@@ -26,6 +27,8 @@ export interface TaskView {
   isolation?: TaskIsolationView;
   /** What an `awaiting_user` task waits on, when the daemon saved why. */
   awaitingReason?: AwaitingReason;
+  /** When a task paused on a usage limit resumes on its own (ISO time); absent when it waits for a manual retry. */
+  resumeAt?: string;
   /** The whole question of the checkpoint the task waits at, while it does. */
   checkpoint?: string;
   /** A finished structured task the daemon can continue in its saved session (ADR-0018, K1). */
@@ -85,10 +88,10 @@ export interface HandoffView {
 }
 
 /**
- * A run with tasks at a merge gate (ADR-0020): what Merge all would merge
- * now, and whether the run waits on it with nothing else running.
+ * Landed work not yet in the user's branch, including a possible merge gate.
  */
-export interface GateView {
+export interface RunMergeView {
+  waitingAtGate: boolean;
   paused: boolean;
   handoff: HandoffView;
 }
@@ -382,6 +385,8 @@ export interface TuiState {
   configuredProviders: AiProvider[];
   allowlist: Record<string, string[]>;
   autonomous: boolean;
+  mergeAtGatesAutomatically: boolean;
+  runAutoMerge: boolean | null;
   /**
    * Whether the terminal's mouse is captured for wheel scrolling. On by
    * default; `/mouse off` hands it back when selecting text out of the
@@ -398,8 +403,8 @@ export interface TuiState {
   workspace: string;
   /** The isolated run awaiting a decision, if any. Cleared once it is discarded. */
   handoff: HandoffView | null;
-  /** A run whose tasks wait at a merge gate, so Merge all is offered mid-run; null otherwise. */
-  gate: GateView | null;
+  /** Null once everything landed is merged into the user's branch. */
+  runMerge: RunMergeView | null;
   overlay: Overlay | null;
   /**
    * Approval prompts not yet shown. The planner blocks on each one, so they are
@@ -560,11 +565,13 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     configuredProviders: [],
     allowlist: {},
     autonomous: true,
+    mergeAtGatesAutomatically: false,
+    runAutoMerge: null,
     mouseCapture: true,
     selection: null,
     workspace: process.cwd(),
     handoff: null,
-    gate: null,
+    runMerge: null,
     overlay: null,
     pendingApprovals: [],
     queuedPrompts: EMPTY_HOLD,

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  taskRowView, taskStatusKind, isTaskRunning, awaitingLabel, approvalLabel, taskRowActions, markAction, markRequestFor, opsEditable,
+  taskRowView, taskStatusKind, isTaskRunning, awaitingLabel, approvalLabel, resumeLabel, resumeTime, taskRowActions, markAction, markRequestFor, opsEditable,
   titledRefs, dependentsNotice, pastGateConfirmation, newTaskFields, type TaskRowSubject, type TaskRowAction,
 } from '..';
 import { taskRef, titledTaskRef } from '../../order-labels';
@@ -38,6 +38,7 @@ describe('labels', () => {
     ['checkpoint', 'Checkpoint'],
     ['conflict', 'Merge conflict'],
     ['files-changed', 'Changed tracked files'],
+    ['usage-limit', 'Paused on a usage limit'],
   ] as const)('an awaiting task waiting on %s reads "%s"', (awaitingReason, label) => {
     expect(awaitingLabel({ status: 'awaiting_user', awaitingReason })).toBe(label);
   });
@@ -63,6 +64,34 @@ describe('labels', () => {
     expect(taskRef({ order: 3 })).toBe('#3');
     expect(taskRef({ order: 1 }, { order: 2 })).toBe('#2.1');
     expect(titledTaskRef({ order: 3, title: 'Deploy' })).toBe('#3 Deploy');
+  });
+});
+
+describe('a task paused on a usage limit', () => {
+  const now = new Date(2026, 9, 11, 17, 0);
+  const paused = { status: 'awaiting_user', type: 'ai' as const, awaitingReason: 'usage-limit' as const };
+
+  it('reads when it resumes, on the reader\'s clock, with the date when it is not today', () => {
+    expect(resumeTime(new Date(2026, 9, 11, 20, 10), now)).toBe('8:10pm');
+    expect(resumeTime(new Date(2026, 9, 11, 9, 0), now)).toBe('9am');
+    expect(resumeTime(new Date(2026, 9, 14, 12, 5), now)).toBe('Oct 14, 12:05pm');
+    expect(resumeLabel({ ...paused, resumeAt: new Date(2026, 9, 11, 20, 10).toISOString() }, now)).toBe('Resumes at 8:10pm');
+  });
+
+  it('offers to cancel the resume only while one is scheduled', () => {
+    const resumeAt = new Date(2026, 9, 11, 20, 10).toISOString();
+    expect(taskRowActions({ ...paused, resumeAt })).toEqual(['cancel-resume', 'complete']);
+    expect(taskRowActions({ ...paused, resumeAt }, 'subtask')).toEqual(['cancel-resume', 'complete']);
+    expect(taskRowActions(paused)).toEqual(['complete']);
+    expect(taskRowView(subject({ ...paused, resumeAt }), { now }).resumes).toBe('Resumes at 8:10pm');
+    expect(taskRowView(subject(paused), { now }).resumes).toBeNull();
+  });
+
+  it('says nothing of a resume time left on a task in any other state', () => {
+    const resumeAt = new Date(2026, 9, 11, 20, 10).toISOString();
+    expect(resumeLabel({ status: 'awaiting_user', awaitingReason: 'input', resumeAt })).toBeNull();
+    expect(resumeLabel({ status: 'pending', awaitingReason: 'usage-limit', resumeAt })).toBeNull();
+    expect(taskRowActions({ status: 'pending', type: 'ai', awaitingReason: 'usage-limit', resumeAt })).toEqual(['force-start']);
   });
 });
 

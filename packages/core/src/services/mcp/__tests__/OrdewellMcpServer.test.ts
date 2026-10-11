@@ -53,7 +53,7 @@ describe('OrdewellMcpServer', () => {
 
     const names = async (client: Client) => (await client.listTools()).tools.map((t) => t.name).sort();
     expect(await names(task)).toEqual(['checkpoint', 'task_complete']);
-    expect(await names(planner)).toEqual(['edit_plan', 'fetch', 'list_models', 'list_runners', 'load_skill', 'run_command', 'submit_plan', 'task_output', 'task_query', 'web_search']);
+    expect(await names(planner)).toEqual(['edit_plan', 'fetch', 'list_models', 'list_runners', 'load_skill', 'run_command', 'submit_plan', 'task_diff', 'task_output', 'task_query', 'web_search']);
   });
 
   // Claude Code in plan mode refuses any MCP tool not marked read-only, even
@@ -63,7 +63,7 @@ describe('OrdewellMcpServer', () => {
     const task = await connect(await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1 }));
     const planner = await connect(await server.issuePlannerToken({ sessionId: 's1' }));
 
-    expect((await planner.listTools()).tools.map((t) => t.annotations?.readOnlyHint)).toEqual(Array(10).fill(true));
+    expect((await planner.listTools()).tools.map((t) => t.annotations?.readOnlyHint)).toEqual(Array(11).fill(true));
     expect((await task.listTools()).tools.map((t) => t.annotations?.readOnlyHint)).toEqual([undefined, undefined]);
   });
 
@@ -97,7 +97,7 @@ describe('OrdewellMcpServer', () => {
     const fetch = vi.fn(async () => ({ text: 'page' }));
     const planner = await connect(await server.issuePlannerToken({ sessionId: 's1', hidden: ['fetch', 'web_search'] }, { fetch }));
 
-    expect((await planner.listTools()).tools.map((t) => t.name).sort()).toEqual(['edit_plan', 'list_models', 'list_runners', 'load_skill', 'run_command', 'submit_plan', 'task_output', 'task_query']);
+    expect((await planner.listTools()).tools.map((t) => t.name).sort()).toEqual(['edit_plan', 'list_models', 'list_runners', 'load_skill', 'run_command', 'submit_plan', 'task_diff', 'task_output', 'task_query']);
     await expect(planner.callTool({ name: 'fetch', arguments: { url: 'https://example.com' } })).rejects.toThrow(/Unknown tool/);
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -249,3 +249,21 @@ function rawRequest(credential: McpCredential, headers: Record<string, string>):
     req.end(body);
   });
 }
+
+describe('task read schemas', () => {
+  it('validates attempt and event kinds before routing a read, and exposes diff paging', async () => {
+    const server = newServer();
+    const taskOutput = vi.fn(async () => ({ text: 'log' }));
+    const taskDiff = vi.fn(async () => ({ text: 'diff' }));
+    const planner = await connect(await server.issuePlannerToken({ sessionId: 's1' }, { taskOutput, taskDiff }));
+    for (const args of [{ task: '#1', attempt: 0 }, { task: '#1', attempt: 1.5 }, { task: '#1', kinds: ['invalid'] }, { task: '#1', since: -1 }]) {
+      expect((await planner.callTool({ name: 'task_output', arguments: args })).isError).toBe(true);
+    }
+    expect(taskOutput).not.toHaveBeenCalled();
+    await planner.callTool({ name: 'task_output', arguments: { task: '#1', attempt: 2, kinds: ['tool_call', 'error', 'usage'], since: 10 } });
+    expect(taskOutput).toHaveBeenCalledWith({ task: '#1', attempt: 2, kinds: ['tool_call', 'error', 'usage'], since: 10 }, expect.anything());
+    await planner.callTool({ name: 'task_diff', arguments: { task: '#1', repo: 'api', path: 'file.ts', lines: 20, since: 3 } });
+    expect(taskDiff).toHaveBeenCalledWith({ task: '#1', repo: 'api', path: 'file.ts', lines: 20, since: 3 }, expect.anything());
+    expect((await planner.callTool({ name: 'task_diff', arguments: { task: '#1', since: -1 } })).isError).toBe(true);
+  });
+});

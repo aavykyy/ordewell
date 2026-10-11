@@ -41,11 +41,11 @@ export const diffRoom = (rows: number): number => Math.max(1, rows - 3);
 const fail = (state: TuiState, content: string): Step => ({ state: say(state, 'error', content), effects: [] });
 
 /**
- * What Merge all would merge now: mid-run, what a merge gate reports as landed
- * and not merged (ADR-0020); otherwise the run's end-of-run handoff.
+ * A previous handoff may still be cached while a resumed run merges its work.
+ * During execution only the current merge view knows what remains unmerged.
  */
 export function currentHandoff(state: TuiState): HandoffView | null {
-  return state.gate?.handoff ?? state.handoff;
+  return state.runMerge?.handoff ?? (midRun(state) ? null : state.handoff);
 }
 
 /** A merge while the run is still going leaves the run in place: its later tasks land on the same branch. */
@@ -262,7 +262,7 @@ export function clearIsolation(state: TuiState): TuiState {
   return {
     ...state,
     handoff: null,
-    gate: null,
+    runMerge: null,
     tasks: mapTasks(state.tasks, ({ isolation: _dropped, ...task }) => task),
   };
 }

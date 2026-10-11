@@ -1,4 +1,4 @@
-import { markAction, taskRef } from '@ordewell/core';
+import { markAction, resumeLabel, taskRef } from '@ordewell/core';
 import { applyKey, emptyEditor, type EditorState } from '../editor';
 import { taskEditorRoom } from '../geometry';
 import { findTask, planRows, selectedPlanRow, type TaskView, type TuiState } from '../state';
@@ -63,6 +63,10 @@ export function handlePlanKey(state: TuiState, key: Key): Step {
   const scroll = scrollDelta(key, state);
   if (scroll !== null) return scrollPlan(state, scroll, true);
 
+  if (key.name === 'char' && key.char === 'G' && state.sessionId) {
+    return step(state, [{ type: 'setAutoMerge', sessionId: state.sessionId, enabled: !state.mergeAtGatesAutomatically }]);
+  }
+
   // Before the row guard: with no tasks there is no row, and this is the way in.
   if (key.name === 'char' && key.char === 'a') return addTask(state, '');
 
@@ -95,7 +99,9 @@ export function handlePlanKey(state: TuiState, key: Key): Step {
   // The run's explicit stop, matching /stop and the uppercase of `E`.
   if (key.char === 'S') return step(state, [{ type: 'stopExecution', sessionId: state.sessionId }]);
 
-  const action = key.char === 'm' ? markAction(task) : PLAN_SHORTCUTS[key.char ?? ''];
+  // A task paused on a usage limit has no runner to cancel; `c` cancels its resume instead.
+  const shortcut = key.char === 'c' && resumeLabel(task) ? 'cancel-resume' : PLAN_SHORTCUTS[key.char ?? ''];
+  const action = key.char === 'm' ? markAction(task) : shortcut;
   if (action === 'force-start' && task.mergeGate?.length) return confirmForceStartPastGate(state, task);
   if (action) {
     return step(state, [taskActionEffect(state, state.sessionId, task.id, action)]);
