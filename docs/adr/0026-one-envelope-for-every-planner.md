@@ -89,10 +89,11 @@ How each runner raises them, checked live (Claude Code 2.1.296, codex-cli
   taken for one a person could approve. 2.x layers rules the same way, last
   match winning, and its session is created with the same rules; it renamed
   `bash` to `shell` and `task` to `subagent` and added `browser`, so the
-  policy denies both spellings. 2.x calls a user's MCP tools from code inside
-  its `execute` tool, as Codex does, and each call still raises its own
-  request; Ordewell's own server is replaced at start with `codemode: false`,
-  so `run_command` and the completion tools are tools of their own.
+  policy denies both spellings. 2.x can call MCP tools from code inside its
+  `execute` tool, which raises no request of its own, so a planner's session
+  denies `execute`; Ordewell's own server is replaced at start with
+  `codemode: false`, so `run_command` and the completion tools are tools of
+  their own, and a 2.x that cannot do that is refused as a planner.
 
 ### Standing approvals: the allowlist
 
@@ -250,4 +251,9 @@ refused from a workspace's environment files (ADR-0016).
   project's instructions given as text; project MCP servers only once
   approved, remembered per definition; OpenCode without project config and
   Codex with the repository untrusted
+  ([ADR-0028](0028-planners-never-run-repository-config.md)).
+- 2026-10-11 — OpenCode 2.x's `execute` ran a planner's code unasked: it
+  raises no permission. Planner sessions now deny it, an OpenCode 2.x that
+  can list Ordewell's tools only inside code mode is refused as a planner,
+  and a planner session created without the deny is not resumed
   ([ADR-0028](0028-planners-never-run-repository-config.md)).

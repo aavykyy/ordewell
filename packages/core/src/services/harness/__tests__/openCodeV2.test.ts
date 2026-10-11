@@ -248,8 +248,8 @@ describe('OpenCode 2.x — a planner\'s own search (ADR-0027)', () => {
   });
 
   it.each([
-    ['created with search off', [...rules(OPENCODE_PLANNER_PERMISSION), ...rules(OPENCODE_SEARCH_OFF)], false],
-    ['created with search on', rules(OPENCODE_PLANNER_PERMISSION), true],
+    ['created with search off', [...rules(OPENCODE_PLANNER_PERMISSION), ...rules(OPENCODE_SEARCH_OFF), ...codeModeOff], false],
+    ['created with search on', [...rules(OPENCODE_PLANNER_PERMISSION), ...codeModeOff], true],
   ])('tells a resumed session %s what its own rules allow', async (_label, permissions, ownSearch) => {
     const server = fakeServer({ [`GET /api/session/${SES}`]: () => ({ data: { id: SES, permissions } }), 'GET /api/config': () => [document({ websearch: { provider: 'exa' } })] });
     const { adapter } = await start(server, plannerStart({ mcp, resumeSessionId: SES }));
@@ -498,7 +498,7 @@ describe('OpenCode 2.x — permission requests', () => {
   });
 });
 
-const ORDEWELL = { name: 'ordewell', url: 'http://127.0.0.1:1/mcp', headers: { authorization: 'Bearer t' } };
+const ORDEWELL = { name: 'ordewell' as const, url: 'http://127.0.0.1:1/mcp', headers: { authorization: 'Bearer t' } };
 
 /** Approved project servers (ADR-0028), as `opencode.json` declares them. */
 const PROBE: ProjectMcpServer = {
@@ -521,16 +521,56 @@ describe('OpenCode 2.x — MCP servers', () => {
     adapter.dispose();
   });
 
-  it('denies a planner `execute`, which 2.x never asks about, unless Ordewell\'s tools are only reachable through it', async () => {
-    const sessionRules = (server: ReturnType<typeof fakeServer>) =>
-      (server.requests.find((r) => r.method === 'POST' && r.path === '/api/session')?.body as { permissions: unknown[] }).permissions;
-    const listed = fakeServer();
-    (await start(listed, plannerStart({ mcp: ORDEWELL }))).adapter.dispose();
-    expect(sessionRules(listed)).toContainEqual({ action: 'execute', resource: '*', effect: 'deny' });
+  it('denies a planner `execute`, which 2.x never asks about', async () => {
+    const server = fakeServer();
+    (await start(server, plannerStart({ mcp: ORDEWELL }))).adapter.dispose();
 
-    const routeGone = fakeServer({ 'PUT /api/experimental/mcp/ordewell': () => ({ status: 404 }) });
-    (await start(routeGone, plannerStart({ mcp: ORDEWELL }))).adapter.dispose();
-    expect(sessionRules(routeGone)).not.toContainEqual({ action: 'execute', resource: '*', effect: 'deny' });
+    const created = server.requests.find((r) => r.method === 'POST' && r.path === '/api/session')?.body as { permissions: unknown[] };
+    expect(created.permissions).toContainEqual({ action: 'execute', resource: '*', effect: 'deny' });
+  });
+
+  it('refuses to start a planner where Ordewell\'s tools would only be reachable through `execute`, and creates no session', async () => {
+    const server = fakeServer({ 'PUT /api/experimental/mcp/ordewell': () => ({ status: 404 }), 'GET /api/info': () => ({ version: '2.0.9' }) });
+
+    await expect(start(server, plannerStart({ mcp: ORDEWELL, projectServers: [PROBE] }))).rejects.toThrow(
+      'OpenCode 2.0.9 cannot run the planner safely: it can only offer Ordewell\'s tools inside code mode, which runs code the planner writes without asking. '
+      + 'The planner needs an OpenCode version that can list MCP tools outside code mode. Update OpenCode, or choose another planner runner.',
+    );
+    expect(server.requests.some((r) => r.method === 'POST' && r.path === '/api/session')).toBe(false);
+    expect(server.requests.some((r) => r.path === '/api/experimental/mcp/probe')).toBe(false);
+  });
+
+  it('starts a task the same way where Ordewell\'s tools are only reachable through `execute`', async () => {
+    const server = fakeServer({ 'PUT /api/experimental/mcp/ordewell': () => ({ status: 404 }) });
+    const { adapter } = await start(server, taskStart({ mcp: ORDEWELL }));
+
+    const created = server.requests.find((r) => r.method === 'POST' && r.path === '/api/session')?.body as { permissions: unknown[] };
+    expect(created.permissions).toEqual([{ action: 'question', resource: '*', effect: 'deny' }, ...OPENCODE_ORDEWELL.sessionRules()]);
+    adapter.dispose();
+  });
+
+  it.each([
+    ['without any rules', undefined],
+    ['without the `execute` deny', rules(OPENCODE_PLANNER_PERMISSION)],
+    ['with `execute` allowed after its deny', [...rules(OPENCODE_PLANNER_PERMISSION), ...codeModeOff, { action: 'execute', resource: '*', effect: 'allow' }]],
+  ])('starts a fresh planner session rather than resume one created %s', async (_label, permissions) => {
+    const server = fakeServer({ [`GET /api/session/${SES}`]: () => ({ data: { id: SES, permissions } }), 'POST /api/session': () => ({ data: { id: 'ses_new' } }) });
+    const { adapter } = await start(server, plannerStart({ mcp: ORDEWELL, resumeSessionId: SES }));
+
+    expect(adapter.nativeSessionId()).toBe('ses_new');
+    const created = server.requests.find((r) => r.method === 'POST' && r.path === '/api/session')?.body as { permissions: unknown[] };
+    expect(created.permissions).toContainEqual({ action: 'execute', resource: '*', effect: 'deny' });
+    expect(server.requests.some((r) => r.path === `/api/session/${SES}/agent`)).toBe(false);
+    adapter.dispose();
+  });
+
+  it('resumes a planner session created with `execute` denied', async () => {
+    const server = fakeServer({ [`GET /api/session/${SES}`]: () => ({ data: { id: SES, permissions: [...rules(OPENCODE_PLANNER_PERMISSION), ...codeModeOff] } }) });
+    const { adapter } = await start(server, plannerStart({ mcp: ORDEWELL, resumeSessionId: SES }));
+
+    expect(adapter.nativeSessionId()).toBe(SES);
+    expect(server.requests.some((r) => r.method === 'POST' && r.path === '/api/session')).toBe(false);
+    adapter.dispose();
   });
 
   it('lists a planner\'s approved project servers\' tools as tools of their own, each replaced once in its own shape', async () => {

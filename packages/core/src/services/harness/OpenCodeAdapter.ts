@@ -373,8 +373,10 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       throw new Error(this.runner.withStderrTail(`The OpenCode ${this.role()} server did not start.`));
     }
 
-    if (await this.speaksV2()) {
+    const version = await this.v2Version();
+    if (version !== null) {
       this.v2 = new OpenCodeV2({
+        version,
         request: (method, path, body, signal) => this.request(method, path, body, signal),
         json: (method, path, body, signal) => this.json(method, path, body, signal),
         openEvents: (signal) => this.deps.fetch(`${this.baseUrl}/api/event`, { signal, headers: this.headers() }),
@@ -686,9 +688,9 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
    * only 2.x answers `/api/info` with its version. A 1.x server — or one that
    * answers with anything else — keeps the 1.x protocol this class speaks.
    */
-  private async speaksV2(): Promise<boolean> {
+  private async v2Version(): Promise<string | null> {
     const info = await this.json<{ version?: unknown }>('GET', '/api/info').catch(() => null);
-    return typeof info === 'object' && info !== null && typeof info.version === 'string';
+    return typeof info === 'object' && info !== null && typeof info.version === 'string' ? info.version : null;
   }
 
   private role(): 'planner' | 'task' {
