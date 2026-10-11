@@ -146,6 +146,42 @@ describe('ConversationViewHost', () => {
   });
 
   describe('reload', () => {
+    it('keeps the send error visible, frees the input, and rebuilds without the failed pending prompt', () => {
+      host.note('user', 'add a parser');
+      host.receive(started);
+      host.receive({ type: 'planner_turn_ended', turnId: TURN, outcome: 'error' });
+      host.note('error', 'planner down');
+      vi.runAllTimers();
+
+      expect(screen.blocks().map((b) => b.type === 'message' ? [b.role, b.text] : b.type)).toEqual([['user', 'add a parser'], ['error', 'planner down']]);
+      expect(screen.posts.filter((m) => m.type === 'plannerTurn').at(-1)).toEqual({ type: 'plannerTurn', active: false });
+      host.reload({ conversationHistory: [], pendingTurns: [] });
+      expect(screen.blocks()).toEqual([]);
+
+      host.note('user', 'add a parser');
+      host.receive({ ...started, turnId: 't-2' });
+      host.flush();
+      expect(screen.blocks()).toMatchObject([{ role: 'user', text: 'add a parser', turnId: 't-2' }]);
+    });
+
+    it('shows the pending prompt beside a reply that continues streaming after load', () => {
+      host.reload({
+        conversationHistory: [],
+        pendingTurns: [{ id: 'p1', source: 'user', text: '/tdd add tests', timestamp: '2026-10-11T10:00:00Z', skills: [
+          { invokedBy: 'user', name: 'tdd', source: 'global', path: '~/tdd/SKILL.md', content: 'HIDDEN BODY' },
+        ] }],
+      });
+      host.receive(delta('Reading the tests.'));
+      vi.runAllTimers();
+
+      expect(screen.blocks()).toMatchObject([
+        { type: 'message', role: 'user', text: '/tdd add tests', skills: ['tdd'] },
+        { type: 'skill_load', name: 'tdd', path: '~/tdd/SKILL.md' },
+        { type: 'message', role: 'planner', text: 'Reading the tests.', streaming: true },
+      ]);
+      expect(JSON.stringify(screen.blocks())).not.toContain('HIDDEN BODY');
+    });
+
     const saved = {
       conversationHistory: [
         { role: 'user' as const, content: 'add a parser', timestamp: '2026-01-01T00:00:00Z' },

@@ -4,6 +4,7 @@ import type { IRunner } from '../../interfaces/IRunner';
 import type { ConversationTurn } from '../AiService';
 import { PlannerTurnDiscardedError } from '../PlannerConversation';
 import { FakeRunnerSession, makeSession, saves, taskOf, testWorkspace } from './sessionTestKit';
+import { fromTranscript } from '../../conversation/transcript';
 
 /** A live planner whose replies the test hands back one at a time. */
 function heldPlanner() {
@@ -74,6 +75,30 @@ async function liveRun() {
 }
 
 describe('live planner turns during a run', () => {
+  it('drops a failed turn from the rebuilt view and lets the user resend it', async () => {
+    const { session, calls } = await liveRun();
+    const snapshots: LegacyPlanState[] = [];
+    saves(session).mockImplementation((plan) => { snapshots.push(structuredClone(plan)); });
+    const rebuilt = () => {
+      const plan = session.planState!;
+      return fromTranscript(plan.conversationHistory, plan.researchLog, plan.plannerUsage, plan.pendingTurns).blocks
+        .flatMap((b) => b.type === 'message' && b.role === 'user' ? [b.text] : []);
+    };
+    const answered = session.continueConversation('check the tests');
+    expect(rebuilt()).toEqual(['build it', 'check the tests']);
+    calls[0].fail(new Error('planner down'));
+    await expect(answered).rejects.toThrow('planner down');
+    expect(rebuilt()).toEqual(['build it']);
+    const saved = snapshots.at(-1)!;
+    expect(fromTranscript(saved.conversationHistory, saved.researchLog, saved.plannerUsage, saved.pendingTurns).blocks
+      .flatMap((b) => b.type === 'message' && b.role === 'user' ? [b.text] : [])).toEqual(['build it']);
+
+    const resent = session.continueConversation('check the tests');
+    calls[1].finish(prose('Tests passed.'));
+    await resent;
+    expect(rebuilt()).toEqual(['build it', 'check the tests']);
+  });
+
   it('answers a message at once while the running task carries on', async () => {
     const { session, calls } = await liveRun();
 

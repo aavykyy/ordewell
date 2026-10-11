@@ -51,8 +51,12 @@ own presentation; it never re-derives the conversation from raw messages.
   context fill is derived only for the planner's own calls, and omitted when
   either half is unknown.
 - **The saved subset for reload (R1).** `fromTranscript` rebuilds the view a
-  session reopens with from its persisted transcript and research log: settled
-  messages, tool rows, subagent blocks and digests, and the token line. It
+  session reopens with from its persisted transcript, research log and pending
+  turns: settled messages, tool rows, subagent blocks and digests, then inputs
+  still waiting for a turn to land, and the token line. Pending user messages
+  keep their skill-load notices; wake-up digests keep their run-update role.
+  The live view adopts these inputs when their turn starts or its transcript
+  lands, so each input is drawn once. It
   deliberately leaves out thinking and everything that was only ever streamed —
   no `transcriptAt` beyond what the transcript itself records, and no reliance
   on the in-flight view. What reload shows is what was saved, not what was seen.
@@ -126,3 +130,4 @@ the same word.)
 
 - 2026-09-27 — accepted; queued prompts moved into core the same day.
 - 2026-10-11 — the pending plan edit list removed with the queue behind it ([ADR-0029](0029-the-supervisor.md)).
+- 2026-10-11 — reload includes pending turn inputs and adopts them on replay or settlement.

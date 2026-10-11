@@ -1,5 +1,5 @@
 import type { ResearchLogEntry, ResearchStep, SkillLoadNotice, SubagentLogEntry } from '../models/Task';
-import type { SerializedConversationMessage } from '../services/SessionMessage';
+import type { SerializedConversationMessage, SerializedPendingTurn } from '../services/SessionMessage';
 import { isMeasured, usageLine, type PlannerUsage } from '../models/Usage';
 import type { DisplayBlock, MessageRole } from './blocks';
 import { planMarker, settledMessage, skillLoadBlock, skillLoadNotice, subagentBlock, toolFromStep, usageBlock, userMessage } from './records';
@@ -125,11 +125,14 @@ function research(log: readonly ResearchLogEntry[]): Placed[] {
  *
  * The research log interleaves with the transcript by time. Entries older than
  * a compaction's first kept message went with the turns it condensed.
+ * Pending inputs follow the landed records in arrival order; they are not
+ * transcript entries until their turn lands.
  */
 export function fromTranscript(
   conversationHistory: readonly SerializedConversationMessage[] | undefined,
   researchLog: readonly ResearchLogEntry[] | undefined,
   plannerUsage?: PlannerUsage,
+  pendingTurns: readonly SerializedPendingTurn[] = [],
 ): ConversationView {
   const history = conversationHistory ?? [];
   const compacted = history[0]?.kind === 'compaction' ? history[0] : undefined;
@@ -147,9 +150,22 @@ export function fromTranscript(
   let nextId = 1;
   const id = () => `b${nextId++}`;
   const blocks = placed.map((item) => item.build(id));
+  const pendingInputs: NonNullable<ConversationView['pendingInputs']>[number][] = [];
+
+  for (const input of pendingTurns) {
+    const start = blocks.length;
+    if (input.source === 'supervisor') {
+      blocks.push(settledMessage(id(), 'wake_up', input.text));
+    } else {
+      const skills = (input.skills ?? []).map(skillLoadNotice);
+      blocks.push(userMessage(id(), input.text, skills));
+      blocks.push(...skills.map((skill) => skillLoadBlock(id(), skill)));
+    }
+    pendingInputs.push({ input: { ...input, skills: input.skills?.map(skillLoadNotice) }, blockIds: blocks.slice(start).map((block) => block.id) });
+  }
 
   if (plannerUsage && isMeasured(plannerUsage.totals)) blocks.push(usageBlock(id(), usageLine(plannerUsage)));
 
   const transcriptAt = history.reduce<string | undefined>((latest, e) => (latest === undefined || e.timestamp > latest ? e.timestamp : latest), undefined);
-  return { blocks, nextId, ...(transcriptAt ? { transcriptAt } : {}) };
+  return { blocks, nextId, ...(transcriptAt ? { transcriptAt } : {}), ...(pendingInputs.length > 0 ? { pendingInputs } : {}) };
 }

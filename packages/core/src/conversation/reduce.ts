@@ -1,5 +1,5 @@
 import type { ResearchStep } from '../models/Task';
-import type { SessionMessage } from '../services/SessionMessage';
+import type { SerializedPendingTurn, SessionMessage } from '../services/SessionMessage';
 import { isMeasured } from '../models/Usage';
 import type { DisplayBlock, MessageBlock, PlanBlock, ToolBlock } from './blocks';
 import { pendingTool, planMarker, settledMessage, settledTool, skillLoadBlock, toolFromStep, userMessage } from './records';
@@ -27,6 +27,8 @@ export interface ConversationView extends BlockList {
    * carries, so entries after this one are what is new in it.
    */
   readonly transcriptAt?: string;
+  /** Reloaded arrivals, keyed by pending turn id until the live turn or transcript accounts for them. */
+  readonly pendingInputs?: readonly { input: SerializedPendingTurn; blockIds: readonly string[] }[];
 }
 
 export const EMPTY_CONVERSATION: ConversationView = { blocks: [], nextId: 1 };
@@ -59,13 +61,46 @@ function finalSegmentIndex(blocks: readonly DisplayBlock[], turnId: string, past
 }
 
 function openTurn(view: ConversationView, { turnId, prompt = '', skills = [], wakeUps = [] }: Message<'planner_turn_started'>): ConversationView {
-  if (wakeUps.length === 0) return promptLine(view, turnId, prompt, skills);
+  const adopted = takePendingInputs(view, prompt, wakeUps, turnId);
+  view = adopted.view;
+  wakeUps = wakeUps.slice(adopted.wakeUps);
+  if (wakeUps.length === 0) return adopted.prompt || (prompt === '' && adopted.wakeUps > 0) ? view : promptLine(view, turnId, prompt, skills);
   // A wake-up turn has no message; otherwise the run updates go ahead of the
   // message they were delivered with, where the transcript keeps them.
-  const said = prompt === '' ? view : promptLine(view, turnId, prompt, skills);
+  const said = prompt === '' || adopted.prompt ? view : promptLine(view, turnId, prompt, skills);
   const at = prompt === '' ? said.blocks.length : findLastIndex(said.blocks, (b) => b.type === 'message' && b.role === 'user' && b.turnId === turnId);
   const updates = wakeUps.map((text, n) => settledMessage(`b${said.nextId + n}`, 'wake_up', text, turnId));
   return { ...said, blocks: [...said.blocks.slice(0, at), ...updates, ...said.blocks.slice(at)], nextId: said.nextId + updates.length };
+}
+
+function takePendingInputs(view: ConversationView, prompt: string | undefined, wakeUps: readonly string[], turnId?: string): { view: ConversationView; prompt: boolean; wakeUps: number } {
+  const pending = view.pendingInputs ?? [];
+  const users = pending.filter(({ input }) => input.source === 'user');
+  const updates = pending.filter(({ input }) => input.source === 'supervisor');
+  const taken = new Set<string>();
+  let matchedPrompt = false;
+  // PlanTurns joins a batch's user messages, but reload draws each arrival.
+  for (let n = 1; prompt !== undefined && n <= users.length; n++) {
+    if (users.slice(0, n).map(({ input }) => input.text).join('\n\n') !== prompt) continue;
+    for (const { input } of users.slice(0, n)) taken.add(input.id);
+    matchedPrompt = true;
+    break;
+  }
+  let matchedUpdates = 0;
+  while (matchedUpdates < wakeUps.length && updates[matchedUpdates]?.input.text === wakeUps[matchedUpdates]) {
+    taken.add(updates[matchedUpdates++].input.id);
+  }
+  if (taken.size === 0) return { view, prompt: false, wakeUps: 0 };
+  const blockIds = new Set(pending.filter(({ input }) => taken.has(input.id)).flatMap(({ blockIds }) => blockIds));
+  return {
+    view: {
+      ...view,
+      blocks: turnId === undefined ? view.blocks : view.blocks.map((block) => blockIds.has(block.id) ? { ...block, turnId } : block),
+      pendingInputs: pending.filter(({ input }) => !taken.has(input.id)),
+    },
+    prompt: matchedPrompt,
+    wakeUps: matchedUpdates,
+  };
 }
 
 function promptLine(view: ConversationView, turnId: string, prompt: string, skills: NonNullable<Message<'planner_turn_started'>['skills']>): ConversationView {
@@ -246,6 +281,8 @@ function syncTranscript(view: ConversationView, { plan, turnId }: Message<'plan_
   let latest = view.transcriptAt;
   for (const [i, entry] of history.entries()) {
     const isNew = view.transcriptAt === undefined || entry.timestamp > view.transcriptAt;
+    if (isNew && entry.role === 'user' && !entry.kind) next = takePendingInputs(next, entry.content, []).view;
+    if (isNew && entry.kind === 'wake_up') next = takePendingInputs(next, undefined, [entry.content]).view;
     if (isNew && entry.kind === 'plan_generated') next = markPlan(next, entry.content, i === committed ? turnId : undefined);
     if (isNew && entry.kind === 'system') next = append(next, (id) => settledMessage(id, 'system', entry.content));
     if (isNew && entry.kind === 'compaction') next = markCompaction(next, entry.content);
