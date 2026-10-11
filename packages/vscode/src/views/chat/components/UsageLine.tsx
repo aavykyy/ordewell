@@ -22,16 +22,20 @@ export function formatCost(currency: string, amount: number): string {
   return currency.toLowerCase() === 'usd' ? `$${value}` : `${value} ${currency.toUpperCase()}`;
 }
 
-function measures(totals: UsageTotals): string[] {
+export function measures(totals: UsageTotals, unknown = false): string[] {
   const parts: string[] = [];
   if (totals.inputTokens !== undefined) parts.push(`${formatCount(totals.inputTokens)} in`);
+  else if (unknown) parts.push('unknown in');
   if (totals.outputTokens !== undefined) parts.push(`${formatCount(totals.outputTokens)} out`);
+  else if (unknown) parts.push('unknown out');
   if (totals.cachedInputTokens !== undefined) parts.push(`${formatCount(totals.cachedInputTokens)} cached`);
   for (const [currency, amount] of Object.entries(totals.reportedCost ?? {})) parts.push(formatCost(currency, amount));
+  if (unknown && !Object.keys(totals.reportedCost ?? {}).length) parts.push('cost unknown');
   return parts;
 }
 
 export default function UsageLine({ block }: { block: UsageBlock }) {
+  const models = block.byModel?.map((m) => `${m.source} / ${m.model ?? 'model unknown'}: ${measures(m.totals, true).join(' · ')}`).join('\n');
   const agents = Object.entries(block.bySubagent ?? {});
   const agentTitle = agents
     .map(([id, totals]) => `${id}: ${measures(totals).join(' · ') || 'no usage reported'}`)
@@ -39,7 +43,8 @@ export default function UsageLine({ block }: { block: UsageBlock }) {
 
   return (
     <div className="usage-line" role="status">
-      <span className="usage-line-tokens">{measures(block.totals).join(' · ')}</span>
+      <span className="usage-line-tokens" title={models}>{measures(block.totals).join(' · ')}</span>
+      {block.model && !block.contextFill && <span className="usage-line-context">context unknown</span>}
       {block.contextFill && (
         <span
           className="usage-line-context"

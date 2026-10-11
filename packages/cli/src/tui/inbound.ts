@@ -346,6 +346,7 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
           ...(task.continuable ? { continuable: true } : {}),
           awaitingApproval: typeof task.awaitingApproval === 'number' && task.awaitingApproval > 0 ? task.awaitingApproval : undefined,
           ...(task.mergeGate?.length ? { mergeGate: task.mergeGate.map(String) } : {}),
+          ...(Array.isArray(task.attemptUsage) ? { attemptUsage: task.attemptUsage as TaskStatusUpdate['attemptUsage'] } : {}),
           ...(task.forcedPastGate?.length ? { forcedPastGate: task.forcedPastGate.map(String) } : {}),
         };
       }

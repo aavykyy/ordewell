@@ -5388,3 +5388,10 @@ body {
   font-size: 12px;
   line-height: 1;
 }
+
+.task-usage, .plan-usage {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+.task-usage { margin-left: 6px; }
+.plan-usage { padding: 4px 8px; }

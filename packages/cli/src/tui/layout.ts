@@ -1,11 +1,11 @@
-import { pad, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
+import { pad, sanitize, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
 import { cursorInLines, type CursorPosition } from './editor';
-import { checkpointCardLines, conversationLines, tokenLine } from './blocks';
+import { checkpointCardLines, conversationLines, taskUsageText, usageMeasures, tokenLine } from './blocks';
 import { chatEditorRoomFor, chatPaneWidth, planPaneWidth } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
 import { findTask, planRows, plannerInFlight, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
 import { modesForTask } from './taskAssignment';
-import { ALL_PROVIDERS, approvalLabel, awaitingLabel, hasHiddenDetail, markAction, runnerForProvider, taskRowView, type AiProvider, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
+import { ALL_PROVIDERS, approvalLabel, awaitingLabel, hasHiddenDetail, markAction, runnerForProvider, taskRowView, planUsage, type AiProvider, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -486,7 +486,8 @@ const FIRST_ROW_LINE = 2;
 
 export function planLayout(state: TuiState, rows: number, cols: number): PlanLayout {
   const done = state.tasks.filter((t) => t.status === 'completed').length;
-  const lines = [style.bold(`Plan ${done}/${state.tasks.length}`), ''];
+  const totalUsage = planUsage(state.tasks);
+  const lines = [style.bold(`Plan ${done}/${state.tasks.length}`), totalUsage.attempts ? style.grey(truncate(`Tasks total: ${taskUsageText(totalUsage)}`, cols)) : ''];
 
   const rowSpans: LineSpan[] = [];
   const orderOf = new Map(state.tasks.map((task) => [task.id, task.order]));
@@ -626,7 +627,9 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
     return prefix + (selected ? style.bold(line) : line);
   });
 
-  const model = task.assignedModel?.modelLabel ?? (task.type === 'ai' ? 'default model' : '');
+  const model = row.usage
+    ? [...new Set((row.usage.byModel ?? []).map((m) => sanitize(m.model ?? 'model unknown')))].join(', ') || 'model unknown'
+    : task.assignedModel?.modelLabel ?? (task.type === 'ai' ? 'default model' : '');
   const effort = task.type === 'ai'
     ? `effort: ${task.assignedModel?.thinkingEffort ?? 'default'}`
     : '';
@@ -645,6 +648,10 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   const skills = (task.skills ?? []).join(' · ');
   const meta = [activity, runner, model].filter(Boolean).join(' · ');
   if (meta) lines.push(style.grey(truncate(`${bodyPad}${meta}`, cols)));
+  if (row.usage) lines.push(style.grey(truncate(`${bodyPad}${taskUsageText(row.usage)}`, cols)));
+  if (expanded && row.usage) {
+    for (const model of row.usage.byModel ?? []) lines.push(...wrap(`${bodyPad}${sanitize(model.model ?? 'model unknown')}: ${usageMeasures(model.totals, true).join(' · ')}`, cols).map(style.grey));
+  }
   if (skills) lines.push(style.grey(truncate(`${bodyPad}skills: ${skills}`, cols)));
   if (effort || mode) lines.push(style.grey(truncate(`${bodyPad}${[effort, mode].filter(Boolean).join(' · ')}`, cols)));
   // The one isolation state that needs the user; every other stays out of the
