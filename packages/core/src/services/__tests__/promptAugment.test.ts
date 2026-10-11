@@ -345,7 +345,7 @@ describe('composeContinuationPrompt (ADR-0018, K1)', () => {
 
     expect(prompt.startsWith('also handle arrays\n')).toBe(true);
     expect(prompt).toContain('continuing this task in the same session');
-    expect(prompt).toContain('recreated from the integration branch');
+    expect(prompt).toContain('Check the working tree');
     expect(prompt).toContain('call the `task_complete` tool with status `done`');
     expect(prompt).not.toContain('ORDEWELL');
   });

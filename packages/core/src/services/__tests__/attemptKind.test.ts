@@ -45,7 +45,7 @@ describe('what each kind decides', () => {
   it.each(table)('a %s attempt', async (name, expected) => {
     const kind = KINDS[name];
     const runs = {
-      attemptCwd: vi.fn(async (_t: unknown, opts: { repair: boolean }) => ({ cwd: opts.repair ? 'kept' : 'run', worktree: true })),
+      attemptCwd: vi.fn(async (_t: unknown, intent: 'fresh' | 'repair' | 'continuation') => ({ cwd: intent === 'repair' ? 'kept' : 'run', worktree: true })),
       workspaceCwd: vi.fn(async () => ({ cwd: 'workspace', worktree: false })),
     };
 
@@ -96,7 +96,7 @@ describe('attemptPrompt', () => {
     ['change', { has: ['ORIGINAL BODY', '### Skill: tdd'], lacks: ['## Previous attempt'], reads: [] }],
     ['ops', { has: ['ORIGINAL BODY', '### Skill: tdd', '## Previous attempt', 'created resource group rg-dev'], lacks: [], reads: ['previousAttempt'] }],
     ['repair', { has: ['MERGE THE INTEGRATION BRANCH'], lacks: ['ORIGINAL BODY', '### Skill: tdd', '## Previous attempt'], reads: ['repairPrompt'] }],
-    ['continued change', { has: ['Your working directory was recreated'], lacks: ['ORIGINAL BODY', '### Skill: tdd'], reads: [] }],
+    ['continued change', { has: ['Check the working tree'], lacks: ['ORIGINAL BODY', '### Skill: tdd'], reads: [] }],
     ['continued ops', { has: ['in the same checkout', 'was not undone'], lacks: ['ORIGINAL BODY', '## Previous attempt'], reads: [] }],
   ];
 

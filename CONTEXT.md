@@ -508,6 +508,13 @@ a status carries only whether it holds (`continuable`), never the session id.
 The first turn is the message plus a short reminder of the done and checkpoint
 protocol — the required `task_complete`/`checkpoint` tools
 (`composeContinuationPrompt`) — not the original prompt.
+In an isolated run its task workspace starts at the integration tips and
+restores the previous attempt's unlanded work, including uncommitted edits
+saved on `ordewell-preserved/` branches before the kept worktrees go. A conflict
+in any repo restores none of it: the agent gets the integration tips and the
+exact preserved branches and inspection commands. A shared run's edits remain
+in its checkout. The continuation message states which happened, so the
+saved session does not assume missing edits still exist.
 A session the runner
 cannot find fails the attempt with a message that suggests Retry; a fresh
 session is never started in its place.
@@ -835,7 +842,9 @@ every repository of the repo group.
 `ordewell/<run-id>/<order>-<slug>`. It is where that task's Runner executes.
 Created when the task starts, removed when it integrates cleanly. A failed or
 conflicted task's worktree is kept so its work can be inspected; a retry
-discards it and starts a fresh one from the current integration tip. Ignored
+discards it and starts a fresh one from the current integration tip. A
+continue restores its previous work on top of that tip, with the preserved
+branches named to the agent if a conflict prevents restoration. Ignored
 artifacts (`node_modules`, `.env*`, `.claude`, …) are linked in from the main
 worktree so it is runnable at once — never `.ordewell/`, which stays at the main
 root. `node_modules` (the root's and each workspace package's) is a real

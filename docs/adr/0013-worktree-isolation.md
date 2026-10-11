@@ -101,8 +101,11 @@ everything below applies per repo of the group.
   A failed verdict, a stop and a cancel keep the worktree (`keep: true`) — a
   runner is often cancelled because it looked stuck after finishing, and the
   finished work must survive. Retry, removal from the plan and a failed spawn
-  remove it. The next attempt's `prepare` replaces a kept worktree from the
-  current integration tip, so nothing piles up.
+  remove it. A fresh attempt's `prepare` replaces a kept worktree from the
+  current integration tip. A continue restores the previous attempt's work
+  on top of that tip, with a conflict fallback naming its preserved branches
+  ([ADR-0018, K1](0018-structured-runner-transport.md)), so the saved runner
+  session sees the edits it remembers.
 - **Dirty trees.** Modified tracked files in any repo of the group make
   isolated execution unavailable for that run (`dirty`); untracked and ignored
   files do not, because the bootstrap accounts for them. `isActive` returns the
@@ -378,3 +381,4 @@ everything below applies per repo of the group.
 - 2026-10-11 — merge at gates automatically, and the supervisor's `merge_all` at Act, as opt-in exits from "never merged for the user" ([ADR-0029](0029-the-supervisor.md)).
 - 2026-10-11 — implemented the automatic gate setting and core merge_all action.
 - 2026-10-11 — `merge_all` reaches the planner as a tool through the command seam, allowed only to a supervisor at Act ([ADR-0029](0029-the-supervisor.md)).
+- 2026-10-11 — a continue restores the previous attempt's preserved work (ADR-0018, K1).
