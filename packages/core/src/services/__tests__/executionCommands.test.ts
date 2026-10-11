@@ -458,13 +458,13 @@ describe('the command seam: who asked', () => {
     },
   );
 
-  it('refuses a supervisor at Act as at Watch until Act has its own rules', async () => {
+  it('refuses a supervisor that is off for the run', async () => {
     const env = await running();
 
-    const outcome = await env.run({ command: 'stop_task', task: 't1' }, { kind: 'supervisor', level: 'act' });
+    const outcome = await env.run({ command: 'stop_task', task: 't1' }, { kind: 'supervisor', level: 'off' });
 
-    expect(outcome).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(/at Watch/) });
-    expect(env.timeline().at(-1)!.record).toMatchObject({ actor: 'supervisor', level: 'act', outcome: 'refused' });
+    expect(outcome).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(/supervisor is off for this run/) });
+    expect(taskOf(env.session, 't1')!.status).toBe('in_progress');
   });
 
   it('keeps each call in the transcript with who asked, which a reload shows as it was shown live', async () => {
@@ -499,6 +499,114 @@ describe('the command seam: who asked', () => {
   });
 });
 
+describe('the command seam: a supervisor at Act', () => {
+  const ACT: ExecutionActor = { kind: 'supervisor', level: 'act' };
+
+  /** Task 1 running in Guarded, where a planner turn's starts would ask the user. */
+  async function guarded() {
+    return running({ autonomous: false });
+  }
+
+  async function failed() {
+    const env = await guarded();
+    env.latest('t1').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('failed'));
+    return env;
+  }
+
+  async function asking() {
+    const env = await guarded();
+    env.latest('t1').requestPermission('p1', 'Bash', { command: 'git push --force' });
+    await vi.waitFor(() => expect(env.session.outstandingApprovals()).toHaveLength(1));
+    return env;
+  }
+
+  async function idle() {
+    const env = setup({ autonomous: false });
+    env.session.loadPlan(plan([task('t1', 1), task('t2', 2)]), 'goal', testWorkspace, { persist: false });
+    return env;
+  }
+
+  it.each([
+    ['run_plan', idle, { command: 'run_plan' }, 'Started the plan — by supervisor.'],
+    ['run_task', idle, { command: 'run_task', task: 't2' }, 'Started task #2 "Task t2" — by supervisor.'],
+    ['stop_task', guarded, { command: 'stop_task', task: 't1' }, 'Stopped task #1 "Task t1" — by supervisor.'],
+    ['stop_run', guarded, { command: 'stop_run' }, 'Stopped the run — by supervisor.'],
+    ['retry_task', failed, { command: 'retry_task', task: 't1', from: 'session', message: 'fix the import' }, 'Continued task #1 "Task t1" in its saved session — by supervisor: "fix the import"'],
+    ['message_task', guarded, { command: 'message_task', task: 't1', text: 'use the cache' }, 'Sent task #1 "Task t1" a message — by supervisor: "use the cache"'],
+    ['answer_approval (deny)', asking, { command: 'answer_approval', task: 't1', answer: 'deny', note: 'push without --force' }, 'Denied a request of task #1 "Task t1" — by supervisor, with the note "push without --force".'],
+    ['answer_approval (escalate)', asking, { command: 'answer_approval', task: 't1', answer: 'escalate' }, 'Left a request of task #1 "Task t1" for you to answer — by supervisor.'],
+  ] as const)('runs %s without asking anyone, even in Guarded, and the timeline reads like the button press, by supervisor', async (_name, arrange, command, line) => {
+    const env = await arrange();
+
+    const outcome = await env.run(command as ExecutionCommand, ACT);
+
+    expect(outcome).toMatchObject({ ok: true });
+    expect(env.cards()).toHaveLength(0);
+    expect(env.timeline().at(-1)).toMatchObject({ record: { actor: 'supervisor', level: 'act', outcome: 'done' }, text: line });
+  });
+
+  it('still never allows an approval', async () => {
+    const env = await asking();
+
+    expect(await env.run({ command: 'answer_approval', task: 't1', answer: 'allow' }, ACT)).toMatchObject({ ok: false, message: expect.stringContaining('answer_approval never allows') });
+    expect(env.session.outstandingApprovals()).toHaveLength(1);
+  });
+
+  it('still starts no task the user did not approve, unless the supervisor added it', async () => {
+    const env = await guarded();
+    env.session.loadPlan(plan([task('t1', 1), task('t9', 2)], { approvedTasks: ['t1'] }), 'goal', testWorkspace, { persist: false });
+
+    expect(await env.run({ command: 'run_task', task: 't9' }, ACT)).toMatchObject({ ok: false, message: expect.stringMatching(/added after the user approved the plan/) });
+    expect(env.spawned('t9')).toHaveLength(0);
+  });
+});
+
+describe('the command seam: merge_all', () => {
+  /** A run whose change task landed, so its ops task waits for Merge all at its gate. */
+  async function landed(mergeResult?: FakeWorktreeIsolation['mergeResult']) {
+    const isolation = new FakeWorktreeIsolation();
+    if (mergeResult) isolation.mergeResult = mergeResult;
+    const env = setup({ isolation });
+    env.session.loadPlan(plan([task('t1', 1), task('o2', 2, { ops: true, dependencies: ['t1'] })]), 'goal', testWorkspace, { persist: false });
+    await env.session.executePlan();
+    env.latest('t1').reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(env.session.mergeGate('o2')).toEqual(['t1']));
+    return { ...env, merges: () => isolation.calls.filter((c) => c.op === 'mergeIntoCheckedOut').length };
+  }
+
+  it.each<[string, ExecutionActor, RegExp]>([
+    ['a planner turn the user started', PLANNER, /^Merge all is the user's: they are in this conversation/],
+    ['a supervisor at Watch', { kind: 'supervisor', level: 'watch' }, /at Watch/],
+    ['a supervisor that is off', { kind: 'supervisor', level: 'off' }, /supervisor is off for this run/],
+  ])('is refused to %s, and merges nothing', async (_who, actor, reason) => {
+    const env = await landed();
+
+    expect(await env.run({ command: 'merge_all' }, actor)).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(reason) });
+    expect(env.merges()).toBe(0);
+    expect(env.session.mergeGate('o2')).toEqual(['t1']);
+  });
+
+  it('merges for a supervisor at Act, without asking, and the timeline says so', async () => {
+    const env = await landed();
+
+    expect(await env.run({ command: 'merge_all' }, { kind: 'supervisor', level: 'act' })).toEqual({ ok: true, message: 'Merged the run\'s landed work into the user\'s branch. Tasks waiting at a merge gate for it can start.' });
+    expect(env.merges()).toBe(1);
+    expect(env.session.mergeGate('o2')).toEqual([]);
+    expect(env.timeline().at(-1)!.text).toBe('Merged the run\'s work into your branch — by supervisor.');
+  });
+
+  it('refuses with the reason when the merge stops, and the gate keeps waiting', async () => {
+    const env = await landed({ outcome: 'conflict', repo: '.', files: ['src/a.ts'] });
+
+    expect(await env.run({ command: 'merge_all' }, { kind: 'supervisor', level: 'act' })).toEqual({
+      ok: false, outcome: 'refused', message: 'Merge all stopped: it conflicts in .: src/a.ts. Nothing was merged; tell the user, who resolves it.',
+    });
+    expect(env.session.mergeGate('o2')).toEqual(['t1']);
+  });
+
+});
+
 describe('the command seam\'s extension points', () => {
   function stubHost(): ExecutionHost {
     const tasks = [task('t1', 1)];
@@ -507,7 +615,7 @@ describe('the command seam\'s extension points', () => {
       scheduling: () => false, hasLiveWork: () => true, running: () => true, maxParallel: () => 3, runBlocked: () => false,
       dependencyMet: () => true, mergeGate: () => [], waitingRequests: () => [],
       runPlan: vi.fn(), startTask: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), retryTask: vi.fn(), continueTask: vi.fn(),
-      messageTask: vi.fn(), denyRequest: vi.fn(), record: vi.fn(),
+      messageTask: vi.fn(), denyRequest: vi.fn(), mergeAll: vi.fn(), record: vi.fn(), guardTripped: vi.fn(), heldEdit: () => false, deferUntilLanded: vi.fn(),
     };
   }
 
@@ -521,15 +629,30 @@ describe('the command seam\'s extension points', () => {
     expect(host.stopTask).toHaveBeenCalledWith('t1');
   });
 
-  it('refuses a call a loop guard trips, with its note, before anything runs', async () => {
+  it('refuses a call a loop guard trips, with its note, tells the user, and runs nothing', async () => {
     const host = stubHost();
-    const guard = vi.fn(() => 'Retried twice already: change the prompt or the model first.');
+    const trip = { key: 'retry-limit:t1', refusal: 'Retried twice already: change the prompt or the model first.', escalation: 'I retried task 1 twice.' };
+    const guard = vi.fn(() => trip);
     const commands = new ExecutionCommands({ host, consent: { request: vi.fn() }, guards: [guard] });
 
     expect(await commands.run({ command: 'stop_task', task: 't1' }, PLANNER)).toEqual({
       ok: false, outcome: 'refused', message: 'Retried twice already: change the prompt or the model first.',
     });
-    expect(guard).toHaveBeenCalledWith(PLANNER, { command: 'stop_task', task: 't1' }, expect.objectContaining({ id: 't1' }));
+    expect(guard).toHaveBeenCalledWith(PLANNER, { command: 'stop_task', task: 't1' }, { task: expect.objectContaining({ id: 't1' }), ref: '#1' });
+    expect(host.guardTripped).toHaveBeenCalledWith(trip);
     expect(host.stopTask).not.toHaveBeenCalled();
   });
+
+  it('holds a start the turn\'s own edit changes until the edit lands, and starts nothing now', async () => {
+    const host = { ...stubHost(), running: () => false, hasLiveWork: () => false, heldEdit: vi.fn(() => true) };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+    const retry: ExecutionCommand = { command: 'retry_task', task: 't1', from: 'fresh' };
+
+    expect(await commands.run(retry, PLANNER)).toMatchObject({ ok: true, message: expect.stringMatching(/^Queued: retry task #1 "Task t1" happens once your edit lands/) });
+    expect(host.heldEdit).toHaveBeenCalledWith('t1');
+    expect(host.deferUntilLanded).toHaveBeenCalledWith(retry, PLANNER);
+    expect(host.startTask).not.toHaveBeenCalled();
+    expect(host.retryTask).not.toHaveBeenCalled();
+  });
+
 });

@@ -1646,12 +1646,17 @@ the next run (ADR-0001's rule for modes). Off: the planner speaks only when the
 user writes. Watch: wake-up turns read and suggest; execution tools and plan
 edits are refused, with a note telling it to suggest the action to the user.
 Act: wake-up turns may also run, stop and retry tasks, message runners, deny
-approvals, edit the plan and merge, inside the loop guards — not offered by
-the surfaces yet, and a plan set to Act through the daemon runs as Watch until
-its rules exist. Saved on the run as `runSettings.supervisorLevel`. A tripped
-wake-up-rate guard or a failed supervisor lowers it for the rest of the run;
-nothing raises it mid-run. A slim precursor of the mandate
-(#23): Watch is `observe`, Act becomes `control` + `replan`.
+approvals, edit the plan task by task (a whole new plan is refused) and merge
+(`merge_all`), without asking, inside the **Loop guards**; a task it adds is
+approved to run, ops tasks included (`addedBy: 'supervisor'`, shown on the
+task). Saved on the run as `runSettings.supervisorLevel`. A tripped
+wake-up-rate guard or a failed supervisor lowers it for the rest of the run, and
+so can the user at any time (`Session.lowerSupervisor`: drop to Watch, or turn
+off), at once and in the wake-up turn under way too; nothing raises it mid-run.
+A run the supervisor restarts itself, or a usage-limit reset resumes, keeps the
+level the run had; only a start of the user's captures the plan's setting
+afresh. A slim precursor of the mandate (#23): Watch is `observe`, Act becomes
+`control` + `replan`.
 *Avoid:* "autonomous", "autonomy" or "auto" for it — those name the runner
 permission modes and the Full/Guarded autonomy level (ADR-0001), a separate
 setting; a Guarded session can have an Act supervisor. *Avoid:* "mandate" until
@@ -1721,17 +1726,26 @@ is the user's: executing the plan approves every task in it, and a task the
 user starts or retries themselves is approved too (`approvedTasks` on the
 plan); a start from anyone else is refused for a task outside that set, so a
 task the planner added since waits for the user.
+A task an Act supervisor adds is approved as its edit lands. A start a planner
+turn asks for after editing that task in the same reply waits for the held
+edit to land, then goes through the seam again. `merge_all` is refused in a
+user-started turn — the user presses Merge all — and allowed only to a
+supervisor at Act.
 `answer_approval` denies or escalates, never allows: allowing would widen the
 mode the plan gave the task.
 *Avoid:* "command surface" — that is the set of user commands by name (slash
 commands and `ordewell` subcommands); *Avoid:* "action API".
 
-**Loop guard** — a check at the Command seam that stops an Act supervisor
-spinning: a retry limit per task (default 2, set on the plan), no retry with
-the failed attempt's prompt and model unchanged, no re-adding a task it removed
-this run or reverting its own edit, and a wake-up-rate limit that drops the run
-to Watch. Each refusal is a note to the model; each tripped guard posts a
-supervisor message to the user.
+**Loop guard** — a check that stops an Act supervisor spinning, made where the
+action executes (`services/LoopGuards.ts`): a retry limit per task
+(`supervisorRetryLimit`, default 2) and no retry with the failed attempt's
+prompt and model unchanged, at the Command seam — a start of a failed task is a
+retry however it is asked for; no re-adding a task it removed or reverting its
+own edit, on the edit path; and a wake-up-rate limit (`WAKE_UP_RATE`) in the
+`Supervisor`, which drops the run to Watch. What they remember
+(`SupervisionMemory`) lasts from the user's start of a run to their next. Each
+refusal is a note to the model naming the guard and what would be accepted;
+each tripped guard posts a supervisor message to the user, once.
 *Avoid:* "rate limit" for the set — only one guard is about rate.
 
 ---

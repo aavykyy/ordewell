@@ -253,6 +253,9 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
           <span className="task-type-badge ops" title="An ops task: it changes no repository files and runs in your checkout, once the work it depends on is merged">Ops</span>
         )}
         <span className="task-title-text">{task.title}</span>
+        {task.addedBy === 'supervisor' && (
+          <span className="task-type-badge supervisor" title="The supervisor added this task during the run, at Act: it is approved to run without asking you">Added by supervisor</span>
+        )}
 
         {/* As plain as a task that waits on the user (ADR-0020). */}
         {/* Shown whether or not the plan reads as executing: the pause holds the

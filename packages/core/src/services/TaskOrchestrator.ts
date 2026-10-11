@@ -1,6 +1,6 @@
 import { McpAttachError } from './harness/ordewellBinding';
 import * as path from 'path';
-import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasksWithParents, taskOrderLabel } from '../models/Task';
+import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasksWithParents, taskOrderLabel, waitsForReset } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
 import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
@@ -1854,11 +1854,6 @@ const RELAPSE_MS = 5 * 60_000;
  * left uncommitted is on its kept branch, not in the new worktree.
  */
 const LIMIT_RESET_MESSAGE = 'Your usage limit has reset. Carry on with the task from where you stopped. Check the working tree first: changes you had not committed may not be in it.';
-
-/** A task paused on a usage limit that resumes on its own. */
-function waitsForReset(task: Readonly<Task>): boolean {
-  return task.status === 'awaiting_user' && task.awaitingReason === 'usage-limit' && !!task.resumeAt;
-}
 
 /** How much of an ops task's last attempt the next one is shown. */
 const OPS_RETRY_TAIL_LINES = 60;

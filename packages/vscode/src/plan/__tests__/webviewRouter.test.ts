@@ -125,6 +125,14 @@ describe('webview messages reach the session through one entry point each', () =
     expect(loadSession(h.session.sessionId, h.workspace)!.plan.supervisorLevel).toBe('watch');
   });
 
+  it('lowers the running supervisor at once, leaving the plan\'s level for the next run', async () => {
+    const lowerSupervisor = vi.spyOn(h.session, 'lowerSupervisor').mockImplementation(() => {});
+    h.session.loadPlan(plan(), 'goal', h.workspace);
+    await h.route({ type: 'lowerSupervisor', level: 'watch' });
+    expect(lowerSupervisor).toHaveBeenCalledWith('watch');
+    expect(h.lastPlan()).toBeTruthy();
+  });
+
   describe('task edits', () => {
     it('a model picked on a card is a session edit, broadcast to every surface', async () => {
       const assignment = { modelId: 'claude-opus-4-1', modelLabel: 'Claude Opus 4.1' };

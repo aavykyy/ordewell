@@ -71,6 +71,10 @@ function runConfirm(
     if (!state.sessionId) return step(closed);
     return step(closed, [taskActionEffect(closed, state.sessionId, overlay.action.taskId, 'force-start')]);
   }
+  if (overlay.action.kind === 'supervisor-act') {
+    if (!state.sessionId) return step(closed);
+    return step(closed, [{ type: 'setSupervisorLevel', sessionId: state.sessionId, level: 'act' }]);
+  }
   if (overlay.action.kind === 'merge-run' || overlay.action.kind === 'discard-run') {
     return confirmedHandoff(state, overlay.action.kind);
   }

@@ -1,0 +1,263 @@
+import { flattenTasks, flattenTasksWithParents, taskRef, type Task } from '../models/Task';
+import type { ExecutionCommandName, ExecutionRecord } from '../models/Execution';
+import { UPDATABLE_FIELDS } from './TaskOps';
+import type { ExecutionCommand } from './ExecutionCommands';
+
+/**
+ * The loop guards of an Act supervisor (ADR-0029): pure checks that stop it
+ * spinning. Each answers with the trip — the note the model is refused with,
+ * and the message the user is told — or null to let the action through. The
+ * session keeps what they remember of the run and calls them where the action
+ * executes: the command seam for retries, the edit path for edits, the
+ * supervisor for its wake-ups.
+ */
+
+/** Retries an Act supervisor may make of one task in a run when the plan sets none. */
+export const DEFAULT_SUPERVISOR_RETRY_LIMIT = 2;
+
+/**
+ * More wake-ups than `max` within `windowMs`, with no task passing in
+ * between, and the supervisor is spinning: woken, acting, and nothing
+ * getting done.
+ */
+export const WAKE_UP_RATE: WakeUpRate = { max: 6, windowMs: 30 * 60_000 };
+
+export interface WakeUpRate {
+  max: number;
+  windowMs: number;
+}
+
+/** A guard that tripped. */
+export interface GuardTrip {
+  /** The guard and what it caught, so the user is told of one trip once however often the model repeats the call. */
+  key: string;
+  /** The note the model is refused with: the guard, and what would be accepted. */
+  refusal: string;
+  /** What the user is told, as the supervisor's message. */
+  escalation: string;
+}
+
+/** How a guard names a task: "task #3 "Build"". */
+export interface GuardedTask {
+  id: string;
+  ref: string;
+  title: string;
+}
+
+/** A task as the command seam located it: the task, and how the plan numbers it. */
+export interface GuardTarget {
+  task: Readonly<Task>;
+  ref: string;
+}
+
+/** What an attempt was told and who ran it: a retry after a failure has to change one of them. */
+export interface AttemptShape {
+  prompt: string;
+  skills: readonly string[];
+  runner: string;
+  model: string | null;
+  effort: string | null;
+}
+
+export function attemptShape(task: Readonly<Task>): AttemptShape {
+  return {
+    prompt: task.prompt ?? '',
+    skills: [...(task.skills ?? [])].sort(),
+    runner: task.assignedRunner,
+    model: task.assignedModel?.modelId ?? null,
+    effort: task.assignedModel?.thinkingEffort ?? task.thinkingEffort ?? null,
+  };
+}
+
+/** Past `limit` retries of one task this run, a retry is refused and the task is the user's. */
+export function retryLimit(task: GuardedTask, retried: number, limit: number): GuardTrip | null {
+  if (retried < limit) return null;
+  const times = retried === 1 ? 'once' : `${retried} times`;
+  return {
+    key: `retry-limit:${task.id}`,
+    refusal: `Refused by the retry limit: you have retried ${named(task)} ${times} this run, the most the plan allows. It is escalated to the user now: tell them what you tried, and do not retry it again.`,
+    escalation: `Loop guard, retry limit: I retried ${named(task)} ${times} this run, the most the plan allows, and stopped. It needs you: retry it, change it or skip it.`,
+  };
+}
+
+/** A retry after a failure, with what the failed attempt was told and who ran it unchanged, is refused. */
+export function identicalRetry(task: GuardedTask, failedWith: AttemptShape | undefined, now: AttemptShape): GuardTrip | null {
+  if (!failedWith || stable(failedWith) !== stable(now)) return null;
+  return {
+    key: `identical-retry:${task.id}`,
+    refusal: `Refused: ${named(task)} failed with this same prompt and model, and an unchanged retry would fail the same way. Change something or escalate: edit its prompt with edit_plan, or move it to another model or runner, then retry; or tell the user.`,
+    escalation: `Loop guard, identical retry: I tried to retry ${named(task)} unchanged after it failed, and was stopped. If I cannot say what to change, it needs you.`,
+  };
+}
+
+/** What the supervisor's own edits did this run: the tasks it removed, and each field it changed. */
+export interface EditMemory {
+  removed: readonly { title: string; prompt: string }[];
+  changed: readonly { taskId: string; field: string; from: string }[];
+}
+
+export function noEdits(): EditMemory {
+  return { removed: [], changed: [] };
+}
+
+/** The memory after one of the supervisor's edits landed, taking the plan from `before` to `after`. */
+export function recordEdit(memory: EditMemory, before: readonly Task[], after: readonly Task[]): EditMemory {
+  const kept = new Map(flattenTasks([...after]).map((t) => [t.id, t]));
+  const removed = flattenTasks([...before]).filter((t) => !kept.has(t.id)).map((t) => ({ title: normalized(t.title), prompt: (t.prompt ?? '').trim() }));
+  const changed = flattenTasks([...before]).flatMap((was) => {
+    const now = kept.get(was.id);
+    return now ? editedFields(was, now).map((field) => ({ taskId: was.id, field, from: stable(was[field]) })) : [];
+  });
+  return { removed: [...memory.removed, ...removed], changed: [...memory.changed, ...changed] };
+}
+
+/**
+ * An edit taking the plan from `before` to `after` that re-adds a task the
+ * supervisor removed this run, or puts a field back to what it was before the
+ * supervisor's own earlier edit of it, is refused.
+ */
+export function oscillatingEdit(memory: EditMemory, before: readonly Task[], after: readonly Task[]): GuardTrip | null {
+  const was = new Map(flattenTasks([...before]).map((t) => [t.id, t]));
+  for (const task of flattenTasks([...after])) {
+    const prior = was.get(task.id);
+    if (!prior) {
+      const prompt = (task.prompt ?? '').trim();
+      const removed = memory.removed.find((r) => r.title === normalized(task.title) || (prompt !== '' && r.prompt === prompt));
+      if (removed) return reAdded(removed.title);
+      continue;
+    }
+    for (const field of editedFields(prior, task)) {
+      const value = stable(task[field]);
+      if (memory.changed.some((c) => c.taskId === task.id && c.field === field && c.from === value)) return reverted(task, field);
+    }
+  }
+  return null;
+}
+
+/** The fields a planner may edit that differ between two versions of one task. */
+export function editedFields(before: Readonly<Task>, after: Readonly<Task>): (keyof Task)[] {
+  return UPDATABLE_FIELDS.filter((field) => stable(before[field]) !== stable(after[field]));
+}
+
+function reAdded(title: string): GuardTrip {
+  return {
+    key: `re-add:${title}`,
+    refusal: `Edit refused: it re-adds "${title}", which you removed earlier this run. Re-adding what you removed is going round in circles; nothing was changed. Escalate to the user instead.`,
+    escalation: `Loop guard, oscillating edits: I tried to re-add "${title}", which I removed earlier this run, and stopped. It needs you to decide whether that task belongs in the plan.`,
+  };
+}
+
+function reverted(task: Readonly<Task>, field: string): GuardTrip {
+  return {
+    key: `revert:${task.id}:${field}`,
+    refusal: `Edit refused: it changes the ${field} of "${task.title}" back to what it was before your own earlier edit. Undoing your own edits is going round in circles; nothing was changed. Escalate to the user instead.`,
+    escalation: `Loop guard, oscillating edits: I tried to undo my own earlier change to the ${field} of "${task.title}", and stopped. It needs you to decide which way it should be.`,
+  };
+}
+
+/** Whether `wakeUps` (times, oldest first, since the last pass) holds more than the rate allows within its window of `now`. */
+export function wakeUpRateTripped(wakeUps: readonly number[], now: number, rate: WakeUpRate = WAKE_UP_RATE): boolean {
+  return wakeUps.filter((at) => now - at < rate.windowMs).length > rate.max;
+}
+
+/**
+ * What the loop guards remember while a supervisor acts, and the checks over
+ * it. The session keeps one from the user's start of a run to their next: a
+ * run the supervisor restarts itself, or a usage-limit reset resumes, is the
+ * same stretch of supervision, or every restart would wipe the retries it
+ * counts.
+ */
+export class SupervisionMemory {
+  private retries = new Map<string, number>();
+  private failedWith = new Map<string, AttemptShape>();
+  private edits = noEdits();
+  private told = new Set<string>();
+
+  /**
+   * The command seam's check of a supervisor's call. A start of a task that
+   * failed in this stretch is a retry, however it is asked for — `run_plan`
+   * included, which would start every failed task again.
+   */
+  check(command: ExecutionCommand, target: GuardTarget | undefined, tasks: readonly Task[], limit: number): GuardTrip | null {
+    const from = command.command === 'retry_task' ? command.from : undefined;
+    for (const { task, ref, unchangedCounts } of this.retried(command.command, from, target, tasks)) {
+      const guarded = { id: task.id, ref, title: task.title };
+      const trip = retryLimit(guarded, this.retries.get(task.id) ?? 0, limit)
+        ?? (unchangedCounts ? identicalRetry(guarded, this.failedWith.get(task.id), attemptShape(task)) : null);
+      if (trip) return trip;
+    }
+    return null;
+  }
+
+  /** A call at the seam went through: a supervisor's retry is counted. */
+  done(record: ExecutionRecord, tasks: readonly Task[]): void {
+    if (record.actor !== 'supervisor' || record.outcome !== 'done') return;
+    const { task: named } = record;
+    const found = named ? flattenTasks([...tasks]).find((t) => t.id === named.id) : undefined;
+    const target = found && named ? { task: found, ref: named.ref } : undefined;
+    for (const { task } of this.retried(record.command, undefined, target, tasks)) {
+      this.retries.set(task.id, (this.retries.get(task.id) ?? 0) + 1);
+    }
+  }
+
+  /** A task's attempt settled: a failure is remembered as what it ran with, until the task passes. */
+  settled(task: Readonly<Task>): void {
+    if (task.status === 'failed') this.failedWith.set(task.id, attemptShape(task));
+    else if (task.status === 'completed') this.failedWith.delete(task.id);
+  }
+
+  checkEdit(before: readonly Task[], after: readonly Task[]): GuardTrip | null {
+    return oscillatingEdit(this.edits, before, after);
+  }
+
+  /** One of the supervisor's edits landed. */
+  edited(before: readonly Task[], after: readonly Task[]): void {
+    this.edits = recordEdit(this.edits, before, after);
+  }
+
+  /** Whether the user is yet to hear of this trip; true once per trip, so a model repeating a refused call is not echoed. */
+  firstReport(trip: GuardTrip): boolean {
+    if (this.told.has(trip.key)) return false;
+    this.told.add(trip.key);
+    return true;
+  }
+
+  forget(): void {
+    this.retries.clear();
+    this.failedWith.clear();
+    this.edits = noEdits();
+    this.told.clear();
+  }
+
+  /** The tasks a call would retry, and whether an unchanged retry of each is the identical retry the guard refuses. */
+  private retried(command: ExecutionCommandName, from: 'fresh' | 'session' | undefined, target: GuardTarget | undefined, tasks: readonly Task[]): (GuardTarget & { unchangedCounts: boolean })[] {
+    switch (command) {
+      // A continue carries a new message, which is the change.
+      case 'retry_task': return target ? [{ ...target, unchangedCounts: from !== 'session' }] : [];
+      case 'run_task': return target && this.failedWith.has(target.task.id) ? [{ ...target, unchangedCounts: true }] : [];
+      case 'run_plan': return flattenTasksWithParents([...tasks])
+        .filter(({ task }) => this.failedWith.has(task.id) && task.status !== 'completed')
+        .map(({ task, parent }) => ({ task, ref: taskRef(task, parent ?? undefined), unchangedCounts: true }));
+      default: return [];
+    }
+  }
+}
+
+function named(task: GuardedTask): string {
+  return `task ${task.ref} "${task.title}"`;
+}
+
+function normalized(title: string): string {
+  return title.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/** A value as one string, objects with their keys in order, so two equal values read the same however they were built. */
+function stable(value: unknown): string {
+  if (value === undefined || value === null) return 'null';
+  if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
+  if (typeof value === 'object') {
+    const entries = Object.entries(value).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stable(v)}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}

@@ -5240,6 +5240,17 @@ body {
   color: var(--purple);
 }
 
+/* A task an Act supervisor added (ADR-0029) */
+.task-type-badge.supervisor {
+  background: var(--orange-subtle);
+  color: var(--orange);
+}
+
+.plan-supervisor-lower {
+  display: inline-flex;
+  gap: 4px;
+}
+
 .task-isolation-badge.gate {
   background: var(--orange-subtle);
   color: var(--orange);

@@ -1,7 +1,9 @@
 import { flattenTasksWithParents, resolveOrderLabel, taskRef, type Task, type TaskStatus } from '../models/Task';
 import type { ExecutionActor, ExecutionCommandName, ExecutionRecord, SupervisorLevel } from '../models/Execution';
 import type { ApprovalRequest, IApproval } from '../interfaces/IApproval';
+import type { IsolationMergeResult } from '../interfaces/IWorktreeIsolation';
 import { continuability } from './continuation';
+import type { GuardTarget, GuardTrip } from './LoopGuards';
 
 /** One call at the command seam, as every route words it (ADR-0029). Task references are resolved here. */
 export type ExecutionCommand =
@@ -13,7 +15,9 @@ export type ExecutionCommand =
   | { command: 'retry_task'; task: string; from: 'fresh' | 'session'; message?: string }
   | { command: 'message_task'; task: string; text: string }
   /** `answer` is checked here rather than typed: an `allow` must reach the seam to be refused with its reason. */
-  | { command: 'answer_approval'; task: string; approval?: string; answer: string; note?: string };
+  | { command: 'answer_approval'; task: string; approval?: string; answer: string; note?: string }
+  /** Merge all: the run's landed work into the user's branch (ADR-0013). */
+  | { command: 'merge_all' };
 
 /** What a call came to: `message` is written for the caller, a model included, to act on. */
 export type CommandOutcome =
@@ -30,22 +34,27 @@ export type Consent = { kind: 'allow' } | { kind: 'ask' } | { kind: 'refuse'; re
 export type SupervisorPolicy = (level: SupervisorLevel, command: ExecutionCommandName) => Consent;
 
 /**
- * Watch (ADR-0029): the supervisor reads and suggests, and every execution
- * command it calls is refused. Act runs as Watch until its own rules land.
+ * The supervisor levels (ADR-0029). Off: it does not act. Watch: it reads and
+ * suggests, and every execution command it calls is refused. Act: every
+ * command runs without asking — choosing Act is the consent — inside the loop
+ * guards; what a command may never do, like allowing an approval, is still
+ * refused by the command itself.
  */
-export const SUPERVISOR_WATCH: SupervisorPolicy = (level) => ({
-  kind: 'refuse',
-  reason: level === 'off'
-    ? 'The supervisor is off for this run, so it cannot act. Suggest it to the user instead.'
-    : 'You are the supervisor at Watch: you read and suggest, and cannot run, stop, retry or message tasks, or answer approvals. Suggest it to the user instead; their reply is an ordinary message, and you can do it then.',
-});
+export const SUPERVISOR_LEVELS: SupervisorPolicy = (level) => {
+  switch (level) {
+    case 'act': return { kind: 'allow' };
+    case 'watch': return { kind: 'refuse', reason: 'You are the supervisor at Watch: you read and suggest, and cannot run, stop, retry or message tasks, answer approvals or merge. Suggest it to the user instead; their reply is an ordinary message, and you can do it then.' };
+    case 'off': return { kind: 'refuse', reason: 'The supervisor is off for this run, so it cannot act. Suggest it to the user instead.' };
+  }
+};
 
 /**
- * A check that stops an actor spinning (ADR-0029's loop guards): the note
- * naming the guard and what would be accepted, or null to let the call
- * through. Run once the call is valid and consented to, before anyone is asked.
+ * A check that stops an actor spinning (ADR-0029's loop guards): the trip —
+ * the note naming the guard and what would be accepted, and what the user is
+ * told — or null to let the call through. Run once the call is valid and
+ * consented to, before anyone is asked.
  */
-export type LoopGuard = (actor: ExecutionActor, command: ExecutionCommand, task: Readonly<Task> | undefined) => string | null;
+export type LoopGuard = (actor: ExecutionActor, command: ExecutionCommand, target: GuardTarget | undefined) => GuardTrip | null;
 
 /** A runner request waiting on a task, as the caller is shown it. */
 export interface WaitingRequest {
@@ -92,8 +101,19 @@ export interface ExecutionHost {
   continueTask(taskId: string, message: string): Promise<void>;
   messageTask(taskId: string, text: string): void;
   denyRequest(requestId: string, note?: string): boolean;
+  /** Merge all, through the queue landings and the user's Merge all share. */
+  mergeAll(): Promise<IsolationMergeResult>;
   /** Keep the call in the timeline, worded as `text`. */
   record(record: ExecutionRecord, text: string): void;
+  /** A loop guard stopped a call: the user is told, as the supervisor's message. */
+  guardTripped(trip: GuardTrip): void;
+  /**
+   * The open planner turn holds an edit — to this task, or to any when none is
+   * named — that lands only when its reply ends.
+   */
+  heldEdit(taskId?: string): boolean;
+  /** Run the command again, as the same actor, once the open turn's reply has landed its edit. */
+  deferUntilLanded(command: ExecutionCommand, actor: ExecutionActor): void;
 }
 
 export interface ExecutionCommandsDeps {
@@ -107,6 +127,8 @@ export interface ExecutionCommandsDeps {
 
 /** Commands that start work: they need the user's approval of what they start, and ask in Guarded. */
 const STARTS: ReadonlySet<ExecutionCommandName> = new Set(['run_plan', 'run_task', 'retry_task']);
+
+const MERGE_IS_USERS = 'Merge all is the user\'s: they are in this conversation, and press Merge all themselves. Tell them the work is ready to merge.';
 
 const NEVER_ALLOWS = 'answer_approval never allows. A runner asks because its mode did not cover the request, and allowing it would widen the mode the plan gave the task. Deny it with a note saying what to do instead, or escalate it to the user.';
 
@@ -133,7 +155,7 @@ export class ExecutionCommands {
 
   constructor(private readonly deps: ExecutionCommandsDeps) {
     this.host = deps.host;
-    this.supervisor = deps.supervisor ?? SUPERVISOR_WATCH;
+    this.supervisor = deps.supervisor ?? SUPERVISOR_LEVELS;
     this.guards = deps.guards ?? [];
     this.now = deps.now ?? (() => new Date().toISOString());
   }
@@ -147,12 +169,20 @@ export class ExecutionCommands {
 
     const consent = this.consent(actor, command.command);
     if (consent.kind === 'refuse') return this.refuse(command, actor, located, consent.reason);
+    // The plan holds what runs (ADR-0029): a start the turn's own held edit changes waits for that edit to land.
+    if (actor.kind !== 'user' && startsFromPrompt(command) && this.host.heldEdit(located?.task.id)) {
+      this.host.deferUntilLanded(command, actor);
+      return { ok: true, message: `Queued: ${this.intent(command, located)} happens once your edit lands, as this reply ends, so it runs as edited. Say so in your reply; you are not told how it goes.` };
+    }
 
     const first = this.prepare(command, actor, located);
     if ('refusal' in first) return this.refuse(command, actor, located, first.refusal);
     for (const guard of this.guards) {
-      const tripped = guard(actor, command, located?.task);
-      if (tripped) return this.refuse(command, actor, located, tripped);
+      const trip = guard(actor, command, located);
+      if (!trip) continue;
+      const refused = this.refuse(command, actor, located, trip.refusal);
+      this.host.guardTripped(trip);
+      return refused;
     }
 
     let act = first.act;
@@ -190,7 +220,9 @@ export class ExecutionCommands {
   private consent(actor: ExecutionActor, command: ExecutionCommandName): Consent {
     switch (actor.kind) {
       case 'user': return { kind: 'allow' };
-      case 'planner-turn': return !STARTS.has(command) || this.host.autonomous() ? { kind: 'allow' } : { kind: 'ask' };
+      // A merge by proxy would add a route to the user's branch for nothing: they are present, and can press it (ADR-0029).
+      case 'planner-turn': if (command === 'merge_all') return { kind: 'refuse', reason: MERGE_IS_USERS };
+        return !STARTS.has(command) || this.host.autonomous() ? { kind: 'allow' } : { kind: 'ask' };
       case 'supervisor': return this.supervisor(actor.level, command);
     }
   }
@@ -207,6 +239,7 @@ export class ExecutionCommands {
       case 'stop_run': return this.prepareStopRun();
       case 'message_task': return this.prepareMessage(located!, command.text);
       case 'answer_approval': return this.prepareAnswer(located!, command);
+      case 'merge_all': return this.prepareMergeAll();
     }
   }
 
@@ -376,6 +409,16 @@ export class ExecutionCommands {
     };
   }
 
+  private prepareMergeAll(): Prepared {
+    return {
+      act: async () => {
+        const result = await this.host.mergeAll();
+        if (result.outcome !== 'merged') throw new Error(`Merge all stopped: ${mergeStopped(result)}. Nothing was merged; tell the user, who resolves it.`);
+        return 'Merged the run\'s landed work into the user\'s branch. Tasks waiting at a merge gate for it can start.';
+      },
+    };
+  }
+
   /** Why a start is not the user's to have made, or null: the user's own call is its own approval. */
   private unapproved(located: Located, actor: ExecutionActor): string | null {
     if (actor.kind === 'user' || this.host.taskApproved(located.task.id)) return null;
@@ -411,6 +454,7 @@ export class ExecutionCommands {
       case 'stop_run': return 'stop the run';
       case 'message_task': return `message ${label}`;
       case 'answer_approval': return `answer ${label}'s request`;
+      case 'merge_all': return 'merge all';
     }
   }
 
@@ -454,6 +498,11 @@ export class ExecutionCommands {
 }
 
 const BLOCKED_RUN = 'Nothing started: the user\'s checkout has uncommitted changes, and the run waits for them to stash them or run without isolation. Tell them.';
+
+/** A command that starts work from the task's prompt as the plan holds it. A continue starts from its message instead. */
+function startsFromPrompt(command: ExecutionCommand): boolean {
+  return command.command === 'run_plan' || command.command === 'run_task' || (command.command === 'retry_task' && command.from === 'fresh');
+}
 
 function withSubtasks(task: Readonly<Task>): string[] {
   return [task.id, ...task.subtasks.flatMap(withSubtasks)];
@@ -522,21 +571,42 @@ function describeExecution(record: ExecutionRecord, command?: ExecutionCommand):
       stop_run: 'stop the run',
       message_task: `message ${label}`,
       answer_approval: `answer a request of ${label}`,
+      merge_all: 'merge all',
     }[record.command];
     return record.outcome === 'declined'
       ? `${who} asked to ${asked}; you declined.`
       : `${who} asked to ${asked}; refused: ${record.detail ?? 'no reason given'}`;
   }
-  const quoted = record.detail ? `: "${record.detail}"` : '';
+  const { action, tail } = doneWords(record, label, continued, escalated);
+  // The supervisor acts unattended, so its line reads as the action itself — the button press — and then who pressed it.
+  return record.actor === 'supervisor'
+    ? `${capitalize(action)} — by supervisor${tail.startsWith(' ') ? `,${tail}` : tail}`
+    : `${who} ${action}${tail}`;
+}
+
+/** What a call that went through did, and what follows it in the line: a full stop, the quoted message, or the note. */
+function doneWords(record: ExecutionRecord, label: string, continued: boolean, escalated: boolean): { action: string; tail: string } {
+  const quoted = record.detail ? `: "${record.detail}"` : '.';
   switch (record.command) {
-    case 'run_plan': return `${who} started the plan.`;
-    case 'run_task': return `${who} started ${label}.`;
-    case 'retry_task': return continued ? `${who} continued ${label} in its saved session${quoted}` : `${who} retried ${label}.`;
-    case 'stop_task': return `${who} stopped ${label}.`;
-    case 'stop_run': return `${who} stopped the run.`;
-    case 'message_task': return `${who} sent ${label} a message${quoted}`;
+    case 'run_plan': return { action: 'started the plan', tail: '.' };
+    case 'run_task': return { action: `started ${label}`, tail: '.' };
+    case 'retry_task': return continued ? { action: `continued ${label} in its saved session`, tail: quoted } : { action: `retried ${label}`, tail: '.' };
+    case 'stop_task': return { action: `stopped ${label}`, tail: '.' };
+    case 'stop_run': return { action: 'stopped the run', tail: '.' };
+    case 'message_task': return { action: `sent ${label} a message`, tail: quoted };
     case 'answer_approval': return escalated
-      ? `${who} left a request of ${label} for you to answer.`
-      : `${who} denied a request of ${label}${record.detail ? ` with the note "${record.detail}"` : ''}.`;
+      ? { action: `left a request of ${label} for you to answer`, tail: '.' }
+      : { action: `denied a request of ${label}`, tail: record.detail ? ` with the note "${record.detail}".` : '.' };
+    case 'merge_all': return { action: 'merged the run\'s work into your branch', tail: '.' };
+  }
+}
+
+/** How a Merge all ended, in a clause: why it stopped, for a model or a run update to read. */
+export function mergeStopped(result: IsolationMergeResult): string {
+  switch (result.outcome) {
+    case 'merged': return 'it merged';
+    case 'blocked': return 'the user\'s checkout has changes that overlap what it would merge';
+    case 'conflict': return `it conflicts in ${result.repo}${result.files?.length ? `: ${result.files.slice(0, 5).join(', ')}` : ''}`;
+    case 'failed': return `it failed in ${result.repo}`;
   }
 }

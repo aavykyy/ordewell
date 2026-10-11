@@ -61,7 +61,10 @@ prompt, and the run never depends on it.**
 The level is a plan setting, Off by default. **It is saved on the plan at run
 start**: flipping it mid-run changes nothing until the next run, the rule
 ADR-0001 keeps for modes. The one exception goes downward only: a tripped guard
-or a failed supervisor lowers the level for the rest of the run, with a notice.
+or a failed supervisor lowers the level for the rest of the run, with a notice,
+and so can the user — drop to Watch, or turn it off — at any time during the
+run. A lowering takes effect at once, in the wake-up turn under way too: what
+that turn calls or edits next is checked against the lowered level.
 
 The levels are a slim precursor of the mandate (#23). Watch is its `observe`
 grant; Act later becomes the bundle of `control` and `replan` (and the merge
@@ -165,6 +168,12 @@ the same seam through its own tool definitions.
 | `answer_approval` | deny a runner approval with a note, or escalate it to the user — never allow |
 | `merge_all` | Merge all, in Act wake-up turns only |
 
+A start the turn asks for after editing that task in the same reply — an edit
+held until the reply ends — waits for the edit to land and then goes through
+the seam again, so it runs as edited: the plan holds what runs. In a wake-up
+turn at Act the supervisor edits task by task; a whole new plan is refused,
+since only edits let the user follow what changed.
+
 **`answer_approval` never allows.** A runner asks because its mode did not
 cover the request. Allowing it would widen the mode the plan gave that task,
 which ADR-0001 forbids at spawn and #92 forbids down the tree. A supervisor can
@@ -211,6 +220,12 @@ Checked at the seam, where the action executes:
 - **Wake-up rate**: more than a set number of wake-ups in a short window with
   no pass in between drops the run to Watch, with a notice. A supervisor that
   keeps waking and nothing passes is spinning.
+
+A start of a task that failed is a retry however it is asked for — `run_task`,
+or `run_plan`, which would start every failed task again. What the guards
+remember lasts from the user's start of a run to their next: a run the
+supervisor restarts itself, or a usage-limit reset resumes, continues the one
+before, its level as lowered included, or each restart would wipe the count.
 
 A refusal is a plain note back to the model naming the guard and what would be
 accepted. Each tripped guard also posts a supervisor message to the user.
@@ -327,3 +342,4 @@ until #30 exists.
   themselves — and a Guarded start asks on the planner's approval card.
 - 2026-10-11 — live planner turns implemented (`PlanTurns`); the pending plan edit queue, its drain and `modifyDuringExecution` removed.
 - 2026-10-11 — the Watch level (`Supervisor`): wake-ups from run events, `usage_limit` coalesced per runner, run updates, the wake-up read budget, refusals at Watch, failure handling and persistence. Surfaces offer Off and Watch; a plan set to Act runs as Watch until Act's rules land.
+- 2026-10-11 — the Act level: every execution command without asking, `merge_all` as a planner tool (refused in user-started turns), edits in wake-up turns (a whole plan refused), tasks the supervisor adds approved and marked `addedBy: 'supervisor'`, a moved task's scheduled resume cancelled, and the loop guards (`LoopGuards`; retry limit `supervisorRetryLimit`, default 2). Added: the user may lower a running supervisor at once (the downward exception above), a start waits for the same reply's held edit, and a start of a failed task counts as a retry however asked. Surfaces offer Act, saying what it allows.

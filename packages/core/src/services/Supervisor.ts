@@ -1,7 +1,8 @@
 import type { SupervisorLevel } from '../models/Execution';
 import { createWakePolicy, type RunEvent, type WakeBatch, type WakePolicy } from './WakePolicy';
 import { classifyRunnerStop, readUsageLimitReset } from './runnerExit';
-import { PlannerTurnDiscardedError, PlannerTurnStoppedError, type WakeUpTurn } from './PlannerConversation';
+import { WAKE_UP_RATE, wakeUpRateTripped, type WakeUpRate } from './LoopGuards';
+import { PlannerTurnDiscardedError, PlannerTurnStoppedError, type PlanChange, type WakeUpTurn } from './PlannerConversation';
 
 /** How long the first attention event waits for others to join its wake-up. */
 export const WAKE_DEBOUNCE_MS = 5_000;
@@ -46,6 +47,8 @@ export interface SupervisorHost {
   describeTask(taskId: string): string;
   /** Reads a wake-up turn may make, as the plan sets them. */
   readBudget(): number;
+  /** Retries the supervisor may make of one task in a run, as the plan sets them. */
+  retryLimit(): number;
   /** The runner the planner runs as, whose usage-limit message says when it resets; null when there is none. */
   plannerRunner(): string | null;
   /** End the planner's process but keep its session id, so the retry resumes it (ADR-0009). */
@@ -54,11 +57,14 @@ export interface SupervisorHost {
   abandonTurn(): void;
   /** The run carries on as Off: save why, and tell the user. */
   goUnsupervised(reason: string): void;
+  /** An Act supervisor tripped the wake-up rate: the run carries on at Watch. `reason` says what it did. */
+  dropToWatch(reason: string): void;
   notice(level: 'info' | 'warn', message: string): void;
 }
 
 export interface SupervisorOptions {
   debounceMs?: number;
+  wakeUpRate?: WakeUpRate;
   turnTimeoutMs?: number;
   hungGraceMs?: number;
   now?: () => number;
@@ -96,23 +102,32 @@ export class Supervisor {
   private finished = false;
   /** While the planner's usage limit holds wake-ups back: when it lets them go. */
   private limited: { until: number; timer: ReturnType<typeof setTimeout> } | null = null;
+  /** When each wake-up since the last pass was delivered, for the wake-up rate guard. */
+  private wakeUps: number[] = [];
   private readonly debounceMs: number;
+  private readonly wakeUpRate: WakeUpRate;
   private readonly turnTimeoutMs: number;
   private readonly hungGraceMs: number;
   private readonly now: () => number;
 
   constructor(private readonly host: SupervisorHost, options: SupervisorOptions = {}) {
     this.debounceMs = options.debounceMs ?? WAKE_DEBOUNCE_MS;
+    this.wakeUpRate = options.wakeUpRate ?? WAKE_UP_RATE;
     this.turnTimeoutMs = options.turnTimeoutMs ?? WAKE_UP_TURN_TIMEOUT_MS;
     this.hungGraceMs = options.hungGraceMs ?? HUNG_TURN_GRACE_MS;
     this.now = options.now ?? Date.now;
     this.policy = createWakePolicy({ debounceMs: this.debounceMs });
   }
 
+  /** The level the supervisor acts at now: the run's, lowered during it perhaps, and Off once it failed. */
+  get level(): SupervisorLevel {
+    const run = this.host.run();
+    return !run || run.unsupervised !== undefined ? 'off' : run.level;
+  }
+
   /** The run has a supervisor at Watch or Act that has not failed in it. */
   get watching(): boolean {
-    const run = this.host.run();
-    return run !== null && run.level !== 'off' && run.unsupervised === undefined;
+    return this.level !== 'off';
   }
 
   /** Whether wake-ups alone may open a turn now: the supervisor watches, and no usage limit holds it. */
@@ -120,11 +135,18 @@ export class Supervisor {
     return this.watching && this.limited === null;
   }
 
-  /** What a wake-up turn is held to under the run's level. */
+  /**
+   * What a wake-up turn is held to under the run's level. The brief is the
+   * level's as the turn opens; what the turn may change is read as it makes
+   * the change, so a level lowered meanwhile applies at once.
+   */
   wakeUpTurn(): WakeUpTurn {
     const readBudget = this.host.readBudget();
-    // Act runs as Watch until its own rules exist.
-    return { readBudget, editsRefused: EDITS_REFUSED, brief: watchBrief(readBudget) };
+    return {
+      readBudget,
+      refused: (change) => changeRefusal(this.level, change),
+      brief: this.level === 'act' ? actBrief(readBudget, this.host.retryLimit()) : watchBrief(readBudget),
+    };
   }
 
   /** A run event. Ignored unless the supervisor watches: at Off, or once it failed, nothing is gathered. */
@@ -134,14 +156,21 @@ export class Supervisor {
       if (this.finished) return;
       this.finished = true;
     }
+    if (event.kind === 'task_passed') this.wakeUps = [];
     this.policy.push({ ...event, at: this.now() });
     this.arm();
   }
 
-  /** A run started: its supervisor starts with a clean record. */
-  runStarted(): void {
-    this.failures = 0;
+  /**
+   * A run started. One the user started gives its supervisor a clean record;
+   * one that `continues` the last — the supervisor's own restart, a reset
+   * resuming — keeps it.
+   */
+  runStarted(continues = false): void {
     this.finished = false;
+    if (continues) return;
+    this.failures = 0;
+    this.wakeUps = [];
   }
 
   /** The plan these events were about is gone: nothing gathered or waited on carries over. */
@@ -151,6 +180,7 @@ export class Supervisor {
     this.limited = null;
     this.failures = 0;
     this.finished = false;
+    this.wakeUps = [];
     this.policy = createWakePolicy({ debounceMs: this.debounceMs });
   }
 
@@ -169,7 +199,8 @@ export class Supervisor {
     let timedOut = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let grace: ReturnType<typeof setTimeout> | undefined;
-    const answered = run(controller.signal);
+    // A run that throws before its first await fails the turn like any other failure, rather than escaping the count.
+    const answered = (async () => run(controller.signal))();
     // Raced below; once the race is lost, the turn's own failure is nobody's to hear.
     answered.catch(() => {});
     const hung = new Promise<never>((_, reject) => {
@@ -231,13 +262,18 @@ export class Supervisor {
     this.host.notice('info', `The planner hit its usage limit. The supervisor's wake-ups wait until ${new Date(until).toISOString()}, and are delivered together then.`);
   }
 
-  /**
-   * The run goes on without a supervisor. What the policy still holds joins
-   * the batches already waiting, so nothing that happened is lost: they all
-   * reach the conversation with the user's next message.
-   */
+  /** The run goes on without a supervisor, and nothing that happened is lost (see {@link standDown}). */
   private giveUp(reason: string): void {
     this.host.goUnsupervised(reason);
+    this.standDown();
+  }
+
+  /**
+   * The supervisor no longer wakes this run — it failed, or the user turned
+   * it off. What the policy still holds joins the batches already waiting,
+   * for the user's next message.
+   */
+  standDown(): void {
     this.disarm();
     const held = this.policy.poll(Number.POSITIVE_INFINITY);
     if (held) this.deliver(held);
@@ -250,9 +286,29 @@ export class Supervisor {
     this.tick = setTimeout(() => {
       this.tick = null;
       const batch = this.policy.poll(this.now());
-      if (batch) this.deliver(batch);
-      else this.arm();
+      if (!batch) {
+        this.arm();
+        return;
+      }
+      this.countWakeUp();
+      this.deliver(batch);
     }, Math.max(0, due - this.now()));
+  }
+
+  /**
+   * The wake-up rate guard (ADR-0029): an Act supervisor woken more often than
+   * the rate allows, with no task passing in between, is spinning, and is
+   * lowered to Watch before the wake-up that tipped it is delivered.
+   */
+  private countWakeUp(): void {
+    if (this.level !== 'act') return;
+    const now = this.now();
+    this.wakeUps.push(now);
+    if (!wakeUpRateTripped(this.wakeUps, now, this.wakeUpRate)) return;
+    const count = this.wakeUps.length;
+    const minutes = Math.max(1, Math.round((now - this.wakeUps[0]) / 60_000));
+    this.wakeUps = [];
+    this.host.dropToWatch(`woke ${count} times in ${minutes} minute${minutes === 1 ? '' : 's'} with no task passing in between`);
   }
 
   private disarm(): void {
@@ -271,14 +327,46 @@ const EDITS_REFUSED =
   'Do not call submit_plan or edit_plan, or emit plan or taskOps JSON, this turn. Reply in prose instead: ' +
   'say what you would change and why, and ask the user. Their reply is an ordinary message, and you make the change then.';
 
-/** What a wake-up turn is told after its digests, never saved: who it is, and what its level lets it do. */
+const EDITS_TURNED_OFF =
+  'Plan edits are refused: the supervisor was turned off for this run, and nothing was changed. ' +
+  'Reply in prose: say what you would change and why, and leave it to the user.';
+
+const WHOLE_PLAN_REFUSED =
+  'A whole new plan is refused in a wake-up turn: as the supervisor you change the plan task by task, with edit_plan, ' +
+  'so the user can follow each change. Nothing was changed. Make the edits you need, or ask the user if the plan needs starting over.';
+
+/** Why a wake-up turn at `level` may not make `change`; undefined when it may. */
+function changeRefusal(level: SupervisorLevel, change: PlanChange): string | undefined {
+  switch (level) {
+    case 'act': return change === 'plan' ? WHOLE_PLAN_REFUSED : undefined;
+    case 'watch': return EDITS_REFUSED;
+    case 'off': return EDITS_TURNED_OFF;
+  }
+}
+
+/** What a wake-up turn is told after its run update, never saved: who it is, and what its level lets it do. */
 function watchBrief(readBudget: number): string {
   return [
     'You are this plan\'s supervisor, woken by the run update above; the user did not write to you.',
     'Tell the user, in a few lines, what needs their attention and what you suggest, so they can answer.',
-    `Read more with task_output, task_diff or task_query if you need to: up to ${readBudget} reads this turn. The update names what happened; it does not hold the logs.`,
+    readsLine(readBudget),
     'At Watch you only suggest. Running, stopping, retrying or messaging tasks, answering approvals and editing the plan are refused in this turn: the user\'s reply is how a suggestion is applied.',
   ].join('\n');
+}
+
+function actBrief(readBudget: number, retryLimit: number): string {
+  return [
+    'You are this plan\'s supervisor, woken by the run update above; the user did not write to you.',
+    'At Act you may act on it yourself: run, stop and retry tasks, message their runners, deny or escalate approvals, change tasks with edit_plan, and merge_all. Nobody is asked first. A task you add is approved to run, an ops task included.',
+    readsLine(readBudget),
+    'To change a task and run it again, call edit_plan and then retry_task in the same reply: the retry waits for the edit to land, so it runs as edited.',
+    `Loop guards hold you: you may retry one task up to ${retryLimit} times this run; a retry after a failure must change its prompt or model; you may not re-add a task you removed or undo an edit of your own. A refused call says why and what would be accepted. When a guard stops you, escalate to the user rather than trying again.`,
+    'Then tell the user, in a few lines, what happened, what you did and why, and what needs them.',
+  ].join('\n');
+}
+
+function readsLine(readBudget: number): string {
+  return `Read more with task_output, task_diff or task_query if you need to: up to ${readBudget} reads this turn. The update names what happened; it does not hold the logs.`;
 }
 
 /**

@@ -54,7 +54,7 @@ describe('OrdewellMcpServer', () => {
     const names = async (client: Client) => (await client.listTools()).tools.map((t) => t.name).sort();
     expect(await names(task)).toEqual(['checkpoint', 'task_complete']);
     expect(await names(planner)).toEqual([
-      'answer_approval', 'edit_plan', 'fetch', 'list_models', 'list_runners', 'load_skill', 'message_task', 'retry_task', 'run_command',
+      'answer_approval', 'edit_plan', 'fetch', 'list_models', 'list_runners', 'load_skill', 'merge_all', 'message_task', 'retry_task', 'run_command',
       'run_plan', 'run_task', 'stop_run', 'stop_task', 'submit_plan', 'task_diff', 'task_output', 'task_query', 'web_search',
     ]);
   });
@@ -68,9 +68,9 @@ describe('OrdewellMcpServer', () => {
     const planner = await connect(await server.issuePlannerToken({ sessionId: 's1' }));
 
     const hints = Object.fromEntries((await planner.listTools()).tools.map((t) => [t.name, t.annotations?.readOnlyHint]));
-    const executing = ['run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'message_task', 'answer_approval'];
+    const executing = ['run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'message_task', 'answer_approval', 'merge_all'];
     for (const [name, hint] of Object.entries(hints)) expect(hint, name).toBe(!executing.includes(name));
-    expect(Object.keys(hints)).toHaveLength(18);
+    expect(Object.keys(hints)).toHaveLength(19);
     expect((await task.listTools()).tools.map((t) => t.annotations?.readOnlyHint)).toEqual([undefined, undefined]);
   });
 
@@ -105,7 +105,7 @@ describe('OrdewellMcpServer', () => {
     const planner = await connect(await server.issuePlannerToken({ sessionId: 's1', hidden: ['fetch', 'web_search'] }, { fetch }));
 
     expect((await planner.listTools()).tools.map((t) => t.name).sort()).toEqual([
-      'answer_approval', 'edit_plan', 'list_models', 'list_runners', 'load_skill', 'message_task', 'retry_task', 'run_command',
+      'answer_approval', 'edit_plan', 'list_models', 'list_runners', 'load_skill', 'merge_all', 'message_task', 'retry_task', 'run_command',
       'run_plan', 'run_task', 'stop_run', 'stop_task', 'submit_plan', 'task_diff', 'task_output', 'task_query',
     ]);
     await expect(planner.callTool({ name: 'fetch', arguments: { url: 'https://example.com' } })).rejects.toThrow(/Unknown tool/);

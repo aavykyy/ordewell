@@ -166,14 +166,15 @@ describe('Merge at gates automatically', () => {
     expect(merged(iso)).toHaveLength(1);
   });
 
-  it('exposes the core merge_all operation without exposing a planner tool', async () => {
+  it('shares its merge with the seam\'s merge_all, which opens the gate the same way', async () => {
     const iso = new FakeWorktreeIsolation();
     const { session, pass } = harness(iso);
     session.loadPlan(plans(false), 'goal', '/repo');
     await session.executePlan();
     pass();
     await vi.waitFor(() => expect(session.mergeGate('o2')).toEqual(['c1']));
-    expect(await session.merge_all()).toEqual({ outcome: 'merged' });
+    expect(await session.execute({ command: 'merge_all' }, { kind: 'supervisor', level: 'act' })).toMatchObject({ ok: true });
+    expect(merged(iso)).toHaveLength(1);
     expect(session.mergeGate('o2')).toEqual([]);
   });
 });

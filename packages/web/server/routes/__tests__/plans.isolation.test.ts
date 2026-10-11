@@ -188,8 +188,33 @@ describe('plan merge settings', () => {
     expect(setWakeUpReadBudget).toHaveBeenCalledWith(8);
   });
 
+  it('routes the supervisor\'s retry limit to the session', async () => {
+    const setSupervisorRetryLimit = vi.fn();
+    const response = await appFor({ setSupervisorRetryLimit }).request('/api/plans/s1/settings', { method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ supervisorRetryLimit: 0 }) });
+    expect(response.status).toBe(200);
+    expect(setSupervisorRetryLimit).toHaveBeenCalledWith(0);
+  });
+
+  it.each(['watch', 'off'])('lowers the running supervisor to %s at once', async (level) => {
+    const lowerSupervisor = vi.fn();
+    const response = await appFor({ lowerSupervisor }).request('/api/plans/s1/supervisor/lower', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level }) });
+    expect(response.status).toBe(200);
+    expect(lowerSupervisor).toHaveBeenCalledWith(level);
+  });
+
+  it('refuses to raise the running supervisor through the lowering route', async () => {
+    const lowerSupervisor = vi.fn();
+    const response = await appFor({ lowerSupervisor }).request('/api/plans/s1/supervisor/lower', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: 'act' }) });
+    expect(response.status).toBe(400);
+    expect(lowerSupervisor).not.toHaveBeenCalled();
+  });
+
   it.each([
     [{ supervisorLevel: 'autonomous' }],
+    [{ supervisorRetryLimit: -1 }],
     [{ wakeUpReadBudget: 0 }],
     [{ wakeUpReadBudget: 2.5 }],
     [{ supervisorLevel: 'watch', mergeAtGatesAutomatically: 'yes' }],

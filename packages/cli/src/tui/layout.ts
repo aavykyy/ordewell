@@ -3,7 +3,7 @@ import { cursorInLines, type CursorPosition } from './editor';
 import { checkpointCardLines, conversationLines, taskUsageText, usageMeasures, tokenLine } from './blocks';
 import { chatEditorRoomFor, chatPaneWidth, planPaneWidth } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
-import { findTask, planRows, plannerInFlight, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
+import { findTask, loweredRunSupervisor, planRows, plannerInFlight, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
 import { modesForTask } from './taskAssignment';
 import { ALL_PROVIDERS, approvalLabel, awaitingLabel, hasHiddenDetail, markAction, resumeLabel, runnerForProvider, taskRowView, planUsage, type AiProvider, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
 
@@ -496,6 +496,11 @@ function supervisorNote(state: TuiState): string {
   return run.level !== state.supervisorLevel ? ` · supervisor next run ${state.supervisorLevel}; now ${run.level}` : '';
 }
 
+function lowerHint(state: TuiState): string {
+  const lowered = loweredRunSupervisor(state);
+  return lowered === 'watch' ? ' · L drop to Watch' : lowered === 'off' ? ' · L turn it off' : '';
+}
+
 export function planLayout(state: TuiState, rows: number, cols: number): PlanLayout {
   const done = state.tasks.filter((t) => t.status === 'completed').length;
   const totalUsage = planUsage(state.tasks);
@@ -508,7 +513,7 @@ export function planLayout(state: TuiState, rows: number, cols: number): PlanLay
   const lines = [
     style.bold(truncate(`Plan ${done}/${state.tasks.length}${nextRun}${supervisorNote(state)}`, cols)),
     style.dim(truncate(`G Merge at gates automatically: ${state.mergeAtGatesAutomatically ? 'on' : 'off'}`, cols)),
-    style.dim(truncate(`W Supervisor: ${state.supervisorLevel}`, cols)),
+    style.dim(truncate(`W Supervisor: ${state.supervisorLevel}${lowerHint(state)}`, cols)),
     totalUsage.attempts ? style.grey(truncate(`Tasks total: ${taskUsageText(totalUsage)}`, cols)) : '',
   ];
   if (unmerged > 0) {
@@ -675,7 +680,8 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
       ? 'quiet'
       : row.running ? 'working' : row.awaiting ? inRow(row.awaiting) : '';
   const skills = (task.skills ?? []).join(' · ');
-  const meta = [activity, runner, model].filter(Boolean).join(' · ');
+  const origin = task.addedBy === 'supervisor' ? 'added by supervisor' : '';
+  const meta = [activity, origin, runner, model].filter(Boolean).join(' · ');
   if (meta) lines.push(style.grey(truncate(`${bodyPad}${meta}`, cols)));
   if (row.usage) lines.push(style.grey(truncate(`${bodyPad}${taskUsageText(row.usage)}`, cols)));
   if (expanded && row.usage) {

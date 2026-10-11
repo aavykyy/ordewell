@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Supervisor, wakeUpDigest, type SupervisedRun, type SupervisorHost } from '../Supervisor';
+import { Supervisor, wakeUpDigest, type RunEventInput, type SupervisedRun, type SupervisorHost } from '../Supervisor';
 import type { RunEvent } from '../WakePolicy';
 
 const describeTask = (taskId: string) => `#${taskId.slice(1)} "Task ${taskId}"`;
@@ -47,10 +47,10 @@ describe('wakeUpDigest', () => {
 });
 
 describe('Supervisor', () => {
-  function host(run: SupervisedRun | null): SupervisorHost & { deliver: ReturnType<typeof vi.fn> } {
+  function host(run: SupervisedRun | null): SupervisorHost & { deliver: ReturnType<typeof vi.fn>; dropToWatch: ReturnType<typeof vi.fn> } {
     return {
-      run: () => run, deliver: vi.fn(async () => undefined), pump: vi.fn(), describeTask, readBudget: () => 12,
-      plannerRunner: () => null, restartPlanner: vi.fn(), abandonTurn: vi.fn(), goUnsupervised: vi.fn(), notice: vi.fn(),
+      run: () => run, deliver: vi.fn(async () => undefined), pump: vi.fn(), describeTask, readBudget: () => 12, retryLimit: () => 2,
+      plannerRunner: () => null, restartPlanner: vi.fn(), abandonTurn: vi.fn(), goUnsupervised: vi.fn(), dropToWatch: vi.fn(), notice: vi.fn(),
     };
   }
 
@@ -71,11 +71,87 @@ describe('Supervisor', () => {
     vi.useRealTimers();
   });
 
-  it('tells a wake-up turn its read budget, and refuses its edits until Act has its own rules', () => {
-    for (const level of ['watch', 'act'] as const) {
-      const turn = new Supervisor(host({ level })).wakeUpTurn();
-      expect(turn).toMatchObject({ readBudget: 12, editsRefused: expect.stringMatching(/^Plan edits are refused in a wake-up turn/) });
-      expect(turn.brief).toMatch(/up to 12 reads this turn/);
+  it('tells a wake-up turn at Watch its read budget, and refuses every change to the plan', () => {
+    const turn = new Supervisor(host({ level: 'watch' })).wakeUpTurn();
+
+    expect(turn.readBudget).toBe(12);
+    expect(turn.refused('edit')).toMatch(/^Plan edits are refused in a wake-up turn: you are the supervisor at Watch/);
+    expect(turn.refused('plan')).toMatch(/^Plan edits are refused in a wake-up turn/);
+    expect(turn.brief).toMatch(/up to 12 reads this turn/);
+    expect(turn.brief).toMatch(/At Watch you only suggest/);
+  });
+
+  it('lets a wake-up turn at Act edit the plan, but not replace it, and tells it its guards', () => {
+    const turn = new Supervisor({ ...host({ level: 'act' }), retryLimit: () => 3 }).wakeUpTurn();
+
+    expect(turn.refused('edit')).toBeUndefined();
+    expect(turn.refused('plan')).toMatch(/^A whole new plan is refused in a wake-up turn: .*edit_plan/);
+    expect(turn.brief).toMatch(/At Act you may act/);
+    expect(turn.brief).toMatch(/up to 3 times/);
+  });
+
+  it('applies a level lowered during the turn at once', () => {
+    let run: SupervisedRun = { level: 'act' };
+    const turn = new Supervisor({ ...host(null), run: () => run }).wakeUpTurn();
+    expect(turn.refused('edit')).toBeUndefined();
+
+    run = { level: 'watch' };
+    expect(turn.refused('edit')).toMatch(/you are the supervisor at Watch/);
+    run = { level: 'off' };
+    expect(turn.refused('edit')).toMatch(/^Plan edits are refused: the supervisor was turned off for this run/);
+    run = { level: 'act', unsupervised: 'it failed twice' };
+    expect(turn.refused('edit')).toMatch(/turned off for this run/);
+  });
+
+  describe('the wake-up rate guard', () => {
+    const rate = { max: 2, windowMs: 60_000 };
+
+    async function wakes(supervisor: Supervisor, events: RunEventInput[]): Promise<void> {
+      for (const event of events) {
+        supervisor.observe(event);
+        await vi.advanceTimersByTimeAsync(20);
+      }
     }
+    const input = (taskId: string): RunEventInput => ({ kind: 'waiting_input', taskId });
+
+    it('drops an Act supervisor to Watch on the wake-up past the rate, before it is delivered', async () => {
+      vi.useFakeTimers();
+      const h = host({ level: 'act' });
+      const order: string[] = [];
+      h.deliver.mockImplementation(async () => { order.push('deliver'); });
+      h.dropToWatch.mockImplementation(() => { order.push('drop'); });
+      const supervisor = new Supervisor(h, { debounceMs: 10, wakeUpRate: rate });
+
+      await wakes(supervisor, [input('t1'), input('t2'), input('t3')]);
+
+      expect(order).toEqual(['deliver', 'deliver', 'drop', 'deliver']);
+      expect(h.dropToWatch).toHaveBeenCalledWith('woke 3 times in 1 minute with no task passing in between');
+      vi.useRealTimers();
+    });
+
+    it('starts counting again after a pass, and ignores wake-ups outside the window', async () => {
+      vi.useFakeTimers();
+      const h = host({ level: 'act' });
+      const supervisor = new Supervisor(h, { debounceMs: 10, wakeUpRate: rate });
+
+      await wakes(supervisor, [input('t1'), input('t2'), { kind: 'task_passed', taskId: 't9' }, input('t3')]);
+      await vi.advanceTimersByTimeAsync(rate.windowMs);
+      await wakes(supervisor, [input('t4'), input('t5')]);
+
+      expect(h.deliver).toHaveBeenCalledTimes(5);
+      expect(h.dropToWatch).not.toHaveBeenCalled();
+      vi.useRealTimers();
+    });
+
+    it('leaves a Watch supervisor be: it has nothing to lower', async () => {
+      vi.useFakeTimers();
+      const h = host({ level: 'watch' });
+      const supervisor = new Supervisor(h, { debounceMs: 10, wakeUpRate: rate });
+
+      await wakes(supervisor, [input('t1'), input('t2'), input('t3'), input('t4')]);
+
+      expect(h.dropToWatch).not.toHaveBeenCalled();
+      vi.useRealTimers();
+    });
   });
 });

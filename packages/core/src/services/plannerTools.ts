@@ -9,7 +9,7 @@ import {
 } from './TaskQuery';
 import type { TaskOp } from './TaskOps';
 import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
-import type { ToolRead } from './PlannerConversation';
+import type { PlanChange, ToolRead } from './PlannerConversation';
 import type { McpToolReply, PlannerToolHandler } from './mcp';
 import type { TaskLogEvent } from '../models/TaskLog';
 import { renderTaskLog } from './taskLogRead';
@@ -57,8 +57,8 @@ export interface PlannerToolsHost {
   webSearch(query: string): Promise<ToolOutcome | undefined>;
   /** An execution command through the session's command seam (ADR-0029), asked by this planner turn. */
   execute(command: ExecutionCommand): Promise<CommandOutcome>;
-  /** Why the open turn may not change the plan — a wake-up turn under Watch (ADR-0029); undefined when it may. */
-  editsRefused(): string | undefined;
+  /** Why the open turn may not make this change — a wake-up turn under Watch, say (ADR-0029); undefined when it may. */
+  editsRefused(change: PlanChange): string | undefined;
 }
 
 /**
@@ -108,6 +108,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       ...(approval !== undefined ? { approval } : {}),
       ...(note !== undefined ? { note } : {}),
     }),
+    mergeAll: () => execute({ command: 'merge_all' }),
 
     async loadSkill({ name }) {
       const skills = modelInvocablePlannerSkills(host.skills());
@@ -168,7 +169,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     },
 
     async submitPlan({ tasks }) {
-      const refused = host.editsRefused();
+      const refused = host.editsRefused('plan');
       if (refused) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ field: 'tasks', message: refused }] }) };
       const turn = host.turnId();
       const catalog = await host.liveCatalog();
@@ -246,7 +247,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     async editPlan({ ops }) {
       // The applier checks each op's fields one by one, so a loose shape is its to refuse.
       const taskOps = ops as unknown as TaskOp[];
-      const refused = host.editsRefused();
+      const refused = host.editsRefused('edit');
       if (refused) return { isError: true, text: JSON.stringify({ ok: false, errors: [opError(refused)] }) };
       const turn = host.turnId();
       const skills = await checkOpSkills(taskOps, host.taskSkills());

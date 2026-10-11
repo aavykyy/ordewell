@@ -104,6 +104,12 @@ export async function routeWebviewMessage(msg: WebviewToHost, deps: WebviewRoute
       if (plan) deps.chatProvider.showPlan(plan);
       return;
     }
+    case 'lowerSupervisor': {
+      deps.session.lowerSupervisor(msg.level);
+      const plan = deps.session.planState;
+      if (plan) deps.chatProvider.showPlan(plan);
+      return;
+    }
     case 'isolationAction':
       await handleIsolationAction(msg.action, msg.taskId, deps);
       return;
