@@ -21,7 +21,7 @@ async function setup(opts: { isolation?: FakeWorktreeIsolation; conflictRepairAt
   store.load(opts.tasks ?? [], ['claude-code']);
   await runs.decide(async () => undefined);
   const landing = new Landing({ runs, config, tasks: store });
-  const prepare = (t: Task) => runs.attemptCwd(t, { repair: false });
+  const prepare = (t: Task) => runs.attemptCwd(t, 'fresh');
   const record = (taskId: string) => runs.current?.tasks[taskId];
   return { landing, runs, isolation, listener, store, prepare, record };
 }
@@ -157,7 +157,7 @@ describe('Landing', () => {
   describe('a conflict repair', () => {
     async function repairing(opts: { conflictRepairAttempts?: number } = {}) {
       const env = await conflicted(opts);
-      await env.runs.attemptCwd(env.t1, { repair: true });
+      await env.runs.attemptCwd(env.t1, 'repair');
       return env;
     }
 
@@ -217,7 +217,7 @@ describe('Landing', () => {
 
       expect(await landing.settleRepair(t1, passed)).toMatchObject({ kind: 'repair-needed', repair: { n: 2, limit: 2 } });
 
-      await runs.attemptCwd(t1, { repair: true });
+      await runs.attemptCwd(t1, 'repair');
       const outcome = await landing.settleRepair(t1, passed);
       expect(outcome).toMatchObject({ kind: 'awaiting_user', reason: 'conflict' });
       expect(outcome.messages.at(-1)).toEqual({ level: 'info', text: 'Task "Task t1" has had 2 of its 2 conflict repairs, so its conflict waits for you.', repairLog: true });

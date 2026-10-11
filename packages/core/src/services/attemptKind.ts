@@ -1,5 +1,5 @@
 import type { Task, TaskSkillSnapshot } from '../models/Task';
-import type { IsolationRunController } from './IsolationRunController';
+import type { AttemptWorkspace, IsolationRunController } from './IsolationRunController';
 import type { RepairAttempt } from './Landing';
 import { composeAugmentedPrompt, composeContinuationPrompt } from './promptAugment';
 
@@ -95,9 +95,9 @@ export function attemptCwd(
   kind: AttemptKind,
   task: Task,
   runs: Pick<IsolationRunController, 'attemptCwd' | 'workspaceCwd'>,
-): Promise<{ cwd: string; worktree: boolean }> {
+): Promise<AttemptWorkspace> {
   if (inCheckout(kind)) return runs.workspaceCwd(task);
-  return runs.attemptCwd(task, { repair: kind.kind === 'repair' });
+  return runs.attemptCwd(task, kind.kind === 'repair' || kind.kind === 'continuation' ? kind.kind : 'fresh');
 }
 
 /** What an attempt's prompt is built from. The callbacks are read only for the kinds that need them. */
@@ -105,6 +105,7 @@ export interface AttemptPromptSources {
   task: Task;
   plan: readonly Task[];
   planMapEnabled?: boolean;
+  continuationMessage?: string;
   /** The task's skills, resolved where the attempt runs; a repair and a continue are given none. */
   skills: readonly TaskSkillSnapshot[];
   /** What a repair is asked to do; read once its worktree has been reopened. */
@@ -122,7 +123,7 @@ export function attemptPrompt(kind: AttemptKind, src: AttemptPromptSources): str
   const { task, plan, planMapEnabled } = src;
   switch (kind.kind) {
     case 'continuation':
-      return composeContinuationPrompt(task, kind.message, { ops: kind.ops });
+      return composeContinuationPrompt(task, [kind.message, src.continuationMessage].filter(Boolean).join('\n\n'), { ops: kind.ops });
     case 'repair':
       // A merge to resolve is not the task's own work, so its skills do not apply.
       return composeAugmentedPrompt({ ...task, prompt: src.repairPrompt(task) }, plan, { planMapEnabled });

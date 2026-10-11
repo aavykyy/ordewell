@@ -69,6 +69,23 @@ export function attemptShape(task: Readonly<Task>): AttemptShape {
   };
 }
 
+/**
+ * What the loop guards remember as plain data, saved on the plan so a daemon
+ * restart does not hand an Act supervisor a fresh retry budget or forget the
+ * tasks it removed (ADR-0029). Maps become records and the reported-trip set an
+ * array, so it round-trips through JSON.
+ */
+export interface SupervisionMemorySnapshot {
+  /** Retries of one task this run, by task id. */
+  retries: Record<string, number>;
+  /** What each failed task's attempt ran with, by task id. */
+  failedWith: Record<string, AttemptShape>;
+  /** The supervisor's own edits this run. */
+  edits: EditMemory;
+  /** The keys of the guard trips the user was already told of. */
+  told: string[];
+}
+
 /** Past `limit` retries of one task this run, a retry is refused and the task is the user's. */
 export function retryLimit(task: GuardedTask, retried: number, limit: number): GuardTrip | null {
   if (retried < limit) return null;
@@ -220,6 +237,29 @@ export class SupervisionMemory {
     if (this.told.has(trip.key)) return false;
     this.told.add(trip.key);
     return true;
+  }
+
+  /** The memory as plain data for the plan; see {@link SupervisionMemorySnapshot}. */
+  snapshot(): SupervisionMemorySnapshot {
+    return {
+      retries: Object.fromEntries(this.retries),
+      failedWith: Object.fromEntries(this.failedWith),
+      edits: { removed: [...this.edits.removed], changed: [...this.edits.changed] },
+      told: [...this.told],
+    };
+  }
+
+  /** Put back a save's memory, replacing whatever this held; absent is a plan saved without any. */
+  restore(snapshot: SupervisionMemorySnapshot | undefined): void {
+    this.forget();
+    if (!snapshot) return;
+    for (const [id, count] of Object.entries(snapshot.retries ?? {})) this.retries.set(id, count);
+    for (const [id, shape] of Object.entries(snapshot.failedWith ?? {})) this.failedWith.set(id, shape);
+    this.edits = {
+      removed: [...(snapshot.edits?.removed ?? [])],
+      changed: [...(snapshot.edits?.changed ?? [])],
+    };
+    this.told = new Set(snapshot.told ?? []);
   }
 
   forget(): void {

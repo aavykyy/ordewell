@@ -86,6 +86,8 @@ export interface IsolationTaskRecord {
   status: IsolationTaskStatus;
   /** Keyed by repo path. */
   repos: Record<string, IsolationTaskRepo>;
+  /** Unrecovered branches from a conflict fallback, so a later continue cannot forget them. */
+  continuationWork?: PreservedWork[];
   /** The repo whose merge stopped the task from landing, while `status` is `conflict` or `failed`. */
   conflictRepo?: string;
   /**
@@ -307,6 +309,7 @@ export interface PreparedTask {
   copied: string[];
   /** What the attempt this one replaces left unlanded, kept on a branch before its worktree went; absent when nothing was. */
   preserved?: PreservedWork[];
+  continuation?: 'restored' | 'fallback';
 }
 
 /** A task as a removal names it. */
@@ -386,11 +389,11 @@ export interface IWorktreeIsolation {
   /**
    * Create the task workspace — one worktree per isolated repo from its
    * integration tip, the shared paths linked in — and return the cwd to spawn
-   * the Runner into. A second `prepare` for the same task is a retry: the old
-   * attempt is discarded and the workspace recreated from the tips, so the
-   * task sees everything its predecessors have integrated.
+   * the Runner into. Fresh attempts start clean from the tips. A continuation
+   * restores the previous attempt's preserved work on top of them, falling
+   * back to the tips in every repo when any restoration conflicts (ADR-0018).
    */
-  prepare(task: Task, run: IsolationRun): Promise<PreparedTask>;
+  prepare(task: Task, run: IsolationRun, intent?: 'fresh' | 'continuation'): Promise<PreparedTask>;
 
   /**
    * Hand a conflicted task's kept workspace to a conflict repair (ADR-0015)

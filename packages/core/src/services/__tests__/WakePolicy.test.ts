@@ -206,6 +206,34 @@ describe('createWakePolicy', () => {
     });
   });
 
+  describe('a snapshot across a restart', () => {
+    it('keeps the events inside the window and the passes, so the batch is delivered after a reload', () => {
+      const policy = createWakePolicy({ debounceMs: DEBOUNCE });
+      policy.push(event('task_passed', 0, 't1'));
+      policy.push(event('waiting_input', 400, 't2'));
+      policy.push(event('task_failed', 500, 't3'));
+
+      const restarted = createWakePolicy({ debounceMs: DEBOUNCE });
+      restarted.restore(policy.snapshot());
+
+      expect(restarted.dueAt()).toBe(400 + DEBOUNCE);
+      expect(restarted.poll(400 + DEBOUNCE)).toEqual({
+        attention: [event('waiting_input', 400, 't2'), event('task_failed', 500, 't3')],
+        sinceLast: [event('task_passed', 0, 't1')],
+      });
+    });
+
+    it('restores nothing from a plan saved before the snapshot existed', () => {
+      const policy = createWakePolicy({ debounceMs: DEBOUNCE });
+      policy.push(event('task_failed', 0, 't1'));
+
+      policy.restore(undefined);
+
+      expect(policy.dueAt()).toBeNull();
+      expect(policy.poll(DEBOUNCE)).toBeNull();
+    });
+  });
+
   it.each([-1, Number.NaN, Number.POSITIVE_INFINITY])('rejects a debounce of %s', (debounceMs) => {
     expect(() => createWakePolicy({ debounceMs })).toThrow(RangeError);
   });

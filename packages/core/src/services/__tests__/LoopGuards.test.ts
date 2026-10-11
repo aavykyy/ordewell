@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createTask, type Task } from '../../models/Task';
 import {
   attemptShape, identicalRetry, noEdits, oscillatingEdit, recordEdit, retryLimit, wakeUpRateTripped,
+  SupervisionMemory,
   type EditMemory,
 } from '../LoopGuards';
 
@@ -100,6 +101,43 @@ describe('no oscillating edits', () => {
   it('remembers nothing it did not do', () => {
     const memory: EditMemory = noEdits();
     expect(oscillatingEdit(memory, [plan[0]], plan)).toBeNull();
+  });
+});
+
+describe('the memory round-trips through a snapshot', () => {
+  const plan = [task('t1'), task('t2', { title: 'Write the docs', prompt: 'document the API' })];
+
+  it('keeps the retries, the failed attempts, the edits and what the user was told', () => {
+    const memory = new SupervisionMemory();
+    memory.done(
+      { command: 'retry_task', actor: 'supervisor', task: { id: 't1', ref: '#1', title: 'Task t1' }, outcome: 'done', at: '2026-10-11T18:00:00Z' },
+      plan,
+    );
+    memory.settled({ ...plan[0], status: 'failed' });
+    memory.edited(plan, [plan[0]]);
+    const trip = retryLimit(t3, 2, 2)!;
+    memory.firstReport(trip);
+
+    const restored = new SupervisionMemory();
+    restored.restore(memory.snapshot());
+
+    const target = { task: { ...plan[0], status: 'failed' as const }, ref: '#1' };
+    expect(restored.check({ command: 'retry_task', task: 't1', from: 'fresh' }, target, plan, 1)?.key).toBe('retry-limit:t1');
+    expect(restored.check({ command: 'run_task', task: 't1' }, target, plan, 5)?.key).toBe('identical-retry:t1');
+    expect(restored.checkEdit([plan[0]], [plan[0], task('n1', { title: 'write the docs ', prompt: 'something new' })])?.key).toBe('re-add:write the docs');
+    expect(restored.firstReport(trip)).toBe(false);
+  });
+
+  it('restores nothing from a plan saved before the snapshot existed', () => {
+    const memory = new SupervisionMemory();
+    memory.done(
+      { command: 'retry_task', actor: 'supervisor', task: { id: 't1', ref: '#1', title: 'Task t1' }, outcome: 'done', at: '2026-10-11T18:00:00Z' },
+      plan,
+    );
+
+    memory.restore(undefined);
+
+    expect(memory.snapshot()).toEqual({ retries: {}, failedWith: {}, edits: noEdits(), told: [] });
   });
 });
 

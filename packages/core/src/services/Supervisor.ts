@@ -1,5 +1,5 @@
 import type { SupervisorLevel } from '../models/Execution';
-import { createWakePolicy, type RunEvent, type WakeBatch, type WakePolicy } from './WakePolicy';
+import { createWakePolicy, type RunEvent, type WakeBatch, type WakePolicy, type WakePolicySnapshot } from './WakePolicy';
 import { classifyRunnerStop, readUsageLimitReset } from './runnerExit';
 import { WAKE_UP_RATE, wakeUpRateTripped, type WakeUpRate } from './LoopGuards';
 import { PlannerTurnDiscardedError, PlannerTurnStoppedError, type PlanChange, type WakeUpTurn } from './PlannerConversation';
@@ -36,6 +36,19 @@ export interface SupervisedRun {
   unsupervised?: string;
 }
 
+/**
+ * What the supervisor gathered but has not delivered, saved on the plan so a
+ * daemon restart still delivers a batch that was inside its debounce window
+ * (ADR-0029). Undelivered batches already wait as `pendingTurns`; this is only
+ * the state the policy and the wake-up rate keep before a batch exists.
+ */
+export interface SupervisorSnapshot {
+  /** The events inside the debounce window and the passes since the last wake-up. */
+  policy: WakePolicySnapshot;
+  /** When each wake-up since the last pass was delivered, for the wake-up rate guard. */
+  wakeUps: number[];
+}
+
 export interface SupervisorHost {
   /** The current run's saved settings; null when no run has started. */
   run(): SupervisedRun | null;
@@ -43,6 +56,8 @@ export interface SupervisorHost {
   deliver(digest: string): Promise<unknown>;
   /** Start whatever planner turn is now due. */
   pump(): void;
+  /** Save what the supervisor gathered: a restart must still deliver a debounced batch (ADR-0029). */
+  saveState(): void;
   /** How a digest names a task: `#3 "Title"`. */
   describeTask(taskId: string): string;
   /** Reads a wake-up turn may make, as the plan sets them. */
@@ -159,6 +174,23 @@ export class Supervisor {
     if (event.kind === 'task_passed') this.wakeUps = [];
     this.policy.push({ ...event, at: this.now() });
     this.arm();
+    this.host.saveState();
+  }
+
+  /** What it gathered but has not delivered, for the plan (ADR-0029). */
+  snapshot(): SupervisorSnapshot {
+    return { policy: this.policy.snapshot(), wakeUps: [...this.wakeUps] };
+  }
+
+  /**
+   * Put back a save's gathered state after a restart, and re-arm the debounce
+   * from when it was due, so a batch that was inside the window is delivered.
+   */
+  restore(snapshot: SupervisorSnapshot | undefined): void {
+    this.disarm();
+    this.policy.restore(snapshot?.policy);
+    this.wakeUps = [...(snapshot?.wakeUps ?? [])];
+    this.arm();
   }
 
   /**
@@ -171,6 +203,10 @@ export class Supervisor {
     if (continues) return;
     this.failures = 0;
     this.wakeUps = [];
+    // A new run gathers its own events: what the previous one left undelivered
+    // was already handed to the user's next turn, and must not wake this one.
+    this.disarm();
+    this.policy = createWakePolicy({ debounceMs: this.debounceMs });
   }
 
   /** The plan these events were about is gone: nothing gathered or waited on carries over. */

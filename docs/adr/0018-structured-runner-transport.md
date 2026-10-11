@@ -92,7 +92,25 @@ and completion evidence.
   It is offered on completed and failed structured tasks with a saved session
   id, not on conflicts. Dependents are left alone, as with retry. If the runner
   refuses the resume, the attempt fails; no fresh session is started in its
-  place.
+  place. In an isolated run the task workspace is recreated at the same path
+  from the current integration tips, then the previous attempt's unlanded work
+  is merged into it. Before removing the kept worktrees, Ordewell commits
+  uncommitted edits, including new files and deletions, to rescue commits and
+  keeps their tips on `ordewell-preserved/<run-id>/<order>-<slug>` branches
+  (with a numeric suffix when needed). A continue must recover that work:
+  its saved session remembers those edits and would otherwise reason from
+  files that no longer exist. The resumed agent is told its previous changes
+  are in the working tree. If anything landed meanwhile conflicts with them,
+  every repo of the group falls back to its integration tip; the preserved
+  branches stay, and the agent is told exactly which branch holds its work
+  in each changed repo, with `git log <branch>` and `git diff HEAD...<branch>`
+  to inspect it before recovering it. Unrecovered branches are saved with the
+  task's isolation record until it lands, so another continue or a reload
+  still reports them while the task remains unfinished. A landing clears that
+  reminder; the preserved branches remain available for inspection.
+  Fresh retries still start clean from the integration tips. Shared runs
+  continue in the same checkout with their
+  uncommitted work already in place, and say so.
 - **Usage limits (U1, #84).** A runner that stops on its account's usage
   limit — its process exits with the limit as the last thing it printed, or a
   turn fails with it as its error — has not failed the task. The attempt ends
@@ -106,11 +124,13 @@ and completion evidence.
   resume together. A resume is a continue (K1) of the task's saved session —
   a fresh attempt where none was saved — told the limit has reset, and once
   nothing else waits on a reset and no task has failed, the hold on the run is
-  released. In an isolated run the continue starts from the integration tip,
-  so what the paused attempt left uncommitted is on its kept branch, and the
-  resumed agent is told to check its tree. A resumed attempt that hits the
-  limit again within five minutes waits for a manual retry, and says so. A
-  plan loaded with a resume time still ahead waits for it again; one that
+  released. Its message says the limit has reset and reports what K1 did with
+  the previous work: restored in the working tree, or a conflict fallback to
+  the integration tips with the preserved branches named. The saved session
+  and its working files must agree for an unattended run to carry on after a
+  limit. A resumed attempt that hits the limit again within five minutes waits
+  for a manual retry, and says so. A plan loaded with a resume time still ahead
+  waits for it again; one that
   passed while nothing ran — the daemon was down — resumes at once. Cancelling
   the resume (the task row and the task view) and stopping the run
   both leave the task waiting for a manual retry, as one with no readable
@@ -213,6 +233,14 @@ transport is retained for take-over.
   A process held for hours, or days for a weekly limit, is lost on any daemon
   restart, so the continue path is needed regardless; it is also the only one
   after a runner's process exits on the limit.
+- **Continuing from the integration tip with only a warning to check the
+  tree.** Previously adopted; rejected because the saved session remembers
+  edits that the new tree omits, and an unattended agent is not told where
+  they went. Restoring the preserved work keeps that session usable; naming
+  its branches is the conflict fallback.
+- **Continuing directly from the kept branch without bringing the integration
+  tip along.** Rejected because it omits work landed while the task waited.
+  Merging the previous work into the current tips preserves both when clean.
 - **A wait per task.** A limit belongs to the account a runner signs in with,
   and the runner is usable only once every limit it hit has reset.
 - **Reading Claude Code's `rate_limit_event`.** Its stream-json reports the
@@ -234,3 +262,4 @@ transport is retained for take-over.
 - 2026-10-11 — U1: a task paused on a usage limit resumes on its own at the reset (#84).
 - 2026-10-11 — a cancelled resume is marked on `onUsageLimitWait`, and a task going silent is announced (`onTaskIdle`), for the supervisor ([ADR-0029](0029-the-supervisor.md)).
 - 2026-10-11 — direct and planner runner changes share resume cancellation and scheduler readiness; same-runner model changes preserve the account's wait.
+- 2026-10-11 — K1 and U1 preserve a continued attempt's unlanded work, with an atomic conflict fallback naming the preserved branches.

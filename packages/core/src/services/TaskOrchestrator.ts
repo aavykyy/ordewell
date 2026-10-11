@@ -1213,10 +1213,9 @@ export class TaskOrchestrator {
   /**
    * Continue a finished structured task in its saved runner session (ADR-0018,
    * K1): a retry whose first turn is the user's message, sent to the session
-   * the task ended in rather than a fresh one given its prompt again. Like a
-   * retry it is a new attempt in a fresh worktree from the integration tip —
-   * the same path, which is where the runner keeps its sessions — verified and
-   * landed like any other, and dependents are left alone.
+   * the task ended in rather than a fresh one given its prompt again. The
+   * worktree keeps the same path, where the runner keeps its sessions, and
+   * restores the previous work so that session's memory matches its files.
    */
   async continueTask(taskId: string, message: string): Promise<void> {
     const text = message.trim();
@@ -1626,7 +1625,7 @@ export class TaskOrchestrator {
         const name = this.registry?.get(attempt.runner)?.manifest.displayName ?? attempt.runner;
         throw new Error(`${name} has no structured connector, so Ordewell cannot run its tasks. Assign the task to Claude Code, Codex or OpenCode.`);
       }
-      const { cwd, worktree } = await attemptCwd(kind, task, this.runs);
+      const { cwd, worktree, continuationMessage } = await attemptCwd(kind, task, this.runs);
       attempt.cwd = cwd;
       attempt.worktree = worktree;
       if (checksTree(kind)) attempt.snapshot = await this.runs.snapshotWorkspace();
@@ -1647,6 +1646,7 @@ export class TaskOrchestrator {
         task,
         plan: this.store.planTasks,
         planMapEnabled: this.config.planMapEnabled,
+        continuationMessage: continuationMessage ?? (!worktree ? 'Your previous changes are in the working tree (shared workspace).' : undefined),
         skills: attempt.skills,
         repairPrompt: (t) => this.landing.repairPrompt(t),
         previousAttempt: (taskId) => this.opsPreviousAttempt(taskId),
@@ -1873,12 +1873,7 @@ const RESUME_MARGIN_MS = 60_000;
 /** A resumed attempt that hits the limit again within this did not get past the reset, so it is not resumed again. */
 const RELAPSE_MS = 5 * 60_000;
 
-/**
- * The turn a resumed session is continued with. In an isolated run the
- * continue starts from the integration tip (K1), so what the paused attempt
- * left uncommitted is on its kept branch, not in the new worktree.
- */
-const LIMIT_RESET_MESSAGE = 'Your usage limit has reset. Carry on with the task from where you stopped. Check the working tree first: changes you had not committed may not be in it.';
+const LIMIT_RESET_MESSAGE = 'Your usage limit has reset. Carry on with the task from where you stopped.';
 
 /** How much of an ops task's last attempt the next one is shown. */
 const OPS_RETRY_TAIL_LINES = 60;

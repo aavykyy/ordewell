@@ -205,14 +205,14 @@ export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], op
 /**
  * The first turn of a continue (ADR-0018, K1): the user's message, then a
  * short reminder of the protocol. The resumed session already holds the
- * original prompt, so it is not sent again — but it holds the old worktree
- * too, and this attempt's is fresh from the integration branch.
+ * original prompt, so it is not sent again. The attempt supplies what happened
+ * to its previous work once its working directory has been prepared.
  */
 export function composeContinuationPrompt(task: Task, message: string, opts: { ops?: boolean } = {}): string {
   const reminder = [
     opts.ops
       ? '(Ordewell) You are continuing this task in the same session, in the same checkout. What your earlier attempt did outside the repository was not undone: check what already exists before acting again.'
-      : '(Ordewell) You are continuing this task in the same session. Your working directory was recreated from the integration branch: work from your earlier attempt is there only if it landed, so check the files before relying on them.',
+      : '(Ordewell) You are continuing this task in the same session. Check the working tree before relying on the files remembered from your earlier attempt.',
   ];
   if (isHitlTask(task)) {
     reminder.push('If you reach a decision that needs human judgment, call the `checkpoint` tool: its result is `continue` or `rejected: <why>`.');

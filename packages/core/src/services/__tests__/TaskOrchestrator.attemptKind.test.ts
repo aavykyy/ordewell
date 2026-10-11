@@ -138,7 +138,7 @@ describe('attempt kinds, as the orchestrator runs them', () => {
       expect(env.isolation.taskIdsFor('prepare')).toEqual(['c1']);
     });
 
-    it('a continued change task starts from a fresh worktree', async () => {
+    it('a continued change task recreates its worktree at the same path', async () => {
       const env = setup();
       const c1 = change('c1', 1);
       env.orchestrator.loadPlan([c1]);
@@ -390,7 +390,7 @@ describe('attempt kinds, as the orchestrator runs them', () => {
       expect(env.spawned('c1')[1].prompt).not.toContain('### Skill: tdd');
     });
 
-    it('a continued change task is told its worktree was recreated', async () => {
+    it('a continued change task is told its previous changes are in the working tree', async () => {
       const env = setup();
       const c1 = change('c1', 1, { skills: ['tdd'] });
       env.orchestrator.loadPlan([c1]);
@@ -400,7 +400,7 @@ describe('attempt kinds, as the orchestrator runs them', () => {
 
       const prompt = env.spawned('c1')[1].prompt;
       expect(prompt.startsWith('one more thing\n')).toBe(true);
-      expect(prompt).toContain('Your working directory was recreated from the integration branch');
+      expect(prompt).toContain('Your previous changes are in the working tree');
       expect(prompt).not.toContain('### Skill: tdd');
     });
 

@@ -151,6 +151,16 @@ interface UserTurn {
   checkpoint?: TranscriptSnapshot | null;
   /** Handed in since the backend last answered; see {@link PlannerConversation.submit}. */
   submitted?: PlannerSubmission;
+  /**
+   * The turn's inputs — the user's message and the skills its `/name` tokens
+   * loaded, the wake-up digests, and the user-prompt research entry — held
+   * until the mutation that lands the outcome writes them. While the turn is in
+   * flight they live only in the plan's pending turns, so a background save
+   * cannot persist them in the transcript too and a reload cannot replay both.
+   * `at` is where they belong in the transcript, before anything the turn wrote
+   * as it ran (a planner skill load, a command at the seam).
+   */
+  input?: { entries: ConversationMessage[]; research: ResearchLogEntry[]; at: number };
   /** See {@link ReplyOptions.onCommit}. */
   onCommit?: () => void;
 }
@@ -776,8 +786,21 @@ export class PlannerConversation {
     userTurn.checkpoint = checkpoint;
     const now = new Date().toISOString();
     const fromUser = wakeUps.length === 0 || message.text !== '' || message.skills.length > 0;
-    this.appendEntries(wakeUps.map((content): ConversationMessage => ({ role: 'user', content, timestamp: now, kind: 'wake_up' })));
-    if (fromUser) this.recordUser(message, now);
+    // Held, not written: a background save mid-turn must never land these in
+    // the transcript while their pending turns still hold them (ADR-0029).
+    // Deferring the write — rather than tagging the entries and skipping them
+    // on replay — is what keeps the transcript and `pendingTurns` from ever
+    // holding the same input after a save; the two leave together in the save
+    // that lands the outcome.
+    const entries: ConversationMessage[] = wakeUps.map((content): ConversationMessage => ({ role: 'user', content, timestamp: now, kind: 'wake_up' }));
+    if (fromUser) entries.push(...this.userEntries(message, now));
+    userTurn.input = {
+      entries,
+      research: fromUser ? [{ id: `up-${Date.now()}`, type: 'user_prompt', content: message.text, timestamp: now }] : [],
+      // `priorHistory` is the transcript as it stood when the turn opened;
+      // anything the turn appends as it runs goes after this point.
+      at: priorHistory.length,
+    };
 
     // The persisted transcript keeps the raw user message; the model gets the
     // live catalog (always) and the current plan (tasks, statuses, edit
@@ -908,12 +931,36 @@ export class PlannerConversation {
   }
 
   /** The message as typed, then one entry per skill it loaded, sharing its timestamp so a reload keeps them together. */
-  private recordUser({ text, skills }: SkillInvocation, timestamp: string): void {
-    this.appendEntries([
+  private userEntries({ text, skills }: SkillInvocation, timestamp: string): ConversationMessage[] {
+    return [
       { role: 'user', content: text, timestamp },
       ...skills.map((skill): ConversationMessage => ({ role: 'user', content: skillLoadLabel(skill), timestamp, kind: 'skill_load', skill })),
-    ]);
+    ];
+  }
+
+  private recordUser({ text, skills }: SkillInvocation, timestamp: string): void {
+    this.appendEntries(this.userEntries({ text, skills }, timestamp));
     this.recordResearch([{ id: `up-${Date.now()}`, type: 'user_prompt', content: text, timestamp }]);
+  }
+
+  /**
+   * Write the turn's held inputs inside the mutation that lands the outcome —
+   * call at its top, before the assistant entries, so the transcript reads in
+   * the order it happened and the inputs leave the plan in the save that
+   * carried their answer (ADR-0029). They go back where the turn opened, ahead
+   * of whatever it wrote as it ran (a planner skill load, a command at the
+   * seam), not at the end.
+   */
+  private commitInput(userTurn: UserTurn): void {
+    const input = userTurn.input;
+    if (!input) return;
+    const plan = this.host.plan();
+    if (plan) {
+      const history = plan.conversationHistory ?? [];
+      const at = Math.min(input.at, history.length);
+      plan.conversationHistory = [...history.slice(0, at), ...input.entries, ...history.slice(at)];
+    }
+    this.recordResearch(input.research);
   }
 
   private recordResearch(entries: ResearchLogEntry[]): void {
@@ -1125,6 +1172,7 @@ export class PlannerConversation {
     const voice = supervisor ? { supervisor: true as const } : {};
     const plan = this.host.mutate(
       () => {
+        this.commitInput(userTurn);
         this.recordResearch(turn.researchLog);
         this.host.adoptTasks(result.tasks, 'edit');
         if (turn.said) this.append('assistant', turn.said, { timestamp: now, ...kind });
@@ -1151,6 +1199,7 @@ export class PlannerConversation {
 
     if (turn.kind === 'plan') {
       return this.host.mutate(() => {
+        this.commitInput(userTurn);
         this.recordResearch(turn.researchLog);
         // A cheap model may emit the PRD block and the plan JSON in one turn —
         // capture the PRD here too so it isn't dropped with the plan preamble.
@@ -1175,6 +1224,7 @@ export class PlannerConversation {
     const supervisor = userTurn.wakeUp !== undefined;
     return this.host.mutate(
       () => {
+        this.commitInput(userTurn);
         this.recordResearch(turn.researchLog);
         this.append('assistant', text, { timestamp: now, ...(supervisor ? { kind: 'supervisor' as const } : {}) });
         this.host.capturePrd(text);

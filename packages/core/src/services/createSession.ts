@@ -556,6 +556,7 @@ export class Session {
       run: () => this.supervisedRun(),
       deliver: (digest) => this.turns.enqueue({ source: 'supervisor', text: digest }),
       pump: () => this.turns.pump(),
+      saveState: () => this.persist({ background: true }),
       describeTask: (taskId) => this.describeTask(taskId),
       readBudget: () => this.plan?.wakeUpReadBudget ?? DEFAULT_WAKE_UP_READ_BUDGET,
       retryLimit: () => this.retryLimit(),
@@ -965,6 +966,9 @@ export class Session {
     this.syncPlanTasks();
     this.plan.isolation = this.runs.planIsolation ?? undefined;
     this.plan.plannerUsage = this.usage.snapshot();
+    // What supervision remembers is read here, at the one save seam, so it is
+    // written in the same save as the action that changed it (ADR-0029).
+    this.plan.supervision = { guards: this.guards.snapshot(), wake: this.supervisor.snapshot() };
     this.plan.lastUpdated = new Date().toISOString();
     this.save(this.plan, this.goal, this.workspace, this.currentSessionId);
     this.conversation.markPersisted(opts);
@@ -1766,6 +1770,13 @@ export class Session {
       this.approvalPolicy.reset();
     }
     this.plan = plan;
+    // A plan adopted off disk carries what supervision remembered: the loop
+    // guards' memory and any batch inside its debounce window (ADR-0029). The
+    // same-object load keeps the live run's, which is fresher than the save.
+    if (adopting) {
+      this.guards.restore(plan.supervision?.guards);
+      this.supervisor.restore(plan.supervision?.wake);
+    }
     this.orchestrator.setMergeAtGatesAutomatically(plan.mergeAtGatesAutomatically === true);
     this.goal = goal;
     this.workspace = workspace;

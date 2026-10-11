@@ -205,18 +205,6 @@ export interface IAiService {
    * and cheap in every implementation, so callers never gate it.
    */
   reset(): void;
-
-  /**
-   * A one-shot plan from a prompt the caller built, so built for this
-   * planner's transport: one with {@link plannerToolsAttached} is asked for a
-   * submit_plan call, never JSON in its reply.
-   */
-  sendPlanningPrompt(
-    prompt: string,
-    runners: RunnerId[],
-    runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-    autonomousDefault?: boolean,
-  ): Promise<Task[]>;
 }
 
 /**
