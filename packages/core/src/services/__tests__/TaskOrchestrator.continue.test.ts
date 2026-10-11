@@ -166,7 +166,7 @@ describe('TaskOrchestrator.continueTask', () => {
     expect(h.task('t2')).toMatchObject({ status: 'completed', verdict: t2Before.verdict, outputSummary: t2Before.outputSummary });
   });
 
-  it('starts from a fresh worktree at the task\'s own path, replacing the kept one', async () => {
+  it('recreates the worktree at the task\'s own path', async () => {
     const isolation = new FakeWorktreeIsolation();
     const h = setup({ isolation });
     h.orchestrator.loadPlan([plan(), createTask({ id: 't2', order: 2, title: 'Other', prompt: 'two' })]);
