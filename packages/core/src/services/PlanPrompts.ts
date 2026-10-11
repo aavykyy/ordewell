@@ -1,4 +1,4 @@
-import { DiscoveredModel, RunnerId, plannerTaskView, type TaskSnapshot, type Task } from '../models/Task';
+import { DiscoveredModel, RunnerId, plannerTaskView, type Task } from '../models/Task';
 import type { LegacyPlanState } from '../models/Task';
 import { buildModeGuide, filteredBuildModes, type RunnerModeInfo } from './ModeResolver';
 import { DEFAULT_PLANNER_MODES, type IsolatedExecution, type PlannerModes } from './plannerModes';
@@ -714,94 +714,6 @@ export function modelContextBlock(
     modeGuide,
     '',
   ].join('\n');
-}
-
-export function executionLogBlock(executionLog: TaskSnapshot[]): string {
-  if (executionLog.length === 0) return '';
-
-  const completed = executionLog.filter((t) => t.status === 'completed');
-  const failed = executionLog.filter((t) => t.status === 'failed');
-
-  const lines = ['EXECUTION LOG SUMMARY:'];
-  lines.push(`Total entries: ${executionLog.length} (${completed.length} completed, ${failed.length} failed)`);
-
-  if (completed.length > 0) {
-    lines.push('');
-    lines.push('COMPLETED TASKS:');
-    for (const t of completed) {
-      const verdict = t.verdict ? ` — ${t.verdict.outcome.toUpperCase()}: ${t.verdict.reason}` : '';
-      lines.push(`- [${t.id}] ${t.title}${verdict}`);
-    }
-  }
-
-  if (failed.length > 0) {
-    lines.push('');
-    lines.push('FAILED TASKS (eligible for retry):');
-    for (const t of failed) {
-      const verdict = t.verdict ? ` — ${t.verdict.reason}` : '';
-      lines.push(`- [${t.id}] ${t.title} (retry #${t.retryCount})${verdict}`);
-    }
-  }
-
-  return lines.join('\n');
-}
-
-export function pendingEditRulesBlock(): string {
-  return [
-    'MODIFICATION RULES:',
-    '- Preserve existing task IDs for all unchanged tasks. Only create new IDs for newly added tasks.',
-    '- DO NOT modify completed tasks from the execution log UNLESS the user explicitly asks to retry them. If retrying a completed task, assign it the SAME id as the original and set its status to "pending".',
-    '- DO NOT modify or remove tasks that are currently in_progress — they are being executed by an active agent session.',
-    '- When removing a task, update all other tasks that reference the deleted ID in their dependencies.',
-    '- Ensure dependency chains remain valid — no dangling references to deleted IDs.',
-    '- Renumber task "order" fields sequentially starting from 1 after insertions or deletions.',
-    '- When adding new tasks, assign appropriate models and thinking efforts based on complexity.',
-    '- For failed tasks being retried: use the same ID, update the prompt to address the failure reason, and set status to "pending".',
-    '- Only modify the tasks the user asked to change. Return ALL pending tasks, not just the modified ones.',
-    '',
-  ].join('\n');
-}
-
-export function buildModifyDuringExecutionPrompt(
-  executionLog: TaskSnapshot[],
-  pendingTasks: string,
-  userMessage: string,
-  modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>>,
-  runners: RunnerId[],
-  runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-  modes: Pick<PlannerModes, 'autonomousDefault' | 'isolatedExecution'> = DEFAULT_PLANNER_MODES,
-  tools = false,
-): string {
-  const execLogBlock = executionLogBlock(executionLog);
-  const rulesBlock = pendingEditRulesBlock();
-  const modelBlock = modelContextBlock(modelsByRunner, runners, runnerModes, modes.autonomousDefault);
-
-  const sections = [
-    corePlannerPrompt(modes.isolatedExecution, tools),
-    '',
-    'You are modifying a plan that is currently executing. Some tasks have already been completed or failed.',
-    '',
-  ];
-
-  if (execLogBlock) {
-    sections.push(execLogBlock);
-    sections.push('');
-  }
-
-  sections.push('CURRENT PENDING TASKS (these are NOT yet executed):');
-  sections.push(pendingTasks);
-  sections.push('');
-  sections.push(rulesBlock);
-  sections.push(modelBlock);
-  sections.push('');
-  sections.push('USER REQUEST:');
-  sections.push(userMessage);
-  sections.push('');
-  sections.push(`${tools
-    ? 'Call submit_plan with the COMPLETE modified pending tasks in its "tasks" array.'
-    : 'Return the COMPLETE modified pending tasks as a JSON object with a single "tasks" array.'} Include all pending tasks, not just the modified ones.\n${submitInstruction(tools)}`);
-
-  return sections.join('\n');
 }
 
 /**

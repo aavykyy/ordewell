@@ -285,22 +285,6 @@ body {
   align-items: center;
 }
 
-/* ---- Pending plan edit badge ---- */
-
-.pending-plan-edit-badge {
-  display: inline-flex;
-  align-items: center;
-  font-size: 9px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--cyan);
-  background: var(--cyan-subtle);
-  border: 1px solid rgba(57, 197, 207, 0.25);
-  border-radius: 3px;
-  padding: 1px 5px;
-}
-
 /* ---- Conversation blocks (#51): thinking, command rows, subagent cards ---- */
 
 .chat-msg-error {
@@ -4685,59 +4669,6 @@ body {
 .detail-toggle[aria-pressed='true'] {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
-}
-
-/* ---- Pending plan edits (#53) ----
-   The run-time edit queue, not queued prompts: each edit waits for the next
-   batch boundary, with a way to withdraw it before that applies it. */
-.pending-plan-edits {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin: 8px 14px 0;
-}
-
-.pending-plan-edit {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  padding: 3px 6px 3px 8px;
-  border: 1px solid var(--border-muted);
-  border-left: 2px solid var(--cyan);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-}
-
-.pending-plan-edit-text {
-  flex: 1;
-  min-width: 0;
-  font-size: 11px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.pending-plan-edit-remove {
-  flex-shrink: 0;
-  width: 18px;
-  height: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.pending-plan-edit-remove:hover {
-  background: var(--red-subtle);
-  color: var(--red);
 }
 
 /* ---- Queued prompts ----

@@ -48,9 +48,10 @@ transport-agnostic. The orchestrator's observer is subscribed once for the
 session's lifetime (not per-operation), killing the double-subscribe class of
 bug — and it is the orchestrator's *only* notification channel: refresh
 signals travel over it and become `status_update` broadcasts (there is no
-separate `onRefresh` callback for a surface to wire). The queue-ready signal
-is the Session's alone: it drains its own **Pending plan edits** when the
-scheduler parks behind them, so no surface is told or has to act.
+separate `onRefresh` callback for a surface to wire). **Live planner turns**
+are the Session's alone: every reply goes through its **PlanTurns**, which
+holds the scheduler's new starts for the turn and lets them go when it ends,
+so no surface is told or has to act.
 The Session adds to the relay's observer only the saves some events owe, each
 made before the event is announced: a task that settles on its own
 (`onTaskSettled` — completed, failed or awaiting the user) is saved as it
@@ -59,8 +60,7 @@ These execution-event saves are *background* saves: one that lands in the
 middle of a planner turn does not settle that turn (see *PlannerConversation*).
 Mutation is an internal seam — every structural plan mutation *and every
 settled conversation turn* (plan commit, task-ops apply, planner message) runs
-one `mutatePlan` ritual (store op → persist → broadcast), and so does the
-between-batch drain of queued edits. The ritual covers plan
+one `mutatePlan` ritual (store op → persist → broadcast). The ritual covers plan
 edits only. User controls that change task state through the orchestrator
 (execute, approve the review, reschedule, stop, retry, cancel, mark complete or
 not done, force start, run one task, continue a task, the two ways past a dirty
@@ -73,12 +73,12 @@ before each `status_update` announced while it runs, and once more when it
 ends — a hold across its spawns and git work would stall every task's status
 and let an `execution_complete` it causes overtake the update held back. The
 saves made while it runs are background saves, as are a task control's own;
-so is the run going on after a drain of **Pending plan edits**, which is
+so is the run going on when a planner turn lets its start hold go, which is
 saved before its statuses go out the same way. `generatePlan` and `loadPlan` persist
 the plan they adopt directly. Direct (non-planner) edits go one step further
 through `editPlan`, which adds the reschedule they owe an armed scheduler:
-nothing else wakes one after a hand edit, because a direct edit never queues,
-so a task the edit unblocked would sit ready and never start. PlanStore is the single source of truth for task
+nothing else wakes one after a hand edit, because no planner turn ends to let
+a start hold go, so a task the edit unblocked would sit ready and never start. PlanStore is the single source of truth for task
 state; `LegacyPlanState.tasks` is written from it (a `snapshot()`, never the
 live tree) at persist and status-broadcast time and never read back into it. The old
 `syncStoreFromPlan` (plan → store direction) is removed — there is only one
@@ -96,9 +96,10 @@ of per-verb forwarders, and the pool never caches plan state (the Session is
 the plan's owner).
 Session boundaries are hard: `startPlanning`/`generatePlan` begin from zero
 (`beginFreshPlan` drops any live conversation and every leftover task, log,
-and queued message), `loadPlan` of a *different* plan drops the live LLM
-conversation plus the old plan's log/queue (the first user send reseeds from
-the adopted plan's own transcript), and hosts call `Session.reset()` on "new
+and waiting planner turn), `loadPlan` of a *different* plan drops the live LLM
+conversation, the old plan's log and the callers of its waiting turns (the
+first user send reseeds from the adopted plan's own transcript, and inputs the
+adopted plan still holds are replayed), and hosts call `Session.reset()` on "new
 session" for a full wipe with a freshly minted identity. Nothing from one
 session may surface in another — a long-lived Session (VS Code hosts exactly
 one) otherwise presents the previous session's tasks to the planner as the
@@ -167,8 +168,9 @@ session's conversation at a time: a reply (merge and split requests included),
 a compaction, the conversation's opening, or one-shot plan generation.
 Starting one creates its abort signal, and a caller's own signal is relayed
 into it. A turn that continues the dialogue is refused while another is live
-(`ConversationBusyError`, 409 from the daemon); one that starts a fresh plan
-supersedes it. `abortPlannerTurn` *stops* the turn: it still settles, with
+(`ConversationBusyError`, 409 from the daemon) — except a reply sent during a
+reply, which **PlanTurns** takes in the next turn instead; one that starts a
+fresh plan supersedes it. `abortPlannerTurn` *stops* the turn: it still settles, with
 whatever the backend had, as `stopped`. A turn whose plan is dropped under it —
 a new plan, another session adopted, the session closed — is *abandoned*:
 stopped, the conversation freed at once, and whatever it settles is discarded
@@ -233,8 +235,8 @@ like a normal chat session.
 **PlanRepair** — the one owner of "the model emitted something unusable —
 correct it and retry". `repairLoop` is the bounded driver (first reply →
 interpret → corrective re-send) behind plan generation
-(`generatePlanWithRepair`), the Session's task-ops settlement, and
-`Planner.modifyDuringExecution`; `classifyPlannerReply` decides what a planner
+(`generatePlanWithRepair`) and the Session's task-ops settlement;
+`classifyPlannerReply` decides what a planner
 reply *is* (plan, task ops, a botched attempt at either, or prose) and owns
 the envelope keys (`PLAN_ENVELOPE_KEY`/`TASK_OPS_ENVELOPE_KEY`, defined in
 JsonExtractor) plus every corrective prompt text. A conversation turn's
@@ -323,9 +325,8 @@ truth for UI redisplay. Tool-call results are NOT stored here — they live in
 the AI service's in-memory tool-use history; `researchLog` remains the
 persisted tool trace. A reloaded session resumes by replaying this transcript
 into a fresh model context; the tool history is gone. Written only by
-**PlannerConversation**: conversation turns, queued mid-run edits
-once the Session's drain applies them (a `system` entry, so the transcript
-and the plan do not drift apart), and a **Compaction**, which replaces it with
+**PlannerConversation**: conversation turns, mid-run ones included, and a
+**Compaction**, which replaces it with
 a summary and its last two exchanges. A **Rewind** never writes it: the
 shortened copy goes to a new session. Every
 write is persisted and broadcast through Session's `mutatePlan` ritual.
@@ -359,8 +360,8 @@ makes it the current session and prints the rewound message.
 list into a new persisted session and continue there; the original, its file
 and its live planner context are untouched, so either side can be forked
 again. The fork carries no run: tasks caught in progress or at a checkpoint
-become pending, finished ones keep their status, and queued mid-run edits and
-any other per-run record stay behind. What travels is decided in one place,
+become pending, finished ones keep their status, and planner turn inputs still
+waiting (`pendingTurns`) and any other per-run record stay behind. What travels is decided in one place,
 `forkPlanState`, which lists fields rather than spreading the plan, so a field
 added to the plan later stays behind until someone decides it should travel.
 The daemon adopts the fork immediately (see **Adopt**); its first message
@@ -570,8 +571,8 @@ opens a turn at once. The queue lists queued and handed-over messages until
 delivery; a message handed over and then let go of by the runner is queued
 again. Completion evidence that arrives while one is undelivered is held, and
 a message the runner reads voids it.
-*Avoid:* "queued prompt" (the planner conversation's hold) and "pending plan
-edit" (a run's plan-edit queue); "sent" or "delivered" for a handed-over
+*Avoid:* "queued prompt" (the planner conversation's hold); "sent" or
+"delivered" for a handed-over
 message — the write or POST succeeding is not delivery.
 
 **Mid-turn delivery** — a task message reaching the model at the runner's next
@@ -1230,8 +1231,8 @@ read, `canSetDependencies` included as one of the checks it runs.
 
 **Planner rewrite** (`keepExecutionState(current, rewrite)`) — a planner
 answering an edit with a whole task list instead of task ops: a `plan` turn on
-a plan that already exists, or the between-batch drain of queued edits
-(`modifyDuringExecution`). The rewrite is laid over the plan's execution
+a plan that already exists. While a task runs it is refused instead, and the
+planner is asked for task edits (see **Live planner turn**). The rewrite is laid over the plan's execution
 state, never swapped in for it — the same rule `applyTaskOps` enforces, for
 the path that has no ops to check. A *settled* task (`completed`,
 `in_progress`, `awaiting_user`) is kept exactly as it stands where the rewrite
@@ -1239,9 +1240,7 @@ names it and put back beside its old neighbour where the rewrite leaves it out;
 every other task keeps its status, and one the rewrite adds starts `pending`. A
 planner restates tasks, it never witnessed one run, so no status is ever read
 from a rewrite. Without this, a planner that answered "add a task" with the
-full plan echoed finished tasks as `pending` and they ran again. The drain
-shows the planner only unfinished tasks as pending and every finished one —
-earlier runs' too — in the execution log.
+full plan echoed finished tasks as `pending` and they ran again.
 *Avoid:* "regenerating" the plan for an edit — only `generatePlan` and the
 first plan commit start from zero, and only `rearm` or Mark not done re-runs a
 finished task.
@@ -1283,9 +1282,8 @@ deps — never a task's `prompt`, `userSteps`, `verdict`, `outputSummary`, or
 leaves out before rewriting it, instead of fabricating content it never saw.
 `PlannerConversation.drainTaskQueries` answers it — from live state, never
 persisted to `conversationHistory` — in its own loop *before* `repairLoop`, so
-a read never spends the corrective-retry budget a fumbled edit is owed, and
-*before* the live-execution queue gate, so a read still lands mid-run (it
-mutates nothing). One field reads execution state: `output` (with top-level
+a read never spends the corrective-retry budget a fumbled edit is owed. A
+read lands mid-run like any other turn's (it mutates nothing). One field reads execution state: `output` (with top-level
 `outputLines`, default 80 capped at 400, and `outputSince`, a previous
 answer's next offset) returns the clean-rendered tail of a task that is
 running right now, from `TaskOrchestrator.getLiveOutput` through the
@@ -1624,26 +1622,8 @@ new or reloaded session drops them. Drawn after the conversation, never in it:
 a prompt joins the conversation only once it is sent.
 *Avoid:* "pending message" (that names the whole queue's existence, not one
 entry); *Avoid:* treating unsend as cancel — nothing in flight is stopped; the
-prompt simply never goes; *Avoid:* "queued" for a **Pending plan edit**.
-
-**Pending plan edit** — a structural edit the user sent while a *run* was live:
-the Session's run-time edit queue (`getQueuedMessages`), which VS Code lists
-above the input with a way to withdraw each one. The Session drains it itself
-at the next batch boundary — when the scheduler, parked behind the queue with
-nothing live, signals queue-ready — and announces the plan the edits made
-(`plan_generated`, carrying what is still queued); no surface triggers the
-drain. It waits on a run, not on a planner
-turn, and is applied to the plan rather than sent as a prompt — a different
-concept from a queued prompt, which is why the surfaces name it apart. An edit
-stays queued until the planner's answer is applied, so the run starts nothing
-while the drain is out; once the planner has it, it can no longer be
-withdrawn. One drain runs at a time: an edit sent during it is drained after,
-before the run goes on. Like a planner turn, a drain answers the plan it was
-asked about: one that settles after that plan was swapped out is dropped, not
-reconciled into its successor, and wakes no run.
-ADR-0029 replaces it with the **Live planner turn**; this entry describes the
-code until that lands.
-*Avoid:* "queued message" or "queued prompt" in UI text for it.
+prompt simply never goes; *Avoid:* "queued prompt" for an input a **Live
+planner turn** is still to take — core holds those, and no surface lists them.
 
 **Supervisor** — the planner conversation that wrote the plan, taking turns
 during the run it planned (ADR-0029, #27). Not a second model or process: its
@@ -1681,12 +1661,25 @@ handed over whole at the next turn that succeeds.
 *Avoid:* "supervisor turn" for a user-started turn during a run, which follows
 the user's consent, not the level's.
 
-**Live planner turn** — a planner turn taken during a run, at once, while
-running tasks carry on (ADR-0029): a user's message or a wake-up, one at a
-time. The scheduler holds *new* starts for the turn's duration and always
-releases them when it ends, however it ends. Edits apply at once to tasks not
-yet started; one aimed at a running or finished task is refused with a note
-the model can act on. Pending turns are persisted on the plan.
+**Live planner turn** — a planner turn taken at once, during a run too, while
+running tasks carry on (ADR-0029). One module owns it: **PlanTurns**
+(`services/PlanTurns.ts`), whose single entry `enqueue({ source, text, skills })`
+takes every input after the opening — a user's message (`source: 'user'`), and
+the supervisor's wake-up batches when they come (`'supervisor'`). Turns run
+one at a time; inputs that arrive during one are taken together by the next,
+in order. While a turn runs the scheduler starts nothing new
+(`TaskOrchestrator.holdStarts`); the hold goes when the turn ends however it
+ends — landed, stopped, failed, abandoned with its plan — or when it has held
+for `START_HOLD_TIMEOUT_MS`, after which the turn goes on without holding the
+run. Its task edits apply as it settles, to tasks not yet started; an edit
+aimed at a running or completed task is refused with what would be accepted
+(`lockedTaskRefusal`: stop it first, or change it after it finishes; rearm a
+completed one). A batch applies whole or not at all, as `applyTaskOps` always
+has, so one refused op refuses its batch. A whole plan is refused while a task
+runs, and the planner is asked for task edits. Inputs wait on the plan
+(`pendingTurns`), saved as they arrive and dropped in the save that lands their
+turn's outcome, so a reload replays exactly what no turn answered; a load also
+carries over the mid-run edits older builds queued (`queuedMessages`).
 *Avoid:* "pending plan edit" or "queued edit" for it — nothing waits for a
 batch boundary; *Avoid:* "pause" for the start hold — running tasks are not
 paused.

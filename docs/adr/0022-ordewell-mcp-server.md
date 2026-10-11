@@ -141,11 +141,9 @@ planner tools are recorded here as an explicit entry against both:
   `allowlist[0]` with its effort cleared, and the result reports the
   coercion), and `applyTaskOps` with `TaskEditValidator` (ADR-0012). The same
   tasks produce the same plan by either route, and the plan stays the source
-  of truth (ADR-0001). A structural edit during a live run is queued as a
-  pending plan edit, exactly as an envelope edit is.
-  *Amended by [ADR-0029](0029-the-supervisor.md):* the pending plan edit is
-  gone; a mid-run edit is applied at once to tasks not yet started and refused,
-  with a note, for a running or finished task.
+  of truth (ADR-0001). A structural edit during a live run applies at once to
+  tasks not yet started and is refused, with a note, for a running or
+  finished task, exactly as an envelope edit is (ADR-0029).
 - **Execution tools are a further explicit entry (P5).** *Added by
   [ADR-0029](0029-the-supervisor.md).* `run_plan`, `run_task`, `stop_task`,
   `stop_run`, `retry_task`, `message_task`, `answer_approval` (deny or
@@ -253,3 +251,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-09 — `load_skill` added to the planner tools (ADR-0024).
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
 - 2026-10-11 — execution tools and `task_diff`, live planner turns, wake-up turns ([ADR-0029](0029-the-supervisor.md)).
+- 2026-10-11 — live planner turns implemented: `edit_plan` checks a mid-run edit at the call, with no queued outcome.

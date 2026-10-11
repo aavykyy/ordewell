@@ -14,17 +14,19 @@ describe('surfacePlan', () => {
     ...createEmptyPlan(),
     tasks: [attempted({ id: 't1', subtasks: [attempted({ id: 't1.1' })] })],
     conversationHistory: [{ role: 'user' as const, content: 'x', timestamp: '2026-01-01T00:00:00Z', kind: 'skill_load' as const, skill: load }],
+    pendingTurns: [{ id: 'turn-1', source: 'user' as const, text: 'go', timestamp: '2026-01-01T00:00:01Z', skills: [load] }],
     queuedMessages: [{ id: 'q1', text: 'go', timestamp: '2026-01-01T00:00:01Z', skills: [load] }],
     prdMarkdown: '# PRD',
   });
 
-  it('keeps the raw plan\'s fields and drops every body from the loads, queue and attempt snapshots', () => {
+  it('keeps the raw plan\'s fields and drops every body from the loads, pending turns and attempt snapshots', () => {
     const raw = plan();
     const out = surfacePlan(raw);
 
     expect(JSON.stringify(out)).not.toContain(BODY);
     expect(out.conversationHistory?.[0].skill).toEqual({ invokedBy: 'user', name: 'grilling', source: 'global', path: load.path });
-    expect(out.queuedMessages?.[0].skills).toEqual([{ invokedBy: 'user', name: 'grilling', source: 'global', path: load.path }]);
+    expect(out.pendingTurns?.[0].skills).toEqual([{ invokedBy: 'user', name: 'grilling', source: 'global', path: load.path }]);
+    expect(out).not.toHaveProperty('queuedMessages');
     expect(out.tasks[0].attemptSkills).toEqual([{ name: 'tdd', source: 'workspace', path: snapshot.path }]);
     expect(out.tasks[0].subtasks[0].attemptSkills).toEqual([{ name: 'tdd', source: 'workspace', path: snapshot.path }]);
     expect(out).toMatchObject({ prdMarkdown: '# PRD', generatedAt: raw.generatedAt, status: raw.status });

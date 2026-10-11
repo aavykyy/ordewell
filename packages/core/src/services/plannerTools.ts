@@ -66,9 +66,9 @@ export interface PlannerToolsHost {
  */
 export const PLANNER_TURN_ENDED = 'The planning turn this call was made in has ended, so nothing was submitted.';
 
-/** What an edit made through the tool came to. `queued`: the turn parks it behind the running batch, so nothing was checked. */
+/** What an edit made through the tool came to. */
 export type PlanEditOutcome =
-  | { ok: true; summary: string[]; queued: boolean }
+  | { ok: true; summary: string[] }
   | { ok: false; errors: string[] };
 
 /** A change the commit makes to a submitted task, named so it is never silent (ADR-0001). */
@@ -251,11 +251,8 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       return answer({
         ok: true,
         summary: outcome.summary,
-        queued: outcome.queued,
         ...(skills.warnings.length > 0 ? { warnings: skills.warnings } : {}),
-        next: outcome.queued
-          ? 'A task you named is running, so the edit is parked and nothing was checked: it is applied between task batches, when the user\'s message comes back to you. Tell the user it is queued.'
-          : 'The edit is applied when this reply ends, and the user is shown what changed. Tell them briefly; do not repeat it as JSON.',
+        next: 'The edit is applied when this reply ends, and the user is shown what changed. Tell them briefly; do not repeat it as JSON.',
       });
     },
   };

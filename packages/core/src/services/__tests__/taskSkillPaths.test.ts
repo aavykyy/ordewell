@@ -1,10 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createTask, type ConversationMessage, type LegacyPlanState, type Task } from '../../models/Task';
-import type { IRunner } from '../../interfaces/IRunner';
+import { createTask, type ConversationMessage, type LegacyPlanState } from '../../models/Task';
 import type { SessionMessage, SessionNotice } from '../SessionMessage';
 import type { SkillInfo } from '../SkillsService';
-import type { ModifyDuringExecutionRequest } from '../Planner';
-import { FakeRunnerSession, makeSession, saves, testWorkspace, taskOf } from './sessionTestKit';
+import { makeSession, saves, testWorkspace, taskOf } from './sessionTestKit';
 import { parsePlanJson } from '../PlanValidator';
 
 function skill(name: string, appliesTo: SkillInfo['appliesTo'], content = `${name} body`): SkillInfo {
@@ -205,53 +203,22 @@ describe('task skills checked where a planner reply lands', () => {
   });
 });
 
-describe('a mid-run edit queued behind a running task', () => {
-  function runner(): IRunner {
-    return {
-      spawn: vi.fn(async ({ taskId }: { taskId: string }) => new FakeRunnerSession(`s-${taskId}`, taskId)),
-      stop: vi.fn(),
-      stopAll: vi.fn(),
-      activeCount: 0,
-    } as unknown as IRunner;
-  }
+describe('a planner turn input saved on the plan', () => {
+  it('is replayed after a reload with the skills its /name tokens loaded, composed as a live send is', async () => {
+    const first = makeSession({ skillsService, aiService: { continueConversation: vi.fn(() => new Promise<never>(() => {})), hasActiveConversation: () => true } });
+    first.loadPlan(twoTaskPlan(), 'build it', testWorkspace, { persist: false });
+    void first.continueConversation('/review /tdd rename the step');
+    const saved = structuredClone(first.planState!);
+    expect(saved.pendingTurns?.flatMap((t) => t.skills ?? []).map((s) => s.name).sort()).toEqual(['review', 'tdd']);
 
-  async function queued(modify: (req: ModifyDuringExecutionRequest) => Promise<{ pendingTasks: Task[]; message: string; skillWarnings?: string[] }>, onNotice?: (notice: SessionNotice) => void) {
-    const modifyDuringExecution = vi.fn(modify);
-    const session = makeSession({
-      skillsService,
-      onNotice,
-      runner: runner(),
-      planner: { modifyDuringExecution },
-      aiService: {
-        continueConversation: vi.fn().mockResolvedValue(opsTurn([{ op: 'update', taskId: '#1', changes: { title: 'Set up v2' } }])),
-        hasActiveConversation: () => true,
-      },
-    });
-    const plan = twoTaskPlan();
-    // Skills attached to the running task would be resolved at spawn, which this fake catalog does not serve.
-    session.loadPlan({ ...plan, status: 'approved', tasks: plan.tasks.map((t) => ({ ...t, skills: undefined })) }, 'build it', testWorkspace, { persist: false });
-    await session.executePlan();
-    await session.continueConversation('/review /tdd rename the running step');
-    expect(session.getQueuedMessages()).toHaveLength(1);
-    await session.processQueuedMessages();
-    return { session, modifyDuringExecution };
-  }
+    const continueConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'ok', researchLog: [] });
+    const reloaded = makeSession({ skillsService, aiService: { continueConversation, hasActiveConversation: () => true } });
+    reloaded.loadPlan(saved, 'build it', testWorkspace, { persist: false });
+    await vi.waitFor(() => expect(continueConversation).toHaveBeenCalled());
 
-  it('is replayed with the skills its /name tokens loaded, composed as a live send is', async () => {
-    const { modifyDuringExecution } = await queued(async ({ pendingTasks }) => ({ pendingTasks, message: 'ok' }));
-
-    const { userMessage, skills } = modifyDuringExecution.mock.calls[0][0];
-    expect(userMessage).toContain('<skill name="review">\nREVIEW BODY\n</skill>');
-    expect(userMessage).toContain('The user asks to use task skill "tdd"');
-    expect(userMessage).toMatch(/rename the running step$/);
-    expect(skills.findSkill('tdd')).toBe(SKILLS[0]);
-  });
-
-  it('tells the user about skills the rewrite names but that are not found', async () => {
-    const onNotice = vi.fn<(notice: SessionNotice) => void>();
-    const { session } = await queued(async ({ pendingTasks }) => ({ pendingTasks, message: 'ok', skillWarnings: ['Task "Build": skill "later" not found'] }), onNotice);
-
-    expect(onNotice).toHaveBeenCalledWith({ type: 'notice', level: 'warn', message: 'Task "Build": skill "later" not found' });
-    expect(skillCheckNote(session.planState?.conversationHistory)?.content).toBe('Skill check:\n- Task "Build": skill "later" not found');
+    const sent = String(continueConversation.mock.calls[0][0]);
+    expect(sent).toContain('<skill name="review">\nREVIEW BODY\n</skill>');
+    expect(sent).toContain('The user asks to use task skill "tdd"');
+    expect(sent).toMatch(/rename the step$/);
   });
 });

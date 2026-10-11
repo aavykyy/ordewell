@@ -118,17 +118,16 @@ describe('SessionEventRelay', () => {
         { role: 'user', content: '/grilling the plan', timestamp: '2026-01-01T00:00:01Z' },
         { role: 'user', content: '/grilling skill loaded', timestamp: '2026-01-01T00:00:01Z', kind: 'skill_load', skill: load },
       ],
-      queuedMessages: [{ id: 'q1', text: '/grilling task 2', timestamp: '2026-01-01T00:00:02Z', skills: [load] }],
+      pendingTurns: [{ id: 'turn-1', source: 'user', text: '/grilling task 2', timestamp: '2026-01-01T00:00:02Z', skills: [load] }],
     };
 
     relay.planGenerated(p, 'goal');
 
     const [msg] = sent;
     expect(msg.type === 'plan_generated' && msg.plan.conversationHistory?.[1].skill).toEqual(notice);
-    expect(msg.type === 'plan_generated' && msg.plan.queuedMessages).toEqual([{ id: 'q1', text: '/grilling task 2', timestamp: '2026-01-01T00:00:02Z', skills: [notice] }]);
     expect(JSON.stringify(msg)).not.toContain('Ask hard questions.');
     expect(p.conversationHistory?.[1].skill?.content).toBe('Ask hard questions.');
-    expect(p.queuedMessages?.[0].skills?.[0].content).toBe('Ask hard questions.');
+    expect(p.pendingTurns?.[0].skills?.[0].content).toBe('Ask hard questions.');
   });
 
   it('records planner usage on the shared ledger as it announces it', () => {

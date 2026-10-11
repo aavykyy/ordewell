@@ -16,7 +16,7 @@ We decided to add a per-**RunnerId** model-id allowlist (stored on `UserSettings
 - **Discovery settles only what it can prove (R1).** Discovery can be stale, and a runner may list nothing, so "this runner didn't list it" does not make an allowlisted id wrong. `effectiveAllowlist` keeps an id the runner lists, keeps an id **no** runner lists (the user named it; the runner validates last), and drops an id listed only by *other* runners — it provably cannot run here. If that leaves nothing, the allowlist was about another runner and the restriction is off for this one. An allowlisted id discovery does not cover is synthesized into the prompt's list rather than falling back to the full discovered set, so a set allowlist stays a hard bound on what the planner sees. D1: both "unset" and "explicit empty array" mean "no restriction" — the user can't trap themselves in a "block all" state.
 - **Read live on every turn (C1).** The catalog is re-sent every planner turn (`Session.catalogBlock`, and the `taskQuery` catalog answer, ADR-0012), and both read the allowlist and the resolver's discovery cache live (`ModelResolver.getCachedRunnerModels`, which never triggers discovery; the Session discovers on its own only where nothing is cached). Only the system prompt's model block is a snapshot from `startPlanning`, and the per-turn block supersedes it. A change to the allowlist reaches the running conversation on its next turn.
 - **The edit validator reads it the same way.** `checkModelAndModeValidity` accepts an id in the runner's effective allowlist even when discovery never listed it — the reading `coerceAssignments` makes.
-- **All ﬁve emit-paths ﬁlter+coerce; `loadPlan` untouched (E1).** `generate`, `startPlanning`, `continueConversation`, `modify`, `modifyDuringExecution` each build a `modelsByRunner` block and yield fresh task arrays — all need the ﬁlter (otherwise the restriction leaks) and the coerce (otherwise stray ids land unrewritten). `loadPlan` only restores a previously-saved plan; coercing there would silently rewrite the user's own previously-edited assignments on reload, defeating P1.
+- **All four emit-paths ﬁlter+coerce; `loadPlan` untouched (E1).** `generate`, `startPlanning`, `continueConversation`, `modify` each build a `modelsByRunner` block and yield fresh task arrays — all need the ﬁlter (otherwise the restriction leaks) and the coerce (otherwise stray ids land unrewritten). `loadPlan` only restores a previously-saved plan; coercing there would silently rewrite the user's own previously-edited assignments on reload, defeating P1.
 
 ## Considered options
 
@@ -41,14 +41,14 @@ We decided to add a per-**RunnerId** model-id allowlist (stored on `UserSettings
   the injected MCP server (ADR-0022); built-in manifests own discovery and
   mode settings, without terminal-only invocation fields.
 - **Coerce on `loadPlan` (E2).** Rejected: would silently rewrite the user's previously-edited assignments the moment they reload a workspace — surprising, invisible, possibly destructive.
-- **Filter only `generate`/`startPlanning` (E3).** Rejected: modify/modifyDuringExecution re-emit task arrays with a fresh `modelsByRunner` block — skipping the ﬁlter there leaks the full discovered set back into the planner's view, defeating the feature.
+- **Filter only `generate`/`startPlanning` (E3).** Rejected: `modify` and the conversation re-emit task arrays with a fresh `modelsByRunner` block — skipping the ﬁlter there leaks the full discovered set back into the planner's view, defeating the feature.
 - **Runtime enforcement in orchestrator (X2/X3).** Rejected: the orchestrator is documented as a pure scheduler (CONTEXT.md); a guard there would refuse a manual-dropdown override that P1 explicitly allows, contradicting the design.
 
 ## Consequences
 
 - `UserSettings` has a nested, non-boolean ﬁeld (`modelAllowlist?: Partial<Record<RunnerId, string[]>>`); `SettingsService.load`/`persist` and `OrchestratorPool.updateSettings` handle that shape. The in-memory settings cache stays (S1-cache) — cross-process staleness is the documented, pre-existing trade-oﬀ shared by every setting.
 - `ModelAllowlistResolver` sits next to `ModeResolver`: two operations (`ﬁlterModelsForPrompt(modelsByRunner, runners)` + `coerceAssignments(tasks, perRunnerAllowlist)`), pure functions, injected allowlist. The nudge half is called by every emit-path before building the prompt block; the coerce half runs on every freshly-emitted task array before the tasks land on the plan.
-- `Planner` / `AiService` / `Session` threads the resolver through `PlanRequest`, `ModifyPlanRequest`, `ModifyDuringExecutionRequest`, and `IAiService.startConversation`'s `modelsByRunner`. `loadPlan` and `TaskOrchestrator.startTask` are unchanged.
+- `Planner` / `AiService` / `Session` threads the resolver through `PlanRequest`, `ModifyPlanRequest`, and `IAiService.startConversation`'s `modelsByRunner`. `loadPlan` and `TaskOrchestrator.startTask` are unchanged.
 - VS Code has an `ordewell.conﬁgureModelAllowlist` command (QuickPick runner → `withProgress` discover → `showQuickPick({ canPickMany: true })` over that runner's discovered models, pre-checked with the current allowlist; empty discovery aborts with a message). The per-task dropdown in `PlanCardGroup.tsx` is unchanged.
 - The CLI has `ordewell allowlist` (`set <runner> <id1,id2,…>` / `clear <runner>` / `show`), calling the existing `PATCH /settings` route. No new TTY picker dependency.
 - The daemon's `PATCH /settings` route is the single persistence channel both surfaces call — no new `/api/commands` entry, since the allowlist is a setting, not a toggle action.
@@ -60,3 +60,4 @@ We decided to add a per-**RunnerId** model-id allowlist (stored on `UserSettings
 - 2026-08-20 — the `grill-me` toggle it was compared with became the `grilling` skill.
 - 2026-09-23 — read live on every turn (ADR-0012); the edit validator and the cleared-allowlist reading fixed (#17).
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
+- 2026-10-11 — `modifyDuringExecution` removed with the mid-run edit queue ([ADR-0029](0029-the-supervisor.md)).

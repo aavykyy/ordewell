@@ -5,7 +5,7 @@ import {
   createTask, opsFlag, inheritedOps, inheritedSkills, skillNames,
 } from '../models/Task';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
-import { validateTaskEdit, checkModelAndModeValidity, type EditCatalog, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
+import { validateTaskEdit, checkModelAndModeValidity, lockedTaskRefusal, type EditCatalog, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
 
 /**
  * Targeted task edits emitted by the planner conversation (the 'task_ops'
@@ -485,7 +485,7 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
     if ('error' in ref) return { error: `${label}: ${ref.error}` };
     const target = findInTasks(tasks, ref.id);
     if (!target) return { error: `${label}: task "${op.taskId}" no longer exists in this batch (removed, merged, or split by an earlier op)` };
-    if (refuseRunning && target.status === 'in_progress') return { error: `${label}: "${target.title}" is running and cannot be re-armed` };
+    if (refuseRunning && target.status === 'in_progress') return { error: `${label}: ${lockedTaskRefusal(target, 're-armed')}` };
     const changes = updatableChanges(op.changes);
     if (changes.assignedRunner && !runners.includes(changes.assignedRunner)) {
       return { error: `${label}: runner "${changes.assignedRunner}" is not in this plan's runner set [${runners.join(', ')}]` };
@@ -546,8 +546,8 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
         if ('error' in ref) { errors.push(`${label}: ${ref.error}`); break; }
         const target = findInTasks(tasks, ref.id);
         if (!target) { errors.push(`${label}: task "${op.taskId}" no longer exists in this batch (removed, merged, or split by an earlier op)`); break; }
-        if (target.status === 'in_progress') { errors.push(`${label}: "${target.title}" is running and cannot be removed`); break; }
-        if (target.status === 'completed') { errors.push(`${label}: "${target.title}" is completed and cannot be removed`); break; }
+        const locked = lockedTaskRefusal(target, 'removed');
+        if (locked) { errors.push(`${label}: ${locked}`); break; }
         tasks = removeTaskFromPlan(tasks, target.id);
         summary.push(`Removed "${target.title}"`);
         break;
@@ -576,11 +576,8 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
         if (resolved.some((t) => !t)) { errors.push(`${label}: unknown task in merge list (already removed, merged, or split by an earlier op)`); break; }
         const toMerge = [...new Map(resolved.map((t) => [t!.id, t!])).values()].sort((a, b) => a.order - b.order);
         if (toMerge.length < 2) { errors.push(`${label}: merge needs at least two tasks`); break; }
-        const locked = toMerge.find((t) => t.status === 'in_progress' || t.status === 'completed');
-        if (locked) {
-          errors.push(`${label}: "${locked.title}" is ${locked.status === 'in_progress' ? 'running' : 'completed'} and cannot be merged`);
-          break;
-        }
+        const locked = toMerge.map((t) => lockedTaskRefusal(t, 'merged')).find((refusal) => refusal !== null);
+        if (locked) { errors.push(`${label}: ${locked}`); break; }
         const idSet = new Set(toMerge.map((t) => t.id));
         const unionDepsRaw = [...new Set(toMerge.flatMap((t) => t.dependencies))].filter((d) => !idSet.has(d));
         const { ids, bad } = resolveDeps(unionDepsRaw, i);
@@ -628,8 +625,8 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
         if ('error' in ref) { errors.push(`${label}: ${ref.error}`); break; }
         const target = findTopLevel(tasks, ref.id);
         if (!target) { errors.push(`${label}: task "${op.taskId}" not found`); break; }
-        if (target.status === 'in_progress') { errors.push(`${label}: "${target.title}" is running and cannot be split`); break; }
-        if (target.status === 'completed') { errors.push(`${label}: "${target.title}" is completed and cannot be split`); break; }
+        const locked = lockedTaskRefusal(target, 'split');
+        if (locked) { errors.push(`${label}: ${locked}`); break; }
         const parts = op.parts ?? [];
         if (parts.length < 2) { errors.push(`${label}: split needs at least two parts`); break; }
         const newTasks: Task[] = [];

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { surfacePlan, type AiProvider, type LegacyPlanState, type SurfacePlan, type DiscoveredModel, type RunnerId, type TaskIsolation, type IsolationHandoff, type IsolationMergeResult, type RunMergeView } from '@ordewell/core';
 import { ConversationViewHost, type SavedConversation } from '../ConversationViewHost';
 import { renderWebviewHtml } from './webviewHtml';
-import type { ChatState, HostToWebview, ModelOption, PendingPlanEdit, PlannerBackend, RunnerMeta, RunnerModeMeta, WebviewToHost } from '../shared/protocol';
+import type { ChatState, HostToWebview, ModelOption, PlannerBackend, RunnerMeta, RunnerModeMeta, WebviewToHost } from '../shared/protocol';
 
 export type { PlannerBackend, RunnerMeta } from '../shared/protocol';
 
@@ -58,11 +58,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const forWebview = surfacePlan(plan);
     this._cachedPlan = forWebview;
     this.postMessage({ type: 'planUpdated', plan: forWebview });
-  }
-  /** Every plan edit waiting at the next batch boundary, so the chat can list (and withdraw) each one. */
-  showPendingPlanEdits(edits: readonly PendingPlanEdit[]): void {
-    // Narrowed by hand: a queued message also carries its skill loads, whose bodies never go to the webview.
-    this.postMessage({ type: 'pendingPlanEdits', edits: edits.map(({ id, text }) => ({ id, text })) });
   }
   /** Live runner output for one task; the webview keeps the tail and renders it in that task's card. */
   sendTaskOutput(taskId: string, text: string): void { this.postMessage({ type: 'taskOutput', taskId, text }); }

@@ -205,12 +205,12 @@ describe('skill bodies on the sessions routes', () => {
     expect(JSON.parse(text).plan.pendingTasks[0].attemptSkills).toEqual([{ name: 'tdd', source: 'global', path: attempt.path }]);
   });
 
-  it('POST /:id/load sends the loaded plan with notices for its skill loads and queue', async () => {
+  it('POST /:id/load sends the loaded plan with notices for its skill loads and pending turns', async () => {
     const plan = {
       tasks: [{ id: 't1', subtasks: [], attemptSkills: [attempt] }],
       runners: [],
       conversationHistory: [{ role: 'user', content: 'x', timestamp: 't', kind: 'skill_load', skill: load }],
-      queuedMessages: [{ id: 'q1', text: 'go', timestamp: 't', skills: [load] }],
+      pendingTurns: [{ id: 'turn-1', source: 'user', text: 'go', timestamp: 't', skills: [load] }],
     };
 
     const res = await appWith(fakePool({ adoptSavedSession: vi.fn().mockReturnValue(plan) } as Partial<OrchestratorPool>)).request('/api/sessions/s1/load?workspace=/ws', { method: 'POST' });

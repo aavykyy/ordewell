@@ -113,7 +113,14 @@ a user message during a wake-up turn is held as a queued prompt.
   at a running or finished task is refused with a note the model can act on:
   "task 4 is running; stop it first, or retry it after". That is the planner
   side of ADR-0012's direct-versus-planner rule, now applied mid-run instead of
-  deferred.
+  deferred. A batch of edits still applies whole or not at all, so one refused
+  op refuses its batch; a whole new plan is refused while tasks run, since only
+  edits can leave running work as it is.
+- **Inputs that arrive during a turn are taken together by the next one**, in
+  order, through one entry (`PlanTurns.enqueue`) that names who the input is
+  from. The hold also lapses after a set time, after which the turn goes on
+  without holding the run: an edit is checked against the tasks as they stand
+  when it applies, so a task that started meanwhile refuses it.
 - **Pending turns are persisted on the plan**, so a daemon restart neither
   loses a user's message nor a wake-up batch not yet delivered.
 
@@ -303,3 +310,4 @@ until #30 exists.
   levels land. Plan approval is kept on the plan as the tasks the user
   approved — every task when they execute it, and each one they start or retry
   themselves — and a Guarded start asks on the planner's approval card.
+- 2026-10-11 — live planner turns implemented (`PlanTurns`); the pending plan edit queue, its drain and `modifyDuringExecution` removed.

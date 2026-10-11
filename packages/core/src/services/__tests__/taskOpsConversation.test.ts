@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
+import { createTask, type LegacyPlanState } from '../../models/Task';
 import { FakeRunnerSession, makeSession, testWorkspace, taskOf, saves } from './sessionTestKit';
 import type { IRunner } from '../../interfaces/IRunner';
 import type { ModelResolver } from '../ModelResolver';
@@ -265,9 +265,7 @@ describe('task_ops conversation turns', () => {
     const plan = await session.continueConversation('rename the sign-off step');
 
     expect(session.planTasks.find((t) => t.id === 'c')!.title).toBe('Sign off with the team');
-    expect(session.getQueuedMessages().length).toBe(0);
-    const last = plan.conversationHistory![plan.conversationHistory!.length - 1];
-    expect(last.content).not.toMatch(/queued/i);
+    expect(plan.pendingTurns).toEqual([]);
   });
 
   // A paused run whose last live task was cancelled must be startable again:
@@ -319,82 +317,36 @@ describe('task_ops conversation turns', () => {
     expect(session.planTasks.find((t) => t.id === 'c')!.title).toBe('Sign off with the team');
     expect(taskOf(session, 'b')!.status).toBe('in_progress');
     expect(spawned).toEqual(['b']);
-    expect(session.getQueuedMessages().length).toBe(0);
-    const last = plan.conversationHistory![plan.conversationHistory!.length - 1];
-    expect(last.content).not.toMatch(/queued/i);
+    expect(plan.pendingTurns).toEqual([]);
   });
 
-  it('still queues an edit that reaches the running task', async () => {
+  // A running task is not the turn's to change: the edit is refused with a
+  // note, nothing of it lands, and the run it was aimed at goes on as it was.
+  it('refuses an edit that reaches the running task, and the run keeps going', async () => {
+    const spawned: string[] = [];
+    const continueConversation = vi.fn().mockResolvedValue({
+      kind: 'task_ops',
+      ops: [{ op: 'update', taskId: '#2', changes: { title: 'Build the backend' } }],
+      text: '', researchLog: [],
+    });
     const session = makeSession({
-      aiService: {
-        startConversation: vi.fn(),
-        continueConversation: vi.fn().mockResolvedValue({
-          kind: 'task_ops',
-          ops: [{ op: 'update', taskId: '#2', changes: { title: 'Build the backend' } }],
-          text: '', researchLog: [],
-        }),
-        hasActiveConversation: () => true,
-        reset: vi.fn(),
-      },
+      runner: recordingRunner(spawned),
+      aiService: { startConversation: vi.fn(), continueConversation, hasActiveConversation: () => true, reset: vi.fn() },
     });
     session.loadPlan(pausedRunPlan(), 'build it', testWorkspace, { persist: false });
     await session.executePlan(); // spawns #2 and leaves it running
 
     const plan = await session.continueConversation('rename the running step');
 
-    expect(taskOf(session, 'b')!.title).toBe('Build'); // nothing applied live
-    expect(taskOf(session, 'b')!.status).toBe('in_progress');
-    expect(session.getQueuedMessages().map((m) => m.text)).toEqual(['rename the running step']);
-    expect(session.getQueuedMessages().length).toBe(1);
-    const last = plan.conversationHistory![plan.conversationHistory!.length - 1];
-    expect(last.content).toMatch(/queued your change/i);
-    expect(last.content).toContain('(1 queued)');
-  });
-
-  // The queued edit drains through the planner, and the plan snapshot it works
-  // from predates the spawn — so it hands back the live task as 'pending'.
-  // Committing that would drop the runner and offer the same work again; a
-  // running task is not the rewrite's to change at all, while the rest of the
-  // edit lands.
-  it('keeps the live task running and the review approved when a queued edit lands', async () => {
-    const spawned: string[] = [];
-    const session = makeSession({
-      runner: recordingRunner(spawned),
-      planner: {
-        modifyDuringExecution: vi.fn(async ({ pendingTasks }: { pendingTasks: Task[] }) => ({
-          message: 'renamed',
-          pendingTasks: pendingTasks.map((t) => ({
-            ...t,
-            // The snapshot the planner echoes back predates the spawn of 'b'.
-            status: t.id === 'b' ? ('pending' as const) : t.status,
-            title: t.id === 'b' ? 'Build v2' : t.id === 'c' ? 'Sign off with the team' : t.title,
-          })),
-        })),
-      },
-      aiService: {
-        startConversation: vi.fn(),
-        continueConversation: vi.fn().mockResolvedValue({
-          kind: 'task_ops',
-          ops: [{ op: 'update', taskId: '#2', changes: { title: 'Build v2' } }],
-          text: '', researchLog: [],
-        }),
-        hasActiveConversation: () => true,
-        reset: vi.fn(),
-      },
-    });
-    session.loadPlan(pausedRunPlan(), 'build it', testWorkspace, { persist: false });
-    await session.executePlan(); // spawns #2 and leaves it running
-    await session.continueConversation('rename the running step');
-    expect(session.getQueuedMessages().length).toBe(1);
-
-    await session.processQueuedMessages();
-
+    expect(String(continueConversation.mock.calls[1][0])).toMatch(/"Build" is running and cannot be modified now: the user can stop it first/);
     expect(taskOf(session, 'b')!.title).toBe('Build');
-    expect(taskOf(session, 'c')!.title).toBe('Sign off with the team');
     expect(taskOf(session, 'b')!.status).toBe('in_progress');
     expect(session.isExecuting).toBe(true);
-    expect(session.status).toBe('running'); // the run stays armed
-    expect(spawned).toEqual(['b']); // the live runner, not a second copy of it
+    expect(session.status).toBe('running');
+    expect(spawned).toEqual(['b']);
+    const last = plan.conversationHistory![plan.conversationHistory!.length - 1];
+    expect(last.content).toMatch(/The plan is unchanged/);
+    expect(plan.pendingTurns).toEqual([]);
   });
 
   it('gives a planner-added task without an explicit model a valid, spawnable assignment', async () => {
@@ -521,7 +473,8 @@ describe('task_ops conversation turns', () => {
 
     const outgoing = String(continueConversation.mock.calls[0][0]);
     expect(outgoing).toMatch(/Execution is RUNNING — these tasks are locked: #2/);
-    expect(outgoing).toMatch(/queued/i);
+    expect(outgoing).toMatch(/No new task starts until your reply ends/);
+    expect(outgoing).not.toMatch(/queued/i);
   });
 
   // Before batch handles, this needed two turns: add the prerequisite, wait

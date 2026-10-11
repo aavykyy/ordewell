@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   repairLoop, classifyPlannerReply, generatePlanWithRepair,
-  reEmitPlanPrompt, reEmitTaskOpsPrompt, taskOpsRejectedPrompt, modifyValidationFeedback,
+  reEmitPlanPrompt, reEmitTaskOpsPrompt, taskOpsRejectedPrompt,
   truncatedPlanReEmitPrompt, TRUNCATED_PLAN_REPAIR_INSTRUCTION, JSON_REPAIR_INSTRUCTION,
 } from '../PlanRepair';
 import { PlanParseError } from '../JsonExtractor';
@@ -219,12 +219,5 @@ describe('corrective prompts', () => {
     const prompt = taskOpsRejectedPrompt(['cycle detected', 'unknown task']);
     expect(prompt).toContain('- cycle detected');
     expect(prompt).toContain('- unknown task');
-  });
-
-  it('modifyValidationFeedback numbers the errors and forbids code fences', () => {
-    const feedback = modifyValidationFeedback(['first', 'second']);
-    expect(feedback).toContain('1. first');
-    expect(feedback).toContain('2. second');
-    expect(feedback).toContain('Do NOT wrap in markdown code blocks');
   });
 });

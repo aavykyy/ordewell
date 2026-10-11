@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildConflictRepairPrompt, buildConflictResolutionPrompt, buildConversationSystemPrompt, buildModifyDuringExecutionPrompt, buildModifyPlanPrompt, buildPlanWithResults, buildResearchPrompt, buildResearchToolsPrompt, buildSubagentSystemPrompt } from '../PlanPrompts';
+import { buildConflictRepairPrompt, buildConflictResolutionPrompt, buildConversationSystemPrompt, buildModifyPlanPrompt, buildPlanWithResults, buildResearchPrompt, buildResearchToolsPrompt, buildSubagentSystemPrompt } from '../PlanPrompts';
 import type { RepoGroupLayout } from '../../interfaces/IWorktreeIsolation';
 import { createTask, type DiscoveredModel, type RunnerId } from '../../models/Task';
 
@@ -92,7 +92,6 @@ describe('the one-shot prompts, per transport', () => {
   const prompts = (tools: boolean) => [
     buildPlanWithResults('goal', '', '', {}, ['claude-code'], undefined, DEFAULT_PLANNER_MODES, tools),
     buildModifyPlanPrompt(plan, 'restyle', {}, undefined, undefined, true, tools),
-    buildModifyDuringExecutionPrompt([], '[]', 'add a task', {}, ['claude-code'], undefined, DEFAULT_PLANNER_MODES, tools),
   ];
 
   it('ask a coding agent for submit_plan and never for JSON in its reply', () => {
@@ -246,10 +245,6 @@ function oneShot(isolatedExecution: false | RepoGroupLayout) {
   return buildResearchPrompt('goal', '', {}, ['claude-code'], undefined, modes({ isolatedExecution }));
 }
 
-function midRun(isolatedExecution: false | RepoGroupLayout) {
-  return buildModifyDuringExecutionPrompt([], '[]', 'add a task', {}, ['claude-code'], undefined, { autonomousDefault: true, isolatedExecution });
-}
-
 describe('planner parallelism rules under worktree isolation (ADR-0013)', () => {
   const OVERLAP_RULE = '- For parallel tasks, specify different target files to avoid merge conflicts.';
 
@@ -293,7 +288,7 @@ describe('planner parallelism rules under worktree isolation (ADR-0013)', () => 
 
 describe('planner rules for a repo group (ADR-0014)', () => {
   const GROUP: RepoGroupLayout = { repos: ['api', 'web'], shared: ['NOTES.md', 'design'] };
-  const builders = { conversation, oneShot, midRun };
+  const builders = { conversation, oneShot };
 
   /** The prompt with its repo-group section cut out, line for line. */
   function withoutGroupSection(prompt: string): string {

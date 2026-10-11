@@ -260,12 +260,11 @@ export class PlanEditor {
 
   /**
    * The mutation seam plus the reschedule every structural edit owes an armed
-   * scheduler. Nothing else wakes one after a hand edit — the queue-drain path
-   * never runs, because a direct edit never queues — so a task the edit just
-   * unblocked would sit ready and never start. `tick()` no-ops while the
-   * scheduler is idle, so this costs nothing during plain planning. The
-   * planner-driven path re-ticks in `PlannerConversation` instead
-   * (`afterEdit`); it must not tick twice.
+   * scheduler. Nothing else wakes one after a hand edit — no planner turn ends
+   * to release a start hold — so a task the edit just unblocked would sit
+   * ready and never start. `tick()` no-ops while the scheduler is idle, so this
+   * costs nothing during plain planning. A planner edit is rescheduled by its
+   * turn's end instead (`PlanTurns`); it must not tick twice.
    */
   private async commit(op: () => boolean, notify?: () => void): Promise<LegacyPlanState | null> {
     const plan = this.mutate(op, notify);

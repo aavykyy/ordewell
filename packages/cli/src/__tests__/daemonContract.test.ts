@@ -182,19 +182,22 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       expect(read.meta.taskCount).toBe(1);
     });
 
-    it('refuses a reply while the planner is still answering, as conversation_busy', async () => {
+    it('takes a reply sent while the planner is still answering in the next turn', async () => {
       let release: (turn: ConversationTurn) => void = () => {};
       await client.startConversation('session-plan', 'Add a limiter', ['claude-code'], workspace);
-      vi.mocked(OpenAiService.prototype.startConversation).mockReturnValue(new Promise((resolve) => { release = resolve; }));
+      vi.mocked(OpenAiService.prototype.startConversation)
+        .mockReturnValueOnce(new Promise((resolve) => { release = resolve; }))
+        .mockResolvedValueOnce(TEXT);
 
-      const inFlight = client.sendConversationMessage('session-plan', 'First');
+      const first = client.sendConversationMessage('session-plan', 'First');
       await vi.waitFor(() => expect(OpenAiService.prototype.startConversation).toHaveBeenCalledTimes(2));
-      const err = await refusal(client.sendConversationMessage('session-plan', 'Second'));
+      const second = client.sendConversationMessage('session-plan', 'Second');
+      await vi.waitFor(() => expect(pool.session('session-plan').planState?.pendingTurns?.map((t) => t.text)).toEqual(['First', 'Second']));
       release(TEXT);
-      await inFlight;
+      await first;
+      const plan = await second;
 
-      expect(err.status).toBe(409);
-      expect(err.code).toBe('conversation_busy');
+      expect(plan.conversationHistory?.filter((m) => m.role === 'user').map((m) => m.content)).toEqual(['Add a limiter', 'First', 'Second']);
     });
 
     it('answers a stopped turn with planner_turn_stopped, not a fault', async () => {

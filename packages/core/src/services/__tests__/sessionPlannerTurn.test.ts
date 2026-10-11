@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { LegacyPlanState } from '../../models/Task';
 import type { ConversationTurn } from '../AiService';
-import { ConversationBusyError, PlannerTurnDiscardedError } from '../PlannerConversation';
+import { PlannerTurnDiscardedError } from '../PlannerConversation';
 import { makeSession, saves, testWorkspace } from './sessionTestKit';
 
 function dialogue(goal: string): LegacyPlanState {
@@ -33,7 +33,7 @@ function heldPlanner() {
 const message = (text: string): ConversationTurn => ({ kind: 'message', text, researchLog: [] });
 
 describe('Session planner turn', () => {
-  it('is busy from the message to the settled reply, and refuses a second message meanwhile', async () => {
+  it('is busy from the message to the settled reply, and takes a second message sent meanwhile in the next turn', async () => {
     const { aiService, calls } = heldPlanner();
     const session = makeSession({ aiService });
     session.loadPlan(dialogue('parser'), 'parser', testWorkspace, { persist: false });
@@ -41,12 +41,16 @@ describe('Session planner turn', () => {
     expect(session.isPlannerBusy).toBe(false);
     const turn = session.continueConversation('JSON');
     expect(session.isPlannerBusy).toBe(true);
-    await expect(session.continueConversation('and YAML')).rejects.toThrow(ConversationBusyError);
+    const next = session.continueConversation('and YAML');
+    expect(aiService.continueConversation).toHaveBeenCalledTimes(1);
 
     calls[0].finish(message('Noted'));
     await turn;
+    await vi.waitFor(() => expect(aiService.continueConversation).toHaveBeenCalledTimes(2));
+    expect(String(aiService.continueConversation.mock.calls[1][0])).toMatch(/and YAML$/);
+    calls[1].finish(message('Noted too'));
+    await next;
     expect(session.isPlannerBusy).toBe(false);
-    expect(aiService.continueConversation).toHaveBeenCalledTimes(1);
   });
 
   it('stops the turn in flight without the caller holding a signal, and has nothing to stop once idle', async () => {

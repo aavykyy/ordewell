@@ -86,9 +86,10 @@ the same word.)
   Esc takes back the newest queued prompt while one is waiting; otherwise the
   first Esc warns and a second within about two seconds stops the turn. Outside
   a turn Esc clears the input, as before.
-- **Pending plan edits keep their queue, under their own name (Q4).** The
-  Session's run-time edit queue is unchanged in core; VS Code calls it a
-  pending plan edit in its protocol and on screen.
+- **No list for mid-run edits (Q4).** A message sent during a run is a live
+  planner turn (ADR-0029), taken at once, so nothing waits for a batch
+  boundary and no surface lists edits above the input. The prompt hold above
+  is the only thing a surface draws as queued.
 
 ## Rejected
 
@@ -124,3 +125,4 @@ the same word.)
 ## History
 
 - 2026-09-27 — accepted; queued prompts moved into core the same day.
+- 2026-10-11 — the pending plan edit list removed with the queue behind it ([ADR-0029](0029-the-supervisor.md)).

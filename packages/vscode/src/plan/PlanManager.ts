@@ -266,14 +266,11 @@ export async function handleSendMessage(
 
   // Unified loop (post-plan chat included): the model decides per turn whether
   // to reply, emit targeted task edits, or re-plan. While a runner is live the
-  // Session answers questions live and queues structural edits for the next
-  // batch boundary. handleStartPlanning remains only for a truly fresh session.
+  // turn is taken at once too, and its edits apply to tasks not yet started
+  // (ADR-0029). handleStartPlanning remains only for a truly fresh session.
   if (deps.session.isExecuting || plan.tasks.length > 0 || hasDialogue || deps.session.isConversationActive) {
     ensureSessionPlan(deps);
     await handleContinueConversation(text, deps);
-    // Only a live runner can queue an edit — an armed-but-idle scheduler applies
-    // it, so the strip would announce a queue that never forms.
-    if (deps.session.isExecuting) deps.chatProvider.showPendingPlanEdits(deps.session.getQueuedMessages());
   } else {
     await handleStartPlanning(text, deps, pendingRunners);
   }
@@ -510,12 +507,10 @@ export function handleSessionMessage(
       deps.chatProvider.showPlan(plan);
       break;
     }
-    // The Session applies a run's queued edits itself and announces the plan
-    // they made, which carries what is still queued; the strip follows it, so
-    // an applied edit stops showing as waiting.
+    // The Session changes the plan itself (a live turn's edits, a run setting)
+    // and announces the result; the card follows it.
     case 'plan_generated':
       deps.chatProvider.showPlan(deps.getCurrentPlan());
-      deps.chatProvider.showPendingPlanEdits(msg.plan.queuedMessages ?? []);
       break;
     case 'execution_complete': {
       const plan = deps.getCurrentPlan();

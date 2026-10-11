@@ -736,24 +736,7 @@ describe('TaskOrchestrator', () => {
     });
   });
 
-  describe('queue check in tick', () => {
-    it('pauses when queue has messages and no active sessions', async () => {
-      const { spawn } = sessionRunner();
-      const orchestrator = makeOrchestrator({ runner: { spawn } });
-
-      orchestrator.loadPlan([createTask({ id: 'u1', order: 1, title: 'Manual', type: 'user' })]);
-
-      let queueReadyCalled = false;
-      orchestrator.subscribe({ onQueueReady: () => { queueReadyCalled = true; } });
-
-      orchestrator.queueMessage('hello from user');
-
-      await orchestrator.approveReview();
-
-      await vi.waitFor(() => expect(queueReadyCalled).toBe(true));
-      expect(spawn).not.toHaveBeenCalled();
-    });
-
+  describe('start hold in tick', () => {
     // The run is armed on a user gate; t1 is force-started past it so a
     // runner is live when the gate opens and the scheduler looks at t2.
     function gatedPlan() {
@@ -764,20 +747,42 @@ describe('TaskOrchestrator', () => {
       ];
     }
 
-    it('prevents starting new tasks when queue has messages and active sessions exist', async () => {
+    it('starts no new task while held, leaves the running one alone, and starts it on the tick after release', async () => {
       const { spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ runner: { spawn } });
       orchestrator.loadPlan(gatedPlan());
       await orchestrator.approveReview();
       await orchestrator.forceStartTask('t1');
 
-      orchestrator.queueMessage('hold on');
+      const release = orchestrator.holdStarts();
       await orchestrator.markTaskComplete('u1');
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(orchestrator.activeTaskIds).toEqual(['t1']);
 
+      release();
+      await orchestrator.tick();
+      expect(spawn).toHaveBeenCalledTimes(2);
+      expect(spawn.mock.calls[1][0].taskId).toBe('t2');
+    });
+
+    it('holds until every hold is released, and a second release of one changes nothing', async () => {
+      const { spawn } = sessionRunner();
+      const orchestrator = makeOrchestrator({ runner: { spawn } });
+      orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' })]);
+      const one = orchestrator.holdStarts();
+      const two = orchestrator.holdStarts();
+      await orchestrator.approveReview();
+
+      one();
+      one();
+      await orchestrator.tick();
+      expect(spawn).not.toHaveBeenCalled();
+      two();
+      await orchestrator.tick();
       expect(spawn).toHaveBeenCalledTimes(1);
     });
 
-    it('proceeds normally when queue is empty', async () => {
+    it('proceeds normally when nothing holds it', async () => {
       const { spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ runner: { spawn } });
       orchestrator.loadPlan(gatedPlan());

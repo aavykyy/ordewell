@@ -17,7 +17,7 @@ import { planSummaryLabel, nextDock } from './planDock';
 import { DetailContext } from './detail';
 import { useFollowOutput } from './followOutput';
 import { slashHelp } from '../../commands/slashCommands';
-import type { HostToWebview, PendingPlanEdit, WebviewToHost } from '../../shared/protocol';
+import type { HostToWebview, WebviewToHost } from '../../shared/protocol';
 import { hasHiddenDetail } from '@ordewell/core/plan-utils';
 import { patchedBlocks } from '../../shared/conversationPatch';
 
@@ -37,7 +37,7 @@ export default function App() {
   const [host, dispatch] = useReducer(reduceHost, INITIAL_HOST_STATE);
   const {
     conversation, plan, isExecuting, isResearchActive, conversationBusy, error, models, modelsByRunner,
-    runnerList, enabledRunnerIds, runners, pendingEdits, held, unsent, modesByRunner, modelConfig,
+    runnerList, enabledRunnerIds, runners, held, unsent, modesByRunner, modelConfig,
     modelOptions, configuredProviders, planner, isReady, modelDiscoveryErrors,
     skills, taskSkills, checkpoint, taskOutput, taskIdle, taskApprovals, taskIsolation, handoff,
     mergeResult, runMerge, taskGates, dockExpanded, dockHeight,
@@ -48,7 +48,6 @@ export default function App() {
   const setError = useCallback((v: string) => dispatch({ type: 'patchError', error: v }), []);
   const setIsReady = useCallback((v: boolean) => dispatch({ type: 'patchReady', ready: v }), []);
   const setRunners = useCallback((v: Updatable<RunnerId[]>) => dispatch({ type: 'patchRunners', runners: v }), []);
-  const setPendingEdits = useCallback((v: Updatable<PendingPlanEdit[]>) => dispatch({ type: 'patchPendingEdits', edits: v }), []);
   const setCheckpoint = useCallback((v: HostState['checkpoint']) => dispatch({ type: 'patchCheckpoint', checkpoint: v }), []);
   const setDockHeight = useCallback((v: number | undefined) => dispatch({ type: 'patchDockHeight', height: v }), []);
   const setDockExpanded = useCallback((v: Updatable<boolean>) => dispatch({ type: 'patchDockExpanded', expanded: v }), []);
@@ -327,13 +326,6 @@ export default function App() {
     vscode.postMessage({ type: 'resolveApproval', id, granted });
   }, []);
 
-  // The host owns the edits; withdrawing removes one here at once so the click
-  // feels immediate, and the host's own pendingPlanEdits settles the list.
-  const handleRemovePendingEdit = useCallback((id: string) => {
-    setPendingEdits((prev) => prev.filter((m) => m.id !== id));
-    vscode.postMessage({ type: 'removePendingPlanEdit', id });
-  }, []);
-
   const handleUnsend = useCallback(() => {
     vscode.postMessage({ type: 'unsendPrompt' });
   }, []);
@@ -532,8 +524,6 @@ export default function App() {
     [plan],
   );
 
-  const pendingEditCount = pendingEdits.length;
-
   const hasContent = blocks.length > 0 || isResearchActive || isExecuting || !!error;
   const streaming = blocks.some((b) => (b.type === 'message' || b.type === 'thinking') && b.streaming);
   /** The one usage block, drawn pinned below the conversation rather than scrolling in it. */
@@ -666,12 +656,7 @@ export default function App() {
                   <span className="queue-dot running" /> {runningCount} running
                 </div>
               )}
-              {pendingEditCount > 0 && (
-                <div className="queue-badge">
-                  <span className="queue-dot" /> {pendingEditCount} plan edit{pendingEditCount > 1 ? 's' : ''} pending
-                </div>
-              )}
-              <div className="executing-status">Tasks active &mdash; plan edits apply between batches</div>
+              <div className="executing-status">Tasks active &mdash; messages reach the planner now; new tasks wait while it replies</div>
             </div>
           )}
         </div>
@@ -900,8 +885,6 @@ export default function App() {
         harnessPlannerModels={harnessPlannerModels}
         configuredProviders={configuredProviders}
         isProcessing={isGenerating}
-        pendingEdits={pendingEdits}
-        onRemovePendingEdit={handleRemovePendingEdit}
         unsent={unsent}
         skills={skills}
       />

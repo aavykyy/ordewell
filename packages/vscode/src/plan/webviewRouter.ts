@@ -104,13 +104,6 @@ export async function routeWebviewMessage(msg: WebviewToHost, deps: WebviewRoute
     case 'addNote':
       deps.chatProvider.conversation.note('system', msg.text);
       return;
-    // The echo is authoritative: the webview removed the edit optimistically,
-    // and this settles which edits really remain.
-    case 'removePendingPlanEdit':
-      deps.session.removeQueuedMessage(msg.id);
-      deps.chatProvider.showPendingPlanEdits(deps.session.getQueuedMessages());
-      deps.persistState();
-      return;
     // The same resolution every surface funnels through: the session
     // broadcasts `approval_settled`, which redraws the card with its outcome.
     case 'resolveApproval':

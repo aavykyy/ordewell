@@ -1,18 +1,17 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createTask, type LegacyPlanState } from '../../models/Task';
 import type { SkillInfo } from '../SkillsService';
-import { makeSession, FakeRunnerSession, fakeConfig, taskOf, queue, saves } from './sessionTestKit';
+import { makeSession, FakeRunnerSession, fakeConfig, taskOf, saves } from './sessionTestKit';
 import { scriptedAdapter, fakeMcpServer } from './harnessTestKit';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { IDLE_TIMEOUT_MS } from '../VerdictEngine';
 import type { IRunner } from '../../interfaces/IRunner';
 import { parsePlanJson } from '../PlanValidator';
-import { PlannerTurnStoppedError } from '../PlannerConversation';
+import { PlannerTurnDiscardedError, PlannerTurnStoppedError } from '../PlannerConversation';
 import type { Session } from '../createSession';
 import type { SessionMessage } from '../SessionMessage';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { reduceConversation, EMPTY_CONVERSATION } from '../../conversation';
-import { flushMicrotasks } from '../../testing';
 
 describe('model allowlist wiring', () => {
   function smallPlan(): LegacyPlanState {
@@ -128,22 +127,6 @@ describe('model allowlist wiring', () => {
     expect(plan.tasks[0].assignedModel?.thinkingEffort).toBeUndefined();
   });
 
-  it('processQueuedMessages passes perRunnerAllowlist to planner.modifyDuringExecution', async () => {
-    const planner = { modifyDuringExecution: vi.fn().mockResolvedValue({ pendingTasks: [], message: 'ok' }) };
-    const session = makeSession({
-      settings: () => ({ modelAllowlist: { 'claude-code': ['kimi-2.6'] } }),
-      planner,
-    });
-    session.loadPlan(smallPlan(), 'Test', '/repo');
-
-    queue(session, 'change task 1');
-    await session.processQueuedMessages();
-
-    expect(planner.modifyDuringExecution).toHaveBeenCalledWith(
-      expect.objectContaining({ perRunnerAllowlist: { 'claude-code': ['kimi-2.6'] } }),
-    );
-  });
-
   it('loadPlan does NOT call filterModelsForPrompt or coerceAssignments (keeps stored modelId as-is)', () => {
     const session = makeSession();
     const plan: LegacyPlanState = {
@@ -162,362 +145,6 @@ describe('model allowlist wiring', () => {
 
     expect(session.planState!.tasks[0].assignedModel?.modelId).toBe('out-of-allowlist-model');
     expect(session.planState!.tasks[0].assignedModel?.thinkingEffort).toBe('high');
-  });
-});
-
-describe('removing a queued message', () => {
-  function loadedSession(): Session {
-    const session = makeSession();
-    session.loadPlan({
-      tasks: [createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' })],
-      generatedAt: new Date().toISOString(),
-      status: 'approved',
-      runners: ['claude-code'],
-      lastUpdated: new Date().toISOString(),
-    }, 'Test', '/repo');
-    return session;
-  }
-
-  it('removes one queued message by id and leaves the rest in order', () => {
-    const session = loadedSession();
-    queue(session, 'first');
-    queue(session, 'second');
-    queue(session, 'third');
-
-    const [first] = session.getQueuedMessages();
-    expect(session.removeQueuedMessage(first.id)).toBe(true);
-
-    expect(session.getQueuedMessages().map((m) => m.text)).toEqual(['second', 'third']);
-    expect(session.getQueuedMessages().length).toBe(2);
-  });
-
-  it('saves the queue without the removed message, so a reload cannot bring it back', () => {
-    const session = loadedSession();
-    queue(session, 'keep', 'drop');
-    const savedQueues: string[][] = [];
-    saves(session).mockImplementation((plan) => { savedQueues.push((plan.queuedMessages ?? []).map((m) => m.text)); });
-
-    const drop = session.getQueuedMessages().find((m) => m.text === 'drop')!;
-    session.removeQueuedMessage(drop.id);
-
-    expect(savedQueues.at(-1)).toEqual(['keep']);
-  });
-
-  it('reports false for an id that is not queued', () => {
-    const session = loadedSession();
-    queue(session, 'only');
-
-    expect(session.removeQueuedMessage('q-nope')).toBe(false);
-    expect(session.getQueuedMessages().length).toBe(1);
-  });
-
-  it('gives every queued message its own id, even within one millisecond', () => {
-    const session = loadedSession();
-    queue(session, 'a');
-    queue(session, 'b');
-
-    const ids = session.getQueuedMessages().map((m) => m.id);
-    expect(new Set(ids).size).toBe(2);
-  });
-});
-
-describe('processQueuedMessages', () => {
-  it('drains queued messages and clears them', async () => {
-    const planner = {
-      modifyDuringExecution: vi.fn().mockResolvedValue({
-        pendingTasks: [createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' })],
-        message: 'ok',
-      }),
-    };
-    const session = makeSession({ planner });
-
-    const plan: LegacyPlanState = {
-      tasks: [createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' })],
-      generatedAt: new Date().toISOString(),
-      status: 'approved',
-      runners: ['claude-code'],
-      lastUpdated: new Date().toISOString(),
-    };
-
-    session.loadPlan(plan, 'Test', '/repo');
-
-    queue(session, 'user says hi');
-    queue(session, 'user asks something');
-
-    expect(session.getQueuedMessages().length).toBe(2);
-
-    await session.processQueuedMessages();
-
-    expect(session.getQueuedMessages().length).toBe(0);
-  });
-
-  it('calls planner.modifyDuringExecution with execution context', async () => {
-    const planner = {
-      modifyDuringExecution: vi.fn().mockResolvedValue({ pendingTasks: [], message: 'ok' }),
-    };
-    const session = makeSession({ planner });
-
-    const plan: LegacyPlanState = {
-      tasks: [createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' })],
-      generatedAt: new Date().toISOString(),
-      status: 'approved',
-      runners: ['claude-code'],
-      lastUpdated: new Date().toISOString(),
-    };
-
-    session.loadPlan(plan, 'Test', '/repo');
-    await session.executePlan();
-    queue(session, 'change task 1');
-
-    await session.processQueuedMessages();
-
-    expect(planner.modifyDuringExecution).toHaveBeenCalledTimes(1);
-    const req = planner.modifyDuringExecution.mock.calls[0][0];
-    expect(req.pendingTasks).toHaveLength(1);
-    expect(req.userMessage).toBe('change task 1');
-  });
-
-  it('reconciles plan when planner returns modified tasks', async () => {
-    const t1 = createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' });
-    const t2 = createTask({ id: 't2', order: 2, title: 'Task 2', prompt: 'then this', dependencies: ['t1'] });
-    const planner = {
-      modifyDuringExecution: vi.fn().mockResolvedValue({ pendingTasks: [t1, { ...t2, title: 'Modified Task', prompt: 'updated' }], message: 'Plan updated' }),
-    };
-    const session = makeSession({ planner });
-
-    const plan: LegacyPlanState = {
-      tasks: [t1, t2],
-      generatedAt: new Date().toISOString(),
-      status: 'approved',
-      runners: ['claude-code'],
-      lastUpdated: new Date().toISOString(),
-    };
-
-    session.loadPlan(plan, 'Test', '/repo');
-    await session.executePlan();
-    queue(session, 'modify');
-
-    await session.processQueuedMessages();
-
-    // t1 is live, so only the task that has not started takes the edit.
-    const stored = taskOf(session, 't2');
-    expect(stored).toBeDefined();
-    expect(stored!.title).toBe('Modified Task');
-    expect(session.getQueuedMessages().length).toBe(0);
-  });
-
-  it('does nothing when queue is empty', async () => {
-    const planner = { modifyDuringExecution: vi.fn() };
-    const session = makeSession({ planner });
-
-    const plan: LegacyPlanState = {
-      tasks: [createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' })],
-      generatedAt: new Date().toISOString(),
-      status: 'approved',
-      runners: ['claude-code'],
-      lastUpdated: new Date().toISOString(),
-    };
-
-    session.loadPlan(plan, 'Test', '/repo');
-
-    await session.processQueuedMessages();
-
-    expect(planner.modifyDuringExecution).not.toHaveBeenCalled();
-  });
-
-  it('applies a queued edit and resumes fan-out without any surface asking it to', async () => {
-    const sessions: FakeRunnerSession[] = [];
-    const runner = {
-      spawn: vi.fn().mockImplementation(() => {
-        const s = new FakeRunnerSession(`s${sessions.length + 1}`, `t${sessions.length + 1}`);
-        sessions.push(s);
-        return Promise.resolve(s);
-      }),
-      stop: vi.fn(),
-      stopAll: vi.fn(),
-      activeCount: 0,
-    } as unknown as IRunner;
-
-    const t1 = createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' });
-    const t2 = createTask({ id: 't2', order: 2, title: 'Second', prompt: 'do second', dependencies: ['t1'] });
-    const planner = {
-      modifyDuringExecution: vi.fn().mockResolvedValue({
-        // The full plan with t1 already completed so the store rebuild keeps
-        // t2's dependency satisfied and getReadyTasks re-schedules t2.
-        pendingTasks: [{ ...t1, status: 'completed' }, { ...t2, title: 'Second, edited', status: 'approved' }],
-        message: 'ok',
-      }),
-    };
-
-    const session = makeSession({ runner, planner });
-
-    const plan: LegacyPlanState = {
-      tasks: [t1, t2],
-      generatedAt: new Date().toISOString(),
-      status: 'approved',
-      runners: ['claude-code'],
-      lastUpdated: new Date().toISOString(),
-    };
-
-    session.loadPlan(plan, 'Test', '/repo');
-    await session.executePlan();
-
-    // t1 starts immediately.
-    expect(runner.spawn).toHaveBeenCalledTimes(1);
-    expect((runner.spawn as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0].taskId).toBe('t1');
-
-    // Queue a structural edit, then complete t1. With the queue non-empty the
-    // scheduler parks instead of spawning t2, and the Session drains the queue
-    // on its own — no surface is wired to do it.
-    queue(session, 'an edit');
-    sessions[0].emitOutput('Done.\n');
-    sessions[0].reportComplete({ status: 'done', summary: '' });
-    sessions[0].emitExit(0);
-
-    await vi.waitFor(() => expect(runner.spawn).toHaveBeenCalledTimes(2));
-
-    expect(planner.modifyDuringExecution).toHaveBeenCalledWith(expect.objectContaining({ userMessage: 'an edit' }));
-    expect(session.getQueuedMessages().length).toBe(0);
-    expect(taskOf(session, 't2')!.title).toBe('Second, edited');
-    expect((runner.spawn as unknown as ReturnType<typeof vi.fn>).mock.calls[1][0].taskId).toBe('t2');
-  });
-});
-
-describe('processQueuedMessages while it drains', () => {
-  function held<T>() {
-    let resolve!: (value: T) => void;
-    const promise = new Promise<T>((r) => { resolve = r; });
-    return { promise, resolve };
-  }
-
-  function recordingRunner() {
-    const sessions: FakeRunnerSession[] = [];
-    const runner = {
-      spawn: vi.fn().mockImplementation((opts: { taskId: string }) => {
-        const s = new FakeRunnerSession(`s${sessions.length + 1}`, opts.taskId);
-        sessions.push(s);
-        return Promise.resolve(s);
-      }),
-      stop: vi.fn(),
-      stopAll: vi.fn(),
-      activeCount: 0,
-    } as unknown as IRunner;
-    const spawnedIds = () => (runner.spawn as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => (c[0] as { taskId: string }).taskId);
-    return { runner, sessions, spawnedIds };
-  }
-
-  const plan = (tasks: LegacyPlanState['tasks']): LegacyPlanState => ({
-    tasks,
-    generatedAt: new Date().toISOString(),
-    status: 'approved',
-    runners: ['claude-code'],
-    lastUpdated: new Date().toISOString(),
-  });
-
-  it('keeps the scheduler paused until the planner has answered', async () => {
-    const { runner, sessions, spawnedIds } = recordingRunner();
-    const t1 = createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' });
-    const u1 = createTask({ id: 'u1', order: 2, title: 'Sign off', type: 'user', userSteps: [{ order: 1, instruction: 'look', completed: false }] });
-    const t2 = createTask({ id: 't2', order: 3, title: 'Second', prompt: 'do second', dependencies: ['t1'] });
-    const answer = held<{ pendingTasks: LegacyPlanState['tasks']; message: string }>();
-    const planner = { modifyDuringExecution: vi.fn().mockReturnValue(answer.promise) };
-    const session = makeSession({ runner, planner });
-    session.loadPlan(plan([t1, u1, t2]), 'Test', '/repo');
-    await session.executePlan();
-    queue(session, 'rename the second task');
-    sessions[0].reportComplete({ status: 'done', summary: '' });
-    await vi.waitFor(() => expect(taskOf(session, 't1')!.status).toBe('completed'));
-
-    const draining = session.processQueuedMessages();
-    await vi.waitFor(() => expect(planner.modifyDuringExecution).toHaveBeenCalledTimes(1));
-    await session.markTaskComplete('u1');
-
-    expect(spawnedIds()).toEqual(['t1']);
-
-    answer.resolve({ pendingTasks: [{ ...t1, status: 'completed' }, { ...u1, status: 'completed' }, { ...t2, title: 'Renamed' }], message: 'ok' });
-    await draining;
-    await vi.waitFor(() => expect(spawnedIds()).toEqual(['t1', 't2']));
-    expect(taskOf(session, 't2')!.title).toBe('Renamed');
-  });
-
-  it('runs one drain at a time: a second call joins it, and what was queued meanwhile is drained after', async () => {
-    const answers = [held<{ pendingTasks: LegacyPlanState['tasks']; message: string }>(), held<{ pendingTasks: LegacyPlanState['tasks']; message: string }>()];
-    let inFlight = 0;
-    let most = 0;
-    const planner = {
-      modifyDuringExecution: vi.fn().mockImplementation(async () => {
-        const answer = answers[planner.modifyDuringExecution.mock.calls.length - 1];
-        most = Math.max(most, ++inFlight);
-        try { return await answer.promise; } finally { inFlight--; }
-      }),
-    };
-    const t1 = createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' });
-    const session = makeSession({ planner });
-    session.loadPlan(plan([t1]), 'Test', '/repo');
-    queue(session, 'first edit');
-
-    const first = session.processQueuedMessages();
-    await vi.waitFor(() => expect(planner.modifyDuringExecution).toHaveBeenCalledTimes(1));
-    queue(session, 'second edit');
-    const second = session.processQueuedMessages();
-    await flushMicrotasks();
-    expect(planner.modifyDuringExecution).toHaveBeenCalledTimes(1);
-
-    answers[0].resolve({ pendingTasks: [{ ...t1, title: 'After first' }], message: 'ok' });
-    await vi.waitFor(() => expect(planner.modifyDuringExecution).toHaveBeenCalledTimes(2));
-    answers[1].resolve({ pendingTasks: [{ ...t1, title: 'After second' }], message: 'ok' });
-    await Promise.all([first, second]);
-
-    expect(most).toBe(1);
-    expect(planner.modifyDuringExecution.mock.calls.map((c) => (c[0] as { userMessage: string }).userMessage)).toEqual(['first edit', 'second edit']);
-    expect(taskOf(session, 't1')!.title).toBe('After second');
-    expect(session.getQueuedMessages()).toEqual([]);
-  });
-
-  it('will not take back a message the planner already has', async () => {
-    const answer = held<{ pendingTasks: LegacyPlanState['tasks']; message: string }>();
-    const planner = { modifyDuringExecution: vi.fn().mockReturnValue(answer.promise) };
-    const t1 = createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' });
-    const session = makeSession({ planner });
-    session.loadPlan(plan([t1]), 'Test', '/repo');
-    queue(session, 'an edit');
-    const [sent] = session.getQueuedMessages();
-
-    const draining = session.processQueuedMessages();
-    await vi.waitFor(() => expect(planner.modifyDuringExecution).toHaveBeenCalledTimes(1));
-
-    expect(session.removeQueuedMessage(sent.id)).toBe(false);
-    answer.resolve({ pendingTasks: [t1], message: 'ok' });
-    await draining;
-  });
-
-  it.each([
-    ['answers', (answer: ReturnType<typeof held<{ pendingTasks: LegacyPlanState['tasks']; message: string }>>, t1: LegacyPlanState['tasks'][number]) => answer.resolve({ pendingTasks: [{ ...t1, title: 'Edited for the old plan' }], message: 'ok' })],
-    ['fails', (answer: ReturnType<typeof held<{ pendingTasks: LegacyPlanState['tasks']; message: string }>>) => answer.resolve(Promise.reject(new Error('planner down')) as never)],
-  ] as const)('discards what the planner %s for a plan swapped out while it drained', async (_what, settle) => {
-    const { runner, spawnedIds } = recordingRunner();
-    const answer = held<{ pendingTasks: LegacyPlanState['tasks']; message: string }>();
-    const planner = { modifyDuringExecution: vi.fn().mockReturnValue(answer.promise) };
-    const onNotice = vi.fn();
-    const t1 = createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' });
-    const session = makeSession({ runner, planner, onNotice });
-    session.loadPlan(plan([t1]), 'Test', '/repo');
-    queue(session, 'an edit');
-
-    const draining = session.processQueuedMessages();
-    await vi.waitFor(() => expect(planner.modifyDuringExecution).toHaveBeenCalledTimes(1));
-    const adopted = plan([createTask({ id: 't1', order: 1, title: 'Other plan', prompt: 'other' })]);
-    session.loadPlan(adopted, 'Other', '/repo');
-    saves(session).mockClear();
-    settle(answer, t1);
-    await draining;
-
-    expect(taskOf(session, 't1')!.title).toBe('Other plan');
-    expect(session.planState).toBe(adopted);
-    expect(adopted.conversationHistory ?? []).toEqual([]);
-    expect(saves(session)).not.toHaveBeenCalled();
-    expect(onNotice).not.toHaveBeenCalled();
-    expect(spawnedIds()).toEqual([]);
   });
 });
 
@@ -1445,15 +1072,20 @@ describe('cross-session isolation', () => {
     expect(reset).toHaveBeenCalledTimes(2);
   });
 
-  it('loadPlan of a different plan clears the previous session\'s queued messages', () => {
-    const session = makeSession();
+  it('loadPlan of a different plan drops the previous session\'s pending turns, and their callers hear it', async () => {
+    const session = makeSession({
+      aiService: { hasActiveConversation: () => true, continueConversation: vi.fn(() => new Promise<never>(() => {})), reset: vi.fn() },
+    });
     session.loadPlan(planWith('a1', 'Plan A task'), 'Goal A', '/repo');
-    queue(session, 'meant for session A');
-    expect(session.getQueuedMessages().length).toBe(1);
+    const inFlight = session.continueConversation('meant for session A');
+    const waiting = session.continueConversation('also for session A');
 
-    session.loadPlan(planWith('b1', 'Plan B task'), 'Goal B', '/repo');
+    const planB = planWith('b1', 'Plan B task');
+    session.loadPlan(planB, 'Goal B', '/repo');
 
-    expect(session.getQueuedMessages().length).toBe(0);
+    await expect(inFlight).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
+    await expect(waiting).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
+    expect(planB.pendingTurns).toBeUndefined();
   });
 
   it('reset() returns the Session to a blank slate with a fresh identity', () => {
@@ -1462,7 +1094,6 @@ describe('cross-session isolation', () => {
       aiService: { hasActiveConversation: () => true, reset },
     });
     session.loadPlan(planWith('a1', 'Plan A task'), 'Goal A', '/repo');
-    queue(session, 'pending change');
     const oldId = session.sessionId;
 
     session.reset();
@@ -1470,7 +1101,6 @@ describe('cross-session isolation', () => {
     expect(session.planState).toBeNull();
     expect(session.currentGoal).toBe('');
     expect(session.planTasks).toHaveLength(0);
-    expect(session.getQueuedMessages().length).toBe(0);
     expect(session.executionLog).toHaveLength(0);
     expect(reset).toHaveBeenCalled();
     expect(session.sessionId).not.toBe(oldId);
