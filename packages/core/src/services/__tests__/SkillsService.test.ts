@@ -518,6 +518,38 @@ describe('SkillsService', () => {
       expect(fs.readFileSync(file, 'utf8')).toContain('Builtin grilling body.');
     });
 
+    describe('when a built-in stops being user-only', () => {
+      const tdd = (extra: Record<string, unknown> = {}) =>
+        writeSkill(h.builtinDir, 'tdd', { name: 'tdd', description: 'Builtin T', 'applies-to': 'task', ...extra }, 'Builtin tdd body.');
+      const installed = () => path.join(home, '.ordewell', 'skills', 'tdd', 'SKILL.md');
+
+      it('an unedited installed copy picks the change up', () => {
+        const svc = createSkillsService(workspaceRoot);
+        svc.seedBuiltinSkill('tdd');
+        expect(svc.findSkill('tdd')).toMatchObject({ modelInvocable: false });
+
+        tdd();
+
+        expect(svc.seedBuiltinSkill('tdd')).toBe(true);
+        expect(svc.findSkill('tdd')).toMatchObject({ modelInvocable: true });
+      });
+
+      it('a copy where the user set the flag themselves keeps it', () => {
+        tdd();
+        const svc = createSkillsService(workspaceRoot);
+        svc.seedBuiltinSkill('tdd');
+        const mine = fs.readFileSync(installed(), 'utf8').replace(/^(applies-to: .*)$/m, '$1\ndisable-model-invocation: true');
+        expect(mine).toContain('disable-model-invocation: true');
+        fs.writeFileSync(installed(), mine);
+
+        tdd({ description: 'Builtin T, revised' });
+
+        expect(svc.seedBuiltinSkill('tdd')).toBe(false);
+        expect(fs.readFileSync(installed(), 'utf8')).toBe(mine);
+        expect(svc.findSkill('tdd')).toMatchObject({ modelInvocable: false });
+      });
+    });
+
     it('returns false without crashing when the package skills dir is missing', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       h.builtinDir = path.join(os.tmpdir(), 'ordewell-missing-' + Date.now());

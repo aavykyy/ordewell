@@ -9,6 +9,7 @@ import { checkOpSkills, checkPlanSkills, checkTaskSkillsEdit, plannedSkillLookup
 import { parsePlanJson } from '../PlanValidator';
 import { applyTaskOps } from '../TaskOps';
 import { PlanStore } from '../PlanStore';
+import { buildConversationSystemPrompt } from '../PlanPrompts';
 import { serializeTask } from '../SessionMessage';
 import type { GitExecFn } from '../gitExec';
 
@@ -102,15 +103,31 @@ describe('resolveTaskSkills', () => {
 });
 
 describe('the built-in tdd skill', () => {
-  it('ships as a user-only task skill carrying the test-first workflow', () => {
+  beforeEach(() => {
     h.builtinDir = path.resolve(__dirname, '..', '..', '..', 'skills');
+  });
 
+  it('ships as a model-invocable task skill carrying the test-first workflow', () => {
     const tdd = createSkillsService(workspace).findSkill('tdd');
 
-    expect(tdd).toMatchObject({ name: 'tdd', source: 'global', appliesTo: 'task', modelInvocable: false });
+    expect(tdd).toMatchObject({ name: 'tdd', source: 'global', appliesTo: 'task', modelInvocable: true });
     expect(tdd?.description).toMatch(/not to verification-only, docs or ops tasks/);
     expect(tdd?.content).toContain('RED: Write ONE failing test');
     expect(fs.existsSync(path.join(globalSkills(), 'tdd', 'SKILL.md'))).toBe(true);
+  });
+
+  it('is the only built-in the planner is offered to attach', () => {
+    const skills = createSkillsService(workspace).listSkills();
+    const text = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, true, { harness: true, skills });
+    const catalog = text.slice(text.indexOf('Task skills you may attach:'), text.indexOf('DEPENDENCY & PARALLELISM:'));
+
+    expect(catalog).toContain(`- tdd: ${skills.find((skill) => skill.name === 'tdd')?.description}`);
+    expect(catalog).toContain('Attach one of these to a task only where its description says it applies.');
+    expect(catalog).not.toMatch(/grilling|to-spec|improve-codebase-architecture/);
+    expect(text).not.toContain('ORDEWELL PLANNER SKILLS:');
+    for (const name of ['grilling', 'to-spec', 'improve-codebase-architecture']) {
+      expect(skills.find((skill) => skill.name === name)).toMatchObject({ modelInvocable: false });
+    }
   });
 });
 

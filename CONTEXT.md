@@ -390,7 +390,7 @@ Code's `disable-model-invocation` and `user-invocable` (unmarked = both). It liv
 `~/.ordewell/skills/` (built-in seeds plus the user's own; tasks never write
 it) or **workspace** `.ordewell/skills/` (committed, so it reaches worktrees
 through git). On a name clash global wins and the workspace copy is reported
-as shadowed. Every built-in is user-only. Ordewell never ships, reads, or
+as shadowed. The built-in planner skills are user-only; the built-in `tdd` task skill is model-invocable (ADR-0024, amended). Ordewell never ships, reads, or
 references runner-native skill mechanisms (`.claude/skills`, OpenCode plugins,
 etc.) to deliver a skill. Research subagents (`spawn_research_agent`, ADR-0005)
 are always-on for the planner, not a skill.
