@@ -1691,13 +1691,18 @@ the model can act on. Pending turns are persisted on the plan.
 batch boundary; *Avoid:* "pause" for the start hold — running tasks are not
 paused.
 
-**Command seam** — the one core entry point every execution action reaches the
-scheduler through: `run_plan`, `run_task`, `stop_task`, `stop_run`,
-`retry_task`, `message_task`, `answer_approval`, `merge_all` (ADR-0029, #91).
+**Command seam** (`ExecutionCommands`, `Session.execute`) — the one core entry
+point every execution action reaches the scheduler through: `run_plan`,
+`run_task`, `stop_task`, `stop_run`, `retry_task`, `message_task`,
+`answer_approval`, `merge_all` (ADR-0029, #91).
 It checks who asked (user, planner turn, supervisor), the Supervisor level,
 plan approval and the loop guards, refuses with an actionable note, and records
 each action in the timeline with who asked. No planner tool reaches into
-`TaskOrchestrator` directly, and the mandate (#23) plugs in here.
+`TaskOrchestrator` directly, and the mandate (#23) plugs in here. Plan approval
+is the user's: executing the plan approves every task in it, and a task the
+user starts or retries themselves is approved too (`approvedTasks` on the
+plan); a start from anyone else is refused for a task outside that set, so a
+task the planner added since waits for the user.
 `answer_approval` denies or escalates, never allows: allowing would widen the
 mode the plan gave the task.
 *Avoid:* "command surface" — that is the set of user commands by name (slash

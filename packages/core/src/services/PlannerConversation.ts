@@ -10,6 +10,7 @@ import type { ForkedDialogue } from './conversationFork';
 import { condensedNotice, extractSummary, keptTail, summaryRequest } from './conversationSummary';
 import type { ConversationMessage, LegacyPlanState, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
 import { flattenTasks, isUserMessage } from '../models/Task';
+import type { ExecutionRecord } from '../models/Execution';
 import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation } from './skillInvocation';
 import { skillLoadNotice, surfaceStep } from '../conversation/records';
 import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
@@ -664,6 +665,16 @@ export class PlannerConversation {
       ...messages.map((m) => `- ${m}`),
       `Reason: ${reason}`,
     ].join('\n'), { kind: 'system' });
+  }
+
+  /**
+   * A call at the command seam (ADR-0029), kept where it happened in the
+   * dialogue: a reload shows it, and a planner replayed from the transcript
+   * knows what was started or stopped, and by whom. Call inside the host's
+   * mutation ritual.
+   */
+  recordExecution(record: ExecutionRecord, text: string): void {
+    this.appendEntries([{ role: 'assistant', content: text, timestamp: record.at, kind: 'execution', execution: record }]);
   }
 
   /**

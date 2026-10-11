@@ -16,6 +16,7 @@ import { renderTaskLog } from './taskLogRead';
 import { taskReadPage } from './taskReadPage';
 import type { TaskDiffRead, TaskDiffResult } from './taskDiffRead';
 import type { ToolOutcome } from '../interfaces/IFileSystem';
+import type { CommandOutcome, ExecutionCommand } from './ExecutionCommands';
 
 /**
  * The session side of the planner's catalog and submission tools (ADR-0022):
@@ -54,6 +55,8 @@ export interface PlannerToolsHost {
   fetchUrl(url: string): Promise<ToolOutcome>;
   /** A search the same way; undefined when the fetcher has no search. */
   webSearch(query: string): Promise<ToolOutcome | undefined>;
+  /** An execution command through the session's command seam (ADR-0029), asked by this planner turn. */
+  execute(command: ExecutionCommand): Promise<CommandOutcome>;
 }
 
 /**
@@ -82,7 +85,28 @@ export function runnersOf(tasks: readonly Task[]): RunnerId[] {
 }
 
 export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
+  // Bound to the turn it was made in: a late call from a turn that ended has nobody's consent behind it.
+  const execute = async (command: ExecutionCommand): Promise<McpToolReply> => {
+    if (host.turnId() === undefined) return { isError: true, text: JSON.stringify({ ok: false, outcome: 'refused', reason: 'No planning turn is open, so nothing was done.' }) };
+    const outcome = await host.execute(command);
+    return outcome.ok
+      ? answer({ ok: true, result: outcome.message })
+      : { isError: true, text: JSON.stringify({ ok: false, outcome: outcome.outcome, reason: outcome.message }) };
+  };
+
   return {
+    runPlan: () => execute({ command: 'run_plan' }),
+    runTask: ({ task }) => execute({ command: 'run_task', task: String(task) }),
+    stopTask: ({ task }) => execute({ command: 'stop_task', task: String(task) }),
+    stopRun: () => execute({ command: 'stop_run' }),
+    retryTask: ({ task, from, message }) => execute({ command: 'retry_task', task: String(task), from, ...(message !== undefined ? { message } : {}) }),
+    messageTask: ({ task, text }) => execute({ command: 'message_task', task: String(task), text }),
+    answerApproval: ({ task, approval, answer: reply, note }) => execute({
+      command: 'answer_approval', task: String(task), answer: reply,
+      ...(approval !== undefined ? { approval } : {}),
+      ...(note !== undefined ? { note } : {}),
+    }),
+
     async loadSkill({ name }) {
       const skills = modelInvocablePlannerSkills(host.skills());
       const skill = skills.find((s) => s.name === name);

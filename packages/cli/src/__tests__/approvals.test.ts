@@ -28,6 +28,12 @@ function deps(overrides: Partial<ApprovalDeps> = {}): ApprovalDeps {
 }
 
 describe('describeApproval', () => {
+  it('asks to start work without promising a wider grant (ADR-0029)', () => {
+    const text = describeApproval({ type: 'approval_request', id: 'ap-3', kind: 'task_start', subject: 'Run the plan', scope: 'Run the plan' });
+    expect(text).toContain('The planner wants to start work:\n    Run the plan');
+    expect(text).not.toMatch(/also allows/i);
+  });
+
   it('leads with what will run, not with the internal scope', () => {
     const text = describeApproval(SHELL_EVENT);
     expect(text).toContain('npm test');

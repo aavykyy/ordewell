@@ -1,0 +1,514 @@
+import { describe, it, expect, vi } from 'vitest';
+import { makeSession, FakeRunnerSession, taskOf, fakeConfig, testWorkspace, type SessionOverrides } from './sessionTestKit';
+import { FakeWorktreeIsolation } from '../../testing';
+import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
+import type { IRunner } from '../../interfaces/IRunner';
+import type { SessionMessage } from '../SessionMessage';
+import type { ExecutionActor } from '../../models/Execution';
+import type { ConversationRequest, ConversationTurn } from '../AiService';
+import { ExecutionCommands, type ExecutionCommand, type ExecutionHost } from '../ExecutionCommands';
+import { EMPTY_CONVERSATION, fromTranscript, reduceConversation } from '../../conversation';
+
+const PLANNER: ExecutionActor = { kind: 'planner-turn' };
+
+function runner() {
+  const sessions: FakeRunnerSession[] = [];
+  const spawn = vi.fn(async (opts: Parameters<IRunner['spawn']>[0]) => {
+    const session = new FakeRunnerSession(`s${sessions.length + 1}`, opts.taskId);
+    sessions.push(session);
+    return session;
+  });
+  return { sessions, spawn, runner: { spawn, stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } as IRunner };
+}
+
+const task = (id: string, order: number, over: Partial<Task> = {}) =>
+  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, assignedRunner: 'claude-code', taskMode: 'acceptEdits', ...over });
+
+function plan(tasks: Task[], over: Partial<LegacyPlanState> = {}): LegacyPlanState {
+  const now = new Date().toISOString();
+  return { tasks, generatedAt: now, status: 'approved', runners: ['claude-code'], lastUpdated: now, ...over };
+}
+
+function setup(opts: { autonomous?: boolean; isolation?: FakeWorktreeIsolation; maxParallel?: number; aiService?: SessionOverrides['aiService'] } = {}) {
+  const messages: SessionMessage[] = [];
+  const r = runner();
+  const session = makeSession({
+    runner: r.runner,
+    isolation: opts.isolation,
+    aiService: opts.aiService,
+    config: fakeConfig({ autonomousMode: opts.autonomous ?? true, maxParallelSessions: opts.maxParallel ?? 3 }),
+    broadcast: (m) => messages.push(m),
+  });
+  const latest = (taskId: string) => r.sessions.filter((s) => s.taskId === taskId).at(-1)!;
+  const spawned = (taskId: string) => r.spawn.mock.calls.map(([o]) => o).filter((o) => o.taskId === taskId);
+  const timeline = () => messages.flatMap((m) => (m.type === 'execution_action' ? [m] : []));
+  const cards = () => messages.flatMap((m) => (m.type === 'approval_request' && m.kind === 'task_start' ? [m] : []));
+  const run = (command: ExecutionCommand, actor: ExecutionActor = PLANNER) => session.execute(command, actor);
+  return { session, messages, timeline, cards, latest, spawned, run, ...r };
+}
+
+/** A run with task 1 started by the user's Execute plan, and task 2 waiting on it. */
+async function running(opts: Parameters<typeof setup>[0] = {}) {
+  const env = setup(opts);
+  env.session.loadPlan(plan([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]), 'goal', testWorkspace, { persist: false });
+  await env.session.executePlan();
+  return env;
+}
+
+describe('the command seam: run_task', () => {
+  it('starts a ready task the user approved, as the force-start button does, and records who asked', async () => {
+    const byTool = setup();
+    byTool.session.loadPlan(plan([task('t1', 1)]), 'goal', testWorkspace, { persist: false });
+    const byButton = setup();
+    byButton.session.loadPlan(plan([task('t1', 1)]), 'goal', testWorkspace, { persist: false });
+
+    // Each attempt's usage carries its start time, which would otherwise differ between the two runs.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-11T12:00:00Z'));
+    const outcome = await byTool.run({ command: 'run_task', task: '1' });
+    await byButton.session.forceStartTask('t1');
+    vi.useRealTimers();
+
+    expect(outcome).toEqual({ ok: true, message: 'Started task #1 "Task t1".' });
+    expect(byTool.spawned('t1')).toHaveLength(1);
+    // The plan pane and the task log are fed the same messages either way.
+    const shown = (messages: SessionMessage[]) => messages.filter((m) => m.type === 'status_update' || m.type === 'task_started' || m.type === 'task_log');
+    expect(shown(byTool.messages)).toEqual(shown(byButton.messages));
+    expect(byTool.timeline()).toEqual([expect.objectContaining({
+      record: expect.objectContaining({ command: 'run_task', actor: 'planner-turn', outcome: 'done', task: { id: 't1', ref: '#1', title: 'Task t1' } }),
+      text: 'The planner started task #1 "Task t1".',
+    })]);
+  });
+
+  it('refuses a task whose dependency has not finished, naming the dependency and its state', async () => {
+    const env = setup();
+    env.session.loadPlan(plan([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]), 'goal', testWorkspace, { persist: false });
+
+    const outcome = await env.run({ command: 'run_task', task: 't2' });
+
+    expect(outcome).toEqual({ ok: false, outcome: 'refused', message: 'Task #2 "Task t2" depends on task #1 "Task t1" (not started), which has not finished. It can start once it has.' });
+    expect(env.spawn).not.toHaveBeenCalled();
+    expect(env.timeline().at(-1)!.text).toBe(`The planner asked to start task #2 "Task t2"; refused: ${outcome.message}`);
+  });
+
+  it('refuses a task waiting at its merge gate, and says the merge is the user\'s', async () => {
+    const env = setup({ isolation: new FakeWorktreeIsolation() });
+    env.session.loadPlan(plan([task('t1', 1), task('o2', 2, { ops: true, dependencies: ['t1'] })]), 'goal', testWorkspace, { persist: false });
+    await env.session.executePlan();
+    env.latest('t1').reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(env.session.mergeGate('o2')).toEqual(['t1']));
+
+    const outcome = await env.run({ command: 'run_task', task: 'o2' });
+
+    expect(outcome).toMatchObject({ ok: false, outcome: 'refused' });
+    expect(outcome.message).toBe('Task #2 "Task o2" waits for Merge all: the work of task #1 "Task t1" is not merged into the user\'s branch yet. Ask the user to merge (Merge all), or to force start it.');
+    expect(env.spawned('o2')).toHaveLength(0);
+  });
+
+  it('refuses a user task, a running task, and a failed one with what to do instead', async () => {
+    const env = await running();
+    env.session.loadPlan(plan([task('t1', 1), task('u2', 2, { type: 'user', prompt: undefined })]), 'goal', testWorkspace, { persist: false });
+    await env.session.executePlan();
+
+    expect((await env.run({ command: 'run_task', task: 'u2' })).message).toBe('Task #2 "Task u2" is a user task: the user does it by hand, and no runner starts it.');
+    expect((await env.run({ command: 'run_task', task: 't1' })).message).toBe('Task #1 "Task t1" is already running.');
+
+    env.latest('t1').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('failed'));
+    expect((await env.run({ command: 'run_task', task: 't1' })).message).toBe('Task #1 "Task t1" failed. Start a new attempt with retry_task.');
+  });
+
+  it('names an unknown task and records the refusal', async () => {
+    const env = setup();
+    env.session.loadPlan(plan([task('t1', 1)]), 'goal', testWorkspace, { persist: false });
+
+    expect(await env.run({ command: 'run_task', task: '#9' })).toMatchObject({ ok: false, message: expect.stringContaining('No task matches "#9"') });
+    expect(env.timeline()).toHaveLength(1);
+  });
+
+  it('refuses to start past the parallel limit', async () => {
+    const env = setup({ maxParallel: 1 });
+    env.session.loadPlan(plan([task('t1', 1), task('t2', 2)]), 'goal', testWorkspace, { persist: false });
+    await env.run({ command: 'run_task', task: 't1' });
+
+    expect((await env.run({ command: 'run_task', task: 't2' })).message).toBe('1 tasks are already running, the most this session runs at once. Wait for one to finish, or stop one first.');
+  });
+});
+
+describe('the command seam: an unapproved plan or task never starts', () => {
+  it.each([true, false])('refuses every start of a plan the user never executed (Full: %s), and asks nobody', async (autonomous) => {
+    const env = setup({ autonomous });
+    env.session.loadPlan(plan([task('t1', 1)], { status: 'draft' }), 'goal', testWorkspace, { persist: false });
+
+    const results = [
+      await env.run({ command: 'run_plan' }),
+      await env.run({ command: 'run_task', task: 't1' }),
+      await env.run({ command: 'retry_task', task: 't1', from: 'fresh' }),
+    ];
+
+    for (const result of results) expect(result).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(/not approved/) });
+    expect(results[0].message).toBe('The user has not approved this plan yet: they approve it by executing it themselves (Execute plan). Ask them to.');
+    expect(env.spawn).not.toHaveBeenCalled();
+    expect(env.cards()).toHaveLength(0);
+  });
+
+  it('refuses a task added after the user approved the plan, until the user starts it themselves', async () => {
+    const env = setup();
+    env.session.loadPlan(plan([task('t1', 1), task('t2', 2)], { approvedTasks: ['t1'] }), 'goal', testWorkspace, { persist: false });
+
+    expect((await env.run({ command: 'run_task', task: 't2' })).message)
+      .toBe('Task #2 "Task t2" was added after the user approved the plan, so it is not approved to run. Ask the user to start it, or to execute the plan, which approves it.');
+    expect((await env.run({ command: 'run_plan' })).message)
+      .toBe('Task #2 "Task t2" was added after the user approved the plan, so it is not approved to run. Ask the user to execute the plan themselves, which approves it.');
+    expect(env.spawn).not.toHaveBeenCalled();
+
+    await env.session.forceStartTask('t2');
+    expect(env.session.planState!.approvedTasks).toEqual(['t1', 't2']);
+  });
+
+  it('counts every task of a plan saved as executed, before approval was kept, as approved', () => {
+    const env = setup();
+    env.session.loadPlan(plan([task('t1', 1, { subtasks: [task('t1a', 1)] })]), 'goal', testWorkspace, { persist: false });
+
+    expect(env.session.planState!.approvedTasks).toEqual(['t1', 't1a']);
+  });
+
+  it('approves every task when the user executes the plan', async () => {
+    const env = setup();
+    env.session.loadPlan(plan([task('t1', 1), task('t2', 2)], { status: 'draft' }), 'goal', testWorkspace, { persist: false });
+
+    await env.session.executePlan();
+
+    expect(env.session.planState!.approvedTasks).toEqual(['t1', 't2']);
+  });
+});
+
+describe('the command seam: consent in a user-started planner turn', () => {
+  it('asks the user before a start in Guarded, on the planner\'s approval card, and starts once allowed', async () => {
+    const env = setup({ autonomous: false });
+    env.session.loadPlan(plan([task('t1', 1)]), 'goal', testWorkspace, { persist: false });
+
+    const pending = env.run({ command: 'run_task', task: 't1' });
+    await vi.waitFor(() => expect(env.cards()).toHaveLength(1));
+    expect(env.cards()[0]).toMatchObject({ subject: 'Start task #1 "Task t1"', detail: 'The planner wants to start work. It runs on claude-code in acceptEdits mode, as the plan set it.' });
+    expect(env.spawn).not.toHaveBeenCalled();
+    env.session.resolveApproval(env.cards()[0].id, true);
+
+    expect(await pending).toMatchObject({ ok: true });
+    expect(env.spawned('t1')).toHaveLength(1);
+  });
+
+  it('starts nothing when the user declines, and records the declined call', async () => {
+    const env = setup({ autonomous: false });
+    env.session.loadPlan(plan([task('t1', 1)]), 'goal', testWorkspace, { persist: false });
+
+    const pending = env.run({ command: 'run_plan' });
+    await vi.waitFor(() => expect(env.cards()).toHaveLength(1));
+    env.session.resolveApproval(env.cards()[0].id, false);
+
+    expect(await pending).toEqual({ ok: false, outcome: 'declined', message: 'The user did not approve: run the plan. Do not ask again unless they say so.' });
+    expect(env.spawn).not.toHaveBeenCalled();
+    expect(env.timeline().at(-1)!.text).toBe('The planner asked to run the plan; you declined.');
+  });
+
+  it('starts without asking in Full', async () => {
+    const env = setup({ autonomous: true });
+    env.session.loadPlan(plan([task('t1', 1)]), 'goal', testWorkspace, { persist: false });
+
+    expect(await env.run({ command: 'run_plan' })).toEqual({ ok: true, message: 'The plan is running: task #1 "Task t1" started, and the rest start as their dependencies finish.' });
+    expect(env.cards()).toHaveLength(0);
+  });
+
+  it('stops, messages and denies in Guarded without asking anyone', async () => {
+    const env = await running({ autonomous: false });
+    env.latest('t1').requestPermission('p1', 'Bash', { command: 'rm -rf build' });
+    await vi.waitFor(() => expect(env.session.outstandingApprovals()).toHaveLength(1));
+
+    expect(await env.run({ command: 'message_task', task: 't1', text: 'use the cache' })).toMatchObject({ ok: true });
+    expect(await env.run({ command: 'answer_approval', task: 't1', answer: 'deny', note: 'keep build' })).toMatchObject({ ok: true });
+    expect(await env.run({ command: 'stop_task', task: 't1' })).toMatchObject({ ok: true });
+    expect(env.cards()).toHaveLength(0);
+  });
+});
+
+describe('the command seam: stop_task and stop_run', () => {
+  it('stops one running task, denying its open approvals as a stop does, and keeps it to retry', async () => {
+    const env = await running();
+    const t1 = env.latest('t1');
+    t1.requestPermission('p1', 'Bash', { command: 'make' });
+    await vi.waitFor(() => expect(env.session.outstandingApprovals()).toHaveLength(1));
+
+    const outcome = await env.run({ command: 'stop_task', task: 't1' });
+
+    expect(outcome).toEqual({ ok: true, message: 'Stopped task #1 "Task t1": it is back to not started and held until it is retried, and its open approvals were denied.' });
+    expect(t1.answers).toEqual([{ id: 'p1', decision: { decision: 'deny' } }]);
+    expect(env.session.outstandingApprovals()).toHaveLength(0);
+    expect(taskOf(env.session, 't1')!.status).toBe('pending');
+    expect(env.timeline().at(-1)!.text).toBe('The planner stopped task #1 "Task t1".');
+  });
+
+  it('refuses to stop a task that is not running', async () => {
+    const env = await running();
+
+    expect(await env.run({ command: 'stop_task', task: 't2' })).toEqual({
+      ok: false, outcome: 'refused', message: 'Task #2 "Task t2" is not running (it has not started): there is nothing to stop.',
+    });
+  });
+
+  it('keeps an ops task\'s retry context when it is stopped midway (ADR-0020)', async () => {
+    const env = setup();
+    env.session.loadPlan(plan([task('o1', 1, { ops: true })]), 'goal', testWorkspace, { persist: false });
+    await env.session.executePlan();
+    env.latest('o1').emitOutput('created resource group rg-dev\n');
+
+    expect((await env.run({ command: 'stop_task', task: 'o1' })).message).toContain('A retry is told what this attempt did.');
+    expect(await env.run({ command: 'retry_task', task: 'o1', from: 'fresh' })).toMatchObject({ ok: true });
+
+    expect(env.spawned('o1')).toHaveLength(2);
+    expect(env.spawned('o1')[1].prompt).toContain('## Previous attempt');
+    expect(env.spawned('o1')[1].prompt).toContain('created resource group rg-dev');
+  });
+
+  it('stops every running task and keeps the plan, as the stop button does', async () => {
+    const env = setup();
+    env.session.loadPlan(plan([task('t1', 1), task('t2', 2)]), 'goal', testWorkspace, { persist: false });
+    await env.session.executePlan();
+
+    const outcome = await env.run({ command: 'stop_run' });
+
+    expect(outcome).toEqual({ ok: true, message: 'Stopped the run: task #1 "Task t1" and task #2 "Task t2" are back to not started, and the plan is kept. Start again with run_plan or run_task.' });
+    expect(env.messages.map((m) => m.type)).toContain('execution_stopped');
+    expect(env.session.planTasks.map((t) => [t.id, t.status])).toEqual([['t1', 'pending'], ['t2', 'pending']]);
+    expect(env.session.isExecuting).toBe(false);
+  });
+
+  it('refuses to stop a run when nothing runs', async () => {
+    const env = setup();
+    env.session.loadPlan(plan([task('t1', 1)]), 'goal', testWorkspace, { persist: false });
+
+    expect((await env.run({ command: 'stop_run' })).message).toBe('Nothing is running: there is no run to stop.');
+  });
+});
+
+describe('the command seam: retry_task', () => {
+  it('starts a fresh attempt of a failed task, even with no run to hand it to', async () => {
+    const env = setup();
+    env.session.loadPlan(plan([task('t1', 1)]), 'goal', testWorkspace, { persist: false });
+    await env.session.executePlan();
+    env.latest('t1').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('failed'));
+    env.session.stopExecution();
+
+    expect(await env.run({ command: 'retry_task', task: 't1', from: 'fresh' })).toEqual({ ok: true, message: 'Retrying task #1 "Task t1".' });
+    expect(env.spawned('t1')).toHaveLength(2);
+    expect(env.timeline().at(-1)!.text).toBe('The planner retried task #1 "Task t1".');
+  });
+
+  it('continues a finished task in its saved session with the message', async () => {
+    const env = setup();
+    env.session.loadPlan(plan([task('t1', 1)]), 'goal', testWorkspace, { persist: false });
+    await env.session.executePlan();
+    env.latest('t1').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('failed'));
+
+    const outcome = await env.run({ command: 'retry_task', task: 't1', from: 'session', message: 'fix the import and finish' });
+
+    expect(outcome).toEqual({ ok: true, message: 'Continuing task #1 "Task t1" in its saved session with your message.' });
+    expect(env.spawned('t1')).toHaveLength(2);
+    expect(env.spawned('t1')[1].resumeSessionId).toBe('native-1');
+    expect(env.timeline().at(-1)!.text).toBe('The planner continued task #1 "Task t1" in its saved session: "fix the import and finish"');
+  });
+
+  it('refuses a continue without a message, and one of a task that never finished', async () => {
+    const env = setup();
+    env.session.loadPlan(plan([task('t1', 1), task('t2', 2)]), 'goal', testWorkspace, { persist: false });
+    await env.run({ command: 'run_task', task: 't1' });
+    env.latest('t1').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('failed'));
+
+    expect((await env.run({ command: 'retry_task', task: 't1', from: 'session' })).message)
+      .toBe('Continuing task #1 "Task t1" in its saved session needs a message: what the runner should do next.');
+    expect((await env.run({ command: 'retry_task', task: 't2', from: 'session', message: 'go on' })).message)
+      .toBe('Task "Task t2" cannot be continued: only a completed or failed task can be. A fresh retry (from "fresh") starts it over from its prompt.');
+    expect(env.spawned('t1')).toHaveLength(1);
+    expect(env.spawned('t2')).toHaveLength(0);
+  });
+
+  it('refuses a running or completed task with what would be accepted', async () => {
+    const env = await running();
+
+    expect((await env.run({ command: 'retry_task', task: 't1', from: 'fresh' })).message)
+      .toBe('Task #1 "Task t1" is running: stop it first with stop_task, or steer it with message_task.');
+    env.latest('t1').reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('completed'));
+    expect((await env.run({ command: 'retry_task', task: 't1', from: 'fresh' })).message)
+      .toBe('Task #1 "Task t1" has already completed. Continue it with retry_task from "session" and a message, or ask the user to mark it not done.');
+  });
+
+  it('asks the user first in Guarded', async () => {
+    const env = setup({ autonomous: false });
+    env.session.loadPlan(plan([task('t1', 1)]), 'goal', testWorkspace, { persist: false });
+
+    const pending = env.run({ command: 'retry_task', task: 't1', from: 'fresh' });
+    await vi.waitFor(() => expect(env.cards()).toHaveLength(1));
+    expect(env.cards()[0].subject).toBe('Retry task #1 "Task t1"');
+    env.session.resolveApproval(env.cards()[0].id, true);
+
+    expect(await pending).toMatchObject({ ok: true });
+  });
+});
+
+describe('the command seam: message_task', () => {
+  it('sends a running task a message through the task message path', async () => {
+    const env = await running();
+
+    expect(await env.run({ command: 'message_task', task: 't1', text: 'also update the docs' })).toEqual({
+      ok: true, message: 'Sent to task #1 "Task t1". The runner reads it at its next step, or when its turn ends.',
+    });
+    expect(env.latest('t1').queued()).toEqual([{ id: 'msg-1', text: 'also update the docs' }]);
+    expect(env.timeline().at(-1)!.text).toBe('The planner sent task #1 "Task t1" a message: "also update the docs"');
+  });
+
+  it('answers a task waiting for input', async () => {
+    const env = await running();
+    env.latest('t1').emitTurnEnd('completed');
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')!.awaitingReason).toBe('input'));
+
+    await env.run({ command: 'message_task', task: 't1', text: 'yes, the second option' });
+
+    expect(env.latest('t1').delivered).toEqual(['yes, the second option']);
+    expect(taskOf(env.session, 't1')!.status).toBe('in_progress');
+  });
+
+  it('refuses a task that is not running, with the reason', async () => {
+    const env = await running();
+
+    expect(await env.run({ command: 'message_task', task: 't2', text: 'hi' })).toEqual({
+      ok: false, outcome: 'refused', message: 'Task "Task t2" is not running, so there is no turn to send a message to.',
+    });
+  });
+});
+
+describe('the command seam: answer_approval never allows', () => {
+  async function asking() {
+    const env = await running();
+    env.latest('t1').requestPermission('p1', 'Bash', { command: 'git push --force' });
+    await vi.waitFor(() => expect(env.session.outstandingApprovals()).toHaveLength(1));
+    return env;
+  }
+
+  it.each(['allow', 'Allow', 'allowForTask'])('refuses "%s" with the reason, and leaves the request to the user', async (answer) => {
+    const env = await asking();
+
+    const outcome = await env.run({ command: 'answer_approval', task: 't1', answer });
+
+    expect(outcome).toEqual({ ok: false, outcome: 'refused', message: expect.stringContaining('answer_approval never allows') });
+    expect(outcome.message).toContain('would widen the mode the plan gave the task');
+    expect(env.latest('t1').answers).toEqual([]);
+    expect(env.session.outstandingApprovals()).toHaveLength(1);
+  });
+
+  it('denies with the note the runner reads', async () => {
+    const env = await asking();
+
+    const outcome = await env.run({ command: 'answer_approval', task: 't1', answer: 'deny', note: 'push without --force' });
+
+    expect(outcome).toMatchObject({ ok: true, message: expect.stringContaining('The runner is given your note.') });
+    expect(env.latest('t1').answers).toEqual([{ id: 'p1', decision: { decision: 'deny', note: 'push without --force' } }]);
+    expect(env.timeline().at(-1)!.text).toBe('The planner denied a request of task #1 "Task t1" with the note "push without --force".');
+  });
+
+  it('escalates by leaving the request for the user, and says so in the timeline', async () => {
+    const env = await asking();
+
+    expect(await env.run({ command: 'answer_approval', task: 't1', answer: 'escalate' })).toMatchObject({ ok: true });
+    expect(env.session.outstandingApprovals()).toHaveLength(1);
+    expect(env.timeline().at(-1)!.text).toBe('The planner left a request of task #1 "Task t1" for you to answer.');
+  });
+
+  it('refuses a task with no request waiting, and an id that is not one of its requests', async () => {
+    const env = await asking();
+
+    expect((await env.run({ command: 'answer_approval', task: 't2', answer: 'deny' })).message).toBe('Task #2 "Task t2" has no request waiting for an answer.');
+    expect((await env.run({ command: 'answer_approval', task: 't1', approval: 'nope', answer: 'deny' })).message)
+      .toMatch(/^No request "nope" waits on task #1 "Task t1"\. Its requests: p1 \(/);
+  });
+});
+
+describe('the command seam: who asked', () => {
+  it('refuses the supervisor, whose levels later slices define', async () => {
+    const env = await running();
+
+    const outcome = await env.run({ command: 'stop_task', task: 't1' }, { kind: 'supervisor', level: 'act' });
+
+    expect(outcome).toEqual({ ok: false, outcome: 'refused', message: 'The supervisor cannot act in this version of Ordewell. Suggest the action to the user instead.' });
+    expect(env.session.isExecuting).toBe(true);
+    expect(env.timeline().at(-1)!.record).toMatchObject({ actor: 'supervisor', level: 'act', outcome: 'refused' });
+  });
+
+  it('keeps each call in the transcript with who asked, which a reload shows as it was shown live', async () => {
+    const env = await running();
+    await env.run({ command: 'stop_task', task: 't1' }, { kind: 'user' });
+    await env.run({ command: 'run_task', task: 't1' });
+
+    const entries = env.session.planState!.conversationHistory!.filter((e) => e.kind === 'execution');
+    expect(entries.map((e) => [e.execution!.actor, e.content])).toEqual([
+      ['user', 'You stopped task #1 "Task t1".'],
+      ['planner-turn', 'The planner started task #1 "Task t1".'],
+    ]);
+    const live = env.timeline().reduce((view, message) => reduceConversation(view, message), EMPTY_CONVERSATION);
+    const reloaded = fromTranscript(env.session.planState!.conversationHistory, []);
+    const lines = (view: typeof live) => view.blocks.flatMap((b) => (b.type === 'message' ? [[b.role, b.text]] : []));
+    expect(lines(reloaded)).toEqual(lines(live));
+    expect(lines(live)).toEqual([['system', 'You stopped task #1 "Task t1".'], ['system', 'The planner started task #1 "Task t1".']]);
+  });
+
+  it('reaches the seam from a planner turn through the session\'s own planner tools', async () => {
+    const startConversation = vi.fn(async (req: ConversationRequest): Promise<ConversationTurn> => {
+      const reply = await req.plannerTools!.handler.stopTask!({ task: '1' }, { signal: new AbortController().signal });
+      return { kind: 'message', text: reply.text, researchLog: [] };
+    });
+    const env = await running({ aiService: { startConversation, hasActiveConversation: () => false } });
+
+    await env.session.continueConversation('stop task 1');
+
+    expect(startConversation).toHaveBeenCalledOnce();
+    expect(taskOf(env.session, 't1')!.status).toBe('pending');
+    expect(env.timeline().at(-1)!.record).toMatchObject({ command: 'stop_task', actor: 'planner-turn', outcome: 'done' });
+  });
+});
+
+describe('the command seam\'s extension points', () => {
+  function stubHost(): ExecutionHost {
+    const tasks = [task('t1', 1)];
+    return {
+      tasks: () => tasks, planApproved: () => true, taskApproved: () => true, approve: vi.fn(), autonomous: () => true,
+      scheduling: () => false, hasLiveWork: () => true, running: () => true, maxParallel: () => 3, runBlocked: () => false,
+      dependencyMet: () => true, mergeGate: () => [], waitingRequests: () => [],
+      runPlan: vi.fn(), startTask: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), retryTask: vi.fn(), continueTask: vi.fn(),
+      messageTask: vi.fn(), denyRequest: vi.fn(), record: vi.fn(),
+    };
+  }
+
+  it('asks the supervisor policy, given the level and the command', async () => {
+    const host = stubHost();
+    const supervisor = vi.fn(() => ({ kind: 'allow' as const }));
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() }, supervisor });
+
+    expect(await commands.run({ command: 'stop_task', task: 't1' }, { kind: 'supervisor', level: 'act' })).toMatchObject({ ok: true });
+    expect(supervisor).toHaveBeenCalledWith('act', 'stop_task');
+    expect(host.stopTask).toHaveBeenCalledWith('t1');
+  });
+
+  it('refuses a call a loop guard trips, with its note, before anything runs', async () => {
+    const host = stubHost();
+    const guard = vi.fn(() => 'Retried twice already: change the prompt or the model first.');
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() }, guards: [guard] });
+
+    expect(await commands.run({ command: 'stop_task', task: 't1' }, PLANNER)).toEqual({
+      ok: false, outcome: 'refused', message: 'Retried twice already: change the prompt or the model first.',
+    });
+    expect(guard).toHaveBeenCalledWith(PLANNER, { command: 'stop_task', task: 't1' }, expect.objectContaining({ id: 't1' }));
+    expect(host.stopTask).not.toHaveBeenCalled();
+  });
+});

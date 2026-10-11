@@ -257,7 +257,7 @@ describe('API planner task reads', () => {
       ]),
       proseTurn('Read it.'),
     ]);
-    await new TestService(fakeConfig()).runTurn({ ...ctxFor(chat, fakeFileSystem()), plannerReads: { taskOutput, taskDiff, taskQuery } });
+    await new TestService(fakeConfig()).runTurn({ ...ctxFor(chat, fakeFileSystem()), plannerTools: { taskOutput, taskDiff, taskQuery } });
     expect(taskOutput).toHaveBeenCalledOnce();
     expect(taskOutput.mock.calls[0]).toBeDefined();
     expect(taskDiff).toHaveBeenCalledOnce();
@@ -273,7 +273,7 @@ describe('API planner task reads', () => {
       toolTurn([{ name: 'task_output', args: { task: '#1' } }, { name: 'task_diff', args: { task: '#1' } }]),
       proseTurn('stopped'),
     ]);
-    await new TestService(fakeConfig()).runTurn({ ...ctxFor(chat, fakeFileSystem()), plannerReads: { taskOutput, taskDiff } }, () => {}, controller.signal);
+    await new TestService(fakeConfig()).runTurn({ ...ctxFor(chat, fakeFileSystem()), plannerTools: { taskOutput, taskDiff } }, () => {}, controller.signal);
     expect(taskOutput).toHaveBeenCalledOnce();
     expect(taskDiff).not.toHaveBeenCalled();
     expect(chat.toolResultsSent[0][1].output).toContain('Stopped by the user');

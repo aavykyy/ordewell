@@ -1,5 +1,6 @@
 import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, QueuedMessage, ResearchStep, RunnerId, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, Verdict } from '../models/Task';
 import type { AttemptUsage, ModelUsage, PlanUsage, UsageTotals } from '../models/Usage';
+import type { ExecutionRecord } from '../models/Execution';
 import type { TaskLogEvent } from '../models/TaskLog';
 import type { ApprovalKind } from '../interfaces/IApproval';
 import type { ApprovalSource } from './ApprovalPolicy';
@@ -217,6 +218,9 @@ export type SessionMessage =
   | { type: 'checkpoint'; taskId: string; taskTitle: string; summary: string }
   | { type: 'execution_complete'; summary: { total: number; completed: number; failed: number } }
   | { type: 'execution_stopped' }
+  // A call at the command seam (ADR-0029), with who made it: `text` is the
+  // line the transcript keeps for it, so a reload shows what was shown live.
+  | { type: 'execution_action'; record: ExecutionRecord; text: string }
   | { type: 'task_updated'; taskId: string; changes: Record<string, unknown> }
   | { type: 'task_started'; taskId: string; order: number; title: string; runner: RunnerId; modelId?: string }
   | { type: 'task_output'; taskId: string; text: string }

@@ -581,6 +581,8 @@ export class TaskOrchestrator {
     return this.attempts.size > 0;
   }
   get isReviewApproved(): boolean { return this.reviewApproved; }
+  /** The scheduler is driving the plan: ready tasks start on their own as slots free. Narrower than {@link isRunning}. */
+  get isScheduling(): boolean { return this.running; }
   get status(): 'approved' | 'running' | 'completed' { return this.planStatus; }
   get activeTaskIds(): string[] { return [...this.activeSessionMap.keys()]; }
   /** Task id → session id of every attempt whose runner is up; a spawn in flight has no session yet. */

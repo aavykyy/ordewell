@@ -26,6 +26,8 @@ import { toGeminiToolDeclarations } from './researchTools';
 import type { LegacyPlanState } from '../models/Task';
 
 const TOOL_DEFINITIONS = toGeminiToolDeclarations();
+/** With the task reads and execution tools a session offers its conversation (ADR-0029). */
+const CONVERSATION_TOOL_DEFINITIONS = toGeminiToolDeclarations(true);
 
 interface GeminiPart {
   text?: string;
@@ -205,7 +207,7 @@ export class GeminiService extends BaseAiService implements IAiService {
       req.runners,
       req.runnerModes,
       req.autonomousDefault ?? true,
-      { isolatedExecution: req.isolatedExecution, skills: req.skills },
+      { isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined },
     );
 
     // Gemini requires strict user/model alternation, so consecutive same-role
@@ -232,7 +234,7 @@ export class GeminiService extends BaseAiService implements IAiService {
 
     const chat = genModel.startChat({
       history: seededHistory,
-      tools: [{ functionDeclarations: toGeminiToolDeclarations(req.plannerTools !== undefined) }],
+      tools: [{ functionDeclarations: req.plannerTools ? CONVERSATION_TOOL_DEFINITIONS : TOOL_DEFINITIONS }],
       generationConfig: { temperature: 0.3, topP: 0.95, maxOutputTokens: 16384 },
     });
 
@@ -250,7 +252,7 @@ export class GeminiService extends BaseAiService implements IAiService {
       runnerModes: req.runnerModes,
       autonomousDefault: req.autonomousDefault,
       fetcher: req.fetcher,
-      plannerReads: req.plannerTools?.handler,
+      plannerTools: req.plannerTools?.handler,
     };
 
     this.conversation = { ctx, setProgress: (onProgress) => { currentProgress = onProgress; } };

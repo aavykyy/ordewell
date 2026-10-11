@@ -566,6 +566,7 @@ export function handleSessionMessage(
     case 'subagent_finished':
     case 'approval_settled':
     case 'approval_decided':
+    case 'execution_action':
     case 'task_log':
       break;
     // What Merge all did, whether this host asked for it or another surface did.

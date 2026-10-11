@@ -49,6 +49,9 @@ import type { IsolationRunController } from './IsolationRunController';
 import { PlanEditor } from './PlanEditor';
 import { PlanEditError } from './PlanEditError';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
+import { ExecutionCommands, type CommandOutcome, type ExecutionCommand, type ExecutionHost } from './ExecutionCommands';
+import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
+import { dependencyMet } from './readiness';
 
 /**
  * Options for plan generation. Progress is not overridable: every planner
@@ -424,6 +427,7 @@ export class Session {
   private readonly skillsService: Pick<SkillsService, 'findSkill' | 'listSkills' | 'searchedDirs' | 'forRoot'>;
   private readonly conversation: PlannerConversation;
   private readonly editor: PlanEditor;
+  private readonly commands: ExecutionCommands;
   private readonly plannerTools: PlannerToolHandler = plannerToolHandler({
     skills: () => this.workspaceSkills().listSkills(),
     turnId: () => this.conversation.currentTurnId,
@@ -443,6 +447,7 @@ export class Session {
     runCommand: (command, signal) => this.fsAdapter.bash(command, signal),
     fetchUrl: (url) => this.fetcher.fetch(url),
     webSearch: async (query) => this.fetcher.search?.(query),
+    execute: (command) => this.commands.run(command, { kind: 'planner-turn' }),
   });
 
   constructor(parts: SessionParts) {
@@ -513,7 +518,74 @@ export class Session {
       notice: (level, message) => this.notice(level, message),
     });
 
+    this.commands = new ExecutionCommands({
+      host: this.executionHost(),
+      // A Guarded start asks on the card the planner's other requests use.
+      consent: { request: (request) => this.approvals.ask(request) },
+    });
+
     this.unsubObserver = this.orchestrator.subscribe(this.observer());
+  }
+
+  /**
+   * The command seam (ADR-0029): an execution action asked for by `actor`,
+   * checked, consented to and recorded in one place. The planner's execution
+   * tools come here; see {@link ExecutionCommands}.
+   */
+  execute(command: ExecutionCommand, actor: ExecutionActor): Promise<CommandOutcome> {
+    return this.commands.run(command, actor);
+  }
+
+  /**
+   * What the seam reads and calls: the operations the surfaces' buttons run,
+   * less the approval a button press gives, which the seam decides itself.
+   */
+  private executionHost(): ExecutionHost {
+    return {
+      tasks: () => (this.plan ? this.store.planTasks : null),
+      planApproved: () => this.plan !== null && this.plan.status !== 'draft' && this.plan.status !== 'rejected',
+      taskApproved: (taskId) => this.plan?.approvedTasks?.includes(taskId) ?? false,
+      approve: (taskIds) => this.approve(taskIds),
+      autonomous: () => this.config.autonomousMode,
+      scheduling: () => this.orchestrator.isScheduling,
+      hasLiveWork: () => this.orchestrator.hasLiveWork,
+      running: (taskId) => this.orchestrator.getAttempt(taskId) !== undefined,
+      maxParallel: () => this.config.maxParallelSessions,
+      runBlocked: () => this.runs.blocked,
+      dependencyMet: (depId) => dependencyMet(depId, this.store, this.runs),
+      mergeGate: (taskId) => this.mergeGate(taskId),
+      waitingRequests: (taskId) => this.approvals.outstanding()
+        .filter(({ request }) => isRunnerApproval(request) && request.taskId === taskId)
+        .map(({ id, request }) => ({ id, subject: request.subject })),
+      runPlan: () => this.runWholePlan(),
+      startTask: (taskId) => this.startOneTask(taskId),
+      stopTask: (taskId) => this.cancelTask(taskId),
+      stopRun: () => this.stopExecution(),
+      retryTask: (taskId) => this.restartTask(taskId),
+      continueTask: (taskId, message) => this.resumeTask(taskId, message),
+      messageTask: (taskId, text) => { this.sendTaskMessage(taskId, text); },
+      denyRequest: (requestId, note) => this.resolveApproval(requestId, { decision: 'deny', ...(note ? { note } : {}) }),
+      record: (record, text) => this.recordExecution(record, text),
+    };
+  }
+
+  /** A call at the seam, in the transcript where it happened and on every surface at once. */
+  private recordExecution(record: ExecutionRecord, text: string): void {
+    this.mutatePlan(() => {
+      this.conversation.recordExecution(record, text);
+      return true;
+    }, () => this.broadcast({ type: 'execution_action', record, text }));
+  }
+
+  /** What the user approved to run (ADR-0029): a start of their own approves the task and its subtasks. */
+  private approve(taskIds: readonly string[]): void {
+    if (!this.plan || taskIds.length === 0) return;
+    this.plan.approvedTasks = [...new Set([...(this.plan.approvedTasks ?? []), ...taskIds])];
+  }
+
+  private approveTask(taskId: string): void {
+    const task = this.store.get(taskId);
+    if (task) this.approve(flattenTasks([task]).map((t) => t.id));
   }
 
   /**
@@ -1022,10 +1094,20 @@ export class Session {
   }
 
   async executePlan(): Promise<void> {
+    this.idlePlan();
+    // Executing is the user's approval of every task in the plan (ADR-0029).
+    this.approve(flattenTasks(this.store.planTasks).map((t) => t.id));
+    await this.runWholePlan();
+  }
+
+  private idlePlan(): LegacyPlanState {
     if (!this.plan || !this.store.planTasks.length) throw new NoPlanError('execute');
     if (this.orchestrator.hasLiveWork) throw new AlreadyExecutingError();
+    return this.plan;
+  }
 
-    const plan = this.plan;
+  private async runWholePlan(): Promise<void> {
+    const plan = this.idlePlan();
     this.orchestrator.setMergeAtGatesAutomatically(plan.mergeAtGatesAutomatically === true);
     await this.withSave(async () => {
       // A scheduler armed from an earlier run but with nothing live — paused on a
@@ -1054,6 +1136,11 @@ export class Session {
   }
 
   async forceStartTask(taskId: string): Promise<void> {
+    this.approveTask(taskId);
+    await this.startOneTask(taskId);
+  }
+
+  private async startOneTask(taskId: string): Promise<void> {
     if (!this.plan) return;
     if (!this.store.get(taskId)) {
       this.orchestrator.loadPlan(this.store.planTasks, this.plan.runners);
@@ -1064,6 +1151,7 @@ export class Session {
 
   async runTask(taskId: string): Promise<void> {
     if (!this.plan) return;
+    this.approveTask(taskId);
     if (!this.store.get(taskId)) {
       this.orchestrator.loadPlan(this.store.planTasks, this.plan.runners);
     }
@@ -1077,6 +1165,11 @@ export class Session {
   }
 
   async retryTask(taskId: string): Promise<void> {
+    this.approveTask(taskId);
+    await this.restartTask(taskId);
+  }
+
+  private async restartTask(taskId: string): Promise<void> {
     await this.withSave(() => this.orchestrator.retryTask(taskId));
   }
 
@@ -1086,6 +1179,11 @@ export class Session {
    * cannot be continued.
    */
   async continueTask(taskId: string, message: string): Promise<void> {
+    this.approveTask(taskId);
+    await this.resumeTask(taskId, message);
+  }
+
+  private async resumeTask(taskId: string, message: string): Promise<void> {
     await this.withSave(() => this.orchestrator.continueTask(taskId, message));
   }
 
@@ -1509,6 +1607,10 @@ export class Session {
     this.orchestrator.setMergeAtGatesAutomatically(plan.mergeAtGatesAutomatically === true);
     this.goal = goal;
     this.workspace = workspace;
+    // Saved before tasks carried the user's approval: executing a plan approved every task it held.
+    if (!plan.approvedTasks && plan.status !== 'draft' && plan.status !== 'rejected') {
+      plan.approvedTasks = flattenTasks(plan.tasks).map((t) => t.id);
+    }
     // The saved ledger is the session's own history: adopt it before the
     // persist below writes the plan back, so a load does not zero the totals.
     this.usage.restore(plan.plannerUsage);

@@ -2,6 +2,7 @@ export * from './models/Task';
 export * from './models/Session';
 export * from './models/Usage';
 export * from './models/TaskLog';
+export * from './models/Execution';
 export * from './interfaces/IFileSystem';
 export { BaseFileSystem } from './services/BaseFileSystem';
 export { STOPPED_TOOL_RESULT } from './services/executeTool';
@@ -99,6 +100,8 @@ export { PlanEditError } from './services/PlanEditError';
 export type * from './daemonContract';
 export { SessionNotFoundError, NoPlanError, AlreadyExecutingError } from './services/SessionErrors';
 export type { SessionDeps, SessionRuntimeSettings, SessionPlanner, SaveSession, ConversationFork, ConversationRewind } from './services/createSession';
+export { ExecutionCommands, SUPERVISOR_NOT_ENABLED } from './services/ExecutionCommands';
+export type { ExecutionCommand, CommandOutcome, Consent, SupervisorPolicy, LoopGuard, ExecutionHost } from './services/ExecutionCommands';
 export { ConversationEditError, ConversationBusyError, PlannerTurnDiscardedError, PlannerTurnStoppedError } from './services/PlannerConversation';
 export type { RewindTarget, ConversationCompaction, PlannerSubmission } from './services/PlannerConversation';
 export {

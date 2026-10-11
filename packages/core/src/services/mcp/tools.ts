@@ -120,6 +120,29 @@ const taskDiffInput = z.object({
   since: z.number().int().min(0).optional().describe('A previous nextOffset, in characters of this diff or file list.'),
 });
 
+const runPlanInput = z.object({});
+
+const oneTaskInput = z.object({ task: taskRef });
+
+const retryTaskInput = z.object({
+  task: taskRef,
+  from: z.enum(['fresh', 'session'])
+    .describe('"fresh": a new attempt from the task\'s prompt as the plan holds it now (change the prompt with edit_plan first). "session": continue the runner\'s saved session with "message"; for a completed or failed task.'),
+  message: z.string().optional().describe('What the runner should do next. Required with "session".'),
+});
+
+const messageTaskInput = z.object({
+  task: taskRef,
+  text: z.string().trim().min(1).describe('The message. A running task reads it at its next step; one waiting for input takes it as its answer.'),
+});
+
+const answerApprovalInput = z.object({
+  task: taskRef,
+  approval: z.string().optional().describe('Which request, when the task has more than one waiting; a refusal lists them.'),
+  answer: z.string().min(1).describe('"deny" or "escalate". Never "allow": that would widen the mode the plan gave the task.'),
+  note: z.string().optional().describe('With "deny": what the runner should do instead. It reads this.'),
+});
+
 export type TaskCompleteArgs = z.infer<typeof taskCompleteInput>;
 export type CheckpointArgs = z.infer<typeof checkpointInput>;
 export type ListRunnersArgs = z.infer<typeof listRunnersInput>;
@@ -133,6 +156,11 @@ export type EditPlanArgs = z.infer<typeof editPlanInput>;
 export type TaskQueryArgs = z.infer<typeof taskQueryInput>;
 export type TaskOutputArgs = z.infer<typeof taskOutputInput>;
 export type TaskDiffArgs = z.infer<typeof taskDiffInput>;
+export type RunPlanArgs = z.infer<typeof runPlanInput>;
+export type OneTaskArgs = z.infer<typeof oneTaskInput>;
+export type RetryTaskArgs = z.infer<typeof retryTaskInput>;
+export type MessageTaskArgs = z.infer<typeof messageTaskInput>;
+export type AnswerApprovalArgs = z.infer<typeof answerApprovalInput>;
 
 /** What a handler answers with. `isError` marks a refusal the caller should act on. */
 export interface McpToolReply {
@@ -183,6 +211,13 @@ export interface PlannerToolHandler {
   taskQuery?: Run<TaskQueryArgs>;
   taskOutput?: Run<TaskOutputArgs>;
   taskDiff?: Run<TaskDiffArgs>;
+  runPlan?: Run<RunPlanArgs>;
+  runTask?: Run<OneTaskArgs>;
+  stopTask?: Run<OneTaskArgs>;
+  stopRun?: Run<RunPlanArgs>;
+  retryTask?: Run<RetryTaskArgs>;
+  messageTask?: Run<MessageTaskArgs>;
+  answerApproval?: Run<AnswerApprovalArgs>;
 }
 
 export interface McpTool<H> {
@@ -228,13 +263,42 @@ export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
 
 /**
  * A harness plan mode refuses an MCP tool that does not declare itself
- * read-only, pre-allowed or not. True of the workspace for every planner tool:
- * `submit_plan` and `edit_plan` write only Ordewell's plan, through the same
+ * read-only, pre-allowed or not. True of the workspace for every planner tool
+ * but the execution tools: `submit_plan` and `edit_plan` write only Ordewell's plan, through the same
  * validation as the envelopes (ADR-0022, P1/P2), `run_command` refuses
  * every write the classifier sees (ADR-0026), and `fetch` and `web_search`
  * only send a GET (ADR-0027).
  */
 const PLANNER_READ_ONLY = { readOnlyHint: true };
+
+/**
+ * The execution tools (ADR-0029) change what runs, so they say so. Every
+ * harness planner is pre-authorized for the server by name, not by this hint,
+ * and none runs in a plan mode that would refuse them for it.
+ */
+const PLANNER_EXECUTES = { readOnlyHint: false };
+
+/**
+ * The planner's execution tools (ADR-0029, #91): each call goes to the
+ * session's command seam, which checks it, asks the user where consent needs
+ * one, and records it. The API planner offers the same tools as its own.
+ */
+export const PLANNER_EXECUTION_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
+  tool('run_plan', 'Start the whole plan, as the user\'s Execute plan does. Only a plan the user has approved; in Guarded the user is asked first.',
+    runPlanInput, (h) => h.runPlan?.bind(h), PLANNER_EXECUTES),
+  tool('run_task', 'Start one task now. Refused, with the reason, for a task whose dependencies have not finished, one waiting for Merge all, or one the user has not approved; in Guarded the user is asked first.',
+    oneTaskInput, (h) => h.runTask?.bind(h), PLANNER_EXECUTES),
+  tool('stop_task', 'Stop one running task: it goes back to not started and is held until retried, and its open approvals are denied.',
+    oneTaskInput, (h) => h.stopTask?.bind(h), PLANNER_EXECUTES),
+  tool('stop_run', 'Stop every running task and the run. The plan is kept.',
+    runPlanInput, (h) => h.stopRun?.bind(h), PLANNER_EXECUTES),
+  tool('retry_task', 'Start a new attempt of a failed, stopped or waiting task: fresh from its prompt, or continuing its saved session with a message. To change what it is told, edit its prompt with edit_plan first. In Guarded the user is asked first.',
+    retryTaskInput, (h) => h.retryTask?.bind(h), PLANNER_EXECUTES),
+  tool('message_task', 'Send a message to a running task, or answer one waiting for input.',
+    messageTaskInput, (h) => h.messageTask?.bind(h), PLANNER_EXECUTES),
+  tool('answer_approval', 'Answer a request a task\'s runner is waiting on: deny it with a note, or escalate it to the user. It never allows.',
+    answerApprovalInput, (h) => h.answerApproval?.bind(h), PLANNER_EXECUTES),
+];
 
 export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
   tool('list_runners', 'List the runners enabled right now, each with its modes and default mode. Call it just before submit_plan.',
@@ -262,6 +326,7 @@ export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     webSearchInput, (h) => h.webSearch?.bind(h), PLANNER_READ_ONLY),
   tool('load_skill', 'Load an Ordewell planner skill by name. Returns its instructions; only model-invocable planner skills can be loaded.',
     loadSkillInput, (h) => h.loadSkill?.bind(h), PLANNER_READ_ONLY),
+  ...PLANNER_EXECUTION_TOOLS,
 ];
 
 export const PLANNER_TASK_READ_TOOLS = PLANNER_TOOLS.filter((t) => ['task_query', 'task_output', 'task_diff'].includes(t.name));
