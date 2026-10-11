@@ -637,7 +637,8 @@ write-capable — it writes nothing but the plan, and only through validation.
 
 **Planner allowlist** — the planner's standing approvals (ADR-0026): command
 rules (`gh issue list`, `gcloud * * list`), MCP tool rules (`mcp:find-*`) and
-scope patterns (`https://docs.example.com/*`, `web_search:<provider>`), with
+scope patterns (`https://docs.example.com/*`, `web_search:<provider>`,
+`mcp-server:<name>@<hash>`), with
 `!` exclusions that always win. What it covers runs
 without asking anyone, in every *approval mode*; file writes are refused
 whatever it says. `curl` and `wget` command rules cover origins, and never
@@ -662,6 +663,16 @@ that receives the query (`web_search:anthropic`, `openai`, `opencode`,
 exclusions, the *web-read budget* and the *approval mode*, and resolves a
 fetch's host only after all of them. Planner-only: tasks never pass through it.
 *Avoid:* "SSRF check" for the whole decision (the guard is its last step).
+
+**Project MCP server** — an MCP server the repository declares for its
+runner (`.mcp.json`, the project's `opencode.json`, `.codex/config.toml`).
+A planner's runner never reads these itself (ADR-0028); Ordewell does, and
+starts one for a planner only once approved, by a person or a
+`mcp-server:<name>@<hash>` allowlist entry naming its exact definition. A
+person's approval is remembered per repository and definition, outside the
+repository. Tasks load them as their runner does.
+*Avoid:* "user MCP server" (the user's own servers load for every planner
+unasked), "trusted server" (no runner's trust setting decides it).
 
 **Web-read budget** — how many web reads one planner turn may make in a
 session, the planner's and its research subagents' together

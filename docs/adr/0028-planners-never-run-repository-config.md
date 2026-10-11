@@ -118,7 +118,9 @@ Code; the `mcp` entries of the project's `opencode.json`/`opencode.jsonc` or
   unremembered server is not started. The refusal is recorded like any other
   decision, so every surface shows it, and its detail names the allowlist
   entry that would start it. A Guarded session's approval is remembered and
-  also starts it in Full later. Under `allow`, it starts.
+  also starts it in Full later. Under `allow`, it starts. Either way the
+  planner is told which of the repository's servers it does not have, so
+  work that needs them goes into the plan's tasks.
 - **The allowlist names a definition, not a name.** `mcp-server:<name>@<hash>`
   in the planner allowlist starts that exact definition in every mode. A name
   alone would start whatever command the next repository puts under it. A
@@ -131,7 +133,8 @@ Code; the `mcp` entries of the project's `opencode.json`/`opencode.jsonc` or
   remembered approvals answer it without asking. A one-shot plan has no
   approval channel, so only remembered approvals start a server for it.
 - **A file Ordewell cannot read is a server it does not start.** A
-  definition it cannot parse is skipped, with the reason recorded.
+  definition it cannot parse is skipped, and the planner is told which file
+  and why.
 
 ### OpenCode planners
 
@@ -235,3 +238,19 @@ and its launch is byte for byte what it was.
 
 - 2026-10-11 — proposed after the live finding above; Claude Code 2.1.296,
   codex-cli 0.162.0, OpenCode 2.0.26 (and 1.18.35 by source).
+- 2026-10-11 — implemented and checked live through Ordewell's own planner
+  and task launches, on Claude Code 2.1.296, codex-cli 0.162.0 and OpenCode
+  2.0.26, in one throwaway repository holding a project hook and an
+  `apiKeyHelper` that each write a marker, an `HTTPS_PROXY` in the settings
+  `env` pointing at a recording proxy, a stdio server in `.mcp.json`,
+  `.codex/config.toml` and `opencode.json` that writes a marker, and an
+  OpenCode plugin that writes one; Codex ran with the repository trusted.
+  For every planner with the servers refused: no marker, the proxy unused,
+  and the planner quoted a secret word from the repository's `CLAUDE.md`
+  (Claude) or `AGENTS.md` (Codex, OpenCode), which it now has only as text.
+  With the server approved, each planner started exactly it. For every task:
+  the server started again; Claude's task ran both hooks and the
+  `apiKeyHelper` and went through the proxy (it then failed on the helper's
+  empty key, as that fixture meant it to); OpenCode's task loaded the plugin;
+  the Codex and OpenCode tasks answered. Codex's trust entry in its config
+  was unchanged after the planner's untrusted thread.
