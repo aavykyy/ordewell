@@ -9,7 +9,6 @@ import {
   splitModelId, turnLatch, usageRecord, type PermissionRequest,
 } from '../openCodeTransport';
 import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION } from '../openCodeOrdewell';
-import { decidePlannerPermission } from '../plannerPermissions';
 
 /**
  * The protocol work OpenCode 1.x and 2.x share, driven directly. The adapter
@@ -465,17 +464,8 @@ describe('openCodePlannerAsk', () => {
     expect(openCodePlannerAsk('todoist_add-tasks', {}, servers)).toEqual({ kind: 'mcp', scope: 'todoist_add-tasks', tool: 'add-tasks', server: 'todoist' });
   });
 
-  it('refuses code mode\'s `execute` without asking, and says to call the tool directly', async () => {
-    const approval = { request: vi.fn(async () => true) };
-    const decision = await decidePlannerPermission(openCodePlannerAsk('execute', { patterns: ['*'] }, servers), {}, { approval, workspaceRoot: '/repo' });
-
-    expect(approval.request).not.toHaveBeenCalled();
-    expect(decision).toEqual({ decision: 'deny', note: expect.stringContaining('code mode') });
-    expect(decision.decision === 'deny' ? decision.note : '').toMatch(/directly by its own name/);
-  });
-
   it('never takes a built-in, or a tool of a server it was not told about, for an MCP tool', () => {
-    for (const name of ['bash', 'edit', 'write', 'task', 'question', 'notebook_edit']) {
+    for (const name of ['bash', 'edit', 'write', 'task', 'question', 'execute', 'notebook_edit']) {
       expect(openCodePlannerAsk(name, {}, servers), name).toEqual({ kind: 'other' });
     }
   });

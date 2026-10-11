@@ -28,6 +28,10 @@ const SEARCH_OFF_RULES: SessionRule[] = Object.entries(OPENCODE_SEARCH_OFF)
  * A planner's session denies it outright.
  */
 const CODE_MODE_OFF_RULES: SessionRule[] = [{ action: 'execute', resource: '*', effect: 'deny' }];
+function codeModeOnly(version: string | undefined): string {
+  return `OpenCode${version ? ` ${version}` : ''} cannot run the planner safely: it can only offer Ordewell's tools inside code mode, which runs code the planner writes without asking. `
+    + 'The planner needs an OpenCode version that can list MCP tools outside code mode. Update OpenCode, or choose another planner runner.';
+}
 /** Why an approved project server's tools are missing, when this OpenCode cannot list them as tools of their own. */
 const UNUSABLE = 'not usable on this OpenCode version: its tools are only reachable through code mode\'s `execute`, which the planner may not use';
 /** A task asks its user in plain text for now, through its runner session. */
@@ -94,10 +98,10 @@ function searchProviderChosen(config: unknown): boolean {
   return false;
 }
 
-/** Whether a session's own rules turn its search off, as {@link SEARCH_OFF_RULES} do. */
-function rulesDenySearch(rules: unknown): boolean {
+/** Whether a session's own rules deny `action` outright, as {@link SEARCH_OFF_RULES} and {@link CODE_MODE_OFF_RULES} do. */
+function rulesDeny(rules: unknown, action: string): boolean {
   if (!Array.isArray(rules)) return false;
-  const last = [...rules].reverse().find((rule: unknown) => isRecord(rule) && rule.action === 'websearch' && (rule.resource === '*' || rule.resource === undefined));
+  const last = [...rules].reverse().find((rule: unknown) => isRecord(rule) && rule.action === action && (rule.resource === '*' || rule.resource === undefined));
   return isRecord(last) && last.effect === 'deny';
 }
 
@@ -120,6 +124,8 @@ interface V2Message {
 
 /** What the adapter that owns the server lends this module. */
 export interface OpenCodeV2Host {
+  /** What `/api/info` reports. */
+  version?: string;
   /** The user's MCP servers the server listed, for telling a planner's MCP tool request from a built-in's (ADR-0026). */
   mcpServers?(): readonly string[];
   request(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<Response>;
@@ -201,8 +207,6 @@ export class OpenCodeV2 {
   private exposed: string[] = [];
   /** Approved project servers whose tools this OpenCode would list only inside `execute`, which a planner may not use. */
   private unusable: ProjectMcpServer[] = [];
-  /** Whether Ordewell's own tools are reachable only through `execute`, so a planner cannot be denied it. */
-  private codeModeNeeded = false;
   private readonly permissions = new OpenCodePermissions(
     (id, sessionId, decision) => this.replyPermission(id, sessionId, decision),
     () => this.opts.mcp,
@@ -229,10 +233,13 @@ export class OpenCodeV2 {
     if (resume) {
       // A resume id names a session on disk, not on this process — so it is checked rather than trusted.
       const existing = await this.host.json<{ data?: { id?: string; permissions?: unknown } }>('GET', `/api/session/${resume}`).catch(() => null);
-      if (existing?.data?.id) {
+      // Its rules are the ones it was created with, which no route changes: a planner session from before
+      // `execute` was denied would keep running the planner's code unasked, so it is treated as stale.
+      const resumable = this.role === 'task' || rulesDeny(existing?.data?.permissions, 'execute');
+      if (existing?.data?.id && resumable) {
         this.sessionId = existing.data.id;
-        // Its rules are the ones it was created with, which no route changes; the instructions follow them.
-        if (this.role === 'planner') this.ownSearch = !rulesDenySearch(existing.data.permissions);
+        // The instructions follow its rules too.
+        if (this.role === 'planner') this.ownSearch = !rulesDeny(existing.data.permissions, 'websearch');
         // The session keeps the model and agent it last ran with, which the plan may have changed since.
         if (this.model) await this.host.request('POST', `/api/session/${this.sessionId}/model`, { model: this.model }).catch(() => undefined);
         await this.host.request('POST', `/api/session/${this.sessionId}/agent`, { agent: this.agent }).catch(() => undefined);
@@ -249,7 +256,7 @@ export class OpenCodeV2 {
     const created = await this.host.json<{ data?: { id?: string } }>('POST', '/api/session', {
       agent: this.agent,
       ...(this.model ? { model: this.model } : {}),
-      permissions: [...(this.role === 'planner' ? [...PLANNER_RULES, ...(this.ownSearch ? [] : SEARCH_OFF_RULES), ...(this.codeModeNeeded ? [] : CODE_MODE_OFF_RULES)] : TASK_RULES), ...this.ordewellRules()],
+      permissions: [...(this.role === 'planner' ? [...PLANNER_RULES, ...(this.ownSearch ? [] : SEARCH_OFF_RULES), ...CODE_MODE_OFF_RULES] : TASK_RULES), ...this.ordewellRules()],
     });
     if (!created?.data?.id) throw new Error(`The OpenCode ${this.role} server did not return a session id.`);
     this.sessionId = created.data.id;
@@ -265,12 +272,16 @@ export class OpenCodeV2 {
    * config it started with is in the 1.x shape both versions read, and that
    * shape drops the setting. Replaced before anything lists the servers, a
    * local one starts once; replaced later, OpenCode stops it and starts the
-   * new one. If the route is gone, Ordewell's tools are still reachable
-   * through `execute`, and a project server's are not reachable at all.
+   * new one. If the route is gone, Ordewell's tools are reachable only
+   * through `execute`: a task keeps that, but a planner would have to choose
+   * between an unchecked code runner and no way to submit a plan, so it is
+   * not started. A project server's tools are then not reachable at all.
    */
   private async exposeServers(): Promise<void> {
     const mcp = this.opts.mcp;
-    if (mcp) this.codeModeNeeded = !await this.expose(mcp.name, { type: 'remote', url: mcp.url, headers: mcp.headers });
+    if (mcp && !await this.expose(mcp.name, { type: 'remote', url: mcp.url, headers: mcp.headers }) && this.role === 'planner') {
+      throw new Error(codeModeOnly(this.host.version));
+    }
     const project = this.opts.kind === 'planner' ? this.opts.projectServers ?? [] : [];
     for (const server of project) {
       if (await this.expose(server.name, transportFields(server.definition))) this.exposed.push(server.name);

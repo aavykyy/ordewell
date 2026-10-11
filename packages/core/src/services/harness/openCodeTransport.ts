@@ -34,12 +34,6 @@ const OPENCODE_BUILTINS = new Set([
   'shell', 'subagent', 'browser', 'execute', 'search', 'opencode_read_mcp_resource', 'opencode_list_mcp_resources',
 ]);
 
-/**
- * 2.x's code mode: `execute` runs code the model writes, which can call any
- * MCP tool, so no single tool's approval could cover what it does.
- */
-const CODE_MODE_REFUSAL = 'Refused: code mode\'s `execute` runs code you write over every MCP tool at once, so Ordewell cannot approve each tool call it would make, and the planner may not use it. Call the MCP tool directly by its own name (`<server>_<tool>`); that call is asked about like any other.';
-
 /** What a planner's OpenCode permission request is for (ADR-0026). `servers` are the MCP servers `/mcp` lists. */
 export function openCodePlannerAsk(
   permission: string,
@@ -58,7 +52,6 @@ export function openCodePlannerAsk(
     const dir = typeof meta.parentDir === 'string' ? meta.parentDir : pattern?.replace(/[\\/]\*$/, '');
     return dir ? { kind: 'path', path: dir, directory: true } : { kind: 'other' };
   }
-  if (permission === 'execute') return { kind: 'other', note: CODE_MODE_REFUSAL };
   if (OPENCODE_BUILTINS.has(permission)) return { kind: 'other' };
   const server = servers.filter((s) => permission.startsWith(`${s}_`)).sort((a, b) => b.length - a.length)[0];
   if (!server) return { kind: 'other' };

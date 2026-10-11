@@ -273,11 +273,20 @@ and its launch is byte for byte what it was.
   Guarded, approved — the server started once and the planner's call went
   through the approval and returned; Full with no allowlist entry — not
   started, no marker.
-  Re-check on 2.0.26 found that `execute` was not refused at all: 2.x raises
-  no permission for it, so a planner's code ran unasked (code mode also makes
-  HTTP requests). A planner's session now carries an `execute: deny` rule,
-  which hides the tool from the model; checked live, direct calls to an
-  approved project tool and to Ordewell's tools still work. The rule is
-  skipped when Ordewell's own tools are only reachable through `execute`
-  (the runtime route is missing), and a resumed session keeps the rules it
-  was created with.
+- 2026-10-11 — OpenCode 2.x `execute` finding and fix. A re-check on 2.0.26
+  found `execute` running unasked: 2.x raises no permission for it, so the
+  refusal described above never fired, and a planner's model-written code,
+  which can call every tool and make HTTP requests, ran past the envelope.
+  Every 2.x planner session is now created with an `execute: deny` rule,
+  which also hides the tool from the model; the refusal note is gone. An
+  OpenCode 2.x without the runtime route can offer Ordewell's own tools only
+  through `execute`, so it is refused as a planner: the start fails with an
+  error naming the version and asking for an update or another planner
+  runner, and no session is created. Its approved project servers would stay
+  unusable, never reachable through `execute`. A session's rules are fixed
+  when it is created, so a planner session without the deny rule is not
+  resumed; a fresh one is started instead, as for a stale session. Task
+  sessions are unchanged. Checked live on 2.0.26 through Ordewell's planner:
+  the model listed its tools without `execute`, a direct call to an approved
+  project server's tool was asked about and returned, and `submit_plan`
+  committed the plan.
