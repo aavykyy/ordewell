@@ -29,6 +29,7 @@ interface SubTaskCardProps {
   onRetry?: (taskId: string) => void;
   onSkip?: (taskId: string) => void;
   onCancel?: (taskId: string) => void;
+  onCancelResume?: (taskId: string) => void;
   onForceStart?: (taskId: string) => void;
   onMarkComplete?: (taskId: string) => void;
   onMarkIncomplete?: (taskId: string) => void;
@@ -38,7 +39,7 @@ interface SubTaskCardProps {
 }
 
 const ACTION_LABELS: Record<TaskRowAction, string> = {
-  cancel: 'Cancel', skip: 'Skip', 'force-start': 'Force Start', complete: 'Mark Complete', uncomplete: 'Mark Not Done',
+  cancel: 'Cancel', 'cancel-resume': 'Cancel Resume', skip: 'Skip', 'force-start': 'Force Start', complete: 'Mark Complete', uncomplete: 'Mark Not Done',
 };
 
 const DEFAULT_MODES: RunnerMode[] = [
@@ -51,7 +52,7 @@ const RUNNER_ABBREV: Record<string, string> = {
   'opencode': 'OC',
 };
 
-export default function SubTaskCard({ task, parentTask, models, modes, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry: _onRetry, onSkip, onCancel, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog }: SubTaskCardProps) {
+export default function SubTaskCard({ task, parentTask, models, modes, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry: _onRetry, onSkip, onCancel, onCancelResume, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog }: SubTaskCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
 
@@ -94,6 +95,21 @@ export default function SubTaskCard({ task, parentTask, models, modes, runners, 
 
         {(isExecuting || row.status === 'failed' || row.status === 'awaiting') && (
           <span className={`task-status-badge ${status.cls}`}>{status.label}</span>
+        )}
+
+        {row.resumes && (
+          <>
+            <span className="task-isolation-badge gate" title="Its runner hit its usage limit. The task resumes on its own once the limit resets.">
+              {row.resumes}
+            </span>
+            {onCancelResume && (
+              <button type="button" className="task-log-open-btn"
+                onClick={(e) => { e.stopPropagation(); onCancelResume(task.id); }}
+                title="Do not resume it on its own: retry it by hand once the limit resets">
+                Cancel resume
+              </button>
+            )}
+          </>
         )}
 
         {!isExecuting && task.assignedModel && (
@@ -217,7 +233,7 @@ export default function SubTaskCard({ task, parentTask, models, modes, runners, 
           {isExecuting && (
             <TaskActions taskId={task.id} actions={row.actions}
               labels={row.status === 'awaiting' ? { ...ACTION_LABELS, complete: 'Verify / Mark Complete' } : ACTION_LABELS}
-              handlers={{ cancel: onCancel, skip: onSkip, 'force-start': onForceStart, complete: onMarkComplete, uncomplete: onMarkIncomplete }} />
+              handlers={{ cancel: onCancel, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart, complete: onMarkComplete, uncomplete: onMarkIncomplete }} />
           )}
         </div>
       )}

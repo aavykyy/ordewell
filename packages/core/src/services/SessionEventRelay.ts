@@ -31,9 +31,10 @@ export interface SessionEventRelayDeps {
 /**
  * Every orchestrator event the relay announces. `onTaskSettled` is persistence
  * only and `onQueueReady` is the Session's cue to drain its queue, so both are
- * the Session's alone.
+ * the Session's alone. A wait on a usage limit reaches surfaces as the task's
+ * status; `onUsageLimitWait` itself is for a supervisor to wake on.
  */
-export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onQueueReady'>>;
+export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onQueueReady' | 'onUsageLimitWait'>>;
 
 /** One subagent's activity seen during a turn: its log entry plus the steps it ran. */
 interface SubagentRun {

@@ -67,6 +67,8 @@ interface TaskCardProps {
   onRetry?: (taskId: string) => void;
   onSkip?: (taskId: string) => void;
   onCancel?: (taskId: string) => void;
+  /** Keep a task paused on a usage limit from resuming on its own (#84). */
+  onCancelResume?: (taskId: string) => void;
   onForceStart?: (taskId: string) => void;
   onMarkComplete?: (taskId: string) => void;
   onMarkIncomplete?: (taskId: string) => void;
@@ -133,11 +135,11 @@ export function TaskCheck({ row, taskId, onMarkComplete, onMarkIncomplete }: { r
 }
 
 const ACTION_CLASS: Record<TaskRowAction, string> = {
-  cancel: 'cancel', skip: 'skip', 'force-start': 'start', complete: 'start', uncomplete: 'skip',
+  cancel: 'cancel', 'cancel-resume': 'cancel', skip: 'skip', 'force-start': 'start', complete: 'start', uncomplete: 'skip',
 };
 
 const ACTION_LABELS: Record<TaskRowAction, string> = {
-  cancel: 'Cancel', skip: 'Skip', 'force-start': 'Start', complete: 'Mark Complete', uncomplete: 'Mark Not Done',
+  cancel: 'Cancel', 'cancel-resume': 'Cancel Resume', skip: 'Skip', 'force-start': 'Start', complete: 'Mark Complete', uncomplete: 'Mark Not Done',
 };
 
 /** The buttons a running plan offers on a card, in the order core lays them out. */
@@ -183,7 +185,7 @@ export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRu
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, models, modes, modelsByRunner, modesByRunner, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, output, idleSince, awaitingApproval = 0, isolation, onResolveConflict, taskOrderMap, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, mergeGate, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
+export default function TaskCard({ task, models, modes, modelsByRunner, modesByRunner, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, output, idleSince, awaitingApproval = 0, isolation, onResolveConflict, taskOrderMap, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, mergeGate, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const isControlled = expandedProp !== undefined;
   const expanded = isControlled ? expandedProp : internalExpanded;
@@ -252,6 +254,23 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
         <span className="task-title-text">{task.title}</span>
 
         {/* As plain as a task that waits on the user (ADR-0020). */}
+        {/* Shown whether or not the plan reads as executing: the pause holds the
+            run, so a held run's card would otherwise hide its only cancel (#84). */}
+        {row.resumes && (
+          <>
+            <span className="task-isolation-badge gate" title="Its runner hit its usage limit. The task resumes on its own once the limit resets.">
+              {row.resumes}
+            </span>
+            {onCancelResume && (
+              <button type="button" className="task-log-open-btn"
+                onClick={(e) => { e.stopPropagation(); onCancelResume(task.id); }}
+                title="Do not resume it on its own: retry it by hand once the limit resets">
+                Cancel resume
+              </button>
+            )}
+          </>
+        )}
+
         {row.mergeGate && (
           <span className="task-isolation-badge gate"
             title={`The work of ${row.mergeGate.join(', ')} is not merged into your branch yet. Merge all lets this task go on.`}>
@@ -592,7 +611,7 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
                     onModelChange={onModelChange} onModelsRefreshNeeded={onModelsRefreshNeeded} onModeChange={onModeChange}
                     taskSkills={taskSkills} onSkillsChange={onSkillsChange}
                     onRemoveTask={onRemoveTask} onPromptChange={onPromptChange}
-                    onRetry={onRetry} onSkip={onSkip} onCancel={onCancel}
+                    onRetry={onRetry} onSkip={onSkip} onCancel={onCancel} onCancelResume={onCancelResume}
                     onForceStart={onForceStart} onMarkComplete={onMarkComplete}
                     onMarkIncomplete={onMarkIncomplete}
                     onRunTask={onRunTask} onOpenLog={onOpenLog} />
@@ -603,7 +622,7 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
 
           {isExecuting && (
             <TaskActions taskId={task.id} actions={row.actions} labels={ACTION_LABELS}
-              handlers={{ cancel: onCancel, skip: onSkip, 'force-start': onForceStart, complete: onMarkComplete, uncomplete: onMarkIncomplete }} />
+              handlers={{ cancel: onCancel, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart, complete: onMarkComplete, uncomplete: onMarkIncomplete }} />
           )}
         </div>
       )}

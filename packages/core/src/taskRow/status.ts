@@ -31,6 +31,7 @@ const AWAITING_LABELS: Record<AwaitingReason, string> = {
   checkpoint: 'Checkpoint',
   conflict: 'Merge conflict',
   'files-changed': 'Changed tracked files',
+  'usage-limit': 'Paused on a usage limit',
 };
 
 /** What an awaiting_user task waits on (ADR-0018, W1); null when no reason was saved. */
@@ -42,4 +43,23 @@ export function awaitingLabel(task: { status: string; awaitingReason?: AwaitingR
 export function approvalLabel(count: number | undefined): string | null {
   if (!count) return null;
   return count > 1 ? `Waiting for approval (${count})` : 'Waiting for approval';
+}
+
+/**
+ * When a paused task resumes, as a reader's clock shows it: "8:10pm", or
+ * "Oct 14, 8:10pm" when it is not today. Read in the local time zone of
+ * whoever formats it.
+ */
+export function resumeTime(at: Date, now: Date = new Date()): string {
+  const clock = at.toLocaleTimeString('en-US', { hour: 'numeric', minute: at.getMinutes() === 0 ? undefined : '2-digit', hour12: true })
+    .replace(/[ \u202f]([AP]M)$/i, (_m, meridiem: string) => meridiem.toLowerCase());
+  if (at.toDateString() === now.toDateString()) return clock;
+  return `${at.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${clock}`;
+}
+
+/** "Resumes at 8:10pm" for a task paused on a usage limit that resumes on its own; null for any other. */
+export function resumeLabel(task: { status: string; awaitingReason?: AwaitingReason; resumeAt?: string | null }, now: Date = new Date()): string | null {
+  if (task.status !== 'awaiting_user' || task.awaitingReason !== 'usage-limit' || !task.resumeAt) return null;
+  const at = new Date(task.resumeAt);
+  return Number.isNaN(at.getTime()) ? null : `Resumes at ${resumeTime(at, now)}`;
 }

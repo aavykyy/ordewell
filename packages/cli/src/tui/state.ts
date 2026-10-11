@@ -26,6 +26,8 @@ export interface TaskView {
   isolation?: TaskIsolationView;
   /** What an `awaiting_user` task waits on, when the daemon saved why. */
   awaitingReason?: AwaitingReason;
+  /** When a task paused on a usage limit resumes on its own (ISO time); absent when it waits for a manual retry. */
+  resumeAt?: string;
   /** The whole question of the checkpoint the task waits at, while it does. */
   checkpoint?: string;
   /** A finished structured task the daemon can continue in its saved session (ADR-0018, K1). */

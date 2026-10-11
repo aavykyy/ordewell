@@ -342,6 +342,7 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
           idleSince: task.idleSince ?? null,
           isolation: task.isolation,
           awaitingReason: isAwaitingReason(task.awaitingReason) ? task.awaitingReason : undefined,
+          ...(typeof task.resumeAt === 'string' ? { resumeAt: task.resumeAt } : {}),
           ...(typeof task.checkpoint === 'string' && task.checkpoint ? { checkpoint: sanitize(task.checkpoint) } : {}),
           ...(task.continuable ? { continuable: true } : {}),
           awaitingApproval: typeof task.awaitingApproval === 'number' && task.awaitingApproval > 0 ? task.awaitingApproval : undefined,

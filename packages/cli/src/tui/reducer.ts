@@ -149,7 +149,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     case 'taskStatus': {
       if (stale(state, action.sessionId) || !state.tasks.some((t) => t.id === action.taskId)) return step(state);
       // This event names no reason, so one kept from an earlier wait would be stale.
-      const tasks = state.tasks.map((t) => (t.id === action.taskId ? { ...t, status: action.status, awaitingReason: undefined, checkpoint: undefined } : t));
+      const tasks = state.tasks.map((t) => (t.id === action.taskId ? { ...t, status: action.status, awaitingReason: undefined, resumeAt: undefined, checkpoint: undefined } : t));
       // The indicator follows the tasks, not the stream: once none is running
       // the run is over, whatever the daemon's scheduler still holds armed.
       const status = runStatus(state, tasks);
@@ -166,6 +166,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         const idleSince = update.idleSince ?? null;
         const isolation = update.isolation ?? t.isolation;
         const awaitingReason = update.awaitingReason;
+        const resumeAt = update.resumeAt;
         const checkpoint = update.checkpoint;
         const continuable = update.continuable === true;
         const awaitingApproval = update.awaitingApproval;
@@ -173,12 +174,12 @@ function reduceAction(state: TuiState, action: Action): Step {
         const forcedPastGate = update.forcedPastGate;
         if (
           update.status !== t.status || idleSince !== (t.idleSince ?? null) || !sameIsolation(isolation, t.isolation)
-          || awaitingReason !== t.awaitingReason || checkpoint !== t.checkpoint
+          || awaitingReason !== t.awaitingReason || resumeAt !== t.resumeAt || checkpoint !== t.checkpoint
           || continuable !== (t.continuable ?? false) || awaitingApproval !== t.awaitingApproval
           || !sameList(mergeGate, t.mergeGate) || !sameList(forcedPastGate, t.forcedPastGate)
         ) {
           changed = true;
-          return { ...t, status: update.status, idleSince, isolation, awaitingReason, checkpoint, continuable, awaitingApproval, mergeGate, forcedPastGate };
+          return { ...t, status: update.status, idleSince, isolation, awaitingReason, resumeAt, checkpoint, continuable, awaitingApproval, mergeGate, forcedPastGate };
         }
         return t;
       });

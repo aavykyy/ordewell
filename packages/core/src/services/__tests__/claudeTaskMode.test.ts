@@ -8,6 +8,7 @@ import { supportsTaskMode, createTaskAdapter } from '../harness/connectors';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
 import { mcpClientConfig } from '../mcp';
+import { classifyRunnerStop, readUsageLimitReset } from '../runnerExit';
 import { modeIds, fakeSpawn, fixture, claudeSteerRecording, type ScriptedReply } from './harnessTestKit';
 
 /**
@@ -275,6 +276,26 @@ describe('ClaudeCodeAdapter in task mode', () => {
       type: 'error',
       message: 'Claude Code started in "default" mode, not the "auto" mode the plan asked for. It does not report why; the model or the account may not offer it.',
     }]);
+    adapter.dispose();
+  });
+
+  it('reports a usage limit as the turn\'s error, in words the reset time is read from (#84)', async () => {
+    // Not recorded: the result line #79 describes, its text built from the
+    // template in `claude` 2.1.296 ("You've hit your <limit> · resets <time> (<zone>)").
+    const limit = "You've hit your session limit · resets 8:10pm (Europe/Rome)";
+    const { processDeps } = deps([
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-1', cwd: '/repo', permissionMode: 'acceptEdits' }) + '\n'
+        + JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: limit, session_id: 'sess-1' }) + '\n',
+    ]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskStart());
+    const events: AgentEvent[] = [];
+    await adapter.send('go', (e) => events.push(e));
+
+    const error = events.find((e): e is Extract<AgentEvent, { type: 'error' }> => e.type === 'error');
+    expect(error?.message).toBe(limit);
+    expect(classifyRunnerStop(error!.message)).toBe('usage-limit');
+    expect(readUsageLimitReset('claude-code', error!.message, new Date('2026-10-11T17:00:00Z'))?.toISOString()).toBe('2026-10-11T18:10:00.000Z');
     adapter.dispose();
   });
 

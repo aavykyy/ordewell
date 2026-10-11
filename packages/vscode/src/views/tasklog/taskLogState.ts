@@ -24,6 +24,7 @@ export function taskLogState(
     case 'checkpoint': return { kind: 'checkpoint', label: 'Waiting at a checkpoint' };
     case 'input': return { kind: 'waiting', label: 'Waiting for your input' };
     case 'conflict': return { kind: 'waiting', label: 'Waiting on a merge conflict' };
+    case 'usage-limit': return { kind: 'waiting', label: 'Paused on a usage limit' };
   }
   if (status.planStatus === 'completed') return { kind: 'done', label: 'Done' };
   if (status.planStatus === 'failed') return { kind: 'failed', label: 'Failed' };
