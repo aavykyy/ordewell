@@ -85,10 +85,10 @@ export interface HandoffView {
 }
 
 /**
- * A run with tasks at a merge gate (ADR-0020): what Merge all would merge
- * now, and whether the run waits on it with nothing else running.
+ * Landed work not yet in the user's branch, including a possible merge gate.
  */
-export interface GateView {
+export interface RunMergeView {
+  waitingAtGate: boolean;
   paused: boolean;
   handoff: HandoffView;
 }
@@ -398,8 +398,8 @@ export interface TuiState {
   workspace: string;
   /** The isolated run awaiting a decision, if any. Cleared once it is discarded. */
   handoff: HandoffView | null;
-  /** A run whose tasks wait at a merge gate, so Merge all is offered mid-run; null otherwise. */
-  gate: GateView | null;
+  /** Null once everything landed is merged into the user's branch. */
+  runMerge: RunMergeView | null;
   overlay: Overlay | null;
   /**
    * Approval prompts not yet shown. The planner blocks on each one, so they are
@@ -564,7 +564,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     selection: null,
     workspace: process.cwd(),
     handoff: null,
-    gate: null,
+    runMerge: null,
     overlay: null,
     pendingApprovals: [],
     queuedPrompts: EMPTY_HOLD,

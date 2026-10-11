@@ -481,12 +481,15 @@ export interface PlanLayout {
   maxScroll: number;
 }
 
-/** `lines[1]` is the spacer under the header, so the first task starts here. */
 const FIRST_ROW_LINE = 2;
 
 export function planLayout(state: TuiState, rows: number, cols: number): PlanLayout {
   const done = state.tasks.filter((t) => t.status === 'completed').length;
-  const lines = [style.bold(`Plan ${done}/${state.tasks.length}`), ''];
+  const unmerged = state.runMerge?.handoff.landed.length ?? 0;
+  const lines = [
+    style.bold(`Plan ${done}/${state.tasks.length}`),
+    unmerged > 0 ? style.dim(truncate(`${unmerged} landed task${unmerged === 1 ? '' : 's'} not merged — /handoff merge`, cols)) : '',
+  ];
 
   const rowSpans: LineSpan[] = [];
   const orderOf = new Map(state.tasks.map((task) => [task.id, task.order]));

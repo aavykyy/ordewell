@@ -937,11 +937,17 @@ stopping at the first failure. A group of one needs none either, since its one
 merge lands or is aborted whole, so it answers `merged`, `conflict` or `failed`
 as it always has. `merged` on a settled run clears it up like a discard, except
 that each integration branch goes only where HEAD contains it, and the plan
-forgets it; any other answer deletes nothing. During a run, Merge all is what
-opens a *merge gate*: it merges what has landed so far and the run goes on, its
+forgets it; any other answer deletes nothing. During a run, Merge all is available
+whenever landed work is not in the user's branch yet, including to open a
+*merge gate*: it merges what has landed so far and the run goes on, its
 branches kept for the tasks still to land (ADR-0020). It never runs while an
 *ops task* does (`mergeExcludes`, read by both sides), and takes turns with
 landings.
+`RunMergeView` carries those unmerged landings to surfaces, which show their task
+count. Its `waitingAtGate` says whether a task waits on that work; `paused`
+means the running plan waits at a gate with no attempts active. The view is
+absent once everything landed is merged. VS Code offers the action quietly
+without a gate and keeps its mid-run card for a gate wait.
 *Avoid:* per-repo merge — there is none, by design (ADR-0014).
 
 **Change task** — a task whose result is a change to repository files: it runs

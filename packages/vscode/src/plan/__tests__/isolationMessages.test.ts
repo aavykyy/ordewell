@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { handleSessionMessage } from '../PlanManager';
 import type { PlanManagerDeps } from '../PlanManager';
 import { replayIsolation } from '../isolation';
-import type { IsolationView, LegacyPlanState, MergeGateView, TaskIsolation } from '@ordewell/core';
+import type { IsolationView, LegacyPlanState, RunMergeView, TaskIsolation } from '@ordewell/core';
 
 function deps() {
   const chatProvider = {
@@ -13,7 +13,7 @@ function deps() {
     showIsolationHandoff: vi.fn(),
     showIsolationMergeResult: vi.fn(),
     clearIsolationHandoff: vi.fn(),
-    showMergeGate: vi.fn(),
+    showRunMerge: vi.fn(),
     showPlan: vi.fn(),
   };
   const plan = { status: 'draft', tasks: [] };
@@ -93,15 +93,15 @@ describe('worktree isolation messages (ADR-0013)', () => {
   // would otherwise offer a merge of branches that no longer exist.
   it('tells the webview which tasks wait at a merge gate, and what Merge all would merge (ADR-0020)', () => {
     const { d, chatProvider } = deps();
-    const gate = { paused: true, repos: [], landed: [{ taskId: 't1', order: 1, title: 'A' }] };
+    const runMerge = { waitingAtGate: true, paused: true, repos: [], landed: [{ taskId: 't1', order: 1, title: 'A' }] };
 
     handleSessionMessage({
       type: 'status_update',
       tasks: [{ id: 't1', status: 'completed', verdict: null }, { id: 'o2', status: 'pending', verdict: null, mergeGate: ['t1'] }],
-      gate,
+      runMerge,
     }, d);
 
-    expect(chatProvider.showMergeGate).toHaveBeenCalledWith(gate, { o2: ['t1'] });
+    expect(chatProvider.showRunMerge).toHaveBeenCalledWith(runMerge, { o2: ['t1'] });
   });
 
   it('keeps the marks after a Merge all mid-run, whose run goes on', () => {
@@ -134,13 +134,13 @@ describe('replaying isolation to a webview that was not listening', () => {
     },
   };
 
-  function replay(opts: { view: IsolationView | null; executing: boolean; gate?: MergeGateView | null; gates?: Record<string, string[]> }) {
-    const chatProvider = { sendTaskIsolation: vi.fn(), showIsolationHandoff: vi.fn(), showMergeGate: vi.fn() };
+  function replay(opts: { view: IsolationView | null; executing: boolean; runMerge?: RunMergeView | null; gates?: Record<string, string[]> }) {
+    const chatProvider = { sendTaskIsolation: vi.fn(), showIsolationHandoff: vi.fn(), showRunMerge: vi.fn() };
     const planState = { tasks: [{ id: 't1', subtasks: [] }, { id: 'o2', subtasks: [] }] } as unknown as LegacyPlanState;
     replayIsolation({
       isolationView: () => opts.view,
       isExecuting: opts.executing,
-      mergeGateView: () => opts.gate ?? null,
+      runMergeView: () => opts.runMerge ?? null,
       mergeGate: (taskId: string) => opts.gates?.[taskId] ?? [],
       planState,
     }, chatProvider);
@@ -148,10 +148,18 @@ describe('replaying isolation to a webview that was not listening', () => {
   }
 
   it('re-tells a run paused at a merge gate (ADR-0020)', () => {
-    const gate: MergeGateView = { paused: true, repos: view.handoff.repos, landed: view.handoff.landed };
-    const chatProvider = replay({ view, executing: true, gate, gates: { o2: ['t1'] } });
+    const runMerge: RunMergeView = { waitingAtGate: true, paused: true, repos: view.handoff.repos, landed: view.handoff.landed };
+    const chatProvider = replay({ view, executing: true, runMerge, gates: { o2: ['t1'] } });
 
-    expect(chatProvider.showMergeGate).toHaveBeenCalledWith(gate, { o2: ['t1'] });
+    expect(chatProvider.showRunMerge).toHaveBeenCalledWith(runMerge, { o2: ['t1'] });
+  });
+
+  it('replays mergeable landings while the run has no gate', () => {
+    const runMerge: RunMergeView = { waitingAtGate: false, paused: false, ...view.handoff };
+    const chatProvider = replay({ view, executing: true, runMerge });
+
+    expect(chatProvider.showRunMerge).toHaveBeenCalledWith(runMerge, {});
+    expect(chatProvider.showIsolationHandoff).not.toHaveBeenCalled();
   });
 
   it('re-sends every task mark and the handoff card of a settled run', () => {
