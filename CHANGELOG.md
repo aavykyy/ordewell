@@ -6,6 +6,78 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
+## [0.9.1] — 2026-10-11
+
+### Security
+
+- **Planners no longer run a repository's config.** Before anyone has
+  approved anything, a planner could start what the repository it researches
+  named: Claude Code's project hooks, `env` block and helper commands, an
+  OpenCode plugin, or a project MCP server on any runner. Now a Claude Code
+  planner reads only your user settings, with hooks off; an OpenCode planner
+  loads no project config and no language servers; and a Codex planner treats
+  the repository as untrusted. The project's instruction files (`CLAUDE.md`,
+  `AGENTS.md`) still reach the planner, as text
+  ([ADR-0028](docs/adr/0028-planners-never-run-repository-config.md)).
+- **Project MCP servers start only once you approve them.** A server a
+  repository declares (`.mcp.json`, `opencode.json`, `.codex/config.toml`)
+  is shown to you with exactly what would run, and your approval is
+  remembered for that repository and that definition; a changed definition
+  asks again. In Full nobody is asked, so it does not start unless the
+  allowlist names it (`mcp-server:<name>@<hash>`); `!mcp-server:*` starts
+  none. The planner is told which servers it does not have.
+- **Web reads have guards that hold without a person.** The private-address
+  guard now parses addresses (IPv4-mapped IPv6, shared and unique-local
+  ranges, every DNS answer) and connects only to an address it checked.
+  Redirects are followed one hop at a time, and a hop to another site is
+  decided again. A name is looked up only after the exclusions, the budget
+  and your approval pass. Only GET and HEAD are sent, with no credentials,
+  and a URL or query that looks like it carries a secret is refused.
+- **`curl` and `wget` in the planner's shell are approved per site.**
+  Approving one site approves no other. Flags that write files are refused,
+  flags that send data or credentials ask every time, startup files such as
+  `.curlrc` are not read, and `curl` connects only to the address the guard
+  checked. A `curl` or `wget` named by its path is refused, so a script the
+  repository ships cannot reuse an approval, and both stay refused in Full
+  and allowlist mode. A
+  refused read points the planner to its own fetch tool; a refused effect
+  points it to an ops task in the plan.
+- **OpenCode 2.x planners cannot use code mode's `execute`.** Where OpenCode
+  cannot list Ordewell's tools outside code mode, the planner fails to start
+  with an error naming the version instead.
+
+### Added
+
+- **Web search and fetch for every planner.** Claude Code, Codex, OpenCode and
+  API planners can read documentation and search the web, decided by one
+  policy. Guarded asks once per site for a fetch and once per session for a
+  search; Full under `auto` reads without asking; `allowlist` mode reads only
+  what the allowlist names. Each runner uses its own provider's search where
+  it can, and Ordewell's `fetch` and `web_search` otherwise. Research
+  subagents get web reads too, and never prompt.
+- **Ways to turn web reads down or off.** `!` exclusions win in every mode:
+  `!web_search:*` turns every search off, and with `!https://*` and
+  `!http://*` every web read. `ordewell.plannerWebReadBudget` /
+  `ORDEWELL_WEB_READ_BUDGET` caps the reads in one planner turn, and 0 turns
+  them off, Codex's own search included. Every web-read decision appears in
+  the research timeline.
+
+### Changed
+
+- **The Stalled badge waits 5 minutes.** A task was marked Stalled after a
+  minute without output, which long model turns and slow builds routinely
+  reach.
+
+### Fixed
+
+- **DuckDuckGo search works.** Ordewell's own web search reads DuckDuckGo's
+  real results page, recognises its bot challenge, and pauses for a short
+  while when challenged instead of returning nothing.
+- The VS Code model panel names the planner's actual provider instead of
+  labelling every planner "via OpenRouter".
+- A task card's skill picker reads "Add skill…" instead of "+ skill".
+- The VS Code extension's host tests pass again.
+
 ## [0.9.0] — 2026-10-10
 
 ### Security

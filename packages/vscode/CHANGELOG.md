@@ -1,5 +1,42 @@
 # Change Log
 
+## [0.9.1] — 2026-10-11
+
+### Security
+
+- **Planners no longer run a repository's config**: no project hooks, `env`,
+  helper commands, plugins or language servers. The project's `CLAUDE.md` and
+  `AGENTS.md` still reach the planner, as text.
+- **Project MCP servers start only once you approve them**, remembered per
+  repository and definition. In Full they start only if the planner allowlist
+  names them.
+- **Web reads are guarded without a person**: private addresses are refused,
+  redirects to another site are decided again, nothing is attached, and a URL
+  or query that looks like it carries a secret is refused.
+- **`curl` and `wget` in the planner's shell are approved per site**, never
+  write files, and stay refused in Full. A refused effect points the planner
+  to an ops task.
+
+### Added
+
+- **Web search and fetch for every planner.** Guarded asks once per site for a
+  fetch and once per session for a search; Full under `auto` reads without
+  asking.
+- **`ordewell.plannerWebReadBudget`** caps the web reads in one planner turn;
+  0 turns them off. `!web_search:*`, `!https://*` and `!http://*` in
+  `ordewell.plannerAllowlist` turn them off too.
+
+### Changed
+
+- The Stalled badge appears after 5 minutes without output, not one.
+
+### Fixed
+
+- Ordewell's own web search works with DuckDuckGo's real results page.
+- The model panel names the planner's actual provider instead of "via
+  OpenRouter".
+- The skill picker reads "Add skill…".
+
 ## [0.9.0] — 2026-10-10
 
 ### Security
