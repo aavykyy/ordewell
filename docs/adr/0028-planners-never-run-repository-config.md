@@ -273,3 +273,11 @@ and its launch is byte for byte what it was.
   Guarded, approved — the server started once and the planner's call went
   through the approval and returned; Full with no allowlist entry — not
   started, no marker.
+  Re-check on 2.0.26 found that `execute` was not refused at all: 2.x raises
+  no permission for it, so a planner's code ran unasked (code mode also makes
+  HTTP requests). A planner's session now carries an `execute: deny` rule,
+  which hides the tool from the model; checked live, direct calls to an
+  approved project tool and to Ordewell's tools still work. The rule is
+  skipped when Ordewell's own tools are only reachable through `execute`
+  (the runtime route is missing), and a resumed session keeps the rules it
+  was created with.

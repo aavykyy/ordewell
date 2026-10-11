@@ -22,6 +22,12 @@ const PLANNER_RULES: SessionRule[] = Object.entries(OPENCODE_PLANNER_PERMISSION)
   .map(([action, effect]) => ({ action, resource: '*', effect }));
 const SEARCH_OFF_RULES: SessionRule[] = Object.entries(OPENCODE_SEARCH_OFF)
   .map(([action, effect]) => ({ action, resource: '*', effect }));
+/**
+ * 2.x raises no permission for `execute` itself, so no approval or refusal
+ * reaches it: it runs model-written code over every tool and HTTP at once.
+ * A planner's session denies it outright.
+ */
+const CODE_MODE_OFF_RULES: SessionRule[] = [{ action: 'execute', resource: '*', effect: 'deny' }];
 /** Why an approved project server's tools are missing, when this OpenCode cannot list them as tools of their own. */
 const UNUSABLE = 'not usable on this OpenCode version: its tools are only reachable through code mode\'s `execute`, which the planner may not use';
 /** A task asks its user in plain text for now, through its runner session. */
@@ -195,6 +201,8 @@ export class OpenCodeV2 {
   private exposed: string[] = [];
   /** Approved project servers whose tools this OpenCode would list only inside `execute`, which a planner may not use. */
   private unusable: ProjectMcpServer[] = [];
+  /** Whether Ordewell's own tools are reachable only through `execute`, so a planner cannot be denied it. */
+  private codeModeNeeded = false;
   private readonly permissions = new OpenCodePermissions(
     (id, sessionId, decision) => this.replyPermission(id, sessionId, decision),
     () => this.opts.mcp,
@@ -241,7 +249,7 @@ export class OpenCodeV2 {
     const created = await this.host.json<{ data?: { id?: string } }>('POST', '/api/session', {
       agent: this.agent,
       ...(this.model ? { model: this.model } : {}),
-      permissions: [...(this.role === 'planner' ? [...PLANNER_RULES, ...(this.ownSearch ? [] : SEARCH_OFF_RULES)] : TASK_RULES), ...this.ordewellRules()],
+      permissions: [...(this.role === 'planner' ? [...PLANNER_RULES, ...(this.ownSearch ? [] : SEARCH_OFF_RULES), ...(this.codeModeNeeded ? [] : CODE_MODE_OFF_RULES)] : TASK_RULES), ...this.ordewellRules()],
     });
     if (!created?.data?.id) throw new Error(`The OpenCode ${this.role} server did not return a session id.`);
     this.sessionId = created.data.id;
@@ -262,7 +270,7 @@ export class OpenCodeV2 {
    */
   private async exposeServers(): Promise<void> {
     const mcp = this.opts.mcp;
-    if (mcp) await this.expose(mcp.name, { type: 'remote', url: mcp.url, headers: mcp.headers });
+    if (mcp) this.codeModeNeeded = !await this.expose(mcp.name, { type: 'remote', url: mcp.url, headers: mcp.headers });
     const project = this.opts.kind === 'planner' ? this.opts.projectServers ?? [] : [];
     for (const server of project) {
       if (await this.expose(server.name, transportFields(server.definition))) this.exposed.push(server.name);

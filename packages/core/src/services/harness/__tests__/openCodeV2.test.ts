@@ -161,7 +161,7 @@ describe('OpenCode 2.x — start', () => {
     expect(created?.body).toEqual({
       agent: 'plan',
       model: { providerID: 'opencode-go', id: 'deepseek-v4.1-flash', variant: 'high' },
-      permissions: Object.entries(OPENCODE_PLANNER_PERMISSION).map(([action, effect]) => ({ action, resource: '*', effect })),
+      permissions: [...Object.entries(OPENCODE_PLANNER_PERMISSION).map(([action, effect]) => ({ action, resource: '*', effect })), ...codeModeOff],
     });
     const prompt = server.requests.find((r) => r.method === 'PUT');
     expect(prompt?.path).toBe(`/api/experimental/session/${SES}/instructions/entries/ordewell-planner`);
@@ -204,6 +204,7 @@ describe('OpenCode 2.x — start', () => {
   });
 });
 
+const codeModeOff = [{ action: 'execute', resource: '*', effect: 'deny' }];
 const rules = (policy: Record<string, string>) => Object.entries(policy).map(([action, effect]) => ({ action, resource: '*', effect }));
 const document = (info: Record<string, unknown>) => ({ type: 'document', path: '/home/u/.config/opencode/opencode.jsonc', info });
 
@@ -224,7 +225,7 @@ describe('OpenCode 2.x — a planner\'s own search (ADR-0027)', () => {
   it('keeps websearch, asked through the policy, where OpenCode\'s config names a provider', async () => {
     const { permissions, system } = await planner([{ type: 'directory', path: '/x' }, document({ websearch: { provider: 'exa' } })]);
 
-    expect(permissions).toEqual([...rules(OPENCODE_PLANNER_PERMISSION), ...ordewellAllow]);
+    expect(permissions).toEqual([...rules(OPENCODE_PLANNER_PERMISSION), ...codeModeOff, ...ordewellAllow]);
     expect(system).toBe(`PLAN\n\n${OPENCODE_ORDEWELL.plannerInstructions(true)}`);
   });
 
@@ -236,7 +237,7 @@ describe('OpenCode 2.x — a planner\'s own search (ADR-0027)', () => {
   ])('denies websearch and codesearch, and points at Ordewell\'s web_search, where %s', async (_label, config) => {
     const { permissions, system } = await planner(config);
 
-    expect(permissions).toEqual([...rules(OPENCODE_PLANNER_PERMISSION), ...rules(OPENCODE_SEARCH_OFF), ...ordewellAllow]);
+    expect(permissions).toEqual([...rules(OPENCODE_PLANNER_PERMISSION), ...rules(OPENCODE_SEARCH_OFF), ...codeModeOff, ...ordewellAllow]);
     expect(system).toBe(`PLAN\n\n${OPENCODE_ORDEWELL.plannerInstructions(false)}`);
   });
 
@@ -518,6 +519,18 @@ describe('OpenCode 2.x — MCP servers', () => {
     expect(replaced?.body).toEqual({ config: { type: 'remote', url: 'http://127.0.0.1:1/mcp', headers: { authorization: 'Bearer t' }, codemode: false } });
     expect(server.requests.indexOf(replaced!)).toBeLessThan(server.requests.findIndex((r) => r.path === '/api/session'));
     adapter.dispose();
+  });
+
+  it('denies a planner `execute`, which 2.x never asks about, unless Ordewell\'s tools are only reachable through it', async () => {
+    const sessionRules = (server: ReturnType<typeof fakeServer>) =>
+      (server.requests.find((r) => r.method === 'POST' && r.path === '/api/session')?.body as { permissions: unknown[] }).permissions;
+    const listed = fakeServer();
+    (await start(listed, plannerStart({ mcp: ORDEWELL }))).adapter.dispose();
+    expect(sessionRules(listed)).toContainEqual({ action: 'execute', resource: '*', effect: 'deny' });
+
+    const routeGone = fakeServer({ 'PUT /api/experimental/mcp/ordewell': () => ({ status: 404 }) });
+    (await start(routeGone, plannerStart({ mcp: ORDEWELL }))).adapter.dispose();
+    expect(sessionRules(routeGone)).not.toContainEqual({ action: 'execute', resource: '*', effect: 'deny' });
   });
 
   it('lists a planner\'s approved project servers\' tools as tools of their own, each replaced once in its own shape', async () => {
