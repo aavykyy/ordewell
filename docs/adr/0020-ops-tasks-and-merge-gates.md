@@ -95,6 +95,12 @@ that depends on.**
 - **The gate waits for the user.** A setting to merge at gates automatically
   belongs with the autonomy work (#21–#43), not here; until then this ADR keeps
   ADR-0013's rule that Ordewell never merges for the user.
+  *Amended by [ADR-0029](0029-the-supervisor.md):* that setting exists, per
+  plan and saved at run start, with or without a supervisor. At a gate
+  Ordewell runs Merge all itself through the same queue; a conflict or dirty
+  tree aborts with the tree untouched and the gate waits for the user, with a
+  notice. The timeline records "auto-merged for task N". A supervisor at Act
+  may also call `merge_all`.
 - The plan shows it: an ops task carries an `ops` mark, and a gated task "waits
   for Merge all". Status updates carry each task's gate and a `RunMergeView`
   whenever landed work is not merged into the user's branch yet. It names that
@@ -202,3 +208,4 @@ it.
 - 2026-10-03 — retry context for structured ops tasks comes from the saved log, so it survives a reload.
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
 - 2026-10-11 — Merge all offered for unmerged landings throughout a run (#85).
+- 2026-10-11 — merge at gates automatically, and the supervisor's `merge_all` ([ADR-0029](0029-the-supervisor.md)).

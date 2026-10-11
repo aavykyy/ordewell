@@ -173,6 +173,13 @@ everything below applies per repo of the group.
   merge gate during a run (ADR-0020); it takes
   turns with the landing queue, so it never reads an integration branch
   mid-landing.
+  *Amended by [ADR-0029](0029-the-supervisor.md):* two exits the user opts
+  into per plan, both saved at run start. *Merge at gates automatically* runs
+  Merge all when a task reaches a merge gate, and a supervisor at Act may call
+  `merge_all` in its wake-up turns. Both go through the same queue and
+  preflight; a conflict or a dirty overlap aborts with the user's tree
+  untouched, and the gate waits for the user. Without either, Ordewell never
+  merges on its own.
 - **Integration branches go once their work is merged, never before.** Ordewell
   never deletes landed work the user has not merged, and never touches a branch
   it does not own. A Merge all that answers `merged` on a settled run clears it
@@ -367,3 +374,4 @@ everything below applies per repo of the group.
 - 2026-10-09 — `.ordewell/skills/` committed and reaching worktrees through git (ADR-0024).
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
 - 2026-10-11 — Merge all exposed throughout a run for unmerged landings (#85).
+- 2026-10-11 — merge at gates automatically, and the supervisor's `merge_all` at Act, as opt-in exits from "never merged for the user" ([ADR-0029](0029-the-supervisor.md)).
