@@ -4418,6 +4418,16 @@ body {
   margin-right: 0;
 }
 
+.plan-merge-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+}
+
 /* ---- Plan revision chip ----
    The transcript's record that the plan changed at this point in the
    conversation, and the way back to it. Styled like a system line, not a

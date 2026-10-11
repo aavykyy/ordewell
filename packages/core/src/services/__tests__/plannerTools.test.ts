@@ -22,6 +22,7 @@ import type { IRunner } from '../../interfaces/IRunner';
 import { fakeConfig, fakeFileSystem } from '../../testing';
 import { respondingSpawn, planJson, type FakeAgentProcess, type FakeSpawnResult } from './harnessTestKit';
 import { plannerToolHandler, PLANNER_TURN_ENDED, type PlannerToolsHost } from '../plannerTools';
+import { EMPTY_CONVERSATION, fromTranscript, reduceConversation, type ConversationView } from '../../conversation';
 import type { SubmitPlanArgs } from '../mcp/tools';
 
 /**
@@ -1047,6 +1048,62 @@ describe('edit_plan', () => {
       expect(viaText.session.getQueuedMessages()).toEqual([]);
       expect(landed(viaText).last).toBe(JSON.stringify({ taskOps: edit }));
     });
+  });
+});
+
+describe('what the planner says around a plan or edit it submits', () => {
+  /** A turn as Claude streams it: prose, the tool call, its result, then the reply that ends the turn. */
+  async function aroundCall(mcp: Client, emit: (event: unknown) => void, name: string, args: Record<string, unknown>): Promise<void> {
+    emit({ type: 'assistant', session_id: 'sess-1', message: { id: 'm0', content: [{ type: 'text', text: 'Updating the plan now.' }] } });
+    emit({ type: 'assistant', session_id: 'sess-1', message: { id: 'm0', content: [{ type: 'tool_use', id: 'tu1', name: `mcp__ordewell__${name}`, input: args }] } });
+    const answer = await call(mcp, name, args);
+    if (answer.isError) throw new Error(`${name} refused: ${JSON.stringify(answer.body)}`);
+    emit({ type: 'user', session_id: 'sess-1', message: { content: [{ type: 'tool_result', tool_use_id: 'tu1', content: [{ type: 'text', text: JSON.stringify(answer.body) }] }] } });
+  }
+
+  const chat = (broadcast: ReturnType<typeof plannerSession>['broadcast']): ConversationView =>
+    broadcast.mock.calls.reduce<ConversationView>((view, [msg]) => reduceConversation(view, msg), EMPTY_CONVERSATION);
+  const plannerLines = (view: ConversationView) => view.blocks.flatMap((b) => (b.type === 'message' && b.role === 'planner' ? [b.text] : []));
+
+  it('stays in the chat, live and on reload, after an edit_plan call lands', async () => {
+    const said = 'Updating the plan now.\n\nRenamed the second task to "Wire it in".';
+    const planner = plannerSession(fakeClaude({
+      turn: async (mcp, message, emit) => {
+        if (!message.includes('EDIT NOW')) return submitted(mcp, TWO_TASKS);
+        await aroundCall(mcp!, emit, 'edit_plan', { ops: [{ op: 'update', taskId: '#2', changes: { title: 'Wire it in' } }] });
+        return 'Renamed the second task to "Wire it in".';
+      },
+    }));
+    await planner.session.startPlanning('add a cache', ['claude-code']);
+
+    await planner.session.continueConversation('EDIT NOW');
+
+    expect(planner.session.planTasks.map((t) => t.title)).toEqual(['Task a', 'Wire it in']);
+    const live = plannerLines(chat(planner.broadcast));
+    expect(live.slice(-2)).toEqual([said, 'Tasks updated:\n- Updated "Task b" (title)']);
+    const plan = planner.session.planState!;
+    expect(plannerLines(fromTranscript(plan.conversationHistory, plan.researchLog)).slice(-2)).toEqual(live.slice(-2));
+  });
+
+  it('stays in the chat, live and on reload, after a submit_plan call lands', async () => {
+    const said = 'Updating the plan now.\n\nTwo tasks: the cache, then wiring it in.';
+    const planner = plannerSession(fakeClaude({
+      turn: async (mcp, _message, emit) => {
+        await aroundCall(mcp!, emit, 'submit_plan', { tasks: TWO_TASKS });
+        return 'Two tasks: the cache, then wiring it in.';
+      },
+    }));
+
+    await planner.session.startPlanning('add a cache', ['claude-code']);
+
+    expect(planner.session.planTasks).toHaveLength(2);
+    const view = chat(planner.broadcast);
+    expect(plannerLines(view)).toEqual([said]);
+    expect(view.blocks.at(-1)).toEqual(expect.objectContaining({ type: 'plan', status: 'generated', taskCount: 2 }));
+    const plan = planner.session.planState!;
+    const reloaded = fromTranscript(plan.conversationHistory, plan.researchLog);
+    expect(plannerLines(reloaded)).toEqual([said]);
+    expect(reloaded.blocks.at(-1)).toEqual(expect.objectContaining({ type: 'plan', status: 'generated', taskCount: 2 }));
   });
 });
 

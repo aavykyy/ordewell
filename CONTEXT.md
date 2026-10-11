@@ -939,11 +939,17 @@ stopping at the first failure. A group of one needs none either, since its one
 merge lands or is aborted whole, so it answers `merged`, `conflict` or `failed`
 as it always has. `merged` on a settled run clears it up like a discard, except
 that each integration branch goes only where HEAD contains it, and the plan
-forgets it; any other answer deletes nothing. During a run, Merge all is what
-opens a *merge gate*: it merges what has landed so far and the run goes on, its
+forgets it; any other answer deletes nothing. During a run, Merge all is available
+whenever landed work is not in the user's branch yet, including to open a
+*merge gate*: it merges what has landed so far and the run goes on, its
 branches kept for the tasks still to land (ADR-0020). It never runs while an
 *ops task* does (`mergeExcludes`, read by both sides), and takes turns with
 landings.
+`RunMergeView` carries those unmerged landings to surfaces, which show their task
+count. Its `waitingAtGate` says whether a task waits on that work; `paused`
+means the running plan waits at a gate with no attempts active. The view is
+absent once everything landed is merged. VS Code offers the action quietly
+without a gate and keeps its mid-run card for a gate wait.
 *Avoid:* per-repo merge — there is none, by design (ADR-0014).
 
 **Change task** — a task whose result is a change to repository files: it runs
@@ -973,6 +979,17 @@ after a confirmation naming what is not merged, and the task keeps that choice
 (`forcedPastGate`). A run with nothing else to do is *paused* at its gates.
 There is no gate without isolation.
 *Avoid:* "checkpoint" — that is a task asking the user to approve its work.
+
+**Auto-merge at gates** — the plan setting *Merge at gates automatically*,
+saved at run start and independent of the Supervisor level (ADR-0029): when a
+task reaches a merge gate, Ordewell runs Merge all itself through the same
+queue and preflight. A conflict or a dirty overlap aborts with the user's tree
+untouched, and the gate waits for the user with a notice (and a wake-up if a
+supervisor is on). The timeline records "auto-merged for task N". With it and
+an Act supervisor's `merge_all` both off, Ordewell never merges for the user
+(ADR-0013).
+*Avoid:* "auto-land" — landing is a task's work onto the integration branch,
+not the user's; *Avoid:* "auto-resolve" — a conflict is never resolved by it.
 
 **Base ref** — the commit the user's checked-out branch pointed at when a run
 minted its record, resolved once at that moment. The integration branch forks from it and
@@ -1588,7 +1605,75 @@ withdrawn. One drain runs at a time: an edit sent during it is drained after,
 before the run goes on. Like a planner turn, a drain answers the plan it was
 asked about: one that settles after that plan was swapped out is dropped, not
 reconciled into its successor, and wakes no run.
+ADR-0029 replaces it with the **Live planner turn**; this entry describes the
+code until that lands.
 *Avoid:* "queued message" or "queued prompt" in UI text for it.
+
+**Supervisor** — the planner conversation that wrote the plan, taking turns
+during the run it planned (ADR-0029, #27). Not a second model or process: its
+notes are in the same `conversationHistory`, marked with their own message
+`kind` so surfaces style them apart from replies to the user. What it may do
+is set by the plan's **Supervisor level** and checked at the **Command seam**.
+It decides what to do next, never whether a task passed — verdicts come from
+evidence. The run never depends on it: a wake-up turn that still fails after one
+restart leaves the run *unsupervised* (carrying on as Off, with a notice).
+*Avoid:* "agent", "orchestrator" (the scheduler is `TaskOrchestrator`),
+"autopilot".
+
+**Supervisor level** — the per-plan setting **Off** / **Watch** / **Act**,
+saved on the plan at run start, so flipping it mid-run changes nothing until
+the next run (ADR-0001's rule for modes). Off: the planner speaks only when the
+user writes. Watch: wake-up turns read and suggest; execution tools and plan
+edits are refused. Act: wake-up turns may also run, stop and retry tasks,
+message runners, deny approvals, edit the plan and merge, inside the loop
+guards. A tripped wake-up-rate guard or a failed supervisor lowers it for the
+rest of the run; nothing raises it mid-run. A slim precursor of the mandate
+(#23): Watch is `observe`, Act becomes `control` + `replan`.
+*Avoid:* "autonomous", "autonomy" or "auto" for it — those name the runner
+permission modes and the Full/Guarded autonomy level (ADR-0001), a separate
+setting; a Guarded session can have an Act supervisor. *Avoid:* "mandate" until
+#23 defines one.
+
+**Wake-up turn** — a planner turn opened by a `WakePolicy` batch rather than by
+the user: a task failed, waiting for input or approval, idle, a landing
+conflict, a usage-limit pause, or the run finished, with passes since the last
+wake-up as context. It has a timeout, a per-turn read budget set on the plan
+(in place of a user turn's per-message read cap), and the consent of the
+Supervisor level rather than the user's. Undelivered batches are persisted and
+handed over whole at the next turn that succeeds.
+*Avoid:* "notification" or "event" for the turn — the event is what woke it;
+*Avoid:* "supervisor turn" for a user-started turn during a run, which follows
+the user's consent, not the level's.
+
+**Live planner turn** — a planner turn taken during a run, at once, while
+running tasks carry on (ADR-0029): a user's message or a wake-up, one at a
+time. The scheduler holds *new* starts for the turn's duration and always
+releases them when it ends, however it ends. Edits apply at once to tasks not
+yet started; one aimed at a running or finished task is refused with a note
+the model can act on. Pending turns are persisted on the plan.
+*Avoid:* "pending plan edit" or "queued edit" for it — nothing waits for a
+batch boundary; *Avoid:* "pause" for the start hold — running tasks are not
+paused.
+
+**Command seam** — the one core entry point every execution action reaches the
+scheduler through: `run_plan`, `run_task`, `stop_task`, `stop_run`,
+`retry_task`, `message_task`, `answer_approval`, `merge_all` (ADR-0029, #91).
+It checks who asked (user, planner turn, supervisor), the Supervisor level,
+plan approval and the loop guards, refuses with an actionable note, and records
+each action in the timeline with who asked. No planner tool reaches into
+`TaskOrchestrator` directly, and the mandate (#23) plugs in here.
+`answer_approval` denies or escalates, never allows: allowing would widen the
+mode the plan gave the task.
+*Avoid:* "command surface" — that is the set of user commands by name (slash
+commands and `ordewell` subcommands); *Avoid:* "action API".
+
+**Loop guard** — a check at the Command seam that stops an Act supervisor
+spinning: a retry limit per task (default 2, set on the plan), no retry with
+the failed attempt's prompt and model unchanged, no re-adding a task it removed
+this run or reverting its own edit, and a wake-up-rate limit that drops the run
+to Watch. Each refusal is a note to the model; each tripped guard posts a
+supervisor message to the user.
+*Avoid:* "rate limit" for the set — only one guard is about rate.
 
 ---
 

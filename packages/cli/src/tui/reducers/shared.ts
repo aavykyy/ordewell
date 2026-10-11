@@ -1,7 +1,7 @@
 import type { AiProvider, ApprovalDecision, AwaitingReason, PlannerUsage, ResearchLogEntry, SerializedConversationMessage, SessionMessage, SettingsResponse, TaskLogEvent } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
-  GateView, HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
+  RunMergeView, HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
   TaskIsolationView, TuiState,
 } from '../state';
 import { say } from '../transcript';
@@ -48,7 +48,7 @@ export type Effect =
   | { type: 'compactConversation'; sessionId: string }
   | { type: 'isolationReviewDiff'; sessionId: string }
   /** `branch` is only for the words the result is reported in; `repaired` likewise (ADR-0015). */
-  /** `midRun`: merged at a merge gate (ADR-0020), so the run and its record stay. */
+  /** `midRun`: the run and its record stay for later landings (ADR-0020). */
   | { type: 'isolationMerge'; sessionId: string; branch: string; group?: boolean; repaired?: LandedTaskView[]; midRun?: boolean }
   | { type: 'isolationDiscard'; sessionId: string; branch: string }
   | { type: 'isolationCleanup'; sessionId: string; branch: string }
@@ -112,7 +112,7 @@ export type Action =
   /** A task asked a checkpoint question; the chat pane says so, and where to answer. */
   | { type: 'taskCheckpoint'; taskId: string; title: string; summary: string; sessionId?: string }
   | { type: 'taskStatus'; taskId: string; status: string; sessionId?: string }
-  | { type: 'tasksStatus'; updates: Record<string, TaskStatusUpdate>; gate?: GateView | null; sessionId?: string }
+  | { type: 'tasksStatus'; updates: Record<string, TaskStatusUpdate>; runMerge?: RunMergeView | null; sessionId?: string }
   | { type: 'isolationBlocked'; message: string; repos?: string[]; sessionId?: string }
   | { type: 'isolationHandoff'; handoff: HandoffView; sessionId?: string }
   | { type: 'handoffDiff'; diff: string; sessionId?: string }
