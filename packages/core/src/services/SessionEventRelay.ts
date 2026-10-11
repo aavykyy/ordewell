@@ -34,8 +34,10 @@ export interface SessionEventRelayDeps {
  * only and `onQueueReady` is the Session's cue to drain its queue, so both are
  * the Session's alone. Run settings and automatic merge records also need
  * persistence before announcement, so Session owns those two observers.
+ * A wait on a usage limit reaches surfaces as the task's status;
+ * `onUsageLimitWait` itself is for a supervisor to wake on.
  */
-export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onQueueReady' | 'onRunStarted' | 'onAutoMerge'>>;
+export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onQueueReady' | 'onRunStarted' | 'onAutoMerge' | 'onUsageLimitWait'>>;
 
 /** One subagent's activity seen during a turn: its log entry plus the steps it ran. */
 interface SubagentRun {

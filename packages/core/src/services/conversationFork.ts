@@ -20,6 +20,7 @@ function forkTask(task: Task): Task {
     copy.status = 'pending';
     copy.outputSummary = undefined;
     delete copy.awaitingReason;
+    delete copy.resumeAt;
   }
   return copy;
 }

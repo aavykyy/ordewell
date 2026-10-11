@@ -65,7 +65,8 @@ edits only. User controls that change task state through the orchestrator
 (execute, approve the review, reschedule, stop, retry, cancel, mark complete or
 not done, force start, run one task, continue a task, the two ways past a dirty
 tree, Merge all, clean up or discard a run, a task message, force sending or
-withdrawing a queued one, interrupting a structured turn, a checkpoint answer)
+withdrawing a queued one, interrupting a structured turn, a checkpoint answer,
+cancelling a scheduled resume)
 are saved before any surface hears of them too: a synchronous one holds its
 `status_update` until the save, and an asynchronous one (`withSave`) saves
 before each `status_update` announced while it runs, and once more when it
@@ -489,7 +490,8 @@ before failure (ADR-0025).
 **Waiting for input** — a structured task whose turn ended without a `task_complete`
 call: `awaiting_user` with a saved reason, `input | checkpoint | conflict |
 files-changed` (a checkpoint wins over input; `files-changed` is an *ops task*
-that changed tracked files, ADR-0020). No verdict and no automatic nudge; the user
+that changed tracked files, ADR-0020), or `usage-limit` when what ended it was
+the runner's usage limit (see *Usage-limit resume*). No verdict and no automatic nudge; the user
 answers or marks the task complete. A pending runner approval is *not* waiting
 for input — it arrives mid-turn, leaves the status alone, and "waiting for
 approval" is derived from the task's pending approvals.
@@ -510,6 +512,20 @@ cannot find fails the attempt with a message that suggests Retry; a fresh
 session is never started in its place.
 *Avoid:* "resume" for the user action (that is the protocol flag), and "retry"
 for it — a retry starts a fresh attempt with no message.
+
+**Usage-limit resume** (`readUsageLimitReset`, `UsageLimitWaits`,
+`cancelScheduledResume`; ADR-0018, U1) — a task whose runner stopped on its
+account's usage limit is `awaiting_user` with reason `usage-limit`, and the run
+holds. When the runner's message names the reset (Claude Code and Codex do;
+OpenCode does not), the task carries a `resumeAt` saved with the plan, and at
+that time it is retried as a *Continue* of its saved session. Tasks paused on
+one runner share one wait — the latest of their resets — and resume together;
+the hold on the run is released once nothing waits on a reset and no task has
+failed. A plan loaded after its time resumes at once. Without a time, after a
+cancel or a stop, or when the resumed attempt hits the limit again at once, the
+task waits for a manual retry. Surfaces show "Resumes at 8:10pm" with a cancel.
+*Avoid:* "rate limit" for it — a provider's per-minute throttle is retried
+inside the runner and is not this; "paused" for any other wait.
 
 **Task log** (`TaskLogEvent`, `reduceTaskLog`, `TaskLogRecorder`) — what a
 structured task did, at full fidelity (ADR-0018, O1b/P1): normalized events —

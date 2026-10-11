@@ -130,6 +130,15 @@ export default function TaskLogApp() {
           <span className="task-log-title">Task {status.order} · {status.title}</span>
           {status.runner && <span className="task-log-runner">{status.runner}</span>}
           {state && <span className={`task-log-state ${state.kind}`}>{state.label}</span>}
+          {status.resumes && (
+            <>
+              <span className="task-log-runner">{status.resumes}</span>
+              <button type="button" className="task-log-detail" onClick={() => vscode.postMessage({ type: 'cancelResume' })}
+                title="Do not resume it on its own: retry it by hand once the limit resets">
+                Cancel resume
+              </button>
+            </>
+          )}
           <span className="task-log-spacer" />
           {hasDetail && (
             <button type="button" className="task-log-detail" aria-pressed={detailAll}

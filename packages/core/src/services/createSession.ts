@@ -1101,6 +1101,11 @@ export class Session {
     await this.withSave(() => this.orchestrator.markTaskIncomplete(taskId));
   }
 
+  /** Keep a task paused on a usage limit from resuming on its own; see {@link TaskOrchestrator.cancelScheduledResume}. */
+  cancelScheduledResume(taskId: string): boolean {
+    return this.saved(() => this.orchestrator.cancelScheduledResume(taskId));
+  }
+
   /**
    * Hand the queued edits to the planner. The Session does this itself each
    * time the scheduler parks behind the queue, so no surface has to; a caller

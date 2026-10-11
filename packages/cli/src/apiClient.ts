@@ -6,6 +6,7 @@ import type {
   AdoptSessionResponse,
   ApprovalAnswer,
   CancelPlanningResponse,
+  CancelResumeResponse,
   ConversationCompactResponse,
   ConversationForkResponse,
   ConversationRewindResponse,
@@ -304,6 +305,11 @@ export class ApiClient {
 
   markTaskIncomplete(sessionId: string, taskId: string): Promise<OkResponse> {
     return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/uncomplete`, 'Mark not done failed');
+  }
+
+  /** Keep a task paused on a usage limit from resuming on its own; `cancelled` is false when none was scheduled. */
+  cancelResume(sessionId: string, taskId: string): Promise<CancelResumeResponse> {
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/resume/cancel`, 'Cancel resume failed');
   }
 
   /** run | force-start | retry | cancel — real orchestrator work, not a status patch. */

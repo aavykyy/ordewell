@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { canContinue, type ApprovalAnswer, type DisplayBlock, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
+import { canContinue, resumeLabel, type ApprovalAnswer, type DisplayBlock, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { EMPTY_TASK_LOG, reduceTaskLog, replayTaskLog, type TaskLogView } from '@ordewell/core/plan-utils';
 import { diffConversation } from '../shared/conversationPatch';
 import { renderWebviewHtml } from './webviewHtml';
@@ -19,6 +19,7 @@ export interface TaskLogSession {
   forceSendQueuedTaskMessage(taskId: string, id: string): boolean;
   interruptTask(taskId: string): Promise<void>;
   continueTask(taskId: string, message: string): Promise<void>;
+  cancelScheduledResume(taskId: string): boolean;
   outstandingApprovals(): PendingApproval[];
   resolveApproval(id: string, answer: ApprovalAnswer): boolean;
 }
@@ -132,6 +133,11 @@ export class TaskLogPanel {
       case 'interruptTask':
         this.controlAsync(() => this.deps.session.interruptTask(this.taskId));
         return;
+      case 'cancelResume':
+        this.control(() => {
+          if (!this.deps.session.cancelScheduledResume(this.taskId)) throw new Error('This task has no resume scheduled.');
+        });
+        return;
       case 'continueTask':
         // The continue is a new attempt: show it, even from an earlier one.
         this.followLive = true;
@@ -210,6 +216,7 @@ export class TaskLogPanel {
 
   private status(): TaskLogStatus {
     const task = this.deps.getTask(this.taskId);
+    const resumes = task ? resumeLabel(task) : null;
     return {
       taskId: this.taskId,
       order: task?.order ?? 0,
@@ -217,6 +224,7 @@ export class TaskLogPanel {
       runner: task?.assignedRunner ?? '',
       planStatus: task?.status ?? 'pending',
       awaitingReason: task?.awaitingReason,
+      ...(resumes ? { resumes } : {}),
       awaitingApproval: this.deps.session.outstandingApprovals()
         .filter((p) => p.request.kind === 'runner_tool' && p.request.taskId === this.taskId).length,
       working: this.view.working,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyRunnerStop, stopsRunner, type AttemptEnd } from '../runnerExit';
+import { classifyRunnerStop, readUsageLimitReset, stopsRunner, type AttemptEnd } from '../runnerExit';
 
 describe('classifyRunnerStop', () => {
   it.each([
@@ -26,11 +26,77 @@ describe('classifyRunnerStop', () => {
   });
 });
 
+describe('readUsageLimitReset', () => {
+  // 17:00 UTC: 19:00 in Rome (CEST), 13:00 in New York (EDT).
+  const now = new Date('2026-10-11T17:00:00Z');
+
+  describe('Claude Code (2.1.296)', () => {
+    // The first is the message as Claude Code printed it (#79, #84); the rest
+    // follow the template in 2.1.296: "You've hit your <limit> · resets <time>
+    // (<zone>)", the date shown beyond a day and the year only when it differs.
+    it.each([
+      ["You've hit your session limit · resets 8:10pm (Europe/Rome)", '2026-10-11T18:10:00.000Z'],
+      ["You've hit your weekly limit · resets 9pm (Europe/Rome) · progress saved", '2026-10-11T19:00:00.000Z'],
+      ["You've hit your usage limit · resets Oct 14, 8:10pm (Europe/Rome)", '2026-10-14T18:10:00.000Z'],
+      ["You've hit your Opus limit · resets Oct 26, 8pm (Europe/Rome)", '2026-10-26T19:00:00.000Z'],
+      ["You've hit your limit · resets Jan 2, 2027, 9am (America/New_York)", '2027-01-02T14:00:00.000Z'],
+      ["You've hit your team's shared budget · ask your admin to raise it · your session limit resets 11:30pm (UTC)", '2026-10-11T23:30:00.000Z'],
+    ])('reads %j', (message, expected) => {
+      expect(readUsageLimitReset('claude-code', `Working…\n${message}\n`, now)?.toISOString()).toBe(expected);
+    });
+
+    it('places a bare time that has passed on the next day', () => {
+      expect(readUsageLimitReset('claude-code', "You've hit your session limit · resets 2am (Europe/Rome)", now)?.toISOString())
+        .toBe('2026-10-12T00:00:00.000Z');
+    });
+
+    it('reads the last limit message when the stream repeats it (#79)', () => {
+      const output = "You've hit your session limit · resets 8pm (UTC)\nYou've hit your session limit · resets 9pm (UTC)\n";
+      expect(readUsageLimitReset('claude-code', output, now)?.toISOString()).toBe('2026-10-11T21:00:00.000Z');
+    });
+
+    it('reads nothing from a zone it cannot place, or a message with no reset', () => {
+      expect(readUsageLimitReset('claude-code', "You've hit your session limit · resets 8pm (Mars/Olympus)", now)).toBeNull();
+      expect(readUsageLimitReset('claude-code', "You've hit your usage limit · contact your admin to increase it", now)).toBeNull();
+      expect(readUsageLimitReset('claude-code', 'Claude usage limit reached. Your limit will reset at 5pm.', now)).toBeNull();
+    });
+  });
+
+  describe('Codex (0.162.0)', () => {
+    // The wording in codex-cli 0.162.0: "… usage limit. Try again at <time>."
+    // or "… or try again at <time>.", the time in the process's local zone as
+    // "%-I:%M %p" the same day, else "%b %-d<st|nd|rd|th>, %Y %-I:%M %p".
+    it.each([
+      ["You've hit your usage limit. Try again at 8:10 PM.", new Date(2026, 9, 11, 20, 10)],
+      ["You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at Oct 14th, 2026 9:05 AM.", new Date(2026, 9, 14, 9, 5)],
+      ["You've hit your usage limit. Try again at Nov 1st, 2026 12:00 AM.", new Date(2026, 10, 1, 0, 0)],
+      ["You've hit your usage limit for gpt-6-sol. Switch to another model now, or try again at Oct 22nd, 2026 12:30 PM.", new Date(2026, 9, 22, 12, 30)],
+    ])('reads %j', (message, expected) => {
+      const localNow = new Date(2026, 9, 11, 19, 0);
+      expect(readUsageLimitReset('codex', message, localNow)?.getTime()).toBe(expected.getTime());
+    });
+
+    it('reads nothing when Codex has no time to give', () => {
+      expect(readUsageLimitReset('codex', "You've hit your usage limit. Try again later.", now)).toBeNull();
+      expect(readUsageLimitReset('codex', 'You have hit your usage limit. Try again after 09:00.', now)).toBeNull();
+    });
+  });
+
+  it('reads nothing for OpenCode (2.0.26), which passes its provider\'s error through with no reset time of its own', () => {
+    expect(readUsageLimitReset('opencode', 'AI_APICallError: usage limit exceeded', now)).toBeNull();
+    expect(readUsageLimitReset('opencode', "You've hit your session limit · resets 8:10pm (Europe/Rome)", now)).toBeNull();
+  });
+
+  it('reads nothing from a reset long past: those words are not this stop\'s', () => {
+    expect(readUsageLimitReset('claude-code', "You've hit your usage limit · resets Oct 1, 8pm (UTC)", now)).toBeNull();
+  });
+});
+
 describe('attempt-end disposition', () => {
-  const reasons: AttemptEnd[] = ['verdict', 'cancel', 'release', 'complete', 'retry', 'spawn-failed', 'stop', 'load'];
+  const reasons: AttemptEnd[] = ['verdict', 'usage-limit', 'cancel', 'release', 'complete', 'retry', 'spawn-failed', 'stop', 'load'];
 
   it('stops the runner for every reason that ends only that attempt, its verdict included', () => {
-    expect(reasons.filter((r) => stopsRunner(r))).toEqual(['verdict', 'cancel', 'release', 'complete', 'retry', 'spawn-failed']);
+    expect(reasons.filter((r) => stopsRunner(r))).toEqual(['verdict', 'usage-limit', 'cancel', 'release', 'complete', 'retry', 'spawn-failed']);
   });
 
   it('leaves stop and load to the whole-run reset', () => {

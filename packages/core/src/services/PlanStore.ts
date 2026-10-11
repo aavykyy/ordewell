@@ -259,6 +259,8 @@ export class PlanStore {
       if (t.type !== 'ai') continue;
       if (preserveCompleted && t.status === 'completed') continue;
       t.status = 'approved';
+      delete t.awaitingReason;
+      delete t.resumeAt;
     }
     this.notifyMutate();
   }
@@ -281,6 +283,15 @@ export class PlanStore {
     task.status = 'awaiting_user';
     if (reason) task.awaitingReason = reason;
     else delete task.awaitingReason;
+    delete task.resumeAt;
+  }
+
+  /** When a task paused on a usage limit resumes on its own; undefined leaves it to a manual retry. */
+  setTaskResumeAt(id: string, resumeAt: string | undefined): void {
+    const task = this._taskMap.get(id);
+    if (!task || task.awaitingReason !== 'usage-limit') return;
+    if (resumeAt) task.resumeAt = resumeAt;
+    else delete task.resumeAt;
   }
 
   markPending(id: string): void {
@@ -303,12 +314,13 @@ export class PlanStore {
     if (task) task.forcedPastGate = dependencies;
   }
 
-  /** A reason outlives nothing: any status but `awaiting_user` drops it. */
+  /** A reason outlives nothing: any status but `awaiting_user` drops it, and the resume time with it. */
   private setStatus(id: string, status: Exclude<TaskStatus, 'awaiting_user'>): void {
     const task = this._taskMap.get(id);
     if (!task) return;
     task.status = status;
     delete task.awaitingReason;
+    delete task.resumeAt;
   }
 
   blockDependents(id: string): void {

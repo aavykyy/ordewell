@@ -1,7 +1,7 @@
 import { NOT_STARTED } from './status';
 
-/** What a user can do to one task from its row. */
-export type TaskRowAction = 'cancel' | 'skip' | 'force-start' | 'complete' | 'uncomplete';
+/** What a user can do to one task from its row. `cancel-resume` keeps a task paused on a usage limit from resuming on its own. */
+export type TaskRowAction = 'cancel' | 'cancel-resume' | 'skip' | 'force-start' | 'complete' | 'uncomplete';
 
 /** A subtask runs with its parent, so its row offers a different set than a top-level task's. */
 export type TaskRowPlacement = 'task' | 'subtask';
@@ -9,16 +9,20 @@ export type TaskRowPlacement = 'task' | 'subtask';
 interface ActionSubject {
   status: string;
   type: 'ai' | 'user';
+  awaitingReason?: string;
+  resumeAt?: string | null;
 }
 
 type Rule = readonly [TaskRowAction, (task: ActionSubject) => boolean];
 
 const UNSTARTED_AI = (t: ActionSubject): boolean => t.type === 'ai' && NOT_STARTED.has(t.status);
 const QUEUED = (t: ActionSubject): boolean => t.status === 'pending' || t.status === 'approved';
+const RESUMES = (t: ActionSubject): boolean => t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit' && !!t.resumeAt;
 
 // Order is the order a surface lays the actions out in.
 const TASK_RULES: readonly Rule[] = [
   ['cancel', (t) => t.status === 'in_progress'],
+  ['cancel-resume', RESUMES],
   ['skip', (t) => t.status === 'blocked'],
   ['force-start', UNSTARTED_AI],
   // A manual task has no runner to report it done, so it can always be marked.
@@ -28,6 +32,7 @@ const TASK_RULES: readonly Rule[] = [
 
 const SUBTASK_RULES: readonly Rule[] = [
   ['cancel', (t) => t.status === 'in_progress'],
+  ['cancel-resume', RESUMES],
   ['complete', (t) => t.status === 'in_progress' && t.type === 'ai'],
   ['force-start', (t) => t.type === 'ai' && QUEUED(t)],
   ['skip', QUEUED],
