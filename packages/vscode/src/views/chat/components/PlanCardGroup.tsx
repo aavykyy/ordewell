@@ -9,6 +9,9 @@ import { canMergeTasks, canSplitTask, planUsage } from '@ordewell/core/plan-util
 
 interface PlanCardGroupProps {
   tasks: Task[];
+  mergeAtGatesAutomatically?: boolean;
+  runAutoMerge?: boolean;
+  onAutoMergeChange?: (enabled: boolean) => void;
   models: DiscoveredModel[];
   modelsByRunner?: Partial<Record<string, DiscoveredModel[]>>;
   modesByRunner?: Record<string, RunnerMode[]>;
@@ -59,6 +62,9 @@ interface PlanCardGroupProps {
 
 export default function PlanCardGroup({
   tasks,
+  mergeAtGatesAutomatically = false,
+  runAutoMerge,
+  onAutoMergeChange,
   models,
   modelsByRunner,
   modesByRunner,
@@ -205,6 +211,15 @@ export default function PlanCardGroup({
 
       {(onExecutePlan || onStopExecution) && (
         <div className="plan-action-bar">
+          {onAutoMergeChange && (
+            <label title="Changes during a run apply to the next run.">
+              <input type="checkbox" checked={mergeAtGatesAutomatically}
+                onChange={(e) => onAutoMergeChange(e.target.checked)} />
+              Merge at gates automatically
+              {isExecuting && runAutoMerge !== undefined && runAutoMerge !== mergeAtGatesAutomatically
+                && ` (next run; now ${runAutoMerge ? 'on' : 'off'})`}
+            </label>
+          )}
           {isExecuting ? (
             onStopExecution && (
               <button className="plan-action-btn stop" onClick={onStopExecution}>Stop</button>

@@ -345,6 +345,7 @@ export interface ConversationMessage {
    * sessions saved before markers existed degrade gracefully.
    */
   kind?: 'plan_generated' | 'system' | 'compaction' | 'skill_load' | 'execution';
+  actor?: 'Ordewell setting';
   /** Present exactly when `kind` is 'skill_load'. */
   skill?: SkillLoad;
   /** Present exactly when `kind` is 'execution'. */
@@ -401,6 +402,9 @@ export function emptyWarnings(): PlanModificationWarnings {
 }
 
 export interface LegacyPlanState {
+  /** Changes during a run apply at its next start (ADR-0029). */
+  mergeAtGatesAutomatically?: boolean;
+  runSettings?: { mergeAtGatesAutomatically: boolean };
   tasks: Task[];
   generatedAt: string;
   status: PlanStatus;

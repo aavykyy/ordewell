@@ -488,20 +488,24 @@ export interface PlanLayout {
   maxScroll: number;
 }
 
-const FIRST_ROW_LINE = 2;
-
 export function planLayout(state: TuiState, rows: number, cols: number): PlanLayout {
   const done = state.tasks.filter((t) => t.status === 'completed').length;
   const totalUsage = planUsage(state.tasks);
   const unmerged = state.runMerge?.handoff.landed.length ?? 0;
+  const changedMergeSetting = state.status === 'executing' && state.runAutoMerge !== null
+    && state.runAutoMerge !== state.mergeAtGatesAutomatically;
+  const nextRun = changedMergeSetting
+    ? ` · next run ${state.mergeAtGatesAutomatically ? 'on' : 'off'}; now ${state.runAutoMerge ? 'on' : 'off'}`
+    : '';
   const lines = [
-    style.bold(`Plan ${done}/${state.tasks.length}`),
+    style.bold(truncate(`Plan ${done}/${state.tasks.length}${nextRun}`, cols)),
+    style.dim(truncate(`G Merge at gates automatically: ${state.mergeAtGatesAutomatically ? 'on' : 'off'}`, cols)),
     totalUsage.attempts ? style.grey(truncate(`Tasks total: ${taskUsageText(totalUsage)}`, cols)) : '',
   ];
   if (unmerged > 0) {
     const hint = style.dim(truncate(`${unmerged} landed task${unmerged === 1 ? '' : 's'} not merged — /handoff merge`, cols));
     if (totalUsage.attempts) lines.push(hint);
-    else lines[1] = hint;
+    else lines[2] = hint;
   }
   const firstRowLine = lines.length;
 
@@ -598,7 +602,7 @@ export function planScrollExtent(state: TuiState): PlanLayout {
   // A pane too narrow to show has nothing to scroll; measuring it anyway would
   // wrap every title to a column and invent an offset the user can never see.
   if (cols === 0) {
-    return { lines: [], rowSpans: [], anchor: { start: FIRST_ROW_LINE, end: FIRST_ROW_LINE }, rows: 0, maxScroll: 0 };
+    return { lines: [], rowSpans: [], anchor: { start: 0, end: 0 }, rows: 0, maxScroll: 0 };
   }
   return planLayout(state, bodyRows(state), cols);
 }

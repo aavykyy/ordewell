@@ -476,7 +476,11 @@ export class PlannerConversation {
   restore(snapshot: TranscriptSnapshot): boolean {
     if (this.host.plan() !== snapshot.plan || this.persisted !== snapshot.persisted) return false;
     const undo = (): boolean => {
-      snapshot.plan.conversationHistory = snapshot.history;
+      // A merge already changed the user's branch; a failed planner turn
+      // cannot take its timeline record back with its own provisional dialogue.
+      const actions = (snapshot.plan.conversationHistory ?? []).filter((entry) =>
+        entry.actor === 'Ordewell setting' && !(snapshot.history ?? []).includes(entry));
+      snapshot.plan.conversationHistory = actions.length > 0 ? [...(snapshot.history ?? []), ...actions] : snapshot.history;
       snapshot.plan.researchLog = snapshot.researchLog;
       return true;
     };

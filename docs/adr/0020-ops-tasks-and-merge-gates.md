@@ -70,8 +70,8 @@ that depends on.**
   already uses: each landing records the integration tip it produced in each repo
   it changed, and the task's work is merged once the checked-out HEAD contains
   those tips. A merge made by hand with git counts as Merge all does, and is
-  found the next time the scheduler looks. The gate is the user's merge; nothing
-  passes it on its own.
+  found the next time the scheduler looks. The gate requires that merge;
+  the per-plan setting below can perform it automatically.
 - A user task is gated for the same reason as an ops task: what the user tests
   or checks by hand is their checkout or their deployment, and before the merge
   neither holds the work the task depends on.
@@ -92,14 +92,15 @@ that depends on.**
 - **Force start passes a gate after one confirmation** that names the
   dependencies whose work is not merged yet. The choice is logged on the task;
   the gate stands for every other task.
-- **The gate waits for the user.** A setting to merge at gates automatically
-  belongs with the autonomy work (#21–#43), not here; until then this ADR keeps
-  ADR-0013's rule that Ordewell never merges for the user.
-  *Amended by [ADR-0029](0029-the-supervisor.md):* that setting exists, per
-  plan and saved at run start, with or without a supervisor. At a gate
-  Ordewell runs Merge all itself through the same queue; a conflict or dirty
-  tree aborts with the tree untouched and the gate waits for the user, with a
-  notice. The timeline records "auto-merged for task N". A supervisor at Act
+- **Merge at gates automatically is an opt-in plan setting**
+  ([ADR-0029](0029-the-supervisor.md)), off by default and saved at run start,
+  with or without a supervisor. Changes during execution apply to the next
+  run. At a gate Ordewell runs Merge all itself through the same queue; a
+  conflict or dirty overlap aborts with the tree untouched and the gate waits
+  for the user, with a notice and an `onAutoMerge` observer event. A failed
+  automatic merge waits for a user merge or the next run before automatic
+  merging resumes. The timeline records
+  "auto-merged for task N", attributed to Ordewell setting. A supervisor at Act
   may also call `merge_all`.
 - The plan shows it: an ops task carries an `ops` mark, and a gated task "waits
   for Merge all". Status updates carry each task's gate and a `RunMergeView`
@@ -209,3 +210,4 @@ it.
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
 - 2026-10-11 — Merge all offered for unmerged landings throughout a run (#85).
 - 2026-10-11 — merge at gates automatically, and the supervisor's `merge_all` ([ADR-0029](0029-the-supervisor.md)).
+- 2026-10-11 — implemented the automatic gate setting and core merge_all action.

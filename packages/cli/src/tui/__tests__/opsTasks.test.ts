@@ -28,6 +28,22 @@ const plan = (tasks: TaskView[], over: Partial<TuiState> = {}): TuiState =>
   initialState({ sessionId: 's1', rows: 40, cols: 100, focus: 'plan', tasks, ...over });
 
 describe('ops tasks and merge gates in the TUI (ADR-0020)', () => {
+  it('toggles automatic gate merging with G and restores its plan setting', () => {
+    const state = plan([change()]);
+    expect(press(state, 'char', 'G').effects).toEqual([{ type: 'setAutoMerge', sessionId: 's1', enabled: true }]);
+    const restored = apply(state, { type: 'planUpdated', sessionId: 's1', plan: {
+      tasks: [change()], mergeAtGatesAutomatically: true,
+      runSettings: { mergeAtGatesAutomatically: false },
+    } }).state;
+    expect(restored.mergeAtGatesAutomatically).toBe(true);
+    expect(press(restored, 'char', 'G').effects).toEqual([{ type: 'setAutoMerge', sessionId: 's1', enabled: false }]);
+    expect(frame(restored)).toContain('Merge at gates automatically: on');
+    expect(frame({ ...restored, status: 'executing' })).toContain('next run on; now off');
+    const older = apply(restored, { type: 'planUpdated', plan: { tasks: [change()] } }).state;
+    expect(older.mergeAtGatesAutomatically).toBe(false);
+    expect(apply(restored, { type: 'sessionCleared' }).state.mergeAtGatesAutomatically).toBe(false);
+  });
+
   it('marks an ops task, and a task waiting at its merge gate', () => {
     const out = frame(plan([change(), deploy({ mergeGate: ['t1'] })]));
 

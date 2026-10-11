@@ -151,6 +151,7 @@ export type WebviewToHost =
   | { type: 'openTaskLog'; taskId: string }
   /** The plan dock's dragged height in px, saved on release so every later session opens at it. */
   | { type: 'setPlanDockHeight'; height: number }
+  | { type: 'setAutoMerge'; enabled: boolean }
   /** Who plans (ADR-0009) — a vendor provider id or one of the harness planners. */
   | { type: 'setPlanner'; provider: string }
   /** The planner's own model and thinking effort, a pair so neither can outlive the other. */

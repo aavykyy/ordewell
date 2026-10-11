@@ -55,13 +55,15 @@ describe('task row accounting', () => {
     const update = actions.find((a): a is Extract<Action, { type: 'tasksStatus' }> => a.type === 'tasksStatus');
     const state = initialState({ sessionId: 's1', tasks: [task({ id: 'parent', subtasks: [task()] })] });
     const updated = reduce(state, update!).state;
-    const layout = planLayout(updated, 4, 140);
+    const layout = planLayout({ ...updated, mergeAtGatesAutomatically: true }, 4, 140);
     const text = layout.lines.map(stripAnsi).join('\n');
 
     expect(updated.tasks[0].subtasks?.[0].attemptUsage).toEqual([usage]);
     expect(updated.runMerge?.handoff.landed).toEqual([{ taskId: 't', order: 1, title: 'Work' }]);
     expect(text).toContain('Tasks total: 12.4k in · 3.1k out · $0.42 · 5s');
+    expect(text).toContain('G Merge at gates automatically: on');
     expect(text).toContain('1 landed task not merged — /handoff merge');
+    expect(layout.rowSpans[0].start).toBe(4);
     expect(revealOffset(layout, layout.maxScroll, layout.rowSpans[0])).toBe(0);
 
     const cleared = reduce(updated, { type: 'tasksStatus', updates: {}, runMerge: null }).state;

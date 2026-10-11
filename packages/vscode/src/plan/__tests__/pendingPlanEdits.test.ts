@@ -3,8 +3,8 @@ import { serializePlan, type LegacyPlanState } from '@ordewell/core';
 import { handleSessionMessage, type PlanManagerDeps } from '../PlanManager';
 
 function deps() {
-  const chatProvider = { conversation: { receive: vi.fn() }, showPendingPlanEdits: vi.fn() };
-  return { d: { chatProvider } as unknown as PlanManagerDeps, chatProvider };
+  const chatProvider = { conversation: { receive: vi.fn() }, showPendingPlanEdits: vi.fn(), showPlan: vi.fn() };
+  return { d: { chatProvider, getCurrentPlan: () => plan([]) } as unknown as PlanManagerDeps, chatProvider };
 }
 
 function plan(queuedMessages: LegacyPlanState['queuedMessages']): LegacyPlanState {

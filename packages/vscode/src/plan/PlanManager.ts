@@ -514,6 +514,7 @@ export function handleSessionMessage(
     // they made, which carries what is still queued; the strip follows it, so
     // an applied edit stops showing as waiting.
     case 'plan_generated':
+      deps.chatProvider.showPlan(deps.getCurrentPlan());
       deps.chatProvider.showPendingPlanEdits(msg.plan.queuedMessages ?? []);
       break;
     case 'execution_complete': {
