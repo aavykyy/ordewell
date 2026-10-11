@@ -313,7 +313,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation run lifecycle', () => {
     const a = await iso.prepare(changes, run);
     const b = await iso.prepare(idle, run);
     expect(run.tasks['task-1'].workspace).toBe(a.cwd);
-    expect(run.tasks['task-1'].repos).toEqual({ '.': { worktree: a.cwd, linked: [] } });
+    expect(run.tasks['task-1'].repos).toEqual({ '.': { worktree: a.cwd, linked: [], baseRef: run.repos[0].baseRef } });
 
     writeFileSync(join(a.cwd, 'new.txt'), 'n\n');
     expect(await iso.integrate(changes, run)).toBe('merged');
@@ -2626,5 +2626,124 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       expect(branches(failing)).toContain(`ordewell/${earlier.id}/integration`);
       for (const repo of ['infra', 'web']) expect(branches(join(dir, repo))).toEqual([`ordewell/${current.id}/integration`]);
     });
+  });
+});
+
+describe.skipIf(!hasGit)('task diff reads', () => {
+  it('lists live tracked and untracked changes, reads a literal file patch, and keeps it after landing', async () => {
+    const root = repo();
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const t = task(1, 'Change readme');
+    const { cwd } = await iso.prepare(t, run);
+    writeFileSync(join(cwd, 'README.md'), 'hello\nworld\n');
+    writeFileSync(join(cwd, 'new file.txt'), 'new\n');
+    expect(await iso.taskDiff!(run, t.id, {})).toEqual({ available: true, text: '[repo .] README.md: +1 -0\n[repo .] new file.txt: +1 -0\n' });
+    expect(await iso.taskDiff!(run, t.id, { path: 'README.md' })).toMatchObject({ available: true, text: expect.stringContaining('+world') });
+    expect(await iso.taskDiff!(run, t.id, { path: 'new file.txt' })).toMatchObject({ available: true, text: expect.stringContaining('+new') });
+    expect(await iso.integrate(t, run)).toBe('merged');
+    expect(existsSync(cwd)).toBe(false);
+    expect(await iso.taskDiff!(run, t.id, { path: 'README.md' })).toMatchObject({ available: true, text: expect.stringContaining('+world') });
+  });
+
+  it('uses the starting integration tip so predecessor changes are excluded', async () => {
+    const root = repo();
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const first = task(1, 'First');
+    const a = await iso.prepare(first, run);
+    writeFileSync(join(a.cwd, 'first.txt'), 'first\n');
+    expect(await iso.integrate(first, run)).toBe('merged');
+    const second = task(2, 'Second');
+    const b = await iso.prepare(second, run);
+    writeFileSync(join(b.cwd, 'second.txt'), 'second\n');
+    expect(await iso.taskDiff!(run, second.id, {})).toEqual({ available: true, text: '[repo .] second.txt: +1 -0\n' });
+    expect(await iso.integrate(second, run)).toBe('merged');
+    expect(await iso.taskDiff!(run, second.id, {})).toEqual({ available: true, text: '[repo .] second.txt: +1 -0\n' });
+  });
+
+  it('names every repository and selects the repository of a single file', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-diff-group-')));
+    roots.push(root);
+    initRepo(join(root, 'alpha'));
+    initRepo(join(root, 'beta'));
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const t = task(1, 'Group');
+    const { cwd } = await iso.prepare(t, run);
+    writeFileSync(join(cwd, 'alpha', 'README.md'), 'alpha\n');
+    writeFileSync(join(cwd, 'beta', 'README.md'), 'beta\n');
+    expect(await iso.taskDiff!(run, t.id, {})).toEqual({ available: true, text: '[repo alpha] README.md: +1 -1\n[repo beta] README.md: +1 -1\n' });
+    const patch = await iso.taskDiff!(run, t.id, { repo: 'beta', path: 'README.md' });
+    expect(patch).toMatchObject({ available: true, text: expect.stringContaining('+beta') });
+    if (patch.available) expect(patch.text).not.toContain('+alpha');
+  });
+
+  it('refuses traversal, state paths, unknown repos and missing files; reports missing historical evidence', async () => {
+    const root = repo();
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const t = task(1, 'Read');
+    await iso.prepare(t, run);
+    for (const file of ['../secret', '/etc/passwd', '.ordewell/session', '.git/config', ':(glob)**']) {
+      expect(await iso.taskDiff!(run, t.id, { path: file })).toMatchObject({ available: false });
+    }
+    expect(await iso.taskDiff!(run, t.id, { repo: 'outside' })).toMatchObject({ available: false, reason: expect.stringContaining('No repository') });
+    expect(await iso.taskDiff!(run, t.id, { path: 'absent.txt' })).toMatchObject({ available: false, reason: expect.stringContaining('No changed file') });
+    delete run.tasks[t.id].repos['.'].baseRef;
+    expect(await iso.taskDiff!(run, t.id, {})).toMatchObject({ available: false, reason: expect.stringContaining('starting commit') });
+    expect(await iso.taskDiff!(run, 'absent', {})).toMatchObject({ available: false, reason: expect.stringContaining('not available for this run') });
+  });
+
+  it('does not run clean filters, textconv, external diff drivers, or fsmonitor while reading', async () => {
+    const root = repo({ 'README.md': 'hello\n', '.gitattributes': 'README.md filter=owned diff=owned\n' });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const t = task(1, 'Read safely');
+    const { cwd } = await iso.prepare(t, run);
+    const marker = join(root, 'executed');
+    const command = `echo executed > '${marker}'`;
+    git(root, 'config', 'filter.owned.clean', command);
+    git(root, 'config', 'filter.owned.process', command);
+    git(root, 'config', 'diff.owned.textconv', command);
+    git(root, 'config', 'diff.external', command);
+    git(root, 'config', 'core.fsmonitor', command);
+    writeFileSync(join(cwd, 'README.md'), 'changed\n');
+    expect(await iso.taskDiff!(run, t.id, { path: 'README.md' })).toMatchObject({ available: true, text: expect.stringContaining('+changed') });
+    expect(existsSync(marker)).toBe(false);
+  });
+});
+
+describe.skipIf(!hasGit)('task diff reads keep the workspace boundary', () => {
+  it('excludes files outside a workspace that is a repository subdirectory', async () => {
+    const root = repo({ 'outside.txt': 'outside\n', 'inside/file.txt': 'inside\n' });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(join(root, 'inside'));
+    const t = task(1, 'Inside');
+    const { cwd } = await iso.prepare(t, run);
+    writeFileSync(join(cwd, '..', 'outside.txt'), 'outside changed\n');
+    writeFileSync(join(cwd, 'file.txt'), 'inside changed\n');
+    writeFileSync(join(cwd, 'new.txt'), 'new\n');
+    expect(await iso.taskDiff!(run, t.id, {})).toEqual({ available: true, text: '[repo .] file.txt: +1 -1\n[repo .] new.txt: +1 -0\n' });
+    expect(await iso.taskDiff!(run, t.id, { path: 'file.txt' })).toMatchObject({ available: true, text: expect.stringContaining('+inside changed') });
+    expect(await iso.taskDiff!(run, t.id, { path: 'outside.txt' })).toMatchObject({ available: false });
+  });
+
+  it('reads a symlink as a link without reading its outside target, and excludes linked artifacts', async () => {
+    const root = repo();
+    mkdirSync(join(root, 'node_modules'));
+    writeFileSync(join(root, 'node_modules', 'secret.txt'), 'private artifact');
+    const outside = repo({ 'secret.txt': 'outside secret\n' });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const t = task(1, 'Link');
+    const { cwd } = await iso.prepare(t, run);
+    symlinkSync(join(outside, 'secret.txt'), join(cwd, 'link.txt'));
+    const patch = await iso.taskDiff!(run, t.id, { path: 'link.txt' });
+    expect(patch).toMatchObject({ available: true, text: expect.stringContaining('new file mode 120000') });
+    if (patch.available) expect(patch.text).not.toContain('outside secret');
+    const list = await iso.taskDiff!(run, t.id, {});
+    if (list.available) expect(list.text).not.toContain('node_modules');
+    expect(await iso.taskDiff!(run, t.id, { path: 'node_modules/secret.txt' })).toMatchObject({ available: false });
   });
 });

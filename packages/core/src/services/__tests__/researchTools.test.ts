@@ -44,3 +44,20 @@ describe('researchTools', () => {
     expect(params.properties!.paths.items!.type).toBe(SchemaType.STRING);
   });
 });
+
+describe('planner task read tool projections', () => {
+  it('offers the same attempt, kind and diff parameters to both API planners', () => {
+    const openai = toOpenAiTools(true);
+    const gemini = toGeminiToolDeclarations(true);
+    for (const name of ['task_query', 'task_output', 'task_diff']) {
+      const a = openai.find((t) => t.function.name === name)!.function.parameters!;
+      const b = gemini.find((t) => t.name === name)!.parameters!;
+      expect(Object.keys(a.properties as object)).toEqual(Object.keys(b.properties!));
+      expect(a.required ?? []).toEqual(b.required ?? []);
+    }
+    const a = openai.find((t) => t.function.name === 'task_output')!.function.parameters!;
+    expect(a.properties).toMatchObject({ attempt: { type: 'integer', minimum: 1 }, kinds: { items: { enum: expect.arrayContaining(['tool_call', 'tool_result', 'text', 'error', 'approval_requested', 'usage']) } } });
+    const b = gemini.find((t) => t.name === 'task_output')!.parameters!;
+    expect(b.properties!.kinds.items!.enum).toContain('usage');
+  });
+});

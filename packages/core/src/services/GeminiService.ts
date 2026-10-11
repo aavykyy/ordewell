@@ -232,7 +232,7 @@ export class GeminiService extends BaseAiService implements IAiService {
 
     const chat = genModel.startChat({
       history: seededHistory,
-      tools: [{ functionDeclarations: TOOL_DEFINITIONS }],
+      tools: [{ functionDeclarations: toGeminiToolDeclarations(req.plannerTools !== undefined) }],
       generationConfig: { temperature: 0.3, topP: 0.95, maxOutputTokens: 16384 },
     });
 
@@ -250,6 +250,7 @@ export class GeminiService extends BaseAiService implements IAiService {
       runnerModes: req.runnerModes,
       autonomousDefault: req.autonomousDefault,
       fetcher: req.fetcher,
+      plannerReads: req.plannerTools?.handler,
     };
 
     this.conversation = { ctx, setProgress: (onProgress) => { currentProgress = onProgress; } };

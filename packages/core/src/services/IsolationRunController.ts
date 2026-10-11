@@ -1,3 +1,4 @@
+import { TASK_DIFF_UNAVAILABLE, type TaskDiffRead, type TaskDiffResult } from './taskDiffRead';
 import type { Task } from '../models/Task';
 import type { IConfig } from '../interfaces/IConfig';
 import type { INotification } from '../interfaces/INotification';
@@ -497,6 +498,13 @@ export class IsolationRunController {
     delete this.resolvers[resolverId];
     this.listener.changed();
     return conflictedId;
+  }
+
+  async taskDiff(taskId: string, options: TaskDiffRead): Promise<TaskDiffResult> {
+    if (!this.run || !this.run.tasks[taskId] || !this.isolation.taskDiff) {
+      return { available: false, reason: TASK_DIFF_UNAVAILABLE };
+    }
+    return this.isolation.taskDiff(this.run, taskId, options);
   }
 
   async reviewDiff(): Promise<string> {

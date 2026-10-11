@@ -20,4 +20,5 @@ export type {
   EditPlanArgs,
   TaskQueryArgs,
   TaskOutputArgs,
+  TaskDiffArgs,
 } from './tools';
