@@ -47,12 +47,21 @@ export function approvalsRoute(pool: OrchestratorPool) {
     if (!pool.hasSession(sessionId)) return refuse(c, 404, `Unknown session: ${sessionId}`, 'session_not_found');
 
     const answer = answerOf(await c.req.json().catch(() => null));
-
-    if (!pool.resolveApproval(sessionId, approvalId, answer)) {
+    const decided = toApprovalDecision(answer);
+    // A runner request the user denies goes through the command seam, so their
+    // action is kept in the timeline (ADR-0029). An allow must reach the
+    // approval path: the seam never allows, and the user's own Allow is legitimate.
+    const request = pool.outstandingApprovals(sessionId).find((pending) => pending.id === approvalId)?.request;
+    if (decided.decision === 'deny' && request?.taskId) {
+      const outcome = await pool.session(sessionId).execute(
+        { command: 'answer_approval', task: request.taskId, approval: approvalId, answer: 'deny', ...(decided.note ? { note: decided.note } : {}) },
+        { kind: 'user' },
+      );
+      if (!outcome.ok) return refuse(c, 400, outcome.message, 'refused');
+    } else if (!pool.resolveApproval(sessionId, approvalId, answer)) {
       return refuse(c, 409, 'Approval is no longer outstanding — it timed out or was already answered.', 'approval_not_outstanding');
     }
-    const { decision } = toApprovalDecision(answer);
-    return c.json({ ok: true, granted: isGranted({ decision }), decision } satisfies ApprovalAnswerResponse);
+    return c.json({ ok: true, granted: isGranted(decided), decision: decided.decision } satisfies ApprovalAnswerResponse);
   });
 
   return router;

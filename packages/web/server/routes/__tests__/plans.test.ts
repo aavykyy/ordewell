@@ -124,13 +124,12 @@ describe('POST /:sessionId/generate', () => {
 
 describe('task control routes', () => {
   it.each([
-    ['run', 'runTask'],
-    ['force-start', 'forceStartTask'],
-    ['retry', 'retryTask'],
-    ['cancel', 'cancelTask'],
-  ])('POST tasks/:taskId/%s calls session.%s', async (segment, method) => {
-    const sessionMethods = { runTask: vi.fn(), forceStartTask: vi.fn(), retryTask: vi.fn(), cancelTask: vi.fn() };
-    const pool = fakePool({ session: vi.fn().mockReturnValue(sessionMethods) } as never);
+    ['run', { command: 'run_task', task: 't9' }],
+    ['retry', { command: 'retry_task', task: 't9', from: 'fresh' }],
+    ['cancel', { command: 'stop_task', task: 't9' }],
+  ])('POST tasks/:taskId/%s reaches the command seam as the user', async (segment, command) => {
+    const execute = vi.fn().mockResolvedValue({ ok: true, message: 'done' });
+    const pool = fakePool({ session: vi.fn().mockReturnValue({ execute }) } as never);
     const { plansRoute } = await import('../../routes/plans');
     const app = new Hono();
     app.route('/api/plans', plansRoute(pool));
@@ -139,7 +138,35 @@ describe('task control routes', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
-    expect((sessionMethods as never)[method]).toHaveBeenCalledWith('t9');
+    expect(execute).toHaveBeenCalledWith(command, { kind: 'user' });
+  });
+
+  it('keeps force-start on the Session method: the seam has no command for a start past a merge gate', async () => {
+    const forceStartTask = vi.fn().mockResolvedValue(undefined);
+    const execute = vi.fn();
+    const pool = fakePool({ session: vi.fn().mockReturnValue({ forceStartTask, execute }) } as never);
+    const { plansRoute } = await import('../../routes/plans');
+    const app = new Hono();
+    app.route('/api/plans', plansRoute(pool));
+
+    const res = await app.request('/api/plans/s1/tasks/t9/force-start', { method: 'POST' });
+
+    expect(res.status).toBe(200);
+    expect(forceStartTask).toHaveBeenCalledWith('t9');
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('answers a seam refusal with 400 and its reason', async () => {
+    const execute = vi.fn().mockResolvedValue({ ok: false, outcome: 'refused', message: 'Task #9 "Deploy" is not running: there is nothing to stop.' });
+    const pool = fakePool({ session: vi.fn().mockReturnValue({ execute }) } as never);
+    const { plansRoute } = await import('../../routes/plans');
+    const app = new Hono();
+    app.route('/api/plans', plansRoute(pool));
+
+    const res = await app.request('/api/plans/s1/tasks/t9/cancel', { method: 'POST' });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'Task #9 "Deploy" is not running: there is nothing to stop.', code: 'refused' });
   });
 
   it('returns 404 for an unknown session', async () => {
@@ -169,5 +196,42 @@ describe('task control routes', () => {
 
     expect(res.status).toBe(200);
     expect(requestMerge).toHaveBeenCalledWith(['a', 'b']);
+  });
+});
+
+describe('run controls reach the command seam as the user', () => {
+  async function appFor(session: Record<string, unknown>): Promise<Hono> {
+    const planSession = { planState: { tasks: [{}] }, planTasks: [{}], isExecuting: false, ...session };
+    const pool = fakePool({ hasSession: vi.fn().mockReturnValue(true), session: vi.fn().mockReturnValue(planSession) } as never);
+    const { plansRoute } = await import('../../routes/plans');
+    const app = new Hono();
+    app.route('/api/plans', plansRoute(pool));
+    return app;
+  }
+
+  it('POST /:sessionId/execute runs the plan through the seam', async () => {
+    const execute = vi.fn().mockResolvedValue({ ok: true, message: 'The plan is running.' });
+    const res = await (await appFor({ execute })).request('/api/plans/s1/execute', { method: 'POST' });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: 'running' });
+    expect(execute).toHaveBeenCalledWith({ command: 'run_plan' }, { kind: 'user' });
+  });
+
+  it('POST /:sessionId/execute answers a seam refusal with 400', async () => {
+    const execute = vi.fn().mockResolvedValue({ ok: false, outcome: 'refused', message: 'The plan is already running.' });
+    const res = await (await appFor({ execute })).request('/api/plans/s1/execute', { method: 'POST' });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'The plan is already running.', code: 'refused' });
+  });
+
+  it('POST /:sessionId/stop stops the run through the seam', async () => {
+    const execute = vi.fn().mockResolvedValue({ ok: true, message: 'Stopped the run.' });
+    const res = await (await appFor({ execute })).request('/api/plans/s1/stop', { method: 'POST' });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: 'stopped' });
+    expect(execute).toHaveBeenCalledWith({ command: 'stop_run' }, { kind: 'user' });
   });
 });

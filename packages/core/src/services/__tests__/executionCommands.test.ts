@@ -181,6 +181,24 @@ describe('the command seam: an unapproved plan or task never starts', () => {
 
     expect(env.session.planState!.approvedTasks).toEqual(['t1', 't2']);
   });
+
+  it('approves every task when the user signs off a review, so the planner may start them', async () => {
+    const env = setup();
+    // The shape the review route sees: an approved plan whose approval ledger was never filled.
+    env.session.loadPlan(
+      plan([task('u1', 1, { type: 'user', prompt: undefined }), task('t2', 2, { dependencies: ['u1'] })], { status: 'approved', approvedTasks: [] }),
+      'goal', testWorkspace, { persist: false },
+    );
+
+    await env.session.approveReview();
+
+    expect(env.session.planState!.approvedTasks).toEqual(['u1', 't2']);
+    // The planner's start of t2 is refused for its unmet dependency, not for approval:
+    // the approval check comes first in the seam.
+    const outcome = await env.run({ command: 'run_task', task: 't2' });
+    expect(outcome.message).toContain('depends on');
+    expect(outcome.message).not.toContain('not approved');
+  });
 });
 
 describe('the command seam: consent in a user-started planner turn', () => {
@@ -363,7 +381,7 @@ describe('the command seam: message_task', () => {
     const env = await running();
 
     expect(await env.run({ command: 'message_task', task: 't1', text: 'also update the docs' })).toEqual({
-      ok: true, message: 'Sent to task #1 "Task t1". The runner reads it at its next step, or when its turn ends.',
+      ok: true, message: 'Sent to task #1 "Task t1". The runner reads it at its next step, or when its turn ends.', id: 'msg-1',
     });
     expect(env.latest('t1').queued()).toEqual([{ id: 'msg-1', text: 'also update the docs' }]);
     expect(env.timeline().at(-1)!.text).toBe('The planner sent task #1 "Task t1" a message: "also update the docs"');
@@ -482,6 +500,18 @@ describe('the command seam: who asked', () => {
     const lines = (view: typeof live) => view.blocks.flatMap((b) => (b.type === 'message' ? [[b.role, b.text]] : []));
     expect(lines(reloaded)).toEqual(lines(live));
     expect(lines(live)).toEqual([['system', 'You stopped task #1 "Task t1".'], ['system', 'The planner started task #1 "Task t1".']]);
+  });
+
+  it('records the user\'s own start as "You started ...", the same wording the button press gets', async () => {
+    const env = setup();
+    env.session.loadPlan(plan([task('t4', 4)]), 'goal', testWorkspace, { persist: false });
+
+    await env.run({ command: 'run_task', task: 't4' }, { kind: 'user' });
+
+    expect(env.timeline().at(-1)).toMatchObject({
+      record: { command: 'run_task', actor: 'user', outcome: 'done', task: { id: 't4', ref: '#4' } },
+      text: 'You started task #4 "Task t4".',
+    });
   });
 
   it('reaches the seam from a planner turn through the session\'s own planner tools', async () => {

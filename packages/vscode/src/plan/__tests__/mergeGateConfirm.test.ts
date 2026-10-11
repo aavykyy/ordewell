@@ -12,6 +12,7 @@ function deps(gate: string[]) {
     planState: { tasks: [createTask({ id: 'fix', order: 1, title: 'Fix' }), createTask({ id: 'ops', order: 2, title: 'Deploy', ops: true, dependencies: ['fix'] })] },
     forceStartTask: vi.fn().mockResolvedValue(undefined),
     runTask: vi.fn().mockResolvedValue(undefined),
+    execute: vi.fn().mockResolvedValue({ ok: true, message: 'done' }),
   };
   const chatProvider = { showPlan: vi.fn(), clearIsolationHandoff: vi.fn() };
   const d = {
@@ -29,7 +30,9 @@ describe('starting a task past its merge gate (ADR-0020)', () => {
 
   it.each([
     ['forceStart', 'forceStartTask'],
-    ['runTask', 'runTask'],
+    // A gated Run is the same start past the gate as Force start, which the
+    // command seam has no command for.
+    ['runTask', 'forceStartTask'],
   ] as const)('%s asks in a modal naming the unmerged work, and starts nothing on a cancel', async (command, method) => {
     showWarningMessage.mockResolvedValue(undefined);
     const { d, session } = deps(['fix']);
@@ -45,7 +48,7 @@ describe('starting a task past its merge gate (ADR-0020)', () => {
 
   it.each([
     ['forceStart', 'forceStartTask'],
-    ['runTask', 'runTask'],
+    ['runTask', 'forceStartTask'],
   ] as const)('%s starts the task once the user goes ahead', async (command, method) => {
     showWarningMessage.mockResolvedValue('Start anyway');
     const { d, session } = deps(['fix']);
@@ -53,6 +56,15 @@ describe('starting a task past its merge gate (ADR-0020)', () => {
     await handleSystemCommand(command, 'ops', d);
 
     expect(session[method]).toHaveBeenCalledWith('ops');
+  });
+
+  it('runs an ungated task through the command seam as the user', async () => {
+    const { d, session } = deps([]);
+
+    await handleSystemCommand('runTask', 'ops', d);
+
+    expect(showWarningMessage).not.toHaveBeenCalled();
+    expect(session.execute).toHaveBeenCalledWith({ command: 'run_task', task: 'ops' }, { kind: 'user' });
   });
 
   it('asks nothing of a task no gate holds', async () => {

@@ -97,6 +97,50 @@ describe('POST /api/approvals/:sessionId/:approvalId', () => {
     expect(pool.resolveApproval).toHaveBeenCalledWith('s1', 'ap-1', { decision: 'deny' });
   });
 
+  it('routes a runner request the user denies through the command seam, keeping it in the timeline', async () => {
+    const execute = vi.fn().mockResolvedValue({ ok: true, message: 'Denied task #1 "Build"\'s request.' });
+    pool = fakePool({
+      outstandingApprovals: vi.fn().mockReturnValue([
+        { id: 'ap-1', createdAt: '2026-10-11T18:00:00Z', request: { kind: 'runner_tool', subject: 'Bash(npm test)', scope: 'Bash(npm test)', taskId: 't1' } },
+      ]),
+      session: vi.fn().mockReturnValue({ execute }),
+    });
+    app = new Hono();
+    app.route('/api/approvals', approvalsRoute(pool));
+
+    const res = await app.request('/api/approvals/s1/ap-1', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ decision: 'deny', note: 'not now' }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(execute).toHaveBeenCalledWith({ command: 'answer_approval', task: 't1', approval: 'ap-1', answer: 'deny', note: 'not now' }, { kind: 'user' });
+    expect(pool.resolveApproval).not.toHaveBeenCalled();
+  });
+
+  it('keeps an allow on the approval path: the seam never allows', async () => {
+    const execute = vi.fn();
+    pool = fakePool({
+      outstandingApprovals: vi.fn().mockReturnValue([
+        { id: 'ap-1', createdAt: '2026-10-11T18:00:00Z', request: { kind: 'runner_tool', subject: 'Bash(npm test)', scope: 'Bash(npm test)', taskId: 't1' } },
+      ]),
+      session: vi.fn().mockReturnValue({ execute }),
+    });
+    app = new Hono();
+    app.route('/api/approvals', approvalsRoute(pool));
+
+    const res = await app.request('/api/approvals/s1/ap-1', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ decision: 'allow' }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(pool.resolveApproval).toHaveBeenCalledWith('s1', 'ap-1', { decision: 'allow' });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it('404s for an unknown session', async () => {
     pool = fakePool({ hasSession: vi.fn().mockReturnValue(false) });
     app = new Hono();

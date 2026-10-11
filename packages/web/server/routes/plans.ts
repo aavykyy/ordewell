@@ -1,13 +1,18 @@
 import { Hono, type Context, type Env } from 'hono';
 import {
+  AlreadyExecutingError,
   flattenTasks,
   isSupervisorLevel,
+  NoPlanError,
   surfacePlan,
   surfacePlanState,
+  TaskControlError,
+  type CommandOutcome,
   type ConversationCompactResponse,
   type ConversationForkResponse,
   type ConversationRewindResponse,
   type ExecuteResponse,
+  type ExecutionCommand,
   type ForceSendResponse,
   type GeneratePlanResponse,
   type IsolationDiffResponse,
@@ -28,6 +33,13 @@ import { OrchestratorPool } from '../pool/orchestratorPool';
 import { failure, refuse } from './errors';
 
 const NO_CHECKPOINT = 'The task is not waiting at a checkpoint — it was answered already, withdrawn, or has no runner left to hear it.';
+
+/** One execution button's command, run as the user (ADR-0029): a refusal becomes the 400 the surface already shows. */
+async function runUserCommand(session: ReturnType<OrchestratorPool['session']>, command: ExecutionCommand): Promise<Extract<CommandOutcome, { ok: true }>> {
+  const outcome = await session.execute(command, { kind: 'user' });
+  if (!outcome.ok) throw new TaskControlError(outcome.message);
+  return outcome;
+}
 
 export function plansRoute(pool: OrchestratorPool) {
   const router = new Hono();
@@ -99,16 +111,29 @@ export function plansRoute(pool: OrchestratorPool) {
 
   router.post('/:sessionId/execute', async (c) => {
     try {
-      await pool.session(c.req.param('sessionId')).executePlan();
+      const session = pool.session(c.req.param('sessionId'));
+      // The daemon contract keeps `no_plan` and `already_executing` distinct
+      // from a plain refusal; the seam refuses either way, so the codes it
+      // cannot carry are kept here.
+      if (!session.planState || session.planTasks.length === 0) throw new NoPlanError('execute');
+      if (session.isExecuting) throw new AlreadyExecutingError();
+      await runUserCommand(session, { command: 'run_plan' });
       return c.json({ status: 'running' } satisfies ExecuteResponse);
     } catch (err) {
       return failure(c, err, 'execute');
     }
   });
 
-  router.post('/:sessionId/stop', (c) => {
-    if (pool.hasSession(c.req.param('sessionId'))) pool.session(c.req.param('sessionId')).stopExecution();
-    return c.json({ status: 'stopped' } satisfies StopResponse);
+  router.post('/:sessionId/stop', async (c) => {
+    try {
+      if (pool.hasSession(c.req.param('sessionId'))) {
+        // A stop with nothing running is a no-op, not a refusal: the surface already said stopped.
+        await pool.session(c.req.param('sessionId')).execute({ command: 'stop_run' }, { kind: 'user' });
+      }
+      return c.json({ status: 'stopped' } satisfies StopResponse);
+    } catch (err) {
+      return failure(c, err, 'stop');
+    }
   });
 
   // Distinct from the stop route above, which halts *execution* (running
@@ -150,21 +175,32 @@ export function plansRoute(pool: OrchestratorPool) {
 
   // Orchestrator controls — these spawn or kill runner processes, so they are
   // deliberately separate from the generic `PUT tasks/:taskId` status patch.
-  for (const [segment, run] of [
-    ['run', (s: ReturnType<typeof pool.session>, id: string) => s.runTask(id)],
-    ['force-start', (s: ReturnType<typeof pool.session>, id: string) => s.forceStartTask(id)],
-    ['retry', (s: ReturnType<typeof pool.session>, id: string) => s.retryTask(id)],
-    ['cancel', (s: ReturnType<typeof pool.session>, id: string) => s.cancelTask(id)],
+  // Each is an execution button, so it goes through the command seam as the
+  // user (ADR-0029). Force start passes a merge gate, which the seam has no
+  // command for, so it stays on the Session method.
+  for (const [segment, command] of [
+    ['run', (id: string): ExecutionCommand => ({ command: 'run_task', task: id })],
+    ['retry', (id: string): ExecutionCommand => ({ command: 'retry_task', task: id, from: 'fresh' })],
+    ['cancel', (id: string): ExecutionCommand => ({ command: 'stop_task', task: id })],
   ] as const) {
     router.post(`/:sessionId/tasks/:taskId/${segment}`, async (c) => {
       try {
-        await run(pool.session(c.req.param('sessionId')), c.req.param('taskId'));
+        await runUserCommand(pool.session(c.req.param('sessionId')), command(c.req.param('taskId')));
         return c.json({ ok: true } satisfies OkResponse);
       } catch (err) {
         return failure(c, err, segment);
       }
     });
   }
+
+  router.post('/:sessionId/tasks/:taskId/force-start', async (c) => {
+    try {
+      await pool.session(c.req.param('sessionId')).forceStartTask(c.req.param('taskId'));
+      return c.json({ ok: true } satisfies OkResponse);
+    } catch (err) {
+      return failure(c, err, 'force-start');
+    }
+  });
 
   // Talking to a task (ADR-0018, M1). A task not running is refused with
   // the reason. Force send
@@ -182,7 +218,19 @@ export function plansRoute(pool: OrchestratorPool) {
     }
   };
 
-  router.post('/:sessionId/tasks/:taskId/messages', messageHandler((session, taskId, text) => session.sendTaskMessage(taskId, text)));
+  // A plain message reaches the task through the command seam as the user (ADR-0029),
+  // so it lands in the timeline; force send has no command and stays on the Session.
+  router.post('/:sessionId/tasks/:taskId/messages', async (c) => {
+    try {
+      const body: unknown = await c.req.json().catch(() => ({}));
+      const text = typeof body === 'object' && body !== null && 'text' in body ? body.text : undefined;
+      if (typeof text !== 'string' || !text.trim()) return c.json({ error: 'text is required' }, 400);
+      const outcome = await runUserCommand(pool.session(c.req.param('sessionId')), { command: 'message_task', task: c.req.param('taskId'), text });
+      return c.json({ id: outcome.id ?? '' } satisfies TaskMessageResponse);
+    } catch (err) {
+      return failure(c, err, 'task edit');
+    }
+  });
   router.post('/:sessionId/tasks/:taskId/messages/now', messageHandler((session, taskId, text) => session.forceSendTaskMessage(taskId, text)));
 
   // Force send a message still queued; `sent` is false once the runner has it.
@@ -195,14 +243,15 @@ export function plansRoute(pool: OrchestratorPool) {
     }
   });
 
-  // Continue a finished structured task in its saved session (ADR-0018, K1).
-  // A task that cannot be continued is refused with the reason.
+  // Continue a finished structured task in its saved session (ADR-0018, K1),
+  // through the command seam as the user (ADR-0029). A task that cannot be
+  // continued is refused with the reason.
   router.post('/:sessionId/tasks/:taskId/continue', async (c) => {
     try {
       const body: unknown = await c.req.json().catch(() => ({}));
       const text = typeof body === 'object' && body !== null && 'text' in body ? body.text : undefined;
       if (typeof text !== 'string' || !text.trim()) return c.json({ error: 'text is required' }, 400);
-      await pool.session(c.req.param('sessionId')).continueTask(c.req.param('taskId'), text);
+      await runUserCommand(pool.session(c.req.param('sessionId')), { command: 'retry_task', task: c.req.param('taskId'), from: 'session', message: text });
       return c.json({ ok: true } satisfies OkResponse);
     } catch (err) {
       return failure(c, err, 'task edit');

@@ -147,6 +147,7 @@ function fakeSession() {
     removeQueuedMessage: vi.fn(),
     reset: vi.fn(),
     loadPlan: vi.fn(),
+    execute: vi.fn(async () => ({ ok: true, message: 'done' })),
     executePlan: vi.fn(async () => {}),
     stopExecution: vi.fn(),
     startPlanning: vi.fn(async (goal: string) => planWithOneTask(goal)),
@@ -353,7 +354,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     await vi.waitFor(() => expect(h.session.spies.startPlanning).toHaveBeenCalled());
 
     h.chat.messages.fire({ type: 'sendSystemCommand', command: 'executePlan' });
-    await vi.waitFor(() => expect(h.session.spies.executePlan).toHaveBeenCalled());
+    await vi.waitFor(() => expect(h.session.spies.execute).toHaveBeenCalledWith({ command: 'run_plan' }, { kind: 'user' }));
     expect(h.session.spies.loadPlan).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'approved' }),
       'build a parser',
@@ -361,7 +362,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     );
 
     h.chat.messages.fire({ type: 'sendSystemCommand', command: 'cancel', taskId: 't1' });
-    await vi.waitFor(() => expect(h.session.spies.cancelTask).toHaveBeenCalledWith('t1'));
+    await vi.waitFor(() => expect(h.session.spies.execute).toHaveBeenCalledWith({ command: 'stop_task', task: 't1' }, { kind: 'user' }));
   });
 
   it('persists and stops runners on dispose', async () => {

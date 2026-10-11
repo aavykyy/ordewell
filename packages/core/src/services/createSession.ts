@@ -659,7 +659,7 @@ export class Session {
       stopRun: () => this.stopExecution(),
       retryTask: (taskId) => this.restartTask(taskId),
       continueTask: (taskId, message) => this.resumeTask(taskId, message),
-      messageTask: (taskId, text) => { this.sendTaskMessage(taskId, text); },
+      messageTask: (taskId, text) => this.sendTaskMessage(taskId, text),
       denyRequest: (requestId, note) => this.resolveApproval(requestId, { decision: 'deny', ...(note ? { note } : {}) }),
       mergeAll: () => this.mergeRun(),
       record: (record, text) => this.recordExecution(record, text),
@@ -1442,6 +1442,10 @@ export class Session {
   async approveReview(): Promise<LegacyPlanState> {
     if (!this.plan) throw new NoPlanError('review');
     const plan = this.plan;
+    // Signing off a review is the user's approval of every task in the plan, as
+    // executing it is (ADR-0029): without it the planner's starts refuse the
+    // tasks as added since approval.
+    this.approve(flattenTasks(this.store.planTasks).map((t) => t.id));
     this.orchestrator.setMergeAtGatesAutomatically(plan.mergeAtGatesAutomatically === true);
     await this.withSave(() => this.orchestrator.approveReview());
     return plan;
