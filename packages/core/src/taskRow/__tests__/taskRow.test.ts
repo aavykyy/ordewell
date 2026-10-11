@@ -71,6 +71,10 @@ describe('a task paused on a usage limit', () => {
   const now = new Date(2026, 9, 11, 17, 0);
   const paused = { status: 'awaiting_user', type: 'ai' as const, awaitingReason: 'usage-limit' as const };
 
+  it('shows no resume time when the saved one does not parse', () => {
+    expect(resumeLabel({ ...paused, resumeAt: 'not a date' }, now)).toBeNull();
+  });
+
   it('reads when it resumes, on the reader\'s clock, with the date when it is not today', () => {
     expect(resumeTime(new Date(2026, 9, 11, 20, 10), now)).toBe('8:10pm');
     expect(resumeTime(new Date(2026, 9, 11, 9, 0), now)).toBe('9am');
