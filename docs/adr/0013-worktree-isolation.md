@@ -161,8 +161,9 @@ everything below applies per repo of the group.
   files hard links, copied only when a hard link is impossible (a different
   volume), with a notice. Copies are what make the recorded link list matter
   there, since a copied `.envrc` is a plain untracked file.
-- **Never merged for the user.** Ordewell never merges into the checked-out
-  branch on its own. When an isolated run settles, `handoff` runs and
+- **Merge into the user's branch requires consent.** Ordewell merges into
+  the checked-out branch when the user presses Merge all, or opts into one of
+  ADR-0029's per-plan settings. When an isolated run settles, `handoff` runs and
   `isolation_handoff` (integration branches, base refs, what landed) is broadcast
   *before* `execution_complete` — the TUI closes its execution stream on the
   latter, so anything after it is lost. What follows is the user's: review the
@@ -173,7 +174,7 @@ everything below applies per repo of the group.
   merge gate during a run (ADR-0020); it takes
   turns with the landing queue, so it never reads an integration branch
   mid-landing.
-  *Amended by [ADR-0029](0029-the-supervisor.md):* two exits the user opts
+  [ADR-0029](0029-the-supervisor.md) defines two settings the user opts
   into per plan, both saved at run start. *Merge at gates automatically* runs
   Merge all when a task reaches a merge gate, and a supervisor at Act may call
   `merge_all` in its wake-up turns. Both go through the same queue and
@@ -375,3 +376,4 @@ everything below applies per repo of the group.
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
 - 2026-10-11 — Merge all exposed throughout a run for unmerged landings (#85).
 - 2026-10-11 — merge at gates automatically, and the supervisor's `merge_all` at Act, as opt-in exits from "never merged for the user" ([ADR-0029](0029-the-supervisor.md)).
+- 2026-10-11 — implemented the automatic gate setting and core merge_all action.

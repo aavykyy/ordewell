@@ -107,6 +107,16 @@ describe('webview messages reach the session through one entry point each', () =
     fs.rmSync(h.workspace, { recursive: true, force: true });
   });
 
+  it('saves the auto-merge toggle on the plan and echoes it to the webview', async () => {
+    h.session.loadPlan(plan(), 'goal', h.workspace);
+    await h.route({ type: 'setAutoMerge', enabled: true });
+    expect(h.session.planState!.mergeAtGatesAutomatically).toBe(true);
+    expect(h.lastPlan()!.mergeAtGatesAutomatically).toBe(true);
+    expect(loadSession(h.session.sessionId, h.workspace)!.plan.mergeAtGatesAutomatically).toBe(true);
+    await h.route({ type: 'setAutoMerge', enabled: false });
+    expect(h.lastPlan()!.mergeAtGatesAutomatically).toBe(false);
+  });
+
   describe('task edits', () => {
     it('a model picked on a card is a session edit, broadcast to every surface', async () => {
       const assignment = { modelId: 'claude-opus-4-1', modelLabel: 'Claude Opus 4.1' };

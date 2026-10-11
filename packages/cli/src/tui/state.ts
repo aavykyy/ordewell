@@ -385,6 +385,8 @@ export interface TuiState {
   configuredProviders: AiProvider[];
   allowlist: Record<string, string[]>;
   autonomous: boolean;
+  mergeAtGatesAutomatically: boolean;
+  runAutoMerge: boolean | null;
   /**
    * Whether the terminal's mouse is captured for wheel scrolling. On by
    * default; `/mouse off` hands it back when selecting text out of the
@@ -563,6 +565,8 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     configuredProviders: [],
     allowlist: {},
     autonomous: true,
+    mergeAtGatesAutomatically: false,
+    runAutoMerge: null,
     mouseCapture: true,
     selection: null,
     workspace: process.cwd(),

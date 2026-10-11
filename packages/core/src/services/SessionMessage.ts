@@ -105,6 +105,8 @@ export type SurfacePlanState =
   | (Omit<Extract<PlanState, { phase: 'executing' }>, 'pendingTasks' | 'executionLog'> & { pendingTasks: SurfaceTask[]; executionLog: SurfaceTask<TaskSnapshot>[] });
 
 export type SerializedPlan = {
+  mergeAtGatesAutomatically?: boolean;
+  runSettings?: LegacyPlanState['runSettings'];
   tasks: SerializedTask[];
   runners: RunnerId[];
   generatedAt: string;
@@ -376,6 +378,8 @@ export function serializePlan(plan: LegacyPlanState): SerializedPlan {
     tasks: plan.tasks.map(serializeTask),
     runners: plan.runners,
     generatedAt: plan.generatedAt,
+    mergeAtGatesAutomatically: plan.mergeAtGatesAutomatically,
+    runSettings: plan.runSettings,
     conversationHistory: surfaceConversation(plan.conversationHistory),
     prdMarkdown: plan.prdMarkdown,
     queuedMessages: surfaceQueued(plan.queuedMessages),

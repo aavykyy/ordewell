@@ -23,7 +23,7 @@ export type OrdewellApi = Pick<ApiClient,
   | 'getTaskLogAttempts' | 'getTaskLog'
   | 'sendTaskMessage' | 'removeQueuedTaskMessage' | 'forceSendTaskMessage' | 'forceSendQueuedTaskMessage'
   | 'interruptTask' | 'approveTaskCheckpoint' | 'rejectTaskCheckpoint' | 'continueTask'
-  | 'addTask' | 'updateTask' | 'removeTask'
+  | 'addTask' | 'updateTask' | 'removeTask' | 'setMergeAtGatesAutomatically'
   | 'getSessions' | 'getSession' | 'adoptSession' | 'deleteSession' | 'closeSession'
   | 'forkConversation' | 'rewindTargets' | 'rewindConversation' | 'compactConversation'
   | 'reviewRunDiff' | 'mergeRun' | 'discardRun' | 'cleanupRun' | 'continueWithStash' | 'continueWithoutIsolation' | 'resolveConflictAsTask'
@@ -237,6 +237,11 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       await refreshPlan(deps, effect.sessionId);
       return;
     }
+
+    case 'setAutoMerge':
+      await api.setMergeAtGatesAutomatically(effect.sessionId, effect.enabled);
+      await refreshPlan(deps, effect.sessionId);
+      return;
 
     case 'updateTask':
       await api.updateTask(effect.sessionId, effect.taskId, effect.changes);

@@ -52,6 +52,19 @@ export function plansRoute(pool: OrchestratorPool) {
     }
   });
 
+  router.patch('/:sessionId/settings', async (c) => {
+    const body: unknown = await c.req.json();
+    const enabled = typeof body === 'object' && body !== null && 'mergeAtGatesAutomatically' in body
+      ? body.mergeAtGatesAutomatically : undefined;
+    if (typeof enabled !== 'boolean') return c.json({ error: 'mergeAtGatesAutomatically must be a boolean' }, 400);
+    try {
+      pool.session(c.req.param('sessionId')).setMergeAtGatesAutomatically(enabled);
+      return c.json({ ok: true } satisfies OkResponse);
+    } catch (err) {
+      return failure(c, err, 'change merge setting');
+    }
+  });
+
   router.post('/:sessionId/execute', async (c) => {
     try {
       await pool.session(c.req.param('sessionId')).executePlan();

@@ -24,6 +24,27 @@ function makeTask(overrides: Partial<Task> = {}): Task {
 const emptyModels: DiscoveredModel[] = [];
 
 describe('PlanCardGroup — Execute Plan / Stop', () => {
+  it('offers automatic gate merging off by default and toggles both ways', () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<PlanCardGroup tasks={[makeTask()]} models={emptyModels}
+      onExecutePlan={vi.fn()} onAutoMergeChange={onChange} />);
+    const toggle = screen.getByRole('checkbox', { name: 'Merge at gates automatically' }) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    fireEvent.click(toggle);
+    expect(onChange).toHaveBeenLastCalledWith(true);
+    rerender(<PlanCardGroup tasks={[makeTask()]} models={emptyModels} mergeAtGatesAutomatically
+      onExecutePlan={vi.fn()} onAutoMergeChange={onChange} />);
+    expect(toggle.checked).toBe(true);
+    fireEvent.click(toggle);
+    expect(onChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('shows that a setting change during execution applies to the next run', () => {
+    render(<PlanCardGroup tasks={[makeTask()]} models={emptyModels} mergeAtGatesAutomatically
+      runAutoMerge={false} isExecuting onStopExecution={vi.fn()} onAutoMergeChange={vi.fn()} />);
+    expect(screen.getByText(/next run; now off/)).toBeTruthy();
+  });
+
   it('renders Execute Plan button when not executing', () => {
     render(
       <PlanCardGroup

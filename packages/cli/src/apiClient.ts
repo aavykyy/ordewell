@@ -364,6 +364,10 @@ export class ApiClient {
     return this.call('POST', `/api/plans/${sessionId}/tasks`, 'Add task failed', task);
   }
 
+  setMergeAtGatesAutomatically(sessionId: string, enabled: boolean): Promise<OkResponse> {
+    return this.call('PATCH', `/api/plans/${sessionId}/settings`, 'Change merge setting failed', { mergeAtGatesAutomatically: enabled });
+  }
+
   updateTask(sessionId: string, taskId: string, changes: Record<string, unknown>): Promise<OkResponse> {
     return this.call('PUT', `/api/plans/${sessionId}/tasks/${taskId}`, 'Update task failed', changes);
   }
