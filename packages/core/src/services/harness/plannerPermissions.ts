@@ -1,3 +1,4 @@
+import { realpathSync } from 'fs';
 import type { ApprovalDecision, IApproval } from '../../interfaces/IApproval';
 import type { IWebFetcher } from '../../interfaces/IWebFetcher';
 import { grantScopeFor, resolveWithin } from '../pathScope';
@@ -25,6 +26,22 @@ const SUBJECT_MAX_CHARS = 400;
 
 function deny(note: string): ApprovalDecision {
   return { decision: 'deny', note };
+}
+
+function onDisk(target: string): string | undefined {
+  try { return realpathSync.native(target); } catch { return undefined; }
+}
+
+/**
+ * Where a harness planner's read lands. Its runner's in-workspace reads are
+ * decided here (ADR-0028), so a link the repository ships pointing outside it
+ * is followed, unlike `pathScope`'s lexical check; a path that does not exist
+ * is judged as written.
+ */
+function readTarget(root: string, target: string): { abs: string; inside: boolean } {
+  const written = resolveWithin(root, target);
+  const real = onDisk(written.abs);
+  return real === undefined ? written : resolveWithin(onDisk(root) ?? root, real);
 }
 
 export async function decidePlannerPermission(
@@ -66,7 +83,7 @@ export async function decidePlannerPermission(
       return decision.allowed ? ALLOW : deny(decision.reason);
     }
     case 'path': {
-      const { abs, inside } = resolveWithin(gate.workspaceRoot, ask.path);
+      const { abs, inside } = readTarget(gate.workspaceRoot, ask.path);
       if (inside) return ALLOW;
       const granted = await gate.approval.request({
         kind: 'external_path',

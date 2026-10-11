@@ -67,7 +67,8 @@ describe('ClaudeCodeAdapter start switch', () => {
       '--permission-prompt-tool', 'stdio',
       '--permission-mode', 'default',
       '--disallowedTools', 'Edit,Write,MultiEdit,NotebookEdit,KillShell,Bash,PowerShell,EnterPlanMode,ExitPlanMode',
-      '--settings', '{"permissions":{"ask":["WebFetch","WebSearch","mcp__*"]}}',
+      '--setting-sources', 'user',
+      '--settings', '{"disableAllHooks":true,"permissions":{"ask":["WebFetch","WebFetch(domain:*)","WebSearch","mcp__*","Read","Grep","Glob","LS"]}}',
       '--append-system-prompt', 'PLAN',
       '--model', 'sonnet',
       '--effort', 'high',
@@ -92,7 +93,11 @@ describe('ClaudeCodeAdapter start switch', () => {
 
     expect(args.flatMap((arg, i) => (arg === '--permission-mode' ? [args[i + 1]] : []))).toEqual(['default']);
     expect(args[args.indexOf('--disallowedTools') + 1].split(',')).toEqual(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'KillShell', 'Bash', 'PowerShell', 'EnterPlanMode', 'ExitPlanMode']);
-    expect(JSON.parse(args[args.indexOf('--settings') + 1])).toEqual({ permissions: { ask: ['WebFetch', 'WebSearch', 'mcp__*'] } });
+    expect(args[args.indexOf('--setting-sources') + 1]).toBe('user');
+    expect(JSON.parse(args[args.indexOf('--settings') + 1])).toEqual({
+      disableAllHooks: true,
+      permissions: { ask: ['WebFetch', 'WebFetch(domain:*)', 'WebSearch', 'mcp__*', 'Read', 'Grep', 'Glob', 'LS'] },
+    });
     for (const flag of ['--dangerously-skip-permissions', 'acceptEdits', 'bypassPermissions']) {
       expect(args).not.toContain(flag);
     }

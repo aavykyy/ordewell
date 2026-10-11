@@ -6,6 +6,10 @@ import { CLAUDE_ORDEWELL } from './claudeOrdewell';
 import { CODEX_ORDEWELL } from './codexOrdewell';
 import { OPENCODE_ORDEWELL } from './openCodeOrdewell';
 import type { OrdewellToolBinding } from './ordewellBinding';
+import type { RepoConfigReader } from './repoConfig';
+import { CLAUDE_REPO_CONFIG } from './claudeRepoConfig';
+import { CODEX_REPO_CONFIG } from './codexRepoConfig';
+import { OPENCODE_REPO_CONFIG } from './openCodeRepoConfig';
 
 /**
  * One runner's connector: the adapter that drives it over its programmatic
@@ -15,6 +19,8 @@ export interface RunnerConnector {
   create(deps: AgentProcessDeps): TaskModeAgentAdapter;
   /** How the adapter hands its runner the Ordewell MCP server (ADR-0022), without which it can neither run a task nor plan. */
   ordewellTools: OrdewellToolBinding;
+  /** What the runner would load from a repository, which Ordewell reads for its planner instead (ADR-0028). */
+  repoConfig: RepoConfigReader;
 }
 
 /**
@@ -23,9 +29,9 @@ export interface RunnerConnector {
  * runner that is not here cannot run tasks at all.
  */
 export const CONNECTORS: Readonly<Record<string, RunnerConnector>> = {
-  'claude-code': { create: (deps) => new ClaudeCodeAdapter(deps), ordewellTools: CLAUDE_ORDEWELL },
-  codex: { create: (deps) => new CodexAdapter(deps), ordewellTools: CODEX_ORDEWELL },
-  opencode: { create: (deps) => new OpenCodeAdapter(deps), ordewellTools: OPENCODE_ORDEWELL },
+  'claude-code': { create: (deps) => new ClaudeCodeAdapter(deps), ordewellTools: CLAUDE_ORDEWELL, repoConfig: CLAUDE_REPO_CONFIG },
+  codex: { create: (deps) => new CodexAdapter(deps), ordewellTools: CODEX_ORDEWELL, repoConfig: CODEX_REPO_CONFIG },
+  opencode: { create: (deps) => new OpenCodeAdapter(deps), ordewellTools: OPENCODE_ORDEWELL, repoConfig: OPENCODE_REPO_CONFIG },
 };
 
 /** The connector for a runner id; undefined for an unknown id (including `toString`). */

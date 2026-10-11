@@ -115,8 +115,8 @@ describe('the environment a runner starts under', () => {
     const envs: NodeJS.ProcessEnv[] = [];
     const adapter = await start(spawned, deps(spawned, workspace, envs));
     expect(Object.values(envs[0]).some((value) => value?.includes('parent-synthetic'))).toBe(false);
-    // The OpenCode planner's server carries Ordewell's own permission policy in place of any it inherited (ADR-0026).
-    const planner = label === 'the OpenCode adapter' ? { permission: OPENCODE_PLANNER_PERMISSION } : {};
+    // The OpenCode planner's server carries Ordewell's own permission policy in place of any it inherited (ADR-0026), and no language server (ADR-0028).
+    const planner = label === 'the OpenCode adapter' ? { lsp: false, permission: OPENCODE_PLANNER_PERMISSION } : {};
     expect(JSON.parse(envs[0].OPENCODE_CONFIG_CONTENT ?? 'null')).toEqual({ model: 'host/model', ...planner });
     expect(JSON.parse(envs[0].Opencode_Config_Content ?? 'null')).toEqual({ model: 'workspace/model', mcp: { other: { type: 'local', command: ['x'] } } });
     adapter.dispose();

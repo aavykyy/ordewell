@@ -9,7 +9,8 @@ export interface ClaudeOrdewellLaunch {
 }
 
 export interface ClaudeOrdewellBinding extends OrdewellToolBinding<string> {
-  launch(mcp: McpClientConfig, role: OrdewellToolRole): ClaudeOrdewellLaunch;
+  /** `servers` are others to put in the same file, by name; none of them can stand in for Ordewell's. */
+  launch(mcp: McpClientConfig, role: OrdewellToolRole, servers?: Record<string, unknown>): ClaudeOrdewellLaunch;
 }
 
 export const CLAUDE_ORDEWELL: ClaudeOrdewellBinding = {
@@ -29,9 +30,9 @@ export const CLAUDE_ORDEWELL: ClaudeOrdewellBinding = {
    * search, and a model that has to look an Ordewell tool up first tends to
    * go on without it.
    */
-  launch(mcp: McpClientConfig, role: OrdewellToolRole): ClaudeOrdewellLaunch {
+  launch(mcp: McpClientConfig, role: OrdewellToolRole, servers: Record<string, unknown> = {}): ClaudeOrdewellLaunch {
     const config = ownerOnlyConfigFile('mcp.json', JSON.stringify({
-      mcpServers: { [mcp.name]: { type: 'http', url: mcp.url, headers: mcp.headers, alwaysLoad: true } },
+      mcpServers: { ...servers, [mcp.name]: { type: 'http', url: mcp.url, headers: mcp.headers, alwaysLoad: true } },
     }));
     return { args: ['--mcp-config', config.path, '--allowedTools', MCP_CLIENT_TOOL_NAMES.toolNames(role, mcp.hidden).join(',')], config };
   },

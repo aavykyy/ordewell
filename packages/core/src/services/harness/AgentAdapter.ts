@@ -3,6 +3,7 @@ import type { SubagentOutcome } from '../../models/Task';
 import type { UsageRecord } from '../../models/Usage';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { McpClientConfig } from '../mcp';
+import type { ProjectMcpServer } from './repoConfig';
 
 
 /**
@@ -142,6 +143,12 @@ export interface PlannerStartOptions extends AgentStartCommon {
    * means off.
    */
   nativeSearch?: boolean;
+  /**
+   * The repository's own MCP servers this planner may start, as approved
+   * (ADR-0028). The runner is launched without the repository's config, so
+   * these are the only ones it gets, and each is handed over as parsed.
+   */
+  projectServers?: ProjectMcpServer[];
 }
 
 /**

@@ -40,6 +40,9 @@ import { mapAgentTool, normalizeAgentArgs } from './agentTools';
 import { decidePlannerPermission, type PlannerPermissionGate } from './plannerPermissions';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
 import { mcpClientConfig, sharedMcpServer, type McpCredential, type OrdewellMcpServer } from '../mcp';
+import { instructionsBlock, repoRoot, type ProjectMcpServer } from './repoConfig';
+import { decideProjectServers, fileProjectServerApprovals, type ProjectServerApprovals } from './projectServers';
+import type { IApproval } from '../../interfaces/IApproval';
 
 /**
  * How many times a turn that backgrounded a subagent may be asked to wait for
@@ -70,6 +73,8 @@ export interface CliAgentAiServiceDeps extends Partial<AgentProcessDeps> {
   workspaceRoot?: () => string;
   /** Where a conversation's planner tools are served (ADR-0022). Absent: no conversation can start. */
   mcpServer?: OrdewellMcpServer;
+  /** A person's approvals of project MCP servers, kept across sessions (ADR-0028). Defaults to Ordewell's data directory. */
+  projectServerApprovals?: ProjectServerApprovals;
 }
 
 interface OneShotCatalog {
@@ -139,6 +144,7 @@ export class CliAgentAiService implements IAiService {
    */
   private searchesUnasked: ((provider: string) => boolean) | undefined;
   private readonly mcpServer: OrdewellMcpServer | undefined;
+  private readonly projectServerApprovals: ProjectServerApprovals;
   /** The planner token the running process was spawned with; revoked with the process (ADR-0022, A3). */
   private plannerToken: string | null = null;
   /** The {@link PlannerStartOptions.nativeSearch} the running process was spawned with. */
@@ -172,6 +178,7 @@ export class CliAgentAiService implements IAiService {
     this.makeAdapter = deps.createAdapter ?? createPlannerAdapter;
     this.workspaceRoot = deps.workspaceRoot ?? (() => process.cwd());
     this.mcpServer = deps.mcpServer ?? sharedMcpServer();
+    this.projectServerApprovals = deps.projectServerApprovals ?? fileProjectServerApprovals();
   }
 
   hasActiveConversation(): boolean { return this.conversation !== null; }
@@ -232,10 +239,11 @@ export class CliAgentAiService implements IAiService {
     );
 
     const fetcher = req.fetcher;
+    const cwd = this.workspaceRoot();
     const startOptions: PlannerStartOptions = {
       kind: 'planner',
-      cwd: this.workspaceRoot(),
-      systemPrompt,
+      cwd,
+      ...await this.repoConfig(systemPrompt, cwd, req.approval),
       model: this.plannerModel(),
       effort: this.config.plannerThinkingEffort,
     };
@@ -629,6 +637,23 @@ export class CliAgentAiService implements IAiService {
     return this.adapter!;
   }
 
+  /**
+   * What the planner gets of the repository's config, its runner being
+   * launched without it (ADR-0028): the instruction files, which are text, in
+   * its system prompt, and the project MCP servers it may start. Decided once
+   * per conversation, so a respawn starts the same servers without asking.
+   */
+  private async repoConfig(systemPrompt: string, cwd: string, approval: IApproval | undefined): Promise<Pick<PlannerStartOptions, 'systemPrompt' | 'projectServers'>> {
+    const reader = connectorFor(this.runner)?.repoConfig;
+    if (!reader) return { systemPrompt };
+    const found = reader.projectServers(cwd);
+    const { started, held } = await decideProjectServers(found.servers, { repoRoot: repoRoot(cwd), approval, approvals: this.projectServerApprovals });
+    return {
+      systemPrompt: [systemPrompt, instructionsBlock(reader.instructions(cwd)), heldServersNote(held, found.unreadable)].filter(Boolean).join('\n\n'),
+      ...(started.length > 0 ? { projectServers: started } : {}),
+    };
+  }
+
   private plannerModel(): string | undefined {
     const id = (this.config.orchestratorModel ?? '').trim();
     return id || undefined;
@@ -709,10 +734,12 @@ export class CliAgentAiService implements IAiService {
         },
       },
     };
+    const cwd = this.workspaceRoot();
     const startOptions: PlannerStartOptions = {
       kind: 'planner',
-      cwd: this.workspaceRoot(),
-      systemPrompt: `${prompt}\nBefore submitting, call list_runners and list_models to check the available assignments.`,
+      cwd,
+      // No approval channel here: only servers a person approved before start.
+      ...await this.repoConfig(`${prompt}\nBefore submitting, call list_runners and list_models to check the available assignments.`, cwd, undefined),
       model: this.plannerModel(),
       effort: this.config.plannerThinkingEffort,
     };
@@ -822,6 +849,16 @@ export class CliAgentAiService implements IAiService {
   ): Promise<Task[]> {
     return (await this.submittedPlan(prompt, { runners, runnerModes, autonomousDefault })).tasks;
   }
+}
+
+/** What the planner is told of the repository's servers it does not have, so it plans their work into tasks instead of guessing. */
+function heldServersNote(held: ProjectMcpServer[], unreadable: { source: string; reason: string }[]): string {
+  const lines = [
+    ...held.map((server) => `- ${server.name} (${server.source}): not approved for planning`),
+    ...unreadable.map((file) => `- ${file.source}: Ordewell could not read it (${file.reason})`),
+  ];
+  if (lines.length === 0) return '';
+  return ['The repository declares MCP servers that were not started for you; their tools are not available while planning. Work that needs them belongs in the plan\'s tasks.', ...lines].join('\n');
 }
 
 function oneShotCatalog(

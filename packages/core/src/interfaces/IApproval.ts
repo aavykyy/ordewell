@@ -21,9 +21,11 @@ import type { ApprovalSource } from '../services/ApprovalPolicy';
  * policy — the runner's mode already decided it needed asking. `mcp_tool` is
  * a harness planner reaching for an MCP tool the user configured (ADR-0026),
  * scoped to that one tool. `web_search` is scoped to the search provider, the
- * party that receives every query (ADR-0027).
+ * party that receives every query (ADR-0027). `mcp_server` is starting an MCP
+ * server the repository declares for a planner, scoped to its definition
+ * (ADR-0028).
  */
-export type ApprovalKind = 'external_path' | 'shell_command' | 'url_fetch' | 'web_search' | 'mcp_tool' | 'runner_tool';
+export type ApprovalKind = 'external_path' | 'shell_command' | 'url_fetch' | 'web_search' | 'mcp_tool' | 'mcp_server' | 'runner_tool';
 
 export interface ApprovalRequest {
   kind: ApprovalKind;

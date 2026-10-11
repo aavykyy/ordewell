@@ -649,7 +649,8 @@ describe('CodexAdapter planner boundary (ADR-0008/0009)', () => {
       cwd: '/repo',
       sandbox: 'read-only',
       approvalPolicy: 'on-request',
-      config: { web_search: 'disabled' },
+      // The repository's own config never loads for a planner (ADR-0028).
+      config: { web_search: 'disabled', projects: { '/repo': { trust_level: 'untrusted' }, '/': { trust_level: 'untrusted' } } },
       developerInstructions: 'PLAN',
     });
     adapter.dispose();
@@ -845,7 +846,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       cwd: '/repo',
       sandbox: 'read-only',
       approvalPolicy: 'on-request',
-      config: { mcp_servers: { ordewell: ordewellServer }, web_search: 'disabled' },
+      config: { mcp_servers: { ordewell: ordewellServer }, web_search: 'disabled', projects: { '/repo': { trust_level: 'untrusted' }, '/': { trust_level: 'untrusted' } } },
       developerInstructions: `PLAN\n\n${CODEX_ORDEWELL.plannerInstructions(false)}`,
     });
     // Codex lists MCP tools only behind its own discovery, and its shell has no network (ADR-0026).

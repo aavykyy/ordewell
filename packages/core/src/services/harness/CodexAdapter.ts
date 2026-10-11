@@ -8,6 +8,7 @@ import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
 import { markedLines } from './fileDiff';
 import { probeCodexSandbox, codexSandboxUnavailableMessage, type CodexSandboxDecision } from './codexSandbox';
 import { ORDEWELL_MCP_SERVER_NAME } from '../mcp';
+import { untrustedProjects } from './codexRepoConfig';
 import { CODEX_ORDEWELL } from './codexOrdewell';
 import { awaitAttach, type AttachState } from './ordewellBinding';
 import { CodexRpc, type RpcMessage, type RpcResponse } from './codexRpc';
@@ -453,6 +454,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       };
     }
     const nativeSearch = opts?.nativeSearch ?? false;
+    const servers = { ...Object.fromEntries((opts?.projectServers ?? []).map((server) => [server.name, server.definition])), ...config.mcp_servers };
     return {
       ...common,
       sandbox: 'read-only',
@@ -463,7 +465,14 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       approvalPolicy: 'on-request',
       // Codex's search raises no request the policy could decide call by
       // call, so it is decided once here (ADR-0027).
-      config: { ...config, web_search: CODEX_ORDEWELL.plannerWebSearch(nativeSearch) },
+      // The repository's own config never loads for a planner, so its servers
+      // are only those approved, handed over as parsed (ADR-0028).
+      config: {
+        ...config,
+        ...(Object.keys(servers).length > 0 ? { mcp_servers: servers } : {}),
+        projects: opts ? untrustedProjects(opts.cwd) : {},
+        web_search: CODEX_ORDEWELL.plannerWebSearch(nativeSearch),
+      },
       // `developerInstructions` layers on top of Codex's own base prompt, the
       // way Claude Code's `--append-system-prompt` does. `baseInstructions`
       // replaces it — which takes Codex's description of its own tools with
