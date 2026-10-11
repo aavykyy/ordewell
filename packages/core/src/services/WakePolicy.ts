@@ -41,11 +41,23 @@ export interface WakePolicyOptions {
   debounceMs: number;
 }
 
+/** What the policy holds before its next wake-up, for the plan (ADR-0029). */
+export interface WakePolicySnapshot {
+  /** Attention events inside the debounce window, in arrival order. */
+  attention: RunEvent[];
+  /** The passes since the previous wake-up. */
+  sinceLast: RunEvent[];
+}
+
 export interface WakePolicy {
   push(event: RunEvent): void;
   poll(now: number): WakeBatch | null;
   /** When `poll` next answers a batch, on the events' clock; null while nothing would wake the supervisor. */
   dueAt(): number | null;
+  /** What waits inside the debounce window, so a daemon restart still delivers it. */
+  snapshot(): WakePolicySnapshot;
+  /** Put back a save's waiting events, replacing whatever this held. */
+  restore(snapshot: WakePolicySnapshot | undefined): void;
 }
 
 export function createWakePolicy(options: WakePolicyOptions): WakePolicy {
@@ -107,5 +119,14 @@ export function createWakePolicy(options: WakePolicyOptions): WakePolicy {
     },
 
     dueAt,
+
+    snapshot() {
+      return { attention: [...attention], sinceLast: [...sinceLast] };
+    },
+
+    restore(snapshot) {
+      attention = [...(snapshot?.attention ?? [])];
+      sinceLast = [...(snapshot?.sinceLast ?? [])];
+    },
   };
 }
