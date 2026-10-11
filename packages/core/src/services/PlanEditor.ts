@@ -27,7 +27,7 @@ export interface PlanEditorDeps {
    * there is no plan or `op` changed nothing.
    */
   mutate: (op: () => boolean, notify?: () => void) => LegacyPlanState | null;
-  scheduler: Pick<TaskOrchestrator, 'tick' | 'releaseTask'>;
+  scheduler: Pick<TaskOrchestrator, 'tick' | 'releaseTask' | 'releaseMovedResume'>;
   runs: Pick<IsolationRunController, 'current' | 'linkResolver'>;
   broadcast: SessionBroadcaster;
   /** Whether the planner has Ordewell's tools, which changes how a merge or split is asked of it. */
@@ -114,7 +114,10 @@ export class PlanEditor {
       }
     }
     const plan = await this.commit(
-      () => Boolean(this.store.update(taskId, changes)),
+      () => {
+        changes = this.scheduler.releaseMovedResume(taskId, changes);
+        return Boolean(this.store.update(taskId, changes));
+      },
       () => this.broadcast({ type: 'task_updated', taskId, changes: changes as Record<string, unknown> }),
     );
     if (plan) for (const warning of skills?.warnings ?? []) this.notice('warn', warning);
@@ -155,7 +158,7 @@ export class PlanEditor {
     if (Object.keys(changes).length === 0) return this.plan();
 
     return this.commit(() => {
-      if (!this.store.update(taskId, changes)) return false;
+      if (!this.store.update(taskId, this.scheduler.releaseMovedResume(taskId, changes))) return false;
       this.admitRunner(runner, catalog.models);
       return true;
     });

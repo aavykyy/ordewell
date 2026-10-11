@@ -38,7 +38,7 @@ import { TaskLogRecorder } from './TaskLogRecorder';
 import { PlannerUsageLedger } from './PlannerUsage';
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
-import { flattenTasks, flattenTasksWithParents, keepExecutionState, stampOrigin, taskRef, waitsForReset, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskSnapshot, type RunnerId } from '../models/Task';
+import { flattenTasks, flattenTasksWithParents, keepExecutionState, stampOrigin, taskRef, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskSnapshot, type RunnerId } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
 import type { AiProvider, IConfig } from '../interfaces/IConfig';
 import type { IFileSystem } from '../interfaces/IFileSystem';
@@ -1313,7 +1313,7 @@ export class Session {
     // Tasks an Act supervisor adds are approved to run, ops tasks included (ADR-0029): choosing Act was the consent.
     const bySupervisor = this.supervisorEditing();
     const { tasks: stamped, added } = stampOrigin(before, coerced, bySupervisor);
-    coerced = this.releaseMovedResumes(before, stamped);
+    coerced = this.preparePlannerTaskUpdates(stamped);
     if (bySupervisor) {
       this.approve(added);
       this.guards.edited(before, coerced);
@@ -1327,24 +1327,12 @@ export class Session {
     return coerced.length;
   }
 
-  /**
-   * A task paused on its runner's usage limit and moved to another runner or
-   * model no longer waits on that limit's reset: its scheduled resume is
-   * cancelled, and it waits for a retry on what it was moved to (ADR-0029).
-   */
-  private releaseMovedResumes(before: readonly Task[], after: Task[]): Task[] {
-    const waiting = new Map(flattenTasks([...before]).filter(waitsForReset).map((t) => [t.id, t]));
-    if (waiting.size === 0) return after;
-    const release = (tasks: Task[]): Task[] => tasks.map((t) => {
-      const was = waiting.get(t.id);
-      const moved = was && (was.assignedRunner !== t.assignedRunner || was.assignedModel?.modelId !== t.assignedModel?.modelId);
-      if (!moved) return { ...t, subtasks: release(t.subtasks ?? []) };
-      this.orchestrator.cancelScheduledResume(t.id);
-      const released: Task = { ...t, subtasks: release(t.subtasks ?? []) };
-      delete released.resumeAt;
-      return released;
-    });
-    return release(after);
+  private preparePlannerTaskUpdates(tasks: Task[]): Task[] {
+    return tasks.map((t) => ({
+      ...t,
+      ...this.orchestrator.releaseMovedResume(t.id, t),
+      subtasks: this.preparePlannerTaskUpdates(t.subtasks ?? []),
+    }));
   }
 
   /**

@@ -112,10 +112,15 @@ and completion evidence.
   limit again within five minutes waits for a manual retry, and says so. A
   plan loaded with a resume time still ahead waits for it again; one that
   passed while nothing ran — the daemon was down — resumes at once. Cancelling
-  the resume (the task row and the task view; `cancelScheduledResume` for a
-  supervisor about to move the task to another runner) and stopping the run
+  the resume (the task row and the task view) and stopping the run
   both leave the task waiting for a manual retry, as one with no readable
-  reset waits. The orchestrator's `onUsageLimitWait` announces each pause and
+  reset waits. Moving a task to another runner, through a direct edit or the
+  planner, cancels its resume through `cancelScheduledResume` before changing
+  its assignment and makes it ready for the scheduler's next slot. Other
+  tasks on the old runner keep their shared wait and pending work on that
+  account stays held. A model change on the same runner keeps the resume:
+  the limit belongs to that runner's account. The orchestrator's
+  `onUsageLimitWait` announces each pause and
   each change to its resume, with the time or null, for a supervisor to wake on;
   a cancelled resume is marked as one, so it wakes nobody.
 - **Task log persistence (P1).** Append-only, per attempt, at
@@ -228,3 +233,4 @@ transport is retained for take-over.
 - 2026-10-10 — the TUI task-log surface corrected to Enter on a task in the plan pane.
 - 2026-10-11 — U1: a task paused on a usage limit resumes on its own at the reset (#84).
 - 2026-10-11 — a cancelled resume is marked on `onUsageLimitWait`, and a task going silent is announced (`onTaskIdle`), for the supervisor ([ADR-0029](0029-the-supervisor.md)).
+- 2026-10-11 — direct and planner runner changes share resume cancellation and scheduler readiness; same-runner model changes preserve the account's wait.

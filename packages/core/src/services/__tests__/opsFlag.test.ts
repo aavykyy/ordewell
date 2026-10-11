@@ -48,7 +48,7 @@ function editor(tasks = plan()) {
     plan: () => state,
     catalog,
     mutate: (op) => (op() ? state : null),
-    scheduler: { tick: async () => undefined, releaseTask: async () => undefined },
+    scheduler: { tick: async () => undefined, releaseTask: async () => undefined, releaseMovedResume: (_taskId, changes) => changes },
     runs: { current: null, linkResolver: () => undefined },
     broadcast: () => undefined,
     plannerTools: () => false,
