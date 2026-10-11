@@ -67,8 +67,8 @@ export function subagentBlock(id: string, { toolCallId, model, usage, turnId, ..
   };
 }
 
-export function usageBlock(id: string, { totals, bySubagent, contextFill }: UsageLine): UsageBlock {
-  return { type: 'usage', id, totals, ...(bySubagent ? { bySubagent } : {}), ...(contextFill ? { contextFill } : {}) };
+export function usageBlock(id: string, { totals, bySubagent, byModel, model, contextFill }: UsageLine): UsageBlock {
+  return { type: 'usage', id, totals, ...(byModel ? { byModel } : {}), ...(model ? { model } : {}), ...(bySubagent ? { bySubagent } : {}), ...(contextFill ? { contextFill } : {}) };
 }
 
 const STATUS_OF_OUTCOME: Record<ResearchStepOutcome, ToolStatus> = {

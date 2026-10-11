@@ -579,6 +579,10 @@ export class Session {
       // it mid-run, so a crash would otherwise lose every verdict since the
       // last Session operation.
       onTaskSettled: () => this.persist({ background: true }),
+      onUsageChanged: () => {
+        this.persist({ background: true });
+        relay.onUsageChanged();
+      },
       onIsolationChanged: () => {
         // The run record names branches and worktrees on disk, so it is saved
         // as it changes rather than at the end: a crash must still find them.

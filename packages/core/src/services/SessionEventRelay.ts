@@ -11,6 +11,7 @@ import {
   type SessionNotice,
 } from './SessionMessage';
 import { surfaceStep } from '../conversation/records';
+import { planUsage } from '../models/Usage';
 import type { LegacyPlanState, ResearchLogEntry, ResearchProgress, ResearchStep, SubagentLogEntry } from '../models/Task';
 
 export interface SessionEventRelayDeps {
@@ -86,6 +87,7 @@ export class SessionEventRelay {
         this.broadcast({ type: 'checkpoint', taskId: data.taskId, taskTitle: data.taskTitle, summary: data.summary });
       },
       onTick: () => this.status(plan()),
+      onUsageChanged: () => this.status(plan()),
       onIsolationChanged: () => this.status(plan()),
       onIsolationBlocked: ({ reason, repos }) => {
         const where = repos.length > 0 ? ` in ${repos.join(', ')}` : '';
@@ -116,6 +118,7 @@ export class SessionEventRelay {
     const runMerge = this.orchestrator.runMergeView();
     this.broadcast({
       type: 'status_update',
+      usage: planUsage(plan.tasks),
       tasks: this.store.allTasks.map((t) => serializeTaskStatus(
         t,
         this.orchestrator.getIdleSince(t.id),

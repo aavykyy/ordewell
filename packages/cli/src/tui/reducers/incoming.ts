@@ -70,6 +70,7 @@ function toTaskView(t: Record<string, unknown>, index: number): TaskView {
     description: planText(t.description ?? t.title),
     prompt: typeof t.prompt === 'string' ? sanitize(t.prompt) : undefined,
     type: t.type === 'user' ? 'user' : 'ai',
+    attemptUsage: Array.isArray(t.attemptUsage) ? t.attemptUsage as TaskView['attemptUsage'] : undefined,
     status: planLabel(t.status, 'pending'),
     awaitingReason: t.status === 'awaiting_user' && isAwaitingReason(t.awaitingReason) ? t.awaitingReason : undefined,
     dependencies: Array.isArray(t.dependencies) ? t.dependencies.map((id: unknown) => planLabel(id)) : [],

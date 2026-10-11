@@ -751,6 +751,20 @@ registry keyed by task let the old attempt's exit unregister the new one.
 field of the attempt. Do not add another per-task map to the orchestrator for
 state that ends with the run; put it on the attempt.
 
+**Attempt usage** (`AttemptUsage`, `Task.attemptUsage`) — the persisted ledger
+of one task attempt: its number, runner, start and end timestamps, wall time,
+and reported usage totals. Reports are grouped by source and the model that
+actually ran; an unreported model stays unknown. Subagent shares are included
+in totals once. The attempt number continues across reloads. A new attempt
+starts a fresh ledger without dropping earlier attempts. Context fill follows
+the latest main-runner model and clears on a switch until the new model reports
+both prompt tokens and its window. `planUsage` sums all task attempts,
+including subtasks, separately from the planner's own ledger. Status updates
+carry both the task ledgers and the plan roll-up; surfaces reuse their planner
+usage formatting. Absent measures mean unknown, never zero or an estimate.
+*Avoid:* attributing a session cost to its last model without a reported
+breakdown; *Avoid:* mixing planner usage into task totals.
+
 **Attempt kind** (`AttemptKind`, `attemptKind.ts`) — what one attempt of a task
 is: `change`, `ops`, `repair` (a *conflict repair*, ADR-0015) or `continuation`
 (a *Continue*, ADR-0018, which carries whether its task is ops). Everything that

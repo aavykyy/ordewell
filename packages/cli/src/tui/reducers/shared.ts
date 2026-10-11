@@ -8,6 +8,7 @@ import { say } from '../transcript';
 
 /** One task's entry in a daemon `status_update`, as the TUI keeps it. */
 export interface TaskStatusUpdate {
+  attemptUsage?: import('@ordewell/core').AttemptUsage[];
   status: string;
   idleSince?: string | null;
   isolation?: TaskIsolationView;

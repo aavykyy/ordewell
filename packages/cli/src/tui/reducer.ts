@@ -160,7 +160,9 @@ function reduceAction(state: TuiState, action: Action): Step {
       if (stale(state, action.sessionId)) return step(state);
       const updates = action.updates;
       let changed = false;
-      const tasks = state.tasks.map((t) => {
+      const applyStatus = (original: TaskView): TaskView => {
+        const subtasks = original.subtasks?.map(applyStatus);
+        const t = subtasks?.some((s, i) => s !== original.subtasks?.[i]) ? { ...original, subtasks } : original;
         const update = updates[t.id];
         if (update === undefined) return t;
         const idleSince = update.idleSince ?? null;
@@ -171,17 +173,19 @@ function reduceAction(state: TuiState, action: Action): Step {
         const awaitingApproval = update.awaitingApproval;
         const mergeGate = update.mergeGate;
         const forcedPastGate = update.forcedPastGate;
+        const attemptUsage = update.attemptUsage ?? t.attemptUsage;
         if (
-          update.status !== t.status || idleSince !== (t.idleSince ?? null) || !sameIsolation(isolation, t.isolation)
+          JSON.stringify(attemptUsage) !== JSON.stringify(t.attemptUsage) || update.status !== t.status || idleSince !== (t.idleSince ?? null) || !sameIsolation(isolation, t.isolation)
           || awaitingReason !== t.awaitingReason || checkpoint !== t.checkpoint
           || continuable !== (t.continuable ?? false) || awaitingApproval !== t.awaitingApproval
           || !sameList(mergeGate, t.mergeGate) || !sameList(forcedPastGate, t.forcedPastGate)
         ) {
           changed = true;
-          return { ...t, status: update.status, idleSince, isolation, awaitingReason, checkpoint, continuable, awaitingApproval, mergeGate, forcedPastGate };
+          return { ...t, status: update.status, idleSince, isolation, awaitingReason, checkpoint, continuable, awaitingApproval, mergeGate, forcedPastGate, attemptUsage };
         }
         return t;
-      });
+      };
+      const tasks = state.tasks.map(applyStatus);
       // An update that does not say (an older daemon) leaves the view as it was.
       const runMerge = action.runMerge === undefined ? state.runMerge : action.runMerge;
       const runMergeChanged = !sameRunMerge(runMerge, state.runMerge);

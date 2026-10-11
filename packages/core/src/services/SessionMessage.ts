@@ -1,5 +1,5 @@
 import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, QueuedMessage, ResearchStep, RunnerId, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, Verdict } from '../models/Task';
-import type { UsageTotals } from '../models/Usage';
+import type { AttemptUsage, ModelUsage, PlanUsage, UsageTotals } from '../models/Usage';
 import type { TaskLogEvent } from '../models/TaskLog';
 import type { ApprovalKind } from '../interfaces/IApproval';
 import type { ApprovalSource } from './ApprovalPolicy';
@@ -38,6 +38,7 @@ export type SerializedTaskStatus = {
   mergeGate?: string[];
   /** The dependencies, by title, a force start went past the merge gate of (ADR-0020). */
   forcedPastGate?: string[];
+  attemptUsage?: AttemptUsage[];
 };
 
 /**
@@ -72,6 +73,7 @@ export type SerializedTask = {
   ops?: true;
   /** Task skills attached by name; absent when none. */
   skills?: string[];
+  attemptUsage?: AttemptUsage[];
 };
 
 /** Skill loads go out as notices: their bodies are for the planner, and stay in the session. */
@@ -186,6 +188,8 @@ export type SessionMessage =
    */
   | {
       type: 'planner_usage';
+      byModel?: ModelUsage[];
+      model?: string;
       turnId?: string;
       totals: UsageTotals;
       bySubagent?: Record<string, UsageTotals>;
@@ -203,7 +207,7 @@ export type SessionMessage =
    * planner; `usage` is its own share, already counted in `planner_usage`.
    */
   | { type: 'subagent_finished'; turnId?: string; subagentId: string; outcome: SubagentOutcome; digest: string; usage?: UsageTotals }
-  | { type: 'status_update'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView }
+  | { type: 'status_update'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage }
   | { type: 'review_needed'; tasks: SerializedTask[] }
   | { type: 'review_approved' }
   | { type: 'checkpoint'; taskId: string; taskTitle: string; summary: string }
@@ -298,6 +302,7 @@ export function serializeTask(t: Task): SerializedTask {
     sliceType: t.sliceType || undefined,
     userStoriesCovered: t.userStoriesCovered || undefined,
     ...(t.ops ? { ops: true as const } : {}),
+    ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
     ...(t.skills?.length ? { skills: [...t.skills] } : {}),
   };
 }
@@ -318,6 +323,7 @@ export function serializeTaskStatus(
       ? { outcome: t.verdict.outcome, reason: t.verdict.reason, checks: t.verdict.checks || [] }
       : null,
     idleSince,
+    ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
     ...(isolation ? { isolation } : {}),
     ...(t.status === 'awaiting_user' && t.awaitingReason ? { awaitingReason: t.awaitingReason } : {}),
     ...(t.status === 'awaiting_user' && t.awaitingReason === 'checkpoint' && checkpoint ? { checkpoint } : {}),
