@@ -10,6 +10,28 @@ function req(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
 }
 
 describe('ApprovalPolicy', () => {
+  it('lets origin exclusions override remembered web scopes in every approval path', async () => {
+    for (const mode of ['ask', 'allow', 'deny'] as const) {
+      const ask = vi.fn().mockResolvedValue(true);
+      const onDecision = vi.fn();
+      let entries: string[] = [];
+      let currentMode: ApprovalMode = 'ask';
+      const policy = new ApprovalPolicy({ mode: () => currentMode, ask, onDecision, preApproved: () => entries });
+      const request = req({ subject: 'curl https://internal.example.com/a', scope: 'curl https://internal.example.com/*' });
+      expect(await policy.request(request)).toBe(true);
+      entries = ['curl https://internal.example.com/*', '!https://internal.example.com/*'];
+      currentMode = mode;
+      ask.mockClear();
+      expect(await policy.request(request)).toBe(false);
+      expect(await policy.request({ ...request, perInvocation: true })).toBe(false);
+      expect(await policy.request({ ...request, scope: 'curl https://public.example/*', scopes: ['curl https://public.example/*', request.scope], allowedBy: 'curl *' })).toBe(false);
+      expect(policy.peek(request)).toEqual({ decision: 'deny', source: 'excluded' });
+      expect(policy.grantsUnasked(request)).toBe(false);
+      expect(onDecision).toHaveBeenLastCalledWith(expect.anything(), false, 'excluded');
+      expect(ask).not.toHaveBeenCalled();
+    }
+  });
+
   it('denies when no human channel is wired — the safe default for headless and web', async () => {
     const policy = new ApprovalPolicy();
     expect(await policy.request(req())).toBe(false);

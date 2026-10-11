@@ -509,7 +509,7 @@ describe('Session web reads', () => {
         expect.objectContaining({ isError: true }),
       ]);
       for (const answer of answers.slice(2)) {
-        expect(JSON.stringify(answer)).toContain('a web URL contains what looks like a secret');
+        expect(JSON.stringify(answer)).toContain('a web command contains what looks like a secret');
       }
       expect(fsAdapter.bashCalls).toEqual([]);
       expect(JSON.stringify(messages)).not.toContain(secret);

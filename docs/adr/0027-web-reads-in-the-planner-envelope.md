@@ -204,7 +204,9 @@ hold without one:
   cookies or auth headers of its own.
 - **An outbound secret check on every URL and every query.** It looks for the
   secrets Ordewell holds (task and planner tokens, provider keys), the values
-  of sensitive environment variables, and well-known token formats. A hit is
+  of sensitive environment variables, and well-known token formats. Environment
+  references are identified by `_URL`, `_URI`, `_PATH`, `_FILE` and `_DIR`
+  names, never by a slash or colon in a secret's value. A hit is
   refused, and recorded without the URL or query. Encoding defeats it: a
   secret in base64, reversed or split across requests passes. It narrows
   exfiltration through a URL; it does not close it.
@@ -281,10 +283,13 @@ Research subagents get `fetch` and `web_search`, and still never prompt
   (`curl https://api.github.com/*`), so approving one site approves no other,
   and a command naming several origins asks for each in one prompt (ADR-0008).
   The program is the lower-cased basename, with a trailing `.exe` removed,
-  including under POSIX for Git Bash. Web scopes never match filesystem path
-  patterns. Default command URL exclusions do not exclude this vetted scope
+  including under POSIX for Git Bash. Path-named executables (`./bin/curl`,
+  `/usr/bin/curl`, `/tmp/wget`) are refused: the research shell resolves these
+  clients by name from PATH, and a repository script cannot reuse their grants.
+  Web scopes never match filesystem path patterns. Default command URL
+  exclusions do not exclude this vetted scope
   form; explicit origin and command exclusions still win.
-- **Every URL passes the outbound secret check before DNS or approval.**
+- **Every URL and value-taking flag passes the outbound secret check before DNS or approval.**
   The same helper and live held credentials as the web-read policy apply;
   refusals withhold the command and URL.
 - **The host passes the SSRF guard** before the command is asked about.
@@ -293,7 +298,10 @@ Research subagents get `fetch` and `web_search`, and still never prompt
   using an address the guard vetted, with IPv6 addresses bracketed. The
   inserted entries follow the initial `-q`, and the final command is
   classified again with only those exact generated resolve values trusted.
-  Caller-supplied `--resolve` stays refused.
+  Caller-supplied `--resolve` stays refused. Curl's raw URL hostname must use
+  only ASCII letters, digits, hyphens and dots, or be a bracketed IPv6 literal;
+  IDNs and percent-encoded hosts are refused before URL normalization can
+  make the vetted name differ from what curl reads.
 - **Flags are a positive list.** Only flags known not to write, send data or
   read a config run without a fresh approval; the data and credential flags
   below are the exceptions, and any other flag refuses. So `-o`, `-O`,
@@ -317,8 +325,9 @@ Research subagents get `fetch` and `web_search`, and still never prompt
   as `wget`: after approval, a config-disabled version probe redirects XDG
   paths to `/dev/null` and Windows `LOCALAPPDATA` to `NUL`, preventing the
   probe itself from creating a home directory. The probe follows certain
-  literal `cd` targets; uncertain navigation with a relative executable
-  refuses. The host used for verification has GNU Wget 1.21.4. An extracted
+  literal `cd` targets; uncertain navigation refuses. Under cmd, probe words
+  containing quotes, variable expansion markers or metacharacters refuse
+  before any probe runs. The host used for verification has GNU Wget 1.21.4. An extracted
   GNU Wget2 2.1.0 reproduced writes to `.wget-ocsp` and `.wget-ocsp_hosts`
   under its XDG data directory with the old suppression flags. Its ordinary
   version probe also created the data directory; the redirected probe left
@@ -432,3 +441,7 @@ filed as its own issue.
   commands secret-checked, Wget2 refused; refusals pointing reads to the
   planner's own fetch tool and effects to an ops task. Task launches are
   unchanged.
+- 2026-10-11 — curl/wget follow-ups: path-named clients refused, flag values
+  secret-checked, origin exclusions overriding remembered grants and rechecked
+  after approval, unsafe cmd probe words refused, raw curl hostnames bounded
+  before pinning, and environment references identified by variable name.

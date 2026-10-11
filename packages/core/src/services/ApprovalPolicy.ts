@@ -1,5 +1,5 @@
 import { approvalScopes, type IApproval, type ApprovalKind, type ApprovalRequest, type StandingDecision } from '../interfaces/IApproval';
-import { parseAllowlist, scopeAllowed, toolAllowed, type PlannerAllowlist } from './plannerAllowlist';
+import { parseAllowlist, scopeAllowed, scopeExcluded, toolAllowed, type PlannerAllowlist } from './plannerAllowlist';
 import type { CommandPolicyOptions } from './commandPolicy';
 
 /**
@@ -107,6 +107,9 @@ export class ApprovalPolicy implements IApproval {
       return granted;
     };
 
+    const list = this.allowlist();
+    if (approvalScopes(req).some((scope) => scopeExcluded(list, scope))) return decide(false, 'excluded');
+
     if (req.perInvocation) {
       if (this.modeOf(req.kind) === 'deny' || this.autonomousOf()) return decide(false, 'mode');
       if (!this.asker) return decide(false, 'no-channel');
@@ -157,6 +160,8 @@ export class ApprovalPolicy implements IApproval {
    * refusals and mode the interactive path uses, stopping at `ask`.
    */
   peek(req: ApprovalRequest): StandingDecision {
+    const list = this.allowlist();
+    if (approvalScopes(req).some((scope) => scopeExcluded(list, scope))) return { decision: 'deny', source: 'excluded' };
     const { scopes, key, open } = this.standing(req);
     if (open.length === 0) return { decision: 'allow', source: scopes.every((s) => this.granted.has(s)) ? 'remembered' : 'pre-approved' };
     if (scopes.some((s) => this.refused.has(s)) || this.refused.has(key)) return { decision: 'deny', source: 'remembered' };
@@ -186,7 +191,9 @@ export class ApprovalPolicy implements IApproval {
   }
 
   grantsUnasked({ kind, scope }: Pick<ApprovalRequest, 'kind' | 'scope'>): boolean {
-    if (this.granted.has(scope) || scopeAllowed(this.allowlist(), scope)) return true;
+    const list = this.allowlist();
+    if (scopeExcluded(list, scope)) return false;
+    if (this.granted.has(scope) || scopeAllowed(list, scope)) return true;
     if (this.refused.has(scope)) return false;
     return this.modeOf(kind) === 'allow';
   }
