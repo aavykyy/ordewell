@@ -1,6 +1,7 @@
 import { Hono, type Context, type Env } from 'hono';
 import {
   flattenTasks,
+  isSupervisorLevel,
   surfacePlan,
   surfacePlanState,
   type ConversationCompactResponse,
@@ -52,16 +53,29 @@ export function plansRoute(pool: OrchestratorPool) {
     }
   });
 
+  // Every setting named is checked before any is applied, so a bad one changes nothing.
   router.patch('/:sessionId/settings', async (c) => {
     const body: unknown = await c.req.json();
-    const enabled = typeof body === 'object' && body !== null && 'mergeAtGatesAutomatically' in body
-      ? body.mergeAtGatesAutomatically : undefined;
-    if (typeof enabled !== 'boolean') return c.json({ error: 'mergeAtGatesAutomatically must be a boolean' }, 400);
+    const field = (key: string): unknown => (typeof body === 'object' && body !== null && key in body ? (body as Record<string, unknown>)[key] : undefined);
+    const merge = field('mergeAtGatesAutomatically');
+    const level = field('supervisorLevel');
+    const reads = field('wakeUpReadBudget');
+    if (merge === undefined && level === undefined && reads === undefined) {
+      return c.json({ error: 'Name a setting: mergeAtGatesAutomatically, supervisorLevel or wakeUpReadBudget' }, 400);
+    }
+    if (merge !== undefined && typeof merge !== 'boolean') return c.json({ error: 'mergeAtGatesAutomatically must be a boolean' }, 400);
+    if (level !== undefined && !isSupervisorLevel(level)) return c.json({ error: 'supervisorLevel must be "off", "watch" or "act"' }, 400);
+    if (reads !== undefined && (typeof reads !== 'number' || !Number.isInteger(reads) || reads < 1)) {
+      return c.json({ error: 'wakeUpReadBudget must be a whole number of reads, at least 1' }, 400);
+    }
     try {
-      pool.session(c.req.param('sessionId')).setMergeAtGatesAutomatically(enabled);
+      const session = pool.session(c.req.param('sessionId'));
+      if (typeof merge === 'boolean') session.setMergeAtGatesAutomatically(merge);
+      if (isSupervisorLevel(level)) session.setSupervisorLevel(level);
+      if (typeof reads === 'number') session.setWakeUpReadBudget(reads);
       return c.json({ ok: true } satisfies OkResponse);
     } catch (err) {
-      return failure(c, err, 'change merge setting');
+      return failure(c, err, 'change plan settings');
     }
   });
 

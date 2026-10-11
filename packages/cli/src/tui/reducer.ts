@@ -1,4 +1,4 @@
-import { EMPTY_HOLD, fromTranscript, holdPrompt, taskStartedNotice } from '@ordewell/core';
+import { EMPTY_HOLD, fromTranscript, holdPrompt, isSupervisorLevel, taskStartedNotice, type SupervisorLevel } from '@ordewell/core';
 import { isolationOfPlan } from '../isolation';
 import { chatEditorRoomFor } from './geometry';
 import { chatScrollMax } from './layout';
@@ -63,6 +63,8 @@ function reduceAction(state: TuiState, action: Action): Step {
         goal: '',
         mergeAtGatesAutomatically: false,
         runAutoMerge: null,
+        supervisorLevel: 'off',
+        runSupervisor: null,
         taskView: null,
         pendingApprovals: [],
         queuedPrompts: EMPTY_HOLD,
@@ -92,6 +94,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         tasks,
         mergeAtGatesAutomatically: (action.plan as { mergeAtGatesAutomatically?: boolean })?.mergeAtGatesAutomatically === true,
         runAutoMerge: (action.plan as { runSettings?: { mergeAtGatesAutomatically: boolean } })?.runSettings?.mergeAtGatesAutomatically ?? null,
+        ...supervisorOf(action.plan),
         handoff: isolation ? isolation.handoff : state.handoff,
         status: plannerInFlight(state) ? 'idle' : state.status,
         busyLabel: '',
@@ -522,4 +525,16 @@ function submit(state: TuiState): Step {
     : { type: 'startConversation', goal: text };
 
   return step({ ...spoken, status: 'planning', stopRequested: false }, [effect]);
+}
+
+/** The plan's supervisor level and its run's, read off a plan as loosely as the merge setting is: older plans have neither. */
+function supervisorOf(plan: unknown): Pick<TuiState, 'supervisorLevel' | 'runSupervisor'> {
+  const { supervisorLevel, runSettings } = (plan ?? {}) as { supervisorLevel?: unknown; runSettings?: { supervisorLevel?: unknown; unsupervised?: unknown } };
+  const level: SupervisorLevel = isSupervisorLevel(supervisorLevel) ? supervisorLevel : 'off';
+  if (!runSettings) return { supervisorLevel: level, runSupervisor: null };
+  const unsupervised = typeof runSettings.unsupervised === 'string' ? runSettings.unsupervised : undefined;
+  return {
+    supervisorLevel: level,
+    runSupervisor: { level: isSupervisorLevel(runSettings.supervisorLevel) ? runSettings.supervisorLevel : 'off', ...(unsupervised ? { unsupervised } : {}) },
+  };
 }

@@ -17,10 +17,22 @@ export interface PlanTurnInput {
   signal?: AbortSignal;
 }
 
+/**
+ * One turn's input: the user's messages joined, with the skills they loaded,
+ * and the wake-up digests delivered with them. `source` is `supervisor` only
+ * when nothing in the turn came from the user — a wake-up turn (ADR-0029).
+ */
+export interface TurnPrompt extends SkillInvocation {
+  source: PlanTurnSource;
+  wakeUps: string[];
+}
+
 export interface PlanTurnsHost {
   plan(): LegacyPlanState | null;
   /** A planner turn this module did not open holds the conversation: an opening, a compaction, plan generation. */
   conversationBusy(): boolean;
+  /** Whether wake-ups alone may open a turn now; when not, they wait for one that may, or for the user's next message. */
+  mayWake(): boolean;
   /** Save the pending list. A background save: it must not count as settling a turn in flight. */
   persist(): void;
   /** Hold the scheduler's new starts; the returned release is idempotent. */
@@ -32,7 +44,7 @@ export interface PlanTurnsHost {
    * lands the turn's outcome, so the saved plan loses the inputs together
    * with the change they made.
    */
-  run(prompt: SkillInvocation, opts: { taken: () => void; signal?: AbortSignal }): Promise<LegacyPlanState>;
+  run(prompt: TurnPrompt, opts: { taken: () => void; signal?: AbortSignal }): Promise<LegacyPlanState>;
   /** Tell the user what no caller is waiting to hear: a replayed input's failed turn, a resume that failed. */
   notice(message: string): void;
 }
@@ -49,8 +61,14 @@ interface Running {
 }
 
 /** One planner message for a batch: the inputs in the order they came, each with the skills it loaded. */
-export function turnPrompt(batch: readonly PendingPlanTurn[]): SkillInvocation {
-  return { text: batch.map((t) => t.text).join('\n\n'), skills: batch.flatMap((t) => t.skills ?? []) };
+export function turnPrompt(batch: readonly PendingPlanTurn[]): TurnPrompt {
+  const fromUser = batch.filter((t) => t.source === 'user');
+  return {
+    source: fromUser.length > 0 ? 'user' : 'supervisor',
+    text: fromUser.map((t) => t.text).join('\n\n'),
+    skills: fromUser.flatMap((t) => t.skills ?? []),
+    wakeUps: batch.filter((t) => t.source === 'supervisor').map((t) => t.text),
+  };
 }
 
 /**
@@ -65,7 +83,10 @@ export function turnPrompt(batch: readonly PendingPlanTurn[]): SkillInvocation {
  *
  * Inputs wait on the plan (`pendingTurns`), saved as they arrive, and leave it
  * in the save that lands their turn's outcome; a turn that ends without one
- * drops them then. A reload therefore replays exactly what no turn answered.
+ * drops the user's then. A wake-up batch is only delivered by a turn that
+ * lands with it, so it stays through a failed one — unless the user stopped
+ * the turn, which was their answer to it. A reload therefore replays exactly
+ * what no turn answered.
  */
 export class PlanTurns {
   private readonly waiters = new Map<string, Waiter>();
@@ -88,7 +109,9 @@ export class PlanTurns {
   enqueue(input: PlanTurnInput): Promise<LegacyPlanState> {
     const plan = this.host.plan();
     if (!plan) return Promise.reject(new Error('No planning conversation to continue'));
-    if (!this.running && this.host.conversationBusy()) return Promise.reject(new ConversationBusyError('send a message'));
+    // A wake-up is never refused: it waits for the conversation like any input
+    // that arrives during a turn, and is delivered when it frees.
+    if (input.source === 'user' && !this.running && this.host.conversationBusy()) return Promise.reject(new ConversationBusyError('send a message'));
     const entry: PendingPlanTurn = {
       id: `turn-${Date.now()}-${++this.seq}`,
       source: input.source,
@@ -115,7 +138,9 @@ export class PlanTurns {
     const plan = this.host.plan();
     if (!plan || this.host.conversationBusy()) return;
     const batch = this.liveBatch(plan);
-    if (batch.length > 0) void this.run(plan, batch);
+    if (batch.length === 0) return;
+    if (batch.every((t) => t.source === 'supervisor') && !this.host.mayWake()) return;
+    void this.run(plan, batch);
   }
 
   /**
@@ -165,8 +190,12 @@ export class PlanTurns {
     // Abandoned: the hold is gone and every waiter has heard.
     if (this.running !== running) return;
     try {
-      // A turn that landed nothing still had its say; its inputs go with it.
-      if (this.take(plan, ids)) this.host.persist();
+      // A turn that landed nothing still had its say; the user's inputs go
+      // with it. A failure leaves the wake-ups undelivered.
+      const dropped = outcome.ok || isInterruption(outcome.err)
+        ? ids
+        : new Set(batch.filter((t) => t.source === 'user').map((t) => t.id));
+      if (this.take(plan, dropped)) this.host.persist();
       running.release();
       await this.host.resumeStarts();
     } catch (err) {
@@ -177,7 +206,7 @@ export class PlanTurns {
       const ended = outcome;
       for (const t of batch) {
         const delivered = this.settle(t.id, (w) => (ended.ok ? w.resolve(ended.plan) : w.reject(ended.err)));
-        if (!delivered && !ended.ok && !isInterruption(ended.err)) this.host.notice(replayFailed(t, ended.err));
+        if (!delivered && !ended.ok && !isInterruption(ended.err) && t.source === 'user') this.host.notice(replayFailed(t, ended.err));
       }
       this.pump();
     }

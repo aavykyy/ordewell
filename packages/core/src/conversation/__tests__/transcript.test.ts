@@ -49,6 +49,16 @@ describe('fromTranscript', () => {
     ]);
   });
 
+  it('reopens a wake-up turn as it was drawn live: the run update, then the supervisor in its own role', () => {
+    const view = fromTranscript([
+      { role: 'user', content: 'build it', timestamp: '2026-10-11T10:00:00Z' },
+      { role: 'user', content: 'Run update:\n- task #1 failed', timestamp: '2026-10-11T10:05:00Z', kind: 'wake_up' },
+      { role: 'assistant', content: 'Task 1 failed; retry it?', timestamp: '2026-10-11T10:05:00Z', kind: 'supervisor' },
+    ], []);
+
+    expect(view.blocks.map((b) => (b.type === 'message' ? b.role : b.type))).toEqual(['user', 'wake_up', 'supervisor']);
+  });
+
   it('reads an empty or missing record as an empty conversation, and shows no token line with nothing measured', () => {
     expect(fromTranscript(undefined, undefined).blocks).toEqual([]);
     expect(fromTranscript([], [], { totals: {} }).blocks).toEqual([]);

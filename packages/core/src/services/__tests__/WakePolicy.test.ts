@@ -16,7 +16,7 @@ describe('createWakePolicy', () => {
     expect(policy.poll(1_000_000)).toBeNull();
   });
 
-  it.each(['task_failed', 'waiting_input', 'waiting_approval', 'task_idle', 'landing_conflict'] as const)(
+  it.each(['task_failed', 'waiting_input', 'waiting_approval', 'task_idle', 'landing_conflict', 'auto_merge_stopped'] as const)(
     'wakes for %s',
     (kind) => {
       const policy = createWakePolicy({ debounceMs: DEBOUNCE });
@@ -69,6 +69,14 @@ describe('createWakePolicy', () => {
         attention: [event('task_failed', 0, 't1'), event('run_finished', 20)],
         sinceLast: [event('task_passed', 10, 't2')],
       });
+    });
+
+    it('reports the run\'s end once however often it is announced', () => {
+      const policy = createWakePolicy({ debounceMs: DEBOUNCE });
+      policy.push(event('run_finished', 20));
+      policy.push(event('run_finished', 21));
+
+      expect(policy.poll(21)?.attention).toEqual([event('run_finished', 20)]);
     });
 
     it('wakes on its own with the passes, and leaves the policy open for a retry', () => {
@@ -142,6 +150,60 @@ describe('createWakePolicy', () => {
 
     policy.push(event('task_failed', 2000, 't3'));
     expect(policy.poll(2000 + DEBOUNCE)?.sinceLast).toEqual([]);
+  });
+
+  describe('usage limits', () => {
+    const limit = (at: number, taskId: string, runner: string, resumeAt: string | null): RunEvent =>
+      ({ kind: 'usage_limit', taskId, at, runner, resumeAt });
+
+    it('wakes for a task paused on its runner\'s limit, with the runner and the resume time', () => {
+      const policy = createWakePolicy({ debounceMs: DEBOUNCE });
+      policy.push(limit(0, 't1', 'claude-code', '2026-10-11T20:10:00.000Z'));
+
+      expect(policy.poll(DEBOUNCE)?.attention).toEqual([
+        { kind: 'usage_limit', taskId: 't1', taskIds: ['t1'], at: 0, runner: 'claude-code', resumeAt: '2026-10-11T20:10:00.000Z' },
+      ]);
+    });
+
+    it('coalesces every task one runner\'s limit pauses into one entry, at the first one\'s place', () => {
+      const policy = createWakePolicy({ debounceMs: DEBOUNCE });
+      policy.push(limit(0, 't1', 'claude-code', '2026-10-11T20:10:00.000Z'));
+      policy.push(event('task_failed', 100, 't9'));
+      policy.push(limit(200, 't2', 'claude-code', '2026-10-11T20:10:00.000Z'));
+      policy.push(limit(300, 't3', 'codex', null));
+      policy.push(limit(400, 't1', 'claude-code', '2026-10-11T20:10:00.000Z'));
+
+      expect(policy.poll(DEBOUNCE)?.attention).toEqual([
+        { kind: 'usage_limit', taskId: 't1', taskIds: ['t1', 't2'], at: 0, runner: 'claude-code', resumeAt: '2026-10-11T20:10:00.000Z' },
+        event('task_failed', 100, 't9'),
+        { kind: 'usage_limit', taskId: 't3', taskIds: ['t3'], at: 300, runner: 'codex', resumeAt: null },
+      ]);
+    });
+
+    it('keeps a known resume time when a later pause on the same limit could not read one', () => {
+      const policy = createWakePolicy({ debounceMs: DEBOUNCE });
+      policy.push(limit(0, 't1', 'claude-code', '2026-10-11T20:10:00.000Z'));
+      policy.push(limit(10, 't2', 'claude-code', null));
+
+      expect(policy.poll(DEBOUNCE)?.attention[0]).toMatchObject({ taskIds: ['t1', 't2'], resumeAt: '2026-10-11T20:10:00.000Z' });
+    });
+  });
+
+  describe('dueAt', () => {
+    it('is null while only passes wait, the window\'s end once attention waits, and at once after run_finished', () => {
+      const policy = createWakePolicy({ debounceMs: DEBOUNCE });
+      policy.push(event('task_passed', 0, 't1'));
+      expect(policy.dueAt()).toBeNull();
+
+      policy.push(event('task_failed', 50, 't2'));
+      policy.push(event('waiting_input', 70, 't3'));
+      expect(policy.dueAt()).toBe(50 + DEBOUNCE);
+
+      policy.push(event('run_finished', 90));
+      expect(policy.dueAt()).toBe(50);
+      policy.poll(90);
+      expect(policy.dueAt()).toBeNull();
+    });
   });
 
   it.each([-1, Number.NaN, Number.POSITIVE_INFINITY])('rejects a debounce of %s', (debounceMs) => {

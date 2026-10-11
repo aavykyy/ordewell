@@ -151,7 +151,7 @@ describe('settleReply', () => {
 
     const turn = await settleReply(m.opts());
 
-    expect(turn).toEqual({ kind: 'message', text: 'Claude Code exited with code 1: not logged in', researchLog: [] });
+    expect(turn).toEqual({ kind: 'message', text: 'Claude Code exited with code 1: not logged in', researchLog: [], failed: true });
     expect(m.sent).toHaveLength(1);
   });
 

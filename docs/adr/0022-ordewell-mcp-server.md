@@ -156,7 +156,8 @@ planner tools are recorded here as an explicit entry against both:
   `MAX_TASK_QUERIES_HARD` in `PlannerConversation`) and the same escalation:
   a nudge to land the turn past the soft cap, a forced landing at the hard
   one. A read through the tool costs what the same read through the envelope
-  costs.
+  costs. A wake-up turn, which no user message bounds, spends the plan's
+  wake-up read budget instead (ADR-0029).
 - **Waking the planner during a run is out of scope (P4).** So is any write it
   makes then. Both stay with #27 and #29.
   *Superseded by [ADR-0029](0029-the-supervisor.md):* wake-up turns, live
@@ -252,3 +253,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
 - 2026-10-11 — execution tools and `task_diff`, live planner turns, wake-up turns ([ADR-0029](0029-the-supervisor.md)).
 - 2026-10-11 — live planner turns implemented: `edit_plan` checks a mid-run edit at the call, with no queued outcome.
+- 2026-10-11 — wake-up turns implemented: their reads spend the plan's wake-up read budget, and `submit_plan` and `edit_plan` are refused in them at Watch.

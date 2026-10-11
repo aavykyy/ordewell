@@ -116,7 +116,8 @@ and completion evidence.
   supervisor about to move the task to another runner) and stopping the run
   both leave the task waiting for a manual retry, as one with no readable
   reset waits. The orchestrator's `onUsageLimitWait` announces each pause and
-  each change to its resume, with the time or null, for a supervisor to wake on.
+  each change to its resume, with the time or null, for a supervisor to wake on;
+  a cancelled resume is marked as one, so it wakes nobody.
 - **Task log persistence (P1).** Append-only, per attempt, at
   `.ordewell/sessions/<session>/tasks/<task>/<attempt>.jsonl`, holding
   normalized events with long tool output trimmed. The same reducer rebuilds
@@ -226,3 +227,4 @@ transport is retained for take-over.
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
 - 2026-10-10 — the TUI task-log surface corrected to Enter on a task in the plan pane.
 - 2026-10-11 — U1: a task paused on a usage limit resumes on its own at the reset (#84).
+- 2026-10-11 — a cancelled resume is marked on `onUsageLimitWait`, and a task going silent is announced (`onTaskIdle`), for the supervisor ([ADR-0029](0029-the-supervisor.md)).

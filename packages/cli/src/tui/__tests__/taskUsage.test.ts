@@ -63,7 +63,7 @@ describe('task row accounting', () => {
     expect(text).toContain('Tasks total: 12.4k in · 3.1k out · $0.42 · 5s');
     expect(text).toContain('G Merge at gates automatically: on');
     expect(text).toContain('1 landed task not merged — /handoff merge');
-    expect(layout.rowSpans[0].start).toBe(4);
+    expect(layout.rowSpans[0].start).toBe(5);
     expect(revealOffset(layout, layout.maxScroll, layout.rowSpans[0])).toBe(0);
 
     const cleared = reduce(updated, { type: 'tasksStatus', updates: {}, runMerge: null }).state;

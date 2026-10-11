@@ -4,9 +4,10 @@ import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
 import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome } from './plannerTools';
 import { sharedMcpServer, type OrdewellMcpServer, type PlannerToolHandler } from './mcp';
-import { ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type PlannerSubmission, type RewindTarget } from './PlannerConversation';
+import { ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type PlannerSubmission, type RewindTarget, type WakeUpTurn } from './PlannerConversation';
 import { forkPlanState, type ForkedDialogue } from './conversationFork';
 import { PlanTurns } from './PlanTurns';
+import { DEFAULT_WAKE_UP_READ_BUDGET, Supervisor, type RunEventInput, type SupervisedRun } from './Supervisor';
 import { Planner } from './Planner';
 import { TaskOrchestrator, type OrchestratorObserver } from './TaskOrchestrator';
 import { PlanStore } from './PlanStore';
@@ -19,7 +20,7 @@ import { HttpWebFetcher } from './HttpWebFetcher';
 import { WebReadPolicy } from './webReadPolicy';
 import { sharedWebResponseCache } from './WebResponseCache';
 import { sharedSearchProvider } from './DuckDuckGoSearchProvider';
-import { ALL_PROVIDERS } from './ProviderRegistry';
+import { ALL_PROVIDERS, runnerForProvider } from './ProviderRegistry';
 import { ModelResolver } from './ModelResolver';
 import { coerceAssignments } from './ModelAllowlistResolver';
 import { plannerModesFrom } from './plannerModes';
@@ -27,7 +28,7 @@ import type { UserSettings } from './SettingsService';
 import { SkillsService } from './SkillsService';
 import { resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
 import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
-import type { RunMergeView, SessionBroadcaster, SessionNotice } from './SessionMessage';
+import { executionSummary, type RunMergeView, type SessionBroadcaster, type SessionNotice } from './SessionMessage';
 import { SessionEventRelay } from './SessionEventRelay';
 import { saveSession } from '../utils/sessionStore';
 import { listTaskLogAttempts, readTaskLog, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
@@ -36,7 +37,7 @@ import { TaskLogRecorder } from './TaskLogRecorder';
 import { PlannerUsageLedger } from './PlannerUsage';
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
-import { flattenTasks, keepExecutionState, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskSnapshot, type RunnerId } from '../models/Task';
+import { flattenTasks, flattenTasksWithParents, keepExecutionState, taskRef, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskSnapshot, type RunnerId } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
 import type { AiProvider, IConfig } from '../interfaces/IConfig';
 import type { IFileSystem } from '../interfaces/IFileSystem';
@@ -51,7 +52,7 @@ import { PlanEditor } from './PlanEditor';
 import { PlanEditError } from './PlanEditError';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { ExecutionCommands, type CommandOutcome, type ExecutionCommand, type ExecutionHost } from './ExecutionCommands';
-import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
+import type { ExecutionActor, ExecutionRecord, SupervisorLevel } from '../models/Execution';
 import { dependencyMet } from './readiness';
 
 /**
@@ -94,6 +95,16 @@ function lastAttemptDigest(location: TaskLogLocation, taskId: string): string | 
   if (attempt === undefined) return null;
   const events = readTaskLog(location, taskId, attempt);
   return events.length > 0 ? digestTaskLog(events, OPS_RETRY_DIGEST_CALLS) : null;
+}
+
+/** Why a gate's automatic Merge all stopped, in a line (ADR-0029). */
+function mergeStopped(result: IsolationMergeResult): string {
+  switch (result.outcome) {
+    case 'merged': return 'it merged';
+    case 'blocked': return 'the user\'s checkout has changes that overlap what it would merge';
+    case 'conflict': return `it conflicts in ${result.repo}${result.files?.length ? `: ${result.files.slice(0, 5).join(', ')}` : ''}`;
+    case 'failed': return `it failed in ${result.repo}`;
+  }
 }
 
 export function sessionRuntimeSettings(settings: UserSettings): SessionRuntimeSettings {
@@ -438,6 +449,8 @@ export class Session {
   private readonly turns: PlanTurns;
   private readonly editor: PlanEditor;
   private readonly commands: ExecutionCommands;
+  private readonly supervisor: Supervisor;
+  private unlistenApprovals: (() => void) | null;
   private readonly plannerTools: PlannerToolHandler = plannerToolHandler({
     skills: () => this.workspaceSkills().listSkills(),
     turnId: () => this.conversation.currentTurnId,
@@ -457,7 +470,8 @@ export class Session {
     runCommand: (command, signal) => this.fsAdapter.bash(command, signal),
     fetchUrl: (url) => this.fetcher.fetch(url),
     webSearch: async (query) => this.fetcher.search?.(query),
-    execute: (command) => this.commands.run(command, { kind: 'planner-turn' }),
+    execute: (command) => this.commands.run(command, this.turnActor()),
+    editsRefused: () => this.conversation.currentWakeUp?.editsRefused,
   });
 
   constructor(parts: SessionParts) {
@@ -515,6 +529,7 @@ export class Session {
     this.turns = new PlanTurns({
       plan: () => this.plan,
       conversationBusy: () => this.conversation.isTurnInFlight,
+      mayWake: () => this.supervisor.mayWake(),
       persist: () => this.persist({ background: true }),
       holdStarts: () => this.orchestrator.holdStarts(),
       resumeStarts: async () => {
@@ -524,9 +539,32 @@ export class Session {
         // A turn that failed before persist leaves its runs unflushed; drop them so
         // the next turn's log cannot absorb a previous turn's uncommitted activity.
         this.events.dropSubagentRuns();
-        return this.conversation.reply(prompt, { signal, onCommit: taken });
+        const reply = (turnSignal: AbortSignal | undefined, wakeUp?: WakeUpTurn) =>
+          this.conversation.reply(prompt, { signal: turnSignal, onCommit: taken, wakeUps: prompt.wakeUps, ...(wakeUp ? { wakeUp } : {}) });
+        // Wake-ups that ride with a user's message are context for the user's turn.
+        return prompt.source === 'supervisor'
+          ? this.supervisor.turn((turnSignal) => reply(turnSignal, this.supervisor.wakeUpTurn()), signal)
+          : reply(signal);
       },
       notice: (message) => this.notice('error', message),
+    });
+
+    this.supervisor = new Supervisor({
+      run: () => this.supervisedRun(),
+      deliver: (digest) => this.turns.enqueue({ source: 'supervisor', text: digest }),
+      pump: () => this.turns.pump(),
+      describeTask: (taskId) => this.describeTask(taskId),
+      readBudget: () => this.plan?.wakeUpReadBudget ?? DEFAULT_WAKE_UP_READ_BUDGET,
+      plannerRunner: () => runnerForProvider(this.config.aiProvider),
+      restartPlanner: () => this.aiService().restart?.(),
+      abandonTurn: () => this.conversation.abandonHungTurn(),
+      goUnsupervised: (reason) => this.goUnsupervised(reason),
+      notice: (level, message) => this.notice(level, message),
+    });
+    this.unlistenApprovals = this.approvals.listen(({ request }) => {
+      if (isRunnerApproval(request) && request.taskId) {
+        this.supervisor.observe({ kind: 'waiting_approval', taskId: request.taskId, detail: request.subject });
+      }
     });
 
     this.editor = new PlanEditor({
@@ -591,6 +629,67 @@ export class Session {
       denyRequest: (requestId, note) => this.resolveApproval(requestId, { decision: 'deny', ...(note ? { note } : {}) }),
       record: (record, text) => this.recordExecution(record, text),
     };
+  }
+
+  /** Who the open planner turn speaks for at the seam: the supervisor in a wake-up turn, else the user's turn. */
+  private turnActor(): ExecutionActor {
+    return this.conversation.currentWakeUp
+      ? { kind: 'supervisor', level: this.plan?.runSettings?.supervisorLevel ?? 'off' }
+      : { kind: 'planner-turn' };
+  }
+
+  /** The run the supervisor watches, as saved when it started. */
+  private supervisedRun(): SupervisedRun | null {
+    const settings = this.plan?.runSettings;
+    if (!settings) return null;
+    return { level: settings.supervisorLevel ?? 'off', ...(settings.unsupervised ? { unsupervised: settings.unsupervised } : {}) };
+  }
+
+  /** `#3 "Title"`, how a wake-up digest names a task. */
+  private describeTask(taskId: string): string {
+    const found = flattenTasksWithParents(this.store.planTasks).find(({ task }) => task.id === taskId);
+    return found ? `${taskRef(found.task, found.parent ?? undefined)} "${found.task.title}"` : taskId;
+  }
+
+  /**
+   * The supervisor failed for the rest of the run (ADR-0029): the run carries
+   * on as Off. Said in the transcript, where its notes would have been, and
+   * as a notice.
+   */
+  private goUnsupervised(reason: string): void {
+    const settings = this.plan?.runSettings;
+    if (!settings || settings.unsupervised) return;
+    const text = `The supervisor stopped: ${reason}. The run carries on unsupervised; what it was not told reaches the planner with your next message.`;
+    this.mutatePlan(() => {
+      settings.unsupervised = reason;
+      this.conversation.append('assistant', text, { kind: 'system' });
+      return true;
+    });
+    this.notice('warn', text);
+  }
+
+  /** The event a task settling on its own is for the supervisor; null for one it hears of another way. */
+  private settledEvent(taskId: string): RunEventInput | null {
+    const task = this.store.get(taskId);
+    if (!task) return null;
+    if (task.status === 'completed') return { kind: 'task_passed', taskId };
+    if (task.status === 'failed') return { kind: 'task_failed', taskId, ...(task.verdict?.reason ? { detail: task.verdict.reason } : {}) };
+    if (task.status !== 'awaiting_user') return null;
+    switch (task.awaitingReason) {
+      case 'checkpoint': {
+        const question = this.orchestrator.getCheckpointQuestion(taskId);
+        return { kind: 'waiting_input', taskId, detail: `at a checkpoint${question ? `: ${question}` : ''}` };
+      }
+      case 'conflict': return { kind: 'landing_conflict', taskId };
+      case 'files-changed':
+        return { kind: 'waiting_input', taskId, detail: 'the ops task changed tracked files in the user\'s checkout; nothing was committed, and the user marks it complete or retries it' };
+      // Heard from the orchestrator's wait, with the runner and its reset.
+      case 'usage-limit': return null;
+      default: {
+        const said = this.orchestrator.getLiveOutput(taskId, { maxLines: 3 })?.text.trim();
+        return { kind: 'waiting_input', taskId, ...(said ? { detail: said } : {}) };
+      }
+    }
   }
 
   /** A call at the seam, in the transcript where it happened and on every surface at once. */
@@ -661,7 +760,8 @@ export class Session {
       ...relay,
       onRunStarted: (settings) => {
         if (!this.plan) return;
-        this.plan.runSettings = settings;
+        this.plan.runSettings = { ...settings, supervisorLevel: this.plan.supervisorLevel ?? 'off' };
+        this.supervisor.runStarted();
         this.persist({ background: true });
         this.events.planGenerated(this.plan, this.goal);
       },
@@ -677,6 +777,7 @@ export class Session {
         this.persist({ background: true });
         this.events.planGenerated(this.plan, this.goal);
         this.broadcast({ type: 'isolation_merge', result });
+        if (result.outcome !== 'merged') this.supervisor.observe({ kind: 'auto_merge_stopped', taskId, detail: mergeStopped(result) });
       },
       onTaskChanged: () => {
         this.saveForControl();
@@ -689,7 +790,17 @@ export class Session {
       // Saved the moment it settles: a shared run has no run record to save
       // it mid-run, so a crash would otherwise lose every verdict since the
       // last Session operation.
-      onTaskSettled: () => this.persist({ background: true }),
+      onTaskSettled: ({ taskId }) => {
+        this.persist({ background: true });
+        const event = this.settledEvent(taskId);
+        if (event) this.supervisor.observe(event);
+      },
+      onUsageLimitWait: ({ taskId, runner, resumeAt, cancelled }) => {
+        if (!cancelled) this.supervisor.observe({ kind: 'usage_limit', taskId, runner, resumeAt });
+      },
+      onTaskIdle: ({ taskId, idleSince }) => {
+        this.supervisor.observe({ kind: 'task_idle', taskId, detail: `no output since ${idleSince}` });
+      },
       onUsageChanged: () => {
         this.persist({ background: true });
         relay.onUsageChanged();
@@ -703,6 +814,8 @@ export class Session {
       onExecutionComplete: () => {
         relay.onExecutionComplete();
         this.persist({ background: true });
+        const { total, completed, failed } = executionSummary(this.store.allTasks);
+        this.supervisor.observe({ kind: 'run_finished', detail: `${completed} of ${total} tasks completed${failed > 0 ? `, ${failed} failed` : ''}` });
       },
     };
   }
@@ -751,6 +864,7 @@ export class Session {
     this.events.dropSubagentRuns();
     this.conversation.abandonTurn();
     this.turns.abandon();
+    this.supervisor.reset();
     this.conversation.reset();
     // Totals belong to the plan they were recorded under; a fresh plan starts
     // its ledger from zero so the previous session's line never lingers.
@@ -1100,6 +1214,25 @@ export class Session {
     this.mutatePlan(() => {
       this.plan!.mergeAtGatesAutomatically = enabled;
       this.orchestrator.setMergeAtGatesAutomatically(enabled);
+      return true;
+    });
+  }
+
+  /** Whether a supervisor watches the plan's runs (ADR-0029); a change during a run applies to the next. */
+  setSupervisorLevel(level: SupervisorLevel): void {
+    if (!this.plan) throw new NoPlanError('change the supervisor level');
+    this.mutatePlan(() => {
+      this.plan!.supervisorLevel = level;
+      return true;
+    });
+  }
+
+  /** Reads a wake-up turn may make (ADR-0029); read at each wake-up. */
+  setWakeUpReadBudget(reads: number): void {
+    if (!this.plan) throw new NoPlanError('change the wake-up read budget');
+    if (!Number.isInteger(reads) || reads < 1) throw new PlanEditError('The wake-up read budget must be a whole number of reads, at least 1.');
+    this.mutatePlan(() => {
+      this.plan!.wakeUpReadBudget = reads;
       return true;
     });
   }
@@ -1464,6 +1597,7 @@ export class Session {
     if (adopting) {
       this.conversation.abandonTurn();
       this.turns.abandon();
+      this.supervisor.reset();
       this.conversation.reset();
       // The execution log is scoped to the outgoing plan.
       this.store.clearLog();
@@ -1515,6 +1649,9 @@ export class Session {
     // server-side after the client has already moved on to a new session.
     this.conversation.abandonTurn();
     this.turns.abandon();
+    this.supervisor.reset();
+    this.unlistenApprovals?.();
+    this.unlistenApprovals = null;
     this.conversation.reset();
     // Deny any still-pending approval prompts so their timers and awaited
     // continuations settle before the Session goes away.

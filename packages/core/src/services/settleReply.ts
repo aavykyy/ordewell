@@ -103,7 +103,7 @@ export async function settleReply(opts: SettleReplyOptions): Promise<Conversatio
         opts.onProgress({ type: 'interrupted' });
         return { done: turn };
       }
-      if (attempt.failure !== undefined) return { done: message(attempt.failure) };
+      if (attempt.failure !== undefined) return { done: { ...message(attempt.failure), failed: true } };
       if (!attempt.text.trim()) return { done: message(emptyReplyReport(deniedStep(attempt))) };
 
       const reply: PlannerReplyClassification = opts.classify ? classifyPlannerReply(attempt.text, opts.classify) : { kind: 'prose' };

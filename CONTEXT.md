@@ -1628,11 +1628,15 @@ planner turn** is still to take — core holds those, and no surface lists them.
 **Supervisor** — the planner conversation that wrote the plan, taking turns
 during the run it planned (ADR-0029, #27). Not a second model or process: its
 notes are in the same `conversationHistory`, marked with their own message
-`kind` so surfaces style them apart from replies to the user. What it may do
+`kind` (`supervisor`, and `wake_up` for the **Run update** it was given) so
+surfaces style them apart from replies to the user. One module owns when it
+wakes and how it fails: `Supervisor` (`services/Supervisor.ts`), fed run
+events by the Session and batching them through `WakePolicy`. What it may do
 is set by the plan's **Supervisor level** and checked at the **Command seam**.
 It decides what to do next, never whether a task passed — verdicts come from
 evidence. The run never depends on it: a wake-up turn that still fails after one
-restart leaves the run *unsupervised* (carrying on as Off, with a notice).
+restart leaves the run *unsupervised* (carrying on as Off, with a notice and a
+note in the transcript; `runSettings.unsupervised` says why).
 *Avoid:* "agent", "orchestrator" (the scheduler is `TaskOrchestrator`),
 "autopilot".
 
@@ -1640,10 +1644,13 @@ restart leaves the run *unsupervised* (carrying on as Off, with a notice).
 saved on the plan at run start, so flipping it mid-run changes nothing until
 the next run (ADR-0001's rule for modes). Off: the planner speaks only when the
 user writes. Watch: wake-up turns read and suggest; execution tools and plan
-edits are refused. Act: wake-up turns may also run, stop and retry tasks,
-message runners, deny approvals, edit the plan and merge, inside the loop
-guards. A tripped wake-up-rate guard or a failed supervisor lowers it for the
-rest of the run; nothing raises it mid-run. A slim precursor of the mandate
+edits are refused, with a note telling it to suggest the action to the user.
+Act: wake-up turns may also run, stop and retry tasks, message runners, deny
+approvals, edit the plan and merge, inside the loop guards — not offered by
+the surfaces yet, and a plan set to Act through the daemon runs as Watch until
+its rules exist. Saved on the run as `runSettings.supervisorLevel`. A tripped
+wake-up-rate guard or a failed supervisor lowers it for the rest of the run;
+nothing raises it mid-run. A slim precursor of the mandate
 (#23): Watch is `observe`, Act becomes `control` + `replan`.
 *Avoid:* "autonomous", "autonomy" or "auto" for it — those name the runner
 permission modes and the Full/Guarded autonomy level (ADR-0001), a separate
@@ -1652,14 +1659,30 @@ setting; a Guarded session can have an Act supervisor. *Avoid:* "mandate" until
 
 **Wake-up turn** — a planner turn opened by a `WakePolicy` batch rather than by
 the user: a task failed, waiting for input or approval, idle, a landing
-conflict, a usage-limit pause, or the run finished, with passes since the last
-wake-up as context. It has a timeout, a per-turn read budget set on the plan
-(in place of a user turn's per-message read cap), and the consent of the
-Supervisor level rather than the user's. Undelivered batches are persisted and
-handed over whole at the next turn that succeeds.
+conflict, an automatic Merge all that stopped, a usage-limit pause (one entry
+per runner, however many tasks it paused), or the run finished, with passes
+since the last wake-up as context. Events within `WAKE_DEBOUNCE_MS` of the
+first join it; the run's end flushes at once. It has a timeout
+(`WAKE_UP_TURN_TIMEOUT_MS`), a per-turn read budget set on the plan
+(`wakeUpReadBudget`, 12 when unset, in place of a user turn's per-message read
+cap), and the consent of the Supervisor level rather than the user's. A
+crashed or hung one is retried once with the planner restarted from its saved
+session id; a planner usage limit is waited out. Undelivered batches are
+pending turns (`source: 'supervisor'`): a failed turn leaves them, a reload
+replays them, and while the supervisor may not wake — unsupervised, or waiting
+on a limit — they ride with the user's next message instead.
 *Avoid:* "notification" or "event" for the turn — the event is what woke it;
 *Avoid:* "supervisor turn" for a user-started turn during a run, which follows
-the user's consent, not the level's.
+the user's consent, not the level's — even one that delivers a run update.
+
+**Run update** — what a wake-up gives the supervisor (`wakeUpDigest`): one
+line per event that woke it, naming the task and a short detail (the verdict's
+reason, the question, the request, the resume time), then the passes since the
+last one. Never a log: the supervisor reads more with `task_output` and
+`task_diff`. Kept in the transcript as a `wake_up` entry and drawn as its own
+block; the level's rules for the turn are told after it and never saved.
+*Avoid:* "digest" in user-facing text, and "summary" — a summary is what a
+Compaction leaves.
 
 **Live planner turn** — a planner turn taken at once, during a run too, while
 running tasks carry on (ADR-0029). One module owns it: **PlanTurns**
@@ -1678,8 +1701,10 @@ completed one). A batch applies whole or not at all, as `applyTaskOps` always
 has, so one refused op refuses its batch. A whole plan is refused while a task
 runs, and the planner is asked for task edits. Inputs wait on the plan
 (`pendingTurns`), saved as they arrive and dropped in the save that lands their
-turn's outcome, so a reload replays exactly what no turn answered; a load also
-carries over the mid-run edits older builds queued (`queuedMessages`).
+turn's outcome, so a reload replays exactly what no turn answered; a turn that
+fails drops the user's inputs but leaves a wake-up batch for the next turn. A
+load also carries over the mid-run edits older builds queued
+(`queuedMessages`).
 *Avoid:* "pending plan edit" or "queued edit" for it — nothing waits for a
 batch boundary; *Avoid:* "pause" for the start hold — running tasks are not
 paused.

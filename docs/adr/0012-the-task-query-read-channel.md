@@ -82,7 +82,10 @@ than cached or replayed.
   A repeated identical query (`taskQuerySignature`) is treated the same as
   hitting the soft cap early — asking the same thing twice is a loop, not a
   read, and gets the landing nudge on the very next answer rather than
-  waiting for three genuinely new questions to also arrive.
+  waiting for three genuinely new questions to also arrive. A wake-up turn
+  (ADR-0029) has no user message to bound it: it gets the plan's wake-up read
+  budget whole (`wakeUpReadBudget`, 12 when unset), and only its last read is
+  told to land.
 - **Refusing to answer was rejected as the backstop (T5).** Unlike a `bash`
   tool call (ADR-0008, T5: "absent is denial"), a read that stops being
   answered is not a safe default here — the planner has no other way to get
@@ -246,3 +249,4 @@ ADR-0008's exploration envelope is unchanged.
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
 - 2026-10-11 — saved attempt log reads and task diffs, paged through the shared read budget on both planner transports.
 - 2026-10-11 — mid-run edits are applied or refused at once, with no queue for a read to wait behind ([ADR-0029](0029-the-supervisor.md)).
+- 2026-10-11 — T4: a wake-up turn spends the plan's wake-up read budget in place of the per-user-turn caps ([ADR-0029](0029-the-supervisor.md)).

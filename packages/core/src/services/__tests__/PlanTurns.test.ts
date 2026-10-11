@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LegacyPlanState } from '../../models/Task';
-import { PlanTurns, turnPrompt, type PlanTurnsHost } from '../PlanTurns';
+import { PlanTurns, turnPrompt, type PlanTurnsHost, type TurnPrompt } from '../PlanTurns';
 import { ConversationBusyError, PlannerTurnDiscardedError, PlannerTurnStoppedError } from '../PlannerConversation';
-import type { SkillInvocation } from '../skillInvocation';
 import { flushMicrotasks } from '../../testing';
 
 function plan(): LegacyPlanState {
@@ -11,7 +10,7 @@ function plan(): LegacyPlanState {
 }
 
 interface HeldTurn {
-  prompt: SkillInvocation;
+  prompt: TurnPrompt;
   signal?: AbortSignal;
   /** Land the turn: its commit runs `taken`, as the conversation's mutation does. */
   land(): void;
@@ -26,6 +25,7 @@ function fakeHost(current: { plan: LegacyPlanState | null } = { plan: plan() }) 
   const host = {
     plan: () => current.plan,
     conversationBusy: vi.fn(() => false),
+    mayWake: vi.fn(() => true),
     persist: vi.fn(() => { saved.push((current.plan?.pendingTurns ?? []).map((t) => t.text)); }),
     holdStarts: vi.fn(() => {
       holds++;
@@ -33,7 +33,7 @@ function fakeHost(current: { plan: LegacyPlanState | null } = { plan: plan() }) 
       return () => { if (held) { held = false; holds--; } };
     }),
     resumeStarts: vi.fn(async () => {}),
-    run: vi.fn((prompt: SkillInvocation, { taken, signal }: { taken: () => void; signal?: AbortSignal }) => new Promise<LegacyPlanState>((resolve, reject) => {
+    run: vi.fn((prompt: TurnPrompt, { taken, signal }: { taken: () => void; signal?: AbortSignal }) => new Promise<LegacyPlanState>((resolve, reject) => {
       turns.push({
         prompt,
         signal,
@@ -109,7 +109,7 @@ describe('PlanTurns', () => {
     turns[0].land();
     await first;
     await vi.waitFor(() => expect(turns).toHaveLength(2));
-    expect(turns[1].prompt.text).toBe('two\n\nthree');
+    expect(turns[1].prompt).toMatchObject({ source: 'user', text: 'two', wakeUps: ['three'] });
     turns[1].land();
     await expect(Promise.all([second, third])).resolves.toHaveLength(2);
   });
@@ -226,6 +226,93 @@ describe('PlanTurns', () => {
   });
 });
 
+describe('PlanTurns: wake-ups (ADR-0029)', () => {
+  const wakeUp = (text = 'Run update:\n- task #1 failed') => ({ source: 'supervisor' as const, text });
+
+  it('opens a wake-up turn on wake-ups alone only while the supervisor may wake', async () => {
+    const { host, turns } = fakeHost();
+    host.mayWake.mockReturnValue(false);
+    const runner = new PlanTurns(host);
+
+    void runner.enqueue(wakeUp()).catch(() => {});
+    expect(turns).toHaveLength(0);
+
+    host.mayWake.mockReturnValue(true);
+    runner.pump();
+    expect(turns).toHaveLength(1);
+    expect(turns[0].prompt).toEqual({ source: 'supervisor', text: '', skills: [], wakeUps: ['Run update:\n- task #1 failed'] });
+  });
+
+  it('delivers waiting wake-ups with the user\'s next message, whatever the supervisor may do', async () => {
+    const { host, turns, current } = fakeHost();
+    host.mayWake.mockReturnValue(false);
+    const runner = new PlanTurns(host);
+    void runner.enqueue(wakeUp()).catch(() => {});
+
+    const answered = runner.enqueue({ source: 'user', text: 'what happened?' });
+
+    expect(turns[0].prompt).toMatchObject({ source: 'user', text: 'what happened?', wakeUps: ['Run update:\n- task #1 failed'] });
+    turns[0].land();
+    await answered;
+    expect(current.plan!.pendingTurns).toEqual([]);
+  });
+
+  it('keeps the wake-ups of a turn that failed, and drops the user\'s message', async () => {
+    const { host, turns, current } = fakeHost();
+    host.mayWake.mockReturnValue(false);
+    const runner = new PlanTurns(host);
+    const woke = runner.enqueue(wakeUp());
+    const answered = runner.enqueue({ source: 'user', text: 'and now?' });
+
+    turns[0].fail(new Error('planner down'));
+
+    await expect(answered).rejects.toThrow('planner down');
+    await expect(woke).rejects.toThrow('planner down');
+    expect(current.plan!.pendingTurns!.map((t) => t.source)).toEqual(['supervisor']);
+    expect(host.notice).not.toHaveBeenCalled();
+  });
+
+  it('drops the wake-ups of a turn the user stopped', async () => {
+    const { host, turns, current } = fakeHost();
+    const runner = new PlanTurns(host);
+    const woke = runner.enqueue(wakeUp());
+
+    turns[0].fail(new PlannerTurnStoppedError());
+
+    await expect(woke).rejects.toBeInstanceOf(PlannerTurnStoppedError);
+    expect(current.plan!.pendingTurns).toEqual([]);
+  });
+
+  it('takes a wake-up while another kind of turn holds the conversation, and delivers it when that turn ends', async () => {
+    const { host, turns, current } = fakeHost();
+    host.conversationBusy.mockReturnValue(true);
+    const runner = new PlanTurns(host);
+
+    void runner.enqueue(wakeUp()).catch(() => {});
+    expect(current.plan!.pendingTurns).toHaveLength(1);
+    expect(turns).toHaveLength(0);
+
+    host.conversationBusy.mockReturnValue(false);
+    runner.pump();
+    expect(turns).toHaveLength(1);
+  });
+
+  it('does not tell the user about a replayed wake-up that failed: the supervisor handles that', async () => {
+    const saved = plan();
+    saved.pendingTurns = [{ id: 'turn-1', source: 'supervisor', text: 'Run update:\n- task #1 failed', timestamp: '2026-10-11T00:00:00Z' }];
+    const { host, turns, current } = fakeHost({ plan: saved });
+    const runner = new PlanTurns(host);
+    runner.pump();
+    host.mayWake.mockReturnValue(false);
+
+    turns[0].fail(new Error('planner down'));
+    await flushMicrotasks();
+
+    expect(host.notice).not.toHaveBeenCalled();
+    expect(current.plan!.pendingTurns).toHaveLength(1);
+  });
+});
+
 describe('turnPrompt', () => {
   it('joins a batch in order and keeps every skill it loaded', () => {
     const skill = { name: 'tdd', source: 'global' as const, path: '/s/tdd/SKILL.md', content: 'body', invokedBy: 'user' as const };
@@ -233,6 +320,6 @@ describe('turnPrompt', () => {
       { id: '1', source: 'user', text: '/tdd one', timestamp: 't', skills: [skill] },
       { id: '2', source: 'user', text: 'two', timestamp: 't' },
     ]);
-    expect(prompt).toEqual({ text: '/tdd one\n\ntwo', skills: [skill] });
+    expect(prompt).toEqual({ source: 'user', text: '/tdd one\n\ntwo', skills: [skill], wakeUps: [] });
   });
 });

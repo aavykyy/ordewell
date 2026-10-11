@@ -58,7 +58,17 @@ function finalSegmentIndex(blocks: readonly DisplayBlock[], turnId: string, past
   return -1;
 }
 
-function openTurn(view: ConversationView, { turnId, prompt = '', skills = [] }: Message<'planner_turn_started'>): ConversationView {
+function openTurn(view: ConversationView, { turnId, prompt = '', skills = [], wakeUps = [] }: Message<'planner_turn_started'>): ConversationView {
+  if (wakeUps.length === 0) return promptLine(view, turnId, prompt, skills);
+  // A wake-up turn has no message; otherwise the run updates go ahead of the
+  // message they were delivered with, where the transcript keeps them.
+  const said = prompt === '' ? view : promptLine(view, turnId, prompt, skills);
+  const at = prompt === '' ? said.blocks.length : findLastIndex(said.blocks, (b) => b.type === 'message' && b.role === 'user' && b.turnId === turnId);
+  const updates = wakeUps.map((text, n) => settledMessage(`b${said.nextId + n}`, 'wake_up', text, turnId));
+  return { ...said, blocks: [...said.blocks.slice(0, at), ...updates, ...said.blocks.slice(at)], nextId: said.nextId + updates.length };
+}
+
+function promptLine(view: ConversationView, turnId: string, prompt: string, skills: NonNullable<Message<'planner_turn_started'>['skills']>): ConversationView {
   // A surface shows its user's prompt the moment it is sent; the turn that
   // answers it adopts that line rather than repeating it.
   const i = findLastIndex(view.blocks, (b) => b.type === 'message' && b.role === 'user');
@@ -93,14 +103,15 @@ function dropBuildingPlan(view: ConversationView, turnId: string | undefined, se
   return blocks.length === view.blocks.length ? view : { ...view, blocks };
 }
 
-function settleReply(view: ConversationView, { content, turnId }: Message<'planner_message'>): ConversationView {
+function settleReply(view: ConversationView, { content, turnId, supervisor }: Message<'planner_message'>): ConversationView {
+  const role = supervisor ? 'supervisor' : 'planner';
   if (turnId !== undefined) {
     const i = finalSegmentIndex(view.blocks, turnId);
     if (i >= 0) {
-      return dropBuildingPlan({ ...view, blocks: replaceAt(view.blocks, i, settledMessage(view.blocks[i].id, 'planner', content, turnId)) }, turnId);
+      return dropBuildingPlan({ ...view, blocks: replaceAt(view.blocks, i, settledMessage(view.blocks[i].id, role, content, turnId)) }, turnId);
     }
   }
-  return append(dropBuildingPlan(view, turnId), (id) => settledMessage(id, 'planner', content, turnId));
+  return append(dropBuildingPlan(view, turnId), (id) => settledMessage(id, role, content, turnId));
 }
 
 // A retracted envelope takes the turn's plan display with it, or its retry

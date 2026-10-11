@@ -600,6 +600,19 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(args[args.indexOf('--resume') + 1]).toBe('sess-claude-1');
   });
 
+  it('restarts the planner on request from its own session, keeping the conversation (ADR-0029)', async () => {
+    const { svc, spawned } = service('claude-code', [fixture('claude-code', 'prose'), fixture('claude-code', 'prose')]);
+    await svc.startConversation(request());
+
+    svc.restart();
+    expect(svc.hasActiveConversation()).toBe(true);
+    await svc.continueConversation('Carry on', () => {});
+
+    expect(spawned.processes).toHaveLength(2);
+    const args = spawned.lastArgs();
+    expect(args[args.indexOf('--resume') + 1]).toBe('sess-claude-1');
+  });
+
   it('names the refused tool when the agent ends its turn without replying', async () => {
     // Agents can stop on a refusal and say nothing. "Empty reply" told the user
     // nothing they could act on; the denial is the actual reason.

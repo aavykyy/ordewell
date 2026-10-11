@@ -4,7 +4,7 @@ import TaskCard from './TaskCard';
 import NewTaskCard from './NewTaskCard';
 import type { TaskDraft } from './NewTaskCard';
 import type { RunnerMode, RunnerOption } from './TaskCard';
-import { Task, DiscoveredModel, TaskModelAssignment, TaskIsolation } from '@ordewell/core';
+import { Task, DiscoveredModel, TaskModelAssignment, TaskIsolation, type SupervisorLevel } from '@ordewell/core';
 import { canMergeTasks, canSplitTask, planUsage } from '@ordewell/core/plan-utils';
 
 interface PlanCardGroupProps {
@@ -12,6 +12,10 @@ interface PlanCardGroupProps {
   mergeAtGatesAutomatically?: boolean;
   runAutoMerge?: boolean;
   onAutoMergeChange?: (enabled: boolean) => void;
+  /** The plan's supervisor level, and what the run started with (ADR-0029). */
+  supervisorLevel?: SupervisorLevel;
+  runSupervisor?: { level: SupervisorLevel; unsupervised?: string };
+  onSupervisorLevelChange?: (level: 'off' | 'watch') => void;
   models: DiscoveredModel[];
   modelsByRunner?: Partial<Record<string, DiscoveredModel[]>>;
   modesByRunner?: Record<string, RunnerMode[]>;
@@ -65,6 +69,9 @@ export default function PlanCardGroup({
   mergeAtGatesAutomatically = false,
   runAutoMerge,
   onAutoMergeChange,
+  supervisorLevel = 'off',
+  runSupervisor,
+  onSupervisorLevelChange,
   models,
   modelsByRunner,
   modesByRunner,
@@ -218,6 +225,19 @@ export default function PlanCardGroup({
               Merge at gates automatically
               {isExecuting && runAutoMerge !== undefined && runAutoMerge !== mergeAtGatesAutomatically
                 && ` (next run; now ${runAutoMerge ? 'on' : 'off'})`}
+            </label>
+          )}
+          {onSupervisorLevelChange && (
+            <label title="Watch: the planner wakes when a task fails, waits on you or goes quiet, reads what happened, and suggests what to do. It never acts. Changes during a run apply to the next run.">
+              Supervisor
+              <select value={supervisorLevel === 'off' ? 'off' : 'watch'}
+                onChange={(e) => onSupervisorLevelChange(e.target.value === 'watch' ? 'watch' : 'off')}>
+                <option value="off">Off</option>
+                <option value="watch">Watch</option>
+              </select>
+              {isExecuting && runSupervisor && (runSupervisor.unsupervised
+                ? <span className="plan-supervisor-stopped" title={runSupervisor.unsupervised}> (stopped; the run is unsupervised)</span>
+                : runSupervisor.level !== supervisorLevel && ` (next run; now ${runSupervisor.level})`)}
             </label>
           )}
           {isExecuting ? (

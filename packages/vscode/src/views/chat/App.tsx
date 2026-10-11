@@ -559,6 +559,10 @@ export default function App() {
           <span className="plan-dock-title">Plan</span>
           {(isExecuting ? plan.runSettings?.mergeAtGatesAutomatically : plan.mergeAtGatesAutomatically)
             && <span className="plan-dock-summary">Merge at gates automatically</span>}
+          {isExecuting && plan.runSettings?.unsupervised
+            ? <span className="plan-dock-summary plan-supervisor-stopped">Unsupervised</span>
+            : (isExecuting ? plan.runSettings?.supervisorLevel : plan.supervisorLevel) === 'watch'
+              && <span className="plan-dock-summary plan-supervisor">Supervisor: Watch</span>}
           <span className="plan-dock-summary">{planSummaryLabel(plan.tasks)}</span>
           {/* A collapse is always honoured, including mid-run — so the bar has to
               say when a task is blocked on the user, or the approval would sit
@@ -592,6 +596,9 @@ export default function App() {
             mergeAtGatesAutomatically={plan.mergeAtGatesAutomatically}
             runAutoMerge={plan.runSettings?.mergeAtGatesAutomatically}
             onAutoMergeChange={(enabled) => vscode.postMessage({ type: 'setAutoMerge', enabled })}
+            supervisorLevel={plan.supervisorLevel}
+            runSupervisor={plan.runSettings && { level: plan.runSettings.supervisorLevel ?? 'off', ...(plan.runSettings.unsupervised ? { unsupervised: plan.runSettings.unsupervised } : {}) }}
+            onSupervisorLevelChange={(level) => vscode.postMessage({ type: 'setSupervisorLevel', level })}
             models={models}
             modelsByRunner={modelsByRunner}
             modesByRunner={modesByRunner}

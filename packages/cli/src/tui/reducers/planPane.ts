@@ -66,6 +66,10 @@ export function handlePlanKey(state: TuiState, key: Key): Step {
   if (key.name === 'char' && key.char === 'G' && state.sessionId) {
     return step(state, [{ type: 'setAutoMerge', sessionId: state.sessionId, enabled: !state.mergeAtGatesAutomatically }]);
   }
+  // Off and Watch only: Act is not offered until its rules land (ADR-0029).
+  if (key.name === 'char' && key.char === 'W' && state.sessionId) {
+    return step(state, [{ type: 'setSupervisorLevel', sessionId: state.sessionId, level: state.supervisorLevel === 'off' ? 'watch' : 'off' }]);
+  }
 
   // Before the row guard: with no tasks there is no row, and this is the way in.
   if (key.name === 'char' && key.char === 'a') return addTask(state, '');

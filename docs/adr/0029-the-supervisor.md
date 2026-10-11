@@ -89,12 +89,22 @@ built. The attention events are:
 - a task is waiting for approval;
 - a task went idle;
 - a landing conflict (ADR-0015);
+- an automatic Merge all at a merge gate that stopped;
 - the run finished;
 - **new:** a task paused on a usage limit, with the time it resumes (#84).
+  Every task one runner's limit pauses is one entry.
 
 A pass never wakes it. Passes ride along as "since last time: tasks 2, 3, 4
 passed". Events close together are merged into one wake-up. The policy is code,
 not prompt text, so when the supervisor speaks is testable without a model.
+
+A due batch reaches the conversation as a **run update**: one line per event,
+naming its task and a short detail — the verdict's reason, the question, the
+request, the resume time — and the passes since the last one. Never a log: the
+supervisor reads more with `task_output` and `task_diff`. The run update is
+the supervisor's input (`kind: 'wake_up'`), and what it says in the turn is
+its note (`kind: 'supervisor'`). The rules of its level are told to it after
+the run update, each turn, and never saved.
 
 ### Live planner turns replace the between-batches queue
 
@@ -209,12 +219,16 @@ accepted. Each tripped guard also posts a supervisor message to the user.
 
 - **A wake-up turn has a timeout.** On a crash or hang the planner is restarted
   by its saved native session id (ADR-0009's resume path) and the turn retried
-  once.
+  once. A turn that does not end when stopped has the conversation taken back
+  from it, and what it wrote is undone as a failure's would be. A planner turn
+  that ends without a reply — a dead agent — is a crash here, not a note.
 - **Then the run goes unsupervised**: it carries on as Off, with a visible
   notice. Wake-ups not delivered are persisted and handed over whole at the
   next successful turn or user message, so nothing that happened is lost to
   the conversation.
-- **A planner usage limit waits for its reset** as a runner's does (#84).
+- **A planner usage limit waits for its reset** as a runner's does (#84),
+  read from the planner's own words; one whose reset cannot be read leaves the
+  run unsupervised.
 - **Undelivered wake-up batches reload after a daemon restart.**
 
 ### Usage limits
@@ -296,8 +310,9 @@ until #30 exists.
   planner still edits no file and runs nothing outside its envelope. Effects
   still happen only in tasks.
 - A plan gains: supervisor level, retry limit, wake-up read budget, merge at
-  gates automatically, pending turns and undelivered wake-up batches. Older
-  plans load as Off, with no auto-merge.
+  gates automatically, and pending turns — the user's messages and the
+  wake-up batches not yet delivered. Older plans load as Off, with no
+  auto-merge.
 - Act with ops tasks can act on real systems unattended. The level picker says
   so; #23 owns the narrower answer.
 - ADR-0013's "never merged for the user" holds unless the user opts in per plan.
@@ -311,3 +326,4 @@ until #30 exists.
   approved — every task when they execute it, and each one they start or retry
   themselves — and a Guarded start asks on the planner's approval card.
 - 2026-10-11 — live planner turns implemented (`PlanTurns`); the pending plan edit queue, its drain and `modifyDuringExecution` removed.
+- 2026-10-11 — the Watch level (`Supervisor`): wake-ups from run events, `usage_limit` coalesced per runner, run updates, the wake-up read budget, refusals at Watch, failure handling and persistence. Surfaces offer Off and Watch; a plan set to Act runs as Watch until Act's rules land.

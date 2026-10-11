@@ -63,8 +63,11 @@ export interface OrchestratorObserver {
    * `resumeAt` is when it resumes on its own (ISO time), null when it waits
    * for a manual retry — the reset could not be read, the resume was
    * cancelled, or the resumed attempt hit the limit again at once.
+   * `cancelled` marks the resume being cancelled, which is no new pause.
    */
-  onUsageLimitWait?(data: { taskId: string; runner: string; resumeAt: string | null }): void;
+  onUsageLimitWait?(data: { taskId: string; runner: string; resumeAt: string | null; cancelled?: true }): void;
+  /** A live task's runner went silent (ADR-0018's idle timer); paused while it waits on input, a checkpoint or an approval. */
+  onTaskIdle?(data: { taskId: string; idleSince: string }): void;
   onReviewNeeded?(data: { tasks: Task[]; planRunners: RunnerId[] }): void;
   onReviewApproved?(data: { tasks: Task[] }): void;
   onCheckpoint?(data: { taskId: string; taskTitle: string; summary: string }): void;
@@ -314,8 +317,12 @@ export class TaskOrchestrator {
       this.emit('onTaskChanged');
     });
     // idleSince is advisory UI state, not a store mutation — broadcast it
-    // through the same onTaskChanged seam without touching PlanStore.
-    this.verifier.onIdleChange(() => this.emit('onTaskChanged'));
+    // through the same onTaskChanged seam without touching PlanStore. Only
+    // going silent is news to a supervisor: null also comes on teardown.
+    this.verifier.onIdleChange((taskId, idleSince) => {
+      if (idleSince) this.emit('onTaskIdle', { taskId, idleSince });
+      this.emit('onTaskChanged');
+    });
   }
 
   /**
@@ -1239,7 +1246,7 @@ export class TaskOrchestrator {
     const runner = this.store.resolveTaskRunner(task);
     this.store.setTaskResumeAt(taskId, undefined);
     if (this.waitingOn(runner).length === 0) this.limitWaits.disarm(runner);
-    this.emit('onUsageLimitWait', { taskId, runner, resumeAt: null });
+    this.emit('onUsageLimitWait', { taskId, runner, resumeAt: null, cancelled: true });
     this.emit('onTaskChanged');
     return true;
   }

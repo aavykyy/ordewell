@@ -30,6 +30,19 @@ describe('ChatMessage', () => {
     expect(container.querySelector('.chat-msg-planner code')!.textContent).toBe('auth.ts');
   });
 
+  it('marks the supervisor\'s note apart from a planner reply, still as markdown', () => {
+    const { container } = render(<ChatMessage block={message({ role: 'supervisor', text: 'Task 1 **failed**; retry it?' })} />);
+    expect(container.querySelector('.chat-msg-planner.chat-msg-supervisor .chat-msg-label')!.textContent).toBe('Supervisor');
+    expect(container.querySelector('.chat-msg-supervisor strong')!.textContent).toBe('failed');
+  });
+
+  it('shows the run update that woke the supervisor as its own card, as it was sent', () => {
+    const { container } = render(<ChatMessage block={message({ role: 'wake_up', text: 'Run update:\n- task #1 "Build" failed: **tests**' })} />);
+    expect(container.querySelector('.chat-msg-wake-up .chat-msg-label')!.textContent).toBe('Run update');
+    expect(container.querySelector('.chat-msg-wake-up .chat-msg-content')!.textContent).toBe('- task #1 "Build" failed: **tests**');
+    expect(container.querySelector('.chat-msg-planner')).toBeNull();
+  });
+
   it('renders a reply still streaming as markdown, marked live', () => {
     const { container } = render(<ChatMessage block={message({ text: 'Reading **the', streaming: true })} />);
     expect(container.querySelector('.chat-msg-planner.streaming .chat-msg-content')!.textContent).toBe('Reading **the');

@@ -178,6 +178,34 @@ describe('plan merge settings', () => {
     }
   });
 
+  it('routes the supervisor level and the wake-up read budget to the session', async () => {
+    const setSupervisorLevel = vi.fn();
+    const setWakeUpReadBudget = vi.fn();
+    const response = await appFor({ setSupervisorLevel, setWakeUpReadBudget }).request('/api/plans/s1/settings', { method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ supervisorLevel: 'watch', wakeUpReadBudget: 8 }) });
+    expect(response.status).toBe(200);
+    expect(setSupervisorLevel).toHaveBeenCalledWith('watch');
+    expect(setWakeUpReadBudget).toHaveBeenCalledWith(8);
+  });
+
+  it.each([
+    [{ supervisorLevel: 'autonomous' }],
+    [{ wakeUpReadBudget: 0 }],
+    [{ wakeUpReadBudget: 2.5 }],
+    [{ supervisorLevel: 'watch', mergeAtGatesAutomatically: 'yes' }],
+    [{}],
+  ])('refuses %j and changes nothing', async (body) => {
+    const setSupervisorLevel = vi.fn();
+    const setWakeUpReadBudget = vi.fn();
+    const setMergeAtGatesAutomatically = vi.fn();
+    const response = await appFor({ setSupervisorLevel, setWakeUpReadBudget, setMergeAtGatesAutomatically }).request('/api/plans/s1/settings', { method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    expect(response.status).toBe(400);
+    expect(setSupervisorLevel).not.toHaveBeenCalled();
+    expect(setWakeUpReadBudget).not.toHaveBeenCalled();
+    expect(setMergeAtGatesAutomatically).not.toHaveBeenCalled();
+  });
+
   it('refuses a non-boolean rather than coercing it on', async () => {
     const setMergeAtGatesAutomatically = vi.fn();
     const response = await appFor({ setMergeAtGatesAutomatically }).request('/api/plans/s1/settings', { method: 'PATCH',
