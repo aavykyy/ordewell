@@ -31,9 +31,10 @@ export interface SessionEventRelayDeps {
 /**
  * Every orchestrator event the relay announces. `onTaskSettled` is persistence
  * only and `onQueueReady` is the Session's cue to drain its queue, so both are
- * the Session's alone.
+ * the Session's alone. Run settings and automatic merge records also need
+ * persistence before announcement, so Session owns those two observers.
  */
-export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onQueueReady'>>;
+export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onQueueReady' | 'onRunStarted' | 'onAutoMerge'>>;
 
 /** One subagent's activity seen during a turn: its log entry plus the steps it ran. */
 interface SubagentRun {

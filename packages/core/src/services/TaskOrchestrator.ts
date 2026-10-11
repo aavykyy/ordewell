@@ -51,6 +51,9 @@ export interface OrchestratorObserver {
    * save the outcome before any surface is told.
    */
   onTaskSettled?(data: { taskId: string }): void;
+  onRunStarted?(settings: { mergeAtGatesAutomatically: boolean }): void;
+  /** A gate's automatic merge settled; failures are attention events for a supervisor. */
+  onAutoMerge?(data: { taskId: string; result: IsolationMergeResult }): void;
   onTick?(): void;
   onExecutionComplete?(): void;
   /** The run is parked behind queued user messages, with nothing live, until they are drained. */
@@ -213,6 +216,10 @@ export class TaskOrchestrator {
   private planStatus: 'approved' | 'running' | 'completed' = 'approved';
   private messageQueue = new MessageQueue();
   private reviewApproved = false;
+  private nextAutoMerge = false;
+  private autoMerge = false;
+  private autoMergeBlocked = false;
+  private mergesInFlight = 0;
   /*
    * Retry counts, spawn counts and holds describe a task across attempts, so
    * they deliberately live outside the attempt record: ending an attempt must
@@ -580,17 +587,32 @@ export class TaskOrchestrator {
    * Never alongside ops work, either way round ({@link mergeExcludes}).
    */
   async mergeRun(): Promise<IsolationMergeResult> {
+    return this.mergeForGate();
+  }
+
+  private async mergeForGate(gate?: Readonly<Task>): Promise<IsolationMergeResult> {
     const excluded = [...this.attempts.values()].find((a) => mergeExcludes(a.kind));
     if (excluded) {
       const title = this.store.get(excluded.taskId)?.title ?? excluded.taskId;
       throw new TaskControlError(`Ops task "${title}" is running in your checkout — Merge all once it has finished.`);
     }
+    this.mergesInFlight++;
     this.merging = true;
     let result: IsolationMergeResult;
     try {
       result = await this.runs.merge();
+    } catch (err) {
+      if (!gate) throw err;
+      result = { outcome: 'failed', repo: SELF_REPO };
+      this.tell('error', `Automatic Merge all could not finish: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
-      this.merging = false;
+      this.merging = --this.mergesInFlight > 0;
+    }
+    if (!gate && result.outcome === 'merged') this.autoMergeBlocked = false;
+    if (gate) {
+      this.autoMergeBlocked = result.outcome !== 'merged';
+      this.emit('onAutoMerge', { taskId: gate.id, result });
+      if (this.autoMergeBlocked) this.tell('warn', `Automatic Merge all for task ${gate.order} stopped. The merge gate is waiting for you.`);
     }
     await this.tick();
     return result;
@@ -699,7 +721,7 @@ export class TaskOrchestrator {
       this.emit('onReviewNeeded', { tasks: this.store.planTasks, planRunners: this.store.planRunners });
       return;
     }
-    this.runs.open();
+    this.openRun();
     console.log(`[TaskOrchestrator] Starting with ${this.store.allTasks.length} tasks (${this.store.allTasks.filter(t => t.type === 'ai' && t.prompt).length} AI ready)`);
     this.running = true;
     this.haltedByFailure = false;
@@ -1001,13 +1023,26 @@ export class TaskOrchestrator {
     return readiness;
   }
 
+  setMergeAtGatesAutomatically(enabled: boolean): void {
+    this.nextAutoMerge = enabled;
+  }
+
+  private openRun(): void {
+    if (!this.runs.isOpen) {
+      this.autoMerge = this.nextAutoMerge;
+      this.autoMergeBlocked = false;
+      this.emit('onRunStarted', { mergeAtGatesAutomatically: this.autoMerge });
+    }
+    this.runs.open();
+  }
+
   /**
    * Open the run a task starts in, and decide whether it isolates if the
    * task's next attempt needs that ({@link decidesIsolation}). False while a
    * dirty tree waits on the user; `resume` is what their choice replays.
    */
   private async openFor(taskId: string, resume: () => Promise<void>): Promise<boolean> {
-    this.runs.open();
+    this.openRun();
     return !decidesIsolation(this.nextAttemptKind(taskId)) || this.runs.decide(resume);
   }
 
@@ -1277,7 +1312,23 @@ export class TaskOrchestrator {
     // Work merged by hand opens a gate as Merge all does; only git can tell.
     // A user task's gate counts too, though the scheduler never starts one.
     const atGate = readiness.gated.length > 0 || this.store.allTasks.some((t) => t.type === 'user' && this.getMergeGate(t.id).length > 0);
-    if (atGate && (await this.runs.refreshInHead())) readiness = this.readiness();
+    if (atGate && (await this.runs.refreshInHead())) {
+      this.autoMergeBlocked = false;
+      readiness = this.readiness();
+    }
+    if (!this.running) return;
+    if (this.autoMerge && !this.autoMergeBlocked && !this.merging
+      && ![...this.attempts.values()].some((a) => mergeExcludes(a.kind))) {
+      const gate = this.store.allTasks.find((t) => this.getMergeGate(t.id).length > 0
+        && !this.onHold.has(t.id) && t.dependencies.every((id) => this.store.isCompleted(id)));
+      if (gate) {
+        // Another landing must not repeatedly attempt a merge the user now
+        // needs to resolve. A user merge or a new run releases this hold.
+        this.autoMergeBlocked = true;
+        await this.mergeForGate(gate);
+        readiness = this.readiness();
+      }
+    }
     if (!this.running) return;
     const { ready } = readiness;
     console.log(`[TaskOrchestrator] tick(): ${ready.length} ready, ${this.attempts.size} active, queue=${this.messageQueue.length}`);

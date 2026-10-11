@@ -32,6 +32,7 @@ function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {})
       continueTask: vi.fn().mockResolvedValue({ ok: true }),
       addTask: vi.fn().mockResolvedValue({ ok: true }),
       updateTask: vi.fn().mockResolvedValue({ ok: true }),
+      setMergeAtGatesAutomatically: vi.fn().mockResolvedValue({ ok: true }),
       removeTask: vi.fn().mockResolvedValue({ ok: true }),
       getSessions: vi.fn().mockResolvedValue([]),
       getSession: vi.fn().mockResolvedValue({ meta: { id: 's1', goal: 'g' }, plan: { tasks: [] } }),
@@ -1849,5 +1850,15 @@ describe('a structured task\'s log, messages and interrupt', () => {
     await runEffect({ type: 'answerTaskApproval', sessionId: 's1', approvalId: 'ap-1', answer: { decision: 'allow' } }, h.deps);
 
     expect(messageOf(h.actions, 'failed')).toMatch(/still waiting for approval/);
+  });
+});
+
+
+describe('automatic gate merge setting effect', () => {
+  it('writes to the plan setting and refreshes the authoritative plan', async () => {
+    const h = harness({ getSession: vi.fn().mockResolvedValue({ plan: { tasks: [], mergeAtGatesAutomatically: true } }) });
+    await runEffect({ type: 'setAutoMerge', sessionId: 's1', enabled: true }, h.deps);
+    expect(h.api.setMergeAtGatesAutomatically).toHaveBeenCalledWith('s1', true);
+    expect(h.actions).toContainEqual({ type: 'planUpdated', sessionId: 's1', plan: { tasks: [], mergeAtGatesAutomatically: true } });
   });
 });

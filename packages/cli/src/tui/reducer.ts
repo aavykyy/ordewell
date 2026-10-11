@@ -61,6 +61,8 @@ function reduceAction(state: TuiState, action: Action): Step {
         ...clearIsolation(state),
         sessionId: null,
         goal: '',
+        mergeAtGatesAutomatically: false,
+        runAutoMerge: null,
         taskView: null,
         pendingApprovals: [],
         queuedPrompts: EMPTY_HOLD,
@@ -88,6 +90,8 @@ function reduceAction(state: TuiState, action: Action): Step {
       const next: TuiState = {
         ...state,
         tasks,
+        mergeAtGatesAutomatically: (action.plan as { mergeAtGatesAutomatically?: boolean })?.mergeAtGatesAutomatically === true,
+        runAutoMerge: (action.plan as { runSettings?: { mergeAtGatesAutomatically: boolean } })?.runSettings?.mergeAtGatesAutomatically ?? null,
         handoff: isolation ? isolation.handoff : state.handoff,
         status: plannerInFlight(state) ? 'idle' : state.status,
         busyLabel: '',

@@ -65,6 +65,7 @@ export type Effect =
   /** `watch` asks the runtime to hold the execution stream open for this action — see `taskActionEffect`. */
   | { type: 'taskAction'; sessionId: string; taskId: string; action: TaskAction; watch?: boolean }
   | { type: 'addTask'; sessionId: string; title: string }
+  | { type: 'setAutoMerge'; sessionId: string; enabled: boolean }
   | { type: 'updateTask'; sessionId: string; taskId: string; changes: Record<string, unknown>; message: string }
   | { type: 'removeTask'; sessionId: string; taskId: string }
   /** Reads a structured task's saved log (ADR-0018, P1) so its view opens with its history. */

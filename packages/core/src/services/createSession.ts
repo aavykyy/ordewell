@@ -560,6 +560,25 @@ export class Session {
     const relay = this.events.observer(() => this.plan);
     return {
       ...relay,
+      onRunStarted: (settings) => {
+        if (!this.plan) return;
+        this.plan.runSettings = settings;
+        this.persist({ background: true });
+        this.events.planGenerated(this.plan, this.goal);
+      },
+      onAutoMerge: ({ taskId, result }) => {
+        if (!this.plan) return;
+        if (result.outcome === 'merged') {
+          this.plan.conversationHistory = [...(this.plan.conversationHistory ?? []), {
+            role: 'assistant', kind: 'system', actor: 'Ordewell setting',
+            content: `Ordewell setting: auto-merged for task ${this.store.get(taskId)?.order ?? taskId}`,
+            timestamp: new Date().toISOString(),
+          }];
+        }
+        this.persist({ background: true });
+        this.events.planGenerated(this.plan, this.goal);
+        this.broadcast({ type: 'isolation_merge', result });
+      },
       onTaskChanged: () => {
         this.saveForControl();
         relay.onTaskChanged();
@@ -986,11 +1005,21 @@ export class Session {
     }
   }
 
+  setMergeAtGatesAutomatically(enabled: boolean): void {
+    if (!this.plan) throw new NoPlanError('change merge setting');
+    this.mutatePlan(() => {
+      this.plan!.mergeAtGatesAutomatically = enabled;
+      this.orchestrator.setMergeAtGatesAutomatically(enabled);
+      return true;
+    });
+  }
+
   async executePlan(): Promise<void> {
     if (!this.plan || !this.store.planTasks.length) throw new NoPlanError('execute');
     if (this.orchestrator.hasLiveWork) throw new AlreadyExecutingError();
 
     const plan = this.plan;
+    this.orchestrator.setMergeAtGatesAutomatically(plan.mergeAtGatesAutomatically === true);
     await this.withSave(async () => {
       // A scheduler armed from an earlier run but with nothing live — paused on a
       // hold, a user task, or a cancellation — would ignore the restart: `start`
@@ -1012,6 +1041,7 @@ export class Session {
   async approveReview(): Promise<LegacyPlanState> {
     if (!this.plan) throw new NoPlanError('review');
     const plan = this.plan;
+    this.orchestrator.setMergeAtGatesAutomatically(plan.mergeAtGatesAutomatically === true);
     await this.withSave(() => this.orchestrator.approveReview());
     return plan;
   }
@@ -1021,6 +1051,7 @@ export class Session {
     if (!this.store.get(taskId)) {
       this.orchestrator.loadPlan(this.store.planTasks, this.plan.runners);
     }
+    this.orchestrator.setMergeAtGatesAutomatically(this.plan.mergeAtGatesAutomatically === true);
     await this.withSave(() => this.orchestrator.forceStartTask(taskId));
   }
 
@@ -1029,6 +1060,7 @@ export class Session {
     if (!this.store.get(taskId)) {
       this.orchestrator.loadPlan(this.store.planTasks, this.plan.runners);
     }
+    this.orchestrator.setMergeAtGatesAutomatically(this.plan.mergeAtGatesAutomatically === true);
     await this.withSave(() => this.orchestrator.runTask(taskId));
   }
 
@@ -1288,8 +1320,9 @@ export class Session {
   /**
    * "Merge all": each repo's integration branch into whatever the user has
    * checked out there — every repo, or none if any cannot take it. The one
-   * irreversible step of isolated execution, so this explicit call is the
-   * only way it ever happens. During a run it merges what has landed so far,
+   * irreversible step of isolated execution. Automatic gate merging and the
+   * supervisor's merge_all share this path. During a run it merges what has
+   * landed so far,
    * which is what opens a merge gate (ADR-0020); it waits for no ops task,
    * and refuses while one runs.
    */
@@ -1299,6 +1332,15 @@ export class Session {
     const result = await this.withSave(() => this.orchestrator.mergeRun());
     this.broadcast({ type: 'isolation_merge', result });
     return result;
+  }
+
+  /**
+   * Core merge_all action for the later supervisor tool. Its tool adapter must
+   * refuse every actor except a supervisor in an Act wake-up turn (ADR-0029);
+   * user-started planner turns cannot consent to a merge by proxy.
+   */
+  async merge_all(): Promise<IsolationMergeResult> {
+    return this.mergeRun();
   }
 
   /** Remove the run's worktrees and task branches; keep its integration branch to review or merge. */
@@ -1452,6 +1494,7 @@ export class Session {
       this.approvalPolicy.reset();
     }
     this.plan = plan;
+    this.orchestrator.setMergeAtGatesAutomatically(plan.mergeAtGatesAutomatically === true);
     this.goal = goal;
     this.workspace = workspace;
     // The saved ledger is the session's own history: adopt it before the

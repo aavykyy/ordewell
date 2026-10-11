@@ -561,6 +561,8 @@ export default function App() {
             </svg>
           </span>
           <span className="plan-dock-title">Plan</span>
+          {(isExecuting ? plan.runSettings?.mergeAtGatesAutomatically : plan.mergeAtGatesAutomatically)
+            && <span className="plan-dock-summary">Merge at gates automatically</span>}
           <span className="plan-dock-summary">{planSummaryLabel(plan.tasks)}</span>
           {/* A collapse is always honoured, including mid-run — so the bar has to
               say when a task is blocked on the user, or the approval would sit
@@ -591,6 +593,9 @@ export default function App() {
           )}
           <PlanCardGroup
             tasks={plan.tasks}
+            mergeAtGatesAutomatically={plan.mergeAtGatesAutomatically}
+            runAutoMerge={plan.runSettings?.mergeAtGatesAutomatically}
+            onAutoMergeChange={(enabled) => vscode.postMessage({ type: 'setAutoMerge', enabled })}
             models={models}
             modelsByRunner={modelsByRunner}
             modesByRunner={modesByRunner}

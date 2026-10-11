@@ -979,11 +979,17 @@ There is no gate without isolation.
 *Avoid:* "checkpoint" — that is a task asking the user to approve its work.
 
 **Auto-merge at gates** — the plan setting *Merge at gates automatically*,
-saved at run start and independent of the Supervisor level (ADR-0029): when a
+off by default, saved at run start and independent of the Supervisor level
+(ADR-0029): changing it during execution applies to the next run. When a
 task reaches a merge gate, Ordewell runs Merge all itself through the same
 queue and preflight. A conflict or a dirty overlap aborts with the user's tree
-untouched, and the gate waits for the user with a notice (and a wake-up if a
-supervisor is on). The timeline records "auto-merged for task N". With it and
+untouched, and the gate waits for the user with a notice. The orchestrator's
+`onAutoMerge` observer event carries the gated task and merge result for a
+supervisor's wake-up; a failed automatic merge waits for a user merge or the
+next run before automatic merging resumes.
+`mergeAtGatesAutomatically` holds the next run's choice, and `runSettings` holds
+the choice captured when this run opened. The timeline records
+"auto-merged for task N", attributed to Ordewell setting. With it and
 an Act supervisor's `merge_all` both off, Ordewell never merges for the user
 (ADR-0013).
 *Avoid:* "auto-land" — landing is a task's work onto the integration branch,

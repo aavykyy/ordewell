@@ -481,13 +481,19 @@ export interface PlanLayout {
   maxScroll: number;
 }
 
-const FIRST_ROW_LINE = 2;
+const FIRST_ROW_LINE = 3;
 
 export function planLayout(state: TuiState, rows: number, cols: number): PlanLayout {
   const done = state.tasks.filter((t) => t.status === 'completed').length;
   const unmerged = state.runMerge?.handoff.landed.length ?? 0;
+  const changedMergeSetting = state.status === 'executing' && state.runAutoMerge !== null
+    && state.runAutoMerge !== state.mergeAtGatesAutomatically;
+  const nextRun = changedMergeSetting
+    ? ` · next run ${state.mergeAtGatesAutomatically ? 'on' : 'off'}; now ${state.runAutoMerge ? 'on' : 'off'}`
+    : '';
   const lines = [
-    style.bold(`Plan ${done}/${state.tasks.length}`),
+    style.bold(truncate(`Plan ${done}/${state.tasks.length}${nextRun}`, cols)),
+    style.dim(truncate(`G Merge at gates automatically: ${state.mergeAtGatesAutomatically ? 'on' : 'off'}`, cols)),
     unmerged > 0 ? style.dim(truncate(`${unmerged} landed task${unmerged === 1 ? '' : 's'} not merged — /handoff merge`, cols)) : '',
   ];
 

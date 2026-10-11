@@ -164,3 +164,25 @@ describe('POST /:sessionId/tasks/:taskId/resolve-conflict', () => {
     expect((await post(app, 'tasks/t2/resolve-conflict')).status).toBe(400);
   });
 });
+
+
+describe('plan merge settings', () => {
+  it('routes a boolean toggle to the session', async () => {
+    const setMergeAtGatesAutomatically = vi.fn();
+    const app = appFor({ setMergeAtGatesAutomatically });
+    for (const enabled of [true, false]) {
+      const response = await app.request('/api/plans/s1/settings', { method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mergeAtGatesAutomatically: enabled }) });
+      expect(response.status).toBe(200);
+      expect(setMergeAtGatesAutomatically).toHaveBeenLastCalledWith(enabled);
+    }
+  });
+
+  it('refuses a non-boolean rather than coercing it on', async () => {
+    const setMergeAtGatesAutomatically = vi.fn();
+    const response = await appFor({ setMergeAtGatesAutomatically }).request('/api/plans/s1/settings', { method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mergeAtGatesAutomatically: 'false' }) });
+    expect(response.status).toBe(400);
+    expect(setMergeAtGatesAutomatically).not.toHaveBeenCalled();
+  });
+});
