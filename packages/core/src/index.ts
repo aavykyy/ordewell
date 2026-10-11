@@ -124,7 +124,7 @@ export type {
   MergeGateView,
   SerializedPlan,
   SerializedConversationMessage,
-  SerializedQueuedMessage,
+  SerializedPendingTurn,
   SurfaceTask,
   SurfacePlan,
   SurfacePlanState,

@@ -33,7 +33,7 @@ export function restoreState(deps: PersistenceDeps): void {
   const hasDialogue = (saved?.conversationHistory?.length ?? 0) > 0;
   // A planning conversation that hasn't produced tasks yet is still a session
   // worth restoring — otherwise a window reload mid-dialogue loses the chat.
-  if (saved && (saved.tasks.length > 0 || hasDialogue || (saved.queuedMessages && saved.queuedMessages.length > 0))) {
+  if (saved && (saved.tasks.length > 0 || hasDialogue)) {
     deps.log(`Restoring saved plan with ${saved.tasks.length} tasks, status: ${saved.status}`);
     deps.setCurrentPlan(saved);
 
@@ -51,18 +51,13 @@ export function restoreState(deps: PersistenceDeps): void {
       saved.status = 'draft';
     }
     // Adopt the plan into the Session so its tasks are executable and the
-    // conversation can resume. persist:false — globalState has no session id,
+    // conversation can resume — a planner turn input no turn answered is
+    // replayed by the adoption. persist:false — globalState has no session id,
     // so persisting here would fork a new session file on every reload.
     try {
       deps.session.loadPlan(saved, deps.getCurrentGoal(), deps.workspaceRoot(), { persist: false });
     } catch (err) {
       deps.log(`Restored plan could not be loaded into the session: ${err}`);
-    }
-
-    // After loadPlan — adopting a plan clears any queued messages, so the
-    // saved queue must be re-applied on top of the adopted plan.
-    if (saved.queuedMessages && saved.queuedMessages.length > 0) {
-      deps.session.setQueuedMessages(saved.queuedMessages);
     }
     deps.chatProvider.conversation.reload(saved);
     if (saved.tasks.length > 0) {
@@ -77,9 +72,8 @@ export function restoreState(deps: PersistenceDeps): void {
 
 export function persistState(deps: PersistenceDeps): void {
   const plan = deps.getCurrentPlan();
-  if (plan.tasks.length === 0 && !(plan.conversationHistory && plan.conversationHistory.length > 0) && !(plan.queuedMessages && plan.queuedMessages.length > 0)) return;
+  if (plan.tasks.length === 0 && !(plan.conversationHistory && plan.conversationHistory.length > 0)) return;
   plan.lastUpdated = new Date().toISOString();
-  plan.queuedMessages = deps.session.getQueuedMessages();
   if (deps.session.isExecuting) plan.status = 'running';
   else if (deps.session.status === 'completed') plan.status = 'completed';
   saveState(plan, deps.workspaceRoot());

@@ -28,12 +28,8 @@ export interface SessionEventRelayDeps {
   checkpointQuestion?: (taskId: string) => string | undefined;
 }
 
-/**
- * Every orchestrator event the relay announces. `onTaskSettled` is persistence
- * only and `onQueueReady` is the Session's cue to drain its queue, so both are
- * the Session's alone.
- */
-export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onQueueReady'>>;
+/** Every orchestrator event the relay announces. `onTaskSettled` is persistence only, so it is the Session's alone. */
+export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled'>>;
 
 /** One subagent's activity seen during a turn: its log entry plus the steps it ran. */
 interface SubagentRun {

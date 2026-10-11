@@ -1,15 +1,12 @@
-import { Task, TaskSnapshot, RunnerId, DiscoveredModel, ResearchLogEntry, ResearchProgress, LegacyPlanState, plannerTaskView, type ActiveTaskSession } from '../models/Task';
+import { Task, RunnerId, DiscoveredModel, ResearchLogEntry, ResearchProgress, LegacyPlanState } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { IFileSystem } from '../interfaces/IFileSystem';
 import { IWebFetcher } from '../interfaces/IWebFetcher';
 import { IAiService } from './AiService';
 import type { RunnerModeInfo } from './ModeResolver';
-import { validatePlanModification } from './PlanValidator';
-import { repairLoop, modifyValidationFeedback } from './PlanRepair';
-import { buildModifyDuringExecutionPrompt } from './PlanPrompts';
 import { filterModelsForPrompt, coerceAssignments } from './ModelAllowlistResolver';
-import { DEFAULT_PLANNER_MODES, type IsolatedExecution, type PlannerModes } from './plannerModes';
-import { checkPlanSkills, type SkillLookup } from './taskSkills';
+import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
+import { checkPlanSkills } from './taskSkills';
 
 /**
  * `autonomousDefault` still arrives on its own — it is not a user toggle but a
@@ -55,29 +52,6 @@ export interface ModifyPlanRequest {
   autonomousDefault?: boolean;
   perRunnerAllowlist?: Partial<Record<RunnerId, string[]>>;
   modes?: PlannerModes;
-}
-
-export interface ModifyDuringExecutionRequest {
-  executionLog: TaskSnapshot[];
-  pendingTasks: Task[];
-  activeSessions: Map<string, ActiveTaskSession>;
-  userMessage: string;
-  modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>>;
-  runners: RunnerId[];
-  runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
-  autonomousDefault?: boolean;
-  perRunnerAllowlist?: Partial<Record<RunnerId, string[]>>;
-  /** Where the run in force puts each task (ADR-0013, ADR-0014). */
-  isolatedExecution?: IsolatedExecution;
-  /** The workspace's skill catalog under its repo group's layout, which the rewritten tasks' skills are checked against. */
-  skills: SkillLookup;
-}
-
-export interface ModifyDuringExecutionResult {
-  pendingTasks: Task[];
-  message: string;
-  /** Skill names not found yet; the edit still lands, as a submitted plan's does. Absent means none. */
-  skillWarnings?: string[];
 }
 
 /** A one-shot plan refused for the skills it attaches; nothing of it was loaded. */
@@ -181,63 +155,5 @@ export class Planner {
       plannerModesWith(req),
     );
     return { tasks: coerceAssignments(result.tasks, req.perRunnerAllowlist ?? {}, req.existingPlan.runners, req.modelsByRunner) };
-  }
-
-  async modifyDuringExecution(req: ModifyDuringExecutionRequest): Promise<ModifyDuringExecutionResult> {
-    const pendingJson = JSON.stringify(req.pendingTasks.map(plannerTaskView), null, 2);
-    const filteredModels = filterModelsForPrompt(req.modelsByRunner, req.perRunnerAllowlist ?? {});
-    const allowlist = req.perRunnerAllowlist ?? {};
-    // A coding agent submits through submit_plan and its reply is never read, so it is never asked for JSON.
-    const tools = this.aiService.plannerToolsAttached?.() ?? false;
-
-    const basePrompt = buildModifyDuringExecutionPrompt(
-      req.executionLog,
-      pendingJson,
-      req.userMessage,
-      filteredModels,
-      req.runners,
-      req.runnerModes,
-      { autonomousDefault: req.autonomousDefault ?? true, isolatedExecution: req.isolatedExecution ?? false },
-      tools,
-    );
-    const send = (corrective?: string) => this.aiService.sendPlanningPrompt(
-      corrective ? basePrompt + corrective : basePrompt,
-      req.runners,
-      req.runnerModes,
-      req.autonomousDefault ?? true,
-    );
-
-    // A finished task echoed back is not a request to run it again — the
-    // caller keeps finished work whatever comes back — so it is dropped here
-    // rather than spending a repair round, or the whole edit, on refusing it.
-    const finished = new Set(req.executionLog.filter((t) => t.status === 'completed').map((t) => t.id));
-
-    return repairLoop<Task[], ModifyDuringExecutionResult>({
-      first: () => send(),
-      resend: (corrective) => send(corrective),
-      interpret: async (tasks) => {
-        const kept = tasks.filter((t) => !finished.has(t.id));
-        const coerced = coerceAssignments(kept, allowlist, req.runners, req.modelsByRunner);
-        const validation = validatePlanModification({
-          executionLog: req.executionLog,
-          oldPending: req.pendingTasks,
-          newPending: coerced,
-          activeSessions: req.activeSessions,
-        });
-        // The parsed tasks, not the coerced copies: those no longer carry what each one asked to attach.
-        const skills = await checkPlanSkills(kept, req.skills);
-        const errors = [...validation.errors, ...skills.errors.map((e) => e.message)];
-        if (errors.length === 0) {
-          return { done: { pendingTasks: coerced, message: `Plan modified: ${coerced.length} pending task(s)`, skillWarnings: skills.warnings } };
-        }
-        return { retry: { errors, corrective: modifyValidationFeedback(errors, tools) } };
-      },
-      maxRepairs: 2,
-      onExhausted: ({ errors }) => {
-        throw new Error(
-          `Plan modification validation exhausted after 3 attempts. Last errors:\n${errors.map((e) => `- ${e}`).join('\n')}`,
-        );
-      },
-    });
   }
 }

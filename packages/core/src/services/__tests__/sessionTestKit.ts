@@ -135,13 +135,3 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
 export function taskOf(session: Pick<Session, 'planTasks'>, taskId: string): Readonly<Task> | undefined {
   return flattenTasks(session.planTasks).find((t) => t.id === taskId);
 }
-
-/** Put `texts` on the session's queue, after whatever is already there, the way a mid-run edit waits. */
-export function queue(session: Pick<Session, 'getQueuedMessages' | 'setQueuedMessages'>, ...texts: string[]): void {
-  const now = new Date().toISOString();
-  const queued = session.getQueuedMessages();
-  session.setQueuedMessages([
-    ...queued,
-    ...texts.map((text, i) => ({ id: `q-test-${queued.length + i + 1}`, text, timestamp: now })),
-  ]);
-}

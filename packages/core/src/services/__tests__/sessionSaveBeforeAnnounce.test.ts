@@ -1,11 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import { makeSession, FakeRunnerSession, queue } from './sessionTestKit';
+import { makeSession, FakeRunnerSession, type SessionOverrides } from './sessionTestKit';
 import { fakeConfig, FakeWorktreeIsolation } from '../../testing';
 import { createTask, flattenTasks, type LegacyPlanState, type Task } from '../../models/Task';
 import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { ConversationTurn } from '../AiService';
-import type { Session, SessionPlanner } from '../createSession';
+import type { Session } from '../createSession';
 import type { SessionMessage } from '../SessionMessage';
 
 const task = (id: string, order: number, over: Partial<Task> = {}) =>
@@ -26,7 +26,7 @@ const statuses = (tasks: ReadonlyArray<{ id: string; status: string }>) =>
 function setup(tasks: Task[], opts: {
   isolation?: FakeWorktreeIsolation;
   config?: IConfig;
-  planner?: Partial<SessionPlanner>;
+  aiService?: SessionOverrides['aiService'];
 } = {}) {
   const runnerSessions: FakeRunnerSession[] = [];
   const runner = {
@@ -46,7 +46,7 @@ function setup(tasks: Task[], opts: {
     runner,
     isolation: opts.isolation ?? new FakeWorktreeIsolation(),
     config: opts.config,
-    planner: opts.planner,
+    aiService: opts.aiService,
     saveSession: (p) => { seen.push({ kind: 'save', statuses: statuses(flattenTasks(p.tasks)) }); },
     broadcast: (m) => {
       messages.push(m);
@@ -202,19 +202,24 @@ describe('every user control saves before it announces', () => {
     expect(env.session.planTasks.map((t) => t.status)).toEqual(['completed', 'in_progress']);
   });
 
-  it('the run going on after the Session drained a queued edit', async () => {
-    const t1 = task('t1', 1);
-    const t2 = task('t2', 2, { dependencies: ['t1'] });
-    const planner = {
-      modifyDuringExecution: vi.fn().mockResolvedValue({ pendingTasks: [{ ...t1, status: 'completed' }, { ...t2, title: 'Second, edited' }], message: 'ok' }),
-    };
-    const env = setup([t1, t2], { planner });
+  it('the run going on after a planner turn held its starts', async () => {
+    let finish!: (turn: ConversationTurn) => void;
+    const env = setup([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], {
+      aiService: {
+        hasActiveConversation: () => true,
+        continueConversation: vi.fn(() => new Promise<ConversationTurn>((resolve) => { finish = resolve; })),
+      },
+    });
     await env.session.executePlan();
-    queue(env.session, 'an edit');
+    const answered = env.session.continueConversation('how is it going?');
+    env.runnerSession('t1').reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(env.session.planTasks[0].status).toBe('completed'));
+    expect(env.session.planTasks[1].status).not.toBe('in_progress');
 
     await expectSavedBeforeAnnounced(env, async () => {
-      env.runnerSession('t1').reportComplete({ status: 'done', summary: '' });
-      await vi.waitFor(() => expect(env.session.planTasks[1].status).toBe('in_progress'));
+      finish({ kind: 'message', text: 'Task 1 is done.', researchLog: [] });
+      await answered;
+      expect(env.session.planTasks[1].status).toBe('in_progress');
     });
   });
 });

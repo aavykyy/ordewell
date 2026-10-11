@@ -27,6 +27,18 @@ export interface TaskEditCheck {
   clear?: (keyof Task)[];
 }
 
+/**
+ * Why the planner may not touch a task execution has reached, worded with what
+ * would be accepted instead: the note goes back to the model, mid-run
+ * included, so it can act on it rather than retry the same edit (ADR-0029).
+ * Null for a task the planner may edit.
+ */
+export function lockedTaskRefusal(task: Pick<Task, 'title' | 'status'>, action = 'changed'): string | null {
+  if (task.status === 'in_progress') return `"${task.title}" is running and cannot be ${action} now: the user can stop it first, or change it after it finishes`;
+  if (task.status === 'completed') return `"${task.title}" is completed and cannot be ${action}: rearm it to run it again, or add a new task for further work`;
+  return null;
+}
+
 const AI_ONLY_FIELDS = ['assignedModel', 'thinkingEffort', 'taskMode', 'autonomy', 'ops'] as const satisfies readonly (keyof Task)[];
 
 /**
@@ -150,10 +162,8 @@ export function validateTaskEdit(
   const target = tasks.find((t) => t.id === taskId);
   if (!target) return { ok: false, error: 'Task not found' };
 
-  if (actor === 'planner') {
-    if (target.status === 'in_progress') return { ok: false, error: `"${target.title}" is running and cannot be modified` };
-    if (target.status === 'completed') return { ok: false, error: `"${target.title}" is completed and cannot be modified` };
-  }
+  const locked = actor === 'planner' ? lockedTaskRefusal(target, 'modified') : null;
+  if (locked) return { ok: false, error: locked };
 
   if (changes.dependencies) {
     const depCheck = canSetDependencies(tasks, taskId, changes.dependencies);

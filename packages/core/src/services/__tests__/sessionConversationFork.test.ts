@@ -35,7 +35,6 @@ function runningPlan(): LegacyPlanState {
       { role: 'user', content: 'rename task 5', timestamp: '2026-01-01T00:00:02Z' },
     ],
     researchLog: [{ id: 'up-1', type: 'user_prompt', content: GOAL, timestamp: '2026-01-01T00:00:00Z' }],
-    queuedMessages: [{ id: 'q-1', text: 'rename task 5', timestamp: '2026-01-01T00:00:02Z' }],
   };
 }
 
@@ -105,7 +104,7 @@ describe('Session.forkConversation', () => {
     expect(saved.tasks[0].verdict?.reason).toBe('marker seen');
     expect(saved.tasks[1].outputSummary).toBeUndefined();
     expect(saved.tasks[2]).not.toHaveProperty('awaitingReason');
-    expect(saved.queuedMessages).toBeUndefined();
+    expect(saved.pendingTurns).toBeUndefined();
     expect(session.planTasks.map((t) => t.status)).toEqual(['completed', 'in_progress', 'awaiting_user', 'pending', 'pending']);
   });
 
@@ -114,6 +113,13 @@ describe('Session.forkConversation', () => {
   it('keeps a failed task failed', () => {
     const fork = forkPlanState(runningPlan(), runningPlan().tasks, { conversationHistory: [], researchLog: [] }, '2026-01-02T00:00:00Z');
     expect(fork.tasks.find((t) => t.id === 'broken')!.status).toBe('failed');
+  });
+
+  // A turn input belongs to the conversation that was asked; the fork's own
+  // first message replays the copied transcript instead.
+  it('leaves the planner turn inputs still waiting with the original', () => {
+    const plan = { ...runningPlan(), pendingTurns: [{ id: 'turn-1', source: 'user' as const, text: 'rename task 5', timestamp: '2026-01-01T00:00:02Z' }] };
+    expect(forkPlanState(plan, plan.tasks, { conversationHistory: [], researchLog: [] }, '2026-01-02T00:00:00Z').pendingTurns).toBeUndefined();
   });
 
   it('is what a rewind forks through: mid-run, the rewound fork carries no run either', () => {
@@ -130,7 +136,7 @@ describe('Session.forkConversation', () => {
     expect(saved.tasks.map((t) => [t.id, t.status])).toEqual([
       ['done', 'completed'], ['running', 'pending'], ['checkpoint', 'pending'], ['broken', 'pending'], ['later', 'pending'],
     ]);
-    expect(saved.queuedMessages).toBeUndefined();
+    expect(saved.pendingTurns).toBeUndefined();
     expect(session.planState!.conversationHistory).toHaveLength(4);
   });
 
@@ -138,7 +144,6 @@ describe('Session.forkConversation', () => {
     const session = makeSession({ isolation: new FakeWorktreeIsolation() });
     const plan = runningPlan();
     plan.tasks = [task('first', 1, 'pending')];
-    delete plan.queuedMessages;
     session.loadPlan(plan, GOAL, workspace, { sessionId: 'session-original', persist: false });
     await session.executePlan();
     const persisted = saves(session).mock.calls.at(-1)![0];

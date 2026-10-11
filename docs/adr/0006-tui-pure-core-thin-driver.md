@@ -25,9 +25,9 @@ We decided to build `ordewell tui` as a **pure state core** (`state`, `reducer`,
 `POST /api/sessions/:id/load` **adopts** a saved session: the pool builds a Session for it and calls `Session.loadPlan(plan, goal, workspace, { sessionId })`, the same seam the VS Code extension uses in `applyLoadedSession`. Both the TUI's `/sessions` and `ordewell sessions load` call it. Without it, a restored plan rendered but was inert — every task endpoint answered `Session not found`, since the pool resolved only sessions planned during the current run.
 
 - **Adoption is explicit, not lazy (A1).** The pool registers a session through its own endpoint.
-- **A live session wins over the file (A2).** Re-adopting an already-registered session returns it untouched. `loadPlan` clears the execution log and queued messages, so re-reading the file mid-run would drop a running plan back to its saved state.
+- **A live session wins over the file (A2).** Re-adopting an already-registered session returns it untouched. `loadPlan` clears the execution log and discards the callers of the old plan's waiting planner turns, so re-reading the file mid-run would drop a running plan back to its saved state.
 - **The saved id is adopted with the plan (A3).** Without `{ sessionId }`, `persist()` would fork the session under a fresh identity; with it, the same file is rewritten. Because `persist()` derives the filename from goal + `generatedAt` + id, adoption lands on the file it came from — pinned by test.
-- **No LLM call (A4).** The plan is adopted exactly as saved; the planner is contacted only when the user next sends a message.
+- **No LLM call (A4).** The plan is adopted exactly as saved; the planner is contacted only when the user next sends a message — or for an input no planner turn had answered when the plan was saved, which is replayed once (ADR-0029).
 
 ## Considered options
 
@@ -43,3 +43,4 @@ We decided to build `ordewell tui` as a **pure state core** (`state`, `reducer`,
 - 2026-09-24 — the record corrected: the VS Code extension never used the daemon, and there is no web UI; the decision stands on the shared core `Session` and session store.
 - 2026-09-27 — the chat pane draws ADR-0017's blocks; ctrl+o, double-Esc and Esc-unsend.
 - 2026-10-09 — skill toggles replaced by skills (ADR-0024); the Context and E1 wording follows.
+- 2026-10-11 — adoption replays planner turn inputs no turn answered ([ADR-0029](0029-the-supervisor.md)).

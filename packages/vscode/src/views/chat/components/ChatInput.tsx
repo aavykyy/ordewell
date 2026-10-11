@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import type { AiProvider } from '@ordewell/core';
 import { aheadOfDraft } from '@ordewell/core/plan-utils';
-import type { PendingPlanEdit } from '../../../shared/protocol';
 import { SLASH_COMMANDS } from '../../../commands/slashCommands';
 
 // Core owns the union; a hand-copied duplicate diverged the moment ADR-0009
@@ -46,9 +45,6 @@ interface ChatInputProps {
   /** Esc with no suggestion list open. True when the key was spent; otherwise it clears the input. */
   onEscape?: () => boolean;
   disabledReason?: string;
-  /** Plan edits the host is holding until the next task batch. */
-  pendingEdits?: PendingPlanEdit[];
-  onRemovePendingEdit?: (id: string) => void;
   prefill?: string;
   /** Queued text taken back from the host; it lands above the current draft. */
   unsent?: { text: string; seq: number } | null;
@@ -261,8 +257,6 @@ export default function ChatInput({
   onStop,
   onEscape,
   disabledReason,
-  pendingEdits = [],
-  onRemovePendingEdit,
   prefill,
   unsent,
   skills = [],
@@ -668,29 +662,6 @@ export default function ChatInput({
 
   return (
     <div className={`chat-input ${disabled ? 'disabled' : ''}`}>
-      {pendingEdits.length > 0 && (
-        <div className="pending-plan-edits" aria-label="Pending plan edits">
-          {pendingEdits.map((m) => (
-            <div key={m.id} className="pending-plan-edit">
-              <span className="pending-plan-edit-badge">pending edit</span>
-              <span className="pending-plan-edit-text" title={m.text}>{m.text}</span>
-              <button
-                type="button"
-                className="pending-plan-edit-remove"
-                title="Withdraw this edit and put it back in the input"
-                aria-label={`Withdraw pending plan edit: ${m.text}`}
-                onClick={() => {
-                  setText(m.text);
-                  textareaRef.current?.focus();
-                  onRemovePendingEdit?.(m.id);
-                }}
-              >
-                ×
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
       {showSuggestions && (
         <div className="slash-suggestions" ref={suggestionsRef}>
           <div className="slash-suggestions-header">

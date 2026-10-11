@@ -3,9 +3,7 @@ import { createTask, type ConversationMessage, type LegacyPlanState, type SkillL
 import type { SessionMessage } from '../SessionMessage';
 import type { ConversationTurn, IAiService } from '../AiService';
 import { ConversationBusyError, ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, type PlannerConversationHost } from '../PlannerConversation';
-import type { SaveSession } from '../createSession';
 import type { SkillInfo } from '../SkillsService';
-import { makeSession, testWorkspace, queue } from './sessionTestKit';
 
 function dialoguePlan(): LegacyPlanState {
   return {
@@ -62,8 +60,6 @@ function fakeHost(ai: IAiService, plan: LegacyPlanState | null = dialoguePlan())
     notice: vi.fn(),
     adoptTasks: vi.fn((tasks) => tasks.length),
     capturePrd: vi.fn(),
-    queueEdit: vi.fn().mockReturnValue(1),
-    afterEdit: vi.fn().mockResolvedValue(undefined),
     turnAborted: vi.fn(),
   };
   const conversation = new PlannerConversation(host);
@@ -372,52 +368,26 @@ describe('PlannerConversation turns', () => {
   });
 });
 
-function approvedPlan(): LegacyPlanState {
-  return {
-    tasks: [createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it', assignedRunner: 'claude-code' })],
-    generatedAt: new Date().toISOString(),
-    status: 'approved',
-    runners: ['claude-code'],
-    lastUpdated: new Date().toISOString(),
-    conversationHistory: [
-      { role: 'user', content: 'build it', timestamp: '2026-01-01T00:00:00Z' },
-      { role: 'assistant', content: 'Plan generated with 1 task.', timestamp: '2026-01-01T00:00:01Z', kind: 'plan_generated' },
-    ],
-  };
-}
+describe('a reply\'s commit callback', () => {
+  it.each([
+    ['a reply', (): ConversationTurn => ({ kind: 'message', text: 'Noted.', researchLog: [] })],
+    ['a plan', (): ConversationTurn => ({ kind: 'plan', tasks: [createTask({ id: 'n1', order: 1, title: 'New', prompt: 'p' })], text: '', researchLog: [] })],
+  ])('runs inside the mutation that lands %s, before it is saved', async (_what, turn) => {
+    const { conversation, state } = fakeHost(fakeAi({ continueConversation: vi.fn().mockResolvedValue(turn()) }));
+    const persistsAtCommit: number[] = [];
 
-function lastPersistedHistory(save: ReturnType<typeof vi.fn<SaveSession>>): LegacyPlanState['conversationHistory'] {
-  const calls = save.mock.calls;
-  return calls[calls.length - 1][0].conversationHistory;
-}
+    await conversation.reply('Also CSV', { onCommit: () => persistsAtCommit.push(state.persists) });
 
-describe('queued mid-run edits', () => {
-  it('records the applied edit in the transcript as a labelled system entry', async () => {
-    const broadcast = vi.fn<(msg: SessionMessage) => void>();
-    const planner = {
-      modifyDuringExecution: vi.fn().mockResolvedValue({
-        pendingTasks: [createTask({ id: 't1', order: 1, title: 'Renamed', prompt: 'do it', assignedRunner: 'claude-code' })],
-        message: 'Plan modified: 1 pending task(s)',
-      }),
-    };
-    const saveSession = vi.fn<SaveSession>();
-    const session = makeSession({ planner, broadcast, saveSession });
-    session.loadPlan(approvedPlan(), 'build it', testWorkspace, { persist: false });
-    await session.executePlan();
-    queue(session, 'rename task 1');
-    queue(session, 'and keep it short');
+    expect(persistsAtCommit).toEqual([0]);
+    expect(state.persists).toBe(1);
+  });
 
-    await session.processQueuedMessages();
+  it('does not run for a turn that lands nothing', async () => {
+    const { conversation } = fakeHost(fakeAi({ continueConversation: vi.fn().mockRejectedValue(new Error('planner down')) }));
+    const onCommit = vi.fn();
 
-    const history = session.planState!.conversationHistory!;
-    expect(history).toHaveLength(3);
-    const entry = history[2];
-    expect(entry.kind).toBe('system');
-    expect(entry.content).toMatch(/^Queued change applied between task batches/);
-    expect(entry.content).toContain('rename task 1');
-    expect(entry.content).toContain('and keep it short');
-    expect(lastPersistedHistory(saveSession)).toHaveLength(3);
-    expect(broadcast.mock.calls.some(([m]) => m.type === 'plan_generated')).toBe(true);
+    await expect(conversation.reply('Also CSV', { onCommit })).rejects.toThrow('planner down');
+    expect(onCommit).not.toHaveBeenCalled();
   });
 });
 

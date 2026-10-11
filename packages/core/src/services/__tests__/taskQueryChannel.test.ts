@@ -287,12 +287,13 @@ describe('the task-query read channel', () => {
     expect(session.planTasks.find((t) => t.id === 'b')!.title).toBe('Build');
   });
 
-  // A read changes nothing, so parking it behind a batch boundary would strand
-  // the planner waiting on the detail it needs to write the edit being queued.
-  it('answers a read immediately while execution is live, and still queues the ops that follow', async () => {
+  // A read changes nothing, so it is answered mid-run like any other turn's;
+  // the edit it informs is still checked against the task running meanwhile.
+  it('answers a read immediately while execution is live, and refuses the ops that follow on the running task', async () => {
     const continueConversation = vi.fn()
       .mockResolvedValueOnce(read({ tasks: ['#3'] }))
-      .mockResolvedValueOnce(ops({ title: 'Build v2' }));
+      .mockResolvedValueOnce(ops({ title: 'Build v2' }))
+      .mockResolvedValueOnce({ kind: 'message', text: 'Task 2 is running; stop it first.', researchLog: [] });
     const session = makeSession({
       aiService: { continueConversation, hasActiveConversation: () => true },
     });
@@ -303,10 +304,10 @@ describe('the task-query read channel', () => {
     const plan = await session.continueConversation('rename task 2');
 
     expect(sent(continueConversation, 1)).toContain('Deploy to staging');
+    expect(sent(continueConversation, 2)).toMatch(/"Build" is running and cannot be modified now/);
     expect(session.planTasks.find((t) => t.id === 'b')!.title).toBe('Build');
-    expect(session.getQueuedMessages().length).toBe(1);
     const last = plan.conversationHistory![plan.conversationHistory!.length - 1];
-    expect(last.content).toMatch(/queued your change/i);
+    expect(last.content).toBe('Task 2 is running; stop it first.');
   });
 
   // The live tail comes from the orchestrator's own capture — the same source

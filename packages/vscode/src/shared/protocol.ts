@@ -86,16 +86,6 @@ export interface ConversationPatch {
   changed: readonly DisplayBlock[];
 }
 
-/**
- * A plan edit the user sent while a run was live: the Session's run-time edit
- * queue, applied at the next batch boundary unless withdrawn. Not a queued
- * prompt — those wait on a planner turn, not on a run (`heldPrompts`).
- */
-export interface PendingPlanEdit {
-  id: string;
-  text: string;
-}
-
 export type WebviewToHost =
   /** Chat input: a message for the planner, or a slash command. */
   | {
@@ -131,8 +121,6 @@ export type WebviewToHost =
    * host resolves the same prompt any other surface would.
    */
   | { type: 'resolveApproval'; id: string; granted: boolean }
-  /** Withdraw one pending plan edit before its batch boundary, so its words return to the input. */
-  | { type: 'removePendingPlanEdit'; id: string }
   /**
    * A prompt typed while the planner answers. The host holds it and sends it
    * when the turn ends — or at once, if the turn ended before this arrived.
@@ -174,8 +162,6 @@ export type HostToWebview =
   | { type: 'taskIdle'; taskId: string; idleSince: string | null }
   /** How many of a structured task's runner requests wait for an answer (ADR-0018, A1); 0 clears the badge. */
   | { type: 'taskApprovals'; taskId: string; count: number }
-  /** Every plan edit still waiting at a batch boundary, in the order it was sent. */
-  | { type: 'pendingPlanEdits'; edits: PendingPlanEdit[] }
   /** The queued prompts the host is holding for the next planner turn, oldest first. */
   | { type: 'heldPrompts'; prompts: PromptHold }
   /** Queued text the host gave back, to go above whatever is in the input. */

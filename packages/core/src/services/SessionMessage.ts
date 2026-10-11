@@ -1,4 +1,4 @@
-import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, QueuedMessage, ResearchStep, RunnerId, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, Verdict } from '../models/Task';
+import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, PendingPlanTurn, ResearchStep, RunnerId, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, Verdict } from '../models/Task';
 import type { UsageTotals } from '../models/Usage';
 import type { TaskLogEvent } from '../models/TaskLog';
 import type { ApprovalKind } from '../interfaces/IApproval';
@@ -76,7 +76,7 @@ export type SerializedTask = {
 
 /** Skill loads go out as notices: their bodies are for the planner, and stay in the session. */
 export type SerializedConversationMessage = Omit<ConversationMessage, 'skill'> & { skill?: SkillLoadNotice };
-export type SerializedQueuedMessage = Omit<QueuedMessage, 'skills'> & { skills?: SkillLoadNotice[] };
+export type SerializedPendingTurn = Omit<PendingPlanTurn, 'skills'> & { skills?: SkillLoadNotice[] };
 
 /**
  * A task as a surface is sent it: its attempt's skills are notices, whole in
@@ -89,10 +89,10 @@ export type SurfaceTask<T extends Task = Task> = Omit<T, 'attemptSkills' | 'subt
 };
 
 /** A plan as the daemon and the VS Code webview are sent it: the session's own state, minus every skill body. */
-export type SurfacePlan = Omit<LegacyPlanState, 'tasks' | 'conversationHistory' | 'queuedMessages'> & {
+export type SurfacePlan = Omit<LegacyPlanState, 'tasks' | 'conversationHistory' | 'pendingTurns' | 'queuedMessages'> & {
   tasks: SurfaceTask[];
   conversationHistory?: SerializedConversationMessage[];
-  queuedMessages?: SerializedQueuedMessage[];
+  pendingTurns?: SerializedPendingTurn[];
 };
 
 /** The phase-tagged shape of {@link SurfacePlan}. */
@@ -106,7 +106,6 @@ export type SerializedPlan = {
   generatedAt: string;
   conversationHistory?: SerializedConversationMessage[];
   prdMarkdown?: string;
-  queuedMessages?: SerializedQueuedMessage[];
 };
 
 /** How a planner turn ended: the reply kind it settled on, a user stop, or a failure. */
@@ -336,8 +335,8 @@ function surfaceConversation(history: LegacyPlanState['conversationHistory']): S
   return history?.map(({ skill, ...m }) => (skill ? { ...m, skill: skillLoadNotice(skill) } : m));
 }
 
-function surfaceQueued(queued: LegacyPlanState['queuedMessages']): SerializedQueuedMessage[] | undefined {
-  return queued?.map(({ skills, ...m }) => (skills ? { ...m, skills: skills.map(skillLoadNotice) } : m));
+function surfacePendingTurns(pending: LegacyPlanState['pendingTurns']): SerializedPendingTurn[] | undefined {
+  return pending?.map(({ skills, ...t }) => (skills ? { ...t, skills: skills.map(skillLoadNotice) } : t));
 }
 
 function surfaceTask<T extends Task>({ attemptSkills, subtasks, runnerSessionId: _runnerSessionId, ...task }: T): SurfaceTask<T> {
@@ -349,12 +348,12 @@ function surfaceTask<T extends Task>({ attemptSkills, subtasks, runnerSessionId:
 }
 
 /** The one place a plan's skill bodies come off before it leaves the session: every wire path that carries plan state goes through here. */
-export function surfacePlan(plan: LegacyPlanState): SurfacePlan {
+export function surfacePlan({ queuedMessages: _carriedOverAtLoad, ...plan }: LegacyPlanState): SurfacePlan {
   return {
     ...plan,
     tasks: plan.tasks.map(surfaceTask),
     conversationHistory: surfaceConversation(plan.conversationHistory),
-    queuedMessages: surfaceQueued(plan.queuedMessages),
+    pendingTurns: surfacePendingTurns(plan.pendingTurns),
     researchLog: plan.researchLog?.map((e) => ('type' in e ? e : surfaceStep(e))),
   };
 }
@@ -372,7 +371,6 @@ export function serializePlan(plan: LegacyPlanState): SerializedPlan {
     generatedAt: plan.generatedAt,
     conversationHistory: surfaceConversation(plan.conversationHistory),
     prdMarkdown: plan.prdMarkdown,
-    queuedMessages: surfaceQueued(plan.queuedMessages),
   };
 }
 

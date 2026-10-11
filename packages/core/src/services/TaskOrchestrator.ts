@@ -1,6 +1,6 @@
 import { McpAttachError } from './harness/ordewellBinding';
 import * as path from 'path';
-import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, QueuedMessage, RunnerId, SkillLoad, DEFAULT_RUNNERS, flattenTasksWithParents, taskOrderLabel } from '../models/Task';
+import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasksWithParents, taskOrderLabel } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
 import type { IRunner, IRunnerSession, QueuedTaskMessage } from '../interfaces/IRunner';
@@ -21,7 +21,6 @@ import { SELF_REPO } from './isolationRecord';
 import { IsolationRunController } from './IsolationRunController';
 import { completesTask, Landing, type LandingMessage, type LandingOutcome, type UnlandedOutcome } from './Landing';
 import { classifyRunnerStop, stopsRunner, type AttemptEnd } from './runnerExit';
-import { MessageQueue } from './MessageQueue';
 import { mergeGate, selectReadyTasks, type Readiness } from './readiness';
 import {
   attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, mergeExcludes, takesSkills,
@@ -38,8 +37,8 @@ import type { MergeGateView } from './SessionMessage';
 
 /**
  * The one notification channel out of the orchestrator. Everything that used
- * to travel over separate callbacks (onRefresh, onQueueReady) is an observer
- * event; the Session subscribes once and turns these into SessionMessages.
+ * to travel over a separate callback (onRefresh) is an observer event; the
+ * Session subscribes once and turns these into SessionMessages.
  */
 export interface OrchestratorObserver {
   /** Any task-shaped state changed (store mutation, checkpoint, retry, …). */
@@ -53,8 +52,6 @@ export interface OrchestratorObserver {
   onTaskSettled?(data: { taskId: string }): void;
   onTick?(): void;
   onExecutionComplete?(): void;
-  /** The run is parked behind queued user messages, with nothing live, until they are drained. */
-  onQueueReady?(): void;
   onReviewNeeded?(data: { tasks: Task[]; planRunners: RunnerId[] }): void;
   onReviewApproved?(data: { tasks: Task[] }): void;
   onCheckpoint?(data: { taskId: string; taskTitle: string; summary: string }): void;
@@ -193,7 +190,7 @@ export interface TaskOrchestratorOptions {
 
 /**
  * The pure scheduler. Owns execution state (`running`, `planStatus`,
- * `reviewApproved`, the live task attempts, `messageQueue`) and the verifier.
+ * `reviewApproved`, the live task attempts, the start hold) and the verifier.
  * All task-shaped state — the plan tree, the flat index, the completed set
  * — lives in {@link PlanStore}, injected at construction. The orchestrator
  * calls `store.markCompleted(id)` / `store.markFailed(id)` instead of mutating
@@ -211,7 +208,8 @@ export class TaskOrchestrator {
   private verifier = new VerdictEngine();
   private running = false;
   private planStatus: 'approved' | 'running' | 'completed' = 'approved';
-  private messageQueue = new MessageQueue();
+  /** Planner turns in flight that new starts wait for (ADR-0029); running attempts carry on. */
+  private startHolds = 0;
   private reviewApproved = false;
   /*
    * Retry counts, spawn counts and holds describe a task across attempts, so
@@ -571,7 +569,21 @@ export class TaskOrchestrator {
     return { taskId: id, attempt: n, phase, sessionId: session?.id ?? null, runner, cwd, startedAt, skills };
   }
 
-  get queuedCount(): number { return this.messageQueue.length; }
+  /**
+   * Hold the scheduler's new starts while a planner turn decides what runs
+   * next, so its edits do not race a task that would otherwise start under
+   * it. Running attempts are untouched. The release is idempotent and starts
+   * nothing itself: whoever releases ticks, which starts what became ready.
+   */
+  holdStarts(): () => void {
+    this.startHolds++;
+    let held = true;
+    return () => {
+      if (!held) return;
+      held = false;
+      this.startHolds--;
+    };
+  }
 
   /**
    * "Merge all"; a settled run that merged everything is cleared up and
@@ -616,30 +628,6 @@ export class TaskOrchestrator {
     const task = this.store.get(taskId);
     if (!task || (task.status !== 'pending' && task.status !== 'approved')) return [];
     return mergeGate(task, this.store, this.runs);
-  }
-
-  queueMessage(text: string, skills?: readonly SkillLoad[]): void {
-    this.messageQueue.enqueue(text, skills);
-    this.emit('onTaskChanged');
-  }
-
-  getQueuedMessages(): QueuedMessage[] {
-    return this.messageQueue.all();
-  }
-
-  /** Take one unsent message back out of the queue; false when it was never there (or already drained). */
-  removeQueuedMessage(id: string): boolean {
-    const removed = this.messageQueue.remove(id);
-    if (removed) this.emit('onTaskChanged');
-    return removed;
-  }
-
-  setQueuedMessages(messages: QueuedMessage[]): void {
-    this.messageQueue.replace(messages);
-  }
-
-  clearQueuedMessages(): void {
-    this.messageQueue.clear();
   }
 
   loadPlan(tasks: readonly Task[], planRunners: RunnerId[] = [...DEFAULT_RUNNERS]): void {
@@ -1265,12 +1253,9 @@ export class TaskOrchestrator {
       return;
     }
 
-    if (this.messageQueue.length > 0) {
-      if (this.attempts.size === 0) {
-        this.emit('onQueueReady');
-      }
-      return;
-    }
+    // Ahead of the run-complete check too: the turn may add work to a run
+    // that would otherwise end under it. Its release ticks again.
+    if (this.startHolds > 0) return;
 
     let readiness = this.readiness();
     // Work merged by hand opens a gate as Merge all does; only git can tell.
@@ -1279,7 +1264,7 @@ export class TaskOrchestrator {
     if (atGate && (await this.runs.refreshInHead())) readiness = this.readiness();
     if (!this.running) return;
     const { ready } = readiness;
-    console.log(`[TaskOrchestrator] tick(): ${ready.length} ready, ${this.attempts.size} active, queue=${this.messageQueue.length}`);
+    console.log(`[TaskOrchestrator] tick(): ${ready.length} ready, ${this.attempts.size} active, held=${this.startHolds}`);
 
     if (ready.length === 0 && this.attempts.size === 0) {
       const remaining = this.store.allTasks.filter(t => t.status !== 'completed');
@@ -1336,7 +1321,7 @@ export class TaskOrchestrator {
 
   /** Whether the scheduler may start `id` now: it passes every readiness gate and a slot is free. */
   private stillReady(id: string): boolean {
-    if (this.attempts.has(id) || this.attempts.size >= this.config.maxParallelSessions) return false;
+    if (this.startHolds > 0 || this.attempts.has(id) || this.attempts.size >= this.config.maxParallelSessions) return false;
     const { ready } = selectReadyTasks({
       store: this.store,
       onHold: this.onHold,

@@ -67,11 +67,10 @@ than cached or replayed.
   a task and then fumbles its `taskOps` JSON still gets the two corrective
   retries that mistake is owed; charging the read against that budget would
   cost the model its chance to fix the edit it was trying to make correctly.
-- **Reads settle even mid-run (T3).** The queue gate in `continueConversation`
-  — structural edits during live execution are queued, never applied live —
-  sits *after* `drainTaskQueries`, not before. A query mutates nothing, so
-  parking it behind a batch boundary would strand the planner waiting on
-  detail it needs to write the very edit that is about to get queued.
+- **Reads settle even mid-run (T3).** A query mutates nothing, so it is
+  answered mid-run as at any other time, before the turn settles. The edit it
+  informs is checked when it applies against the tasks as they stand then: one
+  aimed at a running or completed task is refused with a note (ADR-0029).
 - **Budgeted, not unlimited (T4).** `MAX_TASK_QUERIES` (3) is the point past
   which every answer also carries `TASK_QUERY_ANSWER_OR_OPS`, an instruction
   to land the turn; `MAX_TASK_QUERIES_HARD` (6) is where the loop gives up
@@ -212,3 +211,4 @@ ended its attempt and is answered like any other task that is not running — a
 pointer to its `outputSummary` and `verdict`, with `[awaiting_user]` in its
 header. The answer does not name the conflict; the user's surfaces do.
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
+- 2026-10-11 — mid-run edits are applied or refused at once, with no queue for a read to wait behind ([ADR-0029](0029-the-supervisor.md)).

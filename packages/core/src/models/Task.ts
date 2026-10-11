@@ -366,11 +366,28 @@ export function isUserMessage(entry: ConversationMessage): boolean {
   return entry.role === 'user' && entry.kind !== 'skill_load';
 }
 
+/** A follow-up an older build queued behind a run's batch boundary; read only to carry it over as a {@link PendingPlanTurn}. */
 export interface QueuedMessage {
   id: string;
   text: string;
   timestamp: string;
-  /** What its `/name` tokens loaded when it was sent: the drain composes them with the text, as a live send does. */
+  skills?: SkillLoad[];
+}
+
+/** Who a planner turn answers (ADR-0029): the user's message, or a wake-up batch the supervisor is given. */
+export type PlanTurnSource = 'user' | 'supervisor';
+
+/**
+ * A planner turn's input not yet answered by a turn that ended. It leaves the
+ * plan with the change its turn made, in the same save, so a reload replays
+ * exactly the inputs no turn answered — once.
+ */
+export interface PendingPlanTurn {
+  id: string;
+  source: PlanTurnSource;
+  text: string;
+  timestamp: string;
+  /** What its `/name` tokens loaded when it was sent, so a replay sends the same skills. */
   skills?: SkillLoad[];
 }
 
@@ -397,7 +414,9 @@ export interface LegacyPlanState {
   conversationHistory?: ConversationMessage[];
   /** Full markdown PRD once written by the planner (PRD mode), also saved to .scratch/<slug>/PRD.md. */
   prdMarkdown?: string;
-  /** Follow-ups queued while tasks execute — applied as plan modifications between batches. */
+  /** Planner turn inputs no turn has answered yet (ADR-0029); a reload replays them. */
+  pendingTurns?: PendingPlanTurn[];
+  /** Written by builds that queued mid-run edits; a load moves it into {@link pendingTurns}. */
   queuedMessages?: QueuedMessage[];
   /**
    * The plan's isolation run (ADR-0013), written from the orchestrator at

@@ -14,7 +14,7 @@ import type { RunnerModeInfo } from './ModeResolver';
  *
  * - {@link repairLoop} is the bounded driver (first reply → interpret →
  *   corrective re-send), used by plan generation ({@link generatePlanWithRepair}),
- *   the Session's task-ops settlement, Planner.modifyDuringExecution, and
+ *   the Session's task-ops settlement, and
  *   `settleReply` — the one loop both planner backends settle a conversation
  *   turn's reply through.
  * - {@link classifyPlannerReply} decides what a planner reply *is* — a plan,
@@ -121,20 +121,6 @@ export function reEmitTaskQueryPrompt(detail: string): string {
 /** Task ops parsed but failed semantic validation (cycles, unknown refs, locked tasks). */
 export function taskOpsRejectedPrompt(errors: string[]): string {
   return `Those task edits were rejected:\n- ${errors.join('\n- ')}\nRe-emit a corrected {"${TASK_OPS_ENVELOPE_KEY}":[...]} JSON object, or reply in prose if something is unclear.`;
-}
-
-/** A modified plan failed validation during execution: full re-prompt feedback block, asking for the planner's own transport. */
-export function modifyValidationFeedback(errors: string[], tools = false): string {
-  return [
-    '',
-    '=== VALIDATION ERRORS FROM PREVIOUS ATTEMPT ===',
-    'Your previous plan modification was rejected by validation. Fix these issues:',
-    ...errors.map((e, i) => `${i + 1}. ${e}`),
-    '',
-    tools
-      ? 'Call submit_plan with the COMPLETE corrected pending tasks. A plan written in your reply is not read.'
-      : 'Resubmit the corrected plan. Do NOT wrap in markdown code blocks.',
-  ].join('\n');
 }
 
 // ---------------------------------------------------------------------------

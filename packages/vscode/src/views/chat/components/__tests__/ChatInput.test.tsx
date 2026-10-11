@@ -405,26 +405,3 @@ describe('slash token highlight', () => {
   });
 });
 
-describe('pending plan edits', () => {
-  it('lists what is waiting, each marked as a pending edit', () => {
-    renderInput({ pendingEdits: [{ id: 'q-1', text: 'also add tests' }] });
-    const item = document.querySelector('.pending-plan-edit')!;
-    expect(item.textContent).toContain('also add tests');
-    expect(item.querySelector('.pending-plan-edit-badge')!.textContent).toBe('pending edit');
-  });
-
-  it('shows nothing when no edit is waiting', () => {
-    const { container } = renderInput({ pendingEdits: [] });
-    expect(container.querySelector('.pending-plan-edit')).toBeNull();
-  });
-
-  it('withdrawing reports the id and puts the words back in the input', () => {
-    const onRemovePendingEdit = vi.fn();
-    const { container } = renderInput({ pendingEdits: [{ id: 'q-1', text: 'also add tests' }], onRemovePendingEdit });
-
-    fireEvent.click(container.querySelector('.pending-plan-edit-remove')!);
-
-    expect(onRemovePendingEdit).toHaveBeenCalledWith('q-1');
-    expect((container.querySelector('textarea') as HTMLTextAreaElement).value).toBe('also add tests');
-  });
-});

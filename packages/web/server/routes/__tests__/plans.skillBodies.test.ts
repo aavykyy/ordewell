@@ -13,7 +13,7 @@ function planWithBodies(): LegacyPlanState {
     ...createEmptyPlan(),
     tasks: [{ ...createTask({ id: 't1' }), attemptSkills: [{ name: 'tdd', source: 'global', path: '~/.ordewell/skills/tdd/SKILL.md', content: BODY }] }],
     conversationHistory: [{ role: 'user', content: 'loaded', timestamp: '2026-01-01T00:00:00Z', kind: 'skill_load', skill: load }],
-    queuedMessages: [{ id: 'q1', text: '/grilling go', timestamp: '2026-01-01T00:00:01Z', skills: [load] }],
+    pendingTurns: [{ id: 'turn-1', source: 'user', text: '/grilling go', timestamp: '2026-01-01T00:00:01Z', skills: [load] }],
     researchLog: [{
       id: 'rs1', tool: 'agent_tool', toolLabel: 'mcp__ordewell__load_skill', args: '{"name":"grilling"}',
       result: BODY, success: true, outcome: 'success', timestamp: '2026-01-01T00:00:02Z',

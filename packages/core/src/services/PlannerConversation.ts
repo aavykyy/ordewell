@@ -2,14 +2,14 @@ import { v4 as uuidv4 } from 'uuid';
 import type { ConversationRequest, ConversationTurn, IAiService } from './AiService';
 import { reEmitPlanPrompt, repairLoop, resubmitEditPrompt, resubmitPlanPrompt, taskOpsRejectedPrompt } from './PlanRepair';
 import { renderTaskQueryAnswer, taskQuerySignature, TASK_QUERY_ANSWER_OR_OPS, TASK_QUERY_REMINDER, TASK_READ_TOOLS_REMINDER, type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog } from './TaskQuery';
-import { taskOpsProtocol, refMatchesTask, taskOpRefs, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
+import { taskOpsProtocol, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
 import { resolveDefaultMode } from './ModeResolver';
 import type { PlannerTurnOutcome, SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { TurnStream } from './replyStream';
 import type { ForkedDialogue } from './conversationFork';
 import { condensedNotice, extractSummary, keptTail, summaryRequest } from './conversationSummary';
 import type { ConversationMessage, LegacyPlanState, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
-import { flattenTasks, isUserMessage } from '../models/Task';
+import { isUserMessage } from '../models/Task';
 import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation } from './skillInvocation';
 import { skillLoadNotice, surfaceStep } from '../conversation/records';
 import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
@@ -108,6 +108,8 @@ interface UserTurn {
   reads: ReadBudget;
   /** Handed in since the backend last answered; see {@link PlannerConversation.submit}. */
   submitted?: PlannerSubmission;
+  /** See {@link ReplyOptions.onCommit}. */
+  onCommit?: () => void;
 }
 
 /** A read made through a planner tool: refused once the turn's budget is gone, else answered, told to land when the budget asks it to. */
@@ -163,12 +165,10 @@ export interface PlannerConversationHost {
   /** Load planner-produced tasks: an edit keeps run state, a commit starts over. Returns how many landed. */
   adoptTasks(tasks: readonly Task[], how: 'edit' | 'commit'): number;
   capturePrd(text: string): void;
-  /** Park a structural edit until the next batch boundary. Returns the queue length. */
-  queueEdit(message: SkillInvocation): number;
-  /** Wake a scheduler an applied edit may have unblocked. */
-  afterEdit(): Promise<void>;
   /** The planner turn was stopped or abandoned: whatever it is waiting on (a parked approval) will never be answered. */
   turnAborted(): void;
+  /** A planner turn let the conversation go, so the next one may take it. */
+  turnReleased?(): void;
 }
 
 /**
@@ -272,7 +272,17 @@ export interface TranscriptSnapshot {
 
 export interface ReplyOptions {
   signal?: AbortSignal;
+  /**
+   * Run inside the mutation that lands the turn's outcome — the edit, the
+   * plan or the reply — so what the caller drops with it (the inputs the turn
+   * answered) leaves disk in the same save.
+   */
+  onCommit?: () => void;
 }
+
+/** Refused while tasks run: a whole plan replaces the run's, and only an edit can leave running work as it is. */
+const WHOLE_PLAN_WHILE_RUNNING =
+  'Tasks are running, so a whole new plan cannot replace this one now. Change the tasks that have not started with task edits instead, or ask the user to stop the run first.';
 
 /**
  * The planner conversation (ADR-0002), end to end: the persisted dialogue
@@ -363,7 +373,9 @@ export class PlannerConversation {
       release: () => {
         callerSignal?.removeEventListener('abort', relay);
         // An abandoned turn gave the slot up already, maybe to its successor.
-        if (this.live === turn) this.live = null;
+        if (this.live !== turn) return;
+        this.live = null;
+        this.host.turnReleased?.();
       },
     };
   }
@@ -402,11 +414,6 @@ export class PlannerConversation {
     const held = this.openTurn?.submitted;
     if (!held) return [];
     return held.kind === 'task_ops' ? held.ops : null;
-  }
-
-  /** Whether the turn would park this edit until a batch boundary instead of applying it as it settles. */
-  editWouldQueue(ops: TaskOp[]): boolean {
-    return this.editTouchesLiveWork({ kind: 'task_ops', ops, text: '', researchLog: [] });
   }
 
   /**
@@ -619,20 +626,6 @@ export class PlannerConversation {
   }
 
   /**
-   * Queued mid-run edits applied between batches. The user's message is
-   * already in the transcript from when it was queued; this records that it
-   * finally took effect, so a replay does not read the plan as never changed.
-   * Call inside the host's mutation ritual.
-   */
-  recordQueuedEdits(messages: string[], taskCount: number): void {
-    this.append('assistant', [
-      'Queued change applied between task batches:',
-      ...messages.map((m) => `- ${m}`),
-      `The plan now has ${taskCount} task${taskCount === 1 ? '' : 's'}.`,
-    ].join('\n'), { kind: 'system' });
-  }
-
-  /**
    * What the skill check of a landed plan or edit warned about, kept in the
    * transcript so every surface shows it, on reload too, and not only the
    * planner that may have read it in a tool result. Call inside the host's
@@ -641,19 +634,6 @@ export class PlannerConversation {
   recordSkillWarnings(warnings: readonly string[], timestamp?: string): void {
     if (warnings.length === 0) return;
     this.append('assistant', ['Skill check:', ...warnings.map((w) => `- ${w}`)].join('\n'), { kind: 'system', timestamp });
-  }
-
-  /**
-   * Queued edits the between-batches drain could not apply. Recorded so the
-   * transcript does not go on promising a change that never landed. Call
-   * inside the host's mutation ritual.
-   */
-  recordQueuedEditsFailed(messages: string[], reason: string): void {
-    this.append('assistant', [
-      'Queued change NOT applied — the plan is unchanged:',
-      ...messages.map((m) => `- ${m}`),
-      `Reason: ${reason}`,
-    ].join('\n'), { kind: 'system' });
   }
 
   /**
@@ -687,7 +667,10 @@ export class PlannerConversation {
     const sent = typeof message === 'string' ? { text: message, skills: [] } : message;
     // Refused while any turn is live: two would interleave their transcript
     // appends, and each would settle on the other's open turn.
-    return this.userTurn({ refuseAs: 'send a message' }, sent, options.signal, (userTurn) => this.replyTurn(sent, userTurn));
+    return this.userTurn({ refuseAs: 'send a message' }, sent, options.signal, (userTurn) => {
+      userTurn.onCommit = options.onCommit;
+      return this.replyTurn(sent, userTurn);
+    });
   }
 
   private async replyTurn(message: SkillInvocation, userTurn: UserTurn): Promise<SettledTurn> {
@@ -710,28 +693,8 @@ export class PlannerConversation {
         ? await ai.continueConversation(outgoing, userTurn.stream.sink(), signal)
         : await this.resume(outgoing, priorHistory, signal, userTurn.stream.sink());
 
-      // Reads settle before the execution gate below, so a query is answered
-      // on the spot even mid-run: it mutates nothing, and parking it behind a
-      // batch boundary would strand the planner waiting on detail it needs to
-      // write the very edit that gets queued.
-      let settleable = await this.drainTaskQueries(turn, userTurn);
+      const settleable = await this.drainTaskQueries(turn, userTurn);
       this.assertCurrent(userTurn, settleable);
-
-      // Structural changes that reach a task a runner is executing are queued,
-      // never applied live — the orchestrator must not have the plan mutated
-      // under a running batch in a way that changes that task. The gate is a
-      // live runner *and* an edit that touches it: an edit to any other task,
-      // or an added task, is reconciled into the plan now and the running batch
-      // keeps going. A paused scheduler with no runner live queues nothing.
-      if (this.editTouchesLiveWork(settleable)) {
-        const queued = this.host.queueEdit(message);
-        settleable = {
-          kind: 'message',
-          text: `Execution is running, so I queued your change — it will be applied between task batches (${queued} queued).`,
-          researchLog: settleable.researchLog,
-        };
-      }
-
       return await this.settle(settleable, userTurn);
     } catch (err) {
       // An abandoned turn gave the conversation up already, and a rollback now
@@ -739,21 +702,6 @@ export class PlannerConversation {
       if (checkpoint && !userTurn.planner.abandoned) this.restore(checkpoint);
       throw err;
     }
-  }
-
-  /**
-   * Whether a settled structural edit reaches work a runner is executing. Only
-   * these are queued: a whole-plan commit replaces the plan and would reset the
-   * run, and a task-ops batch that names an in-progress task changes it under
-   * the runner. An add, or an edit to any other task, is reconciled into the
-   * plan in place while the running batch keeps going.
-   */
-  private editTouchesLiveWork(turn: SettleableTurn): boolean {
-    if (turn.kind === 'plan') return this.host.isExecuting();
-    if (turn.kind !== 'task_ops') return false;
-    const running = flattenTasks(this.host.tasks()).filter((t) => t.status === 'in_progress');
-    if (running.length === 0) return false;
-    return turn.ops.some((op) => taskOpRefs(op).some((ref) => running.some((task) => refMatchesTask(ref, task))));
   }
 
   private assertIdle(operation: string): void {
@@ -986,6 +934,11 @@ export class PlannerConversation {
         return this.drainTaskQueries(await ai.continueConversation(corrective, stream.sink(), signal), userTurn);
       },
       interpret: async (t) => {
+        if (t.kind === 'plan' && this.host.isExecuting()) {
+          const errors = [WHOLE_PLAN_WHILE_RUNNING];
+          if (!ai.hasActiveConversation() || signal.aborted) return { done: invalidPlan(errors, t.researchLog) };
+          return { retry: { errors, corrective: (tools ? resubmitEditPrompt : taskOpsRejectedPrompt)(errors) } };
+        }
         if (t.kind === 'plan') {
           const skills = await checkPlanSkills(t.tasks, this.host.taskSkills());
           this.assertStillCurrent(userTurn);
@@ -1009,15 +962,9 @@ export class PlannerConversation {
       onExhausted: ({ reply, errors }) => (reply.kind === 'plan' ? invalidPlan : invalidOps)(errors, reply.researchLog),
     });
 
-    if ('plan' in settled) {
-      // A landed edit can make work ready under a scheduler that is armed but
-      // idle-paused, and nothing else will wake it — the queue-drain path never
-      // runs, because nothing queued.
-      await this.host.afterEdit();
-      return { plan: settled.plan, outcome: 'task_ops' };
-    }
+    if ('plan' in settled) return { plan: settled.plan, outcome: 'task_ops' };
     this.assertCurrent(userTurn, settled.turn);
-    const plan = this.commit(settled.turn, stream.turnId, settled.skillWarnings ?? []);
+    const plan = this.commit(settled.turn, userTurn, settled.skillWarnings ?? []);
     this.warnSkills(settled.skillWarnings ?? []);
     return { plan, outcome: settled.turn.kind };
   }
@@ -1045,6 +992,7 @@ export class PlannerConversation {
         this.host.adoptTasks(result.tasks, 'edit');
         this.append('assistant', content, { timestamp: now });
         this.recordSkillWarnings(skills.warnings, now);
+        userTurn.onCommit?.();
         return true;
       },
       () => {
@@ -1057,8 +1005,9 @@ export class PlannerConversation {
   }
 
   /** Commit a settled (non-task_ops) turn through the host's mutation ritual. */
-  private commit(turn: CommitTurn, turnId: string, skillWarnings: readonly string[]): LegacyPlanState {
+  private commit(turn: CommitTurn, userTurn: UserTurn, skillWarnings: readonly string[]): LegacyPlanState {
     this.requirePlan();
+    const { turnId } = userTurn.stream;
     const now = new Date().toISOString();
 
     if (turn.kind === 'plan') {
@@ -1070,6 +1019,7 @@ export class PlannerConversation {
         const count = this.host.adoptTasks(turn.tasks, 'commit');
         this.append('assistant', `Plan generated with ${count} task${count === 1 ? '' : 's'}.`, { timestamp: now, kind: 'plan_generated' });
         this.recordSkillWarnings(skillWarnings, now);
+        userTurn.onCommit?.();
         return true;
       }, () => this.host.broadcastPlan(turnId))!;
     }
@@ -1084,6 +1034,7 @@ export class PlannerConversation {
         this.recordResearch(turn.researchLog);
         this.append('assistant', text, { timestamp: now });
         this.host.capturePrd(text);
+        userTurn.onCommit?.();
         return true;
       },
       () => this.host.broadcast({ type: 'planner_message', content: text, timestamp: now, turnId }),
@@ -1145,11 +1096,10 @@ export class PlannerConversation {
     if (!lines) return null;
     const tools = this.host.aiService().plannerToolsAttached?.() ?? false;
     // Gated on live runners, not on an armed scheduler: a paused-but-armed run
-    // takes edits immediately, so promising a queue there is a lie the model
-    // plans around (it stops emitting ops and asks the user to wait).
+    // has nothing running to lock, and takes a whole plan as well as an edit.
     const locked = tasks.filter((t) => t.status === 'in_progress');
     const execNote = this.host.isExecuting()
-      ? `\nExecution is RUNNING${locked.length ? ` — these tasks are locked: ${locked.map((t) => `#${t.order}`).join(', ')}` : ''}. Any task edits you emit will be queued and applied between batches.`
+      ? `\nExecution is RUNNING${locked.length ? ` — these tasks are locked: ${locked.map((t) => `#${t.order}`).join(', ')}` : ''}. No new task starts until your reply ends; your task edits apply then, to tasks that have not started. An edit aimed at a running task is refused — the user can stop it first, or you can change it after it finishes. Do not submit a whole new plan while tasks run.`
       : '';
     return [
       '<current_plan>',

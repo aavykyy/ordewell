@@ -273,10 +273,11 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
     if (!copies.first(id, identity(event))) return;
     if (event.type === 'plan_generated') {
       dispatch({ type: 'sessionMessage', message: event, sessionId });
-      // A run's queued edit is reconciled into this broadcast with no turn of
-      // its own, so the pane follows it here. On the planning stream the same
-      // broadcast is a turn still in flight: `converse` settles the plan it
-      // gets back, and ending the turn here would drain the queue early.
+      // A run's stream follows every plan a turn lands, one this surface did
+      // not send included (an input replayed after a reload). On the planning
+      // stream the same broadcast is a turn still in flight: `converse` settles
+      // the plan it gets back, and ending the turn here would send the held
+      // prompts early.
       if (kind === 'execution') dispatch({ type: 'planUpdated', plan: event.plan, sessionId });
       return;
     }

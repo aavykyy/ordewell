@@ -1023,24 +1023,22 @@ describe('edit_plan', () => {
   });
 
   describe('while a task of the plan is running', () => {
-    it('queues an edit that reaches it, and says so; the same edit as a taskOps reply queues nothing', async () => {
+    it('refuses an edit that reaches it, saying what would be accepted, and lands none of it', async () => {
       const edit = [{ op: 'update', taskId: '#1', changes: { title: 'Setup, renamed' } }];
       let answered: { isError: boolean; body: unknown } | undefined;
-      const viaTool = await runningPlan(async (mcp) => {
+      const planner = await runningPlan(async (mcp) => {
         answered = await call(mcp!, 'edit_plan', { ops: edit });
-        return 'Queued.';
+        return 'Task 1 is running: stop it first, or I can rename it once it finishes.';
       });
-      const viaText = await runningPlan(async () => JSON.stringify({ taskOps: edit }));
 
-      await viaTool.session.continueConversation('EDIT NOW');
-      await viaText.session.continueConversation('EDIT NOW');
+      await planner.session.continueConversation('EDIT NOW');
 
-      expect(answered).toEqual({ isError: false, body: expect.objectContaining({ ok: true, queued: true }) });
-      expect(viaTool.session.getQueuedMessages().map((m) => m.text)).toEqual(['EDIT NOW']);
-      expect(landed(viaTool).last).toMatch(/queued your change/);
-      expect(viaTool.session.planTasks[0].title).toBe('Task a');
-      expect(viaText.session.getQueuedMessages()).toEqual([]);
-      expect(landed(viaText).last).toBe(JSON.stringify({ taskOps: edit }));
+      expect(answered).toEqual({
+        isError: true,
+        body: { ok: false, errors: [{ op: 1, kind: 'update', message: expect.stringMatching(/is running and cannot be modified now: the user can stop it first, or change it after it finishes/) }] },
+      });
+      expect(planner.session.planTasks[0].title).toBe('Task a');
+      expect(landed(planner).last).toBe('Task 1 is running: stop it first, or I can rename it once it finishes.');
     });
   });
 });

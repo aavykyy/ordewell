@@ -1,6 +1,6 @@
 import { type SurfacePlan, type DiscoveredModel, type RunnerId, type IsolationHandoff, type IsolationMergeResult, type MergeGateView, type TaskIsolation, type AiProvider } from '@ordewell/core';
 import { DEFAULT_RUNNERS, EMPTY_HOLD, type PromptHold } from '@ordewell/core/plan-utils';
-import type { HostToWebview, PendingPlanEdit, PlannerBackend, RunnerMeta } from '../../shared/protocol';
+import type { HostToWebview, PlannerBackend, RunnerMeta } from '../../shared/protocol';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, type PatchedView } from '../../shared/conversationPatch';
 import { appendTaskOutput, type TaskOutputMap } from './taskOutput';
 import { isPlanRevision, nextDock } from './planDock';
@@ -34,7 +34,6 @@ export interface HostState {
   runnerList: RunnerInfo[];
   enabledRunnerIds: string[];
   runners: RunnerId[];
-  pendingEdits: PendingPlanEdit[];
   /** Queued prompts: what the host is holding for the next planner turn. */
   held: PromptHold;
   /** The last queued text the host gave back; `seq` makes a repeat of the same words land again. */
@@ -85,7 +84,6 @@ export const INITIAL_HOST_STATE: HostState = {
   runnerList: [],
   enabledRunnerIds: [...DEFAULT_RUNNERS],
   runners: [...DEFAULT_RUNNERS],
-  pendingEdits: [],
   held: EMPTY_HOLD,
   unsent: null,
   modesByRunner: {},
@@ -130,7 +128,6 @@ export type HostAction =
   | { type: 'patchError'; error: string }
   | { type: 'patchReady'; ready: boolean }
   | { type: 'patchRunners'; runners: Updatable<RunnerId[]> }
-  | { type: 'patchPendingEdits'; edits: Updatable<PendingPlanEdit[]> }
   | { type: 'patchCheckpoint'; checkpoint: HostState['checkpoint'] }
   | { type: 'patchDockHeight'; height: number | undefined }
   | { type: 'patchDockExpanded'; expanded: Updatable<boolean> };
@@ -162,7 +159,6 @@ export function resetSession(state: HostState, kind: SessionResetKind): HostStat
     mergeResult: null,
     mergeGate: null,
     taskGates: {},
-    pendingEdits: [],
     dockExpanded: nextDock(state.dockExpanded, 'session-reset'),
   };
   if (kind === 'empty') return next;
@@ -206,9 +202,6 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'patchRunners':
       return { ...state, runners: resolve(action.runners, state.runners) };
-
-    case 'patchPendingEdits':
-      return { ...state, pendingEdits: resolve(action.edits, state.pendingEdits) };
 
     case 'patchCheckpoint':
       return { ...state, checkpoint: action.checkpoint };
@@ -336,9 +329,6 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
         runners,
       };
     }
-
-    case 'pendingPlanEdits':
-      return { ...state, pendingEdits: action.edits ?? [] };
 
     case 'heldPrompts':
       return { ...state, held: action.prompts };

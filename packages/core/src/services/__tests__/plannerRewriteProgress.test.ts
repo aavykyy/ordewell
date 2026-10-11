@@ -80,58 +80,48 @@ describe('a planner rewrite never undoes finished work', () => {
     expect(spawned).toEqual(['c']);
   });
 
-  it('keeps completed tasks completed when a queued whole-plan edit lands between batches', async () => {
+  // A whole plan would replace a run's tasks under it; mid-run the planner is
+  // sent back to task edits, and nothing it rewrote lands.
+  it('refuses a whole-plan reply while a task runs, leaving finished and running work as it was', async () => {
     const spawned: string[] = [];
+    const continueConversation = vi.fn(async () => ({
+      kind: 'plan' as const,
+      tasks: rewrittenWithAddedTask(session.planTasks),
+      text: '',
+      researchLog: [],
+    }));
     const session = makeSession({
       runner: recordingRunner(spawned),
-      planner: {
-        modifyDuringExecution: vi.fn(async ({ pendingTasks }: { pendingTasks: Task[] }) => ({
-          message: 'added',
-          pendingTasks: rewrittenWithAddedTask(pendingTasks),
-        })),
-      },
-      aiService: {
-        startConversation: vi.fn(),
-        continueConversation: vi.fn(async () => ({
-          kind: 'plan' as const,
-          tasks: rewrittenWithAddedTask(session.planTasks),
-          text: '',
-          researchLog: [],
-        })),
-        hasActiveConversation: () => true,
-        reset: vi.fn(),
-      },
+      aiService: { startConversation: vi.fn(), continueConversation, hasActiveConversation: () => true, reset: vi.fn() },
     });
     session.loadPlan(halfDonePlan(), 'build it', testWorkspace, { persist: false });
-    await session.executePlan(); // 'c' is live, so the whole-plan reply is queued
+    await session.executePlan();
     expect(spawned).toEqual(['c']);
 
-    await session.continueConversation('add a docs task');
-    expect(session.getQueuedMessages().length).toBe(1);
-    await session.processQueuedMessages();
+    const plan = await session.continueConversation('add a docs task');
 
+    expect(continueConversation).toHaveBeenCalledTimes(3);
     expect(taskOf(session, 'a')).toMatchObject({ status: 'completed', prompt: 'set it up' });
     expect(taskOf(session, 'b')).toMatchObject({ status: 'completed', prompt: 'build it' });
     expect(taskOf(session, 'c')!.status).toBe('in_progress');
-    expect(taskOf(session, 'd')).toBeDefined();
+    expect(taskOf(session, 'd')).toBeUndefined();
     expect(spawned).toEqual(['c']);
+    expect(plan.conversationHistory!.at(-1)!.content).toMatch(/Tasks are running, so a whole new plan cannot replace this one now/);
   });
 
-  it('keeps a task finished in this run when the between-batches edit leaves it out', async () => {
+  it('keeps a task finished in this run when a paused run takes a whole plan that leaves it out', async () => {
     const spawned: string[] = [];
     const session = makeSession({
       runner: recordingRunner(spawned),
-      planner: {
-        // The between-batches prompt asks only for the tasks still to run, so
-        // a planner that obeys it drops the ones already done.
-        modifyDuringExecution: vi.fn(async ({ pendingTasks }: { pendingTasks: Task[] }) => ({
-          message: 'added',
-          pendingTasks: rewrittenWithAddedTask(pendingTasks.filter((t) => t.status !== 'completed')),
-        })),
-      },
       aiService: {
         startConversation: vi.fn(),
-        continueConversation: vi.fn(async () => ({ kind: 'plan' as const, tasks: [...session.planTasks], text: '', researchLog: [] })),
+        // Asked only for what is still to run, a planner drops the tasks already done.
+        continueConversation: vi.fn(async () => ({
+          kind: 'plan' as const,
+          tasks: rewrittenWithAddedTask(session.planTasks.filter((t) => t.status !== 'completed')),
+          text: '',
+          researchLog: [],
+        })),
         hasActiveConversation: () => true,
         reset: vi.fn(),
       },
@@ -142,13 +132,14 @@ describe('a planner rewrite never undoes finished work', () => {
     session.loadPlan(plan, 'build it', testWorkspace, { persist: false });
     await session.executePlan(); // 'b' and 'e' go live
     await session.markTaskComplete('e'); // finished in this run, so it is in the execution log
-    expect(taskOf(session, 'e')!.status).toBe('completed');
+    await session.cancelTask('b'); // the run stays armed with nothing live
+    expect(session.isExecuting).toBe(false);
 
     await session.continueConversation('add a docs task');
-    await session.processQueuedMessages();
 
     expect(taskOf(session, 'a')).toMatchObject({ status: 'completed' });
     expect(taskOf(session, 'e')).toMatchObject({ status: 'completed', title: 'Lint' });
+    expect(taskOf(session, 'd')).toBeDefined();
   });
 
   it('does not re-spawn a cancelled task when a paused run takes a whole-plan reply', async () => {
@@ -175,60 +166,5 @@ describe('a planner rewrite never undoes finished work', () => {
 
     expect(taskOf(session, 'c')!.status).toBe('pending');
     expect(spawned).toEqual(['c']);
-  });
-
-  it('tells the user and keeps the run going when a queued edit cannot be applied', async () => {
-    const onNotice = vi.fn();
-    const session = makeSession({
-      runner: recordingRunner([]),
-      onNotice,
-      planner: {
-        modifyDuringExecution: vi.fn().mockRejectedValue(new Error('Plan modification validation exhausted after 3 attempts')),
-      },
-      aiService: {
-        startConversation: vi.fn(),
-        continueConversation: vi.fn(async () => ({ kind: 'plan' as const, tasks: [...session.planTasks], text: '', researchLog: [] })),
-        hasActiveConversation: () => true,
-        reset: vi.fn(),
-      },
-    });
-    const plan = halfDonePlan();
-    session.loadPlan(plan, 'build it', testWorkspace, { persist: false });
-    await session.executePlan();
-    await session.continueConversation('add a docs task');
-
-    await expect(session.processQueuedMessages()).resolves.toBeUndefined();
-
-    expect(session.getQueuedMessages().length).toBe(0);
-    expect(plan.queuedMessages ?? []).toEqual([]);
-    expect(session.planTasks.map((t) => t.id)).toEqual(['a', 'b', 'c']);
-    expect(onNotice).toHaveBeenCalledWith(expect.objectContaining({ level: 'error', message: expect.stringContaining('could not be applied') }));
-    const last = plan.conversationHistory![plan.conversationHistory!.length - 1];
-    expect(last.content).toMatch(/NOT applied/);
-  });
-
-  it('forgets a queued edit once it has been applied, so a reload cannot apply it again', async () => {
-    const session = makeSession({
-      runner: recordingRunner([]),
-      planner: {
-        modifyDuringExecution: vi.fn(async ({ pendingTasks }: { pendingTasks: Task[] }) => ({ message: 'ok', pendingTasks })),
-      },
-      aiService: {
-        startConversation: vi.fn(),
-        continueConversation: vi.fn(async () => ({ kind: 'plan' as const, tasks: [...session.planTasks], text: '', researchLog: [] })),
-        hasActiveConversation: () => true,
-        reset: vi.fn(),
-      },
-    });
-    const plan = halfDonePlan();
-    session.loadPlan(plan, 'build it', testWorkspace, { persist: false });
-    await session.executePlan();
-    await session.continueConversation('add a docs task');
-    expect(plan.queuedMessages).toHaveLength(1);
-
-    await session.processQueuedMessages();
-
-    expect(session.getQueuedMessages().length).toBe(0);
-    expect(plan.queuedMessages ?? []).toEqual([]);
   });
 });

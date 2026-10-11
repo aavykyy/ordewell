@@ -91,16 +91,6 @@ describe('ChatViewProvider.setModels', () => {
   });
 });
 
-describe('ChatViewProvider.showPendingPlanEdits', () => {
-  it('sends every waiting plan edit with its id, so the chat can list and withdraw each one', () => {
-    const { provider, posted } = providerWithCapture();
-
-    provider.showPendingPlanEdits([{ id: 'q-1', text: 'also add tests' }]);
-
-    expect(posted).toEqual([{ type: 'pendingPlanEdits', edits: [{ id: 'q-1', text: 'also add tests' }] }]);
-  });
-});
-
 describe('ChatViewProvider.sendPlanUpdated', () => {
   const body = 'Ask hard questions. SECRET-BODY';
   const load: SkillLoad = { invokedBy: 'user', name: 'grilling', source: 'global', path: '~/.ordewell/skills/grilling/SKILL.md', content: body };
@@ -111,7 +101,7 @@ describe('ChatViewProvider.sendPlanUpdated', () => {
       ...createEmptyPlan(),
       tasks: [{ ...createTask({ id: 't1' }), attemptSkills: [{ name: 'tdd', source: 'global' as const, path: '~/.ordewell/skills/tdd/SKILL.md', content: body }] }],
       conversationHistory: [{ role: 'user' as const, content: 'loaded', timestamp: '2026-01-01T00:00:00Z', kind: 'skill_load' as const, skill: load }],
-      queuedMessages: [{ id: 'q1', text: '/grilling go', timestamp: '2026-01-01T00:00:01Z', skills: [load] }],
+      pendingTurns: [{ id: 'turn-1', source: 'user' as const, text: '/grilling go', timestamp: '2026-01-01T00:00:01Z', skills: [load] }],
     };
 
     provider.sendPlanUpdated(plan);
@@ -119,7 +109,7 @@ describe('ChatViewProvider.sendPlanUpdated', () => {
     expect(JSON.stringify(posted)).not.toContain('SECRET-BODY');
     expect(posted[0]).toMatchObject({ type: 'planUpdated', plan: { conversationHistory: [{ skill: { name: 'grilling' } }] } });
     expect(plan.conversationHistory[0].skill.content).toBe(body);
-    expect(plan.queuedMessages[0].skills[0].content).toBe(body);
+    expect(plan.pendingTurns[0].skills[0].content).toBe(body);
     expect(plan.tasks[0].attemptSkills?.[0].content).toBe(body);
   });
 });
