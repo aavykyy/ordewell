@@ -388,3 +388,4 @@ model's refusal to write were never security evidence.
 - 2026-10-09 — Claude harness planners deny shell tools and native plan-mode transitions; the OpenCode shell enforcement gap is recorded.
 - 2026-10-10 — harness planners research inside this envelope through `run_command`, every planner's own requests reach `IApproval`, and pre-approved entries become allowlist rules with a mode tied to autonomy (ADR-0026).
 - 2026-10-10 — web reads decided by one policy for every planner, a hardened SSRF guard with pinned connections, `fetch`/`web_search` for research subagents without prompting, and `curl`/`wget` approved per origin ([ADR-0027](0027-web-reads-in-the-planner-envelope.md)).
+- 2026-10-11 — planners never run the repository's config (hooks, settings environment, helpers, plugins, unapproved MCP servers), and a harness planner's in-workspace read is judged on its resolved path ([ADR-0028](0028-planners-never-run-repository-config.md)).

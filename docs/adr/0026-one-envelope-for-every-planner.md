@@ -189,8 +189,9 @@ refused from a workspace's environment files (ADR-0016).
   credentials from leaving for an address the command chose, not every read
   from carrying data. A project that cares excludes those families.
 - **The user's saved allow rules still apply** to the Claude planner, for the
-  tools it is allowed to have, except `WebFetch`, `WebSearch` and MCP tools,
-  which always ask; the shell and edit tools are disallowed outright, and a
+  tools it is allowed to have, except `WebFetch`, `WebSearch`, MCP tools and
+  the path tools, which always ask, and a repository's rules do not load at
+  all ([ADR-0028](0028-planners-never-run-repository-config.md)); the shell and edit tools are disallowed outright, and a
   disallowed tool wins over an allow rule. An OpenCode planner's policy is
   Ordewell's alone.
 - **A command's output is research.** `run_command` renders as the planner's
@@ -241,6 +242,12 @@ refused from a workspace's environment files (ADR-0016).
   own tools now arrive as requests the adapter allows at once.
   `--setting-sources user` was tried and not taken: it also drops local- and
   project-scope MCP servers, which the MCP-tool path serves, and the
-  project's CLAUDE.md. Project settings still load, so a trusted
-  repository's hooks and `enableAllProjectMcpServers` still apply to the
-  planner.
+  project's CLAUDE.md. Project settings still load, so a repository's
+  hooks, settings `env`, helper commands and `.mcp.json` servers still apply
+  to the planner — trusted or not, since `-p` skips the trust dialog.
+- 2026-10-11 — planners stop loading the repository's config: Claude with
+  user-only settings, no hooks, ask rules for its path tools and the
+  project's instructions given as text; project MCP servers only once
+  approved, remembered per definition; OpenCode without project config and
+  Codex with the repository untrusted
+  ([ADR-0028](0028-planners-never-run-repository-config.md)).
