@@ -92,6 +92,7 @@ export function isRunnerApproval(request: ApprovalRequest): boolean {
 
 export type StandingDecision =
   | { decision: 'allow' | 'deny'; source: 'pre-approved' | 'remembered' | 'mode' }
+  | { decision: 'deny'; source: 'excluded' }
   | { decision: 'ask'; source: 'no-channel' };
 
 export interface IApproval {

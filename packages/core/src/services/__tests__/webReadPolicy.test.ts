@@ -210,18 +210,18 @@ describe('WebReadPolicy secret check', () => {
     }
   });
 
-  it('does not treat URLs and credential file paths in the environment as secret values', async () => {
+  it('does not treat named URL and credential file references as secret values', async () => {
     const env = {
       KEYCLOAK_URL: 'https://keycloak.example.com',
       AZURE_KEY_VAULT_URL: 'https://vault.example.com',
-      API_KEY: 'https://keys.example.com',
+      API_KEY_URL: 'https://keys.example.com',
       SERVICE_TOKEN_FILE: '/home/user/credentials/token.txt',
-      PRIVATE_KEY: 'C:\\Users\\user\\credentials\\private.key',
+      PRIVATE_KEY_FILE: 'C:\\Users\\user\\credentials\\private.key',
       SECRET_FILE: '~/credentials/service.json',
       CREDENTIAL_FILE: './credentials/service.json',
       PASSWORD_FILE: '../credentials/password.txt',
       ACCESS_KEY_FILE: '\\\\server\\credentials\\private.key',
-      GOOGLE_CREDENTIAL: 'file:///home/user/credentials/service.json',
+      GOOGLE_CREDENTIAL_URI: 'file:///home/user/credentials/service.json',
     };
     const { reads } = setup({ autonomous: true, policy: { env: () => env } });
     for (const url of ['https://keycloak.example.com/', 'https://vault.example.com/', 'https://keys.example.com/']) {

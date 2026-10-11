@@ -47,8 +47,8 @@ import { SHELL_STATE_COMMANDS, dialectFor, lexAll, literalCdTarget, type Segment
 import { REFUSED_RUNNERS, XARGS_TARGETS, unwrap } from './commandRunners';
 import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, subcommandOf, takesNextToken, valueFlagIn } from './flagPolicy';
 import { AWK_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, sedProgramArgs, sedRefusal } from './filterPrograms';
-import { commandAllowedBy, type PlannerAllowlist } from './plannerAllowlist';
-import { EFFECT_REFUSAL_HINT, READ_REFUSAL_HINT, webCommand } from './webCommands';
+import { commandAllowedBy, scopeExcluded, type PlannerAllowlist } from './plannerAllowlist';
+import { EFFECT_REFUSAL_HINT, READ_REFUSAL_HINT, webCommand, wgetVersionCommands } from './webCommands';
 
 export type { Dialect } from './shellLexer';
 
@@ -294,7 +294,7 @@ export interface CommandClassification {
   /** Separate grants for commands that name several origins. */
   scopes?: string[];
   webUrls?: URL[];
-  webUrlTexts?: string[];
+  webOutboundTexts?: string[];
   /** What a grant covers, for `ask`. Derived from the non-auto segments only. */
   scope: string;
   /** Populated for `refuse`: why, in a sentence the model can act on. */
@@ -819,6 +819,10 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
     if (web && (opts.autonomous || opts.approvalMode === 'deny')) {
       return { tier: 'refuse', scope: '', reason: `curl and wget are refused in Full and allowlist mode. ${web.effect ? EFFECT_REFUSAL_HINT : READ_REFUSAL_HINT}` };
     }
+    const allow = opts.allow;
+    if (web && allow && web.urls.some((url) => scopeExcluded(allow, `${seg.binary.toLowerCase().replace(/\.exe$/, '')} ${url.origin}/*`))) {
+      return { tier: 'refuse', scope: '', reason: `The web origin is excluded by the planner allowlist. ${READ_REFUSAL_HINT}` };
+    }
     // Matched case-insensitively: cmd.exe builtins and the default macOS and
     // Windows filesystems all take `RM` or `Del` for the refused name.
     const reason = refusalFor({ ...seg, binary: seg.binary.toLowerCase() }, opts.trustedWebResolves);
@@ -830,6 +834,11 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
         reason: `"${runner}" appends arguments to "${seg.binary}" that it reads at run time and this classifier never sees, and an argument can make "${seg.binary}" run a program or write a file. Run it on named files directly, or describe it as a task.`,
       };
     }
+  }
+
+  if (unwrapped.some(({ seg }) => seg.binary.toLowerCase().replace(/\.exe$/, '') === 'wget')
+    && wgetVersionCommands(command, opts.dialect).includes(undefined)) {
+    return { tier: 'refuse', scope: '', reason: `The wget executable cannot be checked safely in this working directory. ${READ_REFUSAL_HINT}` };
   }
 
   // A runner is never auto: the arguments it appends are the ones the flag
@@ -853,7 +862,7 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
     return name === 'cd' || (name !== 'command' && SHELL_STATE_COMMANDS.has(name));
   });
   const webUrls = nonAuto.flatMap((u) => webCommand(u.seg, opts.trustedWebResolves)?.urls ?? []);
-  const webUrlTexts = nonAuto.flatMap((u) => webCommand(u.seg, opts.trustedWebResolves)?.urlTexts ?? []);
+  const webOutboundTexts = nonAuto.flatMap((u) => webCommand(u.seg, opts.trustedWebResolves)?.outboundTexts ?? []);
   if (lineScoped && webUrls.length === 0) {
     return { tier: 'ask', scope: trimmed };
   }
@@ -872,7 +881,7 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
   const allowedBy = opts.allow && !perInvocation && !lineScoped ? allowlistRule(nonAuto, opts.allow, opts.trustedWebResolves) : undefined;
   return {
     tier: 'ask', scope,
-    ...(webUrls.length ? { webUrls, webUrlTexts } : {}),
+    ...(webUrls.length ? { webUrls, webOutboundTexts } : {}),
     ...(scopes.length > 1 && webUrls.length ? { scopes } : {}),
     ...(perInvocation ? { perInvocation } : {}),
     ...(allowedBy ? { allowedBy } : {}),

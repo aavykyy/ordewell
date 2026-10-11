@@ -218,7 +218,7 @@ export abstract class BaseFileSystem implements IFileSystem {
   async bash(command: string, signal?: AbortSignal): Promise<ToolOutcome> {
     command = disableWebCommandStartup(command, this.researchShell.dialect);
     const allow = this.approval.allowlist?.();
-    const { tier, scope, reason, allowedBy, perInvocation, scopes: commandScopes, webUrls, webUrlTexts } = classifyCommand(command, {
+    const { tier, scope, reason, allowedBy, perInvocation, scopes: commandScopes, webUrls, webOutboundTexts } = classifyCommand(command, {
       ...this.policyOptions(), ...this.approval.commandPolicy?.(), ...(allow ? { allow } : {}),
     });
 
@@ -226,8 +226,8 @@ export abstract class BaseFileSystem implements IFileSystem {
       return { success: false, output: `Command refused: ${reason}`, truncated: false };
     }
 
-    if (webUrls?.length && carriesSecret([...(webUrlTexts ?? []), ...webUrls.map((url) => url.href)], [...this.outboundSecrets(), ...sensitiveEnvValues(process.env)])) {
-      return { success: false, output: 'Command refused: a web URL contains what looks like a secret. Fetch the page with your web fetch tool, without credentials.', truncated: false };
+    if (webUrls?.length && carriesSecret([...(webOutboundTexts ?? []), ...webUrls.map((url) => url.href)], [...this.outboundSecrets(), ...sensitiveEnvValues(process.env)])) {
+      return { success: false, output: 'Command refused: a web command contains what looks like a secret. Fetch the page with your web fetch tool, without credentials.', truncated: false };
     }
 
     const vettedAddresses = new Map<string, string>();
@@ -266,7 +266,7 @@ export abstract class BaseFileSystem implements IFileSystem {
     }
 
     if (webUrls?.length) {
-      const latest = classifyCommand(command, { ...this.policyOptions(), ...this.approval.commandPolicy?.() });
+      const latest = classifyCommand(command, { ...this.policyOptions(), ...this.approval.commandPolicy?.(), allow: this.approval.allowlist?.() });
       if (latest.tier === 'refuse') return { success: false, output: `Command refused: ${latest.reason}`, truncated: false };
     }
 
@@ -281,7 +281,7 @@ export abstract class BaseFileSystem implements IFileSystem {
     const pinned = pinWebCommandAddresses(command, vettedAddresses, this.researchShell.dialect);
     command = pinned.command;
     if (webUrls?.length) {
-      const latest = classifyCommand(command, { ...this.policyOptions(), ...this.approval.commandPolicy?.(), trustedWebResolves: pinned.resolves });
+      const latest = classifyCommand(command, { ...this.policyOptions(), ...this.approval.commandPolicy?.(), allow: this.approval.allowlist?.(), trustedWebResolves: pinned.resolves });
       if (latest.tier === 'refuse') return { success: false, output: `Command refused: ${latest.reason}`, truncated: false };
     }
     const outcome = await this.execBashImpl(command, signal);
