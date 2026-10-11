@@ -503,7 +503,7 @@ export function handleSessionMessage(
         if (task.isolation) deps.chatProvider.sendTaskIsolation(task.id, task.isolation);
         if (task.mergeGate) gates[task.id] = task.mergeGate;
       }
-      deps.chatProvider.showMergeGate(msg.gate ?? null, gates);
+      deps.chatProvider.showRunMerge(msg.runMerge ?? null, gates);
       deps.chatProvider.showPlan(plan);
       break;
     }

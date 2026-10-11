@@ -151,7 +151,7 @@ describe('TaskOrchestrator: ops tasks and merge gates (ADR-0020)', () => {
       await env.orchestrator.tick();
 
       expect(env.orchestrator.getMergeGate('u2')).toEqual([]);
-      expect(env.orchestrator.mergeGateView()).toBeNull();
+      expect(env.orchestrator.runMergeView()).toBeNull();
     });
 
     it('never holds a change task', async () => {
@@ -199,7 +199,18 @@ describe('TaskOrchestrator: ops tasks and merge gates (ADR-0020)', () => {
     it('reports the run paused at its gates, and what Merge all would merge', async () => {
       const env = await gated();
 
-      expect(env.orchestrator.mergeGateView()).toMatchObject({ paused: true, landed: [{ taskId: 't1' }] });
+      expect(env.orchestrator.runMergeView()).toMatchObject({ waitingAtGate: true, paused: true, landed: [{ taskId: 't1' }] });
+    });
+
+    it('reports a gate without pausing while another change task runs', async () => {
+      const env = setup();
+      const t1 = change('t1', 1);
+      env.orchestrator.loadPlan([t1, change('t2', 2, { dependencies: ['t1'] }), ops('o3', 3, { dependencies: ['t1'] })]);
+      await env.orchestrator.approveReview();
+      env.pass(t1);
+      await vi.waitFor(() => expect(env.spawned('t2')).toHaveLength(1));
+
+      expect(env.orchestrator.runMergeView()).toMatchObject({ waitingAtGate: true, paused: false, landed: [{ taskId: 't1' }] });
     });
 
     it('hands over only what was not merged at a gate, and clears a run merged whole', async () => {

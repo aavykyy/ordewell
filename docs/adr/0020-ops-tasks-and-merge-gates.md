@@ -96,9 +96,11 @@ that depends on.**
   belongs with the autonomy work (#21–#43), not here; until then this ADR keeps
   ADR-0013's rule that Ordewell never merges for the user.
 - The plan shows it: an ops task carries an `ops` mark, and a gated task "waits
-  for Merge all". Status updates carry each task's gate and, while any task
-  waits at one, what Merge all would merge now and whether the run is paused
-  there with nothing else running — so every surface offers Merge all mid-run.
+  for Merge all". Status updates carry each task's gate and a `RunMergeView`
+  whenever landed work is not merged into the user's branch yet. It names that
+  work and whether a gate waits on it; `paused` means the run waits at a gate
+  with nothing else running. Every surface offers Merge all for those landings,
+  with a quiet unmerged task count. VS Code keeps its mid-run card for gates.
 - **Without isolation there is no gate.** Every task already runs in the
   workspace, so a dependent sees its dependency's work as soon as it is done.
 
@@ -199,3 +201,4 @@ it.
 - 2026-10-02 — accepted, and implemented (#67).
 - 2026-10-03 — retry context for structured ops tasks comes from the saved log, so it survives a reload.
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
+- 2026-10-11 — Merge all offered for unmerged landings throughout a run (#85).

@@ -40,22 +40,20 @@ export function handleIsolationHandoff(handoff: IsolationHandoff, deps: PlanMana
  * as it would have on the stream.
  */
 export function replayIsolation(
-  session: Pick<Session, 'isolationView' | 'isExecuting' | 'mergeGateView' | 'mergeGate' | 'planState'>,
-  chatProvider: Pick<ChatViewProvider, 'sendTaskIsolation' | 'showIsolationHandoff' | 'showMergeGate'>,
+  session: Pick<Session, 'isolationView' | 'isExecuting' | 'runMergeView' | 'mergeGate' | 'planState'>,
+  chatProvider: Pick<ChatViewProvider, 'sendTaskIsolation' | 'showIsolationHandoff' | 'showRunMerge'>,
 ): void {
   const view = session.isolationView();
   if (!view) return;
   for (const [taskId, isolation] of Object.entries(view.tasks)) chatProvider.sendTaskIsolation(taskId, isolation);
   if (!session.isExecuting) chatProvider.showIsolationHandoff(view.handoff);
-  // A run paused at a merge gate is told again too (ADR-0020): no status update may come until the user acts.
-  const gate = session.mergeGateView();
-  if (!gate) return;
+  const runMerge = session.runMergeView();
   const gates: Record<string, string[]> = {};
   for (const task of flattenTasks(session.planState?.tasks ?? [])) {
     const waits = session.mergeGate(task.id);
     if (waits.length > 0) gates[task.id] = waits;
   }
-  chatProvider.showMergeGate(gate, gates);
+  chatProvider.showRunMerge(runMerge, gates);
 }
 
 /**

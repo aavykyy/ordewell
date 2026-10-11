@@ -25,7 +25,7 @@ function setup() {
     broadcast: (m) => sent.push(m),
     onNotice: (n) => notices.push(n),
     store,
-    orchestrator: { getIdleSince: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [], mergeGateView: () => null },
+    orchestrator: { getIdleSince: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [], runMergeView: () => null },
     runs: { taskIsolation: () => null },
     usage,
   });
