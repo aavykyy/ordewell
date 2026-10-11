@@ -39,6 +39,25 @@ describe('PlanCardGroup — Execute Plan / Stop', () => {
     expect(onChange).toHaveBeenLastCalledWith(false);
   });
 
+  it('offers the supervisor Off by default, and Watch, never Act', () => {
+    const onChange = vi.fn();
+    render(<PlanCardGroup tasks={[makeTask()]} models={emptyModels} onExecutePlan={vi.fn()} onSupervisorLevelChange={onChange} />);
+    const select = screen.getByRole('combobox', { name: /Supervisor/ }) as HTMLSelectElement;
+    expect(select.value).toBe('off');
+    expect([...select.options].map((o) => o.value)).toEqual(['off', 'watch']);
+    fireEvent.change(select, { target: { value: 'watch' } });
+    expect(onChange).toHaveBeenLastCalledWith('watch');
+  });
+
+  it('says when the run\'s supervisor differs from the setting, or stopped', () => {
+    const { rerender } = render(<PlanCardGroup tasks={[makeTask()]} models={emptyModels} supervisorLevel="off"
+      runSupervisor={{ level: 'watch' }} isExecuting onStopExecution={vi.fn()} onSupervisorLevelChange={vi.fn()} />);
+    expect(screen.getByText(/next run; now watch/)).toBeTruthy();
+    rerender(<PlanCardGroup tasks={[makeTask()]} models={emptyModels} supervisorLevel="watch"
+      runSupervisor={{ level: 'watch', unsupervised: 'its wake-up turn failed twice' }} isExecuting onStopExecution={vi.fn()} onSupervisorLevelChange={vi.fn()} />);
+    expect(screen.getByText(/the run is unsupervised/)).toBeTruthy();
+  });
+
   it('shows that a setting change during execution applies to the next run', () => {
     render(<PlanCardGroup tasks={[makeTask()]} models={emptyModels} mergeAtGatesAutomatically
       runAutoMerge={false} isExecuting onStopExecution={vi.fn()} onAutoMergeChange={vi.fn()} />);

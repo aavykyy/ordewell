@@ -83,8 +83,12 @@ export interface ConversationRequest {
  * parses them.
  */
 export type ConversationTurn =
-  /** `aborted`: the call was stopped, and `text` is only what it had by then. */
-  | { kind: 'message'; text: string; researchLog: ResearchLogEntry[]; aborted?: boolean }
+  /**
+   * `aborted`: the call was stopped, and `text` is only what it had by then.
+   * `failed`: the call ended without a reply (a dead agent, a usage limit),
+   * and `text` says why.
+   */
+  | { kind: 'message'; text: string; researchLog: ResearchLogEntry[]; aborted?: boolean; failed?: boolean }
   | { kind: 'plan'; tasks: Task[]; text: string; researchLog: ResearchLogEntry[] }
   | { kind: 'task_ops'; ops: import('./TaskOps').TaskOp[]; text: string; researchLog: ResearchLogEntry[] }
   | { kind: 'task_query'; query: import('./TaskQuery').TaskQuery; text: string; researchLog: ResearchLogEntry[] };
@@ -118,6 +122,14 @@ export interface IAiService {
    * unconditionally instead.
    */
   hasActiveConversation(): boolean;
+
+  /**
+   * Optional: end the planner's live process but keep its own session id, so
+   * the next turn starts a fresh one resumed from it (ADR-0009). What a
+   * supervisor does to a planner that crashed or hung (ADR-0029). Absent where
+   * there is no process to end: the next call is a fresh request anyway.
+   */
+  restart?(): void;
 
   /**
    * Whether the active conversation (if any) still matches the planner

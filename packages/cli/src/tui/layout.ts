@@ -488,6 +488,14 @@ export interface PlanLayout {
   maxScroll: number;
 }
 
+/** What the running supervisor is, when that is not what the plan's setting says. */
+function supervisorNote(state: TuiState): string {
+  const run = state.status === 'executing' ? state.runSupervisor : null;
+  if (!run) return '';
+  if (run.unsupervised) return ' · unsupervised: the supervisor stopped';
+  return run.level !== state.supervisorLevel ? ` · supervisor next run ${state.supervisorLevel}; now ${run.level}` : '';
+}
+
 export function planLayout(state: TuiState, rows: number, cols: number): PlanLayout {
   const done = state.tasks.filter((t) => t.status === 'completed').length;
   const totalUsage = planUsage(state.tasks);
@@ -498,14 +506,15 @@ export function planLayout(state: TuiState, rows: number, cols: number): PlanLay
     ? ` · next run ${state.mergeAtGatesAutomatically ? 'on' : 'off'}; now ${state.runAutoMerge ? 'on' : 'off'}`
     : '';
   const lines = [
-    style.bold(truncate(`Plan ${done}/${state.tasks.length}${nextRun}`, cols)),
+    style.bold(truncate(`Plan ${done}/${state.tasks.length}${nextRun}${supervisorNote(state)}`, cols)),
     style.dim(truncate(`G Merge at gates automatically: ${state.mergeAtGatesAutomatically ? 'on' : 'off'}`, cols)),
+    style.dim(truncate(`W Supervisor: ${state.supervisorLevel}`, cols)),
     totalUsage.attempts ? style.grey(truncate(`Tasks total: ${taskUsageText(totalUsage)}`, cols)) : '',
   ];
   if (unmerged > 0) {
     const hint = style.dim(truncate(`${unmerged} landed task${unmerged === 1 ? '' : 's'} not merged — /handoff merge`, cols));
     if (totalUsage.attempts) lines.push(hint);
-    else lines[2] = hint;
+    else lines[3] = hint;
   }
   const firstRowLine = lines.length;
 

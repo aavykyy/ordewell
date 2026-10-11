@@ -107,6 +107,7 @@ export type SurfacePlanState =
 
 export type SerializedPlan = {
   mergeAtGatesAutomatically?: boolean;
+  supervisorLevel?: LegacyPlanState['supervisorLevel'];
   runSettings?: LegacyPlanState['runSettings'];
   tasks: SerializedTask[];
   runners: RunnerId[];
@@ -144,15 +145,18 @@ export type SessionMessage =
    * The settled reply of a planner turn, emitted by the session once the turn
    * is classified. Authoritative over any `planner_text_delta` of its turn's
    * final segment. `turnId` is absent for replies sent outside a streamed turn.
+   * `supervisor`: the supervisor said it in a wake-up turn (ADR-0029).
    */
-  | { type: 'planner_message'; content: string; timestamp: string; turnId?: string }
+  | { type: 'planner_message'; content: string; timestamp: string; turnId?: string; supervisor?: true }
   /**
    * A planner turn began. Emitted once per turn by whoever runs the turn,
    * before any other message carrying its `turnId`. `prompt` is the user's
    * message, as typed, when the turn answers one; `skills` are what its
-   * `/name` tokens loaded, absent when none did.
+   * `/name` tokens loaded, absent when none did. `wakeUps` are the wake-up
+   * digests the turn delivers, shown ahead of the prompt; `supervisor` marks a
+   * wake-up turn, which no user message opened (ADR-0029).
    */
-  | { type: 'planner_turn_started'; turnId: string; prompt?: string; skills?: SkillLoadNotice[] }
+  | { type: 'planner_turn_started'; turnId: string; prompt?: string; skills?: SkillLoadNotice[]; wakeUps?: string[]; supervisor?: true }
   | { type: 'planner_skill_loaded'; turnId: string; skill: SkillLoadNotice }
   /**
    * A planner turn is over; nothing more carries its `turnId`. Emitted exactly
@@ -382,6 +386,7 @@ export function serializePlan(plan: LegacyPlanState): SerializedPlan {
     runners: plan.runners,
     generatedAt: plan.generatedAt,
     mergeAtGatesAutomatically: plan.mergeAtGatesAutomatically,
+    supervisorLevel: plan.supervisorLevel,
     runSettings: plan.runSettings,
     conversationHistory: surfaceConversation(plan.conversationHistory),
     prdMarkdown: plan.prdMarkdown,

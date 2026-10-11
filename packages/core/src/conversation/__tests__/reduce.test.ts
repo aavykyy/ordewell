@@ -401,4 +401,36 @@ describe('reduceConversation', () => {
       expect(next.blocks).toEqual(view.blocks);
     });
   });
+
+  describe('the supervisor (ADR-0029)', () => {
+    const update = 'Run update:\n- task #1 "Build" failed: tests fail';
+
+    it('shows a wake-up turn\'s run update, then the supervisor\'s reply in its own role', () => {
+      const view = play([
+        { type: 'planner_turn_started', turnId: 'w1', prompt: '', wakeUps: [update], supervisor: true },
+        { type: 'planner_text_delta', turnId: 'w1', segmentId: 's1', text: 'Task 1 fails its tests.' },
+        { type: 'planner_message', turnId: 'w1', content: 'Task 1 fails its tests. Retry it?', timestamp: 't', supervisor: true },
+        { type: 'planner_turn_ended', turnId: 'w1', outcome: 'message' },
+      ]);
+
+      expect(unkeyed(view.blocks)).toEqual([
+        { type: 'message', role: 'wake_up', text: update, streaming: false, turnId: 'w1' },
+        { type: 'message', role: 'supervisor', text: 'Task 1 fails its tests. Retry it?', streaming: false, turnId: 'w1' },
+      ]);
+    });
+
+    it('puts the run updates a user\'s turn delivers ahead of the message it adopts', () => {
+      const view = play([
+        { type: 'local_entry', role: 'user', text: 'what happened?' },
+        { type: 'planner_turn_started', turnId: 'u1', prompt: 'what happened?', wakeUps: [update] },
+        { type: 'planner_message', turnId: 'u1', content: 'Task 1 failed.', timestamp: 't' },
+      ]);
+
+      expect(unkeyed(view.blocks).map((b) => (b.type === 'message' ? [b.role, b.text] : b.type))).toEqual([
+        ['wake_up', update], ['user', 'what happened?'], ['planner', 'Task 1 failed.'],
+      ]);
+      expect(new Set(view.blocks.map((b) => b.id)).size).toBe(3);
+    });
+  });
+
 });

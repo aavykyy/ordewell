@@ -57,6 +57,8 @@ export interface PlannerToolsHost {
   webSearch(query: string): Promise<ToolOutcome | undefined>;
   /** An execution command through the session's command seam (ADR-0029), asked by this planner turn. */
   execute(command: ExecutionCommand): Promise<CommandOutcome>;
+  /** Why the open turn may not change the plan — a wake-up turn under Watch (ADR-0029); undefined when it may. */
+  editsRefused(): string | undefined;
 }
 
 /**
@@ -166,6 +168,8 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     },
 
     async submitPlan({ tasks }) {
+      const refused = host.editsRefused();
+      if (refused) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ field: 'tasks', message: refused }] }) };
       const turn = host.turnId();
       const catalog = await host.liveCatalog();
       const result = validatePlanTasks({ tasks }, catalog.runners, catalog.modes, catalog.autonomousDefault);
@@ -242,6 +246,8 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     async editPlan({ ops }) {
       // The applier checks each op's fields one by one, so a loose shape is its to refuse.
       const taskOps = ops as unknown as TaskOp[];
+      const refused = host.editsRefused();
+      if (refused) return { isError: true, text: JSON.stringify({ ok: false, errors: [opError(refused)] }) };
       const turn = host.turnId();
       const skills = await checkOpSkills(taskOps, host.taskSkills());
       if (host.turnId() !== turn) return { isError: true, text: JSON.stringify({ ok: false, errors: [opError(PLANNER_TURN_ENDED)] }) };

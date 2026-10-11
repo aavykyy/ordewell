@@ -1,4 +1,4 @@
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, NO_TURN, isTaskRunning, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type TaskLogEvent, type TaskLogView, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, NO_TURN, isTaskRunning, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type SupervisorLevel, type TaskLogEvent, type TaskLogView, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 
 export type RunStatus = 'idle' | 'planning' | 'researching' | 'executing';
@@ -387,6 +387,10 @@ export interface TuiState {
   autonomous: boolean;
   mergeAtGatesAutomatically: boolean;
   runAutoMerge: boolean | null;
+  /** The plan's supervisor level (ADR-0029); a change during a run applies to the next. */
+  supervisorLevel: SupervisorLevel;
+  /** What the current run started with, and why its supervisor stopped if it did; null before any run. */
+  runSupervisor: { level: SupervisorLevel; unsupervised?: string } | null;
   /**
    * Whether the terminal's mouse is captured for wheel scrolling. On by
    * default; `/mouse off` hands it back when selecting text out of the
@@ -567,6 +571,8 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     autonomous: true,
     mergeAtGatesAutomatically: false,
     runAutoMerge: null,
+    supervisorLevel: 'off',
+    runSupervisor: null,
     mouseCapture: true,
     selection: null,
     workspace: process.cwd(),

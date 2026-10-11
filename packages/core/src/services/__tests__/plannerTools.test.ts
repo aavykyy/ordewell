@@ -1325,6 +1325,7 @@ describe('a submission whose planner turn ends while its skill check runs', () =
       fetchUrl: async () => ({ success: true, output: '', truncated: false }),
       webSearch: async () => undefined,
       execute: vi.fn(),
+      editsRefused: () => undefined,
       taskSkills: () => ({
         findSkill: (name) => (name === 'tdd' ? tdd : undefined),
         searchedDirs: () => [],

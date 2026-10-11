@@ -55,7 +55,7 @@ describe('Merge at gates automatically', () => {
     pass();
     await vi.waitFor(() => expect(merged(iso)).toHaveLength(1));
     await vi.waitFor(() => expect(session.mergeGate(gated.id)).toEqual([]));
-    expect(session.planState!.runSettings).toEqual({ mergeAtGatesAutomatically: true });
+    expect(session.planState!.runSettings).toEqual({ mergeAtGatesAutomatically: true, supervisorLevel: 'off' });
     const history = session.planState!.conversationHistory!;
     expect(history).toContainEqual(expect.objectContaining({ kind: 'system', actor: 'Ordewell setting', content: 'Ordewell setting: auto-merged for task 2' }));
     expect(fromTranscript(history, []).blocks).toContainEqual(expect.objectContaining({ type: 'message', role: 'system', text: 'Ordewell setting: auto-merged for task 2' }));
@@ -70,7 +70,7 @@ describe('Merge at gates automatically', () => {
     pass();
     await vi.waitFor(() => expect(session.mergeGate('o2')).toEqual(['c1']));
     expect(merged(iso)).toEqual([]);
-    expect(session.planState!.runSettings).toEqual({ mergeAtGatesAutomatically: false });
+    expect(session.planState!.runSettings).toEqual({ mergeAtGatesAutomatically: false, supervisorLevel: 'off' });
   });
 
   it.each([false, true])('changing %s mid-run applies only to the next run', async (initial) => {
@@ -83,11 +83,11 @@ describe('Merge at gates automatically', () => {
     await vi.waitFor(() => expect(session.planTasks[0].status).toBe('completed'));
     await session.reschedule();
     expect(merged(iso)).toHaveLength(initial ? 1 : 0);
-    expect(session.planState!.runSettings).toEqual({ mergeAtGatesAutomatically: initial });
+    expect(session.planState!.runSettings).toEqual({ mergeAtGatesAutomatically: initial, supervisorLevel: 'off' });
     expect(saves(session).mock.calls.at(-1)![0].mergeAtGatesAutomatically).toBe(!initial);
     session.stopExecution();
     await session.executePlan();
-    expect(session.planState!.runSettings).toEqual({ mergeAtGatesAutomatically: !initial });
+    expect(session.planState!.runSettings).toEqual({ mergeAtGatesAutomatically: !initial, supervisorLevel: 'off' });
     if (!initial) await vi.waitFor(() => expect(merged(iso)).toHaveLength(1));
   });
 
@@ -232,12 +232,12 @@ describe('automatic gate merging with real git', () => {
     session.setMergeAtGatesAutomatically(false);
     const loaded = loadSession(session.sessionId, root)!;
     expect(loaded.plan.mergeAtGatesAutomatically).toBe(false);
-    expect(loaded.plan.runSettings).toEqual({ mergeAtGatesAutomatically: true });
+    expect(loaded.plan.runSettings).toEqual({ mergeAtGatesAutomatically: true, supervisorLevel: 'off' });
     const restored = harness().session;
     restored.loadPlan(loaded.plan, 'goal', root);
     expect(restored.planState!.mergeAtGatesAutomatically).toBe(false);
-    expect(restored.planState!.runSettings).toEqual({ mergeAtGatesAutomatically: true });
+    expect(restored.planState!.runSettings).toEqual({ mergeAtGatesAutomatically: true, supervisorLevel: 'off' });
     await restored.executePlan();
-    expect(restored.planState!.runSettings).toEqual({ mergeAtGatesAutomatically: false });
+    expect(restored.planState!.runSettings).toEqual({ mergeAtGatesAutomatically: false, supervisorLevel: 'off' });
   });
 });

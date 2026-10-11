@@ -24,14 +24,20 @@ export type CommandOutcome =
 export type Consent = { kind: 'allow' } | { kind: 'ask' } | { kind: 'refuse'; reason: string };
 
 /**
- * What a supervisor at `level` may do. Later slices give Watch and Act their
- * rules, and the mandate (#23) replaces this check; nothing above it moves.
+ * What a supervisor at `level` may do. The mandate (#23) replaces this check;
+ * nothing above it moves.
  */
 export type SupervisorPolicy = (level: SupervisorLevel, command: ExecutionCommandName) => Consent;
 
-export const SUPERVISOR_NOT_ENABLED: SupervisorPolicy = () => ({
+/**
+ * Watch (ADR-0029): the supervisor reads and suggests, and every execution
+ * command it calls is refused. Act runs as Watch until its own rules land.
+ */
+export const SUPERVISOR_WATCH: SupervisorPolicy = (level) => ({
   kind: 'refuse',
-  reason: 'The supervisor cannot act in this version of Ordewell. Suggest the action to the user instead.',
+  reason: level === 'off'
+    ? 'The supervisor is off for this run, so it cannot act. Suggest it to the user instead.'
+    : 'You are the supervisor at Watch: you read and suggest, and cannot run, stop, retry or message tasks, or answer approvals. Suggest it to the user instead; their reply is an ordinary message, and you can do it then.',
 });
 
 /**
@@ -127,7 +133,7 @@ export class ExecutionCommands {
 
   constructor(private readonly deps: ExecutionCommandsDeps) {
     this.host = deps.host;
-    this.supervisor = deps.supervisor ?? SUPERVISOR_NOT_ENABLED;
+    this.supervisor = deps.supervisor ?? SUPERVISOR_WATCH;
     this.guards = deps.guards ?? [];
     this.now = deps.now ?? (() => new Date().toISOString());
   }

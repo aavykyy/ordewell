@@ -117,6 +117,14 @@ describe('webview messages reach the session through one entry point each', () =
     expect(h.lastPlan()!.mergeAtGatesAutomatically).toBe(false);
   });
 
+  it('saves the supervisor level on the plan and echoes it to the webview', async () => {
+    h.session.loadPlan(plan(), 'goal', h.workspace);
+    await h.route({ type: 'setSupervisorLevel', level: 'watch' });
+    expect(h.session.planState!.supervisorLevel).toBe('watch');
+    expect(h.lastPlan()!.supervisorLevel).toBe('watch');
+    expect(loadSession(h.session.sessionId, h.workspace)!.plan.supervisorLevel).toBe('watch');
+  });
+
   describe('task edits', () => {
     it('a model picked on a card is a session edit, broadcast to every surface', async () => {
       const assignment = { modelId: 'claude-opus-4-1', modelLabel: 'Claude Opus 4.1' };

@@ -436,13 +436,34 @@ describe('the command seam: answer_approval never allows', () => {
 });
 
 describe('the command seam: who asked', () => {
-  it('refuses the supervisor, whose levels later slices define', async () => {
+  it.each(['run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'message_task', 'answer_approval'] as const)(
+    'refuses %s from a supervisor at Watch, telling it to suggest the action to the user',
+    async (name) => {
+      const env = await running();
+      const command: ExecutionCommand = {
+        run_plan: { command: 'run_plan' },
+        run_task: { command: 'run_task', task: 't1' },
+        stop_task: { command: 'stop_task', task: 't1' },
+        stop_run: { command: 'stop_run' },
+        retry_task: { command: 'retry_task', task: 't1', from: 'fresh' },
+        message_task: { command: 'message_task', task: 't1', text: 'hi' },
+        answer_approval: { command: 'answer_approval', task: 't1', answer: 'deny' },
+      }[name] as ExecutionCommand;
+
+      const outcome = await env.run(command, { kind: 'supervisor', level: 'watch' });
+
+      expect(outcome).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(/at Watch.*Suggest it to the user instead/) });
+      expect(env.session.isExecuting).toBe(true);
+      expect(env.timeline().at(-1)!.record).toMatchObject({ actor: 'supervisor', level: 'watch', outcome: 'refused' });
+    },
+  );
+
+  it('refuses a supervisor at Act as at Watch until Act has its own rules', async () => {
     const env = await running();
 
     const outcome = await env.run({ command: 'stop_task', task: 't1' }, { kind: 'supervisor', level: 'act' });
 
-    expect(outcome).toEqual({ ok: false, outcome: 'refused', message: 'The supervisor cannot act in this version of Ordewell. Suggest the action to the user instead.' });
-    expect(env.session.isExecuting).toBe(true);
+    expect(outcome).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(/at Watch/) });
     expect(env.timeline().at(-1)!.record).toMatchObject({ actor: 'supervisor', level: 'act', outcome: 'refused' });
   });
 

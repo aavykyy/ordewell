@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { PlanIsolation } from '../interfaces/IWorktreeIsolation';
 import type { AttemptUsage, PlannerUsage, UsageRecord, UsageTotals } from './Usage';
-import type { ExecutionRecord } from './Execution';
+import type { ExecutionRecord, SupervisorLevel } from './Execution';
 import type { SkillSource } from '../services/SkillsService';
 import { SKILL_NAME_PATTERN } from '../conversation/skillTokens';
 
@@ -341,10 +341,13 @@ export interface ConversationMessage {
    * the transcript's first entry. 'skill_load' is a skill loaded into the
    * conversation, its snapshot in `skill`; one the user invoked follows the
    * message that named it. 'execution' is a call at the command seam
-   * (ADR-0029), its record in `execution`. Absent for ordinary chat turns, so
-   * sessions saved before markers existed degrade gracefully.
+   * (ADR-0029), its record in `execution`. 'wake_up' is the digest a wake-up
+   * gave the supervisor (role 'user': the model was told it), and
+   * 'supervisor' what the supervisor said in a wake-up turn (ADR-0029).
+   * Absent for ordinary chat turns, so sessions saved before markers existed
+   * degrade gracefully.
    */
-  kind?: 'plan_generated' | 'system' | 'compaction' | 'skill_load' | 'execution';
+  kind?: 'plan_generated' | 'system' | 'compaction' | 'skill_load' | 'execution' | 'wake_up' | 'supervisor';
   actor?: 'Ordewell setting';
   /** Present exactly when `kind` is 'skill_load'. */
   skill?: SkillLoad;
@@ -376,9 +379,9 @@ export interface SkillLoad {
 /** A skill load as a surface announces it — the body stays with the transcript. */
 export type SkillLoadNotice = Omit<SkillLoad, 'content'>;
 
-/** A message the user sent, as opposed to a skill load their message caused. */
+/** A message the user sent, as opposed to a skill load their message caused or a wake-up digest. */
 export function isUserMessage(entry: ConversationMessage): boolean {
-  return entry.role === 'user' && entry.kind !== 'skill_load';
+  return entry.role === 'user' && entry.kind !== 'skill_load' && entry.kind !== 'wake_up';
 }
 
 /** A follow-up an older build queued behind a run's batch boundary; read only to carry it over as a {@link PendingPlanTurn}. */
@@ -395,11 +398,14 @@ export type PlanTurnSource = 'user' | 'supervisor';
 /**
  * A planner turn's input not yet answered by a turn that ended. It leaves the
  * plan with the change its turn made, in the same save, so a reload replays
- * exactly the inputs no turn answered — once.
+ * exactly the inputs no turn answered — once. A supervisor's input is a
+ * wake-up batch not yet delivered (ADR-0029): it stays until a turn lands
+ * with it, whatever turns fail meanwhile.
  */
 export interface PendingPlanTurn {
   id: string;
   source: PlanTurnSource;
+  /** The user's message, or a wake-up batch's digest. */
   text: string;
   timestamp: string;
   /** What its `/name` tokens loaded when it was sent, so a replay sends the same skills. */
@@ -418,10 +424,23 @@ export function emptyWarnings(): PlanModificationWarnings {
   return { deletedCompleted: [], changedCompleted: [], deletedInProgress: [], modifiedInProgress: [], brokenDependencies: [] };
 }
 
+/** What a run started with (ADR-0029): plan settings changed during it apply to the next. */
+export interface RunSettings {
+  mergeAtGatesAutomatically: boolean;
+  /** Absent on a run started before supervisor levels existed: Off. */
+  supervisorLevel?: SupervisorLevel;
+  /** Why the supervisor stopped for the rest of this run, which carries on as Off; absent while it watches. */
+  unsupervised?: string;
+}
+
 export interface LegacyPlanState {
   /** Changes during a run apply at its next start (ADR-0029). */
   mergeAtGatesAutomatically?: boolean;
-  runSettings?: { mergeAtGatesAutomatically: boolean };
+  /** Off when absent. Changes during a run apply at its next start (ADR-0029). */
+  supervisorLevel?: SupervisorLevel;
+  /** Reads a wake-up turn may make, in place of a user message's caps; a default when absent. */
+  wakeUpReadBudget?: number;
+  runSettings?: RunSettings;
   tasks: Task[];
   generatedAt: string;
   status: PlanStatus;

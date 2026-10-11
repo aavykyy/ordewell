@@ -229,6 +229,41 @@ body {
   color: #fff;
 }
 
+/* The supervisor (ADR-0029) speaks in the planner's bubble, marked so its
+   notes read apart from replies to the user, and so does what woke it. */
+.chat-msg-supervisor .chat-msg-bubble {
+  border-left: 3px solid var(--orange);
+}
+
+.chat-msg-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--orange);
+  margin-bottom: 2px;
+}
+
+.chat-msg-wake-up {
+  padding: 6px 12px;
+  margin: 0 14px;
+  border-left: 3px solid var(--orange);
+  background: var(--orange-subtle);
+  border-radius: var(--radius-md);
+}
+
+.chat-msg-wake-up .chat-msg-content {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.plan-supervisor-stopped {
+  color: var(--orange);
+}
+
 .chat-msg-user .chat-msg-content mark.skill-token {
   background: color-mix(in srgb, #fff 22%, transparent);
   color: inherit;

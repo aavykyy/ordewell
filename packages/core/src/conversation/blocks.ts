@@ -12,8 +12,12 @@ import type { ApprovalSource } from '../services/ApprovalPolicy';
  */
 export type DisplayBlock = MessageBlock | ThinkingDisplayBlock | ToolBlock | SubagentBlock | ApprovalBlock | PlanBlock | SkillLoadBlock | UsageBlock;
 
-/** `agent` is a task runner speaking in a structured task's log (ADR-0018); the planner is `planner`. */
-export type MessageRole = 'user' | 'planner' | 'agent' | 'system' | 'error';
+/**
+ * `agent` is a task runner speaking in a structured task's log (ADR-0018); the
+ * planner is `planner`. In a wake-up turn (ADR-0029) the planner speaks as
+ * `supervisor`, and `wake_up` is the run update that woke it.
+ */
+export type MessageRole = 'user' | 'planner' | 'agent' | 'supervisor' | 'wake_up' | 'system' | 'error';
 
 export interface MessageBlock {
   type: 'message';

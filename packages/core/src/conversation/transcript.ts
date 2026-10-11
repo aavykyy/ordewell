@@ -1,7 +1,7 @@
 import type { ResearchLogEntry, ResearchStep, SkillLoadNotice, SubagentLogEntry } from '../models/Task';
 import type { SerializedConversationMessage } from '../services/SessionMessage';
 import { isMeasured, usageLine, type PlannerUsage } from '../models/Usage';
-import type { DisplayBlock } from './blocks';
+import type { DisplayBlock, MessageRole } from './blocks';
 import { planMarker, settledMessage, skillLoadBlock, skillLoadNotice, subagentBlock, toolFromStep, usageBlock, userMessage } from './records';
 import type { ConversationView } from './reduce';
 
@@ -25,8 +25,16 @@ function fromEntry(entry: SerializedConversationMessage, loaded: readonly SkillL
     return (id) => skillLoadBlock(id(), skillLoadNotice(skill));
   }
   if (entry.role === 'user' && !entry.kind) return (id) => userMessage(id(), entry.content, loaded.map(skillLoadNotice));
-  const role = entry.kind === 'system' || entry.kind === 'compaction' || entry.kind === 'execution' ? 'system' : entry.role === 'user' ? 'user' : 'planner';
-  return (id) => settledMessage(id(), role, entry.content);
+  return (id) => settledMessage(id(), roleOf(entry), entry.content);
+}
+
+function roleOf(entry: SerializedConversationMessage): MessageRole {
+  switch (entry.kind) {
+    case 'system': case 'compaction': case 'execution': return 'system';
+    case 'wake_up': return 'wake_up';
+    case 'supervisor': return 'supervisor';
+    default: return entry.role === 'user' ? 'user' : 'planner';
+  }
 }
 
 function loadsAfter(entries: readonly SerializedConversationMessage[], index: number): SkillLoadNotice[] {
@@ -39,9 +47,10 @@ function loadsAfter(entries: readonly SerializedConversationMessage[], index: nu
 }
 
 // A skill load ranks with the message that caused it: same time, same rank,
-// and the stable sort keeps it right under the message.
+// and the stable sort keeps it right under the message. A run update is a
+// turn's input too, ahead of the research it caused.
 function rankOf(entry: SerializedConversationMessage): number {
-  return entry.role === 'user' && (!entry.kind || entry.kind === 'skill_load') ? USER : SETTLED;
+  return entry.role === 'user' && (!entry.kind || entry.kind === 'skill_load' || entry.kind === 'wake_up') ? USER : SETTLED;
 }
 
 function spawnBrief(step: ResearchStep): string | undefined {

@@ -41,15 +41,27 @@ const MAX_TASK_QUERIES = 3;
  */
 const MAX_TASK_QUERIES_HARD = 6;
 
-/** Per-user-turn read state. Shared across the repair loop so retries don't reset it. */
+/** Per-turn read state. Shared across the repair loop so retries don't reset it. */
 interface ReadBudget {
   answered: number;
   /** Query signatures already answered this turn — a repeat is a loop, not a read. */
   seen: Set<string>;
+  /** Reads answered before every answer also says to land the turn. */
+  soft: number;
+  /** Reads answered at all. */
+  hard: number;
 }
 
-function freshReadBudget(): ReadBudget {
-  return { answered: 0, seen: new Set() };
+/**
+ * A user turn's caps, or a wake-up turn's budget (ADR-0029): with no user
+ * message to bound it, a supervisor gets the plan's budget whole, and only
+ * its last read is told to land.
+ */
+function freshReadBudget(wakeUp?: WakeUpTurn): ReadBudget {
+  const limits = wakeUp
+    ? { soft: Math.max(0, wakeUp.readBudget - 1), hard: wakeUp.readBudget }
+    : { soft: MAX_TASK_QUERIES, hard: MAX_TASK_QUERIES_HARD };
+  return { answered: 0, seen: new Set(), ...limits };
 }
 
 /**
@@ -59,8 +71,8 @@ function freshReadBudget(): ReadBudget {
  * again — a loop, not a read.
  */
 function spendRead(reads: ReadBudget, signature: string): 'refused' | 'answer' | 'land' {
-  if (reads.answered >= MAX_TASK_QUERIES_HARD) return 'refused';
-  const land = reads.seen.has(signature) || reads.answered >= MAX_TASK_QUERIES;
+  if (reads.answered >= reads.hard) return 'refused';
+  const land = reads.seen.has(signature) || reads.answered >= reads.soft;
   reads.seen.add(signature);
   reads.answered++;
   return land ? 'land' : 'answer';
@@ -105,6 +117,19 @@ type ClaimedTurn = ConversationTurn & { said?: string };
 type SettleableTurn = Exclude<ClaimedTurn, { kind: 'task_query' }>;
 type CommitTurn = Exclude<SettleableTurn, { kind: 'task_ops' }>;
 
+/**
+ * A wake-up turn (ADR-0029): a supervisor's turn on wake-up digests alone, no
+ * user message in it. What it may do is its level's, decided by the host.
+ */
+export interface WakeUpTurn {
+  /** Reads the turn may make, in place of a user message's caps. */
+  readBudget: number;
+  /** Why a plan or an edit is refused in this turn, worded for the model; absent when its level allows them. */
+  editsRefused?: string;
+  /** Told to the model after the digests and never saved, like the plan block: who it is in this turn, and what it may do. */
+  brief?: string;
+}
+
 /** One user turn, from the message to its settled outcome: every backend call it makes streams through `stream`. */
 interface UserTurn {
   stream: TurnStream;
@@ -113,6 +138,10 @@ interface UserTurn {
   /** The plan the turn is answering; a settle that finds another one current lands nothing. */
   plan: LegacyPlanState | null;
   reads: ReadBudget;
+  /** Set when no user message opened the turn: the supervisor answers it. */
+  wakeUp?: WakeUpTurn;
+  /** Where its failure returns the dialogue to, once it has written to it. */
+  checkpoint?: TranscriptSnapshot | null;
   /** Handed in since the backend last answered; see {@link PlannerConversation.submit}. */
   submitted?: PlannerSubmission;
   /** See {@link ReplyOptions.onCommit}. */
@@ -218,6 +247,18 @@ export class PlannerTurnDiscardedError extends Error {
 }
 
 /**
+ * A wake-up turn's backend ended without a reply — a dead agent, a usage
+ * limit — and said why. A user's turn shows that in the chat instead; a
+ * wake-up has nobody waiting on it, so its supervisor is told (ADR-0029).
+ */
+export class PlannerTurnFailedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PlannerTurnFailedError';
+  }
+}
+
+/**
  * The user stopped the turn and the backend reported that as a thrown error
  * rather than a settled reply. Typed so a surface can stay quiet for it without
  * reading the message: some SDKs' abort errors are plain `Error`s by name, and
@@ -285,6 +326,10 @@ export interface ReplyOptions {
    * answered) leaves disk in the same save.
    */
   onCommit?: () => void;
+  /** Wake-up digests delivered with this turn (ADR-0029), oldest first, ahead of the user's message if there is one. */
+  wakeUps?: readonly string[];
+  /** Set when the turn is a wake-up's alone. */
+  wakeUp?: WakeUpTurn;
 }
 
 /** Refused while tasks run: a whole plan replaces the run's, and only an edit can leave running work as it is. */
@@ -346,6 +391,22 @@ export class PlannerConversation {
   }
 
   /**
+   * Free the conversation from a turn that did not end when stopped — a hung
+   * wake-up (ADR-0029). Unlike {@link abandonTurn} the plan stays, so what the
+   * turn wrote is taken back as its failure would have, and its end is
+   * announced: the turn itself may never get there.
+   */
+  abandonHungTurn(): void {
+    const open = this.openTurn;
+    if (!this.live) return;
+    this.abandonTurn();
+    if (!open) return;
+    this.openTurn = null;
+    if (open.checkpoint) this.restore(open.checkpoint);
+    this.host.broadcast({ type: 'planner_turn_ended', turnId: open.stream.turnId, outcome: 'error' });
+  }
+
+  /**
    * Run planner work that is not a conversation turn — one-shot plan
    * generation — as the planner turn, so it is stopped, refused and superseded
    * like one. It starts a fresh plan, so it supersedes the turn in flight.
@@ -390,6 +451,11 @@ export class PlannerConversation {
   /** The user turn being answered, for what the host raises during it — an approval the turn's research asks for. */
   get currentTurnId(): string | undefined {
     return this.openTurn?.stream.turnId;
+  }
+
+  /** The open turn's wake-up rules, when the supervisor is answering it rather than the user's message. */
+  get currentWakeUp(): WakeUpTurn | undefined {
+    return this.openTurn?.wakeUp;
   }
 
   recordPlannerSkill(skill: SkillLoad): boolean {
@@ -686,27 +752,32 @@ export class PlannerConversation {
    */
   async reply(message: string | SkillInvocation, options: ReplyOptions = {}): Promise<LegacyPlanState> {
     const sent = typeof message === 'string' ? { text: message, skills: [] } : message;
+    const wakeUps = options.wakeUps ?? [];
     // Refused while any turn is live: two would interleave their transcript
     // appends, and each would settle on the other's open turn.
     return this.userTurn({ refuseAs: 'send a message' }, sent, options.signal, (userTurn) => {
       userTurn.onCommit = options.onCommit;
-      return this.replyTurn(sent, userTurn);
-    });
+      return this.replyTurn(sent, wakeUps, userTurn);
+    }, { wakeUps, wakeUp: options.wakeUp });
   }
 
-  private async replyTurn(message: SkillInvocation, userTurn: UserTurn): Promise<SettledTurn> {
+  private async replyTurn(message: SkillInvocation, wakeUps: readonly string[], userTurn: UserTurn): Promise<SettledTurn> {
     const { signal } = userTurn;
     const plan = this.requirePlan();
     const priorHistory = plan.conversationHistory ?? [];
     const checkpoint = this.snapshot();
-    this.recordUser(message, new Date().toISOString());
+    userTurn.checkpoint = checkpoint;
+    const now = new Date().toISOString();
+    const fromUser = wakeUps.length === 0 || message.text !== '' || message.skills.length > 0;
+    this.appendEntries(wakeUps.map((content): ConversationMessage => ({ role: 'user', content, timestamp: now, kind: 'wake_up' })));
+    if (fromUser) this.recordUser(message, now);
 
     // The persisted transcript keeps the raw user message; the model gets the
     // live catalog (always) and the current plan (tasks, statuses, edit
     // protocol — once tasks exist) alongside it.
     const contextBlock = [this.catalogBlock(), this.planContextBlock()].filter(Boolean).join('\n\n');
-    const said = plannerMessage(message.text, message.skills);
-    const outgoing = contextBlock ? `${contextBlock}\n\n${said}` : said;
+    const said = fromUser ? plannerMessage(message.text, message.skills) : '';
+    const outgoing = [contextBlock, ...wakeUps, userTurn.wakeUp?.brief, said].filter(Boolean).join('\n\n');
 
     const ai = this.host.aiService();
     try {
@@ -715,6 +786,7 @@ export class PlannerConversation {
         : await this.resume(outgoing, priorHistory, signal, userTurn.stream.sink());
 
       const settleable = await this.drainTaskQueries(turn, userTurn);
+      if (userTurn.wakeUp) this.assertWakeUpAnswered(settleable, userTurn);
       this.assertCurrent(userTurn, settleable);
       return await this.settle(settleable, userTurn);
     } catch (err) {
@@ -723,6 +795,17 @@ export class PlannerConversation {
       if (checkpoint && !userTurn.planner.abandoned) this.restore(checkpoint);
       throw err;
     }
+  }
+
+  /**
+   * A wake-up turn lands only a real answer. Stopped — by the user, or by its
+   * timeout — it lands nothing, not the fragment a backend hands back; a
+   * failure is thrown rather than shown, for the supervisor to retry
+   * (ADR-0029).
+   */
+  private assertWakeUpAnswered(turn: SettleableTurn, userTurn: UserTurn): void {
+    if (userTurn.signal.aborted) throw new PlannerTurnStoppedError();
+    if (turn.kind === 'message' && turn.failed) throw new PlannerTurnFailedError(turn.text);
   }
 
   private assertIdle(operation: string): void {
@@ -768,14 +851,27 @@ export class PlannerConversation {
    * the turn is where the stream a surface draws begins and ends, and only the
    * conversation sees all of it — every backend call, read and retry.
    */
-  private async userTurn(admission: TurnAdmission, prompt: SkillInvocation, signal: AbortSignal | undefined, run: (turn: UserTurn) => Promise<SettledTurn>): Promise<LegacyPlanState> {
+  private async userTurn(
+    admission: TurnAdmission,
+    prompt: SkillInvocation,
+    signal: AbortSignal | undefined,
+    run: (turn: UserTurn) => Promise<SettledTurn>,
+    delivered: { wakeUps?: readonly string[]; wakeUp?: WakeUpTurn } = {},
+  ): Promise<LegacyPlanState> {
     const { turn: planner, release } = this.claim(admission, signal);
     const turnId = uuidv4();
     const stream = new TurnStream(turnId, (p) => this.host.onProgress(p));
-    const turn: UserTurn = { stream, planner, signal: planner.signal, plan: this.host.plan(), reads: freshReadBudget() };
+    const { wakeUp } = delivered;
+    const turn: UserTurn = { stream, planner, signal: planner.signal, plan: this.host.plan(), reads: freshReadBudget(wakeUp), ...(wakeUp ? { wakeUp } : {}) };
     this.openTurn = turn;
     const skills = prompt.skills.map(skillLoadNotice);
-    this.host.broadcast({ type: 'planner_turn_started', turnId, prompt: prompt.text, ...(skills.length > 0 ? { skills } : {}) });
+    const wakeUps = delivered.wakeUps ?? [];
+    this.host.broadcast({
+      type: 'planner_turn_started', turnId, prompt: prompt.text,
+      ...(skills.length > 0 ? { skills } : {}),
+      ...(wakeUps.length > 0 ? { wakeUps: [...wakeUps] } : {}),
+      ...(wakeUp ? { supervisor: true } : {}),
+    });
     let outcome: PlannerTurnOutcome = 'error';
     try {
       const settled = await run(turn);
@@ -958,6 +1054,12 @@ export class PlannerConversation {
         return this.drainTaskQueries(await ai.continueConversation(corrective, stream.sink(), signal), userTurn);
       },
       interpret: async (t) => {
+        const refused = userTurn.wakeUp?.editsRefused;
+        if (refused && (t.kind === 'plan' || t.kind === 'task_ops')) {
+          const errors = [refused];
+          if (!ai.hasActiveConversation() || signal.aborted) return { done: (t.kind === 'plan' ? invalidPlan : invalidOps)(errors, t.researchLog) };
+          return { retry: { errors, corrective: refused } };
+        }
         if (t.kind === 'plan' && this.host.isExecuting()) {
           const errors = [WHOLE_PLAN_WHILE_RUNNING];
           if (!ai.hasActiveConversation() || signal.aborted) return { done: invalidPlan(errors, t.researchLog) };
@@ -1059,15 +1161,16 @@ export class PlannerConversation {
     const text = turn.text.trim()
       ? turn.text
       : '(The planner returned an empty response. Reply to continue, or rephrase your goal.)';
+    const supervisor = userTurn.wakeUp !== undefined;
     return this.host.mutate(
       () => {
         this.recordResearch(turn.researchLog);
-        this.append('assistant', text, { timestamp: now });
+        this.append('assistant', text, { timestamp: now, ...(supervisor ? { kind: 'supervisor' as const } : {}) });
         this.host.capturePrd(text);
         userTurn.onCommit?.();
         return true;
       },
-      () => this.host.broadcast({ type: 'planner_message', content: text, timestamp: now, turnId }),
+      () => this.host.broadcast({ type: 'planner_message', content: text, timestamp: now, turnId, ...(supervisor ? { supervisor: true } : {}) }),
     )!;
   }
 

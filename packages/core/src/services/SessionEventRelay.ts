@@ -33,10 +33,11 @@ export interface SessionEventRelayDeps {
  * Every orchestrator event the relay announces. `onTaskSettled` is persistence
  * only, so it is the Session's alone. Run settings and automatic merge records
  * also need persistence before announcement, so Session owns those two
- * observers. A wait on a usage limit reaches surfaces as the task's status;
- * `onUsageLimitWait` itself is for a supervisor to wake on.
+ * observers. A wait on a usage limit, and a task gone idle, reach surfaces as
+ * the task's status; `onUsageLimitWait` and `onTaskIdle` themselves are for
+ * the supervisor to wake on.
  */
-export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onRunStarted' | 'onAutoMerge' | 'onUsageLimitWait'>>;
+export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onRunStarted' | 'onAutoMerge' | 'onUsageLimitWait' | 'onTaskIdle'>>;
 
 /** One subagent's activity seen during a turn: its log entry plus the steps it ran. */
 interface SubagentRun {

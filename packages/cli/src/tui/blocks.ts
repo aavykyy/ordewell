@@ -42,6 +42,8 @@ const ROLE_PREFIX: Record<MessageRole, Paint> = {
   user: (t) => `${style.cyan('❯')} ${t}`,
   planner: (t) => `${style.magenta('◆')} ${t}`,
   agent: (t) => `${style.magenta('◆')} ${t}`,
+  supervisor: (t) => `${style.yellow('◇')} ${t}`,
+  wake_up: (t) => style.yellow(`↯ ${t}`),
   system: (t) => style.grey(`· ${t}`),
   error: (t) => `${style.red('✗')} ${style.red(t)}`,
 };
@@ -49,10 +51,12 @@ const ROLE_PREFIX: Record<MessageRole, Paint> = {
 function messageLines(block: MessageBlock, cols: number): string[] {
   const text = sanitize(block.text);
   const room = Math.max(1, cols - 2);
-  const wrapped = block.role === 'planner' || block.role === 'agent'
+  const wrapped = block.role === 'planner' || block.role === 'agent' || block.role === 'supervisor'
     ? renderMarkdown(text, room)
     : block.skills ? skillPaintedLines(text, block.skills, room) : wrap(text, room);
-  return wrapped.map((line, i) => (i === 0 ? ROLE_PREFIX[block.role](line) : `  ${line}`));
+  // A run update is the supervisor's input, not anyone's words: all of it keeps its colour.
+  const rest: Paint = block.role === 'wake_up' ? style.yellow : (t) => t;
+  return wrapped.map((line, i) => (i === 0 ? ROLE_PREFIX[block.role](line) : rest(`  ${line}`)));
 }
 
 /** Wrapped, with each `/name` that loaded a skill painted as the composer paints one being typed. */

@@ -21,6 +21,7 @@ import type {
   MergeGateResponse,
   ModelsResponse,
   OkResponse,
+  SupervisorLevel,
   PlanResponse,
   SurfacePlan,
   SurfacePlanState,
@@ -366,6 +367,10 @@ export class ApiClient {
 
   setMergeAtGatesAutomatically(sessionId: string, enabled: boolean): Promise<OkResponse> {
     return this.call('PATCH', `/api/plans/${sessionId}/settings`, 'Change merge setting failed', { mergeAtGatesAutomatically: enabled });
+  }
+
+  setSupervisorLevel(sessionId: string, level: SupervisorLevel): Promise<OkResponse> {
+    return this.call('PATCH', `/api/plans/${sessionId}/settings`, 'Change supervisor level failed', { supervisorLevel: level });
   }
 
   updateTask(sessionId: string, taskId: string, changes: Record<string, unknown>): Promise<OkResponse> {

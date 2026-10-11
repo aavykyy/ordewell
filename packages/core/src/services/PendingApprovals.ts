@@ -57,8 +57,15 @@ export class PendingApprovals {
     settle: (decision: ApprovalDecision) => void;
     timer: ReturnType<typeof setTimeout> | null;
   }>();
+  private readonly listeners = new Set<(pending: PendingApproval) => void>();
 
   constructor(private readonly opts: PendingApprovalsOptions = {}) {}
+
+  /** Hear each new request once it is announced — the supervisor wakes on a runner's (ADR-0029). */
+  listen(listener: (pending: PendingApproval) => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
 
   /** Park a request and return the promise the approval policy awaits. */
   ask(request: ApprovalRequest, options: AskOptions = {}): Promise<boolean> {
@@ -95,6 +102,7 @@ export class PendingApprovals {
 
       this.entries.set(id, { pending, settle, timer });
       this.opts.onRequest?.(pending);
+      for (const listener of this.listeners) listener(pending);
     });
   }
 

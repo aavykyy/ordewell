@@ -205,6 +205,12 @@ export class CliAgentAiService implements IAiService {
 
   heldSecrets(): readonly string[] { return this.environmentSecrets; }
 
+  restart(): void {
+    this.activeAbort?.abort();
+    this.activeAbort = null;
+    this.disposeAdapter();
+  }
+
   reset(): void {
     this.activeAbort?.abort();
     this.activeAbort = null;

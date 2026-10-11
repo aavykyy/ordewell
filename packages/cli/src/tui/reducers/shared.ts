@@ -1,4 +1,4 @@
-import type { AiProvider, ApprovalDecision, AwaitingReason, PlannerUsage, ResearchLogEntry, SerializedConversationMessage, SessionMessage, SettingsResponse, TaskLogEvent } from '@ordewell/core';
+import type { AiProvider, ApprovalDecision, AwaitingReason, PlannerUsage, ResearchLogEntry, SerializedConversationMessage, SessionMessage, SettingsResponse, SupervisorLevel, TaskLogEvent } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
   RunMergeView, HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
@@ -68,6 +68,7 @@ export type Effect =
   | { type: 'taskAction'; sessionId: string; taskId: string; action: TaskAction; watch?: boolean }
   | { type: 'addTask'; sessionId: string; title: string }
   | { type: 'setAutoMerge'; sessionId: string; enabled: boolean }
+  | { type: 'setSupervisorLevel'; sessionId: string; level: SupervisorLevel }
   | { type: 'updateTask'; sessionId: string; taskId: string; changes: Record<string, unknown>; message: string }
   | { type: 'removeTask'; sessionId: string; taskId: string }
   /** Reads a structured task's saved log (ADR-0018, P1) so its view opens with its history. */

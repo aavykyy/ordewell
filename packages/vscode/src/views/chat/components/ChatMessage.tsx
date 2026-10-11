@@ -43,6 +43,15 @@ export default function ChatMessage({ block }: { block: MessageBlock }) {
       </div>
     );
   }
+  // The run update that woke the supervisor: Ordewell's words to it, shown as they were sent.
+  if (block.role === 'wake_up') {
+    return (
+      <div className="chat-msg chat-msg-wake-up">
+        <span className="chat-msg-label">Run update</span>
+        <span className="chat-msg-content">{block.text.replace(/^Run update:\n/, '')}</span>
+      </div>
+    );
+  }
   if (block.role === 'user') {
     return (
       <div className="chat-msg chat-msg-user">
@@ -53,8 +62,9 @@ export default function ChatMessage({ block }: { block: MessageBlock }) {
     );
   }
   return (
-    <div className={`chat-msg chat-msg-planner${block.streaming ? ' streaming' : ''}`}>
+    <div className={`chat-msg chat-msg-planner${block.role === 'supervisor' ? ' chat-msg-supervisor' : ''}${block.streaming ? ' streaming' : ''}`}>
       <div className="chat-msg-bubble">
+        {block.role === 'supervisor' && <span className="chat-msg-label">Supervisor</span>}
         <div className="chat-msg-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(block.text.trim()) }} />
         {block.streaming && <span className="chat-msg-cursor" aria-hidden="true" />}
       </div>
