@@ -5,7 +5,7 @@ import { chatEditorRoomFor, chatPaneWidth, planPaneWidth } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
 import { findTask, planRows, plannerInFlight, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
 import { modesForTask } from './taskAssignment';
-import { ALL_PROVIDERS, approvalLabel, awaitingLabel, hasHiddenDetail, markAction, runnerForProvider, taskRowView, planUsage, type AiProvider, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
+import { ALL_PROVIDERS, approvalLabel, awaitingLabel, hasHiddenDetail, markAction, resumeLabel, runnerForProvider, taskRowView, planUsage, type AiProvider, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -48,6 +48,8 @@ export function footerHints(state: TuiState): string[] {
   // the selected task — a fixed 'm done' on a finished task reads as a no-op.
   const selected = selectedPlanRow(state)?.task;
   const markHint = selected && markAction(selected) === 'uncomplete' ? 'm undone' : 'm done';
+  // `c` cancels the selected task's resume while it has one; it has no runner to cancel then.
+  const cancelHint = selected && resumeLabel(selected) ? 'c cancel resume' : 'c cancel';
   // Only on a task that has a conflict to resolve: isolation stays quiet otherwise.
   const resolveHint = selected?.isolation?.state === 'conflict' ? ['x resolve conflict'] : [];
   // A planning turn in flight owns ESC ahead of whatever the pane would
@@ -74,7 +76,7 @@ export function footerHints(state: TuiState): string[] {
     return [
       ...(escHint ? [escHint] : []),
       '→ expand/edit', 'R runner', 'o model', 'e effort', 'M mode', 'D deps', 'K skills', 'O ops', 'f start',
-      'E run plan', 'S stop', 'c cancel', markHint, 's skip', 'a add', 'd remove', 'enter log', ...resolveHint,
+      'E run plan', 'S stop', cancelHint, markHint, 's skip', 'a add', 'd remove', 'enter log', ...resolveHint,
       'pgup/pgdn scroll', 'tab chat',
     ];
   }
@@ -149,7 +151,10 @@ function taskActivity(task: TaskView | undefined, working: boolean): string {
   const approvals = approvalLabel(task?.awaitingApproval);
   if (approvals) return inRow(approvals);
   if (working) return 'working';
-  if (task?.status === 'awaiting_user') return inRow(awaitingLabel(task) ?? 'Waiting for your input');
+  if (task?.status === 'awaiting_user') {
+    const resumes = resumeLabel(task);
+    return [inRow(awaitingLabel(task) ?? 'Waiting for your input'), resumes ? inRow(resumes) : ''].filter(Boolean).join(' · ');
+  }
   return task?.status ?? '';
 }
 
@@ -167,7 +172,9 @@ function taskHeaderLines(state: TuiState, tv: NonNullable<TuiState['taskView']>,
     ? ['ctrl-y allow', ...(approval.allowForTask ? ['ctrl-t allow for task'] : []), 'ctrl-g deny (composer text is the note)']
     : waitingCheckpoint(task)
       ? ['ctrl-y approve', 'ctrl-g reject (composer text is the reason)', 'ctrl-x interrupt']
-      : ['ctrl-r remove queued', 'ctrl-x interrupt', 'ctrl-s send now'];
+      : task && resumeLabel(task)
+        ? ['ctrl-x cancel resume']
+        : ['ctrl-r remove queued', 'ctrl-x interrupt', 'ctrl-s send now'];
   if (approval && waitingCheckpoint(task)) hint.push('then the checkpoint');
   const index = tv.attempts.indexOf(tv.attempt);
   if (tv.attempts.length > 1) hint.push(`alt←/→ attempt ${index >= 0 ? index + 1 : 1}/${tv.attempts.length}`);
@@ -680,6 +687,9 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   // A merge gate holds the task as plainly as a task that waits on the user (ADR-0020).
   if (row.mergeGate) {
     lines.push(style.yellow(truncate(`${bodyPad}⏸ waits for Merge all — ${row.mergeGate.join(', ')} not merged into your branch yet`, cols)));
+  }
+  if (row.resumes) {
+    lines.push(style.yellow(truncate(`${bodyPad}⏸ ${inRow(row.resumes)}, once the usage limit resets — c cancels the resume`, cols)));
   }
   if (row.opsChangedFiles) {
     lines.push(style.yellow(truncate(`${bodyPad}⚠ an ops task changed tracked files — check them, then m done or /retry`, cols)));

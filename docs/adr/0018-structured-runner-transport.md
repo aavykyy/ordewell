@@ -41,7 +41,8 @@ and completion evidence.
   is deliberately lossy; nothing that needs fidelity reads it.
 - **A turn without a completion call is "waiting for input" (W1).** A turn that ends
   without a `task_complete` call makes the task `awaiting_user` with a saved reason:
-  `input | checkpoint | conflict | files-changed`. A checkpoint wins over input. There is no
+  `input | checkpoint | conflict | files-changed`, or `usage-limit` for a turn
+  whose error is the runner's usage limit (U1). A checkpoint wins over input. There is no
   automatic nudge — no verdict is guessed, and the user (later the supervisor,
   #28) responds or marks the task complete. Approval requests arrive
   mid-turn and do **not** change task status: "waiting for approval" is derived
@@ -92,6 +93,30 @@ and completion evidence.
   id, not on conflicts. Dependents are left alone, as with retry. If the runner
   refuses the resume, the attempt fails; no fresh session is started in its
   place.
+- **Usage limits (U1, #84).** A runner that stops on its account's usage
+  limit — its process exits with the limit as the last thing it printed, or a
+  turn fails with it as its error — has not failed the task. The attempt ends
+  as a verdict would end it (L1), the task is `awaiting_user` with reason
+  `usage-limit`, and the run holds: every other start would spend the same
+  exhausted limit. When the runner's message says when the limit resets
+  (`readUsageLimitReset`, beside `classifyRunnerStop`: Claude Code and Codex
+  do; OpenCode passes its provider's error through and adds no time), the task
+  gets a resume time, saved with the plan: the reset plus a minute. Tasks
+  paused on one runner share one wait, at the latest of their resets, and
+  resume together. A resume is a continue (K1) of the task's saved session —
+  a fresh attempt where none was saved — told the limit has reset, and once
+  nothing else waits on a reset and no task has failed, the hold on the run is
+  released. In an isolated run the continue starts from the integration tip,
+  so what the paused attempt left uncommitted is on its kept branch, and the
+  resumed agent is told to check its tree. A resumed attempt that hits the
+  limit again within five minutes waits for a manual retry, and says so. A
+  plan loaded with a resume time still ahead waits for it again; one that
+  passed while nothing ran — the daemon was down — resumes at once. Cancelling
+  the resume (the task row and the task view; `cancelScheduledResume` for a
+  supervisor about to move the task to another runner) and stopping the run
+  both leave the task waiting for a manual retry, as one with no readable
+  reset waits. The orchestrator's `onUsageLimitWait` announces each pause and
+  each change to its resume, with the time or null, for a supervisor to wake on.
 - **Task log persistence (P1).** Append-only, per attempt, at
   `.ordewell/sessions/<session>/tasks/<task>/<attempt>.jsonl`, holding
   normalized events with long tool output trimmed. The same reducer rebuilds
@@ -173,6 +198,20 @@ transport is retained for take-over.
 - **The adapter keeping its own mode table.** A second definition of what a
   mode means, against ADR-0001; the manifest owns it.
 - **Live-only task logs.** A reload would lose what the task did.
+- **A usage limit fails the task, or waits for a manual retry only.** The
+  first paints a red X on work that only has to wait; the second, the
+  behaviour before #84, leaves a run started overnight idle from the first
+  limit hit until someone retries it. Resuming continues what the user
+  started; it is not new consent.
+- **Keeping the runner up across the wait and messaging it at the reset.**
+  A process held for hours, or days for a weekly limit, is lost on any daemon
+  restart, so the continue path is needed regardless; it is also the only one
+  after a runner's process exits on the limit.
+- **A wait per task.** A limit belongs to the account a runner signs in with,
+  and the runner is usable only once every limit it hit has reset.
+- **Reading Claude Code's `rate_limit_event`.** Its stream-json reports the
+  reset as an epoch too, but the printed message covers both runners that give
+  a time, and both ways a limit arrives, with one reader per runner.
 - **Storing the log inside the session JSON.** That file is rewritten on every
   save; an append-only file per attempt is not.
 
@@ -186,3 +225,4 @@ transport is retained for take-over.
 - 2026-10-09 — the `runnerTransport` setting and its surfaces removed; a saved plan pinned to `terminal` loads as structured and the field is dropped.
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
 - 2026-10-10 — the TUI task-log surface corrected to Enter on a task in the plan pane.
+- 2026-10-11 — U1: a task paused on a usage limit resumes on its own at the reset (#84).

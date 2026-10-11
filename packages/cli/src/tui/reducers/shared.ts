@@ -13,6 +13,7 @@ export interface TaskStatusUpdate {
   idleSince?: string | null;
   isolation?: TaskIsolationView;
   awaitingReason?: AwaitingReason;
+  resumeAt?: string;
   checkpoint?: string;
   continuable?: boolean;
   awaitingApproval?: number;
@@ -92,7 +93,7 @@ export type Effect =
   | { type: 'refresh'; announce?: boolean }
   | { type: 'exit' };
 
-export type TaskAction = 'complete' | 'uncomplete' | 'skip' | 'retry' | 'cancel' | 'force-start';
+export type TaskAction = 'complete' | 'uncomplete' | 'skip' | 'retry' | 'cancel' | 'force-start' | 'cancel-resume';
 
 export type Action =
   | { type: 'key'; key: Key }

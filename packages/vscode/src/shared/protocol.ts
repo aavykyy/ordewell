@@ -45,7 +45,7 @@ export interface ModelOption {
 
 export type ChatState = 'empty' | 'researching' | 'planDraft' | 'approved' | 'error';
 
-export type SystemCommand = 'cancel' | 'skip' | 'retry' | 'forceStart' | 'runTask' | 'markComplete' | 'markIncomplete' | 'stopExecution' | 'executePlan';
+export type SystemCommand = 'cancel' | 'cancelResume' | 'skip' | 'retry' | 'forceStart' | 'runTask' | 'markComplete' | 'markIncomplete' | 'stopExecution' | 'executePlan';
 
 /**
  * One field edit from a task card. Named by kind rather than read off which

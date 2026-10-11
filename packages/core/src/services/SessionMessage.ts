@@ -18,6 +18,8 @@ export type SerializedTaskStatus = {
   isolation?: TaskIsolation;
   /** What an `awaiting_user` task waits on, when it was saved (ADR-0018, W1). */
   awaitingReason?: AwaitingReason;
+  /** When a task paused on a usage limit resumes on its own (ISO time); absent when it waits for a manual retry. */
+  resumeAt?: string;
   /** The whole question of the checkpoint the task waits at; absent when it waits at none. */
   checkpoint?: string;
   /** Messages waiting for a structured task's turn to end, oldest first; absent when there are none. */
@@ -326,6 +328,7 @@ export function serializeTaskStatus(
     ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
     ...(isolation ? { isolation } : {}),
     ...(t.status === 'awaiting_user' && t.awaitingReason ? { awaitingReason: t.awaitingReason } : {}),
+    ...(t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit' && t.resumeAt ? { resumeAt: t.resumeAt } : {}),
     ...(t.status === 'awaiting_user' && t.awaitingReason === 'checkpoint' && checkpoint ? { checkpoint } : {}),
     ...(queued.length > 0 ? { queued: queued.map((m) => ({ ...m })) } : {}),
     ...(canContinue(t) ? { continuable: true as const } : {}),

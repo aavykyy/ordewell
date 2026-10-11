@@ -12,6 +12,7 @@ describe('task editing routes', () => {
     addTask: ReturnType<typeof vi.fn>;
     removeTask: ReturnType<typeof vi.fn>;
     markTaskIncomplete: ReturnType<typeof vi.fn>;
+    cancelScheduledResume: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
@@ -22,6 +23,7 @@ describe('task editing routes', () => {
       addTask: vi.fn().mockResolvedValue({ tasks: [] }),
       removeTask: vi.fn().mockReturnValue({ tasks: [] }),
       markTaskIncomplete: vi.fn().mockResolvedValue(undefined),
+      cancelScheduledResume: vi.fn().mockReturnValue(true),
     };
     const pool = { session: vi.fn().mockReturnValue(session) } as unknown as OrchestratorPool;
     const { plansRoute } = await import('../../routes/plans');
@@ -149,6 +151,25 @@ describe('task editing routes', () => {
 
       expect(res.status).toBe(404);
       expect((await res.json() as { error: string }).error).toBe('Not found');
+    });
+  });
+
+  describe('POST /tasks/:taskId/resume/cancel', () => {
+    it('cancels the resume of a task paused on a usage limit, and says whether there was one', async () => {
+      const res = await app.request('/api/plans/s1/tasks/t1/resume/cancel', { method: 'POST' });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ cancelled: true });
+      expect(session.cancelScheduledResume).toHaveBeenCalledWith('t1');
+
+      session.cancelScheduledResume.mockReturnValue(false);
+      expect(await (await app.request('/api/plans/s1/tasks/t1/resume/cancel', { method: 'POST' })).json()).toEqual({ cancelled: false });
+    });
+
+    it('404s when the session is gone', async () => {
+      session.cancelScheduledResume.mockImplementation(() => { throw new SessionNotFoundError(); });
+
+      expect((await app.request('/api/plans/s1/tasks/t1/resume/cancel', { method: 'POST' })).status).toBe(404);
     });
   });
 

@@ -19,7 +19,7 @@ import { inboundFor } from './inbound';
  */
 export type OrdewellApi = Pick<ApiClient,
   | 'startConversation' | 'sendConversationMessage' | 'executePlan' | 'stopExecution' | 'cancelPlanning'
-  | 'taskControl' | 'markTaskComplete' | 'markTaskIncomplete'
+  | 'taskControl' | 'markTaskComplete' | 'markTaskIncomplete' | 'cancelResume'
   | 'getTaskLogAttempts' | 'getTaskLog'
   | 'sendTaskMessage' | 'removeQueuedTaskMessage' | 'forceSendTaskMessage' | 'forceSendQueuedTaskMessage'
   | 'interruptTask' | 'approveTaskCheckpoint' | 'rejectTaskCheckpoint' | 'continueTask'
@@ -211,6 +211,12 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
 
     case 'taskAction': {
       const { sessionId, taskId, action } = effect;
+      if (action === 'cancel-resume') {
+        const { cancelled } = await api.cancelResume(sessionId, taskId);
+        dispatch({ type: 'notice', message: cancelled ? 'Resume cancelled: retry the task once the limit resets.' : 'That task had no resume scheduled.' });
+        await refreshPlan(deps, sessionId);
+        return;
+      }
       const request =
         action === 'cancel' || action === 'retry' || action === 'force-start'
           ? () => api.taskControl(sessionId, taskId, action)
