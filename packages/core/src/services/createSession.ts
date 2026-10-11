@@ -1,5 +1,5 @@
 import { createAiService, type IAiService } from './AiService';
-import { applyTaskOps, type TaskOp } from './TaskOps';
+import { applyTaskOps, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
 import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
 import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome } from './plannerTools';
@@ -8,6 +8,7 @@ import { ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, 
 import { forkPlanState, type ForkedDialogue } from './conversationFork';
 import { PlanTurns } from './PlanTurns';
 import { DEFAULT_WAKE_UP_READ_BUDGET, Supervisor, type RunEventInput, type SupervisedRun } from './Supervisor';
+import { DEFAULT_SUPERVISOR_RETRY_LIMIT, editedFields, SupervisionMemory, type GuardTrip } from './LoopGuards';
 import { Planner } from './Planner';
 import { TaskOrchestrator, type OrchestratorObserver } from './TaskOrchestrator';
 import { PlanStore } from './PlanStore';
@@ -37,7 +38,7 @@ import { TaskLogRecorder } from './TaskLogRecorder';
 import { PlannerUsageLedger } from './PlannerUsage';
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
-import { flattenTasks, flattenTasksWithParents, keepExecutionState, taskRef, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskSnapshot, type RunnerId } from '../models/Task';
+import { flattenTasks, flattenTasksWithParents, keepExecutionState, stampOrigin, taskRef, waitsForReset, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskSnapshot, type RunnerId } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
 import type { AiProvider, IConfig } from '../interfaces/IConfig';
 import type { IFileSystem } from '../interfaces/IFileSystem';
@@ -51,7 +52,7 @@ import type { IsolationRunController } from './IsolationRunController';
 import { PlanEditor } from './PlanEditor';
 import { PlanEditError } from './PlanEditError';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
-import { ExecutionCommands, type CommandOutcome, type ExecutionCommand, type ExecutionHost } from './ExecutionCommands';
+import { ExecutionCommands, mergeStopped, type CommandOutcome, type ExecutionCommand, type ExecutionHost } from './ExecutionCommands';
 import type { ExecutionActor, ExecutionRecord, SupervisorLevel } from '../models/Execution';
 import { dependencyMet } from './readiness';
 
@@ -97,15 +98,8 @@ function lastAttemptDigest(location: TaskLogLocation, taskId: string): string | 
   return events.length > 0 ? digestTaskLog(events, OPS_RETRY_DIGEST_CALLS) : null;
 }
 
-/** Why a gate's automatic Merge all stopped, in a line (ADR-0029). */
-function mergeStopped(result: IsolationMergeResult): string {
-  switch (result.outcome) {
-    case 'merged': return 'it merged';
-    case 'blocked': return 'the user\'s checkout has changes that overlap what it would merge';
-    case 'conflict': return `it conflicts in ${result.repo}${result.files?.length ? `: ${result.files.slice(0, 5).join(', ')}` : ''}`;
-    case 'failed': return `it failed in ${result.repo}`;
-  }
-}
+/** Supervisor levels, lowest first: a level only ever goes down during a run. */
+const LEVEL_RANK: Record<SupervisorLevel, number> = { off: 0, watch: 1, act: 2 };
 
 export function sessionRuntimeSettings(settings: UserSettings): SessionRuntimeSettings {
   return {
@@ -450,6 +444,12 @@ export class Session {
   private readonly editor: PlanEditor;
   private readonly commands: ExecutionCommands;
   private readonly supervisor: Supervisor;
+  /** What the loop guards remember from the user's start of a run to their next (ADR-0029). */
+  private readonly guards = new SupervisionMemory();
+  /** Supervisor commands at the seam right now: a run they open continues the user's, rather than starting one. */
+  private supervisorActing = 0;
+  /** Starts the open turn asked for that wait on its own held edit; run once its reply lands. */
+  private deferred: { command: ExecutionCommand; actor: ExecutionActor }[] = [];
   private unlistenApprovals: (() => void) | null;
   private readonly plannerTools: PlannerToolHandler = plannerToolHandler({
     skills: () => this.workspaceSkills().listSkills(),
@@ -470,8 +470,8 @@ export class Session {
     runCommand: (command, signal) => this.fsAdapter.bash(command, signal),
     fetchUrl: (url) => this.fetcher.fetch(url),
     webSearch: async (query) => this.fetcher.search?.(query),
-    execute: (command) => this.commands.run(command, this.turnActor()),
-    editsRefused: () => this.conversation.currentWakeUp?.editsRefused,
+    execute: (command) => this.execute(command, this.turnActor()),
+    editsRefused: (change) => this.conversation.currentWakeUp?.refused(change),
   });
 
   constructor(parts: SessionParts) {
@@ -512,7 +512,7 @@ export class Session {
       mutate: (op, notify) => this.mutatePlan(op, notify),
       broadcast: (msg) => this.broadcast(msg),
       broadcastPlan: (turnId) => this.events.planGenerated(this.plan, this.goal, turnId),
-      validateOps: (ops) => applyTaskOps(this.store.planTasks, ops, this.plan!.runners, this.catalog.edit()),
+      validateOps: (ops) => this.checkPlannerOps(ops, this.plan!.runners, this.catalog.edit()),
       taskSkills: () => this.workspaceSkills(),
       notice: (level, message) => this.notice(level, message),
       adoptTasks: (tasks, how) => this.adoptPlannerTasks(tasks, how),
@@ -535,16 +535,19 @@ export class Session {
       resumeStarts: async () => {
         if (this.orchestrator.isRunning) await this.withSave(() => this.orchestrator.tick(), { background: true });
       },
-      run: (prompt, { taken, signal }) => {
+      run: async (prompt, { taken, signal }) => {
         // A turn that failed before persist leaves its runs unflushed; drop them so
         // the next turn's log cannot absorb a previous turn's uncommitted activity.
         this.events.dropSubagentRuns();
+        this.deferred = [];
         const reply = (turnSignal: AbortSignal | undefined, wakeUp?: WakeUpTurn) =>
           this.conversation.reply(prompt, { signal: turnSignal, onCommit: taken, wakeUps: prompt.wakeUps, ...(wakeUp ? { wakeUp } : {}) });
         // Wake-ups that ride with a user's message are context for the user's turn.
-        return prompt.source === 'supervisor'
+        const landed = await (prompt.source === 'supervisor'
           ? this.supervisor.turn((turnSignal) => reply(turnSignal, this.supervisor.wakeUpTurn()), signal)
-          : reply(signal);
+          : reply(signal));
+        this.runDeferred();
+        return landed;
       },
       notice: (message) => this.notice('error', message),
     });
@@ -555,10 +558,12 @@ export class Session {
       pump: () => this.turns.pump(),
       describeTask: (taskId) => this.describeTask(taskId),
       readBudget: () => this.plan?.wakeUpReadBudget ?? DEFAULT_WAKE_UP_READ_BUDGET,
+      retryLimit: () => this.retryLimit(),
       plannerRunner: () => runnerForProvider(this.config.aiProvider),
       restartPlanner: () => this.aiService().restart?.(),
       abandonTurn: () => this.conversation.abandonHungTurn(),
       goUnsupervised: (reason) => this.goUnsupervised(reason),
+      dropToWatch: (reason) => this.dropToWatch(reason),
       notice: (level, message) => this.notice(level, message),
     });
     this.unlistenApprovals = this.approvals.listen(({ request }) => {
@@ -584,6 +589,7 @@ export class Session {
       host: this.executionHost(),
       // A Guarded start asks on the card the planner's other requests use.
       consent: { request: (request) => this.approvals.ask(request) },
+      guards: [(actor, command, target) => (actor.kind === 'supervisor' ? this.guards.check(command, target, this.store.planTasks, this.retryLimit()) : null)],
     });
 
     this.unsubObserver = this.orchestrator.subscribe(this.observer());
@@ -594,8 +600,35 @@ export class Session {
    * checked, consented to and recorded in one place. The planner's execution
    * tools come here; see {@link ExecutionCommands}.
    */
-  execute(command: ExecutionCommand, actor: ExecutionActor): Promise<CommandOutcome> {
-    return this.commands.run(command, actor);
+  async execute(command: ExecutionCommand, actor: ExecutionActor): Promise<CommandOutcome> {
+    if (actor.kind !== 'supervisor') return this.commands.run(command, actor);
+    this.supervisorActing++;
+    try {
+      return await this.commands.run(command, actor);
+    } finally {
+      this.supervisorActing--;
+    }
+  }
+
+  /** Retries an Act supervisor may make of one task (a loop guard), as the plan sets them. */
+  private retryLimit(): number {
+    return this.plan?.supervisorRetryLimit ?? DEFAULT_SUPERVISOR_RETRY_LIMIT;
+  }
+
+  /**
+   * The starts a turn deferred behind its own held edit, now that it landed:
+   * each goes through the seam again, so it is checked against the edited
+   * plan, and the supervisor's at the level it has by now.
+   */
+  private runDeferred(): void {
+    const due = this.deferred;
+    this.deferred = [];
+    void (async () => {
+      for (const { command, actor } of due) {
+        const now: ExecutionActor = actor.kind === 'supervisor' ? { kind: 'supervisor', level: this.supervisor.level } : actor;
+        await this.execute(command, now).catch((err: unknown) => this.notice('error', `Could not run what the planner queued: ${err instanceof Error ? err.message : String(err)}`));
+      }
+    })();
   }
 
   /**
@@ -627,14 +660,68 @@ export class Session {
       continueTask: (taskId, message) => this.resumeTask(taskId, message),
       messageTask: (taskId, text) => { this.sendTaskMessage(taskId, text); },
       denyRequest: (requestId, note) => this.resolveApproval(requestId, { decision: 'deny', ...(note ? { note } : {}) }),
+      mergeAll: () => this.mergeRun(),
       record: (record, text) => this.recordExecution(record, text),
+      guardTripped: (trip) => this.guardTripped(trip),
+      heldEdit: (taskId) => this.heldEdit(taskId),
+      deferUntilLanded: (command, actor) => { this.deferred.push({ command, actor }); },
     };
   }
 
-  /** Who the open planner turn speaks for at the seam: the supervisor in a wake-up turn, else the user's turn. */
+  /**
+   * Whether the open turn holds a task edit, landing as its reply ends, that
+   * changes this task — or any, when none is named. A whole plan held is not
+   * one: nothing it would start is approved until the user executes it.
+   */
+  private heldEdit(taskId?: string): boolean {
+    const held = this.conversation.pendingOps();
+    if (!held || held.length === 0 || !this.plan) return false;
+    if (taskId === undefined) return true;
+    const result = applyTaskOps(this.store.planTasks, held, this.plan.runners, this.catalog.edit());
+    const before = this.store.get(taskId);
+    const after = result.ok ? flattenTasks(result.tasks).find((t) => t.id === taskId) : before;
+    return !!before && (!after || editedFields(before, after).length > 0);
+  }
+
+  /** The open planner turn is the supervisor's, acting at Act: its edits and added tasks are its own (ADR-0029). */
+  private supervisorEditing(): boolean {
+    return this.conversation.currentWakeUp !== undefined && this.supervisor.level === 'act';
+  }
+
+  /**
+   * A planner edit checked as it is made and again as it lands: the applier's
+   * rules, then, for the supervisor, the oscillation guard.
+   */
+  private checkPlannerOps(ops: TaskOp[], runners: RunnerId[], catalog: ReturnType<SessionCatalog['edit']>): ApplyTaskOpsResult {
+    const result = applyTaskOps(this.store.planTasks, ops, runners, catalog);
+    if (!result.ok || !this.supervisorEditing()) return result;
+    const trip = this.guards.checkEdit(this.store.planTasks, result.tasks);
+    if (!trip) return result;
+    this.guardTripped(trip);
+    return { ok: false, tasks: [...this.store.planTasks], errors: [trip.refusal], summary: [] };
+  }
+
+  /** A loop guard stopped the supervisor: the user hears of it once, as the supervisor's message. */
+  private guardTripped(trip: GuardTrip): void {
+    if (this.guards.firstReport(trip)) this.supervisorNote(trip.escalation);
+  }
+
+  /** A message to the user in the supervisor's voice, kept in the transcript where it happened. */
+  private supervisorNote(text: string): void {
+    const timestamp = new Date().toISOString();
+    this.mutatePlan(() => {
+      this.conversation.append('assistant', text, { timestamp, kind: 'supervisor' });
+      return true;
+    }, () => this.broadcast({ type: 'planner_message', content: text, timestamp, supervisor: true }));
+  }
+
+  /**
+   * Who the open planner turn speaks for at the seam: the supervisor in a
+   * wake-up turn, at its level as of this call, else the user's turn.
+   */
   private turnActor(): ExecutionActor {
     return this.conversation.currentWakeUp
-      ? { kind: 'supervisor', level: this.plan?.runSettings?.supervisorLevel ?? 'off' }
+      ? { kind: 'supervisor', level: this.supervisor.level }
       : { kind: 'planner-turn' };
   }
 
@@ -668,6 +755,31 @@ export class Session {
     this.notice('warn', text);
   }
 
+  /**
+   * Lower the run's supervisor to `level` for the rest of the run, at once
+   * (ADR-0029): never upward, and the plan's own setting, which the next run
+   * starts with, is left as it is. `said` goes in the transcript with it.
+   * False when it was already that low.
+   */
+  private lowerRun(level: 'watch' | 'off', said?: string): boolean {
+    const settings = this.plan?.runSettings;
+    if (!settings || LEVEL_RANK[settings.supervisorLevel ?? 'off'] <= LEVEL_RANK[level]) return false;
+    this.mutatePlan(() => {
+      settings.supervisorLevel = level;
+      if (said) this.conversation.append('assistant', said, { kind: 'system' });
+      return true;
+    });
+    return true;
+  }
+
+  /** The wake-up rate guard tripped: the run carries on at Watch, and the user is told in the supervisor's voice. */
+  private dropToWatch(reason: string): void {
+    if (!this.lowerRun('watch')) return;
+    const text = `Loop guard, wake-up rate: I ${reason}, so I am at Watch for the rest of this run: I tell you what needs you and suggest, and act only when you say so.`;
+    this.supervisorNote(text);
+    this.notice('warn', text);
+  }
+
   /** The event a task settling on its own is for the supervisor; null for one it hears of another way. */
   private settledEvent(taskId: string): RunEventInput | null {
     const task = this.store.get(taskId);
@@ -694,6 +806,7 @@ export class Session {
 
   /** A call at the seam, in the transcript where it happened and on every surface at once. */
   private recordExecution(record: ExecutionRecord, text: string): void {
+    this.guards.done(record, this.store.planTasks);
     this.mutatePlan(() => {
       this.conversation.recordExecution(record, text);
       return true;
@@ -760,8 +873,16 @@ export class Session {
       ...relay,
       onRunStarted: (settings) => {
         if (!this.plan) return;
-        this.plan.runSettings = { ...settings, supervisorLevel: this.plan.supervisorLevel ?? 'off' };
-        this.supervisor.runStarted();
+        // Only the user starts a run's supervision afresh. A run the supervisor
+        // opens itself, or a usage-limit reset resumes, carries on the one
+        // before: its level, as lowered, and what the loop guards remember.
+        const prior = this.plan.runSettings;
+        const continued = prior !== undefined && (this.supervisorActing > 0 || this.controlsInFlight === 0);
+        this.plan.runSettings = continued
+          ? { ...settings, supervisorLevel: prior.supervisorLevel ?? 'off', ...(prior.unsupervised ? { unsupervised: prior.unsupervised } : {}) }
+          : { ...settings, supervisorLevel: this.plan.supervisorLevel ?? 'off' };
+        if (!continued) this.guards.forget();
+        this.supervisor.runStarted(continued);
         this.persist({ background: true });
         this.events.planGenerated(this.plan, this.goal);
       },
@@ -791,6 +912,8 @@ export class Session {
       // it mid-run, so a crash would otherwise lose every verdict since the
       // last Session operation.
       onTaskSettled: ({ taskId }) => {
+        const task = this.store.get(taskId);
+        if (task) this.guards.settled(task);
         this.persist({ background: true });
         const event = this.settledEvent(taskId);
         if (event) this.supervisor.observe(event);
@@ -865,6 +988,8 @@ export class Session {
     this.conversation.abandonTurn();
     this.turns.abandon();
     this.supervisor.reset();
+    this.guards.forget();
+    this.deferred = [];
     this.conversation.reset();
     // Totals belong to the plan they were recorded under; a fresh plan starts
     // its ledger from zero so the previous session's line never lingers.
@@ -1112,7 +1237,7 @@ export class Session {
     if (!held) return refuse('A whole plan was submitted in this reply and replaces the plan when it ends: make the edit in your next reply.');
 
     const batch = [...held, ...ops];
-    const result = applyTaskOps(this.store.planTasks, batch, catalog.runners, this.catalog.edit(catalog.runners));
+    const result = this.checkPlannerOps(batch, catalog.runners, this.catalog.edit(catalog.runners));
     if (!result.ok) return { ok: false, errors: result.errors };
     for (const runner of runnersOf(result.tasks)) this.editor.admitRunner(runner, this.catalog.known(runner));
     if (!this.conversation.submit({ kind: 'task_ops', ops: batch })) return refuse('No planning turn is open to take the edit.');
@@ -1182,15 +1307,44 @@ export class Session {
    */
   private adoptPlannerTasks(tasks: readonly Task[], how: 'edit' | 'commit'): number {
     const runners = this.plan!.runners;
+    const before = this.store.planTasks;
     let coerced = coerceAssignments(tasks, this.catalog.allowlist(), runners, this.catalog.models());
-    if (how === 'commit') coerced = keepExecutionState(this.store.planTasks, coerced);
+    if (how === 'commit') coerced = keepExecutionState(before, coerced);
+    // Tasks an Act supervisor adds are approved to run, ops tasks included (ADR-0029): choosing Act was the consent.
+    const bySupervisor = this.supervisorEditing();
+    const { tasks: stamped, added } = stampOrigin(before, coerced, bySupervisor);
+    coerced = this.releaseMovedResumes(before, stamped);
+    if (bySupervisor) {
+      this.approve(added);
+      this.guards.edited(before, coerced);
+    }
     if (this.orchestrator.isRunning) {
       this.orchestrator.reconcilePlan(coerced, runners);
     } else {
       this.orchestrator.loadPlan(coerced, runners);
-      this.store.resetForRun();
+      this.store.resetForRun({ keepScheduledResumes: true });
     }
     return coerced.length;
+  }
+
+  /**
+   * A task paused on its runner's usage limit and moved to another runner or
+   * model no longer waits on that limit's reset: its scheduled resume is
+   * cancelled, and it waits for a retry on what it was moved to (ADR-0029).
+   */
+  private releaseMovedResumes(before: readonly Task[], after: Task[]): Task[] {
+    const waiting = new Map(flattenTasks([...before]).filter(waitsForReset).map((t) => [t.id, t]));
+    if (waiting.size === 0) return after;
+    const release = (tasks: Task[]): Task[] => tasks.map((t) => {
+      const was = waiting.get(t.id);
+      const moved = was && (was.assignedRunner !== t.assignedRunner || was.assignedModel?.modelId !== t.assignedModel?.modelId);
+      if (!moved) return { ...t, subtasks: release(t.subtasks ?? []) };
+      this.orchestrator.cancelScheduledResume(t.id);
+      const released: Task = { ...t, subtasks: release(t.subtasks ?? []) };
+      delete released.resumeAt;
+      return released;
+    });
+    return release(after);
   }
 
   /**
@@ -1225,6 +1379,28 @@ export class Session {
       this.plan!.supervisorLevel = level;
       return true;
     });
+  }
+
+  /** Retries an Act supervisor may make of one task in a run (a loop guard, ADR-0029); read at each retry. */
+  setSupervisorRetryLimit(retries: number): void {
+    if (!this.plan) throw new NoPlanError('change the supervisor\'s retry limit');
+    if (!Number.isInteger(retries) || retries < 0) throw new PlanEditError('The retry limit must be a whole number of retries, 0 or more.');
+    this.mutatePlan(() => {
+      this.plan!.supervisorRetryLimit = retries;
+      return true;
+    });
+  }
+
+  /**
+   * Lower the supervisor of the run under way (ADR-0029): to Watch, or off.
+   * Unlike the plan's level, which the next run starts with, this applies at
+   * once — to the wake-up turn under way too — for the rest of the run. It
+   * never raises the level.
+   */
+  lowerSupervisor(level: 'watch' | 'off'): void {
+    if (!this.plan?.runSettings) throw new PlanEditError('No run has started, so there is no supervisor to lower: change the plan\'s supervisor level instead.');
+    if (!this.lowerRun(level, level === 'off' ? 'You turned the supervisor off for the rest of this run.' : 'You dropped the supervisor to Watch for the rest of this run.')) return;
+    if (level === 'off') this.supervisor.standDown();
   }
 
   /** Reads a wake-up turn may make (ADR-0029); read at each wake-up. */
@@ -1445,15 +1621,6 @@ export class Session {
     const result = await this.withSave(() => this.orchestrator.mergeRun());
     this.broadcast({ type: 'isolation_merge', result });
     return result;
-  }
-
-  /**
-   * Core merge_all action for the later supervisor tool. Its tool adapter must
-   * refuse every actor except a supervisor in an Act wake-up turn (ADR-0029);
-   * user-started planner turns cannot consent to a merge by proxy.
-   */
-  async merge_all(): Promise<IsolationMergeResult> {
-    return this.mergeRun();
   }
 
   /** Remove the run's worktrees and task branches; keep its integration branch to review or merge. */

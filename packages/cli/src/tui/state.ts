@@ -39,6 +39,8 @@ export interface TaskView {
   ops?: boolean;
   /** Task skills attached by name, put in the runner's prompt at spawn. */
   skills?: string[];
+  /** Set on a task an Act supervisor added during a run (ADR-0029). */
+  addedBy?: 'supervisor';
   /** The dependencies whose work must be merged into the user's branch before this task can go on (ADR-0020). */
   mergeGate?: string[];
   /** The dependencies, by title, a force start went past the merge gate of. */
@@ -261,6 +263,7 @@ export type ConfirmAction =
   | { kind: 'new-session' }
   | { kind: 'remove-task'; taskId: string }
   | { kind: 'force-start-gated'; taskId: string }
+  | { kind: 'supervisor-act' }
   | { kind: 'merge-run' }
   | { kind: 'discard-run' }
   | { kind: 'init-workspace'; goal: string; workspace: string }
@@ -591,4 +594,11 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     spinnerFrame: 0,
     ...overrides,
   };
+}
+
+/** Where `L` takes the run under way's supervisor: one level down, or nowhere when it is off or stopped. */
+export function loweredRunSupervisor(state: TuiState): 'watch' | 'off' | null {
+  const run = state.status === 'executing' ? state.runSupervisor : null;
+  if (!run || run.unsupervised) return null;
+  return run.level === 'act' ? 'watch' : run.level === 'watch' ? 'off' : null;
 }

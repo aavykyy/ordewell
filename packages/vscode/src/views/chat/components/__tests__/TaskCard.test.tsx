@@ -296,3 +296,15 @@ describe('TaskCard — Stalled state', () => {
     expect(screen.queryByText('Stalled')).toBeNull();
   });
 });
+
+describe('TaskCard — origin', () => {
+  it('marks a task the supervisor added, so the user can tell it from their own', () => {
+    render(<TaskCard task={makeTask({ addedBy: 'supervisor' })} models={emptyModels} isExecuting={false} />);
+    expect(screen.getByText('Added by supervisor').getAttribute('title')).toMatch(/approved to run/);
+  });
+
+  it('marks no task the user planned', () => {
+    render(<TaskCard task={makeTask()} models={emptyModels} isExecuting={false} />);
+    expect(screen.queryByText('Added by supervisor')).toBeNull();
+  });
+});

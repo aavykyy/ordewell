@@ -76,6 +76,8 @@ export type SerializedTask = {
   ops?: true;
   /** Task skills attached by name; absent when none. */
   skills?: string[];
+  /** Set only on a task an Act supervisor added (ADR-0029). */
+  addedBy?: 'supervisor';
   attemptUsage?: AttemptUsage[];
 };
 
@@ -315,6 +317,7 @@ export function serializeTask(t: Task): SerializedTask {
     ...(t.ops ? { ops: true as const } : {}),
     ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
     ...(t.skills?.length ? { skills: [...t.skills] } : {}),
+    ...(t.addedBy ? { addedBy: t.addedBy } : {}),
   };
 }
 

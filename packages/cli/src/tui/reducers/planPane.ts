@@ -1,7 +1,7 @@
 import { markAction, resumeLabel, taskRef } from '@ordewell/core';
 import { applyKey, emptyEditor, type EditorState } from '../editor';
 import { taskEditorRoom } from '../geometry';
-import { findTask, planRows, selectedPlanRow, type TaskView, type TuiState } from '../state';
+import { findTask, loweredRunSupervisor, planRows, selectedPlanRow, type TaskView, type TuiState } from '../state';
 import type { Key } from '../keys';
 import { scrollDelta, scrollPlan, settlePlan } from './pointer';
 import { openTaskView } from './taskView';
@@ -66,9 +66,13 @@ export function handlePlanKey(state: TuiState, key: Key): Step {
   if (key.name === 'char' && key.char === 'G' && state.sessionId) {
     return step(state, [{ type: 'setAutoMerge', sessionId: state.sessionId, enabled: !state.mergeAtGatesAutomatically }]);
   }
-  // Off and Watch only: Act is not offered until its rules land (ADR-0029).
   if (key.name === 'char' && key.char === 'W' && state.sessionId) {
+    if (state.supervisorLevel === 'watch') return confirmSupervisorAct(state);
     return step(state, [{ type: 'setSupervisorLevel', sessionId: state.sessionId, level: state.supervisorLevel === 'off' ? 'watch' : 'off' }]);
+  }
+  if (key.name === 'char' && key.char === 'L' && state.sessionId) {
+    const lowered = loweredRunSupervisor(state);
+    return step(state, lowered ? [{ type: 'lowerSupervisor', sessionId: state.sessionId, level: lowered }] : []);
   }
 
   // Before the row guard: with no tasks there is no row, and this is the way in.
@@ -148,4 +152,21 @@ function commitTaskEdit(state: TuiState, task: TaskView, editor: EditorState): S
     changes: { prompt },
     message: `Task ${taskRef(task)} prompt updated.`,
   }]);
+}
+
+/**
+ * Act is the one level that acts on the user's behalf, ops tasks included,
+ * so choosing it says what it allows (ADR-0029).
+ */
+function confirmSupervisorAct(state: TuiState): Step {
+  return step({
+    ...state,
+    overlay: {
+      kind: 'confirm',
+      title: 'Let the supervisor act?',
+      message: 'At Act the supervisor runs, stops and retries tasks, answers their requests (never allowing), edits the plan and merges, without asking you.',
+      note: 'Tasks it adds run too, ops tasks included, which can act on real systems unattended.\nIt applies from the next run; L lowers a running supervisor at once.',
+      action: { kind: 'supervisor-act' },
+    },
+  });
 }

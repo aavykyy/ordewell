@@ -15,7 +15,7 @@ export class SessionNotFoundError extends Error {
 
 /** The session holds no plan (or an empty one) for the operation to act on. */
 export class NoPlanError extends Error {
-  constructor(operation: 'execute' | 'review' | 'change merge setting' | 'change the supervisor level' | 'change the wake-up read budget') {
+  constructor(operation: 'execute' | 'review' | 'change merge setting' | 'change the supervisor level' | 'change the wake-up read budget' | 'change the supervisor\'s retry limit') {
     super(`No plan to ${operation}`);
     this.name = 'NoPlanError';
   }

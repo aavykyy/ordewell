@@ -60,22 +60,40 @@ export function plansRoute(pool: OrchestratorPool) {
     const merge = field('mergeAtGatesAutomatically');
     const level = field('supervisorLevel');
     const reads = field('wakeUpReadBudget');
-    if (merge === undefined && level === undefined && reads === undefined) {
-      return c.json({ error: 'Name a setting: mergeAtGatesAutomatically, supervisorLevel or wakeUpReadBudget' }, 400);
+    const retries = field('supervisorRetryLimit');
+    if (merge === undefined && level === undefined && reads === undefined && retries === undefined) {
+      return c.json({ error: 'Name a setting: mergeAtGatesAutomatically, supervisorLevel, wakeUpReadBudget or supervisorRetryLimit' }, 400);
     }
     if (merge !== undefined && typeof merge !== 'boolean') return c.json({ error: 'mergeAtGatesAutomatically must be a boolean' }, 400);
     if (level !== undefined && !isSupervisorLevel(level)) return c.json({ error: 'supervisorLevel must be "off", "watch" or "act"' }, 400);
     if (reads !== undefined && (typeof reads !== 'number' || !Number.isInteger(reads) || reads < 1)) {
       return c.json({ error: 'wakeUpReadBudget must be a whole number of reads, at least 1' }, 400);
     }
+    if (retries !== undefined && (typeof retries !== 'number' || !Number.isInteger(retries) || retries < 0)) {
+      return c.json({ error: 'supervisorRetryLimit must be a whole number of retries, 0 or more' }, 400);
+    }
     try {
       const session = pool.session(c.req.param('sessionId'));
       if (typeof merge === 'boolean') session.setMergeAtGatesAutomatically(merge);
       if (isSupervisorLevel(level)) session.setSupervisorLevel(level);
       if (typeof reads === 'number') session.setWakeUpReadBudget(reads);
+      if (typeof retries === 'number') session.setSupervisorRetryLimit(retries);
       return c.json({ ok: true } satisfies OkResponse);
     } catch (err) {
       return failure(c, err, 'change plan settings');
+    }
+  });
+
+  // Applies to the run under way at once, unlike the level setting above; it only ever lowers (ADR-0029).
+  router.post('/:sessionId/supervisor/lower', async (c) => {
+    const body: unknown = await c.req.json();
+    const level = typeof body === 'object' && body !== null && 'level' in body ? body.level : undefined;
+    if (level !== 'watch' && level !== 'off') return c.json({ error: 'level must be "watch" or "off": a running supervisor is only ever lowered' }, 400);
+    try {
+      pool.session(c.req.param('sessionId')).lowerSupervisor(level);
+      return c.json({ ok: true } satisfies OkResponse);
+    } catch (err) {
+      return failure(c, err, 'lower the supervisor');
     }
   });
 

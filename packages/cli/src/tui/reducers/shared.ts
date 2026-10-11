@@ -69,6 +69,8 @@ export type Effect =
   | { type: 'addTask'; sessionId: string; title: string }
   | { type: 'setAutoMerge'; sessionId: string; enabled: boolean }
   | { type: 'setSupervisorLevel'; sessionId: string; level: SupervisorLevel }
+  /** Lowers the run under way's supervisor at once, unlike the level setting (ADR-0029). */
+  | { type: 'lowerSupervisor'; sessionId: string; level: 'watch' | 'off' }
   | { type: 'updateTask'; sessionId: string; taskId: string; changes: Record<string, unknown>; message: string }
   | { type: 'removeTask'; sessionId: string; taskId: string }
   /** Reads a structured task's saved log (ADR-0018, P1) so its view opens with its history. */

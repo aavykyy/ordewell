@@ -117,6 +117,9 @@ type ClaimedTurn = ConversationTurn & { said?: string };
 type SettleableTurn = Exclude<ClaimedTurn, { kind: 'task_query' }>;
 type CommitTurn = Exclude<SettleableTurn, { kind: 'task_ops' }>;
 
+/** What a planner turn may change: the whole plan, or tasks through edits. */
+export type PlanChange = 'plan' | 'edit';
+
 /**
  * A wake-up turn (ADR-0029): a supervisor's turn on wake-up digests alone, no
  * user message in it. What it may do is its level's, decided by the host.
@@ -124,8 +127,12 @@ type CommitTurn = Exclude<SettleableTurn, { kind: 'task_ops' }>;
 export interface WakeUpTurn {
   /** Reads the turn may make, in place of a user message's caps. */
   readBudget: number;
-  /** Why a plan or an edit is refused in this turn, worded for the model; absent when its level allows them. */
-  editsRefused?: string;
+  /**
+   * Why a whole plan, or a task edit, is refused in this turn, worded for the
+   * model; undefined when its level allows it. Asked when the change is made
+   * and again as it lands, so a level lowered during the turn applies at once.
+   */
+  refused(change: PlanChange): string | undefined;
   /** Told to the model after the digests and never saved, like the plan block: who it is in this turn, and what it may do. */
   brief?: string;
 }
@@ -1054,8 +1061,8 @@ export class PlannerConversation {
         return this.drainTaskQueries(await ai.continueConversation(corrective, stream.sink(), signal), userTurn);
       },
       interpret: async (t) => {
-        const refused = userTurn.wakeUp?.editsRefused;
-        if (refused && (t.kind === 'plan' || t.kind === 'task_ops')) {
+        const refused = t.kind === 'plan' || t.kind === 'task_ops' ? userTurn.wakeUp?.refused(t.kind === 'plan' ? 'plan' : 'edit') : undefined;
+        if (refused) {
           const errors = [refused];
           if (!ai.hasActiveConversation() || signal.aborted) return { done: (t.kind === 'plan' ? invalidPlan : invalidOps)(errors, t.researchLog) };
           return { retry: { errors, corrective: refused } };
@@ -1112,19 +1119,23 @@ export class PlannerConversation {
 
     const now = new Date().toISOString();
     const content = `Tasks updated:\n- ${result.summary.join('\n- ')}`;
+    // A supervisor's edit is drawn as the supervisor's, so the user can tell what changed on its own.
+    const supervisor = userTurn.wakeUp !== undefined;
+    const kind = supervisor ? { kind: 'supervisor' as const } : {};
+    const voice = supervisor ? { supervisor: true as const } : {};
     const plan = this.host.mutate(
       () => {
         this.recordResearch(turn.researchLog);
         this.host.adoptTasks(result.tasks, 'edit');
-        if (turn.said) this.append('assistant', turn.said, { timestamp: now });
-        this.append('assistant', content, { timestamp: now });
+        if (turn.said) this.append('assistant', turn.said, { timestamp: now, ...kind });
+        this.append('assistant', content, { timestamp: now, ...kind });
         this.recordSkillWarnings(skills.warnings, now);
         userTurn.onCommit?.();
         return true;
       },
       () => {
-        if (turn.said) this.host.broadcast({ type: 'planner_message', content: turn.said, timestamp: now, turnId });
-        this.host.broadcast({ type: 'planner_message', content, timestamp: now, turnId });
+        if (turn.said) this.host.broadcast({ type: 'planner_message', content: turn.said, timestamp: now, turnId, ...voice });
+        this.host.broadcast({ type: 'planner_message', content, timestamp: now, turnId, ...voice });
         this.host.broadcastPlan();
       },
     );

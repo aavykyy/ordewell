@@ -218,6 +218,7 @@ export interface PlannerToolHandler {
   retryTask?: Run<RetryTaskArgs>;
   messageTask?: Run<MessageTaskArgs>;
   answerApproval?: Run<AnswerApprovalArgs>;
+  mergeAll?: Run<RunPlanArgs>;
 }
 
 export interface McpTool<H> {
@@ -298,6 +299,8 @@ export const PLANNER_EXECUTION_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     messageTaskInput, (h) => h.messageTask?.bind(h), PLANNER_EXECUTES),
   tool('answer_approval', 'Answer a request a task\'s runner is waiting on: deny it with a note, or escalate it to the user. It never allows.',
     answerApprovalInput, (h) => h.answerApproval?.bind(h), PLANNER_EXECUTES),
+  tool('merge_all', 'Merge the run\'s landed work into the user\'s branch, as their Merge all does, opening the merge gates that wait on it. Only the supervisor at Act may, in a wake-up turn; otherwise the user presses Merge all.',
+    runPlanInput, (h) => h.mergeAll?.bind(h), PLANNER_EXECUTES),
 ];
 
 export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [

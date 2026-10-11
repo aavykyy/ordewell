@@ -211,3 +211,4 @@ it.
 - 2026-10-11 — Merge all offered for unmerged landings throughout a run (#85).
 - 2026-10-11 — merge at gates automatically, and the supervisor's `merge_all` ([ADR-0029](0029-the-supervisor.md)).
 - 2026-10-11 — implemented the automatic gate setting and core merge_all action.
+- 2026-10-11 — `merge_all` reaches the planner as a tool through the command seam, allowed only to a supervisor at Act ([ADR-0029](0029-the-supervisor.md)).

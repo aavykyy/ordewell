@@ -140,8 +140,10 @@ export type WebviewToHost =
   /** The plan dock's dragged height in px, saved on release so every later session opens at it. */
   | { type: 'setPlanDockHeight'; height: number }
   | { type: 'setAutoMerge'; enabled: boolean }
-  /** The plan's supervisor level (ADR-0029); Act is not offered until its rules land. */
-  | { type: 'setSupervisorLevel'; level: 'off' | 'watch' }
+  /** The plan's supervisor level (ADR-0029), which the next run starts with. */
+  | { type: 'setSupervisorLevel'; level: 'off' | 'watch' | 'act' }
+  /** Lower the run under way's supervisor at once, for the rest of the run. */
+  | { type: 'lowerSupervisor'; level: 'watch' | 'off' }
   /** Who plans (ADR-0009) — a vendor provider id or one of the harness planners. */
   | { type: 'setPlanner'; provider: string }
   /** The planner's own model and thinking effort, a pair so neither can outlive the other. */

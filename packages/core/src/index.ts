@@ -100,8 +100,10 @@ export { PlanEditError } from './services/PlanEditError';
 export type * from './daemonContract';
 export { SessionNotFoundError, NoPlanError, AlreadyExecutingError } from './services/SessionErrors';
 export type { SessionDeps, SessionRuntimeSettings, SessionPlanner, SaveSession, ConversationFork, ConversationRewind } from './services/createSession';
-export { ExecutionCommands, SUPERVISOR_WATCH } from './services/ExecutionCommands';
+export { ExecutionCommands, SUPERVISOR_LEVELS } from './services/ExecutionCommands';
 export type { ExecutionCommand, CommandOutcome, Consent, SupervisorPolicy, LoopGuard, ExecutionHost } from './services/ExecutionCommands';
+export { DEFAULT_SUPERVISOR_RETRY_LIMIT } from './services/LoopGuards';
+export type { GuardTrip, GuardTarget } from './services/LoopGuards';
 export { ConversationEditError, ConversationBusyError, PlannerTurnDiscardedError, PlannerTurnStoppedError } from './services/PlannerConversation';
 export type { RewindTarget, ConversationCompaction, PlannerSubmission } from './services/PlannerConversation';
 export {

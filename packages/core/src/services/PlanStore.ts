@@ -1,7 +1,7 @@
 import {
   Task, TaskSnapshot, TaskStatus, RunnerId, AwaitingReason, DEFAULT_RUNNERS, flattenTasks,
   addTaskToPlan, removeTaskFromPlan, updateTaskInPlan,
-  createTask, renumberTasks, opsFlag, inheritedOps, inheritedSkills,
+  createTask, renumberTasks, opsFlag, inheritedOps, inheritedSkills, waitsForReset,
 } from '../models/Task';
 import { startAttemptUsage, addAttemptUsage, endAttemptUsage, type UsageRecord } from '../models/Usage';
 
@@ -251,13 +251,16 @@ export class PlanStore {
    * default completed tasks keep their status so a reloaded half-finished plan
    * resumes the remainder instead of re-running work that already succeeded;
    * `preserveCompleted: false` is for a freshly committed plan, where
-   * everything starts over.
+   * everything starts over. `keepScheduledResumes` leaves a task waiting on
+   * its runner's usage-limit reset waiting: an edit adopted between runs is
+   * not the user starting over.
    */
-  resetForRun(opts: { preserveCompleted?: boolean } = {}): void {
+  resetForRun(opts: { preserveCompleted?: boolean; keepScheduledResumes?: boolean } = {}): void {
     const preserveCompleted = opts.preserveCompleted ?? true;
     for (const t of this._allTasks) {
       if (t.type !== 'ai') continue;
       if (preserveCompleted && t.status === 'completed') continue;
+      if (opts.keepScheduledResumes && waitsForReset(t)) continue;
       t.status = 'approved';
       delete t.awaitingReason;
       delete t.resumeAt;

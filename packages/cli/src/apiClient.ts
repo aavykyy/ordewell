@@ -373,6 +373,11 @@ export class ApiClient {
     return this.call('PATCH', `/api/plans/${sessionId}/settings`, 'Change supervisor level failed', { supervisorLevel: level });
   }
 
+  /** Lower the run under way's supervisor at once, for the rest of the run (ADR-0029). */
+  lowerSupervisor(sessionId: string, level: 'watch' | 'off'): Promise<OkResponse> {
+    return this.call('POST', `/api/plans/${sessionId}/supervisor/lower`, 'Lower the supervisor failed', { level });
+  }
+
   updateTask(sessionId: string, taskId: string, changes: Record<string, unknown>): Promise<OkResponse> {
     return this.call('PUT', `/api/plans/${sessionId}/tasks/${taskId}`, 'Update task failed', changes);
   }

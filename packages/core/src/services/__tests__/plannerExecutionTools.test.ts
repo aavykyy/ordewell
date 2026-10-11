@@ -49,6 +49,7 @@ describe('the execution tools on the Ordewell MCP server', () => {
     await client.callTool({ name: 'retry_task', arguments: { task: 't4', from: 'session', message: 'finish the docs' } });
     await client.callTool({ name: 'message_task', arguments: { task: 't4', text: 'use the cache' } });
     const answered = await client.callTool({ name: 'answer_approval', arguments: { task: 't4', answer: 'deny', note: 'not that' } });
+    await client.callTool({ name: 'merge_all', arguments: {} });
 
     expect(execute.mock.calls.map(([command]) => command)).toEqual([
       { command: 'run_plan' },
@@ -58,6 +59,7 @@ describe('the execution tools on the Ordewell MCP server', () => {
       { command: 'retry_task', task: 't4', from: 'session', message: 'finish the docs' },
       { command: 'message_task', task: 't4', text: 'use the cache' },
       { command: 'answer_approval', task: 't4', answer: 'deny', note: 'not that' },
+      { command: 'merge_all' },
     ]);
     expect(answered.isError).toBe(false);
     expect(JSON.parse(text(answered))).toEqual({ ok: true, result: 'done' });
@@ -105,7 +107,7 @@ describe('the execution tools as the API planner declares them', () => {
   it('are offered to an OpenAI-compatible conversation only when asked for', () => {
     const names = (execution: boolean) => toOpenAiTools(execution).map((t) => t.function.name);
 
-    expect(names(true)).toEqual(expect.arrayContaining(['run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'message_task', 'answer_approval']));
+    expect(names(true)).toEqual(expect.arrayContaining(['run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'message_task', 'answer_approval', 'merge_all']));
     expect(names(false)).not.toContain('run_task');
   });
 

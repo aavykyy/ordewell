@@ -1,8 +1,8 @@
 /**
  * How far a plan's supervisor may act in its wake-up turns (ADR-0029): a plan
  * setting, saved on the run as it starts. Off: it never wakes. Watch: it
- * wakes, reads and suggests. Act: Watch, and acting within its guards — not
- * offered yet, and run as Watch until its rules land.
+ * wakes, reads and suggests. Act: Watch, and acting within its loop guards
+ * without asking.
  */
 export type SupervisorLevel = 'off' | 'watch' | 'act';
 
@@ -26,7 +26,8 @@ export type ExecutionCommandName =
   | 'stop_run'
   | 'retry_task'
   | 'message_task'
-  | 'answer_approval';
+  | 'answer_approval'
+  | 'merge_all';
 
 /**
  * One call at the command seam as the timeline keeps it: what was asked, by

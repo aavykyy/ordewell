@@ -1,0 +1,118 @@
+import { describe, expect, it } from 'vitest';
+import { createTask, type Task } from '../../models/Task';
+import {
+  attemptShape, identicalRetry, noEdits, oscillatingEdit, recordEdit, retryLimit, wakeUpRateTripped,
+  type EditMemory,
+} from '../LoopGuards';
+
+const t3 = { id: 't3', ref: '#3', title: 'Build' };
+
+const task = (id: string, over: Partial<Task> = {}): Task =>
+  createTask({ id, title: `Task ${id}`, prompt: `do ${id}`, assignedRunner: 'claude-code', assignedModel: { modelId: 'sonnet', modelLabel: 'Sonnet' }, ...over });
+
+describe('the retry limit', () => {
+  it('lets a retry through below the limit', () => {
+    expect(retryLimit(t3, 0, 2)).toBeNull();
+    expect(retryLimit(t3, 1, 2)).toBeNull();
+  });
+
+  it('refuses the retry past it, and escalates the task to the user', () => {
+    const trip = retryLimit(t3, 2, 2)!;
+
+    expect(trip.key).toBe('retry-limit:t3');
+    expect(trip.refusal).toBe('Refused by the retry limit: you have retried task #3 "Build" 2 times this run, the most the plan allows. It is escalated to the user now: tell them what you tried, and do not retry it again.');
+    expect(trip.escalation).toBe('Loop guard, retry limit: I retried task #3 "Build" 2 times this run, the most the plan allows, and stopped. It needs you: retry it, change it or skip it.');
+  });
+
+  it('counts a limit of one in the singular', () => {
+    expect(retryLimit(t3, 1, 1)!.refusal).toContain('retried task #3 "Build" once this run');
+  });
+});
+
+describe('no identical retry', () => {
+  it('refuses a retry after a failure with the same prompt and model', () => {
+    const failed = attemptShape(task('t3'));
+
+    const trip = identicalRetry(t3, failed, attemptShape(task('t3')))!;
+
+    expect(trip.key).toBe('identical-retry:t3');
+    expect(trip.refusal).toBe('Refused: task #3 "Build" failed with this same prompt and model, and an unchanged retry would fail the same way. Change something or escalate: edit its prompt with edit_plan, or move it to another model or runner, then retry; or tell the user.');
+    expect(trip.escalation).toMatch(/^Loop guard, identical retry: I tried to retry task #3 "Build" unchanged after it failed/);
+  });
+
+  it.each([
+    ['its prompt', { prompt: 'do t3, and run the migrations first' }],
+    ['its model', { assignedModel: { modelId: 'opus', modelLabel: 'Opus' } }],
+    ['its thinking effort', { assignedModel: { modelId: 'sonnet', modelLabel: 'Sonnet', thinkingEffort: 'high' } }],
+    ['its runner', { assignedRunner: 'codex' as const }],
+    ['its skills', { skills: ['tdd'] }],
+  ])('lets a retry through once %s changed', (_what, change) => {
+    expect(identicalRetry(t3, attemptShape(task('t3')), attemptShape(task('t3', change)))).toBeNull();
+  });
+
+  it('has nothing to compare before a failure', () => {
+    expect(identicalRetry(t3, undefined, attemptShape(task('t3')))).toBeNull();
+  });
+
+  it('reads the same model whichever order its fields come in', () => {
+    const before = attemptShape(task('t3', { assignedModel: { modelLabel: 'Sonnet', modelId: 'sonnet' } }));
+    expect(identicalRetry(t3, before, attemptShape(task('t3')))).not.toBeNull();
+  });
+});
+
+describe('no oscillating edits', () => {
+  const plan = [task('t1'), task('t2', { title: 'Write the docs', prompt: 'document the API' })];
+
+  it('refuses re-adding a task removed earlier this run, by its title or its prompt', () => {
+    const memory = recordEdit(noEdits(), plan, [plan[0]]);
+
+    const byTitle = oscillatingEdit(memory, [plan[0]], [plan[0], task('n1', { title: 'write the docs ', prompt: 'something new' })]);
+    const byPrompt = oscillatingEdit(memory, [plan[0]], [plan[0], task('n2', { title: 'Docs', prompt: 'document the API' })]);
+
+    expect(byTitle!.key).toBe('re-add:write the docs');
+    expect(byTitle!.refusal).toBe('Edit refused: it re-adds "write the docs", which you removed earlier this run. Re-adding what you removed is going round in circles; nothing was changed. Escalate to the user instead.');
+    expect(byTitle!.escalation).toBe('Loop guard, oscillating edits: I tried to re-add "write the docs", which I removed earlier this run, and stopped. It needs you to decide whether that task belongs in the plan.');
+    expect(byPrompt).not.toBeNull();
+  });
+
+  it('refuses changing a field back to what it was before its own earlier edit', () => {
+    const edited = plan.map((t) => (t.id === 't2' ? { ...t, assignedRunner: 'codex' as const } : t));
+    const memory = recordEdit(noEdits(), plan, edited);
+
+    const trip = oscillatingEdit(memory, edited, plan);
+
+    expect(trip!.key).toBe('revert:t2:assignedRunner');
+    expect(trip!.refusal).toBe('Edit refused: it changes the assignedRunner of "Write the docs" back to what it was before your own earlier edit. Undoing your own edits is going round in circles; nothing was changed. Escalate to the user instead.');
+    expect(trip!.escalation).toMatch(/^Loop guard, oscillating edits: I tried to undo my own earlier change to the assignedRunner of "Write the docs"/);
+  });
+
+  it('lets a field move on to a third value, and other tasks change freely', () => {
+    const edited = plan.map((t) => (t.id === 't2' ? { ...t, prompt: 'document the API, v2' } : t));
+    const memory = recordEdit(noEdits(), plan, edited);
+
+    const onward = edited.map((t) => (t.id === 't2' ? { ...t, prompt: 'document the API, v3' } : t));
+    const other = edited.map((t) => (t.id === 't1' ? { ...t, prompt: 'do t1 again' } : t));
+
+    expect(oscillatingEdit(memory, edited, onward)).toBeNull();
+    expect(oscillatingEdit(memory, edited, other)).toBeNull();
+  });
+
+  it('remembers nothing it did not do', () => {
+    const memory: EditMemory = noEdits();
+    expect(oscillatingEdit(memory, [plan[0]], plan)).toBeNull();
+  });
+});
+
+describe('the wake-up rate', () => {
+  const minute = 60_000;
+  const rate = { max: 3, windowMs: 10 * minute };
+
+  it('trips past the most wake-ups the window allows', () => {
+    expect(wakeUpRateTripped([0, minute, 2 * minute], 2 * minute, rate)).toBe(false);
+    expect(wakeUpRateTripped([0, minute, 2 * minute, 3 * minute], 3 * minute, rate)).toBe(true);
+  });
+
+  it('forgets wake-ups older than the window', () => {
+    expect(wakeUpRateTripped([0, minute, 12 * minute, 13 * minute], 13 * minute, rate)).toBe(false);
+  });
+});

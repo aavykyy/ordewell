@@ -153,6 +153,12 @@ export interface Task {
   skills?: string[];
   /** The skills the latest attempt was given, as read when it spawned. */
   attemptSkills?: TaskSkillSnapshot[];
+  /**
+   * Who put the task in the plan, when it was not the user's own planning:
+   * `supervisor` for a task an Act supervisor added during a run, which
+   * counts as approved to run (ADR-0029). Set by the session, never by an op.
+   */
+  addedBy?: 'supervisor';
   attemptUsage?: AttemptUsage[];
 }
 
@@ -440,6 +446,8 @@ export interface LegacyPlanState {
   supervisorLevel?: SupervisorLevel;
   /** Reads a wake-up turn may make, in place of a user message's caps; a default when absent. */
   wakeUpReadBudget?: number;
+  /** Retries an Act supervisor may make of one task in a run (a loop guard, ADR-0029); a default when absent. */
+  supervisorRetryLimit?: number;
   runSettings?: RunSettings;
   tasks: Task[];
   generatedAt: string;
@@ -681,6 +689,7 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     userStoriesCovered: overrides.userStoriesCovered,
     ...(opsFlag(overrides.ops, overrides.type) ? { ops: true } : {}),
     ...(skills ? { skills } : {}),
+    ...(overrides.addedBy === 'supervisor' ? { addedBy: 'supervisor' as const } : {}),
   };
 }
 
@@ -833,6 +842,33 @@ export function renumberTasks(tasks: readonly Task[]): Task[] {
     order: i + 1,
     subtasks: renumberTasks(t.subtasks),
   }));
+}
+
+/** A task paused on a usage limit that resumes on its own when the limit resets (#84). */
+export function waitsForReset(task: Readonly<Task>): boolean {
+  return task.status === 'awaiting_user' && task.awaitingReason === 'usage-limit' && !!task.resumeAt;
+}
+
+/**
+ * Who put each task of an adopted list in the plan. A task the plan already
+ * had keeps its origin, whatever the planner wrote; a new one is the
+ * supervisor's when `bySupervisor`, and nobody's in particular otherwise, so
+ * no planner can mark its own task as the supervisor's. `added` lists the new
+ * tasks, subtasks included.
+ */
+export function stampOrigin(before: readonly Task[], after: readonly Task[], bySupervisor: boolean): { tasks: Task[]; added: string[] } {
+  const prior = new Map(flattenTasks([...before]).map((t) => [t.id, t]));
+  const added: string[] = [];
+  const stamp = (tasks: readonly Task[]): Task[] => tasks.map((t) => {
+    const was = prior.get(t.id);
+    const origin = was ? was.addedBy : bySupervisor ? 'supervisor' : undefined;
+    if (!was) added.push(t.id);
+    const stamped: Task = { ...t, subtasks: stamp(t.subtasks ?? []) };
+    if (origin) stamped.addedBy = origin;
+    else delete stamped.addedBy;
+    return stamped;
+  });
+  return { tasks: stamp(after), added };
 }
 
 /** Done, running, or held for the user: execution state only a runner or the user can change. */

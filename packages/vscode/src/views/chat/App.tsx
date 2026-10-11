@@ -12,7 +12,7 @@ import QueuedPrompts from './components/QueuedPrompts';
 import HandoffCard from './components/HandoffCard';
 import CheckpointPanel from './components/CheckpointPanel';
 import type { TaskDraft } from './components/NewTaskCard';
-import type { Task, TaskModelAssignment, RunnerId } from '@ordewell/core';
+import type { Task, TaskModelAssignment, RunnerId, SupervisorLevel } from '@ordewell/core';
 import { planSummaryLabel, nextDock } from './planDock';
 import { DetailContext } from './detail';
 import { useFollowOutput } from './followOutput';
@@ -32,6 +32,12 @@ const vscode = acquireVsCodeApi();
 const STOP_ARM_MS = 2_000;
 
 type Updatable<T> = T | ((prev: T) => T);
+
+/** The dock's word on the supervisor, when there is one to speak of. */
+function supervisorSummary(level: SupervisorLevel | undefined): React.ReactNode {
+  if (level !== 'watch' && level !== 'act') return null;
+  return <span className="plan-dock-summary plan-supervisor">Supervisor: {level === 'act' ? 'Act' : 'Watch'}</span>;
+}
 
 export default function App() {
   const [host, dispatch] = useReducer(reduceHost, INITIAL_HOST_STATE);
@@ -561,8 +567,7 @@ export default function App() {
             && <span className="plan-dock-summary">Merge at gates automatically</span>}
           {isExecuting && plan.runSettings?.unsupervised
             ? <span className="plan-dock-summary plan-supervisor-stopped">Unsupervised</span>
-            : (isExecuting ? plan.runSettings?.supervisorLevel : plan.supervisorLevel) === 'watch'
-              && <span className="plan-dock-summary plan-supervisor">Supervisor: Watch</span>}
+            : supervisorSummary(isExecuting ? plan.runSettings?.supervisorLevel : plan.supervisorLevel)}
           <span className="plan-dock-summary">{planSummaryLabel(plan.tasks)}</span>
           {/* A collapse is always honoured, including mid-run — so the bar has to
               say when a task is blocked on the user, or the approval would sit
@@ -599,6 +604,7 @@ export default function App() {
             supervisorLevel={plan.supervisorLevel}
             runSupervisor={plan.runSettings && { level: plan.runSettings.supervisorLevel ?? 'off', ...(plan.runSettings.unsupervised ? { unsupervised: plan.runSettings.unsupervised } : {}) }}
             onSupervisorLevelChange={(level) => vscode.postMessage({ type: 'setSupervisorLevel', level })}
+            onLowerSupervisor={(level) => vscode.postMessage({ type: 'lowerSupervisor', level })}
             models={models}
             modelsByRunner={modelsByRunner}
             modesByRunner={modesByRunner}

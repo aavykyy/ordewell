@@ -39,14 +39,34 @@ describe('PlanCardGroup — Execute Plan / Stop', () => {
     expect(onChange).toHaveBeenLastCalledWith(false);
   });
 
-  it('offers the supervisor Off by default, and Watch, never Act', () => {
+  it('offers the supervisor Off by default, Watch and Act, and says what Act allows', () => {
     const onChange = vi.fn();
     render(<PlanCardGroup tasks={[makeTask()]} models={emptyModels} onExecutePlan={vi.fn()} onSupervisorLevelChange={onChange} />);
     const select = screen.getByRole('combobox', { name: /Supervisor/ }) as HTMLSelectElement;
     expect(select.value).toBe('off');
-    expect([...select.options].map((o) => o.value)).toEqual(['off', 'watch']);
-    fireEvent.change(select, { target: { value: 'watch' } });
-    expect(onChange).toHaveBeenLastCalledWith('watch');
+    expect([...select.options].map((o) => o.value)).toEqual(['off', 'watch', 'act']);
+    expect(select.closest('label')!.title).toMatch(/Act: .*ops tasks included.*real systems unattended/);
+    fireEvent.change(select, { target: { value: 'act' } });
+    expect(onChange).toHaveBeenLastCalledWith('act');
+  });
+
+  it('lowers a running supervisor at once: Act drops to Watch or turns off, Watch turns off', () => {
+    const onLower = vi.fn();
+    const { rerender } = render(<PlanCardGroup tasks={[makeTask()]} models={emptyModels} supervisorLevel="act"
+      runSupervisor={{ level: 'act' }} isExecuting onStopExecution={vi.fn()} onSupervisorLevelChange={vi.fn()} onLowerSupervisor={onLower} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Drop to Watch' }));
+    expect(onLower).toHaveBeenLastCalledWith('watch');
+    fireEvent.click(screen.getByRole('button', { name: 'Turn off' }));
+    expect(onLower).toHaveBeenLastCalledWith('off');
+
+    rerender(<PlanCardGroup tasks={[makeTask()]} models={emptyModels} supervisorLevel="act"
+      runSupervisor={{ level: 'watch' }} isExecuting onStopExecution={vi.fn()} onSupervisorLevelChange={vi.fn()} onLowerSupervisor={onLower} />);
+    expect(screen.queryByRole('button', { name: 'Drop to Watch' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Turn off' })).toBeTruthy();
+
+    rerender(<PlanCardGroup tasks={[makeTask()]} models={emptyModels} supervisorLevel="act"
+      runSupervisor={{ level: 'off' }} isExecuting onStopExecution={vi.fn()} onSupervisorLevelChange={vi.fn()} onLowerSupervisor={onLower} />);
+    expect(screen.queryByRole('button', { name: 'Turn off' })).toBeNull();
   });
 
   it('says when the run\'s supervisor differs from the setting, or stopped', () => {

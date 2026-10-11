@@ -146,7 +146,8 @@ const EXECUTION_TOOLS_SECTION = [
   '- retry_task starts a new attempt of a failed, stopped or waiting task: "fresh" from its prompt, or "session" to continue its saved session with a message. To change what it is told, edit its prompt with edit_plan first.',
   '- message_task sends a running task a message, or answers one waiting for input.',
   '- answer_approval denies a request a task\'s runner is waiting on, with a note saying what to do instead, or escalates it to the user. It never allows.',
-  'Only tasks the user approved start: a task you added since waits for the user. Merge all is always the user\'s.',
+  '- merge_all merges the run\'s landed work into the user\'s branch. Only the supervisor at Act may, in a wake-up turn; in the user\'s own turn they press Merge all themselves.',
+  'Only tasks the user approved start: a task you add in the user\'s turn waits for them. A task the supervisor adds at Act is approved to run.',
   '',
 ];
 
