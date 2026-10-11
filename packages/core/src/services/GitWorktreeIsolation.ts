@@ -1,3 +1,4 @@
+import { readTaskDiff, type TaskDiffRead, type TaskDiffResult } from './taskDiffRead';
 import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -184,6 +185,10 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     this.gitInvoker = { exec: deps.execFileImpl ?? defaultExecFile, resolvePath: this.resolvePath };
     this.platform = deps.platform ?? process.platform;
     this.mintRunId = deps.mintRunId ?? (() => randomBytes(4).toString('hex'));
+  }
+
+  taskDiff(run: IsolationRun, taskId: string, options: TaskDiffRead): Promise<TaskDiffResult> {
+    return readTaskDiff(this.gitInvoker, run, taskId, options);
   }
 
   async isActive(workspaceRoot: string): Promise<IsolationAvailability> {
@@ -384,7 +389,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
           fs.mkdirSync(path.dirname(worktree), { recursive: true });
           // -B: the name is inside this run's namespace, so a leftover from a crashed attempt is ours to reset.
           await this.git(repo.root, ['worktree', 'add', '-q', '-B', branch, worktree, tip]);
-          record.repos[repo.path] = { worktree, linked: [] };
+          record.repos[repo.path] = { worktree, linked: [], baseRef: tip };
         }
 
         // A group re-takes its loose paths for every task, so a file the user
@@ -874,6 +879,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       }
       try {
         await this.commitWorktree(repo, entry, firstLine(record.title));
+        entry.taskTip = (await this.git(repo.root, ['rev-parse', '--verify', `refs/heads/${record.branch}^{commit}`])).trim();
       } catch (err) {
         const detail = firstLine(err instanceof Error ? err.message : String(err));
         return this.stopLanding(record, 'failed', repo, undefined, `git could not commit its work (${detail})`);

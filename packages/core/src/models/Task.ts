@@ -155,6 +155,7 @@ export interface DiscoveredMode {
 export type ResearchToolType =
   | 'read_file' | 'read_files' | 'glob' | 'grep' | 'find_symbol' | 'list_dir'
   | 'bash' | 'fetch' | 'web_search' | 'spawn_research_agent'
+  | 'task_query' | 'task_output' | 'task_diff'
   /**
    * A tool belonging to a harness planner's own toolbox (ADR-0009) that has no
    * Ordewell equivalent — Edit, WebFetch, TodoWrite, whatever a coding agent

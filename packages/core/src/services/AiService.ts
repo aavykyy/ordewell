@@ -16,7 +16,7 @@ import type { SkillInfo } from './SkillsService';
 /**
  * The planner tools a session offers its conversation (ADR-0022). A backend
  * that can inject the Ordewell MCP server into its planner issues a planner
- * token bound to `sessionId` and these handlers; any other ignores the offer.
+ * token bound to `sessionId` and these handlers; API planners use the same task read handlers directly in their tool loop.
  */
 export interface PlannerToolsOffer {
   sessionId: string;
