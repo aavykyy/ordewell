@@ -47,6 +47,15 @@ export const OPENCODE_PLANNER_PERMISSION: Record<string, OpenCodeSessionRule['ef
 /** The variable OpenCode reads inline configuration from, over its config files. */
 export const OPENCODE_CONFIG_VARIABLE = 'OPENCODE_CONFIG_CONTENT';
 
+/**
+ * What a planner's server runs under so the repository's config never loads
+ * (ADR-0028): neither `opencode.json[c]` nor any `.opencode` directory — the
+ * plugins, tools, commands and agents in it — nor the instruction files,
+ * which Ordewell gives the planner as text. Checked against 1.18.35 (by
+ * source) and 2.0.26.
+ */
+export const OPENCODE_PLANNER_ENV = { OPENCODE_DISABLE_PROJECT_CONFIG: '1' } as const;
+
 /** A 2.x session's permission rule. */
 export interface OpenCodeSessionRule {
   action: string;
@@ -65,7 +74,7 @@ export const OPENCODE_SEARCH_PROVIDER = { provider: 'opencode', providerLabel: '
 
 export interface OpenCodeOrdewellBinding extends OrdewellToolBinding<string> {
   /** The 1.x server's `OPENCODE_CONFIG_CONTENT` with the server added — see {@link mergeOrdewellConfig}. */
-  configContent(existing: string | undefined, mcp: McpClientConfig | null, role: 'planner' | 'task'): string | null;
+  configContent(existing: string | undefined, mcp: McpClientConfig | null, role: 'planner' | 'task', projectServers?: Record<string, unknown>): string | null;
   /** The rules a 2.x session is created with so the server's tools never wait on a person (ADR-0022, S3). */
   sessionRules(): OpenCodeSessionRule[];
   /**
@@ -137,7 +146,7 @@ export function withoutParentOrdewell(content: string): string {
  * `existing` is not a JSON object — it cannot be merged, and replacing it would
  * silently drop whatever it carried, so the caller runs without the server.
  */
-function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig | null, role: 'planner' | 'task'): string | null {
+function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig | null, role: 'planner' | 'task', projectServers: Record<string, unknown> = {}): string | null {
   let base: Record<string, unknown> = {};
   if (existing?.trim()) {
     let parsed: unknown;
@@ -149,8 +158,15 @@ function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig 
   if (role === 'planner') { delete base.permission; delete base.permissions; }
   // A bare `"permission": "allow"` is the whole policy; the rule needs an object to join.
   const policy = typeof base.permission === 'string' ? { '*': base.permission } : base.permission;
+  const servers = {
+    ...(role === 'planner' ? projectServers : {}),
+    ...(mcp ? { [mcp.name]: { type: 'remote', url: mcp.url, headers: mcp.headers, enabled: true } } : {}),
+  };
   const ours = {
-    ...(mcp ? { mcp: { [mcp.name]: { type: 'remote', url: mcp.url, headers: mcp.headers, enabled: true } } } : {}),
+    ...(Object.keys(servers).length > 0 ? { mcp: servers } : {}),
+    // A language server opened on a file the planner reads can run the
+    // repository's toolchain; 1.x's `read` opens every file it reads (ADR-0028).
+    ...(role === 'planner' ? { lsp: false } : {}),
     permission: { ...(role === 'planner' ? OPENCODE_PLANNER_PERMISSION : {}), ...(mcp ? { [RULE]: 'allow' } : {}) },
   };
   return JSON.stringify(deepMerge({ ...base, ...(policy === undefined ? {} : { permission: policy }) }, ours));

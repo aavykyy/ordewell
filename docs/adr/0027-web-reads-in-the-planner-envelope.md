@@ -79,8 +79,8 @@ reads without asking; nothing else in Full changes.
   planner is launched with `--settings` ask rules for `WebFetch`, `WebSearch`
   and `mcp__*`; an ask rule beats an allow rule from any source,
   `--allowedTools` included, so every web read reaches the policy. Project
-  settings still load (ADR-0026, History): dropping them would also drop
-  local- and project-scope MCP servers and the project's CLAUDE.md.
+  settings no longer load at all
+  ([ADR-0028](0028-planners-never-run-repository-config.md)).
 - **Codex.** `web_search` runs at OpenAI and raises no permission request, so
   the policy cannot decide it call by call. It is decided once per planner
   spawn, before the planner's token is issued, so the thread's search and
@@ -445,3 +445,6 @@ filed as its own issue.
   secret-checked, origin exclusions overriding remembered grants and rechecked
   after approval, unsafe cmd probe words refused, raw curl hostnames bounded
   before pinning, and environment references identified by variable name.
+- 2026-10-11 — the Claude planner reads user settings only, so a
+  repository's allow rules cannot skip the policy either
+  ([ADR-0028](0028-planners-never-run-repository-config.md)).

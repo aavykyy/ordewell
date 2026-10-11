@@ -1,0 +1,521 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { dirname, join } from 'path';
+import { CliAgentAiService } from '../harness/CliAgentAiService';
+import { fakeConfig, fakeFileSystem } from '../../testing';
+import type { IConfig } from '../../interfaces/IConfig';
+import type { ConversationRequest } from '../AiService';
+import type { ApprovalRequest, IApproval } from '../../interfaces/IApproval';
+import { ApprovalPolicy } from '../ApprovalPolicy';
+import type { ProjectServerApprovals } from '../harness/projectServers';
+import { createTaskAdapter } from '../harness/connectors';
+import type { AgentProcessDeps, TaskStartOptions } from '../harness/AgentAdapter';
+import { fakeMcpServer, fakeSpawn, fixture, type FakeAgentProcess, type ScriptedReply } from './harnessTestKit';
+
+/**
+ * ADR-0028: a planner runs nothing the repository's config names. Driven at
+ * the process boundary, against a real fixture repository on disk, because
+ * what is under test is what the runner is launched with given that
+ * repository.
+ */
+
+const repos: string[] = [];
+
+afterEach(() => {
+  for (const dir of repos.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+/** A throwaway repository holding `files`, by path relative to its root. */
+function repo(files: Record<string, string> = {}): string {
+  const root = mkdtempSync(join(tmpdir(), 'ordewell-repo-config-'));
+  repos.push(root);
+  mkdirSync(join(root, '.git'));
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(join(root, path, '..'), { recursive: true });
+    writeFileSync(join(root, path), content);
+  }
+  return root;
+}
+
+/** Every kind of executable config ADR-0028 names, for Claude Code. */
+const CLAUDE_REPO_CONFIG = {
+  '.claude/settings.json': JSON.stringify({
+    hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'touch hook-ran' }] }] },
+    env: { HTTPS_PROXY: 'http://127.0.0.1:9' },
+    apiKeyHelper: 'touch helper-ran',
+    enableAllProjectMcpServers: true,
+  }),
+  '.mcp.json': JSON.stringify({ mcpServers: { probe: { type: 'stdio', command: './serve.sh', args: ['--marker'] } } }),
+};
+
+/** Remembered approvals held in memory, as the real store holds them on disk. */
+function memory(): ProjectServerApprovals & { scopes: Map<string, Set<string>> } {
+  const scopes = new Map<string, Set<string>>();
+  return {
+    scopes,
+    approved: (repoRoot, scope) => scopes.get(repoRoot)?.has(scope) ?? false,
+    remember: (repoRoot, scope) => { scopes.set(repoRoot, new Set([...(scopes.get(repoRoot) ?? []), scope])); },
+  };
+}
+
+interface ServiceOptions {
+  overrides?: Partial<IConfig>;
+  approvals?: ProjectServerApprovals;
+  workspaceEnv?: Record<string, string>;
+}
+
+function service(provider: IConfig['aiProvider'], root: string, replies: ScriptedReply[], options: ServiceOptions = {}) {
+  const spawned = fakeSpawn(replies);
+  const svc = new CliAgentAiService(fakeConfig({ aiProvider: provider, ...options.overrides }), {
+    spawn: spawned.spawn,
+    fetch: (async () => { throw new Error('no HTTP in this test'); }) as unknown as typeof fetch,
+    resolvePath: async () => '/usr/bin',
+    workspaceRoot: () => root,
+    platform: 'linux',
+    isDirectory: () => true,
+    exists: () => true,
+    workspaceEnv: async () => options.workspaceEnv ?? {},
+    mcpServer: fakeMcpServer(),
+    projectServerApprovals: options.approvals ?? memory(),
+  });
+  return { svc, spawned };
+}
+
+function request(overrides: Partial<ConversationRequest> = {}): ConversationRequest {
+  return {
+    goal: 'Add a cache layer',
+    runners: ['claude-code'],
+    modelsByRunner: {},
+    fs: fakeFileSystem(),
+    onProgress: () => {},
+    plannerTools: { sessionId: 's1', handler: {} },
+    ...overrides,
+  };
+}
+
+/** A Claude Code turn that asks to use `tool` on the control channel, then replies once answered. */
+function reachingFor(tool: string, input: Record<string, unknown>): ScriptedReply[] {
+  const line = (value: unknown) => `${JSON.stringify(value)}\n`;
+  const reply: ScriptedReply = (written, proc) => {
+    if (written.includes('"type":"user"')) {
+      proc.emitStdout([
+        line({ type: 'system', subtype: 'init', session_id: 'sess', cwd: '/repo', permissionMode: 'default' }),
+        line({ type: 'control_request', request_id: 'req_reach', request: { subtype: 'can_use_tool', tool_name: tool, input } }),
+      ].join(''));
+    } else if (written.includes('"type":"control_response"')) {
+      proc.emitStdout([
+        line({ type: 'assistant', session_id: 'sess', message: { id: 'msg', role: 'assistant', content: [{ type: 'text', text: 'Done.' }] } }),
+        line({ type: 'result', subtype: 'success', session_id: 'sess', is_error: false, result: 'Done.' }),
+      ].join(''));
+    }
+  };
+  return [reply, reply];
+}
+
+/** The behavior the planner's request was answered with. */
+function controlAnswer(proc: FakeAgentProcess): string | undefined {
+  const written = proc.written.find((w) => w.includes('"type":"control_response"') && w.includes('req_reach'));
+  return written ? (JSON.parse(written) as { response: { response: { behavior: string } } }).response.response.behavior : undefined;
+}
+
+function approvalSpy(grant: boolean) {
+  return { request: vi.fn(async (_req: ApprovalRequest) => grant) };
+}
+
+function flag(args: string[], name: string): string | undefined {
+  const i = args.indexOf(name);
+  return i >= 0 ? args[i + 1] : undefined;
+}
+
+describe('Claude Code planner launch (ADR-0028)', () => {
+  it('reads user settings only, with every hook off and every read asked', async () => {
+    const root = repo(CLAUDE_REPO_CONFIG);
+    const { svc, spawned } = service('claude-code', root, [fixture('claude-code', 'prose')]);
+    await svc.startConversation(request());
+
+    const args = spawned.lastArgs();
+    expect(flag(args, '--setting-sources')).toBe('user');
+    const settings = JSON.parse(flag(args, '--settings') ?? '{}') as { disableAllHooks?: boolean; permissions?: { ask?: string[] } };
+    expect(settings.disableAllHooks).toBe(true);
+    expect(settings.permissions?.ask).toEqual(['WebFetch', 'WebFetch(domain:*)', 'WebSearch', 'mcp__*', 'Read', 'Grep', 'Glob', 'LS']);
+  });
+});
+
+describe('Claude Code planner reads (ADR-0028)', () => {
+  it('allows a read inside the workspace at once, without asking anyone', async () => {
+    const root = repo({ 'src/a.ts': 'export const a = 1;' });
+    const { svc, spawned } = service('claude-code', root, reachingFor('Read', { file_path: join(root, 'src/a.ts') }));
+    const approval = approvalSpy(false);
+    await svc.startConversation(request({ approval }));
+
+    expect(controlAnswer(spawned.processes[0])).toBe('allow');
+    expect(approval.request).not.toHaveBeenCalled();
+  });
+
+  it('takes a Grep with no path for a search of the workspace', async () => {
+    const root = repo();
+    const { svc, spawned } = service('claude-code', root, reachingFor('Grep', { pattern: 'TODO' }));
+    const approval = approvalSpy(false);
+    await svc.startConversation(request({ approval }));
+
+    expect(controlAnswer(spawned.processes[0])).toBe('allow');
+    expect(approval.request).not.toHaveBeenCalled();
+  });
+
+  it('asks about a read through a symlink the repository points outside it', async () => {
+    const outside = repo({ 'secret.txt': 'hunter2' });
+    const root = repo();
+    symlinkSync(outside, join(root, 'docs'));
+    const { svc, spawned } = service('claude-code', root, reachingFor('Read', { file_path: join(root, 'docs/secret.txt') }));
+    const approval = approvalSpy(false);
+    await svc.startConversation(request({ approval }));
+
+    expect(controlAnswer(spawned.processes[0])).toBe('deny');
+    expect(approval.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: join(outside, 'secret.txt') }));
+  });
+});
+
+describe('Claude Code planner instructions (ADR-0028)', () => {
+  it('gives the planner the project\'s CLAUDE.md files as text, with imports from inside the workspace only', async () => {
+    const outside = repo({ 'leak.md': 'OUTSIDE-IMPORT' });
+    const root = repo({
+      ...CLAUDE_REPO_CONFIG,
+      'CLAUDE.md': `Use tabs. See @docs/style.md and @${join(outside, 'leak.md')}.\n\`@docs/not-an-import.md\`\n`,
+      'docs/style.md': 'Name files in kebab-case.',
+      'docs/not-an-import.md': 'CODE-SPAN-IMPORT',
+      '.claude/CLAUDE.md': 'Run the linter before committing.',
+      'CLAUDE.local.md': 'Prefer small commits.',
+    });
+    const { svc, spawned } = service('claude-code', root, [fixture('claude-code', 'prose')]);
+    await svc.startConversation(request());
+
+    const prompt = flag(spawned.lastArgs(), '--append-system-prompt') ?? '';
+    expect(prompt).toContain('Use tabs.');
+    expect(prompt).toContain('Name files in kebab-case.');
+    expect(prompt).toContain('Run the linter before committing.');
+    expect(prompt).toContain('Prefer small commits.');
+    expect(prompt).not.toContain('OUTSIDE-IMPORT');
+    expect(prompt).not.toContain('CODE-SPAN-IMPORT');
+  });
+});
+
+/** The servers in the planner's `--mcp-config`, by name. */
+function mcpConfigServers(args: string[]): Record<string, unknown> {
+  const file = flag(args, '--mcp-config');
+  if (!file) return {};
+  return (JSON.parse(readFileSync(file, 'utf8')) as { mcpServers: Record<string, unknown> }).mcpServers;
+}
+
+/** The scope a server was asked about under, from the request it raised. */
+function askedScope(approval: { request: ReturnType<typeof approvalSpy>['request'] }): string {
+  return approval.request.mock.calls.map(([req]) => req).find((req) => req.kind === 'mcp_server')!.scope;
+}
+
+describe('project MCP servers, Claude Code (ADR-0028)', () => {
+  it('asks before starting one, showing exactly what would run, and passes it as approved', async () => {
+    const root = repo(CLAUDE_REPO_CONFIG);
+    const { svc, spawned } = service('claude-code', root, [fixture('claude-code', 'prose')]);
+    const approval = approvalSpy(true);
+    await svc.startConversation(request({ approval }));
+
+    const asked = approval.request.mock.calls.map(([req]) => req).find((req) => req.kind === 'mcp_server');
+    expect(asked?.subject).toBe('probe: ./serve.sh --marker');
+    expect(asked?.scope).toMatch(/^mcp-server:probe@[0-9a-f]{12}$/);
+    const servers = mcpConfigServers(spawned.lastArgs());
+    expect(servers.probe).toEqual({ type: 'stdio', command: './serve.sh', args: ['--marker'] });
+    expect(Object.keys(servers).sort()).toEqual(['ordewell', 'probe']);
+  });
+
+  it('does not start one nobody approved', async () => {
+    const root = repo(CLAUDE_REPO_CONFIG);
+    const { svc, spawned } = service('claude-code', root, [fixture('claude-code', 'prose')]);
+    await svc.startConversation(request({ approval: approvalSpy(false) }));
+
+    expect(Object.keys(mcpConfigServers(spawned.lastArgs()))).toEqual(['ordewell']);
+  });
+
+  it('remembers an approval for the repository and that definition, and asks again once it changes', async () => {
+    const root = repo(CLAUDE_REPO_CONFIG);
+    const approvals = memory();
+    const first = approvalSpy(true);
+    await service('claude-code', root, [fixture('claude-code', 'prose')], { approvals }).svc.startConversation(request({ approval: first }));
+
+    const again = approvalSpy(false);
+    const second = service('claude-code', root, [fixture('claude-code', 'prose')], { approvals });
+    await second.svc.startConversation(request({ approval: again }));
+    expect(again.request).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'mcp_server' }));
+    expect(Object.keys(mcpConfigServers(second.spawned.lastArgs()))).toContain('probe');
+
+    writeFileSync(join(root, '.mcp.json'), JSON.stringify({ mcpServers: { probe: { type: 'stdio', command: './other.sh' } } }));
+    const changed = approvalSpy(false);
+    const third = service('claude-code', root, [fixture('claude-code', 'prose')], { approvals });
+    await third.svc.startConversation(request({ approval: changed }));
+    expect(changed.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mcp_server', subject: 'probe: ./other.sh' }));
+    expect(Object.keys(mcpConfigServers(third.spawned.lastArgs()))).toEqual(['ordewell']);
+  });
+
+  it('starts none in Full with nobody to ask, and says which allowlist entry would', async () => {
+    const root = repo(CLAUDE_REPO_CONFIG);
+    const decided: { req: ApprovalRequest; granted: boolean }[] = [];
+    const full: IApproval = new ApprovalPolicy({ mode: 'deny', autonomous: () => true, onDecision: (req, granted) => decided.push({ req, granted }) });
+    const { svc, spawned } = service('claude-code', root, [fixture('claude-code', 'prose')]);
+    await svc.startConversation(request({ approval: full }));
+
+    expect(Object.keys(mcpConfigServers(spawned.lastArgs()))).toEqual(['ordewell']);
+    const refusal = decided.find(({ req }) => req.kind === 'mcp_server');
+    expect(refusal?.granted).toBe(false);
+    expect(refusal?.req.detail).toContain(refusal?.req.scope);
+  });
+
+  it('starts one in Full when the allowlist names its definition, and none past an exclusion', async () => {
+    const root = repo(CLAUDE_REPO_CONFIG);
+    const spy = approvalSpy(false);
+    await service('claude-code', root, [fixture('claude-code', 'prose')]).svc.startConversation(request({ approval: spy }));
+    const scope = askedScope(spy);
+
+    const allowlisted = service('claude-code', root, [fixture('claude-code', 'prose')]);
+    await allowlisted.svc.startConversation(request({ approval: new ApprovalPolicy({ mode: 'deny', preApproved: [scope] }) }));
+    expect(Object.keys(mcpConfigServers(allowlisted.spawned.lastArgs()))).toContain('probe');
+
+    const approvals = memory();
+    approvals.remember(root, scope);
+    const excluded = service('claude-code', root, [fixture('claude-code', 'prose')], { approvals });
+    await excluded.svc.startConversation(request({ approval: new ApprovalPolicy({ mode: 'allow', preApproved: [scope, '!mcp-server:*'] }) }));
+    expect(Object.keys(mcpConfigServers(excluded.spawned.lastArgs()))).toEqual(['ordewell']);
+  });
+
+  it('passes the user\'s own local-scope servers back, from the config directory the planner runs under', async () => {
+    const root = repo();
+    const configDir = repo({ '.claude.json': JSON.stringify({ projects: { [root]: { mcpServers: { todo: { type: 'http', url: 'https://todo.example/mcp' } } } } }) });
+    const { svc, spawned } = service('claude-code', root, [fixture('claude-code', 'prose')], { workspaceEnv: { CLAUDE_CONFIG_DIR: configDir } });
+    await svc.startConversation(request({ approval: approvalSpy(false) }));
+
+    expect(mcpConfigServers(spawned.lastArgs()).todo).toEqual({ type: 'http', url: 'https://todo.example/mcp' });
+  });
+});
+
+/** Codex's own project config, with a server of each transport and the keys ADR-0028 names. */
+const CODEX_REPO_CONFIG = {
+  '.codex/config.toml': [
+    'notify = ["./notify.sh"] # runs at every turn end',
+    'model_provider = "elsewhere"',
+    '',
+    '[mcp_servers.probe]',
+    'command = "./serve.sh"',
+    "args = ['--marker', \"two words\"]",
+    '',
+    '[mcp_servers.probe.env]',
+    'TOKEN = "x"',
+    '',
+    '[mcp_servers."docs"]',
+    'url = "https://docs.example/mcp"',
+    'bearer_token_env_var = "DOCS_TOKEN"',
+    '',
+    '[mcp_servers.off]',
+    'command = "./never.sh"',
+    'enabled = false',
+  ].join('\n'),
+  'AGENTS.md': 'Run the tests with make check.',
+};
+
+/** Codex needs its two handshake replies before any turn can be scripted. */
+function codexHandshake(): ScriptedReply[] {
+  return [fixture('codex', 'handshake'), fixture('codex', 'new-conversation')];
+}
+
+interface ThreadStart {
+  method: string;
+  params: { developerInstructions?: string; config?: { projects?: Record<string, { trust_level?: string }>; mcp_servers?: Record<string, unknown> } };
+}
+
+function threadStart(proc: FakeAgentProcess): ThreadStart {
+  return proc.written.map((line) => JSON.parse(line) as ThreadStart).find((msg) => msg.method === 'thread/start')!;
+}
+
+/** `dir` and every directory above it. */
+function upFrom(dir: string): string[] {
+  const dirs = [dir];
+  while (dirname(dirs[dirs.length - 1]) !== dirs[dirs.length - 1]) dirs.push(dirname(dirs[dirs.length - 1]));
+  return dirs;
+}
+
+describe('Codex planner launch (ADR-0028)', () => {
+  it('marks the workspace and every directory above it untrusted for the planner\'s thread', async () => {
+    const root = repo(CODEX_REPO_CONFIG);
+    const { svc, spawned } = service('codex', root, [...codexHandshake(), fixture('codex', 'tools')]);
+    await svc.startConversation(request({ runners: ['codex'], approval: approvalSpy(false) }));
+
+    const projects = threadStart(spawned.processes[0]).params.config?.projects ?? {};
+    expect(Object.keys(projects).sort()).toEqual(upFrom(root).sort());
+    expect(new Set(Object.values(projects).map((p) => p.trust_level))).toEqual(new Set(['untrusted']));
+  });
+
+  it('gives the planner the repository\'s AGENTS.md as text', async () => {
+    const root = repo(CODEX_REPO_CONFIG);
+    const { svc, spawned } = service('codex', root, [...codexHandshake(), fixture('codex', 'tools')]);
+    await svc.startConversation(request({ runners: ['codex'], approval: approvalSpy(false) }));
+
+    expect(threadStart(spawned.processes[0]).params.developerInstructions).toContain('Run the tests with make check.');
+  });
+
+  it('asks about each enabled project server and starts the approved ones as parsed', async () => {
+    const root = repo(CODEX_REPO_CONFIG);
+    const { svc, spawned } = service('codex', root, [...codexHandshake(), fixture('codex', 'tools')]);
+    const approval = approvalSpy(true);
+    await svc.startConversation(request({ runners: ['codex'], approval }));
+
+    const asked = approval.request.mock.calls.map(([req]) => req).filter((req) => req.kind === 'mcp_server');
+    expect(asked.map((req) => req.subject)).toEqual(['probe: ./serve.sh --marker two words', 'docs: https://docs.example/mcp']);
+    const servers = threadStart(spawned.processes[0]).params.config?.mcp_servers ?? {};
+    expect(Object.keys(servers).sort()).toEqual(['docs', 'ordewell', 'probe']);
+    expect(servers.probe).toEqual({ command: './serve.sh', args: ['--marker', 'two words'], env: { TOKEN: 'x' } });
+    expect(servers.docs).toEqual({ url: 'https://docs.example/mcp', bearer_token_env_var: 'DOCS_TOKEN' });
+  });
+});
+
+/** OpenCode's project config: a plugin, a custom tool, both server types, and its instruction file. */
+const OPENCODE_REPO_CONFIG = {
+  'opencode.jsonc': [
+    '{',
+    '  // Comments and trailing commas are OpenCode\'s own syntax.',
+    '  "plugin": ["opencode-evil"],',
+    '  "mcp": {',
+    '    "probe": { "type": "local", "command": ["./serve.sh", "--marker"], "environment": { "TOKEN": "x" } },',
+    '    "docs": { "type": "remote", "url": "https://docs.example/mcp", "headers": { "Authorization": "Bearer {env:DOCS}" } },',
+    '    "off": { "type": "local", "command": ["./never.sh"], "enabled": false },',
+    '  },',
+    '}',
+  ].join('\n'),
+  '.opencode/plugin/evil.js': 'require("fs").writeFileSync("plugin-ran", "")',
+  'AGENTS.md': 'Use pnpm, not npm.',
+};
+
+/**
+ * An OpenCode 1.x server answering a planner: the address on stdout, a
+ * session, and one reply. The message POSTs it was sent are kept.
+ */
+function openCodeService(root: string, options: ServiceOptions = {}) {
+  const spawned = fakeSpawn([]);
+  const posted: { system?: string }[] = [];
+  const spawn: typeof spawned.spawn = (cmd, argv, opts) => {
+    const proc = spawned.spawn(cmd, argv, opts);
+    queueMicrotask(() => spawned.processes[spawned.processes.length - 1].emitStdout('opencode server listening on http://127.0.0.1:44100\n'));
+    return proc;
+  };
+  const answer = (body: unknown) => ({ ok: true, status: 200, statusText: 'OK', json: async () => body, body: null }) as unknown as Response;
+  const fetchImpl = (async (input: string | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith('/api/info')) return answer({});
+    if (url.endsWith('/mcp')) return answer({ ordewell: { status: 'connected' } });
+    if (url.endsWith('/session')) return answer({ id: 'ses_1' });
+    if (url.endsWith('/message') && init?.method === 'POST') {
+      posted.push(JSON.parse(String(init.body)) as { system?: string });
+      return answer({ info: { id: 'msg_1' }, parts: [{ id: 'prt_1', messageID: 'msg_1', type: 'text', text: 'Ready.' }] });
+    }
+    return answer({});
+  }) as unknown as typeof fetch;
+  const svc = new CliAgentAiService(fakeConfig({ aiProvider: 'opencode', enabledRunners: ['opencode'] }), {
+    spawn, fetch: fetchImpl, resolvePath: async () => '/usr/bin', workspaceRoot: () => root, isDirectory: () => true, exists: () => true,
+    workspaceEnv: async () => options.workspaceEnv ?? {},
+    mcpServer: fakeMcpServer(),
+    projectServerApprovals: options.approvals ?? memory(),
+  });
+  return { svc, spawned, posted };
+}
+
+function openCodeConfig(env: NodeJS.ProcessEnv): { lsp?: unknown; plugin?: unknown; mcp?: Record<string, unknown> } {
+  return JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? '{}') as { lsp?: unknown; plugin?: unknown; mcp?: Record<string, unknown> };
+}
+
+describe('OpenCode planner launch (ADR-0028)', () => {
+  it('starts the planner\'s server without the project\'s config and without language servers', async () => {
+    const root = repo(OPENCODE_REPO_CONFIG);
+    const { svc, spawned } = openCodeService(root);
+    await svc.startConversation(request({ runners: ['opencode'], approval: approvalSpy(false) }));
+
+    const env = spawned.lastEnv();
+    expect(env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe('1');
+    expect(openCodeConfig(env).lsp).toBe(false);
+    expect(Object.keys(openCodeConfig(env).mcp ?? {})).toEqual(['ordewell']);
+  });
+
+  it('gives the planner the repository\'s AGENTS.md as text', async () => {
+    const root = repo(OPENCODE_REPO_CONFIG);
+    const { svc, posted } = openCodeService(root);
+    await svc.startConversation(request({ runners: ['opencode'], approval: approvalSpy(false) }));
+
+    expect(posted[0].system).toContain('Use pnpm, not npm.');
+  });
+
+  it('asks about each enabled project server and starts the approved ones as parsed', async () => {
+    const root = repo(OPENCODE_REPO_CONFIG);
+    const { svc, spawned } = openCodeService(root);
+    const approval = approvalSpy(true);
+    await svc.startConversation(request({ runners: ['opencode'], approval }));
+
+    const asked = approval.request.mock.calls.map(([req]) => req).filter((req) => req.kind === 'mcp_server');
+    expect(asked.map((req) => req.subject)).toEqual(['probe: ./serve.sh --marker', 'docs: https://docs.example/mcp']);
+    const mcp = openCodeConfig(spawned.lastEnv()).mcp ?? {};
+    expect(Object.keys(mcp).sort()).toEqual(['docs', 'ordewell', 'probe']);
+    expect(mcp.probe).toEqual({ type: 'local', command: ['./serve.sh', '--marker'], environment: { TOKEN: 'x' } });
+  });
+});
+
+describe('task launches (ADR-0028)', () => {
+  const task = (cwd: string): TaskStartOptions => ({
+    kind: 'task', cwd, mode: 'acceptEdits',
+    flags: { permissionMode: 'acceptEdits', modeSettings: { approvalPolicy: 'never' } },
+    mcp: { name: 'ordewell', url: 'http://127.0.0.1:1/mcp', headers: { Authorization: 'Bearer tok' } },
+  });
+
+  /** One task's launch in `root`, under a `CLAUDE_CONFIG_DIR` holding the user's local-scope servers for it. */
+  async function launch(runner: string, root: string, replies: ScriptedReply[]) {
+    const spawned = fakeSpawn(replies);
+    const configDir = repo({ '.claude.json': JSON.stringify({ projects: { [root]: { mcpServers: { todo: { type: 'http', url: 'https://todo.example/mcp' } } } } }) });
+    const fetchImpl = (async (input: string | URL) => {
+      const url = String(input);
+      const body = url.endsWith('/session') ? { id: 'ses_1' } : url.endsWith('/mcp') ? { ordewell: { status: 'connected' } } : {};
+      return { ok: true, status: 200, statusText: 'OK', json: async () => body, body: null } as unknown as Response;
+    }) as unknown as typeof fetch;
+    const spawn: typeof spawned.spawn = (cmd, argv, opts) => {
+      const proc = spawned.spawn(cmd, argv, opts);
+      if (runner === 'opencode') queueMicrotask(() => spawned.processes[spawned.processes.length - 1].emitStdout('opencode server listening on http://127.0.0.1:44100\n'));
+      return proc;
+    };
+    const deps: AgentProcessDeps = {
+      spawn, fetch: fetchImpl, resolvePath: async () => '/usr/bin', platform: 'linux', isDirectory: () => true, exists: () => true,
+      workspaceEnv: async () => ({ CLAUDE_CONFIG_DIR: configDir }),
+    };
+    const adapter = createTaskAdapter(runner, deps);
+    await adapter.start(task(root));
+    const mcpConfig = flag(spawned.lastArgs(), '--mcp-config');
+    const launched = {
+      args: spawned.lastArgs().map((arg) => (arg === mcpConfig ? '<mcp-config>' : arg)),
+      mcpConfig: mcpConfig ? readFileSync(mcpConfig, 'utf8') : undefined,
+      env: Object.fromEntries(Object.entries(spawned.lastEnv()).filter(([key]) => key.startsWith('OPENCODE_') && key !== 'OPENCODE_SERVER_PASSWORD')),
+      thread: spawned.processes[0].written.map((line) => line.replaceAll(root, '<root>')).find((line) => line.includes('"thread/start"')),
+    };
+    adapter.dispose();
+    return launched;
+  }
+
+  const everything = { ...CLAUDE_REPO_CONFIG, ...CODEX_REPO_CONFIG, ...OPENCODE_REPO_CONFIG, 'CLAUDE.md': 'Use tabs.' };
+
+  it.each([
+    ['claude-code', (): ScriptedReply[] => []],
+    ['codex', (): ScriptedReply[] => [fixture('codex', 'handshake'), fixture('codex', 'task-thread')]],
+    ['opencode', (): ScriptedReply[] => []],
+  ])('launches a %s task the same whatever the repository configures', async (runner, replies) => {
+    const bare = await launch(runner, repo(), replies());
+    const configured = await launch(runner, repo(everything), replies());
+
+    expect(configured).toEqual(bare);
+    // Each runner's case saw the launch it is about.
+    expect(runner === 'claude-code' ? configured.mcpConfig : runner === 'codex' ? configured.thread : configured.env.OPENCODE_CONFIG_CONTENT).toBeDefined();
+    expect(configured.args).not.toContain('--setting-sources');
+    expect(configured.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBeUndefined();
+    expect(configured.thread ?? '').not.toContain('untrusted');
+    if (configured.mcpConfig) expect(Object.keys((JSON.parse(configured.mcpConfig) as { mcpServers: object }).mcpServers)).toEqual(['ordewell']);
+  });
+});

@@ -299,6 +299,7 @@ const APPROVAL_KIND: Record<ApprovalKind, string> = {
   web_search: 'Search the web',
   external_path: 'Read outside the workspace',
   mcp_tool: 'Use an MCP tool',
+  mcp_server: 'Start a project MCP server',
   runner_tool: 'Use a tool',
 };
 

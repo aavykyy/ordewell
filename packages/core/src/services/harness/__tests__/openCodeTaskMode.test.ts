@@ -732,8 +732,9 @@ describe('OpenCodeAdapter planner — still read-only', () => {
       tools: { question: false, edit: false, write: false, apply_patch: false, todowrite: false, bash: false, task: false },
       system: 'PLAN',
     });
-    // Its server's whole permission policy is Ordewell's (ADR-0026).
-    expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? 'null')).toEqual({ permission: OPENCODE_PLANNER_PERMISSION });
+    // Its server's whole permission policy is Ordewell's (ADR-0026), with no language server and none of the project's config (ADR-0028).
+    expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? 'null')).toEqual({ lsp: false, permission: OPENCODE_PLANNER_PERMISSION });
+    expect(env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe('1');
     expect(server.requests.find((r) => r.path === '/permission/per_1/reply')?.body).toEqual({ reply: 'reject' });
     expect(server.requests.some((r) => r.path.endsWith('/prompt_async'))).toBe(false);
     // 2.x refuses every /api request without credentials, so a planner's server is secured like a task's.
@@ -816,7 +817,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
   it('hands the planner the same, beside the read-only agent', async () => {
     const { adapter, env } = await startTask(fakeServer(), { kind: 'planner', cwd: '/repo', systemPrompt: 'plan read-only', mcp });
 
-    expect(configOf(env)).toEqual({ mcp: { ordewell }, permission: { ...OPENCODE_PLANNER_PERMISSION, 'ordewell_*': 'allow' } });
+    expect(configOf(env)).toEqual({ mcp: { ordewell }, lsp: false, permission: { ...OPENCODE_PLANNER_PERMISSION, 'ordewell_*': 'allow' } });
     adapter.dispose();
   });
 

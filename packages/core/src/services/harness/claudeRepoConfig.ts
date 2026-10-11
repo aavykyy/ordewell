@@ -1,0 +1,94 @@
+import * as os from 'os';
+import * as path from 'path';
+import {
+  NO_SERVERS, insideOnDisk, isRecord, readText,
+  type InstructionFile, type ProjectMcpServer, type ProjectServers, type RepoConfigReader,
+} from './repoConfig';
+
+/** The memory files Claude Code loads from a project's root, in its order. */
+const MEMORY_FILES = ['CLAUDE.md', path.join('.claude', 'CLAUDE.md'), 'CLAUDE.local.md'];
+
+/** How many `@` imports deep Claude Code follows. */
+const MAX_IMPORT_DEPTH = 5;
+
+/**
+ * `@path` imports in a memory file. Claude Code ignores them inside code
+ * spans and fenced blocks, so those are blanked first.
+ */
+function importsOf(text: string): string[] {
+  const prose = text.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
+  return [...prose.matchAll(/(?:^|\s)@([^\s`]+)/g)].map((m) => m[1].replace(/[.,;:)]+$/, ''));
+}
+
+function withImports(workspace: string, file: string, depth: number, seen: Set<string>, into: InstructionFile[]): void {
+  if (seen.has(file)) return;
+  seen.add(file);
+  const text = readText(file);
+  if (text === undefined) return;
+  into.push({ path: path.relative(workspace, file), text });
+  if (depth >= MAX_IMPORT_DEPTH) return;
+  for (const target of importsOf(text)) {
+    // `~/` names the user's own files, which this planner reads as the user's anyway; only the repository's are given here.
+    if (target.startsWith('~')) continue;
+    const abs = path.resolve(path.dirname(file), target);
+    if (insideOnDisk(workspace, abs)) withImports(workspace, abs, depth + 1, seen, into);
+  }
+}
+
+function server(name: string, entry: unknown, source: string): ProjectMcpServer | string {
+  if (!isRecord(entry)) return 'not an object';
+  const remote = entry.type === 'http' || entry.type === 'sse' || (entry.type === undefined && typeof entry.url === 'string');
+  if (remote) {
+    if (typeof entry.url !== 'string') return 'no url';
+    return { name, source, transport: 'remote', target: entry.url, names: isRecord(entry.headers) ? Object.keys(entry.headers) : [], definition: entry };
+  }
+  if (typeof entry.command !== 'string') return 'no command';
+  const args = Array.isArray(entry.args) ? entry.args.map(String) : [];
+  return { name, source, transport: 'stdio', target: [entry.command, ...args].join(' '), names: isRecord(entry.env) ? Object.keys(entry.env) : [], definition: entry };
+}
+
+export const CLAUDE_REPO_CONFIG: RepoConfigReader = {
+  instructions(workspace) {
+    const files: InstructionFile[] = [];
+    const seen = new Set<string>();
+    for (const name of MEMORY_FILES) withImports(workspace, path.join(workspace, name), 0, seen, files);
+    return files;
+  },
+
+  projectServers(workspace) {
+    const source = '.mcp.json';
+    const text = readText(path.join(workspace, source));
+    if (text === undefined) return NO_SERVERS;
+    let parsed: unknown;
+    try { parsed = JSON.parse(text); } catch (err) {
+      return { servers: [], unreadable: [{ source, reason: err instanceof Error ? err.message : String(err) }] };
+    }
+    const entries = isRecord(parsed) && isRecord(parsed.mcpServers) ? parsed.mcpServers : {};
+    const found: ProjectServers = { servers: [], unreadable: [] };
+    for (const [name, entry] of Object.entries(entries)) {
+      const read = server(name, entry, source);
+      if (typeof read === 'string') found.unreadable.push({ source: `${source} (${name})`, reason: read });
+      else found.servers.push(read);
+    }
+    return found;
+  },
+};
+
+/**
+ * The user's local-scope servers for `workspace`: their own entries in
+ * Claude Code's `.claude.json`, which user-only settings stop the CLI from
+ * loading for a planner, though the repository has no say in them
+ * (ADR-0028). `configDir` is the `CLAUDE_CONFIG_DIR` the planner runs under.
+ */
+export function claudeLocalServers(configDir: string | undefined, workspace: string): Record<string, unknown> {
+  const file = configDir ? path.join(configDir, '.claude.json') : path.join(os.homedir(), '.claude.json');
+  const text = readText(file);
+  if (text === undefined) return {};
+  try {
+    const parsed: unknown = JSON.parse(text);
+    const project = isRecord(parsed) && isRecord(parsed.projects) ? parsed.projects[path.resolve(workspace)] : undefined;
+    return isRecord(project) && isRecord(project.mcpServers) ? project.mcpServers : {};
+  } catch {
+    return {};
+  }
+}

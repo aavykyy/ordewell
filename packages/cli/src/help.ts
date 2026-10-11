@@ -137,7 +137,8 @@ Environment:
                              "web_search:<provider>" covers one search provider (anthropic, openai,
                              opencode or duckduckgo); a leading ! excludes, and !web_search:* turns
                              every search off. To turn web reads off: !web_search:*, !https://*,
-                             !http://*, or ORDEWELL_WEB_READ_BUDGET=0
+                             !http://*, or ORDEWELL_WEB_READ_BUDGET=0. "mcp-server:<name>@<hash>"
+                             starts one exact MCP server a repository declares; !mcp-server:* starts none
   ORDEWELL_APPROVAL_DEFAULTS false: drop the built-in read-only allowlist
   ORDEWELL_WEB_READ_BUDGET   Fetches and web searches the planner may make per turn
                              (default: 40; 0 turns web reads off)

@@ -82,6 +82,12 @@ describe('approval overlay rendering', () => {
     expect(out).toMatch(/search the web/i);
   });
 
+  it('labels a project server request as starting one', () => {
+    const out = screenWith({ id: 'ap-6', kind: 'mcp_server', subject: 'probe: ./serve.sh', scope: 'mcp-server:probe@0123456789ab' });
+    expect(out).toContain('probe: ./serve.sh');
+    expect(out).toMatch(/start a project MCP server/i);
+  });
+
   it('surfaces detail, since an auto-tier command touching an outside path otherwise reads identically to a plain read', () => {
     const out = screenWith({
       id: 'ap-4',

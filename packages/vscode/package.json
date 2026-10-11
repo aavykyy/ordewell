@@ -290,7 +290,7 @@
           "type": "array",
           "items": { "type": "string" },
           "default": [],
-          "description": "Extra planner allowlist entries. A command rule such as \"gh issue list\" or \"gcloud * * list\" covers commands whose leading words match it; \"mcp:find-*\" covers MCP tools by name; \"https://docs.example.com/*\" or \"/opt/data/*\" covers fetches and outside reads; \"web_search:<provider>\" covers searches sent to one provider: anthropic (Claude Code), openai (Codex), opencode (OpenCode) or duckduckgo (Ordewell's own search). A leading \"!\" excludes, and an exclusion wins in every mode: \"!web_search:*\" turns every search off. To turn all web reads off, add \"!web_search:*\", \"!https://*\" and \"!http://*\", or set the web-read budget to 0."
+          "description": "Extra planner allowlist entries. A command rule such as \"gh issue list\" or \"gcloud * * list\" covers commands whose leading words match it; \"mcp:find-*\" covers MCP tools by name; \"https://docs.example.com/*\" or \"/opt/data/*\" covers fetches and outside reads; \"web_search:<provider>\" covers searches sent to one provider: anthropic (Claude Code), openai (Codex), opencode (OpenCode) or duckduckgo (Ordewell's own search). A leading \"!\" excludes, and an exclusion wins in every mode: \"!web_search:*\" turns every search off. To turn all web reads off, add \"!web_search:*\", \"!https://*\" and \"!http://*\", or set the web-read budget to 0. \"mcp-server:<name>@<hash>\" starts one exact MCP server a repository declares for the planner (the approval shows the entry); \"!mcp-server:*\" starts none."
         },
         "ordewell.plannerWebReadBudget": {
           "scope": "application",

@@ -68,8 +68,11 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
     this.runner = new RunnerProcess(deps);
   }
 
-  /** The command line that starts this agent in its read-only mode. */
-  protected abstract spawnSpec(opts: AgentStartOptions): SpawnSpec;
+  /**
+   * The command line that starts this agent in its read-only mode, given the
+   * workspace's own variables (ADR-0016) the process will run under.
+   */
+  protected abstract spawnSpec(opts: AgentStartOptions, workspace: Record<string, string>): SpawnSpec;
 
   /** The bytes written to stdin to open one user turn. Must end with a newline. */
   protected abstract turnPayload(message: string): string;
@@ -86,8 +89,8 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
   async start(opts: AgentStartOptions): Promise<void> {
     this.role = opts.kind;
     try {
-      await this.runner.start(opts.cwd, () => {
-        const spec = this.spawnSpec(opts);
+      await this.runner.start(opts.cwd, (workspace) => {
+        const spec = this.spawnSpec(opts, workspace);
         return { command: spec.command, args: spec.args, env: () => spec.env ?? {} };
       }, (child) => {
         this.process = child;

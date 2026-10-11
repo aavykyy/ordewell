@@ -1559,25 +1559,33 @@ describe('CliAgentAiService — one-shot plan generation', () => {
   it('streams an envelope in the reply to the plan display, and nothing of the narration', async () => {
     const plan = planJson();
     const mcp = fakeMcpServer();
+    const scripted = scriptedAdapter([[
+      { type: 'assistant_text', text: 'Here is the plan.' },
+      { type: 'tool_call', id: 'c1', name: 'Read', args: { file_path: 'README.md' } },
+      { type: 'tool_result', id: 'c1', name: 'Read', output: '# App', success: true },
+      { type: 'assistant_text_delta', text: plan.slice(0, 40) },
+      { type: 'assistant_text_delta', text: plan.slice(40) },
+      { type: 'assistant_text', text: plan },
+      { type: 'turn_end' },
+    ]]);
     const svc = new CliAgentAiService(fakeConfig({ aiProvider: 'claude-code' }), {
-      createAdapter: scriptedAdapter([[
-        { type: 'assistant_text', text: 'Here is the plan.' },
-        { type: 'tool_call', id: 'c1', name: 'Read', args: { file_path: 'README.md' } },
-        { type: 'tool_result', id: 'c1', name: 'Read', output: '# App', success: true },
-        { type: 'assistant_text_delta', text: plan.slice(0, 40) },
-        { type: 'assistant_text_delta', text: plan.slice(40) },
-        { type: 'assistant_text', text: plan },
-        { type: 'turn_end' },
-      ]]),
+      // The turn submits through the token its session was issued, as an agent's tool call would.
+      createAdapter: (runner, deps) => {
+        const adapter = scripted(runner, deps)!;
+        return {
+          ...adapter,
+          send: async (message, onEvent, signal) => {
+            await mcp.plannerHandlers.at(-1)!.submitPlan!({ tasks: planTasks() as SubmitPlanArgs['tasks'] }, { signal: new AbortController().signal });
+            return adapter.send(message, onEvent, signal);
+          },
+        };
+      },
       workspaceRoot: () => '/repo',
       mcpServer: mcp,
     });
     const tokens: string[] = [];
-    const generating = svc.generatePlanDirect('Add the thing', ['claude-code'], {}, (token) => tokens.push(token));
-    await vi.waitFor(() => expect(mcp.plannerHandlers).toHaveLength(1));
-    await mcp.plannerHandlers[0].submitPlan!({ tasks: planTasks() as SubmitPlanArgs['tasks'] }, { signal: new AbortController().signal });
 
-    expect(await generating).toHaveLength(1);
+    expect(await svc.generatePlanDirect('Add the thing', ['claude-code'], {}, (token) => tokens.push(token))).toHaveLength(1);
     expect(tokens.join('')).toBe(plan);
   });
 

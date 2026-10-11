@@ -56,6 +56,12 @@ describe('describeApproval', () => {
     expect(text).toMatch(/search the web/i);
   });
 
+  it('describes a project MCP server it would start, by exactly what would run', () => {
+    const text = describeApproval({ ...PATH_EVENT, kind: 'mcp_server', subject: 'probe: ./serve.sh --marker', scope: 'mcp-server:probe@0123456789ab' });
+    expect(text).toContain('probe: ./serve.sh --marker');
+    expect(text).toMatch(/start an MCP server the repository declares/i);
+  });
+
   it('surfaces detail, since an auto-tier command touching an outside path otherwise reads identically to a plain read', () => {
     expect(describeApproval(SHELL_EVENT)).toContain('Planner research wants to run: npm test');
   });

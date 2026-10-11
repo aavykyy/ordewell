@@ -2,7 +2,7 @@ import type { ChildProcess } from 'child_process';
 import { randomBytes } from 'crypto';
 import { RunnerProcess } from './runnerProcess';
 import { OpenCodeV2 } from './OpenCodeV2';
-import { OPENCODE_CONFIG_VARIABLE, OPENCODE_ORDEWELL } from './openCodeOrdewell';
+import { OPENCODE_CONFIG_VARIABLE, OPENCODE_ORDEWELL, OPENCODE_PLANNER_ENV } from './openCodeOrdewell';
 import { awaitAttach } from './ordewellBinding';
 import type { McpClientConfig } from '../mcp';
 import { hunksOf, markedLines } from './fileDiff';
@@ -314,14 +314,16 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
         // A planner always gets its permission policy (ADR-0026), with the server or without it, and
         // over content that cannot be merged too: a planner without its policy may not start.
         const existing = workspaceEnv[OPENCODE_CONFIG_VARIABLE] ?? process.env[OPENCODE_CONFIG_VARIABLE];
+        const projectServers = opts.kind === 'planner' ? Object.fromEntries((opts.projectServers ?? []).map((server) => [server.name, server.definition])) : {};
         const ordewellConfig = opts.kind === 'planner'
-          ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp ?? null, 'planner') ?? OPENCODE_ORDEWELL.configContent(undefined, opts.mcp ?? null, 'planner')
+          ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp ?? null, 'planner', projectServers) ?? OPENCODE_ORDEWELL.configContent(undefined, opts.mcp ?? null, 'planner', projectServers)
           : opts.mcp ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp, 'task') : null;
         if (opts.mcp && ordewellConfig === null) {
           console.error('[opencode] OPENCODE_CONFIG_CONTENT is not a JSON object, so the Ordewell tools were not injected.');
         }
         this.ordewell = ordewellConfig === null ? null : opts.mcp ?? null;
         return {
+          ...(opts.kind === 'planner' ? OPENCODE_PLANNER_ENV : {}),
           ...(ordewellConfig === null ? {} : { [OPENCODE_CONFIG_VARIABLE]: ordewellConfig }),
           OPENCODE_SERVER_USERNAME: SERVER_USERNAME,
           OPENCODE_SERVER_PASSWORD: password,

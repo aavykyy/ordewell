@@ -58,7 +58,7 @@ export class RunnerProcess {
    * is called in the same tick as the spawn, so a listener it attaches hears
    * the process's first output.
    */
-  async start(cwd: string, command: () => RunnerCommand, handshake: (child: ChildProcess) => Promise<void>): Promise<void> {
+  async start(cwd: string, command: (workspace: Record<string, string>) => RunnerCommand, handshake: (child: ChildProcess) => Promise<void>): Promise<void> {
     try {
       await this.launch(cwd, command, handshake);
     } catch (err) {
@@ -67,12 +67,13 @@ export class RunnerProcess {
     }
   }
 
-  private async launch(cwd: string, describe: () => RunnerCommand, handshake: (child: ChildProcess) => Promise<void>): Promise<void> {
+  private async launch(cwd: string, describe: (workspace: Record<string, string>) => RunnerCommand, handshake: (child: ChildProcess) => Promise<void>): Promise<void> {
     // Checked before anything else: a workspace deleted out from under a
     // stale `process.cwd()` otherwise surfaces as `spawn`'s ENOENT, which
     // reads as a missing runner binary rather than a missing directory.
     assertWorkspaceExists(cwd, { isDirectory: this.deps.isDirectory });
-    const command = describe();
+    const workspace = await (this.deps.workspaceEnv ?? workspaceEnvOf)(cwd);
+    const command = describe(workspace);
     const resolvePath = this.deps.resolvePath ?? augmentedPath;
     // Same PATH treatment as model discovery: the
     // binary must resolve wherever the user installed it, even under the
@@ -88,7 +89,6 @@ export class RunnerProcess {
     if (!isExecutableResolved(command.command, launch, PATH, { platform: this.deps.platform, exists: this.deps.exists })) {
       throw new ExecutableNotFoundError(command.command, PATH);
     }
-    const workspace = await (this.deps.workspaceEnv ?? workspaceEnvOf)(cwd);
     this.spawnEnv = runnerEnv(PATH, workspace, command.env?.(workspace));
 
     const child = spawnInOwnGroup((detached) => this.deps.spawn(launch.file, launch.args, {

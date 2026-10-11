@@ -40,7 +40,9 @@ export function describeApproval(event: ApprovalEvent): string {
         ? `The planner wants to search the web:\n    ${subject}`
         : event.kind === 'mcp_tool'
           ? `The planner wants to use an MCP tool:\n    ${subject}`
-          : `The planner wants to read a path outside the workspace:\n    ${subject}`;
+          : event.kind === 'mcp_server'
+            ? `The planner wants to start an MCP server the repository declares:\n    ${subject}`
+            : `The planner wants to read a path outside the workspace:\n    ${subject}`;
 
   // `detail` disambiguates the `external_path` case in particular: an
   // auto-tier command like `cat` touching an outside path reads identically

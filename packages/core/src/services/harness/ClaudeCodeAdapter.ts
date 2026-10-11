@@ -3,13 +3,14 @@ import type { SubagentOutcome } from '../../models/Task';
 import { partedPromptUsage, type UsageRecord } from '../../models/Usage';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import { claudeThinkingArgs } from '../../plugins/resolveArgs';
-import type { AgentEvent, AgentStartOptions, PlannerAsk, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
+import type { AgentEvent, AgentStartOptions, PlannerAsk, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
 import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
 import { markedLines, structuredPatchText } from './fileDiff';
 import { ORDEWELL_MCP_SERVER_NAME, type McpClientConfig, type OwnerOnlyFile } from '../mcp';
 import { CLAUDE_ORDEWELL } from './claudeOrdewell';
 import { settleWithin } from './settleWithin';
 import { awaitAttach, type OrdewellToolRole } from './ordewellBinding';
+import { claudeLocalServers } from './claudeRepoConfig';
 
 /**
  * Native plan mode permits Bash writes to its plan file, and saved allow rules
@@ -31,15 +32,18 @@ const PLANNER_PERMISSION_MODE = 'default';
 
 /**
  * Claude Code sends `can_use_tool` only when its own rules say ask, so an
- * allow rule — the user's, or one a repository commits to
- * `.claude/settings.json` — would run a web read or an MCP tool past the
- * planner's policy, record and budget. An ask rule beats an allow rule from
- * any source, `--allowedTools` included (checked live on 2.1.296), so these
- * always reach the envelope; Ordewell's own tools are then allowed by the
- * adapter at once. Project settings stay loaded: without them the CLI also
- * drops local- and project-scope MCP servers and the project's CLAUDE.md.
+ * allow rule — the user's own, a saved `additionalDirectories` — would run a
+ * web read, an MCP tool or a read outside the workspace past the planner's
+ * policy, record and budget. An ask rule beats an allow rule from any source,
+ * `--allowedTools` included (checked live on 2.1.296), so these always reach
+ * the envelope; Ordewell's own tools and in-workspace reads are then allowed
+ * at once. A user's own hook runs on the planner's tool calls and can write,
+ * which no planner may (ADR-0028).
  */
-const PLANNER_SETTINGS = JSON.stringify({ permissions: { ask: ['WebFetch', 'WebSearch', 'mcp__*'] } });
+const PLANNER_SETTINGS = JSON.stringify({
+  disableAllHooks: true,
+  permissions: { ask: ['WebFetch', 'WebFetch(domain:*)', 'WebSearch', 'mcp__*', 'Read', 'Grep', 'Glob', 'LS'] },
+});
 
 /** Claude Code's read tools, by the input field that names their path. */
 const PATH_TOOLS: Record<string, { field: string; directory: boolean }> = {
@@ -58,7 +62,8 @@ function plannerAsk(name: string, input: Record<string, unknown>, server: string
   if (name === 'WebFetch' && typeof input.url === 'string') return { kind: 'fetch', url: input.url };
   if (name === 'WebSearch' && typeof input.query === 'string') return { kind: 'search', query: input.query, provider: 'anthropic' };
   const pathTool = PATH_TOOLS[name];
-  const target = pathTool ? input[pathTool.field] : undefined;
+  // A search with no path runs in the working directory, which is the workspace.
+  const target = pathTool ? input[pathTool.field] ?? (pathTool.directory ? '.' : undefined) : undefined;
   if (pathTool && typeof target === 'string') return { kind: 'path', path: target, directory: pathTool.directory };
   return { kind: 'other' };
 }
@@ -316,7 +321,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   /** The last turn's `result` ended it, so a steer's echo now opens a turn the CLI started for that message. */
   private turnClosed = false;
 
-  protected spawnSpec(opts: AgentStartOptions): SpawnSpec {
+  protected spawnSpec(opts: AgentStartOptions, workspace: Record<string, string>): SpawnSpec {
     if (opts.kind === 'task') return this.taskSpawnSpec(opts);
     const args = [
       ...PROTOCOL_ARGS,
@@ -324,10 +329,13 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       '--permission-prompt-tool', 'stdio',
       '--permission-mode', PLANNER_PERMISSION_MODE,
       '--disallowedTools', DISALLOWED_TOOLS.join(','),
+      // In `-p` a repository's settings apply trusted or not: their hooks,
+      // `env` and helper commands run before the first turn (ADR-0028).
+      '--setting-sources', 'user',
       '--settings', PLANNER_SETTINGS,
       '--append-system-prompt', opts.systemPrompt,
     ];
-    if (opts.mcp) args.push(...this.ordewellServerArgs(opts.mcp, 'planner'));
+    if (opts.mcp) args.push(...this.ordewellServerArgs(opts.mcp, 'planner', this.plannerServers(opts, workspace)));
     if (opts.model) args.push('--model', opts.model);
     // `adaptive` is a thinking *type*, not an effort rung: `--effort adaptive`
     // is warned about and ignored, and adaptive is the default for every model
@@ -368,10 +376,24 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     return { command: 'claude', args };
   }
 
+  /**
+   * What user-only settings stop the CLI loading that is not the
+   * repository's to choose (ADR-0028): the user's own local-scope servers,
+   * under the `CLAUDE_CONFIG_DIR` the planner runs with, and the project
+   * servers approved for it.
+   */
+  private plannerServers(opts: PlannerStartOptions, workspace: Record<string, string>): Record<string, unknown> {
+    const configDir = workspace.CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR;
+    return {
+      ...claudeLocalServers(configDir, opts.cwd),
+      ...Object.fromEntries((opts.projectServers ?? []).map((server) => [server.name, server.definition])),
+    };
+  }
+
   /** The file holding the token lives exactly as long as the process that reads it. */
-  private ordewellServerArgs(mcp: McpClientConfig, role: OrdewellToolRole): string[] {
+  private ordewellServerArgs(mcp: McpClientConfig, role: OrdewellToolRole, servers?: Record<string, unknown>): string[] {
     this.removeMcpConfig();
-    const { args, config } = CLAUDE_ORDEWELL.launch(mcp, role);
+    const { args, config } = CLAUDE_ORDEWELL.launch(mcp, role, servers);
     this.mcpConfig = config;
     void this.processEnded.then(() => config.remove());
     this.givenOrdewell = true;
