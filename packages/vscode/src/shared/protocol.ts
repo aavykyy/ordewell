@@ -1,5 +1,5 @@
 import type {
-  AiProvider, DisplayBlock, DiscoveredModel, IsolationHandoff, IsolationMergeResult, MergeGateView, PromptHold, RunnerId, SurfacePlan,
+  AiProvider, DisplayBlock, DiscoveredModel, IsolationHandoff, IsolationMergeResult, RunMergeView, PromptHold, RunnerId, SurfacePlan,
   TaskIsolation, TaskModelAssignment,
 } from '@ordewell/core';
 
@@ -45,7 +45,7 @@ export interface ModelOption {
 
 export type ChatState = 'empty' | 'researching' | 'planDraft' | 'approved' | 'error';
 
-export type SystemCommand = 'cancel' | 'skip' | 'retry' | 'forceStart' | 'runTask' | 'markComplete' | 'markIncomplete' | 'stopExecution' | 'executePlan';
+export type SystemCommand = 'cancel' | 'cancelResume' | 'skip' | 'retry' | 'forceStart' | 'runTask' | 'markComplete' | 'markIncomplete' | 'stopExecution' | 'executePlan';
 
 /**
  * One field edit from a task card. Named by kind rather than read off which
@@ -211,7 +211,7 @@ export type HostToWebview =
   | { type: 'isolationCleared' }
   // Merge gates (ADR-0020): which tasks wait for Merge all, on which
   // dependencies, and — while any does — what Merge all would merge now.
-  | { type: 'mergeGate'; gate: MergeGateView | null; tasks: Record<string, string[]> }
+  | { type: 'runMerge'; runMerge: RunMergeView | null; tasks: Record<string, string[]> }
   /**
    * A session was (re)loaded: the webview drops the previous session's plan,
    * task output, isolation and any stuck busy state. The conversation itself

@@ -1,6 +1,6 @@
+import { PLANNER_EXECUTION_TOOLS, PLANNER_TASK_READ_TOOLS, type McpTool, type PlannerToolHandler } from './mcp/tools';
 import type OpenAI from 'openai';
 import { SchemaType, type FunctionDeclaration, type Schema } from '@google/generative-ai';
-import { PLANNER_EXECUTION_TOOLS, type McpTool, type PlannerToolHandler } from './mcp/tools';
 
 /**
  * Canonical definition of the read-only research tools the planner uses to
@@ -220,9 +220,11 @@ function projectOpenAi(specs: ResearchToolSpec[]): OpenAI.Chat.Completions.ChatC
   }));
 }
 
-/** Project the canonical tools into OpenAI's chat-completions tool format; `execution` adds the execution tools. */
-export function toOpenAiTools(execution = false): OpenAI.Chat.Completions.ChatCompletionTool[] {
-  return projectOpenAi(conversationSpecs(execution));
+/** Project the canonical tools into OpenAI's chat-completions tool format; `plannerTools` adds the task reads and the execution tools. */
+export function toOpenAiTools(plannerTools = false): OpenAI.Chat.Completions.ChatCompletionTool[] {
+  return [...projectOpenAi(conversationSpecs(plannerTools)), ...(plannerTools ? PLANNER_TASK_READ_TOOLS.map((t): OpenAI.Chat.Completions.ChatCompletionTool => ({
+    type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema },
+  })) : [])];
 }
 
 /** The subagent's own tool list in OpenAI format. */
@@ -237,9 +239,9 @@ const SCHEMA_TYPE: Record<ParamType, SchemaType> = {
   boolean: SchemaType.BOOLEAN,
 };
 
-/** Project the canonical tools into Gemini's function-declaration format; `execution` adds the execution tools. */
-export function toGeminiToolDeclarations(execution = false): FunctionDeclaration[] {
-  return conversationSpecs(execution).map((t) => {
+/** Project the canonical tools into Gemini's function-declaration format; `plannerTools` adds the task reads and the execution tools. */
+export function toGeminiToolDeclarations(plannerTools = false): FunctionDeclaration[] {
+  const tools = conversationSpecs(plannerTools).map((t) => {
     const properties: Record<string, Schema> = {};
     for (const [key, param] of Object.entries(t.properties)) {
       properties[key] = {
@@ -254,4 +256,24 @@ export function toGeminiToolDeclarations(execution = false): FunctionDeclaration
       ? { name: t.name, description: t.description }
       : { name: t.name, description: t.description, parameters: { type: SchemaType.OBJECT, properties, required: t.required } };
   });
+  const reads = plannerTools ? PLANNER_TASK_READ_TOOLS.map((t): FunctionDeclaration => {
+    const schema = geminiSchema(t.inputSchema);
+    return { name: t.name, description: t.description,
+      parameters: { ...schema, type: SchemaType.OBJECT, properties: schema.properties ?? {} },
+    };
+  }) : [];
+  return [...tools, ...reads];
+}
+
+function geminiSchema(value: unknown): Schema {
+  const raw = value as { type?: string; description?: string; enum?: string[]; properties?: Record<string, unknown>; required?: string[]; items?: unknown; anyOf?: unknown[] };
+  if (raw.anyOf) return { ...geminiSchema(raw.anyOf[0]), ...(raw.description ? { description: raw.description } : {}) };
+  const description = raw.description ? { description: raw.description } : {};
+  if (raw.type === 'object') return { type: SchemaType.OBJECT, ...description,
+    properties: Object.fromEntries(Object.entries(raw.properties ?? {}).map(([k, v]) => [k, geminiSchema(v)])), required: raw.required ?? [],
+  };
+  if (raw.type === 'array') return { type: SchemaType.ARRAY, ...description, items: geminiSchema(raw.items) };
+  if (raw.type === 'integer' || raw.type === 'number') return { type: SchemaType.NUMBER, ...description };
+  if (raw.type === 'boolean') return { type: SchemaType.BOOLEAN, ...description };
+  return { type: SchemaType.STRING, ...description, ...(raw.enum ? { format: 'enum', enum: raw.enum } : {}) };
 }

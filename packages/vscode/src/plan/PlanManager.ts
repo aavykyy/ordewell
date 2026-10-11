@@ -430,6 +430,9 @@ export async function handleSystemCommand(
     case 'cancel':
       await deps.session.cancelTask(taskId);
       break;
+    case 'cancelResume':
+      deps.session.cancelScheduledResume(taskId);
+      break;
     case 'retry':
       await deps.session.retryTask(taskId);
       break;
@@ -503,7 +506,7 @@ export function handleSessionMessage(
         if (task.isolation) deps.chatProvider.sendTaskIsolation(task.id, task.isolation);
         if (task.mergeGate) gates[task.id] = task.mergeGate;
       }
-      deps.chatProvider.showMergeGate(msg.gate ?? null, gates);
+      deps.chatProvider.showRunMerge(msg.runMerge ?? null, gates);
       deps.chatProvider.showPlan(plan);
       break;
     }

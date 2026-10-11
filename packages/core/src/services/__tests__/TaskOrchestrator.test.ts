@@ -488,8 +488,9 @@ describe('TaskOrchestrator', () => {
       const paused = orchestrator.storeInstance.get('t1');
       expect(paused!.status).toBe('awaiting_user');
       expect(paused!.verdict!.outcome).toBe('fail');
-      // Neither input, a checkpoint nor a conflict: a retry answers it, not a message.
-      expect(paused!.awaitingReason).toBeUndefined();
+      // A retry answers it, not a message; no reset time was given, so none is scheduled.
+      expect(paused!.awaitingReason).toBe('usage-limit');
+      expect(paused!.resumeAt).toBeUndefined();
     });
 
     it('does not promise a kept worktree when the paused task ran in the workspace root', async () => {
@@ -1712,5 +1713,30 @@ describe('TaskOrchestrator — retrying an ops task (ADR-0020)', () => {
     await orchestrator.start();
 
     expect(spawn.mock.calls[1][0].prompt).not.toContain('## Previous attempt');
+  });
+});
+
+describe('persisted attempt accounting', () => {
+  it('captures live usage, ends wall time on cancel, and keeps numbering across reloads', async () => {
+    const runner = sessionRunner();
+    const orchestrator = makeOrchestrator({ runner });
+    orchestrator.loadPlan([createTask({ id: 't', prompt: 'Work' })]);
+    const changed = vi.fn();
+    orchestrator.subscribe({ onUsageChanged: changed });
+    await orchestrator.forceStartTask('t');
+    const session = runner.sessions[0];
+    session.emitEvent({ type: 'usage', record: { source: 'codex', model: 'a', inputTokens: 10 } });
+    expect(changed).toHaveBeenCalledOnce();
+    expect(orchestrator.storeInstance.get('t')?.attemptUsage?.[0].totals).toEqual({ inputTokens: 10 });
+    await orchestrator.cancelTask('t');
+    const saved = orchestrator.storeInstance.snapshot();
+    expect(saved[0].attemptUsage?.[0].endedAt).toBeDefined();
+    session.emitEvent({ type: 'usage', record: { source: 'codex', model: 'a', inputTokens: 100 } });
+    orchestrator.loadPlan(saved);
+    await orchestrator.forceStartTask('t');
+    expect(orchestrator.storeInstance.get('t')?.attemptUsage?.map((u) => u.attempt)).toEqual([1, 2]);
+    expect(orchestrator.storeInstance.get('t')?.attemptUsage?.[0].totals.inputTokens).toBe(10);
+    expect(orchestrator.storeInstance.get('t')?.attemptUsage?.[1].totals).toEqual({});
+    orchestrator.stop();
   });
 });

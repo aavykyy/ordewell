@@ -85,7 +85,7 @@ export async function followExecution(
     if (event.type === 'status_update' && event.tasks) {
       printStatus(event.tasks as TaskStatus[]);
       // Said once per pause: the run waits on a merge only the user makes (ADR-0020).
-      const paused = event.gate?.paused === true;
+      const paused = event.runMerge?.paused === true;
       if (paused && !pausedAtGate) process.stderr.write('· Paused for Merge all — `ordewell handoff merge` merges what has landed, and the waiting tasks start.\n');
       pausedAtGate = paused;
     }

@@ -1,7 +1,7 @@
 import { isAwaitingReason, type DisplayBlock, type SessionMessage, type SettingsResponse } from '@ordewell/core';
 import { sanitize } from '../ansi';
 import {
-  isTaskRunning, plannerInFlight, type GateView, type TaskView, type TuiState,
+  isTaskRunning, plannerInFlight, type RunMergeView, type TaskView, type TuiState,
 } from '../state';
 import { hear } from '../transcript';
 import { dropApproval, enqueueApproval } from './approvals';
@@ -70,8 +70,10 @@ function toTaskView(t: Record<string, unknown>, index: number): TaskView {
     description: planText(t.description ?? t.title),
     prompt: typeof t.prompt === 'string' ? sanitize(t.prompt) : undefined,
     type: t.type === 'user' ? 'user' : 'ai',
+    attemptUsage: Array.isArray(t.attemptUsage) ? t.attemptUsage as TaskView['attemptUsage'] : undefined,
     status: planLabel(t.status, 'pending'),
     awaitingReason: t.status === 'awaiting_user' && isAwaitingReason(t.awaitingReason) ? t.awaitingReason : undefined,
+    ...(t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit' && typeof t.resumeAt === 'string' ? { resumeAt: t.resumeAt } : {}),
     dependencies: Array.isArray(t.dependencies) ? t.dependencies.map((id: unknown) => planLabel(id)) : [],
     assignedRunner: typeof t.assignedRunner === 'string' ? planLabel(t.assignedRunner) : undefined,
     taskMode: typeof t.taskMode === 'string' ? planLabel(t.taskMode) : undefined,
@@ -123,7 +125,7 @@ export function applySettings(state: TuiState, settings: Partial<SettingsRespons
  * last `task_started` title, which went on naming a task long after it had
  * finished — and said nothing once the run was only waiting on the user.
  */
-export function runLabel(tasks: TaskView[], gate: GateView | null = null): string {
+export function runLabel(tasks: TaskView[], runMerge: RunMergeView | null = null): string {
   const running = tasks.filter(isTaskRunning);
   if (running.length > 0) {
     const [first] = running;
@@ -133,7 +135,7 @@ export function runLabel(tasks: TaskView[], gate: GateView | null = null): strin
   const waiting = tasks.filter((t) => t.status === 'awaiting_user').length;
   if (waiting > 0) return waiting === 1 ? '1 task waits for you' : `${waiting} tasks wait for you`;
   // As plain as a task that waits on the user: the run waits on a merge (ADR-0020).
-  return gate?.paused ? 'paused for Merge all — /handoff merge' : '';
+  return runMerge?.paused ? 'paused for Merge all — /handoff merge' : '';
 }
 
 /** A label for the status row, which is one row: text from a model flattened onto it. */

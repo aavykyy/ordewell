@@ -1,5 +1,5 @@
 import type { ResearchStepOutcome, SkillLoadNotice, SubagentOutcome } from '../models/Task';
-import type { UsageTotals } from '../models/Usage';
+import type { ModelUsage, UsageTotals } from '../models/Usage';
 import type { ApprovalKind } from '../interfaces/IApproval';
 import type { ApprovalSource } from '../services/ApprovalPolicy';
 
@@ -153,6 +153,8 @@ export interface SkillLoadBlock extends SkillLoadNotice {
 
 /** The token line. There is at most one, and it is always the last block. */
 export interface UsageBlock {
+  byModel?: ModelUsage[];
+  model?: string;
   type: 'usage';
   id: string;
   totals: UsageTotals;

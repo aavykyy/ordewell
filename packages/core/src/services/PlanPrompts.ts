@@ -364,8 +364,10 @@ function buildConversationBody(
       ? 'Use each runner\'s default mode from list_runners unless the task needs a different mode it lists. Avoid "plan" (read-only) unless the user asked for analysis only.'
       : modeGuide,
     '',
-    // An API planner has no MCP client, so it reads through the envelope (ADR-0012).
-    ...(tools ? TASK_READ_TOOLS_PROTOCOL : TASK_QUERY_PROTOCOL),
+    ...(tools ? TASK_READ_TOOLS_PROTOCOL : [
+      ...TASK_QUERY_PROTOCOL,
+      'You may also call task_query, task_output and task_diff when offered. task_output accepts attempt and kinds to read a saved structured log (latest attempt by default); task_diff lists changed files by repo, or reads one patch with path and repo. Both page with since/nextOffset. These calls share the taskQuery read cap. Without attempt or kinds, task_output keeps the live tail/outcome behavior. A shared run without recorded changes has no task diff.',
+    ]),
     '',
     ...(variant.execution ? EXECUTION_TOOLS_SECTION : []),
     context ? `PROJECT CONTEXT:\n${context}\n` : '',

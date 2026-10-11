@@ -450,3 +450,22 @@ describe('sessionStore', () => {
     });
   });
 });
+
+describe('attempt usage persistence', () => {
+  it('round-trips ledgers, models, wall time and unknown measures in a saved plan', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-usage-'));
+    try {
+      const plan = createEmptyPlan();
+      plan.tasks = [createTask({ attemptUsage: [
+        { attempt: 1, runner: 'codex', startedAt: '2026-10-11T10:00:00Z', endedAt: '2026-10-11T10:00:05Z', wallTimeMs: 5000, totals: { inputTokens: 10 }, byModel: [{ source: 'codex', model: 'a', totals: { inputTokens: 10 } }] },
+        { attempt: 2, runner: 'codex', startedAt: '2026-10-11T11:00:00Z', wallTimeMs: 0, totals: {}, byModel: [] },
+      ] })];
+      const meta = saveSession(plan, 'Usage', dir);
+      const restored = loadSession(meta.id, dir)!;
+      expect(restored.plan.tasks[0].attemptUsage).toEqual(plan.tasks[0].attemptUsage);
+      expect(restored.plan.tasks[0].attemptUsage?.[1].totals).not.toHaveProperty('reportedCost');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

@@ -20,6 +20,7 @@ export type {
   EditPlanArgs,
   TaskQueryArgs,
   TaskOutputArgs,
+  TaskDiffArgs,
   RunPlanArgs,
   OneTaskArgs,
   RetryTaskArgs,

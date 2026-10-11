@@ -65,7 +65,8 @@ edits only. User controls that change task state through the orchestrator
 (execute, approve the review, reschedule, stop, retry, cancel, mark complete or
 not done, force start, run one task, continue a task, the two ways past a dirty
 tree, Merge all, clean up or discard a run, a task message, force sending or
-withdrawing a queued one, interrupting a structured turn, a checkpoint answer)
+withdrawing a queued one, interrupting a structured turn, a checkpoint answer,
+cancelling a scheduled resume)
 are saved before any surface hears of them too: a synchronous one holds its
 `status_update` until the save, and an asynchronous one (`withSave`) saves
 before each `status_update` announced while it runs, and once more when it
@@ -489,7 +490,8 @@ before failure (ADR-0025).
 **Waiting for input** — a structured task whose turn ended without a `task_complete`
 call: `awaiting_user` with a saved reason, `input | checkpoint | conflict |
 files-changed` (a checkpoint wins over input; `files-changed` is an *ops task*
-that changed tracked files, ADR-0020). No verdict and no automatic nudge; the user
+that changed tracked files, ADR-0020), or `usage-limit` when what ended it was
+the runner's usage limit (see *Usage-limit resume*). No verdict and no automatic nudge; the user
 answers or marks the task complete. A pending runner approval is *not* waiting
 for input — it arrives mid-turn, leaves the status alone, and "waiting for
 approval" is derived from the task's pending approvals.
@@ -511,6 +513,20 @@ session is never started in its place.
 *Avoid:* "resume" for the user action (that is the protocol flag), and "retry"
 for it — a retry starts a fresh attempt with no message.
 
+**Usage-limit resume** (`readUsageLimitReset`, `UsageLimitWaits`,
+`cancelScheduledResume`; ADR-0018, U1) — a task whose runner stopped on its
+account's usage limit is `awaiting_user` with reason `usage-limit`, and the run
+holds. When the runner's message names the reset (Claude Code and Codex do;
+OpenCode does not), the task carries a `resumeAt` saved with the plan, and at
+that time it is retried as a *Continue* of its saved session. Tasks paused on
+one runner share one wait — the latest of their resets — and resume together;
+the hold on the run is released once nothing waits on a reset and no task has
+failed. A plan loaded after its time resumes at once. Without a time, after a
+cancel or a stop, or when the resumed attempt hits the limit again at once, the
+task waits for a manual retry. Surfaces show "Resumes at 8:10pm" with a cancel.
+*Avoid:* "rate limit" for it — a provider's per-minute throttle is retried
+inside the runner and is not this; "paused" for any other wait.
+
 **Task log** (`TaskLogEvent`, `reduceTaskLog`, `TaskLogRecorder`) — what a
 structured task did, at full fidelity (ADR-0018, O1b/P1): normalized events —
 text and thinking, tool calls with their results (long ones trimmed to head
@@ -519,7 +535,9 @@ and tail), subagents, usage, turns, the message queue and runner approvals
 `task_log` and appended to `.ordewell/sessions/<session>/tasks/<task>/<attempt>.jsonl`,
 one file per attempt, numbered from what is on disk. `reduceTaskLog` folds the
 same events into display blocks live and on reload, so the two draw alike. The
-file goes with its session. Every task attempt uses this log.
+file goes with its session. Every task attempt uses this log. The planner reads
+a saved attempt with `task_output` (optional `attempt` and event-type `kinds`),
+through bounded text pages and its shared task read budget.
 *Avoid:* "transcript" (the planner conversation's saved record), "output"
 (the lossy plain-text channel `VerdictEngine` reads — nothing that needs
 fidelity reads it), and reading a verdict from the log.
@@ -751,6 +769,20 @@ registry keyed by task let the old attempt's exit unregister the new one.
 field of the attempt. Do not add another per-task map to the orchestrator for
 state that ends with the run; put it on the attempt.
 
+**Attempt usage** (`AttemptUsage`, `Task.attemptUsage`) — the persisted ledger
+of one task attempt: its number, runner, start and end timestamps, wall time,
+and reported usage totals. Reports are grouped by source and the model that
+actually ran; an unreported model stays unknown. Subagent shares are included
+in totals once. The attempt number continues across reloads. A new attempt
+starts a fresh ledger without dropping earlier attempts. Context fill follows
+the latest main-runner model and clears on a switch until the new model reports
+both prompt tokens and its window. `planUsage` sums all task attempts,
+including subtasks, separately from the planner's own ledger. Status updates
+carry both the task ledgers and the plan roll-up; surfaces reuse their planner
+usage formatting. Absent measures mean unknown, never zero or an estimate.
+*Avoid:* attributing a session cost to its last model without a reported
+breakdown; *Avoid:* mixing planner usage into task totals.
+
 **Attempt kind** (`AttemptKind`, `attemptKind.ts`) — what one attempt of a task
 is: `change`, `ops`, `repair` (a *conflict repair*, ADR-0015) or `continuation`
 (a *Continue*, ADR-0018, which carries whether its task is ops). Everything that
@@ -937,11 +969,17 @@ stopping at the first failure. A group of one needs none either, since its one
 merge lands or is aborted whole, so it answers `merged`, `conflict` or `failed`
 as it always has. `merged` on a settled run clears it up like a discard, except
 that each integration branch goes only where HEAD contains it, and the plan
-forgets it; any other answer deletes nothing. During a run, Merge all is what
-opens a *merge gate*: it merges what has landed so far and the run goes on, its
+forgets it; any other answer deletes nothing. During a run, Merge all is available
+whenever landed work is not in the user's branch yet, including to open a
+*merge gate*: it merges what has landed so far and the run goes on, its
 branches kept for the tasks still to land (ADR-0020). It never runs while an
 *ops task* does (`mergeExcludes`, read by both sides), and takes turns with
 landings.
+`RunMergeView` carries those unmerged landings to surfaces, which show their task
+count. Its `waitingAtGate` says whether a task waits on that work; `paused`
+means the running plan waits at a gate with no attempts active. The view is
+absent once everything landed is merged. VS Code offers the action quietly
+without a gate and keeps its mid-run card for a gate wait.
 *Avoid:* per-repo merge — there is none, by design (ADR-0014).
 
 **Change task** — a task whose result is a change to repository files: it runs
@@ -992,7 +1030,10 @@ mid-run does not retarget the run.
 isolation: the `IsolationRun` record holding the run id, the repo group (`repos`:
 each repo's path, root, base ref and integration branch; a single repository is
 one repo at `.`), the shared paths, each task's branch, task workspace,
-per-repo worktree and status, and the *landing* in flight, if any. It is plain JSON so it
+per-repo worktree and status, and the *landing* in flight, if any. Each new
+task record keeps the integration tip it started from per repo and the task
+branch tip before landing removes it. `task_diff` compares against that task
+start, so predecessor changes are excluded even after the worktree is gone. It is plain JSON so it
 can persist with the plan state, and a new run mints a new record. Task ids are
 only unique within one plan, so every operation that acts on a task takes the run
 it belongs to.

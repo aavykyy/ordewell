@@ -31,6 +31,8 @@ export interface TaskLogStatus {
   runner: string;
   planStatus: TaskStatus;
   awaitingReason?: AwaitingReason;
+  /** "Resumes at 8:10pm" while a task paused on a usage limit resumes on its own (#84); absent otherwise. */
+  resumes?: string;
   /** How many of the runner's tool requests wait for an answer (ADR-0018, A1). */
   awaitingApproval: number;
   /** A turn is live. */
@@ -65,6 +67,8 @@ export type TaskLogToHost =
   /** Force send a message still queued. */
   | { type: 'sendQueuedTaskMessageNow'; id: string }
   | { type: 'interruptTask' }
+  /** Keep a task paused on a usage limit from resuming on its own (#84). */
+  | { type: 'cancelResume' }
   /** Continue the finished task in its saved session, with `text` as its next turn. */
   | { type: 'continueTask'; text: string }
   /** Answer one of the runner's tool requests (ADR-0018, A1). */

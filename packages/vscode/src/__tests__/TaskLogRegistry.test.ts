@@ -28,6 +28,7 @@ function harness(attempts: Record<number, TaskLogEvent[]> = { 1: attemptOne }) {
     forceSendQueuedTaskMessage: vi.fn(() => true),
     interruptTask: vi.fn(async () => {}),
     continueTask: vi.fn(async () => {}),
+    cancelScheduledResume: vi.fn(() => true),
     pending: [] as PendingApproval[],
     outstandingApprovals: vi.fn((): PendingApproval[] => session.pending),
     resolveApproval: vi.fn(() => true),
@@ -77,7 +78,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
       session: () => ({
         taskLogAttempts: () => [], taskLog: () => [], sendTaskMessage: () => 'm', removeQueuedTaskMessage: () => false, interruptTask: async () => {},
         forceSendTaskMessage: () => 'm', forceSendQueuedTaskMessage: () => false,
-        continueTask: async () => {}, outstandingApprovals: () => [], resolveApproval: () => false,
+        continueTask: async () => {}, cancelScheduledResume: () => false, outstandingApprovals: () => [], resolveApproval: () => false,
       }),
       getTask: () => undefined,
       log: vi.fn(),
@@ -375,6 +376,22 @@ describe('task-log tabs over a whole run (ADR-0018, V1)', () => {
     h.registry.receive({ type: 'task_updated', taskId: 't1', changes: { title: 'Parse JSON5' } });
     expect(posted(__panels[0])).toEqual([expect.objectContaining({ type: 'status', status: expect.objectContaining({ title: 'Parse JSON5' }) })]);
     expect(__panels[0].title).toBe('Task 1 · Parse JSON5');
+  });
+
+  it('says when a task paused on a usage limit resumes, and routes its cancel (#84)', () => {
+    const h = harness();
+    Object.assign(h.task, { status: 'awaiting_user', awaitingReason: 'usage-limit', resumeAt: new Date(Date.now() + 60 * 60_000).toISOString() });
+    h.registry.open('t1');
+    __panels[0].__receive({ type: 'ready' });
+
+    expect(posted(__panels[0])[0]).toMatchObject({ type: 'init', status: { awaitingReason: 'usage-limit', resumes: expect.stringMatching(/^Resumes at /) } });
+
+    __panels[0].__receive({ type: 'cancelResume' });
+    expect(h.session.cancelScheduledResume).toHaveBeenCalledWith('t1');
+
+    h.session.cancelScheduledResume.mockReturnValue(false);
+    __panels[0].__receive({ type: 'cancelResume' });
+    expect(posted(__panels[0])).toContainEqual({ type: 'showError', error: 'This task has no resume scheduled.' });
   });
 
   it('shows the Session\'s refusal of an interrupt', async () => {

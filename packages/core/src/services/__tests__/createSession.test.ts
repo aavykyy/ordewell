@@ -1041,11 +1041,13 @@ describe('session id stability (persist seam)', () => {
         {
           type: 'planner_usage', turnId: 't1',
           totals: { inputTokens: 1000, outputTokens: 100, reportedCost: { USD: 0.01 } },
+          byModel: [{ source: 'claude-code', totals: { inputTokens: 1000, outputTokens: 100, reportedCost: { USD: 0.01 } } }],
           contextFill: { usedTokens: 1000, windowTokens: 200000 },
         },
         {
           type: 'planner_usage', turnId: 't1',
           totals: { inputTokens: 1400, outputTokens: 140, reportedCost: { USD: 0.01 } },
+          byModel: [{ source: 'claude-code', totals: { inputTokens: 1400, outputTokens: 140, reportedCost: { USD: 0.01 } } }],
           bySubagent: { sa1: { inputTokens: 400, outputTokens: 40 } },
           contextFill: { usedTokens: 1000, windowTokens: 200000 },
         },
@@ -1055,7 +1057,7 @@ describe('session id stability (persist seam)', () => {
     it('leaves context fill out while the window is unknown', async () => {
       const sent = await broadcastsFor([{ type: 'usage', record: { source: 'openai', inputTokens: 1000 } }]);
 
-      expect(sent).toEqual([{ type: 'planner_usage', totals: { inputTokens: 1000 } }]);
+      expect(sent).toEqual([{ type: 'planner_usage', totals: { inputTokens: 1000 }, byModel: [{ source: 'openai', totals: { inputTokens: 1000 } }] }]);
     });
 
     it('treats a reported window of zero as unknown, not as no room', async () => {
@@ -1063,7 +1065,7 @@ describe('session id stability (persist seam)', () => {
         { type: 'usage', record: { source: 'codex', inputTokens: 1000, contextWindow: 0 } },
       ]);
 
-      expect(sent).toEqual([{ type: 'planner_usage', totals: { inputTokens: 1000 } }]);
+      expect(sent).toEqual([{ type: 'planner_usage', totals: { inputTokens: 1000 }, byModel: [{ source: 'codex', totals: { inputTokens: 1000 } }] }]);
     });
 
     it('keeps costs reported in different currencies apart', async () => {
@@ -1105,6 +1107,9 @@ describe('session id stability (persist seam)', () => {
       const persisted = saves(session).mock.calls.at(-1)?.[0];
       expect(persisted?.plannerUsage).toEqual({
         totals: { inputTokens: 10, outputTokens: 2, reportedCost: { USD: 0.5 } },
+        byModel: [{ source: 'openai', totals: { inputTokens: 10, outputTokens: 2, reportedCost: { USD: 0.5 } } }],
+        source: 'openai',
+        model: undefined,
         lastPromptTokens: 10,
       });
     });
@@ -1645,10 +1650,12 @@ describe('saving a run as its tasks settle', () => {
     } as unknown as IRunner;
     // Each save and each announcement, tagged with t1's status as it was then.
     const order: string[] = [];
+    const messages: SessionMessage[] = [];
     const saveSession = vi.fn((plan: LegacyPlanState) => {
       order.push(`save:${plan.tasks.find((t) => t.id === 't1')!.status}`);
     });
     const broadcast = (msg: SessionMessage) => {
+      messages.push(msg);
       if (msg.type === 'status_update') order.push(`status:${msg.tasks.find((t) => t.id === 't1')!.status}`);
       if (msg.type === 'execution_complete') order.push('complete');
     };
@@ -1664,8 +1671,30 @@ describe('saving a run as its tasks settle', () => {
       lastUpdated: new Date().toISOString(),
     }, 'Test', '/repo', { persist: false });
     const runnerSession = (taskId: string) => runnerSessions.find((t) => t.taskId === taskId)!;
-    return { session, saveSession, order, runnerSession };
+    return { session, saveSession, order, runnerSession, messages };
   }
+
+  it('persists live attempt usage before broadcasting the task ledgers and task total', async () => {
+    const env = twoTaskRun();
+    await env.session.executePlan();
+    env.order.length = 0;
+    env.runnerSession('t1').emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'actual', inputTokens: 10, reportedCost: { amount: 0.5, currency: 'USD' } } });
+    expect(env.order).toEqual(['save:in_progress', 'status:in_progress']);
+    const persisted = env.saveSession.mock.calls.at(-1)![0];
+    expect(persisted.tasks[0].attemptUsage?.[0].byModel?.[0].model).toBe('actual');
+    expect(persisted.tasks[0].attemptUsage?.[0].totals).toEqual({ inputTokens: 10, reportedCost: { USD: 0.5 } });
+    const status = env.messages.filter((msg) => msg.type === 'status_update').at(-1);
+    expect(status?.type).toBe('status_update');
+    if (status?.type !== 'status_update') throw new Error('Missing status update');
+    expect(status.usage?.totals).toEqual({ inputTokens: 10, reportedCost: { USD: 0.5 } });
+    expect(status.tasks[0].attemptUsage?.[0].totals).toEqual(status.usage?.totals);
+    expect(status.usage?.attempts).toBe(2);
+    env.session.destroy();
+    const restored = makeSession();
+    restored.loadPlan(persisted, 'Usage', '/repo', { persist: false });
+    expect(taskOf(restored, 't1')?.attemptUsage?.[0].totals).toEqual(status.usage?.totals);
+    restored.destroy();
+  });
 
   it('saves a task\'s verdict the moment it lands, before announcing it, while the run goes on', async () => {
     const { session, saveSession, order, runnerSession } = twoTaskRun();

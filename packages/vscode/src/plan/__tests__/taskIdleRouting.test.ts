@@ -7,7 +7,7 @@ function deps(): PlanManagerDeps & { chatProvider: { sendTaskIdle: ReturnType<ty
   const plan = { status: 'draft', tasks: [] } as unknown as LegacyPlanState;
   return {
     session: { isExecuting: true, status: 'running' } as unknown as PlanManagerDeps['session'],
-    chatProvider: { sendTaskIdle: vi.fn(), sendTaskApprovals: vi.fn(), showMergeGate: vi.fn(), showPlan: vi.fn(), conversation: { receive: vi.fn() } },
+    chatProvider: { sendTaskIdle: vi.fn(), sendTaskApprovals: vi.fn(), showRunMerge: vi.fn(), showPlan: vi.fn(), conversation: { receive: vi.fn() } },
     getCurrentPlan: () => plan,
     isGeneratingPlan: () => false,
   } as unknown as PlanManagerDeps & { chatProvider: { sendTaskIdle: ReturnType<typeof vi.fn>; sendTaskApprovals: ReturnType<typeof vi.fn>; showPlan: ReturnType<typeof vi.fn> } };

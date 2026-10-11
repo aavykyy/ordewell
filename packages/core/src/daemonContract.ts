@@ -109,6 +109,11 @@ export interface CancelPlanningResponse {
   cancelled: boolean;
 }
 
+/** `POST /api/plans/:id/tasks/:taskId/resume/cancel` — false when no resume was scheduled for the task. */
+export interface CancelResumeResponse {
+  cancelled: boolean;
+}
+
 export interface TaskMessageResponse {
   id: string;
 }

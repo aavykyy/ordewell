@@ -26,7 +26,7 @@ import { toGeminiToolDeclarations } from './researchTools';
 import type { LegacyPlanState } from '../models/Task';
 
 const TOOL_DEFINITIONS = toGeminiToolDeclarations();
-/** With the execution tools a session offers its conversation (ADR-0029). */
+/** With the task reads and execution tools a session offers its conversation (ADR-0029). */
 const CONVERSATION_TOOL_DEFINITIONS = toGeminiToolDeclarations(true);
 
 interface GeminiPart {

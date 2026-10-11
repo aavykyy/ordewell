@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { PlanIsolation } from '../interfaces/IWorktreeIsolation';
-import type { PlannerUsage, UsageRecord, UsageTotals } from './Usage';
+import type { AttemptUsage, PlannerUsage, UsageRecord, UsageTotals } from './Usage';
 import type { ExecutionRecord } from './Execution';
 import type { SkillSource } from '../services/SkillsService';
 import { SKILL_NAME_PATTERN } from '../conversation/skillTokens';
@@ -41,13 +41,14 @@ export type TaskMode = string;
 /**
  * Why an `awaiting_user` task waits (ADR-0018, W1): a structured turn that
  * ended without a `task_complete` call, a checkpoint question, work that did not
- * land, or an ops task that changed tracked files (ADR-0020). Saved, so no
- * surface has to guess it from whether an attempt is live.
+ * land, an ops task that changed tracked files (ADR-0020), or its runner's
+ * usage limit. Saved, so no surface has to guess it from whether an attempt
+ * is live.
  */
-export type AwaitingReason = 'input' | 'checkpoint' | 'conflict' | 'files-changed';
+export type AwaitingReason = 'input' | 'checkpoint' | 'conflict' | 'files-changed' | 'usage-limit';
 
 export function isAwaitingReason(value: unknown): value is AwaitingReason {
-  return value === 'input' || value === 'checkpoint' || value === 'conflict' || value === 'files-changed';
+  return value === 'input' || value === 'checkpoint' || value === 'conflict' || value === 'files-changed' || value === 'usage-limit';
 }
 
 export interface TaskModelAssignment {
@@ -122,8 +123,15 @@ export interface Task {
   userStoriesCovered?: string[];
   /** The runner's saved session for a later continue; cleared when a fresh attempt starts. */
   runnerSessionId?: string;
-  /** Set only while `status` is `awaiting_user`, and not always then — a usage-limit pause has none. */
+  /** Set only while `status` is `awaiting_user`, and not always then — a pause saved by an older build has none. */
   awaitingReason?: AwaitingReason;
+  /**
+   * When a task paused on its runner's usage limit is resumed on its own (ISO
+   * time): the reset the runner announced, plus a short margin. Absent when no
+   * reset time could be read or the user cancelled the resume — the task then
+   * waits for a manual retry. Set only with `awaitingReason` `usage-limit`.
+   */
+  resumeAt?: string;
   /**
    * An ops task (ADR-0020): it changes no repository files, runs at the
    * workspace root rather than in a worktree, and waits for the change tasks
@@ -145,6 +153,7 @@ export interface Task {
   skills?: string[];
   /** The skills the latest attempt was given, as read when it spawned. */
   attemptSkills?: TaskSkillSnapshot[];
+  attemptUsage?: AttemptUsage[];
 }
 
 export interface DiscoveredMode {
@@ -156,6 +165,7 @@ export interface DiscoveredMode {
 export type ResearchToolType =
   | 'read_file' | 'read_files' | 'glob' | 'grep' | 'find_symbol' | 'list_dir'
   | 'bash' | 'fetch' | 'web_search' | 'spawn_research_agent'
+  | 'task_query' | 'task_output' | 'task_diff'
   /**
    * A tool belonging to a harness planner's own toolbox (ADR-0009) that has no
    * Ordewell equivalent — Edit, WebFetch, TodoWrite, whatever a coding agent
@@ -619,6 +629,7 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     subtasks: overrides.subtasks ?? [],
     verdict: overrides.verdict,
     outputSummary: overrides.outputSummary,
+    ...(overrides.attemptUsage ? { attemptUsage: structuredClone(overrides.attemptUsage) } : {}),
     assignedModel: overrides.assignedModel,
     assignedRunner: overrides.assignedRunner ?? 'claude-code',
     thinkingEffort: overrides.thinkingEffort,
@@ -812,6 +823,7 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
         outputSummary: prior?.outputSummary,
         runnerSessionId: prior?.runnerSessionId,
         attemptSkills: prior?.attemptSkills,
+        attemptUsage: prior?.attemptUsage,
         // Where a task that has run ran is fixed, like its runner session (ADR-0020).
         ...(prior?.status === 'failed' ? { ops: prior.ops } : {}),
         forcedPastGate: prior?.forcedPastGate,
@@ -831,7 +843,7 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
 }
 
 /** What only execution reads; {@link keepExecutionState} puts it back on whatever a planner returns. */
-const EXECUTION_ONLY = ['attemptSkills', 'runnerSessionId', 'awaitingReason', 'forcedPastGate', 'outputSummary'] as const satisfies readonly (keyof Task)[];
+const EXECUTION_ONLY = ['attemptUsage', 'attemptSkills', 'runnerSessionId', 'awaitingReason', 'resumeAt', 'forcedPastGate', 'outputSummary'] as const satisfies readonly (keyof Task)[];
 
 export type PlannerTaskView = Omit<Task, typeof EXECUTION_ONLY[number] | 'subtasks'> & { subtasks: PlannerTaskView[] };
 

@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Task, DiscoveredModel, ResearchStep, ResearchLogEntry, ResearchProgress, RunnerId } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
-import { IFileSystem } from '../interfaces/IFileSystem';
+import { IFileSystem, type ToolOutcome } from '../interfaces/IFileSystem';
 import { IWebFetcher } from '../interfaces/IWebFetcher';
 import { buildPlanWithResults } from './PlanPrompts';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
@@ -10,11 +10,11 @@ import { settleReply, type ReplyAttempt } from './settleReply';
 import { compactResearchResults, withProactiveCompaction } from './contextCompaction';
 import type { RunnerModeInfo } from './ModeResolver';
 import { collectResearchContext } from './ContextCollector';
+import { PLANNER_EXECUTION_TOOLS, PLANNER_TASK_READ_TOOLS, type PlannerToolHandler } from './mcp/tools';
+import { redactSecrets } from '../utils/redactSecrets';
 import { executeTool, STOPPED_TOOL_RESULT } from './executeTool';
 import { runResearchAgent, mapWithConcurrency, SUBAGENT_LIMITS } from './ResearchSubagents';
 import { SPAWN_RESEARCH_AGENT, isExecutionTool } from './researchTools';
-import { PLANNER_EXECUTION_TOOLS, type PlannerToolHandler } from './mcp/tools';
-import type { ToolOutcome } from '../interfaces/IFileSystem';
 import { classifyOutcome } from './researchStepSummary';
 import { addUsage, type UsageTotals } from '../models/Usage';
 import type { ConversationTurn } from './AiService';
@@ -33,16 +33,17 @@ const PARALLEL_SAFE_TOOLS = new Set(['read_file', 'read_files', 'glob', 'grep', 
 const TOOL_ROUND_CONCURRENCY = 8;
 
 /**
- * An execution tool call (ADR-0029), answered by the session's command seam
- * through the same handler and argument check the MCP route uses. Undefined
- * for any other tool, or when the session offered no handler.
+ * A task read or an execution tool call (ADR-0029), answered by the session's
+ * planner tools through the same handler and argument check the MCP route
+ * uses. Undefined for any other tool, or when the session offered no handler.
  */
-async function callExecutionTool(handler: PlannerToolHandler | undefined, name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ToolOutcome | undefined> {
-  const tool = handler ? PLANNER_EXECUTION_TOOLS.find((t) => t.name === name) : undefined;
+async function callPlannerTool(handler: PlannerToolHandler | undefined, name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ToolOutcome | undefined> {
+  const read = PLANNER_TASK_READ_TOOLS.find((t) => t.name === name);
+  const tool = handler ? read ?? PLANNER_EXECUTION_TOOLS.find((t) => t.name === name) : undefined;
   if (!handler || !tool) return undefined;
   if (signal?.aborted) return { success: false, output: STOPPED_TOOL_RESULT, truncated: false };
   const reply = await tool.call(handler, args, { signal: signal ?? new AbortController().signal });
-  return { success: !reply.isError, output: reply.text, truncated: false };
+  return { success: !reply.isError, output: read ? redactSecrets(reply.text) : reply.text, truncated: false };
 }
 
 /**
@@ -99,7 +100,7 @@ export interface ConversationTurnContext {
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
   autonomousDefault?: boolean;
   fetcher?: IWebFetcher;
-  /** The session's planner tools; the conversation offers their execution tools (ADR-0029) when set. */
+  /** The session's planner tools; the conversation offers their task reads and execution tools (ADR-0029) when set. */
   plannerTools?: PlannerToolHandler;
 }
 
@@ -293,7 +294,7 @@ export abstract class BaseAiService {
       // calls here that have not started. `executeTool` answers those without
       // running them, the same way the budget-exhaustion path above does.
       const toolResult = preResult
-        ?? await callExecutionTool(plannerTools, tc.name, toolArgs, signal)
+        ?? await callPlannerTool(plannerTools, tc.name, toolArgs, signal)
         ?? await executeTool(tc.name, toolArgs, fs, fetcher, signal);
 
       const MAX_RESPONSE_CHARS = 50000;

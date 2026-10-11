@@ -1,10 +1,11 @@
+import TaskUsage from './TaskUsage';
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import TaskCard from './TaskCard';
 import NewTaskCard from './NewTaskCard';
 import type { TaskDraft } from './NewTaskCard';
 import type { RunnerMode, RunnerOption } from './TaskCard';
 import { Task, DiscoveredModel, TaskModelAssignment, TaskIsolation } from '@ordewell/core';
-import { canMergeTasks, canSplitTask } from '@ordewell/core/plan-utils';
+import { canMergeTasks, canSplitTask, planUsage } from '@ordewell/core/plan-utils';
 
 interface PlanCardGroupProps {
   tasks: Task[];
@@ -43,6 +44,7 @@ interface PlanCardGroupProps {
   onRetry?: (taskId: string) => void;
   onSkip?: (taskId: string) => void;
   onCancel?: (taskId: string) => void;
+  onCancelResume?: (taskId: string) => void;
   onForceStart?: (taskId: string) => void;
   onMarkComplete?: (taskId: string) => void;
   onMarkIncomplete?: (taskId: string) => void;
@@ -83,6 +85,7 @@ export default function PlanCardGroup({
   onRetry,
   onSkip,
   onCancel,
+  onCancelResume,
   onForceStart,
   onMarkComplete,
   onMarkIncomplete,
@@ -97,6 +100,7 @@ export default function PlanCardGroup({
   const [mergeValidationError, setMergeValidationError] = useState<string | null>(null);
   // Accordion: at most one top-level task open at a time.
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+  const usage = planUsage(tasks);
   const sorted = [...tasks].sort((a, b) => a.order - b.order);
   const taskOrderMap = new Map(tasks.map((t) => [t.id, t.order]));
   const mergeMode = mergeSelectedIds.length > 0;
@@ -182,6 +186,7 @@ export default function PlanCardGroup({
 
   return (
     <div className="plan-card-group">
+      {usage.attempts > 0 && <div className="plan-usage">Tasks total: <TaskUsage usage={usage} /></div>}
       {mergeMode && (
         <div className="plan-merge-banner" onKeyDown={handleMergeKeyDown}>
           <span>Merge selected tasks (<strong>{mergeSelectedIds.length}</strong> selected)</span>
@@ -261,6 +266,7 @@ export default function PlanCardGroup({
                 onRetry={onRetry}
                 onSkip={onSkip}
                 onCancel={onCancel}
+                onCancelResume={onCancelResume}
                 onForceStart={onForceStart}
                 onMarkComplete={onMarkComplete}
                 onMarkIncomplete={onMarkIncomplete}

@@ -1,8 +1,9 @@
+import { usageLine, type AttemptUsage, type UsageLine } from '../models/Usage';
 import type { AwaitingReason } from '../models/Task';
 import type { TaskIsolationState } from '../interfaces/IWorktreeIsolation';
 import { taskOrderLabel, taskRef } from '../order-labels';
 import { capConflictFiles } from '../services/conflictFiles';
-import { approvalLabel, awaitingLabel, isTaskRunning, taskStatusKind, type TaskStatusKind } from './status';
+import { approvalLabel, awaitingLabel, isTaskRunning, resumeLabel, taskStatusKind, type TaskStatusKind } from './status';
 import { markAction, opsEditable, taskRowActions, type TaskRowAction, type TaskRowPlacement } from './actions';
 
 /**
@@ -20,10 +21,13 @@ export interface TaskRowSubject {
   ops?: boolean;
   idleSince?: string | null;
   awaitingReason?: AwaitingReason;
+  /** When a task paused on a usage limit resumes on its own (ISO time). */
+  resumeAt?: string | null;
   awaitingApproval?: number;
   isolation?: TaskRowIsolation | null;
   mergeGate?: readonly string[];
   forcedPastGate?: readonly string[];
+  attemptUsage?: readonly AttemptUsage[];
 }
 
 export interface TaskRowIsolation {
@@ -44,12 +48,20 @@ export interface TaskRowContext {
   orderOf?: ReadonlyMap<string, number>;
   /** The modes the task's runner declares; autonomy is a tag on one of them (ADR-0001). */
   modes?: readonly { id: string; autonomous?: boolean }[];
+  /** What a resume time is read against; the clock when absent. */
+  now?: Date;
 }
 
 /** Whether the row stands for an AI task, a manual one, or an ops task (ADR-0020). */
 export type TaskRowKind = 'ai' | 'user' | 'ops';
 
+export interface TaskRowUsage extends UsageLine {
+  attempt: number;
+  wallTimeMs?: number;
+}
+
 export interface TaskRowView {
+  usage: TaskRowUsage | null;
   /** "2", or "2.1" for a subtask. */
   orderLabel: string;
   kind: TaskRowKind;
@@ -58,6 +70,8 @@ export interface TaskRowView {
   running: boolean;
   /** What an awaiting task waits on, in sentence case; null when nothing was saved. */
   awaiting: string | null;
+  /** "Resumes at 8:10pm" while a task paused on a usage limit resumes on its own; null otherwise. */
+  resumes: string | null;
   /** Runner requests waiting on the user, in sentence case; null when none do. */
   approvals: string | null;
   /** The task's mode is tagged autonomous: it runs without permission prompts. */
@@ -106,12 +120,15 @@ const filesOf = (files: string[] | undefined): string | null => (files?.length ?
 export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}): TaskRowView {
   const parent = context.parent ?? undefined;
   const isolation = task.isolation && task.isolation.state !== 'none' ? task.isolation : null;
+  const latestUsage = task.attemptUsage?.at(-1);
   return {
+    usage: latestUsage ? { ...usageLine(latestUsage), attempt: latestUsage.attempt, wallTimeMs: latestUsage.wallTimeMs, byModel: latestUsage.byModel } : task.type === 'ai' && ['completed', 'failed', 'in_progress', 'awaiting_user'].includes(task.status) ? { totals: {}, attempt: 0, byModel: [] } : null,
     orderLabel: taskOrderLabel(task, parent),
     kind: task.type === 'user' ? 'user' : task.ops ? 'ops' : 'ai',
     status: taskStatusKind(task),
     running: isTaskRunning(task),
     awaiting: awaitingLabel(task),
+    resumes: resumeLabel(task, context.now),
     approvals: approvalLabel(task.awaitingApproval),
     autonomous: task.type === 'ai' && context.modes?.find((m) => m.id === task.taskMode)?.autonomous === true,
     repos: namedRepos(isolation?.repos),

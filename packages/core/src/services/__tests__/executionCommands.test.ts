@@ -62,8 +62,12 @@ describe('the command seam: run_task', () => {
     const byButton = setup();
     byButton.session.loadPlan(plan([task('t1', 1)]), 'goal', testWorkspace, { persist: false });
 
+    // Each attempt's usage carries its start time, which would otherwise differ between the two runs.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-11T12:00:00Z'));
     const outcome = await byTool.run({ command: 'run_task', task: '1' });
     await byButton.session.forceStartTask('t1');
+    vi.useRealTimers();
 
     expect(outcome).toEqual({ ok: true, message: 'Started task #1 "Task t1".' });
     expect(byTool.spawned('t1')).toHaveLength(1);
