@@ -26,7 +26,7 @@ import type { UserSettings } from './SettingsService';
 import { SkillsService } from './SkillsService';
 import { plannerMessage, resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
 import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
-import type { MergeGateView, SessionBroadcaster, SessionNotice } from './SessionMessage';
+import type { RunMergeView, SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { SessionEventRelay } from './SessionEventRelay';
 import { saveSession } from '../utils/sessionStore';
 import { listTaskLogAttempts, readTaskLog, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
@@ -1279,9 +1279,9 @@ export class Session {
     return this.orchestrator.getMergeGate(taskId);
   }
 
-  /** What Merge all would merge mid-run, while any task waits at a merge gate; null otherwise. */
-  mergeGateView(): MergeGateView | null {
-    return this.orchestrator.mergeGateView();
+  /** What Merge all would merge now; null once everything landed is merged. */
+  runMergeView(): RunMergeView | null {
+    return this.orchestrator.runMergeView();
   }
 
   /** The run's integration branch against its base ref, as a unified diff. */

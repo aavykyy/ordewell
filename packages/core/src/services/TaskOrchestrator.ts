@@ -34,7 +34,7 @@ import { resolveWorkspaceEnv, type WorkspaceEnv } from './workspaceEnv';
 import { supportsTaskMode } from './harness/connectors';
 import { continuability } from './continuation';
 import { quotedList } from '../utils/quotedList';
-import type { MergeGateView } from './SessionMessage';
+import type { RunMergeView } from './SessionMessage';
 
 /**
  * The one notification channel out of the orchestrator. Everything that used
@@ -600,12 +600,13 @@ export class TaskOrchestrator {
   /**
    * The run as a surface offers Merge all mid-run (ADR-0020): what has landed
    * and is not merged, and whether the run is paused at its gates with nothing
-   * else running. Null while no task waits at a gate.
+   * else running. Null once everything landed is merged.
    */
-  mergeGateView(): MergeGateView | null {
+  runMergeView(): RunMergeView | null {
     const handoff = this.runs.view()?.handoff;
-    if (!handoff || !this.store.allTasks.some((t) => this.getMergeGate(t.id).length > 0)) return null;
-    return { paused: this.running && this.attempts.size === 0, repos: handoff.repos, landed: handoff.landed };
+    if (!handoff?.landed.length) return null;
+    const waitingAtGate = this.store.allTasks.some((t) => this.getMergeGate(t.id).length > 0);
+    return { waitingAtGate, paused: waitingAtGate && this.running && this.attempts.size === 0, repos: handoff.repos, landed: handoff.landed };
   }
 
   /**

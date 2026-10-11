@@ -141,6 +141,16 @@ planner tools are recorded here as an explicit entry against both:
   tasks produce the same plan by either route, and the plan stays the source
   of truth (ADR-0001). A structural edit during a live run is queued as a
   pending plan edit, exactly as an envelope edit is.
+  *Amended by [ADR-0029](0029-the-supervisor.md):* the pending plan edit is
+  gone; a mid-run edit is applied at once to tasks not yet started and refused,
+  with a note, for a running or finished task.
+- **Execution tools are a further explicit entry (P5).** *Added by
+  [ADR-0029](0029-the-supervisor.md).* `run_plan`, `run_task`, `stop_task`,
+  `stop_run`, `retry_task`, `message_task`, `answer_approval` (deny or
+  escalate, never allow) and `merge_all` change what runs, not files. They
+  reach the scheduler only through one core command seam, which checks the
+  supervisor level, who started the turn and the plan's approval; `task_diff`
+  joins the reads. Absent a grant at the seam, the call is refused.
 - **Reads keep today's caps (P3).** `task_query` and `task_output` share the
   per-user-turn read budget the envelope has (`MAX_TASK_QUERIES`,
   `MAX_TASK_QUERIES_HARD` in `PlannerConversation`) and the same escalation:
@@ -149,6 +159,8 @@ planner tools are recorded here as an explicit entry against both:
   costs.
 - **Waking the planner during a run is out of scope (P4).** So is any write it
   makes then. Both stay with #27 and #29.
+  *Superseded by [ADR-0029](0029-the-supervisor.md):* wake-up turns, live
+  planner turns and a per-turn read budget for wake-ups.
 
 ### Planner: the catalog is read when the plan is submitted
 
@@ -236,3 +248,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-05 — OpenCode checked against 1.18.34: the server and an allow rule for `ordewell_*` go in `OPENCODE_CONFIG_CONTENT`, deep-merged over what is already there. A tool is named `ordewell_<tool>`. A `checkpoint` call held for 130s returned its answer, past the 5s `timeout` a remote entry defaults to and the MCP client's 60s request timeout, so no timeout is configured.
 - 2026-10-09 — `load_skill` added to the planner tools (ADR-0024).
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
+- 2026-10-11 — execution tools and `task_diff`, live planner turns, wake-up turns ([ADR-0029](0029-the-supervisor.md)).

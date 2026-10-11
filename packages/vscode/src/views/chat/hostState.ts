@@ -1,4 +1,4 @@
-import { type SurfacePlan, type DiscoveredModel, type RunnerId, type IsolationHandoff, type IsolationMergeResult, type MergeGateView, type TaskIsolation, type AiProvider } from '@ordewell/core';
+import { type SurfacePlan, type DiscoveredModel, type RunnerId, type IsolationHandoff, type IsolationMergeResult, type RunMergeView, type TaskIsolation, type AiProvider } from '@ordewell/core';
 import { DEFAULT_RUNNERS, EMPTY_HOLD, type PromptHold } from '@ordewell/core/plan-utils';
 import type { HostToWebview, PendingPlanEdit, PlannerBackend, RunnerMeta } from '../../shared/protocol';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, type PatchedView } from '../../shared/conversationPatch';
@@ -59,8 +59,8 @@ export interface HostState {
   /** The end-of-run handoff card, present until the run is merged, discarded or restarted. */
   handoff: IsolationHandoff | null;
   mergeResult: IsolationMergeResult | null;
-  /** While tasks wait at a merge gate (ADR-0020): what Merge all would merge now. */
-  mergeGate: MergeGateView | null;
+  /** What Merge all would merge now, including a possible gate wait. */
+  runMerge: RunMergeView | null;
   /** Per task id, the dependencies it waits on at its merge gate. */
   taskGates: Record<string, string[]>;
   /** Is the plan dock open? See planDock.ts for when this flips. */
@@ -104,7 +104,7 @@ export const INITIAL_HOST_STATE: HostState = {
   taskIsolation: {},
   handoff: null,
   mergeResult: null,
-  mergeGate: null,
+  runMerge: null,
   taskGates: {},
   dockExpanded: false,
   dockHeight: undefined,
@@ -160,7 +160,7 @@ export function resetSession(state: HostState, kind: SessionResetKind): HostStat
     taskIsolation: {},
     handoff: null,
     mergeResult: null,
-    mergeGate: null,
+    runMerge: null,
     taskGates: {},
     pendingEdits: [],
     dockExpanded: nextDock(state.dockExpanded, 'session-reset'),
@@ -282,10 +282,10 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
       return { ...state, mergeResult: action.result ?? null };
 
     case 'isolationCleared':
-      return { ...state, taskIsolation: {}, handoff: null, mergeResult: null, mergeGate: null, taskGates: {} };
+      return { ...state, taskIsolation: {}, handoff: null, mergeResult: null, runMerge: null, taskGates: {} };
 
-    case 'mergeGate':
-      return { ...state, mergeGate: action.gate ?? null, taskGates: action.tasks ?? {} };
+    case 'runMerge':
+      return { ...state, runMerge: action.runMerge ?? null, taskGates: action.tasks ?? {} };
 
     case 'setModels':
       return { ...state, models: action.models ?? [] };

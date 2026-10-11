@@ -388,7 +388,7 @@ describe('execution', () => {
 
     expect(h.actions).toContainEqual({
       type: 'tasksStatus',
-      gate: null,
+      runMerge: null,
       updates: { a: { status: 'in_progress', idleSince: null } },
       sessionId: 's1',
     });
@@ -423,7 +423,7 @@ describe('execution', () => {
 
     expect(h.actions).toContainEqual({
       type: 'tasksStatus',
-      gate: null,
+      runMerge: null,
       updates: { a: { status: 'completed', idleSince: null }, b: { status: 'running', idleSince: null } },
       sessionId: 's1',
     });
@@ -758,7 +758,7 @@ describe('task control', () => {
     expect(order).toEqual(['streamExecution', 'taskControl']);
     expect(h.actions).toContainEqual({
       type: 'tasksStatus',
-      gate: null,
+      runMerge: null,
       updates: { t1: { status: 'in_progress', idleSince: null } },
       sessionId: 's1',
     });
@@ -1527,7 +1527,23 @@ describe('worktree isolation', () => {
 
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    expect(h.actions).toContainEqual({ type: 'tasksStatus', sessionId: 's1', gate: null, updates: { b: { status: 'awaiting_user', idleSince: null, isolation } } });
+    expect(h.actions).toContainEqual({ type: 'tasksStatus', sessionId: 's1', runMerge: null, updates: { b: { status: 'awaiting_user', idleSince: null, isolation } } });
+  });
+
+  it('carries mid-run landings without a gate from status updates and clears them after merging', async () => {
+    const landed = [{ taskId: 't1', order: 1, title: 'Change' }];
+    const repos = [{ path: '.', integrationBranch: 'ordewell/r1/integration', baseRef: 'abc', landed }];
+    const h = running([
+      { type: 'status_update', tasks: [], runMerge: { waitingAtGate: false, paused: false, repos, landed } },
+      { type: 'status_update', tasks: [] },
+    ]);
+
+    await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
+
+    expect(h.actions.filter((a) => a.type === 'tasksStatus')).toEqual([
+      { type: 'tasksStatus', sessionId: 's1', updates: {}, runMerge: { waitingAtGate: false, paused: false, handoff: { repos, landed } } },
+      { type: 'tasksStatus', sessionId: 's1', updates: {}, runMerge: null },
+    ]);
   });
 
   it('turns isolation_blocked into the stash / run-without / cancel question', async () => {

@@ -6,7 +6,7 @@ import { activeToken, findCommand, parseSlash, tokenCompletions } from './slash'
 import { applyKey, commit } from './editor';
 import { say, wiped } from './transcript';
 import { blockedPicker, clearIsolation, handoffArrived, isolationForPlan, sameIsolation, showDiff } from './handoff';
-import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, type GateView, type RunStatus, type TaskView, type TuiState } from './state';
+import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, type RunMergeView, type RunStatus, type TaskView, type TuiState } from './state';
 import type { Key } from './keys';
 import { handleOverlayKey } from './reducers/overlays';
 import { handlePlanKey } from './reducers/planPane';
@@ -153,7 +153,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       // The indicator follows the tasks, not the stream: once none is running
       // the run is over, whatever the daemon's scheduler still holds armed.
       const status = runStatus(state, tasks);
-      return step({ ...state, status, tasks, busyLabel: status === 'executing' ? runLabel(tasks, state.gate) : state.busyLabel });
+      return step({ ...state, status, tasks, busyLabel: status === 'executing' ? runLabel(tasks, state.runMerge) : state.busyLabel });
     }
 
     case 'tasksStatus': {
@@ -186,16 +186,16 @@ function reduceAction(state: TuiState, action: Action): Step {
         return t;
       };
       const tasks = state.tasks.map(applyStatus);
-      // An update that does not say (an older daemon) leaves the gate as it was.
-      const gate = action.gate === undefined ? state.gate : action.gate;
-      const gateChanged = !sameGate(gate, state.gate);
+      // An update that does not say (an older daemon) leaves the view as it was.
+      const runMerge = action.runMerge === undefined ? state.runMerge : action.runMerge;
+      const runMergeChanged = !sameRunMerge(runMerge, state.runMerge);
       // Skip a new state object when nothing actually changed — a no-op
       // status_update still triggers a render via dispatch, but at least
       // the reference equality lets downstream memos keep their hits.
-      if (!changed && !gateChanged) return step(state);
-      const next = { ...state, tasks, gate };
+      if (!changed && !runMergeChanged) return step(state);
+      const next = { ...state, tasks, runMerge };
       const status = runStatus(next, tasks);
-      return step({ ...next, status, busyLabel: status === 'executing' ? runLabel(tasks, gate) : state.busyLabel });
+      return step({ ...next, status, busyLabel: status === 'executing' ? runLabel(tasks, runMerge) : state.busyLabel });
     }
 
     case 'isolationBlocked': {
@@ -374,9 +374,9 @@ function sameList(a: readonly string[] | undefined, b: readonly string[] | undef
   return (a ?? []).join('\0') === (b ?? []).join('\0');
 }
 
-function sameGate(a: GateView | null, b: GateView | null): boolean {
+function sameRunMerge(a: RunMergeView | null, b: RunMergeView | null): boolean {
   if (!a || !b) return a === b;
-  return a.paused === b.paused && JSON.stringify(a.handoff) === JSON.stringify(b.handoff);
+  return a.waitingAtGate === b.waitingAtGate && a.paused === b.paused && JSON.stringify(a.handoff) === JSON.stringify(b.handoff);
 }
 
 function runStatus(state: TuiState, tasks: TaskView[]): RunStatus {
@@ -384,7 +384,7 @@ function runStatus(state: TuiState, tasks: TaskView[]): RunStatus {
   // A task waiting on the user is not executing, but the run is not over
   // either — the indicator says it waits rather than going idle. A run paused
   // at a merge gate waits on the user the same way.
-  if (tasks.some((t) => t.status === 'awaiting_user') || state.gate?.paused) return 'executing';
+  if (tasks.some((t) => t.status === 'awaiting_user') || state.runMerge?.paused) return 'executing';
   return plannerInFlight(state) ? state.status : 'idle';
 }
 

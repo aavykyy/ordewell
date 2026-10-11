@@ -47,6 +47,36 @@ const saved = (session: Session) => saves(session).mock.calls.at(-1)?.[0];
 beforeEach(() => { vi.restoreAllMocks(); });
 
 describe('Session with worktree isolation', () => {
+  it('offers landed work without a gate, drops it after merging, and offers later landings', async () => {
+    const { session, lastStatus, pass, spawn, isolation, messages } = setup();
+    const t1 = task('t1', 1);
+    const t2 = task('t2', 2, { dependencies: ['t1'] });
+    session.loadPlan(plan([t1, t2]), 'goal', '/repo');
+    await session.executePlan();
+    expect(session.runMergeView()).toBeNull();
+    expect(lastStatus()!.runMerge).toBeUndefined();
+
+    pass(t1);
+    await vi.waitFor(() => expect(spawn.mock.calls.map(([o]) => o.taskId)).toContain('t2'));
+    expect(session.runMergeView()).toMatchObject({
+      waitingAtGate: false, paused: false, landed: [{ taskId: 't1' }],
+    });
+    expect(lastStatus()!.runMerge).toEqual(session.runMergeView());
+    expect(isolation.calls.map((c) => c.op)).not.toContain('mergeIntoCheckedOut');
+
+    await session.mergeRun();
+
+    expect(session.runMergeView()).toBeNull();
+    expect(lastStatus()!.runMerge).toBeUndefined();
+    expect(session.isExecuting).toBe(true);
+    expect(session.isolationView()).not.toBeNull();
+    expect(messages.map((m) => m.type)).not.toContain('execution_complete');
+
+    pass(t2);
+    await vi.waitFor(() => expect(lastStatus()!.runMerge?.landed.map((t) => t.taskId)).toEqual(['t2']));
+    expect(lastStatus()!.runMerge).toMatchObject({ waitingAtGate: false, paused: false });
+  });
+
   it('reports a merge gate on status updates, and merges mid-run to open it (ADR-0020)', async () => {
     const { session, lastStatus, pass, spawn, messages } = setup();
     const t1 = task('t1', 1);
@@ -54,14 +84,14 @@ describe('Session with worktree isolation', () => {
     await session.executePlan();
     pass(t1);
     await vi.waitFor(() => expect(lastStatus()!.tasks.find((t) => t.id === 'o2')!.mergeGate).toEqual(['t1']));
-    expect(lastStatus()!.gate).toMatchObject({ paused: true, landed: [{ taskId: 't1', title: 'Task t1' }] });
+    expect(lastStatus()!.runMerge).toMatchObject({ waitingAtGate: true, paused: true, landed: [{ taskId: 't1', title: 'Task t1' }] });
     expect(messages.map((m) => m.type)).not.toContain('execution_complete');
 
     expect(await session.mergeRun()).toEqual({ outcome: 'merged' });
 
     await vi.waitFor(() => expect(spawn.mock.calls.map(([o]) => o.taskId)).toContain('o2'));
     expect(lastStatus()!.tasks.find((t) => t.id === 'o2')!.mergeGate).toBeUndefined();
-    expect(lastStatus()!.gate).toBeUndefined();
+    expect(lastStatus()!.runMerge).toBeUndefined();
     expect(session.isolationView()).not.toBeNull();
   });
 

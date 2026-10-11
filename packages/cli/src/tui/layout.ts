@@ -481,13 +481,22 @@ export interface PlanLayout {
   maxScroll: number;
 }
 
-/** `lines[1]` is the spacer under the header, so the first task starts here. */
 const FIRST_ROW_LINE = 2;
 
 export function planLayout(state: TuiState, rows: number, cols: number): PlanLayout {
   const done = state.tasks.filter((t) => t.status === 'completed').length;
   const totalUsage = planUsage(state.tasks);
-  const lines = [style.bold(`Plan ${done}/${state.tasks.length}`), totalUsage.attempts ? style.grey(truncate(`Tasks total: ${taskUsageText(totalUsage)}`, cols)) : ''];
+  const unmerged = state.runMerge?.handoff.landed.length ?? 0;
+  const lines = [
+    style.bold(`Plan ${done}/${state.tasks.length}`),
+    totalUsage.attempts ? style.grey(truncate(`Tasks total: ${taskUsageText(totalUsage)}`, cols)) : '',
+  ];
+  if (unmerged > 0) {
+    const hint = style.dim(truncate(`${unmerged} landed task${unmerged === 1 ? '' : 's'} not merged — /handoff merge`, cols));
+    if (totalUsage.attempts) lines.push(hint);
+    else lines[1] = hint;
+  }
+  const firstRowLine = lines.length;
 
   const rowSpans: LineSpan[] = [];
   const orderOf = new Map(state.tasks.map((task) => [task.id, task.order]));
@@ -505,7 +514,7 @@ export function planLayout(state: TuiState, rows: number, cols: number): PlanLay
     rowSpans.push({ start: taskStart, end: lines.length - 1 });
   });
 
-  const selected = rowSpans[state.selectedTask] ?? { start: FIRST_ROW_LINE, end: FIRST_ROW_LINE };
+  const selected = rowSpans[state.selectedTask] ?? { start: firstRowLine, end: firstRowLine };
   const anchor = editorLine === undefined ? selected : { start: editorLine, end: editorLine };
   return { lines, rowSpans, anchor, rows, maxScroll: Math.max(0, lines.length - rows) };
 }
@@ -523,7 +532,7 @@ const clampOffset = (layout: PlanLayout, offset: number): number =>
 export function revealOffset(layout: PlanLayout, offset: number, span: LineSpan): number {
   const at = clampOffset(layout, offset);
   const bodyHeight = layout.rows - 1;
-  const first = span.start <= FIRST_ROW_LINE ? 0 : span.start - 1;
+  const first = span.start <= (layout.rowSpans[0]?.start ?? layout.anchor.start) ? 0 : span.start - 1;
   if (span.start < 1 + at || span.end - span.start + 1 > bodyHeight) return clampOffset(layout, first);
   if (span.end > at + layout.rows - 1) return clampOffset(layout, span.end - layout.rows + 1);
   return at;

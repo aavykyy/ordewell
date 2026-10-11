@@ -350,9 +350,8 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
           ...(task.forcedPastGate?.length ? { forcedPastGate: task.forcedPastGate.map(String) } : {}),
         };
       }
-      // Absent means no task waits at a gate any more, which is news too.
-      const gate = event.gate ? { paused: event.gate.paused === true, handoff: { repos: event.gate.repos, landed: event.gate.landed } } : null;
-      dispatch({ type: 'tasksStatus', updates, gate, sessionId });
+      const runMerge = event.runMerge ? { waitingAtGate: event.runMerge.waitingAtGate === true, paused: event.runMerge.paused === true, handoff: { repos: event.runMerge.repos, landed: event.runMerge.landed } } : null;
+      dispatch({ type: 'tasksStatus', updates, runMerge, sessionId });
       return;
     }
 

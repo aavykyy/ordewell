@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { planLayout } from '../layout';
+import { planLayout, revealOffset } from '../layout';
 import { initialState, type TaskView } from '../state';
 import { reduce, type Action } from '../reducer';
 import { inboundFor } from '../inbound';
@@ -39,5 +39,34 @@ describe('task row accounting', () => {
     const updated = reduce(state, { type: 'tasksStatus', updates: { t: { status: 'completed', attemptUsage: [usage] } } }).state;
     expect(updated.tasks[0].subtasks?.[0].attemptUsage).toEqual([usage]);
     expect(lines(updated.tasks)).toContain('12.4k in');
+  });
+
+  it('keeps usage and unmerged landings from the same status update visible', () => {
+    const actions: Action[] = [];
+    const receive = inboundFor({}, (action) => actions.push(action), 's1').execution();
+    receive({
+      type: 'status_update',
+      tasks: [{ id: 't', status: 'completed', verdict: null, attemptUsage: [usage] }],
+      runMerge: {
+        waitingAtGate: false, paused: false, repos: [],
+        landed: [{ taskId: 't', order: 1, title: 'Work' }],
+      },
+    });
+    const update = actions.find((a): a is Extract<Action, { type: 'tasksStatus' }> => a.type === 'tasksStatus');
+    const state = initialState({ sessionId: 's1', tasks: [task({ id: 'parent', subtasks: [task()] })] });
+    const updated = reduce(state, update!).state;
+    const layout = planLayout(updated, 4, 140);
+    const text = layout.lines.map(stripAnsi).join('\n');
+
+    expect(updated.tasks[0].subtasks?.[0].attemptUsage).toEqual([usage]);
+    expect(updated.runMerge?.handoff.landed).toEqual([{ taskId: 't', order: 1, title: 'Work' }]);
+    expect(text).toContain('Tasks total: 12.4k in · 3.1k out · $0.42 · 5s');
+    expect(text).toContain('1 landed task not merged — /handoff merge');
+    expect(revealOffset(layout, layout.maxScroll, layout.rowSpans[0])).toBe(0);
+
+    const cleared = reduce(updated, { type: 'tasksStatus', updates: {}, runMerge: null }).state;
+    const clearedText = planLayout(cleared, 40, 140).lines.map(stripAnsi).join('\n');
+    expect(clearedText).not.toContain('landed task');
+    expect(clearedText).toContain('Tasks total: 12.4k in · 3.1k out · $0.42 · 5s');
   });
 });
