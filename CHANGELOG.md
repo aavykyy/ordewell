@@ -109,11 +109,15 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   `orchestratorModel` setting and `ORCHESTRATOR_MODEL` are unchanged.
 - **`/settings` walks your run settings.** Autonomy, supervisor (with retries
   and reads), merge automatically, autorun and parallel are set in one stepped
-  panel, in the terminal UI and in VS Code, and only what changed is saved.
-  The individual commands remain.
+  panel in the terminal UI, and only what changed is saved. In VS Code they are
+  a Run block in the chat's Settings panel: each is clicked or typed and saved
+  at once, and Act and autorun still ask first. The individual commands remain.
+- **Parallel, retries and reads take a typed number.** In the terminal UI's
+  `/settings` they are numbers, typed or moved by ↑/↓, instead of preset lists.
 - **Terminal pickers are restyled.** Short lists are numbered, labels and
   details are aligned, and the current value is marked. Multi-choice pickers
-  step through their choices and save nothing until the last one.
+  switch steps with ←/→ (tab and shift-tab still work) and save nothing until
+  the last one.
 - **Plan rows are one line plus a meta line.** Skills, effort and mode show
   when a row is expanded. Per-task usage moved out of the rows into the task
   view's pinned footer, with time and a per-model breakdown; *Tasks total*
