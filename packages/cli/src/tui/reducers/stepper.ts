@@ -111,9 +111,9 @@ export function handleStepperKey(state: TuiState, stepper: StepperState, key: Ke
   const before = lastIndexBefore(lists, current);
   const after = lists.findIndex((list, i) => i > current && list !== null);
 
-  if (key.name === 'escape') {
-    return before === -1 ? step({ ...state, overlay: null }) : reopen(show(state, definition, choices, before));
-  }
+  // Esc cancels the whole pass, from any step and even with a filter or digits typed;
+  // ←/shift-tab are the way back. Nothing is applied until the last step's enter.
+  if (key.name === 'escape') return step({ ...state, overlay: null });
   // Jumps leave the highlighted row unconfirmed: tab and the arrows are for reaching one
   // setting, not for answering every one on the way.
   if (key.name === 'tab' || key.name === 'right') return after === -1 ? reopen(stepper) : reopen(show(state, definition, choices, after));
