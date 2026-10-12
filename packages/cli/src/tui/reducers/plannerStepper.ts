@@ -32,11 +32,13 @@ const hasEfforts = (state: TuiState, choices: StepChoices): boolean =>
 /**
  * `/planner` with no argument: harness, model and effort in one pass
  * (ADR-0009). Each step's rows come from the backend chosen before it, not
- * the one in effect, and nothing reaches the daemon until the last step —
- * so a cancel anywhere leaves the planner exactly as it was.
+ * the one in effect. Each enter saves its step with the later ones at their
+ * pre-selection — a harness goes with the model and effort it opens on — so
+ * the planner is never left holding one backend with another's model.
  */
 export const plannerStepper: StepperDefinition = {
   title: 'Planner',
+  advanceOnEnter: true,
   hint: 'Who researches your goal and writes the plan. Coding agents use their own subscription — no API key.',
   steps: [
     {
@@ -58,22 +60,29 @@ export const plannerStepper: StepperDefinition = {
         plannerEffortItems(state, choices.harness, choices.model, preferredEffort(state, choices.harness, choices.model)),
     },
   ],
-  complete(state, choices) {
+  save(state, choices) {
     const provider = choices.harness;
+    const modelId = choices.model;
+    // An empty or not yet loaded catalog offers no model to pair the harness with.
+    if (!modelId) return step(state);
     const effort = choices.effort && choices.effort !== DEFAULT_EFFORT ? choices.effort : '';
-    const model = plannerModelItems(state, provider, '').find((m) => m.id === choices.model);
-    const level = plannerEffortItems(state, provider, choices.model, '').find((e) => e.id === effort);
+    if (provider === state.plannerProvider && modelId === state.orchestratorModel && effort === state.plannerEffort) return step(state);
+    const model = plannerModelItems(state, provider, '').find((m) => m.id === modelId);
+    const level = plannerEffortItems(state, provider, modelId, '').find((e) => e.id === effort);
     const parts = [
       ALL_PROVIDERS[provider as AiProvider]?.label ?? provider,
-      model?.label ?? choices.model,
+      model?.label ?? modelId,
       ...(effort ? [`${level?.label ?? effort} effort`] : []),
     ];
-    return step(state, [{
-      type: 'setPlannerChoice',
-      provider,
-      modelId: choices.model,
-      effort,
-      notice: `Planner: ${parts.join(' · ')}`,
-    }]);
+    // Taken ahead of the daemon's answer so the rows mark it at once; the
+    // answer carries the same values, the daemon remembering the pick per
+    // backend just as this does.
+    return step({
+      ...state,
+      plannerProvider: provider,
+      orchestratorModel: modelId,
+      plannerEffort: effort,
+      plannerModels: { ...state.plannerModels, [provider]: effort ? { model: modelId, effort } : { model: modelId } },
+    }, [{ type: 'setPlannerChoice', provider, modelId, effort, notice: `Planner: ${parts.join(' · ')}` }]);
   },
 };

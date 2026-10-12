@@ -25,8 +25,26 @@ const MODELS: Record<string, { id: string; label: string; efforts: string[] }[]>
 const effortsOf = (choices: StepChoices): string[] =>
   MODELS[choices.harness]?.find((m) => m.id === choices.model)?.efforts ?? [];
 
+/**
+ * Saves the way a real hook does: the state takes the choice at once, and an
+ * effect goes out only when something changed.
+ */
+function savePlanner(state: TuiState, choices: StepChoices): Step {
+  const effort = choices.effort ?? '';
+  const { harness, model } = choices;
+  if (harness === state.plannerProvider && model === state.orchestratorModel && effort === state.plannerEffort) return { state, effects: [] };
+  return {
+    state: { ...state, plannerProvider: harness, orchestratorModel: model, plannerEffort: effort },
+    effects: [{ type: 'setPlannerChoice', provider: harness, modelId: model, effort, notice: '' }],
+  };
+}
+
+const saved = (provider: string, modelId: string, effort: string) =>
+  ({ type: 'setPlannerChoice' as const, provider, modelId, effort, notice: '' });
+
 const planner: StepperDefinition = {
   title: 'Planner',
+  advanceOnEnter: true,
   steps: [
     {
       id: 'harness',
@@ -51,14 +69,7 @@ const planner: StepperDefinition = {
       items: (state, choices) => effortsOf(choices).map((e) => ({ id: e, label: e, selected: e === state.plannerEffort })),
     },
   ],
-  complete: (state, choices) => ({
-    state,
-    effects: [
-      { type: 'setPlanner', provider: choices.harness },
-      { type: 'setModel', modelId: choices.model },
-      ...(choices.effort ? [{ type: 'setPlannerEffort' as const, effort: choices.effort }] : []),
-    ],
-  }),
+  save: savePlanner,
 };
 
 const base = initialState({ plannerProvider: 'codex', orchestratorModel: 'gpt', plannerEffort: 'xhigh' });
@@ -84,44 +95,50 @@ const at = (state: TuiState) => {
   };
 };
 
+const marked = (state: TuiState): string | undefined => stepperOf(state).items.find((i) => i.selected)?.id;
+
 describe('stepper', () => {
   it('opens on the first step with the current value highlighted', () => {
     expect(at(opened())).toEqual({ step: 'harness', row: 'codex', trail: '[Harness] › Model › Effort' });
   });
 
-  it('enter confirms a step and moves on to the next, pre-selected', () => {
+  it('enter on an unchanged step saves nothing and moves on to the next, pre-selected', () => {
     expect(at(keys(opened(), 'enter'))).toEqual({ step: 'model', row: 'gpt', trail: 'Harness: Codex › [Model] › Effort' });
   });
 
+  it("enter saves a changed step at once, with the later steps' pre-selections, and moves on", () => {
+    const { state, effects } = press(keys(opened(), 'up'), 'enter');
+    expect(effects).toEqual([saved('claude', 'opus', 'low')]);
+    expect(state.plannerProvider).toBe('claude');
+    expect(at(state)).toEqual({ step: 'model', row: 'opus', trail: 'Harness: Claude Code › [Model] › Effort' });
+  });
+
   it("rebuilds a later step's rows from what an earlier step chose", () => {
-    const s = keys(opened(), 'up', 'enter');
+    const s = press(keys(opened(), 'up'), 'enter').state;
     expect(stepperOf(s).items.map((i) => i.id)).toEqual(['opus', 'haiku']);
-    expect(at(s)).toEqual({ step: 'model', row: 'opus', trail: 'Harness: Claude Code › [Model] › Effort' });
   });
 
   it("a changed choice drops the later steps' pre-selections, even ones the new rows still offer", () => {
     // Both sizes come in both colours; what a colour pre-selects is its own.
     const shirts: StepperDefinition = {
       title: 'Shirt',
+      advanceOnEnter: true,
       steps: [
         { id: 'colour', label: 'Colour', items: () => [{ id: 'red', label: 'Red', selected: true }, { id: 'blue', label: 'Blue' }] },
         { id: 'size', label: 'Size', items: (_s, c) => ['s', 'l'].map((id) => ({ id, label: id, selected: id === (c.colour === 'red' ? 's' : 'l') })) },
       ],
-      complete: (state) => ({ state, effects: [] }),
+      save: (state) => ({ state, effects: [] }),
     };
     const open = openStepper(base, shirts).state;
     expect(at(keys(open, 'down', 'enter')).row).toBe('l');
   });
 
   it('leaves a step that does not apply out of the header and the walk', () => {
-    const s = keys(opened(), 'up', 'enter', 'down');
+    const s = keys(press(keys(opened(), 'up'), 'enter').state, 'down');
     expect(at(s).trail).toBe('Harness: Claude Code › [Model] › Effort');
     const { state, effects } = press(s, 'enter');
     expect(state.overlay).toBeNull();
-    expect(effects).toEqual([
-      { type: 'setPlanner', provider: 'claude' },
-      { type: 'setModel', modelId: 'haiku' },
-    ]);
+    expect(effects).toEqual([saved('claude', 'haiku', '')]);
   });
 
   it('drops a skipped step from the header when the current values skip it', () => {
@@ -129,7 +146,7 @@ describe('stepper', () => {
     expect(at(s).trail).toBe('[Harness] › Model');
   });
 
-  it('esc closes from the first, a middle and the last step without applying anything', () => {
+  it('esc closes from the first, a middle and the last step, saving nothing more', () => {
     const middle = keys(opened(), 'enter');
     const last = keys(opened(), 'enter', 'enter');
     expect(at(last).step).toBe('effort');
@@ -137,9 +154,22 @@ describe('stepper', () => {
       const { state, effects } = press(s, 'escape');
       expect(state.overlay).toBeNull();
       expect(effects).toEqual([]);
-      expect(state.plannerProvider).toBe(s.plannerProvider);
-      expect(state.orchestratorModel).toBe(s.orchestratorModel);
     }
+  });
+
+  it('esc keeps what enter already saved and drops a highlighted row never confirmed', () => {
+    const s = keys(press(keys(opened(), 'up'), 'enter').state, 'down');
+    const { state, effects } = press(s, 'escape');
+    expect(state.overlay).toBeNull();
+    expect(effects).toEqual([]);
+    expect(state.plannerProvider).toBe('claude');
+    expect(state.orchestratorModel).toBe('opus');
+  });
+
+  it('left back to a saved step shows the new value as the current one', () => {
+    const s = keys(press(keys(opened(), 'up'), 'enter').state, 'left');
+    expect(at(s)).toEqual({ step: 'harness', row: 'claude', trail: '[Harness] › Model › Effort' });
+    expect(marked(s)).toBe('claude');
   });
 
   it("tab jumps ahead without taking the highlighted row as the step's choice", () => {
@@ -174,26 +204,21 @@ describe('stepper', () => {
     expect(at(keys(opened(), 'right', 'right', 'right')).step).toBe('effort');
   });
 
-  it('jumping past steps keeps their values, and the last enter completes once with every choice', () => {
+  it('enter on the last step closes, saving only a change', () => {
     const s = keys(opened(), 'tab', 'tab');
     expect(at(s)).toEqual({ step: 'effort', row: 'xhigh', trail: 'Harness: Codex › Model: GPT › [Effort]' });
-    const { state, effects } = press(s, 'enter');
-    expect(state.overlay).toBeNull();
-    expect(effects).toEqual([
-      { type: 'setPlanner', provider: 'codex' },
-      { type: 'setModel', modelId: 'gpt' },
-      { type: 'setPlannerEffort', effort: 'xhigh' },
-    ]);
+    const unchanged = press(s, 'enter');
+    expect(unchanged.state.overlay).toBeNull();
+    expect(unchanged.effects).toEqual([]);
+    const changed = press(keys(s, 'up'), 'enter');
+    expect(changed.state.overlay).toBeNull();
+    expect(changed.effects).toEqual([saved('codex', 'gpt', 'medium')]);
   });
 
-  it('a digit chooses its row on a numbered step and moves on', () => {
+  it('a digit chooses its row on a numbered step and saves it', () => {
     const s = keys(opened(), 'enter', 'tab');
     const { state, effects } = press(s, 'char', '1');
-    expect(effects).toEqual([
-      { type: 'setPlanner', provider: 'codex' },
-      { type: 'setModel', modelId: 'gpt' },
-      { type: 'setPlannerEffort', effort: 'medium' },
-    ]);
+    expect(effects).toEqual([saved('codex', 'gpt', 'medium')]);
     expect(state.overlay).toBeNull();
   });
 
@@ -203,27 +228,58 @@ describe('stepper', () => {
     expect(effects).toEqual([]);
     expect(at(state).step).toBe('harness');
   });
-});
 
-describe('stepper number step', () => {
-  /** Two counts after a list; `complete` hands back what it was given so a test can read it. */
-  function counts(): { definition: StepperDefinition; done: () => StepChoices | undefined } {
-    let completed: StepChoices | undefined;
-    const definition: StepperDefinition = {
-      title: 'Run',
-      steps: [
-        { id: 'pace', label: 'Pace', items: () => [{ id: 'fast', label: 'Fast', selected: true }, { id: 'slow', label: 'Slow' }] },
-        { id: 'workers', label: 'Workers', number: { min: 1, current: (state) => state.maxParallel } },
-        { id: 'retries', label: 'Retries', number: { min: 0, current: () => 2 } },
-      ],
-      complete: (state, choices) => {
-        completed = choices;
+  it('with no step applying, hands the hook what there is and opens nothing', () => {
+    const saves: StepChoices[] = [];
+    const none: StepperDefinition = {
+      ...planner,
+      steps: planner.steps.map((s) => ({ ...s, skip: () => true })),
+      save: (state, choices) => {
+        saves.push(choices);
         return { state, effects: [] };
       },
     };
-    return { definition, done: () => completed };
+    expect(openStepper(base, none).state.overlay).toBeNull();
+    expect(saves).toEqual([{}]);
+  });
+});
+
+describe('stepper that stays on the step', () => {
+  /**
+   * A list and two counts, saved straight onto the state: the list is
+   * `autonomous`, the counts `maxParallel` and the supervisor's retry limit.
+   */
+  function counts(): { definition: StepperDefinition; saves: StepChoices[] } {
+    const saves: StepChoices[] = [];
+    const definition: StepperDefinition = {
+      title: 'Run',
+      advanceOnEnter: false,
+      steps: [
+        {
+          id: 'pace',
+          label: 'Pace',
+          items: (state) => [{ id: 'fast', label: 'Fast', selected: state.autonomous }, { id: 'slow', label: 'Slow', selected: !state.autonomous }],
+        },
+        { id: 'workers', label: 'Workers', number: { min: 1, current: (state) => state.maxParallel } },
+        { id: 'retries', label: 'Retries', number: { min: 0, current: (state) => state.runSettings.supervisorRetryLimit } },
+      ],
+      save: (state, choices) => {
+        saves.push(choices);
+        return {
+          state: {
+            ...state,
+            autonomous: choices.pace === 'fast',
+            maxParallel: Number(choices.workers),
+            runSettings: { ...state.runSettings, supervisorRetryLimit: Number(choices.retries) },
+          },
+          effects: [],
+        };
+      },
+    };
+    return { definition, saves };
   }
-  const start = (definition: StepperDefinition): TuiState => openStepper(initialState({ maxParallel: 5 }), definition).state;
+  const start = (definition: StepperDefinition): TuiState =>
+    openStepper(initialState({ autonomous: true, maxParallel: 5, runSettings: { ...base.runSettings, supervisorRetryLimit: 2 } }), definition).state;
   const type = (state: TuiState, text: string): TuiState =>
     [...text].reduce((s, char) => {
       const { state: next, effects } = press(s, 'char', char);
@@ -232,85 +288,96 @@ describe('stepper number step', () => {
     }, state);
   const entry = (state: TuiState): string | undefined => stepperOf(state).entry?.text;
 
+  it('enter on a list row saves it and stays on the step, the row marked current', () => {
+    const { definition, saves } = counts();
+    const s = keys(start(definition), 'down', 'enter');
+    expect(saves).toEqual([{ pace: 'slow', workers: '5', retries: '2' }]);
+    expect(at(s)).toEqual({ step: 'pace', row: 'slow', trail: '[Pace] › Workers › Retries' });
+    expect(marked(s)).toBe('slow');
+    expect(s.autonomous).toBe(false);
+  });
+
+  it('a step saved earlier shows its new value in the header and on a revisit', () => {
+    const { definition } = counts();
+    const s = keys(start(definition), 'down', 'enter', 'right');
+    expect(at(s).trail).toBe('Pace: Slow › [Workers] › Retries');
+    expect(marked(keys(s, 'left'))).toBe('slow');
+  });
+
   it('opens a number step pre-filled with the current value', () => {
     const { definition } = counts();
-    const s = keys(start(definition), 'enter');
+    const s = keys(start(definition), 'right');
     expect(at(s).step).toBe('workers');
     expect(entry(s)).toBe('5');
   });
 
-  it('the first digit replaces the pre-filled value, later ones append, and enter takes the number', () => {
-    const { definition, done } = counts();
-    const s = type(keys(start(definition), 'enter'), '17');
+  it('the first digit replaces the pre-filled value, later ones append, and enter saves the number', () => {
+    const { definition, saves } = counts();
+    const s = type(keys(start(definition), 'right'), '17');
     expect(entry(s)).toBe('17');
-    const next = keys(s, 'enter', 'enter');
-    expect(next.overlay).toBeNull();
-    expect(done()).toEqual({ pace: 'fast', workers: '17', retries: '2' });
+    const next = keys(s, 'enter');
+    expect(saves).toEqual([{ pace: 'fast', workers: '17', retries: '2' }]);
+    expect(at(next).step).toBe('workers');
+    expect(entry(next)).toBe('17');
+    expect(next.maxParallel).toBe(17);
   });
 
-  it('enter stays on the step while the number is below the minimum or empty', () => {
-    const { definition, done } = counts();
-    const zero = type(keys(start(definition), 'enter'), '0');
-    expect(at(keys(zero, 'enter')).step).toBe('workers');
-    const empty = keys(start(definition), 'enter', 'backspace');
+  it('enter does nothing while the number is below the minimum or empty', () => {
+    const { definition, saves } = counts();
+    const zero = type(keys(start(definition), 'right'), '0');
+    expect(entry(keys(zero, 'enter'))).toBe('0');
+    const empty = keys(start(definition), 'right', 'backspace');
     expect(entry(empty)).toBe('');
     expect(at(keys(empty, 'enter')).step).toBe('workers');
-    expect(done()).toBeUndefined();
+    expect(saves).toEqual([]);
   });
 
-  it('esc closes with digits typed, without applying them', () => {
-    const { definition, done } = counts();
-    const s = type(keys(start(definition), 'enter'), '17');
+  it('esc closes with digits typed, without saving them', () => {
+    const { definition, saves } = counts();
+    const s = type(keys(start(definition), 'right'), '17');
     const { state, effects } = press(s, 'escape');
     expect(state.overlay).toBeNull();
     expect(effects).toEqual([]);
-    expect(done()).toBeUndefined();
+    expect(saves).toEqual([]);
+    expect(state.maxParallel).toBe(5);
   });
 
   it('takes 0 where the minimum is 0', () => {
-    const { definition, done } = counts();
-    const s = type(keys(start(definition), 'enter', 'enter'), '0');
-    expect(keys(s, 'enter').overlay).toBeNull();
-    expect(done()).toEqual({ pace: 'fast', workers: '5', retries: '0' });
+    const { definition, saves } = counts();
+    keys(type(keys(start(definition), 'right', 'right'), '0'), 'enter');
+    expect(saves).toEqual([{ pace: 'fast', workers: '5', retries: '0' }]);
   });
 
   it('typing the pre-filled digit still starts a fresh number', () => {
     const { definition } = counts();
-    expect(entry(type(keys(start(definition), 'enter'), '55'))).toBe('55');
+    expect(entry(type(keys(start(definition), 'right'), '55'))).toBe('55');
   });
 
   it('ignores anything but digits', () => {
     const { definition } = counts();
-    expect(entry(type(keys(start(definition), 'enter'), '1a-2'))).toBe('12');
+    expect(entry(type(keys(start(definition), 'right'), '1a-2'))).toBe('12');
   });
 
   it('↑ and ↓ step the number by one and stop at the minimum', () => {
     const { definition } = counts();
-    const s = keys(start(definition), 'enter');
+    const s = keys(start(definition), 'right');
     expect(entry(keys(s, 'up', 'up'))).toBe('7');
     expect(entry(keys(s, ...Array<string>(6).fill('down')))).toBe('1');
     expect(entry(keys(type(s, '0'), 'down'))).toBe('1');
-    expect(entry(keys(start(definition), 'enter', 'enter', 'down', 'down', 'down'))).toBe('0');
+    expect(entry(keys(start(definition), 'right', 'right', 'down', 'down', 'down'))).toBe('0');
   });
 
   it('a digit after ↑ or ↓ starts the number afresh', () => {
     const { definition } = counts();
-    expect(entry(type(keys(start(definition), 'enter', 'up'), '3'))).toBe('3');
+    expect(entry(type(keys(start(definition), 'right', 'up'), '3'))).toBe('3');
   });
 
-  it('switching steps keeps a valid typed number and shows it in the header', () => {
-    const { definition } = counts();
-    const s = keys(type(keys(start(definition), 'enter'), '17'), 'right');
-    expect(at(s)).toEqual({ step: 'retries', row: undefined, trail: 'Pace: Fast › Workers: 17 › [Retries]' });
-    expect(entry(keys(s, 'left'))).toBe('17');
-    expect(entry(keys(s, 'shift-tab'))).toBe('17');
-  });
-
-  it('switching steps drops an invalid typed number for the current value', () => {
-    const { definition } = counts();
-    const s = keys(type(keys(start(definition), 'enter'), '0'), 'tab');
-    expect(at(s).trail).toBe('Pace: Fast › Workers: 5 › [Retries]');
+  it('switching steps drops a typed number never confirmed', () => {
+    const { definition, saves } = counts();
+    const s = keys(type(keys(start(definition), 'right'), '17'), 'right');
+    expect(at(s)).toEqual({ step: 'retries', row: undefined, trail: 'Pace: Fast › Workers: 5 › [Retries]' });
     expect(entry(keys(s, 'left'))).toBe('5');
+    keys(s, 'enter');
+    expect(saves).toEqual([{ pace: 'fast', workers: '5', retries: '2' }]);
   });
 });
-

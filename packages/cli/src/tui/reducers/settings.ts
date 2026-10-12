@@ -1,17 +1,18 @@
 import type { GlobalRunSettings, SupervisorLevel } from '@ordewell/core';
 import { ACT_RISK, AUTORUN_RISK, SUPERVISOR_LEVEL_LABEL, autonomyLevelLabel } from '@ordewell/core';
-import type { PickerItem, TuiState } from '../state';
-import { say } from '../transcript';
-import { openStepper, type StepChoices, type StepperDefinition } from './stepper';
+import type { ConfirmAction, PickerItem, TuiState } from '../state';
+import { openStepper, reopenStepper, type StepChoices, type StepperDefinition } from './stepper';
 import { step, type Effect, type Step } from './shared';
 
 /**
  * `/settings`: the run settings `/auto`, `/supervisor`, `/automerge`,
- * `/autorun` and `/parallel` set one at a time, as one stepped panel. Only
- * what changed is saved, through the same paths those commands use.
+ * `/autorun` and `/parallel` set one at a time, as one stepped panel. Each
+ * enter saves its step, and only if it changed, through the same paths those
+ * commands use.
  */
 
 export type SaveSettingsEffect = Extract<Effect, { type: 'saveSettings' }>;
+type SaveSettingsAction = Extract<ConfirmAction, { kind: 'save-settings' }>;
 
 const SUPERVISOR_DETAIL: Record<SupervisorLevel, string> = {
   off: 'The planner speaks only when you write',
@@ -32,7 +33,8 @@ const supervisorOff = (_state: TuiState, choices: StepChoices): boolean => choic
 // their minimum up, with no ceiling (parseCount, parseMaxParallel).
 export const SETTINGS: StepperDefinition = {
   title: 'Settings',
-  hint: 'Saved for this run and every later one. Nothing is saved until the last step.',
+  advanceOnEnter: false,
+  hint: 'Saved for this run and every later one. Each choice is saved when you press enter.',
   steps: [
     {
       id: 'autonomy',
@@ -88,12 +90,12 @@ export const SETTINGS: StepperDefinition = {
       number: { min: 1, current: (state) => state.maxParallel },
     },
   ],
-  complete: completeSettings,
+  save: saveChoices,
 };
 
 export const openSettings = (state: TuiState): Step => openStepper(state, SETTINGS);
 
-function completeSettings(state: TuiState, choices: StepChoices): Step {
+function saveChoices(state: TuiState, choices: StepChoices): Step {
   const run: Partial<GlobalRunSettings> = {};
   const changed: string[] = [];
   const save: Omit<SaveSettingsEffect, 'message'> = { type: 'saveSettings', run, ...(state.sessionId ? { sessionId: state.sessionId } : {}) };
@@ -133,7 +135,7 @@ function completeSettings(state: TuiState, choices: StepChoices): Step {
     changed.push(`Parallel ${parallel}`);
   }
 
-  if (changed.length === 0) return step(say(state, 'system', 'No changes.'));
+  if (changed.length === 0) return step(state);
   const effect: SaveSettingsEffect = { ...save, message: `Settings: ${changed.join(' · ')}` };
   const risks = [...(run.supervisorLevel === 'act' ? [ACT_RISK] : []), ...(run.autorun ? [AUTORUN_RISK] : [])];
   if (risks.length === 0) return saveSettings(state, effect);
@@ -143,22 +145,32 @@ function completeSettings(state: TuiState, choices: StepChoices): Step {
     ...state,
     overlay: {
       kind: 'confirm',
-      title: 'Save these settings?',
+      title: 'Save this setting?',
       message: effect.message,
-      note: `${risks.join('\n')}\nThey apply to this session's run now, and to every later run.`,
-      action: { kind: 'save-settings', effect },
+      note: `${risks.join('\n')}\nIt applies to this session's run now, and to every later run.`,
+      action: { kind: 'save-settings', effect, ...(state.overlay?.kind === 'stepper' ? { menu: state.overlay.stepper } : {}) },
     },
   });
 }
 
+/** The confirmation's answer, back on the menu it was asked from — with the setting saved only if `confirmed`. */
+export function answerSaveSettings(state: TuiState, action: SaveSettingsAction, confirmed: boolean): Step {
+  const closed = { ...state, overlay: null };
+  const { state: next, effects } = confirmed ? saveSettings(closed, action.effect) : step(closed);
+  return step(action.menu ? reopenStepper(next, action.menu) : next, effects);
+}
+
 /**
- * The flags `/auto` and `/parallel` set are updated here, not when the save
- * lands, as those commands do: the daemon never answers them back.
+ * Everything is updated here, not when the save lands: the flags `/auto` and
+ * `/parallel` set because the daemon never answers them back, the run
+ * settings so the open menu marks the new value at once. The daemon's answer
+ * then replaces the run settings with the same values.
  */
 export function saveSettings(state: TuiState, effect: SaveSettingsEffect): Step {
   return step({
     ...state,
     ...(effect.autonomous !== undefined ? { autonomous: effect.autonomous } : {}),
     ...(effect.maxParallel !== undefined ? { maxParallel: effect.maxParallel } : {}),
+    runSettings: { ...state.runSettings, ...effect.run },
   }, [effect]);
 }

@@ -103,8 +103,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 ### Changed
 
 - **`/planner` is one stepped flow.** In the terminal UI and in VS Code it
-  walks Harness › Model › Effort and saves once, at the end; cancelling
-  applies nothing. `/planner <provider>`, `/model` and `/planner-effort`
+  walks Harness › Model › Effort; VS Code saves once, at the end, and
+  cancelling there applies nothing. `/planner <provider>`, `/model` and `/planner-effort`
   remain as shortcuts. The user-facing name is now *planner model*; the
   `orchestratorModel` setting and `ORCHESTRATOR_MODEL` are unchanged.
 - **`/settings` walks your run settings.** Autonomy, supervisor (with retries
@@ -116,14 +116,16 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   `/settings` they are numbers, typed or moved by ↑/↓, instead of preset lists.
 - **Terminal pickers are restyled.** Short lists are numbered, labels and
   details are aligned, and the current value is marked. Multi-choice pickers
-  switch steps with ←/→ (tab and shift-tab still work) and save nothing until
-  the last one.
+  switch steps with ←/→ (tab and shift-tab still work).
 - **The welcome shows a compact 3-row logo at every terminal size.** The mark
   carries the wordmark (plain bold text, letter-spaced) and version beside it, and stays at
   the top of a short terminal; the large braille banner, its one-line fallback and the
   description paragraph are gone.
 - **Esc closes the `/settings` and `/planner` menus** in the terminal UI,
   discarding choices not yet confirmed, instead of going back a step.
+- **Enter saves at once in the terminal UI's `/settings` and `/planner`.** The
+  menu shows the new value straight away and esc keeps it; `/settings` stays on
+  the step, `/planner` moves on, and Act and autorun still ask first.
 - **Your messages sit on a grey band.** In the terminal UI's chat and task view
   each message you sent is set off by a grey band the width of the pane, so it
   is easy to find when scrolling back.

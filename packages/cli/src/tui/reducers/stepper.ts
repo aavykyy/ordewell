@@ -35,7 +35,7 @@ export interface NumberStep extends StepBase {
 export type StepDefinition = ListStep | NumberStep;
 
 /**
- * A command that sets several related values in one pass. It lives in the
+ * A command that sets several related values, one step each. It lives in the
  * overlay as functions rather than as a data action the way `PickerAction`
  * does: a step's rows depend on the choices before it, so they cannot be
  * computed when the overlay opens, and nothing serialises `TuiState`.
@@ -44,8 +44,16 @@ export interface StepperDefinition {
   title: string;
   hint?: string;
   steps: StepDefinition[];
-  /** Called once, on the last step's enter, with every applicable step's choice; nothing is applied before. */
-  complete(state: TuiState, choices: StepChoices): Step;
+  /** Whether enter moves on to the next step, closing after the last, or stays to show what it saved. */
+  advanceOnEnter: boolean;
+  /**
+   * Called on every enter with every applicable step's choice, and expected to
+   * save only what differs from `state` — updating `state` too, since the rows
+   * are rebuilt from it to show the choice as the current one. It runs with
+   * the stepper still open: a hook that puts an overlay of its own in its
+   * place, such as a confirmation, owns the way back.
+   */
+  save(state: TuiState, choices: StepChoices): Step;
 }
 
 /** One step in the header. `value` is the chosen row's label, on a step already passed. */
@@ -79,43 +87,46 @@ export interface StepperState {
 export function openStepper(state: TuiState, definition: StepperDefinition): Step {
   const { choices, lists } = settle(state, definition, {});
   const first = lists.findIndex((list) => list !== null);
-  if (first === -1) return definition.complete(state, choices);
+  if (first === -1) return definition.save(state, choices);
   return step({ ...state, overlay: { kind: 'stepper', stepper: show(state, definition, choices, first) } });
 }
 
 /**
- * Rebuilds the open stepper's rows from fresh state — runners or models that
- * landed after it opened — keeping its step, choices and filter. A step the
- * new data would skip stays on screen as it was; moving the user off it
- * mid-answer would be the more confusing of the two.
+ * Rebuilds the open stepper's rows from fresh state — runners, models or the
+ * daemon's answer to a save, landed after it opened — keeping its step,
+ * choices, filter and highlighted row. A step the new data would skip stays
+ * on screen as it was; moving the user off it mid-answer would be the more
+ * confusing of the two.
  */
 export function refreshStepper(state: TuiState): TuiState {
   const overlay = state.overlay;
   if (overlay?.kind !== 'stepper') return state;
-  const { definition, current, choices, filter, entry } = overlay.stepper;
+  const { definition, current, choices, filter, entry, items, index } = overlay.stepper;
   if (settle(state, definition, choices).lists[current] === null) return state;
   const fresh = show(state, definition, choices, current);
-  const stepper = entry ? { ...fresh, entry } : filter ? { ...fresh, filter, index: 0 } : fresh;
+  if (entry) return { ...state, overlay: { kind: 'stepper', stepper: { ...fresh, entry } } };
+  const highlighted = matchingItems(items, filter)[index]?.id;
+  const at = matchingItems(fresh.items, filter).findIndex((item) => item.id === highlighted);
+  const stepper = { ...fresh, filter, index: at !== -1 ? at : filter ? 0 : fresh.index };
   return { ...state, overlay: { kind: 'stepper', stepper } };
 }
 
 export function handleStepperKey(state: TuiState, stepper: StepperState, key: Key): Step {
   const reopen = (next: StepperState): Step => step({ ...state, overlay: { kind: 'stepper', stepper: next } });
-  const { definition, current, entry } = stepper;
+  const { definition, current, entry, choices } = stepper;
   const def = definition.steps[current];
   const typed = def.number && entry ? parseCount(entry.text, def.number.min) : null;
-  // A valid typed number goes with the user when they leave the step; with
-  // nothing but a field showing it, dropping it would read as losing it.
-  const { choices, lists } = settle(state, definition, typed === null ? stepper.choices : { ...stepper.choices, [def.id]: String(typed) });
+  const { lists } = settle(state, definition, choices);
   const items = matchingItems(stepper.items, stepper.filter);
   const before = lastIndexBefore(lists, current);
   const after = lists.findIndex((list, i) => i > current && list !== null);
 
-  // Esc cancels the whole pass, from any step and even with a filter or digits typed;
-  // ←/shift-tab are the way back. Nothing is applied until the last step's enter.
+  // Esc closes from any step, even with a filter or digits typed, and undoes
+  // nothing: every enter already saved its step, and a row or number never
+  // confirmed was never saved.
   if (key.name === 'escape') return step({ ...state, overlay: null });
-  // Jumps leave the highlighted row unconfirmed: tab and the arrows are for reaching one
-  // setting, not for answering every one on the way.
+  // Jumps leave the highlighted row or typed number unconfirmed: tab and the arrows are
+  // for reaching one setting, not for answering every one on the way.
   if (key.name === 'tab' || key.name === 'right') return after === -1 ? reopen(stepper) : reopen(show(state, definition, choices, after));
   if (key.name === 'shift-tab' || key.name === 'left') return before === -1 ? reopen(stepper) : reopen(show(state, definition, choices, before));
   if (def.number) {
@@ -154,7 +165,7 @@ function confirm(state: TuiState, stepper: StepperState, item: PickerItem | unde
   return choose(state, stepper, item.id);
 }
 
-/** Takes `value` as the step's choice and moves on, or completes after the last step. */
+/** Saves `value` as the step's choice, then stays, moves on, or closes after the last step. */
 function choose(state: TuiState, stepper: StepperState, value: string): Step {
   const { definition, current } = stepper;
   const id = definition.steps[current].id;
@@ -163,10 +174,29 @@ function choose(state: TuiState, stepper: StepperState, value: string): Step {
   const kept = value === stepper.choices[id]
     ? stepper.choices
     : Object.fromEntries(definition.steps.slice(0, current).flatMap((s) => (s.id in stepper.choices ? [[s.id, stepper.choices[s.id]]] : [])));
-  const { choices, lists } = settle(state, definition, { ...kept, [id]: value });
-  const next = lists.findIndex((list, i) => i > current && list !== null);
-  if (next === -1) return definition.complete({ ...state, overlay: null }, choices);
-  return step({ ...state, overlay: { kind: 'stepper', stepper: show(state, definition, choices, next) } });
+  const { choices } = settle(state, definition, { ...kept, [id]: value });
+  const open = { ...state, overlay: { kind: 'stepper' as const, stepper } };
+  const saved = definition.save(open, choices);
+  if (saved.state.overlay !== open.overlay) return saved;
+
+  // Rebuilt from the saved state, so an earlier choice that changed which steps apply shows at once.
+  const { lists } = settle(saved.state, definition, choices);
+  const next = !definition.advanceOnEnter ? current : lists.findIndex((list, i) => i > current && list !== null);
+  if (next === -1 || lists[next] === null) return { ...saved, state: { ...saved.state, overlay: null } };
+  return { ...saved, state: { ...saved.state, overlay: { kind: 'stepper', stepper: show(saved.state, definition, choices, next) } } };
+}
+
+/**
+ * `stepper` back on screen on the same step, its choices taken afresh from
+ * what `state` holds now — for a hook's own overlay to return to once it is
+ * answered.
+ */
+export function reopenStepper(state: TuiState, stepper: StepperState): TuiState {
+  const { definition, current } = stepper;
+  const { lists } = settle(state, definition, {});
+  const at = lists[current] !== null ? current : lists.findIndex((list) => list !== null);
+  if (at === -1) return { ...state, overlay: null };
+  return { ...state, overlay: { kind: 'stepper', stepper: show(state, definition, {}, at) } };
 }
 
 /**
