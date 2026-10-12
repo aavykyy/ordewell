@@ -5,7 +5,7 @@ import {
   type UsageLine, type UsageTotals,
   type SkillLoadBlock, type SubagentBlock, type SubagentStatus, type ThinkingDisplayBlock, type ToolBlock,
 } from '@ordewell/core';
-import { sanitize, style, truncate, width, wrap, wrapLines } from './ansi';
+import { pad, sanitize, style, truncate, width, wrap, wrapLines } from './ansi';
 import { renderMarkdown } from './markdown';
 
 /*
@@ -56,7 +56,14 @@ function messageLines(block: MessageBlock, cols: number): string[] {
     : block.skills ? skillPaintedLines(text, block.skills, room) : wrap(text, room);
   // A run update is the supervisor's input, not anyone's words: all of it keeps its colour.
   const rest: Paint = block.role === 'wake_up' ? style.yellow : (t) => t;
-  return wrapped.map((line, i) => (i === 0 ? ROLE_PREFIX[block.role](line) : rest(`  ${line}`)));
+  const rows = wrapped.map((line, i) => (i === 0 ? ROLE_PREFIX[block.role](line) : rest(`  ${line}`)));
+  return block.role === 'user' ? onBand(rows, cols) : rows;
+}
+
+/** An empty row above and below, every row painted out to the pane's edge; with colour off only the empty rows remain. */
+function onBand(rows: string[], cols: number): string[] {
+  const band = ['', ...rows, ''];
+  return style.enabled ? band.map((row) => style.band(pad(row, cols))) : band;
 }
 
 /** Wrapped, with each `/name` that loaded a skill painted as the composer paints one being typed. */

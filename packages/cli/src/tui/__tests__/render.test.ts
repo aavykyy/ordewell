@@ -914,7 +914,7 @@ describe('chat scrolling', () => {
   });
 
   it('reveals older messages when scrolled back', () => {
-    const out = text({ conversation, scroll: 30 });
+    const out = text({ conversation, scroll: 80 });
     expect(out).not.toContain('message number 40');
     expect(out).toContain('message number 20');
   });

@@ -39,13 +39,13 @@ describe('a message that loads a skill', () => {
   it('shows a planner load live and on reload without highlighting a user token', () => {
     const skill: SkillLoadNotice = { ...grilling, invokedBy: 'planner' };
     const live = hear(sent('goal', []), { type: 'planner_skill_loaded', turnId: 't1', skill });
-    expect(rowsFrom(live, '❯', 2)).toEqual(['❯ goal', '● grilling skill loaded by planner · ~/.ordewell/skills/grilling/SKILL.md']);
+    expect(rowsFrom(live, '❯', 3)).toEqual(['❯ goal', '', '● grilling skill loaded by planner · ~/.ordewell/skills/grilling/SKILL.md']);
     const history: ConversationMessage[] = [
       { role: 'user', content: 'goal', timestamp: 't1' },
       { role: 'assistant', content: 'grilling skill loaded by planner', timestamp: 't2', kind: 'skill_load', skill: { ...skill, content: 'HIDDEN BODY' } },
     ];
     const { state } = reduce(initialState({ rows: 60, cols: 80, sessionId: 's1' }), { type: 'chatRestored', history, sessionId: 's1' });
-    expect(rowsFrom(state, '❯', 2)).toEqual(rowsFrom(live, '❯', 2));
+    expect(rowsFrom(state, '❯', 3)).toEqual(rowsFrom(live, '❯', 3));
     expect(render(state).map(stripAnsi).join('\n')).not.toContain('HIDDEN BODY');
   });
 
@@ -53,8 +53,9 @@ describe('a message that loads a skill', () => {
     const state = sent('/grilling the cache design', [grilling]);
 
     expect(messagesOf(state).filter((m) => m.role === 'user').map((m) => m.text)).toEqual(['/grilling the cache design']);
-    expect(rowsFrom(state, '❯', 3)).toEqual([
+    expect(rowsFrom(state, '❯', 4)).toEqual([
       '❯ /grilling the cache design',
+      '',
       '● /grilling skill loaded · ~/.ordewell/skills/grilling/SKILL.md',
       '',
     ]);
@@ -72,7 +73,7 @@ describe('a message that loads a skill', () => {
 
   it('cuts the path from the left in a narrow pane', () => {
     style.enabled = false;
-    const [, notice] = rowsFrom(sent('/grilling', [grilling], 44), '❯', 2);
+    const [, , notice] = rowsFrom(sent('/grilling', [grilling], 44), '❯', 3);
 
     expect(notice.startsWith('● /grilling skill loaded · …')).toBe(true);
     expect(notice.endsWith('/SKILL.md')).toBe(true);
@@ -81,7 +82,7 @@ describe('a message that loads a skill', () => {
   it('cuts a Windows-style path at a backslash boundary too', () => {
     style.enabled = false;
     const winSkill: SkillLoadNotice = { ...grilling, path: 'C:\\Users\\ada\\.ordewell\\skills\\grilling\\SKILL.md' };
-    const [, notice] = rowsFrom(sent('/grilling', [winSkill], 44), '❯', 2);
+    const [, , notice] = rowsFrom(sent('/grilling', [winSkill], 44), '❯', 3);
 
     expect(notice).toMatch(/· …\\(?:[^\\]+\\)*SKILL\.md$/);
   });
@@ -113,7 +114,7 @@ describe('a task skill the user named', () => {
 
   it('shows the attach notice under the message live', () => {
     const state = sent('use /tdd here', [tdd]);
-    expect(rowsFrom(state, '❯', 2)).toEqual(['❯ use /tdd here', notice]);
+    expect(rowsFrom(state, '❯', 3)).toEqual(['❯ use /tdd here', '', notice]);
   });
 
   it('shows the same notice on reload', () => {
@@ -123,7 +124,7 @@ describe('a task skill the user named', () => {
       { role: 'user', content: '/tdd will be attached to fitting tasks', timestamp: '2026-10-09T10:00:00.000Z', kind: 'skill_load', skill: { ...tdd, content: '' } },
     ];
     const { state } = reduce(initialState({ rows: 60, cols: 80, sessionId: 's1' }), { type: 'chatRestored', history, sessionId: 's1' });
-    expect(rowsFrom(state, '❯', 2)).toEqual(['❯ use /tdd here', notice]);
+    expect(rowsFrom(state, '❯', 3)).toEqual(['❯ use /tdd here', '', notice]);
   });
 });
 
@@ -138,8 +139,9 @@ describe('a reloaded session', () => {
     style.enabled = false;
     const { state } = reduce(initialState({ rows: 60, cols: 80, sessionId: 's1' }), { type: 'chatRestored', history, sessionId: 's1' });
 
-    expect(rowsFrom(state, '❯ /', 4)).toEqual([
+    expect(rowsFrom(state, '❯ /', 5)).toEqual([
       '❯ /grilling the cache',
+      '',
       '● /grilling skill loaded · ~/.ordewell/skills/grilling/SKILL.md',
       '',
       '◆ Which store?',
