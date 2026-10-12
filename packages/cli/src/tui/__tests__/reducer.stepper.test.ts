@@ -99,6 +99,20 @@ describe('stepper', () => {
     expect(at(s)).toEqual({ step: 'model', row: 'opus', trail: 'Harness: Claude Code › [Model] › Effort' });
   });
 
+  it("a changed choice drops the later steps' pre-selections, even ones the new rows still offer", () => {
+    // Both sizes come in both colours; what a colour pre-selects is its own.
+    const shirts: StepperDefinition = {
+      title: 'Shirt',
+      steps: [
+        { id: 'colour', label: 'Colour', items: () => [{ id: 'red', label: 'Red', selected: true }, { id: 'blue', label: 'Blue' }] },
+        { id: 'size', label: 'Size', items: (_s, c) => ['s', 'l'].map((id) => ({ id, label: id, selected: id === (c.colour === 'red' ? 's' : 'l') })) },
+      ],
+      complete: (state) => ({ state, effects: [] }),
+    };
+    const open = openStepper(base, shirts).state;
+    expect(at(keys(open, 'down', 'enter')).row).toBe('l');
+  });
+
   it('leaves a step that does not apply out of the header and the walk', () => {
     const s = keys(opened(), 'up', 'enter', 'down');
     expect(at(s).trail).toBe('Harness: Claude Code › [Model] › Effort');

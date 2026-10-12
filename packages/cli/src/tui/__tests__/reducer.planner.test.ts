@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { initialState, reduce, type Action } from '../reducer';
+import { initialState, reduce, type Action, type Step } from '../reducer';
+import type { StepperState } from '../reducers/stepper';
 import type { SessionMessage } from '@ordewell/core';
 import type { PickerItem, TuiState } from '../state';
 import { lastMessage, messagesOf } from './chat';
@@ -39,66 +40,204 @@ const installedAll: Partial<TuiState> = {
   ],
 };
 
-describe('/planner', () => {
-  it('opens a picker listing the coding agents before the API providers', () => {
-    const { state } = run('/planner', { ...installedAll, configuredProviders: ['openrouter'] });
+function stepperOf(state: TuiState): StepperState {
+  if (state.overlay?.kind !== 'stepper') throw new Error('expected a stepper overlay');
+  return state.overlay.stepper;
+}
 
-    expect(state.overlay).toMatchObject({ kind: 'picker', picker: { action: { kind: 'set-planner' } } });
-    expect(items(state).map((i) => i.id)).toEqual(['claude-code', 'codex', 'opencode', 'openrouter']);
+const press = (state: TuiState, name: string): Step => reduce(state, { type: 'key', key: { name } });
+
+/** Move the stepper's cursor onto `id`, then press enter. */
+function choose(state: TuiState, id: string): Step {
+  const stepper = stepperOf(state);
+  const index = stepper.items.findIndex((i) => i.id === id);
+  if (index < 0) throw new Error(`no row for "${id}"`);
+  return press({ ...state, overlay: { kind: 'stepper', stepper: { ...stepper, index } } }, 'enter');
+}
+
+/** The step on screen and the row its cursor rests on. */
+const at = (state: TuiState) => {
+  const s = stepperOf(state);
+  return { step: s.trail.find((t) => t.active)?.label, on: s.items[s.index]?.id };
+};
+
+describe('/planner', () => {
+  const models = [
+    { id: 'opus', label: 'Claude Opus 5.5', provider: 'anthropic', runners: ['claude-code'], variants: [{ id: 'low', label: 'Low' }, { id: 'high', label: 'High' }] },
+    { id: 'haiku', label: 'Claude Haiku 5.5', provider: 'anthropic', runners: ['claude-code'], variants: [] },
+    { id: 'gpt', label: 'GPT', provider: 'openai', runners: ['codex'], variants: [{ id: 'xhigh', label: 'Extra high' }] },
+  ];
+  const ready: Partial<TuiState> = {
+    ...installedAll,
+    models,
+    orchestratorModels: [
+      { id: 'deepseek/v4', label: 'DeepSeek V4', provider: 'openrouter' },
+      { id: 'qwen/max', label: 'Qwen Max', provider: 'openrouter' },
+    ],
+    configuredProviders: ['openrouter'],
+    plannerProvider: 'codex',
+    orchestratorModel: 'gpt',
+  };
+
+  it('opens a stepper on the harness step, coding agents before API providers', () => {
+    const { state } = run('/planner', ready);
+
+    expect(at(state)).toEqual({ step: 'Harness', on: 'codex' });
+    expect(stepperOf(state).items.map((i) => i.id)).toEqual(['claude-code', 'codex', 'opencode', 'openrouter']);
   });
 
   it('says a coding agent needs no API key', () => {
-    const { state } = run('/planner', installedAll);
-    expect(items(state).find((i) => i.id === 'claude-code')?.detail).toMatch(/no API key/i);
+    const { state } = run('/planner', ready);
+    expect(stepperOf(state).items.find((i) => i.id === 'claude-code')?.detail).toMatch(/no API key/i);
   });
 
-  it('marks the current planner as selected', () => {
-    const { state } = run('/planner', { ...installedAll, plannerProvider: 'codex' });
-    expect(items(state).find((i) => i.id === 'codex')?.selected).toBe(true);
-  });
+  it('keeps an agent whose CLI is not installed listed, with the reason, and refuses it', () => {
+    const opened = run('/planner', { ...ready, runners: [{ id: 'codex', name: 'Codex', enabled: true }] }).state;
 
-  it('disables an agent whose CLI is not installed, with the reason', () => {
-    const { state } = run('/planner', {
-      runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }],
-    });
+    const claude = stepperOf(opened).items.find((i) => i.id === 'claude-code')!;
+    expect(claude.disabled).toBe(true);
+    expect(claude.detail).toMatch(/not installed|PATH/);
 
-    const codex = items(state).find((i) => i.id === 'codex')!;
-    expect(codex.disabled).toBe(true);
-    expect(codex.detail).toMatch(/not installed|PATH/);
-    // Listed, not hidden — "why isn't Codex here?" is the worse question.
-    expect(items(state).map((i) => i.id)).toContain('codex');
-  });
-
-  it('refuses to select a disabled agent and keeps the picker open', () => {
-    const opened = run('/planner', { runners: [] }).state;
-    const { state, effects } = pick(opened, 'codex');
-
+    const { state, effects } = choose(opened, 'claude-code');
     expect(effects).toEqual([]);
-    expect(state.overlay?.kind).toBe('picker');
+    expect(at(state).step).toBe('Harness');
     expect(lastMessage(state)?.role).toBe('error');
   });
 
-  it('selecting an agent persists the choice', () => {
-    const opened = run('/planner', installedAll).state;
-    const { state, effects } = pick(opened, 'claude-code');
+  /** Harness › Model › Effort, each confirmed with enter. */
+  it('asks harness, model and effort for a harness model with variants, then sends them together', () => {
+    let state = run('/planner', ready).state;
+    state = choose(state, 'claude-code').state;
+    expect(at(state).step).toBe('Model');
+    state = choose(state, 'opus').state;
+    expect(at(state).step).toBe('Effort');
+    expect(stepperOf(state).items.map((i) => i.label)).toEqual(['Runner default', 'Low', 'High']);
 
-    expect(effects[0]).toMatchObject({ type: 'setPlanner', provider: 'claude-code' });
-    expect(state.overlay).toBeNull();
+    const done = choose(state, 'high');
+    expect(done.state.overlay).toBeNull();
+    expect(done.effects).toEqual([{
+      type: 'setPlannerChoice', provider: 'claude-code', modelId: 'opus', effort: 'high',
+      notice: 'Planner: Claude Code · Claude Opus 5.5 · High effort',
+    }]);
   });
 
-  it('leaves the model decision to the daemon, whatever the old backend served', () => {
-    // The daemon resolves the new backend's model (remembered, catalog
-    // default, or nothing) — the reducer no longer guesses at it client-side.
-    const opened = run('/planner', {
-      ...installedAll,
-      orchestratorModel: 'deepseek/deepseek-v4-flash',
-      models: [{ id: 'sonnet', label: 'Sonnet', provider: 'anthropic', runners: ['claude-code'] }],
-    }).state;
+  it('skips the effort step for a model without variants', () => {
+    let state = run('/planner', ready).state;
+    state = choose(state, 'claude-code').state;
+    expect(stepperOf(state).trail.map((t) => t.label)).toEqual(['Harness', 'Model', 'Effort']);
 
-    expect(pick(opened, 'claude-code').effects[0]).toEqual({ type: 'setPlanner', provider: 'claude-code' });
+    const done = choose(state, 'haiku');
+    expect(done.state.overlay).toBeNull();
+    expect(done.effects).toEqual([{
+      type: 'setPlannerChoice', provider: 'claude-code', modelId: 'haiku', effort: '',
+      notice: 'Planner: Claude Code · Claude Haiku 5.5',
+    }]);
   });
 
-  it('/planner <id> sets it without opening the picker', () => {
+  it('asks only harness and model for a vendor backend, from the vendor catalog', () => {
+    let state = run('/planner', ready).state;
+    state = choose(state, 'openrouter').state;
+    expect(stepperOf(state).trail.map((t) => t.label)).toEqual(['Harness', 'Model']);
+    expect(stepperOf(state).items.map((i) => i.id)).toEqual(['deepseek/v4', 'qwen/max']);
+
+    expect(choose(state, 'qwen/max').effects).toEqual([{
+      type: 'setPlannerChoice', provider: 'openrouter', modelId: 'qwen/max', effort: '',
+      notice: 'Planner: OpenRouter · Qwen Max',
+    }]);
+  });
+
+  it("lists the chosen harness's models, not the current planner's", () => {
+    let state = run('/planner', ready).state;
+    state = choose(state, 'claude-code').state;
+    expect(stepperOf(state).items.map((i) => i.id)).toEqual(['opus', 'haiku']);
+
+    // Back to the harness step and onto another one: the model step is rebuilt for it.
+    state = press(state, 'escape').state;
+    state = choose(state, 'codex').state;
+    expect(stepperOf(state).items.map((i) => i.id)).toEqual(['gpt']);
+    expect(at(state).on).toBe('gpt');
+  });
+
+  it('pre-selects the model remembered for the chosen backend', () => {
+    let state = run('/planner', { ...ready, plannerModels: { 'claude-code': { model: 'haiku' } } }).state;
+    state = choose(state, 'claude-code').state;
+    expect(at(state)).toEqual({ step: 'Model', on: 'haiku' });
+  });
+
+  it('pre-selects the current model when the backend is unchanged, and the first model otherwise', () => {
+    const current = choose(run('/planner', { ...ready, plannerProvider: 'claude-code', orchestratorModel: 'haiku' }).state, 'claude-code').state;
+    expect(at(current).on).toBe('haiku');
+
+    const fresh = choose(run('/planner', ready).state, 'claude-code').state;
+    expect(at(fresh).on).toBe('opus');
+  });
+
+  it('pre-selects the remembered effort while that model still declares it, else the runner default', () => {
+    const remembered = { ...ready, plannerModels: { 'claude-code': { model: 'opus', effort: 'low' } } };
+    let state = choose(run('/planner', remembered).state, 'claude-code').state;
+    state = choose(state, 'opus').state;
+    expect(at(state)).toEqual({ step: 'Effort', on: 'low' });
+
+    const stale = { ...ready, plannerModels: { 'claude-code': { model: 'opus', effort: 'max' } } };
+    state = choose(choose(run('/planner', stale).state, 'claude-code').state, 'opus').state;
+    expect(stepperOf(state).items[stepperOf(state).index].label).toBe('Runner default');
+  });
+
+  it('pre-selects the current effort when the backend and model are unchanged', () => {
+    const current = { ...ready, plannerProvider: 'claude-code', orchestratorModel: 'opus', plannerEffort: 'high' };
+    const state = choose(choose(run('/planner', current).state, 'claude-code').state, 'opus').state;
+    expect(at(state).on).toBe('high');
+  });
+
+  it('sends the runner default as an empty effort', () => {
+    const state = choose(choose(run('/planner', ready).state, 'claude-code').state, 'opus').state;
+    const { effects } = press(state, 'enter');
+    expect(effects).toEqual([{
+      type: 'setPlannerChoice', provider: 'claude-code', modelId: 'opus', effort: '',
+      notice: 'Planner: Claude Code · Claude Opus 5.5',
+    }]);
+  });
+
+  it('explains an empty catalog for the chosen harness', () => {
+    const state = choose(run('/planner', { ...ready, models: [] }).state, 'claude-code').state;
+    const row = stepperOf(state).items[0];
+    expect(row.disabled).toBe(true);
+    expect(row.label).toMatch(/No claude-code models discovered yet/);
+    expect(row.detail).toContain('/refresh');
+  });
+
+  it('changes nothing when cancelled, from any step', () => {
+    const opened = run('/planner', ready).state;
+    const first = press(opened, 'escape');
+    expect(first.effects).toEqual([]);
+    expect(first.state.overlay).toBeNull();
+    expect(first.state.plannerProvider).toBe('codex');
+
+    let state = choose(opened, 'claude-code').state;
+    state = press(state, 'escape').state;
+    const cancelled = press(state, 'escape');
+    expect(cancelled.effects).toEqual([]);
+    expect(cancelled.state.overlay).toBeNull();
+    expect(cancelled.state.orchestratorModel).toBe('gpt');
+  });
+
+  it('fills in the preflight once runner discovery lands', () => {
+    // The stepper can be opened before the daemon has answered; every agent
+    // would otherwise be stuck showing as missing.
+    const opened = run('/planner', { ...ready, runners: [] }).state;
+    expect(stepperOf(opened).items.find((i) => i.id === 'codex')?.disabled).toBe(true);
+
+    const { state } = reduce(opened, { type: 'runnersLoaded', runners: [{ id: 'codex', name: 'Codex', enabled: true }] });
+    expect(stepperOf(state).items.find((i) => i.id === 'codex')?.disabled).toBe(false);
+  });
+
+  it('fills in the model step once the catalog lands', () => {
+    const opened = choose(run('/planner', { ...ready, models: [] }).state, 'claude-code').state;
+    const { state } = reduce(opened, { type: 'modelsLoaded', models });
+    expect(stepperOf(state).items.map((i) => i.id)).toEqual(['opus', 'haiku']);
+  });
+
+  it('/planner <id> switches directly, leaving the model to the daemon', () => {
     const { state, effects } = run('/planner opencode', installedAll);
     expect(effects).toEqual([{ type: 'setPlanner', provider: 'opencode' }]);
     expect(state.overlay).toBeNull();
@@ -110,22 +249,15 @@ describe('/planner', () => {
     expect(lastMessage(state)?.role).toBe('error');
   });
 
-  it('fills in the preflight once runner discovery lands', () => {
-    // The picker can be opened before the daemon has answered; every agent
-    // would otherwise be stuck showing as missing.
-    const opened = run('/planner', { runners: [] }).state;
-    expect(items(opened).find((i) => i.id === 'codex')?.disabled).toBe(true);
-
-    const { state } = reduce(opened, {
-      type: 'runnersLoaded',
-      runners: [{ id: 'codex', name: 'Codex', enabled: true }],
-    });
-    expect(items(state).find((i) => i.id === 'codex')?.disabled).toBe(false);
-  });
-
   it('tracks the planner the daemon reports', () => {
     const { state } = reduce(initialState(), { type: 'settingsLoaded', settings: { aiProvider: 'codex' } });
     expect(state.plannerProvider).toBe('codex');
+  });
+
+  it('tracks the per-backend model memory the daemon reports', () => {
+    const plannerModels = { codex: { model: 'gpt', effort: 'xhigh' } };
+    const { state } = reduce(initialState(), { type: 'settingsLoaded', settings: { plannerModels } });
+    expect(state.plannerModels).toEqual(plannerModels);
   });
 });
 

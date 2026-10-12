@@ -6,7 +6,9 @@ import { findCommand, type ParsedCommand } from '../slash';
 import { findTask, plannerInFlight, type PickerItem, type TuiState } from '../state';
 import { modelsForRunner } from '../taskAssignment';
 import { say } from '../transcript';
-import { DEFAULT_EFFORT, picker, pickerItemsFor, plannerEffortItems, plannerItems, providerErrorHint } from './pickers';
+import { DEFAULT_EFFORT, picker, pickerItemsFor, plannerEffortItems, providerErrorHint } from './pickers';
+import { plannerStepper } from './plannerStepper';
+import { openStepper } from './stepper';
 import { taskActionEffect } from './planPane';
 import { answerCheckpoint, continueTaskStep } from './taskView';
 import {
@@ -245,7 +247,7 @@ function setModel(state: TuiState, args: string[]): Step {
       ...state,
       overlay: {
         kind: 'picker',
-        picker: picker('Orchestrator model', items, { kind: 'set-model' }, { hint: providerErrorHint(state), filterable: true }),
+        picker: picker('Planner model', items, { kind: 'set-model' }, { hint: providerErrorHint(state), filterable: true }),
       },
     },
     [{ type: 'loadModels' }],
@@ -260,19 +262,14 @@ function setPlanner(state: TuiState, args: string[]): Step {
     }
     return step(state, [{ type: 'setPlanner', provider: id }]);
   }
-  return step({
-    ...state,
-    overlay: {
-      kind: 'picker',
-      picker: picker('Planner', plannerItems(state), { kind: 'set-planner' }, {
-        hint: 'Who researches your goal and writes the plan. Coding agents use their own subscription — no API key.',
-      }),
-    },
-  });
+  const opened = openStepper(state, plannerStepper);
+  // The model step lists the chosen backend's catalog, so fetch it fresh; the
+  // open stepper refills when it lands.
+  return { ...opened, effects: [...opened.effects, { type: 'loadModels' }] };
 }
 
 function setPlannerEffort(state: TuiState, args: string[]): Step {
-  const items = plannerEffortItems(state);
+  const items = plannerEffortItems(state, state.plannerProvider, state.orchestratorModel, state.plannerEffort);
   if (args[0]) {
     const wanted = args[0].toLowerCase();
     const match = items.find((i) => !i.disabled && (i.id === wanted || (wanted === 'default' && i.id === DEFAULT_EFFORT)));

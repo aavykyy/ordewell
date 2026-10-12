@@ -29,6 +29,8 @@ export type Effect =
   | { type: 'setModel'; modelId: string }
   | { type: 'setPlanner'; provider: string }
   | { type: 'setPlannerEffort'; effort: string }
+  /** `/planner`'s three answers at once, so the daemon never holds a provider with the old backend's model. */
+  | { type: 'setPlannerChoice'; provider: string; modelId: string; effort: string; notice: string }
   | { type: 'setApiKey'; provider: string; key: string }
   | { type: 'setAllowlist'; runner: string; modelIds: string[] }
   | { type: 'setRunnerEnabled'; runner: string; enabled: boolean }

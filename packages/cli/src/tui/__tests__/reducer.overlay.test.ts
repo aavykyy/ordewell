@@ -74,19 +74,19 @@ describe('picker navigation', () => {
 
 describe('fixed-list picker', () => {
   const planners = (over: Partial<PickerState> = {}) => withPicker({
-    action: { kind: 'set-planner' },
+    action: { kind: 'set-planner-effort' },
     filterable: false,
     items: [
-      { id: 'claude-code', label: 'Claude Code' },
-      { id: 'codex', label: 'Codex' },
-      { id: 'opencode', label: 'OpenCode', detail: 'CLI not installed', disabled: true },
+      { id: 'low', label: 'Low' },
+      { id: 'high', label: 'High' },
+      { id: '', label: 'Max', detail: 'not offered by this model', disabled: true },
     ],
     ...over,
   });
 
   it('a digit chooses its row straight away', () => {
     const { state, effects } = press(planners(), 'char', '2');
-    expect(effects).toEqual([{ type: 'setPlanner', provider: 'codex' }]);
+    expect(effects).toEqual([{ type: 'setPlannerEffort', effort: 'high' }]);
     expect(state.overlay).toBeNull();
   });
 
@@ -100,7 +100,7 @@ describe('fixed-list picker', () => {
     const { state, effects } = press(planners(), 'char', '3');
     expect(effects).toEqual([]);
     expect(pickerOf(state).items).toHaveLength(3);
-    expect(messagesOf(state).at(-1)?.text).toContain('CLI not installed');
+    expect(messagesOf(state).at(-1)?.text).toContain('not offered by this model');
   });
 
   it('typing does not filter it', () => {
@@ -110,7 +110,7 @@ describe('fixed-list picker', () => {
 
   it('a digit toggles a row of a multi-select', () => {
     const s = press(planners({ action: { kind: 'set-runners' }, multi: true, chosen: [] }), 'char', '2').state;
-    expect(pickerOf(s).chosen).toEqual(['codex']);
+    expect(pickerOf(s).chosen).toEqual(['high']);
     expect(pickerOf(s).index).toBe(1);
   });
 

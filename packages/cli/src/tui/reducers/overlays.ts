@@ -217,11 +217,6 @@ function choose(state: TuiState, picker: PickerState, item: PickerItem | undefin
     case 'set-model':
       return step(closed, [{ type: 'setModel', modelId: item.id }]);
 
-    case 'set-planner':
-      // The daemon decides what the new backend's model should become — its
-      // own remembered choice, that backend's catalog default, or nothing —
-      // and the effect that runs this consumes whatever it returns.
-      return step(closed, [{ type: 'setPlanner', provider: item.id }]);
     case 'set-planner-effort':
       return step(closed, [{ type: 'setPlannerEffort', effort: item.id === DEFAULT_EFFORT ? '' : item.id }]);
 

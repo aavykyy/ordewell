@@ -649,7 +649,7 @@ describe('TUI end to end', () => {
     h.type('\r');
 
     await vi.waitFor(() => {
-      expect(h.screen()).toContain('Orchestrator model set to openrouter/newer-model.');
+      expect(h.screen()).toContain('Planner model set to openrouter/newer-model.');
     });
     expect(h.envWrites.ORCHESTRATOR_MODEL).toBe('openrouter/newer-model');
     expect(h.daemon.mocks.updateSettings).toHaveBeenCalledWith({ orchestratorModel: 'openrouter/newer-model' });

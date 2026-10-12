@@ -354,7 +354,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       await api.updateSettings({ orchestratorModel: effect.modelId });
       deps.setEnvVar('ORCHESTRATOR_MODEL', effect.modelId);
       dispatch({ type: 'settingsLoaded', settings: { orchestratorModel: effect.modelId } });
-      dispatch({ type: 'notice', message: `Orchestrator model set to ${effect.modelId}.` });
+      dispatch({ type: 'notice', message: `Planner model set to ${effect.modelId}.` });
       return;
 
     case 'setPlanner': {
@@ -381,6 +381,27 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
           : `Planner set to ${meta.label}.`} ${plannerModelNotice(recall)}`,
       });
       await loadModels(deps);
+      return;
+    }
+
+    case 'setPlannerChoice': {
+      // One write, so the daemon never holds the new provider with the old
+      // backend's model. An explicit model also turns off its switch recall
+      // and is remembered for this provider, the way VS Code's
+      // `PlannerSelection.setModel` remembers a pick.
+      const env = { AI_PROVIDER: effect.provider, ORCHESTRATOR_MODEL: effect.modelId, ORDEWELL_PLANNER_EFFORT: effect.effort };
+      const settings = await api.updateSettings({ env });
+      persistAfterDaemon(deps, env);
+      dispatch({
+        type: 'settingsLoaded',
+        settings: {
+          ...settings,
+          aiProvider: effect.provider as AiProvider,
+          orchestratorModel: effect.modelId,
+          plannerThinkingEffort: effect.effort,
+        },
+      });
+      dispatch({ type: 'notice', message: effect.notice });
       return;
     }
 

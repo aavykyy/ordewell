@@ -112,6 +112,8 @@ export function applySettings(state: TuiState, settings: Partial<SettingsRespons
       typeof settings.aiProvider === 'string' ? settings.aiProvider : state.plannerProvider,
     plannerEffort:
       typeof settings.plannerThinkingEffort === 'string' ? settings.plannerThinkingEffort : state.plannerEffort,
+    plannerModels:
+      settings.plannerModels && typeof settings.plannerModels === 'object' ? settings.plannerModels : state.plannerModels,
     maxParallel: typeof settings.maxParallel === 'number' ? settings.maxParallel : state.maxParallel,
     allowlist:
       settings.modelAllowlist && typeof settings.modelAllowlist === 'object'

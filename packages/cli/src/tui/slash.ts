@@ -47,8 +47,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'task-ops', usage: '/task-ops <id> [on|off]', description: 'Make a task an ops task — run in your checkout once its dependencies are merged — or a change task', category: 'tasks' },
 
   // Models & providers
-  { name: 'planner', usage: '/planner [<provider>]', description: 'Choose who plans — an API provider or a coding agent (no API key)', category: 'models' },
-  { name: 'model', usage: '/model [set <id>]', description: 'Show or set the orchestrator model', category: 'models' },
+  { name: 'planner', usage: '/planner [<provider>]', description: 'Pick the planner — harness, model and effort in one go', category: 'models' },
+  { name: 'model', usage: '/model [set <id>]', description: 'Show or set the planner model', category: 'models' },
   { name: 'planner-effort', usage: '/planner-effort [<level>]', description: "Thinking effort for a coding-agent planner", category: 'models' },
   { name: 'key', usage: '/key [set <provider> <key>]', description: 'Configure API provider keys', category: 'models' },
   { name: 'allowlist', usage: '/allowlist [set <runner> <ids> | clear <runner>]', description: 'Limit which models a runner may use', category: 'models' },
