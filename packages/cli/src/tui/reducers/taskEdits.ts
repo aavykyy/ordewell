@@ -79,6 +79,7 @@ export function openTaskDepsPicker(state: TuiState, task: TaskView): Step {
       picker: picker(`Depends on · ${titledTaskRef(task)}`, items, action, {
         hint: 'Only tasks earlier in the plan can be dependencies.',
         multi: true,
+        filterable: true,
         chosen: task.dependencies.filter((id) => items.some((i) => i.id === id)),
       }),
     },
@@ -99,6 +100,7 @@ export function openTaskSkillsPicker(state: TuiState, task: TaskView): Step {
       picker: picker(`Skills · ${titledTaskRef(task)}`, items, action, {
         hint: "Attached skills go into this task's prompt when it starts.",
         multi: true,
+        filterable: true,
         chosen: task.skills ?? [],
       }),
     },
@@ -149,6 +151,7 @@ export function openTaskModelPicker(state: TuiState, task: TaskView): Step {
           hint: task.assignedRunner
             ? `Showing models discovered for ${task.assignedRunner}.`
             : 'Choose the model this task will run with.',
+          filterable: true,
         }),
       },
     },

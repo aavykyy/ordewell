@@ -500,7 +500,7 @@ describe('overlays', () => {
         kind: 'picker',
         picker: {
           title: 'Orchestrator model', items: [{ id: 'a/1', label: 'Alpha' }],
-          filter: '', index: 0, multi: false, chosen: [], action: { kind: 'set-model' },
+          filter: '', index: 0, multi: false, chosen: [], filterable: true, action: { kind: 'set-model' },
         },
       },
     });
@@ -515,7 +515,7 @@ describe('overlays', () => {
         picker: {
           title: 'Allowed models',
           items: [{ id: 'a/1', label: 'Alpha' }, { id: 'b/2', label: 'Beta' }],
-          filter: '', index: 0, multi: true, chosen: ['b/2'], action: { kind: 'set-allowlist', runner: 'opencode' },
+          filter: '', index: 0, multi: true, chosen: ['b/2'], filterable: true, action: { kind: 'set-allowlist', runner: 'opencode' },
         },
       },
     });

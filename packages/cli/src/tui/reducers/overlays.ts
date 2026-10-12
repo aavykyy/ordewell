@@ -10,8 +10,9 @@ import { WHEEL_NOTCH, isWheel, pageNotch, scrollPointed } from './pointer';
 import { taskActionEffect } from './planPane';
 import { assignTaskEffort, assignTaskSkills, assignTaskMode, assignTaskModel, assignTaskRunner } from './taskEdits';
 import { say } from '../transcript';
-import { clamp, fail, step, type Step } from './shared';
+import { clamp, digitRow, editText, fail, step, type Step } from './shared';
 import { runSettingsEffect } from './runSettings';
+import { handleStepperKey } from './stepper';
 
 export function handleOverlayKey(state: TuiState, overlay: NonNullable<TuiState['overlay']>, key: Key): Step {
   if (overlay.kind === 'help') return handleHelpKey(state, overlay, key);
@@ -25,9 +26,10 @@ export function handleOverlayKey(state: TuiState, overlay: NonNullable<TuiState[
   // their list. Everything else here floats over the panes with nothing of its
   // own to scroll, so the notch belongs to the pane underneath rather than in
   // the bin — an approval prompt used to freeze both panes solid.
-  if (isWheel(key) && overlay.kind !== 'picker') return scrollPointed(state, key);
+  if (isWheel(key) && overlay.kind !== 'picker' && overlay.kind !== 'stepper') return scrollPointed(state, key);
   if (overlay.kind === 'approval') return handleApprovalKey(state, overlay, key);
   if (overlay.kind === 'confirm') return handleConfirmKey(state, overlay, key);
+  if (overlay.kind === 'stepper') return handleStepperKey(state, overlay.stepper, key);
   // Cancelling is a choice here, not a dismissal: the run is parked in the
   // daemon until it hears one.
   if (key.name === 'escape' && overlay.kind === 'picker' && overlay.picker.action.kind === 'isolation-blocked') {
@@ -126,17 +128,6 @@ function handlePromptKey(
   return step({ ...state, overlay: { ...overlay, value } });
 }
 
-/** The picker filter and the prompt field are single-line fields with no cursor. */
-function editText(value: string, key: Key): string {
-  if (key.name === 'char') return value + (key.char ?? '');
-  // Single-line fields flatten a paste's newlines; a copied API key often
-  // drags a trailing newline along, and it must not act as enter here either.
-  if (key.name === 'paste') return value + (key.text ?? '').replace(/\n/g, ' ');
-  if (key.name === 'backspace') return value.slice(0, -1);
-  if (key.name === 'ctrl-u') return '';
-  return value;
-}
-
 function handlePickerKey(state: TuiState, picker: PickerState, key: Key): Step {
   const items = visibleItems(picker);
   const reopen = (next: PickerState): Step => step({ ...state, overlay: { kind: 'picker', picker: next } });
@@ -157,6 +148,15 @@ function handlePickerKey(state: TuiState, picker: PickerState, key: Key): Step {
   }
 
   if (key.name === 'enter') return choose(state, picker, items[picker.index]);
+
+  if (!picker.filterable) {
+    const row = digitRow(key);
+    if (row === null || !items[row]) return reopen(picker);
+    if (!picker.multi) return choose(state, { ...picker, index: row }, items[row]);
+    const id = items[row].id;
+    const chosen = picker.chosen.includes(id) ? picker.chosen.filter((c) => c !== id) : [...picker.chosen, id];
+    return reopen({ ...picker, index: row, chosen });
+  }
 
   const filter = editText(picker.filter, key);
   if (filter === picker.filter) return reopen(picker);
@@ -253,6 +253,7 @@ function choose(state: TuiState, picker: PickerState, item: PickerItem | undefin
             filter: '',
             index: 0,
             multi: true,
+            filterable: true,
             // Ids this runner doesn't serve can be sitting in a settings file
             // written before the list was scoped; dropping them here means
             // confirming the picker also repairs the stored allowlist.

@@ -9,7 +9,8 @@ import { chatEditorRoomFor, chatPaneWidth, chatPromptLabel, paneColumns, planPan
 import { currentHandoff, diffRoom, handoffActions } from './handoff';
 import { handoffBase, handoffBranch, isRepoGroup, repoResultLines } from '../isolation';
 import { capConflictFiles, titledTaskRef } from '@ordewell/core';
-import { plannerInFlight, visibleItems, type Overlay, type PickerState, type TuiState } from './state';
+import { matchingItems, plannerInFlight, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
+import type { StepperState } from './reducers/stepper';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
 
 /**
@@ -470,6 +471,7 @@ function renderOverlay(state: TuiState, rows: number, cols: number): string[] {
     );
   }
   if (overlay.kind === 'handoff') return renderHandoff(state, overlay, rows, cols);
+  if (overlay.kind === 'stepper') return renderStepper(overlay.stepper, rows, cols);
   return renderPicker(overlay.picker, rows, cols);
 }
 
@@ -539,42 +541,140 @@ function paintDiffLine(line: string): string {
 
 function renderPicker(picker: PickerState, rows: number, cols: number): string[] {
   const items = visibleItems(picker);
-  const body: string[] = [];
+  const inner = Math.max(1, cols - 2);
+  const head = [
+    ...(picker.hint ? wrap(picker.hint, inner).map((line) => style.grey(line)) : []),
+    ...(picker.filterable ? [`${style.grey('filter:')} ${picker.filter}${style.grey('▏')}`] : []),
+    '',
+  ];
+  const footer = keyHints([
+    ...(picker.multi ? [['space', 'toggles'] as const] : []),
+    ['enter', picker.multi ? 'confirms' : 'selects'],
+    ['esc', 'cancels'],
+    ...(picker.filterable ? [['type', 'to filter'] as const] : []),
+  ]);
+  const room = Math.max(1, rows - head.length - 3);
+  const list = items.length === 0
+    ? [style.grey(picker.filter ? 'Nothing matches that filter.' : 'Nothing to show yet…')]
+    : pickerRows({ items, index: picker.index, numbered: !picker.filterable, chosen: picker.multi ? picker.chosen : undefined }, room, inner);
+  return frame(picker.title, [...head, ...list, '', footer], rows, cols);
+}
 
-  if (picker.hint) body.push(style.grey(picker.hint));
-  body.push(`${style.grey('filter:')} ${picker.filter}${style.grey('▏')}`, '');
+function renderStepper(stepper: StepperState, rows: number, cols: number): string[] {
+  const { definition, trail } = stepper;
+  const active = definition.steps[stepper.current];
+  const items = matchingItems(stepper.items, stepper.filter);
+  const inner = Math.max(1, cols - 2);
+  const at = trail.findIndex((t) => t.active);
+  const header = trail
+    .map((t) => (t.active
+      ? style.highlight(style.bold(t.label))
+      : t.value !== undefined ? `${style.grey(`${t.label}:`)} ${t.value}` : style.grey(t.label)))
+    .join(style.grey(' › '));
+  const hint = active.hint ?? definition.hint;
+  const head = [
+    truncate(header, inner),
+    ...(hint ? wrap(hint, inner).map((line) => style.grey(line)) : []),
+    ...(active.filterable ? [`${style.grey('filter:')} ${stepper.filter}${style.grey('▏')}`] : []),
+    '',
+  ];
+  const footer = keyHints([
+    ['enter', at === trail.length - 1 ? 'done' : 'next'],
+    ...(trail.length > 1 ? [['tab/shift-tab', 'switch step'] as const] : []),
+    ['esc', at === 0 ? 'cancels' : 'back'],
+    ...(active.filterable ? [['type', 'to filter'] as const] : []),
+  ]);
+  const room = Math.max(1, rows - head.length - 3);
+  const list = items.length === 0
+    ? [style.grey(stepper.filter ? 'Nothing matches that filter.' : 'Nothing to show yet…')]
+    : pickerRows({ items, index: stepper.index, numbered: !active.filterable }, room, inner);
+  return frame(definition.title, [...head, ...list, '', footer], rows, cols);
+}
 
-  if (items.length === 0) {
-    body.push(style.grey(picker.filter ? 'Nothing matches that filter.' : 'Nothing to show yet…'));
+/** Columns between a list's label column and its detail column. */
+const DETAIL_GAP = 2;
+
+interface PickerRowList {
+  items: PickerItem[];
+  index: number;
+  numbered: boolean;
+  /** The ticked ids of a multi-select; absent, the list marks its current item instead. */
+  chosen?: string[];
+}
+
+/**
+ * A list's rows, at most `room` lines of `inner` columns: the label column is
+ * as wide as the widest label, the detail wraps inside its own column, and a
+ * list longer than `room` says how much is above and below rather than
+ * clipping silently.
+ */
+function pickerRows(list: PickerRowList, room: number, inner: number): string[] {
+  const { items, numbered, chosen } = list;
+  const index = Math.max(0, Math.min(list.index, items.length - 1));
+  const digits = String(items.length).length;
+  const prefixWidth = 2 + (numbered ? digits + 2 : 0) + (chosen ? 4 : 0);
+  const rowWidth = Math.max(1, inner - prefixWidth);
+  const isCurrent = (item: PickerItem): boolean => !chosen && item.selected === true;
+  const widest = Math.max(0, ...items.map((item) => width(item.label) + (isCurrent(item) ? 2 : 0)));
+  // The label column gives way first: a detail squeezed into a few columns
+  // stops reading as a sentence, while a long label still reads cut short.
+  const labelWidth = items.some((item) => item.detail)
+    ? Math.min(widest, Math.max(8, rowWidth - DETAIL_GAP - Math.max(16, Math.floor(rowWidth / 3))))
+    : Math.min(widest, rowWidth);
+  const detailWidth = Math.max(1, rowWidth - labelWidth - DETAIL_GAP);
+  const detailIndent = ' '.repeat(prefixWidth + labelWidth + DETAIL_GAP);
+
+  const block = (item: PickerItem, i: number): string[] => {
+    const active = i === index;
+    const current = isCurrent(item);
+    const number = numbered ? `${String(i + 1).padStart(digits)}. ` : '';
+    const mark = chosen ? `${chosen.includes(item.id) ? style.green('[✓]') : style.grey('[ ]')} ` : '';
+    const name = truncate(item.label, Math.max(1, labelWidth - (current ? 2 : 0)));
+    const painted = item.disabled ? style.grey(name) : active ? style.bold(name) : name;
+    const tick = current ? ` ${style.green('✔')}` : '';
+    const label = `${painted}${tick}${' '.repeat(Math.max(0, labelWidth - width(name) - (current ? 2 : 0)))}`;
+    // The bar is one colour: grey detail on it would read as a hole in it.
+    const paint = (line: string): string => (active ? line : style.grey(line));
+    const detail = item.detail ? wrap(item.detail, detailWidth) : [];
+    const lines = [
+      `${active ? '❯' : ' '} ${number}${mark}${detail.length > 0 ? `${label}${' '.repeat(DETAIL_GAP)}${paint(detail[0])}` : label}`,
+      ...detail.slice(1).map((line) => `${detailIndent}${paint(line)}`),
+    ];
+    return active ? lines.map((line) => style.highlight(pad(line, inner))) : lines;
+  };
+
+  const blocks = items.map(block);
+  if (blocks.reduce((n, b) => n + b.length, 0) <= room) return blocks.flat();
+
+  // Grow outward from the active row, one side then the other, so it stays
+  // near the middle until one end of the list is reached.
+  const fit = Math.max(1, room - 2);
+  let lo = index;
+  let hi = index;
+  let used = blocks[index].length;
+  for (let grew = true; grew;) {
+    grew = false;
+    if (hi + 1 < blocks.length && used + blocks[hi + 1].length <= fit) {
+      hi += 1;
+      used += blocks[hi].length;
+      grew = true;
+    }
+    if (lo > 0 && used + blocks[lo - 1].length <= fit) {
+      lo -= 1;
+      used += blocks[lo].length;
+      grew = true;
+    }
   }
+  return [
+    ...(lo > 0 ? [style.grey(`  ↑ … +${lo} more`)] : []),
+    ...blocks.slice(lo, hi + 1).flat().slice(0, fit),
+    ...(hi < blocks.length - 1 ? [style.grey(`  ↓ … +${blocks.length - 1 - hi} more`)] : []),
+  ];
+}
 
-  // Scroll the list so the highlighted row stays on screen.
-  const room = Math.max(1, rows - body.length - 3);
-  const start = Math.max(0, Math.min(picker.index - Math.floor(room / 2), items.length - room));
-
-  for (const [offset, item] of items.slice(start, start + room).entries()) {
-    const active = start + offset === picker.index;
-    const mark = picker.multi
-      ? (picker.chosen.includes(item.id) ? style.green('[✓]') : style.grey('[ ]'))
-      : item.selected
-        ? style.green('●')
-        : ' ';
-    // Spaced off the caret on purpose: `❯●` reads as one smudged glyph.
-    const caret = active ? style.cyan('❯') : ' ';
-    const label = truncate(item.label, Math.max(1, cols - 12));
-    const detail = item.detail ? style.grey(` — ${item.detail}`) : '';
-    // An unavailable row (a coding agent whose CLI is missing) is greyed whole
-    // rather than hidden, so the reason in `detail` stays legible.
-    const line = item.disabled
-      ? `${caret} ${mark} ${style.grey(label)}${detail}`
-      : `${caret} ${mark} ${active ? style.bold(label) : label}${detail}`;
-    body.push(truncate(line, cols - 2));
-  }
-
-  body.push('', style.grey(picker.multi
-    ? 'space toggles · enter confirms · esc cancels · type to filter'
-    : 'enter selects · esc cancels · type to filter'));
-  return frame(picker.title, body, rows, cols);
+/** A footer of keys: the key in bold, what it does in grey. */
+function keyHints(hints: readonly (readonly [string, string])[]): string {
+  return hints.map(([key, meaning]) => `${style.bold(key)} ${style.grey(meaning)}`).join(style.grey(' · '));
 }
 
 function renderHelp(scroll: number, sheet: HelpSheet, rows: number, cols: number): string[] {

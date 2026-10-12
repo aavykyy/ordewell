@@ -22,6 +22,7 @@ function withPicker(over: Partial<PickerState>, state: Partial<TuiState> = {}): 
         index: 0,
         multi: false,
         chosen: [],
+        filterable: true,
         action: { kind: 'set-model' },
         ...over,
       },
@@ -68,6 +69,54 @@ describe('picker navigation', () => {
   it('does not type into the chat input while it is open', () => {
     const s = press(withPicker({}), 'char', 'b').state;
     expect(s.editor.text).toBe('');
+  });
+});
+
+describe('fixed-list picker', () => {
+  const planners = (over: Partial<PickerState> = {}) => withPicker({
+    action: { kind: 'set-planner' },
+    filterable: false,
+    items: [
+      { id: 'claude-code', label: 'Claude Code' },
+      { id: 'codex', label: 'Codex' },
+      { id: 'opencode', label: 'OpenCode', detail: 'CLI not installed', disabled: true },
+    ],
+    ...over,
+  });
+
+  it('a digit chooses its row straight away', () => {
+    const { state, effects } = press(planners(), 'char', '2');
+    expect(effects).toEqual([{ type: 'setPlanner', provider: 'codex' }]);
+    expect(state.overlay).toBeNull();
+  });
+
+  it('a digit past the last row does nothing', () => {
+    const { state, effects } = press(planners(), 'char', '7');
+    expect(effects).toEqual([]);
+    expect(pickerOf(state).index).toBe(0);
+  });
+
+  it('a digit on a disabled row keeps the picker open with the reason', () => {
+    const { state, effects } = press(planners(), 'char', '3');
+    expect(effects).toEqual([]);
+    expect(pickerOf(state).items).toHaveLength(3);
+    expect(messagesOf(state).at(-1)?.text).toContain('CLI not installed');
+  });
+
+  it('typing does not filter it', () => {
+    const s = press(planners(), 'char', 'c').state;
+    expect(pickerOf(s).filter).toBe('');
+  });
+
+  it('a digit toggles a row of a multi-select', () => {
+    const s = press(planners({ action: { kind: 'set-runners' }, multi: true, chosen: [] }), 'char', '2').state;
+    expect(pickerOf(s).chosen).toEqual(['codex']);
+    expect(pickerOf(s).index).toBe(1);
+  });
+
+  it('a digit in a filterable list is filter text — model names have digits in them', () => {
+    const s = press(withPicker({}), 'char', '2').state;
+    expect(pickerOf(s).filter).toBe('2');
   });
 });
 

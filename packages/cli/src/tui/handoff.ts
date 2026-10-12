@@ -243,6 +243,7 @@ export function blockedPicker(state: TuiState, message: string, repos: string[] 
         index: 0,
         multi: false,
         chosen: [],
+        filterable: false,
         action: { kind: 'isolation-blocked' },
       },
     },
