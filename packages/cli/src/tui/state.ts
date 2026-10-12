@@ -280,7 +280,8 @@ export type ConfirmAction =
   | { kind: 'force-start-gated'; taskId: string }
   | { kind: 'supervisor-act' }
   | { kind: 'autorun-on' }
-  | { kind: 'save-settings'; effect: SaveSettingsEffect }
+  /** `menu` is the `/settings` stepper the question was asked from, reopened once it is answered. */
+  | { kind: 'save-settings'; effect: SaveSettingsEffect; menu?: StepperState }
   | { kind: 'merge-run' }
   | { kind: 'discard-run' }
   | { kind: 'init-workspace'; goal: string; workspace: string }

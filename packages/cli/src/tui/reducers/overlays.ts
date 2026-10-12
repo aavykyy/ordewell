@@ -12,7 +12,7 @@ import { assignTaskEffort, assignTaskSkills, assignTaskMode, assignTaskModel, as
 import { say } from '../transcript';
 import { clamp, digitRow, editText, fail, step, type Step } from './shared';
 import { runSettingsEffect } from './runSettings';
-import { saveSettings } from './settings';
+import { answerSaveSettings } from './settings';
 import { handleStepperKey } from './stepper';
 
 export function handleOverlayKey(state: TuiState, overlay: NonNullable<TuiState['overlay']>, key: Key): Step {
@@ -46,7 +46,9 @@ function handleConfirmKey(
   overlay: Extract<NonNullable<TuiState['overlay']>, { kind: 'confirm' }>,
   key: Key,
 ): Step {
-  if (key.name === 'escape') return step({ ...state, overlay: null });
+  if (key.name === 'escape') {
+    return overlay.action.kind === 'save-settings' ? answerSaveSettings(state, overlay.action, false) : step({ ...state, overlay: null });
+  }
   const { choice } = overlay;
   if (!choice) return key.name === 'enter' ? runConfirm(state, overlay) : step(state);
 
@@ -77,7 +79,7 @@ function runConfirm(
   }
   if (overlay.action.kind === 'supervisor-act') return step(closed, [runSettingsEffect(closed, { supervisorLevel: 'act' })]);
   if (overlay.action.kind === 'autorun-on') return step(closed, [runSettingsEffect(closed, { autorun: true })]);
-  if (overlay.action.kind === 'save-settings') return saveSettings(closed, overlay.action.effect);
+  if (overlay.action.kind === 'save-settings') return answerSaveSettings(state, overlay.action, true);
   if (overlay.action.kind === 'merge-run' || overlay.action.kind === 'discard-run') {
     return confirmedHandoff(state, overlay.action.kind);
   }

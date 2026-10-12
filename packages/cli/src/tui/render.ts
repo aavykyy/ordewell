@@ -573,8 +573,8 @@ function renderStepper(stepper: StepperState, rows: number, cols: number): strin
     .join(style.grey(' › '));
   const hint = active.hint ?? definition.hint;
   const top = [truncate(header, inner), ...(hint ? wrap(hint, inner).map((line) => style.grey(line)) : [])];
-  const enter = ['enter', at === trail.length - 1 ? 'done' : 'next'] as const;
-  const cancel = ['esc', 'cancels'] as const;
+  const enter = ['enter', !definition.advanceOnEnter ? 'sets' : at === trail.length - 1 ? 'done' : 'next'] as const;
+  const cancel = ['esc', 'closes'] as const;
   const switchStep = trail.length > 1 ? [['←/→', 'switch step'] as const] : [];
   if (active.number) {
     const input = `${style.cyan('❯')} ${stepper.entry?.text ?? ''}${style.grey('▏')}`;

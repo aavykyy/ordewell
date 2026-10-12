@@ -270,7 +270,8 @@ function reduceAction(state: TuiState, action: Action): Step {
     }
 
     case 'settingsLoaded':
-      return step(applySettings(state, action.settings));
+      // An open /settings or /planner marks the current value from what the daemon now holds.
+      return step(refreshStepper(applySettings(state, action.settings)));
 
     case 'modelsLoaded':
       return step(refreshStepper(

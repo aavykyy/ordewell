@@ -104,21 +104,48 @@ describe('/planner', () => {
     expect(lastMessage(state)?.role).toBe('error');
   });
 
-  /** Harness › Model › Effort, each confirmed with enter. */
-  it('asks harness, model and effort for a harness model with variants, then sends them together', () => {
-    let state = run('/planner', ready).state;
-    state = choose(state, 'claude-code').state;
-    expect(at(state).step).toBe('Model');
-    state = choose(state, 'opus').state;
-    expect(at(state).step).toBe('Effort');
-    expect(stepperOf(state).items.map((i) => i.label)).toEqual(['Runner default', 'Low', 'High']);
+  const saved = (provider: string, modelId: string, effort: string, notice: string) =>
+    ({ type: 'setPlannerChoice', provider, modelId, effort, notice });
 
-    const done = choose(state, 'high');
+  /** Harness › Model › Effort, each confirmed with enter. */
+  it('saves harness, model and effort as each is entered, moving on after each', () => {
+    let out = choose(run('/planner', ready).state, 'claude-code');
+    // The harness saves with the model and effort it would open on, so the planner is never half-switched.
+    expect(out.effects).toEqual([saved('claude-code', 'opus', '', 'Planner: Claude Code · Claude Opus 5.5')]);
+    expect(at(out.state).step).toBe('Model');
+
+    out = choose(out.state, 'opus');
+    expect(out.effects).toEqual([]);
+    expect(at(out.state).step).toBe('Effort');
+    expect(stepperOf(out.state).items.map((i) => i.label)).toEqual(['Runner default', 'Low', 'High']);
+
+    const done = choose(out.state, 'high');
     expect(done.state.overlay).toBeNull();
-    expect(done.effects).toEqual([{
-      type: 'setPlannerChoice', provider: 'claude-code', modelId: 'opus', effort: 'high',
-      notice: 'Planner: Claude Code · Claude Opus 5.5 · High effort',
-    }]);
+    expect(done.effects).toEqual([saved('claude-code', 'opus', 'high', 'Planner: Claude Code · Claude Opus 5.5 · High effort')]);
+  });
+
+  it('saves nothing and prints nothing for a step entered unchanged', () => {
+    const opened = run('/planner', ready).state;
+    const { state, effects } = choose(opened, 'codex');
+    expect(effects).toEqual([]);
+    expect(messagesOf(state)).toEqual(messagesOf(opened));
+    expect(at(state)).toEqual({ step: 'Model', on: 'gpt' });
+  });
+
+  it('shows a saved harness as the current one on going back to it', () => {
+    const state = press(choose(run('/planner', ready).state, 'claude-code').state, 'left').state;
+    expect(at(state)).toEqual({ step: 'Harness', on: 'claude-code' });
+    expect(stepperOf(state).items.find((i) => i.selected)?.id).toBe('claude-code');
+  });
+
+  it("keeps the saved choice marked when the daemon's answer lands", () => {
+    const state = choose(run('/planner', ready).state, 'claude-code').state;
+    const echoed = reduce(state, {
+      type: 'settingsLoaded',
+      settings: { aiProvider: 'claude-code', orchestratorModel: 'opus', plannerThinkingEffort: '', plannerModels: { 'claude-code': { model: 'opus' } } },
+    }).state;
+    expect(at(echoed)).toEqual({ step: 'Model', on: 'opus' });
+    expect(stepperOf(echoed).items.find((i) => i.selected)?.id).toBe('opus');
   });
 
   it('skips the effort step for a model without variants', () => {
@@ -128,22 +155,17 @@ describe('/planner', () => {
 
     const done = choose(state, 'haiku');
     expect(done.state.overlay).toBeNull();
-    expect(done.effects).toEqual([{
-      type: 'setPlannerChoice', provider: 'claude-code', modelId: 'haiku', effort: '',
-      notice: 'Planner: Claude Code · Claude Haiku 5.5',
-    }]);
+    expect(done.effects).toEqual([saved('claude-code', 'haiku', '', 'Planner: Claude Code · Claude Haiku 5.5')]);
   });
 
   it('asks only harness and model for a vendor backend, from the vendor catalog', () => {
-    let state = run('/planner', ready).state;
-    state = choose(state, 'openrouter').state;
+    const harness = choose(run('/planner', ready).state, 'openrouter');
+    expect(harness.effects).toEqual([saved('openrouter', 'deepseek/v4', '', 'Planner: OpenRouter · DeepSeek V4')]);
+    const state = harness.state;
     expect(stepperOf(state).trail.map((t) => t.label)).toEqual(['Harness', 'Model']);
     expect(stepperOf(state).items.map((i) => i.id)).toEqual(['deepseek/v4', 'qwen/max']);
 
-    expect(choose(state, 'qwen/max').effects).toEqual([{
-      type: 'setPlannerChoice', provider: 'openrouter', modelId: 'qwen/max', effort: '',
-      notice: 'Planner: OpenRouter · Qwen Max',
-    }]);
+    expect(choose(state, 'qwen/max').effects).toEqual([saved('openrouter', 'qwen/max', '', 'Planner: OpenRouter · Qwen Max')]);
   });
 
   it("lists the chosen harness's models, not the current planner's", () => {
@@ -190,35 +212,35 @@ describe('/planner', () => {
   });
 
   it('sends the runner default as an empty effort', () => {
-    const state = choose(choose(run('/planner', ready).state, 'claude-code').state, 'opus').state;
-    const { effects } = press(state, 'enter');
-    expect(effects).toEqual([{
-      type: 'setPlannerChoice', provider: 'claude-code', modelId: 'opus', effort: '',
-      notice: 'Planner: Claude Code · Claude Opus 5.5',
-    }]);
+    const current = { ...ready, plannerProvider: 'claude-code', orchestratorModel: 'opus', plannerEffort: 'high' };
+    const state = press(run('/planner', current).state, 'tab').state;
+    const { effects } = choose(press(state, 'tab').state, '__runner_default__');
+    expect(effects).toEqual([saved('claude-code', 'opus', '', 'Planner: Claude Code · Claude Opus 5.5')]);
   });
 
-  it('explains an empty catalog for the chosen harness', () => {
-    const state = choose(run('/planner', { ...ready, models: [] }).state, 'claude-code').state;
+  it('explains an empty catalog for the chosen harness, saving nothing until a model can go with it', () => {
+    const { state, effects } = choose(run('/planner', { ...ready, models: [] }).state, 'claude-code');
+    expect(effects).toEqual([]);
+    expect(state.plannerProvider).toBe('codex');
     const row = stepperOf(state).items[0];
     expect(row.disabled).toBe(true);
     expect(row.label).toMatch(/No claude-code models discovered yet/);
     expect(row.detail).toContain('/refresh');
   });
 
-  it('changes nothing when cancelled, from any step', () => {
+  it('esc keeps what enter saved and changes nothing more, from any step', () => {
     const opened = run('/planner', ready).state;
     const first = press(opened, 'escape');
     expect(first.effects).toEqual([]);
     expect(first.state.overlay).toBeNull();
     expect(first.state.plannerProvider).toBe('codex');
 
-    let state = choose(opened, 'claude-code').state;
-    state = press(state, 'escape').state;
-    const cancelled = press(state, 'escape');
-    expect(cancelled.effects).toEqual([]);
-    expect(cancelled.state.overlay).toBeNull();
-    expect(cancelled.state.orchestratorModel).toBe('gpt');
+    const state = press(choose(opened, 'claude-code').state, 'down').state;
+    const closed = press(state, 'escape');
+    expect(closed.effects).toEqual([]);
+    expect(closed.state.overlay).toBeNull();
+    expect(closed.state.plannerProvider).toBe('claude-code');
+    expect(closed.state.orchestratorModel).toBe('opus');
   });
 
   it('fills in the preflight once runner discovery lands', () => {

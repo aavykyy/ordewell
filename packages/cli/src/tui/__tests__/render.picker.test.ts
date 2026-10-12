@@ -151,6 +151,7 @@ describe('picker paint', () => {
 describe('stepper', () => {
   const definition: StepperDefinition = {
     title: 'Planner',
+    advanceOnEnter: true,
     steps: [
       {
         id: 'harness',
@@ -163,7 +164,7 @@ describe('stepper', () => {
       },
       { id: 'model', label: 'Model', hint: 'Models this harness runs.', items: () => [{ id: 'gpt', label: 'GPT' }] },
     ],
-    complete: (state) => ({ state, effects: [] }),
+    save: (state) => ({ state, effects: [] }),
   };
   const screen = (state: TuiState): string[] => render(state).map((line) => line.trimEnd());
 
@@ -177,7 +178,7 @@ describe('stepper', () => {
       ' ❯ 2. Codex ✔',
       '   3. OpenCode     CLI not installed',
       '',
-      ' enter next · ←/→ switch step · esc cancels',
+      ' enter next · ←/→ switch step · esc closes',
     ]);
   });
 
@@ -191,7 +192,7 @@ describe('stepper', () => {
       '',
       ' ❯ 1. GPT',
       '',
-      ' enter done · ←/→ switch step · esc cancels',
+      ' enter done · ←/→ switch step · esc closes',
     ]);
   });
 
@@ -205,17 +206,20 @@ describe('stepper', () => {
     }
   });
 
-  it('draws a number step as one input line with its minimum', () => {
+  it('draws a number step as one input line with its minimum, and says enter sets it where enter stays', () => {
     const counts: StepperDefinition = {
       title: 'Settings',
+      advanceOnEnter: false,
       steps: [
         { id: 'pace', label: 'Pace', items: () => [{ id: 'fast', label: 'Fast', selected: true }] },
         { id: 'parallel', label: 'Parallel', hint: 'How many tasks run at once.', number: { min: 1, current: () => 7 } },
       ],
-      complete: (state) => ({ state, effects: [] }),
+      save: (state) => ({ state, effects: [] }),
     };
     const opened = openStepper(initialState({ rows: 24, cols: 60 }), counts).state;
-    const out = screen(reduce(opened, { type: 'key', key: { name: 'enter' } }).state);
+    const list = screen(opened);
+    expect(list).toContain(' enter sets · ←/→ switch step · esc closes');
+    const out = screen(reduce(opened, { type: 'key', key: { name: 'right' } }).state);
     const top = out.findIndex((l) => l.includes('Settings'));
     expect(out.slice(top + 1, top + 8)).toEqual([
       ' Pace: Fast › Parallel',
@@ -224,7 +228,7 @@ describe('stepper', () => {
       ' ❯ 7▏',
       ' At least 1.',
       '',
-      ' enter done · ↑/↓ change · ←/→ switch step · esc cancels',
+      ' enter sets · ↑/↓ change · ←/→ switch step · esc closes',
     ]);
   });
 });

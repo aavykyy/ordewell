@@ -295,6 +295,7 @@ the daemon reads it from there at generation.
 
 - 2026-10-12 — accepted.
 - 2026-10-12 — `/settings` in VS Code is a Run block in the chat's Settings panel, saving each setting as it is set; the terminal UI takes Parallel, retries and reads as typed numbers and steps with ←/→.
+- 2026-10-12 — the terminal UI's `/settings` saves each step on enter and stays on it, instead of saving once at the last step; esc closes and keeps what was saved. Users wanted to see a choice take effect and leave with esc, as the VS Code Run block already allows. Act and autorun on still ask first, and the menu returns to the step either way.
 - 2026-10-12 — with autorun on and Full, the planner may start a task added
   after the plan was approved; a start in the reply that adds it waits for the
   edit to land.
