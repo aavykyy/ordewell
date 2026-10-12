@@ -287,10 +287,22 @@ function paintSpans(text: string, base: number, spans: Array<{ start: number; en
   return out + text.slice(cursor);
 }
 
+/**
+ * The composer on the same grey band as a sent message: an empty row above and
+ * below, every row painted to the edge. It sits under both panes, so the edge
+ * is the terminal's — the divider ends above it — and the draft wraps at that
+ * same width. With colour off the empty rows stay, so the row count the layout
+ * reserves does not depend on the terminal's palette.
+ */
 function renderInput(state: TuiState): string[] {
+  const rows = ['', ...composerLines(state), ''];
+  return style.enabled ? rows.map((row) => style.band(pad(row, state.cols))) : rows;
+}
+
+function composerLines(state: TuiState): string[] {
   const prompt = state.taskView
     ? style.accent(`${chatPromptLabel(state)} `)
-    : state.focus === 'plan' ? style.grey('❯ ') : style.cyan('❯ ');
+    : state.focus === 'plan' ? style.bandGrey('❯ ') : style.cyan('❯ ');
   // The driver hides the hardware cursor, so the frame marks the caret itself —
   // but only while keystrokes actually go to the editor.
   const lines = chatInputWrap(state);
@@ -337,7 +349,7 @@ function suggest(state: TuiState, room: number): string {
   const matches = tokenCompletions(token);
   if (matches.length === 0) return '';
   const names = matches.map((c) => c.name).join(' ');
-  return style.grey(`  ${truncate(names, Math.max(0, room - 2))}`);
+  return style.bandGrey(`  ${truncate(names, Math.max(0, room - 2))}`);
 }
 
 function renderFooter(state: TuiState, cols: number): string[] {

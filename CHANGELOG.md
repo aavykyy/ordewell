@@ -126,9 +126,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **Enter saves at once in the terminal UI's `/settings` and `/planner`.** The
   menu shows the new value straight away and esc keeps it; `/settings` stays on
   the step, `/planner` moves on, and Act and autorun still ask first.
-- **Your messages sit on a grey band.** In the terminal UI's chat and task view
-  each message you sent is set off by a grey band the width of the pane, so it
-  is easy to find when scrolling back.
+- **Your messages and the input box sit on a grey band.** In the terminal UI's
+  chat and task view each message you sent is set off by a grey band the width
+  of the pane, so it is easy to find when scrolling back, and the input box you
+  type in is on the same band.
 - **Plan rows are one line plus a meta line.** Skills, effort and mode show
   when a row is expanded. Per-task usage moved out of the rows into the task
   view's pinned footer, with time and a per-model breakdown; *Tasks total*

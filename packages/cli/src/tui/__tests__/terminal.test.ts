@@ -349,6 +349,23 @@ describe('openTerminal', () => {
     terminal.close();
   });
 
+  it('lets the grey band\'s 256-colour background through to the tty', () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const terminal = openTerminal({
+      input: input as unknown as NodeJS.ReadStream,
+      output: output as unknown as NodeJS.WriteStream,
+      onKey: vi.fn(),
+      onResize: vi.fn(),
+    });
+
+    const band = '\x1b[48;5;236m\x1b[36m❯ \x1b[0m\x1b[48;5;236mhi   \x1b[0m';
+    output.writes.length = 0;
+    terminal.draw([band]);
+    expect(output.writes.join('')).toContain(`\x1b[1;1H${band}\x1b[K`);
+    terminal.close();
+  });
+
   it('ignores draws after close and restores the terminal only once', () => {
     const input = new FakeInput();
     const output = new FakeOutput();
