@@ -3472,6 +3472,13 @@ body {
   margin-bottom: 6px;
 }
 
+.checkpoint-summary-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
 .checkpoint-summary {
   font-size: 12px;
   color: var(--text-secondary);
@@ -3484,7 +3491,22 @@ body {
   word-break: break-word;
   max-height: 200px;
   overflow-y: auto;
-  margin-bottom: 10px;
+}
+
+.checkpoint-summary-toggle {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.checkpoint-summary-toggle:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 .checkpoint-actions {

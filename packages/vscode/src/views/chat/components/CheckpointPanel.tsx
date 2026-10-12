@@ -15,6 +15,7 @@ export default function CheckpointPanel({ taskTitle, summary, pausedAt, onApprov
   const [reason, setReason] = useState('');
   const [showRejectInput, setShowRejectInput] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [showFull, setShowFull] = useState(false);
 
   useEffect(() => {
     const tick = () => setElapsed(Math.floor((Date.now() - pausedAt) / 60000));
@@ -24,6 +25,9 @@ export default function CheckpointPanel({ taskTitle, summary, pausedAt, onApprov
   }, [pausedAt]);
 
   const isTimeout = elapsed >= TIMEOUT_MINUTES;
+  const fullSummary = summary.trim();
+  const preview = truncateCheckpointSummary(summary);
+  const truncated = preview !== fullSummary;
 
   return (
     <div className={`checkpoint-panel ${isTimeout ? 'checkpoint-timeout' : ''}`}>
@@ -36,8 +40,20 @@ export default function CheckpointPanel({ taskTitle, summary, pausedAt, onApprov
         </span>
       </div>
       <div className="checkpoint-task">Task: {taskTitle}</div>
-      <div className="checkpoint-summary" title={summary}>
-        {truncateCheckpointSummary(summary)}
+      <div className="checkpoint-summary-block">
+        <div className="checkpoint-summary" title={summary}>
+          {showFull ? fullSummary : preview}
+        </div>
+        {truncated && (
+          <button
+            type="button"
+            className="checkpoint-summary-toggle"
+            aria-expanded={showFull}
+            onClick={() => setShowFull((v) => !v)}
+          >
+            {showFull ? 'Show less' : 'Show full'}
+          </button>
+        )}
       </div>
 
       {!showRejectInput ? (
