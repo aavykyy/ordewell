@@ -102,6 +102,26 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **`/planner` is one stepped flow.** In the terminal UI and in VS Code it
+  walks Harness › Model › Effort and saves once, at the end; cancelling
+  applies nothing. `/planner <provider>`, `/model` and `/planner-effort`
+  remain as shortcuts. The user-facing name is now *planner model*; the
+  `orchestratorModel` setting and `ORCHESTRATOR_MODEL` are unchanged.
+- **`/settings` walks your run settings.** Autonomy, supervisor (with retries
+  and reads), merge automatically, autorun and parallel are set in one stepped
+  panel, in the terminal UI and in VS Code, and only what changed is saved.
+  The individual commands remain.
+- **Terminal pickers are restyled.** Short lists are numbered, labels and
+  details are aligned, and the current value is marked. Multi-choice pickers
+  step through their choices and save nothing until the last one.
+- **Plan rows are one line plus a meta line.** Skills, effort and mode show
+  when a row is expanded. Per-task usage moved out of the rows into the task
+  view's pinned footer, with time and a per-model breakdown; *Tasks total*
+  stays at the top. VS Code task cards drop per-task usage too, and show
+  model and mode badges only when expanded.
+- **The plan footer shows only the keys that apply** to the selected task,
+  plus `? keys` for the full key sheet.
+
 - **Run settings belong to you, not the plan.** The supervisor level, merge
   automatically, the retry limit, the wake-up read budget, autorun and
   Full/Guarded are saved machine-wide in `settings.json`. A change applies at
