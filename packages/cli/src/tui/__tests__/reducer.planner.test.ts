@@ -152,7 +152,7 @@ describe('/planner', () => {
     expect(stepperOf(state).items.map((i) => i.id)).toEqual(['opus', 'haiku']);
 
     // Back to the harness step and onto another one: the model step is rebuilt for it.
-    state = press(state, 'escape').state;
+    state = press(state, 'shift-tab').state;
     state = choose(state, 'codex').state;
     expect(stepperOf(state).items.map((i) => i.id)).toEqual(['gpt']);
     expect(at(state).on).toBe('gpt');

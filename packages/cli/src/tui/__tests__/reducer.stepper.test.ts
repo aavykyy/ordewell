@@ -129,15 +129,17 @@ describe('stepper', () => {
     expect(at(s).trail).toBe('[Harness] › Model');
   });
 
-  it('esc goes back one step, keeping what was chosen', () => {
-    const s = keys(opened(), 'up', 'enter', 'escape');
-    expect(at(s)).toEqual({ step: 'harness', row: 'claude', trail: '[Harness] › Model › Effort' });
-  });
-
-  it('esc on the first step cancels without applying anything', () => {
-    const { state, effects } = press(opened(), 'escape');
-    expect(state.overlay).toBeNull();
-    expect(effects).toEqual([]);
+  it('esc closes from the first, a middle and the last step without applying anything', () => {
+    const middle = keys(opened(), 'enter');
+    const last = keys(opened(), 'enter', 'enter');
+    expect(at(last).step).toBe('effort');
+    for (const s of [opened(), middle, last]) {
+      const { state, effects } = press(s, 'escape');
+      expect(state.overlay).toBeNull();
+      expect(effects).toEqual([]);
+      expect(state.plannerProvider).toBe(s.plannerProvider);
+      expect(state.orchestratorModel).toBe(s.orchestratorModel);
+    }
   });
 
   it("tab jumps ahead without taking the highlighted row as the step's choice", () => {
@@ -253,6 +255,15 @@ describe('stepper number step', () => {
     const empty = keys(start(definition), 'enter', 'backspace');
     expect(entry(empty)).toBe('');
     expect(at(keys(empty, 'enter')).step).toBe('workers');
+    expect(done()).toBeUndefined();
+  });
+
+  it('esc closes with digits typed, without applying them', () => {
+    const { definition, done } = counts();
+    const s = type(keys(start(definition), 'enter'), '17');
+    const { state, effects } = press(s, 'escape');
+    expect(state.overlay).toBeNull();
+    expect(effects).toEqual([]);
     expect(done()).toBeUndefined();
   });
 

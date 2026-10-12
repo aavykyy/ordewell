@@ -177,7 +177,7 @@ describe('stepper', () => {
       ' ❯ 2. Codex ✔',
       '   3. OpenCode     CLI not installed',
       '',
-      ' enter next · ←/→ switch step',
+      ' enter next · ←/→ switch step · esc cancels',
     ]);
   });
 
@@ -191,7 +191,7 @@ describe('stepper', () => {
       '',
       ' ❯ 1. GPT',
       '',
-      ' enter done · ←/→ switch step',
+      ' enter done · ←/→ switch step · esc cancels',
     ]);
   });
 
@@ -224,7 +224,7 @@ describe('stepper', () => {
       ' ❯ 7▏',
       ' At least 1.',
       '',
-      ' enter done · ↑/↓ change · ←/→ switch step',
+      ' enter done · ↑/↓ change · ←/→ switch step · esc cancels',
     ]);
   });
 });

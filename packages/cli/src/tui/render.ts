@@ -574,10 +574,11 @@ function renderStepper(stepper: StepperState, rows: number, cols: number): strin
   const hint = active.hint ?? definition.hint;
   const top = [truncate(header, inner), ...(hint ? wrap(hint, inner).map((line) => style.grey(line)) : [])];
   const enter = ['enter', at === trail.length - 1 ? 'done' : 'next'] as const;
+  const cancel = ['esc', 'cancels'] as const;
   const switchStep = trail.length > 1 ? [['←/→', 'switch step'] as const] : [];
   if (active.number) {
     const input = `${style.cyan('❯')} ${stepper.entry?.text ?? ''}${style.grey('▏')}`;
-    const footer = keyHints([enter, ['↑/↓', 'change'], ...switchStep]);
+    const footer = keyHints([enter, ['↑/↓', 'change'], ...switchStep, cancel]);
     return frame(definition.title, [...top, '', input, style.grey(`At least ${active.number.min}.`), '', footer], rows, cols);
   }
   const head = [
@@ -589,6 +590,7 @@ function renderStepper(stepper: StepperState, rows: number, cols: number): strin
     enter,
     ...switchStep,
     ...(active.filterable ? [['type', 'to filter'] as const] : []),
+    cancel,
   ]);
   const room = Math.max(1, rows - head.length - 3);
   const list = items.length === 0
