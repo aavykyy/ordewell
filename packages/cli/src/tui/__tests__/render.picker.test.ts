@@ -204,4 +204,28 @@ describe('stepper', () => {
       style.enabled = false;
     }
   });
+
+  it('draws a number step as one input line with its minimum', () => {
+    const counts: StepperDefinition = {
+      title: 'Settings',
+      steps: [
+        { id: 'pace', label: 'Pace', items: () => [{ id: 'fast', label: 'Fast', selected: true }] },
+        { id: 'parallel', label: 'Parallel', hint: 'How many tasks run at once.', number: { min: 1, current: () => 7 } },
+      ],
+      complete: (state) => ({ state, effects: [] }),
+    };
+    const opened = openStepper(initialState({ rows: 24, cols: 60 }), counts).state;
+    const out = screen(reduce(opened, { type: 'key', key: { name: 'enter' } }).state);
+    const top = out.findIndex((l) => l.includes('Settings'));
+    expect(out.slice(top + 1, top + 8)).toEqual([
+      ' Pace: Fast › Parallel',
+      ' How many tasks run at once.',
+      '',
+      ' ❯ 7▏',
+      ' At least 1.',
+      '',
+      ' enter done · ↑/↓ change · ←/→ switch step',
+    ]);
+  });
 });
+

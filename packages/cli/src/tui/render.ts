@@ -572,15 +572,22 @@ function renderStepper(stepper: StepperState, rows: number, cols: number): strin
       : t.value !== undefined ? `${style.grey(`${t.label}:`)} ${t.value}` : style.grey(t.label)))
     .join(style.grey(' › '));
   const hint = active.hint ?? definition.hint;
+  const top = [truncate(header, inner), ...(hint ? wrap(hint, inner).map((line) => style.grey(line)) : [])];
+  const enter = ['enter', at === trail.length - 1 ? 'done' : 'next'] as const;
+  const switchStep = trail.length > 1 ? [['←/→', 'switch step'] as const] : [];
+  if (active.number) {
+    const input = `${style.cyan('❯')} ${stepper.entry?.text ?? ''}${style.grey('▏')}`;
+    const footer = keyHints([enter, ['↑/↓', 'change'], ...switchStep]);
+    return frame(definition.title, [...top, '', input, style.grey(`At least ${active.number.min}.`), '', footer], rows, cols);
+  }
   const head = [
-    truncate(header, inner),
-    ...(hint ? wrap(hint, inner).map((line) => style.grey(line)) : []),
+    ...top,
     ...(active.filterable ? [`${style.grey('filter:')} ${stepper.filter}${style.grey('▏')}`] : []),
     '',
   ];
   const footer = keyHints([
-    ['enter', at === trail.length - 1 ? 'done' : 'next'],
-    ...(trail.length > 1 ? [['←/→', 'switch step'] as const] : []),
+    enter,
+    ...switchStep,
     ...(active.filterable ? [['type', 'to filter'] as const] : []),
   ]);
   const room = Math.max(1, rows - head.length - 3);

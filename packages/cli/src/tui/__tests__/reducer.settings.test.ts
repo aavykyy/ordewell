@@ -20,10 +20,19 @@ function stepper(state: TuiState): StepperState {
   if (state.overlay?.kind !== 'stepper') throw new Error(`expected the stepper, got ${state.overlay?.kind ?? 'none'}`);
   return state.overlay.stepper;
 }
+/** The step on screen and its value: the highlighted row of a list, the typed digits of a number. */
 const onScreen = (state: TuiState): { step: string; highlighted: string | undefined } => {
   const s = stepper(state);
-  return { step: s.trail.find((t) => t.active)?.label ?? '', highlighted: s.items[s.index]?.label };
+  return { step: s.trail.find((t) => t.active)?.label ?? '', highlighted: s.entry?.text ?? s.items[s.index]?.label };
 };
+
+function type(state: TuiState, text: string): TuiState {
+  return [...text].reduce((s, char) => {
+    const { state: next, effects } = press(s, 'char', char);
+    expect(effects).toEqual([]);
+    return next;
+  }, state);
+}
 
 /** Presses each key in turn, failing the test if any of them asks the runtime to do something. */
 function walk(state: TuiState, ...names: string[]): TuiState {
@@ -58,7 +67,6 @@ describe('/settings', () => {
       { step: 'Autorun', highlighted: 'Off' },
       { step: 'Parallel', highlighted: '3' },
     ]);
-    expect(stepper(state).items.filter((item) => item.selected).map((item) => item.label)).toEqual(['3']);
   });
 
   it('skips the supervisor retries and reads steps once the supervisor is Off', () => {
@@ -92,7 +100,7 @@ describe('/settings', () => {
     expect(onScreen(state).step).toBe('Autorun');
     state = walk(state, 'up', 'enter');
     expect(onScreen(state).step).toBe('Parallel');
-    const done = press(state, 'char', '3');
+    const done = press(type(state, '3'), 'enter');
     expect(done.effects).toEqual([]);
     expect(done.state.overlay?.kind).toBe('confirm');
 
@@ -107,8 +115,8 @@ describe('/settings', () => {
     let state = typed(base(), '/settings').state;
     state = walk(state, 'down', 'enter');      // Guarded
     state = press(state, 'enter').state;       // Watch, unchanged
-    state = press(state, 'char', '4').state;   // retries 3
-    state = press(state, 'char', '4').state;   // reads 24
+    state = walk(type(state, '3'), 'enter');   // retries 3
+    state = walk(type(state, '24'), 'enter');  // reads 24
     state = press(state, 'char', '1').state;   // automerge on
     state = press(state, 'enter').state;       // autorun off, unchanged
     const done = press(state, 'enter');        // parallel 5, unchanged
@@ -134,10 +142,36 @@ describe('/settings', () => {
     expect(declined.state.overlay).toBeNull();
   });
 
-  it('marks the current count even when it is not one of the usual picks', () => {
-    const state = walk(typed(base({ maxParallel: 7 }), '/settings').state, ...Array<string>(6).fill('tab'));
-    const items = stepper(state).items;
-    expect(items.map((i) => i.label)).toContain('7');
-    expect(items.find((i) => i.selected)?.label).toBe('7');
+  it('saves any whole number typed for Parallel', () => {
+    const state = walk(typed(base(), '/settings').state, ...Array<string>(6).fill('tab'));
+    expect(onScreen(state)).toEqual({ step: 'Parallel', highlighted: '5' });
+    const done = press(type(state, '17'), 'enter');
+    expect(done.state.overlay).toBeNull();
+    expect(done.effects).toEqual([
+      { type: 'saveSettings', run: {}, maxParallel: 17, message: 'Settings: Parallel 17', sessionId: 's1' },
+    ]);
+    expect(done.state.maxParallel).toBe(17);
+  });
+
+  it('refuses 0 for Parallel and Supervisor reads, and takes it for Supervisor retries', () => {
+    const parallel = walk(type(walk(typed(base(), '/settings').state, ...Array<string>(6).fill('tab')), '0'), 'enter');
+    expect(onScreen(parallel)).toEqual({ step: 'Parallel', highlighted: '0' });
+    const reads = walk(type(walk(typed(base(), '/settings').state, 'tab', 'tab', 'tab'), '0'), 'enter');
+    expect(onScreen(reads)).toEqual({ step: 'Supervisor reads', highlighted: '0' });
+
+    const retries = walk(type(walk(typed(base(), '/settings').state, 'tab', 'tab'), '0'), 'enter');
+    expect(onScreen(retries).step).toBe('Supervisor reads');
+    const done = finish(retries);
+    expect(done.effects).toEqual([
+      { type: 'saveSettings', run: { supervisorRetryLimit: 0 }, message: 'Settings: Supervisor retries 0', sessionId: 's1' },
+    ]);
+  });
+
+  it('↓ stops at each count\'s minimum', () => {
+    const down = (tabs: number, presses: number): string | undefined =>
+      onScreen(walk(typed(base(), '/settings').state, ...Array<string>(tabs).fill('tab'), ...Array<string>(presses).fill('down'))).highlighted;
+    expect(down(2, 5)).toBe('0');
+    expect(down(3, 20)).toBe('1');
+    expect(down(6, 10)).toBe('1');
   });
 });

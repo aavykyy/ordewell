@@ -202,3 +202,104 @@ describe('stepper', () => {
     expect(at(state).step).toBe('harness');
   });
 });
+
+describe('stepper number step', () => {
+  /** Two counts after a list; `complete` hands back what it was given so a test can read it. */
+  function counts(): { definition: StepperDefinition; done: () => StepChoices | undefined } {
+    let completed: StepChoices | undefined;
+    const definition: StepperDefinition = {
+      title: 'Run',
+      steps: [
+        { id: 'pace', label: 'Pace', items: () => [{ id: 'fast', label: 'Fast', selected: true }, { id: 'slow', label: 'Slow' }] },
+        { id: 'workers', label: 'Workers', number: { min: 1, current: (state) => state.maxParallel } },
+        { id: 'retries', label: 'Retries', number: { min: 0, current: () => 2 } },
+      ],
+      complete: (state, choices) => {
+        completed = choices;
+        return { state, effects: [] };
+      },
+    };
+    return { definition, done: () => completed };
+  }
+  const start = (definition: StepperDefinition): TuiState => openStepper(initialState({ maxParallel: 5 }), definition).state;
+  const type = (state: TuiState, text: string): TuiState =>
+    [...text].reduce((s, char) => {
+      const { state: next, effects } = press(s, 'char', char);
+      expect(effects).toEqual([]);
+      return next;
+    }, state);
+  const entry = (state: TuiState): string | undefined => stepperOf(state).entry?.text;
+
+  it('opens a number step pre-filled with the current value', () => {
+    const { definition } = counts();
+    const s = keys(start(definition), 'enter');
+    expect(at(s).step).toBe('workers');
+    expect(entry(s)).toBe('5');
+  });
+
+  it('the first digit replaces the pre-filled value, later ones append, and enter takes the number', () => {
+    const { definition, done } = counts();
+    const s = type(keys(start(definition), 'enter'), '17');
+    expect(entry(s)).toBe('17');
+    const next = keys(s, 'enter', 'enter');
+    expect(next.overlay).toBeNull();
+    expect(done()).toEqual({ pace: 'fast', workers: '17', retries: '2' });
+  });
+
+  it('enter stays on the step while the number is below the minimum or empty', () => {
+    const { definition, done } = counts();
+    const zero = type(keys(start(definition), 'enter'), '0');
+    expect(at(keys(zero, 'enter')).step).toBe('workers');
+    const empty = keys(start(definition), 'enter', 'backspace');
+    expect(entry(empty)).toBe('');
+    expect(at(keys(empty, 'enter')).step).toBe('workers');
+    expect(done()).toBeUndefined();
+  });
+
+  it('takes 0 where the minimum is 0', () => {
+    const { definition, done } = counts();
+    const s = type(keys(start(definition), 'enter', 'enter'), '0');
+    expect(keys(s, 'enter').overlay).toBeNull();
+    expect(done()).toEqual({ pace: 'fast', workers: '5', retries: '0' });
+  });
+
+  it('typing the pre-filled digit still starts a fresh number', () => {
+    const { definition } = counts();
+    expect(entry(type(keys(start(definition), 'enter'), '55'))).toBe('55');
+  });
+
+  it('ignores anything but digits', () => {
+    const { definition } = counts();
+    expect(entry(type(keys(start(definition), 'enter'), '1a-2'))).toBe('12');
+  });
+
+  it('↑ and ↓ step the number by one and stop at the minimum', () => {
+    const { definition } = counts();
+    const s = keys(start(definition), 'enter');
+    expect(entry(keys(s, 'up', 'up'))).toBe('7');
+    expect(entry(keys(s, ...Array<string>(6).fill('down')))).toBe('1');
+    expect(entry(keys(type(s, '0'), 'down'))).toBe('1');
+    expect(entry(keys(start(definition), 'enter', 'enter', 'down', 'down', 'down'))).toBe('0');
+  });
+
+  it('a digit after ↑ or ↓ starts the number afresh', () => {
+    const { definition } = counts();
+    expect(entry(type(keys(start(definition), 'enter', 'up'), '3'))).toBe('3');
+  });
+
+  it('switching steps keeps a valid typed number and shows it in the header', () => {
+    const { definition } = counts();
+    const s = keys(type(keys(start(definition), 'enter'), '17'), 'right');
+    expect(at(s)).toEqual({ step: 'retries', row: undefined, trail: 'Pace: Fast › Workers: 17 › [Retries]' });
+    expect(entry(keys(s, 'left'))).toBe('17');
+    expect(entry(keys(s, 'shift-tab'))).toBe('17');
+  });
+
+  it('switching steps drops an invalid typed number for the current value', () => {
+    const { definition } = counts();
+    const s = keys(type(keys(start(definition), 'enter'), '0'), 'tab');
+    expect(at(s).trail).toBe('Pace: Fast › Workers: 5 › [Retries]');
+    expect(entry(keys(s, 'left'))).toBe('5');
+  });
+});
+

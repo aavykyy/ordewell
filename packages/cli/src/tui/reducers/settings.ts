@@ -13,12 +13,6 @@ import { step, type Effect, type Step } from './shared';
 
 export type SaveSettingsEffect = Extract<Effect, { type: 'saveSettings' }>;
 
-// Every count is valid with no ceiling (core's parseCount, parseMaxParallel);
-// these are the likely picks, and the current value joins them if it is not one.
-const RETRY_COUNTS = [0, 1, 2, 3, 5];
-const READ_COUNTS = [1, 6, 12, 24, 48];
-const PARALLEL_COUNTS = [1, 2, 3, 4, 5, 8, 10];
-
 const SUPERVISOR_DETAIL: Record<SupervisorLevel, string> = {
   off: 'The planner speaks only when you write',
   watch: 'The planner follows your runs and suggests what to do',
@@ -32,13 +26,10 @@ const switchItems = (current: boolean, onDetail: string, offDetail: string): Pic
   { id: 'off', label: 'Off', detail: offDetail, selected: !current },
 ];
 
-function countItems(counts: number[], current: number): PickerItem[] {
-  const all = counts.includes(current) ? counts : [...counts, current].sort((a, b) => a - b);
-  return all.map((n) => ({ id: String(n), label: String(n), selected: n === current }));
-}
-
 const supervisorOff = (_state: TuiState, choices: StepChoices): boolean => choices.supervisor === 'off';
 
+// The counts are typed rather than picked: core takes any whole number from
+// their minimum up, with no ceiling (parseCount, parseMaxParallel).
 export const SETTINGS: StepperDefinition = {
   title: 'Settings',
   hint: 'Saved for this run and every later one. Nothing is saved until the last step.',
@@ -63,14 +54,14 @@ export const SETTINGS: StepperDefinition = {
       label: 'Supervisor retries',
       hint: 'How many times the supervisor may retry one task in a run',
       skip: supervisorOff,
-      items: (state) => countItems(RETRY_COUNTS, state.runSettings.supervisorRetryLimit),
+      number: { min: 0, current: (state) => state.runSettings.supervisorRetryLimit },
     },
     {
       id: 'reads',
       label: 'Supervisor reads',
       hint: 'How many reads the supervisor may make each time it wakes up',
       skip: supervisorOff,
-      items: (state) => countItems(READ_COUNTS, state.runSettings.wakeUpReadBudget),
+      number: { min: 1, current: (state) => state.runSettings.wakeUpReadBudget },
     },
     {
       id: 'automerge',
@@ -94,7 +85,7 @@ export const SETTINGS: StepperDefinition = {
       id: 'parallel',
       label: 'Parallel',
       hint: 'How many AI tasks run at once, a live run included',
-      items: (state) => countItems(PARALLEL_COUNTS, state.maxParallel),
+      number: { min: 1, current: (state) => state.maxParallel },
     },
   ],
   complete: completeSettings,
