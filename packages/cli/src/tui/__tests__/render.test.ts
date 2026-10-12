@@ -176,6 +176,27 @@ describe('welcome banner', () => {
     expect(lines[dotRow]).toMatch(/⣀⣶⣿⣷⡄\s+⣰⣿/);
   });
 
+  it('draws the art on a standard 80x24 terminal, with the hints still on screen', () => {
+    const lines = screen({ cols: 80, rows: 24, workspace: '/home/dev/ordewell-tui' }).map(stripAnsi);
+    expect(lines.some((l) => l.includes('⣀⣶⣿⣷⡄'))).toBe(true);
+    expect(lines.some((l) => l.includes('/help'))).toBe(true);
+    expect(lines.some((l) => l.includes('ordewell-tui'))).toBe(true);
+  });
+
+  it('drops the description before it drops the art', () => {
+    const lines = screen({ cols: 80, rows: 23 }).map(stripAnsi);
+    expect(lines.some((l) => l.includes('⣀⣶⣿⣷⡄'))).toBe(true);
+    expect(lines.some((l) => l.includes('Autonomy'))).toBe(true);
+    expect(lines.some((l) => l.includes('researches your codebase'))).toBe(false);
+  });
+
+  it('falls back to the lockup when not even the trimmed art welcome fits, keeping the Setup rows', () => {
+    const lines = screen({ cols: 80, rows: 22 }).map(stripAnsi);
+    expect(lines.some((l) => l.includes('≫●'))).toBe(true);
+    expect(lines.some((l) => l.includes('⣀⣶⣿⣷⡄'))).toBe(false);
+    expect(lines.some((l) => l.includes('Autonomy'))).toBe(true);
+  });
+
   it('falls back to the one-line lockup when the art cannot fit', () => {
     const out = screen({ cols: 60 });
     const lines = out.map(stripAnsi);
