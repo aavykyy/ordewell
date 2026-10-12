@@ -31,6 +31,7 @@ import { settleReply, type ReplyAttempt } from '../settleReply';
 import { ReplySplitter } from '../replyStream';
 import { opensWithJsonObject } from '../JsonExtractor';
 import { redactSecrets } from '../../utils/redactSecrets';
+import { sameMessage } from '../../utils/sameMessage';
 import { abortScope } from '../../utils/abortScope';
 import { runnerForProvider } from '../ProviderRegistry';
 import { collectResearchContext } from '../ContextCollector';
@@ -108,11 +109,6 @@ interface HarnessTurn {
   /** Subagents the agent left running when it ended the turn. See {@link MAX_AGENT_WAITS}. */
   backgroundAgents: number;
 }
-
-const sameMessage = (a: string, b: string): boolean => {
-  const bare = (value: string) => value.trim().replace(/\.+$/, '').trimEnd();
-  return bare(a) !== '' && bare(a) === bare(b);
-};
 
 /**
  * The failure a turn ends on, in front of which the final run's own text is

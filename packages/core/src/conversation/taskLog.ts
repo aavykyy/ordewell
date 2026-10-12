@@ -1,6 +1,7 @@
 import type { QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
 import type { TaskLogEvent } from '../models/TaskLog';
 import { addPlannerUsage, isMeasured, usageLine, type PlannerUsage } from '../models/Usage';
+import { sameMessage } from '../utils/sameMessage';
 import { mapAgentTool, normalizeAgentArgs } from '../services/harness/agentTools';
 import type { ApprovalBlock, MessageBlock, SubagentChild, SubagentStatus, ThinkingDisplayBlock } from './blocks';
 import { toolHeadline } from './format';
@@ -30,6 +31,8 @@ export interface TaskLogView extends BlockList {
    * authoritative copy replaces it instead of repeating it below.
    */
   readonly streams: Readonly<Record<string, string>>;
+  /** The turn's latest agent text block, which a failure that repeats it takes the place of. */
+  readonly latestText?: string;
 }
 
 export const EMPTY_TASK_LOG: TaskLogView = { blocks: [], nextId: 1, queued: [], working: false, streams: {} };
@@ -87,11 +90,30 @@ function streamWhole(view: TaskLogView, lane: Lane, key: string, text: string, m
 }
 
 function agentText(view: TaskLogView, text: string): TaskLogView {
-  return streamWhole(view, null, TEXT_STREAM, text, (id) => settledMessage(id, 'agent', blockText(text)));
+  const next = streamWhole(view, null, TEXT_STREAM, text, (id) => settledMessage(id, 'agent', blockText(text)));
+  // Added whole, the block took the id the view was about to hand out;
+  // otherwise it is the one the deltas were streaming into.
+  return { ...next, latestText: next.nextId > view.nextId ? `b${view.nextId}` : view.streams[TEXT_STREAM] };
 }
 
 function agentTextDelta(view: TaskLogView, text: string): TaskLogView {
-  return streamDelta(view, null, TEXT_STREAM, text, (id, t) => ({ type: 'message', id, role: 'agent', text: t, streaming: true }));
+  const next = streamDelta(view, null, TEXT_STREAM, text, (id, t) => ({ type: 'message', id, role: 'agent', text: t, streaming: true }));
+  return { ...next, latestText: next.streams[TEXT_STREAM] };
+}
+
+/**
+ * Claude Code says a usage limit twice — as an assistant message and as the
+ * `result` of the failed turn. The log keeps both; the view shows the failure
+ * alone when the turn's latest agent text only repeats it. Text before that
+ * block is a real reply, and text that merely mentions the failure is not a
+ * repeat.
+ */
+function failTurn(view: TaskLogView, message: string): TaskLogView {
+  const repeated = view.blocks.find((b) => b.id === view.latestText);
+  const settled = repeated?.type === 'message' && repeated.role === 'agent' && sameMessage(repeated.text, message)
+    ? withoutStream({ ...view, blocks: view.blocks.filter((b) => b !== repeated) }, TEXT_STREAM)
+    : view;
+  return appendOutput({ ...settled, latestText: undefined }, null, (id) => settledMessage(id, 'error', message));
 }
 
 function thinkingBlock(id: string, text: string, streaming: boolean, subagentId: string | undefined): ThinkingDisplayBlock {
@@ -200,7 +222,7 @@ function decideApproval(view: TaskLogView, { approvalId, decision, note }: Event
 
 function startTurn(view: TaskLogView, { message, messageId }: Event<'turn_start'>): TaskLogView {
   const queued = messageId ? view.queued.filter((m) => m.id !== messageId) : view.queued;
-  const working = { ...view, queued, working: true };
+  const working = { ...view, queued, working: true, latestText: undefined };
   // A turn the runner opened itself has no user message to show.
   return message ? append(working, (id) => settledMessage(id, 'user', message)) : working;
 }
@@ -208,7 +230,7 @@ function startTurn(view: TaskLogView, { message, messageId }: Event<'turn_start'
 const CUT: Record<StructuredTurnEnd, SubagentStatus | null> = { completed: null, interrupted: 'stopped', failed: 'failed' };
 
 function endTurn(view: TaskLogView, { reason }: Event<'turn_end'>): TaskLogView {
-  const closed = closeOpenBlocks({ ...view, working: false, lastTurnEnd: reason, streams: {} }, CUT[reason]);
+  const closed = closeOpenBlocks({ ...view, working: false, lastTurnEnd: reason, streams: {}, latestText: undefined }, CUT[reason]);
   return reason === 'interrupted' ? append(closed, (id) => settledMessage(id, 'system', 'Interrupted.')) : closed;
 }
 
@@ -267,7 +289,7 @@ export function reduceTaskLog(view: TaskLogView, event: TaskLogEvent): TaskLogVi
     case 'message_handed_over': return handOver(view, event);
     case 'message_delivered': return deliverMidTurn(view, event);
     case 'message_undelivered': return append(unqueueMessage(view, event), (id) => settledMessage(id, 'system', `${event.text} · not delivered`));
-    case 'error': return appendOutput(view, null, (id) => settledMessage(id, 'error', event.message));
+    case 'error': return failTurn(view, event.message);
     case 'approval_requested': return requestApproval(view, event);
     case 'approval_decided': return decideApproval(view, event);
     case 'approval_withdrawn': return settleApproval(view, event.approvalId, (block) => ({ ...block, status: 'withdrawn' }));

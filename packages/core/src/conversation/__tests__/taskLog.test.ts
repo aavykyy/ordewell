@@ -182,6 +182,88 @@ describe('reduceTaskLog', () => {
     expect(view.blocks.at(-1)).toMatchObject({ type: 'message', role: 'error', text: 'Claude Code ended the turn: error_max_turns' });
   });
 
+  describe('a usage limit the runner says twice (#79)', () => {
+    const limit = "You've hit your session limit · resets 8:10pm (Europe/Rome)";
+    const agentTexts = (view: ReturnType<typeof replayTaskLog>) => view.blocks.filter((b) => b.type === 'message' && b.role === 'agent');
+    const failure = { type: 'message', role: 'error', text: `${limit}.`, streaming: false };
+
+    it('shows the limit once, as the error', () => {
+      const view = replayTaskLog([start, { type: 'text', text: limit }, { type: 'error', message: `${limit}.` }, { type: 'turn_end', reason: 'failed' }]);
+      expect(unkeyed(view.blocks)).toEqual([{ type: 'message', role: 'user', text: 'Do the task', streaming: false }, failure]);
+    });
+
+    it('takes back a streamed copy of it too', () => {
+      const view = replayTaskLog([
+        start,
+        { type: 'text_delta', text: limit.slice(0, 20) },
+        { type: 'text_delta', text: limit.slice(20) },
+        { type: 'text', text: limit },
+        { type: 'error', message: `${limit}.` },
+      ]);
+      expect(agentTexts(view)).toHaveLength(0);
+      expect(unkeyed(view.blocks).at(-1)).toEqual(failure);
+      expect(view.streams).toEqual({});
+    });
+
+    it('takes back a streamed copy that never got its whole block', () => {
+      const view = replayTaskLog([start, { type: 'text_delta', text: limit }, { type: 'error', message: `${limit}.` }]);
+      expect(agentTexts(view)).toHaveLength(0);
+      expect(unkeyed(view.blocks).at(-1)).toEqual(failure);
+    });
+
+    it('keeps a real reply that came before it, beside the error', () => {
+      const view = replayTaskLog([
+        start,
+        { type: 'text', text: 'The cache belongs in src/cache.ts.' },
+        { type: 'text', text: `\n\n${limit}` },
+        { type: 'error', message: `${limit}.` },
+      ]);
+      expect(unkeyed(view.blocks).slice(1)).toEqual([
+        { type: 'message', role: 'agent', text: 'The cache belongs in src/cache.ts.', streaming: false },
+        failure,
+      ]);
+    });
+
+    it('keeps text that only mentions the error', () => {
+      const view = replayTaskLog([start, { type: 'text', text: `I stopped early: ${limit}` }, { type: 'error', message: limit }]);
+      expect(unkeyed(view.blocks).slice(1)).toEqual([
+        { type: 'message', role: 'agent', text: `I stopped early: ${limit}`, streaming: false },
+        { type: 'message', role: 'error', text: limit, streaming: false },
+      ]);
+    });
+
+    it('only looks at the latest text block of the turn', () => {
+      const view = replayTaskLog([
+        start,
+        { type: 'text', text: limit },
+        { type: 'tool_call', id: 'c1', name: 'Bash', args: '{"command":"ls"}' },
+        { type: 'text', text: 'Listing done.' },
+        { type: 'error', message: limit },
+      ]);
+      expect(agentTexts(view).map((b) => b.type === 'message' && b.text)).toEqual([limit, 'Listing done.']);
+    });
+
+    it('leaves an earlier turn’s text alone', () => {
+      const view = replayTaskLog([
+        start,
+        { type: 'text', text: limit },
+        { type: 'turn_end', reason: 'completed' },
+        { type: 'turn_start', message: 'Go on' },
+        { type: 'error', message: limit },
+      ]);
+      expect(agentTexts(view).map((b) => b.type === 'message' && b.text)).toEqual([limit]);
+    });
+
+    it('gives a stored log the same view, whole or resumed part way', () => {
+      const events: TaskLogEvent[] = [start, { type: 'text', text: limit }, { type: 'error', message: `${limit}.` }, { type: 'turn_end', reason: 'failed' }];
+      const stored = JSON.parse(JSON.stringify(events)) as TaskLogEvent[];
+      const expected = unkeyed(replayTaskLog(events).blocks);
+      expect(unkeyed(replayTaskLog(stored).blocks)).toEqual(expected);
+      expect(unkeyed(replayTaskLog(stored.slice(2), replayTaskLog(stored.slice(0, 2))).blocks)).toEqual(expected);
+      expect(expected.filter((b) => b.type === 'message' && b.role !== 'user')).toEqual([failure]);
+    });
+  });
+
   it('holds queued messages beside the blocks until a turn delivers them, and lets one be taken back', () => {
     const queued = replayTaskLog([
       start,
