@@ -271,6 +271,57 @@ describe('ordewell parallel', () => {
   });
 });
 
+describe('ordewell supervisor, automerge and autorun (ADR-0030)', () => {
+  const RUN = { supervisorLevel: 'watch', mergeAtGatesAutomatically: false, autorun: false, supervisorRetryLimit: 2, wakeUpReadBudget: 12 };
+
+  it('shows the user\'s run settings', async () => {
+    const d = await fakeDaemon({ settings: { run: { ...RUN, supervisorLevel: 'act', supervisorRetryLimit: 1 } } });
+    const { handleSupervisor, handleAutomerge, handleAutorun } = await import('../runSettings');
+    const supervisor = await capture(() => handleSupervisor([], new ApiClient(d.port)));
+    const automerge = await capture(() => handleAutomerge([], new ApiClient(d.port)));
+    const autorun = await capture(() => handleAutorun([], new ApiClient(d.port)));
+    expect(supervisor.stdout).toContain('Supervisor: Act, 1 retry per task, 12 reads per wake-up');
+    expect(automerge.stdout).toContain('Merge at gates automatically: off');
+    expect(autorun.stdout).toContain('Autorun: off');
+    expect(d.sent).toEqual([]);
+    d.close();
+  });
+
+  it.each([
+    [['act'], 'handleSupervisor', { supervisorLevel: 'act' }],
+    [['retries', '3'], 'handleSupervisor', { supervisorRetryLimit: 3 }],
+    [['reads', '20'], 'handleSupervisor', { wakeUpReadBudget: 20 }],
+    [['on'], 'handleAutomerge', { mergeAtGatesAutomatically: true }],
+    [['on'], 'handleAutorun', { autorun: true }],
+  ] as const)('saves %j through %s', async (args, handler, run) => {
+    const d = await fakeDaemon({ settings: { run: RUN } });
+    const commands = await import('../runSettings');
+    await capture(() => commands[handler]([...args], new ApiClient(d.port)));
+    expect(d.sent.find((r) => r.method === 'PATCH')!.body).toEqual({ run });
+    d.close();
+  });
+
+  it('says what Act and autorun allow when it turns them on', async () => {
+    const d = await fakeDaemon({ settings: { run: RUN } });
+    const { handleSupervisor, handleAutorun } = await import('../runSettings');
+    expect((await capture(() => handleSupervisor(['act'], new ApiClient(d.port)))).stdout).toMatch(/ops tasks included/);
+    expect((await capture(() => handleAutorun(['on'], new ApiClient(d.port)))).stdout).toMatch(/without review, ops tasks included/);
+    d.close();
+  });
+
+  it.each([
+    ['handleSupervisor', ['boss']], ['handleSupervisor', ['reads', '0']], ['handleSupervisor', ['retries', 'many']],
+    ['handleAutomerge', ['maybe']], ['handleAutorun', ['yes']],
+  ] as const)('%s refuses %j, sending nothing', async (handler, args) => {
+    const d = await fakeDaemon({ settings: { run: RUN } });
+    const commands = await import('../runSettings');
+    const { exitCode } = await capture(() => commands[handler]([...args], new ApiClient(d.port)));
+    expect(exitCode).toBe(1);
+    expect(d.sent).toEqual([]);
+    d.close();
+  });
+});
+
 describe('ordewell key', () => {
   it('stores the key under the provider env var and never prints it', async () => {
     const d = await fakeDaemon({ models: CATALOG });

@@ -201,6 +201,11 @@ the change to that session at once, as a command does. The per-plan
 `POST /api/plans/:sessionId/supervisor/lower` are removed: their only client is
 the CLI's own `apiClient`, and the project is before 1.0.
 
+The route takes the run settings as named fields, never the autonomy level.
+Full/Guarded stays in `SETTINGS_ENV_REFUSED`'s approval-posture class: a
+surface writes it to `settings.json` itself, through `SettingsService`, and
+the daemon reads it from there at generation.
+
 ## Considered options
 
 - **Rejected: keep them per plan.** Every new goal starts at the defaults, and

@@ -432,11 +432,19 @@ export function emptyWarnings(): PlanModificationWarnings {
   return { deletedCompleted: [], changedCompleted: [], deletedInProgress: [], modifiedInProgress: [], brokenDependencies: [] };
 }
 
-/** What a run started with (ADR-0029): plan settings changed during it apply to the next. */
+/**
+ * The run's own copy of the user's run settings (ADR-0030): taken when the
+ * user starts it, changed at once by a change made in this session, and
+ * lowered by a tripped guard or a failed supervisor.
+ */
 export interface RunSettings {
   mergeAtGatesAutomatically: boolean;
   /** Absent on a run started before supervisor levels existed: Off. */
   supervisorLevel?: SupervisorLevel;
+  /** Absent on a run started before ADR-0030: the user's setting. */
+  supervisorRetryLimit?: number;
+  /** Absent on a run started before ADR-0030: the user's setting. */
+  wakeUpReadBudget?: number;
   /** Why the supervisor stopped for the rest of this run, which carries on as Off; absent while it watches. */
   unsupervised?: string;
 }
@@ -453,14 +461,6 @@ export interface SupervisionSnapshot {
 }
 
 export interface LegacyPlanState {
-  /** Changes during a run apply at its next start (ADR-0029). */
-  mergeAtGatesAutomatically?: boolean;
-  /** Off when absent. Changes during a run apply at its next start (ADR-0029). */
-  supervisorLevel?: SupervisorLevel;
-  /** Reads a wake-up turn may make, in place of a user message's caps; a default when absent. */
-  wakeUpReadBudget?: number;
-  /** Retries an Act supervisor may make of one task in a run (a loop guard, ADR-0029); a default when absent. */
-  supervisorRetryLimit?: number;
   runSettings?: RunSettings;
   /** What supervision remembers across a daemon restart (ADR-0029); absent on plans saved before it existed. */
   supervision?: SupervisionSnapshot;

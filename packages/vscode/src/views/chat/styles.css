@@ -851,6 +851,30 @@ body {
   margin-bottom: 4px;
 }
 
+.empty-state-setup {
+  display: grid;
+  gap: 4px;
+  margin: 12px 0;
+  font-size: 12px;
+  text-align: left;
+}
+
+.empty-state-setup-row {
+  display: grid;
+  grid-template-columns: 72px 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.empty-state-setup-label,
+.empty-state-setup-command {
+  color: var(--vscode-descriptionForeground);
+}
+
+.empty-state-setup .warn {
+  color: var(--vscode-editorWarning-foreground);
+}
+
 .empty-state p {
   font-size: 13px;
   color: var(--text-secondary);

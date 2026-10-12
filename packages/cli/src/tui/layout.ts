@@ -3,7 +3,8 @@ import { cursorInLines, type CursorPosition } from './editor';
 import { checkpointCardLines, conversationLines, taskUsageText, usageMeasures, tokenLine } from './blocks';
 import { chatEditorRoomFor, chatPaneWidth, planPaneWidth } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
-import { findTask, loweredRunSupervisor, planRows, plannerInFlight, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
+import { findTask, planRows, plannerInFlight, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
+import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { ALL_PROVIDERS, approvalLabel, awaitingLabel, hasHiddenDetail, markAction, resumeLabel, runnerForProvider, taskRowView, planUsage, type AiProvider, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
 
@@ -322,6 +323,17 @@ function plannerSetup(state: TuiState): { label: string; ready: boolean } {
 const SETUP_KEY_COLS = 10;
 const SETUP_VALUE_COLS = 32;
 
+/** The run settings (ADR-0030), the settings that let Ordewell act unasked drawn as a warning. */
+function runSettingsValue(state: TuiState): string {
+  const { supervisorLevel, mergeAtGatesAutomatically, autorun } = state.runSettings;
+  const level = `supervisor ${SUPERVISOR_LEVEL_LABEL[supervisorLevel]}`;
+  return [
+    supervisorLevel === 'act' ? style.yellow(level) : level,
+    `auto-merge ${mergeAtGatesAutomatically ? 'on' : 'off'}`,
+    autorun ? style.yellow('autorun on') : 'autorun off',
+  ].join(' · ');
+}
+
 function setupRow(label: string, value: string, command: string, cols: number): string {
   // Padded rather than truncated to the value column: a long model id keeps its
   // name and pushes the command right, instead of being cut to fit a grid.
@@ -372,7 +384,7 @@ const BANNER_COLS = Math.max(
   ...BANNER_ROWS.map((row) => BANNER_ICON_COLS + BANNER_GAP + width(row.word)),
 );
 /** The full welcome (banner + setup + hints) needs this much terminal. */
-const BANNER_MIN_ROWS = 24;
+const BANNER_MIN_ROWS = 26;
 
 /** Column where "well" begins in every `word` row — see the cell grid in the BANNER_ROWS comment. */
 const BANNER_WELL_COL = 30;
@@ -422,6 +434,8 @@ function welcomeLines(state: TuiState, cols: number): string[] {
       '/runners',
       cols,
     ),
+    setupRow('Autonomy', state.autonomous ? style.yellow('Full') : 'Guarded', '/auto', cols),
+    setupRow('Run', runSettingsValue(state), '/supervisor · /automerge · /autorun', cols),
     '',
   ];
 
@@ -488,38 +502,18 @@ export interface PlanLayout {
   maxScroll: number;
 }
 
-/** What the running supervisor is, when that is not what the plan's setting says. */
-function supervisorNote(state: TuiState): string {
-  const run = state.status === 'executing' ? state.runSupervisor : null;
-  if (!run) return '';
-  if (run.unsupervised) return ' · unsupervised: the supervisor stopped';
-  return run.level !== state.supervisorLevel ? ` · supervisor next run ${state.supervisorLevel}; now ${run.level}` : '';
-}
-
-function lowerHint(state: TuiState): string {
-  const lowered = loweredRunSupervisor(state);
-  return lowered === 'watch' ? ' · L drop to Watch' : lowered === 'off' ? ' · L turn it off' : '';
-}
-
 export function planLayout(state: TuiState, rows: number, cols: number): PlanLayout {
   const done = state.tasks.filter((t) => t.status === 'completed').length;
   const totalUsage = planUsage(state.tasks);
   const unmerged = state.runMerge?.handoff.landed.length ?? 0;
-  const changedMergeSetting = state.status === 'executing' && state.runAutoMerge !== null
-    && state.runAutoMerge !== state.mergeAtGatesAutomatically;
-  const nextRun = changedMergeSetting
-    ? ` · next run ${state.mergeAtGatesAutomatically ? 'on' : 'off'}; now ${state.runAutoMerge ? 'on' : 'off'}`
-    : '';
   const lines = [
-    style.bold(truncate(`Plan ${done}/${state.tasks.length}${nextRun}${supervisorNote(state)}`, cols)),
-    style.dim(truncate(`G Merge at gates automatically: ${state.mergeAtGatesAutomatically ? 'on' : 'off'}`, cols)),
-    style.dim(truncate(`W Supervisor: ${state.supervisorLevel}${lowerHint(state)}`, cols)),
+    style.bold(truncate(`Plan ${done}/${state.tasks.length}`, cols)),
     totalUsage.attempts ? style.grey(truncate(`Tasks total: ${taskUsageText(totalUsage)}`, cols)) : '',
   ];
   if (unmerged > 0) {
     const hint = style.dim(truncate(`${unmerged} landed task${unmerged === 1 ? '' : 's'} not merged — /handoff merge`, cols));
     if (totalUsage.attempts) lines.push(hint);
-    else lines[3] = hint;
+    else lines[1] = hint;
   }
   const firstRowLine = lines.length;
 

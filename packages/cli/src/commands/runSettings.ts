@@ -1,0 +1,77 @@
+import type { GlobalRunSettings } from '@ordewell/core';
+import type { ApiClient } from '../apiClient';
+import { positionals } from '../utils';
+import {
+  ACT_RISK, AUTORUN_RISK, SUPERVISOR_LEVEL_LABEL, automergeSummary, autorunSummary, parseCount, parseSwitch, supervisorSummary,
+} from '@ordewell/core';
+import { connect, fail } from './shared';
+
+/**
+ * The run settings (ADR-0030), saved for every session from its next run. A
+ * session's run under way takes a change at once only when it is made in
+ * that session, in the TUI.
+ */
+
+const SUPERVISOR_USAGE = 'Usage: ordewell supervisor [off|watch|act] · ordewell supervisor retries <n> · ordewell supervisor reads <n>';
+const AUTOMERGE_USAGE = 'Usage: ordewell automerge [on|off]';
+const AUTORUN_USAGE = 'Usage: ordewell autorun [on|off]';
+
+async function save(api: ApiClient, changes: Partial<GlobalRunSettings>): Promise<void> {
+  await api.updateRunSettings(changes);
+}
+
+export async function handleSupervisor(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
+  const [arg, value] = positionals(subArgs);
+  let changes: Partial<GlobalRunSettings> | null = null;
+  if (arg === 'off' || arg === 'watch' || arg === 'act') changes = { supervisorLevel: arg };
+  else if (arg === 'retries') changes = maybe(parseCount(value, 0), (n) => ({ supervisorRetryLimit: n }));
+  else if (arg === 'reads') changes = maybe(parseCount(value, 1), (n) => ({ wakeUpReadBudget: n }));
+  if (arg !== undefined && changes === null) fail(SUPERVISOR_USAGE);
+
+  const api = await connect(subArgs, injectedApi);
+  if (!changes) {
+    console.log(supervisorSummary((await api.getSettings()).run));
+    console.log(`  ${SUPERVISOR_USAGE}`);
+    return;
+  }
+  await save(api, changes);
+  if (changes.supervisorLevel) console.log(`Supervisor: ${SUPERVISOR_LEVEL_LABEL[changes.supervisorLevel]}, from each session's next run.`);
+  if (changes.supervisorLevel === 'act') console.log(ACT_RISK);
+  if (changes.supervisorRetryLimit !== undefined) console.log(`Supervisor retry limit: ${changes.supervisorRetryLimit} per task.`);
+  if (changes.wakeUpReadBudget !== undefined) console.log(`Wake-up read budget: ${changes.wakeUpReadBudget} reads.`);
+}
+
+export async function handleAutomerge(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
+  const [arg] = positionals(subArgs);
+  const enabled = arg === undefined ? null : parseSwitch(arg);
+  if (arg !== undefined && enabled === null) fail(AUTOMERGE_USAGE);
+
+  const api = await connect(subArgs, injectedApi);
+  if (enabled === null) {
+    console.log(automergeSummary((await api.getSettings()).run));
+    console.log(`  ${AUTOMERGE_USAGE}`);
+    return;
+  }
+  await save(api, { mergeAtGatesAutomatically: enabled });
+  console.log(`Merge at gates automatically: ${enabled ? 'on' : 'off'}, from each session's next run.`);
+}
+
+export async function handleAutorun(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
+  const [arg] = positionals(subArgs);
+  const enabled = arg === undefined ? null : parseSwitch(arg);
+  if (arg !== undefined && enabled === null) fail(AUTORUN_USAGE);
+
+  const api = await connect(subArgs, injectedApi);
+  if (enabled === null) {
+    console.log(autorunSummary((await api.getSettings()).run));
+    console.log(`  ${AUTORUN_USAGE}`);
+    return;
+  }
+  await save(api, { autorun: enabled });
+  console.log(`Autorun: ${enabled ? 'on — each plan the planner submits starts at once' : 'off — plans wait for your review'}.`);
+  if (enabled) console.log(AUTORUN_RISK);
+}
+
+function maybe<T>(n: number | null, wrap: (n: number) => T): T | null {
+  return n === null ? null : wrap(n);
+}

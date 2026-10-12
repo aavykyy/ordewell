@@ -238,13 +238,28 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       pickModelWithProvider: (...args) => discovery.pickModelWithProvider(...args),
       updateConfig: async (key, value) => services.config.update(key, value),
       recordPlannerModel: (model, effort) => services.plannerModelMemory.remember(services.config.aiProvider, model, effort),
+      runSettings: {
+        get: () => services.settingsService.getRunSettings(),
+        change: (changes) => {
+          services.settingsService.updateRunSettings(changes);
+          managerDeps.session.applyRunSettings(changes);
+          sendRunSettings();
+          const plan = managerDeps.session.planState;
+          if (plan) services.chatProvider.showPlan(plan);
+        },
+      },
       log,
     };
+  }
+
+  function sendRunSettings(): void {
+    services.chatProvider.setRunSettings(services.config.autonomousMode, services.settingsService.getRunSettings());
   }
 
   function onWebviewReady(): void {
     services.chatProvider.resendAllState();
     services.chatProvider.setPlanDockHeight(services.context.globalState.get<number>(PLAN_DOCK_HEIGHT_KEY));
+    sendRunSettings();
     sendSkills();
     // Activation-time discovery can catch a runner CLI cold (server spawn,
     // catalog fetch, auth store still loading) and cache a degraded model

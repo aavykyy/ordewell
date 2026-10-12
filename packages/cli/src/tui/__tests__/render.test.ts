@@ -167,7 +167,7 @@ function boldSans(word: string): string {
 
 describe('welcome banner', () => {
   it('draws the logo as braille art — dot and wordmark on the same rows', () => {
-    const out = screen({ cols: 90 });
+    const out = screen({ cols: 90, rows: 26 });
     const lines = out.map(stripAnsi);
     // The dot's widest row, from the traced BANNER_ROWS art.
     const dotRow = lines.findIndex((l) => l.includes('⣀⣶⣿⣷⡄'));

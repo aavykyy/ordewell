@@ -1057,6 +1057,14 @@ export class TaskOrchestrator {
     this.nextAutoMerge = enabled;
   }
 
+  /** The run under way merges at gates, or stops, from now on (ADR-0030); a gate already reached merges at once. */
+  setMergeAtGatesNow(enabled: boolean): void {
+    this.nextAutoMerge = enabled;
+    if (!this.runs.isOpen || this.autoMerge === enabled) return;
+    this.autoMerge = enabled;
+    if (enabled && this.running) void this.tick();
+  }
+
   private openRun(): void {
     if (!this.runs.isOpen) {
       this.autoMerge = this.nextAutoMerge;

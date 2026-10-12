@@ -3,6 +3,7 @@ import { initialState, reduce, type Action, type Step } from '../reducer';
 import { render } from '../render';
 import { style } from '../ansi';
 import { conversationLines } from '../blocks';
+import { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings } from '@ordewell/core';
 import type { TaskView, TuiState } from '../state';
 
 beforeAll(() => { style.enabled = false; });
@@ -16,69 +17,88 @@ const frame = (state: TuiState): string => render(state).join('\n');
 const task: TaskView = { id: 't1', order: 1, title: 'Build', type: 'ai', status: 'in_progress', dependencies: [] };
 const plan = (over: Partial<TuiState> = {}): TuiState =>
   initialState({ sessionId: 's1', rows: 40, cols: 120, focus: 'plan', tasks: [task], ...over });
+/** The user's run settings as the daemon answered them (ADR-0030). */
+const loaded = (state: TuiState, run: Partial<GlobalRunSettings>): TuiState =>
+  apply(state, { type: 'settingsLoaded', settings: { run: { ...RUN_SETTINGS_DEFAULTS, ...run } } }).state;
+const typed = (state: TuiState, text: string): Step =>
+  reduce({ ...state, focus: 'chat', editor: { ...state.editor, text, cursor: text.length } }, key('enter'));
+const said = (step: Step): string => frame(step.state);
 
-describe('the supervisor in the TUI (ADR-0029)', () => {
-  it('steps the plan\'s supervisor through Off, Watch and Act with W, asking before Act', () => {
-    const off = plan();
-    expect(press(off, 'char', 'W').effects).toEqual([{ type: 'setSupervisorLevel', sessionId: 's1', level: 'watch' }]);
-    expect(frame(off)).toContain('W Supervisor: off');
+describe('run settings in the TUI (ADR-0030)', () => {
+  it('/supervisor sets the level for this session and every later run, asking before Act', () => {
+    expect(typed(plan(), '/supervisor watch').effects).toEqual([{ type: 'setRunSettings', changes: { supervisorLevel: 'watch' }, sessionId: 's1' }]);
+    expect(typed(plan(), '/supervisor off').effects).toEqual([{ type: 'setRunSettings', changes: { supervisorLevel: 'off' }, sessionId: 's1' }]);
 
-    const watching = apply(off, { type: 'planUpdated', sessionId: 's1', plan: { tasks: [task], supervisorLevel: 'watch' } }).state;
-    expect(watching.supervisorLevel).toBe('watch');
-    expect(frame(watching)).toContain('W Supervisor: watch');
-    const asked = press(watching, 'char', 'W');
+    const asked = typed(plan(), '/supervisor act');
     expect(asked.effects).toEqual([]);
-    expect(asked.state.overlay).toMatchObject({ kind: 'confirm', title: 'Let the supervisor act?', action: { kind: 'supervisor-act' } });
+    expect(asked.state.overlay).toMatchObject({ kind: 'confirm', title: 'Let the supervisor act?' });
     expect(frame(asked.state)).toMatch(/ops tasks included/);
-    expect(press(asked.state, 'enter').effects).toEqual([{ type: 'setSupervisorLevel', sessionId: 's1', level: 'act' }]);
-
-    const acting = apply(off, { type: 'planUpdated', sessionId: 's1', plan: { tasks: [task], supervisorLevel: 'act' } }).state;
-    expect(frame(acting)).toContain('W Supervisor: act');
-    expect(press(acting, 'char', 'W').effects).toEqual([{ type: 'setSupervisorLevel', sessionId: 's1', level: 'off' }]);
-    expect(apply(watching, { type: 'sessionCleared' }).state.supervisorLevel).toBe('off');
+    expect(press(asked.state, 'enter').effects).toEqual([{ type: 'setRunSettings', changes: { supervisorLevel: 'act' }, sessionId: 's1' }]);
   });
 
-  it('lowers the running supervisor at once with L: Act to Watch, Watch to off', () => {
-    const run = (level: 'act' | 'watch' | 'off') => apply(plan({ status: 'executing' }), { type: 'planUpdated', sessionId: 's1', plan: {
-      tasks: [task], supervisorLevel: 'act', runSettings: { mergeAtGatesAutomatically: false, supervisorLevel: level },
+  it('/supervisor retries and reads set the loop guard and the wake-up budget, refusing what is out of range', () => {
+    expect(typed(plan(), '/supervisor retries 3').effects).toEqual([{ type: 'setRunSettings', changes: { supervisorRetryLimit: 3 }, sessionId: 's1' }]);
+    expect(typed(plan(), '/supervisor reads 20').effects).toEqual([{ type: 'setRunSettings', changes: { wakeUpReadBudget: 20 }, sessionId: 's1' }]);
+    expect(typed(plan(), '/supervisor reads 0').effects).toEqual([]);
+    expect(typed(plan(), '/supervisor retries -1').effects).toEqual([]);
+    expect(typed(plan(), '/supervisor boss').effects).toEqual([]);
+  });
+
+  it('a bare /supervisor, /automerge or /autorun says what it is and changes nothing', () => {
+    const state = loaded(plan(), { supervisorLevel: 'act', supervisorRetryLimit: 1, mergeAtGatesAutomatically: true });
+    const supervisor = typed(state, '/supervisor');
+    expect(supervisor.effects).toEqual([]);
+    expect(said(supervisor)).toContain('Supervisor: Act, 1 retry per task, 12 reads per wake-up');
+    expect(said(typed(state, '/automerge'))).toContain('Merge at gates automatically: on');
+    expect(said(typed(state, '/autorun'))).toContain('Autorun: off');
+  });
+
+  it('/automerge and /autorun switch, and autorun asks before it turns on', () => {
+    expect(typed(plan(), '/automerge on').effects).toEqual([{ type: 'setRunSettings', changes: { mergeAtGatesAutomatically: true }, sessionId: 's1' }]);
+    expect(typed(plan(), '/automerge off').effects).toEqual([{ type: 'setRunSettings', changes: { mergeAtGatesAutomatically: false }, sessionId: 's1' }]);
+    expect(typed(plan(), '/autorun off').effects).toEqual([{ type: 'setRunSettings', changes: { autorun: false }, sessionId: 's1' }]);
+
+    const asked = typed(plan(), '/autorun on');
+    expect(asked.effects).toEqual([]);
+    expect(frame(asked.state)).toMatch(/without review, ops tasks included/);
+    expect(press(asked.state, 'enter').effects).toEqual([{ type: 'setRunSettings', changes: { autorun: true }, sessionId: 's1' }]);
+  });
+
+  it('saves the setting alone when no session is open', () => {
+    expect(typed(initialState({}), '/automerge on').effects).toEqual([{ type: 'setRunSettings', changes: { mergeAtGatesAutomatically: true } }]);
+  });
+
+  it('no longer has plan-pane keys for them', () => {
+    for (const k of ['G', 'W', 'L']) expect(press(plan({ status: 'executing' }), 'char', k).effects).toEqual([]);
+    expect(frame(plan())).not.toMatch(/G Merge at gates|W Supervisor/);
+  });
+
+  it('lists them in the welcome screen\'s Setup block, with the commands that change them', () => {
+    const welcome = frame(loaded(initialState({ rows: 40, cols: 120 }), { supervisorLevel: 'act', autorun: true }));
+
+    expect(welcome).toMatch(/Autonomy\s+Full\s+\/auto/);
+    expect(welcome).toMatch(/Run\s+supervisor Act · auto-merge off · autorun on\s+\/supervisor · \/automerge · \/autorun/);
+  });
+
+  it('shows them on the status line, and the run\'s own level where it differs', () => {
+    expect(frame(plan())).toContain('● Full · supervisor Watch');
+    expect(frame(loaded(plan(), { supervisorLevel: 'act', mergeAtGatesAutomatically: true, autorun: true }))).toContain('● Full · supervisor Act · auto-merge · autorun');
+
+    const lowered = apply(loaded(plan({ status: 'executing' }), { supervisorLevel: 'act' }), { type: 'planUpdated', sessionId: 's1', plan: {
+      tasks: [task], runSettings: { mergeAtGatesAutomatically: false, supervisorLevel: 'watch' },
     } }).state;
+    expect(frame({ ...lowered, status: 'executing' })).toContain('supervisor Act → Watch');
 
-    const acting = { ...run('act'), status: 'executing' as const };
-    expect(frame(acting)).toContain('L drop to Watch');
-    expect(press(acting, 'char', 'L').effects).toEqual([{ type: 'lowerSupervisor', sessionId: 's1', level: 'watch' }]);
-
-    const watching = { ...run('watch'), status: 'executing' as const };
-    expect(frame(watching)).toContain('L turn it off');
-    expect(press(watching, 'char', 'L').effects).toEqual([{ type: 'lowerSupervisor', sessionId: 's1', level: 'off' }]);
-
-    const off = { ...run('off'), status: 'executing' as const };
-    expect(frame(off)).not.toMatch(/L (drop|turn)/);
-    expect(press(off, 'char', 'L').effects).toEqual([]);
+    const stopped = apply(lowered, { type: 'planUpdated', sessionId: 's1', plan: {
+      tasks: [task], runSettings: { mergeAtGatesAutomatically: false, supervisorLevel: 'act', unsupervised: 'its wake-up turn failed twice' },
+    } }).state;
+    expect(frame({ ...stopped, status: 'executing' })).toContain('supervisor Act → unsupervised');
   });
 
   it('marks a task the supervisor added', () => {
     const added = plan({ tasks: [task, { ...task, id: 't2', order: 2, title: 'Add a cache', status: 'pending', addedBy: 'supervisor' }] });
     expect(frame(added)).toMatch(/added by supervisor/);
     expect(frame(plan())).not.toMatch(/added by supervisor/);
-  });
-
-  it('says when the running supervisor differs from the setting, or stopped', () => {
-    const changed = apply(plan({ status: 'executing' }), { type: 'planUpdated', sessionId: 's1', plan: {
-      tasks: [task], supervisorLevel: 'off', runSettings: { mergeAtGatesAutomatically: false, supervisorLevel: 'watch' },
-    } }).state;
-    expect(frame({ ...changed, status: 'executing' })).toContain('supervisor next run off; now watch');
-
-    const stopped = apply(changed, { type: 'planUpdated', sessionId: 's1', plan: {
-      tasks: [task], supervisorLevel: 'watch', runSettings: { mergeAtGatesAutomatically: false, supervisorLevel: 'watch', unsupervised: 'its wake-up turn failed twice' },
-    } }).state;
-    expect(stopped.runSupervisor).toEqual({ level: 'watch', unsupervised: 'its wake-up turn failed twice' });
-    expect(frame({ ...stopped, status: 'executing' })).toContain('unsupervised: the supervisor stopped');
-  });
-
-  it('reads an older plan, with no level saved, as Off', () => {
-    const older = apply(plan(), { type: 'planUpdated', sessionId: 's1', plan: { tasks: [task], runSettings: { mergeAtGatesAutomatically: true } } }).state;
-    expect(older.supervisorLevel).toBe('off');
-    expect(older.runSupervisor).toEqual({ level: 'off' });
   });
 
   it('draws the run update and the supervisor\'s note apart from the planner\'s replies', () => {

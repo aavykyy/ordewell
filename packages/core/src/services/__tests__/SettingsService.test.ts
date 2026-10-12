@@ -242,4 +242,42 @@ describe('SettingsService', () => {
       expect(new SettingsService(tempFile).getEnabledRunners()).toEqual([]);
     });
   });
+
+  describe('run settings (ADR-0030)', () => {
+    it('defaults to a watching supervisor, no automatic merge, no autorun, 2 retries and 12 reads', () => {
+      expect(service.getRunSettings()).toEqual({
+        supervisorLevel: 'watch',
+        mergeAtGatesAutomatically: false,
+        autorun: false,
+        supervisorRetryLimit: 2,
+        wakeUpReadBudget: 12,
+      });
+    });
+
+    it('saves a change for every later reader, leaving the other values as they were', () => {
+      service.updateRunSettings({ supervisorLevel: 'act', mergeAtGatesAutomatically: true });
+
+      expect(new SettingsService(tempFile).getRunSettings()).toEqual({
+        supervisorLevel: 'act',
+        mergeAtGatesAutomatically: true,
+        autorun: false,
+        supervisorRetryLimit: 2,
+        wakeUpReadBudget: 12,
+      });
+    });
+
+    it('refuses a value outside its range and saves nothing of that change', () => {
+      expect(() => service.updateRunSettings({ supervisorLevel: 'act', supervisorRetryLimit: -1 })).toThrow(/retry limit/i);
+      expect(() => service.updateRunSettings({ wakeUpReadBudget: 0 })).toThrow(/read budget/i);
+      expect(() => service.updateRunSettings({ wakeUpReadBudget: 2.5 })).toThrow(/read budget/i);
+
+      expect(service.getRunSettings().supervisorLevel).toBe('watch');
+    });
+
+    it('reads a hand-edited value it cannot use as the default, keeping the rest', () => {
+      fs.writeFileSync(tempFile, JSON.stringify({ supervisorLevel: 'boss', supervisorRetryLimit: 'many', autorun: true }));
+
+      expect(new SettingsService(tempFile).getRunSettings()).toMatchObject({ supervisorLevel: 'watch', supervisorRetryLimit: 2, autorun: true });
+    });
+  });
 });

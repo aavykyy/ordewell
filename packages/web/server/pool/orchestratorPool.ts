@@ -16,6 +16,7 @@ import {
   deleteSession,
   SettingsService,
   sessionRuntimeSettings,
+  type GlobalRunSettings,
   type PlanState,
   type LegacyPlanState,
   migratePlanState,
@@ -216,7 +217,20 @@ export class OrchestratorPool {
       // The model remembered per planner backend (this task), so a surface can
       // render what's remembered without a second round-trip.
       plannerModels: userSettings.plannerModels,
+      run: this.settingsService.getRunSettings(),
     };
+  }
+
+  /**
+   * Save the user's run settings, and apply them at once to `sessionId`'s run
+   * when that session is open here (ADR-0030). Other sessions' runs keep
+   * theirs. Throws a {@link RunSettingsError}, saving nothing, for a value
+   * out of range.
+   */
+  updateRunSettings(changes: Partial<GlobalRunSettings>, sessionId?: string): SettingsResponse {
+    this.settingsService.updateRunSettings(changes);
+    if (sessionId) this.sessions.get(sessionId)?.applyRunSettings(changes);
+    return this.getSettings();
   }
 
   /**

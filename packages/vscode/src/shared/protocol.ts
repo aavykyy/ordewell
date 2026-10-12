@@ -1,4 +1,4 @@
-import type {
+import type { GlobalRunSettings,
   AiProvider, DisplayBlock, DiscoveredModel, IsolationHandoff, IsolationMergeResult, RunMergeView, PromptHold, RunnerId, SurfacePlan,
   TaskIsolation, TaskModelAssignment,
 } from '@ordewell/core';
@@ -139,11 +139,6 @@ export type WebviewToHost =
   | { type: 'openTaskLog'; taskId: string }
   /** The plan dock's dragged height in px, saved on release so every later session opens at it. */
   | { type: 'setPlanDockHeight'; height: number }
-  | { type: 'setAutoMerge'; enabled: boolean }
-  /** The plan's supervisor level (ADR-0029), which the next run starts with. */
-  | { type: 'setSupervisorLevel'; level: 'off' | 'watch' | 'act' }
-  /** Lower the run under way's supervisor at once, for the rest of the run. */
-  | { type: 'lowerSupervisor'; level: 'watch' | 'off' }
   /** Who plans (ADR-0009) — a vendor provider id or one of the harness planners. */
   | { type: 'setPlanner'; provider: string }
   /** The planner's own model and thinking effort, a pair so neither can outlive the other. */
@@ -176,6 +171,8 @@ export type HostToWebview =
   | { type: 'setRunners'; runners: RunnerMeta[] }
   /** The remembered plan dock height in px; absent until the user first drags it. */
   | { type: 'planDockHeight'; height?: number }
+  /** The user's autonomy level and run settings (ADR-0030), sent on ready and after each change. */
+  | { type: 'setRunSettings'; autonomous: boolean; run: GlobalRunSettings }
   /** Discovered skills (global ~/.ordewell/skills/ + workspace .ordewell/skills/, global wins over workspace) for the /skill-name suggestion dropdown. */
   | { type: 'setSkills'; skills: { name: string; description: string; appliesTo?: 'planner' | 'task' }[] }
   /** Every `applies-to: task` skill, user-only ones included: what a task card's skill chips can attach. */

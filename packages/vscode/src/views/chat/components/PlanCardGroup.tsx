@@ -4,27 +4,12 @@ import TaskCard from './TaskCard';
 import NewTaskCard from './NewTaskCard';
 import type { TaskDraft } from './NewTaskCard';
 import type { RunnerMode, RunnerOption } from './TaskCard';
-import { Task, DiscoveredModel, TaskModelAssignment, TaskIsolation, type SupervisorLevel } from '@ordewell/core';
+import { Task, DiscoveredModel, TaskModelAssignment, TaskIsolation } from '@ordewell/core';
 import { canMergeTasks, canSplitTask, planUsage } from '@ordewell/core/plan-utils';
 
 /** What each level allows, in the picker's tooltip: Act's risk is said where it is chosen (ADR-0029). */
-const SUPERVISOR_LEVELS_TITLE = [
-  'Watch: the planner wakes when a task fails, waits on you or goes quiet, reads what happened, and suggests what to do. It never acts.',
-  'Act: it also runs, stops and retries tasks, denies their requests, edits the plan and merges, without asking you. Tasks it adds run too, ops tasks included, which can act on real systems unattended.',
-  'Changes during a run apply to the next run.',
-].join('\n\n');
-
 interface PlanCardGroupProps {
   tasks: Task[];
-  mergeAtGatesAutomatically?: boolean;
-  runAutoMerge?: boolean;
-  onAutoMergeChange?: (enabled: boolean) => void;
-  /** The plan's supervisor level, and what the run started with (ADR-0029). */
-  supervisorLevel?: SupervisorLevel;
-  runSupervisor?: { level: SupervisorLevel; unsupervised?: string };
-  onSupervisorLevelChange?: (level: SupervisorLevel) => void;
-  /** Lower the run under way's supervisor at once, for the rest of the run. */
-  onLowerSupervisor?: (level: 'watch' | 'off') => void;
   models: DiscoveredModel[];
   modelsByRunner?: Partial<Record<string, DiscoveredModel[]>>;
   modesByRunner?: Record<string, RunnerMode[]>;
@@ -75,13 +60,6 @@ interface PlanCardGroupProps {
 
 export default function PlanCardGroup({
   tasks,
-  mergeAtGatesAutomatically = false,
-  runAutoMerge,
-  onAutoMergeChange,
-  supervisorLevel = 'off',
-  runSupervisor,
-  onSupervisorLevelChange,
-  onLowerSupervisor,
   models,
   modelsByRunner,
   modesByRunner,
@@ -228,38 +206,6 @@ export default function PlanCardGroup({
 
       {(onExecutePlan || onStopExecution) && (
         <div className="plan-action-bar">
-          {onAutoMergeChange && (
-            <label title="Changes during a run apply to the next run.">
-              <input type="checkbox" checked={mergeAtGatesAutomatically}
-                onChange={(e) => onAutoMergeChange(e.target.checked)} />
-              Merge at gates automatically
-              {isExecuting && runAutoMerge !== undefined && runAutoMerge !== mergeAtGatesAutomatically
-                && ` (next run; now ${runAutoMerge ? 'on' : 'off'})`}
-            </label>
-          )}
-          {onSupervisorLevelChange && (
-            <label title={SUPERVISOR_LEVELS_TITLE}>
-              Supervisor
-              <select value={supervisorLevel}
-                onChange={(e) => onSupervisorLevelChange(e.target.value === 'act' || e.target.value === 'watch' ? e.target.value : 'off')}>
-                <option value="off">Off</option>
-                <option value="watch">Watch</option>
-                <option value="act">Act</option>
-              </select>
-              {isExecuting && runSupervisor && (runSupervisor.unsupervised
-                ? <span className="plan-supervisor-stopped" title={runSupervisor.unsupervised}> (stopped; the run is unsupervised)</span>
-                : runSupervisor.level !== supervisorLevel && ` (next run; now ${runSupervisor.level})`)}
-            </label>
-          )}
-          {/* Unlike the level above, which the next run starts with, these act on the run under way at once (ADR-0029). */}
-          {isExecuting && onLowerSupervisor && runSupervisor && !runSupervisor.unsupervised && runSupervisor.level !== 'off' && (
-            <span className="plan-supervisor-lower">
-              {runSupervisor.level === 'act' && (
-                <button type="button" className="plan-action-btn" title="The supervisor stops acting for the rest of this run, and only suggests" onClick={() => onLowerSupervisor('watch')}>Drop to Watch</button>
-              )}
-              <button type="button" className="plan-action-btn" title="The supervisor stops waking for the rest of this run" onClick={() => onLowerSupervisor('off')}>Turn off</button>
-            </span>
-          )}
           {isExecuting ? (
             onStopExecution && (
               <button className="plan-action-btn stop" onClick={onStopExecution}>Stop</button>

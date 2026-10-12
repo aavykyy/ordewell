@@ -14,7 +14,7 @@ import { WAKE_DEBOUNCE_MS } from '../Supervisor';
  * as it would have.
  */
 
-const ACT = { plan: { supervisorLevel: 'act' as const } };
+const ACT = { settings: { supervisorLevel: 'act' as const } };
 const SUPERVISOR = { kind: 'supervisor', level: 'act' } as const;
 
 /** The last plan the session saved, detached, with the session torn down. */
@@ -33,8 +33,8 @@ function reload(saved: ReturnType<typeof savedPlan>) {
 }
 
 /** A one-task run whose task failed, with the supervisor woken to it at Act. */
-async function failedOnce(over: Options['plan'] = {}): Promise<Env> {
-  const env = await supervised([task('t1', 1)], { plan: { supervisorLevel: 'act', ...over } });
+async function failedOnce(over: Options['settings'] = {}): Promise<Env> {
+  const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'act', ...over } });
   env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
   await until(() => env.planner.calls.length === 1);
   return env;

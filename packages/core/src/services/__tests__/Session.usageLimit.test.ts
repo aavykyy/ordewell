@@ -13,7 +13,7 @@ afterEach(() => {
 
 describe('editing a task waiting on a usage-limit reset', () => {
   it('a runner change makes a usage-limit task ready even if its resume was already cancelled', async () => {
-    const env = await supervised([task('t1', 1)], { plan: { supervisorLevel: 'off' } });
+    const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'off' } });
     hitLimit(env.run.of('t1'));
     await until(() => taskOf(env.session, 't1')!.resumeAt === RESUME_AT);
     env.session.cancelScheduledResume('t1');
@@ -27,7 +27,7 @@ describe('editing a task waiting on a usage-limit reset', () => {
 
   it('a moved task waits for a scheduler slot and starts when it becomes free', async () => {
     const env = await supervised([task('t1', 1), task('t2', 2, { assignedRunner: 'codex' })], {
-      plan: { supervisorLevel: 'off', runners: ['claude-code', 'codex'] }, config: { maxParallelSessions: 1 },
+      settings: { supervisorLevel: 'off' }, plan: { runners: ['claude-code', 'codex'] }, config: { maxParallelSessions: 1 },
     });
     hitLimit(env.run.of('t1'));
     await until(() => taskOf(env.session, 't1')!.resumeAt === RESUME_AT);
@@ -44,7 +44,7 @@ describe('editing a task waiting on a usage-limit reset', () => {
   });
 
   it('a user model change on the same runner keeps its resume and uses the new model at reset', async () => {
-    const env = await supervised([task('t1', 1)], { plan: { supervisorLevel: 'off' } });
+    const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'off' } });
     hitLimit(env.run.of('t1'));
     await until(() => taskOf(env.session, 't1')!.resumeAt === RESUME_AT);
 
@@ -62,7 +62,7 @@ describe('editing a task waiting on a usage-limit reset', () => {
 
   it('a runner change leaves the other tasks on the old account waiting until its shared reset', async () => {
     const env = await supervised([task('t1', 1), task('t2', 2), task('t3', 3)], {
-      plan: { supervisorLevel: 'off' }, config: { maxParallelSessions: 2 },
+      settings: { supervisorLevel: 'off' }, config: { maxParallelSessions: 2 },
     });
     hitLimit(env.run.of('t1'));
     hitLimit(env.run.of('t2'));
@@ -85,7 +85,7 @@ describe('editing a task waiting on a usage-limit reset', () => {
   });
 
   it('the runner picker starts the task on a newly admitted runner', async () => {
-    const env = await supervised([task('t1', 1)], { plan: { supervisorLevel: 'off' } });
+    const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'off' } });
     hitLimit(env.run.of('t1'));
     await until(() => taskOf(env.session, 't1')!.resumeAt === RESUME_AT);
 
@@ -97,7 +97,7 @@ describe('editing a task waiting on a usage-limit reset', () => {
   });
 
   it('a user runner patch releases its resume and starts on the new runner', async () => {
-    const env = await supervised([task('t1', 1)], { plan: { supervisorLevel: 'off', runners: ['claude-code', 'codex'] } });
+    const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'off' }, plan: { runners: ['claude-code', 'codex'] } });
     hitLimit(env.run.of('t1'));
     await until(() => taskOf(env.session, 't1')!.resumeAt === RESUME_AT);
 

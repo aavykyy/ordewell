@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import {
+import { RUN_SETTINGS_DEFAULTS,
   createTask, RunnerRegistry,
   type AiProvider, type DiscoveredModel, type IRunner, type LegacyPlanState,
   type ModelResolver, type PlannerModelMemory, type RunnerInstallation,
@@ -50,6 +50,7 @@ function fakeChat() {
     planGenerated: vi.fn(),
     planApproved: vi.fn(),
     setPlanDockHeight: vi.fn(),
+    setRunSettings: vi.fn(),
     setSkills: vi.fn(),
     setTaskSkills: vi.fn(),
     setModels: vi.fn(),
@@ -190,6 +191,8 @@ function fakeRunnerInstallation(installed: string[]) {
 function fakeSettings() {
   return {
     getAll: vi.fn(() => ({})),
+    getRunSettings: vi.fn(() => ({ ...RUN_SETTINGS_DEFAULTS })),
+    updateRunSettings: vi.fn(),
   };
 }
 
@@ -288,6 +291,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
       tasks: [expect.objectContaining({ id: 't1' })],
     }));
     await vi.waitFor(() => expect(h.chat.provider.setModels).toHaveBeenCalledWith(models));
+    expect(h.chat.provider.setRunSettings).toHaveBeenCalledWith(expect.any(Boolean), RUN_SETTINGS_DEFAULTS);
     await vi.waitFor(() => expect(h.chat.provider.setPlannerBackends).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ id: 'claude-code', usable: true })]),
       'openrouter', undefined, '',

@@ -21,8 +21,8 @@ describe('the retry limit', () => {
     const trip = retryLimit(t3, 2, 2)!;
 
     expect(trip.key).toBe('retry-limit:t3');
-    expect(trip.refusal).toBe('Refused by the retry limit: you have retried task #3 "Build" 2 times this run, the most the plan allows. It is escalated to the user now: tell them what you tried, and do not retry it again.');
-    expect(trip.escalation).toBe('Loop guard, retry limit: I retried task #3 "Build" 2 times this run, the most the plan allows, and stopped. It needs you: retry it, change it or skip it.');
+    expect(trip.refusal).toBe('Refused by the retry limit: you have retried task #3 "Build" 2 times this run, the most your settings allow. It is escalated to the user now: tell them what you tried, and do not retry it again.');
+    expect(trip.escalation).toBe('Loop guard, retry limit: I retried task #3 "Build" 2 times this run, the most your settings allow, and stopped. It needs you: retry it, change it or skip it.');
   });
 
   it('counts a limit of one in the singular', () => {

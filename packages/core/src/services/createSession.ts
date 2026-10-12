@@ -7,8 +7,8 @@ import { sharedMcpServer, type OrdewellMcpServer, type PlannerToolHandler } from
 import { ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type PlannerSubmission, type RewindTarget, type WakeUpTurn } from './PlannerConversation';
 import { forkPlanState, type ForkedDialogue } from './conversationFork';
 import { PlanTurns } from './PlanTurns';
-import { DEFAULT_WAKE_UP_READ_BUDGET, Supervisor, type RunEventInput, type SupervisedRun } from './Supervisor';
-import { DEFAULT_SUPERVISOR_RETRY_LIMIT, editedFields, SupervisionMemory, type GuardTrip } from './LoopGuards';
+import { Supervisor, type RunEventInput, type SupervisedRun } from './Supervisor';
+import { editedFields, SupervisionMemory, type GuardTrip } from './LoopGuards';
 import { Planner } from './Planner';
 import { TaskOrchestrator, type OrchestratorObserver } from './TaskOrchestrator';
 import { PlanStore } from './PlanStore';
@@ -25,7 +25,7 @@ import { ALL_PROVIDERS, runnerForProvider } from './ProviderRegistry';
 import { ModelResolver } from './ModelResolver';
 import { coerceAssignments } from './ModelAllowlistResolver';
 import { plannerModesFrom } from './plannerModes';
-import type { UserSettings } from './SettingsService';
+import { RUN_SETTINGS_DEFAULTS, runSettingsOf, type GlobalRunSettings, type UserSettings } from './SettingsService';
 import { SkillsService } from './SkillsService';
 import { resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
 import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
@@ -73,6 +73,8 @@ export interface SessionRuntimeSettings {
   modelAllowlist?: Record<string, string[]>;
   /** Absent means the user never chose, and `config.enabledRunners` (the host's defaults) decides. */
   enabledRunners?: RunnerId[];
+  /** The user's run settings (ADR-0030); absent means every default. */
+  run?: GlobalRunSettings;
 }
 
 /**
@@ -101,10 +103,13 @@ function lastAttemptDigest(location: TaskLogLocation, taskId: string): string | 
 /** Supervisor levels, lowest first: a level only ever goes down during a run. */
 const LEVEL_RANK: Record<SupervisorLevel, number> = { off: 0, watch: 1, act: 2 };
 
+const SUPERVISOR_LEVEL_LABEL: Record<SupervisorLevel, string> = { off: 'Off', watch: 'Watch', act: 'Act' };
+
 export function sessionRuntimeSettings(settings: UserSettings): SessionRuntimeSettings {
   return {
     modelAllowlist: settings.modelAllowlist,
     enabledRunners: settings.enabledRunners,
+    run: runSettingsOf(settings),
   };
 }
 
@@ -561,7 +566,7 @@ export class Session {
       pump: () => this.turns.pump(),
       saveState: () => this.persist({ background: true }),
       describeTask: (taskId) => this.describeTask(taskId),
-      readBudget: () => this.plan?.wakeUpReadBudget ?? DEFAULT_WAKE_UP_READ_BUDGET,
+      readBudget: () => this.plan?.runSettings?.wakeUpReadBudget ?? this.userRunSettings().wakeUpReadBudget,
       retryLimit: () => this.retryLimit(),
       plannerRunner: () => runnerForProvider(this.config.aiProvider),
       restartPlanner: () => this.aiService().restart?.(),
@@ -614,9 +619,9 @@ export class Session {
     }
   }
 
-  /** Retries an Act supervisor may make of one task (a loop guard), as the plan sets them. */
+  /** Retries an Act supervisor may make of one task (a loop guard), as the run holds them. */
   private retryLimit(): number {
-    return this.plan?.supervisorRetryLimit ?? DEFAULT_SUPERVISOR_RETRY_LIMIT;
+    return this.plan?.runSettings?.supervisorRetryLimit ?? this.userRunSettings().supervisorRetryLimit;
   }
 
   /**
@@ -733,6 +738,11 @@ export class Session {
     return this.conversation.currentWakeUp
       ? { kind: 'supervisor', level: this.supervisor.level }
       : { kind: 'planner-turn' };
+  }
+
+  /** The user's run settings as they stand now (ADR-0030). */
+  private userRunSettings(): GlobalRunSettings {
+    return this.settingsFn().run ?? RUN_SETTINGS_DEFAULTS;
   }
 
   /** The run the supervisor watches, as saved when it started. */
@@ -888,9 +898,18 @@ export class Session {
         // before: its level, as lowered, and what the loop guards remember.
         const prior = this.plan.runSettings;
         const continued = prior !== undefined && (this.supervisorActing > 0 || this.controlsInFlight === 0);
-        this.plan.runSettings = continued
-          ? { ...settings, supervisorLevel: prior.supervisorLevel ?? 'off', ...(prior.unsupervised ? { unsupervised: prior.unsupervised } : {}) }
-          : { ...settings, supervisorLevel: this.plan.supervisorLevel ?? 'off' };
+        if (continued) {
+          this.plan.runSettings = prior;
+          this.orchestrator.setMergeAtGatesNow(prior.mergeAtGatesAutomatically);
+        } else {
+          const user = this.userRunSettings();
+          this.plan.runSettings = {
+            ...settings,
+            supervisorLevel: user.supervisorLevel,
+            supervisorRetryLimit: user.supervisorRetryLimit,
+            wakeUpReadBudget: user.wakeUpReadBudget,
+          };
+        }
         if (!continued) this.guards.forget();
         this.supervisor.runStarted(continued);
         this.persist({ background: true });
@@ -1366,54 +1385,35 @@ export class Session {
     }
   }
 
-  setMergeAtGatesAutomatically(enabled: boolean): void {
-    if (!this.plan) throw new NoPlanError('change merge setting');
-    this.mutatePlan(() => {
-      this.plan!.mergeAtGatesAutomatically = enabled;
-      this.orchestrator.setMergeAtGatesAutomatically(enabled);
-      return true;
-    });
-  }
-
-  /** Whether a supervisor watches the plan's runs (ADR-0029); a change during a run applies to the next. */
-  setSupervisorLevel(level: SupervisorLevel): void {
-    if (!this.plan) throw new NoPlanError('change the supervisor level');
-    this.mutatePlan(() => {
-      this.plan!.supervisorLevel = level;
-      return true;
-    });
-  }
-
-  /** Retries an Act supervisor may make of one task in a run (a loop guard, ADR-0029); read at each retry. */
-  setSupervisorRetryLimit(retries: number): void {
-    if (!this.plan) throw new NoPlanError('change the supervisor\'s retry limit');
-    if (!Number.isInteger(retries) || retries < 0) throw new PlanEditError('The retry limit must be a whole number of retries, 0 or more.');
-    this.mutatePlan(() => {
-      this.plan!.supervisorRetryLimit = retries;
-      return true;
-    });
-  }
-
   /**
-   * Lower the supervisor of the run under way (ADR-0029): to Watch, or off.
-   * Unlike the plan's level, which the next run starts with, this applies at
-   * once — to the wake-up turn under way too — for the rest of the run. It
-   * never raises the level.
+   * The user changed run settings in this session (ADR-0030), which the host
+   * has already saved: the run under way takes them at once, in either
+   * direction — the wake-up turn under way too, since the seam reads the run's
+   * level at each call. Other sessions' runs keep theirs until they end.
    */
-  lowerSupervisor(level: 'watch' | 'off'): void {
-    if (!this.plan?.runSettings) throw new PlanEditError('No run has started, so there is no supervisor to lower: change the plan\'s supervisor level instead.');
-    if (!this.lowerRun(level, level === 'off' ? 'You turned the supervisor off for the rest of this run.' : 'You dropped the supervisor to Watch for the rest of this run.')) return;
-    if (level === 'off') this.supervisor.standDown();
-  }
-
-  /** Reads a wake-up turn may make (ADR-0029); read at each wake-up. */
-  setWakeUpReadBudget(reads: number): void {
-    if (!this.plan) throw new NoPlanError('change the wake-up read budget');
-    if (!Number.isInteger(reads) || reads < 1) throw new PlanEditError('The wake-up read budget must be a whole number of reads, at least 1.');
-    this.mutatePlan(() => {
-      this.plan!.wakeUpReadBudget = reads;
-      return true;
-    });
+  applyRunSettings(changes: Partial<GlobalRunSettings>): void {
+    const settings = this.plan?.runSettings;
+    if (!settings) return;
+    const level = changes.supervisorLevel;
+    // Also when the level is unchanged but the supervisor failed: the user's
+    // command is a fresh consent, and lifts what a failure or a guard lowered.
+    if (level !== undefined && (level !== (settings.supervisorLevel ?? 'off') || settings.unsupervised !== undefined)) {
+      this.mutatePlan(() => {
+        settings.supervisorLevel = level;
+        delete settings.unsupervised;
+        this.conversation.append('assistant', `You set the supervisor to ${SUPERVISOR_LEVEL_LABEL[level]}.`, { kind: 'system' });
+        return true;
+      });
+      if (level === 'off') this.supervisor.standDown();
+      else this.supervisor.setByUser();
+    }
+    if (changes.mergeAtGatesAutomatically !== undefined) {
+      settings.mergeAtGatesAutomatically = changes.mergeAtGatesAutomatically;
+      this.orchestrator.setMergeAtGatesNow(changes.mergeAtGatesAutomatically);
+    }
+    if (changes.supervisorRetryLimit !== undefined) settings.supervisorRetryLimit = changes.supervisorRetryLimit;
+    if (changes.wakeUpReadBudget !== undefined) settings.wakeUpReadBudget = changes.wakeUpReadBudget;
+    this.persist({ background: true });
   }
 
   async executePlan(): Promise<void> {
@@ -1431,7 +1431,7 @@ export class Session {
 
   private async runWholePlan(): Promise<void> {
     const plan = this.idlePlan();
-    this.orchestrator.setMergeAtGatesAutomatically(plan.mergeAtGatesAutomatically === true);
+    this.orchestrator.setMergeAtGatesAutomatically(this.userRunSettings().mergeAtGatesAutomatically);
     await this.withSave(async () => {
       // A scheduler armed from an earlier run but with nothing live — paused on a
       // hold, a user task, or a cancellation — would ignore the restart: `start`
@@ -1457,7 +1457,7 @@ export class Session {
     // executing it is (ADR-0029): without it the planner's starts refuse the
     // tasks as added since approval.
     this.approve(flattenTasks(this.store.planTasks).map((t) => t.id));
-    this.orchestrator.setMergeAtGatesAutomatically(plan.mergeAtGatesAutomatically === true);
+    this.orchestrator.setMergeAtGatesAutomatically(this.userRunSettings().mergeAtGatesAutomatically);
     await this.withSave(() => this.orchestrator.approveReview());
     return plan;
   }
@@ -1472,7 +1472,7 @@ export class Session {
     if (!this.store.get(taskId)) {
       this.orchestrator.loadPlan(this.store.planTasks, this.plan.runners);
     }
-    this.orchestrator.setMergeAtGatesAutomatically(this.plan.mergeAtGatesAutomatically === true);
+    this.orchestrator.setMergeAtGatesAutomatically(this.userRunSettings().mergeAtGatesAutomatically);
     await this.withSave(() => this.orchestrator.forceStartTask(taskId));
   }
 
@@ -1482,7 +1482,7 @@ export class Session {
     if (!this.store.get(taskId)) {
       this.orchestrator.loadPlan(this.store.planTasks, this.plan.runners);
     }
-    this.orchestrator.setMergeAtGatesAutomatically(this.plan.mergeAtGatesAutomatically === true);
+    this.orchestrator.setMergeAtGatesAutomatically(this.userRunSettings().mergeAtGatesAutomatically);
     await this.withSave(() => this.orchestrator.runTask(taskId));
   }
 
@@ -1788,7 +1788,7 @@ export class Session {
       this.guards.restore(plan.supervision?.guards);
       this.supervisor.restore(plan.supervision?.wake);
     }
-    this.orchestrator.setMergeAtGatesAutomatically(plan.mergeAtGatesAutomatically === true);
+    this.orchestrator.setMergeAtGatesAutomatically(this.userRunSettings().mergeAtGatesAutomatically);
     this.goal = goal;
     this.workspace = workspace;
     // Saved before tasks carried the user's approval: executing a plan approved every task it held.
@@ -1809,6 +1809,11 @@ export class Session {
     // Older builds copied the since-removed transport setting onto the plan.
     // Every plan now runs structured (ADR-0018), so the copy is not carried on.
     delete (plan as { runnerTransport?: unknown }).runnerTransport;
+    // Run settings are the user's now (ADR-0030); an older plan's own copies
+    // are not read, and go with this save.
+    for (const key of ['supervisorLevel', 'mergeAtGatesAutomatically', 'supervisorRetryLimit', 'wakeUpReadBudget']) {
+      delete (plan as unknown as Record<string, unknown>)[key];
+    }
     carryOverQueuedEdits(plan);
     // The run record is taken synchronously; only the orphan prune is awaited
     // in the background, and git serializes it ahead of any worktree a run adds.

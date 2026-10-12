@@ -209,6 +209,16 @@ export class Supervisor {
     this.policy = createWakePolicy({ debounceMs: this.debounceMs });
   }
 
+  /**
+   * The user set the run's level (ADR-0030). Their fresh consent starts the
+   * wake-up rate window and the failure count again; the loop guards' own
+   * memory is not the supervisor's, and stays.
+   */
+  setByUser(): void {
+    this.failures = 0;
+    this.wakeUps = [];
+  }
+
   /** The plan these events were about is gone: nothing gathered or waited on carries over. */
   reset(): void {
     this.disarm();

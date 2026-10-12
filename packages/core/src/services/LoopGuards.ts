@@ -92,8 +92,8 @@ export function retryLimit(task: GuardedTask, retried: number, limit: number): G
   const times = retried === 1 ? 'once' : `${retried} times`;
   return {
     key: `retry-limit:${task.id}`,
-    refusal: `Refused by the retry limit: you have retried ${named(task)} ${times} this run, the most the plan allows. It is escalated to the user now: tell them what you tried, and do not retry it again.`,
-    escalation: `Loop guard, retry limit: I retried ${named(task)} ${times} this run, the most the plan allows, and stopped. It needs you: retry it, change it or skip it.`,
+    refusal: `Refused by the retry limit: you have retried ${named(task)} ${times} this run, the most your settings allow. It is escalated to the user now: tell them what you tried, and do not retry it again.`,
+    escalation: `Loop guard, retry limit: I retried ${named(task)} ${times} this run, the most your settings allow, and stopped. It needs you: retry it, change it or skip it.`,
   };
 }
 

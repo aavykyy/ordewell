@@ -7,6 +7,7 @@ import type { ConversationRequest, ConversationTurn } from '../AiService';
 import type { SessionMessage, SessionNotice } from '../SessionMessage';
 import type { McpToolContext, PlannerToolHandler } from '../mcp';
 import { WAKE_DEBOUNCE_MS } from '../Supervisor';
+import { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings } from '../SettingsService';
 import { flushMicrotasks } from '../../testing';
 import { fakeConfig, FakeRunnerSession, makeSession, testWorkspace } from './sessionTestKit';
 
@@ -81,7 +82,6 @@ export function plan(tasks: Task[], over: Partial<LegacyPlanState> = {}): Legacy
     lastUpdated: '2026-10-11T17:00:00Z',
     status: 'approved',
     runners: ['claude-code'],
-    supervisorLevel: 'watch',
     conversationHistory: [
       { role: 'user', content: 'build it', timestamp: '2026-10-11T16:00:00Z' },
       { role: 'assistant', content: `Plan generated with ${tasks.length} tasks.`, timestamp: '2026-10-11T16:00:01Z', kind: 'plan_generated' },
@@ -92,12 +92,16 @@ export function plan(tasks: Task[], over: Partial<LegacyPlanState> = {}): Legacy
 
 export interface Options {
   plan?: Partial<LegacyPlanState>;
+  /** The user's run settings (ADR-0030), Watch and the other defaults unless set. */
+  settings?: Partial<GlobalRunSettings>;
   config?: Partial<IConfig>;
   isolation?: IWorktreeIsolation;
 }
 
-/** A session running `tasks` under the plan's supervisor level, Watch unless the options say otherwise. */
+/** A session running `tasks` under the user's supervisor level, Watch unless the options say otherwise. */
 export async function supervised(tasks: Task[] = [task('t1', 1), task('t2', 2)], options: Options = {}) {
+  // The user's settings file: a test changes it as another surface would.
+  const settings: GlobalRunSettings = { ...RUN_SETTINGS_DEFAULTS, ...options.settings };
   const planner = heldPlanner();
   const run = recordingRunner();
   const messages: SessionMessage[] = [];
@@ -109,11 +113,12 @@ export async function supervised(tasks: Task[] = [task('t1', 1), task('t2', 2)],
     broadcast: (m) => messages.push(m),
     onNotice: (n) => notices.push(n),
     config: fakeConfig(options.config),
+    settings: () => ({ run: { ...settings } }),
     ...(options.isolation ? { workspaceRoot: () => '/repo' } : {}),
   });
   session.loadPlan(plan(tasks, options.plan), 'build it', options.isolation ? '/repo' : testWorkspace);
   await session.executePlan();
-  return { session, planner, run, messages, notices };
+  return { session, planner, run, messages, notices, settings };
 }
 
 export const prose = (text: string): ConversationTurn => ({ kind: 'message', text, researchLog: [] });
@@ -145,6 +150,12 @@ export function hitLimit(s: FakeRunnerSession): void {
 }
 
 export type Env = Awaited<ReturnType<typeof supervised>>;
+
+/** The user changes run settings in this session, as a surface does: saved, then applied to the session's run. */
+export function changeSettings(env: Env, changes: Partial<GlobalRunSettings>): void {
+  Object.assign(env.settings, changes);
+  env.session.applyRunSettings(changes);
+}
 
 /** A run whose supervisor is in its first wake-up turn, on task 1 waiting for input. */
 export async function wokenUp(options: Options = {}, tasks: Task[] = [task('t1', 1), task('t2', 2)]): Promise<Env> {

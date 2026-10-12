@@ -10,6 +10,7 @@ import type { SkillsService } from '../SkillsService';
 import type { TaskOutputSource } from '../../interfaces/TaskOutputSource';
 import type { IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
+import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { flattenTasks, type Task } from '../../models/Task';
 import type { TaskLogEvent } from '../../models/TaskLog';
 import type { TaskLogFile, TaskLogLocation } from '../../utils/taskLogStore';
@@ -109,7 +110,9 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
     broadcast: overrides.broadcast ?? vi.fn(),
     onNotice: overrides.onNotice,
     modelResolver: { getCachedRunnerModels: () => [], contextWindowFor: () => undefined, ...(overrides.modelResolver ?? { modelsForRunners: vi.fn().mockResolvedValue({}) }) } as ModelResolver,
-    settings: overrides.settings ?? (() => ({})),
+    // No supervisor unless a test asks: the default, Watch, would take planner
+    // turns that tests about other things never answer.
+    settings: overrides.settings ?? (() => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } })),
     sessionId: overrides.sessionId,
     // Session drops a live conversation via reset() on fresh-plan and
     // plan-adoption boundaries — default it so partial fakes don't explode.

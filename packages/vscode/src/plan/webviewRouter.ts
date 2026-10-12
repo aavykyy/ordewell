@@ -92,24 +92,6 @@ export async function routeWebviewMessage(msg: WebviewToHost, deps: WebviewRoute
       await handleSplitPlan(msg.taskId, deps);
       sendNextHeldPrompt(deps);
       return;
-    case 'setAutoMerge': {
-      deps.session.setMergeAtGatesAutomatically(msg.enabled);
-      const plan = deps.session.planState;
-      if (plan) deps.chatProvider.showPlan(plan);
-      return;
-    }
-    case 'setSupervisorLevel': {
-      deps.session.setSupervisorLevel(msg.level);
-      const plan = deps.session.planState;
-      if (plan) deps.chatProvider.showPlan(plan);
-      return;
-    }
-    case 'lowerSupervisor': {
-      deps.session.lowerSupervisor(msg.level);
-      const plan = deps.session.planState;
-      if (plan) deps.chatProvider.showPlan(plan);
-      return;
-    }
     case 'isolationAction':
       await handleIsolationAction(msg.action, msg.taskId, deps);
       return;

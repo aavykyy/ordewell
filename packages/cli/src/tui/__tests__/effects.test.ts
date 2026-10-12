@@ -1890,11 +1890,18 @@ describe('a structured task\'s log, messages and interrupt', () => {
 });
 
 
-describe('automatic gate merge setting effect', () => {
-  it('writes to the plan setting and refreshes the authoritative plan', async () => {
-    const h = harness({ getSession: vi.fn().mockResolvedValue({ plan: { tasks: [], mergeAtGatesAutomatically: true } }) });
-    await runEffect({ type: 'setAutoMerge', sessionId: 's1', enabled: true }, h.deps);
-    expect(h.api.setMergeAtGatesAutomatically).toHaveBeenCalledWith('s1', true);
-    expect(h.actions).toContainEqual({ type: 'planUpdated', sessionId: 's1', plan: { tasks: [], mergeAtGatesAutomatically: true } });
+describe('run settings effect (ADR-0030)', () => {
+  it('saves the change, applies it to the session\'s run, and takes the settings the daemon answers', async () => {
+    const answered = { run: { supervisorLevel: 'act', mergeAtGatesAutomatically: false, autorun: false, supervisorRetryLimit: 2, wakeUpReadBudget: 12 } };
+    const h = harness({
+      updateRunSettings: vi.fn().mockResolvedValue(answered),
+      getSession: vi.fn().mockResolvedValue({ plan: { tasks: [], runSettings: { mergeAtGatesAutomatically: false, supervisorLevel: 'act' } } }),
+    });
+
+    await runEffect({ type: 'setRunSettings', changes: { supervisorLevel: 'act' }, sessionId: 's1' }, h.deps);
+
+    expect(h.api.updateRunSettings).toHaveBeenCalledWith({ supervisorLevel: 'act' }, 's1');
+    expect(h.actions).toContainEqual({ type: 'settingsLoaded', settings: answered });
+    expect(h.actions).toContainEqual(expect.objectContaining({ type: 'planUpdated', sessionId: 's1' }));
   });
 });

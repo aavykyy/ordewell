@@ -23,6 +23,9 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   { label: '/allowlist', detail: 'Restrict which models the planner may auto-assign per runner', insertText: '/allowlist' },
   { label: '/refresh', detail: 'Re-discover runner models (e.g. after enabling an opencode backend)', insertText: '/refresh' },
   { label: '/auto', detail: 'Set the autonomy level for new plans: Full or Guarded', insertText: '/auto' },
+  { label: '/supervisor', detail: 'Whether the planner watches or acts on your runs: off, watch, act · retries <n> · reads <n>', insertText: '/supervisor ' },
+  { label: '/automerge', detail: 'Merge into your branch by itself when a task reaches a merge gate: on or off', insertText: '/automerge ' },
+  { label: '/autorun', detail: 'Start each plan the planner submits, without review: on or off', insertText: '/autorun ' },
   { label: '/parallel', detail: 'How many AI tasks run at once — applies to a run already going', insertText: '/parallel ' },
   { label: '/help', detail: 'Show all available commands', insertText: '/help' },
 ];

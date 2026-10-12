@@ -21,7 +21,7 @@ import type {
   MergeGateResponse,
   ModelsResponse,
   OkResponse,
-  SupervisorLevel,
+  GlobalRunSettings,
   PlanResponse,
   SurfacePlan,
   SurfacePlanState,
@@ -365,19 +365,6 @@ export class ApiClient {
     return this.call('POST', `/api/plans/${sessionId}/tasks`, 'Add task failed', task);
   }
 
-  setMergeAtGatesAutomatically(sessionId: string, enabled: boolean): Promise<OkResponse> {
-    return this.call('PATCH', `/api/plans/${sessionId}/settings`, 'Change merge setting failed', { mergeAtGatesAutomatically: enabled });
-  }
-
-  setSupervisorLevel(sessionId: string, level: SupervisorLevel): Promise<OkResponse> {
-    return this.call('PATCH', `/api/plans/${sessionId}/settings`, 'Change supervisor level failed', { supervisorLevel: level });
-  }
-
-  /** Lower the run under way's supervisor at once, for the rest of the run (ADR-0029). */
-  lowerSupervisor(sessionId: string, level: 'watch' | 'off'): Promise<OkResponse> {
-    return this.call('POST', `/api/plans/${sessionId}/supervisor/lower`, 'Lower the supervisor failed', { level });
-  }
-
   updateTask(sessionId: string, taskId: string, changes: Record<string, unknown>): Promise<OkResponse> {
     return this.call('PUT', `/api/plans/${sessionId}/tasks/${taskId}`, 'Update task failed', changes);
   }
@@ -672,6 +659,11 @@ export class ApiClient {
 
   getSettings(): Promise<SettingsResponse> {
     return this.call('GET', '/api/settings', 'Failed to fetch settings');
+  }
+
+  /** Save run settings (ADR-0030); with `sessionId`, that session's run takes them at once. */
+  updateRunSettings(changes: Partial<GlobalRunSettings>, sessionId?: string): Promise<SettingsResponse> {
+    return this.call('PATCH', '/api/settings', 'Change run settings failed', { run: changes, ...(sessionId ? { sessionId } : {}) });
   }
 
   updateSettings(changes: Record<string, unknown>): Promise<SettingsUpdateResponse> {

@@ -1,4 +1,4 @@
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, NO_TURN, isTaskRunning, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type SupervisorLevel, type TaskLogEvent, type TaskLogView, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type SupervisorLevel, type TaskLogEvent, type TaskLogView, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 
 export type RunStatus = 'idle' | 'planning' | 'researching' | 'executing';
@@ -264,6 +264,7 @@ export type ConfirmAction =
   | { kind: 'remove-task'; taskId: string }
   | { kind: 'force-start-gated'; taskId: string }
   | { kind: 'supervisor-act' }
+  | { kind: 'autorun-on' }
   | { kind: 'merge-run' }
   | { kind: 'discard-run' }
   | { kind: 'init-workspace'; goal: string; workspace: string }
@@ -388,11 +389,10 @@ export interface TuiState {
   configuredProviders: AiProvider[];
   allowlist: Record<string, string[]>;
   autonomous: boolean;
-  mergeAtGatesAutomatically: boolean;
+  /** The user's run settings (ADR-0030), as the daemon last answered them. */
+  runSettings: GlobalRunSettings;
   runAutoMerge: boolean | null;
-  /** The plan's supervisor level (ADR-0029); a change during a run applies to the next. */
-  supervisorLevel: SupervisorLevel;
-  /** What the current run started with, and why its supervisor stopped if it did; null before any run. */
+  /** The current run's own level, and why its supervisor stopped if it did; null before any run. */
   runSupervisor: { level: SupervisorLevel; unsupervised?: string } | null;
   /**
    * Whether the terminal's mouse is captured for wheel scrolling. On by
@@ -572,9 +572,8 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     configuredProviders: [],
     allowlist: {},
     autonomous: true,
-    mergeAtGatesAutomatically: false,
+    runSettings: { ...RUN_SETTINGS_DEFAULTS },
     runAutoMerge: null,
-    supervisorLevel: 'off',
     runSupervisor: null,
     mouseCapture: true,
     selection: null,
@@ -594,11 +593,4 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     spinnerFrame: 0,
     ...overrides,
   };
-}
-
-/** Where `L` takes the run under way's supervisor: one level down, or nowhere when it is off or stopped. */
-export function loweredRunSupervisor(state: TuiState): 'watch' | 'off' | null {
-  const run = state.status === 'executing' ? state.runSupervisor : null;
-  if (!run || run.unsupervised) return null;
-  return run.level === 'act' ? 'watch' : run.level === 'watch' ? 'off' : null;
 }

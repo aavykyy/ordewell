@@ -23,11 +23,11 @@ export type OrdewellApi = Pick<ApiClient,
   | 'getTaskLogAttempts' | 'getTaskLog'
   | 'sendTaskMessage' | 'removeQueuedTaskMessage' | 'forceSendTaskMessage' | 'forceSendQueuedTaskMessage'
   | 'interruptTask' | 'approveTaskCheckpoint' | 'rejectTaskCheckpoint' | 'continueTask'
-  | 'addTask' | 'updateTask' | 'removeTask' | 'setMergeAtGatesAutomatically' | 'setSupervisorLevel' | 'lowerSupervisor'
+  | 'addTask' | 'updateTask' | 'removeTask'
   | 'getSessions' | 'getSession' | 'adoptSession' | 'deleteSession' | 'closeSession'
   | 'forkConversation' | 'rewindTargets' | 'rewindConversation' | 'compactConversation'
   | 'reviewRunDiff' | 'mergeRun' | 'discardRun' | 'cleanupRun' | 'continueWithStash' | 'continueWithoutIsolation' | 'resolveConflictAsTask'
-  | 'getSettings' | 'updateSettings'
+  | 'getSettings' | 'updateSettings' | 'updateRunSettings'
   | 'getRunners' | 'setRunnerEnabled' | 'getModels'
   | 'streamPlanning' | 'respondToApproval' | 'streamExecution' | 'closeExecutionStream'
 >;
@@ -238,20 +238,12 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       return;
     }
 
-    case 'setAutoMerge':
-      await api.setMergeAtGatesAutomatically(effect.sessionId, effect.enabled);
-      await refreshPlan(deps, effect.sessionId);
+    case 'setRunSettings': {
+      const settings = await api.updateRunSettings(effect.changes, effect.sessionId);
+      dispatch({ type: 'settingsLoaded', settings });
+      if (effect.sessionId) await refreshPlan(deps, effect.sessionId);
       return;
-
-    case 'setSupervisorLevel':
-      await api.setSupervisorLevel(effect.sessionId, effect.level);
-      await refreshPlan(deps, effect.sessionId);
-      return;
-
-    case 'lowerSupervisor':
-      await api.lowerSupervisor(effect.sessionId, effect.level);
-      await refreshPlan(deps, effect.sessionId);
-      return;
+    }
 
     case 'updateTask':
       await api.updateTask(effect.sessionId, effect.taskId, effect.changes);

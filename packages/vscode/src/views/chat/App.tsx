@@ -12,7 +12,8 @@ import QueuedPrompts from './components/QueuedPrompts';
 import HandoffCard from './components/HandoffCard';
 import CheckpointPanel from './components/CheckpointPanel';
 import type { TaskDraft } from './components/NewTaskCard';
-import type { Task, TaskModelAssignment, RunnerId, SupervisorLevel } from '@ordewell/core';
+import type { GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId } from '@ordewell/core';
+import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
 import { planSummaryLabel, nextDock } from './planDock';
 import { DetailContext } from './detail';
 import { useFollowOutput } from './followOutput';
@@ -34,9 +35,26 @@ const STOP_ARM_MS = 2_000;
 type Updatable<T> = T | ((prev: T) => T);
 
 /** The dock's word on the supervisor, when there is one to speak of. */
-function supervisorSummary(level: SupervisorLevel | undefined): React.ReactNode {
-  if (level !== 'watch' && level !== 'act') return null;
-  return <span className="plan-dock-summary plan-supervisor">Supervisor: {level === 'act' ? 'Act' : 'Watch'}</span>;
+/**
+ * The run settings on the plan bar (ADR-0030): the user's level, and during a
+ * run the run's own where a guard, a failure or another window left it
+ * different.
+ */
+function runSettingsSummary(run: GlobalRunSettings | undefined, runSettings: RunSettings | undefined, isExecuting: boolean): React.ReactNode {
+  if (!run) return null;
+  const level = SUPERVISOR_LEVEL_LABEL[run.supervisorLevel];
+  const actual = !isExecuting || !runSettings ? null
+    : runSettings.unsupervised ? 'unsupervised'
+    : (runSettings.supervisorLevel ?? 'off') !== run.supervisorLevel ? SUPERVISOR_LEVEL_LABEL[runSettings.supervisorLevel ?? 'off'] : null;
+  return (
+    <>
+      <span className={`plan-dock-summary plan-supervisor${actual === 'unsupervised' ? ' plan-supervisor-stopped' : ''}`}>
+        Supervisor: {level}{actual && ` → ${actual}`}
+      </span>
+      {run.mergeAtGatesAutomatically && <span className="plan-dock-summary">Merge at gates automatically</span>}
+      {run.autorun && <span className="plan-dock-summary">Autorun</span>}
+    </>
+  );
 }
 
 export default function App() {
@@ -563,12 +581,8 @@ export default function App() {
             </svg>
           </span>
           <span className="plan-dock-title">Plan</span>
-          {(isExecuting ? plan.runSettings?.mergeAtGatesAutomatically : plan.mergeAtGatesAutomatically)
-            && <span className="plan-dock-summary">Merge at gates automatically</span>}
-          {isExecuting && plan.runSettings?.unsupervised
-            ? <span className="plan-dock-summary plan-supervisor-stopped">Unsupervised</span>
-            : supervisorSummary(isExecuting ? plan.runSettings?.supervisorLevel : plan.supervisorLevel)}
           <span className="plan-dock-summary">{planSummaryLabel(plan.tasks)}</span>
+          {runSettingsSummary(host.runSettings?.run, plan.runSettings, isExecuting)}
           {/* A collapse is always honoured, including mid-run — so the bar has to
               say when a task is blocked on the user, or the approval would sit
               unseen behind it. */}
@@ -598,13 +612,6 @@ export default function App() {
           )}
           <PlanCardGroup
             tasks={plan.tasks}
-            mergeAtGatesAutomatically={plan.mergeAtGatesAutomatically}
-            runAutoMerge={plan.runSettings?.mergeAtGatesAutomatically}
-            onAutoMergeChange={(enabled) => vscode.postMessage({ type: 'setAutoMerge', enabled })}
-            supervisorLevel={plan.supervisorLevel}
-            runSupervisor={plan.runSettings && { level: plan.runSettings.supervisorLevel ?? 'off', ...(plan.runSettings.unsupervised ? { unsupervised: plan.runSettings.unsupervised } : {}) }}
-            onSupervisorLevelChange={(level) => vscode.postMessage({ type: 'setSupervisorLevel', level })}
-            onLowerSupervisor={(level) => vscode.postMessage({ type: 'lowerSupervisor', level })}
             models={models}
             modelsByRunner={modelsByRunner}
             modesByRunner={modesByRunner}
@@ -854,7 +861,7 @@ export default function App() {
         )}
 
         {!hasContent && isReady && canPlan && (
-          <EmptyState onLoadSession={handleLoadSession} />
+          <EmptyState onLoadSession={handleLoadSession} runSettings={host.runSettings} />
         )}
 
         {error && (

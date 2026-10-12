@@ -27,7 +27,7 @@ const supervisorSaid = (env: Env): string[] =>
 
 /** The run up to its wake-up turn: task 1 passed, task 2 failed, and the supervisor is woken to it. */
 async function failedSecond(level: 'watch' | 'act'): Promise<Env> {
-  const env = await supervised(chain(), { plan: { supervisorLevel: level } });
+  const env = await supervised(chain(), { settings: { supervisorLevel: level } });
   env.run.of('t1').reportComplete({ status: 'done', summary: 'scaffolded' });
   await until(() => env.run.spawnedIds().includes('t2'));
   env.run.of('t2').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });

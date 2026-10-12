@@ -13,6 +13,7 @@ import {
   addTask, confirmForceStartPastGate, openTaskDepsPicker, taskCommand, taskOpsCommand, taskEffortCommand, taskModeCommand, taskModelCommand, taskRunnerCommand, taskSkillsCommand,
 } from './taskEdits';
 import { stopPlanning } from './turnQueue';
+import { automergeCommand, autorunCommand, supervisorCommand } from './runSettings';
 import { fail, step, withSession, type Effect, type Step, type TaskAction } from './shared';
 
 const KNOWN_PROVIDERS = Object.keys(ALL_PROVIDERS);
@@ -65,6 +66,12 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
       return runners(state, args);
     case 'auto':
       return setAutonomous(state, args[0]);
+    case 'supervisor':
+      return supervisorCommand(state, args);
+    case 'automerge':
+      return automergeCommand(state, args[0]);
+    case 'autorun':
+      return autorunCommand(state, args[0]);
     case 'parallel':
       return setMaxParallel(state, args[0]);
     case 'mouse':
