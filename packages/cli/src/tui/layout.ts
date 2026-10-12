@@ -6,6 +6,7 @@ import { SLASH_COMMANDS, type SlashCategory } from './slash';
 import { findTask, planRows, plannerInFlight, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
+import { cliVersion } from '../version';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
 import { ALL_PROVIDERS, approvalLabel, awaitingLabel, hasHiddenDetail, resumeLabel, runnerForProvider, taskRowView, planUsage, type AiProvider, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
 
@@ -73,8 +74,8 @@ export function footerHints(state: TuiState): string[] {
   }
   // The detail-all toggle names the direction it will go, like `m done` does.
   // Shown only once the conversation holds something it can expand: the
-  // welcome alone must keep the footer to one row, or a 24-row terminal
-  // gives up a line of the logo's welcome.
+  // welcome alone must keep the footer to one row, or a short terminal
+  // gives up a row of the welcome.
   const detailHint = hasHiddenDetail(state.taskView ? state.taskView.view.blocks : state.conversation.blocks)
     ? [state.detailAll ? 'ctrl-o collapse all' : 'ctrl-o expand all']
     : [];
@@ -263,28 +264,37 @@ export function chatLayout(state: TuiState, rows: number, cols: number): ChatLay
   const blocks = tv ? tv.view.blocks : state.conversation.blocks;
   // The welcome (logo, setup, hints) heads the transcript for the whole
   // planning conversation and only goes once a plan exists — from then on the
-  // plan pane owns the screen and the chat column is too narrow for the art.
+  // plan pane owns the screen and the chat column is too narrow for it.
   const welcome = !tv && state.tasks.length === 0;
   // Not a block of the runner's log, so it stays out of the memoised body.
   const checkpoint = tv ? waitingCheckpoint(findTask(state.tasks, tv.taskId)) : undefined;
   const card = tv && checkpoint ? checkpointCardLines(findTask(state.tasks, tv.taskId)?.order ?? 0, checkpoint, cols, waitingApproval(tv) !== undefined) : [];
   const answering = chatBodyLines(blocks, cols, state.detailAll, tv ? waitingApproval(tv) : undefined);
   const body = card.length > 0 ? [...answering, ...card] : answering;
-  const transcript = !welcome ? body : body.length === 0 ? welcomeLines(state, rows, cols) : [...welcomeLines(state, rows, cols), '', ...body];
+  const transcript = !welcome ? body : body.length === 0 ? welcomeLines(state, cols) : [...welcomeLines(state, cols), '', ...body];
   // The queued prompts paint as part of the tail, newest last — they are the
   // turns that have not gone out yet, and they travel where a sent message
   // would have appeared. A task's queue is its own, taken back one at a time.
   const bubbles = tv ? taskQueuedRows(state, cols) : queuedPromptRows(state, cols);
-  const lines = [...transcript, ...(bubbles.length > 0 ? ['', ...bubbles] : [])];
-  const header = tv ? taskHeaderLines(state, tv, cols) : [];
+  const content = [...transcript, ...(bubbles.length > 0 ? ['', ...bubbles] : [])];
+  const taskHeader = tv ? taskHeaderLines(state, tv, cols) : [];
   // The usage rows are the session's (or the opened task's), not lines of the
   // transcript: they keep the pane's bottom rows while everything above them
   // scrolls — unless the pane is a single row, which belongs to the conversation.
   const usage = rows <= 1 ? [] : tv ? taskUsageFooter(state, tv, blocks, cols) : tokenRow(blocks, cols);
   // The per-model rows are the expendable part: they yield to the transcript
   // so a short pane never trades its last conversation row for a breakdown.
-  const footer = usage.slice(0, Math.max(1, rows - header.length - 1));
-  const room = Math.max(0, rows - header.length - footer.length);
+  const footer = usage.slice(0, Math.max(1, rows - taskHeader.length - 1));
+  const space = Math.max(0, rows - taskHeader.length - footer.length);
+  // The welcome alone in a pane too short for it would lose its mark to the
+  // newest-lines-win rule below, so the mark stays put while the rest scrolls.
+  // Once the conversation starts, the welcome scrolls away like any line.
+  const pinned = welcome && body.length === 0 && bubbles.length === 0 && content.length > space
+    ? content.slice(0, Math.min(WELCOME_MARK_ROWS, space))
+    : [];
+  const header = [...taskHeader, ...pinned];
+  const lines = content.slice(pinned.length);
+  const room = space - pinned.length;
   // Content that fits hangs off the top so the welcome does not jump when the
   // first message lands; once it overflows the newest lines win the pane.
   return { lines, header, footer, anchor: lines.length > room ? 'bottom' : 'top', maxScroll: Math.max(0, lines.length - room) };
@@ -363,10 +373,6 @@ function setupRow(label: string, value: string, command: string, cols: number): 
   return truncate(`${head}${style.grey(command)}`, cols - 1);
 }
 
-// The brand mark: three strokes converging on a solid dot — the same "many
-// tasks, one pipeline" idea as the logo, in the one accent colour it uses.
-const ICON = `${style.bold('≫')}${style.bold(style.cyan('●'))}`;
-
 /**
  * Unicode Mathematical Sans-Serif Bold maps 1:1 onto ASCII lowercase, so the
  * wordmark reads bold in any font without an ANSI bold escape — which a
@@ -379,59 +385,81 @@ function boldSans(word: string): string {
   }).join('');
 }
 
-const WORDMARK = boldSans('ordewell');
-const LOCKUP = `${ICON} ${WORDMARK}`;
+const WORDMARK_ORDE = boldSans('orde');
+const WORDMARK_WELL = boldSans('well');
 
 /**
- * The logo itself, traced from the brand PDF into braille cells: three strokes
- * converging on the dot, then the lowercase wordmark in its own typeface. Each
- * row splits the icon at the dot so only the dot takes the accent colour,
- * exactly as in the logo.
+ * The logo's icon on a braille dot grid (`#` stroke, `o` dot), traced from
+ * assets/readme/logo-*.png: outer strokes that leave level, sweep into the
+ * middle one and run on with it as one trunk, a one-dot gap, then the round
+ * dot. Strokes are two dots thick because a line centred on 12 dot rows needs
+ * an even width; the dot is three strokes across, as near the logo's four as
+ * three rows allow. Only the top half is drawn — the bottom is its mirror.
+ *
+ * Braille rather than quadrant blocks: 2×4 dots a cell instead of 2×2 is what
+ * lets three strokes and a round dot share three rows.
  */
-interface BannerRow { strokes: string; dot: string; word: string }
-
-const BANNER_ROWS: BannerRow[] = [
-  { strokes: '⠚⠻⠶⢦⣤⡀', dot: '', word: '                   ⢸⣿⡇                            ⢸⣿  ⣿⣿' },
-  { strokes: '    ⠈⠙⢷⣤⡀', dot: '', word: ' ⣀⣤⣤⣤⣤⡀  ⣤⣤⢀⣤⡄ ⣀⣤⣤⣤⣸⣿⡇  ⣠⣤⣤⣤⣀ ⢠⣤⡄  ⣤⣤  ⣠⣤  ⣠⣤⣤⣤⣀  ⢸⣿  ⣿⣿' },
-  { strokes: '⣀⣀⣀⣀⣀⣀⣀⣈⣻⣶⣤⣀⣀', dot: '⣀⣶⣿⣷⡄', word: '⣰⣿⠏⠁⠈⢻⣿⡆ ⣿⣿⠟⠉⠁⣰⣿⠏⠉⠉⢻⣿⡇ ⣾⡟⠁ ⠙⣿⡆ ⣿⣧ ⢸⡿⣿⡄ ⣿⡏ ⣾⡿⠁ ⠙⣿⣆ ⢸⣿  ⣿⣿' },
-  { strokes: '⠉⠉⠉⠉⠉⠉⠉⢉⣽⡿⠛⠋⠉', dot: '⠉⢿⣿⡿⠃', word: '⣿⣿    ⣿⡇ ⣿⣿   ⣿⣿   ⢸⣿⡇⢸⣿⡿⠿⠿⠿⠿⠟ ⢸⣿⡀⣿⠇⢹⣇⢸⣿⠁ ⣿⡿⠿⠿⠿⠿⠿ ⢸⣿  ⣿⣿' },
-  { strokes: '    ⢀⣠⡶⠛⠁', dot: '', word: '⠹⣿⣦⣀⣀⣼⣿⠃ ⣿⣿   ⠸⣿⣦⣀⣠⣾⣿⡇ ⢿⣷⣀⣀⣠⣶⠆  ⢿⣿⡿ ⠘⣿⣿⡏  ⢻⣷⣄⣀⣠⣶⠆ ⢸⣿  ⣿⣿' },
-  { strokes: '⢤⣤⠶⠾⠛⠁', dot: '', word: ' ⠈⠙⠛⠛⠉   ⠉⠉    ⠈⠙⠛⠋⠈⠉⠁  ⠉⠛⠛⠋⠁   ⠈⠉⠁  ⠉⠉    ⠉⠛⠛⠋⠁  ⠉⠉  ⠉⠉' },
+const MARK_TOP_HALF = [
+  '###...................',
+  '######................',
+  '....####..............',
+  '......####.......oooo.',
+  '........####....oooooo',
+  '###############.oooooo',
 ];
 
-const BANNER_ICON_COLS = 18;
-const BANNER_GAP = 2;
-const BANNER_COLS = Math.max(
-  ...BANNER_ROWS.map((row) => BANNER_ICON_COLS + BANNER_GAP + width(row.word)),
-);
+/** Dot bits of a braille cell, by [row][column] within its 2×4 grid. */
+const BRAILLE_BITS = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]];
 
-/** Column where "well" begins in every `word` row — see the cell grid in the BANNER_ROWS comment. */
-const BANNER_WELL_COL = 30;
+interface MarkCell { glyph: string; dot: boolean }
 
-function colorWell(word: string): string {
-  const cells = [...word];
-  return cells.slice(0, BANNER_WELL_COL).join('') + style.cyan(cells.slice(BANNER_WELL_COL).join(''));
+/** Each 4-dot band of the grid as one row of braille cells. */
+function brailleRows(grid: string[]): MarkCell[][] {
+  const bands = Array.from({ length: grid.length / 4 }, (_, b) => grid.slice(b * 4, b * 4 + 4));
+  return bands.map((band) => Array.from({ length: Math.ceil(band[0].length / 2) }, (_, cell) => {
+    let bits = 0;
+    let dot = false;
+    band.forEach((line, r) => BRAILLE_BITS[r].forEach((bit, c) => {
+      const mark = line[cell * 2 + c];
+      if (mark === '#' || mark === 'o') bits |= bit;
+      if (mark === 'o') dot = true;
+    }));
+    return { glyph: String.fromCodePoint(0x2800 + bits), dot };
+  }));
 }
 
-function lockupLines(cols: number): string[] {
-  const left = ' '.repeat(Math.max(0, Math.floor((cols - width(LOCKUP)) / 2)));
-  return [left + LOCKUP];
-}
+const MARK = brailleRows([...MARK_TOP_HALF, ...[...MARK_TOP_HALF].reverse()]);
 
-function artLines(cols: number): string[] {
-  const left = ' '.repeat(Math.floor((cols - BANNER_COLS) / 2));
-  return BANNER_ROWS.map((row) => {
-    const gap = ' '.repeat(BANNER_ICON_COLS + BANNER_GAP - width(row.strokes) - width(row.dot));
-    return left + row.strokes + (row.dot ? style.cyan(row.dot) : '') + gap + colorWell(row.word);
-  });
-}
+/** Painted per frame, not at load: colour is only switched on or off once the terminal starts. */
+const paintMark = (row: MarkCell[]): string => row.map(({ glyph, dot }) => dot ? style.cyan(glyph) : glyph).join('');
+
+const MARK_GAP = '  ';
+
+const VERSION = cliVersion();
 
 /**
- * `rows` is the pane the welcome is painted into, so the art is chosen by what
- * actually fits: art + everything, then art without the description, then the
- * one-line lockup.
+ * The middle row carries the wordmark and the version. Short of room the
+ * version goes first, then the wordmark is cut; the mark itself is never
+ * dropped, only cut like any row once the pane is narrower than it.
  */
-function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
+function markLines(cols: number): string[] {
+  const room = Math.max(0, cols - 1);
+  const [top, mid, bottom] = MARK.map(paintMark);
+  const wordmark = `${WORDMARK_ORDE}${style.cyan(WORDMARK_WELL)}`;
+  const named = `${mid}${MARK_GAP}${wordmark}`;
+  const versioned = VERSION === 'unknown' ? named : `${named}${MARK_GAP}${style.grey(`v${VERSION}`)}`;
+  const textRoom = room - width(mid) - MARK_GAP.length;
+  const middle = width(versioned) <= room ? versioned
+    : width(named) <= room ? named
+    : textRoom > 0 ? `${mid}${MARK_GAP}${truncate(wordmark, textRoom)}`
+    : truncate(mid, room);
+  return [truncate(top, room), middle, truncate(bottom, room)];
+}
+
+/** The welcome's mark rows, which a pane too short for the whole welcome keeps pinned. */
+const WELCOME_MARK_ROWS = MARK.length;
+
+function welcomeLines(state: TuiState, cols: number): string[] {
   const planner = plannerSetup(state);
   const enabledRunners = state.runners.filter((r) => r.enabled).map((r) => r.name);
   const canPlan = planner.ready
@@ -443,13 +471,6 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     : style.yellow(planner.label === 'not set' ? 'not set' : `${planner.label} (unavailable)`);
 
   const prompt = wrap(style.bold('Describe a goal to start planning.'), Math.max(1, cols - 1));
-  const description = [
-    ...wrap(
-      style.grey('Ordewell researches your codebase, drafts a task plan, then runs each task in a coding agent.'),
-      Math.max(1, cols - 1),
-    ),
-    '',
-  ];
   const setup = [
     style.bold('Setup'),
     setupRow('Planner', plannerValue, '/planner · /model', cols),
@@ -474,19 +495,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     ];
   const tail = [...notice, style.grey('/help   all commands'), style.grey(state.workspace)];
 
-  const compose = (banner: string[], withDescription: boolean): string[] => [
-    ...banner, '', ...prompt, ...(withDescription ? description : []), ...setup, ...tail,
-  ];
-  if (cols >= BANNER_COLS) {
-    const art = artLines(cols);
-    for (const withDescription of [true, false]) {
-      const lines = compose(art, withDescription);
-      if (lines.length <= rows) {
-        return lines;
-      }
-    }
-  }
-  return compose(lockupLines(cols), true);
+  return [...markLines(cols), '', ...prompt, '', ...setup, ...tail];
 }
 
 // ── Plan pane ────────────────────────────────────────────────────────────────

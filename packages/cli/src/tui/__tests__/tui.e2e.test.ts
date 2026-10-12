@@ -925,16 +925,15 @@ describe('TUI end to end', () => {
 
   it('welcome stays top-anchored across the startup refresh, then a goal, a manual first task and a rewind through the popup carry the plan forward', async () => {
     const h = harness();
-    // The banner (or its narrow lockup) is always the welcome's first line —
-    // one row under the skills bar, whatever "Setup" happens to say. Either
-    // form carries the bold "≫" icon or the braille banner art.
+    // The braille mark is always the welcome's first line — one row under the
+    // skills bar, whatever "Setup" happens to say.
     const topBodyRow = (frame: string) => frame.split('\n')[1];
-    const isBanner = (row: string) => /≫|[⠀-⣿]/.test(row);
+    const isMark = (row: string) => /[⠀-⣿]/.test(row);
 
     // A: the welcome's first line is on the top body row from the very first painted frame.
     const firstFrame = h.frames()[0];
     expect(firstFrame).toBeDefined();
-    expect(isBanner(topBodyRow(firstFrame!))).toBe(true);
+    expect(isMark(topBodyRow(firstFrame!))).toBe(true);
 
     // The startup refresh (runners/settings/models) completes silently — no notice —
     // and the welcome's first line is still on that same top body row.
@@ -944,7 +943,7 @@ describe('TUI end to end', () => {
       expect(h.daemon.mocks.getModels).toHaveBeenCalled();
     });
     expect(h.screen()).not.toContain('Refreshed runners, settings and models.');
-    expect(isBanner(topBodyRow(h.screen()))).toBe(true);
+    expect(isMark(topBodyRow(h.screen()))).toBe(true);
 
     // A goal starts a conversation that asks a clarifying question before any
     // plan exists — the welcome stays, with the reply hanging under it.
@@ -958,7 +957,7 @@ describe('TUI end to end', () => {
     h.type('Build the login flow');
     h.type('\r');
     await vi.waitFor(() => expect(h.screen()).toContain('Which auth provider?'));
-    expect(isBanner(topBodyRow(h.screen()))).toBe(true);
+    expect(isMark(topBodyRow(h.screen()))).toBe(true);
     expect(h.app.getState().tasks).toEqual([]);
 
     // C: `/add-task` on the still-empty plan adds the first task, and its
