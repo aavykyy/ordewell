@@ -1,0 +1,113 @@
+import { markAction, resumeLabel, taskRowView } from '@ordewell/core';
+import type { TaskView } from './state';
+
+/**
+ * The plan pane's keys, written down once. The key sheet (`?`) prints every
+ * entry; the footer picks the few that fit the selected task from the same
+ * entries, so a key renamed here is renamed in both and a key the footer
+ * names cannot be missing from the sheet.
+ *
+ * Only the advertising lives here. What a key does is `reducers/planPane.ts`.
+ */
+
+export type PlanKeyGroup = 'Navigation' | 'Assign' | 'Run' | 'Status' | 'Other';
+
+export interface PlanKey {
+  keys: string;
+  meaning: string;
+  group: PlanKeyGroup;
+  /** The footer's short form. A function where the label follows the selected task. */
+  hint?: string | ((task: TaskView | undefined) => string);
+}
+
+// Object order is the sheet's order within a group.
+export const PLAN_KEYS = {
+  move: { keys: 'up / down', meaning: 'move between tasks', group: 'Navigation' },
+  scroll: { keys: 'pgup / pgdn', meaning: 'scroll the plan', group: 'Navigation' },
+  expand: { keys: '→', meaning: "reveal a task's subtasks, then edit its prompt", group: 'Navigation', hint: '→ expand' },
+  log: { keys: 'enter', meaning: "open the task's log and message its runner", group: 'Navigation', hint: 'enter log' },
+  back: { keys: 'esc', meaning: 'collapse the task, or return to the chat', group: 'Navigation' },
+
+  runner: { keys: 'R', meaning: "pick the task's runner", group: 'Assign' },
+  model: { keys: 'o', meaning: "pick the task's model", group: 'Assign', hint: 'o model' },
+  effort: { keys: 'e', meaning: "pick the task's effort", group: 'Assign', hint: 'e effort' },
+  mode: { keys: 'M', meaning: "pick the task's mode", group: 'Assign' },
+  deps: { keys: 'D', meaning: 'pick the tasks it depends on', group: 'Assign' },
+  skills: { keys: 'K', meaning: 'pick the skills it loads', group: 'Assign' },
+  ops: { keys: 'O', meaning: 'switch between a change and an ops task', group: 'Assign' },
+
+  start: { keys: 'f', meaning: 'start the task now', group: 'Run', hint: 'f start' },
+  runPlan: { keys: 'E', meaning: 'run the whole plan', group: 'Run', hint: 'E run plan' },
+  stop: { keys: 'S', meaning: 'stop the run', group: 'Run', hint: 'S stop' },
+  cancel: {
+    keys: 'c',
+    meaning: "cancel the task's runner, or its pending resume",
+    group: 'Run',
+    // `c` cancels the resume while the task has one; it has no runner to cancel then.
+    hint: (task) => (task && resumeLabel(task) ? 'c cancel resume' : 'c cancel'),
+  },
+  resolve: { keys: 'x', meaning: 'resolve a merge conflict', group: 'Run', hint: 'x resolve conflict' },
+  retry: { keys: '/retry', meaning: 'run a failed task again (type it in the chat)', group: 'Run', hint: '/retry' },
+
+  mark: {
+    keys: 'm',
+    meaning: 'mark the task done, or take it back',
+    group: 'Status',
+    // `m` toggles, so the hint names the direction it will go for this task.
+    hint: (task) => (task && markAction(task) === 'uncomplete' ? 'm undone' : 'm done'),
+  },
+  skip: { keys: 's', meaning: 'skip the task', group: 'Status', hint: 's skip' },
+  remove: { keys: 'd', meaning: 'remove the task', group: 'Status' },
+  add: { keys: 'a', meaning: 'add a task', group: 'Status', hint: 'a add' },
+
+  keys: { keys: '?', meaning: 'show this sheet', group: 'Other', hint: '? keys' },
+  chat: { keys: 'tab', meaning: 'switch to the chat', group: 'Other', hint: 'tab chat' },
+} satisfies Record<string, PlanKey>;
+
+export type PlanKeyId = keyof typeof PLAN_KEYS;
+
+/** Keys while a task's prompt editor is open; they type into a draft, so none of the above apply. */
+export const TASK_EDITOR_KEYS: readonly { keys: string; meaning: string }[] = [
+  { keys: 'enter', meaning: 'save the prompt' },
+  { keys: 'alt-enter', meaning: 'insert a newline' },
+  { keys: 'esc', meaning: 'discard the edit' },
+  { keys: 'pgup / pgdn', meaning: 'scroll the plan' },
+];
+
+const GROUPS: readonly PlanKeyGroup[] = ['Navigation', 'Assign', 'Run', 'Status', 'Other'];
+
+export function planKeysByGroup(): [PlanKeyGroup, PlanKey[]][] {
+  const entries: PlanKey[] = Object.values(PLAN_KEYS);
+  return GROUPS.map((group) => [group, entries.filter((entry) => entry.group === group)]);
+}
+
+function hintOf(id: PlanKeyId, task: TaskView | undefined): string {
+  const entry: PlanKey = PLAN_KEYS[id];
+  const { hint } = entry;
+  if (hint === undefined) return entry.keys;
+  return typeof hint === 'function' ? hint(task) : hint;
+}
+
+/** What the selected task can actually be asked to do, most useful first. */
+function taskKeyIds(task: TaskView | undefined, runActive: boolean): PlanKeyId[] {
+  if (!task) return ['add'];
+  const row = taskRowView(task);
+  if (row.conflict) return ['resolve', 'log'];
+  if (row.resumes) return ['cancel', 'log'];
+  switch (row.status) {
+    case 'running':
+    case 'quiet':
+      return runActive ? ['log', 'cancel', 'stop'] : ['log', 'cancel'];
+    case 'awaiting': return ['log', 'mark'];
+    case 'failed': return ['retry', 'log'];
+    case 'done': return ['mark', 'log'];
+    case 'blocked': return ['start', 'skip', 'runPlan'];
+    default: return row.kind === 'user' ? ['mark', 'runPlan'] : ['start', 'runPlan', 'model', 'effort'];
+  }
+}
+
+/** The plan footer's hints for the selected task, ending in the keys that are always there. */
+export function planFooterHints(task: TaskView | undefined, runActive: boolean): string[] {
+  const ids: PlanKeyId[] = [...taskKeyIds(task, runActive), 'expand', 'keys', 'chat'];
+  return ids.map((id) => hintOf(id, task));
+}

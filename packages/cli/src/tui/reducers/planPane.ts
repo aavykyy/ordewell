@@ -65,6 +65,8 @@ export function handlePlanKey(state: TuiState, key: Key): Step {
 
   // Before the row guard: with no tasks there is no row, and this is the way in.
   if (key.name === 'char' && key.char === 'a') return addTask(state, '');
+  // The footer names only the keys that fit the selected task; this lists them all.
+  if (key.name === 'char' && key.char === '?') return step({ ...state, overlay: { kind: 'help', scroll: 0, sheet: 'keys' } });
 
   const row = selectedPlanRow(state);
   if (!row) return step(state);

@@ -221,7 +221,7 @@ export interface ApprovalRequestView {
 }
 
 export type Overlay =
-  | { kind: 'help'; scroll?: number }
+  | { kind: 'help'; scroll?: number; sheet?: 'commands' | 'keys' }
   | { kind: 'approval'; request: ApprovalRequestView }
   | { kind: 'picker'; picker: PickerState }
   /**

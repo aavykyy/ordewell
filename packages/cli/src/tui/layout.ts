@@ -6,7 +6,8 @@ import { SLASH_COMMANDS, type SlashCategory } from './slash';
 import { findTask, planRows, plannerInFlight, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
-import { ALL_PROVIDERS, approvalLabel, awaitingLabel, hasHiddenDetail, markAction, resumeLabel, runnerForProvider, taskRowView, planUsage, type AiProvider, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
+import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
+import { ALL_PROVIDERS, approvalLabel, awaitingLabel, hasHiddenDetail, resumeLabel, runnerForProvider, taskRowView, planUsage, type AiProvider, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -41,18 +42,12 @@ export function chatInputWrap(state: TuiState): WrapLine[] | null {
 
 /**
  * The footer's key hints, unpainted. Kept next to the body extents because the
- * footer's height is what is left over for the body — the plan pane's list is
- * longer than a normal terminal is wide and routinely wraps to two rows.
+ * footer's height is what is left over for the body. The plan pane names only
+ * the keys that fit the selected task and leaves the rest to the `?` sheet, so
+ * it stays one row and the task list keeps the room.
  */
 export function footerHints(state: TuiState): string[] {
-  // `m` toggles, so the hint has to name the direction it will actually go for
-  // the selected task — a fixed 'm done' on a finished task reads as a no-op.
   const selected = selectedPlanRow(state)?.task;
-  const markHint = selected && markAction(selected) === 'uncomplete' ? 'm undone' : 'm done';
-  // `c` cancels the selected task's resume while it has one; it has no runner to cancel then.
-  const cancelHint = selected && resumeLabel(selected) ? 'c cancel resume' : 'c cancel';
-  // Only on a task that has a conflict to resolve: isolation stays quiet otherwise.
-  const resolveHint = selected?.isolation?.state === 'conflict' ? ['x resolve conflict'] : [];
   // A planning turn in flight owns ESC ahead of whatever the pane would
   // otherwise bind it to. What ESC does there depends on what is waiting: a
   // queued prompt it takes back, otherwise the first press arms the stop and
@@ -74,12 +69,7 @@ export function footerHints(state: TuiState): string[] {
     if (state.taskEditor) {
       return ['type to edit prompt', 'pgup/pgdn scroll', 'alt-enter newline', 'enter save', 'esc cancel'];
     }
-    return [
-      ...(escHint ? [escHint] : []),
-      '→ expand/edit', 'R runner', 'o model', 'e effort', 'M mode', 'D deps', 'K skills', 'O ops', 'f start',
-      'E run plan', 'S stop', cancelHint, markHint, 's skip', 'a add', 'd remove', 'enter log', ...resolveHint,
-      'pgup/pgdn scroll', 'tab chat',
-    ];
+    return [...(escHint ? [escHint] : []), ...planFooterHints(selected, state.status === 'executing')];
   }
   // The detail-all toggle names the direction it will go, like `m done` does.
   // Shown only once the conversation holds something it can expand: the
@@ -89,7 +79,7 @@ export function footerHints(state: TuiState): string[] {
     ? [state.detailAll ? 'ctrl-o collapse all' : 'ctrl-o expand all']
     : [];
   return [
-    '/help', 'tab plan', 'alt-enter newline', 'pgup/pgdn scroll',
+    '/help', 'tab plan',
     ...detailHint,
     ...(escHint ? [escHint] : []),
     'ctrl-c quit',
@@ -793,8 +783,11 @@ const CATEGORY_TITLE: Record<SlashCategory, string> = {
   system: 'System',
 };
 
+/** Which sheet the help overlay shows: the slash commands, or the plan pane's keys (`?`). */
+export type HelpSheet = 'commands' | 'keys';
+
 /**
- * The command sheet, the rows of it that fit, and how far it scrolls. The sheet
+ * The sheet, the rows of it that fit, and how far it scrolls. The sheet
  * is taller than most terminals, and it is the one overlay with an offset of
  * its own — so it needs the same exact bound the panes do.
  */
@@ -805,7 +798,24 @@ export interface HelpLayout {
   maxScroll: number;
 }
 
-export function helpLayout(rows: number, cols: number): HelpLayout {
+/** The key sheet's rows: one table, grouped, built from the entries the footer picks its hints from. */
+function keySheetBody(cols: number): string[] {
+  const body: string[] = [];
+  for (const [group, keys] of planKeysByGroup()) {
+    body.push(style.bold(group));
+    for (const { keys: label, meaning } of keys) {
+      body.push(`  ${pad(label, Math.min(14, cols - 6))} ${style.grey(meaning)}`);
+    }
+    body.push('');
+  }
+  body.push(
+    style.bold('While editing a task prompt'),
+    ...TASK_EDITOR_KEYS.map(({ keys, meaning }) => `  ${pad(keys, Math.min(14, cols - 6))} ${style.grey(meaning)}`),
+  );
+  return body;
+}
+
+function commandSheetBody(cols: number): string[] {
   const body: string[] = [];
   for (const [category, title] of Object.entries(CATEGORY_TITLE) as [SlashCategory, string][]) {
     const commands = SLASH_COMMANDS.filter((c) => c.category === category);
@@ -818,6 +828,7 @@ export function helpLayout(rows: number, cols: number): HelpLayout {
   }
   body.push(
     style.grey('tab switches panes · pgup/pgdn scroll · ctrl-o toggles full detail · esc takes back a queued prompt, otherwise esc twice stops · ctrl-l clears · ctrl-c quits'),
+    style.grey('alt-enter inserts a newline · ? lists the plan pane\'s keys, once tab has put you there'),
   );
   // One line each: the sheet clips every line to the frame, and the task
   // view's keys run far past any width on a single one.
@@ -830,6 +841,11 @@ export function helpLayout(rows: number, cols: number): HelpLayout {
     style.grey('  at a checkpoint, ctrl-y approves and ctrl-g rejects, with the composer text as the reason · /checkpoint <id> approve|reject [reason] from anywhere'),
     style.grey('  alt←/→ changes attempt · esc returns'),
   );
+  return body;
+}
+
+export function helpLayout(rows: number, cols: number, sheet: HelpSheet = 'commands'): HelpLayout {
+  const body = sheet === 'keys' ? keySheetBody(cols) : commandSheetBody(cols);
 
   // The sheet is a table: clip long descriptions to one row each rather than
   // wrapping them, which would break the two-column alignment.
@@ -841,5 +857,6 @@ export function helpLayout(rows: number, cols: number): HelpLayout {
 
 /** How far the help sheet can scroll at the size it is about to be painted. */
 export function helpScrollMax(state: TuiState): number {
-  return helpLayout(bodyRows(state), state.cols).maxScroll;
+  const sheet = state.overlay?.kind === 'help' ? state.overlay.sheet : undefined;
+  return helpLayout(bodyRows(state), state.cols, sheet).maxScroll;
 }

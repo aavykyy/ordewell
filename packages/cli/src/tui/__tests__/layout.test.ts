@@ -287,10 +287,13 @@ describe('the help sheet footer', () => {
     expect(footer).toContain('esc takes back a queued prompt');
   });
 
+  it('keeps the newline key the chat footer no longer names', () => {
+    expect(helpFooter()).toContain('alt-enter inserts a newline');
+  });
+
   it('drops the arrow keys and the removed per-block expansion mentions', () => {
     const footer = helpFooter();
     expect(footer).not.toContain('↑↓');
-    expect(footer).not.toContain('alt-enter');
     expect(footer).not.toMatch(/alt[+-]?(↑|↓)/);
   });
 
