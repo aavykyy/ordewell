@@ -158,16 +158,6 @@ describe('top bar', () => {
   });
 });
 
-// Mirrors layout.ts's boldSans(): Unicode Mathematical Sans-Serif Bold reads as
-// bold in any font without an ANSI escape, so the wordmark isn't the literal
-// ASCII string "ordewell" — tests need the same mapping to find it.
-function boldSans(word: string): string {
-  return [...word].map((ch) => {
-    const code = ch.codePointAt(0)!;
-    return code >= 97 && code <= 122 ? String.fromCodePoint(0x1d5ee + (code - 97)) : ch;
-  }).join('');
-}
-
 describe('welcome mark', () => {
   // The mark as designed on its dot grid: three strokes converging on the dot.
   const MARK = [
@@ -195,9 +185,19 @@ describe('welcome mark', () => {
   it('puts the wordmark and the version on the middle row only', () => {
     const lines = screen({ cols: 80, rows: 24 }).map(stripAnsi);
     const top = markAt(lines);
-    expect(lines[top + 1].trimEnd()).toMatch(new RegExp(`^${MARK[1]}\\s+${boldSans('ordewell')}\\s+v${CLI_VERSION.replace(/\./g, '\\.')}$`));
+    expect(lines[top + 1].trimEnd()).toMatch(new RegExp(`^${MARK[1]}\\s+ordewell\\s+v${CLI_VERSION.replace(/\./g, '\\.')}$`));
     expect(lines[top].trimEnd()).toBe(MARK[0]);
     expect(lines[top + 2].trimEnd()).toBe(MARK[2]);
+  });
+
+  it('draws the wordmark as plain ASCII with both halves bold', () => {
+    style.enabled = true;
+    let raw: string[];
+    try { raw = screen({ cols: 80, rows: 24 }); } finally { style.enabled = false; }
+    const middle = raw.find((l) => stripAnsi(l).startsWith(MARK[1]))!;
+    expect([...middle].every((ch) => ch.codePointAt(0)! <= 0xffff)).toBe(true);
+    expect(middle).toContain('\x1b[1morde\x1b[0m');
+    expect(middle).toContain('\x1b[1m\x1b[36mwell\x1b[0m');
   });
 
   it('mirrors the top row in the bottom one', () => {
@@ -228,10 +228,10 @@ describe('welcome mark', () => {
   it('drops the version first, then cuts the wordmark, when the middle row runs out of room', () => {
     // The pane leaves its last column free: 11 mark + 2 gap + 8 wordmark = 21.
     const named = screen({ cols: 22, rows: 24 }).map(stripAnsi);
-    expect(named[markAt(named) + 1].trimEnd()).toBe(`${MARK[1]}  ${boldSans('ordewell')}`);
+    expect(named[markAt(named) + 1].trimEnd()).toBe(`${MARK[1]}  ordewell`);
     const cut = screen({ cols: 18, rows: 24 }).map(stripAnsi);
     // 17 columns leave 4 for the wordmark: three letters and the ellipsis.
-    expect(cut[markAt(cut) + 1].trimEnd()).toBe(`${MARK[1]}  ${boldSans('ord')}…`);
+    expect(cut[markAt(cut) + 1].trimEnd()).toBe(`${MARK[1]}  ord…`);
   });
 
   it('no longer carries the description paragraph', () => {

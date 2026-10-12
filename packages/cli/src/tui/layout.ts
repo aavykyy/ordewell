@@ -373,21 +373,9 @@ function setupRow(label: string, value: string, command: string, cols: number): 
   return truncate(`${head}${style.grey(command)}`, cols - 1);
 }
 
-/**
- * Unicode Mathematical Sans-Serif Bold maps 1:1 onto ASCII lowercase, so the
- * wordmark reads bold in any font without an ANSI bold escape — which a
- * later per-char colour reset would otherwise clip mid-word.
- */
-function boldSans(word: string): string {
-  return [...word].map((ch) => {
-    const code = ch.codePointAt(0)!;
-    return code >= 97 && code <= 122 ? String.fromCodePoint(0x1d5ee + (code - 97)) : ch;
-  }).join('');
-}
-
-const WORDMARK_ORDE = boldSans('orde');
-const WORDMARK_WELL = boldSans('well');
-
+// Plain ASCII: mathematical alphanumerics fall back to wider glyphs in most
+// monospace fonts and overlap. Halves are painted separately so the cyan
+// reset never clips the bold.
 /**
  * The logo's icon on a braille dot grid (`#` stroke, `o` dot), traced from
  * assets/readme/logo-*.png: outer strokes that leave level, sweep into the
@@ -445,7 +433,7 @@ const VERSION = cliVersion();
 function markLines(cols: number): string[] {
   const room = Math.max(0, cols - 1);
   const [top, mid, bottom] = MARK.map(paintMark);
-  const wordmark = `${WORDMARK_ORDE}${style.cyan(WORDMARK_WELL)}`;
+  const wordmark = `${style.bold('orde')}${style.bold(style.cyan('well'))}`;
   const named = `${mid}${MARK_GAP}${wordmark}`;
   const versioned = VERSION === 'unknown' ? named : `${named}${MARK_GAP}${style.grey(`v${VERSION}`)}`;
   const textRoom = room - width(mid) - MARK_GAP.length;
