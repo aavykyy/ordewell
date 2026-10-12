@@ -294,6 +294,7 @@ the daemon reads it from there at generation.
 ## History
 
 - 2026-10-12 — accepted.
+- 2026-10-12 — `/settings` in VS Code is a Run block in the chat's Settings panel, saving each setting as it is set; the terminal UI takes Parallel, retries and reads as typed numbers and steps with ←/→.
 - 2026-10-12 — with autorun on and Full, the planner may start a task added
   after the plan was approved; a start in the reply that adds it waits for the
   edit to land.
