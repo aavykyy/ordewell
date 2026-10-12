@@ -295,7 +295,8 @@ describe('transcript', () => {
     const conversation = chatOf(...Array.from({ length: 60 }, (_, i): ['user', string] => ['user', `message ${i + 1}`]));
     const rows = screen({ rows: 24, conversation }).map(stripAnsi);
     const last = rows.map((l, i) => (l.includes('message 60') ? i : -1)).reduce((a, b) => Math.max(a, b), -1);
-    expect(last).toBeGreaterThan(rows.length - 8);
+    // Under it: its band's empty row, the block gap, the status row, the composer's three rows, the footer.
+    expect(last).toBe(rows.length - 1 - 7);
   });
 
   it('top-anchors the remaining messages once a plan replaces the welcome', () => {
@@ -574,8 +575,9 @@ describe('input line', () => {
     try {
       const s = initialState({ rows: 24, cols: 80 });
       const out = render({ ...s, editor: { ...s.editor, text: 'first\nsecond', cursor: 7 } });
-      const inputLines = out.slice(out.length - 3, out.length - 1);
-      expect(inputLines.join('\n')).toContain(style.inverse('e') || 'e');
+      const second = out.filter((l) => stripAnsi(l).startsWith('  second'));
+      expect(second).toHaveLength(1);
+      expect(second[0]).toContain(`s${style.inverse('e')}`);
     } finally {
       style.enabled = false;
     }
@@ -715,7 +717,7 @@ describe('overlays', () => {
 
   it('scrolls the help sheet to reach the commands below the fold', () => {
     const top = text({ overlay: { kind: 'help', scroll: 0 }, rows: 24 });
-    const down = text({ overlay: { kind: 'help', scroll: 14 }, rows: 24 });
+    const down = text({ overlay: { kind: 'help', scroll: 16 }, rows: 24 });
     expect(top).not.toContain('/allowlist');
     expect(down).toContain('/allowlist');
   });
@@ -803,7 +805,7 @@ describe('input cursor', () => {
       const s = initialState({ rows: 24, cols: 80 });
       const out = render({ ...s, editor: { ...s.editor, text: 'abcdef', cursor: 2 } });
       const input = inputRow(out);
-      expect(input).toContain(`ab${style.inverse('c')}def`);
+      expect(input).toContain(`ab${style.inverse('c')}\x1b[48;5;236mdef`);
     });
   });
 
@@ -893,10 +895,10 @@ describe('input cursor', () => {
         const s = initialState({ rows: 24, cols: 80 });
 
         style.enabled = false;
-        const plain = stripAnsi(render({ ...s, editor: { ...s.editor, text: '/grilling', cursor: 3 } })[24 - 2]);
+        const plain = stripAnsi(render({ ...s, editor: { ...s.editor, text: '/grilling', cursor: 3 } })[24 - 3]);
 
         style.enabled = true;
-        const coloured = stripAnsi(render({ ...s, editor: { ...s.editor, text: '/grilling', cursor: 3 } })[24 - 2]);
+        const coloured = stripAnsi(render({ ...s, editor: { ...s.editor, text: '/grilling', cursor: 3 } })[24 - 3]);
 
         expect(coloured).toBe(plain);
       } finally {

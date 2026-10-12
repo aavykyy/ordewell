@@ -142,9 +142,10 @@ function fakeDaemon() {
   };
 }
 
-function harness() {
+function harness(rows = 24) {
   const input = new FakeInput();
   const output = new FakeOutput();
+  output.rows = rows;
   const daemon = fakeDaemon();
   const envWrites: Record<string, string> = {};
   const onExit = vi.fn();
@@ -295,9 +296,10 @@ describe('TUI end to end', () => {
     expect(h.transcript()).toContain('◆ Plan drafted — anything to change?');
     // The prompt the turn answers is the line already shown, not a second copy of it.
     expect(messagesOf(h.app.getState()).filter((m) => m.role === 'user')).toHaveLength(1);
-    // Pinned to the chat pane's last row: above the status row, which sits above the input.
+    // Pinned to the chat pane's last row: above the status row, which sits above
+    // the composer's empty band row and then its text.
     const input = chat.findIndex((line, i) => i > header && line.startsWith('❯'));
-    expect(chat[input - 2]).toBe('12.4k in · 3.1k out · 18% ctx');
+    expect(chat[input - 3]).toBe('12.4k in · 3.1k out · 18% ctx');
   });
 
   it('ctrl+o raw bytes toggle full detail on the command rows, with the footer hint following', async () => {
@@ -924,7 +926,8 @@ describe('TUI end to end', () => {
   });
 
   it('welcome stays top-anchored across the startup refresh, then a goal, a manual first task and a rewind through the popup carry the plan forward', async () => {
-    const h = harness();
+    // Tall enough that the welcome and the first exchange fit above the composer's band.
+    const h = harness(30);
     // The braille mark is always the welcome's first line — one row under the
     // skills bar, whatever "Setup" happens to say.
     const topBodyRow = (frame: string) => frame.split('\n')[1];

@@ -42,6 +42,18 @@ export function chatInputWrap(state: TuiState): WrapLine[] | null {
   return wrapLines(state.editor.text, chatEditorRoomFor(state, true));
 }
 
+/** The empty rows the composer carries above and below its text, on the grey band. */
+export const COMPOSER_BAND_ROWS = 2;
+
+/**
+ * Every row the composer takes: its text rows plus the band rows around them.
+ * The renderer paints this many and `bodyRows` reserves this many, which is
+ * what keeps the frame at exactly `state.rows` lines.
+ */
+export function composerRows(state: TuiState): number {
+  return (chatInputWrap(state)?.length ?? 1) + COMPOSER_BAND_ROWS;
+}
+
 /**
  * The footer's key hints, unpainted. Kept next to the body extents because the
  * footer's height is what is left over for the body. The plan pane names only
@@ -209,9 +221,8 @@ export function packHints(hints: string[], cols: number): string[] {
  * measured against.
  */
 export function bodyRows(state: TuiState): number {
-  const input = chatInputWrap(state)?.length ?? 1;
   const footer = packHints(footerHints(state), state.cols).length;
-  return Math.max(0, state.rows - CHROME_ROWS - input - footer + 2);
+  return Math.max(0, state.rows - CHROME_ROWS - composerRows(state) - footer + 2);
 }
 
 // ── Chat body ────────────────────────────────────────────────────────────────

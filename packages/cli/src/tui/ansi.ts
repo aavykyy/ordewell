@@ -273,4 +273,10 @@ export const style = {
    */
   band: (text: string): string =>
     (style.enabled ? `\x1b[48;5;236m${text.split('\x1b[0m').join('\x1b[0m\x1b[48;5;236m')}\x1b[0m` : text),
+  /**
+   * Quiet text for use on the band. Bright black (`grey`) is a theme's own
+   * background in some palettes and sits close to the band's, so hints and the
+   * blurred prompt would sink into it; a fixed mid grey stays readable on 236.
+   */
+  bandGrey: colour('38;5;245'),
 };
