@@ -129,7 +129,8 @@ export function handleStepperKey(state: TuiState, stepper: StepperState, key: Ke
     }
     const replacing = shown.pristine && (key.name === 'char' || key.name === 'paste');
     const text = editText(replacing ? '' : shown.text, key);
-    return text === shown.text || !/^\d*$/.test(text) ? reopen(stepper) : reopen({ ...stepper, entry: { text, pristine: false } });
+    const unchanged = text === shown.text && !replacing;
+    return unchanged || !/^\d*$/.test(text) ? reopen(stepper) : reopen({ ...stepper, entry: { text, pristine: false } });
   }
   if (key.name === 'up' || key.name === 'scrollup') return reopen({ ...stepper, index: Math.max(0, stepper.index - 1) });
   if (key.name === 'down' || key.name === 'scrolldown') {
