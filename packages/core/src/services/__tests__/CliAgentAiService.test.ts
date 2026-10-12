@@ -78,6 +78,32 @@ function claudeSays(text: string): string {
   ].map((line) => `${JSON.stringify(line)}\n`).join('');
 }
 
+/**
+ * A Claude Code turn cut short by its usage limit: the CLI says the limit once
+ * as an assistant message and again as the `result` of an `is_error` turn.
+ */
+function claudeHitsLimit(said: string, result: string, before = ''): string {
+  return [
+    { type: 'system', subtype: 'init', session_id: 'sess-limit', cwd: '/repo', permissionMode: 'plan' },
+    ...(before ? [{ type: 'assistant', session_id: 'sess-limit', message: { id: 'msg_before', role: 'assistant', content: [{ type: 'text', text: before }] } }] : []),
+    { type: 'assistant', session_id: 'sess-limit', message: { id: 'msg_limit', role: 'assistant', content: [{ type: 'text', text: said }] } },
+    { type: 'result', subtype: 'success', session_id: 'sess-limit', is_error: true, result },
+  ].map((line) => `${JSON.stringify(line)}\n`).join('');
+}
+
+/** The reply text a surface is still showing once the turn's retractions are applied. */
+function shownReply(events: ResearchProgress[]): string {
+  const segments = new Map<string, string>();
+  for (const event of events) {
+    if (event.type === 'text_delta' && event.segmentId) segments.set(event.segmentId, (segments.get(event.segmentId) ?? '') + (event.text ?? ''));
+    else if (event.type === 'text_retracted') {
+      if (event.segmentId) segments.delete(event.segmentId);
+      else segments.clear();
+    }
+  }
+  return [...segments.values()].join('');
+}
+
 function request(overrides: Partial<ConversationRequest> = {}): ConversationRequest {
   const progress: ResearchProgress[] = [];
   return {
@@ -786,6 +812,81 @@ describe('CliAgentAiService — streamed events (#47)', () => {
 
     expect(events.filter((e) => e.type === 'subagent_started' || e.type === 'subagent_finished').map((e) => `${e.type}:${e.subagentId}`))
       .toEqual(['subagent_started:sa1', 'subagent_finished:sa1']);
+  });
+});
+
+describe('CliAgentAiService — a usage limit the agent says twice (#79)', () => {
+  function scripted(...turns: AgentEvent[][]) {
+    return new CliAgentAiService(fakeConfig({ aiProvider: 'claude-code' }), {
+      createAdapter: scriptedAdapter(turns),
+      workspaceRoot: () => '/repo',
+      mcpServer: fakeMcpServer(),
+    });
+  }
+
+  const limit = "You've hit your session limit · resets 8:10pm (Europe/Rome)";
+
+  it('shows the limit once, as the failure', async () => {
+    // The assistant block and the error `result` word it alike but for a final period.
+    const { svc } = service('claude-code', [claudeHitsLimit(limit, `${limit}.`)]);
+    const { events, onProgress } = collector();
+
+    const turn = await svc.startConversation(request({ onProgress }));
+
+    expect(turn).toMatchObject({ kind: 'message', text: `${limit}.`, failed: true });
+    expect(shownReply(events)).toBe('');
+  });
+
+  it('takes back a streamed copy of the limit too', async () => {
+    const svc = scripted([
+      { type: 'assistant_text_delta', text: limit },
+      { type: 'assistant_text', text: limit },
+      { type: 'error', message: `${limit}.` },
+    ]);
+    const { events, onProgress } = collector();
+
+    const turn = await svc.startConversation(request({ onProgress }));
+
+    expect(turn).toMatchObject({ kind: 'message', text: `${limit}.`, failed: true });
+    expect(shownReply(events)).toBe('');
+  });
+
+  it('keeps a real reply that came before the failure, beside the error', async () => {
+    const { svc } = service('claude-code', [claudeHitsLimit(limit, `${limit}.`, 'The cache belongs in src/cache.ts.')]);
+    const { events, onProgress } = collector();
+
+    const turn = await svc.startConversation(request({ onProgress }));
+
+    expect(turn).toMatchObject({ kind: 'message', failed: true, text: `The cache belongs in src/cache.ts.\n\n${limit}.` });
+    // The settled failure replaces the final segment, so nothing is left streamed beside it.
+    expect(shownReply(events)).toBe('');
+  });
+
+  it('leaves an earlier segment of the reply showing, with the failure after it', async () => {
+    const svc = scripted([
+      { type: 'assistant_text', text: 'Reading the cache.' },
+      { type: 'tool_call', id: 'c1', name: 'Read', args: { file_path: 'src/cache.ts' } },
+      { type: 'tool_result', id: 'c1', name: 'Read', output: 'export {}', success: true },
+      { type: 'assistant_text', text: limit },
+      { type: 'error', message: `${limit}.` },
+    ]);
+    const { events, onProgress } = collector();
+
+    const turn = await svc.startConversation(request({ onProgress }));
+
+    expect(turn).toMatchObject({ kind: 'message', failed: true, text: `${limit}.` });
+    expect(shownReply(events)).toBe('Reading the cache.');
+  });
+
+  it('keeps reply text that only mentions the failure', async () => {
+    const svc = scripted([
+      { type: 'assistant_text', text: `I stopped early: ${limit}` },
+      { type: 'error', message: limit },
+    ]);
+
+    const turn = await svc.startConversation(request());
+
+    expect(turn.text).toBe(`I stopped early: ${limit}\n\n${limit}`);
   });
 });
 

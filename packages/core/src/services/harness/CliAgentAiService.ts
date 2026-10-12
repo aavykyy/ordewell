@@ -29,6 +29,7 @@ import { checkPlanSkills, type SkillLookup } from '../taskSkills';
 import { PLANNER_TURN_ENDED } from '../plannerTools';
 import { settleReply, type ReplyAttempt } from '../settleReply';
 import { ReplySplitter } from '../replyStream';
+import { opensWithJsonObject } from '../JsonExtractor';
 import { redactSecrets } from '../../utils/redactSecrets';
 import { abortScope } from '../../utils/abortScope';
 import { runnerForProvider } from '../ProviderRegistry';
@@ -106,6 +107,24 @@ interface HarnessTurn {
   aborted?: boolean;
   /** Subagents the agent left running when it ended the turn. See {@link MAX_AGENT_WAITS}. */
   backgroundAgents: number;
+}
+
+const sameMessage = (a: string, b: string): boolean => {
+  const bare = (value: string) => value.trim().replace(/\.+$/, '').trimEnd();
+  return bare(a) !== '' && bare(a) === bare(b);
+};
+
+/**
+ * The failure a turn ends on, in front of which the final run's own text is
+ * kept. Claude Code says a usage limit twice — as an assistant message and as
+ * the `result` of the failed turn — and a block that only repeats the failure
+ * is dropped so the user reads it once. Text that came before it is a real
+ * reply, and a JSON envelope the planner never finished is not one.
+ */
+function failureAfterReply(run: string, blockAt: number, error: string): string {
+  const repeated = sameMessage(run.slice(blockAt), error);
+  const before = (repeated ? run.slice(0, blockAt) : run).trim();
+  return before && opensWithJsonObject(before) !== true ? `${before}\n\n${error}` : error;
 }
 
 /**
@@ -380,7 +399,10 @@ export class CliAgentAiService implements IAiService {
     // envelope opening right after a tool call is classified on its own
     // opening, not carried over from whatever the text before the call was.
     let segmentId = uuidv4();
-    const commitRun = () => { text += streamedRun; streamedRun = ''; segmentId = uuidv4(); };
+    const commitRun = () => { text += streamedRun; streamedRun = ''; runStart = text.length; segmentId = uuidv4(); };
+    // Where the open run, and the latest complete text block in it, begin in `text`.
+    let runStart = 0;
+    let blockStart = 0;
     // Who streamed thinking deltas (the planner as '', or a subagent) since
     // their last complete `thinking`, which then repeats what was already sent.
     const streamedThinking = new Set<string>();
@@ -429,6 +451,7 @@ export class CliAgentAiService implements IAiService {
           return;
 
         case 'assistant_text':
+          blockStart = text.length;
           text += event.text;
           if (streamedRun) streamedRun = '';
           else onProgress({ type: 'text_delta', text: event.text, segmentId });
@@ -527,6 +550,8 @@ export class CliAgentAiService implements IAiService {
       }
     }, signal, () => onProgress({ type: 'liveness' }));
 
+    const finalSegment = segmentId;
+    const finalRunStart = runStart;
     commitRun();
 
     // Anything still pending when the turn ended never produced a result —
@@ -542,6 +567,14 @@ export class CliAgentAiService implements IAiService {
     // the session id rather than throwing into a dead stdin.
     if (error || signal?.aborted) this.disposeAdapter();
 
+    if (error) {
+      const failure = failureAfterReply(text.slice(finalRunStart), Math.max(blockStart, finalRunStart) - finalRunStart, error);
+      // The settled failure replaces the turn's final segment, so what that
+      // segment streamed is taken back and carried in the failure instead.
+      onProgress({ type: 'text_retracted', segmentId: finalSegment });
+      text = text.slice(0, finalRunStart);
+      return { text, researchLog, error: failure, aborted: signal?.aborted, backgroundAgents };
+    }
     return { text, researchLog, error, aborted: signal?.aborted, backgroundAgents };
   }
 
