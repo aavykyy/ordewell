@@ -176,6 +176,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **The welcome logo shows again on standard 80×24 terminals.** The braille
+  art is chosen by the rows the chat pane really has, and gives up its
+  description paragraph before it gives up the art.
 - **A usage limit shows once.** Claude Code reports a limit as a message and
   again as the turn's error, worded alike. The planner chat, the task chat and
   task views, a reload and the task's plain text now show it once, as the

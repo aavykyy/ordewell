@@ -74,7 +74,7 @@ export function footerHints(state: TuiState): string[] {
   // The detail-all toggle names the direction it will go, like `m done` does.
   // Shown only once the conversation holds something it can expand: the
   // welcome alone must keep the footer to one row, or a 24-row terminal
-  // loses the logo's last line.
+  // gives up a line of the logo's welcome.
   const detailHint = hasHiddenDetail(state.taskView ? state.taskView.view.blocks : state.conversation.blocks)
     ? [state.detailAll ? 'ctrl-o collapse all' : 'ctrl-o expand all']
     : [];
@@ -270,7 +270,7 @@ export function chatLayout(state: TuiState, rows: number, cols: number): ChatLay
   const card = tv && checkpoint ? checkpointCardLines(findTask(state.tasks, tv.taskId)?.order ?? 0, checkpoint, cols, waitingApproval(tv) !== undefined) : [];
   const answering = chatBodyLines(blocks, cols, state.detailAll, tv ? waitingApproval(tv) : undefined);
   const body = card.length > 0 ? [...answering, ...card] : answering;
-  const transcript = !welcome ? body : body.length === 0 ? welcomeLines(state, cols) : [...welcomeLines(state, cols), '', ...body];
+  const transcript = !welcome ? body : body.length === 0 ? welcomeLines(state, rows, cols) : [...welcomeLines(state, rows, cols), '', ...body];
   // The queued prompts paint as part of the tail, newest last — they are the
   // turns that have not gone out yet, and they travel where a sent message
   // would have appeared. A task's queue is its own, taken back one at a time.
@@ -404,8 +404,6 @@ const BANNER_GAP = 2;
 const BANNER_COLS = Math.max(
   ...BANNER_ROWS.map((row) => BANNER_ICON_COLS + BANNER_GAP + width(row.word)),
 );
-/** The full welcome (banner + setup + hints) needs this much terminal. */
-const BANNER_MIN_ROWS = 26;
 
 /** Column where "well" begins in every `word` row — see the cell grid in the BANNER_ROWS comment. */
 const BANNER_WELL_COL = 30;
@@ -415,11 +413,12 @@ function colorWell(word: string): string {
   return cells.slice(0, BANNER_WELL_COL).join('') + style.cyan(cells.slice(BANNER_WELL_COL).join(''));
 }
 
-function bannerLines(rows: number, cols: number): string[] {
-  if (cols < BANNER_COLS || rows < BANNER_MIN_ROWS) {
-    const left = ' '.repeat(Math.max(0, Math.floor((cols - width(LOCKUP)) / 2)));
-    return [left + LOCKUP];
-  }
+function lockupLines(cols: number): string[] {
+  const left = ' '.repeat(Math.max(0, Math.floor((cols - width(LOCKUP)) / 2)));
+  return [left + LOCKUP];
+}
+
+function artLines(cols: number): string[] {
   const left = ' '.repeat(Math.floor((cols - BANNER_COLS) / 2));
   return BANNER_ROWS.map((row) => {
     const gap = ' '.repeat(BANNER_ICON_COLS + BANNER_GAP - width(row.strokes) - width(row.dot));
@@ -427,7 +426,12 @@ function bannerLines(rows: number, cols: number): string[] {
   });
 }
 
-function welcomeLines(state: TuiState, cols: number): string[] {
+/**
+ * `rows` is the pane the welcome is painted into, so the art is chosen by what
+ * actually fits: art + everything, then art without the description, then the
+ * one-line lockup.
+ */
+function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
   const planner = plannerSetup(state);
   const enabledRunners = state.runners.filter((r) => r.enabled).map((r) => r.name);
   const canPlan = planner.ready
@@ -438,15 +442,15 @@ function welcomeLines(state: TuiState, cols: number): string[] {
     ? [planner.label, state.orchestratorModel || style.yellow('no model')].join(style.grey(' · '))
     : style.yellow(planner.label === 'not set' ? 'not set' : `${planner.label} (unavailable)`);
 
-  const lines = [
-    ...bannerLines(state.rows, cols),
-    '',
-    ...wrap(style.bold('Describe a goal to start planning.'), Math.max(1, cols - 1)),
+  const prompt = wrap(style.bold('Describe a goal to start planning.'), Math.max(1, cols - 1));
+  const description = [
     ...wrap(
       style.grey('Ordewell researches your codebase, drafts a task plan, then runs each task in a coding agent.'),
       Math.max(1, cols - 1),
     ),
     '',
+  ];
+  const setup = [
     style.bold('Setup'),
     setupRow('Planner', plannerValue, '/planner · /model', cols),
     setupRow(
@@ -459,19 +463,30 @@ function welcomeLines(state: TuiState, cols: number): string[] {
     setupRow('Run', runSettingsValue(state), '/supervisor · /automerge · /autorun', cols),
     '',
   ];
-
-  if (!canPlan) {
-    lines.push(
+  const notice = canPlan
+    ? []
+    : [
       ...wrap(
         style.yellow('Ordewell needs one coding agent installed (Claude Code, Codex, OpenCode) — or an API key from a provider such as OpenRouter, added with /key.'),
         Math.max(1, cols - 1),
       ),
       '',
-    );
-  }
+    ];
+  const tail = [...notice, style.grey('/help   all commands'), style.grey(state.workspace)];
 
-  lines.push(style.grey('/help   all commands'), style.grey(state.workspace));
-  return lines;
+  const compose = (banner: string[], withDescription: boolean): string[] => [
+    ...banner, '', ...prompt, ...(withDescription ? description : []), ...setup, ...tail,
+  ];
+  if (cols >= BANNER_COLS) {
+    const art = artLines(cols);
+    for (const withDescription of [true, false]) {
+      const lines = compose(art, withDescription);
+      if (lines.length <= rows) {
+        return lines;
+      }
+    }
+  }
+  return compose(lockupLines(cols), true);
 }
 
 // ── Plan pane ────────────────────────────────────────────────────────────────
