@@ -72,6 +72,8 @@ export interface SupervisorHost {
   abandonTurn(): void;
   /** The run carries on as Off: save why, and tell the user. */
   goUnsupervised(reason: string): void;
+  /** A turn that took a wake-up ended, however it ended; see {@link Supervisor.awaitsRunEnd}. */
+  wakeUpEnded(): void;
   /** An Act supervisor tripped the wake-up rate: the run carries on at Watch. `reason` says what it did. */
   dropToWatch(reason: string): void;
   notice(level: 'info' | 'warn', message: string): void;
@@ -115,6 +117,7 @@ export class Supervisor {
   private failures = 0;
   /** The run's end was reported: the scheduler can announce it more than once. */
   private finished = false;
+  private runEndPending = false;
   /** While the planner's usage limit holds wake-ups back: when it lets them go. */
   private limited: { until: number; timer: ReturnType<typeof setTimeout> } | null = null;
   /** When each wake-up since the last pass was delivered, for the wake-up rate guard. */
@@ -145,6 +148,11 @@ export class Supervisor {
     return this.level !== 'off';
   }
 
+  /** The run's end was gathered for a wake-up whose turn has not ended yet. */
+  get awaitsRunEnd(): boolean {
+    return this.runEndPending;
+  }
+
   /** Whether wake-ups alone may open a turn now: the supervisor watches, and no usage limit holds it. */
   mayWake(): boolean {
     return this.watching && this.limited === null;
@@ -170,6 +178,7 @@ export class Supervisor {
     if (event.kind === 'run_finished') {
       if (this.finished) return;
       this.finished = true;
+      this.runEndPending = true;
     }
     if (event.kind === 'task_passed') this.wakeUps = [];
     this.policy.push({ ...event, at: this.now() });
@@ -226,6 +235,7 @@ export class Supervisor {
     this.limited = null;
     this.failures = 0;
     this.finished = false;
+    this.runEndPending = false;
     this.wakeUps = [];
     this.policy = createWakePolicy({ debounceMs: this.debounceMs });
   }
@@ -321,6 +331,7 @@ export class Supervisor {
    */
   standDown(): void {
     this.disarm();
+    this.runEndPending = false;
     const held = this.policy.poll(Number.POSITIVE_INFINITY);
     if (held) this.deliver(held);
   }
@@ -363,8 +374,12 @@ export class Supervisor {
   }
 
   private deliver(batch: WakeBatch): void {
+    const runEnd = batch.attention.some((e) => e.kind === 'run_finished');
     // A failure is the wake-up turn's to handle, in {@link turn}; the batch stays pending meanwhile.
-    this.host.deliver(wakeUpDigest(batch, (taskId) => this.host.describeTask(taskId))).catch(() => {});
+    void this.host.deliver(wakeUpDigest(batch, (taskId) => this.host.describeTask(taskId))).catch(() => {}).then(() => {
+      if (runEnd) this.runEndPending = false;
+      this.host.wakeUpEnded();
+    });
   }
 }
 
@@ -439,7 +454,9 @@ function attentionLine(event: RunEvent, describe: (taskId: string) => string): s
     case 'waiting_approval': return `${task} is waiting for approval${colon}`;
     case 'task_idle': return `${task} has gone quiet${detail ? ` (${detail})` : ''}`;
     case 'landing_conflict': return `${task} finished, but its work conflicts and could not land${colon}`;
-    case 'auto_merge_stopped': return `automatic Merge all at the merge gate of ${task} stopped${colon}; the gate waits for the user`;
+    case 'auto_merge_stopped': return event.taskId === undefined
+      ? `automatic Merge all at the end of the run stopped${colon}; the run is handed over to the user to merge`
+      : `automatic Merge all at the merge gate of ${task} stopped${colon}; the gate waits for the user`;
     case 'run_finished': return `the run finished${colon}`;
     case 'task_passed': return `${task} passed`;
     case 'usage_limit': {

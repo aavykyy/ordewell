@@ -411,9 +411,9 @@ export class IsolationRunController {
 
   /**
    * Close the open run. An isolated one hands its integration branch over for
-   * review — unless the user merged everything it landed at merge gates
-   * already, which leaves nothing to hand over, so it is cleared up as a Merge
-   * all would have.
+   * review — unless everything it landed is merged already, at merge gates or
+   * by the run's automatic Merge all, which leaves nothing to hand over, so it
+   * is cleared up as a Merge all would have.
    */
   async close(): Promise<void> {
     const mode = this.mode;
@@ -422,7 +422,7 @@ export class IsolationRunController {
     if (mode !== 'isolated' || !run) return;
     await this.refreshInHead();
     const records = Object.values(run.tasks);
-    if (records.length > 0 && records.every((r) => r.status === 'merged' && r.inHead)) {
+    if (records.some((r) => r.status === 'merged') && handoffOf(run).landed.length === 0) {
       this.tell('info', 'Everything this run landed is merged into your branch already.');
       await this.clearMerged(run);
       return;

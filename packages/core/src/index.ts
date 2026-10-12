@@ -46,7 +46,7 @@ export type { ResearchChat, ResearchTurn, ToolCall, ToolResult } from './service
 export { GeminiService } from './services/GeminiService';
 export { OpenAiService } from './services/OpenAiService';
 export { TaskOrchestrator, TaskControlError } from './services/TaskOrchestrator';
-export type { OrchestratorObserver, TaskAttemptSnapshot, TaskOrchestratorDeps, TaskOrchestratorOptions } from './services/TaskOrchestrator';
+export type { AutoMergeTrigger, OrchestratorObserver, TaskAttemptSnapshot, TaskOrchestratorDeps, TaskOrchestratorOptions } from './services/TaskOrchestrator';
 export { PlanStore } from './services/PlanStore';
 export { Planner } from './services/Planner';
 export type { PlanRequest, ModifyPlanRequest } from './services/Planner';
