@@ -5,7 +5,7 @@ import {
   createTask, opsFlag, inheritedOps, inheritedSkills, skillNames,
 } from '../models/Task';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
-import { validateTaskEdit, checkModelAndModeValidity, lockedTaskRefusal, type EditCatalog, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
+import { validateTaskEdit, plannerAssignmentCheck, lockedTaskRefusal, type EditCatalog, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
 import { resolveDefaultMode } from './ModeResolver';
 
 /**
@@ -546,7 +546,7 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
         const { ids, bad } = resolveDeps(spec.dependencies, i);
         if (bad.length) { errors.push(`${label}: unknown dependencies: ${bad.join(', ')}`); break; }
         const runner = spec.assignedRunner && runners.includes(spec.assignedRunner) ? spec.assignedRunner : runners[0];
-        const validity = checkModelAndModeValidity(runner, spec.assignedModel, spec.taskMode, catalog);
+        const validity = plannerAssignmentCheck(runner, spec.assignedModel, spec.taskMode, catalog);
         if (!validity.ok) { errors.push(`${label}: ${validity.error}`); break; }
         const newId = uuidv4();
         const taskMode = spec.type === 'user' ? spec.taskMode : landingMode(runner, spec.taskMode, catalog) ?? spec.taskMode;
@@ -608,6 +608,8 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
         const spec = op.merged ?? {};
         if (!spec.title) { errors.push(`${label}: merged task needs a title`); break; }
         const runner = spec.assignedRunner && runners.includes(spec.assignedRunner) ? spec.assignedRunner : toMerge[0].assignedRunner;
+        const mergedValidity = plannerAssignmentCheck(runner, spec.assignedModel, spec.taskMode, catalog);
+        if (!mergedValidity.ok) { errors.push(`${label}: ${mergedValidity.error}`); break; }
         const mergedTask = createTask({
           title: spec.title,
           description: spec.description ?? toMerge.map((t) => t.description).filter(Boolean).join('\n\n'),
@@ -670,6 +672,8 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
             deps = prevId ? [prevId] : [];
           }
           const runner = spec.assignedRunner && runners.includes(spec.assignedRunner) ? spec.assignedRunner : target.assignedRunner;
+          const partValidity = plannerAssignmentCheck(runner, spec.assignedModel, spec.taskMode, catalog);
+          if (!partValidity.ok) { errors.push(`${label}: split part ${p + 1}: ${partValidity.error}`); buildError = true; break; }
           const nt = createTask({
             title: spec.title,
             description: spec.description ?? spec.title,

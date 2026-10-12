@@ -1,7 +1,7 @@
 import { Task, RunnerId, DiscoveredModel, TaskModelAssignment, TaskMode } from '../models/Task';
 import { canSetDependencies } from './TaskOps';
 import { effectiveAllowlist } from './ModelAllowlistResolver';
-import type { RunnerModeInfo } from './ModeResolver';
+import { resolveDefaultMode, type RunnerModeInfo } from './ModeResolver';
 import { NOT_STARTED } from '../taskRow/status';
 
 /**
@@ -103,6 +103,36 @@ export function checkModelAndModeValidity(
 }
 
 /**
+ * Guarded is a ceiling on the modes the planner hands a runner (ADR-0001): a
+ * mode only Full allows is refused, naming the one to use instead. Full is no
+ * floor — a safer mode the planner picks stands. A submitted plan gets the same
+ * ceiling from `resolveTaskMode`, which swaps such a mode; an edit is refused
+ * instead, as an invalid one is, so the planner hears why.
+ */
+function levelCeilingCheck(runner: RunnerId, taskMode: TaskMode | undefined, catalog: EditCatalog | undefined): TaskEditCheck {
+  if (taskMode === undefined || catalog?.autonomousDefault !== false) return { ok: true };
+  const modes = catalog.runnerModes[runner];
+  const mode = modes?.find((m) => m.id === taskMode);
+  if (!mode?.autonomous || mode.safe) return { ok: true };
+  const instead = resolveDefaultMode(modes, false);
+  return {
+    ok: false,
+    error: `Mode "${taskMode}" is only allowed in Full, and the user chose Guarded — leave the mode unset for ${runner}'s Guarded mode${instead ? ` (${instead})` : ''}, or pick another mode Guarded allows`,
+  };
+}
+
+/** What a planner may assign a task: a model and mode its runner offers, under the user's level. The user's own edit skips the level. */
+export function plannerAssignmentCheck(
+  runner: RunnerId,
+  assignedModel: TaskModelAssignment | undefined,
+  taskMode: TaskMode | undefined,
+  catalog: EditCatalog | undefined,
+): TaskEditCheck {
+  const validity = checkModelAndModeValidity(runner, assignedModel, taskMode, catalog);
+  return validity.ok ? levelCeilingCheck(runner, taskMode, catalog) : validity;
+}
+
+/**
  * Coherence between `type` and the fields that only make sense for one side
  * of it. Deriving user steps from an AI prompt (or vice versa) would fabricate
  * instructions nobody wrote (ADR-0001: the plan is the source of truth), so a
@@ -179,7 +209,9 @@ export function validateTaskEdit(
   if (ops) return ops;
 
   const runner = changes.assignedRunner ?? target.assignedRunner;
-  const validity = checkModelAndModeValidity(runner, changes.assignedModel, changes.taskMode, catalog);
+  const validity = actor === 'planner'
+    ? plannerAssignmentCheck(runner, changes.assignedModel, changes.taskMode, catalog)
+    : checkModelAndModeValidity(runner, changes.assignedModel, changes.taskMode, catalog);
   if (!validity.ok) return validity;
 
   return coherence ?? { ok: true };

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { applyTaskOps, parseTaskOpsJson, textHasTaskOps, canMergeTasks, canSplitTask } from '../TaskOps';
+import { validateTaskEdit } from '../TaskEditValidator';
 import { PlanParseError } from '../JsonExtractor';
 import { createTask, type Task } from '../../models/Task';
 
@@ -899,6 +900,48 @@ describe('applyTaskOps — the mode a planner edit leaves unset', () => {
     const res = applyTaskOps(plan, [{ op: 'update', taskId: 'a', changes: { assignedRunner: 'opencode' } }], runners, catalog(true));
     expect(res.ok).toBe(true);
     expect(res.tasks[0]).toMatchObject({ assignedRunner: 'opencode', taskMode: 'build' });
+  });
+
+  // Guarded is a ceiling on what the planner hands a runner; Full is not a floor.
+  describe('under Guarded, a mode only Full allows', () => {
+    const refused = (res: ReturnType<typeof applyTaskOps>) => {
+      expect(res.ok).toBe(false);
+      expect(res.errors[0]).toMatch(/"bypassPermissions" is only allowed in Full, and the user chose Guarded/);
+      expect(res.errors[0]).toContain('auto');
+    };
+
+    it('is refused on an added task', () => {
+      refused(applyTaskOps(samplePlan(), [{ op: 'add', task: { title: 'Add a cache', prompt: 'p', assignedRunner: 'claude-code', taskMode: 'bypassPermissions' } }], runners, catalog(false)));
+    });
+
+    it('is refused on an update', () => {
+      refused(applyTaskOps(samplePlan(), [{ op: 'update', taskId: 'a', changes: { taskMode: 'bypassPermissions' } }], runners, catalog(false)));
+    });
+
+    it('is refused on a merged task and a split part', () => {
+      refused(applyTaskOps(samplePlan(), [{ op: 'merge', taskIds: ['a', 'b'], merged: { title: 'Setup + Build', taskMode: 'bypassPermissions' } }], runners, catalog(false)));
+      refused(applyTaskOps(samplePlan(), [{ op: 'split', taskId: 'b', parts: [{ title: 'Build core', taskMode: 'bypassPermissions' }, { title: 'Build UI' }] }], runners, catalog(false)));
+    });
+
+    it('allows a mode both levels offer, and the safe one', () => {
+      expect(applyTaskOps(samplePlan(), [{ op: 'update', taskId: 'a', changes: { taskMode: 'acceptEdits' } }], runners, catalog(false)).ok).toBe(true);
+      expect(applyTaskOps(samplePlan(), [{ op: 'update', taskId: 'a', changes: { taskMode: 'auto' } }], runners, catalog(false)).ok).toBe(true);
+    });
+
+    it('allows it under Full, and a safer mode under Full too', () => {
+      expect(applyTaskOps(samplePlan(), [{ op: 'update', taskId: 'a', changes: { taskMode: 'bypassPermissions' } }], runners, catalog(true)).ok).toBe(true);
+      expect(applyTaskOps(samplePlan(), [{ op: 'update', taskId: 'a', changes: { taskMode: 'auto' } }], runners, catalog(true)).ok).toBe(true);
+    });
+
+    it('leaves the user\'s own edit alone', () => {
+      expect(validateTaskEdit('direct', samplePlan(), 'a', { taskMode: 'bypassPermissions' }, catalog(false))).toEqual({ ok: true });
+    });
+  });
+
+  it('refuses a mode the runner does not have on a merged task, as on an update', () => {
+    const res = applyTaskOps(samplePlan(), [{ op: 'merge', taskIds: ['a', 'b'], merged: { title: 'Setup + Build', taskMode: 'yolo' } }], runners, catalog(true));
+    expect(res.ok).toBe(false);
+    expect(res.errors[0]).toContain('yolo');
   });
 
   it('keeps the mode of a task moved to a runner that offers it', () => {

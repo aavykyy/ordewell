@@ -68,6 +68,11 @@ Concretely:
 - **`plan` mode stays valid but is steered away from** for build-style tasks.
   The parser never rewrites it; the guide simply does not point the planner at
   it. Manual per-task override in the UI wins at every level.
+- **The planner's edits follow the same rules** as a submitted plan. A task it
+  adds or moves to another runner without a mode it offers lands on that
+  runner's mode for the level. Under Guarded, a mode only Full allows is refused
+  with the one to use instead — refused rather than swapped, as an invalid mode
+  in an edit is. The user's own edits are not checked against the level.
 
 ## Alternatives considered
 
@@ -133,3 +138,4 @@ Concretely:
   runner, where a classifier does not. `auto` stays an alias of Guarded.
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
 - 2026-10-12 — the level is saved in the global `settings.json` ([ADR-0030](0030-global-run-settings.md)).
+- 2026-10-12 — the planner's edits get the level's mode when they name none, and Guarded refuses a mode only Full allows.
