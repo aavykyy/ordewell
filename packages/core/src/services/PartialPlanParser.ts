@@ -6,8 +6,8 @@ export interface PartialPlanTask {
   status: 'streaming' | 'complete';
   /** Assigned model label, once it has streamed in — for the live row's chip. */
   model?: string;
-  /** Task mode ("build"|"plan"), once it has streamed in — for the live row's chip. */
-  mode?: string;
+  /** Set once `"readOnly": true` has streamed in — for the live row's chip. */
+  readOnly?: true;
 }
 
 /**
@@ -67,12 +67,12 @@ function findTasksArrayStart(text: string): number {
 /** Build a live row from a (possibly unterminated) task-object fragment. */
 function rowFromObject(objText: string, status: PartialPlanTask['status']): PartialPlanTask {
   const model = stringField(objText, 'modelLabel');
-  const mode = stringField(objText, 'taskMode');
+  const readOnly = /"readOnly"\s*:\s*true/.test(objText);
   return {
     title: titleFromObject(objText),
     status,
     ...(model ? { model } : {}),
-    ...(mode ? { mode } : {}),
+    ...(readOnly ? { readOnly: true as const } : {}),
   };
 }
 

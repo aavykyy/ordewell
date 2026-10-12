@@ -1420,20 +1420,21 @@ keep the two surfaces from diverging.
 
 ## Modes
 
-**ModeResolver** — the deep module owning ADR-0001 mode resolution: the
-planner-nudged, parser-validated policy that picks each AI task's runner mode
-(`build`/`acceptEdits`/`plan`/…) from manifest `autonomous`/`safe` tags and the
-global autonomy toggle — two named levels, **Full** (the `autonomous`-tagged
-mode, today's ON) and **Guarded** (the `safe`-tagged mode, today's OFF), saved
+**ModeResolver** — the deep module owning mode resolution (ADR-0001,
+ADR-0031): the policy that gives each AI task the planner writes its runner
+mode (`build`/`acceptEdits`/`plan`/…), decided when the task is planned, from
+manifest `autonomous`/`safe`/`readOnly` tags, the task's *read-only* answer and
+the global autonomy toggle — two named levels, **Full** (the
+`autonomous`-tagged mode) and **Guarded** (the `safe`-tagged mode), saved
 machine-wide in `settings.json` (ADR-0030), carried as
 the boolean `autonomousMode` (`autonomousDefault`, TUI `autonomous`) and named for
 users by `autonomyLevelLabel`; `/auto full|guarded` selects one, with `on`/`off` and `auto` as
-aliases (`parseAutonomyLevel`). Three operations behind one interface:
-`resolveDefaultMode` (tag-based default per toggle), `buildModeGuide` (the
-mode list the planner's prompt shows, DEFAULT-tagged, opposite-toggle modes
-hidden), and `resolveTaskMode` (the parser's validator — fixes invalid or
-toggle-conflicting emissions, never overrides a valid `plan`). The policy is
-planner-nudged, never runtime-overridden; what the plan says is what runs.
+aliases (`parseAutonomyLevel`). Its operations: `resolveDefaultMode` (the
+level's mode for a runner), `readOnlyMode` (the runner's `readOnly`-tagged
+mode, if any) and `plannedMode` (the mode a planned task lands on — the plan
+parser and the planner's edits both call it). The planner never names a mode;
+the user's per-task choice is never checked against the level, and nothing is
+rewritten at spawn: what the plan says is what runs.
 *Avoid:* "mode service", "mode manager", "auto mode" for either level, and "Full auto" /
 "Auto" (the levels' old names) — Claude Code has a real `auto` permission mode
 (its classifier), which is Ordewell's *Guarded* level on that runner, not a
@@ -1441,7 +1442,17 @@ synonym for Full — and do not confuse with
 **ModelResolver** (model discovery/routing). The names differ by one letter on
 purpose: ModeResolver resolves *runner modes*; ModelResolver resolves *models*.
 *Avoid:* "the parser" for this policy — it lives in `ModeResolver.ts`, not the
-plan parser, even though `resolveTaskMode` is the parser's validator.
+plan parser, even though the parser calls `plannedMode`.
+
+**Read-only task** — an AI task the planner marks `readOnly: true` because it
+must not change any file: a review, an audit, an analysis whose result is a
+report (ADR-0031). It runs in its runner's `readOnly`-tagged mode (`plan` on
+every built-in runner), at either level, and stays read-only through a
+planner's move or split unless the planner lifts it with `readOnly: false`.
+The planner's only say over a task's mode; a runner without a read-only mode
+cannot take one. It is a request, not a task field: the task stores the mode.
+*Avoid:* "plan mode task" (`plan` is one runner's mode id, not the concept),
+"analysis task".
 
 ---
 

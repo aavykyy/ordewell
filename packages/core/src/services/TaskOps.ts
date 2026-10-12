@@ -5,22 +5,25 @@ import {
   createTask, opsFlag, inheritedOps, inheritedSkills, skillNames,
 } from '../models/Task';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
-import { validateTaskEdit, plannerAssignmentCheck, lockedTaskRefusal, type EditCatalog, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
-import { resolveDefaultMode } from './ModeResolver';
+import { validateTaskEdit, checkModelAndModeValidity, lockedTaskRefusal, type EditCatalog, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
+import { plannedMode, readOnlyMode, type PlannedMode } from './ModeResolver';
 
 /**
  * Targeted task edits emitted by the planner conversation (the 'task_ops'
  * ConversationTurn). Task references accept a task id, a "#<order>" ref, or a
  * bare order number — cheap models rarely echo UUIDs correctly.
  */
+/** A task as the planner writes it: its fields, less the mode, plus whether it must not change files (ADR-0031). */
+export type PlannerTaskSpec = Partial<Task> & { readOnly?: boolean };
+
 export type TaskOp =
-  | { op: 'update'; taskId: string; changes: Partial<Task> }
-  | { op: 'add'; task: Partial<Task>; handle?: string }
+  | { op: 'update'; taskId: string; changes: PlannerTaskSpec }
+  | { op: 'add'; task: PlannerTaskSpec; handle?: string }
   | { op: 'remove'; taskId: string }
   | { op: 'reorder'; taskIds: string[] }
-  | { op: 'merge'; taskIds: string[]; merged: Partial<Task>; handle?: string }
-  | { op: 'split'; taskId: string; parts: Partial<Task>[]; handle?: string }
-  | { op: 'rearm'; taskId: string; changes?: Partial<Task> };
+  | { op: 'merge'; taskIds: string[]; merged: PlannerTaskSpec; handle?: string }
+  | { op: 'split'; taskId: string; parts: PlannerTaskSpec[]; handle?: string }
+  | { op: 'rearm'; taskId: string; changes?: PlannerTaskSpec };
 
 /** Fields the planner may change on an existing task. Everything else (id, status, verdict…) is system-owned. */
 export const UPDATABLE_FIELDS: (keyof Task)[] = [
@@ -34,14 +37,14 @@ export const UPDATABLE_FIELDS: (keyof Task)[] = [
  * running execution changes.
  */
 export function taskOpsProtocol(executionNote = '', tools = false): string[] {
-  const updateChanges = UPDATABLE_FIELDS
+  const updateChanges = [...UPDATABLE_FIELDS.filter((f) => f !== 'taskMode'), 'readOnly']
     .map((f) => (f === 'dependencies' ? '"dependencies"?:["<id or #order>"]' : `"${f}"?`))
     .join(',');
   return [
     tools ? '- To modify specific tasks, call edit_plan, never a JSON reply. Its argument is:' : '- To modify specific tasks, reply with ONLY this JSON object:',
     tools ? '  {"ops": [' : '  {"taskOps": [',
     `    {"op":"update","taskId":"<id or #order>","changes":{${updateChanges}}},`,
-    '    {"op":"add","task":{"title","description","prompt","dependencies":["<id or #order>"],"assignedRunner"?,"assignedModel"?,"ops"?},"handle"?:"<name>"},',
+    '    {"op":"add","task":{"title","description","prompt","dependencies":["<id or #order>"],"assignedRunner"?,"assignedModel"?,"readOnly"?,"ops"?},"handle"?:"<name>"},',
     '    {"op":"remove","taskId":"<id or #order>"},',
     '    {"op":"reorder","taskIds":["<id or #order>", "... every task exactly once"]},   // only to re-prioritise INDEPENDENT tasks',
     '    {"op":"merge","taskIds":["<id or #order>", "..."],"merged":{"title","description","prompt"?,"assignedRunner"?,"assignedModel"?,...},"handle"?:"<name>"},',
@@ -52,6 +55,7 @@ export function taskOpsProtocol(executionNote = '', tools = false): string[] {
     'Every "<id or #order>" ref in a batch resolves against the plan shown above, before any op in the batch runs — an earlier remove/merge/split never shifts what a later "#N" means.',
     'Give "add", "merge", or "split" a "handle" (any name you choose, unused elsewhere in this batch) to let a LATER op in the same batch reference the task it produces — for "split", the handle names its last part. A handle used before its defining op is rejected.',
     `When creating or changing tasks, set "assignedRunner" and "assignedModel" ({"modelId","modelLabel","thinkingEffort"?}) using only the runners and models ${tools ? 'list_runners and list_models return' : 'listed in <available_models>'}.`,
+    'Set "readOnly": true on a task that must not change any file, and "readOnly": false to lift it; you never set "taskMode". A task you move, split or edit keeps being read-only or not unless you say otherwise.',
     'Keep dependencies consistent: no cycles, no references to removed tasks, and never touch running or completed tasks — "rearm" is the one exception, below.',
     ...(tools ? ['edit_plan checks the batch when you call it and answers with what it will change, or with the error to fix — call it again in the same reply. The edit is applied when your reply ends; edits you make in one reply join one batch.'] : []),
     'Just declare the dependencies you want — display order is repaired for you afterwards, so a rewire or a newly added prerequisite never needs a "reorder" op. Only a task that is running or completed cannot be shifted, so an edit that would need one to move is rejected.' + executionNote,
@@ -417,19 +421,32 @@ export function canSplitTask(tasks: readonly Task[], taskId: string): { ok: bool
 }
 
 
+/** The planner names no mode (ADR-0031): it says read-only, and the mode follows. */
+const MODE_NOT_THE_PLANNERS = '"taskMode" is the user\'s to choose — set "readOnly": true on a task that must not change files, and leave it out otherwise';
+
+function askedReadOnly(spec: PlannerTaskSpec | undefined): boolean | undefined {
+  return typeof spec?.readOnly === 'boolean' ? spec.readOnly : undefined;
+}
+
+function isReadOnly(task: Task, catalog: EditCatalog | undefined): boolean {
+  return task.taskMode !== undefined && task.taskMode === readOnlyMode(catalog?.runnerModes[task.assignedRunner]);
+}
+
 /**
- * The mode a planner edit lands a task on: the one it names when its runner
- * offers it, else that runner's mode under the user's level — what a whole
- * plan's missing mode resolves to (ADR-0001). Left to `createTask`, it was the
- * generic `build`, which Claude Code runs as acceptEdits whatever the level;
- * and a task moved between runners kept a mode its new runner does not have.
- * Undefined with no catalog to read the runner's modes from.
+ * The mode a planner edit lands a task on (ADR-0031). A task stays read-only
+ * or not unless the planner says otherwise, so a move or split never quietly
+ * gives a read-only task write access. Undefined mode with no catalog to read
+ * the runner's modes from.
  */
-function landingMode(runner: RunnerId, current: string | undefined, catalog: EditCatalog | undefined): string | undefined {
-  const modes = catalog?.runnerModes[runner];
-  if (!modes || modes.length === 0) return undefined;
-  if (current !== undefined && modes.some((m) => m.id === current)) return current;
-  return resolveDefaultMode(modes, catalog?.autonomousDefault ?? true);
+function landingMode(runner: RunnerId, readOnly: boolean | undefined, current: string | undefined, catalog: EditCatalog | undefined): PlannedMode {
+  return plannedMode(runner, catalog?.runnerModes, { readOnly, current }, catalog?.autonomousDefault ?? true);
+}
+
+/** A planner spec as task fields: `readOnly` is a request, not something a task stores. */
+function taskFields(spec: PlannerTaskSpec): Partial<Task> {
+  const fields: PlannerTaskSpec = { ...spec };
+  delete fields.readOnly;
+  return fields;
 }
 
 /**
@@ -492,7 +509,7 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
    * is rearm's extra lock check, kept before the field work so its message wins.
    */
   const prepareEdit = (
-    op: { taskId: string; changes?: Partial<Task> },
+    op: { taskId: string; changes?: PlannerTaskSpec },
     opIndex: number,
     label: string,
     audience: TaskEditActor,
@@ -503,6 +520,7 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
     const target = findInTasks(tasks, ref.id);
     if (!target) return { error: `${label}: task "${op.taskId}" no longer exists in this batch (removed, merged, or split by an earlier op)` };
     if (refuseRunning && target.status === 'in_progress') return { error: `${label}: ${lockedTaskRefusal(target, 're-armed')}` };
+    if (op.changes && 'taskMode' in op.changes) return { error: `${label}: ${MODE_NOT_THE_PLANNERS}` };
     const changes = updatableChanges(op.changes);
     if (changes.assignedRunner && !runners.includes(changes.assignedRunner)) {
       return { error: `${label}: runner "${changes.assignedRunner}" is not in this plan's runner set [${runners.join(', ')}]` };
@@ -515,9 +533,13 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
     const check = validateTaskEdit(audience, flattenTasks(tasks), target.id, changesForCheck, catalog);
     if (!check.ok) return { error: `${label}: ${check.error}` };
     for (const field of check.clear ?? []) (changes as Record<string, unknown>)[field] = undefined;
-    if (changes.assignedRunner && changes.assignedRunner !== target.assignedRunner && changes.taskMode === undefined && target.type !== 'user') {
-      const mode = landingMode(changes.assignedRunner, target.taskMode, catalog);
-      if (mode !== undefined && mode !== target.taskMode) changes.taskMode = mode;
+    const readOnly = askedReadOnly(op.changes);
+    const moved = changes.assignedRunner !== undefined && changes.assignedRunner !== target.assignedRunner;
+    const becomesAi = changes.type === 'ai' && target.type === 'user';
+    if ((readOnly !== undefined || moved || becomesAi) && (changes.type ?? target.type) !== 'user') {
+      const mode = landingMode(changes.assignedRunner ?? target.assignedRunner, readOnly ?? isReadOnly(target, catalog), target.taskMode, catalog);
+      if (!mode.ok) return { error: `${label}: ${mode.error}` };
+      if (mode.mode !== undefined && mode.mode !== target.taskMode) changes.taskMode = mode.mode;
     }
     if ('dependencies' in changes) {
       const { ids, bad } = resolveDeps(changes.dependencies, opIndex);
@@ -534,7 +556,12 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
         const prep = prepareEdit(op, i, label, 'planner');
         if ('error' in prep) { errors.push(prep.error); break; }
         const { target, changes, check } = prep;
-        if (Object.keys(changes).length === 0) { errors.push(`${label}: no valid changes provided`); break; }
+        if (Object.keys(changes).length === 0) {
+          const readOnly = askedReadOnly(op.changes);
+          if (readOnly !== undefined) { summary.push(`"${target.title}" is already ${readOnly ? '' : 'not '}read-only`); break; }
+          errors.push(`${label}: no valid changes provided`);
+          break;
+        }
         tasks = updateTaskInPlan(tasks, target.id, changes);
         const clearedNote = check.clear?.length ? `; cleared ${check.clear.join(', ')}` : '';
         summary.push(`Updated "${target.title}" (${Object.keys(changes).join(', ')})${clearedNote}`);
@@ -546,13 +573,15 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
         const { ids, bad } = resolveDeps(spec.dependencies, i);
         if (bad.length) { errors.push(`${label}: unknown dependencies: ${bad.join(', ')}`); break; }
         const runner = spec.assignedRunner && runners.includes(spec.assignedRunner) ? spec.assignedRunner : runners[0];
-        const validity = plannerAssignmentCheck(runner, spec.assignedModel, spec.taskMode, catalog);
+        if ('taskMode' in spec) { errors.push(`${label}: ${MODE_NOT_THE_PLANNERS}`); break; }
+        const validity = checkModelAndModeValidity(runner, spec.assignedModel, undefined, catalog);
         if (!validity.ok) { errors.push(`${label}: ${validity.error}`); break; }
+        const mode = spec.type === 'user' ? undefined : landingMode(runner, askedReadOnly(spec), undefined, catalog);
+        if (mode && !mode.ok) { errors.push(`${label}: ${mode.error}`); break; }
         const newId = uuidv4();
-        const taskMode = spec.type === 'user' ? spec.taskMode : landingMode(runner, spec.taskMode, catalog) ?? spec.taskMode;
         tasks = addTaskToPlan(tasks, {
-          ...spec,
-          ...(taskMode !== undefined ? { taskMode } : {}),
+          ...taskFields(spec),
+          ...(mode?.mode !== undefined ? { taskMode: mode.mode } : {}),
           subtasks: withSkillNames(spec.subtasks),
           id: newId,
           dependencies: ids,
@@ -608,18 +637,24 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
         const spec = op.merged ?? {};
         if (!spec.title) { errors.push(`${label}: merged task needs a title`); break; }
         const runner = spec.assignedRunner && runners.includes(spec.assignedRunner) ? spec.assignedRunner : toMerge[0].assignedRunner;
-        const mergedValidity = plannerAssignmentCheck(runner, spec.assignedModel, spec.taskMode, catalog);
+        if ('taskMode' in spec) { errors.push(`${label}: ${MODE_NOT_THE_PLANNERS}`); break; }
+        const mergedValidity = checkModelAndModeValidity(runner, spec.assignedModel, undefined, catalog);
         if (!mergedValidity.ok) { errors.push(`${label}: ${mergedValidity.error}`); break; }
+        const mergedType = spec.type ?? (toMerge.some((t) => t.type === 'user') ? 'user' : 'ai');
+        // Read-only only when every merged task was: one that writes makes the merged task write.
+        const current = (toMerge.find((t) => !isReadOnly(t, catalog)) ?? toMerge[0]).taskMode;
+        const mergedMode = mergedType === 'user' ? undefined : landingMode(runner, askedReadOnly(spec) ?? toMerge.every((t) => isReadOnly(t, catalog)), current, catalog);
+        if (mergedMode && !mergedMode.ok) { errors.push(`${label}: ${mergedMode.error}`); break; }
         const mergedTask = createTask({
           title: spec.title,
           description: spec.description ?? toMerge.map((t) => t.description).filter(Boolean).join('\n\n'),
           prompt: spec.prompt ?? (toMerge.map((t) => t.prompt).filter(Boolean).join('\n\n---\n\n') || undefined),
-          type: spec.type ?? (toMerge.some((t) => t.type === 'user') ? 'user' : 'ai'),
+          type: mergedType,
           dependencies: ids,
           assignedRunner: runner,
           assignedModel: spec.assignedModel ?? toMerge.find((t) => t.assignedModel)?.assignedModel,
           thinkingEffort: spec.thinkingEffort ?? toMerge.find((t) => t.thinkingEffort)?.thinkingEffort,
-          taskMode: spec.taskMode ?? toMerge[0].taskMode,
+          taskMode: mergedMode?.mode ?? current,
           autonomy: spec.autonomy ?? toMerge.find((t) => t.autonomy)?.autonomy,
           sliceType: spec.sliceType ?? toMerge.find((t) => t.sliceType)?.sliceType,
           ops: inheritedOps(toMerge, spec.ops),
@@ -672,8 +707,11 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
             deps = prevId ? [prevId] : [];
           }
           const runner = spec.assignedRunner && runners.includes(spec.assignedRunner) ? spec.assignedRunner : target.assignedRunner;
-          const partValidity = plannerAssignmentCheck(runner, spec.assignedModel, spec.taskMode, catalog);
+          if ('taskMode' in spec) { errors.push(`${label}: split part ${p + 1}: ${MODE_NOT_THE_PLANNERS}`); buildError = true; break; }
+          const partValidity = checkModelAndModeValidity(runner, spec.assignedModel, undefined, catalog);
           if (!partValidity.ok) { errors.push(`${label}: split part ${p + 1}: ${partValidity.error}`); buildError = true; break; }
+          const partMode = (spec.type ?? target.type) === 'user' ? undefined : landingMode(runner, askedReadOnly(spec) ?? isReadOnly(target, catalog), target.taskMode, catalog);
+          if (partMode && !partMode.ok) { errors.push(`${label}: split part ${p + 1}: ${partMode.error}`); buildError = true; break; }
           const nt = createTask({
             title: spec.title,
             description: spec.description ?? spec.title,
@@ -682,7 +720,7 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
             dependencies: deps,
             assignedRunner: runner,
             assignedModel: spec.assignedModel ?? target.assignedModel,
-            taskMode: spec.taskMode ?? target.taskMode,
+            taskMode: partMode?.mode ?? target.taskMode,
             autonomy: spec.autonomy ?? target.autonomy,
             sliceType: spec.sliceType ?? target.sliceType,
             ops: inheritedOps([target], spec.ops),

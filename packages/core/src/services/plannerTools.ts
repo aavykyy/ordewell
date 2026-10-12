@@ -1,7 +1,7 @@
 import { flattenTasks, type RunnerId, type SkillLoad, type Task, type Verdict } from '../models/Task';
 import type { SkillInfo } from './SkillsService';
 import { modelInvocablePlannerSkills, snapshotSkill } from './skillInvocation';
-import { autonomyLevelLabel, filteredBuildModes, resolveDefaultMode } from './ModeResolver';
+import { autonomyLevelLabel, readOnlyMode } from './ModeResolver';
 import { validatePlanTasks } from './PlanValidator';
 import {
   findTask, fitTail, taskQuerySignature, OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX, OUTPUT_TAIL_MAX_CHARS, TASK_QUERY_TASK_FIELDS, TASK_READ_ANSWER_OR_EDIT,
@@ -141,17 +141,8 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       const catalog = await host.liveCatalog();
       return answer({
         autonomy: autonomyLevelLabel(catalog.autonomousDefault),
-        runners: catalog.runners.map((id) => {
-          const modes = catalog.modes[id] ?? [];
-          // The modes the system prompt has always offered: those the
-          // autonomy level allows, and `plan` for analysis-only work.
-          const offered = [...filteredBuildModes(modes, catalog.autonomousDefault), ...modes.filter((m) => m.id === 'plan')];
-          return {
-            id,
-            defaultMode: resolveDefaultMode(modes, catalog.autonomousDefault) ?? null,
-            modes: offered.map(({ id: modeId, label, description }) => ({ id: modeId, label, description })),
-          };
-        }),
+        // No mode names: the planner says only whether a task is read-only (ADR-0031).
+        runners: catalog.runners.map((id) => ({ id, readOnly: readOnlyMode(catalog.modes[id]) !== undefined })),
       });
     },
 
@@ -181,6 +172,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
         return { isError: true, text: JSON.stringify({ ok: false, errors: skills.errors.map((e) => ({ ...e, field: 'skills' })) }) };
       }
 
+      const warnings = [...(result.warnings ?? []), ...skills.warnings];
       const runners = runnersOf(result.tasks);
       const coerced = coercions(result.tasks, host.coerce(result.tasks, runners));
       if (!host.submitPlan(result.tasks, runners)) {
@@ -190,7 +182,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
         ok: true,
         tasks: result.tasks.length,
         coerced,
-        ...(skills.warnings.length > 0 ? { warnings: skills.warnings } : {}),
+        ...(warnings.length > 0 ? { warnings } : {}),
         next: 'The plan is committed when this reply ends. Tell the user briefly what you submitted; do not repeat the plan as JSON.',
       });
     },
@@ -319,8 +311,6 @@ function taskDetail(plan: readonly Task[], ref: string, fields: readonly TaskQue
 function catalogDetail(catalog: TaskQueryCatalog) {
   return {
     runners: catalog.runners.map((id) => {
-      const modes = catalog.modes[id] ?? [];
-      const defaultMode = resolveDefaultMode(modes, catalog.autonomousDefault);
       return {
         id,
         models: (catalog.models[id] ?? []).map((m) => ({
@@ -328,7 +318,7 @@ function catalogDetail(catalog: TaskQueryCatalog) {
           modelLabel: m.modelLabel,
           variants: (m.variants ?? []).map((v) => ({ id: v.id, label: v.label })),
         })),
-        modes: modes.map((m) => ({ id: m.id, label: m.label, description: m.description, default: m.id === defaultMode })),
+        readOnly: readOnlyMode(catalog.modes[id]) !== undefined,
       };
     }),
   };

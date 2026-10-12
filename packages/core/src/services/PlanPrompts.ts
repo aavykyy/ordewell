@@ -1,6 +1,6 @@
 import { DiscoveredModel, RunnerId, plannerTaskView, type Task } from '../models/Task';
 import type { LegacyPlanState } from '../models/Task';
-import { buildModeGuide, filteredBuildModes, type RunnerModeInfo } from './ModeResolver';
+import { readOnlyRunners, type RunnerModeInfo } from './ModeResolver';
 import { DEFAULT_PLANNER_MODES, type IsolatedExecution, type PlannerModes } from './plannerModes';
 import { TASK_QUERY_PROTOCOL, TASK_READ_TOOLS_PROTOCOL } from './TaskQuery';
 import { SELF_REPO } from './isolationRecord';
@@ -52,27 +52,19 @@ export function buildSubagentSystemPrompt(): string {
   ].join('\n');
 }
 
-function buildModeGuideForRunners(runners: RunnerId[], _autonomousDefault: boolean): string {
-  const lines = ['Assign a "taskMode" to each AI task based on the runner:'];
-  for (const r of runners) {
-    if (r === 'claude-code') {
-      lines.push('- For claude-code: "acceptEdits" (edit automatically, recommended), "auto" (a classifier approves or blocks each action), "default" (ask before edits), "plan" (read-only analysis), "bypassPermissions" (skip all prompts, CI only).');
-    } else if (r === 'opencode') {
-      lines.push('- For opencode: "build" (full access agent), "plan" (read-only analysis).');
-    } else {
-      lines.push(`- For ${r}: use the modes from the runner's manifest.`);
-    }
-  }
-  lines.push('Use the recommended mode for implementation. Use "plan" for analysis-only requests.');
-  return lines.join('\n');
-}
-
-function buildModeExamplesForRunners(runners: RunnerId[]): string {
-  return runners.map(r => {
-    if (r === 'claude-code') return 'claude-code: acceptEdits|auto|default|plan|bypassPermissions';
-    if (r === 'opencode') return 'opencode: build|plan';
-    return `${r}: default|plan`;
-  }).join(', ');
+/**
+ * The planner's whole say over a task's mode (ADR-0031). Mode names are
+ * runner-specific and were what it got wrong, so it sees none of them.
+ */
+function readOnlyGuide(runnerModes: Record<RunnerId, RunnerModeInfo[]> | undefined, tools: boolean): string {
+  const able = runnerModes ? readOnlyRunners(runnerModes) : [];
+  return [
+    'Set "readOnly": true on an AI task that must not change any file: a review, an audit, an analysis whose result is a report. Leave it out on every other task.',
+    'You never choose a runner mode. Each task runs in its runner\'s mode for the user\'s autonomy level (Full or Guarded), or in the runner\'s read-only mode when "readOnly" is true.',
+    ...(tools
+      ? ['A read-only task must go to a runner list_runners marks "readOnly": true.']
+      : runnerModes ? [able.length > 0 ? `Runners with a read-only mode: ${able.join(', ')}.` : 'No runner here has a read-only mode, so do not set "readOnly".'] : []),
+  ].join('\n');
 }
 
 /**
@@ -238,20 +230,10 @@ export function buildConversationSystemPrompt(
   modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>>,
   runners: RunnerId[],
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-  autonomousDefault = true,
   variant: ConversationVariant = {},
 ): string {
   const modelsJson = modelsJsonFor(modelsByRunner, runners);
-  const modeGuide = runnerModes ? buildModeGuide(runnerModes, autonomousDefault) : buildModeGuideForRunners(runners, autonomousDefault);
-
-  const modeExamples = runnerModes
-    ? Object.entries(runnerModes).map(([r, ms]) => {
-        const filtered = filteredBuildModes(ms, autonomousDefault);
-        return `${r}: ${filtered.map(m => m.id).join('|')}${ms.some(m => m.id === 'plan') ? '|plan' : ''}`;
-      }).join(', ')
-    : buildModeExamplesForRunners(runners);
-
-  return buildConversationBody(goal, context, modelsJson, runners, modeGuide, modeExamples, variant);
+  return buildConversationBody(goal, context, modelsJson, runners, readOnlyGuide(runnerModes, variant.harness ?? false), variant);
 }
 
 /**
@@ -262,9 +244,9 @@ export function buildConversationSystemPrompt(
 const PLANNER_TOOLS_CATALOG = [
   'RUNNERS, MODELS AND MODES:',
   'Which runners, models and modes you may assign can change while you plan: the user may enable a runner or edit the model allowlist at any time. Read them just before you submit, never from memory:',
-  '1. Call list_runners: the enabled runners, each with its task modes and default mode.',
+  '1. Call list_runners: the enabled runners, and which of them have a read-only mode.',
   '2. Call list_models for each runner you will assign: its allowed models, with their thinking-effort variants.',
-  '3. Call submit_plan with the whole plan. "assignedRunner" must be a runner list_runners returned, "assignedModel.modelId" a modelId list_models returned for that runner, "taskMode" one of that runner\'s modes.',
+  '3. Call submit_plan with the whole plan. "assignedRunner" must be a runner list_runners returned, "assignedModel.modelId" a modelId list_models returned for that runner.',
   '4. If submit_plan returns errors, fix exactly what each one names and call it again in the same reply. If it reports "coerced" changes, tell the user what was changed.',
   '',
 ];
@@ -275,7 +257,6 @@ function buildConversationBody(
   modelsJson: string,
   runners: RunnerId[],
   modeGuide: string,
-  modeExamples: string,
   variant: ConversationVariant,
 ): string {
   const tools = variant.harness ?? false;
@@ -329,7 +310,7 @@ function buildConversationBody(
     '      "userSteps": [{ "order": 1, "instruction": "Step description", "completed": false }],',
     '      "assignedModel": { "modelId": "model-id", "modelLabel": "Model Label", "thinkingEffort": "a variant id from that model\'s variants list — omit if the model has none" },',
     '      "assignedRunner": "' + (tools ? 'a runner id from list_runners' : runners.join('|')) + '",',
-    '      "taskMode": "' + (tools ? 'one of that runner\'s modes from list_runners' : modeExamples) + '",',
+    '      "readOnly": true,',
     '      "autonomy": "AFK|HITL",',
     '      "sliceType": "AFK|HITL",',
     '      "ops": true,',
@@ -387,10 +368,8 @@ function buildConversationBody(
     '- Use weaker/faster models for simple file operations, test generation, config changes, documentation.',
     `- Assign thinkingEffort based on task complexity, choosing ONLY from the assigned model's "variants" list ${tools ? 'from list_models' : 'above'} (e.g. low for simple tasks, high for complex ones). Omit thinkingEffort if the model has no variants.`,
     '',
-    'TASK MODE:',
-    tools
-      ? 'Use each runner\'s default mode from list_runners unless the task needs a different mode it lists. Avoid "plan" (read-only) unless the user asked for analysis only.'
-      : modeGuide,
+    'READ-ONLY TASKS:',
+    modeGuide,
     '',
     ...(tools ? TASK_READ_TOOLS_PROTOCOL : [
       ...TASK_QUERY_PROTOCOL,
@@ -483,7 +462,7 @@ function corePlannerPrompt(isolatedExecution: IsolatedExecution, tools = false):
   '      "userSteps": [{ "order": 1, "instruction": "Step description", "completed": false }],',
   '      "assignedModel": { "modelId": "model-id", "modelLabel": "Model Label", "thinkingEffort": "a variant id from that model\'s variants list — omit if the model has none" },',
   '      "assignedRunner": "{{RUNNER_CHOICES}}",',
-  '      "taskMode": "{{MODE_EXAMPLES}}",',
+  '      "readOnly": true,',
   '      "autonomy": "AFK|HITL",',
   '      "sliceType": "AFK|HITL",',
   '      "ops": true,',
@@ -557,7 +536,7 @@ function getPlanTemplate(isolatedExecution: IsolatedExecution, tools: boolean): 
     '  For Claude Code, use the variant IDs listed for each model in the models list (adaptive, low, medium, high, xhigh, max — per-model).',
     '  Omit thinkingEffort if the model has no variants.',
     '',
-    'TASK MODE:',
+    'READ-ONLY TASKS:',
     '{{MODE_GUIDE}}',
     '',
     'CONTEXT:',
@@ -611,19 +590,11 @@ function buildPlanPromptBase(
   modes: PlannerModes = DEFAULT_PLANNER_MODES,
   tools = false,
 ): string {
-  const { autonomousDefault } = modes;
   const template = getPlanTemplate(modes.isolatedExecution, tools);
   const researchReplacement = includeResearchSection ? RESEARCH_SECTION : '';
   const modelsJson = modelsJsonFor(modelsByRunner, runners);
 
-  const modeGuide = runnerModes ? buildModeGuide(runnerModes, autonomousDefault) : buildModeGuideForRunners(runners, autonomousDefault);
-
-  const modeExamples = runnerModes
-    ? Object.entries(runnerModes).map(([r, ms]) => {
-        const filtered = filteredBuildModes(ms, autonomousDefault);
-        return `${r}: ${filtered.map(m => m.id).join('|')}${ms.some(m => m.id === 'plan') ? '|plan' : ''}`;
-      }).join(', ')
-    : buildModeExamplesForRunners(runners);
+  const modeGuide = readOnlyGuide(runnerModes, tools);
 
   return template
     .replace('{{RESEARCH_SECTION}}', researchReplacement)
@@ -632,7 +603,6 @@ function buildPlanPromptBase(
     .replace('{{RUNNER_CHOICES}}', runners.join('|'))
     .replace('{{RUNNER_INSTRUCTION}}', runnerInstruction(runners))
     .replace('{{MODE_GUIDE}}', modeGuide)
-    .replace('{{MODE_EXAMPLES}}', modeExamples)
     .replace('{{CONTEXT}}', context || '(no additional context)')
     .replace('{{RESEARCH_RESULTS}}', researchResults ? `\n\nRESEARCH FINDINGS:\n${researchResults}` : '')
     + `\n\nUser goal: ${userGoal}`;
@@ -668,7 +638,6 @@ export function buildModifyPlanPrompt(
   modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>>,
   aiflowContext?: string,
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-  autonomousDefault = true,
   tools = false,
 ): string {
   const modelsJson = modelsJsonFor(modelsByRunner, existingPlan.runners);
@@ -677,7 +646,7 @@ export function buildModifyPlanPrompt(
     ? `<aiflow_context>\n${aiflowContext}\n</aiflow_context>\n\n`
     : '';
 
-  const modeGuide = runnerModes ? buildModeGuide(runnerModes, autonomousDefault) : '';
+  const modeGuide = runnerModes ? readOnlyGuide(runnerModes, tools) : '';
 
   return [
     'You are a software project planner. You previously generated a task plan and the user now wants to modify it.',
@@ -697,7 +666,7 @@ export function buildModifyPlanPrompt(
       : 'Return the COMPLETE modified plan as a JSON object with a single "tasks" array.',
     '',
     'RULES:',
-    '- For each task, preserve these exact fields: id, order, title, description, type, status, dependencies, prompt, userSteps, subtasks, assignedModel, thinkingEffort, taskMode.',
+    '- For each task, preserve these exact fields: id, order, title, description, type, status, dependencies, prompt, userSteps, subtasks, assignedModel, thinkingEffort, readOnly.',
     '- DO NOT modify or delete completed tasks UNLESS the user explicitly asks to redo or replace them. If the user asks to redo a completed task, change its status from "completed" to "pending" and update its properties as requested.',
     '- DO NOT modify or delete tasks with status "in_progress" — they are currently executing.',
     '- DO NOT modify or delete tasks with status "failed" UNLESS the user asks to fix them — then update the prompt and change status from "failed" to "pending".',
@@ -721,10 +690,9 @@ export function modelContextBlock(
   modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>>,
   runners: RunnerId[],
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-  autonomousDefault = true,
 ): string {
   const modelsJson = modelsJsonFor(modelsByRunner, runners);
-  const modeGuide = runnerModes ? buildModeGuide(runnerModes, autonomousDefault) : buildModeGuideForRunners(runners, autonomousDefault);
+  const modeGuide = readOnlyGuide(runnerModes, false);
 
   return [
     'MODEL ASSIGNMENT:',
@@ -738,7 +706,7 @@ export function modelContextBlock(
     '- Use weaker/faster models (Sonnet, DeepSeek V4 Flash) for: simple file operations, test generation, config changes, documentation, straightforward bug fixes.',
     '- Assign thinkingEffort based on task complexity: "low" for simple tasks, "medium" or "high" for moderate/complex tasks.',
     '',
-    'TASK MODE:',
+    'READ-ONLY TASKS:',
     modeGuide,
     '',
   ].join('\n');

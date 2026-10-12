@@ -1,5 +1,6 @@
 import { createAiService, type IAiService } from './AiService';
 import { applyTaskOps, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
+import { carryPlannedModes } from './ModeResolver';
 import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
 import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome } from './plannerTools';
@@ -1369,7 +1370,7 @@ export class Session {
     const runners = this.plan!.runners;
     const before = this.store.planTasks;
     let coerced = coerceAssignments(tasks, this.catalog.allowlist(), runners, this.catalog.models());
-    if (how === 'commit') coerced = keepExecutionState(before, coerced);
+    if (how === 'commit') coerced = keepExecutionState(before, carryPlannedModes(before, coerced, this.catalog.edit(runners)));
     // Tasks an Act supervisor adds are approved to run, ops tasks included (ADR-0029): choosing Act was the consent.
     const bySupervisor = this.supervisorEditing();
     const { tasks: stamped, added } = stampOrigin(before, coerced, bySupervisor);

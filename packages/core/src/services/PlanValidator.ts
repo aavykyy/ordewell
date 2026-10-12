@@ -1,6 +1,6 @@
 import { Task, createTask, opsFlag, skillNames, TaskModelAssignment, RunnerId } from '../models/Task';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, PLAN_ENVELOPE_KEY } from './JsonExtractor';
-import { resolveTaskMode, type RunnerModeInfo } from './ModeResolver';
+import { plannedMode, type RunnerModeInfo } from './ModeResolver';
 
 export function parsePlanJson(
   raw: string,
@@ -73,7 +73,8 @@ export interface PlanTaskError {
   message: string;
 }
 
-export type PlanTasksResult = { ok: true; tasks: Task[] } | { ok: false; errors: PlanTaskError[] };
+/** `warnings` name what was accepted but not used, for a channel that can tell the planner. */
+export type PlanTasksResult = { ok: true; tasks: Task[]; warnings?: string[] } | { ok: false; errors: PlanTaskError[] };
 
 /**
  * Every check a plan's tasks must pass, on an already-parsed `{ tasks }`
@@ -98,6 +99,7 @@ export function validatePlanTasks(
   const tasks = rawTasks.map((t) => parseTask(asRecord(t), runners, runnerModes, autonomousDefault));
 
   const errors = verticalSliceErrors(tasks);
+  errors.push(...modeErrors(tasks));
   for (const t of tasks) {
     if (!runners.includes(t.assignedRunner)) {
       errors.push({
@@ -108,7 +110,16 @@ export function validatePlanTasks(
     }
   }
 
-  return errors.length > 0 ? { ok: false, errors } : { ok: true, tasks };
+  if (errors.length > 0) return { ok: false, errors };
+  const ignored = rawTasks.some(namesMode);
+  return ignored
+    ? { ok: true, tasks, warnings: ['"taskMode" is not yours to set and was ignored: each task runs in its runner\'s mode for the user\'s autonomy level, or its read-only mode when you set "readOnly": true.'] }
+    : { ok: true, tasks };
+}
+
+function namesMode(raw: unknown): boolean {
+  if (!isRecord(raw)) return false;
+  return raw.taskMode !== undefined || (Array.isArray(raw.subtasks) && raw.subtasks.some(namesMode));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -155,6 +166,9 @@ type InheritedSlice = { sliceType?: Task['sliceType']; autonomy?: Task['autonomy
  */
 const skillsAsked = new WeakMap<Task, unknown[]>();
 
+/** Why a parsed task has no mode it can run in — a read-only task on a runner without a read-only mode. */
+const modeRefused = new WeakMap<Task, string>();
+
 /** The `skills` a parsed task was submitted with, before normalization; undefined for a task not parsed here. */
 export function requestedSkills(task: Task): readonly unknown[] | undefined {
   return skillsAsked.get(task);
@@ -169,6 +183,8 @@ function parseTask(
 ): Task {
   const assignedRunner = typeof raw.assignedRunner === 'string' ? raw.assignedRunner : (runners[0] ?? 'claude-code');
   const taskType = (raw.type === 'user' ? 'user' : 'ai') as Task['type'];
+  const readOnly = raw.readOnly === true;
+  const mode = plannedMode(assignedRunner, runnerModes, { readOnly }, autonomousDefault);
   const title = String(raw.title ?? '');
   const description = String(raw.description ?? '');
   // Explicit child values always win; inheritance only fills a gap, and only
@@ -212,12 +228,8 @@ function parseTask(
       : undefined,
     assignedRunner,
     thinkingEffort: raw.thinkingEffort ? String(raw.thinkingEffort) : undefined,
-    taskMode: resolveTaskMode(
-      raw.taskMode !== undefined ? String(raw.taskMode) : undefined,
-      assignedRunner,
-      runnerModes,
-      autonomousDefault,
-    ),
+    // A planner's own `taskMode` is never read (ADR-0031).
+    taskMode: (mode.ok ? mode.mode : undefined) ?? (readOnly && !runnerModes ? 'plan' : 'build'),
     autonomy,
     sliceType,
     userStoriesCovered: Array.isArray(raw.userStoriesCovered)
@@ -229,7 +241,18 @@ function parseTask(
     skills: skillNames(raw.skills),
   });
   if (Array.isArray(raw.skills)) skillsAsked.set(task, raw.skills);
+  if (!mode.ok && taskType === 'ai') modeRefused.set(task, mode.error);
   return task;
+}
+
+function modeErrors(tasks: Task[]): PlanTaskError[] {
+  return tasks.flatMap((t) => {
+    const refused = modeRefused.get(t);
+    return [
+      ...(refused ? [{ taskId: t.id, field: 'readOnly', message: `Task "${t.title}": ${refused}` }] : []),
+      ...modeErrors(t.subtasks),
+    ];
+  });
 }
 
 function verticalSliceErrors(tasks: Task[], parentTitle?: string): PlanTaskError[] {

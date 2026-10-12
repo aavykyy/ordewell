@@ -126,7 +126,7 @@ describe('the task-query read channel', () => {
     expect(sent(continueConversation, 1)).toContain('#9: no task matches this reference');
   });
 
-  it('answers a catalog read with labels, variants and mode descriptions — before any task exists', async () => {
+  it('answers a catalog read with labels, variants and read-only support — before any task exists', async () => {
     const continueConversation = vi.fn()
       .mockResolvedValueOnce(read({ catalog: true }))
       .mockResolvedValueOnce({ kind: 'message', text: 'ok', researchLog: [] });
@@ -153,9 +153,9 @@ describe('the task-query read channel', () => {
     expect(catalog).toContain('Claude Opus 4');
     expect(catalog).toContain('high');
     expect(catalog).toContain('max');
-    // Mode descriptions are the half the always-on id-only block leaves out.
-    expect(catalog).toMatch(/acceptEdits — .+:.+/);
-    expect(catalog).toContain('(default)');
+    // The planner sees whether a runner takes read-only tasks, never a mode name (ADR-0031).
+    expect(catalog).toContain('claude-code takes read-only tasks: yes');
+    expect(catalog).not.toContain('acceptEdits');
     expect(catalog).not.toContain('<task_detail>');
   });
 

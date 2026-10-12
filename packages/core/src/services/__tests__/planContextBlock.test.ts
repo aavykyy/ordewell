@@ -57,7 +57,8 @@ describe('planContextBlock task-shape fields', () => {
     expect(aiLine).toContain('type:AI');
     expect(aiLine).toContain('autonomy:AFK');
     expect(aiLine).toContain('slice:AFK');
-    expect(aiLine).toContain('mode:build');
+    expect(aiLine).not.toContain('mode:');
+    expect(aiLine).not.toContain('read-only');
     expect(aiLine).toContain('effort:high');
 
     expect(manLine).toContain('type:MAN');
@@ -67,6 +68,19 @@ describe('planContextBlock task-shape fields', () => {
     // Model/mode fields are meaningless for a MAN task and must not appear.
     expect(manLine).not.toContain('mode:');
     expect(manLine).not.toContain('model:');
+  });
+
+  it('marks a task in its runner\'s read-only mode as read-only', async () => {
+    const continueConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'ok', researchLog: [] });
+    const session = makeSession({ aiService: { continueConversation, hasActiveConversation: () => true } });
+    const plan = planWithMixedTasks();
+    plan.tasks = plan.tasks.map((t) => (t.id === 'ai-1' ? { ...t, taskMode: 'plan' } : t));
+    session.loadPlan(plan, 'Test goal', '/repo');
+
+    await session.continueConversation('go on');
+    const outgoing = continueConversation.mock.calls[0][0] as string;
+
+    expect(outgoing.split('\n').find((l) => l.includes('id=ai-1'))).toContain(' read-only ');
   });
 
   it('shows each task\'s status and its dependencies by #order, not just id', async () => {

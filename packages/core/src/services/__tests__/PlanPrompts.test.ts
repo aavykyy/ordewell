@@ -15,7 +15,7 @@ describe('model-invocable planner skill catalog', () => {
   });
   const skills = [skill('review-plan'), skill('task-only', { appliesTo: 'task' }), skill('user-only', { modelInvocable: false })];
   const prompt = (harness: boolean, plannerSkills = skills) => buildConversationSystemPrompt(
-    'goal', '', {}, ['claude-code'], undefined, true, { harness, skills: plannerSkills },
+    'goal', '', {}, ['claude-code'], undefined, { harness, skills: plannerSkills },
   );
 
   it('advertises only loadable names and descriptions to a harness planner', () => {
@@ -43,7 +43,7 @@ describe('task skill catalog', () => {
     source: 'global', path: `/skills/${name}/SKILL.md`, appliesTo: 'task', modelInvocable: true, userInvocable: true, ...extra,
   });
   const prompt = (plannerSkills: SkillInfo[], plannerTools = true) => buildConversationSystemPrompt(
-    'goal', '', {}, ['claude-code'], undefined, true, { harness: plannerTools, skills: plannerSkills },
+    'goal', '', {}, ['claude-code'], undefined, { harness: plannerTools, skills: plannerSkills },
   );
 
   it('lists model-invocable task skills with a never-blanket-attach instruction', () => {
@@ -91,7 +91,7 @@ describe('the one-shot prompts, per transport', () => {
   const plan = { tasks: [createTask({ id: 'a', title: 'A' })], generatedAt: now, status: 'approved' as const, runners: ['claude-code' as RunnerId], lastUpdated: now };
   const prompts = (tools: boolean) => [
     buildPlanWithResults('goal', '', '', {}, ['claude-code'], undefined, DEFAULT_PLANNER_MODES, tools),
-    buildModifyPlanPrompt(plan, 'restyle', {}, undefined, undefined, true, tools),
+    buildModifyPlanPrompt(plan, 'restyle', {}, undefined, undefined, tools),
   ];
 
   it('ask a coding agent for submit_plan and never for JSON in its reply', () => {
@@ -172,7 +172,6 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
       { 'claude-code': [{ modelId: 'sonnet', modelLabel: 'Sonnet', variants: [{ id: 'high', label: 'High' }] }] },
       ['claude-code'],
       undefined,
-      true,
       { harness: harnessMode },
     );
   }
@@ -238,7 +237,7 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
 const LONE_REPO: RepoGroupLayout = { repos: ['.'], shared: [] };
 
 function conversation(isolatedExecution: false | RepoGroupLayout) {
-  return buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, true, { isolatedExecution });
+  return buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { isolatedExecution });
 }
 
 function oneShot(isolatedExecution: false | RepoGroupLayout) {
@@ -415,7 +414,7 @@ describe('planner rules for change and ops tasks (ADR-0020)', () => {
 
 describe('the outline gate and autorun (ADR-0030)', () => {
   const prompt = (harness: boolean, autorun?: boolean) =>
-    buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, true, { harness, autorun });
+    buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness, autorun });
 
   it.each([true, false])('waits for the outline to be confirmed with autorun off (harness: %s)', (harness) => {
     const p = prompt(harness, false);

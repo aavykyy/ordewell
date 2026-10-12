@@ -118,7 +118,7 @@ describe('the built-in tdd skill', () => {
 
   it('is the only built-in the planner is offered to attach', () => {
     const skills = createSkillsService(workspace).listSkills();
-    const text = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, true, { harness: true, skills });
+    const text = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness: true, skills });
     const catalog = text.slice(text.indexOf('Task skills you may attach:'), text.indexOf('DEPENDENCY & PARALLELISM:'));
 
     expect(catalog).toContain(`- tdd: ${skills.find((skill) => skill.name === 'tdd')?.description}`);

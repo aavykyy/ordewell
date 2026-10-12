@@ -3,7 +3,7 @@ import type { ConversationRequest, ConversationTurn, IAiService } from './AiServ
 import { reEmitPlanPrompt, repairLoop, resubmitEditPrompt, resubmitPlanPrompt, taskOpsRejectedPrompt } from './PlanRepair';
 import { renderTaskQueryAnswer, taskQuerySignature, TASK_QUERY_ANSWER_OR_OPS, TASK_QUERY_REMINDER, TASK_READ_TOOLS_REMINDER, type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog } from './TaskQuery';
 import { taskOpsProtocol, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
-import { resolveDefaultMode } from './ModeResolver';
+import { readOnlyMode, readOnlyRunners } from './ModeResolver';
 import type { PlannerTurnOutcome, SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { TurnStream } from './replyStream';
 import type { ForkedDialogue } from './conversationFork';
@@ -1269,7 +1269,7 @@ export class PlannerConversation {
   private catalogBlock(): string | null {
     if (!this.host.plan()) return null;
     if (this.host.aiService().plannerToolsAttached?.()) return PLANNER_TOOLS_REMINDER;
-    const { runners, models, modes, autonomousDefault } = this.host.catalog();
+    const { runners, models, modes } = this.host.catalog();
 
     const modelLines = runners.map((runner) => {
       const list = models[runner] ?? [];
@@ -1279,21 +1279,13 @@ export class PlannerConversation {
       return `${runner}: ${ids}${remainder > 0 ? ` … +${remainder} more not shown` : ''}`;
     });
 
-    const modeLines = runners.map((runner) => {
-      const list = modes[runner] ?? [];
-      if (list.length === 0) return `${runner}: (no modes declared)`;
-      const defaultId = resolveDefaultMode(list, autonomousDefault);
-      const ids = list.map((m) => `${m.id}${m.id === defaultId ? ' (default)' : ''}`).join(', ');
-      return `${runner}: ${ids}`;
-    });
+    const readOnly = readOnlyRunners(Object.fromEntries(runners.map((r) => [r, modes[r] ?? []])));
 
     return [
       '<available_models>',
       ...modelLines,
       '</available_models>',
-      '<available_task_modes>',
-      ...modeLines,
-      '</available_task_modes>',
+      `<read_only_runners>${readOnly.join(', ') || '(none)'}</read_only_runners>`,
     ].join('\n');
   }
 
@@ -1330,13 +1322,16 @@ export class PlannerConversation {
     const tasks = this.host.tasks();
     if (!this.host.plan() || tasks.length === 0) return null;
     const orderOf = new Map(tasks.map((t) => [t.id, `#${t.order}`]));
+    const { modes } = this.host.catalog();
     return tasks.map((t) => {
       const isMan = t.type === 'user';
       // A MAN task has no model or mode to run under — the field that means
-      // something there is how many steps the human still has to do.
+      // something there is how many steps the human still has to do. The
+      // planner sees no mode name, only read-only (ADR-0031).
+      const readOnly = t.taskMode !== undefined && t.taskMode === readOnlyMode(modes[t.assignedRunner]);
       const runFields = isMan
         ? `steps:${t.userSteps?.length ?? 0}`
-        : `${t.assignedModel ? `model:${t.assignedModel.modelId} ` : ''}mode:${t.taskMode ?? 'build'} effort:${t.thinkingEffort ?? '-'}`;
+        : `${t.assignedModel ? `model:${t.assignedModel.modelId} ` : ''}${readOnly ? 'read-only ' : ''}effort:${t.thinkingEffort ?? '-'}`;
       return `#${t.order} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : t.ops ? 'AI ops' : 'AI'} runner:${t.assignedRunner} ${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:[${t.dependencies.map((d) => orderOf.get(d) ?? d).join(', ')}]${t.skills?.length ? ` skills:[${t.skills.join(', ')}]` : ''}`;
     });
   }

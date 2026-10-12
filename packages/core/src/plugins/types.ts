@@ -86,6 +86,8 @@ export interface RunnerMode {
   autonomous?: boolean;
   /** Marks this mode as the runner's conservative build mode — the resolved default when autonomous mode is OFF. */
   safe?: boolean;
+  /** Marks this mode as the runner's read-only mode — what a task the planner marks read-only runs in (ADR-0031). */
+  readOnly?: boolean;
 }
 
 export interface RunnerEntry {

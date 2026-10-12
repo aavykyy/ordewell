@@ -67,7 +67,7 @@ const planTask = z.looseObject({
   userSteps: z.array(z.looseObject({ order: z.number().optional(), instruction: z.string() })).optional(),
   assignedRunner: z.string().optional(),
   assignedModel: modelAssignment.optional(),
-  taskMode: z.string().optional(),
+  readOnly: z.boolean().optional().describe('True for a task that must not change any file. Ordewell picks every mode; there is no taskMode.'),
   autonomy: z.enum(['AFK', 'HITL']).optional(),
   sliceType: z.enum(['AFK', 'HITL']).optional(),
   ops: z.boolean().optional(),
@@ -304,7 +304,7 @@ export const PLANNER_EXECUTION_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
 ];
 
 export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
-  tool('list_runners', 'List the runners enabled right now, each with its modes and default mode. Call it just before submit_plan.',
+  tool('list_runners', 'List the runners enabled right now, and whether each takes a read-only task. Call it just before submit_plan.',
     listRunnersInput, (h) => h.listRunners?.bind(h), PLANNER_READ_ONLY),
   tool('list_models', 'List the models a runner may use right now, with labels and thinking-effort variants.',
     listModelsInput, (h) => h.listModels?.bind(h), PLANNER_READ_ONLY),
