@@ -35,6 +35,7 @@ function makeDeps(overrides: Partial<SlashDeps> = {}): SlashDeps {
     recallPlannerModel: () => ({ model: '', effort: '', source: 'none' }),
     applyPlannerChoice: async () => {},
     runSettings: { get: () => ({ ...RUN_SETTINGS_DEFAULTS }), change: () => {} },
+    maxParallel: () => 5,
     saveAutonomy: () => {},
     log: () => {},
     ...overrides,

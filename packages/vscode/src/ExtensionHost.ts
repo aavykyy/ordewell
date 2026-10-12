@@ -241,6 +241,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       recordPlannerModel: (model, effort) => services.plannerModelMemory.remember(services.config.aiProvider, model, effort),
       recallPlannerModel: (provider, harnessModels, vendorOptions) => recallPlannerModel(services.plannerModelMemory, provider, harnessModels, vendorOptions),
       applyPlannerChoice: (provider, modelId, effort) => planner.applyChoice(provider, modelId, effort),
+      maxParallel: () => services.config.maxParallelSessions,
       saveAutonomy: (enabled) => {
         services.settingsService.setAutonomousMode(enabled);
         sendRunSettings();

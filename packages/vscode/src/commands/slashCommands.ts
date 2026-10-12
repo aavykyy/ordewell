@@ -22,6 +22,7 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   { label: '/compact', detail: 'Condense this conversation into a summary; the last two exchanges and all tasks are kept', insertText: '/compact' },
   { label: '/allowlist', detail: 'Restrict which models the planner may auto-assign per runner', insertText: '/allowlist' },
   { label: '/refresh', detail: 'Re-discover runner models (e.g. after enabling an opencode backend)', insertText: '/refresh' },
+  { label: '/settings', detail: 'Run settings: autonomy, supervisor, merging, autorun, parallel tasks', insertText: '/settings' },
   { label: '/auto', detail: 'Set the autonomy level for new plans: Full or Guarded', insertText: '/auto' },
   { label: '/supervisor', detail: 'Whether the planner watches or acts on your runs: off, watch, act · retries <n> · reads <n>', insertText: '/supervisor ' },
   { label: '/automerge', detail: 'Merge into your branch by itself at merge gates and at the end of a run: on or off', insertText: '/automerge ' },

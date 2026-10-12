@@ -2,13 +2,14 @@ import * as vscode from 'vscode';
 import {
   enabledRunners, listSessions, loadSession, knownModelId, runnerForProvider, getProviderMeta,
   ORCHESTRATOR_SHORTCUTS, parseAutonomyLevel,
-  ACT_RISK, AUTORUN_RISK, automergeSummary, autorunSummary, parseCount, parseSwitch, supervisorSummary, type GlobalRunSettings,
+  automergeSummary, autorunSummary, parseCount, parseSwitch, supervisorSummary, type GlobalRunSettings,
 } from '@ordewell/core';
 import type { AiProvider, IConfig, RunnerRegistry, ModelResolver, SettingsService, RunnerModeInfo, DiscoveredModel, PlannerModelRecall } from '@ordewell/core';
 import type { ApiProvider } from '../adapters/SecretStore';
 import type { ChatViewProvider, PlannerBackend } from '../providers/ChatViewProvider';
 import type { VendorModelOption } from '../plan/PlannerModelSwitch';
 import { configureModelAllowlist } from './configureModelAllowlist';
+import { runSettingsWizard, confirmRisks } from './settingsWizard';
 import { SLASH_COMMAND_NAMES, slashHelp } from './slashCommands';
 import { resolveAutonomousQuickPickItems, applyAutonomousChoice } from '../SlashAutonomous';
 import { runPlannerWizard } from './plannerWizard';
@@ -47,6 +48,8 @@ export interface SlashDeps {
   saveAutonomy(enabled: boolean): void;
   /** The user's run settings (ADR-0030): `change` saves them and applies them at once to this window's run. */
   runSettings: { get(): GlobalRunSettings; change(changes: Partial<GlobalRunSettings>): void };
+  /** How many AI tasks may run at once (`ordewell.maxParallelSessions`). */
+  maxParallel(): number;
   log(msg: string): void;
 }
 
@@ -329,6 +332,17 @@ export async function handleSlashCommand(text: string, deps: SlashDeps): Promise
     vscode.window.showInformationMessage(applyAutonomousChoice(picked.value, runners, modesByRunner));
     return;
   }
+  if (cmd === '/settings') {
+    await runSettingsWizard({
+      autonomous: deps.config.autonomousMode,
+      run: deps.runSettings.get(),
+      maxParallel: deps.maxParallel(),
+      saveAutonomy: (enabled) => deps.saveAutonomy(enabled),
+      changeRunSettings: (changes) => deps.runSettings.change(changes),
+      setMaxParallel: (n) => deps.updateConfig('maxParallelSessions', n),
+    });
+    return;
+  }
   if (cmd === '/supervisor' || cmd === '/automerge' || cmd === '/autorun') {
     await runSettingsCommand(cmd, args, deps);
     return;
@@ -356,8 +370,7 @@ async function runSettingsCommand(cmd: '/supervisor' | '/automerge' | '/autorun'
     vscode.window.showWarningMessage(RUN_SETTINGS_USAGE[cmd]);
     return;
   }
-  if (changes.supervisorLevel === 'act' && !(await confirmed('Let the supervisor act?', `At Act the supervisor runs, stops and retries tasks, edits the plan and merges, without asking you. ${ACT_RISK}`, 'Let it act'))) return;
-  if (changes.autorun === true && !(await confirmed('Start plans without review?', `Each plan the planner submits starts at once, as if you had pressed Execute. ${AUTORUN_RISK}`, 'Turn autorun on'))) return;
+  if (!(await confirmRisks(changes))) return;
   deps.runSettings.change(changes);
 }
 
@@ -371,8 +384,4 @@ function runSettingsChange(cmd: '/supervisor' | '/automerge' | '/autorun', arg: 
   const enabled = parseSwitch(arg);
   if (enabled === null) return null;
   return cmd === '/automerge' ? { mergeAtGatesAutomatically: enabled } : { autorun: enabled };
-}
-
-async function confirmed(title: string, detail: string, confirm: string): Promise<boolean> {
-  return (await vscode.window.showWarningMessage(title, { modal: true, detail }, confirm)) === confirm;
 }

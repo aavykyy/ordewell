@@ -131,17 +131,17 @@ describe('/planner wizard: leaving', () => {
     qp.__accept(1);
     qp = await step();
     expect(qp.step).toBe(3);
-    qp.__triggerBack();
+    qp.__back();
 
     qp = await step();
     expect(qp.step).toBe(2);
     expect((qp.activeItems[0] as { label: string }).label).toBe('Claude Opus 5.5');
-    qp.__triggerBack();
+    qp.__back();
 
     qp = await step();
     expect(qp.step).toBe(1);
     expect(qp.buttons).toHaveLength(0);
-    qp.__hide();
+    qp.__escape();
     await done;
 
     expect(deps.applyChoice).not.toHaveBeenCalled();
@@ -153,7 +153,7 @@ describe('/planner wizard: leaving', () => {
 
     for (let n = 1; n < stepNumber; n++) (await step()).__accept(0);
     expect((await step()).step).toBe(stepNumber);
-    (await step()).__hide();
+    (await step()).__escape();
     await done;
 
     expect(deps.applyChoice).not.toHaveBeenCalled();
@@ -172,7 +172,7 @@ describe('/planner wizard: leaving', () => {
     expect(warn).toHaveBeenCalledWith('codex is not installed');
     expect(__quickPicks).toHaveLength(1);
     expect(qp.step).toBe(1);
-    qp.__hide();
+    qp.__escape();
     await done;
     expect(deps.applyChoice).not.toHaveBeenCalled();
   });
@@ -201,7 +201,7 @@ describe('/planner wizard: starting point', () => {
 
     qp = await step();
     expect((qp.activeItems[0] as { label: string }).label).toBe('DeepSeek V4');
-    qp.__hide();
+    qp.__escape();
     await done;
   });
 
@@ -221,7 +221,7 @@ describe('/planner wizard: starting point', () => {
 
     qp = await step();
     expect((qp.activeItems[0] as { label: string }).label).toBe('Low');
-    qp.__hide();
+    qp.__escape();
     await done;
   });
 
@@ -240,7 +240,7 @@ describe('/planner wizard: starting point', () => {
 
     qp = await step();
     expect((qp.activeItems[0] as { label: string }).label).toBe('Runner default');
-    qp.__hide();
+    qp.__escape();
     await done;
   });
 });
