@@ -324,6 +324,44 @@ describe('transcript', () => {
     expect(out).not.toMatch(/needs one coding agent/i);
   });
 
+  describe('setup rows', () => {
+    const claude = {
+      plannerProvider: 'claude-code',
+      orchestratorModel: 'opus',
+      runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }],
+      models: [
+        { id: 'opus', label: 'Opus', provider: 'anthropic', runners: ['claude-code'], variants: [{ id: 'low', label: 'Low' }, { id: 'high', label: 'High effort' }] },
+        { id: 'haiku', label: 'Haiku', provider: 'anthropic', runners: ['claude-code'], variants: [] },
+      ],
+    } satisfies Partial<TuiState>;
+    const row = (name: string, over: Partial<TuiState>): string =>
+      screen({ ...claude, ...over }).map(stripAnsi).find((l) => l.trimStart().startsWith(name))!;
+
+    it('shows harness · model · effort with only /planner', () => {
+      const planner = row('Planner', { plannerEffort: 'high' });
+      expect(planner).toContain('Claude Code · opus · High effort');
+      expect(planner).toContain('/planner');
+      expect(planner).not.toContain('/model');
+    });
+
+    it('leaves the effort out when none is set or the model has no variants', () => {
+      expect(row('Planner', {})).toMatch(/Claude Code · opus\s+\/planner/);
+      expect(row('Planner', { orchestratorModel: 'haiku', plannerEffort: 'high' })).toMatch(/Claude Code · haiku\s+\/planner/);
+    });
+
+    it('ends the Run row at /settings and gives Autonomy no command', () => {
+      const run = row('Run  ', {});
+      expect(run.trimEnd()).toMatch(/autorun off\s+\/settings$/);
+      for (const gone of ['/supervisor', '/automerge', '/autorun']) expect(run).not.toContain(gone);
+      const autonomy = row('Autonomy', {});
+      expect(autonomy).not.toContain('/auto');
+    });
+
+    it('keeps every setup row inside 80 columns', () => {
+      for (const l of screen({ ...claude, plannerEffort: 'high', cols: 80 })) expect(width(l)).toBeLessThanOrEqual(80);
+    });
+  });
+
   it('says what is missing when nothing can plan yet', () => {
     const out = text();
     expect(out).toMatch(/Claude Code, Codex, OpenCode/);

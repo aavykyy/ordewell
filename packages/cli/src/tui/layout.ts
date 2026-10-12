@@ -6,6 +6,7 @@ import { SLASH_COMMANDS, type SlashCategory } from './slash';
 import { findTask, planRows, plannerInFlight, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
+import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
 import { ALL_PROVIDERS, approvalLabel, awaitingLabel, hasHiddenDetail, resumeLabel, runnerForProvider, taskRowView, planUsage, type AiProvider, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
@@ -365,12 +366,20 @@ function runSettingsValue(state: TuiState): string {
   ].join(' · ');
 }
 
+/** The planner's effort as its picker labels it; empty when none is chosen or the model has no levels. */
+function plannerEffortLabel(state: TuiState): string {
+  const chosen = plannerEffortItems(state, state.plannerProvider, state.orchestratorModel, state.plannerEffort)
+    .find((item) => item.selected && !item.disabled && item.id !== DEFAULT_EFFORT);
+  return chosen?.label ?? '';
+}
+
 function setupRow(label: string, value: string, command: string, cols: number): string {
+  const head = `  ${style.grey(pad(label, SETUP_KEY_COLS))}${value}`;
+  if (!command) return truncate(head, cols - 1);
   // Padded rather than truncated to the value column: a long model id keeps its
   // name and pushes the command right, instead of being cut to fit a grid.
   const gap = ' '.repeat(Math.max(2, SETUP_VALUE_COLS - width(value)));
-  const head = `  ${style.grey(pad(label, SETUP_KEY_COLS))}${value}${gap}`;
-  return truncate(`${head}${style.grey(command)}`, cols - 1);
+  return truncate(`${head}${gap}${style.grey(command)}`, cols - 1);
 }
 
 // Plain ASCII: mathematical alphanumerics fall back to wider glyphs in most
@@ -459,21 +468,22 @@ function welcomeLines(state: TuiState, cols: number): string[] {
     || state.configuredProviders.length > 0;
 
   const plannerValue = planner.ready
-    ? [planner.label, state.orchestratorModel || style.yellow('no model')].join(style.grey(' · '))
+    ? [planner.label, state.orchestratorModel || style.yellow('no model'), plannerEffortLabel(state)]
+      .filter(Boolean).join(style.grey(' · '))
     : style.yellow(planner.label === 'not set' ? 'not set' : `${planner.label} (unavailable)`);
 
   const prompt = wrap(style.bold('Describe a goal to start planning.'), Math.max(1, cols - 1));
   const setup = [
     style.bold('Setup'),
-    setupRow('Planner', plannerValue, '/planner · /model', cols),
+    setupRow('Planner', plannerValue, '/planner', cols),
     setupRow(
       'Runners',
       enabledRunners.length > 0 ? enabledRunners.join(', ') : style.yellow('none enabled'),
       '/runners',
       cols,
     ),
-    setupRow('Autonomy', state.autonomous ? style.yellow('Full') : 'Guarded', '/auto', cols),
-    setupRow('Run', runSettingsValue(state), '/supervisor · /automerge · /autorun', cols),
+    setupRow('Autonomy', state.autonomous ? style.yellow('Full') : 'Guarded', '', cols),
+    setupRow('Run', runSettingsValue(state), '/settings', cols),
     '',
   ];
   const notice = canPlan
