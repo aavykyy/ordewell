@@ -1,10 +1,36 @@
 import React from 'react';
+import type { GlobalRunSettings } from '@ordewell/core';
+import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
 
 interface EmptyStateProps {
   onLoadSession?: () => void;
+  /** The user's autonomy level and run settings (ADR-0030); absent until the host sends them. */
+  runSettings?: { autonomous: boolean; run: GlobalRunSettings } | null;
 }
 
-export default function EmptyState({ onLoadSession }: EmptyStateProps) {
+/** One Setup row: what is set, and the command that changes it. */
+function SetupRow({ label, value, command, warn }: { label: string; value: React.ReactNode; command: string; warn?: boolean }) {
+  return (
+    <div className="empty-state-setup-row">
+      <span className="empty-state-setup-label">{label}</span>
+      <span className={`empty-state-setup-value${warn ? ' warn' : ''}`}>{value}</span>
+      <code className="empty-state-setup-command">{command}</code>
+    </div>
+  );
+}
+
+function RunValue({ run }: { run: GlobalRunSettings }) {
+  const level = `supervisor ${SUPERVISOR_LEVEL_LABEL[run.supervisorLevel]}`;
+  return (
+    <>
+      {run.supervisorLevel === 'act' ? <span className="warn">{level}</span> : level}
+      {` · auto-merge ${run.mergeAtGatesAutomatically ? 'on' : 'off'} · `}
+      {run.autorun ? <span className="warn">autorun on</span> : 'autorun off'}
+    </>
+  );
+}
+
+export default function EmptyState({ onLoadSession, runSettings }: EmptyStateProps) {
   return (
     <div className="empty-state">
       <div className="empty-state-logo">
@@ -54,6 +80,12 @@ export default function EmptyState({ onLoadSession }: EmptyStateProps) {
         Describe your goal and Ordewell will research your codebase,
         generate a structured task plan, and execute it.
       </p>
+      {runSettings && (
+        <div className="empty-state-setup">
+          <SetupRow label="Autonomy" value={runSettings.autonomous ? 'Full' : 'Guarded'} warn={runSettings.autonomous} command="/auto" />
+          <SetupRow label="Run" value={<RunValue run={runSettings.run} />} command="/supervisor · /automerge · /autorun" />
+        </div>
+      )}
       {onLoadSession && (
         <button className="load-session-btn" onClick={onLoadSession}>
           Load Previous Session

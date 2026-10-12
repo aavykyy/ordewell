@@ -21,7 +21,7 @@ import type {
   MergeGateResponse,
   ModelsResponse,
   OkResponse,
-  SupervisorLevel,
+  GlobalRunSettings,
   PlanResponse,
   SurfacePlan,
   SurfacePlanState,
@@ -121,6 +121,13 @@ export interface ExecutionSummary {
  * the real type turns that into a compile error at each surface.
  */
 export type WsEvent = SessionMessage | SessionNotice;
+
+/** A held subscription to a session (`followSession`). `ended` is `'lost'` unless `close` ended it. */
+export interface SessionFollow {
+  ready: Promise<void>;
+  ended: Promise<'lost' | void>;
+  close(): void;
+}
 
 /** `/api/plans/<id>/…` and `/api/sessions/<id>/…`: the session a request is about. */
 const SESSION_PATH = /^\/api\/(?:plans|sessions)\/([^/?]+)/;
@@ -363,19 +370,6 @@ export class ApiClient {
 
   addTask(sessionId: string, task: Record<string, unknown>): Promise<OkResponse> {
     return this.call('POST', `/api/plans/${sessionId}/tasks`, 'Add task failed', task);
-  }
-
-  setMergeAtGatesAutomatically(sessionId: string, enabled: boolean): Promise<OkResponse> {
-    return this.call('PATCH', `/api/plans/${sessionId}/settings`, 'Change merge setting failed', { mergeAtGatesAutomatically: enabled });
-  }
-
-  setSupervisorLevel(sessionId: string, level: SupervisorLevel): Promise<OkResponse> {
-    return this.call('PATCH', `/api/plans/${sessionId}/settings`, 'Change supervisor level failed', { supervisorLevel: level });
-  }
-
-  /** Lower the run under way's supervisor at once, for the rest of the run (ADR-0029). */
-  lowerSupervisor(sessionId: string, level: 'watch' | 'off'): Promise<OkResponse> {
-    return this.call('POST', `/api/plans/${sessionId}/supervisor/lower`, 'Lower the supervisor failed', { level });
   }
 
   updateTask(sessionId: string, taskId: string, changes: Record<string, unknown>): Promise<OkResponse> {
@@ -627,6 +621,46 @@ export class ApiClient {
   }
 
   /**
+   * Every broadcast of one session for as long as the caller holds it. Unlike
+   * `streamExecution`, a run's end does not end it: the next run may be one
+   * nobody on this surface asked for — autorun, the planner's `run_plan`, the
+   * supervisor — and the daemon tells only the sockets already subscribed.
+   * `ready` settles on a failure too, never rejects: a follow that cannot
+   * connect costs the live view, not the request it opened around.
+   */
+  followSession(sessionId: string, onEvent: (event: WsEvent) => void): SessionFollow {
+    const socket = this.openSessionSocket(sessionId);
+    let closing = false;
+    const ready = new Promise<void>((resolve) => {
+      socket.once('open', () => resolve());
+      socket.once('error', () => resolve());
+      socket.once('close', () => resolve());
+    });
+    const ended = new Promise<'lost' | void>((resolve) => {
+      socket.once('close', () => resolve(closing ? undefined : 'lost'));
+    });
+    socket.on('message', (data: Buffer) => {
+      if (closing) return;
+      try {
+        onEvent(JSON.parse(data.toString()));
+      } catch {
+        // ignore malformed messages
+      }
+    });
+    socket.on('error', () => {
+      // Reported through `ended`, which the close that follows settles.
+    });
+    return {
+      ready,
+      ended,
+      close: () => {
+        closing = true;
+        socket.close();
+      },
+    };
+  }
+
+  /**
    * Answer an approval prompt: the planner's with a yes/no, a task runner's
    * with the whole decision (ADR-0018, A1). The planner's requests arrive over
    * the session socket; a runner's, in its task log.
@@ -672,6 +706,11 @@ export class ApiClient {
 
   getSettings(): Promise<SettingsResponse> {
     return this.call('GET', '/api/settings', 'Failed to fetch settings');
+  }
+
+  /** Save run settings (ADR-0030); with `sessionId`, that session's run takes them at once. */
+  updateRunSettings(changes: Partial<GlobalRunSettings>, sessionId?: string): Promise<SettingsResponse> {
+    return this.call('PATCH', '/api/settings', 'Change run settings failed', { run: changes, ...(sessionId ? { sessionId } : {}) });
   }
 
   updateSettings(changes: Record<string, unknown>): Promise<SettingsUpdateResponse> {

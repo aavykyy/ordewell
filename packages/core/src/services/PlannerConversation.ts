@@ -3,7 +3,7 @@ import type { ConversationRequest, ConversationTurn, IAiService } from './AiServ
 import { reEmitPlanPrompt, repairLoop, resubmitEditPrompt, resubmitPlanPrompt, taskOpsRejectedPrompt } from './PlanRepair';
 import { renderTaskQueryAnswer, taskQuerySignature, TASK_QUERY_ANSWER_OR_OPS, TASK_QUERY_REMINDER, TASK_READ_TOOLS_REMINDER, type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog } from './TaskQuery';
 import { taskOpsProtocol, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
-import { resolveDefaultMode } from './ModeResolver';
+import { readOnlyMode, readOnlyRunners } from './ModeResolver';
 import type { PlannerTurnOutcome, SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { TurnStream } from './replyStream';
 import type { ForkedDialogue } from './conversationFork';
@@ -14,6 +14,7 @@ import type { ExecutionRecord } from '../models/Execution';
 import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation } from './skillInvocation';
 import { skillLoadNotice, surfaceStep } from '../conversation/records';
 import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
+import { AUTORUN_OFF, AUTORUN_ON } from './PlanPrompts';
 
 /**
  * Per-runner model cap for the always-on catalog block. Generous enough that
@@ -196,6 +197,8 @@ export interface PlannerConversationHost {
   opening(runners: RunnerId[]): Promise<ConversationOpening>;
   /** What the per-turn catalog block and every read draw from, as of now. */
   catalog(): TaskQueryCatalog;
+  /** Whether autorun is on now (ADR-0030); the planner is told in the turn after it changes. */
+  autorun(): boolean;
   tasks(): readonly Task[];
   /**
    * The orchestrator's live capture for a task's latest attempt, backing the
@@ -374,6 +377,8 @@ export class PlannerConversation {
   private persisted = 0;
   /** Saves an execution event made while a turn may be in flight; see {@link restore}. */
   private savedInBackground = 0;
+  /** What the planner was last told of autorun: by its opening prompt, or a turn's block since. */
+  private toldAutorun = false;
   private live: PlannerTurn | null = null;
   private openTurn: UserTurn | null = null;
 
@@ -749,6 +754,7 @@ export class PlannerConversation {
       const opening = await prepare();
       this.assertCurrent(userTurn);
       this.recordUser(goal, new Date().toISOString());
+      this.toldAutorun = opening.autorun ?? false;
       const turn = await this.host.aiService().startConversation({
         ...opening,
         // The system prompt's goal is the text as typed; skill bodies ride the
@@ -805,7 +811,7 @@ export class PlannerConversation {
     // The persisted transcript keeps the raw user message; the model gets the
     // live catalog (always) and the current plan (tasks, statuses, edit
     // protocol — once tasks exist) alongside it.
-    const contextBlock = [this.catalogBlock(), this.planContextBlock()].filter(Boolean).join('\n\n');
+    const contextBlock = [this.catalogBlock(), this.planContextBlock(), this.autorunBlock()].filter(Boolean).join('\n\n');
     const said = fromUser ? plannerMessage(message.text, message.skills) : '';
     const outgoing = [contextBlock, ...wakeUps, userTurn.wakeUp?.brief, said].filter(Boolean).join('\n\n');
 
@@ -993,6 +999,7 @@ export class PlannerConversation {
     // session id goes too — otherwise the agent's own memory of the old
     // dialogue could ride along under the replayed one.
     this.reset();
+    this.toldAutorun = opening.autorun ?? false;
     return this.host.aiService().startConversation({
       ...opening,
       runners,
@@ -1247,10 +1254,22 @@ export class PlannerConversation {
    * admitted mid-session by a retarget is shown like every other. A planner
    * with Ordewell's tools gets a reminder to read the catalog instead.
    */
+  /**
+   * The autorun rule (ADR-0030) when it changed since the planner was last
+   * told — in the opening prompt or an earlier turn — so a switch mid-
+   * conversation reaches its next turn without repeating in every one.
+   */
+  private autorunBlock(): string | null {
+    const now = this.host.autorun();
+    if (now === this.toldAutorun) return null;
+    this.toldAutorun = now;
+    return now ? AUTORUN_ON : AUTORUN_OFF;
+  }
+
   private catalogBlock(): string | null {
     if (!this.host.plan()) return null;
     if (this.host.aiService().plannerToolsAttached?.()) return PLANNER_TOOLS_REMINDER;
-    const { runners, models, modes, autonomousDefault } = this.host.catalog();
+    const { runners, models, modes } = this.host.catalog();
 
     const modelLines = runners.map((runner) => {
       const list = models[runner] ?? [];
@@ -1260,21 +1279,13 @@ export class PlannerConversation {
       return `${runner}: ${ids}${remainder > 0 ? ` … +${remainder} more not shown` : ''}`;
     });
 
-    const modeLines = runners.map((runner) => {
-      const list = modes[runner] ?? [];
-      if (list.length === 0) return `${runner}: (no modes declared)`;
-      const defaultId = resolveDefaultMode(list, autonomousDefault);
-      const ids = list.map((m) => `${m.id}${m.id === defaultId ? ' (default)' : ''}`).join(', ');
-      return `${runner}: ${ids}`;
-    });
+    const readOnly = readOnlyRunners(Object.fromEntries(runners.map((r) => [r, modes[r] ?? []])));
 
     return [
       '<available_models>',
       ...modelLines,
       '</available_models>',
-      '<available_task_modes>',
-      ...modeLines,
-      '</available_task_modes>',
+      `<read_only_runners>${readOnly.join(', ') || '(none)'}</read_only_runners>`,
     ].join('\n');
   }
 
@@ -1311,13 +1322,16 @@ export class PlannerConversation {
     const tasks = this.host.tasks();
     if (!this.host.plan() || tasks.length === 0) return null;
     const orderOf = new Map(tasks.map((t) => [t.id, `#${t.order}`]));
+    const { modes } = this.host.catalog();
     return tasks.map((t) => {
       const isMan = t.type === 'user';
       // A MAN task has no model or mode to run under — the field that means
-      // something there is how many steps the human still has to do.
+      // something there is how many steps the human still has to do. The
+      // planner sees no mode name, only read-only (ADR-0031).
+      const readOnly = t.taskMode !== undefined && t.taskMode === readOnlyMode(modes[t.assignedRunner]);
       const runFields = isMan
         ? `steps:${t.userSteps?.length ?? 0}`
-        : `${t.assignedModel ? `model:${t.assignedModel.modelId} ` : ''}mode:${t.taskMode ?? 'build'} effort:${t.thinkingEffort ?? '-'}`;
+        : `${t.assignedModel ? `model:${t.assignedModel.modelId} ` : ''}${readOnly ? 'read-only ' : ''}effort:${t.thinkingEffort ?? '-'}`;
       return `#${t.order} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : t.ops ? 'AI ops' : 'AI'} runner:${t.assignedRunner} ${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:[${t.dependencies.map((d) => orderOf.get(d) ?? d).join(', ')}]${t.skills?.length ? ` skills:[${t.skills.join(', ')}]` : ''}`;
     });
   }

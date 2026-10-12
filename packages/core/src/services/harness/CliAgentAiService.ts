@@ -16,7 +16,7 @@ import type { IConfig } from '../../interfaces/IConfig';
 import type { IFileSystem } from '../../interfaces/IFileSystem';
 import type { IWebFetcher } from '../../interfaces/IWebFetcher';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
-import type { RunnerModeInfo } from '../ModeResolver';
+import { readOnlyMode, type RunnerModeInfo } from '../ModeResolver';
 import type { IAiService, ConversationRequest, ConversationTurn, PlannerToolsOffer } from '../AiService';
 import {
   buildConversationSystemPrompt,
@@ -240,8 +240,7 @@ export class CliAgentAiService implements IAiService {
       req.modelsByRunner,
       req.runners,
       req.runnerModes,
-      req.autonomousDefault ?? true,
-      { harness: true, isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined },
+      { harness: true, isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun },
     );
 
     const fetcher = req.fetcher;
@@ -721,7 +720,7 @@ export class CliAgentAiService implements IAiService {
     const tools: PlannerToolsOffer = {
       sessionId: uuidv4(),
       handler: {
-        listRunners: async () => ({ text: JSON.stringify({ runners: catalog.runners.map((id) => ({ id, modes: catalog.runnerModes?.[id] ?? [] })) }) }),
+        listRunners: async () => ({ text: JSON.stringify({ runners: catalog.runners.map((id) => ({ id, readOnly: readOnlyMode(catalog.runnerModes?.[id]) !== undefined })) }) }),
         listModels: async ({ runner }) => ({ text: JSON.stringify({ runner, models: catalog.modelsByRunner?.[runner] ?? [] }) }),
         submitPlan: async ({ tasks }) => {
           const result = validatePlanTasks({ tasks }, catalog.runners, catalog.runnerModes, catalog.autonomousDefault);
@@ -731,10 +730,11 @@ export class CliAgentAiService implements IAiService {
           if (skills && skills.errors.length > 0) return refuse(skills.errors.map((error) => error.message));
           submitted = result.tasks;
           refused = [];
+          const warnings = [...(result.warnings ?? []), ...(skills?.warnings ?? [])];
           return {
             text: JSON.stringify({
               ok: true,
-              ...(skills && skills.warnings.length > 0 ? { warnings: skills.warnings } : {}),
+              ...(warnings.length > 0 ? { warnings } : {}),
               next: 'Plan recorded. End your turn now.',
             }),
           };
@@ -839,7 +839,7 @@ export class CliAgentAiService implements IAiService {
     modes: PlannerModes = DEFAULT_PLANNER_MODES,
     signal?: AbortSignal,
   ): Promise<{ tasks: Task[] }> {
-    const prompt = buildModifyPlanPrompt(existingPlan, userRequest, modelsByRunner, undefined, runnerModes, modes.autonomousDefault, true);
+    const prompt = buildModifyPlanPrompt(existingPlan, userRequest, modelsByRunner, undefined, runnerModes, true);
     try {
       const plan = await this.submittedPlan(prompt, oneShotCatalog(existingPlan.runners, modelsByRunner, runnerModes, modes), onProgress, signal);
       return { tasks: plan.tasks };

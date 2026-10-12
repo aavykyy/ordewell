@@ -1,3 +1,4 @@
+import type { GlobalRunSettings } from '@ordewell/core';
 import { type SurfacePlan, type DiscoveredModel, type RunnerId, type IsolationHandoff, type IsolationMergeResult, type RunMergeView, type TaskIsolation, type AiProvider } from '@ordewell/core';
 import { DEFAULT_RUNNERS, EMPTY_HOLD, type PromptHold } from '@ordewell/core/plan-utils';
 import type { HostToWebview, PlannerBackend, RunnerMeta } from '../../shared/protocol';
@@ -40,6 +41,8 @@ export interface HostState {
   unsent: { text: string; seq: number } | null;
   modesByRunner: Record<string, RunnerMode[]>;
   modelConfig: { orchestrator: string; orchestratorProvider?: string } | null;
+  /** The user's autonomy level and run settings (ADR-0030); null until the host sends them. */
+  runSettings: { autonomous: boolean; run: GlobalRunSettings } | null;
   modelOptions: ModelOption[];
   configuredProviders: AiProvider[];
   /** Who plans (ADR-0009): the backends offered, the one in use, and its runner + effort. */
@@ -88,6 +91,7 @@ export const INITIAL_HOST_STATE: HostState = {
   unsent: null,
   modesByRunner: {},
   modelConfig: null,
+  runSettings: null,
   modelOptions: [],
   configuredProviders: [],
   planner: { backends: [], provider: '' },
@@ -344,6 +348,9 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'planDockHeight':
       return { ...state, dockHeight: action.height };
+
+    case 'setRunSettings':
+      return { ...state, runSettings: { autonomous: action.autonomous, run: action.run } };
 
     case 'checkpoint':
       return {

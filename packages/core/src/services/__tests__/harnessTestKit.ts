@@ -296,7 +296,6 @@ export function planJson(runner = 'claude-code'): string {
         prompt: 'Add the thing to src/thing.ts',
         assignedRunner: runner,
         assignedModel: { modelId: 'sonnet', modelLabel: 'Sonnet' },
-        taskMode: 'acceptEdits',
         autonomy: 'AFK',
         sliceType: 'AFK',
         subtasks: [],

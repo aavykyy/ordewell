@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExecutionRecord } from '../../models/Execution';
 import { makeSession, taskOf, testWorkspace } from './sessionTestKit';
 import { FakeWorktreeIsolation } from '../../testing';
-import { ctx, hitLimit, NOW, plan, prose, RESUME_AT, settled, supervised, task, until, waitForInput, wokenUp, type Env, type Options } from './supervisorTestKit';
+import { changeSettings, ctx, hitLimit, NOW, plan, prose, RESUME_AT, settled, supervised, task, until, waitForInput, wokenUp, type Env, type Options } from './supervisorTestKit';
 import { WAKE_DEBOUNCE_MS } from '../Supervisor';
 import { WAKE_UP_RATE } from '../LoopGuards';
 
-const ACT: Options = { plan: { supervisorLevel: 'act' } };
+const ACT: Options = { settings: { supervisorLevel: 'act' } };
 
 const records = (env: Env): ExecutionRecord[] =>
   env.session.planState!.conversationHistory!.flatMap((e) => (e.execution ? [e.execution] : []));
@@ -124,7 +124,7 @@ describe('tasks the supervisor adds at Act', () => {
 /** Task 1 paused on claude-code's usage limit, and the supervisor woken to it at Act. */
 async function limited(tasks = [task('t1', 1), task('t2', 2)], pause: string[] = ['t1']): Promise<Env> {
   const env = await supervised(tasks, {
-    plan: { ...ACT.plan, runners: ['claude-code', 'codex'] }, config: { enabledRunners: ['claude-code', 'codex'] },
+    ...ACT, plan: { runners: ['claude-code', 'codex'] }, config: { enabledRunners: ['claude-code', 'codex'] },
   });
   for (const id of pause) hitLimit(env.run.of(id));
   await settled();
@@ -175,8 +175,8 @@ describe('moving a task paused on a usage limit', () => {
 const notes = (env: Env) => env.session.planState!.conversationHistory!.filter((e) => e.kind === 'supervisor').map((e) => e.content);
 
 /** A one-task run whose task failed, with the supervisor woken to it at Act. */
-async function failedOnce(over: Options['plan'] = {}): Promise<Env> {
-  const env = await supervised([task('t1', 1)], { plan: { supervisorLevel: 'act', ...over } });
+async function failedOnce(over: Options['settings'] = {}): Promise<Env> {
+  const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'act', ...over } });
   env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
   await until(() => env.planner.calls.length === 1);
   return env;
@@ -190,7 +190,7 @@ async function failsAgain(env: Env, calls: number): Promise<void> {
 }
 
 describe('the loop guards', () => {
-  it('refuses a retry past the plan\'s retry limit, and escalates the task to the user once', async () => {
+  it('refuses a retry past the user\'s retry limit, and escalates the task to the user once', async () => {
     const env = await failedOnce({ supervisorRetryLimit: 1 });
     const first = await env.planner.tools().retryTask!({ task: '1', from: 'session', message: 'fix the import' }, ctx);
     expect(first.isError).toBeFalsy();
@@ -200,12 +200,23 @@ describe('the loop guards', () => {
     const second = await env.planner.tools().retryTask!({ task: '1', from: 'session', message: 'try harder' }, ctx);
     const third = await env.planner.tools().retryTask!({ task: '1', from: 'session', message: 'once more' }, ctx);
 
-    expect(JSON.parse(second.text).reason).toBe('Refused by the retry limit: you have retried task #1 "Task t1" once this run, the most the plan allows. It is escalated to the user now: tell them what you tried, and do not retry it again.');
+    expect(JSON.parse(second.text).reason).toBe('Refused by the retry limit: you have retried task #1 "Task t1" once this run, the most your settings allow. It is escalated to the user now: tell them what you tried, and do not retry it again.');
     expect(third.isError).toBe(true);
     expect(env.run.spawnedIds().filter((id) => id === 't1')).toHaveLength(2);
     expect(notes(env).filter((n) => n.startsWith('Loop guard, retry limit'))).toEqual([
-      'Loop guard, retry limit: I retried task #1 "Task t1" once this run, the most the plan allows, and stopped. It needs you: retry it, change it or skip it.',
+      'Loop guard, retry limit: I retried task #1 "Task t1" once this run, the most your settings allow, and stopped. It needs you: retry it, change it or skip it.',
     ]);
+  });
+
+  it('takes a retry limit raised in this session at once', async () => {
+    const env = await failedOnce({ supervisorRetryLimit: 0 });
+    const refused = await env.planner.tools().retryTask!({ task: '1', from: 'session', message: 'fix the import' }, ctx);
+
+    changeSettings(env, { supervisorRetryLimit: 1 });
+    const retried = await env.planner.tools().retryTask!({ task: '1', from: 'session', message: 'fix the import' }, ctx);
+
+    expect(refused.isError).toBe(true);
+    expect(retried.isError).toBeFalsy();
   });
 
   it('counts retries across the runs the supervisor restarts itself, and starts afresh when the user starts', async () => {
@@ -248,7 +259,7 @@ describe('the loop guards', () => {
   });
 
   it('drops a start queued behind an edit that never landed, and says so', async () => {
-    const env = await supervised([task('t1', 1)], { plan: { supervisorLevel: 'off' }, config: { autonomousMode: true } });
+    const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'off' }, config: { autonomousMode: true } });
     env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
     await until(() => taskOf(env.session, 't1')!.status === 'failed');
     const answered = env.session.continueConversation('fix the import in task 1 and retry it');
@@ -304,7 +315,7 @@ describe('the loop guards', () => {
 
     expect(env.planner.calls.at(-1)!.message).toMatch(/At Watch you only suggest/);
     expect(env.session.planState!.runSettings!.supervisorLevel).toBe('watch');
-    expect(env.session.planState!.supervisorLevel).toBe('act');
+    expect(env.settings.supervisorLevel).toBe('act');
     expect(env.notices).toContainEqual(expect.objectContaining({ level: 'warn', message: expect.stringMatching(/^Loop guard, wake-up rate: /) }));
     expect(notes(env)).toContainEqual(expect.stringMatching(/^Loop guard, wake-up rate: I woke 7 times .* with no task passing.*Watch for the rest of this run/));
   });
@@ -350,11 +361,11 @@ describe('merge_all as a planner tool', () => {
   });
 });
 
-describe('lowering the supervisor mid-run', () => {
-  it('to Watch applies at once, in the wake-up turn under way too, and leaves the next run\'s setting alone', async () => {
+describe('changing the supervisor level mid-run', () => {
+  it('to Watch applies at once, in the wake-up turn under way too', async () => {
     const env = await wokenUp(ACT);
 
-    env.session.lowerSupervisor('watch');
+    changeSettings(env, { supervisorLevel: 'watch' });
     const stop = await env.planner.tools().stopTask!({ task: '2' }, ctx);
     const edit = await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#2', changes: { prompt: 'do t2 better' } }] }, ctx);
 
@@ -362,8 +373,7 @@ describe('lowering the supervisor mid-run', () => {
     expect(JSON.parse(edit.text).errors[0].message).toMatch(/you are the supervisor at Watch/);
     expect(taskOf(env.session, 't2')!.status).toBe('in_progress');
     expect(env.session.planState!.runSettings!.supervisorLevel).toBe('watch');
-    expect(env.session.planState!.supervisorLevel).toBe('act');
-    expect(env.session.planState!.conversationHistory!).toContainEqual(expect.objectContaining({ kind: 'system', content: 'You dropped the supervisor to Watch for the rest of this run.' }));
+    expect(env.session.planState!.conversationHistory!).toContainEqual(expect.objectContaining({ kind: 'system', content: 'You set the supervisor to Watch.' }));
   });
 
   it('off stops the wake-ups; what was gathered reaches the planner with the user\'s next message', async () => {
@@ -371,7 +381,7 @@ describe('lowering the supervisor mid-run', () => {
     waitForInput(env.run.of('t1'));
     await settled();
 
-    env.session.lowerSupervisor('off');
+    changeSettings(env, { supervisorLevel: 'off' });
     await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS * 4);
     waitForInput(env.run.of('t2'));
     await settled();
@@ -385,17 +395,28 @@ describe('lowering the supervisor mid-run', () => {
     expect(env.planner.calls[0].message).not.toMatch(/task #2/);
   });
 
-  it('never raises it, and needs a run', async () => {
-    const env = await supervised([task('t1', 1)], { plan: { supervisorLevel: 'watch' } });
-    env.session.lowerSupervisor('watch');
-    expect(env.session.planState!.conversationHistory!.filter((e) => e.content.includes('dropped the supervisor'))).toHaveLength(0);
+  it('to Act applies at once: the next wake-up turn may act', async () => {
+    const env = await wokenUp({ settings: { supervisorLevel: 'watch' } });
+    env.planner.calls[0].finish(prose('Task 1 waits for you.'));
+    await settled();
 
-    env.session.lowerSupervisor('off');
-    env.session.lowerSupervisor('watch');
-    expect(env.session.planState!.runSettings!.supervisorLevel).toBe('off');
+    changeSettings(env, { supervisorLevel: 'act' });
+    env.run.of('t2').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+    await until(() => env.planner.calls.length === 2);
+    const stop = await env.planner.tools().stopTask!({ task: '1' }, ctx);
 
+    expect(env.planner.calls[1].message).toMatch(/At Act you may act/);
+    expect(stop.isError).toBeFalsy();
+    expect(env.session.planState!.runSettings!.supervisorLevel).toBe('act');
+  });
+
+  it('with no run under way, changes nothing on the plan: the next run reads the saved setting', () => {
     const idle = makeSession({});
-    idle.loadPlan(plan([task('t1', 1)], { supervisorLevel: 'act' }), 'build it', testWorkspace, { persist: false });
-    expect(() => idle.lowerSupervisor('off')).toThrow(/No run has started/);
+    idle.loadPlan(plan([task('t1', 1)]), 'build it', testWorkspace, { persist: false });
+
+    expect(() => idle.applyRunSettings({ supervisorLevel: 'act' })).not.toThrow();
+    expect(idle.planState!.runSettings).toBeUndefined();
   });
 });

@@ -10,6 +10,7 @@ import { currentHandoff, diffRoom, handoffActions } from './handoff';
 import { handoffBase, handoffBranch, isRepoGroup, repoResultLines } from '../isolation';
 import { capConflictFiles, titledTaskRef } from '@ordewell/core';
 import { plannerInFlight, visibleItems, type Overlay, type PickerState, type TuiState } from './state';
+import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
 
 /**
  * The whole frame as `state.rows` lines, each at most `state.cols` columns
@@ -186,7 +187,26 @@ function fit(lines: string[], rows: number, anchor: 'top' | 'bottom'): string[] 
 
 function renderAutonomy(state: TuiState, cols: number): string {
   const auto = state.autonomous ? style.yellow('● Full') : style.green('● Guarded');
-  return truncate(auto, cols);
+  return truncate(`${auto}${style.grey(' · ')}${runSettingsBadge(state)}`, cols);
+}
+
+/**
+ * The run settings (ADR-0030), always shown, since a global setting that
+ * applies at once is the kind that is forgotten while it is on. During a run,
+ * the run's own level where a guard, a failure or another session left it
+ * different from the setting.
+ */
+function runSettingsBadge(state: TuiState): string {
+  const { supervisorLevel, mergeAtGatesAutomatically, autorun } = state.runSettings;
+  const paint = (text: string, warn: boolean) => (warn ? style.yellow(text) : text);
+  const run = state.status === 'executing' ? state.runSupervisor : null;
+  const actual = run?.unsupervised ? 'unsupervised' : run && run.level !== supervisorLevel ? SUPERVISOR_LEVEL_LABEL[run.level] : null;
+  const level = `supervisor ${SUPERVISOR_LEVEL_LABEL[supervisorLevel]}${actual ? ` → ${actual}` : ''}`;
+  return [
+    paint(level, supervisorLevel === 'act'),
+    ...(mergeAtGatesAutomatically ? ['auto-merge'] : []),
+    ...(autorun ? [style.yellow('autorun')] : []),
+  ].join(style.grey(' · '));
 }
 
 /**

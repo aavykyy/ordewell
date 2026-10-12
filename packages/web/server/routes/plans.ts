@@ -2,7 +2,6 @@ import { Hono, type Context, type Env } from 'hono';
 import {
   AlreadyExecutingError,
   flattenTasks,
-  isSupervisorLevel,
   NoPlanError,
   surfacePlan,
   surfacePlanState,
@@ -62,50 +61,6 @@ export function plansRoute(pool: OrchestratorPool) {
       return c.json({ plan: surfacePlanState(plan), models, modelsByRunner, ...(notes.length > 0 ? { notes } : {}) } satisfies GeneratePlanResponse);
     } catch (err) {
       return failure(c, err, 'generate', { message: 'Plan generation failed' });
-    }
-  });
-
-  // Every setting named is checked before any is applied, so a bad one changes nothing.
-  router.patch('/:sessionId/settings', async (c) => {
-    const body: unknown = await c.req.json();
-    const field = (key: string): unknown => (typeof body === 'object' && body !== null && key in body ? (body as Record<string, unknown>)[key] : undefined);
-    const merge = field('mergeAtGatesAutomatically');
-    const level = field('supervisorLevel');
-    const reads = field('wakeUpReadBudget');
-    const retries = field('supervisorRetryLimit');
-    if (merge === undefined && level === undefined && reads === undefined && retries === undefined) {
-      return c.json({ error: 'Name a setting: mergeAtGatesAutomatically, supervisorLevel, wakeUpReadBudget or supervisorRetryLimit' }, 400);
-    }
-    if (merge !== undefined && typeof merge !== 'boolean') return c.json({ error: 'mergeAtGatesAutomatically must be a boolean' }, 400);
-    if (level !== undefined && !isSupervisorLevel(level)) return c.json({ error: 'supervisorLevel must be "off", "watch" or "act"' }, 400);
-    if (reads !== undefined && (typeof reads !== 'number' || !Number.isInteger(reads) || reads < 1)) {
-      return c.json({ error: 'wakeUpReadBudget must be a whole number of reads, at least 1' }, 400);
-    }
-    if (retries !== undefined && (typeof retries !== 'number' || !Number.isInteger(retries) || retries < 0)) {
-      return c.json({ error: 'supervisorRetryLimit must be a whole number of retries, 0 or more' }, 400);
-    }
-    try {
-      const session = pool.session(c.req.param('sessionId'));
-      if (typeof merge === 'boolean') session.setMergeAtGatesAutomatically(merge);
-      if (isSupervisorLevel(level)) session.setSupervisorLevel(level);
-      if (typeof reads === 'number') session.setWakeUpReadBudget(reads);
-      if (typeof retries === 'number') session.setSupervisorRetryLimit(retries);
-      return c.json({ ok: true } satisfies OkResponse);
-    } catch (err) {
-      return failure(c, err, 'change plan settings');
-    }
-  });
-
-  // Applies to the run under way at once, unlike the level setting above; it only ever lowers (ADR-0029).
-  router.post('/:sessionId/supervisor/lower', async (c) => {
-    const body: unknown = await c.req.json();
-    const level = typeof body === 'object' && body !== null && 'level' in body ? body.level : undefined;
-    if (level !== 'watch' && level !== 'off') return c.json({ error: 'level must be "watch" or "off": a running supervisor is only ever lowered' }, 400);
-    try {
-      pool.session(c.req.param('sessionId')).lowerSupervisor(level);
-      return c.json({ ok: true } satisfies OkResponse);
-    } catch (err) {
-      return failure(c, err, 'lower the supervisor');
     }
   });
 

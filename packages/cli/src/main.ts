@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { migrateOldConfigDir } from '@ordewell/core';
-import { loadEnvFile } from './utils/env';
+import { loadEnvFile, moveAutonomyToSettings } from './utils/env';
 import { printHelp } from './help';
 import { describeConnectionRefused, isConnectionRefused, resolvePort } from './daemon';
 import { ApiClient } from './apiClient';
@@ -14,6 +14,7 @@ async function main(): Promise<void> {
   // Before loadEnvFile() reads from the new location, so a pre-`.ordewell`
   // install's API keys are there to find.
   migrateOldConfigDir();
+  moveAutonomyToSettings();
   loadEnvFile();
   const argv = process.argv.slice(2);
   // Bare `ordewell` opens the TUI — it is the product's front door, not a usage

@@ -49,7 +49,11 @@ Planner, models and runners:
   ordewell key [set <p> <key>]    Show which providers have a key, or store one
   ordewell runners [<id> on|off]  Enable or disable runners (claude-code, opencode, codex)
   ordewell allowlist set|clear|show       Limit which models a runner may use
-  ordewell auto [full|guarded]    Autonomy level for new sessions: Full or Guarded
+  ordewell auto [full|guarded]    Autonomy level for new plans: Full or Guarded
+  ordewell supervisor [off|watch|act]  Whether the planner watches or acts on your runs (default watch);
+                                  also: supervisor retries <n>, supervisor reads <n>
+  ordewell automerge [on|off]     Merge into your branch by itself at a merge gate (default off)
+  ordewell autorun [on|off]       Start each plan the planner submits, without review (default off)
   ordewell parallel [<n>]         How many AI tasks run at once (default 5; applies to a live run)
   ordewell refresh                Re-discover runners and model catalogs
   ordewell models                 List every provider's catalog (works without a server)
@@ -128,7 +132,7 @@ Environment:
   ORDEWELL_PLANNER_EFFORT    Thinking effort for a coding-agent planner
   ORCHESTRATOR_MODEL         Default: deepseek/deepseek-v4-flash
   OPENROUTER_BASE_URL        Default: https://openrouter.ai/api/v1
-  ORDEWELL_AUTONOMOUS_MODE   true: Full, false: Guarded, for new sessions (see "ordewell auto")
+  ORDEWELL_AUTONOMOUS_MODE   true: Full, false: Guarded; overrides what "ordewell auto" saved
   ORDEWELL_APPROVAL_MODE     What the planner may run beyond read-only commands: auto (default:
                              Guarded asks, Full runs only the allowlist and web reads), ask,
                              allowlist or allow. File writes are always refused

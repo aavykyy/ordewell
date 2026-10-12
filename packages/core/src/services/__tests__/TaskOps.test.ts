@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { applyTaskOps, parseTaskOpsJson, textHasTaskOps, canMergeTasks, canSplitTask } from '../TaskOps';
+import { validateTaskEdit } from '../TaskEditValidator';
 import { PlanParseError } from '../JsonExtractor';
 import { createTask, type Task } from '../../models/Task';
 
@@ -329,7 +330,7 @@ describe('applyTaskOps — model and task-mode validity', () => {
     runnerModes: {
       'claude-code': [
         { id: 'acceptEdits', label: 'Accept Edits', description: 'edit automatically' },
-        { id: 'plan', label: 'Plan', description: 'read-only' },
+        { id: 'plan', label: 'Plan', description: 'read-only', readOnly: true },
       ],
     },
   };
@@ -351,13 +352,15 @@ describe('applyTaskOps — model and task-mode validity', () => {
     expect(res.errors[0]).toMatch(/allowlist/i);
   });
 
-  it('refuses an update to a task mode the runner does not have, naming the runner', () => {
-    const res = applyTaskOps(samplePlan(), [
-      { op: 'update', taskId: 'a', changes: { taskMode: 'yolo' } },
-    ], ['claude-code'], CATALOG);
-    expect(res.ok).toBe(false);
-    expect(res.errors[0]).toContain('claude-code');
-    expect(res.errors[0]).toContain('yolo');
+  it('refuses any task mode the planner names, valid or not, pointing at readOnly (ADR-0031)', () => {
+    for (const taskMode of ['yolo', 'plan']) {
+      const res = applyTaskOps(samplePlan(), [
+        { op: 'update', taskId: 'a', changes: { taskMode } },
+      ], ['claude-code'], CATALOG);
+      expect(res.ok).toBe(false);
+      expect(res.errors[0]).toContain('"taskMode" is the user\'s to choose');
+      expect(res.errors[0]).toContain('"readOnly"');
+    }
   });
 
   it('accepts a model the runner offers and within the allowlist', () => {
@@ -386,12 +389,13 @@ describe('applyTaskOps — model and task-mode validity', () => {
     expect(res.errors[0]).toContain('gpt-5');
   });
 
-  it('accepts a valid task mode', () => {
+  it('lands a task the planner marks read-only on the runner\'s read-only mode', () => {
     const res = applyTaskOps(samplePlan(), [
-      { op: 'update', taskId: 'a', changes: { taskMode: 'plan' } },
+      { op: 'update', taskId: 'a', changes: { readOnly: true } },
     ], ['claude-code'], CATALOG);
     expect(res.ok).toBe(true);
     expect(res.tasks[0].taskMode).toBe('plan');
+    expect(res.tasks[0]).not.toHaveProperty('readOnly');
   });
 
   it('refuses an added task with an invented model', () => {
@@ -402,12 +406,12 @@ describe('applyTaskOps — model and task-mode validity', () => {
     expect(res.errors[0]).toContain('gpt-9-imaginary');
   });
 
-  it('refuses an added task with an invalid task mode', () => {
+  it('refuses an added task that names a mode', () => {
     const res = applyTaskOps(samplePlan(), [
-      { op: 'add', task: { title: 'Docs', taskMode: 'yolo' } },
+      { op: 'add', task: { title: 'Docs', taskMode: 'plan' } },
     ], ['claude-code'], CATALOG);
     expect(res.ok).toBe(false);
-    expect(res.errors[0]).toContain('yolo');
+    expect(res.errors[0]).toContain('"taskMode" is the user\'s to choose');
   });
 
   it('runs no model/mode check when no catalog is supplied (backwards compatible)', () => {
@@ -840,8 +844,12 @@ describe('applyTaskOps — the ops flag (ADR-0020)', () => {
 });
 
 describe('applyTaskOps — an added task\'s subtask skills', () => {
-  // A subtask is a full task object; its skills arrive as the planner wrote them.
-  const sub = (title: string, skills?: unknown[], subtasks: Task[] = []) => ({ ...createTask({ title }), subtasks, ...(skills ? { skills } : {}) }) as Task;
+  // A subtask is a full task object, less the mode the planner never names; its skills arrive as the planner wrote them.
+  const sub = (title: string, skills?: unknown[], subtasks: Task[] = []) => {
+    const task: Partial<Task> = createTask({ title });
+    delete task.taskMode;
+    return { ...task, subtasks, ...(skills ? { skills } : {}) } as Task;
+  };
 
   it('stores them as a task\'s are, at every depth, each independent of its parent\'s', () => {
     const res = applyTaskOps(samplePlan(), [{
@@ -855,5 +863,143 @@ describe('applyTaskOps — an added task\'s subtask skills', () => {
     expect(added.subtasks.map((s) => s.skills)).toEqual([['deploy'], undefined]);
     expect(added.subtasks[0].subtasks[0].skills).toEqual(['later']);
     expect('skills' in added.subtasks[1]).toBe(false);
+  });
+});
+
+// A whole plan's missing mode resolves to the runner's mode under the user's
+// Full/Guarded level (ADR-0001); the planner's edits must land on the same one,
+// not on the generic `build`, which Claude Code runs as acceptEdits.
+describe('applyTaskOps — the mode a planner edit lands a task on (ADR-0031)', () => {
+  const MODES = {
+    'claude-code': [
+      { id: 'acceptEdits', label: 'Accept Edits', description: 'edit automatically' },
+      { id: 'auto', label: 'Auto', description: 'classifier', safe: true },
+      { id: 'bypassPermissions', label: 'Bypass', description: 'no prompts', autonomous: true },
+      { id: 'plan', label: 'Plan', description: 'read-only', readOnly: true },
+    ],
+    opencode: [
+      { id: 'build', label: 'Build', description: 'edits', autonomous: true, safe: true },
+      { id: 'plan', label: 'Plan', description: 'read-only', readOnly: true },
+    ],
+    custom: [
+      { id: 'write', label: 'Write', description: 'edits', autonomous: true, safe: true },
+    ],
+  };
+  const catalog = (autonomousDefault: boolean) => ({ modelsByRunner: {}, runnerModes: MODES, autonomousDefault });
+  const runners: Array<'claude-code' | 'opencode' | 'custom'> = ['claude-code', 'opencode', 'custom'];
+  const added = (res: ReturnType<typeof applyTaskOps>) => res.tasks.find((t) => t.title === 'Add a cache');
+  const task = (id: string, order: number, taskMode: string, assignedRunner: 'claude-code' | 'opencode' = 'claude-code') =>
+    createTask({ id, order, title: `Task ${id}`, prompt: id, assignedRunner, taskMode });
+
+  it('gives an added task the runner\'s mode for the level', () => {
+    const add = [{ op: 'add' as const, task: { title: 'Add a cache', prompt: 'p', assignedRunner: 'claude-code' as const } }];
+    expect(added(applyTaskOps(samplePlan(), add, runners, catalog(true)))?.taskMode).toBe('bypassPermissions');
+    expect(added(applyTaskOps(samplePlan(), add, runners, catalog(false)))?.taskMode).toBe('auto');
+  });
+
+  it('gives an added read-only task the runner\'s read-only mode, and stores no readOnly field', () => {
+    const res = applyTaskOps(samplePlan(), [{ op: 'add', task: { title: 'Add a cache', prompt: 'p', assignedRunner: 'opencode', readOnly: true } }], runners, catalog(true));
+    expect(added(res)?.taskMode).toBe('plan');
+    expect(added(res)).not.toHaveProperty('readOnly');
+  });
+
+  it('refuses a read-only task on a runner with no read-only mode, naming those with one', () => {
+    const res = applyTaskOps(samplePlan(), [{ op: 'add', task: { title: 'Add a cache', prompt: 'p', assignedRunner: 'custom', readOnly: true } }], runners, catalog(true));
+    expect(res.ok).toBe(false);
+    expect(res.errors[0]).toContain('"custom" has no read-only mode');
+    expect(res.errors[0]).toContain('claude-code, opencode');
+  });
+
+  it('takes a task off read-only only when told readOnly: false, onto the level\'s mode', () => {
+    const plan = [task('a', 1, 'plan')];
+    expect(applyTaskOps(plan, [{ op: 'update', taskId: 'a', changes: { title: 'Renamed' } }], runners, catalog(false)).tasks[0].taskMode).toBe('plan');
+    expect(applyTaskOps(plan, [{ op: 'update', taskId: 'a', changes: { readOnly: false } }], runners, catalog(false)).tasks[0].taskMode).toBe('auto');
+  });
+
+  it('keeps a mode the user picked through planner edits that ask for no change', () => {
+    const plan = [task('a', 1, 'acceptEdits')];
+    expect(applyTaskOps(plan, [{ op: 'update', taskId: 'a', changes: { readOnly: false } }], runners, catalog(true)).tasks[0].taskMode).toBe('acceptEdits');
+    expect(applyTaskOps(plan, [{ op: 'rearm', taskId: 'a', changes: { prompt: 'again' } }], runners, catalog(true)).tasks[0].taskMode).toBe('acceptEdits');
+  });
+
+  it('moves a task to another runner onto that runner\'s mode when it does not offer the old one', () => {
+    const res = applyTaskOps([task('a', 1, 'bypassPermissions')], [{ op: 'update', taskId: 'a', changes: { assignedRunner: 'opencode' } }], runners, catalog(true));
+    expect(res.ok).toBe(true);
+    expect(res.tasks[0]).toMatchObject({ assignedRunner: 'opencode', taskMode: 'build' });
+  });
+
+  it('keeps a read-only task read-only when it moves, and refuses a move to a runner without a read-only mode', () => {
+    const plan = [task('a', 1, 'plan', 'opencode')];
+    expect(applyTaskOps(plan, [{ op: 'update', taskId: 'a', changes: { assignedRunner: 'claude-code' } }], runners, catalog(true)).tasks[0])
+      .toMatchObject({ assignedRunner: 'claude-code', taskMode: 'plan' });
+    const res = applyTaskOps(plan, [{ op: 'update', taskId: 'a', changes: { assignedRunner: 'custom' } }], runners, catalog(true));
+    expect(res.ok).toBe(false);
+    expect(res.errors[0]).toContain('"custom" has no read-only mode');
+  });
+
+  it('makes a merged task read-only only when every merged task was', () => {
+    const merge = (plan: Task[]) => applyTaskOps(plan, [{ op: 'merge', taskIds: ['a', 'b'], merged: { title: 'Both' } }], runners, catalog(false)).tasks[0].taskMode;
+    expect(merge([task('a', 1, 'plan'), task('b', 2, 'plan')])).toBe('plan');
+    expect(merge([task('a', 1, 'plan'), task('b', 2, 'acceptEdits')])).toBe('acceptEdits');
+    expect(applyTaskOps([task('a', 1, 'plan'), task('b', 2, 'acceptEdits')], [{ op: 'merge', taskIds: ['a', 'b'], merged: { title: 'Both', readOnly: true } }], runners, catalog(false)).tasks[0].taskMode).toBe('plan');
+  });
+
+  it('gives split parts the split task\'s mode unless a part says otherwise', () => {
+    const res = applyTaskOps([task('a', 1, 'plan')], [{ op: 'split', taskId: 'a', parts: [{ title: 'Read' }, { title: 'Write', readOnly: false }] }], runners, catalog(false));
+    expect(res.tasks.map((t) => t.taskMode)).toEqual(['plan', 'auto']);
+  });
+
+  it('refuses a mode named on a merged task or a split part', () => {
+    expect(applyTaskOps(samplePlan(), [{ op: 'merge', taskIds: ['a', 'b'], merged: { title: 'Setup + Build', taskMode: 'bypassPermissions' } }], runners, catalog(true)).ok).toBe(false);
+    expect(applyTaskOps(samplePlan(), [{ op: 'split', taskId: 'b', parts: [{ title: 'Build core', taskMode: 'auto' }, { title: 'Build UI' }] }], runners, catalog(true)).ok).toBe(false);
+  });
+
+  it('decides an added task\'s subtasks as a plan\'s: read-only passes down unless a subtask says otherwise', () => {
+    const res = applyTaskOps(samplePlan(), [{ op: 'add', task: {
+      title: 'Add a cache', prompt: 'p', assignedRunner: 'claude-code', readOnly: true,
+      subtasks: [{ title: 'Read' }, { title: 'Write', readOnly: false, subtasks: [{ title: 'Deeper' }] }] as never,
+    } }], runners, catalog(false));
+    expect(res.ok).toBe(true);
+    const [read, write] = added(res)?.subtasks ?? [];
+    expect(read.taskMode).toBe('plan');
+    expect(write.taskMode).toBe('auto');
+    expect(write.subtasks[0].taskMode).toBe('auto');
+    expect(read).not.toHaveProperty('readOnly');
+  });
+
+  it('refuses a mode named on an added subtask', () => {
+    const res = applyTaskOps(samplePlan(), [{ op: 'add', task: { title: 'Add a cache', prompt: 'p', subtasks: [{ title: 'Child', taskMode: 'bypassPermissions' }] as never } }], runners, catalog(true));
+    expect(res.ok).toBe(false);
+    expect(res.errors[0]).toContain('readOnly');
+  });
+
+  it('refuses readOnly: true on a manual task, which runs in no mode', () => {
+    const manual = [createTask({ id: 'u', order: 1, title: 'Sign in', type: 'user', userSteps: [{ order: 1, instruction: 'x', completed: false }] })];
+    const update = applyTaskOps(manual, [{ op: 'update', taskId: 'u', changes: { readOnly: true } }], runners, catalog(true));
+    expect(update.ok).toBe(false);
+    expect(update.errors[0]).toContain('manual');
+    const add = applyTaskOps(samplePlan(), [{ op: 'add', task: { title: 'Sign in', type: 'user', readOnly: true } }], runners, catalog(true));
+    expect(add.ok).toBe(false);
+  });
+
+  it('says a task is already read-only only when it is', () => {
+    const res = applyTaskOps([task('a', 1, 'acceptEdits')], [{ op: 'update', taskId: 'a', changes: { readOnly: true } }], runners);
+    expect(res.summary.join(' ')).not.toContain('already read-only');
+    expect(applyTaskOps([task('a', 1, 'plan')], [{ op: 'update', taskId: 'a', changes: { readOnly: true } }], runners, catalog(true)).summary[0]).toContain('already read-only');
+  });
+
+  it('reports read-only in its summary, never the mode field', () => {
+    const plan = [task('a', 1, 'acceptEdits')];
+    const update = applyTaskOps(plan, [{ op: 'update', taskId: 'a', changes: { readOnly: true } }], runners, catalog(true));
+    expect(update.summary[0]).toContain('readOnly');
+    expect(update.summary[0]).not.toContain('taskMode');
+    const moved = applyTaskOps([task('a', 1, 'bypassPermissions')], [{ op: 'update', taskId: 'a', changes: { assignedRunner: 'opencode' } }], runners, catalog(true));
+    expect(moved.summary[0]).not.toContain('taskMode');
+    const rearm = applyTaskOps(plan, [{ op: 'rearm', taskId: 'a', changes: { readOnly: true } }], runners, catalog(true));
+    expect(rearm.summary[0]).not.toContain('taskMode');
+  });
+
+  it('leaves the user\'s own edit alone: any mode the runner has, at either level', () => {
+    expect(validateTaskEdit('direct', samplePlan(), 'a', { taskMode: 'bypassPermissions' }, catalog(false))).toEqual({ ok: true });
   });
 });

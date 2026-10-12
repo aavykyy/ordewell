@@ -55,7 +55,7 @@ roughly:
     "prompt": "Detailed instructions for the coding agent",
     "assignedModel": { "modelId": "…", "thinkingEffort": "low|medium|high" },
     "assignedRunner": "claude-code",                // drawn from plan.runners
-    "taskMode": "build|plan",                        // edits files, or read-only
+    "readOnly": true,                                // omit unless it must not change files
     "testingStrategy": "inline|separate_task|user_verify|none"
   }]
 }
@@ -102,15 +102,17 @@ defend.
 
 ## Per-task routing changes what "thinking effort" means
 
-Once the planner assigns a model *and* a thinking-effort tier *and* a mode per task, "effort" stops
+Once the planner assigns a model *and* a thinking-effort tier *and* says which tasks are read-only, "effort" stops
 being a global dial and becomes a scheduling decision:
 
 - A docs or config task → cheap model, low effort, and `testingStrategy: none`.
 - A security-sensitive refactor → strong model, high effort, with an inline verification command
   appended to its own prompt.
-- An analysis-only task → `taskMode: plan`, which selects the runner's native
-  planning mode. Task modes are distinct from the harness planner's stricter
-  controls; native planning modes can permit plan-file writes. See
+- An analysis-only task → `readOnly: true`, which selects the runner's native
+  read-only mode; every other task gets the runner's mode for the user's
+  Full/Guarded level ([ADR-0031](adr/0031-the-planner-says-read-only-not-a-mode.md)).
+  Task modes are distinct from the harness planner's stricter controls;
+  native planning modes can permit plan-file writes. See
   [ADR-0008](adr/0008-planner-exploration-envelope.md).
 
 The planner is making a portfolio decision across the whole job, not a single global setting. That's

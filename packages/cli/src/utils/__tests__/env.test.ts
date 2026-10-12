@@ -112,3 +112,48 @@ describe('loadEnvFile', () => {
     expect(process.env[key]).toBeUndefined();
   });
 });
+
+describe('moving the autonomy level out of .env (ADR-0030)', () => {
+  const file = () => path.join(os.tmpdir(), '.ordewell', '.env');
+  const saved = { path: process.env.ORDEWELL_SETTINGS_PATH, mode: process.env.ORDEWELL_AUTONOMOUS_MODE };
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-move-autonomy-'));
+    process.env.ORDEWELL_SETTINGS_PATH = path.join(dir, 'settings.json');
+    delete process.env.ORDEWELL_AUTONOMOUS_MODE;
+  });
+  afterEach(() => {
+    for (const [key, value] of [['ORDEWELL_SETTINGS_PATH', saved.path], ['ORDEWELL_AUTONOMOUS_MODE', saved.mode]] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('copies the level the .env held into the settings once, and takes it out of .env, so loading no longer overrides it', async () => {
+    const { moveAutonomyToSettings } = await import('../env');
+    const { SettingsService } = await import('@ordewell/core');
+    writeEnvVar(file(), 'OPENROUTER_API_KEY', 'sk-x');
+    writeEnvVar(file(), 'ORDEWELL_AUTONOMOUS_MODE', 'false');
+
+    moveAutonomyToSettings();
+    loadEnvFile();
+
+    expect(new SettingsService().getAll().autonomousMode).toBe(false);
+    expect(fs.readFileSync(file(), 'utf8')).not.toContain('ORDEWELL_AUTONOMOUS_MODE');
+    expect(fs.readFileSync(file(), 'utf8')).toContain('OPENROUTER_API_KEY=sk-x');
+    expect(process.env.ORDEWELL_AUTONOMOUS_MODE).toBeUndefined();
+  });
+
+  it('keeps a level already in the settings, and still clears the stale .env line', async () => {
+    const { moveAutonomyToSettings } = await import('../env');
+    const { SettingsService } = await import('@ordewell/core');
+    new SettingsService().setAutonomousMode(true);
+    writeEnvVar(file(), 'ORDEWELL_AUTONOMOUS_MODE', 'false');
+
+    moveAutonomyToSettings();
+
+    expect(new SettingsService().getAll().autonomousMode).toBe(true);
+    expect(fs.readFileSync(file(), 'utf8')).not.toContain('ORDEWELL_AUTONOMOUS_MODE');
+  });
+});

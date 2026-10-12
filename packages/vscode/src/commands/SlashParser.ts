@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import {
   enabledRunners, listSessions, loadSession, knownModelId, runnerForProvider, getProviderMeta,
   ORCHESTRATOR_SHORTCUTS, parseAutonomyLevel,
+  ACT_RISK, AUTORUN_RISK, automergeSummary, autorunSummary, parseCount, parseSwitch, supervisorSummary, type GlobalRunSettings,
 } from '@ordewell/core';
 import type { AiProvider, IConfig, RunnerRegistry, ModelResolver, SettingsService, RunnerModeInfo, DiscoveredModel } from '@ordewell/core';
 import type { ApiProvider } from '../adapters/SecretStore';
@@ -36,6 +37,10 @@ export interface SlashDeps {
   updateConfig(key: string, value: unknown): Promise<void>;
   /** Remember `model`/`effort` as the current provider's planner choice (keyed by `config.aiProvider` at write time). */
   recordPlannerModel(model: string, effort?: string): void;
+  /** Saves Full or Guarded in the user's settings file, which every surface shares (ADR-0030). */
+  saveAutonomy(enabled: boolean): void;
+  /** The user's run settings (ADR-0030): `change` saves them and applies them at once to this window's run. */
+  runSettings: { get(): GlobalRunSettings; change(changes: Partial<GlobalRunSettings>): void };
   log(msg: string): void;
 }
 
@@ -305,16 +310,61 @@ export async function handleSlashCommand(text: string, deps: SlashDeps): Promise
       return;
     }
     if (direct !== null) {
-      await deps.updateConfig('autonomousMode', direct);
+      deps.saveAutonomy(direct);
       vscode.window.showInformationMessage(applyAutonomousChoice(direct, runners, modesByRunner));
       return;
     }
     const items = resolveAutonomousQuickPickItems(runners, modesByRunner, deps.config.autonomousMode);
     const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Autonomy level for new plans' });
     if (!picked) return;
-    await deps.updateConfig('autonomousMode', picked.value);
+    deps.saveAutonomy(picked.value);
     vscode.window.showInformationMessage(applyAutonomousChoice(picked.value, runners, modesByRunner));
     return;
   }
+  if (cmd === '/supervisor' || cmd === '/automerge' || cmd === '/autorun') {
+    await runSettingsCommand(cmd, args, deps);
+    return;
+  }
   vscode.window.showWarningMessage(`Unknown command: ${cmd}. Type /help for available commands.`);
+}
+
+const RUN_SETTINGS_USAGE: Record<'/supervisor' | '/automerge' | '/autorun', string> = {
+  '/supervisor': 'Usage: /supervisor [off|watch|act] · /supervisor retries <n> · /supervisor reads <n>',
+  '/automerge': 'Usage: /automerge [on|off]',
+  '/autorun': 'Usage: /autorun [on|off]',
+};
+
+/** The run settings (ADR-0030): a bare command says the value, an argument sets it; Act and autorun ask first. */
+async function runSettingsCommand(cmd: '/supervisor' | '/automerge' | '/autorun', args: string[], deps: SlashDeps): Promise<void> {
+  const run = deps.runSettings.get();
+  const [arg, value] = args;
+  if (arg === undefined) {
+    const summary = cmd === '/supervisor' ? supervisorSummary(run) : cmd === '/automerge' ? automergeSummary(run) : autorunSummary(run);
+    vscode.window.showInformationMessage(`${summary}. ${RUN_SETTINGS_USAGE[cmd].replace(/^Usage: /, '')}`);
+    return;
+  }
+  const changes = runSettingsChange(cmd, arg, value);
+  if (!changes) {
+    vscode.window.showWarningMessage(RUN_SETTINGS_USAGE[cmd]);
+    return;
+  }
+  if (changes.supervisorLevel === 'act' && !(await confirmed('Let the supervisor act?', `At Act the supervisor runs, stops and retries tasks, edits the plan and merges, without asking you. ${ACT_RISK}`, 'Let it act'))) return;
+  if (changes.autorun === true && !(await confirmed('Start plans without review?', `Each plan the planner submits starts at once, as if you had pressed Execute. ${AUTORUN_RISK}`, 'Turn autorun on'))) return;
+  deps.runSettings.change(changes);
+}
+
+function runSettingsChange(cmd: '/supervisor' | '/automerge' | '/autorun', arg: string, value: string | undefined): Partial<GlobalRunSettings> | null {
+  if (cmd === '/supervisor') {
+    if (arg === 'off' || arg === 'watch' || arg === 'act') return { supervisorLevel: arg };
+    const n = parseCount(value, arg === 'reads' ? 1 : 0);
+    if (n === null) return null;
+    return arg === 'retries' ? { supervisorRetryLimit: n } : arg === 'reads' ? { wakeUpReadBudget: n } : null;
+  }
+  const enabled = parseSwitch(arg);
+  if (enabled === null) return null;
+  return cmd === '/automerge' ? { mergeAtGatesAutomatically: enabled } : { autorun: enabled };
+}
+
+async function confirmed(title: string, detail: string, confirm: string): Promise<boolean> {
+  return (await vscode.window.showWarningMessage(title, { modal: true, detail }, confirm)) === confirm;
 }

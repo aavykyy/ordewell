@@ -1,6 +1,6 @@
 # 0013 — Worktree isolation: one checkout per task, one branch per run
 
-**Status:** accepted — extended by [ADR-0014](0014-multi-repo-workspaces.md) (repo groups), [ADR-0015](0015-conflict-repair.md) (conflict repair), [ADR-0019](0019-nested-repos-shared-live.md) (nested repositories) and [ADR-0020](0020-ops-tasks-and-merge-gates.md) (ops tasks and merge gates)
+**Status:** accepted — extended by [ADR-0014](0014-multi-repo-workspaces.md) (repo groups), [ADR-0015](0015-conflict-repair.md) (conflict repair), [ADR-0019](0019-nested-repos-shared-live.md) (nested repositories) and [ADR-0020](0020-ops-tasks-and-merge-gates.md) (ops tasks and merge gates); amended by [ADR-0030](0030-global-run-settings.md) (merge consent is a global setting)
 
 Every AI task ran in the same working directory — the workspace root. With
 `maxParallelSessions` above one, several Runners edited that one tree at once.
@@ -166,7 +166,7 @@ everything below applies per repo of the group.
   there, since a copied `.envrc` is a plain untracked file.
 - **Merge into the user's branch requires consent.** Ordewell merges into
   the checked-out branch when the user presses Merge all, or opts into one of
-  ADR-0029's per-plan settings. When an isolated run settles, `handoff` runs and
+  ADR-0029's settings. When an isolated run settles, `handoff` runs and
   `isolation_handoff` (integration branches, base refs, what landed) is broadcast
   *before* `execution_complete` — the TUI closes its execution stream on the
   latter, so anything after it is lost. What follows is the user's: review the
@@ -183,7 +183,10 @@ everything below applies per repo of the group.
   `merge_all` in its wake-up turns. Both go through the same queue and
   preflight; a conflict or a dirty overlap aborts with the user's tree
   untouched, and the gate waits for the user. Without either, Ordewell never
-  merges on its own.
+  merges on its own. *Amended by [ADR-0030](0030-global-run-settings.md):*
+  both are global user settings (`/automerge`, `/supervisor act`), opted into
+  once rather than per plan, and a change applies at once to the session it
+  is made in.
 - **Integration branches go once their work is merged, never before.** Ordewell
   never deletes landed work the user has not merged, and never touches a branch
   it does not own. A Merge all that answers `merged` on a settled run clears it
@@ -382,3 +385,4 @@ everything below applies per repo of the group.
 - 2026-10-11 — implemented the automatic gate setting and core merge_all action.
 - 2026-10-11 — `merge_all` reaches the planner as a tool through the command seam, allowed only to a supervisor at Act ([ADR-0029](0029-the-supervisor.md)).
 - 2026-10-11 — a continue restores the previous attempt's preserved work (ADR-0018, K1).
+- 2026-10-12 — the merge consents become global user settings ([ADR-0030](0030-global-run-settings.md)).

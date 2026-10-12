@@ -117,6 +117,7 @@ export function applySettings(state: TuiState, settings: Partial<SettingsRespons
       settings.modelAllowlist && typeof settings.modelAllowlist === 'object'
         ? (settings.modelAllowlist as Record<string, string[]>)
         : state.allowlist,
+    runSettings: settings.run ?? state.runSettings,
   };
 }
 

@@ -78,7 +78,7 @@ describe('the supervisor at Watch: what wakes it', () => {
     const isolation = new FakeWorktreeIsolation();
     isolation.mergeResult = { outcome: 'conflict', repo: '.', files: ['src/a.ts'] };
     const deploy = task('o2', 2, { title: 'Deploy', ops: true, dependencies: ['t1'] });
-    const env = await supervised([task('t1', 1), deploy], { isolation, config: { worktreeIsolation: true }, plan: { mergeAtGatesAutomatically: true } });
+    const env = await supervised([task('t1', 1), deploy], { isolation, config: { worktreeIsolation: true }, settings: { mergeAtGatesAutomatically: true } });
 
     env.run.of('t1').reportComplete({ status: 'done', summary: '' });
     await until(() => isolation.calls.some((c) => c.op === 'mergeIntoCheckedOut'));
@@ -153,7 +153,7 @@ describe('the supervisor at Watch: what wakes it', () => {
   });
 
   it('stays asleep with the supervisor Off, and saves the level on the run as it starts', async () => {
-    const env = await supervised([task('t1', 1)], { plan: { supervisorLevel: undefined } });
+    const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'off' } });
 
     expect(env.session.planState!.runSettings).toMatchObject({ supervisorLevel: 'off' });
     env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
@@ -163,11 +163,10 @@ describe('the supervisor at Watch: what wakes it', () => {
     expect(env.planner.calls).toHaveLength(0);
   });
 
-  it('keeps the level the run started with when the plan setting changes mid-run', async () => {
+  it('keeps the level the run started with when the setting is changed in another session', async () => {
     const env = await supervised([task('t1', 1)]);
 
-    env.session.setSupervisorLevel('off');
-    expect(env.session.planState!.supervisorLevel).toBe('off');
+    env.settings.supervisorLevel = 'off';
     expect(env.session.planState!.runSettings).toMatchObject({ supervisorLevel: 'watch' });
     waitForInput(env.run.of('t1'));
     await settled();
@@ -269,7 +268,7 @@ describe('a wake-up turn', () => {
   });
 
   it('spends the plan\'s read budget in place of a user message\'s caps', async () => {
-    const env = await wokenUp({ plan: { wakeUpReadBudget: 2 } });
+    const env = await wokenUp({ settings: { wakeUpReadBudget: 2 } });
     const read = (ref: string) => env.planner.tools().taskQuery!({ tasks: [ref] }, ctx);
 
     const first = await read('1');
@@ -284,7 +283,7 @@ describe('a wake-up turn', () => {
   });
 
   it('keeps a user turn\'s caps: three reads before it is told to land', async () => {
-    const env = await supervised([task('t1', 1)], { plan: { wakeUpReadBudget: 1 } });
+    const env = await supervised([task('t1', 1)], { settings: { wakeUpReadBudget: 1 } });
     void env.session.continueConversation('how is task 1 going?');
     await until(() => env.planner.calls.length === 1);
     const read = () => env.planner.tools().taskQuery!({ tasks: ['1'], fields: ['description'] }, ctx);

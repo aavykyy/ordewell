@@ -52,6 +52,8 @@ export interface EditCatalog {
   runnerModes: Partial<Record<RunnerId, RunnerModeInfo[]>>;
   /** Raw (unfiltered) allowlist, keyed by runner — the same shape `coerceAssignments` takes. */
   perRunnerAllowlist?: Partial<Record<RunnerId, string[]>>;
+  /** Full (true) or Guarded: the mode a task the planner writes lands on unless it is read-only (ADR-0031). Full when absent. */
+  autonomousDefault?: boolean;
 }
 
 /**
@@ -176,8 +178,7 @@ export function validateTaskEdit(
   const ops = opsCheck(tasks, target, changes);
   if (ops) return ops;
 
-  const runner = changes.assignedRunner ?? target.assignedRunner;
-  const validity = checkModelAndModeValidity(runner, changes.assignedModel, changes.taskMode, catalog);
+  const validity = checkModelAndModeValidity(changes.assignedRunner ?? target.assignedRunner, changes.assignedModel, changes.taskMode, catalog);
   if (!validity.ok) return validity;
 
   return coherence ?? { ok: true };

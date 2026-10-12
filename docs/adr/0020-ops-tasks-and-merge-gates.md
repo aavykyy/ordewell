@@ -1,6 +1,6 @@
 # 0020 — Ops tasks run in the workspace, behind a merge gate
 
-**Status:** accepted — amends [ADR-0013](0013-worktree-isolation.md) and [ADR-0014](0014-multi-repo-workspaces.md)
+**Status:** accepted — amends [ADR-0013](0013-worktree-isolation.md) and [ADR-0014](0014-multi-repo-workspaces.md); amended by [ADR-0030](0030-global-run-settings.md)
 
 **Amends:** ADR-0013 (worktree isolation) — what Merge all does to a run still
 going, and when a run decides whether it isolates; ADR-0014 (multi-repo
@@ -103,6 +103,9 @@ that depends on.**
   resumes. The timeline records
   "auto-merged for task N", attributed to Ordewell setting. A supervisor at Act
   may also call `merge_all`.
+  *Amended by [ADR-0030](0030-global-run-settings.md):* it is a global user
+  setting, `/automerge`, not a plan setting; a change applies at once to the
+  session it is typed in, and to other sessions from their next run.
 - The plan shows it: an ops task carries an `ops` mark, and a gated task "waits
   for Merge all". Status updates carry each task's gate and a `RunMergeView`
   whenever landed work is not merged into the user's branch yet. It names that
@@ -214,3 +217,4 @@ it.
 - 2026-10-11 — implemented the automatic gate setting and core merge_all action.
 - 2026-10-11 — `merge_all` reaches the planner as a tool through the command seam, allowed only to a supervisor at Act ([ADR-0029](0029-the-supervisor.md)).
 - 2026-10-11 — wording: automatic merging resumes after any Merge all that goes through, an Act supervisor's `merge_all` included, as the code always did.
+- 2026-10-12 — merge at gates automatically becomes a global user setting, live in the session it is changed in ([ADR-0030](0030-global-run-settings.md)).

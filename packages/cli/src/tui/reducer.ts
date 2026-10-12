@@ -1,4 +1,4 @@
-import { EMPTY_HOLD, fromTranscript, holdPrompt, isSupervisorLevel, taskStartedNotice, type SupervisorLevel } from '@ordewell/core';
+import { EMPTY_HOLD, fromTranscript, holdPrompt, isSupervisorLevel, taskStartedNotice } from '@ordewell/core';
 import { isolationOfPlan } from '../isolation';
 import { chatEditorRoomFor } from './geometry';
 import { chatScrollMax } from './layout';
@@ -61,9 +61,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         ...clearIsolation(state),
         sessionId: null,
         goal: '',
-        mergeAtGatesAutomatically: false,
         runAutoMerge: null,
-        supervisorLevel: 'off',
         runSupervisor: null,
         taskView: null,
         pendingApprovals: [],
@@ -92,7 +90,6 @@ function reduceAction(state: TuiState, action: Action): Step {
       const next: TuiState = {
         ...state,
         tasks,
-        mergeAtGatesAutomatically: (action.plan as { mergeAtGatesAutomatically?: boolean })?.mergeAtGatesAutomatically === true,
         runAutoMerge: (action.plan as { runSettings?: { mergeAtGatesAutomatically: boolean } })?.runSettings?.mergeAtGatesAutomatically ?? null,
         ...supervisorOf(action.plan),
         handoff: isolation ? isolation.handoff : state.handoff,
@@ -247,6 +244,17 @@ function reduceAction(state: TuiState, action: Action): Step {
         busyLabel: '',
       });
     }
+
+    // Its own turn's plan comes back on the call `converse` awaits; the copy
+    // broadcast meanwhile would settle the turn before its reply is spoken.
+    case 'planBroadcast':
+      if (stale(state, action.sessionId) || plannerInFlight(state)) return step(state);
+      return reduceAction(state, { type: 'planUpdated', plan: action.plan, sessionId: action.sessionId });
+
+    // The follow is open while nothing runs, so its loss is news only with a run on screen.
+    case 'followLost':
+      if (stale(state, action.sessionId) || state.status !== 'executing') return step(state);
+      return reduceAction(state, { type: 'executionLost', sessionId: action.sessionId });
 
     case 'executionLost': {
       if (stale(state, action.sessionId)) return step(state);
@@ -527,14 +535,12 @@ function submit(state: TuiState): Step {
   return step({ ...spoken, status: 'planning', stopRequested: false }, [effect]);
 }
 
-/** The plan's supervisor level and its run's, read off a plan as loosely as the merge setting is: older plans have neither. */
-function supervisorOf(plan: unknown): Pick<TuiState, 'supervisorLevel' | 'runSupervisor'> {
-  const { supervisorLevel, runSettings } = (plan ?? {}) as { supervisorLevel?: unknown; runSettings?: { supervisorLevel?: unknown; unsupervised?: unknown } };
-  const level: SupervisorLevel = isSupervisorLevel(supervisorLevel) ? supervisorLevel : 'off';
-  if (!runSettings) return { supervisorLevel: level, runSupervisor: null };
+/** The run's own supervisor level, read off a plan loosely: a plan with no run has none. */
+function supervisorOf(plan: unknown): Pick<TuiState, 'runSupervisor'> {
+  const { runSettings } = (plan ?? {}) as { runSettings?: { supervisorLevel?: unknown; unsupervised?: unknown } };
+  if (!runSettings) return { runSupervisor: null };
   const unsupervised = typeof runSettings.unsupervised === 'string' ? runSettings.unsupervised : undefined;
   return {
-    supervisorLevel: level,
     runSupervisor: { level: isSupervisorLevel(runSettings.supervisorLevel) ? runSettings.supervisorLevel : 'off', ...(unsupervised ? { unsupervised } : {}) },
   };
 }

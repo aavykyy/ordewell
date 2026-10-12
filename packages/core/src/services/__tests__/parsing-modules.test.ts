@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { parsePlanJson, looksLikePlanAttempt } from '../PlanValidator';
+import { parsePlanJson, looksLikePlanAttempt, validatePlanTasks } from '../PlanValidator';
 import { generatePlanWithRepair, JSON_REPAIR_INSTRUCTION } from '../PlanRepair';
 import { extractJsonObject, PlanParseError } from '../JsonExtractor';
 import { parsePartialPlan } from '../PartialPlanParser';
-import { buildModeGuide, autonomyLevelLabel, parseAutonomyLevel } from '../ModeResolver';
+import { autonomyLevelLabel, parseAutonomyLevel } from '../ModeResolver';
 import { buildResearchPrompt, buildPlanWithResults, buildModifyPlanPrompt } from '../PlanPrompts';
+import { createTask } from '../../models/Task';
 
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
 
@@ -262,8 +263,8 @@ describe('parsePlanJson', () => {
     expect(parsePlanJson(onePlan(), RUNNERS)[0].taskMode).toBe('build');
   });
 
-  it('honours taskMode "plan"', () => {
-    expect(parsePlanJson(onePlan({ taskMode: 'plan' }), RUNNERS)[0].taskMode).toBe('plan');
+  it('gives a readOnly task "plan"', () => {
+    expect(parsePlanJson(onePlan({ readOnly: true }), RUNNERS)[0].taskMode).toBe('plan');
   });
 
   it('recurses into subtasks', () => {
@@ -419,11 +420,16 @@ describe('parsePartialPlan', () => {
     ]);
   });
 
-  it('surfaces the model label and mode of a completed task for chips', () => {
-    const partial = '{"tasks":[{"title":"A","assignedModel":{"modelLabel":"Opus 4.8"},"taskMode":"plan"}';
+  it('surfaces the model label and read-only mark of a completed task for chips', () => {
+    const partial = '{"tasks":[{"title":"A","assignedModel":{"modelLabel":"Opus 4.8"},"readOnly":true}';
     expect(parsePartialPlan(partial)).toEqual([
-      { title: 'A', status: 'complete', model: 'Opus 4.8', mode: 'plan' },
+      { title: 'A', status: 'complete', model: 'Opus 4.8', readOnly: true },
     ]);
+  });
+
+  it('reads a row\'s chips from the task itself, not from its subtasks', () => {
+    const partial = '{"tasks":[{"subtasks":[{"title":"Child","assignedModel":{"modelLabel":"Haiku"},"readOnly":true}],"title":"Parent"}';
+    expect(parsePartialPlan(partial)).toEqual([{ title: 'Parent', status: 'complete' }]);
   });
 
   it('omits model/mode while a task is still streaming them', () => {
@@ -534,55 +540,10 @@ describe('generatePlanWithRepair', () => {
   });
 });
 
-// --- Dynamic mode selection ---
 
-describe('buildModeGuide', () => {
-  const claudeModes = [
-    { id: 'default', label: 'Ask before edits', description: 'Standard mode: asks permission before editing files' },
-    { id: 'auto', label: 'Auto', description: 'Classifier approves or blocks each action', safe: true },
-    { id: 'acceptEdits', label: 'Edit automatically', description: 'Edits files without asking' },
-    { id: 'plan', label: 'Plan mode', description: 'Read-only analysis' },
-    { id: 'bypassPermissions', label: 'Bypass permissions', description: 'Skips all permission prompts', autonomous: true },
-  ];
-  const opencodeModes = [
-    { id: 'build', label: 'Build', description: 'Full access agent', autonomous: true, safe: true },
-    { id: 'plan', label: 'Plan', description: 'Read-only agent' },
-  ];
+// --- Modes: the planner says read-only, Ordewell picks the mode (ADR-0031) ---
 
-  it('shows only autonomous-compatible modes for claude-code under Full, safe-only modes hidden', () => {
-    const guide = buildModeGuide({ 'claude-code': claudeModes, 'opencode': opencodeModes }, true);
-    expect(guide).toContain('AVAILABLE MODES PER RUNNER');
-    // safe-only "auto" is filtered out
-    expect(guide).not.toContain('auto (');
-    // autonomous-tagged mode shown as DEFAULT
-    expect(guide).toContain('bypassPermissions (DEFAULT)');
-    // neutral untagged mode still listed
-    expect(guide).toContain('acceptEdits (');
-    // bypassPermissions listed before acceptEdits
-    expect(guide.indexOf('bypassPermissions')).toBeLessThan(guide.indexOf('acceptEdits'));
-  });
-
-  it('shows only safe-compatible modes for claude-code under Auto, autonomous-only modes hidden', () => {
-    const guide = buildModeGuide({ 'claude-code': claudeModes, 'opencode': opencodeModes }, false);
-    const ccLine = guide.split('\n').find((l) => l.startsWith('- claude-code:'))!;
-    const ocLine = guide.split('\n').find((l) => l.startsWith('- opencode:'))!;
-    // autonomous-only "bypassPermissions" is filtered out
-    expect(ccLine).not.toContain('bypassPermissions');
-    // safe-tagged mode shown as DEFAULT
-    expect(ccLine).toContain('auto (DEFAULT)');
-    expect(ccLine.indexOf('auto (DEFAULT)')).toBeLessThan(ccLine.indexOf('default ('));
-    // neutral untagged mode still listed
-    expect(ccLine).toContain('acceptEdits (');
-    // opencode.build wears both tags — visible under OFF too, annotated
-    expect(ocLine).toContain('build (DEFAULT)');
-  });
-
-  it('names the autonomy level the plan is generated under', () => {
-    const runners = { 'claude-code': claudeModes };
-    expect(buildModeGuide(runners, true)).toContain('Autonomy level: Full');
-    expect(buildModeGuide(runners, false)).toContain('Autonomy level: Guarded');
-  });
-
+describe('autonomy level names', () => {
   it('labels the two levels', () => {
     expect(autonomyLevelLabel(true)).toBe('Full');
     expect(autonomyLevelLabel(false)).toBe('Guarded');
@@ -595,304 +556,147 @@ describe('buildModeGuide', () => {
   ])('parses the level argument %s', (arg, expected) => {
     expect(parseAutonomyLevel(arg)).toBe(expected);
   });
-
-  it('omits plan modes from the guide listing', () => {
-    const guide = buildModeGuide({ 'claude-code': claudeModes, 'opencode': opencodeModes }, true);
-    const ccLine = guide.split('\n').find((l) => l.startsWith('- claude-code:'))!;
-    const ocLine = guide.split('\n').find((l) => l.startsWith('- opencode:'))!;
-    expect(ccLine).not.toContain('plan (');
-    expect(ocLine).not.toContain('plan (');
-  });
-
-  it('returns empty string for empty input', () => {
-    expect(buildModeGuide({})).toBe('');
-  });
-
-  it('skips runners with empty mode arrays', () => {
-    const guide = buildModeGuide({ 'claude-code': claudeModes, 'empty-runner': [] });
-    expect(guide).toContain('claude-code');
-    expect(guide).not.toContain('empty-runner');
-  });
 });
 
-describe('parsePlanJson with dynamic modes', () => {
-  const claudeModes = {
+describe('parsePlanJson modes', () => {
+  const runnerModes = {
     'claude-code': [
-      { id: 'default', label: 'Ask before edits', description: 'Standard mode' },
-      { id: 'acceptEdits', label: 'Edit automatically', description: 'Edits without asking' },
-      { id: 'plan', label: 'Plan mode', description: 'Read-only' },
-      { id: 'bypassPermissions', label: 'Bypass permissions', description: 'CI only' },
+      { id: 'default', label: 'Ask before edits', description: 'asks' },
+      { id: 'auto', label: 'Auto', description: 'classifier', safe: true },
+      { id: 'acceptEdits', label: 'Edit automatically', description: 'edits' },
+      { id: 'plan', label: 'Plan mode', description: 'read-only', readOnly: true },
+      { id: 'bypassPermissions', label: 'Bypass permissions', description: 'skips prompts', autonomous: true },
     ],
-    'opencode': [
-      { id: 'build', label: 'Build', description: 'Full access' },
-      { id: 'plan', label: 'Plan', description: 'Read-only' },
+    codex: [
+      { id: 'agent', label: 'Agent', description: 'workspace-write', safe: true },
+      { id: 'plan', label: 'Plan', description: 'read-only', readOnly: true },
+      { id: 'fullAccess', label: 'Full access', description: 'no sandbox', autonomous: true },
+    ],
+    custom: [
+      { id: 'write', label: 'Write', description: 'writes', autonomous: true, safe: true },
     ],
   };
+  const runners = ['claude-code', 'codex', 'custom'];
+  const planWith = (fields: Record<string, unknown>, runner = 'claude-code') => onePlan({ assignedRunner: runner, ...fields });
 
-  const mixedRunners = ['claude-code', 'opencode'];
-
-  const planWithMode = (mode: string, runner = 'claude-code') => JSON.stringify({
-    tasks: [{
-      id: 't1', order: 1, title: 'Test', description: 'd', type: 'ai',
-      dependencies: [], subtasks: [],
-      sliceType: 'AFK', autonomy: 'AFK',
-      taskMode: mode, assignedRunner: runner,
-    }],
+  it('gives each AI task its runner\'s mode for the level', () => {
+    expect(parsePlanJson(planWith({}), runners, runnerModes, true)[0].taskMode).toBe('bypassPermissions');
+    expect(parsePlanJson(planWith({}), runners, runnerModes, false)[0].taskMode).toBe('auto');
+    expect(parsePlanJson(planWith({}, 'codex'), runners, runnerModes, true)[0].taskMode).toBe('fullAccess');
+    expect(parsePlanJson(planWith({}, 'codex'), runners, runnerModes, false)[0].taskMode).toBe('agent');
   });
 
-  it('accepts a valid mode from the manifest', () => {
-    const tasks = parsePlanJson(planWithMode('acceptEdits'), ['claude-code'], claudeModes);
-    expect(tasks[0].taskMode).toBe('acceptEdits');
+  it('gives a read-only task its runner\'s read-only mode', () => {
+    expect(parsePlanJson(planWith({ readOnly: true }), runners, runnerModes, true)[0].taskMode).toBe('plan');
+    expect(parsePlanJson(planWith({ readOnly: true }, 'codex'), runners, runnerModes, false)[0].taskMode).toBe('plan');
   });
 
-  it('accepts bypassPermissions mode from the manifest', () => {
-    const tasks = parsePlanJson(planWithMode('bypassPermissions'), ['claude-code'], claudeModes);
-    expect(tasks[0].taskMode).toBe('bypassPermissions');
+  it('ignores a mode the planner names, and says so', () => {
+    const raw = JSON.parse(planWith({ taskMode: 'bypassPermissions' })) as { tasks: unknown[] };
+    const result = validatePlanTasks(raw, runners, runnerModes, false);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.tasks[0].taskMode).toBe('auto');
+    expect(result.warnings?.join(' ')).toContain('taskMode');
+    expect(parsePlanJson(planWith({ taskMode: 'plan' }), runners, runnerModes, true)[0].taskMode).toBe('bypassPermissions');
   });
 
-  it('accepts build mode for opencode', () => {
-    const tasks = parsePlanJson(planWithMode('build', 'opencode'), mixedRunners, claudeModes);
-    expect(tasks[0].taskMode).toBe('build');
+  it('refuses a read-only task on a runner without a read-only mode', () => {
+    const raw = JSON.parse(planWith({ readOnly: true }, 'custom')) as { tasks: unknown[] };
+    const result = validatePlanTasks(raw, runners, runnerModes, true);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors[0]).toMatchObject({ taskId: 't1', field: 'readOnly' });
+    expect(result.errors[0].message).toContain('claude-code, codex');
+    expect(() => parsePlanJson(planWith({ readOnly: true }, 'custom'), runners, runnerModes)).toThrow(PlanParseError);
   });
 
-  it('accepts plan mode for any runner', () => {
-    const tasks = parsePlanJson(planWithMode('plan'), ['claude-code'], claudeModes);
-    expect(tasks[0].taskMode).toBe('plan');
-  });
-
-  it('preserves a valid plan emission even when the toggle is ON', () => {
-    const tagged = {
-      'claude-code': [
-        { id: 'default', label: 'Ask', description: 'asks', safe: true },
-        { id: 'bypassPermissions', label: 'Auto', description: 'skips prompts', autonomous: true },
-        { id: 'plan', label: 'Plan', description: 'read-only' },
-      ],
-    };
-    const tasks = parsePlanJson(planWithMode('plan'), ['claude-code'], tagged, true);
-    expect(tasks[0].taskMode).toBe('plan');
-  });
-
-  it('resolves a missing mode to the toggle default when the runner declares modes', () => {
-    const codex = {
-      codex: [
-        { id: 'agent', label: 'Agent', description: 'workspace-write', safe: true },
-        { id: 'plan', label: 'Plan', description: 'read-only' },
-        { id: 'fullAccess', label: 'Full access', description: 'no sandbox', autonomous: true },
-      ],
-    };
-    const raw = JSON.stringify({
-      tasks: [{ id: 't1', order: 1, title: 'T', description: 'd', type: 'ai', dependencies: [], subtasks: [], sliceType: 'AFK', autonomy: 'AFK', assignedRunner: 'codex' }],
-    });
-    expect(parsePlanJson(raw, ['codex'], codex, true)[0].taskMode).toBe('fullAccess');
-    expect(parsePlanJson(raw, ['codex'], codex, false)[0].taskMode).toBe('agent');
-  });
-
-  it('accepts legacy "build" mode for claude-code (backward compat)', () => {
-    const tasks = parsePlanJson(planWithMode('build'), ['claude-code'], claudeModes);
-    expect(tasks[0].taskMode).toBe('build');
-  });
-
-  it('falls back to most-autonomous non-plan mode for invalid mode', () => {
-    const tasks = parsePlanJson(planWithMode('nonexistent'), ['claude-code'], claudeModes);
-    expect(tasks[0].taskMode).toBe('bypassPermissions');
-  });
-
-  it('falls back to the autonomous-tagged mode for invalid emissions when toggle is ON', () => {
-    const tagged = {
-      'claude-code': [
-        { id: 'default', label: 'Ask', description: 'asks', safe: true },
-        { id: 'acceptEdits', label: 'Edit', description: 'edits' },
-        { id: 'plan', label: 'Plan', description: 'read-only' },
-        { id: 'bypassPermissions', label: 'Auto', description: 'skips prompts', autonomous: true },
-      ],
-    };
-    const tasks = parsePlanJson(planWithMode('garbage'), ['claude-code'], tagged, true);
-    expect(tasks[0].taskMode).toBe('bypassPermissions');
-  });
-
-  it('falls back to the safe-tagged mode for invalid emissions when toggle is OFF', () => {
-    const tagged = {
-      'claude-code': [
-        { id: 'default', label: 'Ask', description: 'asks', safe: true },
-        { id: 'acceptEdits', label: 'Edit', description: 'edits' },
-        { id: 'plan', label: 'Plan', description: 'read-only' },
-        { id: 'bypassPermissions', label: 'Auto', description: 'skips prompts', autonomous: true },
-      ],
-    };
-    const tasks = parsePlanJson(planWithMode('garbage'), ['claude-code'], tagged, false);
-    expect(tasks[0].taskMode).toBe('default');
-  });
-
-  it('overrides valid mode that conflicts with toggle: safe mode → autonomous when ON', () => {
-    const tagged = {
-      'claude-code': [
-        { id: 'default', label: 'Ask', description: 'asks', safe: true },
-        { id: 'acceptEdits', label: 'Edit', description: 'edits' },
-        { id: 'plan', label: 'Plan', description: 'read-only' },
-        { id: 'bypassPermissions', label: 'Auto', description: 'skips prompts', autonomous: true },
-      ],
-    };
-    expect(parsePlanJson(planWithMode('default'), ['claude-code'], tagged, true)[0].taskMode).toBe('bypassPermissions');
-    expect(parsePlanJson(planWithMode('bypassPermissions'), ['claude-code'], tagged, false)[0].taskMode).toBe('default');
-  });
-
-  it('passes through untagged mode (acceptEdits) regardless of toggle', () => {
-    const tagged = {
-      'claude-code': [
-        { id: 'default', label: 'Ask', description: 'asks', safe: true },
-        { id: 'acceptEdits', label: 'Edit', description: 'edits' },
-        { id: 'plan', label: 'Plan', description: 'read-only' },
-        { id: 'bypassPermissions', label: 'Auto', description: 'skips prompts', autonomous: true },
-      ],
-    };
-    expect(parsePlanJson(planWithMode('acceptEdits'), ['claude-code'], tagged, true)[0].taskMode).toBe('acceptEdits');
-    expect(parsePlanJson(planWithMode('acceptEdits'), ['claude-code'], tagged, false)[0].taskMode).toBe('acceptEdits');
-  });
-
-  it('passes through dual-tagged mode (build) regardless of toggle', () => {
-    const dual = {
-      'opencode': [
-        { id: 'build', label: 'Build', description: 'full access', autonomous: true, safe: true },
-        { id: 'plan', label: 'Plan', description: 'read-only' },
-      ],
-    };
-    expect(parsePlanJson(planWithMode('build', 'opencode'), ['opencode'], dual, true)[0].taskMode).toBe('build');
-    expect(parsePlanJson(planWithMode('build', 'opencode'), ['opencode'], dual, false)[0].taskMode).toBe('build');
-  });
-
-  it('passes through byPassPermissions when toggle is ON (no conflict)', () => {
-    const tagged = {
-      'claude-code': [
-        { id: 'default', label: 'Ask', description: 'asks', safe: true },
-        { id: 'bypassPermissions', label: 'Auto', description: 'skips prompts', autonomous: true },
-        { id: 'plan', label: 'Plan', description: 'read-only' },
-      ],
-    };
-    const tasks = parsePlanJson(planWithMode('bypassPermissions'), ['claude-code'], tagged, true);
-    expect(tasks[0].taskMode).toBe('bypassPermissions');
-  });
-
-  it('falls back to most-autonomous non-plan mode for opencode invalid mode', () => {
-    const tasks = parsePlanJson(planWithMode('nonexistent', 'opencode'), mixedRunners, claudeModes);
-    expect(tasks[0].taskMode).toBe('build');
-  });
-
-  it('defaults to build when no taskMode is specified and no modes info available', () => {
-    const raw = JSON.stringify({
-      tasks: [{ id: 't1', order: 1, title: 'T', description: 'd', type: 'ai', dependencies: [], subtasks: [], sliceType: 'AFK', autonomy: 'AFK' }],
-    });
-    const tasks = parsePlanJson(raw, ['claude-code']);
-    expect(tasks[0].taskMode).toBe('build');
-  });
-
-  it('validates modes when runnerModes is partially provided', () => {
-    const partialModes = { 'claude-code': claudeModes['claude-code'] };
-    const tasks = parsePlanJson(planWithMode('acceptEdits'), ['claude-code'], partialModes);
-    expect(tasks[0].taskMode).toBe('acceptEdits');
-  });
-
-  it('passes through mode when runner has no modes defined', () => {
-    const tasks = parsePlanJson(planWithMode('some-mode', 'unknown-runner'), ['unknown-runner'], claudeModes);
-    expect(tasks[0].taskMode).toBe('some-mode');
-  });
-
-  it('works without runnerModes (backward compat, collapses to build/plan as before)', () => {
-    const t1 = parsePlanJson(planWithMode('plan'), ['claude-code']);
-    expect(t1[0].taskMode).toBe('plan');
-    const t2 = parsePlanJson(planWithMode('anything'), ['claude-code']);
-    expect(t2[0].taskMode).toBe('build');
-  });
-
-  it('validates mode in subtasks too', () => {
+  it('decides subtasks the same way', () => {
     const raw = JSON.stringify({
       tasks: [{
-        id: 'parent', order: 1, title: 'p', description: 'd', type: 'ai', dependencies: [], sliceType: 'AFK', autonomy: 'AFK',
-        subtasks: [{ id: 'child', order: 1, title: 'c', description: 'd', type: 'ai', dependencies: [],
-          taskMode: 'nonexistent', assignedRunner: 'claude-code', subtasks: [], sliceType: 'AFK', autonomy: 'AFK' }],
+        id: 'parent', order: 1, title: 'p', description: 'd', type: 'ai', dependencies: [], sliceType: 'AFK', autonomy: 'AFK', assignedRunner: 'claude-code',
+        subtasks: [{ id: 'child', order: 1, title: 'c', description: 'd', type: 'ai', dependencies: [], readOnly: true, assignedRunner: 'claude-code', subtasks: [] }],
       }],
     });
-    const tasks = parsePlanJson(raw, ['claude-code'], claudeModes);
-    expect(tasks[0].subtasks[0].taskMode).toBe('bypassPermissions');
+    const [parent] = parsePlanJson(raw, runners, runnerModes, false);
+    expect(parent.taskMode).toBe('auto');
+    expect(parent.subtasks[0].taskMode).toBe('plan');
+  });
+
+  it('passes a task\'s read-only down to its subtasks unless a subtask says otherwise', () => {
+    const raw = JSON.stringify({
+      tasks: [{
+        id: 'parent', order: 1, title: 'p', description: 'd', type: 'ai', dependencies: [], sliceType: 'AFK', autonomy: 'AFK', readOnly: true, assignedRunner: 'claude-code',
+        subtasks: [
+          { id: 'read', order: 1, title: 'r', description: 'd', type: 'ai', dependencies: [], assignedRunner: 'codex', subtasks: [] },
+          { id: 'write', order: 2, title: 'w', description: 'd', type: 'ai', dependencies: [], readOnly: false, assignedRunner: 'claude-code', subtasks: [] },
+        ],
+      }],
+    });
+    const [parent] = parsePlanJson(raw, runners, runnerModes, false);
+    expect(parent.subtasks.map((s) => s.taskMode)).toEqual(['plan', 'auto']);
+  });
+
+  it('falls back to positional last non-plan when no level tags exist', () => {
+    const untagged = { 'claude-code': [{ id: 'default', label: 'Ask', description: 'asks' }, { id: 'plan', label: 'Plan', description: 'read-only' }, { id: 'bypassPermissions', label: 'Bypass', description: 'skips' }] };
+    expect(parsePlanJson(planWith({}), ['claude-code'], untagged, false)[0].taskMode).toBe('bypassPermissions');
+  });
+
+  it('collapses to build/plan when no runner modes are known', () => {
+    expect(parsePlanJson(onePlan(), ['claude-code'])[0].taskMode).toBe('build');
+    expect(parsePlanJson(onePlan({ readOnly: true }), ['claude-code'])[0].taskMode).toBe('plan');
+    expect(parsePlanJson(onePlan({ taskMode: 'plan' }), ['claude-code'])[0].taskMode).toBe('build');
   });
 });
 
-describe('prompt contains dynamic mode guide', () => {
-  const taggedModes = {
+describe('the planner prompt asks for read-only, never a mode', () => {
+  const runnerModes = {
     'claude-code': [
-      { id: 'default', label: 'Ask', description: 'asks', safe: true },
+      { id: 'auto', label: 'Auto', description: 'classifier', safe: true },
       { id: 'acceptEdits', label: 'Edit', description: 'edits' },
-      { id: 'plan', label: 'Plan', description: 'read-only' },
-      { id: 'bypassPermissions', label: 'Auto', description: 'skips prompts', autonomous: true },
+      { id: 'plan', label: 'Plan', description: 'read-only', readOnly: true },
+      { id: 'bypassPermissions', label: 'Bypass', description: 'skips prompts', autonomous: true },
     ],
   };
 
-  it('shows autonomous modes and hides safe-only mode in prompt when toggle is ON', () => {
-    const prompt = buildResearchPrompt('g', '', {}, ['claude-code'], taggedModes, modes({ autonomousDefault: true }));
-    expect(prompt).toContain('bypassPermissions (DEFAULT)');
-    expect(prompt).toContain('acceptEdits');
-    // safe-only mode is filtered out entirely
-    expect(prompt).not.toContain('default (');
+  it.each([true, false])('names no mode id at either level (Full=%s)', (autonomousDefault) => {
+    const prompt = buildPlanWithResults('g', '', '', {}, ['claude-code'], runnerModes, modes({ autonomousDefault }));
+    expect(prompt).toContain('"readOnly"');
+    expect(prompt).not.toContain('"taskMode"');
+    for (const id of ['bypassPermissions', 'acceptEdits', '"auto"']) expect(prompt).not.toContain(id);
   });
 
-  it('shows safe modes and hides autonomous-only mode in prompt when toggle is OFF', () => {
-    const prompt = buildResearchPrompt('g', '', {}, ['claude-code'], taggedModes, modes({ autonomousDefault: false }));
-    expect(prompt).toContain('default (DEFAULT)');
-    expect(prompt).toContain('acceptEdits');
-    // autonomous-only mode is filtered out entirely
+  it('names the runners that can take a read-only task', () => {
+    const prompt = buildResearchPrompt('g', '', {}, ['claude-code', 'custom'], { ...runnerModes, custom: [{ id: 'write', label: 'W', description: 'w' }] }, modes());
+    const line = prompt.split('\n').find((l) => l.startsWith('Runners with a read-only mode')) ?? '';
+    expect(line).toContain('claude-code');
+    expect(line).not.toContain('custom');
+  });
+
+  it.each([true, false])('shows readOnly as false in the task template, so a copied example writes (Full=%s)', (autonomousDefault) => {
+    const prompt = buildPlanWithResults('g', '', '', {}, ['claude-code'], runnerModes, modes({ autonomousDefault }));
+    expect(prompt).toContain('"readOnly": false');
+    expect(prompt).not.toContain('"readOnly": true,');
+  });
+
+  it('shows the modify prompt which tasks are read-only, and no mode', () => {
+    const tasks = [
+      createTask({ id: 'r', order: 1, title: 'Review', assignedRunner: 'claude-code', taskMode: 'plan', subtasks: [createTask({ id: 's', order: 1, title: 'Sub', assignedRunner: 'claude-code', taskMode: 'bypassPermissions' })] }),
+      createTask({ id: 'w', order: 2, title: 'Write', assignedRunner: 'claude-code', taskMode: 'bypassPermissions' }),
+    ];
+    const existingPlan = { tasks, generatedAt: '', status: 'draft' as const, runners: ['claude-code' as const], lastUpdated: '' };
+    const prompt = buildModifyPlanPrompt(existingPlan, '', {}, undefined, runnerModes);
+    expect(prompt).not.toContain('taskMode');
     expect(prompt).not.toContain('bypassPermissions');
+    // The guide's own `"readOnly": true on an AI task` is not a task.
+    expect(prompt.match(/"readOnly": true(?! on)/g)).toHaveLength(1);
   });
 
-  it('lists only compatible MODE_EXAMPLES when toggle is ON', () => {
-    const prompt = buildPlanWithResults('g', '', '', {}, ['claude-code'], taggedModes, modes({ autonomousDefault: true }));
-    const examplesLine = prompt.split('\n').find((l) => l.includes('"taskMode"')) ?? '';
-    // safe-only "default" is filtered out of examples
-    expect(examplesLine).not.toContain('default');
-    expect(examplesLine).toContain('bypassPermissions');
-    expect(examplesLine).toContain('acceptEdits');
-  });
-
-  it('lists only compatible MODE_EXAMPLES when toggle is OFF', () => {
-    const prompt = buildPlanWithResults('g', '', '', {}, ['claude-code'], taggedModes, modes({ autonomousDefault: false }));
-    const examplesLine = prompt.split('\n').find((l) => l.includes('"taskMode"')) ?? '';
-    // autonomous-only "bypassPermissions" is filtered out of examples
-    expect(examplesLine).not.toContain('bypassPermissions');
-    expect(examplesLine).toContain('default');
-    expect(examplesLine).toContain('acceptEdits');
-  });
-
-  it('omits plan from the guide in buildModifyPlanPrompt too', () => {
+  it('asks the modify prompt to keep readOnly, not taskMode', () => {
     const existingPlan = { tasks: [], generatedAt: '', status: 'draft' as const, runners: ['claude-code' as const], lastUpdated: '' };
-    const prompt = buildModifyPlanPrompt(existingPlan, '', {}, undefined, taggedModes, true);
-    const guideLine = prompt.split('\n').find((l) => l.startsWith('- claude-code:')) ?? '';
-    expect(guideLine).not.toContain('plan (');
-  });
-});
-
-describe('resolveTaskMode degradation', () => {
-  it('falls back to positional last non-plan when no autonomous/safe tags exist (T8)', () => {
-    const untagged = {
-      'claude-code': [
-        { id: 'default', label: 'Ask', description: 'asks' },
-        { id: 'acceptEdits', label: 'Edit', description: 'edits' },
-        { id: 'plan', label: 'Plan', description: 'read-only' },
-        { id: 'bypassPermissions', label: 'Auto', description: 'skips' },
-      ],
-    };
-    const planWithMode = (mode: string) => JSON.stringify({
-      tasks: [{ id: 't1', order: 1, title: 'T', description: 'd', type: 'ai', dependencies: [], subtasks: [], sliceType: 'AFK', autonomy: 'AFK', taskMode: mode, assignedRunner: 'claude-code' }],
-    });
-    // ON with no tags: positional last non-plan → bypassPermissions
-    expect(parsePlanJson(planWithMode('garbage'), ['claude-code'], untagged, true)[0].taskMode).toBe('bypassPermissions');
-    // OFF with no tags: positional last non-plan → bypassPermissions (same — tags drive selection)
-    expect(parsePlanJson(planWithMode('garbage'), ['claude-code'], untagged, false)[0].taskMode).toBe('bypassPermissions');
-  });
-
-  it('collapses to build/plan when no runnerModes info is available (T9, backward compat)', () => {
-    const planWithMode = (mode: string | undefined) => JSON.stringify({
-      tasks: [{ id: 't1', order: 1, title: 'T', description: 'd', type: 'ai', dependencies: [], subtasks: [], sliceType: 'AFK', autonomy: 'AFK', ...(mode !== undefined ? { taskMode: mode } : {}) }],
-    });
-    expect(parsePlanJson(planWithMode('plan'), ['claude-code'])[0].taskMode).toBe('plan');
-    expect(parsePlanJson(planWithMode('anything'), ['claude-code'])[0].taskMode).toBe('build');
-    expect(parsePlanJson(planWithMode(undefined), ['claude-code'])[0].taskMode).toBe('build');
+    const prompt = buildModifyPlanPrompt(existingPlan, '', {}, undefined, runnerModes);
+    expect(prompt).toContain('readOnly');
+    expect(prompt).not.toContain('taskMode');
+    expect(prompt).not.toContain('bypassPermissions');
   });
 });

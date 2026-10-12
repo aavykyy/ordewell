@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
+import { RUN_SETTINGS_DEFAULTS } from '@ordewell/core';
 import type { OrchestratorPool } from '../../pool/orchestratorPool';
 
 function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
@@ -22,6 +23,7 @@ function settingsState(overrides: Partial<SettingsState> = {}): SettingsState {
     maxParallel: 3,
     modelAllowlist: undefined,
     plannerModels: undefined,
+    run: { ...RUN_SETTINGS_DEFAULTS },
     ...overrides,
   };
 }
@@ -53,6 +55,7 @@ describe('GET /api/settings', () => {
       plannerThinkingEffort: '',
       // How many tasks run at once — `/parallel` shows it from here.
       maxParallel: 3,
+      run: { ...RUN_SETTINGS_DEFAULTS },
     });
   });
 });

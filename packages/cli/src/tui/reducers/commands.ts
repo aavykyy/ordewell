@@ -13,6 +13,7 @@ import {
   addTask, confirmForceStartPastGate, openTaskDepsPicker, taskCommand, taskOpsCommand, taskEffortCommand, taskModeCommand, taskModelCommand, taskRunnerCommand, taskSkillsCommand,
 } from './taskEdits';
 import { stopPlanning } from './turnQueue';
+import { automergeCommand, autorunCommand, supervisorCommand } from './runSettings';
 import { fail, step, withSession, type Effect, type Step, type TaskAction } from './shared';
 
 const KNOWN_PROVIDERS = Object.keys(ALL_PROVIDERS);
@@ -65,6 +66,12 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
       return runners(state, args);
     case 'auto':
       return setAutonomous(state, args[0]);
+    case 'supervisor':
+      return supervisorCommand(state, args);
+    case 'automerge':
+      return automergeCommand(state, args[0]);
+    case 'autorun':
+      return autorunCommand(state, args[0]);
     case 'parallel':
       return setMaxParallel(state, args[0]);
     case 'mouse':
@@ -412,8 +419,9 @@ function setAutonomous(state: TuiState, arg: string | undefined): Step {
   if (arg === undefined) return step(say(state, 'system', `Autonomy level: ${autonomyLevelLabel(state.autonomous)} — /auto full or /auto guarded changes it for new plans.`));
   const enabled = parseAutonomyLevel(arg);
   if (enabled === null) return fail(state, 'Usage: /auto [full|guarded]');
-  // Updated here, not from the effect: nothing round-trips this setting back
-  // (it lives in .env), and a stale flag would freeze the toggle and the badge.
+  // Updated here, not from the effect: the daemon never answers this setting
+  // back (it is written to the settings file locally), and a stale flag would
+  // freeze the toggle and the badge.
   return step({ ...state, autonomous: enabled }, [{ type: 'setAutonomous', enabled }]);
 }
 

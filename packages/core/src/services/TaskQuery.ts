@@ -1,6 +1,6 @@
 import type { DiscoveredModel, RunnerId, Task } from '../models/Task';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_QUERY_ENVELOPE_KEY } from './JsonExtractor';
-import { resolveDefaultMode, type RunnerModeInfo } from './ModeResolver';
+import { readOnlyMode, type RunnerModeInfo } from './ModeResolver';
 import type { LiveTail, LiveTailOptions } from '../interfaces/TaskOutputSource';
 
 /**
@@ -186,7 +186,7 @@ export const TASK_QUERY_PROTOCOL: string[] = [
   '- "tasks": one or more task references. Ask for everything you need in ONE query — each query costs a round-trip.',
   '- "fields": optional. Omit it to get every field above.',
   '- "fields" may include "output": the recent clean output of a task that is running right now — the way to diagnose a task that looks stuck mid-execution. "outputLines" (default 80, at most 400) sets how many lines; "outputSince" resumes a previous read at the offset its answer reported. A task that is not running answers with a pointer to its outputSummary and verdict instead.',
-  '- "catalog": optional. Set it to true for the full runner and model catalog — every model id with its label and thinking-effort variants, and every task mode with its description. It works before any task exists, and may be used on its own.',
+  '- "catalog": optional. Set it to true for the full runner and model catalog — every model id with its label and thinking-effort variants, and whether each runner takes read-only tasks. It works before any task exists, and may be used on its own.',
   'Ordewell answers immediately with the detail and changes nothing. Then reply again with your taskOps JSON, or with prose for the user.',
   'Three queries per user message; after that every answer also tells you to land the turn. Do not ask the same question twice.',
 ];
@@ -331,13 +331,7 @@ function renderCatalog(catalog: TaskQueryCatalog): string[] {
         : ' variants: none';
       lines.push(`  - ${m.modelId} — ${m.modelLabel}${variants}`);
     }
-    const modes = catalog.modes[runner] ?? [];
-    lines.push(`${runner} task modes:`);
-    if (modes.length === 0) lines.push('  (none declared)');
-    const defaultId = resolveDefaultMode(modes, catalog.autonomousDefault);
-    for (const mode of modes) {
-      lines.push(`  - ${mode.id} — ${mode.label}: ${mode.description}${mode.id === defaultId ? ' (default)' : ''}`);
-    }
+    lines.push(`${runner} takes read-only tasks: ${readOnlyMode(catalog.modes[runner]) ? 'yes' : 'no'}`);
   }
   return lines;
 }

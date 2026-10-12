@@ -212,7 +212,8 @@ export * from './utils/taskLogStore';
 export { mintSessionId } from './utils/sessionId';
 export { extractPrdBlock, savePrdMarkdown, sanitizeSlug } from './utils/prdStore';
 export type { PrdBlock } from './utils/prdStore';
-export { SettingsService, getSettingsPath, type UserSettings } from './services/SettingsService';
+export { ACT_RISK, AUTORUN_RISK, SUPERVISOR_LEVEL_LABEL, automergeSummary, autorunSummary, parseCount, parseSwitch, supervisorSummary } from './services/runSettingsText';
+export { SettingsService, getSettingsPath, runSettingsOf, RUN_SETTINGS_DEFAULTS, RunSettingsError, type GlobalRunSettings, type UserSettings } from './services/SettingsService';
 export {
   PlannerModelMemory,
   type PlannerModelChoice,

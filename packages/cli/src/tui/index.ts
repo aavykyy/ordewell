@@ -1,4 +1,4 @@
-import { assertWorkspaceExists, createSkillsService, EnvConfig, mintSessionId } from '@ordewell/core';
+import { assertWorkspaceExists, createSkillsService, EnvConfig, mintSessionId, SettingsService } from '@ordewell/core';
 import { ensureDaemonOwned, findFreePort, resolvePort, stopDaemon } from '../daemon';
 import { ApiClient } from '../apiClient';
 import { flag, saveLastSession } from '../utils';
@@ -61,9 +61,6 @@ export async function handleTui(subArgs: string[]): Promise<void> {
   // eslint-disable-next-line prefer-const
   let terminal: ReturnType<typeof openTerminal> | undefined;
 
-  // Mirror BaseConfig.autonomousMode so the badge starts truthful when
-  // ORDEWELL_AUTONOMOUS_MODE is already set in the environment or .env.
-  const autoMode = process.env.ORDEWELL_AUTONOMOUS_MODE;
   // On unless explicitly refused. It used to be opt-in, but the opt-in was
   // persisted per workspace (`.env`), so the wheel died again in every other
   // project — a setting nobody can keep track of. `/mouse off` still hands the
@@ -71,7 +68,8 @@ export async function handleTui(subArgs: string[]): Promise<void> {
   const mouseCapture = process.env.ORDEWELL_TUI_MOUSE !== 'false' && process.env.ORDEWELL_TUI_MOUSE !== '0';
 
   const app = createApp({
-    initial: { workspace, autonomous: autoMode !== 'false' && autoMode !== '0', mouseCapture, taskSkills },
+    // The level the daemon plans with: the saved one, unless the environment overrides it (ADR-0030).
+    initial: { workspace, autonomous: new SettingsService().autonomousMode(), mouseCapture, taskSkills },
     draw: (frame) => terminal?.draw(frame),
     perform: (effect) =>
       runEffect(effect, {
@@ -83,6 +81,11 @@ export async function handleTui(subArgs: string[]): Promise<void> {
         setEnvVar: (key, value) => {
           writeEnvVar(findEnvFile(), key, value);
           process.env[key] = value;
+        },
+        saveAutonomy: (enabled) => {
+          const settings = new SettingsService();
+          settings.setAutonomousMode(enabled);
+          return { overridden: settings.autonomousModeOverridden() };
         },
         setMouseCapture: (enabled) => terminal?.setMouse(enabled),
         // The alt screen is up with the cursor hidden, so an OSC 52 write shows

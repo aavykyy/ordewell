@@ -2,7 +2,8 @@
 
 **Status:** accepted — amends [ADR-0009](0009-coding-agents-as-planners.md),
 [ADR-0013](0013-worktree-isolation.md), [ADR-0020](0020-ops-tasks-and-merge-gates.md)
-and [ADR-0022](0022-ordewell-mcp-server.md)
+and [ADR-0022](0022-ordewell-mcp-server.md); amended by [ADR-0030](0030-global-run-settings.md)
+(the settings are global, saved and live; autorun)
 
 **Amends:** ADR-0009 and ADR-0022 — the planner gains execution tools, a further
 explicit exception to harness planners being read-only; ADR-0013 — "never
@@ -65,6 +66,12 @@ or a failed supervisor lowers the level for the rest of the run, with a notice,
 and so can the user — drop to Watch, or turn it off — at any time during the
 run. A lowering takes effect at once, in the wake-up turn under way too: what
 that turn calls or edits next is checked against the lowered level.
+
+*Amended by [ADR-0030](0030-global-run-settings.md):* the level is a global
+user setting, Watch by default, set with `/supervisor`. A change applies at
+once, in either direction, to the session it is typed in, and to other
+sessions from their next run. The user's command also lifts a guard's or a
+failure's lowering, the guards' memory kept.
 
 The levels are a slim precursor of the mandate (#23). Watch is its `observe`
 grant; Act later becomes the bundle of `control` and `replan` (and the merge
@@ -189,6 +196,10 @@ narrow (deny), or hand the decision to a person.
 - **A user-started turn** follows #91. Stops and messages are always allowed —
   they only end or steer work. Starts and retries ask the user in Guarded and
   follow plan approval in Full. An unapproved task never starts, at any level.
+  *Amended by [ADR-0030](0030-global-run-settings.md):* with autorun on, a
+  plan the planner submits is approved and started as the user's standing
+  instruction; with autorun on and Full, the planner may also start a task it
+  added after the plan was approved.
   `merge_all` is refused: the user is in the conversation, and presses Merge
   all themselves.
 - **A wake-up turn under Watch** refuses every execution tool with "suggest it
@@ -278,6 +289,10 @@ This is a second, opt-in exit from ADR-0013's "never merged for the user",
 beside `merge_all` under Act. Both are switched on by the user per plan;
 without either, the user's Merge all stays the only path.
 
+*Amended by [ADR-0030](0030-global-run-settings.md):* a global user setting,
+`/automerge`, not a plan setting saved at run start; a change applies at once
+to the session it is typed in.
+
 ### Out of scope
 
 Spending limits and harness distribution (a separate design), delegation and
@@ -339,7 +354,10 @@ until #30 exists.
 - A plan gains: supervisor level, retry limit, wake-up read budget, merge at
   gates automatically, and pending turns — the user's messages and the
   wake-up batches not yet delivered. Older plans load as Off, with no
-  auto-merge.
+  auto-merge. *Amended by [ADR-0030](0030-global-run-settings.md):* the plan
+  keeps only the pending turns and the run's `runSettings`; the level, retry
+  limit, read budget and merge setting are global, and older plans' values are
+  ignored.
 - Act with ops tasks can act on real systems unattended. The level picker says
   so; #23 owns the narrower answer.
 - ADR-0013's "never merged for the user" holds unless the user opts in per plan.
@@ -378,3 +396,8 @@ until #30 exists.
   as the other surfaces' buttons do. The defaults are stated in the body: retry
   limit 2, wake-up read budget 12, wake-up debounce 5 s, wake-up turn timeout
   10 min, start-hold lapse 5 min, wake-up rate more than 6 in 30 min.
+- 2026-10-12 — amended by [ADR-0030](0030-global-run-settings.md): the level,
+  merge at gates automatically, the retry limit and the read budget become
+  global user settings changed by chat commands, applied at once to the
+  session they are typed in; Watch is the default; autorun starts a submitted
+  plan.

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { globalDataDir, writePrivateFile } from '@ordewell/core';
+import { SettingsService, globalDataDir, writePrivateFile } from '@ordewell/core';
 
 export function findEnvFile(): string {
   return join(globalDataDir(), '.env');
@@ -71,6 +71,33 @@ export function writeEnvVar(filePath: string, key: string, value: string): void 
 
   try {
     writePrivateFile(filePath, content);
+  } catch (err) {
+    console.error(`Could not write to ${filePath}: ${(err as Error).message}`);
+  }
+}
+
+const AUTONOMY_KEY = 'ORDEWELL_AUTONOMOUS_MODE';
+
+/**
+ * The autonomy level moved from `.env` to the settings file (ADR-0030). Run
+ * before {@link loadEnvFile}: a line left there would load as an environment
+ * override and hide every later `/auto`. The settings file's own value wins;
+ * an older install's line fills it once, and goes either way.
+ */
+export function moveAutonomyToSettings(): void {
+  const filePath = findEnvFile();
+  if (!existsSync(filePath)) return;
+  const lines = readFileSync(filePath, 'utf8').split('\n');
+  const index = lines.findIndex((line) => line.trim().replace(/^export\s+/, '').startsWith(`${AUTONOMY_KEY}=`));
+  if (index === -1) return;
+  const settings = new SettingsService();
+  if (settings.getAll().autonomousMode === undefined) {
+    const value = unquote(lines[index].slice(lines[index].indexOf('=') + 1).trim());
+    settings.setAutonomousMode(value !== 'false' && value !== '0');
+  }
+  lines.splice(index, 1);
+  try {
+    writePrivateFile(filePath, lines.join('\n'));
   } catch (err) {
     console.error(`Could not write to ${filePath}: ${(err as Error).message}`);
   }

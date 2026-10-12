@@ -94,7 +94,7 @@ describe('a task paused on a usage limit in the TUI', () => {
     const dispatch = vi.fn();
     const deps: EffectDeps = {
       api: { cancelResume } as unknown as OrdewellApi,
-      workspace: '/ws', port: 3742, dispatch, newSessionId: () => 's2', setEnvVar: () => {}, hasBin: () => true, exit: vi.fn(),
+      workspace: '/ws', port: 3742, dispatch, newSessionId: () => 's2', setEnvVar: () => {}, saveAutonomy: () => ({ overridden: false }), hasBin: () => true, exit: vi.fn(),
       reviveDaemon: vi.fn(), setMouseCapture: vi.fn(), writeTerminal: vi.fn(),
     };
     // Only the request is pinned; the plan refresh after it has no daemon to reach.

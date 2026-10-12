@@ -73,7 +73,7 @@ export const CLAUDE_CODE_MANIFEST: RunnerManifest = {
     { id: 'default', label: 'Ask before edits', description: 'Standard mode: asks permission before editing files', cliValue: 'default' },
     { id: 'auto', label: 'Auto', description: 'Claude\'s classifier approves or blocks each action, so routine work proceeds without prompts', cliValue: 'auto', safe: true },
     { id: 'acceptEdits', label: 'Edit automatically', description: 'Edits files without asking, still asks for risky operations', cliValue: 'acceptEdits' },
-    { id: 'plan', label: 'Plan mode', description: 'Read-only analysis, no edits allowed', cliValue: 'plan' },
+    { id: 'plan', label: 'Plan mode', description: 'Read-only analysis, no edits allowed', cliValue: 'plan', readOnly: true },
     { id: 'bypassPermissions', label: 'Bypass permissions', description: 'Skips all permission prompts — use for AI-driven autonomous runs', cliValue: 'bypassPermissions', autonomous: true },
   ],
 };

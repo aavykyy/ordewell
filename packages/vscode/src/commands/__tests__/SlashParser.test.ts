@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { window, commands } from '../../test/vscode.mock';
 import { handleSlashCommand, isKnownSlashCommand, type SlashDeps } from '../SlashParser';
-import type { DiscoveredModel } from '@ordewell/core';
+import { RUN_SETTINGS_DEFAULTS, type DiscoveredModel, type GlobalRunSettings } from '@ordewell/core';
 
 function harnessModel(modelId: string, variantIds: string[] = []): DiscoveredModel {
   return { modelId, modelLabel: modelId, variants: variantIds.map((id) => ({ id, label: id })) };
@@ -32,6 +32,8 @@ function makeDeps(overrides: Partial<SlashDeps> = {}): SlashDeps {
     pickModelWithProvider: async () => undefined,
     updateConfig: async () => {},
     recordPlannerModel: () => {},
+    runSettings: { get: () => ({ ...RUN_SETTINGS_DEFAULTS }), change: () => {} },
+    saveAutonomy: () => {},
     log: () => {},
     ...overrides,
   };
@@ -225,29 +227,91 @@ describe('conversation-editing slash commands', () => {
       ['on', true, 'Full'],
       ['off', false, 'Guarded'],
     ])('/auto %s stores %s and names the level %s', async (arg, stored, label) => {
-      const updateConfig = vi.fn(async () => {});
+      const saveAutonomy = vi.fn();
       mocked('showInformationMessage').mockClear();
-      await handleSlashCommand(`/auto ${arg}`, makeDeps({ updateConfig }));
-      expect(updateConfig).toHaveBeenCalledWith('autonomousMode', stored);
+      await handleSlashCommand(`/auto ${arg}`, makeDeps({ saveAutonomy }));
+      expect(saveAutonomy).toHaveBeenCalledWith(stored);
       expect(mocked('showInformationMessage').mock.calls[0][0]).toContain(`Autonomy level: ${label}.`);
     });
 
     it('a bare /auto offers the two levels by name, picking the current one', async () => {
-      const updateConfig = vi.fn(async () => {});
+      const saveAutonomy = vi.fn();
       mocked('showQuickPick').mockReset().mockResolvedValue(undefined);
-      await handleSlashCommand('/auto', makeDeps({ updateConfig }));
+      await handleSlashCommand('/auto', makeDeps({ saveAutonomy }));
       const items = mocked('showQuickPick').mock.calls[0][0] as { label: string; picked: boolean }[];
       expect(items.map((i) => i.label)).toEqual(['Full (recommended)', 'Guarded']);
       expect(items.map((i) => i.picked)).toEqual([true, false]);
-      expect(updateConfig).not.toHaveBeenCalled();
+      expect(saveAutonomy).not.toHaveBeenCalled();
     });
 
     it('an unknown level warns with the usage and changes nothing', async () => {
-      const updateConfig = vi.fn(async () => {});
+      const saveAutonomy = vi.fn();
       mocked('showWarningMessage').mockClear();
-      await handleSlashCommand('/auto maybe', makeDeps({ updateConfig }));
+      await handleSlashCommand('/auto maybe', makeDeps({ saveAutonomy }));
       expect(mocked('showWarningMessage').mock.calls[0][0]).toBe('Usage: /auto [full|guarded]');
-      expect(updateConfig).not.toHaveBeenCalled();
+      expect(saveAutonomy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('run settings (ADR-0030)', () => {
+    const mocked = (name: 'showInformationMessage' | 'showWarningMessage') =>
+      window[name] as unknown as ReturnType<typeof vi.fn>;
+    const settingsWith = (run: Partial<GlobalRunSettings> = {}) => {
+      const change = vi.fn();
+      return { change, deps: makeDeps({ runSettings: { get: () => ({ ...RUN_SETTINGS_DEFAULTS, ...run }), change } }) };
+    };
+
+    it.each([
+      ['/supervisor watch', { supervisorLevel: 'watch' }],
+      ['/supervisor off', { supervisorLevel: 'off' }],
+      ['/supervisor retries 3', { supervisorRetryLimit: 3 }],
+      ['/supervisor reads 20', { wakeUpReadBudget: 20 }],
+      ['/automerge on', { mergeAtGatesAutomatically: true }],
+      ['/autorun off', { autorun: false }],
+    ])('%s saves and applies %j', async (line, changes) => {
+      const { change, deps } = settingsWith();
+      await handleSlashCommand(line, deps);
+      expect(change).toHaveBeenCalledWith(changes);
+    });
+
+    it.each([
+      ['/supervisor act', { supervisorLevel: 'act' }, /ops tasks included/],
+      ['/autorun on', { autorun: true }, /without review, ops tasks included/],
+    ])('%s asks first, and changes nothing when declined', async (line, changes, risk) => {
+      const { change, deps } = settingsWith();
+      mocked('showWarningMessage').mockReset().mockResolvedValue(undefined);
+      await handleSlashCommand(line, deps);
+      expect(change).not.toHaveBeenCalled();
+      expect(JSON.stringify(mocked('showWarningMessage').mock.calls[0])).toMatch(risk);
+
+      const confirm = String(mocked('showWarningMessage').mock.calls[0].at(-1));
+      mocked('showWarningMessage').mockReset().mockResolvedValue(confirm);
+      await handleSlashCommand(line, deps);
+      expect(change).toHaveBeenCalledWith(changes);
+    });
+
+    it.each(['/supervisor boss', '/supervisor reads 0', '/supervisor retries many', '/automerge maybe', '/autorun yes'])('%s warns with the usage and changes nothing', async (line) => {
+      const { change, deps } = settingsWith();
+      mocked('showWarningMessage').mockReset();
+      await handleSlashCommand(line, deps);
+      expect(String(mocked('showWarningMessage').mock.calls[0][0])).toMatch(/^Usage: \//);
+      expect(change).not.toHaveBeenCalled();
+    });
+
+    it('a bare command says what the setting is', async () => {
+      const { deps } = settingsWith({ supervisorLevel: 'act', mergeAtGatesAutomatically: true });
+      mocked('showInformationMessage').mockClear();
+      await handleSlashCommand('/supervisor', deps);
+      await handleSlashCommand('/automerge', deps);
+      await handleSlashCommand('/autorun', deps);
+      const said = mocked('showInformationMessage').mock.calls.map((c) => String(c[0]));
+      expect(said[0]).toContain('Supervisor: Act, 2 retries per task, 12 reads per wake-up');
+      expect(said[1]).toContain('Merge at gates automatically: on');
+      expect(said[2]).toContain('Autorun: off');
+    });
+
+    it('are known commands', () => {
+      for (const name of ['/supervisor act', '/automerge', '/autorun on']) expect(isKnownSlashCommand(name)).toBe(true);
     });
   });
 

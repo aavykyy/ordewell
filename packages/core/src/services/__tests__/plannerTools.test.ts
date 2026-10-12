@@ -467,6 +467,20 @@ describe('list_runners and list_models', () => {
       models: [{ modelId: 'gpt-5', modelLabel: 'GPT-5', variants: [{ id: 'low', label: 'Low' }, { id: 'high', label: 'High' }] }],
     });
   });
+
+  it('say which runners take a read-only task, and name no mode (ADR-0031)', async () => {
+    let answer: unknown;
+    const { session } = plannerSession(fakeClaude({
+      turn: async (mcp) => {
+        answer = (await call(mcp!, 'list_runners')).body;
+        return 'What should it do?';
+      },
+    }), { enabledRunners: ['claude-code', 'codex'] });
+
+    await session.startPlanning('add a cache', ['claude-code', 'codex']);
+
+    expect(answer).toEqual({ autonomy: 'Full', runners: [{ id: 'claude-code', readOnly: true }, { id: 'codex', readOnly: true }] });
+  });
 });
 
 function planTask(id: string, order: number, runner: string, modelId: string, extra: Record<string, unknown> = {}) {
@@ -505,7 +519,7 @@ describe('submit_plan', () => {
         if (!message.includes('use codex too')) return 'Which runners should I use?';
         await call(mcp!, 'list_runners');
         await call(mcp!, 'list_models', { runner: 'codex' });
-        submitted = await call(mcp!, 'submit_plan', { tasks: [planTask('a', 1, 'claude-code', 'claude-sonnet-4'), planTask('b', 2, 'codex', 'gpt-5', { taskMode: 'auto' })] });
+        submitted = await call(mcp!, 'submit_plan', { tasks: [planTask('a', 1, 'claude-code', 'claude-sonnet-4'), planTask('b', 2, 'codex', 'gpt-5')] });
         return 'Submitted the plan.';
       },
     }));
@@ -540,6 +554,35 @@ describe('submit_plan', () => {
       { taskId: 'a', field: 'thinkingEffort', from: 'high', to: null },
     ]);
     expect(session.planTasks[0].assignedModel?.modelId).toBe('claude-sonnet-4');
+  });
+
+  it('gives a read-only task its runner\'s read-only mode and every other its mode for the level', async () => {
+    const { session } = plannerSession(fakeClaude({
+      turn: async (mcp) => {
+        await call(mcp!, 'submit_plan', { tasks: [planTask('a', 1, 'claude-code', 'claude-sonnet-4', { readOnly: true }), planTask('b', 2, 'claude-code', 'claude-sonnet-4')] });
+        return 'Submitted.';
+      },
+    }));
+
+    await session.startPlanning('review the cache', ['claude-code']);
+
+    expect(session.planTasks.map((t) => t.taskMode)).toEqual(['plan', 'bypassPermissions']);
+  });
+
+  it('ignores a mode the planner names, and says so', async () => {
+    let submitted: { isError: boolean; body: unknown } | undefined;
+    const { session } = plannerSession(fakeClaude({
+      turn: async (mcp) => {
+        submitted = await call(mcp!, 'submit_plan', { tasks: [planTask('a', 1, 'claude-code', 'claude-sonnet-4', { taskMode: 'default' })] });
+        return 'Submitted.';
+      },
+    }));
+
+    await session.startPlanning('add a cache', ['claude-code']);
+
+    expect(submitted?.isError).toBe(false);
+    expect((submitted?.body as { warnings?: string[] }).warnings?.join(' ')).toContain('"taskMode" is not yours to set');
+    expect(session.planTasks[0].taskMode).toBe('bypassPermissions');
   });
 });
 
@@ -867,7 +910,7 @@ describe('edit_plan with task skills', () => {
 });
 
 describe('edit_plan adding a task with subtasks', () => {
-  const sub = (title: string, skills: unknown[], subtasks: unknown[] = []) => ({ ...createTask({ title }), subtasks, skills });
+  const sub = (title: string, skills: unknown[], subtasks: unknown[] = []) => ({ title, subtasks, skills });
 
   it('refuses a whole batch when a descendant carries a planner skill, naming it, then lands nested names with their warnings', async () => {
     const answers: { isError: boolean; body: unknown }[] = [];
@@ -1185,7 +1228,7 @@ describe('task_query', () => {
     });
   });
 
-  it('with catalog: true, adds the live runners, models and modes', async () => {
+  it('with catalog: true, adds the live runners, their models, and whether each takes a read-only task', async () => {
     let answer: { body: unknown } | undefined;
     const { session, settings } = await planAndRead(async (mcp) => {
       answer = await call(mcp, 'task_query', { tasks: ['#1'], fields: ['description'], catalog: true });
@@ -1194,12 +1237,12 @@ describe('task_query', () => {
     settings({ enabledRunners: ['claude-code', 'codex'] });
     await session.continueConversation('READ NOW');
 
-    const { catalog } = answer!.body as { catalog: { runners: { id: string; models: { modelId: string }[]; modes: { id: string }[] }[] } };
+    const { catalog } = answer!.body as { catalog: { runners: { id: string; models: { modelId: string }[]; readOnly: boolean; modes?: unknown }[] } };
     expect(catalog.runners.map((r) => [r.id, r.models.map((m) => m.modelId)])).toEqual([
       ['claude-code', ['claude-sonnet-4', 'claude-opus-4']],
       ['codex', ['gpt-5']],
     ]);
-    expect(catalog.runners[0].modes.length).toBeGreaterThan(0);
+    expect(catalog.runners.map((r) => [r.readOnly, r.modes])).toEqual([[true, undefined], [true, undefined]]);
   });
 });
 

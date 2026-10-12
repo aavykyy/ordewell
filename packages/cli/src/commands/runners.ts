@@ -1,5 +1,4 @@
-import { autonomyLevelLabel, parseAutonomyLevel } from '@ordewell/core';
-import { findEnvFile, writeEnvVar } from '../utils/env';
+import { SettingsService, autonomyLevelLabel, parseAutonomyLevel } from '@ordewell/core';
 import type { ApiClient } from '../apiClient';
 import { positionals } from '../utils';
 import { connect, fail, fetchCatalog } from './shared';
@@ -36,15 +35,14 @@ export async function handleRunners(subArgs: string[], injectedApi?: ApiClient):
 const AUTO_USAGE = 'Usage: ordewell auto [full|guarded]';
 
 /**
- * The approval posture new sessions start in. It lives only in `.env` and is
- * read by the client at launch (the daemon has no say in it), so unlike every
- * other setting here there is nothing to push — which also means a running TUI
- * keeps its current badge until it restarts.
+ * The approval posture new plans start in, saved in the user's settings
+ * (ADR-0030), where the daemon reads it for each plan. Written here rather than
+ * through the daemon, which refuses it as approval posture.
  */
 export function handleAuto(subArgs: string[]): void {
   const [arg] = positionals(subArgs);
-  const currentRaw = process.env.ORDEWELL_AUTONOMOUS_MODE;
-  const current = currentRaw !== 'false' && currentRaw !== '0';
+  const settings = new SettingsService();
+  const current = settings.autonomousMode();
 
   if (!arg) {
     console.log(`Autonomy level: ${autonomyLevelLabel(current)}`);
@@ -55,9 +53,10 @@ export function handleAuto(subArgs: string[]): void {
   const enabled = parseAutonomyLevel(arg);
   if (enabled === null) fail(AUTO_USAGE);
 
-  writeEnvVar(findEnvFile(), 'ORDEWELL_AUTONOMOUS_MODE', String(enabled));
-  process.env.ORDEWELL_AUTONOMOUS_MODE = String(enabled);
-  console.log(`Autonomy level: ${autonomyLevelLabel(enabled)} for new sessions.`);
+  settings.setAutonomousMode(enabled);
+  console.log(settings.autonomousModeOverridden()
+    ? `${autonomyLevelLabel(enabled)} is saved, but ORDEWELL_AUTONOMOUS_MODE in the environment decides the level until it is unset.`
+    : `Autonomy level: ${autonomyLevelLabel(enabled)} for new plans.`);
 }
 
 /**

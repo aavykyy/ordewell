@@ -168,3 +168,33 @@ describe('a planner rewrite never undoes finished work', () => {
     expect(spawned).toEqual(['c']);
   });
 });
+
+describe('a planner rewrite keeps the modes the user picked (ADR-0031)', () => {
+  it('keeps a pending task\'s hand-picked mode where the rewrite leaves it writable, and takes read-only from the rewrite', async () => {
+    const session = makeSession({
+      aiService: {
+        startConversation: vi.fn(),
+        continueConversation: vi.fn(async () => ({
+          kind: 'plan' as const,
+          // As a parse hands them over: every mode freshly decided, the level's or read-only.
+          tasks: session.planTasks.map((t) => ({ ...t, taskMode: t.id === 'b' ? 'plan' : 'bypassPermissions' })),
+          text: '',
+          researchLog: [],
+        })),
+        hasActiveConversation: () => true,
+        reset: vi.fn(),
+      },
+    });
+    const plan = halfDonePlan();
+    plan.tasks = [
+      createTask({ id: 'a', order: 1, title: 'Setup', prompt: 'set it up', assignedRunner: 'claude-code', taskMode: 'default' }),
+      createTask({ id: 'b', order: 2, title: 'Review', prompt: 'review it', assignedRunner: 'claude-code', taskMode: 'acceptEdits' }),
+      createTask({ id: 'c', order: 3, title: 'Ship', prompt: 'ship it', assignedRunner: 'claude-code', taskMode: 'plan' }),
+    ];
+    session.loadPlan(plan, 'build it', testWorkspace, { persist: false });
+
+    await session.continueConversation('tidy the plan');
+
+    expect(session.planTasks.map((t) => [t.id, t.taskMode])).toEqual([['a', 'default'], ['b', 'plan'], ['c', 'bypassPermissions']]);
+  });
+});

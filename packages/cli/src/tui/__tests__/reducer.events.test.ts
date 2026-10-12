@@ -195,6 +195,20 @@ describe('execution', () => {
     expect(lastMessage(s)?.text).toContain('/load');
   });
 
+  // The follow socket is open while nothing runs, so losing it is only news
+  // when a run is on screen.
+  it('says the run is no longer followed when the follow is lost mid-run', () => {
+    const live = initialState({ ...withTasks, sessionId: 's1', status: 'executing', busyLabel: 'Running a' });
+    const s = send(live, { type: 'followLost', sessionId: 's1' });
+    expect(s.status).toBe('idle');
+    expect(lastMessage(s)?.text).toContain('Lost the connection');
+  });
+
+  it('says nothing when the follow is lost with no run on screen', () => {
+    const idle = initialState({ ...withTasks, sessionId: 's1' });
+    expect(send(idle, { type: 'followLost', sessionId: 's1' })).toBe(idle);
+  });
+
   // A run whose last live task is cancelled or marked done can never restart if
   // the indicator stays "executing": the daemon refuses the next Execute as
   // "already executing". The tasks are the truth, not the stream.

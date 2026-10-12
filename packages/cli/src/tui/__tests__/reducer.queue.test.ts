@@ -379,3 +379,32 @@ describe('rendering — the armed stop hint', () => {
     }
   });
 });
+
+// The daemon broadcasts the plan a turn lands to every socket on the session,
+// and the follow socket is open through every turn: its copy can beat the REST
+// answer `converse` settles the turn with.
+describe('a plan broadcast during the surface\'s own turn', () => {
+  it('neither settles the turn nor sends the queued prompt', () => {
+    const state = run('follow up', planningState()).state;
+    const { state: after, effects } = reduce(state, {
+      type: 'planBroadcast',
+      plan: { tasks: [task({ title: 'Edited' })] },
+      sessionId: 'session-1',
+    });
+
+    expect(after.status).toBe('planning');
+    expect(after.queuedPrompts).toEqual(['follow up']);
+    expect(effects).toEqual([]);
+  });
+
+  it('updates the pane when no turn of this surface is out (a supervisor\'s edit)', () => {
+    const state = initialState({ sessionId: 'session-1', tasks: [task({})], status: 'executing' });
+    const { state: after } = reduce(state, {
+      type: 'planBroadcast',
+      plan: { tasks: [task({ title: 'Edited', status: 'in_progress' })] },
+      sessionId: 'session-1',
+    });
+
+    expect(after.tasks[0].title).toBe('Edited');
+  });
+});

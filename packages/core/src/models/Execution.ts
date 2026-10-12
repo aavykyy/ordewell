@@ -17,7 +17,9 @@ export function isSupervisorLevel(value: unknown): value is SupervisorLevel {
 export type ExecutionActor =
   | { kind: 'user' }
   | { kind: 'planner-turn' }
-  | { kind: 'supervisor'; level: SupervisorLevel };
+  | { kind: 'supervisor'; level: SupervisorLevel }
+  /** The user's standing instruction to start each plan the planner submits (ADR-0030). */
+  | { kind: 'autorun' };
 
 export type ExecutionCommandName =
   | 'run_plan'

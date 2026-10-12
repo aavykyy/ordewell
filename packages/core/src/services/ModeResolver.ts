@@ -1,4 +1,4 @@
-import type { RunnerId } from '../models/Task';
+import { flattenTasks, type RunnerId, type Task } from '../models/Task';
 
 export interface RunnerModeInfo {
   id: string;
@@ -6,6 +6,7 @@ export interface RunnerModeInfo {
   description: string;
   autonomous?: boolean;
   safe?: boolean;
+  readOnly?: boolean;
 }
 
 /** The slice of RunnerRegistry this module needs — structural, so nothing here depends on the manifest layer. */
@@ -33,7 +34,7 @@ export function runnerModesFrom(registry: ManifestLookup, runners: RunnerId[]): 
  * Returns undefined if `modes` is empty or undefined.
  */
 export function resolveDefaultMode(
-  modes: RunnerModeInfo[] | undefined,
+  modes: readonly RunnerModeInfo[] | undefined,
   autonomousDefault = true,
 ): string | undefined {
   if (!modes || modes.length === 0) return undefined;
@@ -41,38 +42,9 @@ export function resolveDefaultMode(
   const tagged = modes.find((m) => m[tag]);
   if (tagged) return tagged.id;
   for (let i = modes.length - 1; i >= 0; i--) {
-    if (modes[i].id !== 'plan') return modes[i].id;
+    if (!modes[i].readOnly && modes[i].id !== 'plan') return modes[i].id;
   }
   return undefined;
-}
-
-function isDefaultMode(m: RunnerModeInfo, autonomousDefault: boolean): boolean {
-  return autonomousDefault ? !!m.autonomous : !!m.safe;
-}
-
-function modeConflictsWithToggle(
-  mode: RunnerModeInfo,
-  autonomousDefault: boolean,
-): boolean {
-  if (autonomousDefault) return !!mode.safe && !mode.autonomous;
-  return !!mode.autonomous && !mode.safe;
-}
-
-/**
- * Build modes compatible with the current toggle. Plan is excluded from the
- * build-mode list (it is never a default for implementation tasks). Modes
- * tagged exclusively for the OPPOSITE toggle are hidden — the LLM cannot see
- * or select them. A dual-tagged mode (both autonomous + safe) is shown under
- * either toggle.
- */
-export function filteredBuildModes(modes: RunnerModeInfo[], autonomousDefault: boolean): RunnerModeInfo[] {
-  const buildModes = modes.filter((m) => m.id !== 'plan' && !modeConflictsWithToggle(m, autonomousDefault));
-  const defaultIdx = buildModes.findIndex((m) => isDefaultMode(m, autonomousDefault));
-  if (defaultIdx > 0) {
-    const [def] = buildModes.splice(defaultIdx, 1);
-    buildModes.unshift(def);
-  }
-  return buildModes;
 }
 
 /** The user-facing name of the `autonomousMode` boolean's two states. */
@@ -89,64 +61,72 @@ export function parseAutonomyLevel(arg: string | undefined): boolean | null {
   }
 }
 
-export function buildModeGuide(
-  runnerModes: Record<RunnerId, RunnerModeInfo[]>,
-  autonomousDefault = true,
-): string {
-  const lines: string[] = [];
-  for (const [runnerId, modes] of Object.entries(runnerModes)) {
-    if (!modes || modes.length === 0) continue;
-    const filtered = filteredBuildModes(modes, autonomousDefault);
-    if (filtered.length === 0) continue;
-    const modeStr = filtered
-      .map((m) => {
-        const tag = isDefaultMode(m, autonomousDefault) ? ' (DEFAULT)' : '';
-        return `${m.id}${tag} (${m.description})`;
-      })
-      .join(', ');
-    lines.push(`- ${runnerId}: ${modeStr}`);
-  }
-  if (lines.length === 0) return '';
-
-  return [
-    `Autonomy level: ${autonomyLevelLabel(autonomousDefault)}.`,
-    'AVAILABLE MODES PER RUNNER:',
-    ...lines,
-    '',
-    'For each AI task, use the mode marked (DEFAULT) unless the task needs a different compatible mode listed above. Avoid the "plan" mode (read-only) unless the user explicitly requested analysis-only.',
-  ].join('\n');
+/** The mode a manifest tags `readOnly` — never found by id, so a runner with no tag has none. */
+export function readOnlyMode(modes: readonly RunnerModeInfo[] | undefined): string | undefined {
+  return modes?.find((m) => m.readOnly)?.id;
 }
 
-export function resolveTaskMode(
-  emittedMode: string | undefined,
-  runnerId: RunnerId,
-  runnerModes: Record<RunnerId, RunnerModeInfo[]> | undefined,
+/** What the planner says about a task's mode (ADR-0031): read-only or not, and the mode the task has now, if any. */
+export interface ModeRequest {
+  readOnly?: boolean;
+  current?: string;
+}
+
+export type PlannedMode = { ok: true; mode: string | undefined } | { ok: false; error: string };
+
+/**
+ * The mode a task the planner writes lands on (ADR-0031). The planner names no
+ * mode: a read-only task gets its runner's read-only mode; any other keeps the
+ * mode it has when the runner offers it — a mode the user picked survives an
+ * edit that does not ask for a change — and otherwise gets the runner's mode
+ * for the level. `readOnly: false` is the one request that moves a task off
+ * its read-only mode. Undefined mode when the runner's modes are unknown.
+ */
+export function plannedMode(
+  runner: RunnerId,
+  runnerModes: Partial<Record<RunnerId, readonly RunnerModeInfo[]>> | undefined,
+  { readOnly, current }: ModeRequest,
   autonomousDefault = true,
-): string {
-  const rawMode = (emittedMode as string) || 'build';
-
-  if (!runnerModes) return rawMode === 'plan' ? 'plan' : 'build';
-
-  const modes = runnerModes[runnerId];
-
-  if (!modes || modes.length === 0) return rawMode;
-
-  // A missing mode is an invalid emission, not a request for legacy `build` —
-  // which on Codex aliases the workspace-write sandbox, not full access.
-  if (!emittedMode) return resolveDefaultMode(modes, autonomousDefault) ?? 'build';
-
-  const validIds = new Set(modes.map((m) => m.id));
-
-  if (rawMode === 'build' || validIds.has(rawMode)) {
-    if (rawMode === 'plan' || rawMode === 'build') return rawMode;
-    const modeObj = modes.find((m) => m.id === rawMode);
-    if (modeObj && modeConflictsWithToggle(modeObj, autonomousDefault)) {
-      const fallback = resolveDefaultMode(modes, autonomousDefault);
-      return fallback ?? 'build';
-    }
-    return rawMode;
+): PlannedMode {
+  if (!runnerModes) return { ok: true, mode: undefined };
+  const modes = runnerModes[runner] ?? [];
+  const readOnlyId = readOnlyMode(modes);
+  if (readOnly === true) {
+    if (readOnlyId) return { ok: true, mode: readOnlyId };
+    const able = readOnlyRunners(runnerModes);
+    return {
+      ok: false,
+      error: `Runner "${runner}" has no read-only mode — assign a read-only task to ${able.length > 0 ? `one of: ${able.join(', ')}` : 'no runner: none of the enabled runners has one'}, or drop "readOnly"`,
+    };
   }
+  const keep = current !== undefined && modes.some((m) => m.id === current) && !(readOnly === false && current === readOnlyId);
+  return { ok: true, mode: keep ? current : resolveDefaultMode(modes, autonomousDefault) };
+}
 
-  const fallback = resolveDefaultMode(modes, autonomousDefault);
-  return fallback ?? 'build';
+/**
+ * A plan the planner restates over an existing one comes back with every mode
+ * decided afresh. A restatement says read-only or not for each task, so that
+ * answer stands; what it cannot say is a mode the user picked. So where a
+ * task it names was planned before and is not read-only now, the earlier mode
+ * is kept when its runner offers it — the rule an edit follows.
+ */
+export function carryPlannedModes(
+  before: readonly Task[],
+  rewrite: Task[],
+  catalog: { runnerModes: Partial<Record<RunnerId, readonly RunnerModeInfo[]>>; autonomousDefault?: boolean },
+): Task[] {
+  const prior = new Map(flattenTasks(before).map((t) => [t.id, t]));
+  const carry = (t: Task): Task => {
+    const subtasks = (t.subtasks ?? []).map(carry);
+    const was = prior.get(t.id);
+    if (t.type === 'user' || !was || was.type === 'user' || t.taskMode === readOnlyMode(catalog.runnerModes[t.assignedRunner])) return { ...t, subtasks };
+    const mode = plannedMode(t.assignedRunner, catalog.runnerModes, { readOnly: false, current: was.taskMode }, catalog.autonomousDefault ?? true);
+    return { ...t, subtasks, ...(mode.ok && mode.mode !== undefined ? { taskMode: mode.mode } : {}) };
+  };
+  return rewrite.map(carry);
+}
+
+/** The runners a read-only task may go to, as the planner's prompt names them. */
+export function readOnlyRunners(runnerModes: Partial<Record<RunnerId, readonly RunnerModeInfo[]>>): RunnerId[] {
+  return Object.entries(runnerModes).filter(([, ms]) => readOnlyMode(ms)).map(([id]) => id);
 }

@@ -9,7 +9,7 @@ import type { ConversationCompaction, RewindTarget } from './services/PlannerCon
 import type { PlannerModelRecall } from './services/PlannerModelMemory';
 import type { OrchestratorOption } from './services/ProviderRouting';
 import type { RunnerModeInfo } from './services/ModeResolver';
-import type { UserSettings } from './services/SettingsService';
+import type { GlobalRunSettings, UserSettings } from './services/SettingsService';
 import type { TaskLogEvent } from './models/TaskLog';
 
 /**
@@ -206,6 +206,8 @@ export interface SettingsResponse {
   maxParallel: number;
   modelAllowlist: UserSettings['modelAllowlist'];
   plannerModels: UserSettings['plannerModels'];
+  /** The user's run settings (ADR-0030), each at its default until set. */
+  run: GlobalRunSettings;
 }
 
 /** What `PATCH /api/settings` answers: the settings as they now stand, plus what the write itself decided. */

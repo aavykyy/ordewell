@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { AiProvider, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, parseMaxParallel, normalizeGeminiModel, resolveProvider, ALL_PROVIDERS, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET } from '@ordewell/core';
-import type { ProviderModelLists } from '@ordewell/core';
+import type { ProviderModelLists, SettingsService } from '@ordewell/core';
 import { SecretStore, type ApiProvider, type SecretKey } from './SecretStore';
 
 export class VsCodeConfig extends BaseConfig {
@@ -227,7 +227,6 @@ export class VsCodeConfig extends BaseConfig {
   get researchEnabled() { return this.config.get<boolean>('researchEnabled', true); }
   get researchMaxSteps() { return this.config.get<number>('researchMaxSteps', 48); }
   get researchMaxFileSize() { return this.config.get<number>('researchMaxFileSize', 10); }
-  get autonomousMode() { return this.config.get<boolean>('autonomousMode', true); }
   get approvalMode() {
     if (process.env.ORDEWELL_APPROVAL_MODE !== undefined) return super.approvalMode;
     return parseApprovalModeSetting(this.config.get<string>('plannerApprovals', 'auto'));
@@ -273,5 +272,26 @@ export class VsCodeConfig extends BaseConfig {
     return vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('ordewell')) listener();
     });
+  }
+}
+
+/**
+ * Full/Guarded moved from VS Code's `ordewell.autonomousMode` to the user's
+ * settings file, which every surface shares (ADR-0030). A level set there is
+ * copied once, unless the file already has one, and the old setting cleared;
+ * a VS Code that refuses to clear a setting it no longer declares leaves it
+ * unread, which is harmless.
+ */
+export async function moveAutonomyFromVsCodeSetting(settings: SettingsService): Promise<void> {
+  const config = vscode.workspace.getConfiguration('ordewell');
+  const seen = config.inspect<boolean>('autonomousMode');
+  const value = seen?.globalValue ?? seen?.workspaceValue;
+  if (typeof value !== 'boolean') return;
+  if (settings.getAll().autonomousMode === undefined) settings.setAutonomousMode(value);
+  try {
+    if (seen?.globalValue !== undefined) await config.update('autonomousMode', undefined, true);
+    if (seen?.workspaceValue !== undefined) await config.update('autonomousMode', undefined, false);
+  } catch {
+    // Not declared any more, so VS Code may refuse the write; the value is already copied.
   }
 }

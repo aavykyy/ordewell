@@ -11,6 +11,7 @@ import { taskActionEffect } from './planPane';
 import { assignTaskEffort, assignTaskSkills, assignTaskMode, assignTaskModel, assignTaskRunner } from './taskEdits';
 import { say } from '../transcript';
 import { clamp, fail, step, type Step } from './shared';
+import { runSettingsEffect } from './runSettings';
 
 export function handleOverlayKey(state: TuiState, overlay: NonNullable<TuiState['overlay']>, key: Key): Step {
   if (overlay.kind === 'help') return handleHelpKey(state, overlay.scroll ?? 0, key);
@@ -71,10 +72,8 @@ function runConfirm(
     if (!state.sessionId) return step(closed);
     return step(closed, [taskActionEffect(closed, state.sessionId, overlay.action.taskId, 'force-start')]);
   }
-  if (overlay.action.kind === 'supervisor-act') {
-    if (!state.sessionId) return step(closed);
-    return step(closed, [{ type: 'setSupervisorLevel', sessionId: state.sessionId, level: 'act' }]);
-  }
+  if (overlay.action.kind === 'supervisor-act') return step(closed, [runSettingsEffect(closed, { supervisorLevel: 'act' })]);
+  if (overlay.action.kind === 'autorun-on') return step(closed, [runSettingsEffect(closed, { autorun: true })]);
   if (overlay.action.kind === 'merge-run' || overlay.action.kind === 'discard-run') {
     return confirmedHandoff(state, overlay.action.kind);
   }

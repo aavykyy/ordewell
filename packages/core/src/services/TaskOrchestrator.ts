@@ -608,6 +608,9 @@ export class TaskOrchestrator {
     return { taskId: id, attempt: n, phase, sessionId: session?.id ?? null, runner, cwd, startedAt, skills };
   }
 
+  /** A planner turn holds new starts: what is ready starts when it releases them. */
+  get startsHeld(): boolean { return this.startHolds > 0; }
+
   /**
    * Hold the scheduler's new starts while a planner turn decides what runs
    * next, so its edits do not race a task that would otherwise start under
@@ -1055,6 +1058,14 @@ export class TaskOrchestrator {
 
   setMergeAtGatesAutomatically(enabled: boolean): void {
     this.nextAutoMerge = enabled;
+  }
+
+  /** The run under way merges at gates, or stops, from now on (ADR-0030); a gate already reached merges at once. */
+  setMergeAtGatesNow(enabled: boolean): void {
+    this.nextAutoMerge = enabled;
+    if (!this.runs.isOpen || this.autoMerge === enabled) return;
+    this.autoMerge = enabled;
+    if (enabled && this.running) void this.tick();
   }
 
   private openRun(): void {

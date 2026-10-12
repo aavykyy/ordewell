@@ -1,4 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { SettingsService } from '../../services/SettingsService';
 import { BaseConfig } from '../BaseConfig';
 import { AiProvider } from '../IConfig';
 
@@ -151,6 +155,32 @@ describe('BaseConfig', () => {
     it('honors GEMINI_BASE_URL as the google base URL override', () => {
       process.env.GEMINI_BASE_URL = 'https://custom.gemini.example/v1';
       expect(new TestConfig().getProviderBaseUrl('google')).toBe('https://custom.gemini.example/v1');
+    });
+  });
+
+  describe('autonomousMode (ADR-0030)', () => {
+    const saved = { path: process.env.ORDEWELL_SETTINGS_PATH, mode: process.env.ORDEWELL_AUTONOMOUS_MODE };
+    let dir: string;
+    beforeEach(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-autonomy-'));
+      process.env.ORDEWELL_SETTINGS_PATH = path.join(dir, 'settings.json');
+      delete process.env.ORDEWELL_AUTONOMOUS_MODE;
+    });
+    afterEach(() => {
+      for (const [key, value] of [['ORDEWELL_SETTINGS_PATH', saved.path], ['ORDEWELL_AUTONOMOUS_MODE', saved.mode]] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('reads the level the user saved, as it stands now', () => {
+      const config = new TestConfig();
+      expect(config.autonomousMode).toBe(true);
+
+      new SettingsService().setAutonomousMode(false);
+
+      expect(config.autonomousMode).toBe(false);
     });
   });
 });

@@ -82,8 +82,12 @@ export interface ExecutionHost {
   approve(taskIds: readonly string[]): void;
   /** Full autonomy: starts follow plan approval without a question. */
   autonomous(): boolean;
+  /** The user's autorun setting, as it is now (ADR-0030). */
+  autorun(): boolean;
   /** The scheduler is driving the plan: ready tasks start as slots free. */
   scheduling(): boolean;
+  /** An open planner turn holds the scheduler's new starts until its reply ends. */
+  startsHeld(): boolean;
   /** Work is running right now. */
   hasLiveWork(): boolean;
   /** The task's attempt is live: starting, running or landing. */
@@ -173,17 +177,19 @@ export class ExecutionCommands {
     if (!this.host.tasks()) return { ok: false, outcome: 'refused', message: 'There is no plan yet, so there is nothing to run or stop.' };
     const located = 'task' in command ? this.locate(command.task) : undefined;
     if ('task' in command && !located) {
-      return this.refuse(command, actor, undefined, `No task matches "${command.task}" in the current plan. Name it by id, "#order" or exact title.`);
+      // The turn's own edit may be adding it: under the autorun exception the start waits for it, as a start of an edited task does.
+      if (startsFromPrompt(command) && this.addedMayStart(actor) && this.host.heldEdit()) return this.defer(command, actor, undefined);
+      const missing = `No task matches "${command.task}" in the current plan.`;
+      // A task the turn's own edit adds is not in the plan until the reply ends, and nothing then starts it on the turn's behalf.
+      return this.refuse(command, actor, undefined, actor.kind !== 'user' && this.host.heldEdit()
+        ? `${missing} If your edit adds it, it lands as this reply ends, so it cannot start in this turn: tell the user, who starts it.`
+        : `${missing} Name it by id, "#order" or exact title.`);
     }
 
     const consent = this.consent(actor, command.command);
     if (consent.kind === 'refuse') return this.refuse(command, actor, located, consent.reason);
     // The plan holds what runs (ADR-0029): a start the turn's own held edit changes waits for that edit to land.
-    if (actor.kind !== 'user' && startsFromPrompt(command) && this.host.heldEdit(located?.task.id)) {
-      const intent = this.intent(command, located);
-      this.host.deferUntilLanded(command, actor, intent);
-      return { ok: true, message: `Queued: ${intent} happens once your edit lands, as this reply ends, so it runs as edited. Say so in your reply; you are not told how it goes.` };
-    }
+    if (actor.kind !== 'user' && startsFromPrompt(command) && this.host.heldEdit(located?.task.id)) return this.defer(command, actor, located);
 
     const first = this.prepare(command, actor, located);
     if ('refusal' in first) return this.refuse(command, actor, located, first.refusal);
@@ -215,11 +221,27 @@ export class ExecutionCommands {
     } catch (err) {
       return this.refuse(command, actor, located, err instanceof Error ? err.message : String(err));
     }
-    if (actor.kind === 'user' && STARTS.has(command.command)) {
+    // Autorun starts a plan as the user's standing instruction, so its start approves the plan as theirs does; so does a start under its exception for added tasks.
+    if ((actor.kind === 'user' || actor.kind === 'autorun' || this.addedMayStart(actor)) && STARTS.has(command.command)) {
       this.host.approve(located ? withSubtasks(located.task) : this.all().map(({ task }) => task.id));
     }
     this.keep(command, actor, located, 'done', doneDetail(command));
     return { ok: true, message: acted.message, ...(acted.id !== undefined ? { id: acted.id } : {}) };
+  }
+
+  private defer(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined): CommandOutcome {
+    const intent = this.intent(command, located);
+    this.host.deferUntilLanded(command, actor, intent);
+    return { ok: true, message: `Queued: ${intent} happens once your edit lands, as this reply ends, so it runs as edited. Say so in your reply; you are not told how it goes.` };
+  }
+
+  /**
+   * With autorun on and Full, a planner turn may start a task added after the
+   * user approved the plan (ADR-0030). Read at each start, so switching either
+   * off stops it at once; never on a plan the user has not approved.
+   */
+  private addedMayStart(actor: ExecutionActor): boolean {
+    return actor.kind === 'planner-turn' && this.host.autorun() && this.host.autonomous() && this.host.planApproved();
   }
 
   /**
@@ -229,7 +251,8 @@ export class ExecutionCommands {
    */
   private consent(actor: ExecutionActor, command: ExecutionCommandName): Consent {
     switch (actor.kind) {
-      case 'user': return { kind: 'allow' };
+      case 'user':
+      case 'autorun': return { kind: 'allow' };
       // A merge by proxy would add a route to the user's branch for nothing: they are present, and can press it (ADR-0029).
       case 'planner-turn': if (command === 'merge_all') return { kind: 'refuse', reason: MERGE_IS_USERS };
         return !STARTS.has(command) || this.host.autonomous() ? { kind: 'allow' } : { kind: 'ask' };
@@ -261,11 +284,12 @@ export class ExecutionCommands {
     }
     const toRun = all.filter(({ task }) => task.type === 'ai' && task.status !== 'completed');
     if (toRun.length === 0) return { refusal: 'Every task has already completed: there is nothing left to run.' };
-    if (actor.kind !== 'user') {
+    // Autorun is the user's standing instruction: its run is the user's approval, as Execute plan is.
+    if (actor.kind !== 'user' && actor.kind !== 'autorun') {
       if (!this.host.planApproved()) {
         return { refusal: 'The user has not approved this plan yet: they approve it by executing it themselves (Execute plan). Ask them to.' };
       }
-      const unapproved = toRun.filter(({ task }) => !this.host.taskApproved(task.id));
+      const unapproved = this.addedMayStart(actor) ? [] : toRun.filter(({ task }) => !this.host.taskApproved(task.id));
       if (unapproved.length > 0) {
         const one = unapproved.length === 1;
         return { refusal: `${capitalize(named(unapproved))} ${one ? 'was' : 'were'} added after the user approved the plan, so ${one ? 'it is' : 'they are'} not approved to run. Ask the user to execute the plan themselves, which approves ${one ? 'it' : 'them'}.` };
@@ -276,10 +300,11 @@ export class ExecutionCommands {
         await this.host.runPlan();
         if (this.host.runBlocked()) return { message: BLOCKED_RUN };
         const started = this.all().filter(({ task }) => this.host.running(task.id));
+        if (started.length > 0) return { message: `The plan is running: ${named(started)} started, and the rest start as their dependencies finish.` };
         return {
-          message: started.length === 0
-            ? 'The plan is running; nothing could start yet. Read the plan to see what each task waits on.'
-            : `The plan is running: ${named(started)} started, and the rest start as their dependencies finish.`,
+          message: this.host.startsHeld()
+            ? 'The plan is running: what is ready starts once this reply ends, and the rest as their dependencies finish.'
+            : 'The plan is running; nothing could start yet. Read the plan to see what each task waits on.',
         };
       },
     };
@@ -437,7 +462,7 @@ export class ExecutionCommands {
 
   /** Why a start is not the user's to have made, or null: the user's own call is its own approval. */
   private unapproved(located: Located, actor: ExecutionActor): string | null {
-    if (actor.kind === 'user' || this.host.taskApproved(located.task.id)) return null;
+    if (actor.kind === 'user' || actor.kind === 'autorun' || this.addedMayStart(actor) || this.host.taskApproved(located.task.id)) return null;
     const label = describe(located);
     return this.host.planApproved()
       ? `${capitalize(label)} was added after the user approved the plan, so it is not approved to run. Ask the user to start it, or to execute the plan, which approves it.`
@@ -461,7 +486,7 @@ export class ExecutionCommands {
 
   /** What was asked, as "start task #4 "Title"". */
   private intent(command: ExecutionCommand, located: Located | undefined): string {
-    const label = located ? describe(located) : '';
+    const label = located ? describe(located) : 'task' in command ? `"${command.task}"` : '';
     switch (command.command) {
       case 'run_plan': return 'run the plan';
       case 'run_task': return `start ${label}`;
@@ -570,12 +595,14 @@ const WHO: Record<ExecutionActor['kind'], string> = {
   user: 'You',
   'planner-turn': 'The planner',
   supervisor: 'The supervisor',
+  autorun: 'Autorun',
 };
 
 /** The timeline's line for one call: who asked, what, and how it ended. */
 function describeExecution(record: ExecutionRecord, command?: ExecutionCommand): string {
   const who = WHO[record.actor];
-  const label = record.task ? `task ${record.task.ref} "${record.task.title}"` : '';
+  // A refusal for a task the plan does not have names it as the caller did.
+  const label = record.task ? `task ${record.task.ref} "${record.task.title}"` : command && 'task' in command ? `"${command.task}"` : '';
   const continued = command?.command === 'retry_task' && command.from === 'session';
   const escalated = command?.command === 'answer_approval' && command.answer.trim().toLowerCase() === 'escalate';
   if (record.outcome !== 'done') {
@@ -594,9 +621,9 @@ function describeExecution(record: ExecutionRecord, command?: ExecutionCommand):
       : `${who} asked to ${asked}; refused: ${record.detail ?? 'no reason given'}`;
   }
   const { action, tail } = doneWords(record, label, continued, escalated);
-  // The supervisor acts unattended, so its line reads as the action itself — the button press — and then who pressed it.
-  return record.actor === 'supervisor'
-    ? `${capitalize(action)} — by supervisor${tail.startsWith(' ') ? `,${tail}` : tail}`
+  // The supervisor and autorun act unattended, so their line reads as the action itself — the button press — and then who pressed it.
+  return record.actor === 'supervisor' || record.actor === 'autorun'
+    ? `${capitalize(action)} — by ${record.actor}${tail.startsWith(' ') ? `,${tail}` : tail}`
     : `${who} ${action}${tail}`;
 }
 

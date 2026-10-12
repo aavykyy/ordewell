@@ -29,6 +29,6 @@ export const OPENCODE_MANIFEST: RunnerManifest = {
 
   modes: [
     { id: 'build', label: 'Build', description: 'Full access agent for development work', cliValue: 'build', autonomous: true, safe: true },
-    { id: 'plan', label: 'Plan', description: 'Read-only agent for analysis and exploration', cliValue: 'plan' },
+    { id: 'plan', label: 'Plan', description: 'Read-only agent for analysis and exploration', cliValue: 'plan', readOnly: true },
   ],
 };

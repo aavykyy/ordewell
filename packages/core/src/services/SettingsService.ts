@@ -1,6 +1,64 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { globalDataDir, migrateOldConfigDir } from '../utils/globalDataDir';
+import type { SupervisorLevel } from '../models/Execution';
+import { DEFAULT_SUPERVISOR_RETRY_LIMIT } from './LoopGuards';
+import { DEFAULT_WAKE_UP_READ_BUDGET } from './Supervisor';
+
+/** How a run is started, watched and merged: the user's, not a plan's (ADR-0030). */
+export interface GlobalRunSettings {
+  supervisorLevel: SupervisorLevel;
+  mergeAtGatesAutomatically: boolean;
+  /** Start a plan when the planner submits it, approved as if the user had pressed Execute. */
+  autorun: boolean;
+  /** Retries an Act supervisor may make of one task in a run (a loop guard). */
+  supervisorRetryLimit: number;
+  /** Reads a wake-up turn may make, in place of a user message's caps. */
+  wakeUpReadBudget: number;
+}
+
+export const RUN_SETTINGS_DEFAULTS: Readonly<GlobalRunSettings> = {
+  supervisorLevel: 'watch',
+  mergeAtGatesAutomatically: false,
+  autorun: false,
+  supervisorRetryLimit: DEFAULT_SUPERVISOR_RETRY_LIMIT,
+  wakeUpReadBudget: DEFAULT_WAKE_UP_READ_BUDGET,
+};
+
+export class RunSettingsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RunSettingsError';
+  }
+}
+
+const SUPERVISOR_LEVELS: readonly SupervisorLevel[] = ['off', 'watch', 'act'];
+
+/** Each value's own check, so a hand-edited file and a refused update agree on what is usable. */
+const RUN_SETTING_CHECKS: { [K in keyof GlobalRunSettings]: { valid: (v: unknown) => v is GlobalRunSettings[K]; refusal: string } } = {
+  supervisorLevel: {
+    valid: (v): v is SupervisorLevel => typeof v === 'string' && (SUPERVISOR_LEVELS as readonly string[]).includes(v),
+    refusal: 'The supervisor level must be off, watch or act.',
+  },
+  mergeAtGatesAutomatically: {
+    valid: (v): v is boolean => typeof v === 'boolean',
+    refusal: 'Merge at gates automatically must be on or off.',
+  },
+  autorun: {
+    valid: (v): v is boolean => typeof v === 'boolean',
+    refusal: 'Autorun must be on or off.',
+  },
+  supervisorRetryLimit: {
+    valid: (v): v is number => Number.isInteger(v) && (v as number) >= 0,
+    refusal: 'The retry limit must be a whole number of retries, 0 or more.',
+  },
+  wakeUpReadBudget: {
+    valid: (v): v is number => Number.isInteger(v) && (v as number) >= 1,
+    refusal: 'The wake-up read budget must be a whole number of reads, 1 or more.',
+  },
+};
+
+const RUN_SETTING_KEYS = Object.keys(RUN_SETTING_CHECKS) as (keyof GlobalRunSettings)[];
 
 export interface UserSettings {
   modelAllowlist?: Record<string, string[]>;
@@ -11,6 +69,13 @@ export interface UserSettings {
    * back to the environment's defaults; `[]` is a deliberate "none of them".
    */
   enabledRunners?: string[];
+  /** Full (true) or Guarded (false), ADR-0001; Full until the user chooses. */
+  autonomousMode?: boolean;
+  supervisorLevel?: SupervisorLevel;
+  mergeAtGatesAutomatically?: boolean;
+  autorun?: boolean;
+  supervisorRetryLimit?: number;
+  wakeUpReadBudget?: number;
 }
 
 /**
@@ -43,6 +108,15 @@ function readPlannerModels(raw: unknown): Record<string, { model: string; effort
       : { model };
   }
   return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** The run settings `settings` holds, each one it leaves out at its default. */
+export function runSettingsOf(settings: UserSettings): GlobalRunSettings {
+  const out = { ...RUN_SETTINGS_DEFAULTS };
+  for (const key of RUN_SETTING_KEYS) {
+    if (settings[key] !== undefined) (out as Record<keyof GlobalRunSettings, unknown>)[key] = settings[key];
+  }
+  return out;
 }
 
 export class SettingsService {
@@ -130,6 +204,48 @@ export class SettingsService {
     this.persist();
   }
 
+  /**
+   * Full or Guarded (ADR-0001), as saved here (ADR-0030). A value set in the
+   * environment wins, so a script or CI run can fix its own without touching
+   * the user's file.
+   */
+  autonomousMode(): boolean {
+    const env = process.env.ORDEWELL_AUTONOMOUS_MODE;
+    if (this.autonomousModeOverridden()) return env !== 'false' && env !== '0';
+    return this.getAll().autonomousMode ?? true;
+  }
+
+  /** Whether `ORDEWELL_AUTONOMOUS_MODE` decides the level, whatever this file says. */
+  autonomousModeOverridden(): boolean {
+    const env = process.env.ORDEWELL_AUTONOMOUS_MODE;
+    return env !== undefined && env.trim() !== '';
+  }
+
+  setAutonomousMode(enabled: boolean): void {
+    this.getAll();
+    this.cache!.autonomousMode = enabled;
+    this.persist();
+  }
+
+  getRunSettings(): GlobalRunSettings {
+    return runSettingsOf(this.getAll());
+  }
+
+  /** Checks every value before writing any, so a refused change saves nothing. */
+  updateRunSettings(changes: Partial<GlobalRunSettings>): GlobalRunSettings {
+    for (const key of RUN_SETTING_KEYS) {
+      if (changes[key] !== undefined && !RUN_SETTING_CHECKS[key].valid(changes[key])) {
+        throw new RunSettingsError(RUN_SETTING_CHECKS[key].refusal);
+      }
+    }
+    this.getAll();
+    for (const key of RUN_SETTING_KEYS) {
+      if (changes[key] !== undefined) (this.cache as Record<keyof GlobalRunSettings, unknown>)[key] = changes[key];
+    }
+    this.persist();
+    return this.getRunSettings();
+  }
+
   private load(): UserSettings {
     // A pre-`.ordewell` install keeps its settings in the old config dir; lift
     // them once before reading so the first read already sees the moved file.
@@ -150,6 +266,11 @@ export class SettingsService {
         }
         if (Array.isArray(raw.enabledRunners)) {
           settings.enabledRunners = raw.enabledRunners.map(String);
+        }
+        if (typeof raw.autonomousMode === 'boolean') settings.autonomousMode = raw.autonomousMode;
+        // A value it cannot use is left out, so its default stands.
+        for (const key of RUN_SETTING_KEYS) {
+          if (RUN_SETTING_CHECKS[key].valid(raw[key])) (settings as Record<keyof GlobalRunSettings, unknown>)[key] = raw[key];
         }
         return settings;
       }

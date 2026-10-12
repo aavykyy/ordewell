@@ -295,8 +295,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
       req.modelsByRunner,
       req.runners,
       req.runnerModes,
-      req.autonomousDefault ?? true,
-      { isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined },
+      { isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun },
     );
 
     const userText = req.goal;
@@ -435,7 +434,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
       const collected = await new ContextCollector(fs).collect(existingPlan.runners[0] ?? 'claude-code');
       if (collected.aiflowContext) aiflowContext = collected.aiflowContext;
     }
-    const prompt = buildModifyPlanPrompt(existingPlan, userRequest, modelsByRunner, aiflowContext, runnerModes, autonomousDefault);
+    const prompt = buildModifyPlanPrompt(existingPlan, userRequest, modelsByRunner, aiflowContext, runnerModes);
     try {
       const tasks = await generatePlanWithRepair((repairHint) =>
         this.streamPlanText(prompt, repairHint, (token) => onProgress?.({ type: 'plan_token', planToken: token }), undefined, signal),

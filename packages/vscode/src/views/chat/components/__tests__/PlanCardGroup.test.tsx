@@ -24,66 +24,6 @@ function makeTask(overrides: Partial<Task> = {}): Task {
 const emptyModels: DiscoveredModel[] = [];
 
 describe('PlanCardGroup — Execute Plan / Stop', () => {
-  it('offers automatic gate merging off by default and toggles both ways', () => {
-    const onChange = vi.fn();
-    const { rerender } = render(<PlanCardGroup tasks={[makeTask()]} models={emptyModels}
-      onExecutePlan={vi.fn()} onAutoMergeChange={onChange} />);
-    const toggle = screen.getByRole('checkbox', { name: 'Merge at gates automatically' }) as HTMLInputElement;
-    expect(toggle.checked).toBe(false);
-    fireEvent.click(toggle);
-    expect(onChange).toHaveBeenLastCalledWith(true);
-    rerender(<PlanCardGroup tasks={[makeTask()]} models={emptyModels} mergeAtGatesAutomatically
-      onExecutePlan={vi.fn()} onAutoMergeChange={onChange} />);
-    expect(toggle.checked).toBe(true);
-    fireEvent.click(toggle);
-    expect(onChange).toHaveBeenLastCalledWith(false);
-  });
-
-  it('offers the supervisor Off by default, Watch and Act, and says what Act allows', () => {
-    const onChange = vi.fn();
-    render(<PlanCardGroup tasks={[makeTask()]} models={emptyModels} onExecutePlan={vi.fn()} onSupervisorLevelChange={onChange} />);
-    const select = screen.getByRole('combobox', { name: /Supervisor/ }) as HTMLSelectElement;
-    expect(select.value).toBe('off');
-    expect([...select.options].map((o) => o.value)).toEqual(['off', 'watch', 'act']);
-    expect(select.closest('label')!.title).toMatch(/Act: .*ops tasks included.*real systems unattended/);
-    fireEvent.change(select, { target: { value: 'act' } });
-    expect(onChange).toHaveBeenLastCalledWith('act');
-  });
-
-  it('lowers a running supervisor at once: Act drops to Watch or turns off, Watch turns off', () => {
-    const onLower = vi.fn();
-    const { rerender } = render(<PlanCardGroup tasks={[makeTask()]} models={emptyModels} supervisorLevel="act"
-      runSupervisor={{ level: 'act' }} isExecuting onStopExecution={vi.fn()} onSupervisorLevelChange={vi.fn()} onLowerSupervisor={onLower} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Drop to Watch' }));
-    expect(onLower).toHaveBeenLastCalledWith('watch');
-    fireEvent.click(screen.getByRole('button', { name: 'Turn off' }));
-    expect(onLower).toHaveBeenLastCalledWith('off');
-
-    rerender(<PlanCardGroup tasks={[makeTask()]} models={emptyModels} supervisorLevel="act"
-      runSupervisor={{ level: 'watch' }} isExecuting onStopExecution={vi.fn()} onSupervisorLevelChange={vi.fn()} onLowerSupervisor={onLower} />);
-    expect(screen.queryByRole('button', { name: 'Drop to Watch' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Turn off' })).toBeTruthy();
-
-    rerender(<PlanCardGroup tasks={[makeTask()]} models={emptyModels} supervisorLevel="act"
-      runSupervisor={{ level: 'off' }} isExecuting onStopExecution={vi.fn()} onSupervisorLevelChange={vi.fn()} onLowerSupervisor={onLower} />);
-    expect(screen.queryByRole('button', { name: 'Turn off' })).toBeNull();
-  });
-
-  it('says when the run\'s supervisor differs from the setting, or stopped', () => {
-    const { rerender } = render(<PlanCardGroup tasks={[makeTask()]} models={emptyModels} supervisorLevel="off"
-      runSupervisor={{ level: 'watch' }} isExecuting onStopExecution={vi.fn()} onSupervisorLevelChange={vi.fn()} />);
-    expect(screen.getByText(/next run; now watch/)).toBeTruthy();
-    rerender(<PlanCardGroup tasks={[makeTask()]} models={emptyModels} supervisorLevel="watch"
-      runSupervisor={{ level: 'watch', unsupervised: 'its wake-up turn failed twice' }} isExecuting onStopExecution={vi.fn()} onSupervisorLevelChange={vi.fn()} />);
-    expect(screen.getByText(/the run is unsupervised/)).toBeTruthy();
-  });
-
-  it('shows that a setting change during execution applies to the next run', () => {
-    render(<PlanCardGroup tasks={[makeTask()]} models={emptyModels} mergeAtGatesAutomatically
-      runAutoMerge={false} isExecuting onStopExecution={vi.fn()} onAutoMergeChange={vi.fn()} />);
-    expect(screen.getByText(/next run; now off/)).toBeTruthy();
-  });
-
   it('renders Execute Plan button when not executing', () => {
     render(
       <PlanCardGroup

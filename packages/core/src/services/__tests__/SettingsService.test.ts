@@ -242,4 +242,75 @@ describe('SettingsService', () => {
       expect(new SettingsService(tempFile).getEnabledRunners()).toEqual([]);
     });
   });
+
+  describe('run settings (ADR-0030)', () => {
+    it('defaults to a watching supervisor, no automatic merge, no autorun, 2 retries and 12 reads', () => {
+      expect(service.getRunSettings()).toEqual({
+        supervisorLevel: 'watch',
+        mergeAtGatesAutomatically: false,
+        autorun: false,
+        supervisorRetryLimit: 2,
+        wakeUpReadBudget: 12,
+      });
+    });
+
+    it('saves a change for every later reader, leaving the other values as they were', () => {
+      service.updateRunSettings({ supervisorLevel: 'act', mergeAtGatesAutomatically: true });
+
+      expect(new SettingsService(tempFile).getRunSettings()).toEqual({
+        supervisorLevel: 'act',
+        mergeAtGatesAutomatically: true,
+        autorun: false,
+        supervisorRetryLimit: 2,
+        wakeUpReadBudget: 12,
+      });
+    });
+
+    it('refuses a value outside its range and saves nothing of that change', () => {
+      expect(() => service.updateRunSettings({ supervisorLevel: 'act', supervisorRetryLimit: -1 })).toThrow(/retry limit/i);
+      expect(() => service.updateRunSettings({ wakeUpReadBudget: 0 })).toThrow(/read budget/i);
+      expect(() => service.updateRunSettings({ wakeUpReadBudget: 2.5 })).toThrow(/read budget/i);
+
+      expect(service.getRunSettings().supervisorLevel).toBe('watch');
+    });
+
+    it('reads a hand-edited value it cannot use as the default, keeping the rest', () => {
+      fs.writeFileSync(tempFile, JSON.stringify({ supervisorLevel: 'boss', supervisorRetryLimit: 'many', autorun: true }));
+
+      expect(new SettingsService(tempFile).getRunSettings()).toMatchObject({ supervisorLevel: 'watch', supervisorRetryLimit: 2, autorun: true });
+    });
+  });
+
+  describe('the autonomy level (ADR-0030)', () => {
+    const saved = process.env.ORDEWELL_AUTONOMOUS_MODE;
+    afterEach(() => {
+      if (saved === undefined) delete process.env.ORDEWELL_AUTONOMOUS_MODE;
+      else process.env.ORDEWELL_AUTONOMOUS_MODE = saved;
+    });
+
+    it('is Full until the user chooses, and keeps their choice for every later reader', () => {
+      delete process.env.ORDEWELL_AUTONOMOUS_MODE;
+      expect(service.autonomousMode()).toBe(true);
+
+      service.setAutonomousMode(false);
+
+      expect(new SettingsService(tempFile).autonomousMode()).toBe(false);
+      expect(new SettingsService(tempFile).getAll().autonomousMode).toBe(false);
+    });
+
+    it.each([['false', false], ['0', false], ['true', true]])('gives way to ORDEWELL_AUTONOMOUS_MODE=%s in the environment', (value, level) => {
+      service.setAutonomousMode(!level);
+      process.env.ORDEWELL_AUTONOMOUS_MODE = value;
+
+      expect(service.autonomousMode()).toBe(level);
+      expect(service.autonomousModeOverridden()).toBe(true);
+    });
+
+    it('reads a hand-edited value it cannot use as Full', () => {
+      delete process.env.ORDEWELL_AUTONOMOUS_MODE;
+      fs.writeFileSync(tempFile, JSON.stringify({ autonomousMode: 'guarded' }));
+
+      expect(new SettingsService(tempFile).autonomousMode()).toBe(true);
+    });
+  });
 });

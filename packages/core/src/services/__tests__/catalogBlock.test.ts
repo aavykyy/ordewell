@@ -29,7 +29,7 @@ describe('catalog block — always-on, allowlist-filtered', () => {
 
     const outgoing = String(continueConversation.mock.calls[0][0]);
     expect(outgoing).toContain('<available_models>');
-    expect(outgoing).toContain('<available_task_modes>');
+    expect(outgoing).toContain('<read_only_runners>');
     expect(outgoing).not.toContain('<current_plan>');
   });
 
@@ -60,7 +60,7 @@ describe('catalog block — always-on, allowlist-filtered', () => {
     expect(outgoing).not.toContain('claude-haiku-4');
   });
 
-  it('lists each selected runner\'s task modes with the default marked', async () => {
+  it('names the selected runners that take a read-only task, and no mode (ADR-0031)', async () => {
     const continueConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'ok', researchLog: [] });
     const session = makeSession({
       aiService: { continueConversation, hasActiveConversation: () => true },
@@ -70,11 +70,9 @@ describe('catalog block — always-on, allowlist-filtered', () => {
     await session.continueConversation('go on');
 
     const outgoing = String(continueConversation.mock.calls[0][0]);
-    const modeLine = outgoing.split('\n').find((l) => l.startsWith('claude-code:') && l.includes('(default)'));
-    expect(modeLine).toContain('bypassPermissions (default)');
-    expect(modeLine).toContain('acceptEdits');
-    expect(modeLine).toContain('default');
-    expect(modeLine).toContain('plan');
+    expect(outgoing).toContain('<read_only_runners>claude-code</read_only_runners>');
+    expect(outgoing).not.toContain('bypassPermissions');
+    expect(outgoing).not.toContain('acceptEdits');
   });
 
   it('only lists runners selected for this plan, not every enabled runner', async () => {

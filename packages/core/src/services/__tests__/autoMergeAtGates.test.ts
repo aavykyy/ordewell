@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -11,19 +11,23 @@ import { createWorktreeIsolation } from '../GitWorktreeIsolation';
 import { TaskOrchestrator } from '../TaskOrchestrator';
 import { fromTranscript } from '../../conversation/transcript';
 import { loadSession, saveSession } from '../../utils/sessionStore';
-import { FakeRunnerSession, fakeNotification, makeSession, saves } from './sessionTestKit';
+import { FakeRunnerSession, fakeNotification, makeSession } from './sessionTestKit';
 import type { SessionMessage, SessionNotice } from '../SessionMessage';
+import { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings } from '../SettingsService';
 
 const change = createTask({ id: 'c1', order: 1, title: 'Change', prompt: 'change' });
 const ops = createTask({ id: 'o2', order: 2, title: 'Deploy', prompt: 'deploy', ops: true, dependencies: ['c1'] });
 const user = createTask({ id: 'u2', order: 2, title: 'Check', type: 'user', dependencies: ['c1'] });
-const plans = (enabled?: boolean, tasks = [change, ops]): LegacyPlanState => ({
+const plans = (tasks = [change, ops]): LegacyPlanState => ({
   tasks, generatedAt: '2026-10-11T00:00:00Z', lastUpdated: '2026-10-11T00:00:00Z',
   status: 'approved', runners: ['claude-code'],
-  ...(enabled === undefined ? {} : { mergeAtGatesAutomatically: enabled }),
 });
 const cleanup: (() => void)[] = [];
+/** The user's run settings file, shared by every session a test makes (ADR-0030). */
+let userSettings: GlobalRunSettings;
+beforeEach(() => { userSettings = { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' }; });
 afterEach(() => { while (cleanup.length) cleanup.pop()!(); });
+const mergesAtGates = (enabled = false) => { userSettings.mergeAtGatesAutomatically = enabled; };
 
 function harness(isolation: IWorktreeIsolation = new FakeWorktreeIsolation(), workspace = '/repo', disk = false) {
   const sessions: FakeRunnerSession[] = [];
@@ -36,7 +40,7 @@ function harness(isolation: IWorktreeIsolation = new FakeWorktreeIsolation(), wo
   const messages: SessionMessage[] = [];
   const notices: SessionNotice[] = [];
   const session = makeSession({ isolation, runner, workspaceRoot: () => workspace,
-    config: fakeConfig({ worktreeIsolation: true }), broadcast: (m) => messages.push(m), onNotice: (n) => notices.push(n),
+    config: fakeConfig({ worktreeIsolation: true }), settings: () => ({ run: { ...userSettings } }), broadcast: (m) => messages.push(m), onNotice: (n) => notices.push(n),
     ...(disk ? { saveSession } : {}),
   });
   cleanup.push(() => session.destroy());
@@ -50,45 +54,61 @@ describe('Merge at gates automatically', () => {
   it.each([ops, user])('merges for the gate of $type task without a supervisor and records the actor', async (gated) => {
     const iso = new FakeWorktreeIsolation();
     const { session, pass, messages } = harness(iso);
-    session.loadPlan(plans(true, [change, gated]), 'goal', '/repo');
+    mergesAtGates(true);
+    session.loadPlan(plans([change, gated]), 'goal', '/repo');
     await session.executePlan();
     pass();
     await vi.waitFor(() => expect(merged(iso)).toHaveLength(1));
     await vi.waitFor(() => expect(session.mergeGate(gated.id)).toEqual([]));
-    expect(session.planState!.runSettings).toEqual({ mergeAtGatesAutomatically: true, supervisorLevel: 'off' });
+    expect(session.planState!.runSettings).toMatchObject({ mergeAtGatesAutomatically: true, supervisorLevel: 'off' });
     const history = session.planState!.conversationHistory!;
     expect(history).toContainEqual(expect.objectContaining({ kind: 'system', actor: 'Ordewell setting', content: 'Ordewell setting: auto-merged for task 2' }));
     expect(fromTranscript(history, []).blocks).toContainEqual(expect.objectContaining({ type: 'message', role: 'system', text: 'Ordewell setting: auto-merged for task 2' }));
     expect(messages).toContainEqual({ type: 'isolation_merge', result: { outcome: 'merged' } });
   });
 
-  it.each([undefined, false])('waits with setting %s, including older saved plans', async (enabled) => {
+  it.each([undefined, false])('waits with the user\'s setting %s: off by default', async (enabled) => {
     const iso = new FakeWorktreeIsolation();
     const { session, pass } = harness(iso);
-    session.loadPlan(plans(enabled), 'goal', '/repo');
+    mergesAtGates(enabled);
+    session.loadPlan(plans(), 'goal', '/repo');
     await session.executePlan();
     pass();
     await vi.waitFor(() => expect(session.mergeGate('o2')).toEqual(['c1']));
     expect(merged(iso)).toEqual([]);
-    expect(session.planState!.runSettings).toEqual({ mergeAtGatesAutomatically: false, supervisorLevel: 'off' });
+    expect(session.planState!.runSettings).toMatchObject({ mergeAtGatesAutomatically: false, supervisorLevel: 'off' });
   });
 
-  it.each([false, true])('changing %s mid-run applies only to the next run', async (initial) => {
+  it.each([false, true])('changed from %s mid-run in this session, applies to the run under way at once', async (initial) => {
     const iso = new FakeWorktreeIsolation();
     const { session, pass } = harness(iso);
-    session.loadPlan(plans(initial, [change, user]), 'goal', '/repo');
+    mergesAtGates(initial);
+    session.loadPlan(plans([change, user]), 'goal', '/repo');
     await session.executePlan();
-    session.setMergeAtGatesAutomatically(!initial);
+
+    mergesAtGates(!initial);
+    session.applyRunSettings({ mergeAtGatesAutomatically: !initial });
     pass();
     await vi.waitFor(() => expect(session.planTasks[0].status).toBe('completed'));
     await session.reschedule();
-    expect(merged(iso)).toHaveLength(initial ? 1 : 0);
-    expect(session.planState!.runSettings).toEqual({ mergeAtGatesAutomatically: initial, supervisorLevel: 'off' });
-    expect(saves(session).mock.calls.at(-1)![0].mergeAtGatesAutomatically).toBe(!initial);
-    session.stopExecution();
+
+    expect(merged(iso)).toHaveLength(initial ? 0 : 1);
+    expect(session.planState!.runSettings).toMatchObject({ mergeAtGatesAutomatically: !initial });
+  });
+
+  it('keeps the run\'s own setting when it is changed in another session', async () => {
+    const iso = new FakeWorktreeIsolation();
+    const { session, pass } = harness(iso);
+    mergesAtGates(false);
+    session.loadPlan(plans([change, user]), 'goal', '/repo');
     await session.executePlan();
-    expect(session.planState!.runSettings).toEqual({ mergeAtGatesAutomatically: !initial, supervisorLevel: 'off' });
-    if (!initial) await vi.waitFor(() => expect(merged(iso)).toHaveLength(1));
+
+    mergesAtGates(true);
+    pass();
+    await vi.waitFor(() => expect(session.planTasks[0].status).toBe('completed'));
+    await session.reschedule();
+
+    expect(merged(iso)).toEqual([]);
   });
 
   it.each(['clean', 'manual', 'by hand'] as const)('merges at successive gates after a %s first gate while leaving other change tasks running', async (first) => {
@@ -97,7 +117,8 @@ describe('Merge at gates automatically', () => {
     const second = createTask({ id: 'c3', order: 3, prompt: 'second', dependencies: ['u2'] });
     const last = createTask({ id: 'u4', order: 4, type: 'user', dependencies: ['c3'] });
     const parallel = createTask({ id: 'c5', order: 5, prompt: 'parallel' });
-    session.loadPlan(plans(true, [change, user, second, last, parallel]), 'goal', '/repo');
+    mergesAtGates(true);
+    session.loadPlan(plans([change, user, second, last, parallel]), 'goal', '/repo');
     await session.executePlan();
     if (first !== 'clean') iso.mergeResult = { outcome: 'conflict', repo: '.' };
     pass();
@@ -126,7 +147,8 @@ describe('Merge at gates automatically', () => {
     const iso = new FakeWorktreeIsolation();
     const { session, pass } = harness(iso);
     const next = createTask({ id: 'c2', order: 2, prompt: 'next', dependencies: ['c1'] });
-    session.loadPlan(plans(true, [change, next]), 'goal', '/repo');
+    mergesAtGates(true);
+    session.loadPlan(plans([change, next]), 'goal', '/repo');
     await session.executePlan();
     pass();
     await vi.waitFor(() => expect(session.planTasks[1].status).toBe('in_progress'));
@@ -138,7 +160,8 @@ describe('Merge at gates automatically', () => {
     const iso = new FakeWorktreeIsolation();
     const { session, pass } = harness(iso);
     const unrelated = createTask({ id: 'o3', order: 3, ops: true, prompt: 'other ops' });
-    session.loadPlan(plans(true, [change, ops, unrelated]), 'goal', '/repo');
+    mergesAtGates(true);
+    session.loadPlan(plans([change, ops, unrelated]), 'goal', '/repo');
     await session.executePlan();
     pass();
     await vi.waitFor(() => expect(session.mergeGate('o2')).toEqual(['c1']));
@@ -169,7 +192,8 @@ describe('Merge at gates automatically', () => {
   it('shares its merge with the seam\'s merge_all, which opens the gate the same way', async () => {
     const iso = new FakeWorktreeIsolation();
     const { session, pass } = harness(iso);
-    session.loadPlan(plans(false), 'goal', '/repo');
+    mergesAtGates(false);
+    session.loadPlan(plans(), 'goal', '/repo');
     await session.executePlan();
     pass();
     await vi.waitFor(() => expect(session.mergeGate('o2')).toEqual(['c1']));
@@ -203,7 +227,8 @@ describe('automatic gate merging with real git', () => {
     const root = repo();
     const iso = createWorktreeIsolation({ config: fakeConfig({ worktreeIsolation: true }), resolvePath: async () => process.env.PATH ?? '' });
     const { session, spawn, pass, notices } = harness(iso, root);
-    session.loadPlan(plans(true), 'goal', root);
+    mergesAtGates(true);
+    session.loadPlan(plans(), 'goal', root);
     await session.executePlan();
     const cwd = spawn.mock.calls[0][0].cwd!;
     writeFileSync(join(cwd, 'x'), 'runner\n');
@@ -224,21 +249,21 @@ describe('automatic gate merging with real git', () => {
     expect(existsSync(join(root, '.git', 'MERGE_HEAD'))).toBe(false);
   }, 15000);
 
-  it('persists the requested setting and run snapshot and restores them', async () => {
+  it('persists the run\'s own copy and restores it, and the next run reads the user\'s setting', async () => {
     const root = repo();
     const { session } = harness(new FakeWorktreeIsolation(), root, true);
+    mergesAtGates(true);
     session.loadPlan(plans(), 'goal', root);
-    session.setMergeAtGatesAutomatically(true);
     await session.executePlan();
-    session.setMergeAtGatesAutomatically(false);
     const loaded = loadSession(session.sessionId, root)!;
-    expect(loaded.plan.mergeAtGatesAutomatically).toBe(false);
-    expect(loaded.plan.runSettings).toEqual({ mergeAtGatesAutomatically: true, supervisorLevel: 'off' });
+    expect(loaded.plan).not.toHaveProperty('mergeAtGatesAutomatically');
+    expect(loaded.plan.runSettings).toMatchObject({ mergeAtGatesAutomatically: true });
+
+    mergesAtGates(false);
     const restored = harness().session;
     restored.loadPlan(loaded.plan, 'goal', root);
-    expect(restored.planState!.mergeAtGatesAutomatically).toBe(false);
-    expect(restored.planState!.runSettings).toEqual({ mergeAtGatesAutomatically: true, supervisorLevel: 'off' });
+    expect(restored.planState!.runSettings).toMatchObject({ mergeAtGatesAutomatically: true });
     await restored.executePlan();
-    expect(restored.planState!.runSettings).toEqual({ mergeAtGatesAutomatically: false, supervisorLevel: 'off' });
+    expect(restored.planState!.runSettings).toMatchObject({ mergeAtGatesAutomatically: false });
   });
 });

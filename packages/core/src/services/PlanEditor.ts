@@ -154,7 +154,8 @@ export class PlanEditor {
     if (task.assignedRunner === runner || task.type === 'user') return plan;
 
     const catalog = await this.catalog.runner(runner);
-    const changes = retargetTaskRunner(task, runner, this.allowedCatalog(catalog, runner));
+    const from = this.catalog.edit([task.assignedRunner]).runnerModes[task.assignedRunner];
+    const changes = retargetTaskRunner(task, runner, this.allowedCatalog(catalog, runner), from);
     if (Object.keys(changes).length === 0) return this.plan();
 
     return this.commit(() => {
