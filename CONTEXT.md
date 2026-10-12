@@ -1036,20 +1036,18 @@ after a confirmation naming what is not merged, and the task keeps that choice
 There is no gate without isolation.
 *Avoid:* "checkpoint" — that is a task asking the user to approve its work.
 
-**Auto-merge at gates** — the plan setting *Merge at gates automatically*,
-off by default, saved at run start and independent of the Supervisor level
-(ADR-0029): changing it during execution applies to the next run. When a
-task reaches a merge gate, Ordewell runs Merge all itself through the same
-queue and preflight. A conflict or a dirty overlap aborts with the user's tree
-untouched, and the gate waits for the user with a notice. The orchestrator's
-`onAutoMerge` observer event carries the gated task and merge result for a
-supervisor's wake-up; a failed automatic merge waits for a user merge or the
-next run before automatic merging resumes.
-`mergeAtGatesAutomatically` holds the next run's choice, and `runSettings` holds
-the choice captured when this run opened. The timeline records
-"auto-merged for task N", attributed to Ordewell setting. With it and
-an Act supervisor's `merge_all` both off, Ordewell never merges for the user
-(ADR-0013).
+**Auto-merge at gates** — the **Run setting** *Merge at gates automatically*,
+off by default, set with `/automerge` and independent of the Supervisor level
+(ADR-0029, ADR-0030). When a task reaches a merge gate, Ordewell runs Merge all
+itself through the same queue and preflight. A conflict or a dirty overlap
+aborts with the user's tree untouched, and the gate waits for the user with a
+notice. The orchestrator's `onAutoMerge` observer event carries the gated task
+and merge result for a supervisor's wake-up; a failed automatic merge waits for
+a user merge or the next run before automatic merging resumes. The run's copy
+is in `runSettings`; a change applies to it at once in the session it is made
+in. The timeline records "auto-merged for task N", attributed to Ordewell
+setting. With it and an Act supervisor's `merge_all` both off, Ordewell never
+merges for the user (ADR-0013).
 *Avoid:* "auto-land" — landing is a task's work onto the integration branch,
 not the user's; *Avoid:* "auto-resolve" — a conflict is never resolved by it.
 
@@ -1426,7 +1424,8 @@ keep the two surfaces from diverging.
 planner-nudged, parser-validated policy that picks each AI task's runner mode
 (`build`/`acceptEdits`/`plan`/…) from manifest `autonomous`/`safe` tags and the
 global autonomy toggle — two named levels, **Full** (the `autonomous`-tagged
-mode, today's ON) and **Guarded** (the `safe`-tagged mode, today's OFF), carried as
+mode, today's ON) and **Guarded** (the `safe`-tagged mode, today's OFF), saved
+machine-wide in `settings.json` (ADR-0030), carried as
 the boolean `autonomousMode` (`autonomousDefault`, TUI `autonomous`) and named for
 users by `autonomyLevelLabel`; `/auto full|guarded` selects one, with `on`/`off` and `auto` as
 aliases (`parseAutonomyLevel`). Three operations behind one interface:
@@ -1659,7 +1658,7 @@ notes are in the same `conversationHistory`, marked with their own message
 surfaces style them apart from replies to the user. One module owns when it
 wakes and how it fails: `Supervisor` (`services/Supervisor.ts`), fed run
 events by the Session and batching them through `WakePolicy`. What it may do
-is set by the plan's **Supervisor level** and checked at the **Command seam**.
+is set by the run's **Supervisor level** and checked at the **Command seam**.
 It decides what to do next, never whether a task passed — verdicts come from
 evidence. The run never depends on it: a wake-up turn that still fails after one
 restart leaves the run *unsupervised* (carrying on as Off, with a notice and a
@@ -1667,27 +1666,49 @@ note in the transcript; `runSettings.unsupervised` says why).
 *Avoid:* "agent", "orchestrator" (the scheduler is `TaskOrchestrator`),
 "autopilot".
 
-**Supervisor level** — the per-plan setting **Off** / **Watch** / **Act**,
-saved on the plan at run start, so flipping it mid-run changes nothing until
-the next run (ADR-0001's rule for modes). Off: the planner speaks only when the
-user writes. Watch: wake-up turns read and suggest; execution tools and plan
-edits are refused, with a note telling it to suggest the action to the user.
-Act: wake-up turns may also run, stop and retry tasks, message runners, deny
-approvals, edit the plan task by task (a whole new plan is refused) and merge
-(`merge_all`), without asking, inside the **Loop guards**; a task it adds is
-approved to run, ops tasks included (`addedBy: 'supervisor'`, shown on the
-task). Saved on the run as `runSettings.supervisorLevel`. A tripped
-wake-up-rate guard or a failed supervisor lowers it for the rest of the run, and
-so can the user at any time (`Session.lowerSupervisor`: drop to Watch, or turn
-off), at once and in the wake-up turn under way too; nothing raises it mid-run.
-A run the supervisor restarts itself, or a usage-limit reset resumes, keeps the
-level the run had; only a start of the user's captures the plan's setting
-afresh. A slim precursor of the mandate (#23): Watch is `observe`, Act becomes
-`control` + `replan`.
+**Supervisor level** — the **Run setting** **Off** / **Watch** / **Act**,
+Watch by default, set with `/supervisor` (ADR-0029, ADR-0030). Off: the planner
+speaks only when the user writes. Watch: wake-up turns read and suggest;
+execution tools and plan edits are refused, with a note telling it to suggest
+the action to the user. Act: wake-up turns may also run, stop and retry tasks,
+message runners, deny approvals, edit the plan task by task (a whole new plan
+is refused) and merge (`merge_all`), without asking, inside the **Loop
+guards**; a task it adds is approved to run, ops tasks included
+(`addedBy: 'supervisor'`, shown on the task). A run holds its own copy,
+`runSettings.supervisorLevel`, which the Command seam reads at each call. A
+tripped wake-up-rate guard or a failed supervisor lowers it for the rest of the
+run; the user's `/supervisor` sets it, up or down, at once in the session it is
+typed in, lifting such a lowering with the guards' memory kept. A run the
+supervisor restarts itself, or a usage-limit reset resumes, keeps the level the
+run had; a start of the user's copies the global value afresh. A slim
+precursor of the mandate (#23): Watch is `observe`, Act becomes `control` +
+`replan`.
 *Avoid:* "autonomous", "autonomy" or "auto" for it — those name the runner
 permission modes and the Full/Guarded autonomy level (ADR-0001), a separate
 setting; a Guarded session can have an Act supervisor. *Avoid:* "mandate" until
 #23 defines one.
+
+**Run settings** — the machine-wide user settings that say how a run is
+started, watched and merged: **Supervisor level**, **Auto-merge at gates**,
+**Autorun**, the supervisor's retry limit and the wake-up read budget
+(ADR-0030). Saved in `settings.json`, changed only by the user's chat commands
+(`/supervisor`, `/automerge`, `/autorun`) or `PATCH /api/settings`, never by the
+planner. A change applies at once to the session it is made in; another
+session's run under way keeps its values until it ends. A run's own copy is
+`runSettings` on the plan; the plan stores no other copy.
+*Avoid:* "autonomy" or "autonomy settings" for them — *autonomy* is the
+Full/Guarded level only, shown on its own Setup row; *Avoid:* "plan settings"
+(they stopped being per plan).
+
+**Autorun** — the **Run setting** that starts a plan when the planner submits
+it, approved as if the user had pressed Execute; off by default, set with
+`/autorun` (ADR-0030). The planner skips the outline gate but still asks
+clarifying questions. It fires on a submission only — never on a session's load
+or on the switch being turned on while a plan waits — and starts ops tasks too.
+Independent of the Supervisor level and of Full/Guarded. Recorded as `run_plan`
+with autorun as who asked.
+*Avoid:* "auto-execute", "auto-approve" (approval is a consequence, not the
+setting), "autopilot".
 
 **Wake-up turn** — a planner turn opened by a `WakePolicy` batch rather than by
 the user: a task failed, waiting for input or approval, idle, a landing
@@ -1695,8 +1716,8 @@ conflict, an automatic Merge all that stopped, a usage-limit pause (one entry
 per runner, however many tasks it paused), or the run finished, with passes
 since the last wake-up as context. Events within `WAKE_DEBOUNCE_MS` of the
 first join it; the run's end flushes at once. It has a timeout
-(`WAKE_UP_TURN_TIMEOUT_MS`), a per-turn read budget set on the plan
-(`wakeUpReadBudget`, 12 when unset, in place of a user turn's per-message read
+(`WAKE_UP_TURN_TIMEOUT_MS`), a per-turn read budget from the **Run settings**
+(`wakeUpReadBudget`, default 12, in place of a user turn's per-message read
 cap), and the consent of the Supervisor level rather than the user's. A
 crashed or hung one is retried once with the planner restarted from its saved
 session id; a planner usage limit is waited out. Undelivered batches are

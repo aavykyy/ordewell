@@ -1,6 +1,6 @@
 # 0001 — Autonomous mode resolution
 
-**Status:** accepted
+**Status:** accepted — amended by [ADR-0030](0030-global-run-settings.md) (where the level is saved)
 
 ## Problem
 
@@ -35,6 +35,11 @@ Concretely:
   `/auto guarded` select them (`ordewell auto full|guarded` likewise); `on`, `off`
   and `auto` stay as aliases, and a bare `/auto` in the TUI reports the current level
   instead of flipping it.
+  *Amended by [ADR-0030](0030-global-run-settings.md):* the level is saved
+  machine-wide in `settings.json`, not in the workspace `.env` or VS Code's
+  `ordewell.autonomousMode`, which is removed; existing values are copied over
+  once, and `ORDEWELL_AUTONOMOUS_MODE` stays as an override Ordewell never
+  writes. Still read at generation, never at spawn.
 - **Manifests declare what autonomy means for that runner.** Core never
   hardcodes mode IDs. Each manifest tags one mode `autonomous: true` and one
   `safe: true`:
@@ -127,3 +132,4 @@ Concretely:
   Code's own `auto` permission mode (`/auto auto`), and *Guarded* holds on every
   runner, where a classifier does not. `auto` stays an alias of Guarded.
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
+- 2026-10-12 — the level is saved in the global `settings.json` ([ADR-0030](0030-global-run-settings.md)).
