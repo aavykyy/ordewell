@@ -155,30 +155,44 @@ export function createFakeWebviewPanel(viewType: string, title: string): FakeWeb
   return panel;
 }
 
-export const QuickInputButtons = { Back: { iconPath: 'back', tooltip: 'Back' } } as const;
+export const QuickInputButtons = {
+  Back: { iconPath: new ThemeIcon('arrow-left'), tooltip: 'Back' },
+} as const;
 
-export interface FakeQuickPick {
+export interface FakeQuickPickItem {
+  label: string;
+  description?: string;
+  detail?: string;
+}
+
+export interface FakeQuickPick<T = FakeQuickPickItem> {
   title?: string;
   step?: number;
   totalSteps?: number;
   placeholder?: string;
-  items: { label: string; description?: string; detail?: string }[];
-  activeItems: FakeQuickPick['items'];
-  selectedItems: FakeQuickPick['items'];
-  buttons: unknown[];
+  ignoreFocusOut: boolean;
+  buttons: readonly unknown[];
+  items: readonly T[];
+  activeItems: readonly T[];
+  selectedItems: readonly T[];
   disposed: boolean;
   show(): void;
   hide(): void;
   dispose(): void;
   onDidAccept(cb: () => void): { dispose(): void };
-  onDidTriggerButton(cb: (button: unknown) => void): { dispose(): void };
   onDidHide(cb: () => void): { dispose(): void };
+  onDidTriggerButton(cb: (button: unknown) => void): { dispose(): void };
+  /** Accept the highlighted item, or the one at `index` after moving the highlight there. */
+  __accept(index?: number): void;
+  __back(): void;
+  /** The user dismissing the picker (Escape, focus loss). */
+  __escape(): void;
 }
 
 /** Quick picks created by `window.createQuickPick`, in creation order. */
 export const __quickPicks: FakeQuickPick[] = [];
 /** One entry per `show()`: what the user does to that pick. */
-export const __quickPickScript: Array<(pick: FakeQuickPick & { __accept(): void; __back(): void; __escape(): void }) => void> = [];
+export const __quickPickScript: Array<(pick: FakeQuickPick) => void> = [];
 
 export function __resetQuickPicks(): void {
   __quickPicks.length = 0;
@@ -189,22 +203,32 @@ function createFakeQuickPick(): FakeQuickPick {
   const accept: Array<() => void> = [];
   const button: Array<(b: unknown) => void> = [];
   const hide: Array<() => void> = [];
-  const pick: FakeQuickPick & { __accept(): void; __back(): void; __escape(): void } = {
+  const subscribe = <F>(list: F[], cb: F) => {
+    list.push(cb);
+    return { dispose() { const i = list.indexOf(cb); if (i >= 0) list.splice(i, 1); } };
+  };
+  const pick: FakeQuickPick = {
+    ignoreFocusOut: false,
     items: [], activeItems: [], selectedItems: [], buttons: [], disposed: false,
     show() {
       const act = __quickPickScript.shift();
       if (act) queueMicrotask(() => act(pick));
     },
     hide() { for (const cb of [...hide]) cb(); },
+    // A real picker reports its own dispose() as a hide too.
     dispose() {
       if (pick.disposed) return;
       pick.disposed = true;
       for (const cb of [...hide]) cb();
     },
-    onDidAccept(cb) { accept.push(cb); return { dispose() {} }; },
-    onDidTriggerButton(cb) { button.push(cb); return { dispose() {} }; },
-    onDidHide(cb) { hide.push(cb); return { dispose() {} }; },
-    __accept() { pick.selectedItems = [...pick.activeItems]; for (const cb of [...accept]) cb(); },
+    onDidAccept: (cb) => subscribe(accept, cb),
+    onDidTriggerButton: (cb) => subscribe(button, cb),
+    onDidHide: (cb) => subscribe(hide, cb),
+    __accept(index) {
+      if (index !== undefined) pick.activeItems = [pick.items[index]];
+      pick.selectedItems = [...pick.activeItems];
+      for (const cb of [...accept]) cb();
+    },
     __back() { for (const cb of [...button]) cb(QuickInputButtons.Back); },
     __escape() { pick.hide(); },
   };

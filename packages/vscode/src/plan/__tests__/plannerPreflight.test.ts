@@ -31,7 +31,7 @@ describe('plannerPreflightError', () => {
 
   it('still demands a model from a keyed vendor planner', () => {
     expect(plannerPreflightError(config('openrouter', 'sk-or', '')))
-      .toContain('No orchestrator model selected');
+      .toContain('No planner model selected');
   });
 
   it('passes a fully configured vendor planner', () => {

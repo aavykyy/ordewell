@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { window, commands } from '../../test/vscode.mock';
+import { window, commands, __quickPicks, __resetQuickPicks } from '../../test/vscode.mock';
 import { handleSlashCommand, isKnownSlashCommand, type SlashDeps } from '../SlashParser';
 import { RUN_SETTINGS_DEFAULTS, type DiscoveredModel, type GlobalRunSettings } from '@ordewell/core';
 
@@ -32,6 +32,8 @@ function makeDeps(overrides: Partial<SlashDeps> = {}): SlashDeps {
     pickModelWithProvider: async () => undefined,
     updateConfig: async () => {},
     recordPlannerModel: () => {},
+    recallPlannerModel: () => ({ model: '', effort: '', source: 'none' }),
+    applyPlannerChoice: async () => {},
     runSettings: { get: () => ({ ...RUN_SETTINGS_DEFAULTS }), change: () => {} },
     maxParallel: () => 5,
     saveAutonomy: () => {},
@@ -144,6 +146,41 @@ describe('/model set with a vendor model while a coding agent plans', () => {
     expect(commands.executeCommand).not.toHaveBeenCalled();
     expect(updateConfig).not.toHaveBeenCalled();
     expect(window.showQuickPick).not.toHaveBeenCalled();
+  });
+});
+
+describe('/planner', () => {
+  const backend = { id: 'claude-code', label: 'Claude Code', kind: 'harness' as const, runner: 'claude-code', usable: true };
+
+  it('with no argument walks the stepped picker and applies the choice once', async () => {
+    __resetQuickPicks();
+    const applyPlannerChoice = vi.fn(async () => {});
+    const deps = makeDeps({
+      plannerBackends: async () => [backend],
+      modelResolver: { ...makeDeps().modelResolver, modelsForRunners: async () => ({ 'claude-code': [harnessModel('claude-opus-5-5', ['high'])] }) },
+      applyPlannerChoice,
+    });
+
+    const done = handleSlashCommand('/planner', deps);
+    for (const index of [0, 0, 1]) {
+      await new Promise((resolve) => setImmediate(resolve));
+      __quickPicks[0].__accept(index);
+    }
+    await done;
+
+    expect(applyPlannerChoice).toHaveBeenCalledOnce();
+    expect(applyPlannerChoice).toHaveBeenCalledWith('claude-code', 'claude-opus-5-5', 'high');
+  });
+
+  it('with a backend id switches straight to it, without opening the picker', async () => {
+    __resetQuickPicks();
+    const executeCommand = commands.executeCommand as unknown as ReturnType<typeof vi.fn>;
+    executeCommand.mockClear();
+
+    await handleSlashCommand('/planner claude-code', makeDeps({ plannerBackends: async () => [backend] }));
+
+    expect(executeCommand).toHaveBeenCalledWith('ordewell.setPlanner', 'claude-code');
+    expect(__quickPicks).toHaveLength(0);
   });
 });
 

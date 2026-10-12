@@ -4,13 +4,15 @@ import {
   ORCHESTRATOR_SHORTCUTS, parseAutonomyLevel,
   automergeSummary, autorunSummary, parseCount, parseSwitch, supervisorSummary, type GlobalRunSettings,
 } from '@ordewell/core';
-import type { AiProvider, IConfig, RunnerRegistry, ModelResolver, SettingsService, RunnerModeInfo, DiscoveredModel } from '@ordewell/core';
+import type { AiProvider, IConfig, RunnerRegistry, ModelResolver, SettingsService, RunnerModeInfo, DiscoveredModel, PlannerModelRecall } from '@ordewell/core';
 import type { ApiProvider } from '../adapters/SecretStore';
 import type { ChatViewProvider, PlannerBackend } from '../providers/ChatViewProvider';
+import type { VendorModelOption } from '../plan/PlannerModelSwitch';
 import { configureModelAllowlist } from './configureModelAllowlist';
 import { runSettingsWizard, confirmRisks } from './settingsWizard';
 import { SLASH_COMMAND_NAMES, slashHelp } from './slashCommands';
 import { resolveAutonomousQuickPickItems, applyAutonomousChoice } from '../SlashAutonomous';
+import { runPlannerWizard } from './plannerWizard';
 
 // A '/' text whose first word the table does not name is a discovered skill
 // (or unknown) invocation: the caller routes it to handleSendMessage, so the
@@ -38,6 +40,10 @@ export interface SlashDeps {
   updateConfig(key: string, value: unknown): Promise<void>;
   /** Remember `model`/`effort` as the current provider's planner choice (keyed by `config.aiProvider` at write time). */
   recordPlannerModel(model: string, effort?: string): void;
+  /** What the planner should land on for `provider`: its remembered model, else the catalog's first. */
+  recallPlannerModel(provider: AiProvider, harnessModels: DiscoveredModel[] | undefined, vendorOptions: VendorModelOption[] | undefined): PlannerModelRecall;
+  /** Switch backend, model and effort in one change and remember the pick. */
+  applyPlannerChoice(provider: AiProvider, modelId: string, effort: string): Promise<void>;
   /** Saves Full or Guarded in the user's settings file, which every surface shares (ADR-0030). */
   saveAutonomy(enabled: boolean): void;
   /** The user's run settings (ADR-0030): `change` saves them and applies them at once to this window's run. */
@@ -48,29 +54,31 @@ export interface SlashDeps {
 }
 
 /**
- * Pick the planner backend (ADR-0009). Harness planners are listed even when
- * unusable, with the preflight's reason as the detail — a picker that hides a
- * missing CLI leaves the user guessing why their agent vanished.
+ * `/planner <id>` switches straight to that backend and its remembered model;
+ * bare `/planner` walks harness, model and effort in one stepped quick pick
+ * (ADR-0009). Unusable harness planners are listed with the preflight's reason
+ * — a picker that hides a missing CLI leaves the user guessing why it vanished.
  */
 async function pickPlanner(arg: string | undefined, deps: SlashDeps): Promise<void> {
-  const backends = await deps.plannerBackends();
-  let chosen = arg ? backends.find((b) => b.id === arg.toLowerCase()) : undefined;
-  if (arg && !chosen) {
-    vscode.window.showWarningMessage(`Unknown planner: ${arg}. Run /planner with no argument to see the list.`);
+  if (!arg) {
+    await runPlannerWizard({
+      current: () => ({
+        provider: deps.config.aiProvider,
+        model: deps.config.orchestratorModel,
+        effort: deps.config.plannerThinkingEffort ?? '',
+      }),
+      plannerBackends: deps.plannerBackends,
+      modelsForRunner: async (runner) => (await deps.modelResolver.modelsForRunners([runner]))[runner] ?? [],
+      vendorModels: async (provider) => (await deps.modelResolver.pickerOptions()).filter((o) => o.apiProvider === provider),
+      recall: deps.recallPlannerModel,
+      applyChoice: deps.applyPlannerChoice,
+    });
     return;
   }
+  const chosen = (await deps.plannerBackends()).find((b) => b.id === arg.toLowerCase());
   if (!chosen) {
-    const picked = await vscode.window.showQuickPick(
-      backends.map((b) => ({
-        label: b.usable ? b.label : `$(circle-slash) ${b.label}`,
-        description: b.id === deps.config.aiProvider ? 'current' : undefined,
-        detail: b.reason,
-        backend: b,
-      })),
-      { placeHolder: 'Who researches your goal and writes the plan?' },
-    );
-    if (!picked) return;
-    chosen = picked.backend;
+    vscode.window.showWarningMessage(`Unknown planner: ${arg}. Run /planner with no argument to see the list.`);
+    return;
   }
   if (!chosen.usable) {
     vscode.window.showWarningMessage(chosen.reason ?? `${chosen.label} is not available.`);
@@ -217,14 +225,14 @@ export async function handleSlashCommand(text: string, deps: SlashDeps): Promise
     if (known) {
       await deps.updateConfig('orchestratorModel', known);
       deps.recordPlannerModel(known);
-      vscode.window.showInformationMessage(`Orchestrator model set to: ${known}`);
+      vscode.window.showInformationMessage(`Planner model set to: ${known}`);
       return;
     }
-    const picked = await deps.pickModelWithProvider(options, deps.config.configuredProviders, 'Pick orchestrator model');
+    const picked = await deps.pickModelWithProvider(options, deps.config.configuredProviders, 'Pick the planner model');
     if (picked) {
       await deps.updateConfig('orchestratorModel', picked);
       deps.recordPlannerModel(picked);
-      vscode.window.showInformationMessage(`Orchestrator model set to: ${picked}`);
+      vscode.window.showInformationMessage(`Planner model set to: ${picked}`);
     }
     return;
   }
