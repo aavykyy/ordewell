@@ -53,7 +53,7 @@ export async function handleAutomerge(subArgs: string[], injectedApi?: ApiClient
     return;
   }
   await save(api, { mergeAtGatesAutomatically: enabled });
-  console.log(`Merge at gates automatically: ${enabled ? 'on' : 'off'}, from each session's next run.`);
+  console.log(`Merge automatically (gates, end of run): ${enabled ? 'on' : 'off'}, from each session's next run.`);
 }
 
 export async function handleAutorun(subArgs: string[], injectedApi?: ApiClient): Promise<void> {

@@ -49,7 +49,7 @@ describe('run settings in the TUI (ADR-0030)', () => {
     const supervisor = typed(state, '/supervisor');
     expect(supervisor.effects).toEqual([]);
     expect(said(supervisor)).toContain('Supervisor: Act, 1 retry per task, 12 reads per wake-up');
-    expect(said(typed(state, '/automerge'))).toContain('Merge at gates automatically: on');
+    expect(said(typed(state, '/automerge'))).toContain('Merge automatically (gates, end of run): on');
     expect(said(typed(state, '/autorun'))).toContain('Autorun: off');
   });
 

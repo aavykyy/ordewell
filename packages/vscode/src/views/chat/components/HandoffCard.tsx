@@ -93,9 +93,9 @@ function MergeOutcome({ result, branch }: { result: IsolationMergeResult; branch
 }
 
 /**
- * The end of an isolated run (ADR-0013). Ordewell never merges into the
- * checked-out branch on its own, so this is where that irreversible step is
- * offered — next to the one artifact to review it with, the integration branch.
+ * The end of an isolated run (ADR-0013). Unless the user opted in to automatic
+ * merging or a supervisor at Act merges, Ordewell does not merge into the
+ * checked-out branch, so this is where that irreversible step is offered — next to the one artifact to review it with, the integration branch.
  * A repo group (ADR-0014) reports per repo and merges all-or-nothing; a group
  * of one reads exactly as it did before.
  */

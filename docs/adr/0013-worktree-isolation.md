@@ -386,3 +386,4 @@ everything below applies per repo of the group.
 - 2026-10-11 — `merge_all` reaches the planner as a tool through the command seam, allowed only to a supervisor at Act ([ADR-0029](0029-the-supervisor.md)).
 - 2026-10-11 — a continue restores the previous attempt's preserved work (ADR-0018, K1).
 - 2026-10-12 — the merge consents become global user settings ([ADR-0030](0030-global-run-settings.md)).
+- 2026-10-12 — the end of a run is a handoff unless the user opted in to automatic merging, which now also merges at the end of a run, or the supervisor at Act merges ([ADR-0029](0029-the-supervisor.md), amendment of 2026-10-12).

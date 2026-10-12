@@ -51,7 +51,7 @@ function runSettingsSummary(run: GlobalRunSettings | undefined, runSettings: Run
       <span className={`plan-dock-summary plan-supervisor${actual === 'unsupervised' ? ' plan-supervisor-stopped' : ''}`}>
         Supervisor: {level}{actual && ` → ${actual}`}
       </span>
-      {run.mergeAtGatesAutomatically && <span className="plan-dock-summary">Merge at gates automatically</span>}
+      {run.mergeAtGatesAutomatically && <span className="plan-dock-summary">Merge automatically</span>}
       {run.autorun && <span className="plan-dock-summary">Autorun</span>}
     </>
   );

@@ -306,7 +306,7 @@ describe('conversation-editing slash commands', () => {
       await handleSlashCommand('/autorun', deps);
       const said = mocked('showInformationMessage').mock.calls.map((c) => String(c[0]));
       expect(said[0]).toContain('Supervisor: Act, 2 retries per task, 12 reads per wake-up');
-      expect(said[1]).toContain('Merge at gates automatically: on');
+      expect(said[1]).toContain('Merge automatically (gates, end of run): on');
       expect(said[2]).toContain('Autorun: off');
     });
 
