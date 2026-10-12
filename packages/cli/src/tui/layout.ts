@@ -433,7 +433,11 @@ const VERSION = cliVersion();
 function markLines(cols: number): string[] {
   const room = Math.max(0, cols - 1);
   const [top, mid, bottom] = MARK.map(paintMark);
-  const wordmark = `${style.bold('orde')}${style.bold(style.cyan('well'))}`;
+  // Letter-spaced because a bold `ew` fuses: `w` fills its cell and synthetic
+  // bold bleeds a pixel right. The halves are painted apart so the cyan reset
+  // never clips the bold, with the join between them left unstyled.
+  const spaced = (word: string): string => [...word].join(' ');
+  const wordmark = `${style.bold(spaced('orde'))} ${style.bold(style.cyan(spaced('well')))}`;
   const named = `${mid}${MARK_GAP}${wordmark}`;
   const versioned = VERSION === 'unknown' ? named : `${named}${MARK_GAP}${style.grey(`v${VERSION}`)}`;
   const textRoom = room - width(mid) - MARK_GAP.length;
