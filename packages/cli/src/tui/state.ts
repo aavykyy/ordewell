@@ -1,5 +1,6 @@
 import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type SupervisorLevel, type TaskLogEvent, type TaskLogView, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
+import type { SaveSettingsEffect } from './reducers/settings';
 import type { StepperState } from './reducers/stepper';
 
 export type RunStatus = 'idle' | 'planning' | 'researching' | 'executing';
@@ -280,6 +281,7 @@ export type ConfirmAction =
   | { kind: 'force-start-gated'; taskId: string }
   | { kind: 'supervisor-act' }
   | { kind: 'autorun-on' }
+  | { kind: 'save-settings'; effect: SaveSettingsEffect }
   | { kind: 'merge-run' }
   | { kind: 'discard-run' }
   | { kind: 'init-workspace'; goal: string; workspace: string }

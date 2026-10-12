@@ -69,6 +69,8 @@ export type Effect =
   | { type: 'addTask'; sessionId: string; title: string }
   /** Saves run settings (ADR-0030), and applies them at once to `sessionId`'s run when one is named. */
   | { type: 'setRunSettings'; changes: Partial<GlobalRunSettings>; sessionId?: string }
+  /** `/settings`: only the changed values, saved the way their own commands save them, then `message` as one notice. */
+  | { type: 'saveSettings'; run: Partial<GlobalRunSettings>; autonomous?: boolean; maxParallel?: number; message: string; sessionId?: string }
   | { type: 'updateTask'; sessionId: string; taskId: string; changes: Record<string, unknown>; message: string }
   | { type: 'removeTask'; sessionId: string; taskId: string }
   /** Reads a structured task's saved log (ADR-0018, P1) so its view opens with its history. */

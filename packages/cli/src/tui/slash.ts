@@ -58,6 +58,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'automerge', usage: '/automerge [on|off]', description: 'Merge into your branch by itself at merge gates and at the end of a run', category: 'models' },
   { name: 'autorun', usage: '/autorun [on|off]', description: 'Start each plan the planner submits, without review', category: 'models' },
   { name: 'parallel', usage: '/parallel [<n>]', description: 'How many AI tasks run at once (applies to a live run)', category: 'models' },
+  { name: 'settings', usage: '/settings', description: 'Run settings: autonomy, supervisor, merging, autorun, parallel tasks', category: 'models' },
   { name: 'refresh', usage: '/refresh', description: 'Re-discover runners and model catalogs', category: 'models' },
 
   // Sessions

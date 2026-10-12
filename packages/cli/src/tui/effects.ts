@@ -435,10 +435,23 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     }
 
     case 'setMaxParallel':
-      await api.updateSettings({ env: { ORDEWELL_MAX_PARALLEL: String(effect.limit) } });
-      deps.setEnvVar('ORDEWELL_MAX_PARALLEL', String(effect.limit));
+      await saveMaxParallel(deps, effect.limit);
       dispatch({ type: 'notice', message: `Up to ${effect.limit} AI task${effect.limit === 1 ? '' : 's'} now run at once.` });
       return;
+
+    case 'saveSettings': {
+      if (Object.keys(effect.run).length > 0) {
+        const settings = await api.updateRunSettings(effect.run, effect.sessionId);
+        dispatch({ type: 'settingsLoaded', settings });
+        if (effect.sessionId) await refreshPlan(deps, effect.sessionId);
+      }
+      if (effect.maxParallel !== undefined) await saveMaxParallel(deps, effect.maxParallel);
+      const overridden = effect.autonomous !== undefined && deps.saveAutonomy(effect.autonomous).overridden;
+      dispatch({ type: 'notice', message: overridden
+        ? `${effect.message} — ORDEWELL_AUTONOMOUS_MODE in the environment decides the autonomy level until it is unset.`
+        : effect.message });
+      return;
+    }
 
     case 'setAutonomous': {
       const { overridden } = deps.saveAutonomy(effect.enabled);
@@ -636,6 +649,11 @@ function osc52(text: string): string {
  * missing `xclip`, or one that cannot open the display, falls through to the
  * terminal route rather than reporting a copy that did not happen.
  */
+async function saveMaxParallel(deps: EffectDeps, limit: number): Promise<void> {
+  await deps.api.updateSettings({ env: { ORDEWELL_MAX_PARALLEL: String(limit) } });
+  deps.setEnvVar('ORDEWELL_MAX_PARALLEL', String(limit));
+}
+
 function copySelection(deps: EffectDeps, text: string): void {
   if (!text) return;
   const lines = text.split('\n').length;
