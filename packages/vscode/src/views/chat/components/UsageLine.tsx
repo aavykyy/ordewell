@@ -35,7 +35,7 @@ export function measures(totals: UsageTotals, unknown = false): string[] {
 }
 
 export default function UsageLine({ block }: { block: UsageBlock }) {
-  const models = block.byModel?.map((m) => `${m.source} / ${m.model ?? 'model unknown'}: ${measures(m.totals, true).join(' · ')}`).join('\n');
+  const models = block.byModel?.map((m) => `${m.source} / ${m.model ?? 'unattributed'}: ${measures(m.totals, true).join(' · ')}`).join('\n');
   const agents = Object.entries(block.bySubagent ?? {});
   const agentTitle = agents
     .map(([id, totals]) => `${id}: ${measures(totals).join(' · ') || 'no usage reported'}`)

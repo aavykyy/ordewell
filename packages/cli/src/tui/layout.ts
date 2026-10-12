@@ -655,8 +655,9 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
     return prefix + (selected ? style.bold(line) : line);
   });
 
-  const model = row.usage
-    ? [...new Set((row.usage.byModel ?? []).map((m) => sanitize(m.model ?? 'model unknown')))].join(', ') || 'model unknown'
+  const reported = [...new Set((row.usage?.byModel ?? []).flatMap((m) => (m.model ? [sanitize(m.model)] : [])))];
+  const model = reported.length
+    ? reported.join(', ')
     : task.assignedModel?.modelLabel ?? (task.type === 'ai' ? 'default model' : '');
   const effort = task.type === 'ai'
     ? `effort: ${task.assignedModel?.thinkingEffort ?? 'default'}`
@@ -679,7 +680,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   if (meta) lines.push(style.grey(truncate(`${bodyPad}${meta}`, cols)));
   if (row.usage) lines.push(style.grey(truncate(`${bodyPad}${taskUsageText(row.usage)}`, cols)));
   if (expanded && row.usage) {
-    for (const model of row.usage.byModel ?? []) lines.push(...wrap(`${bodyPad}${sanitize(model.model ?? 'model unknown')}: ${usageMeasures(model.totals, true).join(' · ')}`, cols).map(style.grey));
+    for (const model of row.usage.byModel ?? []) lines.push(...wrap(`${bodyPad}${sanitize(model.model ?? 'unattributed')}: ${usageMeasures(model.totals, true).join(' · ')}`, cols).map(style.grey));
   }
   if (skills) lines.push(style.grey(truncate(`${bodyPad}skills: ${skills}`, cols)));
   if (effort || mode) lines.push(style.grey(truncate(`${bodyPad}${[effort, mode].filter(Boolean).join(' · ')}`, cols)));
