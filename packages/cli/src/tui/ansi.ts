@@ -265,4 +265,12 @@ export const style = {
    */
   highlight: (text: string): string =>
     (style.enabled ? `\x1b[7m${text.split('\x1b[0m').join('\x1b[0m\x1b[7m')}\x1b[0m` : text),
+  /**
+   * The grey band the user's own messages sit on. The background is
+   * re-asserted after every reset inside, or the cyan `❯` and a skill token
+   * would end the band partway along the row. 236 is dark enough to stay a
+   * quiet band on a dark terminal and keeps default and cyan text legible.
+   */
+  band: (text: string): string =>
+    (style.enabled ? `\x1b[48;5;236m${text.split('\x1b[0m').join('\x1b[0m\x1b[48;5;236m')}\x1b[0m` : text),
 };

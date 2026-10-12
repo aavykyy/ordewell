@@ -124,6 +124,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   description paragraph are gone.
 - **Esc closes the `/settings` and `/planner` menus** in the terminal UI,
   discarding choices not yet confirmed, instead of going back a step.
+- **Your messages sit on a grey band.** In the terminal UI's chat and task view
+  each message you sent is set off by a grey band the width of the pane, so it
+  is easy to find when scrolling back.
 - **Plan rows are one line plus a meta line.** Skills, effort and mode show
   when a row is expanded. Per-task usage moved out of the rows into the task
   view's pinned footer, with time and a per-model breakdown; *Tasks total*

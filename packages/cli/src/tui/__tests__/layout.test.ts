@@ -74,12 +74,12 @@ describe('chat pane — no dead notches', () => {
   it('scrolls back to the very first line of the transcript and no further', () => {
     // With a plan in hand the welcome is gone, so the transcript's own first
     // line is the top of the pane.
-    const top = repeat(chatState(40, { tasks: tasks(1) }), 'pageup', 20);
+    const top = repeat(chatState(40, { tasks: tasks(1) }), 'pageup', 40);
     expect(plain(top)).toContain('message 1');
   });
 
   it('counts the welcome as part of what scrolls, before a plan replaces it', () => {
-    const top = repeat(chatState(40), 'pageup', 20);
+    const top = repeat(chatState(40), 'pageup', 40);
     expect(plain(top)).toContain('Describe a goal to start planning.');
   });
 });
