@@ -14,6 +14,7 @@ import {
 } from './taskEdits';
 import { stopPlanning } from './turnQueue';
 import { automergeCommand, autorunCommand, supervisorCommand } from './runSettings';
+import { openSettings } from './settings';
 import { fail, step, withSession, type Effect, type Step, type TaskAction } from './shared';
 
 const KNOWN_PROVIDERS = Object.keys(ALL_PROVIDERS);
@@ -74,6 +75,8 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
       return autorunCommand(state, args[0]);
     case 'parallel':
       return setMaxParallel(state, args[0]);
+    case 'settings':
+      return openSettings(state);
     case 'mouse':
       return setMouseCapture(state, args[0]);
 

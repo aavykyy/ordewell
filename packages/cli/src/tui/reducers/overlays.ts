@@ -12,6 +12,7 @@ import { assignTaskEffort, assignTaskSkills, assignTaskMode, assignTaskModel, as
 import { say } from '../transcript';
 import { clamp, digitRow, editText, fail, step, type Step } from './shared';
 import { runSettingsEffect } from './runSettings';
+import { saveSettings } from './settings';
 import { handleStepperKey } from './stepper';
 
 export function handleOverlayKey(state: TuiState, overlay: NonNullable<TuiState['overlay']>, key: Key): Step {
@@ -76,6 +77,7 @@ function runConfirm(
   }
   if (overlay.action.kind === 'supervisor-act') return step(closed, [runSettingsEffect(closed, { supervisorLevel: 'act' })]);
   if (overlay.action.kind === 'autorun-on') return step(closed, [runSettingsEffect(closed, { autorun: true })]);
+  if (overlay.action.kind === 'save-settings') return saveSettings(closed, overlay.action.effect);
   if (overlay.action.kind === 'merge-run' || overlay.action.kind === 'discard-run') {
     return confirmedHandoff(state, overlay.action.kind);
   }

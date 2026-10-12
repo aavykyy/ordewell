@@ -963,6 +963,35 @@ describe('settings', () => {
     await runEffect({ type: 'setAutonomous', enabled: false }, h.deps);
     expect(h.actions).toContainEqual({ type: 'notice', message: expect.stringMatching(/Guarded is saved, but ORDEWELL_AUTONOMOUS_MODE in the environment decides the level until it is unset/) });
   });
+
+  it('/settings saves the run settings in one update, then parallel and autonomy, with one notice', async () => {
+    const run = { supervisorLevel: 'watch', mergeAtGatesAutomatically: false, autorun: true, supervisorRetryLimit: 3, wakeUpReadBudget: 12 };
+    const saved: boolean[] = [];
+    const h = harness(
+      { updateRunSettings: vi.fn().mockResolvedValue({ run }) },
+      { saveAutonomy: (enabled) => { saved.push(enabled); return { overridden: false }; } },
+    );
+    await runEffect({
+      type: 'saveSettings', run: { autorun: true, supervisorRetryLimit: 3 }, maxParallel: 3, autonomous: false,
+      message: 'Settings: Autonomy Guarded · Supervisor retries 3 · Autorun on · Parallel 3', sessionId: 's1',
+    }, h.deps);
+    expect(h.api.updateRunSettings.mock.calls).toEqual([[{ autorun: true, supervisorRetryLimit: 3 }, 's1']]);
+    expect(h.actions).toContainEqual({ type: 'settingsLoaded', settings: { run } });
+    expect(h.api.updateSettings).toHaveBeenCalledWith({ env: { ORDEWELL_MAX_PARALLEL: '3' } });
+    expect(h.env.ORDEWELL_MAX_PARALLEL).toBe('3');
+    expect(saved).toEqual([false]);
+    expect(h.actions.filter((a) => a.type === 'notice')).toEqual([
+      { type: 'notice', message: 'Settings: Autonomy Guarded · Supervisor retries 3 · Autorun on · Parallel 3' },
+    ]);
+  });
+
+  it('/settings leaves the run settings and the daemon alone when only autonomy changed', async () => {
+    const h = harness({ updateRunSettings: vi.fn() }, { saveAutonomy: () => ({ overridden: true }) });
+    await runEffect({ type: 'saveSettings', run: {}, autonomous: true, message: 'Settings: Autonomy Full' }, h.deps);
+    expect(h.api.updateRunSettings).not.toHaveBeenCalled();
+    expect(h.api.updateSettings).not.toHaveBeenCalled();
+    expect(h.actions).toContainEqual({ type: 'notice', message: expect.stringMatching(/^Settings: Autonomy Full — ORDEWELL_AUTONOMOUS_MODE in the environment decides/) });
+  });
 });
 
 describe('catalogs and sessions', () => {
