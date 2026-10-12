@@ -61,6 +61,8 @@ export type SerializedTask = {
   order: number;
   title: string;
   type: string;
+  /** Without it a plan broadcast after a run reads as every task pending. */
+  status: Task['status'];
   description: string;
   dependencies: string[];
   assignedRunner: RunnerId;
@@ -73,6 +75,9 @@ export type SerializedTask = {
   autonomy: Task['autonomy'];
   sliceType: Task['sliceType'];
   userStoriesCovered: Task['userStoriesCovered'];
+  /** As on {@link SerializedTaskStatus}: only while the task is `awaiting_user`. */
+  awaitingReason?: AwaitingReason;
+  resumeAt?: string;
   /** Set only on an ops task (ADR-0020). */
   ops?: true;
   /** Task skills attached by name; absent when none. */
@@ -304,6 +309,7 @@ export function serializeTask(t: Task): SerializedTask {
     order: t.order,
     title: t.title,
     type: t.type,
+    status: t.status,
     description: t.description,
     dependencies: t.dependencies || [],
     assignedRunner: t.assignedRunner,
@@ -316,6 +322,8 @@ export function serializeTask(t: Task): SerializedTask {
     autonomy: t.autonomy || undefined,
     sliceType: t.sliceType || undefined,
     userStoriesCovered: t.userStoriesCovered || undefined,
+    ...(t.status === 'awaiting_user' && t.awaitingReason ? { awaitingReason: t.awaitingReason } : {}),
+    ...(t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit' && t.resumeAt ? { resumeAt: t.resumeAt } : {}),
     ...(t.ops ? { ops: true as const } : {}),
     ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
     ...(t.skills?.length ? { skills: [...t.skills] } : {}),

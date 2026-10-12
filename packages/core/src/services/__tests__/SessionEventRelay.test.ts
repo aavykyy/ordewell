@@ -108,6 +108,31 @@ describe('SessionEventRelay', () => {
     expect(sent[1]).toMatchObject({ type: 'plan_generated', goal: 'goal', turnId: 'turn-1' });
   });
 
+  it('announces each task\'s status, subtasks and the reason a waiting task waits included', () => {
+    const { relay, sent, store } = setup();
+    store.load([
+      createTask({ id: 't1', order: 1, title: 'First', prompt: 'a', status: 'completed' }),
+      createTask({
+        id: 't2', order: 2, title: 'Second', prompt: 'b',
+        subtasks: [createTask({ id: 't2a', order: 1, title: 'Second A', prompt: 'c', status: 'completed' })],
+      }),
+      createTask({ id: 't3', order: 3, title: 'Third', prompt: 'd' }),
+    ], ['claude-code']);
+    store.markAwaitingUser('t3', 'usage-limit');
+    store.setTaskResumeAt('t3', '2026-01-01T05:00:00Z');
+
+    relay.planGenerated(plan(), 'goal');
+
+    const [msg] = sent;
+    if (msg.type !== 'plan_generated') throw new Error('expected plan_generated');
+    expect(msg.plan.tasks).toMatchObject([
+      { id: 't1', status: 'completed' },
+      { id: 't2', status: 'pending', subtasks: [{ id: 't2a', status: 'completed' }] },
+      { id: 't3', status: 'awaiting_user', awaitingReason: 'usage-limit', resumeAt: '2026-01-01T05:00:00Z' },
+    ]);
+    expect(msg.plan.tasks[0]).not.toHaveProperty('awaitingReason');
+  });
+
   it('announces a plan\'s skill loads without their bodies, which stay in the session for replay', () => {
     const { relay, sent } = setup();
     const notice = { invokedBy: 'user' as const, name: 'grilling', source: 'global' as const, path: '~/.ordewell/skills/grilling/SKILL.md' };

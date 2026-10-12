@@ -7,6 +7,7 @@ const task = (over: Partial<SerializedTask>): SerializedTask => ({
   order: 1,
   title: 'Task',
   type: 'ai',
+  status: 'pending',
   description: '',
   dependencies: [],
   assignedRunner: 'claude-code',

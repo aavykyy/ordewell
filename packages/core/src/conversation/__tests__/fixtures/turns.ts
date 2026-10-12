@@ -104,7 +104,7 @@ export const harnessSubagent: ConversationInput[] = [
  */
 export function planSnapshot(conversationHistory: SerializedConversationMessage[], taskCount = 0, turnId?: string): ConversationInput {
   const tasks = Array.from({ length: taskCount }, (_, i) => ({
-    id: `task-${i + 1}`, order: i + 1, title: `Task ${i + 1}`, type: 'ai', description: '', dependencies: [], assignedRunner: 'claude-code',
+    id: `task-${i + 1}`, order: i + 1, title: `Task ${i + 1}`, type: 'ai', status: 'pending' as const, description: '', dependencies: [], assignedRunner: 'claude-code',
     assignedModel: null, taskMode: 'build', prompt: null, subtasks: [], userSteps: undefined, thinkingEffort: undefined, autonomy: undefined,
     sliceType: undefined, userStoriesCovered: undefined,
   }));
