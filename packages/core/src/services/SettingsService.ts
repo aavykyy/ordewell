@@ -69,6 +69,8 @@ export interface UserSettings {
    * back to the environment's defaults; `[]` is a deliberate "none of them".
    */
   enabledRunners?: string[];
+  /** Full (true) or Guarded (false), ADR-0001; Full until the user chooses. */
+  autonomousMode?: boolean;
   supervisorLevel?: SupervisorLevel;
   mergeAtGatesAutomatically?: boolean;
   autorun?: boolean;
@@ -202,6 +204,29 @@ export class SettingsService {
     this.persist();
   }
 
+  /**
+   * Full or Guarded (ADR-0001), as saved here (ADR-0030). A value set in the
+   * environment wins, so a script or CI run can fix its own without touching
+   * the user's file.
+   */
+  autonomousMode(): boolean {
+    const env = process.env.ORDEWELL_AUTONOMOUS_MODE;
+    if (this.autonomousModeOverridden()) return env !== 'false' && env !== '0';
+    return this.getAll().autonomousMode ?? true;
+  }
+
+  /** Whether `ORDEWELL_AUTONOMOUS_MODE` decides the level, whatever this file says. */
+  autonomousModeOverridden(): boolean {
+    const env = process.env.ORDEWELL_AUTONOMOUS_MODE;
+    return env !== undefined && env.trim() !== '';
+  }
+
+  setAutonomousMode(enabled: boolean): void {
+    this.getAll();
+    this.cache!.autonomousMode = enabled;
+    this.persist();
+  }
+
   getRunSettings(): GlobalRunSettings {
     return runSettingsOf(this.getAll());
   }
@@ -242,6 +267,7 @@ export class SettingsService {
         if (Array.isArray(raw.enabledRunners)) {
           settings.enabledRunners = raw.enabledRunners.map(String);
         }
+        if (typeof raw.autonomousMode === 'boolean') settings.autonomousMode = raw.autonomousMode;
         // A value it cannot use is left out, so its default stands.
         for (const key of RUN_SETTING_KEYS) {
           if (RUN_SETTING_CHECKS[key].valid(raw[key])) (settings as Record<keyof GlobalRunSettings, unknown>)[key] = raw[key];

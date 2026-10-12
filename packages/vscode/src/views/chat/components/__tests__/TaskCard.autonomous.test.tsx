@@ -31,16 +31,16 @@ const modes: RunnerMode[] = [
 describe('TaskCard — autonomous mode marking', () => {
   it('marks a task whose resolved mode is tagged autonomous in the manifest', () => {
     render(<TaskCard task={makeTask()} models={emptyModels} modes={modes} isExecuting={false} />);
-    expect(screen.getByTitle(/ordewell\.autonomousMode/)).toBeTruthy();
+    expect(screen.getByTitle(/Full: runs without permission prompts — \/auto changes the level/)).toBeTruthy();
   });
 
   it('shows no marking for a task whose mode carries no autonomous tag', () => {
     render(<TaskCard task={makeTask({ taskMode: 'default' })} models={emptyModels} modes={modes} isExecuting={false} />);
-    expect(screen.queryByTitle(/ordewell\.autonomousMode/)).toBeNull();
+    expect(screen.queryByTitle(/Full: runs without permission prompts/)).toBeNull();
   });
 
   it('shows no marking when no manifest mode data is available at all', () => {
     render(<TaskCard task={makeTask()} models={emptyModels} isExecuting={false} />);
-    expect(screen.queryByTitle(/ordewell\.autonomousMode/)).toBeNull();
+    expect(screen.queryByTitle(/Full: runs without permission prompts/)).toBeNull();
   });
 });

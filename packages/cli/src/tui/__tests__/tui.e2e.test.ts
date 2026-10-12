@@ -152,6 +152,7 @@ function harness() {
         dispatch: (action) => app.dispatch(action),
         newSessionId: () => `session-${++sessionCounter}`,
         setEnvVar: (key, value) => { envWrites[key] = value; },
+        saveAutonomy: () => ({ overridden: false }),
         setMouseCapture: (enabled) => terminal?.setMouse(enabled),
         // A real `xclip` would put test fixtures on the developer's clipboard;
         // the probe and the pipe are the only two steps that have to be faked.

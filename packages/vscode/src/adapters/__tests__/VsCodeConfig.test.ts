@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { __setConfig, __resetConfig } from '../../test/vscode.mock';
-import { VsCodeConfig } from '../VsCodeConfig';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { __setConfig, __resetConfig, configUpdates } from '../../test/vscode.mock';
+import { VsCodeConfig, moveAutonomyFromVsCodeSetting } from '../VsCodeConfig';
 import { SecretStore } from '../SecretStore';
-import { DEFAULT_WEB_READ_BUDGET } from '@ordewell/core';
+import { DEFAULT_WEB_READ_BUDGET, SettingsService } from '@ordewell/core';
 
 /** Build a loaded SecretStore backed by an in-memory map. */
 async function makeStore(initial: Record<string, string> = {}) {
@@ -128,23 +131,44 @@ describe('VsCodeConfig.webReadBudget', () => {
   });
 });
 
-describe('VsCodeConfig.autonomousMode', () => {
-  it('defaults to true when the setting is unset', async () => {
-    const store = await makeStore({});
-    __setConfig({});
-    expect(new VsCodeConfig(store).autonomousMode).toBe(true);
+describe('the autonomy level (ADR-0030)', () => {
+  const savedPath = process.env.ORDEWELL_SETTINGS_PATH;
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-vscode-autonomy-'));
+    process.env.ORDEWELL_SETTINGS_PATH = path.join(dir, 'settings.json');
+  });
+  afterEach(() => {
+    if (savedPath === undefined) delete process.env.ORDEWELL_SETTINGS_PATH;
+    else process.env.ORDEWELL_SETTINGS_PATH = savedPath;
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it('reflects the ordewell.autonomousMode setting when explicitly false', async () => {
-    const store = await makeStore({});
+  it('is the level saved in the user\'s settings, which every surface shares', async () => {
+    const config = new VsCodeConfig(await makeStore({}));
+    expect(config.autonomousMode).toBe(true);
+
+    new SettingsService().setAutonomousMode(false);
+
+    expect(config.autonomousMode).toBe(false);
+  });
+
+  it('copies a level set in the old VS Code setting once, then clears that setting', async () => {
     __setConfig({ autonomousMode: false });
-    expect(new VsCodeConfig(store).autonomousMode).toBe(false);
+
+    await moveAutonomyFromVsCodeSetting(new SettingsService());
+
+    expect(new SettingsService().getAll().autonomousMode).toBe(false);
+    expect(configUpdates).toContainEqual({ key: 'autonomousMode', value: undefined });
   });
 
-  it('reflects the ordewell.autonomousMode setting when explicitly true', async () => {
-    const store = await makeStore({});
-    __setConfig({ autonomousMode: true });
-    expect(new VsCodeConfig(store).autonomousMode).toBe(true);
+  it('keeps a level already saved over the old VS Code setting', async () => {
+    new SettingsService().setAutonomousMode(true);
+    __setConfig({ autonomousMode: false });
+
+    await moveAutonomyFromVsCodeSetting(new SettingsService());
+
+    expect(new SettingsService().autonomousMode()).toBe(true);
   });
 });
 

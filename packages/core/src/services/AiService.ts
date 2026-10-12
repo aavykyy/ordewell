@@ -45,6 +45,8 @@ export interface ConversationRequest {
   contextWindow?: number;
   /** Where tasks will run (ADR-0013, ADR-0014): in worktrees, the prompt drops file-overlap ordering and describes a repo group. */
   isolatedExecution?: IsolatedExecution;
+  /** A plan the planner submits starts at once (ADR-0030), so the opening prompt has no outline gate. */
+  autorun?: boolean;
   signal?: AbortSignal;
   /**
    * Persisted dialogue to seed a resumed conversation (session reload). The

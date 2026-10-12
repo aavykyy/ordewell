@@ -280,4 +280,37 @@ describe('SettingsService', () => {
       expect(new SettingsService(tempFile).getRunSettings()).toMatchObject({ supervisorLevel: 'watch', supervisorRetryLimit: 2, autorun: true });
     });
   });
+
+  describe('the autonomy level (ADR-0030)', () => {
+    const saved = process.env.ORDEWELL_AUTONOMOUS_MODE;
+    afterEach(() => {
+      if (saved === undefined) delete process.env.ORDEWELL_AUTONOMOUS_MODE;
+      else process.env.ORDEWELL_AUTONOMOUS_MODE = saved;
+    });
+
+    it('is Full until the user chooses, and keeps their choice for every later reader', () => {
+      delete process.env.ORDEWELL_AUTONOMOUS_MODE;
+      expect(service.autonomousMode()).toBe(true);
+
+      service.setAutonomousMode(false);
+
+      expect(new SettingsService(tempFile).autonomousMode()).toBe(false);
+      expect(new SettingsService(tempFile).getAll().autonomousMode).toBe(false);
+    });
+
+    it.each([['false', false], ['0', false], ['true', true]])('gives way to ORDEWELL_AUTONOMOUS_MODE=%s in the environment', (value, level) => {
+      service.setAutonomousMode(!level);
+      process.env.ORDEWELL_AUTONOMOUS_MODE = value;
+
+      expect(service.autonomousMode()).toBe(level);
+      expect(service.autonomousModeOverridden()).toBe(true);
+    });
+
+    it('reads a hand-edited value it cannot use as Full', () => {
+      delete process.env.ORDEWELL_AUTONOMOUS_MODE;
+      fs.writeFileSync(tempFile, JSON.stringify({ autonomousMode: 'guarded' }));
+
+      expect(new SettingsService(tempFile).autonomousMode()).toBe(true);
+    });
+  });
 });

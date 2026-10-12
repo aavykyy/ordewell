@@ -207,7 +207,7 @@ export class GeminiService extends BaseAiService implements IAiService {
       req.runners,
       req.runnerModes,
       req.autonomousDefault ?? true,
-      { isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined },
+      { isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun },
     );
 
     // Gemini requires strict user/model alternation, so consecutive same-role

@@ -5,6 +5,8 @@
 import { vi } from 'vitest';
 
 let configValues: Record<string, unknown> = {};
+/** Every `update` a test's code made, in order. */
+export const configUpdates: { key: string; value: unknown }[] = [];
 
 /** Set the `ordewell.*` configuration values the mocked workspace returns. */
 export function __setConfig(values: Record<string, unknown>): void {
@@ -13,6 +15,7 @@ export function __setConfig(values: Record<string, unknown>): void {
 
 export function __resetConfig(): void {
   configValues = {};
+  configUpdates.length = 0;
 }
 
 export const workspace = {
@@ -21,11 +24,14 @@ export const workspace = {
       get<T>(key: string, defaultValue?: T): T {
         return (key in configValues ? configValues[key] : defaultValue) as T;
       },
-      inspect() {
-        return undefined;
+      // A value a test set reads as the user's own (global) one; anything else as unset.
+      inspect<T>(key: string): { key: string; globalValue?: T } | undefined {
+        return key in configValues ? { key, globalValue: configValues[key] as T } : undefined;
       },
-      async update() {
-        /* no-op */
+      async update(key: string, value: unknown) {
+        configUpdates.push({ key, value });
+        if (value === undefined) delete configValues[key];
+        else configValues[key] = value;
       },
     };
   },

@@ -267,11 +267,6 @@
           "default": true,
           "description": "Run codebase research before planning"
         },
-        "ordewell.autonomousMode": {
-          "type": "boolean",
-          "default": true,
-          "description": "Autonomy level for new plans. On = Full: each runner's autonomous mode, with no permission prompts. Off = Guarded: each runner's safe mode, where the runner's own reviewer or classifier decides what to approve. Change it with /auto full or /auto guarded."
-        },
         "ordewell.plannerApprovals": {
           "scope": "application",
           "type": "string",

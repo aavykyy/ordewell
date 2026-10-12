@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { createSession, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner } from '@ordewell/core';
 import { ChatViewProvider } from './providers/ChatViewProvider';
-import { VsCodeConfig } from './adapters/VsCodeConfig';
+import { VsCodeConfig, moveAutonomyFromVsCodeSetting } from './adapters/VsCodeConfig';
 import { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
 import { SecretStore } from './adapters/SecretStore';
 import { VsCodeNotification } from './adapters/VsCodeNotification';
@@ -30,6 +30,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const config = new VsCodeConfig(secretStore);
     const runnerRegistry = new RunnerRegistry();
     const settingsService = new SettingsService();
+    await moveAutonomyFromVsCodeSetting(settingsService);
 
     activeHost = createExtension({
       context,

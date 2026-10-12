@@ -412,3 +412,23 @@ describe('planner rules for change and ops tasks (ADR-0020)', () => {
     expect(oneShot(LONE_REPO)).not.toContain('A question is not a task');
   });
 });
+
+describe('the outline gate and autorun (ADR-0030)', () => {
+  const prompt = (harness: boolean, autorun?: boolean) =>
+    buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, true, { harness, autorun });
+
+  it.each([true, false])('waits for the outline to be confirmed with autorun off (harness: %s)', (harness) => {
+    const p = prompt(harness, false);
+    expect(p).toContain('After the user confirms the outline');
+    expect(p).toMatch(/Do not skip the outline/);
+  });
+
+  it.each([true, false])('with autorun on, writes the outline as the summary and submits without waiting, still asking what is unclear (harness: %s)', (harness) => {
+    const p = prompt(harness, true);
+    expect(p).not.toContain('After the user confirms the outline');
+    expect(p).not.toMatch(/Do not skip the outline/);
+    expect(p).toMatch(/AUTORUN is on/);
+    expect(p).toMatch(/do not wait for the user to confirm it/i);
+    expect(p).toMatch(/ask the user BEFORE planning/);
+  });
+});

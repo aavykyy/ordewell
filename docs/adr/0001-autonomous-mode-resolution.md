@@ -36,7 +36,7 @@ Concretely:
   and `auto` stay as aliases, and a bare `/auto` in the TUI reports the current level
   instead of flipping it.
   *Amended by [ADR-0030](0030-global-run-settings.md):* the level is saved
-  machine-wide in `settings.json`, not in the workspace `.env` or VS Code's
+  machine-wide in `settings.json`, not in `~/.ordewell/.env` or VS Code's
   `ordewell.autonomousMode`, which is removed; existing values are copied over
   once, and `ORDEWELL_AUTONOMOUS_MODE` stays as an override Ordewell never
   writes. Still read at generation, never at spawn.

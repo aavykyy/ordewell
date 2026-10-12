@@ -37,6 +37,8 @@ export interface SlashDeps {
   updateConfig(key: string, value: unknown): Promise<void>;
   /** Remember `model`/`effort` as the current provider's planner choice (keyed by `config.aiProvider` at write time). */
   recordPlannerModel(model: string, effort?: string): void;
+  /** Saves Full or Guarded in the user's settings file, which every surface shares (ADR-0030). */
+  saveAutonomy(enabled: boolean): void;
   /** The user's run settings (ADR-0030): `change` saves them and applies them at once to this window's run. */
   runSettings: { get(): GlobalRunSettings; change(changes: Partial<GlobalRunSettings>): void };
   log(msg: string): void;
@@ -308,14 +310,14 @@ export async function handleSlashCommand(text: string, deps: SlashDeps): Promise
       return;
     }
     if (direct !== null) {
-      await deps.updateConfig('autonomousMode', direct);
+      deps.saveAutonomy(direct);
       vscode.window.showInformationMessage(applyAutonomousChoice(direct, runners, modesByRunner));
       return;
     }
     const items = resolveAutonomousQuickPickItems(runners, modesByRunner, deps.config.autonomousMode);
     const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Autonomy level for new plans' });
     if (!picked) return;
-    await deps.updateConfig('autonomousMode', picked.value);
+    deps.saveAutonomy(picked.value);
     vscode.window.showInformationMessage(applyAutonomousChoice(picked.value, runners, modesByRunner));
     return;
   }

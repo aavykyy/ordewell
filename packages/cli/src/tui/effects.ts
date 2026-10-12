@@ -41,6 +41,8 @@ export interface EffectDeps {
   newSessionId(): string;
   /** Persists to the resolved `.env` and to `process.env`. */
   setEnvVar(key: string, value: string): void;
+  /** Saves Full or Guarded in the user's settings (ADR-0030); `overridden` when the environment decides it anyway. */
+  saveAutonomy(enabled: boolean): { overridden: boolean };
   /**
    * Brings the daemon back after it has gone away, resolving to whether it is
    * now answering. The TUI outlives its daemon in every direction — the daemon
@@ -437,10 +439,14 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       dispatch({ type: 'notice', message: `Up to ${effect.limit} AI task${effect.limit === 1 ? '' : 's'} now run at once.` });
       return;
 
-    case 'setAutonomous':
-      deps.setEnvVar('ORDEWELL_AUTONOMOUS_MODE', String(effect.enabled));
-      dispatch({ type: 'notice', message: `Autonomy level: ${autonomyLevelLabel(effect.enabled)} for new plans.` });
+    case 'setAutonomous': {
+      const { overridden } = deps.saveAutonomy(effect.enabled);
+      const level = autonomyLevelLabel(effect.enabled);
+      dispatch({ type: 'notice', message: overridden
+        ? `${level} is saved, but ORDEWELL_AUTONOMOUS_MODE in the environment decides the level until it is unset.`
+        : `Autonomy level: ${level} for new plans.` });
       return;
+    }
 
     case 'setMouseCapture':
       // The reducer already said which trade this is; persisting it only makes

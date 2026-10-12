@@ -56,6 +56,7 @@ function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {})
     dispatch: (action) => actions.push(action),
     newSessionId: () => 'session-new',
     setEnvVar: (key, value) => { env[key] = value; },
+    saveAutonomy: () => ({ overridden: false }),
     setMouseCapture: vi.fn(),
     // Never the real probe or the real clipboard: the defaults would put test
     // fixtures on the developer's actual clipboard.
@@ -914,11 +915,19 @@ describe('settings', () => {
     expect(h.actions).toContainEqual({ type: 'notice', message: 'Runners enabled: OpenCode.' });
   });
 
-  it('persists autonomous mode', async () => {
-    const h = harness();
+  it('saves the autonomy level in the user\'s settings, not in .env (ADR-0030)', async () => {
+    const saved: boolean[] = [];
+    const h = harness({}, { saveAutonomy: (enabled) => { saved.push(enabled); return { overridden: false }; } });
     await runEffect({ type: 'setAutonomous', enabled: false }, h.deps);
-    expect(h.env.ORDEWELL_AUTONOMOUS_MODE).toBe('false');
+    expect(saved).toEqual([false]);
+    expect(h.env.ORDEWELL_AUTONOMOUS_MODE).toBeUndefined();
     expect(h.actions).toContainEqual({ type: 'notice', message: 'Autonomy level: Guarded for new plans.' });
+  });
+
+  it('says when ORDEWELL_AUTONOMOUS_MODE in the environment overrides the saved level', async () => {
+    const h = harness({}, { saveAutonomy: () => ({ overridden: true }) });
+    await runEffect({ type: 'setAutonomous', enabled: false }, h.deps);
+    expect(h.actions).toContainEqual({ type: 'notice', message: expect.stringMatching(/Guarded is saved, but ORDEWELL_AUTONOMOUS_MODE in the environment decides the level until it is unset/) });
   });
 });
 

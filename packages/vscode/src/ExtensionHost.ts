@@ -238,6 +238,10 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       pickModelWithProvider: (...args) => discovery.pickModelWithProvider(...args),
       updateConfig: async (key, value) => services.config.update(key, value),
       recordPlannerModel: (model, effort) => services.plannerModelMemory.remember(services.config.aiProvider, model, effort),
+      saveAutonomy: (enabled) => {
+        services.settingsService.setAutonomousMode(enabled);
+        sendRunSettings();
+      },
       runSettings: {
         get: () => services.settingsService.getRunSettings(),
         change: (changes) => {

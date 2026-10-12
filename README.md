@@ -111,7 +111,8 @@ ordewell task-deps 3 1,2            # make it wait for tasks 1 and 2
 1. **Describe your goal.** The planner explores your workspace without modifying
    it and asks clarifying questions.
 2. **Review the plan.** Read the tasks and their dependencies. Edit prompts, agent
-   assignments and models before running.
+   assignments and models before running. To skip this step, `/autorun on` starts
+   each plan as soon as the planner submits it.
 3. **Run the tasks.** Each task starts a fresh coding agent session. Independent
    tasks run in parallel; dependent tasks wait for the work they need. Code changes
    stay on separate branches, and you can follow each task's progress.

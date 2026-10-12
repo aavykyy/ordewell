@@ -215,7 +215,8 @@ export class ExecutionCommands {
     } catch (err) {
       return this.refuse(command, actor, located, err instanceof Error ? err.message : String(err));
     }
-    if (actor.kind === 'user' && STARTS.has(command.command)) {
+    // Autorun starts a plan as the user's standing instruction, so its start approves the plan as theirs does.
+    if ((actor.kind === 'user' || actor.kind === 'autorun') && STARTS.has(command.command)) {
       this.host.approve(located ? withSubtasks(located.task) : this.all().map(({ task }) => task.id));
     }
     this.keep(command, actor, located, 'done', doneDetail(command));
@@ -229,7 +230,8 @@ export class ExecutionCommands {
    */
   private consent(actor: ExecutionActor, command: ExecutionCommandName): Consent {
     switch (actor.kind) {
-      case 'user': return { kind: 'allow' };
+      case 'user':
+      case 'autorun': return { kind: 'allow' };
       // A merge by proxy would add a route to the user's branch for nothing: they are present, and can press it (ADR-0029).
       case 'planner-turn': if (command === 'merge_all') return { kind: 'refuse', reason: MERGE_IS_USERS };
         return !STARTS.has(command) || this.host.autonomous() ? { kind: 'allow' } : { kind: 'ask' };
@@ -261,7 +263,8 @@ export class ExecutionCommands {
     }
     const toRun = all.filter(({ task }) => task.type === 'ai' && task.status !== 'completed');
     if (toRun.length === 0) return { refusal: 'Every task has already completed: there is nothing left to run.' };
-    if (actor.kind !== 'user') {
+    // Autorun is the user's standing instruction: its run is the user's approval, as Execute plan is.
+    if (actor.kind !== 'user' && actor.kind !== 'autorun') {
       if (!this.host.planApproved()) {
         return { refusal: 'The user has not approved this plan yet: they approve it by executing it themselves (Execute plan). Ask them to.' };
       }
@@ -437,7 +440,7 @@ export class ExecutionCommands {
 
   /** Why a start is not the user's to have made, or null: the user's own call is its own approval. */
   private unapproved(located: Located, actor: ExecutionActor): string | null {
-    if (actor.kind === 'user' || this.host.taskApproved(located.task.id)) return null;
+    if (actor.kind === 'user' || actor.kind === 'autorun' || this.host.taskApproved(located.task.id)) return null;
     const label = describe(located);
     return this.host.planApproved()
       ? `${capitalize(label)} was added after the user approved the plan, so it is not approved to run. Ask the user to start it, or to execute the plan, which approves it.`
@@ -570,6 +573,7 @@ const WHO: Record<ExecutionActor['kind'], string> = {
   user: 'You',
   'planner-turn': 'The planner',
   supervisor: 'The supervisor',
+  autorun: 'Autorun',
 };
 
 /** The timeline's line for one call: who asked, what, and how it ended. */
@@ -594,9 +598,9 @@ function describeExecution(record: ExecutionRecord, command?: ExecutionCommand):
       : `${who} asked to ${asked}; refused: ${record.detail ?? 'no reason given'}`;
   }
   const { action, tail } = doneWords(record, label, continued, escalated);
-  // The supervisor acts unattended, so its line reads as the action itself — the button press — and then who pressed it.
-  return record.actor === 'supervisor'
-    ? `${capitalize(action)} — by supervisor${tail.startsWith(' ') ? `,${tail}` : tail}`
+  // The supervisor and autorun act unattended, so their line reads as the action itself — the button press — and then who pressed it.
+  return record.actor === 'supervisor' || record.actor === 'autorun'
+    ? `${capitalize(action)} — by ${record.actor}${tail.startsWith(' ') ? `,${tail}` : tail}`
     : `${who} ${action}${tail}`;
 }
 

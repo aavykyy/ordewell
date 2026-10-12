@@ -4,6 +4,7 @@ import { DEFAULT_WEB_READ_BUDGET } from '../services/webReadPolicy';
 import type { ProviderModelLists } from '../services/ProviderRouting';
 import { ALL_PROVIDERS, getProviderMeta, PROVIDER_DETECT_PRIORITY } from '../services/ProviderRegistry';
 import { DEFAULT_MAX_PARALLEL, parseMaxParallel } from '../utils/maxParallel';
+import { SettingsService } from '../services/SettingsService';
 
 export function normalizeGeminiModel(id: string): string {
   return id.replace(/^gemini:/, '').replace(/^google\//, '');
@@ -120,7 +121,8 @@ export abstract class BaseConfig implements IConfig {
 
   get planMapEnabled(): boolean { return process.env.ORDEWELL_PLAN_MAP_ENABLED !== 'false' && process.env.ORDEWELL_PLAN_MAP_ENABLED !== '0'; }
 
-  get autonomousMode(): boolean { return process.env.ORDEWELL_AUTONOMOUS_MODE !== 'false' && process.env.ORDEWELL_AUTONOMOUS_MODE !== '0'; }
+  /** The user's saved level (ADR-0030), read each time so a change from any surface reaches the next plan. */
+  get autonomousMode(): boolean { return new SettingsService().autonomousMode(); }
 
   get worktreeIsolation(): boolean { return process.env.ORDEWELL_WORKTREE_ISOLATION !== 'false' && process.env.ORDEWELL_WORKTREE_ISOLATION !== '0'; }
   get worktreeSetupCommand(): string | undefined { return process.env.ORDEWELL_WORKTREE_SETUP?.trim() || undefined; }

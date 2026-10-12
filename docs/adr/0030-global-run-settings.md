@@ -35,10 +35,10 @@ In use, that shape is wrong three ways:
 ADR-0029 stated the per-plan choice but weighed no alternative to it, so no
 rejected option is reopened here.
 
-The Full/Guarded level (ADR-0001) has a related problem. It is saved per
-workspace in `.env` by the TUI and CLI, and in VS Code's own
-`ordewell.autonomousMode` setting by the extension, so two surfaces on one
-machine can disagree, and every new repository starts over.
+The Full/Guarded level (ADR-0001) has a related problem. The TUI and CLI save
+it in `~/.ordewell/.env`, which the daemon reads only when it starts, and the
+extension in VS Code's own `ordewell.autonomousMode` setting, so two surfaces
+on one machine can disagree.
 
 ## Decision
 
@@ -60,7 +60,7 @@ There is no per-plan value and no per-workspace override.
   migrated.
 - **A run keeps its own copy, `runSettings`.** It is what the run actually used,
   the record behind the timeline, and the value a guard or a failure lowers.
-- **Full/Guarded moves too.** On first start, a value in the workspace `.env` or
+- **Full/Guarded moves too.** On first start, a value in `~/.ordewell/.env` or
   a non-default `ordewell.autonomousMode` is copied into `settings.json` once,
   so nobody's level flips; the VS Code setting is removed from the extension.
   `ORDEWELL_AUTONOMOUS_MODE` stays as an override from the environment, but
@@ -210,7 +210,7 @@ the daemon reads it from there at generation.
 
 - **Rejected: keep them per plan.** Every new goal starts at the defaults, and
   the settings describe the user, not the goal.
-- **Rejected: per workspace, as Full/Guarded was.** A setting saved per
+- **Rejected: per workspace.** A setting saved per
   repository is set again in every repository and forgotten in most. A
   per-workspace override for a repository with ops tasks on production can
   come later if it is needed.

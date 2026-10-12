@@ -271,6 +271,24 @@ describe('ordewell parallel', () => {
   });
 });
 
+describe('ordewell auto (ADR-0030)', () => {
+  it('saves the level in the user\'s settings, not in .env', async () => {
+    const { join } = await import('path');
+    const { existsSync, readFileSync } = await import('fs');
+    vi.stubEnv('ORDEWELL_SETTINGS_PATH', join(envDir, 'settings.json'));
+    vi.stubEnv('ORDEWELL_AUTONOMOUS_MODE', '');
+    const { handleAuto } = await import('../runners');
+    const { SettingsService } = await import('@ordewell/core');
+
+    const { stdout } = await capture(() => handleAuto(['guarded']));
+
+    expect(new SettingsService().autonomousMode()).toBe(false);
+    expect(stdout).toContain('Autonomy level: Guarded for new plans.');
+    const env = join(envDir, '.ordewell', '.env');
+    expect(existsSync(env) ? readFileSync(env, 'utf8') : '').not.toContain('ORDEWELL_AUTONOMOUS_MODE');
+  });
+});
+
 describe('ordewell supervisor, automerge and autorun (ADR-0030)', () => {
   const RUN = { supervisorLevel: 'watch', mergeAtGatesAutomatically: false, autorun: false, supervisorRetryLimit: 2, wakeUpReadBudget: 12 };
 

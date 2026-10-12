@@ -457,6 +457,8 @@ export class Session {
   private deferred: { command: ExecutionCommand; actor: ExecutionActor; intent: string }[] = [];
   /** The open turn's task edit landed, so what it deferred runs as edited. */
   private editLanded = false;
+  /** The open turn's planner submitted a whole plan, which autorun starts once the turn ends (ADR-0030). */
+  private planSubmitted = false;
   private unlistenApprovals: (() => void) | null;
   private readonly plannerTools: PlannerToolHandler = plannerToolHandler({
     skills: () => this.workspaceSkills().listSkills(),
@@ -513,6 +515,7 @@ export class Session {
       onProgress: (p) => this.events.progress(p),
       opening: (runners) => this.conversationOpening(runners),
       catalog: () => this.catalog.queryCatalog(this.plan?.runners ?? []),
+      autorun: () => this.userRunSettings().autorun,
       tasks: () => this.store.planTasks,
       liveOutput: (taskId, opts) => this.orchestrator.getLiveOutput(taskId, opts),
       isExecuting: () => this.isExecuting,
@@ -548,6 +551,7 @@ export class Session {
         this.events.dropSubagentRuns();
         this.deferred = [];
         this.editLanded = false;
+        this.planSubmitted = false;
         const reply = (turnSignal: AbortSignal | undefined, wakeUp?: WakeUpTurn) =>
           this.conversation.reply(prompt, { signal: turnSignal, onCommit: taken, wakeUps: prompt.wakeUps, ...(wakeUp ? { wakeUp } : {}) });
         // Wake-ups that ride with a user's message are context for the user's turn.
@@ -555,6 +559,7 @@ export class Session {
           ? this.supervisor.turn((turnSignal) => reply(turnSignal, this.supervisor.wakeUpTurn()), signal)
           : reply(signal));
         this.runDeferred();
+        if (prompt.source !== 'supervisor') this.autorunSubmitted();
         return landed;
       },
       notice: (message) => this.notice('error', message),
@@ -622,6 +627,20 @@ export class Session {
   /** Retries an Act supervisor may make of one task (a loop guard), as the run holds them. */
   private retryLimit(): number {
     return this.plan?.runSettings?.supervisorRetryLimit ?? this.userRunSettings().supervisorRetryLimit;
+  }
+
+  /**
+   * Autorun (ADR-0030): a plan the planner submitted in the turn that just
+   * ended starts as if the user had pressed Execute, through the seam, so the
+   * timeline says autorun started it. Read now, not when the turn opened: the
+   * switch is the user's to flip at any time.
+   */
+  private autorunSubmitted(): void {
+    const submitted = this.planSubmitted;
+    this.planSubmitted = false;
+    if (!submitted || !this.userRunSettings().autorun || this.orchestrator.hasLiveWork) return;
+    void this.execute({ command: 'run_plan' }, { kind: 'autorun' })
+      .catch((err: unknown) => this.notice('error', `Autorun could not start the plan: ${err instanceof Error ? err.message : String(err)}`));
   }
 
   /**
@@ -1168,7 +1187,10 @@ export class Session {
     const now = new Date().toISOString();
     this.plan = { tasks: [], generatedAt: now, status: 'draft', runners: chosenRunners, lastUpdated: now };
 
-    return this.conversation.start(this.resolveSkillInvocation(goal), () => this.conversationOpening(chosenRunners), options?.signal);
+    this.planSubmitted = false;
+    const planned = await this.conversation.start(this.resolveSkillInvocation(goal), () => this.conversationOpening(chosenRunners), options?.signal);
+    this.autorunSubmitted();
+    return planned;
   }
 
   /**
@@ -1312,6 +1334,7 @@ export class Session {
       modelsByRunner: filteredModels,
       runnerModes,
       autonomousDefault: this.config.autonomousMode,
+      autorun: this.userRunSettings().autorun,
       isolatedExecution: await this.runs.plannerLayout(),
       // The planner's own model window, when a cached catalog knows it, so the
       // usage line can show context fill (#49). Unknown stays absent.
@@ -1340,6 +1363,7 @@ export class Session {
    */
   private adoptPlannerTasks(tasks: readonly Task[], how: 'edit' | 'commit'): number {
     if (how === 'edit') this.editLanded = true;
+    else this.planSubmitted = true;
     const runners = this.plan!.runners;
     const before = this.store.planTasks;
     let coerced = coerceAssignments(tasks, this.catalog.allowlist(), runners, this.catalog.models());

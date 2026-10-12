@@ -118,6 +118,18 @@ function researchPhaseBlock(harnessMode: boolean): string {
  * Facts about who plans and where tasks will run, as opposed to the user's
  * choices: they change what the prompt can promise, not what it asks for.
  */
+/**
+ * What autorun asks of the planner (ADR-0030), in the opening prompt and in a
+ * turn where the user turned it on. Questions stay: a guess on real ambiguity
+ * would then run unattended.
+ */
+export const AUTORUN_ON =
+  'AUTORUN is on: a plan you submit starts at once, without the user\'s review. When you are ready to plan, write the outline in your reply as the plan\'s summary and submit the plan in the same reply; do not wait for the user to confirm it. Still ask clarifying questions first when the goal is vague or a decision would materially change the outcome.';
+
+/** A turn where the user turned autorun off: the outline gate is back. */
+export const AUTORUN_OFF =
+  'AUTORUN is off now: show the outline and wait for the user to confirm it before you submit a plan.';
+
 export interface ConversationVariant {
   /**
    * Harness planner (ADR-0009): the agent owns its own tools and research
@@ -131,6 +143,8 @@ export interface ConversationVariant {
   isolatedExecution?: IsolatedExecution;
   /** The session offers the execution tools (ADR-0029), as MCP tools or the API planner's own. */
   execution?: boolean;
+  /** A submitted plan starts at once (ADR-0030): the planner does not wait for its outline to be confirmed. */
+  autorun?: boolean;
 }
 
 /**
@@ -265,6 +279,10 @@ function buildConversationBody(
   variant: ConversationVariant,
 ): string {
   const tools = variant.harness ?? false;
+  const autorun = variant.autorun ?? false;
+  const submit = tools
+    ? 'call list_runners and list_models, then submit the final task plan with submit_plan'
+    : 'emit the final task plan as a JSON object with a "tasks" array';
   return [
     `You are Ordewell's project planner. You explore the codebase, ask concise clarifying questions grounded in your findings, and produce structured task plans ${tools ? 'through the submit_plan tool' : 'as JSON'}. Be direct: avoid unnecessary preamble, summaries, or explanations unless the user asks for detail.`,
     '',
@@ -272,19 +290,28 @@ function buildConversationBody(
     '1. Explore the workspace with tools to understand the codebase.',
     '2. Ask clarifying questions grounded in your findings. Reference actual files. When the goal is vague, or a decision would materially change the outcome (storage engine, library choice, scope, API shape), ask the user BEFORE planning — never silently assume. Clear, fully-specified goals need no questions.',
     '3. When you have enough context, produce a prose outline — a short list describing each vertical slice in order.',
-    tools
-      ? '4. After the user confirms the outline, call list_runners and list_models, then submit the final task plan with submit_plan.'
-      : '4. After the user confirms the outline, emit the final task plan as a JSON object with a "tasks" array.',
+    autorun ? `4. Write the outline in your reply, then ${submit} in the same reply.` : `4. After the user confirms the outline, ${submit}.`,
     '',
     researchPhaseBlock(tools),
     '',
     ...(tools ? ['Ordewell skills load only through load_skill; do not use the native Skill tool or read skill files directly.', ...plannerSkillsBlock(variant.skills ?? []), ''] : []),
-    'OUTLINE PHASE:',
-    `- When you are ready to propose a plan, first show a prose outline. DO NOT jump straight to ${tools ? 'submit_plan' : 'JSON'}.`,
+    ...(autorun
+      ? [
+        'OUTLINE PHASE (AUTORUN is on):',
+        `- ${AUTORUN_ON}`,
+      ]
+      : [
+        'OUTLINE PHASE:',
+        `- When you are ready to propose a plan, first show a prose outline. DO NOT jump straight to ${tools ? 'submit_plan' : 'JSON'}.`,
+      ]),
     '- Format: a numbered list describing each vertical tracer-bullet slice, with the files/layers each slice touches.',
     '- Example: "1. Set up database schema (src/db/schema.ts) — creates tables for users and sessions\n2. Add auth middleware (src/auth/middleware.ts) — validates JWTs on protected routes\n3. Build login page (src/ui/Login.tsx) — form component with validation"',
-    '- The user may reply with adjustments. Revise the outline and re-present it.',
-    tools ? '- When the user confirms the outline, submit the plan with submit_plan.' : '- When the user confirms the outline, emit the task plan JSON.',
+    ...(autorun
+      ? []
+      : [
+        '- The user may reply with adjustments. Revise the outline and re-present it.',
+        tools ? '- When the user confirms the outline, submit the plan with submit_plan.' : '- When the user confirms the outline, emit the task plan JSON.',
+      ]),
     '',
     'PLAN FORMAT:',
     tools ? 'submit_plan takes {"tasks": [...]}, every task in this shape:' : 'Generate a task plan using this JSON format:',
@@ -339,11 +366,11 @@ function buildConversationBody(
     ...(tools
       ? [
         '- Submit the plan ONLY through submit_plan. Never write it as JSON in your reply.',
-        '- Show the outline BEFORE submitting. Do not skip the outline.',
+        autorun ? '- Write the outline in your reply before submitting the plan.' : '- Show the outline BEFORE submitting. Do not skip the outline.',
       ]
       : [
         '- Do NOT wrap the JSON in markdown code blocks. Output ONLY the JSON object when committing the plan.',
-        '- Emit the outline BEFORE the JSON. Do not skip the outline.',
+        autorun ? '- Write the outline before the JSON.' : '- Emit the outline BEFORE the JSON. Do not skip the outline.',
       ]),
     '- Reference specific files and patterns from your research in task prompts.',
     ...(variant.isolatedExecution ? [] : [OVERLAP_AVOIDANCE_RULE]),
