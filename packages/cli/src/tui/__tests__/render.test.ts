@@ -658,11 +658,17 @@ describe('footer', () => {
     expect(text({ tasks })).toMatch(/tab/i);
   });
 
-  it('shows the task shortcuts when the plan pane has focus', () => {
-    const out = text({ tasks, focus: 'plan', cols: 140 });
+  it('shows the shortcuts that fit the selected task when the plan pane has focus', () => {
+    const out = text({ tasks: [{ ...tasks[0], status: 'pending' }], focus: 'plan', cols: 140 });
     expect(out).toMatch(/f start/);
     expect(out).toMatch(/E run plan/);
     expect(out).not.toMatch(/retry/i);
+  });
+
+  it('does not offer a start on a task that has already finished', () => {
+    const out = text({ tasks, focus: 'plan', cols: 140 });
+    expect(out).toMatch(/m undone/);
+    expect(out).not.toMatch(/f start/);
   });
 
   it('advertises opening the log on the selected task', () => {
@@ -889,11 +895,11 @@ describe('plan pane — runner and mode', () => {
     expect(out).not.toMatch(/mode:/);
   });
 
-  it('advertises the runner and mode keys in the plan footer', () => {
-    const out = render(initialState({ focus: 'plan', tasks: [task], rows: 40, cols: 200 })).join('\n');
+  it('lists the runner and mode keys in the plan pane key sheet', () => {
+    const out = render(initialState({ focus: 'plan', tasks: [task], rows: 40, cols: 200, overlay: { kind: 'help', sheet: 'keys' } })).join('\n');
 
-    expect(out).toContain('R runner');
-    expect(out).toContain('M mode');
+    expect(out).toMatch(/R +pick the task's runner/);
+    expect(out).toMatch(/M +pick the task's mode/);
   });
 
   it('lists runner and mode in the expanded task key hints', () => {

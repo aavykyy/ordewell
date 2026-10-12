@@ -31,7 +31,8 @@ describe('plan pane — idle indicator', () => {
     expect(spinnerGlyphs.some((g) => idleFrame.includes(g))).toBe(false);
     expect(spinnerGlyphs.some((g) => busyFrame.includes(g))).toBe(true);
     // Idle indicator must be distinct from the awaiting_user '?' marker too.
-    expect(idleFrame).not.toContain('?');
+    // The footer's own `? keys` hint is not that marker, so only the body is read.
+    expect(idleFrame.split('\n').slice(0, -1).join('\n')).not.toContain('?');
   });
 
   it('shows a quiet task without a terminal hint', () => {

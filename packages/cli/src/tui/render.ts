@@ -2,7 +2,7 @@ import { pad, stripAnsi, style, truncate, width, wrap } from './ansi';
 import { cursorInLines } from './editor';
 import { activeToken, skillMatchKind, slashTokens, tokenCompletions } from './slash';
 import {
-  bodyRows, chatInputWrap, chatLayout, footerHints, helpLayout, packHints, planLayout, planOffset,
+  bodyRows, chatInputWrap, chatLayout, footerHints, helpLayout, type HelpSheet, packHints, planLayout, planOffset,
   stopHint,
 } from './layout';
 import { chatEditorRoomFor, chatPaneWidth, chatPromptLabel, paneColumns, planPaneWidth } from './geometry';
@@ -407,7 +407,7 @@ function renderPlan(state: TuiState, rows: number, cols: number): string[] {
 
 function renderOverlay(state: TuiState, rows: number, cols: number): string[] {
   const overlay = state.overlay!;
-  if (overlay.kind === 'help') return renderHelp(overlay.scroll ?? 0, rows, cols);
+  if (overlay.kind === 'help') return renderHelp(overlay.scroll ?? 0, overlay.sheet ?? 'commands', rows, cols);
   if (overlay.kind === 'approval') {
     const { request } = overlay;
     const headline = request.kind === 'shell_command'
@@ -577,12 +577,12 @@ function renderPicker(picker: PickerState, rows: number, cols: number): string[]
   return frame(picker.title, body, rows, cols);
 }
 
-function renderHelp(scroll: number, rows: number, cols: number): string[] {
-  const { lines, room, maxScroll } = helpLayout(rows, cols);
+function renderHelp(scroll: number, sheet: HelpSheet, rows: number, cols: number): string[] {
+  const { lines, room, maxScroll } = helpLayout(rows, cols, sheet);
   const offset = Math.min(scroll, maxScroll);
   const footer = style.grey(offset < maxScroll ? '↑↓ scroll · any other key closes' : 'any key closes');
 
-  return frame('Commands', [...lines.slice(offset, offset + room), footer], rows, cols);
+  return frame(sheet === 'keys' ? 'Keys' : 'Commands', [...lines.slice(offset, offset + room), footer], rows, cols);
 }
 
 /** Most rows of a quoted message a confirmation shows before it cuts to an ellipsis. */

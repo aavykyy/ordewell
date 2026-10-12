@@ -14,7 +14,7 @@ import { clamp, fail, step, type Step } from './shared';
 import { runSettingsEffect } from './runSettings';
 
 export function handleOverlayKey(state: TuiState, overlay: NonNullable<TuiState['overlay']>, key: Key): Step {
-  if (overlay.kind === 'help') return handleHelpKey(state, overlay.scroll ?? 0, key);
+  if (overlay.kind === 'help') return handleHelpKey(state, overlay, key);
   // A sideways notch is not a keystroke, and every overlay below reads an
   // unhandled key as a cue to close or to hold still.
   if (key.name === 'wheelignored') return step(state);
@@ -90,7 +90,7 @@ function runConfirm(
  * it. The offsets here run the other way to the panes' — the sheet is
  * top-anchored, so a positive delta moves *down* it.
  */
-function handleHelpKey(state: TuiState, scroll: number, key: Key): Step {
+function handleHelpKey(state: TuiState, overlay: Extract<NonNullable<TuiState['overlay']>, { kind: 'help' }>, key: Key): Step {
   const page = pageNotch(bodyRows(state));
   const move: Record<string, number> = {
     down: 1,
@@ -102,7 +102,7 @@ function handleHelpKey(state: TuiState, scroll: number, key: Key): Step {
   };
   const delta = move[key.name];
   if (delta === undefined) return step({ ...state, overlay: null });
-  return step({ ...state, overlay: { kind: 'help', scroll: clamp(scroll + delta, helpScrollMax(state)) } });
+  return step({ ...state, overlay: { ...overlay, scroll: clamp((overlay.scroll ?? 0) + delta, helpScrollMax(state)) } });
 }
 
 function handlePromptKey(

@@ -155,9 +155,9 @@ describe('expanding a task with subtasks from a real key press', () => {
     expect(edited.taskEditor?.text).toBe('Sibling');
   });
 
-  it('the footer hints still say "→ expand/edit" while browsing revealed subtasks, not "type to edit prompt"', () => {
+  it('the footer hints still say "→ expand" while browsing revealed subtasks, not "type to edit prompt"', () => {
     const expanded = press(state(), 'right');
-    expect(footerHints(expanded)).toContain('→ expand/edit');
+    expect(footerHints(expanded)).toContain('→ expand');
     expect(footerHints(expanded)).not.toContain('type to edit prompt');
   });
 });
