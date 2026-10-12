@@ -1,4 +1,3 @@
-import TaskUsage from './TaskUsage';
 import React, { useState } from 'react';
 import SkillChips from './SkillChips';
 import ModelSelector, { getModelClass, providerLabel } from './ModelSelector';
@@ -94,7 +93,6 @@ export default function SubTaskCard({ task, parentTask, models, modes, runners, 
           </button>
         )}
 
-        <TaskUsage usage={row.usage} />
         {(isExecuting || row.status === 'failed' || row.status === 'awaiting') && (
           <span className={`task-status-badge ${status.cls}`}>{status.label}</span>
         )}

@@ -1,7 +1,6 @@
-import TaskUsage from './TaskUsage';
 import React, { useState } from 'react';
 import SubTaskCard from './SubTaskCard';
-import ModelSelector, { getModelClass, providerLabel } from './ModelSelector';
+import ModelSelector from './ModelSelector';
 import DependencyPicker from './DependencyPicker';
 import SkillChips from './SkillChips';
 import { lastLine } from '../taskOutput';
@@ -164,11 +163,6 @@ export function TaskActions({ taskId, actions, labels, handlers }: {
   );
 }
 
-const RUNNER_ABBREV: Record<string, string> = {
-  'claude-code': 'CC',
-  'opencode': 'OC',
-};
-
 const DEFAULT_MODES: RunnerMode[] = [
   { id: 'build', label: 'Build', description: 'Edit files and run commands' },
   { id: 'plan', label: 'Plan', description: 'Read-only analysis' },
@@ -186,7 +180,7 @@ export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRu
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, models, modes, modelsByRunner, modesByRunner, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, output, idleSince, awaitingApproval = 0, isolation, onResolveConflict, taskOrderMap, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, mergeGate, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
+export default function TaskCard({ task, models, modes, modelsByRunner, modesByRunner, runners, configuredProviders, modelApiMapping, isExecuting, output, idleSince, awaitingApproval = 0, isolation, onResolveConflict, taskOrderMap, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, mergeGate, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const isControlled = expandedProp !== undefined;
   const expanded = isControlled ? expandedProp : internalExpanded;
@@ -208,7 +202,6 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
 
   const outputRef = useFollowOutput<HTMLPreElement>(output);
 
-  const modelClass = task.assignedModel ? getModelClass(task.assignedModel.modelId) : '';
   const status = statusBadge(row);
   const isUserTask = task.type === 'user';
 
@@ -234,8 +227,6 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
 
   const allStepsComplete = task.userSteps?.every((s) => completedSteps.has(s.order)) ?? false;
 
-  const runnerAbbrev = effectiveRunner ? (RUNNER_ABBREV[effectiveRunner] ?? effectiveRunner.slice(0, 2).toUpperCase()) : null;
-  const modeInfo = activeModes.find((m) => m.id === task.taskMode);
 
 
   const runnerOptions = runnerOptionsFor(runners, task.assignedRunner);
@@ -320,40 +311,11 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
         {/* The awaiting reason is a badge in its own right (ADR-0018, W1): a
             task held for the user must read as such whether or not a run is
             still being drawn as active. */}
-        <TaskUsage usage={row.usage} />
         {(isExecuting || row.status === 'failed' || row.status === 'awaiting') && (
           <>
             <span className={`task-status-dot ${status.cls}`} title={status.label} />
             <span className={`task-status-badge ${status.cls}`}>{status.label}</span>
           </>
-        )}
-
-        {!isExecuting && task.assignedModel && (
-          <span className={`task-model-badge ${modelClass}`}>
-            {task.assignedModel.modelLabel}
-            {(() => {
-              const m = models.find((x) => x.modelId === task.assignedModel!.modelId);
-              const rp = m?.runnerProvider || task.assignedModel!.modelId.split('/')[0];
-              if (rp) {
-                return <> &middot; {providerLabel(rp, m?.runnerProviderLabel)}</>;
-              }
-              return null;
-            })()}
-            {task.assignedModel.thinkingEffort && (
-              <> &middot; {task.assignedModel.thinkingEffort}</>
-            )}
-            {runnerAbbrev && (
-              <span className="task-runner-abbrev">{runnerAbbrev}</span>
-            )}
-          </span>
-        )}
-
-        {!isExecuting && task.taskMode && (
-          <span className="task-type-badge" style={{ background: 'rgba(210,153,29,0.15)', color: 'var(--orange)' }}
-            title={row.autonomous ? 'Full: runs without permission prompts — /auto changes the level' : undefined}>
-            {modeInfo?.label ?? task.taskMode}
-            {row.autonomous && ' ⚡'}
-          </span>
         )}
 
         {canEditDeps ? (
@@ -564,9 +526,23 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
               onOpen={onModelsRefreshNeeded} />
           )}
 
+          {/* The header no longer carries the model, so a card with no catalog to pick from still has to say which model it holds. */}
+          {!isExecuting && task.type === 'ai' && task.assignedModel && !(models.length > 0 && onModelChange) && (
+            <div className="model-selector" style={{ marginTop: '8px' }}>
+              <label>Model</label>
+              <span>
+                {task.assignedModel.modelLabel}
+                {task.assignedModel.thinkingEffort && <> &middot; {task.assignedModel.thinkingEffort}</>}
+              </span>
+            </div>
+          )}
+
           {!isExecuting && task.type === 'ai' && onModeChange && (
             <div className="model-selector" style={{ marginTop: '8px' }}>
-              <label htmlFor={`task-mode-${task.id}`}>Mode</label>
+              <label htmlFor={`task-mode-${task.id}`}
+                title={row.autonomous ? 'Full: runs without permission prompts — /auto changes the level' : undefined}>
+                Mode{row.autonomous && ' ⚡'}
+              </label>
               <select id={`task-mode-${task.id}`} value={task.taskMode ?? activeModes[0]?.id ?? 'build'}
                 onChange={(e) => onModeChange(task.id, e.target.value)}>
                 {activeModes.map((m) => (
