@@ -18,6 +18,7 @@ import type { AgentEvent, AgentProcessDeps, TaskModeAgentAdapter, TaskStartOptio
 import { mapAgentTool, normalizeAgentArgs } from './harness/agentTools';
 import { createTaskAdapter } from './harness/connectors';
 import { settleWithin } from './harness/settleWithin';
+import { sameMessage } from '../utils/sameMessage';
 
 /** How long a soft interrupt may take before the runner is killed and resumed instead. */
 const DEFAULT_INTERRUPT_GRACE_MS = 5000;
@@ -82,6 +83,8 @@ class PlainTextChannel {
   private pending = '';
   /** What this text block has already written from its deltas. */
   private streamed = '';
+  /** The turn's latest whole text block. */
+  private latest = '';
   private atLineStart = true;
 
   constructor(private readonly write: (text: string) => void) {}
@@ -101,6 +104,7 @@ class PlainTextChannel {
     const streamed = this.streamed;
     this.pending = '';
     this.streamed = '';
+    this.latest = text;
     // Anything else means the deltas and the block disagree; the block wins,
     // even at the cost of repeating text — evidence is never dropped.
     this.out(text.startsWith(streamed) ? text.slice(streamed.length) : text);
@@ -112,9 +116,21 @@ class PlainTextChannel {
     this.out(`${text}\n`);
   }
 
+  /**
+   * A failed turn's message. Claude Code says a usage limit twice — as an
+   * assistant message and as the failure — so one that only repeats the
+   * turn's latest text is not written again.
+   */
+  failure(message: string): void {
+    this.flush();
+    if (sameMessage(this.streamed || this.latest, message)) return;
+    this.line(message);
+  }
+
   endTurn(): void {
     this.flush();
     this.streamed = '';
+    this.latest = '';
     if (!this.atLineStart) this.out('\n');
   }
 
@@ -685,7 +701,7 @@ export class StructuredSession extends AbstractRunnerSession {
       case 'assistant_text_delta': this.text.delta(event.text); break;
       case 'assistant_text': this.text.block(event.text); break;
       case 'tool_call': if (!event.subagentId) this.text.line(toolLine(event.name, event.args)); break;
-      case 'error': this.text.line(event.message); break;
+      case 'error': this.text.failure(event.message); break;
       default: break;
     }
     this.emitEvent(event);

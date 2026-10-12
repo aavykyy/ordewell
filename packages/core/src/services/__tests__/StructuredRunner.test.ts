@@ -281,6 +281,39 @@ describe('StructuredSession output', () => {
     turn.session.kill();
   });
 
+  it('writes a usage limit the CLI says twice once (#79)', async () => {
+    const limit = "You've hit your session limit · resets 8:10pm (Europe/Rome)";
+    // An assistant message, then the `result` of the failed turn, worded alike but for a final period.
+    const transcript = [
+      { type: 'system', subtype: 'init', session_id: 'sess-limit', cwd: '/repo', permissionMode: 'acceptEdits' },
+      { type: 'assistant', session_id: 'sess-limit', message: { id: 'msg_limit', role: 'assistant', content: [{ type: 'text', text: limit }] } },
+      { type: 'result', subtype: 'success', session_id: 'sess-limit', is_error: true, result: `${limit}.` },
+    ].map((line) => `${JSON.stringify(line)}\n`).join('');
+    const { runner } = harness([transcript]);
+    const turn = observe(await runner.spawn(options()));
+    await turn.nextTurnEnd();
+
+    expect(turn.session.getOutput()).toBe(`${limit}\n`);
+    expect(turn.turnEnds).toEqual(['failed']);
+    // The events are the record; the plain text is the lossy view.
+    expect(turn.events.filter((e) => e.type === 'assistant_text' || e.type === 'error')).toHaveLength(2);
+    turn.session.kill();
+  });
+
+  it('keeps a failure that says more than the last message (#79)', async () => {
+    const transcript = [
+      { type: 'system', subtype: 'init', session_id: 'sess-fail', cwd: '/repo', permissionMode: 'acceptEdits' },
+      { type: 'assistant', session_id: 'sess-fail', message: { id: 'msg_fail', role: 'assistant', content: [{ type: 'text', text: 'Reading the cache.' }] } },
+      { type: 'result', subtype: 'success', session_id: 'sess-fail', is_error: true, result: 'The session limit was reached.' },
+    ].map((line) => `${JSON.stringify(line)}\n`).join('');
+    const { runner } = harness([transcript]);
+    const turn = observe(await runner.spawn(options()));
+    await turn.nextTurnEnd();
+
+    expect(turn.session.getOutput()).toBe('Reading the cache.\nThe session limit was reached.\n');
+    turn.session.kill();
+  });
+
   it('emits the turn and its events in order', async () => {
     const { runner } = harness([fixture('claude-code', 'task-marker')]);
     const turn = observe(await runner.spawn(options()));
