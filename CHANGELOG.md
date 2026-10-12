@@ -119,8 +119,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   switch steps with ←/→ (tab and shift-tab still work) and save nothing until
   the last one.
 - **The welcome shows a compact 3-row logo at every terminal size.** The mark
-  carries the wordmark and version beside it, and stays at the top of a short
-  terminal; the large braille banner, its one-line fallback and the
+  carries the wordmark (plain bold text) and version beside it, and stays at
+  the top of a short terminal; the large braille banner, its one-line fallback and the
   description paragraph are gone.
 - **Esc closes the `/settings` and `/planner` menus** in the terminal UI,
   discarding choices not yet confirmed, instead of going back a step.
