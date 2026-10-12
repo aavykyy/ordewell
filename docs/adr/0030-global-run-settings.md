@@ -192,6 +192,26 @@ wrong", that users want in either combination.
 This is the exception to ADR-0029's "an unapproved task never starts": under
 autorun, submission is approval.
 
+**With autorun on and Full, the planner may also start a task added after the
+plan was approved.** A task the planner adds to an approved plan is otherwise
+unapproved until the user starts it, so with autorun on a finished run stopped
+at the first follow-up: the planner added the task, its `run_task` was
+refused, and the task waited for a person the user had said was not needed.
+
+- **The planner starts it, when it asks** — `run_task`, or `run_plan` over a
+  plan with added tasks. Nothing starts on its own: adding a task for later
+  stays possible, and autorun still fires on a whole submitted plan only.
+- **A start in the reply that adds the task waits for the edit to land**, as a
+  start of a task the reply edits already does (ADR-0029).
+- **Both settings are read at the start**, not when the task was added, so
+  turning autorun off or going to Guarded stops it at once. A start that goes
+  through approves the task, as the user's own start does.
+- **Ops tasks too**, for the reason autorun starts them in a submitted plan.
+- **Only a planner turn the user started, and only on a plan the user or
+  autorun approved.** Under Guarded, autorun off, or a plan never approved, an
+  added task waits for the user as before. The supervisor's starts follow its
+  level (ADR-0029): Act already counts its own added tasks as approved.
+
 ### API
 
 `GET /api/settings` answers every run setting and the autonomy level;
@@ -274,3 +294,6 @@ the daemon reads it from there at generation.
 ## History
 
 - 2026-10-12 — accepted.
+- 2026-10-12 — with autorun on and Full, the planner may start a task added
+  after the plan was approved; a start in the reply that adds it waits for the
+  edit to land.

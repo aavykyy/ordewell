@@ -1706,7 +1706,9 @@ it, approved as if the user had pressed Execute; off by default, set with
 clarifying questions. It fires on a submission only — never on a session's load
 or on the switch being turned on while a plan waits — and starts ops tasks too.
 Independent of the Supervisor level and of Full/Guarded. Recorded as `run_plan`
-with autorun as who asked.
+with autorun as who asked. With autorun on and Full, the planner may also start
+a task it added after the plan was approved, when it asks; both are read at the
+start.
 *Avoid:* "auto-execute", "auto-approve" (approval is a consequence, not the
 setting), "autopilot".
 

@@ -198,7 +198,8 @@ narrow (deny), or hand the decision to a person.
   follow plan approval in Full. An unapproved task never starts, at any level.
   *Amended by [ADR-0030](0030-global-run-settings.md):* with autorun on, a
   plan the planner submits is approved and started as the user's standing
-  instruction.
+  instruction; with autorun on and Full, the planner may also start a task it
+  added after the plan was approved.
   `merge_all` is refused: the user is in the conversation, and presses Merge
   all themselves.
 - **A wake-up turn under Watch** refuses every execution tool with "suggest it

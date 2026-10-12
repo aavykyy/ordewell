@@ -161,7 +161,7 @@ const EXECUTION_TOOLS_SECTION = [
   '- message_task sends a running task a message, or answers one waiting for input.',
   '- answer_approval denies a request a task\'s runner is waiting on, with a note saying what to do instead, or escalates it to the user. It never allows.',
   '- merge_all merges the run\'s landed work into the user\'s branch. Only the supervisor at Act may, in a wake-up turn; in the user\'s own turn they press Merge all themselves.',
-  'Only tasks the user approved start: a task you add in the user\'s turn waits for them. A task the supervisor adds at Act is approved to run.',
+  'Only tasks the user approved start: a task you add in the user\'s turn waits for them, unless AUTORUN is on and autonomy is Full — then you may start it yourself when the user wants it run. A task the supervisor adds at Act is approved to run.',
   '',
 ];
 

@@ -643,8 +643,8 @@ describe('the command seam\'s extension points', () => {
   function stubHost(): ExecutionHost {
     const tasks = [task('t1', 1)];
     return {
-      tasks: () => tasks, planApproved: () => true, taskApproved: () => true, approve: vi.fn(), autonomous: () => true,
-      scheduling: () => false, hasLiveWork: () => true, running: () => true, maxParallel: () => 3, runBlocked: () => false,
+      tasks: () => tasks, planApproved: () => true, taskApproved: () => true, approve: vi.fn(), autonomous: () => true, autorun: () => false,
+      scheduling: () => false, startsHeld: () => false, hasLiveWork: () => true, running: () => true, maxParallel: () => 3, runBlocked: () => false,
       dependencyMet: () => true, mergeGate: () => [], waitingRequests: () => [],
       runPlan: vi.fn(), startTask: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), retryTask: vi.fn(), continueTask: vi.fn(),
       messageTask: vi.fn(), denyRequest: vi.fn(), mergeAll: vi.fn(), record: vi.fn(), guardTripped: vi.fn(), heldEdit: () => false, deferUntilLanded: vi.fn(),
@@ -697,6 +697,33 @@ describe('the command seam\'s extension points', () => {
     expect(outcome).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringContaining('lands as this reply ends') });
     expect(outcome.message).toMatch(/^No task matches "Add divide" in the current plan\./);
     expect(host.heldEdit).toHaveBeenCalledWith();
+    expect(host.startTask).not.toHaveBeenCalled();
+  });
+
+  it('with autorun on and Full, holds a start of a task the turn\'s own edit adds until the edit lands', async () => {
+    const host = { ...stubHost(), autorun: () => true, running: () => false, hasLiveWork: () => false, heldEdit: vi.fn(() => true) };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+    const start: ExecutionCommand = { command: 'run_task', task: 'Add divide' };
+
+    expect(await commands.run(start, PLANNER)).toMatchObject({ ok: true, message: expect.stringMatching(/^Queued: start "Add divide" happens once your edit lands/) });
+    expect(host.deferUntilLanded).toHaveBeenCalledWith(start, PLANNER, 'start "Add divide"');
+    expect(host.record).not.toHaveBeenCalled();
+  });
+
+  it('with autorun on and Full, starts an unapproved task the planner asks for, and approves it with its subtasks', async () => {
+    const host = { ...stubHost(), autorun: () => true, running: () => false, hasLiveWork: () => false, taskApproved: () => false };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    expect(await commands.run({ command: 'run_task', task: 't1' }, PLANNER)).toMatchObject({ ok: true });
+    expect(host.startTask).toHaveBeenCalledWith('t1');
+    expect(host.approve).toHaveBeenCalledWith(['t1']);
+  });
+
+  it('never lets the supervisor start an unapproved task on the autorun exception', async () => {
+    const host = { ...stubHost(), autorun: () => true, running: () => false, hasLiveWork: () => false, taskApproved: () => false };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    expect(await commands.run({ command: 'run_task', task: 't1' }, { kind: 'supervisor', level: 'act' })).toMatchObject({ ok: false, outcome: 'refused' });
     expect(host.startTask).not.toHaveBeenCalled();
   });
 
