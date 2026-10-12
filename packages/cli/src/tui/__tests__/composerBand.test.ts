@@ -7,7 +7,7 @@ import { initialState, type TaskLogState, type TaskView, type TuiState } from '.
 import { registerSkillCommands } from '../slash';
 import { chatOf } from './chat';
 
-const GREY_BG = '\x1b[48;5;236m';
+const GREY_BG = '\x1b[48;5;234m';
 const RESET = '\x1b[0m';
 const GREY_ON_BAND = '\x1b[38;5;245m';
 
