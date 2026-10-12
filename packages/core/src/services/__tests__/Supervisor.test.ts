@@ -31,6 +31,12 @@ describe('wakeUpDigest', () => {
     ].join('\n'));
   });
 
+  it('names an automatic Merge all at the run\'s end, which has no task, as the run\'s', () => {
+    const digest = wakeUpDigest({ attention: [{ kind: 'auto_merge_stopped', at: 0, detail: 'it conflicts in .: a.ts' }], sinceLast: [] }, describeTask);
+
+    expect(digest.split('\n')[1]).toBe('- automatic Merge all at the end of the run stopped: it conflicts in .: a.ts; the run is handed over to the user to merge');
+  });
+
   it('cuts a long detail to one short line', () => {
     const digest = wakeUpDigest({ attention: [{ kind: 'task_failed', taskId: 't1', at: 0, detail: 'x'.repeat(1000) }], sinceLast: [] }, describeTask);
 
@@ -50,7 +56,7 @@ describe('Supervisor', () => {
   function host(run: SupervisedRun | null): SupervisorHost & { deliver: ReturnType<typeof vi.fn>; dropToWatch: ReturnType<typeof vi.fn> } {
     return {
       run: () => run, deliver: vi.fn(async () => undefined), pump: vi.fn(), saveState: vi.fn(), describeTask, readBudget: () => 12, retryLimit: () => 2,
-      plannerRunner: () => null, restartPlanner: vi.fn(), abandonTurn: vi.fn(), goUnsupervised: vi.fn(), dropToWatch: vi.fn(), notice: vi.fn(),
+      plannerRunner: () => null, restartPlanner: vi.fn(), abandonTurn: vi.fn(), goUnsupervised: vi.fn(), wakeUpEnded: vi.fn(), dropToWatch: vi.fn(), notice: vi.fn(),
     };
   }
 

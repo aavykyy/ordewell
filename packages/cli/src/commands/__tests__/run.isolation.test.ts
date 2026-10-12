@@ -106,6 +106,27 @@ describe('ordewell run at the end of an isolated run', () => {
     expect(stdout).toContain('Run finished on ordewell/r1/integration — 1 task landed.');
     expect(stdout).toContain('ordewell handoff');
   });
+
+  it('says the supervisor may merge a handoff deferred to it, beside the handoff command', async () => {
+    const deferred: Event = { ...handoff, type: 'isolation_handoff', deferredTo: 'supervisor' } as Event;
+    const { client } = liveDaemon({ execute: [deferred, complete] });
+
+    const { stdout } = await capture(() => handleRun(['--session-id', 's1'], client));
+
+    expect(stdout).toContain('Run finished on ordewell/r1/integration — 1 task landed.');
+    expect(stdout).toContain('  The supervisor may merge it.');
+    expect(stdout).toContain('ordewell handoff');
+  });
+
+  it('says when the run merged automatically at its end', async () => {
+    const merged: Event = { type: 'isolation_merge', result: { outcome: 'merged' }, trigger: { kind: 'run_end' } };
+    const { client } = liveDaemon({ execute: [merged, complete] });
+
+    const { stdout } = await capture(() => handleRun(['--session-id', 's1'], client));
+
+    expect(stdout).toContain('Run finished, and merged into your branch automatically.');
+    expect(stdout).not.toContain('ordewell handoff');
+  });
 });
 
 describe('ordewell run over a repo group', () => {

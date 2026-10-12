@@ -37,6 +37,9 @@ import { quotedList } from '../utils/quotedList';
 import type { RunMergeView } from './SessionMessage';
 import { resumeTime } from '../taskRow/status';
 
+/** What ran an automatic Merge all: a task reaching its merge gate, or the run settling with landed work unmerged. */
+export type AutoMergeTrigger = { kind: 'gate'; taskId: string } | { kind: 'run_end' };
+
 /**
  * The one notification channel out of the orchestrator. Everything that used
  * to travel over a separate callback (onRefresh) is an observer event; the
@@ -53,8 +56,8 @@ export interface OrchestratorObserver {
    */
   onTaskSettled?(data: { taskId: string }): void;
   onRunStarted?(settings: { mergeAtGatesAutomatically: boolean }): void;
-  /** A gate's automatic merge settled; failures are attention events for a supervisor. */
-  onAutoMerge?(data: { taskId: string; result: IsolationMergeResult }): void;
+  /** An automatic Merge all settled, at a gate or at the run's end; failures are attention events for a supervisor. */
+  onAutoMerge?(data: { trigger: AutoMergeTrigger; result: IsolationMergeResult }): void;
   onTick?(): void;
   onUsageChanged?(): void;
   onExecutionComplete?(): void;
@@ -634,10 +637,10 @@ export class TaskOrchestrator {
    * Never alongside ops work, either way round ({@link mergeExcludes}).
    */
   async mergeRun(): Promise<IsolationMergeResult> {
-    return this.mergeForGate();
+    return this.mergeLanded();
   }
 
-  private async mergeForGate(gate?: Readonly<Task>): Promise<IsolationMergeResult> {
+  private async mergeLanded(trigger?: AutoMergeTrigger): Promise<IsolationMergeResult> {
     const excluded = [...this.attempts.values()].find((a) => mergeExcludes(a.kind));
     if (excluded) {
       const title = this.store.get(excluded.taskId)?.title ?? excluded.taskId;
@@ -649,20 +652,39 @@ export class TaskOrchestrator {
     try {
       result = await this.runs.merge();
     } catch (err) {
-      if (!gate) throw err;
+      if (!trigger) throw err;
       result = { outcome: 'failed', repo: SELF_REPO };
       this.tell('error', `Automatic Merge all could not finish: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       this.merging = --this.mergesInFlight > 0;
     }
-    if (!gate && result.outcome === 'merged') this.autoMergeBlocked = false;
-    if (gate) {
+    if (!trigger && result.outcome === 'merged') this.autoMergeBlocked = false;
+    if (trigger) {
       this.autoMergeBlocked = result.outcome !== 'merged';
-      this.emit('onAutoMerge', { taskId: gate.id, result });
-      if (this.autoMergeBlocked) this.tell('warn', `Automatic Merge all for task ${gate.order} stopped. The merge gate is waiting for you.`);
+      this.emit('onAutoMerge', { trigger, result });
+      if (this.autoMergeBlocked) {
+        this.tell('warn', trigger.kind === 'gate'
+          ? `Automatic Merge all for task ${this.store.get(trigger.taskId)?.order ?? trigger.taskId} stopped. The merge gate is waiting for you.`
+          : 'Automatic Merge all at the end of the run stopped. The run is handed over to you to merge.');
+      }
     }
-    await this.tick();
+    // The run's end closes the run itself, straight after.
+    if (trigger?.kind !== 'run_end') await this.tick();
     return result;
+  }
+
+  /**
+   * Close the settled run. With merge at gates automatically on, landed work
+   * not merged yet is merged first, through the gate's path, so no surface
+   * hears of a handoff for a run about to merge; one that stopped is handed
+   * over as before.
+   */
+  private async closeRun(): Promise<void> {
+    if (this.autoMerge && !this.autoMergeBlocked && !this.merging && this.runs.isolating && this.runMergeView()
+      && ![...this.attempts.values()].some((a) => mergeExcludes(a.kind))) {
+      await this.mergeLanded({ kind: 'run_end' });
+    }
+    await this.runs.close();
   }
 
   /**
@@ -953,7 +975,7 @@ export class TaskOrchestrator {
       if (this.attempts.size === 0) {
         if (this.store.isAllComplete()) this.planStatus = 'completed';
         this.emit('onTick');
-        if (this.settled) await this.runs.close();
+        if (this.settled) await this.closeRun();
         this.emit('onExecutionComplete');
       }
       return;
@@ -1474,7 +1496,7 @@ export class TaskOrchestrator {
       // plan's remaining attempts — is closed by a verdict only. Ended by
       // cancel, Mark complete or a failed spawn instead, it would stay open, and
       // the next run would inherit its mode rather than decide its own.
-      if (this.attempts.size === 0 && this.runs.isOpen && this.settled) await this.runs.close();
+      if (this.attempts.size === 0 && this.runs.isOpen && this.settled) await this.closeRun();
       return;
     }
 
@@ -1499,7 +1521,7 @@ export class TaskOrchestrator {
         // Another landing must not repeatedly attempt a merge the user now
         // needs to resolve. A user merge or a new run releases this hold.
         this.autoMergeBlocked = true;
-        await this.mergeForGate(gate);
+        await this.mergeLanded({ kind: 'gate', taskId: gate.id });
         readiness = this.readiness();
       }
     }
@@ -1522,7 +1544,7 @@ export class TaskOrchestrator {
         this.notifications.info('All tasks completed!');
         this.emit('onTaskChanged');
         this.emit('onTick');
-        await this.runs.close();
+        await this.closeRun();
         this.emit('onExecutionComplete');
       } else {
         // Not done — just waiting on a user task, checkpoint, or held task.

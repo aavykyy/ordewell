@@ -4,6 +4,7 @@ import type { ExecutionRecord } from '../models/Execution';
 import type { TaskLogEvent } from '../models/TaskLog';
 import type { ApprovalKind } from '../interfaces/IApproval';
 import type { ApprovalSource } from './ApprovalPolicy';
+import type { AutoMergeTrigger } from './TaskOrchestrator';
 import type { IsolationHandoff, IsolationMergeResult, TaskIsolation } from '../interfaces/IWorktreeIsolation';
 import type { QueuedTaskMessage } from '../interfaces/IRunner';
 import { canContinue } from './continuation';
@@ -242,11 +243,14 @@ export type SessionMessage =
   // An isolated run settled: for each repo, the branch its work landed on and
   // the commit that branch forked from; and what landed, in plan order. Sent
   // before `execution_complete`, which surfaces treat as the end of the stream.
-  | { type: 'isolation_handoff'; repos: IsolationHandoff['repos']; landed: IsolationHandoff['landed'] }
+  // `deferredTo`: an Act supervisor handles it first; the unmarked handoff
+  // that follows its wake-up turn, if the run is still unmerged, comes after.
+  | { type: 'isolation_handoff'; repos: IsolationHandoff['repos']; landed: IsolationHandoff['landed']; deferredTo?: IsolationHandoff['deferredTo'] }
   // What "Merge all" did, for every surface watching rather than only the one
   // that asked: merged, blocked with each repo and why, or stopped part-way
-  // with the repos that stay merged.
-  | { type: 'isolation_merge'; result: IsolationMergeResult }
+  // with the repos that stay merged. `trigger`: Ordewell ran it by itself,
+  // at a merge gate or at the run's end, with merge at gates automatically on.
+  | { type: 'isolation_merge'; result: IsolationMergeResult; trigger?: AutoMergeTrigger }
   // Carries no content — see `ResearchProgress['liveness']`. Exists only so a
   // surface's idle watchdog sees the harness process working even during a
   // stretch that produces nothing visible.

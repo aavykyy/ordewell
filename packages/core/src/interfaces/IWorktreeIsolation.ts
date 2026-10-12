@@ -241,6 +241,12 @@ export interface IsolationHandoff {
   repos: IsolationHandoffRepo[];
   /** Tasks that landed on the integration branches, in plan order. */
   landed: IsolationLandedTask[];
+  /**
+   * The run's end is an Act supervisor's to handle first (ADR-0029), so a
+   * surface shows the handoff without popping it up. Sent again without this
+   * once the supervisor's turn on it ends with the run still unmerged.
+   */
+  deferredTo?: 'supervisor';
 }
 
 /** A plan's isolation as a surface shows it: a mark for each task the run touched, and its handoff. */

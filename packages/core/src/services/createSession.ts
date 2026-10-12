@@ -460,6 +460,8 @@ export class Session {
   private editLanded = false;
   /** The open turn's planner submitted a whole plan, which autorun starts once the turn ends (ADR-0030). */
   private planSubmitted = false;
+  /** The run's handoff went out marked as an Act supervisor's, and is owed unmarked unless it merges (ADR-0029). */
+  private handoffDeferred = false;
   private unlistenApprovals: (() => void) | null;
   private readonly plannerTools: PlannerToolHandler = plannerToolHandler({
     skills: () => this.workspaceSkills().listSkills(),
@@ -578,6 +580,9 @@ export class Session {
       restartPlanner: () => this.aiService().restart?.(),
       abandonTurn: () => this.conversation.abandonHungTurn(),
       goUnsupervised: (reason) => this.goUnsupervised(reason),
+      wakeUpEnded: () => {
+        if (!this.supervisor.awaitsRunEnd) this.handOver();
+      },
       dropToWatch: (reason) => this.dropToWatch(reason),
       notice: (level, message) => this.notice(level, message),
     });
@@ -795,6 +800,7 @@ export class Session {
       return true;
     });
     this.notice('warn', text);
+    this.handOver();
   }
 
   /**
@@ -811,7 +817,22 @@ export class Session {
       if (said) this.conversation.append('assistant', said, { kind: 'system' });
       return true;
     });
+    this.handOver();
     return true;
+  }
+
+  /**
+   * Send a handoff deferred to an Act supervisor again, unmarked, once the
+   * supervisor no longer has it: its wake-up turn on the run's end is over, it
+   * was lowered, or it failed. Not when the run merged meanwhile, or a new run
+   * opened, whose own handoff is to come.
+   */
+  private handOver(): void {
+    if (!this.handoffDeferred) return;
+    this.handoffDeferred = false;
+    const handoff = this.runs.view()?.handoff;
+    if (this.runs.isOpen || !handoff?.landed.length) return;
+    this.broadcast({ type: 'isolation_handoff', ...handoff });
   }
 
   /** The wake-up rate guard tripped: the run carries on at Watch, and the user is told in the supervisor's voice. */
@@ -937,19 +958,22 @@ export class Session {
         this.persist({ background: true });
         this.events.planGenerated(this.plan, this.goal);
       },
-      onAutoMerge: ({ taskId, result }) => {
+      onAutoMerge: ({ trigger, result }) => {
         if (!this.plan) return;
+        const taskId = trigger.kind === 'gate' ? trigger.taskId : undefined;
         if (result.outcome === 'merged') {
           this.plan.conversationHistory = [...(this.plan.conversationHistory ?? []), {
             role: 'assistant', kind: 'system', actor: 'Ordewell setting',
-            content: `Ordewell setting: auto-merged for task ${this.store.get(taskId)?.order ?? taskId}`,
+            content: taskId === undefined
+              ? 'Ordewell setting: auto-merged at the end of the run'
+              : `Ordewell setting: auto-merged for task ${this.store.get(taskId)?.order ?? taskId}`,
             timestamp: new Date().toISOString(),
           }];
         }
         this.persist({ background: true });
         this.events.planGenerated(this.plan, this.goal);
-        this.broadcast({ type: 'isolation_merge', result });
-        if (result.outcome !== 'merged') this.supervisor.observe({ kind: 'auto_merge_stopped', taskId, detail: mergeStopped(result) });
+        this.broadcast({ type: 'isolation_merge', result, trigger });
+        if (result.outcome !== 'merged') this.supervisor.observe({ kind: 'auto_merge_stopped', ...(taskId === undefined ? {} : { taskId }), detail: mergeStopped(result) });
       },
       onTaskChanged: () => {
         this.saveForControl();
@@ -985,11 +1009,16 @@ export class Session {
         this.persist({ background: true });
         relay.onIsolationChanged();
       },
+      onIsolationHandoff: (handoff) => {
+        this.handoffDeferred = this.supervisor.level === 'act';
+        relay.onIsolationHandoff(this.handoffDeferred ? { ...handoff, deferredTo: 'supervisor' } : handoff);
+      },
       onExecutionComplete: () => {
         relay.onExecutionComplete();
         this.persist({ background: true });
         const { total, completed, failed } = executionSummary(this.store.allTasks);
         this.supervisor.observe({ kind: 'run_finished', detail: `${completed} of ${total} tasks completed${failed > 0 ? `, ${failed} failed` : ''}` });
+        if (!this.supervisor.awaitsRunEnd) this.handOver();
       },
     };
   }
@@ -1042,6 +1071,7 @@ export class Session {
     this.conversation.abandonTurn();
     this.turns.abandon();
     this.supervisor.reset();
+    this.handoffDeferred = false;
     this.guards.forget();
     this.deferred = [];
     this.conversation.reset();
@@ -1433,6 +1463,7 @@ export class Session {
       });
       if (level === 'off') this.supervisor.standDown();
       else this.supervisor.setByUser();
+      if (level !== 'act') this.handOver();
     }
     if (changes.mergeAtGatesAutomatically !== undefined) {
       settings.mergeAtGatesAutomatically = changes.mergeAtGatesAutomatically;
@@ -1799,6 +1830,7 @@ export class Session {
       this.conversation.abandonTurn();
       this.turns.abandon();
       this.supervisor.reset();
+      this.handoffDeferred = false;
       this.conversation.reset();
       // The execution log is scoped to the outgoing plan.
       this.store.clearLog();
@@ -1863,6 +1895,7 @@ export class Session {
     this.conversation.abandonTurn();
     this.turns.abandon();
     this.supervisor.reset();
+    this.handoffDeferred = false;
     this.unlistenApprovals?.();
     this.unlistenApprovals = null;
     this.conversation.reset();

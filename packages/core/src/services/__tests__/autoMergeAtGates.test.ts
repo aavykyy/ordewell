@@ -64,7 +64,7 @@ describe('Merge at gates automatically', () => {
     const history = session.planState!.conversationHistory!;
     expect(history).toContainEqual(expect.objectContaining({ kind: 'system', actor: 'Ordewell setting', content: 'Ordewell setting: auto-merged for task 2' }));
     expect(fromTranscript(history, []).blocks).toContainEqual(expect.objectContaining({ type: 'message', role: 'system', text: 'Ordewell setting: auto-merged for task 2' }));
-    expect(messages).toContainEqual({ type: 'isolation_merge', result: { outcome: 'merged' } });
+    expect(messages).toContainEqual({ type: 'isolation_merge', result: { outcome: 'merged' }, trigger: { kind: 'gate', taskId: gated.id } });
   });
 
   it.each([undefined, false])('waits with the user\'s setting %s: off by default', async (enabled) => {
@@ -182,7 +182,7 @@ describe('Merge at gates automatically', () => {
     orchestrator.setMergeAtGatesAutomatically(true);
     await orchestrator.approveReview();
     sessions.at(-1)!.reportComplete({ status: 'done', summary: 'done' });
-    await vi.waitFor(() => expect(event).toHaveBeenCalledWith({ taskId: 'o2', result: iso.mergeResult }));
+    await vi.waitFor(() => expect(event).toHaveBeenCalledWith({ trigger: { kind: 'gate', taskId: 'o2' }, result: iso.mergeResult }));
     await orchestrator.tick();
     await orchestrator.tick();
     expect(orchestrator.getMergeGate('o2')).toEqual(['c1']);
@@ -200,6 +200,112 @@ describe('Merge at gates automatically', () => {
     expect(await session.execute({ command: 'merge_all' }, { kind: 'supervisor', level: 'act' })).toMatchObject({ ok: true });
     expect(merged(iso)).toHaveLength(1);
     expect(session.mergeGate('o2')).toEqual([]);
+  });
+});
+
+const handoffs = (messages: SessionMessage[]) => messages.filter((m) => m.type === 'isolation_handoff');
+
+describe('Merge all at the end of the run', () => {
+  const next = createTask({ id: 'c2', order: 2, prompt: 'next', dependencies: ['c1'] });
+
+  it('merges what landed when the run settles, emits no handoff, and clears the run', async () => {
+    const iso = new FakeWorktreeIsolation();
+    const { session, pass, messages } = harness(iso);
+    mergesAtGates(true);
+    session.loadPlan(plans([change, next]), 'goal', '/repo');
+    await session.executePlan();
+    pass();
+    await vi.waitFor(() => expect(session.planTasks[1].status).toBe('in_progress'));
+    pass('c2');
+    await vi.waitFor(() => expect(messages.some((m) => m.type === 'execution_complete')).toBe(true));
+
+    expect(merged(iso)).toHaveLength(1);
+    expect(handoffs(messages)).toEqual([]);
+    expect(messages).toContainEqual({ type: 'isolation_merge', result: { outcome: 'merged' }, trigger: { kind: 'run_end' } });
+    expect(session.isolationView()).toBeNull();
+    expect(session.planState!.conversationHistory!.map((e) => e.content)).toEqual(['Ordewell setting: auto-merged at the end of the run']);
+  });
+
+  it('merges what landed beside a failed task, and hands nothing over', async () => {
+    const iso = new FakeWorktreeIsolation();
+    const { session, sessions, pass, messages, notices } = harness(iso);
+    const failing = createTask({ id: 'c3', order: 3, prompt: 'fails' });
+    mergesAtGates(true);
+    session.loadPlan(plans([change, failing]), 'goal', '/repo');
+    await session.executePlan();
+    pass();
+    await vi.waitFor(() => expect(session.planTasks[0].status).toBe('completed'));
+    sessions.find((s) => s.taskId === 'c3')!.reportComplete({ status: 'failed', summary: '', reason: 'tests failed' });
+    await vi.waitFor(() => expect(messages.some((m) => m.type === 'execution_complete')).toBe(true));
+
+    expect(merged(iso)).toHaveLength(1);
+    expect(handoffs(messages)).toEqual([]);
+    expect(session.isolationView()?.handoff.landed).toEqual([]);
+    expect(notices.map((n) => n.message)).toContainEqual(expect.stringMatching(/^The run is not cleared up: .* holds work that has not landed/));
+  });
+
+  it('hands the run over when the merge stops, with a notice and an attention event', async () => {
+    const iso = new FakeWorktreeIsolation();
+    iso.mergeResult = { outcome: 'conflict', repo: '.' };
+    const { session, pass, messages, notices } = harness(iso);
+    mergesAtGates(true);
+    session.loadPlan(plans([change]), 'goal', '/repo');
+    await session.executePlan();
+    pass();
+    await vi.waitFor(() => expect(messages.some((m) => m.type === 'execution_complete')).toBe(true));
+
+    expect(merged(iso)).toHaveLength(1);
+    expect(notices.map((n) => n.message)).toContain('Automatic Merge all at the end of the run stopped. The run is handed over to you to merge.');
+    expect(handoffs(messages)).toEqual([expect.objectContaining({ landed: [expect.objectContaining({ taskId: 'c1' })] })]);
+    expect(messages.findIndex((m) => m.type === 'isolation_merge')).toBeLessThan(messages.findIndex((m) => m.type === 'isolation_handoff'));
+  });
+
+  it.each([undefined, false])('with the setting %s, hands the run over without merging', async (enabled) => {
+    const iso = new FakeWorktreeIsolation();
+    const { session, pass, messages } = harness(iso);
+    mergesAtGates(enabled);
+    session.loadPlan(plans([change]), 'goal', '/repo');
+    await session.executePlan();
+    pass();
+    await vi.waitFor(() => expect(messages.some((m) => m.type === 'execution_complete')).toBe(true));
+
+    expect(merged(iso)).toEqual([]);
+    expect(handoffs(messages)).toHaveLength(1);
+    expect(session.isolationView()?.handoff.landed).toHaveLength(1);
+  });
+
+  it('does not merge again once a gate merge stopped: the run is handed over', async () => {
+    const iso = new FakeWorktreeIsolation();
+    iso.mergeResult = { outcome: 'conflict', repo: '.' };
+    const { session, pass, messages } = harness(iso);
+    mergesAtGates(true);
+    session.loadPlan(plans([change, user]), 'goal', '/repo');
+    await session.executePlan();
+    pass();
+    await vi.waitFor(() => expect(session.mergeGate('u2')).toEqual(['c1']));
+    await session.markTaskComplete('u2');
+    await vi.waitFor(() => expect(messages.some((m) => m.type === 'execution_complete')).toBe(true));
+
+    expect(merged(iso)).toHaveLength(1);
+    expect(handoffs(messages)).toHaveLength(1);
+  });
+
+  it('leaves a run merged in full at its gates as before: cleared, with nothing more to merge', async () => {
+    const iso = new FakeWorktreeIsolation();
+    const { session, pass, messages } = harness(iso);
+    mergesAtGates(true);
+    session.loadPlan(plans([change, user]), 'goal', '/repo');
+    await session.executePlan();
+    pass();
+    await vi.waitFor(() => expect(merged(iso)).toHaveLength(1));
+    await vi.waitFor(() => expect(session.mergeGate('u2')).toEqual([]));
+    await session.markTaskComplete('u2');
+    await vi.waitFor(() => expect(messages.some((m) => m.type === 'execution_complete')).toBe(true));
+
+    expect(merged(iso)).toHaveLength(1);
+    expect(handoffs(messages)).toEqual([]);
+    expect(session.isolationView()).toBeNull();
+    expect(session.planState!.conversationHistory!.map((e) => e.content)).toEqual(['Ordewell setting: auto-merged for task 2']);
   });
 });
 

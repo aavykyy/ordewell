@@ -113,7 +113,11 @@ export async function followExecution(
       const where = isRepoGroup(event) ? ` in ${event.repos.map((r) => r.path).join(', ')}` : '';
       console.log(`\nRun finished on ${handoffBranch(event)}${where} — ${n} task${n === 1 ? '' : 's'} landed.`);
       if (isRepoGroup(event)) for (const line of repoResultLines(event)) console.log(`  ${line}`);
+      if (event.deferredTo === 'supervisor') console.log('  The supervisor may merge it.');
       console.log('  `ordewell handoff review|merge|discard|cleanup` to land it.');
+    }
+    if (event.type === 'isolation_merge' && event.trigger?.kind === 'run_end' && event.result.outcome === 'merged') {
+      console.log('\nRun finished, and merged into your branch automatically.');
     }
   }, settleReady);
 
