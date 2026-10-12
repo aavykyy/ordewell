@@ -155,7 +155,65 @@ export function createFakeWebviewPanel(viewType: string, title: string): FakeWeb
   return panel;
 }
 
+export const QuickInputButtons = { Back: { iconPath: 'back', tooltip: 'Back' } } as const;
+
+export interface FakeQuickPick {
+  title?: string;
+  step?: number;
+  totalSteps?: number;
+  placeholder?: string;
+  items: { label: string; description?: string; detail?: string }[];
+  activeItems: FakeQuickPick['items'];
+  selectedItems: FakeQuickPick['items'];
+  buttons: unknown[];
+  disposed: boolean;
+  show(): void;
+  hide(): void;
+  dispose(): void;
+  onDidAccept(cb: () => void): { dispose(): void };
+  onDidTriggerButton(cb: (button: unknown) => void): { dispose(): void };
+  onDidHide(cb: () => void): { dispose(): void };
+}
+
+/** Quick picks created by `window.createQuickPick`, in creation order. */
+export const __quickPicks: FakeQuickPick[] = [];
+/** One entry per `show()`: what the user does to that pick. */
+export const __quickPickScript: Array<(pick: FakeQuickPick & { __accept(): void; __back(): void; __escape(): void }) => void> = [];
+
+export function __resetQuickPicks(): void {
+  __quickPicks.length = 0;
+  __quickPickScript.length = 0;
+}
+
+function createFakeQuickPick(): FakeQuickPick {
+  const accept: Array<() => void> = [];
+  const button: Array<(b: unknown) => void> = [];
+  const hide: Array<() => void> = [];
+  const pick: FakeQuickPick & { __accept(): void; __back(): void; __escape(): void } = {
+    items: [], activeItems: [], selectedItems: [], buttons: [], disposed: false,
+    show() {
+      const act = __quickPickScript.shift();
+      if (act) queueMicrotask(() => act(pick));
+    },
+    hide() { for (const cb of [...hide]) cb(); },
+    dispose() {
+      if (pick.disposed) return;
+      pick.disposed = true;
+      for (const cb of [...hide]) cb();
+    },
+    onDidAccept(cb) { accept.push(cb); return { dispose() {} }; },
+    onDidTriggerButton(cb) { button.push(cb); return { dispose() {} }; },
+    onDidHide(cb) { hide.push(cb); return { dispose() {} }; },
+    __accept() { pick.selectedItems = [...pick.activeItems]; for (const cb of [...accept]) cb(); },
+    __back() { for (const cb of [...button]) cb(QuickInputButtons.Back); },
+    __escape() { pick.hide(); },
+  };
+  __quickPicks.push(pick);
+  return pick;
+}
+
 export const window = {
+  createQuickPick: vi.fn(createFakeQuickPick) as never,
   showQuickPick: vi.fn() as never,
   withProgress: vi.fn() as never,
   showWarningMessage: vi.fn() as never,

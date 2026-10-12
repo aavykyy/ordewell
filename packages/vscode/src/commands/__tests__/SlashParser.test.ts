@@ -33,6 +33,7 @@ function makeDeps(overrides: Partial<SlashDeps> = {}): SlashDeps {
     updateConfig: async () => {},
     recordPlannerModel: () => {},
     runSettings: { get: () => ({ ...RUN_SETTINGS_DEFAULTS }), change: () => {} },
+    maxParallel: () => 5,
     saveAutonomy: () => {},
     log: () => {},
     ...overrides,

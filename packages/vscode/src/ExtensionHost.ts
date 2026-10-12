@@ -238,6 +238,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       pickModelWithProvider: (...args) => discovery.pickModelWithProvider(...args),
       updateConfig: async (key, value) => services.config.update(key, value),
       recordPlannerModel: (model, effort) => services.plannerModelMemory.remember(services.config.aiProvider, model, effort),
+      maxParallel: () => services.config.maxParallelSessions,
       saveAutonomy: (enabled) => {
         services.settingsService.setAutonomousMode(enabled);
         sendRunSettings();
