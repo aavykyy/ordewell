@@ -287,15 +287,46 @@ export function chatLayout(state: TuiState, rows: number, cols: number): ChatLay
   const bubbles = tv ? taskQueuedRows(state, cols) : queuedPromptRows(state, cols);
   const lines = [...transcript, ...(bubbles.length > 0 ? ['', ...bubbles] : [])];
   const header = tv ? taskHeaderLines(state, tv, cols) : [];
-  // The token line is the session's, not a line of the transcript: it keeps
-  // the pane's bottom row while everything above it scrolls — unless the pane
-  // is a single row, which belongs to the conversation.
-  const usage = rows > 1 ? tokenLine(blocks, cols) : null;
-  const footer = usage ? [usage] : [];
+  // The usage rows are the session's (or the opened task's), not lines of the
+  // transcript: they keep the pane's bottom rows while everything above them
+  // scrolls — unless the pane is a single row, which belongs to the conversation.
+  const usage = rows <= 1 ? [] : tv ? taskUsageFooter(state, tv, blocks, cols) : tokenRow(blocks, cols);
+  // The per-model rows are the expendable part: they yield to the transcript
+  // so a short pane never trades its last conversation row for a breakdown.
+  const footer = usage.slice(0, Math.max(1, rows - header.length - 1));
   const room = Math.max(0, rows - header.length - footer.length);
   // Content that fits hangs off the top so the welcome does not jump when the
   // first message lands; once it overflows the newest lines win the pane.
   return { lines, header, footer, anchor: lines.length > room ? 'bottom' : 'top', maxScroll: Math.max(0, lines.length - room) };
+}
+
+const tokenRow = (blocks: readonly DisplayBlock[], cols: number): string[] => {
+  const line = tokenLine(blocks, cols);
+  return line ? [line] : [];
+};
+
+/**
+ * The opened task's usage for the attempt on screen: the same measures and
+ * wall time its row used to carry, then one row per model when more than one
+ * reported. `attemptUsage` is kept per attempt, so an earlier attempt shows its
+ * own numbers; when it holds nothing for the attempt on screen (or the task has
+ * no row-level usage at all) the log's own last usage block is the footer, as it
+ * was before — it has no wall time to add.
+ */
+function taskUsageFooter(state: TuiState, tv: NonNullable<TuiState['taskView']>, blocks: readonly DisplayBlock[], cols: number): string[] {
+  const task = findTask(state.tasks, tv.taskId);
+  const reported = task?.attemptUsage ?? [];
+  const onScreen = tv.attempt > 0 ? reported.find((a) => a.attempt === tv.attempt) : reported.at(-1);
+  if (!task || !onScreen) return tokenRow(blocks, cols);
+  const usage = taskRowView({ ...task, attemptUsage: [onScreen] }).usage;
+  if (!usage) return tokenRow(blocks, cols);
+  const models = usage.byModel ?? [];
+  return [
+    style.grey(truncate(taskUsageText(usage), cols)),
+    ...(models.length > 1
+      ? models.map((m) => style.grey(truncate(`${sanitize(m.model ?? 'unattributed')}: ${usageMeasures(m.totals, true).join(' · ')}`, cols)))
+      : []),
+  ];
 }
 
 /** How far back the chat pane can be scrolled at the size it is about to be painted. */
@@ -678,12 +709,6 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   const origin = task.addedBy === 'supervisor' ? 'added by supervisor' : '';
   const meta = [activity, origin, runner, model].filter(Boolean).join(' · ');
   if (meta) lines.push(style.grey(truncate(`${bodyPad}${meta}`, cols)));
-  if (row.usage) lines.push(style.grey(truncate(`${bodyPad}${taskUsageText(row.usage)}`, cols)));
-  if (expanded && row.usage) {
-    for (const model of row.usage.byModel ?? []) lines.push(...wrap(`${bodyPad}${sanitize(model.model ?? 'unattributed')}: ${usageMeasures(model.totals, true).join(' · ')}`, cols).map(style.grey));
-  }
-  if (skills) lines.push(style.grey(truncate(`${bodyPad}skills: ${skills}`, cols)));
-  if (effort || mode) lines.push(style.grey(truncate(`${bodyPad}${[effort, mode].filter(Boolean).join(' · ')}`, cols)));
   // The one isolation state that needs the user; every other stays out of the
   // row and shows only in the expanded detail below.
   if (row.conflict) {
@@ -714,6 +739,8 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
 
   let editorLine: number | undefined;
   if (expanded) {
+    if (skills) lines.push(style.grey(truncate(`${bodyPad}skills: ${skills}`, cols)));
+    if (effort || mode) lines.push(style.grey(truncate(`${bodyPad}${[effort, mode].filter(Boolean).join(' · ')}`, cols)));
     lines.push(style.grey(`${bodyPad}${task.status.replace(/_/g, ' ')}`));
     if (task.isolation && task.isolation.state !== 'none' && task.isolation.branch) {
       lines.push(...taskText('Branch', task.isolation.branch, cols, bodyPad));

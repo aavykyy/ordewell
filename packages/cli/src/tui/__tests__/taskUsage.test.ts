@@ -11,15 +11,27 @@ const usage: AttemptUsage = { attempt: 1, runner: 'codex', startedAt: '', wallTi
 const task = (over: Partial<TaskView> = {}): TaskView => ({ id: 't', order: 1, title: 'Work', type: 'ai', status: 'completed', dependencies: [], ...over });
 const lines = (tasks: TaskView[]) => planLayout(initialState({ tasks, rows: 40, cols: 140 }), 40, 140).lines.map(stripAnsi).join('\n');
 
+const expandedLines = (t: TaskView) => {
+  const state = { ...initialState({ tasks: [t], rows: 40, cols: 140 }), expandedTaskId: t.id };
+  return planLayout(state, 40, 140).lines.map(stripAnsi).join('\n');
+};
+
 describe('task row accounting', () => {
-  it('uses planner formatting for the latest attempt and a separate task total', () => {
-    const text = lines([task({ attemptUsage: [usage] })]);
-    expect(text).toContain('12.4k in · 3.1k out · $0.42 · 18% ctx · 5s');
-    expect(text).toContain('Tasks total: 12.4k in · 3.1k out · $0.42 · 5s');
+  it('keeps the plan total at the top and no usage on the row, collapsed or expanded', () => {
+    const t = task({ attemptUsage: [usage] });
+    const collapsed = lines([t]);
+    expect(collapsed).toContain('Tasks total: 12.4k in · 3.1k out · $0.42 · 5s');
+    expect(collapsed.replace('Tasks total: 12.4k in · 3.1k out · $0.42 · 5s', '')).not.toMatch(/12\.4k in|18% ctx/);
+    expect(expandedLines(t).replace('Tasks total: 12.4k in · 3.1k out · $0.42 · 5s', '')).not.toMatch(/12\.4k in|18% ctx|actual-model: /);
   });
 
-  it('shows unknown where a runner reported nothing', () => {
-    expect(lines([task()])).toContain('unknown in · unknown out · cost unknown · ctx unknown · time unknown');
+  it('keeps skills, effort and mode off a collapsed row and shows them expanded', () => {
+    const t = task({ type: 'ai', skills: ['tdd'], taskMode: 'plan', assignedModel: { modelId: 'm', modelLabel: 'M', thinkingEffort: 'high' } });
+    const collapsed = lines([t]);
+    for (const hidden of ['skills:', 'effort:', 'mode:']) expect(collapsed).not.toContain(hidden);
+    const expanded = expandedLines(t);
+    expect(expanded).toContain('skills: tdd');
+    expect(expanded).toContain('effort: high · mode: plan');
   });
 
   it('carries live usage from the daemon into the row even when status stays the same', () => {
@@ -31,14 +43,14 @@ describe('task row accounting', () => {
     const state = initialState({ sessionId: 's1', tasks: [task()] });
     const updated = reduce(state, update!).state;
     expect(updated.tasks[0].attemptUsage).toEqual([usage]);
-    expect(lines(updated.tasks)).toContain('$0.42');
+    expect(lines(updated.tasks)).toContain('Tasks total: 12.4k in · 3.1k out · $0.42 · 5s');
   });
 
   it('applies nested usage updates without needing a status change', () => {
     const state = initialState({ tasks: [task({ id: 'parent', subtasks: [task()] })] });
     const updated = reduce(state, { type: 'tasksStatus', updates: { t: { status: 'completed', attemptUsage: [usage] } } }).state;
     expect(updated.tasks[0].subtasks?.[0].attemptUsage).toEqual([usage]);
-    expect(lines(updated.tasks)).toContain('12.4k in');
+    expect(lines(updated.tasks)).toContain('Tasks total: 12.4k in');
   });
 
   it('keeps usage and unmerged landings from the same status update visible', () => {
@@ -63,7 +75,9 @@ describe('task row accounting', () => {
     expect(text).toContain('Tasks total: 12.4k in · 3.1k out · $0.42 · 5s');
     expect(text).toContain('1 landed task not merged — /handoff merge');
     expect(layout.rowSpans[0].start).toBe(3);
-    expect(revealOffset(layout, layout.maxScroll, layout.rowSpans[0])).toBe(0);
+    const at = revealOffset(layout, layout.maxScroll, layout.rowSpans[0]);
+    expect(layout.rowSpans[0].start).toBeGreaterThan(at);
+    expect(layout.rowSpans[0].end).toBeLessThanOrEqual(at + layout.rows - 1);
 
     const cleared = reduce(updated, { type: 'tasksStatus', updates: {}, runMerge: null }).state;
     const clearedText = planLayout(cleared, 40, 140).lines.map(stripAnsi).join('\n');
@@ -92,13 +106,13 @@ describe('task row model name', () => {
     expect(text).not.toContain('model unknown');
   });
 
-  it('leaves an unnamed entry out of the row and labels it in the expanded view', () => {
+  it('leaves an unnamed entry out of the row', () => {
     const t = running([
       { source: 'claude-code', model: 'claude-sonnet-x', totals: { inputTokens: 1 } },
       { source: 'claude-code', totals: { inputTokens: 7000 } },
     ]);
     expect(lines([t])).not.toContain('model unknown');
     expect(lines([t])).not.toContain('unattributed');
-    expect(expanded(t)).toContain('unattributed: 7k in');
+    expect(expanded(t)).not.toContain('unattributed');
   });
 });

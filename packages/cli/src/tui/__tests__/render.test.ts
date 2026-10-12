@@ -354,7 +354,7 @@ describe('plan pane', () => {
       assignedRunner: 'codex',
       assignedModel: { modelId: 'gpt-5', modelLabel: 'GPT-5', thinkingEffort: 'high' },
     }];
-    const out = text({ tasks: configured });
+    const out = text({ tasks: configured, expandedTaskId: configured[0].id });
     expect(out).toContain('GPT-5');
     expect(out).toContain('effort: high');
   });
@@ -822,7 +822,7 @@ describe('plan pane scrolling', () => {
   });
 
   it('planScroll shifts the viewport in the plan pane', () => {
-    const out = text({ rows: 15, cols: 80, tasks: manyTasks(30), focus: 'plan', selectedTask: 0, planScroll: 12 });
+    const out = text({ rows: 15, cols: 80, tasks: manyTasks(30), focus: 'plan', selectedTask: 0, planScroll: 8 });
     expect(out).not.toContain('Task number 1');
     expect(out).toContain('Task number 5');
   });
@@ -873,8 +873,8 @@ describe('plan pane — runner and mode', () => {
     assignedModel: { modelId: 'gpt-5-codex', modelLabel: 'GPT-5 Codex', thinkingEffort: 'high' },
   };
 
-  it('shows the task mode on its row, beside the runner it belongs to', () => {
-    const out = render(initialState({ focus: 'plan', tasks: [task], rows: 40, cols: 100 })).join('\n');
+  it('shows the task mode once the row is expanded, beside the runner it belongs to', () => {
+    const out = render(initialState({ focus: 'plan', tasks: [task], rows: 40, cols: 100, expandedTaskId: task.id })).join('\n');
 
     expect(out).toContain('codex');
     expect(out).toMatch(/mode: agent/);
@@ -882,7 +882,7 @@ describe('plan pane — runner and mode', () => {
 
   it('omits the mode line for a manual task, which no runner executes', () => {
     const out = render(initialState({
-      focus: 'plan', rows: 40, cols: 100,
+      focus: 'plan', rows: 40, cols: 100, expandedTaskId: task.id,
       tasks: [{ ...task, type: 'user' as const, taskMode: undefined }],
     })).join('\n');
 
