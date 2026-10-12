@@ -76,8 +76,8 @@ describe('run settings in the TUI (ADR-0030)', () => {
   it('lists them in the welcome screen\'s Setup block, with the commands that change them', () => {
     const welcome = frame(loaded(initialState({ rows: 40, cols: 120 }), { supervisorLevel: 'act', autorun: true }));
 
-    expect(welcome).toMatch(/Autonomy\s+Full\s+\/auto/);
-    expect(welcome).toMatch(/Run\s+supervisor Act · auto-merge off · autorun on\s+\/supervisor · \/automerge · \/autorun/);
+    expect(welcome).toMatch(/Autonomy\s+Full\s*\n/);
+    expect(welcome).toMatch(/Run\s+supervisor Act · auto-merge off · autorun on\s+\/settings/);
   });
 
   it('shows them on the status line, and the run\'s own level where it differs', () => {

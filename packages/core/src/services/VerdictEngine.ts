@@ -12,9 +12,11 @@ export type IdleListener = (taskId: string, idleSince: string | null) => void;
 /**
  * No output for this long marks a running task idle (advisory, UI-only). Long
  * model turns and slow builds routinely go quiet for minutes, so a shorter
- * window flagged healthy tasks as Stalled.
+ * window flagged healthy tasks as Stalled. A run that ends with a build plus
+ * the full test suite can print nothing for more than 5 minutes, which flagged
+ * healthy tasks quiet and woke the supervisor for nothing, hence 10.
  */
-export const IDLE_TIMEOUT_MS = 5 * 60_000;
+export const IDLE_TIMEOUT_MS = 10 * 60_000;
 
 
 export class VerdictEngine {
