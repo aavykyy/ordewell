@@ -181,3 +181,19 @@ export function withSession(state: TuiState, run: (sessionId: string) => Step): 
   }
   return run(state.sessionId);
 }
+
+/** A list filter and the prompt field are single-line fields with no cursor. */
+export function editText(value: string, key: Key): string {
+  if (key.name === 'char') return value + (key.char ?? '');
+  // Single-line fields flatten a paste's newlines; a copied API key often
+  // drags a trailing newline along, and it must not act as enter here either.
+  if (key.name === 'paste') return value + (key.text ?? '').replace(/\n/g, ' ');
+  if (key.name === 'backspace') return value.slice(0, -1);
+  if (key.name === 'ctrl-u') return '';
+  return value;
+}
+
+/** The row a digit key names on a numbered list (numbered from 1 on screen), or null for any other key. */
+export function digitRow(key: Key): number | null {
+  return key.name === 'char' && key.char !== undefined && /^[1-9]$/.test(key.char) ? Number(key.char) - 1 : null;
+}

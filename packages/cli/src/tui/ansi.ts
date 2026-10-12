@@ -259,4 +259,10 @@ export const style = {
    * a dark background.
    */
   accent: colour('94'),
+  /**
+   * A list's active row, drawn as a bar. Inverse is re-asserted after every
+   * reset inside, or the first painted word in the row would end the bar.
+   */
+  highlight: (text: string): string =>
+    (style.enabled ? `\x1b[7m${text.split('\x1b[0m').join('\x1b[0m\x1b[7m')}\x1b[0m` : text),
 };

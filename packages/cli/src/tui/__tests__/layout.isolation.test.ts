@@ -247,7 +247,7 @@ describe('handoff overlay frame', () => {
         picker: {
           title: 'Run blocked by uncommitted changes', hint: 'Tracked files have uncommitted changes',
           items: [{ id: 'stash', label: 'Stash and continue' }, { id: 'shared', label: 'Run without isolation' }, { id: 'cancel', label: 'Cancel' }],
-          filter: '', index: 0, multi: false, chosen: [], action: { kind: 'isolation-blocked' },
+          filter: '', index: 0, multi: false, chosen: [], filterable: false, action: { kind: 'isolation-blocked' },
         },
       },
     }));

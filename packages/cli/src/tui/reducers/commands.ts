@@ -79,7 +79,7 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
 
     case 'sessions':
       return step(
-        { ...state, overlay: { kind: 'picker', picker: picker('Sessions', [], { kind: 'load-session' }) } },
+        { ...state, overlay: { kind: 'picker', picker: picker('Sessions', [], { kind: 'load-session' }, { filterable: true }) } },
         [{ type: 'loadSessions' }],
       );
     case 'handoff':
@@ -245,7 +245,7 @@ function setModel(state: TuiState, args: string[]): Step {
       ...state,
       overlay: {
         kind: 'picker',
-        picker: picker('Orchestrator model', items, { kind: 'set-model' }, { hint: providerErrorHint(state) }),
+        picker: picker('Orchestrator model', items, { kind: 'set-model' }, { hint: providerErrorHint(state), filterable: true }),
       },
     },
     [{ type: 'loadModels' }],
@@ -453,7 +453,7 @@ function rewind(state: TuiState, arg: string | undefined): Step {
   return withIdlePlanner(state, (sessionId) => {
     if (arg === undefined) {
       return step(
-        { ...state, rewindTargets: null, overlay: { kind: 'picker', picker: picker('Rewind to before…', [], { kind: 'rewind' }, { hint: 'Rewinding forks the conversation from just before the chosen message; the original is kept and the tasks ride along.' }) } },
+        { ...state, rewindTargets: null, overlay: { kind: 'picker', picker: picker('Rewind to before…', [], { kind: 'rewind' }, { filterable: true, hint: 'Rewinding forks the conversation from just before the chosen message; the original is kept and the tasks ride along.' }) } },
         [{ type: 'loadRewindTargets', sessionId }],
       );
     }

@@ -1,5 +1,6 @@
 import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type SupervisorLevel, type TaskLogEvent, type TaskLogView, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
+import type { StepperState } from './reducers/stepper';
 
 export type RunStatus = 'idle' | 'planning' | 'researching' | 'executing';
 
@@ -189,6 +190,12 @@ export interface PickerState {
   /** Multi-select pickers toggle with space and confirm the whole set on enter. */
   multi: boolean;
   chosen: string[];
+  /**
+   * A long list (models, sessions) narrows as the user types. A short fixed
+   * one is numbered instead and a digit picks its row — the two can't share,
+   * because model names contain digits.
+   */
+  filterable: boolean;
   action: PickerAction;
 }
 
@@ -199,11 +206,16 @@ export interface PickerState {
  * layer back at the layer that drives it.
  */
 export function visibleItems(picker: PickerState): PickerItem[] {
-  const filter = picker.filter.trim().toLowerCase();
-  if (!filter) return picker.items;
+  return matchingItems(picker.items, picker.filter);
+}
+
+/** `items` narrowed to what `filter` matches — the rule every filterable list shares. */
+export function matchingItems(items: PickerItem[], text: string): PickerItem[] {
+  const filter = text.trim().toLowerCase();
+  if (!filter) return items;
   // `detail` carries the provider name, so typing e.g. "openrouter" narrows to
   // that provider's models alongside id/label matches.
-  return picker.items.filter(
+  return items.filter(
     (i) =>
       i.id.toLowerCase().includes(filter) ||
       i.label.toLowerCase().includes(filter) ||
@@ -224,6 +236,7 @@ export type Overlay =
   | { kind: 'help'; scroll?: number }
   | { kind: 'approval'; request: ApprovalRequestView }
   | { kind: 'picker'; picker: PickerState }
+  | { kind: 'stepper'; stepper: StepperState }
   /**
    * The end-of-run handoff. `index` is the highlighted action; `diff` replaces
    * the action list while the integration branch's diff is being read.

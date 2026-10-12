@@ -6,13 +6,14 @@ import { effortsForTask, modelsForRunner, modelsForTask, modesForTask } from '..
 /** The picker id meaning "the runner's own default", as opposed to a model variant. */
 export const DEFAULT_EFFORT = '__runner_default__';
 
+/** A fixed, numbered list unless `extra` says it is `filterable`. */
 export function picker(
   title: string,
   items: PickerItem[],
   action: PickerState['action'],
   extra: Partial<PickerState> = {},
 ): PickerState {
-  return { title, items, filter: '', index: 0, multi: false, chosen: [], action, ...extra };
+  return { title, items, filter: '', index: 0, multi: false, chosen: [], filterable: false, action, ...extra };
 }
 
 /**
