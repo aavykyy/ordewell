@@ -184,10 +184,14 @@ worktrees and task branches but keeps the integration branch; "Discard run"
 removes it too, and an integration branch the user's HEAD already contains is
 deleted once merged (ADR-0013).
 
-**End of run is a handoff.** Ordewell never merges into the user's branch
-automatically. When the plan settles it reports the integration branch and
-offers Review diff / Merge / Discard / Clean up. Merge is a normal `git merge`
-reported back to the surface.
+**End of run is a handoff.** Unless the user opted in to merging
+automatically (`/automerge`), or a supervisor at Act merges, Ordewell does not
+merge into the user's branch. When the plan settles it reports the integration
+branch and offers Review diff / Merge / Discard / Clean up. With automatic
+merging on, the end of a run merges by itself and the handoff is sent only if
+that merge stops; with the supervisor at Act it is marked as deferred to the
+supervisor (ADR-0029). Merge is a normal `git merge` reported back to the
+surface.
 
 **Planner prompt is conditioned on isolation.** When isolation is active, the
 planner keeps dependency edges for genuine logical ordering but stops

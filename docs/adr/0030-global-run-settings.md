@@ -297,3 +297,10 @@ the daemon reads it from there at generation.
 - 2026-10-12 — with autorun on and Full, the planner may start a task added
   after the plan was approved; a start in the reply that adds it waits for the
   edit to land.
+- 2026-10-12 — amended: the setting is read as "merge automatically": at merge
+  gates and at the end of a run. A user who turned it on was still stopped at
+  the end of the run, and the handoff overlay asked about a merge the
+  supervisor was about to make. The command `/automerge` and the settings key
+  `mergeAtGatesAutomatically` are unchanged; the handoff is not opened by the
+  surfaces while an automatic merge is coming
+  ([ADR-0029](0029-the-supervisor.md), "Merge at gates automatically").

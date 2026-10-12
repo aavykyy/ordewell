@@ -35,7 +35,7 @@ describe('run settings in the chat', () => {
     send({ type: 'setRunSettings', autonomous: true, run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'act', mergeAtGatesAutomatically: true } });
     send({ type: 'planUpdated', plan });
     expect(bar()).toContain('Supervisor: Act');
-    expect(bar()).toContain('Merge at gates automatically');
+    expect(bar()).toContain('Merge automatically');
 
     send({ type: 'planUpdated', plan: { ...plan, status: 'running', runSettings: { mergeAtGatesAutomatically: true, supervisorLevel: 'watch' } } });
     expect(bar()).toContain('Supervisor: Act → Watch');
@@ -47,7 +47,7 @@ describe('run settings in the chat', () => {
   it('has no controls for them on the plan: they are chat commands', () => {
     send({ type: 'planUpdated', plan });
 
-    expect(screen.queryByRole('checkbox', { name: /Merge at gates automatically/ })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: /Merge automatically/ })).toBeNull();
     expect(screen.queryByRole('combobox', { name: /Supervisor/ })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Drop to Watch' })).toBeNull();
   });

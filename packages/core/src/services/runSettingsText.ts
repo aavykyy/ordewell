@@ -10,7 +10,7 @@ const onOff = (value: boolean): string => (value ? 'on' : 'off');
 
 export const supervisorSummary = (run: GlobalRunSettings): string =>
   `Supervisor: ${SUPERVISOR_LEVEL_LABEL[run.supervisorLevel]}, ${plural(run.supervisorRetryLimit, 'retry', 'retries')} per task, ${plural(run.wakeUpReadBudget, 'read', 'reads')} per wake-up`;
-export const automergeSummary = (run: GlobalRunSettings): string => `Merge at gates automatically: ${onOff(run.mergeAtGatesAutomatically)}`;
+export const automergeSummary = (run: GlobalRunSettings): string => `Merge automatically (gates, end of run): ${onOff(run.mergeAtGatesAutomatically)}`;
 export const autorunSummary = (run: GlobalRunSettings): string => `Autorun: ${onOff(run.autorun)}`;
 
 export const ACT_RISK = 'Tasks it adds run too, ops tasks included, which can act on real systems unattended.';

@@ -1036,7 +1036,7 @@ after a confirmation naming what is not merged, and the task keeps that choice
 There is no gate without isolation.
 *Avoid:* "checkpoint" — that is a task asking the user to approve its work.
 
-**Auto-merge at gates** — the **Run setting** *Merge at gates automatically*,
+**Auto-merge at gates** — the **Run setting** *Merge automatically* (key `mergeAtGatesAutomatically`),
 off by default, set with `/automerge` and independent of the Supervisor level
 (ADR-0029, ADR-0030). When a task reaches a merge gate, Ordewell runs Merge all
 itself through the same queue and preflight. A conflict or a dirty overlap
@@ -1046,8 +1046,10 @@ and merge result for a supervisor's wake-up; a failed automatic merge waits for
 a user merge or the next run before automatic merging resumes. The run's copy
 is in `runSettings`; a change applies to it at once in the session it is made
 in. The timeline records "auto-merged for task N", attributed to Ordewell
-setting. With it and an Act supervisor's `merge_all` both off, Ordewell never
-merges for the user (ADR-0013).
+setting. It also merges at the end of a run (ADR-0029, amended 2026-10-12): the
+end-of-run handoff is sent only if that merge stops. With it and an Act
+supervisor's `merge_all` both off, Ordewell never merges for the user
+(ADR-0013).
 *Avoid:* "auto-land" — landing is a task's work onto the integration branch,
 not the user's; *Avoid:* "auto-resolve" — a conflict is never resolved by it.
 

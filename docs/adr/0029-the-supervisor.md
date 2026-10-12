@@ -293,6 +293,26 @@ without either, the user's Merge all stays the only path.
 `/automerge`, not a plan setting saved at run start; a change applies at once
 to the session it is typed in.
 
+*Amended 2026-10-12 — merge at the end of a run, and who opens the handoff.*
+A user who turned auto-merge on was still stopped at the end of the run, and
+the handoff overlay asked about a merge the supervisor was about to make. So:
+
+- **The setting also merges at the end of a run.** With it on, when a run
+  settles with landed work that is not merged yet, Ordewell runs Merge all
+  itself, by the same route as a gate merge: the `onAutoMerge` observer, the
+  "auto-merged" timeline entry, a notice and the `isolation_merge` broadcast.
+  If that merge stops (conflict, dirty overlap, failure) the run is handed off
+  as before, and a supervisor that is watching gets an `auto_merge_stopped`
+  event. The command is still `/automerge` and the key is unchanged; the
+  setting reads "merge automatically": at merge gates and at the end of a run.
+- **Surfaces do not open the handoff while a merge is coming.** With
+  auto-merge on, no handoff is sent unless the automatic merge stops. With the
+  supervisor at Act, the handoff is sent marked as deferred to the supervisor:
+  the TUI prints only its transcript line, and the VS Code card says the
+  supervisor may merge it but keeps its buttons. If the supervisor's wake-up
+  turn for the finished run ends without merging, the handoff is sent again
+  unmarked, and the TUI overlay opens then.
+
 ### Out of scope
 
 Spending limits and harness distribution (a separate design), delegation and
@@ -401,3 +421,6 @@ until #30 exists.
   global user settings changed by chat commands, applied at once to the
   session they are typed in; Watch is the default; autorun starts a submitted
   plan.
+- 2026-10-12 — merge automatically also at the end of a run, and the end-of-run
+  handoff is deferred while an automatic merge or an Act supervisor's merge is
+  coming (see "Merge at gates automatically").

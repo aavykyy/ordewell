@@ -299,7 +299,7 @@ describe('ordewell supervisor, automerge and autorun (ADR-0030)', () => {
     const automerge = await capture(() => handleAutomerge([], new ApiClient(d.port)));
     const autorun = await capture(() => handleAutorun([], new ApiClient(d.port)));
     expect(supervisor.stdout).toContain('Supervisor: Act, 1 retry per task, 12 reads per wake-up');
-    expect(automerge.stdout).toContain('Merge at gates automatically: off');
+    expect(automerge.stdout).toContain('Merge automatically (gates, end of run): off');
     expect(autorun.stdout).toContain('Autorun: off');
     expect(d.sent).toEqual([]);
     d.close();

@@ -218,3 +218,4 @@ it.
 - 2026-10-11 — `merge_all` reaches the planner as a tool through the command seam, allowed only to a supervisor at Act ([ADR-0029](0029-the-supervisor.md)).
 - 2026-10-11 — wording: automatic merging resumes after any Merge all that goes through, an Act supervisor's `merge_all` included, as the code always did.
 - 2026-10-12 — merge at gates automatically becomes a global user setting, live in the session it is changed in ([ADR-0030](0030-global-run-settings.md)).
+- 2026-10-12 — the automatic merge setting also merges at the end of a run, by the same route as a gate merge ([ADR-0029](0029-the-supervisor.md), amendment of 2026-10-12).

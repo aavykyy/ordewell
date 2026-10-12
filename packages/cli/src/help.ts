@@ -52,7 +52,7 @@ Planner, models and runners:
   ordewell auto [full|guarded]    Autonomy level for new plans: Full or Guarded
   ordewell supervisor [off|watch|act]  Whether the planner watches or acts on your runs (default watch);
                                   also: supervisor retries <n>, supervisor reads <n>
-  ordewell automerge [on|off]     Merge into your branch by itself at a merge gate (default off)
+  ordewell automerge [on|off]     Merge into your branch by itself at merge gates and at the end of a run (default off)
   ordewell autorun [on|off]       Start each plan the planner submits, without review (default off)
   ordewell parallel [<n>]         How many AI tasks run at once (default 5; applies to a live run)
   ordewell refresh                Re-discover runners and model catalogs
