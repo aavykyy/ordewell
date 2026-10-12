@@ -185,19 +185,18 @@ describe('welcome mark', () => {
   it('puts the wordmark and the version on the middle row only', () => {
     const lines = screen({ cols: 80, rows: 24 }).map(stripAnsi);
     const top = markAt(lines);
-    expect(lines[top + 1].trimEnd()).toMatch(new RegExp(`^${MARK[1]}\\s+ordewell\\s+v${CLI_VERSION.replace(/\./g, '\\.')}$`));
+    expect(lines[top + 1].trimEnd()).toMatch(new RegExp(`^${MARK[1]}\\s+o r d e w e l l\\s+v${CLI_VERSION.replace(/\./g, '\\.')}$`));
     expect(lines[top].trimEnd()).toBe(MARK[0]);
     expect(lines[top + 2].trimEnd()).toBe(MARK[2]);
   });
 
-  it('draws the wordmark as plain ASCII with both halves bold', () => {
+  it('draws the wordmark letter-spaced as plain ASCII with both halves bold', () => {
     style.enabled = true;
     let raw: string[];
     try { raw = screen({ cols: 80, rows: 24 }); } finally { style.enabled = false; }
     const middle = raw.find((l) => stripAnsi(l).startsWith(MARK[1]))!;
     expect([...middle].every((ch) => ch.codePointAt(0)! <= 0xffff)).toBe(true);
-    expect(middle).toContain('\x1b[1morde\x1b[0m');
-    expect(middle).toContain('\x1b[1m\x1b[36mwell\x1b[0m');
+    expect(middle).toContain('\x1b[1mo r d e\x1b[0m \x1b[1m\x1b[36mw e l l\x1b[0m');
   });
 
   it('mirrors the top row in the bottom one', () => {
@@ -226,12 +225,12 @@ describe('welcome mark', () => {
   });
 
   it('drops the version first, then cuts the wordmark, when the middle row runs out of room', () => {
-    // The pane leaves its last column free: 11 mark + 2 gap + 8 wordmark = 21.
-    const named = screen({ cols: 22, rows: 24 }).map(stripAnsi);
-    expect(named[markAt(named) + 1].trimEnd()).toBe(`${MARK[1]}  ordewell`);
-    const cut = screen({ cols: 18, rows: 24 }).map(stripAnsi);
-    // 17 columns leave 4 for the wordmark: three letters and the ellipsis.
-    expect(cut[markAt(cut) + 1].trimEnd()).toBe(`${MARK[1]}  ord…`);
+    // The pane leaves its last column free: 11 mark + 2 gap + 15 wordmark = 28.
+    const named = screen({ cols: 29, rows: 24 }).map(stripAnsi);
+    expect(named[markAt(named) + 1].trimEnd()).toBe(`${MARK[1]}  o r d e w e l l`);
+    const cut = screen({ cols: 20, rows: 24 }).map(stripAnsi);
+    // 19 columns leave 6 for the wordmark: three letters, their spaces and the ellipsis.
+    expect(cut[markAt(cut) + 1].trimEnd()).toBe(`${MARK[1]}  o r d…`);
   });
 
   it('no longer carries the description paragraph', () => {
