@@ -1,5 +1,63 @@
 # Change Log
 
+## [Unreleased]
+
+### Security
+
+- **The planner cannot change your run settings.** `/supervisor`, `/automerge`,
+  `/autorun` and `/auto` are yours alone; a supervisor can deny a runner's
+  approval but never allow one.
+
+### Added
+
+- **A supervisor.** The planner keeps watching your run and writes you notes,
+  labelled "Supervisor" in the chat. Off, **Watch** (default) or **Act**, set
+  with `/supervisor [off|watch|act]`. At Act it may run, stop and retry tasks,
+  edit the plan and merge without asking; guards stop it from looping, and
+  `/supervisor retries <n>` and `/supervisor reads <n>` set its limits.
+- **Run settings in chat.** `/supervisor`, `/automerge [on|off]` and
+  `/autorun [on|off]` report the value bare and set it with an argument. The
+  empty chat's Setup block has **Autonomy** and **Run** rows, and the plan bar
+  shows the values. `/supervisor act` and `/autorun on` ask you to confirm.
+- **Autorun.** `/autorun on` starts each plan the planner submits, as if you
+  had pressed Execute.
+- **Merge all at any time during a run.** A Merge all button and an "unmerged"
+  count appear whenever landed work is not in your branch yet.
+- **`/automerge on`** also merges at the end of a run. The handoff card says
+  the supervisor may merge it when one is on its way, and keeps its buttons.
+- **Read-only tasks.** A review or audit that must not change files runs in its
+  runner's read-only mode.
+- **Usage on each task.** The task card shows tokens, cost, context and time
+  for the latest attempt; hover for the per-model breakdown.
+- **A task paused on a usage limit resumes on its own.** The card reads
+  "Resumes at 8:10pm" with a **Cancel resume** button.
+
+### Changed
+
+- **Run settings are saved on your machine, not on the plan**, and apply at
+  once to the chat you change them in. The supervisor starts at Watch.
+- **A message sent during a run is answered at once** instead of waiting for
+  the current batch of tasks.
+- **The planner no longer names a mode**; it marks a task read-only or not, and
+  a task it adds or moves gets its runner's mode for your Full/Guarded level.
+- **The built-in `tdd` task skill** is attached by the planner on its own.
+
+### Removed
+
+- **`ordewell.autonomousMode`.** Your value is copied once; use `/auto full` or
+  `/auto guarded`.
+- **The plan card's supervisor controls** and **the list of queued edits above
+  the input**.
+
+### Fixed
+
+- A usage limit shows once in the planner chat and in a task's log.
+- **Show full / Show less** reads a checkpoint's summary in full.
+- A resumed task keeps the paused attempt's uncommitted work in an isolated
+  run, and a task moved to another runner leaves its usage-limit wait.
+- A coding-agent planner's reply stays beside the plan it submits.
+- A message is no longer shown twice after a reload.
+
 ## [0.9.1] — 2026-10-11
 
 ### Security

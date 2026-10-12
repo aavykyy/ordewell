@@ -6,6 +6,183 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
+## [Unreleased]
+
+### Security
+
+- **The planner cannot raise its own consent.** The supervisor level, merge
+  automatically, autorun and Full/Guarded are changed by your chat commands
+  only; no planner tool, MCP tool or route the planner can reach sets them,
+  and the commands never reach the planner as a message
+  ([ADR-0030](docs/adr/0030-global-run-settings.md)).
+- **A supervisor can narrow a runner's permissions, never widen them.**
+  `answer_approval` denies a runner's request with a note or hands it to you;
+  it cannot allow one. Effects still happen only in tasks: the planner still
+  edits no file and runs nothing outside its envelope
+  ([ADR-0029](docs/adr/0029-the-supervisor.md)).
+
+### Added
+
+- **A supervisor that watches your run, and optionally acts.** The planner
+  conversation that wrote the plan now takes turns while the run goes on, at
+  one of three levels: **Off** (it speaks only when you write), **Watch** (the
+  default: it wakes on a failure, a task waiting for input or approval, an idle
+  task, a landing conflict, an automatic merge that stopped, a usage-limit
+  pause or the end of the run, reads what it needs and writes you a note), or
+  **Act** (it may also run, stop and retry tasks, message runners, deny
+  approvals, edit the plan task by task and merge, without asking). A wake-up
+  is a digest, one line per event with the passes since the last one, never a
+  log. Its notes are marked as the supervisor's in the chat. It decides what
+  to do next, never whether a task passed
+  ([ADR-0029](docs/adr/0029-the-supervisor.md)).
+- **Guards that keep Act from looping.** A task is retried at most twice by
+  default (`/supervisor retries <n>`), an identical retry or re-adding a
+  task it removed is refused, and more than six wake-ups in 30 minutes with no
+  task passing drops the run to Watch with a notice. A turn that crashes or
+  hangs is restarted once; after that the run carries on unsupervised, with a
+  notice. Tasks Act adds count as approved, ops tasks included, so choosing Act
+  accepts that an instruction injected into something the planner read could
+  run unattended on real systems.
+- **Supervision survives a daemon restart.** Wake-ups not yet delivered, the
+  user's messages waiting for a turn, and the loop guards' counts are saved
+  with the plan and restored when it is loaded again.
+- **The planner can run the plan, not only write it.** Tools `run_plan`,
+  `run_task`, `stop_task`, `stop_run`, `retry_task`, `message_task`,
+  `answer_approval` and `merge_all` reach the scheduler through one command
+  seam, the same one the surfaces' buttons now use, so the timeline records
+  who acted: you, a planner turn or the supervisor. In a turn you started,
+  stops and messages go through, starts and retries ask you in Guarded and
+  follow plan approval in Full, and `merge_all` is refused because Merge all is
+  yours to press.
+- **The planner can read why an attempt failed.** `task_output` reads any
+  attempt's saved log, filtered by event kind and paged, and the new
+  `task_diff` lists the files an attempt changed, then one file's diff.
+- **Merge all at any point during a run.** Whenever landed work is not in your
+  branch yet, the TUI plan pane says how many landed tasks are not merged
+  (`/handoff merge`) and VS Code shows a Merge all button with the same
+  count. A task gated on that work still waits for it
+  ([ADR-0013](docs/adr/0013-worktree-isolation.md),
+  [ADR-0020](docs/adr/0020-ops-tasks-and-merge-gates.md)).
+- **Merge automatically.** `/automerge on` merges for you at each merge gate
+  and, now, at the end of a run: a run that settles with landed work not yet
+  merged runs Merge all itself, by the same preflight. A conflict or a dirty
+  overlap aborts with your tree untouched and the run is handed over as
+  before. The timeline reads "auto-merged at the end of the run".
+- **Run settings you set once.** `/supervisor [off|watch|act]`,
+  `/supervisor retries <n>`, `/supervisor reads <n>`, `/automerge [on|off]`
+  and `/autorun [on|off]` report the value when bare and set it with an
+  argument; `ordewell supervisor`, `ordewell automerge` and `ordewell autorun`
+  do the same from the shell. The welcome screen's Setup block gains an
+  **Autonomy** row and a **Run** row, and a badge shows the values at all
+  times. `/supervisor act` and `/autorun on` ask you to confirm and say what
+  they allow ([ADR-0030](docs/adr/0030-global-run-settings.md)).
+- **Autorun.** With `/autorun on`, a plan the planner submits is approved and
+  started as if you had pressed Execute, and the planner skips the outline
+  gate but still asks clarifying questions. It fires on a submission only,
+  never when a session loads with a plan waiting. With autorun on and Full, a
+  planner turn you start may also start a task it added to an approved plan.
+  Under Guarded those tasks wait for you as before.
+- **Read-only tasks.** A review, an audit or an analysis that must not change
+  files is marked read-only in the plan, and runs in its runner's read-only
+  mode (`plan` on Claude Code, Codex and OpenCode) at either level. It stays
+  read-only through a move or a split, and its AI subtasks inherit it
+  ([ADR-0031](docs/adr/0031-the-planner-says-read-only-not-a-mode.md)).
+- **Usage on every task attempt.** Each attempt records its tokens, reported
+  cost and wall time, grouped by the model that actually ran, and the task
+  row, the plan total, `ordewell status` and the VS Code task card show them.
+  A measure a runner did not report reads "unknown", never zero, and usage with
+  no model named is labelled "unattributed".
+- **A task paused on a usage limit resumes by itself.** When the runner names
+  the reset (Claude Code and Codex do, OpenCode does not), the task shows
+  "Resumes at 8:10pm" with a cancel and is continued from its saved session at
+  that time. Tasks paused on one runner share one wait, and a plan loaded after
+  the time resumes at once. Without a time, after a cancel, or when the limit
+  is hit again at once, the task waits for a manual retry
+  ([ADR-0018](docs/adr/0018-structured-runner-transport.md)).
+
+### Changed
+
+- **Run settings belong to you, not the plan.** The supervisor level, merge
+  automatically, the retry limit, the wake-up read budget, autorun and
+  Full/Guarded are saved machine-wide in `settings.json`. A change applies at
+  once, in either direction, to the session it is typed in, and to other
+  sessions from their next run; your command also lifts a lowering a guard
+  or a failure made, with the guards' counts kept. Older plans' own values are
+  ignored. The supervisor level defaults to **Watch**, so a wake-up is a
+  planner turn and uses the planner's usage; `/supervisor off` turns it off.
+- **Full/Guarded is saved with them.** A value in `~/.ordewell/.env` or in
+  VS Code's `ordewell.autonomousMode` is copied to `settings.json` once.
+  `ORDEWELL_AUTONOMOUS_MODE` still overrides it from the environment, and
+  `/auto` says so when it does.
+- **The planner says read-only, never a mode.** A plan or an edit that names a
+  `taskMode` has it ignored or refused with `readOnly` named instead, and the
+  planner is no longer shown runner mode lists. A task it adds or moves lands
+  on its runner's mode for your level, and under Guarded an edit cannot reach a
+  mode only Full allows. A mode you pick by hand is kept
+  ([ADR-0031](docs/adr/0031-the-planner-says-read-only-not-a-mode.md)).
+- **A message during a run is answered at once.** It no longer waits in a queue
+  for the scheduler to park between batches: a planner turn takes it while
+  running tasks carry on, holds new starts for the length of the turn, and
+  applies its edits at once to tasks not yet started. An edit to a running
+  task is refused with "stop it first", and a whole new plan is refused while
+  tasks run.
+- **No pop-up for a merge that is on its way.** With merge automatically on,
+  the end-of-run handoff is sent only if that merge stops. With an Act
+  supervisor it is deferred: the TUI prints a transcript line without opening
+  the overlay, the VS Code card says the supervisor may merge it and keeps its
+  buttons, and `ordewell run` says so. If the supervisor's turn for the finished
+  run ends without a merge, the handoff opens as before.
+- **The built-in `tdd` task skill is model-invocable.** The planner attaches it
+  on its own to tasks that implement or change behaviour, not to verification,
+  docs or ops tasks. Set `disable-model-invocation: true` in your copy in
+  `~/.ordewell/skills/tdd/` to opt out. The other built-ins stay user-only
+  ([ADR-0024](docs/adr/0024-unified-skills.md)).
+
+### Removed
+
+- **Per-plan supervisor controls.** The plan pane's `G`, `W` and `L` keys and
+  VS Code's plan-card controls are gone; use `/supervisor`, `/automerge` and
+  `/autorun`. The daemon's per-plan settings route and
+  `POST /api/plans/:sessionId/supervisor/lower` go with them, replaced by
+  `PATCH /api/settings` with a `run` object and an optional `sessionId`.
+- **The `ordewell.autonomousMode` VS Code setting.** Use `/auto full` or
+  `/auto guarded`.
+- **The list of queued plan edits above VS Code's input**, with its withdraw
+  buttons: a message sent during a run is a planner turn now.
+
+### Fixed
+
+- **A usage limit shows once.** Claude Code reports a limit as a message and
+  again as the turn's error, worded alike. The planner chat, the task chat and
+  task views, a reload and the task's plain text now show it once, as the
+  failure, and a real reply before it stays.
+- **Usage-limit waits are released when a task changes runner.** Moving a
+  paused task to another runner, by hand or by a planner edit, cancels its
+  scheduled resume and makes it ready on the new runner. Other tasks on the old
+  runner keep their wait, and a model change on the same runner keeps it.
+- **A resumed attempt keeps the paused attempt's uncommitted work in an
+  isolated run.** A continue starts at the integration tips and restores the
+  previous attempt's unlanded edits. If a conflict prevents that, the agent is
+  told which preserved branches hold the work.
+- **A plan edit after a run no longer shows every task as not done in the
+  TUI.** The tasks were still completed; only the display read as if the run's
+  work had been lost.
+- **The TUI follows the session it shows.** Runs started by autorun, the
+  planner's run tools or the supervisor, and the supervisor's reports after a
+  run's end, are drawn without waiting for you to act.
+- **A coding-agent planner's reply stays beside the plan or edit it submits.**
+  The message used to vanish the moment the turn settled, live and on reload.
+- **A supervised run finishes after an edited retry.** A planner edit made while
+  a failure halts the run is reconciled into it and keeps the failed task
+  failed, so the retry resumes the run instead of running that task alone. A
+  start deferred behind an edit that never lands is dropped, with a notice.
+- **A user message is no longer shown twice on replay**, and a view rebuilt
+  mid-turn shows the turn's inputs.
+- **A checkpoint's summary can be read in full in VS Code**, with Show full and
+  Show less under its first line.
+- **The task row names the model that reported usage.** It shows the assigned
+  model until the first usage report instead of "model unknown".
+
 ## [0.9.1] — 2026-10-11
 
 ### Security
