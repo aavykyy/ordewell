@@ -44,7 +44,8 @@ describe('the supervisor at Watch: what wakes it', () => {
     await vi.advanceTimersByTimeAsync(IDLE_TIMEOUT_MS + WAKE_DEBOUNCE_MS);
 
     await until(() => env.planner.calls.length === 1);
-    expect(env.planner.calls[0].message).toMatch(/- task #1 "Task t1" has gone quiet \(no output since 2026-10-11T18:05:00\.000Z\)/);
+    const quietSince = new Date(NOW.getTime() + IDLE_TIMEOUT_MS).toISOString();
+    expect(env.planner.calls[0].message).toContain(`- task #1 "Task t1" has gone quiet (no output since ${quietSince})`);
   });
 
   it('wakes at once when the run finishes, with the passes since the last wake-up', async () => {

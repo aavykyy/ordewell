@@ -136,6 +136,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   model and mode badges only when expanded.
 - **The plan footer shows only the keys that apply** to the selected task,
   plus `? keys` for the full key sheet.
+- **A running task is marked quiet after 10 minutes without output** (was 5),
+  so a long build and test run no longer wakes the supervisor for nothing.
 
 - **Run settings belong to you, not the plan.** The supervisor level, merge
   automatically, the retry limit, the wake-up read budget, autorun and

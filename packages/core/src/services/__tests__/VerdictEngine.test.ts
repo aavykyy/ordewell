@@ -343,8 +343,8 @@ describe('VerdictEngine', () => {
       vi.useRealTimers();
     });
 
-    it('waits five minutes: a minute of silence is an ordinary long turn', () => {
-      expect(IDLE_TIMEOUT_MS).toBe(5 * 60_000);
+    it('waits ten minutes: a long build and test run is an ordinary quiet stretch', () => {
+      expect(IDLE_TIMEOUT_MS).toBe(10 * 60_000);
     });
 
     it('sets idleSince after the idle window of no output on a running task', () => {
