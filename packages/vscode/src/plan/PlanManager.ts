@@ -559,7 +559,7 @@ export function handleSessionMessage(
     // An isolated run settled: the branch its work landed on and what landed.
     // Sent before `execution_complete`; the webview shows the handoff card.
     case 'isolation_handoff':
-      handleIsolationHandoff({ repos: msg.repos, landed: msg.landed }, deps);
+      handleIsolationHandoff({ repos: msg.repos, landed: msg.landed, ...(msg.deferredTo ? { deferredTo: msg.deferredTo } : {}) }, deps);
       break;
     // Drawn by the conversation view above, or not by this surface at all.
     // Named so a new SessionMessage variant fails to compile until someone

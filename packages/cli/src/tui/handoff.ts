@@ -60,16 +60,35 @@ export function handoffCommand(state: TuiState, arg: string | undefined): Step {
   return runHandoffAction(state, action.id);
 }
 
-/** A run just settled with work on a branch. Interrupts only a screen with nothing else on it. */
+/**
+ * A run just settled with work on a branch. Interrupts only a screen with
+ * nothing else on it — and not at all when an Act supervisor looks at the run
+ * first: it may merge it, and a pop-up would be dismissed for nothing.
+ */
 export function handoffArrived(state: TuiState, handoff: HandoffView): TuiState {
   const landed = handoff.landed.length;
   const where = isRepoGroup(handoff) ? ` in ${reposOf(handoff)}` : '';
+  const branch = handoffBranch(handoff);
+  const tasks = `${landed} task${landed === 1 ? '' : 's'} landed`;
+  const received = { ...state, handoff };
+
+  if (handoff.deferredTo === 'supervisor') {
+    return say(received, 'system', `Run finished on ${branch}${where} — ${tasks}. The supervisor may merge it; /handoff to review it yourself.`);
+  }
+  const returned = state.handoff?.deferredTo === 'supervisor' && handoffBranch(state.handoff) === branch;
   const told = say(
-    { ...state, handoff },
+    received,
     'system',
-    `Run finished on ${handoffBranch(handoff)}${where} — ${landed} task${landed === 1 ? '' : 's'} landed. /handoff to review and land it.`,
+    returned
+      ? `The supervisor left ${branch}${where} to you — ${tasks}. /handoff to review and land it.`
+      : `Run finished on ${branch}${where} — ${tasks}. /handoff to review and land it.`,
   );
   return state.overlay ? told : { ...told, overlay: { kind: 'handoff', index: 0, diff: null } };
+}
+
+/** A saved plan's record has no deferral to report; the mark stands until the unmarked handoff of the same run replaces it. */
+export function withDeferral(fresh: HandoffView, known: HandoffView | null): HandoffView {
+  return known?.deferredTo && handoffBranch(known) === handoffBranch(fresh) ? { ...fresh, deferredTo: known.deferredTo } : fresh;
 }
 
 export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {

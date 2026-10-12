@@ -56,6 +56,20 @@ describe('worktree isolation messages (ADR-0013)', () => {
     expect(chatProvider.showIsolationHandoff).toHaveBeenCalledWith(handoff);
   });
 
+  it('passes the supervisor deferral on to the webview, and leaves it off an unmarked handoff', () => {
+    const { d, chatProvider } = deps();
+    const landed = [{ taskId: 't1', order: 1, title: 'A' }];
+    const handoff = {
+      repos: [{ path: '.', integrationBranch: 'ordewell/r/integration', baseRef: 'abc123', landed }],
+      landed,
+    };
+
+    handleSessionMessage({ type: 'isolation_handoff', ...handoff, deferredTo: 'supervisor' }, d);
+    handleSessionMessage({ type: 'isolation_handoff', ...handoff }, d);
+
+    expect(chatProvider.showIsolationHandoff.mock.calls).toEqual([[{ ...handoff, deferredTo: 'supervisor' }], [handoff]]);
+  });
+
   it('posts a repo group handoff with each repo its own work', () => {
     const { d, chatProvider } = deps();
     const apiLanded = [{ taskId: 't1', order: 1, title: 'A' }];
@@ -120,6 +134,21 @@ describe('worktree isolation messages (ADR-0013)', () => {
 
     expect(chatProvider.clearIsolationHandoff).toHaveBeenCalled();
     expect(chatProvider.showIsolationMergeResult).not.toHaveBeenCalled();
+  });
+
+  it('drops a handoff card deferred to the supervisor when the supervisor merges the run', () => {
+    const { d, chatProvider } = deps();
+    const landed = [{ taskId: 't1', order: 1, title: 'A' }];
+    handleSessionMessage({
+      type: 'isolation_handoff',
+      repos: [{ path: '.', integrationBranch: 'ordewell/r/integration', baseRef: 'abc123', landed }],
+      landed,
+      deferredTo: 'supervisor',
+    }, d);
+
+    handleSessionMessage({ type: 'isolation_merge', result: { outcome: 'merged' } }, d);
+
+    expect(chatProvider.clearIsolationHandoff).toHaveBeenCalled();
   });
 });
 

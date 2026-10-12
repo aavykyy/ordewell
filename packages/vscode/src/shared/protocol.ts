@@ -190,7 +190,7 @@ export type HostToWebview =
   | { type: 'taskIsolation'; taskId: string; isolation: TaskIsolation }
   // The end-of-run handoff: each repo's integration branch and base, and what
   // landed, with the actions the host performs on request.
-  | { type: 'isolationHandoff'; repos: IsolationHandoff['repos']; landed: IsolationHandoff['landed'] }
+  | { type: 'isolationHandoff'; repos: IsolationHandoff['repos']; landed: IsolationHandoff['landed']; deferredTo?: IsolationHandoff['deferredTo'] }
   // What "Merge all" did: all-or-nothing per repo, or which repos one landed in
   // before it stopped. A group of one reports its single merge as before.
   | { type: 'isolationMergeResult'; result: IsolationMergeResult }

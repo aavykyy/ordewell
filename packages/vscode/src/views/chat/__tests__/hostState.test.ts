@@ -87,3 +87,22 @@ describe('reduceHost gates', () => {
     expect(reduceHost(once, msg({ type: 'taskApprovals', taskId: 't1', count: 1 }))).toBe(once);
   });
 });
+
+describe('reduceHost isolationHandoff', () => {
+  const landed = [{ taskId: 't1', order: 1, title: 'A' }];
+  const repos = [{ path: '.', integrationBranch: 'ordewell/r/integration', baseRef: 'abc', landed }];
+
+  it('keeps the supervisor deferral on the handoff', () => {
+    const next = reduceHost(INITIAL_HOST_STATE, msg({ type: 'isolationHandoff', repos, landed, deferredTo: 'supervisor' }));
+
+    expect(next.handoff).toEqual({ repos, landed, deferredTo: 'supervisor' });
+  });
+
+  it('replaces a deferred handoff with the unmarked one that follows it', () => {
+    const deferred = reduceHost(INITIAL_HOST_STATE, msg({ type: 'isolationHandoff', repos, landed, deferredTo: 'supervisor' }));
+
+    const next = reduceHost(deferred, msg({ type: 'isolationHandoff', repos, landed }));
+
+    expect(next.handoff).toEqual({ repos, landed });
+  });
+});

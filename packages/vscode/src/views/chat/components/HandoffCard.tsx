@@ -26,6 +26,8 @@ export interface HandoffRepo {
 interface HandoffCardProps {
   repos: HandoffRepo[];
   landed: HandoffLandedTask[];
+  /** An Act supervisor looks at this run when it wakes and may merge it; the actions stay the user's too. */
+  deferredTo?: 'supervisor';
   /** The result of the last Merge all, so a blocked or part-landed group is visible. */
   mergeResult?: IsolationMergeResult | null;
   /**
@@ -99,7 +101,7 @@ function MergeOutcome({ result, branch }: { result: IsolationMergeResult; branch
  * A repo group (ADR-0014) reports per repo and merges all-or-nothing; a group
  * of one reads exactly as it did before.
  */
-export default function HandoffCard({ repos, landed, mergeResult, midRun, onAction }: HandoffCardProps) {
+export default function HandoffCard({ repos, landed, deferredTo, mergeResult, midRun, onAction }: HandoffCardProps) {
   const sorted = sortLanded(landed);
   const isGroup = repos.length > 1;
   // Every repo's integration branch has the same name.
@@ -115,6 +117,9 @@ export default function HandoffCard({ repos, landed, mergeResult, midRun, onActi
         </span>
         <code className="isolation-handoff-branch">{branch}</code>
       </div>
+      {deferredTo === 'supervisor' && (
+        <div className="isolation-handoff-deferred">The supervisor may merge this when it wakes. You can review or merge it yourself meanwhile.</div>
+      )}
       {isGroup ? (
         <>
           <div className="isolation-handoff-base">

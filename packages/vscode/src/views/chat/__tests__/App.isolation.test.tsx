@@ -68,6 +68,16 @@ describe('App — worktree isolation (ADR-0013)', () => {
     expect(document.querySelector('.task-isolation-badge')).toBeNull();
   });
 
+  it('shows a deferred handoff with its note, and drops the note when the unmarked handoff follows', () => {
+    send({ type: 'planUpdated', plan });
+    send({ type: 'isolationHandoff', ...handoff, deferredTo: 'supervisor' });
+    expect(screen.getByText(/supervisor may merge this when it wakes/i)).toBeTruthy();
+
+    send({ type: 'isolationHandoff', ...handoff });
+    expect(screen.queryByText(/supervisor may merge this/i)).toBeNull();
+    expect(document.querySelector('.isolation-handoff')).toBeTruthy();
+  });
+
   it('offers Merge all for a repo group and posts it to the host', () => {
     send({ type: 'planUpdated', plan });
     send({ type: 'isolationHandoff', ...groupHandoff });

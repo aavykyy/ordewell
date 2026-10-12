@@ -653,6 +653,7 @@ export default function App() {
             <HandoffCard
               repos={handoff.repos}
               landed={handoff.landed}
+              deferredTo={handoff.deferredTo}
               mergeResult={mergeResult}
               onAction={(action) => handleIsolationAction(action)}
             />

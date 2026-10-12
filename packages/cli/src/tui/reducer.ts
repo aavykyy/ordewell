@@ -5,7 +5,7 @@ import { chatScrollMax } from './layout';
 import { activeToken, findCommand, parseSlash, tokenCompletions } from './slash';
 import { applyKey, commit } from './editor';
 import { say, wiped } from './transcript';
-import { blockedPicker, clearIsolation, handoffArrived, isolationForPlan, sameIsolation, showDiff } from './handoff';
+import { blockedPicker, clearIsolation, handoffArrived, isolationForPlan, sameIsolation, showDiff, withDeferral } from './handoff';
 import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, type RunMergeView, type RunStatus, type TaskView, type TuiState } from './state';
 import type { Key } from './keys';
 import { handleOverlayKey } from './reducers/overlays';
@@ -92,7 +92,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         tasks,
         runAutoMerge: (action.plan as { runSettings?: { mergeAtGatesAutomatically: boolean } })?.runSettings?.mergeAtGatesAutomatically ?? null,
         ...supervisorOf(action.plan),
-        handoff: isolation ? isolation.handoff : state.handoff,
+        handoff: isolation ? withDeferral(isolation.handoff, state.handoff) : state.handoff,
         status: plannerInFlight(state) ? 'idle' : state.status,
         busyLabel: '',
         expandedTaskId,

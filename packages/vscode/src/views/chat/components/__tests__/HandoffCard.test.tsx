@@ -51,6 +51,24 @@ describe('HandoffCard (ADR-0013)', () => {
   });
 });
 
+describe('HandoffCard — deferred to the supervisor', () => {
+  it('says the supervisor may merge this when it wakes, and keeps every action', () => {
+    const onAction = vi.fn();
+    render(<HandoffCard {...handoff} deferredTo="supervisor" onAction={onAction} />);
+
+    expect(screen.getByText(/supervisor may merge this when it wakes/i)).toBeTruthy();
+    fireEvent.click(screen.getByText('Merge'));
+    expect(onAction).toHaveBeenCalledWith('merge');
+    for (const label of ['Review diff', 'Clean up', 'Discard']) expect(screen.getByText(label)).toBeTruthy();
+  });
+
+  it('has no such note on an unmarked handoff', () => {
+    render(<HandoffCard {...handoff} onAction={vi.fn()} />);
+
+    expect(screen.queryByText(/supervisor/i)).toBeNull();
+  });
+});
+
 describe('HandoffCard — conflict repair (ADR-0015)', () => {
   it('marks a landed task that only landed after repairing a conflict, and its files', () => {
     const repaired = {
