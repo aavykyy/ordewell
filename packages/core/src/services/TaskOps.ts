@@ -6,6 +6,7 @@ import {
 } from '../models/Task';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
 import { validateTaskEdit, checkModelAndModeValidity, lockedTaskRefusal, type EditCatalog, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
+import { resolveDefaultMode } from './ModeResolver';
 
 /**
  * Targeted task edits emitted by the planner conversation (the 'task_ops'
@@ -415,6 +416,22 @@ export function canSplitTask(tasks: readonly Task[], taskId: string): { ok: bool
   return { ok: true };
 }
 
+
+/**
+ * The mode a planner edit lands a task on: the one it names when its runner
+ * offers it, else that runner's mode under the user's level — what a whole
+ * plan's missing mode resolves to (ADR-0001). Left to `createTask`, it was the
+ * generic `build`, which Claude Code runs as acceptEdits whatever the level;
+ * and a task moved between runners kept a mode its new runner does not have.
+ * Undefined with no catalog to read the runner's modes from.
+ */
+function landingMode(runner: RunnerId, current: string | undefined, catalog: EditCatalog | undefined): string | undefined {
+  const modes = catalog?.runnerModes[runner];
+  if (!modes || modes.length === 0) return undefined;
+  if (current !== undefined && modes.some((m) => m.id === current)) return current;
+  return resolveDefaultMode(modes, catalog?.autonomousDefault ?? true);
+}
+
 /**
  * Apply task ops to a snapshot of the plan, atomically: either every op
  * applies and the result validates (deps resolve, no cycles, running and
@@ -498,6 +515,10 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
     const check = validateTaskEdit(audience, flattenTasks(tasks), target.id, changesForCheck, catalog);
     if (!check.ok) return { error: `${label}: ${check.error}` };
     for (const field of check.clear ?? []) (changes as Record<string, unknown>)[field] = undefined;
+    if (changes.assignedRunner && changes.assignedRunner !== target.assignedRunner && changes.taskMode === undefined && target.type !== 'user') {
+      const mode = landingMode(changes.assignedRunner, target.taskMode, catalog);
+      if (mode !== undefined && mode !== target.taskMode) changes.taskMode = mode;
+    }
     if ('dependencies' in changes) {
       const { ids, bad } = resolveDeps(changes.dependencies, opIndex);
       if (bad.length) return { error: `${label}: unknown dependencies: ${bad.join(', ')}` };
@@ -528,8 +549,10 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
         const validity = checkModelAndModeValidity(runner, spec.assignedModel, spec.taskMode, catalog);
         if (!validity.ok) { errors.push(`${label}: ${validity.error}`); break; }
         const newId = uuidv4();
+        const taskMode = spec.type === 'user' ? spec.taskMode : landingMode(runner, spec.taskMode, catalog) ?? spec.taskMode;
         tasks = addTaskToPlan(tasks, {
           ...spec,
+          ...(taskMode !== undefined ? { taskMode } : {}),
           subtasks: withSkillNames(spec.subtasks),
           id: newId,
           dependencies: ids,

@@ -52,6 +52,8 @@ export interface EditCatalog {
   runnerModes: Partial<Record<RunnerId, RunnerModeInfo[]>>;
   /** Raw (unfiltered) allowlist, keyed by runner — the same shape `coerceAssignments` takes. */
   perRunnerAllowlist?: Partial<Record<RunnerId, string[]>>;
+  /** Full (true) or Guarded: picks the mode a task the edit leaves without one lands on (ADR-0001). Full when absent. */
+  autonomousDefault?: boolean;
 }
 
 /**

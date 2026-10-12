@@ -857,3 +857,53 @@ describe('applyTaskOps — an added task\'s subtask skills', () => {
     expect('skills' in added.subtasks[1]).toBe(false);
   });
 });
+
+// A whole plan's missing mode resolves to the runner's mode under the user's
+// Full/Guarded level (ADR-0001); the planner's edits must land on the same one,
+// not on the generic `build`, which Claude Code runs as acceptEdits.
+describe('applyTaskOps — the mode a planner edit leaves unset', () => {
+  const MODES = {
+    'claude-code': [
+      { id: 'acceptEdits', label: 'Accept Edits', description: 'edit automatically' },
+      { id: 'auto', label: 'Auto', description: 'classifier', safe: true },
+      { id: 'bypassPermissions', label: 'Bypass', description: 'no prompts', autonomous: true },
+      { id: 'plan', label: 'Plan', description: 'read-only' },
+    ],
+    opencode: [
+      { id: 'build', label: 'Build', description: 'edits', autonomous: true, safe: true },
+      { id: 'plan', label: 'Plan', description: 'read-only' },
+    ],
+  };
+  const catalog = (autonomousDefault: boolean) => ({ modelsByRunner: {}, runnerModes: MODES, autonomousDefault });
+  const runners: Array<'claude-code' | 'opencode'> = ['claude-code', 'opencode'];
+  const addedMode = (res: ReturnType<typeof applyTaskOps>) => res.tasks.find((t) => t.title === 'Add a cache')?.taskMode;
+
+  it('gives an added task the runner\'s Full mode under Full', () => {
+    const res = applyTaskOps(samplePlan(), [{ op: 'add', task: { title: 'Add a cache', prompt: 'p', assignedRunner: 'claude-code' } }], runners, catalog(true));
+    expect(res.ok).toBe(true);
+    expect(addedMode(res)).toBe('bypassPermissions');
+  });
+
+  it('gives an added task the runner\'s Guarded mode under Guarded', () => {
+    const res = applyTaskOps(samplePlan(), [{ op: 'add', task: { title: 'Add a cache', prompt: 'p', assignedRunner: 'claude-code' } }], runners, catalog(false));
+    expect(addedMode(res)).toBe('auto');
+  });
+
+  it('keeps a mode the planner chose', () => {
+    const res = applyTaskOps(samplePlan(), [{ op: 'add', task: { title: 'Add a cache', prompt: 'p', assignedRunner: 'claude-code', taskMode: 'acceptEdits' } }], runners, catalog(true));
+    expect(addedMode(res)).toBe('acceptEdits');
+  });
+
+  it('moves a task to another runner onto that runner\'s mode when it does not offer the old one', () => {
+    const plan = [createTask({ id: 'a', order: 1, title: 'Setup', prompt: 'setup', assignedRunner: 'claude-code', taskMode: 'bypassPermissions' })];
+    const res = applyTaskOps(plan, [{ op: 'update', taskId: 'a', changes: { assignedRunner: 'opencode' } }], runners, catalog(true));
+    expect(res.ok).toBe(true);
+    expect(res.tasks[0]).toMatchObject({ assignedRunner: 'opencode', taskMode: 'build' });
+  });
+
+  it('keeps the mode of a task moved to a runner that offers it', () => {
+    const plan = [createTask({ id: 'a', order: 1, title: 'Setup', prompt: 'setup', assignedRunner: 'opencode', taskMode: 'plan' })];
+    const res = applyTaskOps(plan, [{ op: 'update', taskId: 'a', changes: { assignedRunner: 'claude-code' } }], runners, catalog(true));
+    expect(res.tasks[0]).toMatchObject({ assignedRunner: 'claude-code', taskMode: 'plan' });
+  });
+});

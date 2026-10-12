@@ -138,6 +138,7 @@ export class SessionCatalog {
       modelsByRunner: this.models(),
       runnerModes: this.modes(runners),
       perRunnerAllowlist: this.allowlist(),
+      autonomousDefault: this.deps.config.autonomousMode,
     };
   }
 
