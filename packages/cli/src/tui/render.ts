@@ -580,8 +580,7 @@ function renderStepper(stepper: StepperState, rows: number, cols: number): strin
   ];
   const footer = keyHints([
     ['enter', at === trail.length - 1 ? 'done' : 'next'],
-    ...(trail.length > 1 ? [['tab/shift-tab', 'switch step'] as const] : []),
-    ['esc', at === 0 ? 'cancels' : 'back'],
+    ...(trail.length > 1 ? [['←/→', 'switch step'] as const] : []),
     ...(active.filterable ? [['type', 'to filter'] as const] : []),
   ]);
   const room = Math.max(1, rows - head.length - 3);

@@ -89,10 +89,10 @@ export function handleStepperKey(state: TuiState, stepper: StepperState, key: Ke
   if (key.name === 'escape') {
     return before === -1 ? step({ ...state, overlay: null }) : reopen(show(state, definition, choices, before));
   }
-  // Jumps leave the highlighted row unconfirmed: tab is for reaching one
+  // Jumps leave the highlighted row unconfirmed: tab and the arrows are for reaching one
   // setting, not for answering every one on the way.
-  if (key.name === 'tab') return after === -1 ? reopen(stepper) : reopen(show(state, definition, choices, after));
-  if (key.name === 'shift-tab') return before === -1 ? reopen(stepper) : reopen(show(state, definition, choices, before));
+  if (key.name === 'tab' || key.name === 'right') return after === -1 ? reopen(stepper) : reopen(show(state, definition, choices, after));
+  if (key.name === 'shift-tab' || key.name === 'left') return before === -1 ? reopen(stepper) : reopen(show(state, definition, choices, before));
   if (key.name === 'up' || key.name === 'scrollup') return reopen({ ...stepper, index: Math.max(0, stepper.index - 1) });
   if (key.name === 'down' || key.name === 'scrolldown') {
     return reopen({ ...stepper, index: Math.max(0, Math.min(items.length - 1, stepper.index + 1)) });

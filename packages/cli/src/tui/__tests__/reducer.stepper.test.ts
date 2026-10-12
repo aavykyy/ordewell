@@ -155,6 +155,23 @@ describe('stepper', () => {
     expect(at(keys(opened(), 'tab', 'tab', 'tab')).step).toBe('effort');
   });
 
+  it("right jumps ahead without taking the highlighted row as the step's choice", () => {
+    const s = keys(opened(), 'up', 'right');
+    expect(at(s)).toEqual({ step: 'model', row: 'gpt', trail: 'Harness: Codex › [Model] › Effort' });
+  });
+
+  it('left jumps back to the step as it was chosen', () => {
+    const s = keys(opened(), 'enter', 'down', 'left');
+    expect(at(s)).toEqual({ step: 'harness', row: 'codex', trail: '[Harness] › Model › Effort' });
+  });
+
+  it('right and left stop at the ends, and left on the first step keeps the stepper open', () => {
+    const first = keys(opened(), 'left');
+    expect(first.overlay?.kind).toBe('stepper');
+    expect(at(first).step).toBe('harness');
+    expect(at(keys(opened(), 'right', 'right', 'right')).step).toBe('effort');
+  });
+
   it('jumping past steps keeps their values, and the last enter completes once with every choice', () => {
     const s = keys(opened(), 'tab', 'tab');
     expect(at(s)).toEqual({ step: 'effort', row: 'xhigh', trail: 'Harness: Codex › Model: GPT › [Effort]' });

@@ -177,11 +177,11 @@ describe('stepper', () => {
       ' ❯ 2. Codex ✔',
       '   3. OpenCode     CLI not installed',
       '',
-      ' enter next · tab/shift-tab switch step · esc cancels',
+      ' enter next · ←/→ switch step',
     ]);
   });
 
-  it('shows a passed step with its value, and esc as back on a later step', () => {
+  it('shows a passed step with its value on a later step', () => {
     const opened = openStepper(initialState({ rows: 24, cols: 60 }), definition).state;
     const out = screen(reduce(opened, { type: 'key', key: { name: 'enter' } }).state);
     const top = out.findIndex((l) => l.includes('Planner'));
@@ -191,7 +191,7 @@ describe('stepper', () => {
       '',
       ' ❯ 1. GPT',
       '',
-      ' enter done · tab/shift-tab switch step · esc back',
+      ' enter done · ←/→ switch step',
     ]);
   });
 
