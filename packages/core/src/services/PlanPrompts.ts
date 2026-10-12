@@ -1,6 +1,6 @@
-import { DiscoveredModel, RunnerId, plannerTaskView, type Task } from '../models/Task';
+import { DiscoveredModel, RunnerId, plannerTaskView, type PlannerTaskView, type Task } from '../models/Task';
 import type { LegacyPlanState } from '../models/Task';
-import { readOnlyRunners, type RunnerModeInfo } from './ModeResolver';
+import { readOnlyMode, readOnlyRunners, type RunnerModeInfo } from './ModeResolver';
 import { DEFAULT_PLANNER_MODES, type IsolatedExecution, type PlannerModes } from './plannerModes';
 import { TASK_QUERY_PROTOCOL, TASK_READ_TOOLS_PROTOCOL } from './TaskQuery';
 import { SELF_REPO } from './isolationRecord';
@@ -59,7 +59,7 @@ export function buildSubagentSystemPrompt(): string {
 function readOnlyGuide(runnerModes: Record<RunnerId, RunnerModeInfo[]> | undefined, tools: boolean): string {
   const able = runnerModes ? readOnlyRunners(runnerModes) : [];
   return [
-    'Set "readOnly": true on an AI task that must not change any file: a review, an audit, an analysis whose result is a report. Leave it out on every other task.',
+    'Set "readOnly": true on an AI task that must not change any file: a review, an audit, an analysis whose result is a report. Leave it false or out on every other task. A read-only task\'s subtasks are read-only too unless one sets "readOnly": false.',
     'You never choose a runner mode. Each task runs in its runner\'s mode for the user\'s autonomy level (Full or Guarded), or in the runner\'s read-only mode when "readOnly" is true.',
     ...(tools
       ? ['A read-only task must go to a runner list_runners marks "readOnly": true.']
@@ -310,7 +310,7 @@ function buildConversationBody(
     '      "userSteps": [{ "order": 1, "instruction": "Step description", "completed": false }],',
     '      "assignedModel": { "modelId": "model-id", "modelLabel": "Model Label", "thinkingEffort": "a variant id from that model\'s variants list — omit if the model has none" },',
     '      "assignedRunner": "' + (tools ? 'a runner id from list_runners' : runners.join('|')) + '",',
-    '      "readOnly": true,',
+    '      "readOnly": false,',
     '      "autonomy": "AFK|HITL",',
     '      "sliceType": "AFK|HITL",',
     '      "ops": true,',
@@ -462,7 +462,7 @@ function corePlannerPrompt(isolatedExecution: IsolatedExecution, tools = false):
   '      "userSteps": [{ "order": 1, "instruction": "Step description", "completed": false }],',
   '      "assignedModel": { "modelId": "model-id", "modelLabel": "Model Label", "thinkingEffort": "a variant id from that model\'s variants list — omit if the model has none" },',
   '      "assignedRunner": "{{RUNNER_CHOICES}}",',
-  '      "readOnly": true,',
+  '      "readOnly": false,',
   '      "autonomy": "AFK|HITL",',
   '      "sliceType": "AFK|HITL",',
   '      "ops": true,',
@@ -632,6 +632,13 @@ export function buildPlanWithResults(
   return buildPlanPromptBase(userGoal, context, researchResults, modelsByRunner, runners, false, runnerModes, modes, tools);
 }
 
+/** A task as the modify prompt shows it: read-only or not, never its mode (ADR-0031). */
+function readOnlyView(task: PlannerTaskView, runnerModes: Record<RunnerId, RunnerModeInfo[]> | undefined): Record<string, unknown> {
+  const { taskMode, subtasks, ...rest } = task;
+  const readOnly = taskMode !== undefined && taskMode === readOnlyMode(runnerModes?.[task.assignedRunner]);
+  return { ...rest, ...(readOnly ? { readOnly: true as const } : {}), subtasks: subtasks.map((s) => readOnlyView(s, runnerModes)) };
+}
+
 export function buildModifyPlanPrompt(
   existingPlan: LegacyPlanState,
   userRequest: string,
@@ -641,7 +648,7 @@ export function buildModifyPlanPrompt(
   tools = false,
 ): string {
   const modelsJson = modelsJsonFor(modelsByRunner, existingPlan.runners);
-  const planJson = JSON.stringify(existingPlan.tasks.map(plannerTaskView), null, 2);
+  const planJson = JSON.stringify(existingPlan.tasks.map((t) => readOnlyView(plannerTaskView(t), runnerModes)), null, 2);
   const aiflowBlock = aiflowContext
     ? `<aiflow_context>\n${aiflowContext}\n</aiflow_context>\n\n`
     : '';

@@ -65,7 +65,8 @@ function findTasksArrayStart(text: string): number {
 }
 
 /** Build a live row from a (possibly unterminated) task-object fragment. */
-function rowFromObject(objText: string, status: PartialPlanTask['status']): PartialPlanTask {
+function rowFromObject(fullText: string, status: PartialPlanTask['status']): PartialPlanTask {
+  const objText = withoutSubtasks(fullText);
   const model = stringField(objText, 'modelLabel');
   const readOnly = /"readOnly"\s*:\s*true/.test(objText);
   return {
@@ -74,6 +75,30 @@ function rowFromObject(objText: string, status: PartialPlanTask['status']): Part
     ...(model ? { model } : {}),
     ...(readOnly ? { readOnly: true as const } : {}),
   };
+}
+
+/**
+ * The fragment with its `subtasks` array cut out, so a row's title and chips
+ * are the task's own and never a subtask's. An unterminated array is cut to
+ * the end.
+ */
+function withoutSubtasks(objText: string): string {
+  const key = /"subtasks"\s*:\s*\[/.exec(objText);
+  if (!key) return objText;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = key.index + key[0].length - 1; i < objText.length; i++) {
+    const ch = objText[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') inString = true;
+    else if (ch === '[') depth++;
+    else if (ch === ']' && --depth === 0) return objText.slice(0, key.index) + withoutSubtasks(objText.slice(i + 1));
+  }
+  return objText.slice(0, key.index);
 }
 
 /** Read the `title` value out of a (possibly unterminated) task-object fragment. */

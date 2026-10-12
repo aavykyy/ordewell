@@ -5,6 +5,7 @@ import { extractJsonObject, PlanParseError } from '../JsonExtractor';
 import { parsePartialPlan } from '../PartialPlanParser';
 import { autonomyLevelLabel, parseAutonomyLevel } from '../ModeResolver';
 import { buildResearchPrompt, buildPlanWithResults, buildModifyPlanPrompt } from '../PlanPrompts';
+import { createTask } from '../../models/Task';
 
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
 
@@ -426,6 +427,11 @@ describe('parsePartialPlan', () => {
     ]);
   });
 
+  it('reads a row\'s chips from the task itself, not from its subtasks', () => {
+    const partial = '{"tasks":[{"subtasks":[{"title":"Child","assignedModel":{"modelLabel":"Haiku"},"readOnly":true}],"title":"Parent"}';
+    expect(parsePartialPlan(partial)).toEqual([{ title: 'Parent', status: 'complete' }]);
+  });
+
   it('omits model/mode while a task is still streaming them', () => {
     const partial = '{"tasks":[{"title":"A","assignedM';
     expect(parsePartialPlan(partial)).toEqual([
@@ -617,6 +623,20 @@ describe('parsePlanJson modes', () => {
     expect(parent.subtasks[0].taskMode).toBe('plan');
   });
 
+  it('passes a task\'s read-only down to its subtasks unless a subtask says otherwise', () => {
+    const raw = JSON.stringify({
+      tasks: [{
+        id: 'parent', order: 1, title: 'p', description: 'd', type: 'ai', dependencies: [], sliceType: 'AFK', autonomy: 'AFK', readOnly: true, assignedRunner: 'claude-code',
+        subtasks: [
+          { id: 'read', order: 1, title: 'r', description: 'd', type: 'ai', dependencies: [], assignedRunner: 'codex', subtasks: [] },
+          { id: 'write', order: 2, title: 'w', description: 'd', type: 'ai', dependencies: [], readOnly: false, assignedRunner: 'claude-code', subtasks: [] },
+        ],
+      }],
+    });
+    const [parent] = parsePlanJson(raw, runners, runnerModes, false);
+    expect(parent.subtasks.map((s) => s.taskMode)).toEqual(['plan', 'auto']);
+  });
+
   it('falls back to positional last non-plan when no level tags exist', () => {
     const untagged = { 'claude-code': [{ id: 'default', label: 'Ask', description: 'asks' }, { id: 'plan', label: 'Plan', description: 'read-only' }, { id: 'bypassPermissions', label: 'Bypass', description: 'skips' }] };
     expect(parsePlanJson(planWith({}), ['claude-code'], untagged, false)[0].taskMode).toBe('bypassPermissions');
@@ -651,6 +671,25 @@ describe('the planner prompt asks for read-only, never a mode', () => {
     const line = prompt.split('\n').find((l) => l.startsWith('Runners with a read-only mode')) ?? '';
     expect(line).toContain('claude-code');
     expect(line).not.toContain('custom');
+  });
+
+  it.each([true, false])('shows readOnly as false in the task template, so a copied example writes (Full=%s)', (autonomousDefault) => {
+    const prompt = buildPlanWithResults('g', '', '', {}, ['claude-code'], runnerModes, modes({ autonomousDefault }));
+    expect(prompt).toContain('"readOnly": false');
+    expect(prompt).not.toContain('"readOnly": true,');
+  });
+
+  it('shows the modify prompt which tasks are read-only, and no mode', () => {
+    const tasks = [
+      createTask({ id: 'r', order: 1, title: 'Review', assignedRunner: 'claude-code', taskMode: 'plan', subtasks: [createTask({ id: 's', order: 1, title: 'Sub', assignedRunner: 'claude-code', taskMode: 'bypassPermissions' })] }),
+      createTask({ id: 'w', order: 2, title: 'Write', assignedRunner: 'claude-code', taskMode: 'bypassPermissions' }),
+    ];
+    const existingPlan = { tasks, generatedAt: '', status: 'draft' as const, runners: ['claude-code' as const], lastUpdated: '' };
+    const prompt = buildModifyPlanPrompt(existingPlan, '', {}, undefined, runnerModes);
+    expect(prompt).not.toContain('taskMode');
+    expect(prompt).not.toContain('bypassPermissions');
+    // The guide's own `"readOnly": true on an AI task` is not a task.
+    expect(prompt.match(/"readOnly": true(?! on)/g)).toHaveLength(1);
   });
 
   it('asks the modify prompt to keep readOnly, not taskMode', () => {

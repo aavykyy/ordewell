@@ -67,6 +67,14 @@ describe('retargetTaskRunner', () => {
     expect(changes.taskMode).toBe('plan');
   });
 
+  it('keeps a read-only task read-only by the manifest tag, not the mode id (ADR-0031)', () => {
+    const from = [{ id: 'acceptEdits', label: 'Edit', description: 'edits' }, { id: 'plan', label: 'Plan', description: 'Read only', readOnly: true }];
+    const to = [{ id: 'write', label: 'Write', description: 'edits' }, { id: 'inspect', label: 'Inspect', description: 'Read only', readOnly: true }];
+    const catalog = { models: CODEX_MODELS, modes: to, defaultMode: 'write' };
+    expect(retargetTaskRunner(claudeTask({ taskMode: 'plan' }), 'codex', catalog, from).taskMode).toBe('inspect');
+    expect(retargetTaskRunner(claudeTask({ taskMode: 'acceptEdits' }), 'codex', catalog, from).taskMode).toBe('write');
+  });
+
   it('clamps an effort the new model does not offer to the nearest rung it does', () => {
     const task = claudeTask({
       assignedModel: { modelId: 'x', modelLabel: 'X', thinkingEffort: 'xhigh', availableVariants: ['xhigh'] },

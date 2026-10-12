@@ -1449,6 +1449,8 @@ must not change any file: a review, an audit, an analysis whose result is a
 report (ADR-0031). It runs in its runner's `readOnly`-tagged mode (`plan` on
 every built-in runner), at either level, and stays read-only through a
 planner's move or split unless the planner lifts it with `readOnly: false`.
+Its AI subtasks are read-only too unless one says otherwise; a manual task
+cannot be one.
 The planner's only say over a task's mode; a runner without a read-only mode
 cannot take one. It is a request, not a task field: the task stores the mode.
 *Avoid:* "plan mode task" (`plan` is one runner's mode id, not the concept),

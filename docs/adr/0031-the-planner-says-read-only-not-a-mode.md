@@ -72,6 +72,11 @@ that offers the same mode.
   read-only through a move or a split unless the planner says
   `readOnly: false`: a move must not hand it write access quietly, and a move
   to a runner without a read-only mode is refused.
+- **Subtasks inherit read-only.** A subtask runs as a task of its own, so a
+  read-only task's AI subtasks are read-only too, in a submitted plan or an
+  added task, unless a subtask says `readOnly: false`.
+- **A manual task cannot be read-only.** It runs in no mode. A submitted plan
+  ignores the mark on one; an edit that asks for it is refused.
 - **A merge is read-only only when every merged task was.** One task that
   writes makes the merged task write; its "current" mode is the first such
   task's.
@@ -85,7 +90,9 @@ that offers the same mode.
 Manifests tag their read-only mode `readOnly: true`, beside `autonomous` and
 `safe`. The built-in `plan` modes of Claude Code, Codex and OpenCode wear it.
 Core still hardcodes no mode id: a runner with no tagged mode has no read-only
-mode.
+mode. The one exception is a plan parsed with no runner modes at all, where a
+read-only task falls back to `plan`, as any other falls back to `build`: the
+guess that keeps it from writing.
 
 ### What does not change
 
@@ -95,7 +102,8 @@ mode.
   "what the plan says is what runs".
 - **The per-task mode dropdown** on every surface, and the CLI's mode
   commands, keep every mode the runner offers. A user's choice is not checked
-  against the level (ADR-0001).
+  against the level (ADR-0001). A user moving a read-only task to another
+  runner lands it on that runner's read-only mode, found by tag, not by id.
 - **Saved plans load as they are.** Their tasks already carry concrete modes,
   including modes the planner chose under the old rule. Nothing is migrated.
 
@@ -125,8 +133,9 @@ mode.
   `resolveTaskMode`, and gains the table above as one function; the edit path
   and the plan parser both call it. The Guarded ceiling on planner edits goes:
   the planner can no longer name a mode for it to refuse.
-- The plan block, `list_runners` and the catalog read show `read-only` and
-  which runners take it, never a mode name. The approval card a Guarded user
+- The plan block, `list_runners`, the catalog read, the modify-plan prompt and
+  `edit_plan`'s summaries show `read-only` and which runners take it, never a
+  mode name. The approval card a Guarded user
   answers still names the mode: it is for the user.
 - `submit_plan`'s silent swap is gone with `resolveTaskMode`, so its
   `coerced` list no longer misses mode changes: there are none to report.
@@ -141,3 +150,6 @@ mode.
 ## History
 
 - 2026-10-12 — accepted.
+- 2026-10-12 — subtasks inherit read-only; a manual task cannot be read-only;
+  a user's runner change keeps read-only by tag;
+  the no-modes fallback is named.

@@ -159,7 +159,7 @@ describe('task skills checked where a planner reply lands', () => {
 
   it('refuses a mixed envelope batch whose added task carries a planner skill on a subtask, changing nothing, then lands the corrected nested names', async () => {
     const onNotice = vi.fn<(notice: SessionNotice) => void>();
-    const sub = (title: string, skills: unknown[], subtasks: unknown[] = []): unknown => ({ ...createTask({ title }), subtasks, skills });
+    const sub = (title: string, skills: unknown[], subtasks: unknown[] = []): unknown => ({ title, subtasks, skills });
     const batch = (child: unknown) => [
       { op: 'update', taskId: '#1', changes: { title: 'Renamed' } },
       { op: 'add', task: { title: 'Docs', skills: ['tdd'], subtasks: [child] } },

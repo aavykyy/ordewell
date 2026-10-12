@@ -1,6 +1,6 @@
 import type { DiscoveredModel, RunnerId, Task } from '../models/Task';
 import { clampThinkingEffort } from './ModelAllowlistResolver';
-import type { RunnerModeInfo } from './ModeResolver';
+import { readOnlyMode, type RunnerModeInfo } from './ModeResolver';
 
 /** What a runner offers a task: the models discovered for it and the modes its manifest declares. */
 export interface RunnerCatalog {
@@ -65,10 +65,15 @@ export function runnerAssignment(
  * single-field edit — it either brings the other three with it or leaves the
  * task unrunnable.
  *
+ * `from` is the old runner's modes. A task on its read-only mode lands on the
+ * new runner's read-only mode, found by tag as the planner's are (ADR-0031):
+ * runners need not share the id.
+ *
  * Returns the patch to apply, or `{}` when there is nothing to change.
  */
-export function retargetTaskRunner(task: Task, runner: RunnerId, catalog: RunnerCatalog): Partial<Task> {
+export function retargetTaskRunner(task: Task, runner: RunnerId, catalog: RunnerCatalog, from?: readonly RunnerModeInfo[]): Partial<Task> {
   if (task.type === 'user') return {};
   if (task.assignedRunner === runner) return {};
-  return { assignedRunner: runner, ...runnerAssignment(catalog, task) };
+  const readOnly = task.taskMode !== undefined && task.taskMode === readOnlyMode(from) ? readOnlyMode(catalog.modes) : undefined;
+  return { assignedRunner: runner, ...runnerAssignment(catalog, readOnly ? { ...task, taskMode: readOnly } : task) };
 }

@@ -156,7 +156,7 @@ export function looksLikePlanAttempt(raw: string): boolean {
  * _allTasks). `type: 'user'` subtasks inherit nothing and must still declare
  * HITL themselves.
  */
-type InheritedSlice = { sliceType?: Task['sliceType']; autonomy?: Task['autonomy'] };
+type InheritedSlice = { sliceType?: Task['sliceType']; autonomy?: Task['autonomy']; readOnly?: boolean };
 
 /**
  * What each parsed task asked to attach, as the planner wrote it. Kept beside
@@ -183,7 +183,9 @@ function parseTask(
 ): Task {
   const assignedRunner = typeof raw.assignedRunner === 'string' ? raw.assignedRunner : (runners[0] ?? 'claude-code');
   const taskType = (raw.type === 'user' ? 'user' : 'ai') as Task['type'];
-  const readOnly = raw.readOnly === true;
+  // A read-only task's subtasks run as tasks of their own, so they would
+  // otherwise get write access the planner said the work must not have.
+  const readOnly = taskType === 'ai' && (raw.readOnly === true || (raw.readOnly !== false && inherited?.readOnly === true));
   const mode = plannedMode(assignedRunner, runnerModes, { readOnly }, autonomousDefault);
   const title = String(raw.title ?? '');
   const description = String(raw.description ?? '');
@@ -217,7 +219,7 @@ function parseTask(
       : undefined,
     subtasks: Array.isArray(raw.subtasks)
       ? raw.subtasks.map((s: unknown) =>
-          parseTask(asRecord(s), runners, runnerModes, autonomousDefault, { sliceType, autonomy }))
+          parseTask(asRecord(s), runners, runnerModes, autonomousDefault, { sliceType, autonomy, readOnly }))
       : [],
     assignedModel: raw.assignedModel
       ? {
@@ -228,7 +230,8 @@ function parseTask(
       : undefined,
     assignedRunner,
     thinkingEffort: raw.thinkingEffort ? String(raw.thinkingEffort) : undefined,
-    // A planner's own `taskMode` is never read (ADR-0031).
+    // A planner's own `taskMode` is never read (ADR-0031). With no runner
+    // modes to read, `plan` is the guess that keeps a read-only task from writing.
     taskMode: (mode.ok ? mode.mode : undefined) ?? (readOnly && !runnerModes ? 'plan' : 'build'),
     autonomy,
     sliceType,

@@ -910,7 +910,7 @@ describe('edit_plan with task skills', () => {
 });
 
 describe('edit_plan adding a task with subtasks', () => {
-  const sub = (title: string, skills: unknown[], subtasks: unknown[] = []) => ({ ...createTask({ title }), subtasks, skills });
+  const sub = (title: string, skills: unknown[], subtasks: unknown[] = []) => ({ title, subtasks, skills });
 
   it('refuses a whole batch when a descendant carries a planner skill, naming it, then lands nested names with their warnings', async () => {
     const answers: { isError: boolean; body: unknown }[] = [];
