@@ -165,7 +165,6 @@ export interface PickerItem {
 /** What the runtime should do with the item(s) the user picks. */
 export type PickerAction =
   | { kind: 'set-model' }
-  | { kind: 'set-planner' }
   | { kind: 'set-planner-effort' }
   | { kind: 'set-key' }
   | { kind: 'load-session' }
@@ -401,6 +400,12 @@ export interface TuiState {
    * planner, whose effort is baked into the model id.
    */
   plannerEffort: string;
+  /**
+   * The model (and effort) last picked for each planner backend, keyed by
+   * AiProvider — the settings file's `plannerModels`, so `/planner` can
+   * pre-select what switching to a backend would restore.
+   */
+  plannerModels: Record<string, { model: string; effort?: string }>;
   /** How many AI tasks run at once, as the daemon reports it. */
   maxParallel: number;
   configuredProviders: AiProvider[];
@@ -585,6 +590,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     orchestratorModel: '',
     plannerProvider: '',
     plannerEffort: '',
+    plannerModels: {},
     maxParallel: DEFAULT_MAX_PARALLEL,
     configuredProviders: [],
     allowlist: {},

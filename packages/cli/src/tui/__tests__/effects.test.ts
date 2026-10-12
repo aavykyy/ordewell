@@ -891,8 +891,56 @@ describe('planner switch', () => {
   });
 });
 
+/** `/planner`'s stepper: harness, model and effort reach the daemon in one write. */
+describe('planner choice', () => {
+  const choice: Effect = {
+    type: 'setPlannerChoice', provider: 'claude-code', modelId: 'opus', effort: 'high',
+    notice: 'Planner: Claude Code · Claude Opus 5.5 · High effort',
+  };
+
+  it('sends provider, model and effort in a single settings write', async () => {
+    const h = harness();
+    await runEffect(choice, h.deps);
+
+    expect(h.api.updateSettings).toHaveBeenCalledTimes(1);
+    expect(h.api.updateSettings).toHaveBeenCalledWith({
+      env: { AI_PROVIDER: 'claude-code', ORCHESTRATOR_MODEL: 'opus', ORDEWELL_PLANNER_EFFORT: 'high' },
+    });
+  });
+
+  it('persists all three to .env once the daemon accepts them', async () => {
+    const h = harness();
+    await runEffect(choice, h.deps);
+    expect(h.env).toEqual({ AI_PROVIDER: 'claude-code', ORCHESTRATOR_MODEL: 'opus', ORDEWELL_PLANNER_EFFORT: 'high' });
+  });
+
+  it('leaves .env untouched when the daemon refuses', async () => {
+    const h = harness({ updateSettings: vi.fn().mockRejectedValue(new Error('bad request')) });
+    await runEffect(choice, h.deps);
+    expect(h.env).toEqual({});
+    expect(types(h.actions)).toContain('failed');
+  });
+
+  it("shows the choice in state with the daemon's updated per-backend memory", async () => {
+    const plannerModels = { 'claude-code': { model: 'opus', effort: 'high' } };
+    const h = harness({ updateSettings: vi.fn().mockResolvedValue({ plannerModels }) });
+    await runEffect(choice, h.deps);
+
+    const loaded = reduce(initialState(), h.actions.find((a) => a.type === 'settingsLoaded')!).state;
+    expect(loaded).toMatchObject({ plannerProvider: 'claude-code', orchestratorModel: 'opus', plannerEffort: 'high', plannerModels });
+  });
+
+  it('says what was set in one notice', async () => {
+    const h = harness();
+    await runEffect(choice, h.deps);
+    expect(h.actions.filter((a) => a.type === 'notice')).toEqual([
+      { type: 'notice', message: 'Planner: Claude Code · Claude Opus 5.5 · High effort' },
+    ]);
+  });
+});
+
 describe('settings', () => {
-  it('persists the orchestrator model to .env as well as the running daemon', async () => {
+  it('persists the planner model to .env as well as the running daemon', async () => {
     const h = harness();
     await runEffect({ type: 'setModel', modelId: 'a/b' }, h.deps);
 

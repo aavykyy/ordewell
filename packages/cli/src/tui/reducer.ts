@@ -15,6 +15,7 @@ import { pickRewindTarget, runCommand, skillInTaskView, unknownCommand } from '.
 import { disarmStop, drainQueue, plannerEscape } from './reducers/turnQueue';
 import { applySettings, followSession, normalizeTasks, runLabel } from './reducers/incoming';
 import { refillPicker } from './reducers/pickers';
+import { refreshStepper } from './reducers/stepper';
 import {
   handleMouseSelect, isMouseSelect, isWheel, scrollChat, scrollDelta, scrollPointed, settlePlan, toggleDetail,
 } from './reducers/pointer';
@@ -272,7 +273,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step(applySettings(state, action.settings));
 
     case 'modelsLoaded':
-      return step(
+      return step(refreshStepper(
         refillPicker(
           {
             ...state,
@@ -282,9 +283,9 @@ function reduceAction(state: TuiState, action: Action): Step {
             providerErrors: action.providerErrors ?? state.providerErrors,
             modesByRunner: action.modesByRunner ?? state.modesByRunner,
           },
-          ['set-model', 'set-planner', 'set-task-model', 'set-task-effort', 'set-task-mode'],
+          ['set-model', 'set-task-model', 'set-task-effort', 'set-task-mode'],
         ),
-      );
+      ));
 
     case 'sessionsLoaded':
       return step(refillPicker({ ...state, sessions: action.sessions }, ['load-session', 'delete-session']));
@@ -322,14 +323,14 @@ function reduceAction(state: TuiState, action: Action): Step {
       });
 
     case 'runnersLoaded':
-      // Installed runners are the planner picker's preflight signal, so a
-      // picker opened before discovery landed fills in rather than sitting
-      // there claiming every agent is missing.
-      return step(refillPicker({
+      // Installed runners are `/planner`'s preflight signal, so a stepper
+      // opened before discovery landed fills in rather than sitting there
+      // claiming every agent is missing.
+      return step(refreshStepper(refillPicker({
         ...state,
         runners: action.runners,
         orchestratorModel: action.orchestratorModel ?? state.orchestratorModel,
-      }, ['set-planner', 'set-task-runner']));
+      }, ['set-task-runner'])));
 
     case 'failed': {
       // A failed call may have been the task view's log read; the view falls

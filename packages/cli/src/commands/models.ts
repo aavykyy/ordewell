@@ -91,7 +91,7 @@ export async function handleModels(subArgs: string[]): Promise<void> {
   }
 
   console.log(
-    `\n  Current orchestrator model: ${process.env.ORCHESTRATOR_MODEL || 'deepseek/deepseek-v4-flash'}`,
+    `\n  Current planner model: ${process.env.ORCHESTRATOR_MODEL || 'deepseek/deepseek-v4-flash'}`,
   );
   console.log(`  Set with: ordewell models --set <model_id>`);
 }

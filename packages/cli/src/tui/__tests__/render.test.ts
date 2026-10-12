@@ -499,12 +499,12 @@ describe('overlays', () => {
       overlay: {
         kind: 'picker',
         picker: {
-          title: 'Orchestrator model', items: [{ id: 'a/1', label: 'Alpha' }],
+          title: 'Planner model', items: [{ id: 'a/1', label: 'Alpha' }],
           filter: '', index: 0, multi: false, chosen: [], filterable: true, action: { kind: 'set-model' },
         },
       },
     });
-    expect(out).toContain('Orchestrator model');
+    expect(out).toContain('Planner model');
     expect(out).toContain('Alpha');
   });
 

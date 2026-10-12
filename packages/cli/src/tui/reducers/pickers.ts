@@ -50,15 +50,17 @@ export function providerErrorHint(state: TuiState): string | undefined {
 }
 
 /**
- * The planner-model catalog for the current backend (ADR-0009). A harness
- * planner runs a coding agent, so the only models it can serve are that
- * agent's own — offering it the cross-provider vendor catalog would list
- * models it cannot run. This is the third of the three places `isCliProvider`
- * guards.
+ * The planner-model catalog for `provider` (ADR-0009), with `selectedId`
+ * marked. A harness planner runs a coding agent, so the only models it can
+ * serve are that agent's own — offering it the cross-provider vendor catalog
+ * would list models it cannot run. This is the third of the three places
+ * `isCliProvider` guards.
  */
-function plannerModelItems(state: TuiState): PickerItem[] {
-  const runner = runnerForProvider(state.plannerProvider as AiProvider);
-  if (!runner) return state.orchestratorModels.map((m) => ({ id: m.id, label: m.label, detail: modelDetail(m) }));
+export function plannerModelItems(state: TuiState, provider: string, selectedId: string): PickerItem[] {
+  const runner = runnerForProvider(provider as AiProvider);
+  if (!runner) {
+    return state.orchestratorModels.map((m) => ({ id: m.id, label: m.label, detail: modelDetail(m), selected: m.id === selectedId }));
+  }
 
   const items = state.models
     .filter((m) => m.runners?.includes(runner))
@@ -69,7 +71,7 @@ function plannerModelItems(state: TuiState): PickerItem[] {
         m.provider,
         m.variants?.length ? `${m.variants.length} effort level${m.variants.length === 1 ? '' : 's'}` : 'runner default effort',
       ].filter(Boolean).join(' · '),
-      selected: m.id === state.orchestratorModel,
+      selected: m.id === selectedId,
     }));
   // An empty catalog means discovery hasn't landed (or failed); a blank picker
   // with no explanation reads as a broken command.
@@ -78,13 +80,18 @@ function plannerModelItems(state: TuiState): PickerItem[] {
     : [{ id: '', label: `No ${runner} models discovered yet`, detail: 'run /refresh', disabled: true }];
 }
 
-/** The variants of the model the harness planner is set to, plus the agent's own default. */
-export function plannerEffortItems(state: TuiState): PickerItem[] {
-  const runner = runnerForProvider(state.plannerProvider as AiProvider);
-  if (!runner) {
+/** `provider`'s harness model `modelId`, when that agent lists it; a vendor planner has none. */
+export function plannerHarnessModel(state: TuiState, provider: string, modelId: string): ModelView | undefined {
+  const runner = runnerForProvider(provider as AiProvider);
+  return runner ? state.models.find((m) => m.id === modelId && m.runners?.includes(runner)) : undefined;
+}
+
+/** The variants of a harness planner's model, plus the agent's own default, with `selectedEffort` marked. */
+export function plannerEffortItems(state: TuiState, provider: string, modelId: string, selectedEffort: string): PickerItem[] {
+  if (!runnerForProvider(provider as AiProvider)) {
     return [{ id: '', label: 'Thinking effort applies to a coding-agent planner', detail: 'switch with /planner', disabled: true }];
   }
-  const model = state.models.find((m) => m.id === state.orchestratorModel && m.runners?.includes(runner));
+  const model = plannerHarnessModel(state, provider, modelId);
   if (!model) {
     return [{ id: '', label: 'No planner model selected', detail: 'pick one with /model', disabled: true }];
   }
@@ -93,20 +100,17 @@ export function plannerEffortItems(state: TuiState): PickerItem[] {
     return [{ id: '', label: `${model.label} exposes no effort levels`, detail: "it always runs at the agent's default", disabled: true }];
   }
   return [
-    { id: DEFAULT_EFFORT, label: 'Runner default', detail: 'Let the agent choose', selected: !state.plannerEffort },
-    ...variants.map((v) => ({ id: v.id, label: v.label, selected: v.id === state.plannerEffort })),
+    { id: DEFAULT_EFFORT, label: 'Runner default', detail: 'Let the agent choose', selected: !selectedEffort },
+    ...variants.map((v) => ({ id: v.id, label: v.label, selected: v.id === selectedEffort })),
   ];
 }
 
 export function pickerItemsFor(state: TuiState, action: PickerState['action']): PickerItem[] {
   if (action.kind === 'set-model') {
-    return plannerModelItems(state);
-  }
-  if (action.kind === 'set-planner') {
-    return plannerItems(state);
+    return plannerModelItems(state, state.plannerProvider, state.orchestratorModel);
   }
   if (action.kind === 'set-planner-effort') {
-    return plannerEffortItems(state);
+    return plannerEffortItems(state, state.plannerProvider, state.orchestratorModel, state.plannerEffort);
   }
   if (action.kind === 'rewind') {
     if (state.rewindTargets === null) return [];

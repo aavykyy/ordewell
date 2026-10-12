@@ -24,7 +24,7 @@ function pickerScreen(over: Partial<PickerState>, state: Partial<TuiState> = {})
         multi: false,
         chosen: [],
         filterable: false,
-        action: { kind: 'set-planner' },
+        action: { kind: 'set-planner-effort' },
         ...over,
       },
     },
@@ -89,7 +89,7 @@ describe('picker rows', () => {
 
   it('gives a filterable list a filter line and no numbers', () => {
     const out = pickerScreen({
-      title: 'Orchestrator model',
+      title: 'Planner model',
       items: [{ id: 'gpt-5', label: 'GPT-5' }, { id: 'o3', label: 'o3' }],
       filter: 'g',
       filterable: true,

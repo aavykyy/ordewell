@@ -150,6 +150,20 @@ describe('OrchestratorPool.updateSettings — planner model memory', () => {
     expect(pool.updateSettings({ env: { AI_PROVIDER: 'opencode' } }).orchestratorModel).toBe('opencode/model-y');
   });
 
+  it("keeps and remembers an explicit model and effort sent with a switch (the TUI's /planner stepper)", () => {
+    new SettingsService().setPlannerModel('opencode', { model: 'opencode/model-x' });
+    process.env.AI_PROVIDER = 'claude-code';
+
+    const result = pool.updateSettings({
+      env: { AI_PROVIDER: 'opencode', ORCHESTRATOR_MODEL: 'opencode/model-y', ORDEWELL_PLANNER_EFFORT: 'high' },
+    });
+
+    expect(result.orchestratorModel).toBe('opencode/model-y');
+    expect(result.plannerThinkingEffort).toBe('high');
+    expect(result.switchRecall).toBeUndefined();
+    expect(result.plannerModels).toEqual({ opencode: { model: 'opencode/model-y', effort: 'high' } });
+  });
+
   it('selects the first catalog model when nothing is remembered for the provider', () => {
     process.env.AI_PROVIDER = 'claude-code';
     process.env.ORCHESTRATOR_MODEL = 'claude-a';

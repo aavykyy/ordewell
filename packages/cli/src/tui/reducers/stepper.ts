@@ -62,6 +62,22 @@ export function openStepper(state: TuiState, definition: StepperDefinition): Ste
   return step({ ...state, overlay: { kind: 'stepper', stepper: show(state, definition, choices, first) } });
 }
 
+/**
+ * Rebuilds the open stepper's rows from fresh state — runners or models that
+ * landed after it opened — keeping its step, choices and filter. A step the
+ * new data would skip stays on screen as it was; moving the user off it
+ * mid-answer would be the more confusing of the two.
+ */
+export function refreshStepper(state: TuiState): TuiState {
+  const overlay = state.overlay;
+  if (overlay?.kind !== 'stepper') return state;
+  const { definition, current, choices, filter } = overlay.stepper;
+  if (settle(state, definition, choices).lists[current] === null) return state;
+  const fresh = show(state, definition, choices, current);
+  const stepper = filter ? { ...fresh, filter, index: 0 } : fresh;
+  return { ...state, overlay: { kind: 'stepper', stepper } };
+}
+
 export function handleStepperKey(state: TuiState, stepper: StepperState, key: Key): Step {
   const reopen = (next: StepperState): Step => step({ ...state, overlay: { kind: 'stepper', stepper: next } });
   const { definition, current } = stepper;
@@ -97,7 +113,13 @@ function confirm(state: TuiState, stepper: StepperState, item: PickerItem | unde
     return step(say(state, 'error', item.detail ? `${item.label} — ${item.detail}` : `${item.label} is not available.`));
   }
   const { definition, current } = stepper;
-  const { choices, lists } = settle(state, definition, { ...stepper.choices, [definition.steps[current].id]: item.id });
+  const id = definition.steps[current].id;
+  // A later step's value is only a pre-selection until confirmed, and it was
+  // derived from the old answer; kept, it would outlive the choice it came from.
+  const kept = item.id === stepper.choices[id]
+    ? stepper.choices
+    : Object.fromEntries(definition.steps.slice(0, current).flatMap((s) => (s.id in stepper.choices ? [[s.id, stepper.choices[s.id]]] : [])));
+  const { choices, lists } = settle(state, definition, { ...kept, [id]: item.id });
   const next = lists.findIndex((list, i) => i > current && list !== null);
   if (next === -1) return definition.complete({ ...state, overlay: null }, choices);
   return step({ ...state, overlay: { kind: 'stepper', stepper: show(state, definition, choices, next) } });
