@@ -49,6 +49,7 @@ function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {})
         return Promise.resolve();
       }),
       closeExecutionStream: vi.fn(),
+      followSession: vi.fn().mockReturnValue({ ready: Promise.resolve(), ended: new Promise(() => {}), close: vi.fn() }),
       ...api,
     } as OrdewellApi,
     workspace: '/ws',
@@ -214,6 +215,40 @@ describe('planning', () => {
     await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'x' }, h.deps);
 
     expect(heard(h.actions).map((m) => m.type === 'planner_message' && m.content)).toEqual(['Which database?']);
+  });
+
+  // Seen live: a plan turn's marker ("Plan generated with 1 task.") was spoken
+  // as a second planner reply, and autorun's start line can be last as well.
+  it('backfills the turn\'s reply, not the markers the turn left after it', async () => {
+    const h = streaming(async () => ({
+      tasks: [],
+      conversationHistory: [
+        { role: 'user', content: 'x' },
+        { role: 'assistant', content: 'One task: add subtract.' },
+        { role: 'assistant', content: 'Plan generated with 1 task.', kind: 'plan_generated' },
+        { role: 'assistant', content: 'Started the plan — by autorun.', kind: 'execution' },
+      ],
+    }), 'sendConversationMessage');
+
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'x' }, h.deps);
+
+    expect(heard(h.actions).map((m) => m.type === 'planner_message' && m.content)).toEqual(['One task: add subtract.']);
+  });
+
+  it('backfills nothing from an earlier turn when this one left no reply', async () => {
+    const h = streaming(async () => ({
+      tasks: [],
+      conversationHistory: [
+        { role: 'user', content: 'first' },
+        { role: 'assistant', content: 'Which database?' },
+        { role: 'user', content: 'x' },
+        { role: 'assistant', content: 'Plan generated with 1 task.', kind: 'plan_generated' },
+      ],
+    }), 'sendConversationMessage');
+
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'x' }, h.deps);
+
+    expect(heard(h.actions).filter((m) => m.type === 'planner_message')).toEqual([]);
   });
 
   it('joins a burst of one stream\'s deltas into a single action', async () => {
@@ -474,7 +509,7 @@ describe('execution', () => {
 
     expect(h.actions).toEqual([
       { type: 'sessionMessage', message: event, sessionId: 's1' },
-      { type: 'planUpdated', plan, sessionId: 's1' },
+      { type: 'planBroadcast', plan, sessionId: 's1' },
     ]);
   });
 
@@ -691,8 +726,7 @@ describe('duplicate run subscriptions', () => {
       runEffect({ type: 'execute', sessionId: 's1' }, h.deps),
       runEffect({ type: 'execute', sessionId: 's1' }, h.deps),
     ];
-    await Promise.resolve();
-    expect(listeners).toHaveLength(2);
+    await vi.waitFor(() => expect(listeners).toHaveLength(2));
 
     const started = { type: 'task_started', taskId: 't1', order: 1, title: 'Add route', runner: 'opencode' };
     for (const listener of listeners) listener(started);
@@ -1912,5 +1946,154 @@ describe('run settings effect (ADR-0030)', () => {
     expect(h.api.updateRunSettings).toHaveBeenCalledWith({ supervisorLevel: 'act' }, 's1');
     expect(h.actions).toContainEqual({ type: 'settingsLoaded', settings: answered });
     expect(h.actions).toContainEqual(expect.objectContaining({ type: 'planUpdated', sessionId: 's1' }));
+  });
+});
+
+describe('following the session', () => {
+  /** A harness whose follow socket the test drives, and can end. */
+  function following(api: Partial<OrdewellApi> = {}) {
+    const follows: Array<{ sessionId: string; emit: (e: unknown) => void; close: Mock; end: (outcome?: 'lost') => void }> = [];
+    const h = harness({
+      followSession: vi.fn().mockImplementation((sessionId: string, cb: (e: unknown) => void) => {
+        let end: (outcome?: 'lost') => void = () => {};
+        const ended = new Promise<'lost' | void>((resolve) => { end = resolve; });
+        const close = vi.fn(() => end());
+        follows.push({ sessionId, emit: cb, close, end });
+        return { ready: Promise.resolve(), ended, close };
+      }),
+      ...api,
+    });
+    return { ...h, follows };
+  }
+
+  it('is open before the first turn is sent, so a run the turn\'s plan starts on its own is drawn', async () => {
+    const h = following({ startConversation: vi.fn().mockResolvedValue({ tasks: [{ id: 'a', title: 'A' }] }) });
+
+    await runEffect({ type: 'startConversation', goal: 'ship it' }, h.deps);
+    const [follow] = h.follows;
+    follow.emit({ type: 'execution_action', record: { command: 'run_plan', actor: 'autorun', outcome: 'done', at: '2026-10-12T10:00:00Z' }, text: 'Started the plan — by autorun.' });
+    follow.emit({ type: 'task_started', taskId: 'a', order: 1, title: 'A', runner: 'claude-code' });
+    follow.emit({ type: 'execution_complete', summary: { total: 1, completed: 0, failed: 1 } });
+
+    expect(vi.mocked(h.api.followSession).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(h.api.startConversation).mock.invocationCallOrder[0]);
+    expect(follow.sessionId).toBe('session-new');
+    expect(types(h.actions)).toEqual(expect.arrayContaining(['taskStarted', 'executionComplete']));
+    expect(h.actions).toContainEqual(expect.objectContaining({ type: 'sessionMessage', message: expect.objectContaining({ type: 'execution_action' }) }));
+  });
+
+  it('keeps one follow for the session across turns and runs', async () => {
+    const h = following();
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'two' }, h.deps);
+    await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
+
+    expect(h.api.followSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a broadcast once when the follow and the run\'s own stream both carry it', async () => {
+    let run: (e: unknown) => void = () => {};
+    const h = following({
+      streamExecution: vi.fn().mockImplementation((_id: string, cb: (e: unknown) => void, onReady?: (error?: Error) => void) => {
+        run = cb;
+        onReady?.();
+        return Promise.resolve();
+      }),
+    });
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
+    await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
+    const start = { type: 'task_started', taskId: 'a', order: 1, title: 'A', runner: 'claude-code' };
+    h.follows[0].emit(start);
+    run(start);
+
+    expect(h.actions.filter((a) => a.type === 'taskStarted')).toHaveLength(1);
+  });
+
+  it('follows a loaded session, and leaves the one it was on', async () => {
+    const h = following();
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
+    await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
+
+    expect(h.follows.map((f) => f.sessionId)).toEqual(['s1', 's9']);
+    expect(h.follows[0].close).toHaveBeenCalled();
+    expect(h.follows[1].close).not.toHaveBeenCalled();
+  });
+
+  it('goes on following the session on screen when loading another fails', async () => {
+    const h = following({ adoptSession: vi.fn().mockRejectedValue(new DaemonError('Session not found', 404, 'session_not_found')) });
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
+    await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
+
+    expect(h.follows.map((f) => f.sessionId)).toEqual(['s1', 's9', 's1']);
+    expect(h.follows[1].close).toHaveBeenCalled();
+    expect(h.follows[2].close).not.toHaveBeenCalled();
+  });
+
+  it('follows a fork it switches to', async () => {
+    const h = following({ forkConversation: vi.fn().mockResolvedValue({ sessionId: 'session-fork', goal: 'g', plan: { tasks: [] } }) });
+    await runEffect({ type: 'forkConversation', sessionId: 's1' }, h.deps);
+
+    expect(h.follows.map((f) => f.sessionId)).toEqual(['session-fork']);
+  });
+
+  it('stops following a session the TUI closes', async () => {
+    const h = following();
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
+    await runEffect({ type: 'closeSession', sessionId: 's1' }, h.deps);
+
+    expect(h.follows[0].close).toHaveBeenCalled();
+  });
+
+  it('drops the follow of a first turn the daemon never registered', async () => {
+    const h = following({ startConversation: vi.fn().mockRejectedValue(new Error('planner down')) });
+    await runEffect({ type: 'startConversation', goal: 'ship it' }, h.deps);
+
+    expect(h.follows[0].close).toHaveBeenCalled();
+  });
+
+  it('opens a new follow after the last one was lost', async () => {
+    const h = following();
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
+    h.follows[0].end('lost');
+    await Promise.resolve();
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'two' }, h.deps);
+
+    expect(h.api.followSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports a lost follow, which the reducer speaks only while a run is shown', async () => {
+    const h = following();
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
+    h.follows[0].end('lost');
+    await vi.waitFor(() => expect(h.actions).toContainEqual({ type: 'followLost', sessionId: 's1' }));
+  });
+
+  it('leaves a loss to the run\'s own stream while one is open, so it is reported once', async () => {
+    let lose: () => void = () => {};
+    const h = following({
+      streamExecution: vi.fn().mockImplementation((_id: string, _cb: unknown, onReady?: (error?: Error) => void) => {
+        onReady?.();
+        return new Promise<'lost'>((resolve) => { lose = () => resolve('lost'); });
+      }),
+    });
+    const running = runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
+    await vi.waitFor(() => expect(h.api.streamExecution).toHaveBeenCalled());
+    h.follows[0].end('lost');
+    lose();
+    await running;
+    await Promise.resolve();
+
+    expect(types(h.actions)).toContain('executionLost');
+    expect(types(h.actions)).not.toContain('followLost');
+  });
+
+  it('a follow that is not the current one says nothing when it ends', async () => {
+    const h = following();
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
+    await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
+    h.follows[0].end('lost');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(types(h.actions)).not.toContain('followLost');
   });
 });

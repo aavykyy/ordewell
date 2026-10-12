@@ -173,7 +173,11 @@ export class ExecutionCommands {
     if (!this.host.tasks()) return { ok: false, outcome: 'refused', message: 'There is no plan yet, so there is nothing to run or stop.' };
     const located = 'task' in command ? this.locate(command.task) : undefined;
     if ('task' in command && !located) {
-      return this.refuse(command, actor, undefined, `No task matches "${command.task}" in the current plan. Name it by id, "#order" or exact title.`);
+      const missing = `No task matches "${command.task}" in the current plan.`;
+      // A task the turn's own edit adds is not in the plan until the reply ends, and nothing then starts it on the turn's behalf.
+      return this.refuse(command, actor, undefined, actor.kind !== 'user' && this.host.heldEdit()
+        ? `${missing} If your edit adds it, it lands as this reply ends, so it cannot start in this turn: tell the user, who starts it.`
+        : `${missing} Name it by id, "#order" or exact title.`);
     }
 
     const consent = this.consent(actor, command.command);
@@ -579,7 +583,8 @@ const WHO: Record<ExecutionActor['kind'], string> = {
 /** The timeline's line for one call: who asked, what, and how it ended. */
 function describeExecution(record: ExecutionRecord, command?: ExecutionCommand): string {
   const who = WHO[record.actor];
-  const label = record.task ? `task ${record.task.ref} "${record.task.title}"` : '';
+  // A refusal for a task the plan does not have names it as the caller did.
+  const label = record.task ? `task ${record.task.ref} "${record.task.title}"` : command && 'task' in command ? `"${command.task}"` : '';
   const continued = command?.command === 'retry_task' && command.from === 'session';
   const escalated = command?.command === 'answer_approval' && command.answer.trim().toLowerCase() === 'escalate';
   if (record.outcome !== 'done') {

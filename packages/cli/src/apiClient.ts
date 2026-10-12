@@ -122,6 +122,13 @@ export interface ExecutionSummary {
  */
 export type WsEvent = SessionMessage | SessionNotice;
 
+/** A held subscription to a session (`followSession`). `ended` is `'lost'` unless `close` ended it. */
+export interface SessionFollow {
+  ready: Promise<void>;
+  ended: Promise<'lost' | void>;
+  close(): void;
+}
+
 /** `/api/plans/<id>/…` and `/api/sessions/<id>/…`: the session a request is about. */
 const SESSION_PATH = /^\/api\/(?:plans|sessions)\/([^/?]+)/;
 
@@ -611,6 +618,46 @@ export class ApiClient {
     });
     this.executionStreamEnds.set(stream, endStream);
     return stream;
+  }
+
+  /**
+   * Every broadcast of one session for as long as the caller holds it. Unlike
+   * `streamExecution`, a run's end does not end it: the next run may be one
+   * nobody on this surface asked for — autorun, the planner's `run_plan`, the
+   * supervisor — and the daemon tells only the sockets already subscribed.
+   * `ready` settles on a failure too, never rejects: a follow that cannot
+   * connect costs the live view, not the request it opened around.
+   */
+  followSession(sessionId: string, onEvent: (event: WsEvent) => void): SessionFollow {
+    const socket = this.openSessionSocket(sessionId);
+    let closing = false;
+    const ready = new Promise<void>((resolve) => {
+      socket.once('open', () => resolve());
+      socket.once('error', () => resolve());
+      socket.once('close', () => resolve());
+    });
+    const ended = new Promise<'lost' | void>((resolve) => {
+      socket.once('close', () => resolve(closing ? undefined : 'lost'));
+    });
+    socket.on('message', (data: Buffer) => {
+      if (closing) return;
+      try {
+        onEvent(JSON.parse(data.toString()));
+      } catch {
+        // ignore malformed messages
+      }
+    });
+    socket.on('error', () => {
+      // Reported through `ended`, which the close that follows settles.
+    });
+    return {
+      ready,
+      ended,
+      close: () => {
+        closing = true;
+        socket.close();
+      },
+    };
   }
 
   /**

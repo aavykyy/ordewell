@@ -1,10 +1,10 @@
 import { execSync } from 'child_process';
 import {
-  ALL_PROVIDERS, autonomyLevelLabel, clipboardCopyCommand, isCliProvider, markRequestFor, newTaskFields, type AiProvider, type HasBinFn, type SurfacePlan,
+  ALL_PROVIDERS, autonomyLevelLabel, clipboardCopyCommand, isCliProvider, isUserMessage, markRequestFor, newTaskFields, type AiProvider, type HasBinFn, type SurfacePlan,
   type PlannerModelRecall,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
-import { DaemonError, WorkspaceInitNeededError, type ApiClient } from '../apiClient';
+import { DaemonError, WorkspaceInitNeededError, type ApiClient, type SessionFollow } from '../apiClient';
 import { normalizeCatalog } from '../catalog';
 import { plannerSwitchRecall } from '../plannerModelSwitch';
 import type { Action, Effect } from './reducer';
@@ -29,7 +29,7 @@ export type OrdewellApi = Pick<ApiClient,
   | 'reviewRunDiff' | 'mergeRun' | 'discardRun' | 'cleanupRun' | 'continueWithStash' | 'continueWithoutIsolation' | 'resolveConflictAsTask'
   | 'getSettings' | 'updateSettings' | 'updateRunSettings'
   | 'getRunners' | 'setRunnerEnabled' | 'getModels'
-  | 'streamPlanning' | 'respondToApproval' | 'streamExecution' | 'closeExecutionStream'
+  | 'streamPlanning' | 'respondToApproval' | 'streamExecution' | 'closeExecutionStream' | 'followSession'
 >;
 
 export interface EffectDeps {
@@ -166,6 +166,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       } catch (err) {
         // The daemon registers a session only after planning succeeds, so this
         // id points at nothing — keeping it would 404 every following message.
+        unfollow(deps, sessionId);
         dispatch({ type: 'sessionCleared' });
         // Offer to initialize instead of just reporting failure — but only
         // once: a rejection on the confirmed retry (allowInit already true)
@@ -468,9 +469,21 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       return;
 
     case 'loadSession': {
+      // Followed first: a session still running goes on reporting while it loads.
+      const shown = follows.get(deps.api)?.sessionId;
+      await follow(deps, effect.sessionId);
       // Adopting registers the session with the daemon, which is what makes the
       // restored plan executable — `getSession` alone only reads the file.
-      const { plan, goal } = await api.adoptSession(effect.sessionId, workspace);
+      let adopted: Awaited<ReturnType<OrdewellApi['adoptSession']>>;
+      try {
+        adopted = await api.adoptSession(effect.sessionId, workspace);
+      } catch (err) {
+        // The TUI stays on the session it showed, so it goes on following that one.
+        if (shown) await follow(deps, shown);
+        else unfollow(deps, effect.sessionId);
+        throw err;
+      }
+      const { plan, goal } = adopted;
       dispatch({ type: 'sessionStarted', sessionId: effect.sessionId, goal });
       dispatch(restoredChat(plan, effect.sessionId));
       dispatch({ type: 'planUpdated', plan, sessionId: effect.sessionId });
@@ -482,6 +495,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     // catching up — the original session is not closed: it may be running.
     case 'forkConversation': {
       const fork = await api.forkConversation(effect.sessionId);
+      await follow(deps, fork.sessionId);
       dispatch({ type: 'sessionForked', sessionId: fork.sessionId, goal: fork.goal });
       dispatch(restoredChat(fork.plan, fork.sessionId));
       dispatch({ type: 'planUpdated', plan: fork.plan, sessionId: fork.sessionId });
@@ -503,6 +517,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     // rewound message comes back into the input, to edit and send again.
     case 'rewindConversation': {
       const fork = await api.rewindConversation(effect.sessionId, effect.index);
+      await follow(deps, fork.sessionId);
       dispatch({ type: 'sessionForked', sessionId: fork.sessionId, goal: fork.goal });
       dispatch(restoredChat(fork.plan, fork.sessionId));
       dispatch({ type: 'planUpdated', plan: fork.plan, sessionId: fork.sessionId });
@@ -579,6 +594,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       return;
 
     case 'closeSession':
+      unfollow(deps, effect.sessionId);
       // Local state already moved on; a failure here must not surface as an
       // error in the new session's transcript.
       try {
@@ -656,6 +672,23 @@ async function withExecutionStream(
   sessionId: string,
   request: () => Promise<unknown>,
 ): Promise<void> {
+  await follow(deps, sessionId);
+  const open = runStreamsOf(deps.api);
+  open.set(sessionId, (open.get(sessionId) ?? 0) + 1);
+  try {
+    await streamRun(deps, sessionId, request);
+  } finally {
+    const left = (open.get(sessionId) ?? 1) - 1;
+    if (left > 0) open.set(sessionId, left);
+    else open.delete(sessionId);
+  }
+}
+
+async function streamRun(
+  deps: EffectDeps,
+  sessionId: string,
+  request: () => Promise<unknown>,
+): Promise<void> {
   let settleReady: (error?: Error) => void = () => {};
   const streamReady = new Promise<void>((resolve, reject) => {
     settleReady = (error) => error ? reject(error) : resolve();
@@ -676,6 +709,52 @@ async function withExecutionStream(
   if (await stream === 'lost') deps.dispatch({ type: 'executionLost', sessionId });
 }
 
+// ── Following the session ────────────────────────────────────────────────────
+
+const follows = new WeakMap<object, { sessionId: string; follow: SessionFollow }>();
+const runStreams = new WeakMap<object, Map<string, number>>();
+
+function runStreamsOf(api: object): Map<string, number> {
+  let open = runStreams.get(api);
+  if (!open) {
+    open = new Map();
+    runStreams.set(api, open);
+  }
+  return open;
+}
+
+/**
+ * Holds the TUI's one standing subscription, to the session it shows. A run's
+ * own stream exists only around a request this surface made, and the planning
+ * one only around a turn; a run started by anyone else — autorun as the turn
+ * ends, the planner's `run_plan`, the supervisor after the last task settled —
+ * was broadcast into nothing. Ensured before each request, for the reason
+ * `withExecutionStream` subscribes first; anchored to the client, like
+ * `inboundFor`, so a new daemon connection starts clean.
+ */
+async function follow(deps: EffectDeps, sessionId: string): Promise<void> {
+  const current = follows.get(deps.api);
+  if (current?.sessionId === sessionId) return current.follow.ready;
+  current?.follow.close();
+  const inbound = inboundFor(deps.api, deps.dispatch, sessionId);
+  const entry = { sessionId, follow: deps.api.followSession(sessionId, inbound.execution()) };
+  follows.set(deps.api, entry);
+  void entry.follow.ended.then((outcome) => {
+    if (follows.get(deps.api) !== entry) return;
+    follows.delete(deps.api);
+    // A run's own stream says so itself when it goes with the daemon; two notices for one loss is noise.
+    if (outcome === 'lost' && !runStreamsOf(deps.api).has(sessionId)) deps.dispatch({ type: 'followLost', sessionId });
+  });
+  await entry.follow.ready;
+}
+
+function unfollow(deps: EffectDeps, sessionId: string): void {
+  const current = follows.get(deps.api);
+  if (current?.sessionId !== sessionId) return;
+  follows.delete(deps.api);
+  current.follow.close();
+}
+
 /**
  * One planner turn: its messages stream over the websocket while the REST call
  * is in flight, and the reply is either a question or a plan.
@@ -685,7 +764,7 @@ async function converse(deps: EffectDeps, sessionId: string, call: () => Promise
   const stream = deps.api.streamPlanning(sessionId, inbound.planning());
 
   try {
-    await stream.ready;
+    await Promise.all([stream.ready, follow(deps, sessionId)]);
     const plan = await call();
     inbound.flush();
     // Speak the turn before `planUpdated` settles it: the settle is also what
@@ -714,12 +793,20 @@ function restoredChat(plan: unknown, sessionId: string): Action {
   };
 }
 
-/** The settled reply a plan's transcript ends on, with the timestamp a socket copy of it would carry. */
+/**
+ * The reply the turn settled on, with the timestamp a socket copy of it would
+ * carry. Only a plain entry is a reply: the markers a turn leaves after it — a
+ * plan committed, a run autorun started, a skill loaded — are drawn by their
+ * own broadcasts, and spoken here they were a second planner line. Nothing
+ * before the user's message is this turn's.
+ */
 function lastAssistantMessage(plan: unknown): { content: string; timestamp?: string } | null {
   const history = (plan as Pick<SurfacePlan, 'conversationHistory'> | null)?.conversationHistory ?? [];
   for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i].role === 'assistant' && history[i].kind !== 'skill_load') {
-      const { content, timestamp } = history[i];
+    const entry = history[i];
+    if (isUserMessage(entry)) return null;
+    if (entry.role === 'assistant' && entry.kind === undefined) {
+      const { content, timestamp } = entry;
       return { content, ...(timestamp ? { timestamp } : {}) };
     }
   }

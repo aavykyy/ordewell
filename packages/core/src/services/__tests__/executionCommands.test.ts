@@ -124,6 +124,8 @@ describe('the command seam: run_task', () => {
 
     expect(await env.run({ command: 'run_task', task: '#9' })).toMatchObject({ ok: false, message: expect.stringContaining('No task matches "#9"') });
     expect(env.timeline()).toHaveLength(1);
+    // Seen live as "The planner asked to start ; refused: …".
+    expect(env.timeline()[0].text).toMatch(/^The planner asked to start "#9"; refused: No task matches "#9"/);
   });
 
   it('refuses to start past the parallel limit', async () => {
@@ -683,6 +685,25 @@ describe('the command seam\'s extension points', () => {
     expect(host.deferUntilLanded).toHaveBeenCalledWith(retry, PLANNER, 'retry task #1 "Task t1"');
     expect(host.startTask).not.toHaveBeenCalled();
     expect(host.retryTask).not.toHaveBeenCalled();
+  });
+
+  // Seen live: the planner added a task and started it in the same turn, and was told only that no task matched.
+  it('says why a task the turn\'s own edit adds cannot start yet', async () => {
+    const host = { ...stubHost(), running: () => false, hasLiveWork: () => false, heldEdit: vi.fn(() => true) };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    const outcome = await commands.run({ command: 'run_task', task: 'Add divide' }, PLANNER);
+
+    expect(outcome).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringContaining('lands as this reply ends') });
+    expect(outcome.message).toMatch(/^No task matches "Add divide" in the current plan\./);
+    expect(host.heldEdit).toHaveBeenCalledWith();
+    expect(host.startTask).not.toHaveBeenCalled();
+  });
+
+  it('names no held edit when there is none', async () => {
+    const commands = new ExecutionCommands({ host: stubHost(), consent: { request: vi.fn() } });
+
+    expect((await commands.run({ command: 'run_task', task: 'Add divide' }, PLANNER)).message).not.toContain('reply ends');
   });
 
 });

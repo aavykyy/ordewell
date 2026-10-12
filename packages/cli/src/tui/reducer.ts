@@ -245,6 +245,17 @@ function reduceAction(state: TuiState, action: Action): Step {
       });
     }
 
+    // Its own turn's plan comes back on the call `converse` awaits; the copy
+    // broadcast meanwhile would settle the turn before its reply is spoken.
+    case 'planBroadcast':
+      if (stale(state, action.sessionId) || plannerInFlight(state)) return step(state);
+      return reduceAction(state, { type: 'planUpdated', plan: action.plan, sessionId: action.sessionId });
+
+    // The follow is open while nothing runs, so its loss is news only with a run on screen.
+    case 'followLost':
+      if (stale(state, action.sessionId) || state.status !== 'executing') return step(state);
+      return reduceAction(state, { type: 'executionLost', sessionId: action.sessionId });
+
     case 'executionLost': {
       if (stale(state, action.sessionId)) return step(state);
       // Statuses stay as last reported: the daemon still serves the live store

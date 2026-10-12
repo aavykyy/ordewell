@@ -8,9 +8,10 @@ import type { TaskStatusUpdate } from './reducers/shared';
  * One session's inbound events, whichever subscription delivered them.
  *
  * The daemon sends every broadcast to every socket subscribed to a session
- * (`OrchestratorPool.broadcast`), so while a run is under way — the run's own
- * subscription is open, and a planner turn opens a second one around its REST
- * call — the same planner-conversation message arrives on both. This module is
+ * (`OrchestratorPool.broadcast`), and the TUI holds several: a standing follow
+ * of the session it shows, a run's own subscription around a run it asked for,
+ * and one a planner turn opens around its REST call — so the same message
+ * arrives on each. This module is
  * the one place that knows that, and the one place that decides what a message
  * shows: the conversation view for anything a planner said or did, the run's
  * own handling for task lifecycle.
@@ -174,7 +175,7 @@ class WindowSet {
 export interface SessionInbound {
   /** A fresh subscription for a planning turn. Each call is its own identity. */
   planning(): Receiver;
-  /** A fresh subscription for a run. Each call is its own identity. */
+  /** A fresh subscription for a run, or for the session's standing follow. Each call is its own identity. */
   execution(): Receiver;
   /**
    * The settled reply an awaited call's plan carries. The socket usually spoke
@@ -275,12 +276,13 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
     if (!copies.first(id, identity(event))) return;
     if (event.type === 'plan_generated') {
       dispatch({ type: 'sessionMessage', message: event, sessionId });
-      // A run's stream follows every plan a turn lands, one this surface did
-      // not send included (an input replayed after a reload). On the planning
-      // stream the same broadcast is a turn still in flight: `converse` settles
-      // the plan it gets back, and ending the turn here would send the held
-      // prompts early.
-      if (kind === 'execution') dispatch({ type: 'planUpdated', plan: event.plan, sessionId });
+      // A run's stream and the follow take every plan a turn lands, one this
+      // surface did not send included (a supervisor's edit, an input replayed
+      // after a reload). On the planning stream the same broadcast is a turn
+      // still in flight: `converse` settles the plan it gets back, and ending
+      // the turn here would send the held prompts early — which is also why
+      // the reducer sets a broadcast plan aside while its own turn is out.
+      if (kind === 'execution') dispatch({ type: 'planBroadcast', plan: event.plan, sessionId });
       return;
     }
     dispatch({ type: 'sessionMessage', message: event, sessionId });

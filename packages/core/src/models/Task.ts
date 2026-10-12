@@ -388,7 +388,7 @@ export interface SkillLoad {
 export type SkillLoadNotice = Omit<SkillLoad, 'content'>;
 
 /** A message the user sent, as opposed to a skill load their message caused or a wake-up digest. */
-export function isUserMessage(entry: ConversationMessage): boolean {
+export function isUserMessage(entry: Pick<ConversationMessage, 'role' | 'kind'>): boolean {
   return entry.role === 'user' && entry.kind !== 'skill_load' && entry.kind !== 'wake_up';
 }
 

@@ -53,11 +53,16 @@ function fakeDaemon() {
   const log: string[] = [];
   let planningListener: ((event: unknown) => void) | null = null;
   let executionListener: ((event: unknown) => void) | null = null;
+  let followListener: ((event: unknown) => void) | null = null;
+  // Like `OrchestratorPool.broadcast`: every socket open on the session gets every event.
+  const broadcast = (event: unknown) => {
+    for (const listener of [planningListener, executionListener, followListener]) listener?.(event);
+  };
 
   const api = {
     startConversation: vi.fn(async (_id: string, _goal: string) => {
       log.push('startConversation');
-      planningListener?.({ type: 'research_step', tool: 'read_file', args: '{"path":"src/LoginRoute.ts"}' });
+      broadcast({ type: 'research_step', tool: 'read_file', args: '{"path":"src/LoginRoute.ts"}' });
       await Promise.resolve();
       return planPayload();
     }),
@@ -67,9 +72,9 @@ function fakeDaemon() {
     }),
     executePlan: vi.fn(async (_id: string) => {
       log.push('executePlan');
-      executionListener?.({ type: 'status_update', tasks: [{ id: 't1', status: 'in_progress' }] });
-      executionListener?.({ type: 'status_update', tasks: [{ id: 't1', status: 'completed' }, { id: 't2', status: 'completed' }] });
-      executionListener?.({ type: 'execution_complete', summary: { total: 2, completed: 2, failed: 0 } });
+      broadcast({ type: 'status_update', tasks: [{ id: 't1', status: 'in_progress' }] });
+      broadcast({ type: 'status_update', tasks: [{ id: 't1', status: 'completed' }, { id: 't2', status: 'completed' }] });
+      broadcast({ type: 'execution_complete', summary: { total: 2, completed: 2, failed: 0 } });
       settleExecution();
       return { status: 'started' };
     }),
@@ -117,6 +122,11 @@ function fakeDaemon() {
       queueMicrotask(() => onReady?.());
       return new Promise<void>((resolve) => { settleExecution = resolve; });
     }),
+    followSession: vi.fn((_id: string, onEvent: (event: unknown) => void) => {
+      log.push('followSession');
+      followListener = onEvent;
+      return { ready: Promise.resolve(), ended: new Promise<void>(() => {}), close: () => { if (followListener === onEvent) followListener = null; } };
+    }),
   };
   let settleExecution: () => void = () => {};
 
@@ -124,8 +134,10 @@ function fakeDaemon() {
     api: api as unknown as OrdewellApi,
     mocks: api,
     log,
-    emitPlanning: (event: unknown) => planningListener?.(event),
-    emitExecution: (event: unknown) => executionListener?.(event),
+    emitPlanning: broadcast,
+    emitExecution: broadcast,
+    /** An event only the follow hears: nothing this surface asked for is in flight. */
+    emitFollow: (event: unknown) => followListener?.(event),
     endExecution: () => settleExecution(),
   };
 }
@@ -348,6 +360,7 @@ describe('TUI end to end', () => {
     h.type('Build the login flow');
     h.type('\r');
     await vi.waitFor(() => expect(h.app.getState().sessionId).toBe('session-1'));
+    await vi.waitFor(() => expect(h.daemon.mocks.startConversation).toHaveBeenCalled());
 
     h.type('Use SQLite');
     h.type('\r');
@@ -373,6 +386,7 @@ describe('TUI end to end', () => {
     h.type('Build the login flow');
     h.type('\r');
     await vi.waitFor(() => expect(h.app.getState().sessionId).toBe('session-1'));
+    await vi.waitFor(() => expect(h.daemon.mocks.startConversation).toHaveBeenCalled());
 
     h.type('Use SQLite');
     h.type('\r');
@@ -401,6 +415,7 @@ describe('TUI end to end', () => {
     h.type('Build the login flow');
     h.type('\r');
     await vi.waitFor(() => expect(h.app.getState().sessionId).toBe('session-1'));
+    await vi.waitFor(() => expect(h.daemon.mocks.startConversation).toHaveBeenCalled());
 
     h.type('Use SQLite');
     h.type('\r');
@@ -454,6 +469,38 @@ describe('TUI end to end', () => {
     });
     expect(h.daemon.log.indexOf('streamExecution')).toBeLessThan(h.daemon.log.indexOf('executePlan'));
     expect(h.app.getState().tasks.map((t) => t.status)).toEqual(['completed', 'completed']);
+  });
+
+  // Autorun starts the plan as the turn ends, after the planning socket closed;
+  // the supervisor speaks after the run's end closed the run's own. Only the
+  // follow is open for either.
+  it('draws a run nobody on this surface started, and the supervisor\'s note after it ends', async () => {
+    const h = harness();
+    h.type('Build the login flow');
+    h.type('\r');
+    await vi.waitFor(() => expect(h.screen()).toContain('Add the login route'));
+    expect(h.daemon.log.indexOf('followSession')).toBeLessThan(h.daemon.log.indexOf('startConversation'));
+
+    h.daemon.emitFollow({
+      type: 'execution_action',
+      record: { command: 'run_plan', actor: 'autorun', outcome: 'done', at: '2026-10-12T10:00:00.000Z' },
+      text: 'Started the plan — by autorun.',
+    });
+    h.daemon.emitFollow({ type: 'task_started', taskId: 't1', order: 1, title: 'Add the login route', runner: 'opencode' });
+    await vi.waitFor(() => expect(h.app.getState().status).toBe('executing'));
+    h.daemon.emitFollow({ type: 'status_update', tasks: [{ id: 't1', status: 'failed' }, { id: 't2', status: 'pending' }] });
+    h.daemon.emitFollow({ type: 'execution_complete', summary: { total: 2, completed: 0, failed: 1 } });
+    h.daemon.emitFollow({ type: 'planner_turn_started', turnId: 'w1', supervisor: true });
+    h.daemon.emitFollow({ type: 'planner_message', content: 'Task 1 failed on a missing env var.', timestamp: '2026-10-12T10:01:00.000Z', turnId: 'w1', supervisor: true });
+    h.daemon.emitFollow({ type: 'planner_turn_ended', turnId: 'w1', outcome: 'message' });
+
+    await vi.waitFor(() => {
+      expect(h.screen()).toContain('Started the plan — by autorun.');
+      expect(h.screen()).toContain('Execution finished — 0/2 tasks complete');
+      expect(h.screen()).toContain('Task 1 failed on a missing env var.');
+    });
+    expect(h.app.getState().tasks.map((t) => t.status)).toEqual(['failed', 'pending']);
+    expect(h.app.getState().status).toBe('idle');
   });
 
   it('E on the plan pane runs the whole plan, like /run', async () => {
