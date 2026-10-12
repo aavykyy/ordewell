@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, it, expect } from 'vitest';
-import { replayTaskLog, type TaskLogEvent } from '@ordewell/core';
-import { width } from '../ansi';
+import { replayTaskLog, type AttemptUsage, type TaskLogEvent } from '@ordewell/core';
+import { stripAnsi, width } from '../ansi';
+import { chatPaneWidth } from '../geometry';
+import { bodyRows, chatLayout } from '../layout';
 import { initialState, reduce } from '../reducer';
 import { render } from '../render';
 import { registerSkillCommands } from '../slash';
@@ -273,6 +275,62 @@ describe('the task view draws as a runner, not the planner', () => {
       }),
     });
     expect(plain(withUsage)).toContain('12.4k in');
+  });
+
+  describe('the task usage footer', () => {
+    const attempt = (n: number, over: Partial<AttemptUsage> = {}): AttemptUsage => ({
+      attempt: n, runner: 'claude-code', startedAt: '', wallTimeMs: 65_000,
+      totals: { inputTokens: 12_400, outputTokens: 3_100 }, byModel: [], lastPromptTokens: 36_000, contextWindow: 200_000, ...over,
+    });
+    const bottom = (state: TuiState, count = 1): string[] => {
+      const rows = render(state).map((l) => stripAnsi(l).split('│')[0].trimEnd());
+      const end = bodyRows(state) + 1;
+      return rows.slice(end - count, end);
+    };
+    const withUsage = (usage: AttemptUsage[], over: Partial<TaskLogState> = {}): TuiState =>
+      opened({ tasks: [task({ attemptUsage: usage })], taskView: loaded(over), rows: 24, cols: 100 });
+
+    it('pins the attempt\'s measures and wall time on the pane\'s bottom row', () => {
+      expect(bottom(withUsage([attempt(1)]))).toEqual(['12.4k in · 3.1k out · cost unknown · 18% ctx · 65s']);
+    });
+
+    it('lists each model under it when more than one reported', () => {
+      const models = [
+        { source: 'claude-code', model: 'sonnet-x', totals: { inputTokens: 10_000, outputTokens: 2_000 } },
+        { source: 'claude-code', model: 'haiku-y', totals: { inputTokens: 2_400, outputTokens: 1_100 } },
+      ];
+      expect(bottom(withUsage([attempt(1, { byModel: models })]), 3)).toEqual([
+        '12.4k in · 3.1k out · cost unknown · 18% ctx · 65s',
+        'sonnet-x: 10k in · 2k out · cost unknown',
+        'haiku-y: 2.4k in · 1.1k out · cost unknown',
+      ]);
+    });
+
+    it('adds no model lines for a single model', () => {
+      const one = [{ source: 'claude-code', model: 'sonnet-x', totals: { inputTokens: 12_400 } }];
+      expect(bottom(withUsage([attempt(1, { byModel: one })]), 2)[0]).not.toContain('sonnet-x');
+    });
+
+    it('shows the attempt on screen, not the latest', () => {
+      const state = withUsage(
+        [attempt(1, { wallTimeMs: 5_000 }), attempt(2, { wallTimeMs: 90_000, totals: { inputTokens: 900, outputTokens: 80 } })],
+        { attempts: [1, 2], attempt: 1, followLatest: false },
+      );
+      expect(bottom(state)[0]).toContain('12.4k in · 3.1k out · cost unknown · 18% ctx · 5s');
+    });
+
+    it('keeps the scroll bound exact with the extra rows pinned', () => {
+      const models = [
+        { source: 'claude-code', model: 'sonnet-x', totals: { inputTokens: 10_000 } },
+        { source: 'claude-code', model: 'haiku-y', totals: { inputTokens: 2_400 } },
+      ];
+      const many = replayTaskLog(Array.from({ length: 40 }, (_, i): TaskLogEvent => ({ type: 'text_delta', text: `line ${i}\n\n` })));
+      const state = withUsage([attempt(1, { byModel: models })], { view: many });
+      const layout = chatLayout(state, bodyRows(state), chatPaneWidth(state));
+      expect(layout.footer).toHaveLength(3);
+      expect(layout.maxScroll).toBe(layout.lines.length - (bodyRows(state) - layout.header.length - 3));
+      expect(render(state)).toHaveLength(state.rows);
+    });
   });
 
   it('draws the tool call and its result', () => {

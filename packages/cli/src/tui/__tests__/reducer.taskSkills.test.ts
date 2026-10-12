@@ -117,9 +117,9 @@ describe('/task-skills', () => {
 });
 
 describe('plan row', () => {
-  it('lists attached skills compactly under the task', async () => {
+  it('lists attached skills compactly under the task once it is expanded', async () => {
     const { render } = await import('../render');
-    const text = render(planPane({ cols: 160, tasks: [task({ skills: ['tdd', 'made-by-earlier-task'], subtasks: [task({ id: 's1', order: 1, title: 'Sub', skills: ['tdd'] })] })] }))
+    const text = render(planPane({ cols: 160, expandedTaskId: 't1', tasks: [task({ skills: ['tdd', 'made-by-earlier-task'], subtasks: [task({ id: 's1', order: 1, title: 'Sub', skills: ['tdd'] })] })] }))
       .join('\n').replace(/\x1b\[[0-9;]*m/g, ''); // eslint-disable-line no-control-regex
 
     expect(text).toContain('skills: tdd · made-by-earlier-task');

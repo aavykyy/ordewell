@@ -26,7 +26,7 @@ const modes: Record<string, ModeView[]> = {
 
 describe('plan pane — autonomous task marking', () => {
   it('marks a task whose resolved mode is tagged autonomous in the manifest', () => {
-    const out = text({ tasks: [task()], modesByRunner: modes });
+    const out = text({ tasks: [task()], modesByRunner: modes, expandedTaskId: 't1' });
     expect(out).toContain('mode: bypassPermissions ⚡');
   });
 
