@@ -45,6 +45,57 @@ describe('isolation_handoff', () => {
     expect(lastMessage(state)?.text).toMatch(/\/handoff/);
   });
 
+  it('stores a handoff deferred to the supervisor and says so, without opening the overlay', () => {
+    const deferred: HandoffView = { ...handoff, deferredTo: 'supervisor' };
+
+    const { state } = apply(session(), { type: 'isolationHandoff', handoff: deferred, sessionId: 's1' });
+
+    expect(state.handoff).toEqual(deferred);
+    expect(state.overlay).toBeNull();
+    expect(lastMessage(state)?.text).toBe(
+      'Run finished on ordewell/r1/integration — 2 tasks landed. The supervisor may merge it; /handoff to review it yourself.',
+    );
+  });
+
+  it('keeps /handoff working while the handoff is deferred', () => {
+    const deferred = withHandoff({ handoff: { ...handoff, deferredTo: 'supervisor' } });
+
+    expect(typed(deferred, '/handoff').state.overlay).toEqual({ kind: 'handoff', index: 0, diff: null });
+    expect(typed(deferred, '/handoff merge').state.overlay).toMatchObject({ kind: 'confirm', action: { kind: 'merge-run' } });
+  });
+
+  it('opens the overlay when the unmarked handoff for the same run follows, and says the supervisor left it', () => {
+    const deferred = session({ handoff: { ...handoff, deferredTo: 'supervisor' } });
+
+    const { state } = apply(deferred, { type: 'isolationHandoff', handoff, sessionId: 's1' });
+
+    expect(state.handoff).toEqual(handoff);
+    expect(state.overlay).toEqual({ kind: 'handoff', index: 0, diff: null });
+    expect(lastMessage(state)?.text).toBe(
+      'The supervisor left ordewell/r1/integration to you — 2 tasks landed. /handoff to review and land it.',
+    );
+  });
+
+  it('leaves an overlay that is already open alone when the unmarked handoff follows', () => {
+    const deferred = session({ handoff: { ...handoff, deferredTo: 'supervisor' }, overlay: { kind: 'help' } });
+
+    const { state } = apply(deferred, { type: 'isolationHandoff', handoff, sessionId: 's1' });
+
+    expect(state.overlay).toEqual({ kind: 'help' });
+  });
+
+  it('tells a new run\'s unmarked handoff apart from the deferred run before it', () => {
+    const other: HandoffView = {
+      ...handoff,
+      repos: [{ ...handoff.repos[0], integrationBranch: 'ordewell/r2/integration' }],
+    };
+    const deferred = session({ handoff: { ...handoff, deferredTo: 'supervisor' } });
+
+    const { state } = apply(deferred, { type: 'isolationHandoff', handoff: other, sessionId: 's1' });
+
+    expect(lastMessage(state)?.text).toMatch(/^Run finished on ordewell\/r2\/integration/);
+  });
+
   it("ignores another session's handoff", () => {
     const { state } = apply(session(), { type: 'isolationHandoff', handoff, sessionId: 'other' });
 
@@ -280,6 +331,20 @@ describe('discarding', () => {
   });
 });
 
+describe('a merge while the handoff is deferred', () => {
+  it('clears the handoff and closes the overlay, as a merge from any source does', () => {
+    const before = withHandoff({
+      handoff: { ...handoff, deferredTo: 'supervisor' },
+      overlay: { kind: 'handoff', index: 0, diff: null },
+    });
+
+    const { state } = apply(before, { type: 'runCleared', sessionId: 's1' });
+
+    expect(state.handoff).toBeNull();
+    expect(state.overlay).toBeNull();
+  });
+});
+
 describe('per-task isolation on the plan', () => {
   const conflict = { state: 'conflict' as const, branch: 'ordewell/r1/2-t2', worktree: '/w/2-t2' };
 
@@ -335,6 +400,14 @@ describe('per-task isolation on the plan', () => {
 
     expect(state.tasks.map((t) => t.isolation?.state)).toEqual(['conflict', 'none']);
     expect(state.handoff).toEqual({ repos: [{ path: '.', integrationBranch: 'ordewell/r1/integration', baseRef: 'abc', landed: [] }], landed: [] });
+  });
+
+  it('keeps the supervisor deferral across a plan refresh of the same run', () => {
+    const deferred = session({ handoff: { ...handoff, deferredTo: 'supervisor' } });
+
+    const { state } = apply(deferred, { type: 'planUpdated', sessionId: 's1', plan: savedPlan });
+
+    expect(state.handoff).toMatchObject({ deferredTo: 'supervisor', repos: [{ integrationBranch: 'ordewell/r1/integration' }] });
   });
 
   it('reads a repairing task from a saved plan\'s run record (ADR-0015)', () => {

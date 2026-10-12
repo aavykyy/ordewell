@@ -399,7 +399,7 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
       return;
 
     case 'isolation_handoff':
-      dispatch({ type: 'isolationHandoff', handoff: { repos: event.repos, landed: event.landed }, sessionId });
+      dispatch({ type: 'isolationHandoff', handoff: { repos: event.repos, landed: event.landed, ...(event.deferredTo ? { deferredTo: event.deferredTo } : {}) }, sessionId });
       return;
 
     // A structured task's log as it happens (ADR-0018, P1): the task view is

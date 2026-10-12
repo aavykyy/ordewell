@@ -273,7 +273,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
       return { ...state, taskIsolation: { ...state.taskIsolation, [action.taskId]: action.isolation } };
 
     case 'isolationHandoff':
-      return { ...state, handoff: { repos: action.repos ?? [], landed: action.landed ?? [] } };
+      return { ...state, handoff: { repos: action.repos ?? [], landed: action.landed ?? [], ...(action.deferredTo ? { deferredTo: action.deferredTo } : {}) } };
 
     case 'isolationMergeResult':
       return { ...state, mergeResult: action.result ?? null };

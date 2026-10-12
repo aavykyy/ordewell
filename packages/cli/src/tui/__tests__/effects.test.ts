@@ -1669,6 +1669,16 @@ describe('worktree isolation', () => {
     expect(h.actions).toContainEqual({ type: 'isolationHandoff', handoff: { repos, landed }, sessionId: 's1' });
   });
 
+  it('carries the supervisor deferral of an isolation_handoff through', async () => {
+    const landed = [{ taskId: 't1', order: 1, title: 'One' }];
+    const repos = [{ path: '.', integrationBranch: 'ordewell/r1/integration', baseRef: 'abc', landed }];
+    const h = running([{ type: 'isolation_handoff', repos, landed, deferredTo: 'supervisor' }]);
+
+    await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
+
+    expect(h.actions).toContainEqual({ type: 'isolationHandoff', handoff: { repos, landed, deferredTo: 'supervisor' }, sessionId: 's1' });
+  });
+
   it('hands the dirty repos of a group to the stash question', async () => {
     const h = running([{ type: 'isolation_blocked', reason: 'dirty', repos: ['api', 'web'], message: 'Tracked files have uncommitted changes in api, web' }]);
 

@@ -87,6 +87,8 @@ export interface HandoffRepoView {
 export interface HandoffView {
   repos: HandoffRepoView[];
   landed: LandedTaskView[];
+  /** An Act supervisor looks at this run first and may merge it, so it is shown without taking over the screen. */
+  deferredTo?: 'supervisor';
 }
 
 /**
