@@ -11,6 +11,7 @@ import UsageLine from './components/UsageLine';
 import QueuedPrompts from './components/QueuedPrompts';
 import HandoffCard from './components/HandoffCard';
 import CheckpointPanel from './components/CheckpointPanel';
+import RunSettingsBlock from './components/RunSettingsBlock';
 import type { TaskDraft } from './components/NewTaskCard';
 import type { GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId } from '@ordewell/core';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
@@ -18,7 +19,7 @@ import { planSummaryLabel, nextDock } from './planDock';
 import { DetailContext } from './detail';
 import { useFollowOutput } from './followOutput';
 import { slashHelp } from '../../commands/slashCommands';
-import type { HostToWebview, WebviewToHost } from '../../shared/protocol';
+import type { HostToWebview, SettingsChange, WebviewToHost } from '../../shared/protocol';
 import { hasHiddenDetail } from '@ordewell/core/plan-utils';
 import { patchedBlocks } from '../../shared/conversationPatch';
 
@@ -64,7 +65,7 @@ export default function App() {
     runnerList, enabledRunnerIds, runners, held, unsent, modesByRunner, modelConfig,
     modelOptions, configuredProviders, planner, isReady, modelDiscoveryErrors,
     skills, taskSkills, checkpoint, taskOutput, taskIdle, taskApprovals, taskIsolation, handoff,
-    mergeResult, runMerge, taskGates, dockExpanded, dockHeight,
+    mergeResult, runMerge, taskGates, dockExpanded, dockHeight, settingsRequest,
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
   const setIsResearchActive = useCallback((v: boolean) => dispatch({ type: 'patchResearchActive', active: v }), []);
@@ -87,6 +88,7 @@ export default function App() {
 
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const dockBodyRef = useRef<HTMLDivElement>(null);
+  const runSettingsRef = useRef<HTMLElement>(null);
   const helpTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const processingRef = useRef(false);
   const lastActivityRef = useRef(Date.now());
@@ -124,6 +126,13 @@ export default function App() {
     const fallback = setTimeout(() => setIsReady(true), 4000);
     return () => clearTimeout(fallback);
   }, []);
+
+  useEffect(() => {
+    if (settingsRequest === 0) return;
+    setSetupCollapsed(false);
+    runSettingsRef.current?.focus();
+    runSettingsRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [settingsRequest]);
 
   const pushSystem = useCallback((text: string) => {
     vscode.postMessage({ type: 'addNote', text });
@@ -510,6 +519,10 @@ export default function App() {
     vscode.postMessage({ type: 'setPlannerModel', modelId: assignment.modelId, effort: assignment.thinkingEffort });
   }, []);
 
+  const handleSettingsChange = useCallback((change: SettingsChange) => {
+    vscode.postMessage({ type: 'changeSettings', change });
+  }, []);
+
   const handlePlannerChange = useCallback((provider: string) => {
     if (provider === planner.provider) return;
     vscode.postMessage({ type: 'setPlanner', provider });
@@ -786,6 +799,8 @@ export default function App() {
             )}
           </div>
         </section>
+
+        {host.runSettings && <RunSettingsBlock ref={runSettingsRef} value={host.runSettings} onChange={handleSettingsChange} />}
         </div>
       </div>
 

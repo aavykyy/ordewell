@@ -1,10 +1,11 @@
 import * as vscode from 'vscode';
 import {
   createSession, createSkillsService, createEmptyPlan, flattenTasks, parseMaxParallel, sessionRuntimeSettings,
-  type AiProvider, type LegacyPlanState, type RunnerId, type Session, type SessionDeps,
+  type AiProvider, type GlobalRunSettings, type LegacyPlanState, type RunnerId, type Session, type SessionDeps,
 } from '@ordewell/core';
 import { registerCommands, type CommandDeps } from './commands/CommandRegistry';
 import { handleSlashCommand, type SlashDeps } from './commands/SlashParser';
+import { confirmRisks } from './commands/runSettings';
 import { handleApprovePlan, handleSessionMessage, handleStartPlanning, type PlanManagerDeps } from './plan/PlanManager';
 import { replayIsolation } from './plan/isolation';
 import { routeWebviewMessage, type WebviewRouterDeps } from './plan/webviewRouter';
@@ -13,6 +14,7 @@ import { ModelDiscovery, sendModelConfig } from './ModelDiscovery';
 import { PlannerSelection } from './PlannerSelection';
 import { recallPlannerModel } from './plan/PlannerModelSwitch';
 import type { ChatViewProvider } from './providers/ChatViewProvider';
+import type { SettingsChange } from './shared/protocol';
 import { TaskLogRegistry } from './providers/TaskLogRegistry';
 import { SecretStore } from './adapters/SecretStore';
 import type { VsCodeConfig } from './adapters/VsCodeConfig';
@@ -199,6 +201,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       setPlannerModel: (modelId, effort) => planner.setModel(modelId, effort),
       openTaskLog: (taskId) => taskLogs.open(taskId),
       setPlanDockHeight: (height) => { void services.context.globalState.update(PLAN_DOCK_HEIGHT_KEY, height); },
+      changeSettings,
     },
     getPendingRunners: () => state.pendingRunners,
     setPendingRunners: (runners) => { state.pendingRunners = runners; },
@@ -241,27 +244,42 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       recordPlannerModel: (model, effort) => services.plannerModelMemory.remember(services.config.aiProvider, model, effort),
       recallPlannerModel: (provider, harnessModels, vendorOptions) => recallPlannerModel(services.plannerModelMemory, provider, harnessModels, vendorOptions),
       applyPlannerChoice: (provider, modelId, effort) => planner.applyChoice(provider, modelId, effort),
-      maxParallel: () => services.config.maxParallelSessions,
-      saveAutonomy: (enabled) => {
-        services.settingsService.setAutonomousMode(enabled);
-        sendRunSettings();
-      },
+      saveAutonomy,
       runSettings: {
         get: () => services.settingsService.getRunSettings(),
-        change: (changes) => {
-          services.settingsService.updateRunSettings(changes);
-          managerDeps.session.applyRunSettings(changes);
-          sendRunSettings();
-          const plan = managerDeps.session.planState;
-          if (plan) services.chatProvider.showPlan(plan);
-        },
+        change: changeRunSettings,
       },
       log,
     };
   }
 
   function sendRunSettings(): void {
-    services.chatProvider.setRunSettings(services.config.autonomousMode, services.settingsService.getRunSettings());
+    services.chatProvider.setRunSettings(services.config.autonomousMode, services.settingsService.getRunSettings(), services.config.maxParallelSessions);
+  }
+
+  function saveAutonomy(enabled: boolean): void {
+    services.settingsService.setAutonomousMode(enabled);
+    sendRunSettings();
+  }
+
+  function changeRunSettings(changes: Partial<GlobalRunSettings>): void {
+    services.settingsService.updateRunSettings(changes);
+    managerDeps.session.applyRunSettings(changes);
+    sendRunSettings();
+    const plan = managerDeps.session.planState;
+    if (plan) services.chatProvider.showPlan(plan);
+  }
+
+  /**
+   * A click in the Settings panel's Run block. Pushed back whatever happens, so
+   * a declined Act or autorun, or a refused number, shows its old value again.
+   */
+  async function changeSettings(change: SettingsChange): Promise<void> {
+    if (change.autonomous !== undefined) saveAutonomy(change.autonomous);
+    if (change.run && await confirmRisks(change.run)) changeRunSettings(change.run);
+    const limit = change.maxParallel === undefined ? null : parseMaxParallel(change.maxParallel);
+    if (limit !== null) await services.config.update('maxParallelSessions', limit);
+    sendRunSettings();
   }
 
   function onWebviewReady(): void {
@@ -346,6 +364,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     restoreState(persistenceDeps());
 
     services.context.subscriptions.push(services.config.onDidChange(() => {
+      sendRunSettings();
       // A raised parallel limit would otherwise wait for the next verdict to
       // be seen; a no-op while nothing runs.
       managerDeps.session.reschedule().catch((err) => log(`Reschedule failed: ${err instanceof Error ? err.message : String(err)}`));

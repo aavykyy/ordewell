@@ -41,8 +41,10 @@ export interface HostState {
   unsent: { text: string; seq: number } | null;
   modesByRunner: Record<string, RunnerMode[]>;
   modelConfig: { orchestrator: string; orchestratorProvider?: string } | null;
-  /** The user's autonomy level and run settings (ADR-0030); null until the host sends them. */
-  runSettings: { autonomous: boolean; run: GlobalRunSettings } | null;
+  /** The user's autonomy level, run settings (ADR-0030) and parallel limit; null until the host sends them. */
+  runSettings: { autonomous: boolean; run: GlobalRunSettings; maxParallel: number } | null;
+  /** Bumped by each `/settings`: App opens the Settings panel at its Run block. */
+  settingsRequest: number;
   modelOptions: ModelOption[];
   configuredProviders: AiProvider[];
   /** Who plans (ADR-0009): the backends offered, the one in use, and its runner + effort. */
@@ -92,6 +94,7 @@ export const INITIAL_HOST_STATE: HostState = {
   modesByRunner: {},
   modelConfig: null,
   runSettings: null,
+  settingsRequest: 0,
   modelOptions: [],
   configuredProviders: [],
   planner: { backends: [], provider: '' },
@@ -350,7 +353,10 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
       return { ...state, dockHeight: action.height };
 
     case 'setRunSettings':
-      return { ...state, runSettings: { autonomous: action.autonomous, run: action.run } };
+      return { ...state, runSettings: { autonomous: action.autonomous, run: action.run, maxParallel: action.maxParallel } };
+
+    case 'openSettings':
+      return { ...state, settingsRequest: state.settingsRequest + 1 };
 
     case 'checkpoint':
       return {

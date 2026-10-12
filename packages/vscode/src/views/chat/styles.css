@@ -673,15 +673,16 @@ body {
 .setup-panel-body {
   display: flex;
   flex-direction: column;
-  max-height: 600px;
+  max-height: 70vh;
   opacity: 1;
-  overflow: hidden;
+  overflow-y: auto;
   transition: max-height var(--transition-fast), opacity var(--transition-fast);
 }
 
 .setup-panel-body.collapsed {
   max-height: 0;
   opacity: 0;
+  overflow: hidden;
 }
 
 .setup-block {
@@ -810,6 +811,56 @@ body {
   opacity: 0.45;
   cursor: not-allowed;
   text-decoration: line-through;
+}
+
+/* ---- Run settings (Settings panel) ---- */
+.run-settings:focus {
+  outline: none;
+}
+
+.run-setting {
+  display: grid;
+  grid-template-columns: 8.5em 1fr;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 2px;
+}
+
+.run-setting-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.run-setting-hint {
+  grid-column: 2;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.run-setting-number {
+  width: 64px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: inherit;
+  outline: none;
+}
+
+.run-setting-number:focus {
+  border-color: var(--accent);
+}
+
+.run-setting-number[aria-invalid='true'] {
+  border-color: var(--red);
+  background: var(--red-subtle);
+}
+
+.run-setting:has([aria-invalid='true']) .run-setting-hint {
+  color: var(--red);
 }
 
 /* ---- Empty State ---- */

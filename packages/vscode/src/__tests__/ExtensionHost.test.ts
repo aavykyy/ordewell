@@ -16,7 +16,7 @@ import type { VsCodeConfig } from '../adapters/VsCodeConfig';
 import type { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import type { VsCodeNotification } from '../adapters/VsCodeNotification';
 import type { WebviewToHost } from '../shared/protocol';
-import { __panels, __resetPanels } from '../test/vscode.mock';
+import { __panels, __resetPanels, window } from '../test/vscode.mock';
 
 const models: DiscoveredModel[] = [
   { modelId: 'claude-sonnet-4-5', modelLabel: 'Claude Sonnet 4.5', variants: [], runnerProvider: 'anthropic' },
@@ -138,6 +138,7 @@ function fakeSession() {
     sessionId: 's1',
     aiServiceInstance: { reset: vi.fn() },
     reschedule: vi.fn(async () => {}),
+    applyRunSettings: vi.fn(),
     isExecuting: false,
     isConversationActive: false,
     isPlannerBusy: false,
@@ -189,10 +190,12 @@ function fakeRunnerInstallation(installed: string[]) {
 }
 
 function fakeSettings() {
+  let run = { ...RUN_SETTINGS_DEFAULTS };
   return {
     getAll: vi.fn(() => ({})),
-    getRunSettings: vi.fn(() => ({ ...RUN_SETTINGS_DEFAULTS })),
-    updateRunSettings: vi.fn(),
+    getRunSettings: vi.fn(() => ({ ...run })),
+    updateRunSettings: vi.fn((changes: Partial<typeof run>) => { run = { ...run, ...changes }; }),
+    setAutonomousMode: vi.fn(),
   };
 }
 
@@ -291,7 +294,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
       tasks: [expect.objectContaining({ id: 't1' })],
     }));
     await vi.waitFor(() => expect(h.chat.provider.setModels).toHaveBeenCalledWith(models));
-    expect(h.chat.provider.setRunSettings).toHaveBeenCalledWith(expect.any(Boolean), RUN_SETTINGS_DEFAULTS);
+    expect(h.chat.provider.setRunSettings).toHaveBeenCalledWith(expect.any(Boolean), RUN_SETTINGS_DEFAULTS, 2);
     await vi.waitFor(() => expect(h.chat.provider.setPlannerBackends).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ id: 'claude-code', usable: true })]),
       'openrouter', undefined, '',
@@ -392,6 +395,70 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     await vi.waitFor(() => expect(__panels).toHaveLength(1));
     expect(__panels[0].viewType).toBe('ordewellTaskLog');
     expect(__panels[0].title).toBe('Task 1 · Parse JSON');
+  });
+});
+
+describe("the Settings panel's Run block", () => {
+  let h: ReturnType<typeof harness>;
+  const warning = window.showWarningMessage as unknown as ReturnType<typeof vi.fn>;
+  const lastPush = () => h.chat.provider.setRunSettings.mock.calls.at(-1);
+
+  beforeEach(async () => {
+    h = harness();
+    await h.host.start();
+    warning.mockReset();
+    h.chat.provider.setRunSettings.mockClear();
+  });
+  afterEach(() => {
+    fs.rmSync(h.workspace, { recursive: true, force: true });
+  });
+
+  it('saves Full or Guarded and pushes the settings back', async () => {
+    h.chat.messages.fire({ type: 'changeSettings', change: { autonomous: false } });
+
+    await vi.waitFor(() => expect(h.settings.setAutonomousMode).toHaveBeenCalledWith(false));
+    expect(h.chat.provider.setRunSettings).toHaveBeenCalled();
+  });
+
+  it('saves a run setting, applies it to this window\'s run and pushes it back', async () => {
+    h.chat.messages.fire({ type: 'changeSettings', change: { run: { wakeUpReadBudget: 20 } } });
+
+    await vi.waitFor(() => expect(h.settings.updateRunSettings).toHaveBeenCalledWith({ wakeUpReadBudget: 20 }));
+    expect(h.session.spies.applyRunSettings).toHaveBeenCalledWith({ wakeUpReadBudget: 20 });
+    expect(lastPush()).toEqual([true, { ...RUN_SETTINGS_DEFAULTS, wakeUpReadBudget: 20 }, 2]);
+  });
+
+  it.each([
+    [{ supervisorLevel: 'act' as const }, /ops tasks included/],
+    [{ autorun: true }, /without review/],
+  ])('%j asks first; declined, it saves nothing and pushes the unchanged value', async (run, risk) => {
+    warning.mockResolvedValue(undefined);
+    h.chat.messages.fire({ type: 'changeSettings', change: { run } });
+
+    await vi.waitFor(() => expect(h.chat.provider.setRunSettings).toHaveBeenCalled());
+    expect(JSON.stringify(warning.mock.calls[0])).toMatch(risk);
+    expect(h.settings.updateRunSettings).not.toHaveBeenCalled();
+    expect(lastPush()).toEqual([true, RUN_SETTINGS_DEFAULTS, 2]);
+
+    warning.mockReset().mockImplementation(async (...args: unknown[]) => args.at(-1));
+    h.chat.messages.fire({ type: 'changeSettings', change: { run } });
+    await vi.waitFor(() => expect(h.settings.updateRunSettings).toHaveBeenCalledWith(run));
+  });
+
+  it('saves the parallel limit, and refuses one below 1', async () => {
+    h.chat.messages.fire({ type: 'changeSettings', change: { maxParallel: 0 } });
+    await vi.waitFor(() => expect(h.chat.provider.setRunSettings).toHaveBeenCalled());
+    expect(h.config.config.update).not.toHaveBeenCalledWith('maxParallelSessions', expect.anything());
+
+    h.chat.messages.fire({ type: 'changeSettings', change: { maxParallel: 17 } });
+    await vi.waitFor(() => expect(h.config.config.update).toHaveBeenCalledWith('maxParallelSessions', 17));
+  });
+
+  it('pushes the parallel limit whenever the configuration changes (/parallel, the command, settings.json)', async () => {
+    await h.config.config.update('maxParallelSessions', 9);
+    for (const listener of h.config.listeners) listener();
+
+    expect(lastPush()).toEqual([true, RUN_SETTINGS_DEFAULTS, 9]);
   });
 });
 

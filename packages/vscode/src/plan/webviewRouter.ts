@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { RunnerId } from '@ordewell/core';
-import type { WebviewToHost } from '../shared/protocol';
+import type { SettingsChange, WebviewToHost } from '../shared/protocol';
 import { isKnownSlashCommand } from '../commands/SlashParser';
 import { handleIsolationAction } from './isolation';
 import {
@@ -18,6 +18,7 @@ export interface ExtensionHandlers {
   /** Open (or focus) the on-demand task-log tab for a structured task (ADR-0018, V1). */
   openTaskLog(taskId: string): void;
   setPlanDockHeight(height: number): void;
+  changeSettings(change: SettingsChange): Promise<void>;
 }
 
 export interface WebviewRouterDeps extends PlanManagerDeps {
@@ -127,6 +128,9 @@ export async function routeWebviewMessage(msg: WebviewToHost, deps: WebviewRoute
       return;
     case 'setPlannerModel':
       await deps.extension.setPlannerModel(msg.modelId, msg.effort);
+      return;
+    case 'changeSettings':
+      await deps.extension.changeSettings(msg.change);
       return;
     case 'stopResearch':
       handleStopPlanning(deps);
