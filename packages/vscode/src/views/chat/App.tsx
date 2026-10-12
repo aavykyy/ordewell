@@ -817,7 +817,7 @@ export default function App() {
               </div>
             ) : (
               <div className="model-info-warning">
-                No orchestrator model selected. Type <code>/model set</code> to pick one, or plans cannot be generated.
+                No planner model selected. Type <code>/model set</code> to pick one, or plans cannot be generated.
               </div>
             )
           )}

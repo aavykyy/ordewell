@@ -10,9 +10,9 @@ export interface SlashCommandSpec {
 }
 
 export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
-  { label: '/planner', detail: 'Choose who plans — an API provider or a coding agent (no API key)', insertText: '/planner' },
-  { label: '/model', detail: 'Show model configuration', insertText: '/model' },
-  { label: '/model set ', detail: 'Pick orchestrator model', insertText: '/model set ' },
+  { label: '/planner', detail: 'Pick the planner: harness, model and effort in one flow', insertText: '/planner' },
+  { label: '/model', detail: 'Show the planner model', insertText: '/model' },
+  { label: '/model set ', detail: 'Pick the planner model', insertText: '/model set ' },
   { label: '/planner-effort', detail: 'Thinking effort for a coding-agent planner', insertText: '/planner-effort' },
   { label: '/key set ', detail: 'Set an API key for a provider', insertText: '/key set ' },
   { label: '/sessions', detail: 'Browse and load saved sessions', insertText: '/sessions' },

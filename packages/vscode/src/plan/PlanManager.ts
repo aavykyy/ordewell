@@ -112,7 +112,7 @@ export function plannerPreflightError(config: PlanManagerDeps['config']): string
     return 'API key not configured. Run "Ordewell: Configure API Key" to set it.';
   }
   if (!config.planningModel) {
-    return 'No orchestrator model selected. Type /model set to pick one first.';
+    return 'No planner model selected. Type /model set to pick one first.';
   }
   return null;
 }

@@ -11,6 +11,7 @@ import { routeWebviewMessage, type WebviewRouterDeps } from './plan/webviewRoute
 import { saveCurrentSession, restoreState, persistState, type PersistenceDeps } from './state/StatePersistence';
 import { ModelDiscovery, sendModelConfig } from './ModelDiscovery';
 import { PlannerSelection } from './PlannerSelection';
+import { recallPlannerModel } from './plan/PlannerModelSwitch';
 import type { ChatViewProvider } from './providers/ChatViewProvider';
 import { TaskLogRegistry } from './providers/TaskLogRegistry';
 import { SecretStore } from './adapters/SecretStore';
@@ -238,6 +239,8 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       pickModelWithProvider: (...args) => discovery.pickModelWithProvider(...args),
       updateConfig: async (key, value) => services.config.update(key, value),
       recordPlannerModel: (model, effort) => services.plannerModelMemory.remember(services.config.aiProvider, model, effort),
+      recallPlannerModel: (provider, harnessModels, vendorOptions) => recallPlannerModel(services.plannerModelMemory, provider, harnessModels, vendorOptions),
+      applyPlannerChoice: (provider, modelId, effort) => planner.applyChoice(provider, modelId, effort),
       saveAutonomy: (enabled) => {
         services.settingsService.setAutonomousMode(enabled);
         sendRunSettings();

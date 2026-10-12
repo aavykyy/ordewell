@@ -155,7 +155,83 @@ export function createFakeWebviewPanel(viewType: string, title: string): FakeWeb
   return panel;
 }
 
+export const QuickInputButtons = {
+  Back: { iconPath: new ThemeIcon('arrow-left'), tooltip: 'Back' },
+} as const;
+
+export interface FakeQuickPick<T = Record<string, unknown>> {
+  title?: string;
+  step?: number;
+  totalSteps?: number;
+  placeholder?: string;
+  ignoreFocusOut: boolean;
+  buttons: readonly unknown[];
+  items: readonly T[];
+  activeItems: readonly T[];
+  selectedItems: readonly T[];
+  shown: boolean;
+  disposed: boolean;
+  show(): void;
+  hide(): void;
+  dispose(): void;
+  onDidAccept(cb: () => void): { dispose(): void };
+  onDidHide(cb: () => void): { dispose(): void };
+  onDidTriggerButton(cb: (button: unknown) => void): { dispose(): void };
+  /** Accept the highlighted item, or the one at `index` after moving the highlight there. */
+  __accept(index?: number): void;
+  __triggerBack(): void;
+  /** The user dismissing the picker (Escape, focus loss). */
+  __hide(): void;
+}
+
+/** Quick picks created via `window.createQuickPick`, in creation order. */
+export const __quickPicks: FakeQuickPick[] = [];
+
+export function __resetQuickPicks(): void {
+  __quickPicks.length = 0;
+}
+
+export function createFakeQuickPick<T>(): FakeQuickPick<T> {
+  const accepts: Array<() => void> = [];
+  const hides: Array<() => void> = [];
+  const buttons: Array<(b: unknown) => void> = [];
+  const subscribe = <F>(list: F[], cb: F) => {
+    list.push(cb);
+    return { dispose: () => { const i = list.indexOf(cb); if (i >= 0) list.splice(i, 1); } };
+  };
+  const qp: FakeQuickPick<T> = {
+    ignoreFocusOut: false,
+    buttons: [],
+    items: [],
+    activeItems: [],
+    selectedItems: [],
+    shown: false,
+    disposed: false,
+    show() { qp.shown = true; },
+    // A real picker reports its own hide() the same way as a dismissal.
+    hide() {
+      if (!qp.shown) return;
+      qp.shown = false;
+      for (const cb of [...hides]) cb();
+    },
+    dispose() { qp.disposed = true; },
+    onDidAccept: (cb) => subscribe(accepts, cb),
+    onDidHide: (cb) => subscribe(hides, cb),
+    onDidTriggerButton: (cb) => subscribe(buttons, cb),
+    __accept(index) {
+      if (index !== undefined) qp.activeItems = [qp.items[index]];
+      qp.selectedItems = qp.activeItems;
+      for (const cb of [...accepts]) cb();
+    },
+    __triggerBack() { for (const cb of [...buttons]) cb(QuickInputButtons.Back); },
+    __hide() { qp.hide(); },
+  };
+  __quickPicks.push(qp as unknown as FakeQuickPick);
+  return qp;
+}
+
 export const window = {
+  createQuickPick: vi.fn(() => createFakeQuickPick()) as never,
   showQuickPick: vi.fn() as never,
   withProgress: vi.fn() as never,
   showWarningMessage: vi.fn() as never,

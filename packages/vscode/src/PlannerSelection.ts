@@ -45,7 +45,6 @@ export class PlannerSelection {
   /** Switch who plans. */
   async apply(provider: AiProvider): Promise<void> {
     if (!getProviderMeta(provider)) return;
-    await this.deps.config.update('aiProvider', provider);
     // A model id from the old backend is meaningless to the new one — an
     // OpenRouter slug handed to Claude Code, or the reverse. `recallPlannerModel`
     // restores what the user last picked *for this provider*, falling back to
@@ -54,11 +53,32 @@ export class PlannerSelection {
     const harnessModels = runner ? ((await this.deps.modelResolver.modelsForRunners([runner]))[runner] ?? []) : undefined;
     const vendorOptions = runner ? undefined : await this.deps.modelResolver.pickerOptions();
     const { model, effort } = recallPlannerModel(this.deps.plannerModelMemory, provider, harnessModels, vendorOptions);
+    await this.write(provider, model, effort);
+    await this.publish(`Planner set to ${provider}`);
+  }
+
+  /**
+   * Switch backend, model and effort as one change — the `/planner` wizard's
+   * last step. The pick is remembered here, not recalled: it is what the user
+   * just chose, so it has to win over whatever the memory held for the backend.
+   */
+  async applyChoice(provider: AiProvider, modelId: string, effort: string): Promise<void> {
+    if (!getProviderMeta(provider)) return;
+    await this.write(provider, modelId, effort);
+    this.deps.plannerModelMemory.remember(provider, modelId, effort);
+    await this.publish(`Planner set to ${provider}, model ${modelId}`);
+  }
+
+  private async write(provider: AiProvider, model: string, effort: string): Promise<void> {
+    await this.deps.config.update('aiProvider', provider);
     await this.deps.config.update('orchestratorModel', model);
     await this.deps.config.update('plannerThinkingEffort', effort);
+  }
+
+  private async publish(logLine: string): Promise<void> {
     this.deps.sendModelConfig();
     await this.sendState();
-    this.deps.log(`Planner set to ${provider}`);
+    this.deps.log(logLine);
   }
 
   async sendState(): Promise<void> {
