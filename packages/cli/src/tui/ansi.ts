@@ -238,6 +238,8 @@ function colour(open: string): (text: string) => string {
   return (text: string) => (style.enabled ? `\x1b[${open}m${text}\x1b[0m` : text);
 }
 
+const BAND_BG = '\x1b[48;5;234m';
+
 export const style = {
   /** Set false when the output is piped or the terminal has no colour. */
   enabled: true,
@@ -268,15 +270,15 @@ export const style = {
   /**
    * The grey band the user's own messages sit on. The background is
    * re-asserted after every reset inside, or the cyan `❯` and a skill token
-   * would end the band partway along the row. 236 is dark enough to stay a
+   * would end the band partway along the row. 234 is dark enough to stay a
    * quiet band on a dark terminal and keeps default and cyan text legible.
    */
   band: (text: string): string =>
-    (style.enabled ? `\x1b[48;5;236m${text.split('\x1b[0m').join('\x1b[0m\x1b[48;5;236m')}\x1b[0m` : text),
+    (style.enabled ? `${BAND_BG}${text.split('\x1b[0m').join(`\x1b[0m${BAND_BG}`)}\x1b[0m` : text),
   /**
    * Quiet text for use on the band. Bright black (`grey`) is a theme's own
    * background in some palettes and sits close to the band's, so hints and the
-   * blurred prompt would sink into it; a fixed mid grey stays readable on 236.
+   * blurred prompt would sink into it; a fixed mid grey stays readable on 234.
    */
   bandGrey: colour('38;5;245'),
 };

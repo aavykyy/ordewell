@@ -6,7 +6,7 @@ import { chatLayout } from '../layout';
 import { initialState } from '../reducer';
 import type { TaskLogState, TaskView } from '../state';
 
-const GREY_BG = '\x1b[48;5;236m';
+const GREY_BG = '\x1b[48;5;234m';
 const RESET = '\x1b[0m';
 
 const message = (role: MessageBlock['role'], text: string, over: Partial<MessageBlock> = {}): MessageBlock =>

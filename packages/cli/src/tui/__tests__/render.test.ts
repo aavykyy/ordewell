@@ -805,7 +805,7 @@ describe('input cursor', () => {
       const s = initialState({ rows: 24, cols: 80 });
       const out = render({ ...s, editor: { ...s.editor, text: 'abcdef', cursor: 2 } });
       const input = inputRow(out);
-      expect(input).toContain(`ab${style.inverse('c')}\x1b[48;5;236mdef`);
+      expect(input).toContain(`ab${style.inverse('c')}\x1b[48;5;234mdef`);
     });
   });
 

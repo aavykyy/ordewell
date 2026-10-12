@@ -359,7 +359,7 @@ describe('openTerminal', () => {
       onResize: vi.fn(),
     });
 
-    const band = '\x1b[48;5;236m\x1b[36m❯ \x1b[0m\x1b[48;5;236mhi   \x1b[0m';
+    const band = '\x1b[48;5;234m\x1b[36m❯ \x1b[0m\x1b[48;5;234mhi   \x1b[0m';
     output.writes.length = 0;
     terminal.draw([band]);
     expect(output.writes.join('')).toContain(`\x1b[1;1H${band}\x1b[K`);
