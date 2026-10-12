@@ -7,6 +7,9 @@ import { reduce, type Action } from '../reducer';
 import type { ResearchStepOutcome, SessionMessage } from '@ordewell/core';
 import { chatOf } from './chat';
 import { registerSkillCommands } from '../slash';
+import cliPackage from '../../../package.json';
+
+const CLI_VERSION = cliPackage.version;
 
 // Any escape sequence at all, and the two kinds a painted frame may carry:
 // colour, and the erase-plus-cursor-column the pane divider is anchored with.
@@ -149,13 +152,13 @@ describe('top bar', () => {
     expect(auto).not.toContain('Full');
   });
 
-  it('carries no product name, model, or workspace — those live in the welcome banner', () => {
+  it('carries no product name, model, or workspace — those live in the welcome', () => {
     const out = screen({ orchestratorModel: 'deepseek/deepseek-v4-flash', workspace: '/home/dev/ordewell-tui' });
     expect(stripAnsi(out[0])).not.toMatch(/Ordewell|ordewell-tui|deepseek/i);
   });
 });
 
-// Mirrors render.ts's boldSans(): Unicode Mathematical Sans-Serif Bold reads as
+// Mirrors layout.ts's boldSans(): Unicode Mathematical Sans-Serif Bold reads as
 // bold in any font without an ANSI escape, so the wordmark isn't the literal
 // ASCII string "ordewell" — tests need the same mapping to find it.
 function boldSans(word: string): string {
@@ -165,56 +168,91 @@ function boldSans(word: string): string {
   }).join('');
 }
 
-describe('welcome banner', () => {
-  it('draws the logo as braille art — dot and wordmark on the same rows', () => {
-    const out = screen({ cols: 90, rows: 26 });
-    const lines = out.map(stripAnsi);
-    // The dot's widest row, from the traced BANNER_ROWS art.
-    const dotRow = lines.findIndex((l) => l.includes('⣀⣶⣿⣷⡄'));
-    expect(dotRow).toBeGreaterThanOrEqual(0);
-    // The wordmark sits to the right of the icon, not stacked under it.
-    expect(lines[dotRow]).toMatch(/⣀⣶⣿⣷⡄\s+⣰⣿/);
+describe('welcome mark', () => {
+  // The mark as designed on its dot grid: three strokes converging on the dot.
+  const MARK = [
+    '⠛⠓⠶⣤⣀⠀⠀⠀⢀⣀⡀',
+    '⠶⠶⠶⠶⣿⣿⠶⠆⣿⣿⣿',
+    '⣤⡤⠶⠛⠉⠀⠀⠀⠈⠉⠁',
+  ];
+  const markAt = (lines: string[]): number => lines.findIndex((l) => l.startsWith(MARK[0]));
+
+  it('draws the 3-row mark at the left edge of an 80x24 terminal', () => {
+    const lines = screen({ cols: 80, rows: 24 }).map(stripAnsi);
+    const top = markAt(lines);
+    expect(top).toBeGreaterThanOrEqual(0);
+    expect(lines[top + 1].startsWith(MARK[1])).toBe(true);
+    expect(lines[top + 2].startsWith(MARK[2])).toBe(true);
   });
 
-  it('draws the art on a standard 80x24 terminal, with the hints still on screen', () => {
+  it('stays whole at a very short height, pinned above the rest of the welcome', () => {
+    const lines = screen({ cols: 80, rows: 10 }).map(stripAnsi);
+    const top = markAt(lines);
+    expect(top).toBeGreaterThanOrEqual(0);
+    expect(lines[top + 1].startsWith(MARK[1])).toBe(true);
+    expect(lines[top + 2].startsWith(MARK[2])).toBe(true);
+  });
+  it('puts the wordmark and the version on the middle row only', () => {
+    const lines = screen({ cols: 80, rows: 24 }).map(stripAnsi);
+    const top = markAt(lines);
+    expect(lines[top + 1].trimEnd()).toMatch(new RegExp(`^${MARK[1]}\\s+${boldSans('ordewell')}\\s+v${CLI_VERSION.replace(/\./g, '\\.')}$`));
+    expect(lines[top].trimEnd()).toBe(MARK[0]);
+    expect(lines[top + 2].trimEnd()).toBe(MARK[2]);
+  });
+
+  it('mirrors the top row in the bottom one', () => {
+    // Swaps braille dot rows 1↔4 and 2↔3 in each column of a cell.
+    const flip = (row: string): string => [...row].map((ch) => {
+      const bits = ch.codePointAt(0)! - 0x2800;
+      const pairs: Array<[number, number]> = [[0x01, 0x40], [0x02, 0x04], [0x08, 0x80], [0x10, 0x20]];
+      let out = 0;
+      for (const [a, b] of pairs) {
+        if (bits & a) out |= b;
+        if (bits & b) out |= a;
+      }
+      return String.fromCodePoint(0x2800 + out);
+    }).join('');
+    const lines = screen({ cols: 80, rows: 24 }).map(stripAnsi);
+    const top = markAt(lines);
+    expect(lines[top + 2].trimEnd()).toBe(flip(lines[top].trimEnd()));
+  });
+
+  it('keeps the whole mark at 40 columns, cutting the version before the wordmark', () => {
+    const lines = screen({ cols: 40, rows: 24 }).map(stripAnsi);
+    const top = markAt(lines);
+    expect(top).toBeGreaterThanOrEqual(0);
+    expect(lines[top + 1].startsWith(MARK[1])).toBe(true);
+    expect(lines[top + 2].startsWith(MARK[2])).toBe(true);
+  });
+
+  it('drops the version first, then cuts the wordmark, when the middle row runs out of room', () => {
+    // The pane leaves its last column free: 11 mark + 2 gap + 8 wordmark = 21.
+    const named = screen({ cols: 22, rows: 24 }).map(stripAnsi);
+    expect(named[markAt(named) + 1].trimEnd()).toBe(`${MARK[1]}  ${boldSans('ordewell')}`);
+    const cut = screen({ cols: 18, rows: 24 }).map(stripAnsi);
+    // 17 columns leave 4 for the wordmark: three letters and the ellipsis.
+    expect(cut[markAt(cut) + 1].trimEnd()).toBe(`${MARK[1]}  ${boldSans('ord')}…`);
+  });
+
+  it('no longer carries the description paragraph', () => {
+    expect(text({ cols: 120, rows: 40 })).not.toContain('researches your codebase');
+  });
+
+  it('keeps the Setup rows, the help hint and the workspace on an 80x24 terminal', () => {
     const lines = screen({ cols: 80, rows: 24, workspace: '/home/dev/ordewell-tui' }).map(stripAnsi);
-    expect(lines.some((l) => l.includes('⣀⣶⣿⣷⡄'))).toBe(true);
-    expect(lines.some((l) => l.includes('/help'))).toBe(true);
-    expect(lines.some((l) => l.includes('ordewell-tui'))).toBe(true);
-  });
-
-  it('drops the description before it drops the art', () => {
-    const lines = screen({ cols: 80, rows: 23 }).map(stripAnsi);
-    expect(lines.some((l) => l.includes('⣀⣶⣿⣷⡄'))).toBe(true);
-    expect(lines.some((l) => l.includes('Autonomy'))).toBe(true);
-    expect(lines.some((l) => l.includes('researches your codebase'))).toBe(false);
-  });
-
-  it('falls back to the lockup when not even the trimmed art welcome fits, keeping the Setup rows', () => {
-    const lines = screen({ cols: 80, rows: 22 }).map(stripAnsi);
-    expect(lines.some((l) => l.includes('≫●'))).toBe(true);
-    expect(lines.some((l) => l.includes('⣀⣶⣿⣷⡄'))).toBe(false);
-    expect(lines.some((l) => l.includes('Autonomy'))).toBe(true);
-  });
-
-  it('falls back to the one-line lockup when the art cannot fit', () => {
-    const out = screen({ cols: 60 });
-    const lines = out.map(stripAnsi);
-    const markLine = lines.findIndex((l) => l.includes(boldSans('ordewell')));
-    expect(markLine).toBeGreaterThanOrEqual(0);
-    expect(lines[markLine]).toContain('≫●');
-  });
-
-  it('shows the workspace directory just below the help hint', () => {
-    const out = text({ workspace: '/home/dev/ordewell-tui' });
-    const lines = out.split('\n').map(stripAnsi);
+    for (const row of ['Setup', 'Planner', 'Runners', 'Autonomy', 'Run ']) {
+      expect(lines.some((l) => l.trimStart().startsWith(row))).toBe(true);
+    }
     const helpLine = lines.findIndex((l) => l.includes('/help'));
     expect(helpLine).toBeGreaterThanOrEqual(0);
     expect(lines[helpLine + 1]).toContain('ordewell-tui');
   });
 
-  it('still renders in a terminal narrower than the wordmark', () => {
+  it('still renders in a terminal narrower than the mark', () => {
     expect(() => screen({ rows: 40, cols: 4, workspace: '/ws' })).not.toThrow();
+    for (const line of screen({ rows: 40, cols: 4, workspace: '/ws' })) {
+      expect(width(line)).toBeLessThanOrEqual(4);
+    }
   });
 });
 

@@ -118,6 +118,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   details are aligned, and the current value is marked. Multi-choice pickers
   switch steps with ←/→ (tab and shift-tab still work) and save nothing until
   the last one.
+- **The welcome shows a compact 3-row logo at every terminal size.** The mark
+  carries the wordmark and version beside it, and stays at the top of a short
+  terminal; the large braille banner, its one-line fallback and the
+  description paragraph are gone.
+- **Esc closes the `/settings` and `/planner` menus** in the terminal UI,
+  discarding choices not yet confirmed, instead of going back a step.
 - **Plan rows are one line plus a meta line.** Skills, effort and mode show
   when a row is expanded. Per-task usage moved out of the rows into the task
   view's pinned footer, with time and a per-model breakdown; *Tasks total*
@@ -176,9 +182,6 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
-- **The welcome logo shows again on standard 80×24 terminals.** The braille
-  art is chosen by the rows the chat pane really has, and gives up its
-  description paragraph before it gives up the art.
 - **A usage limit shows once.** Claude Code reports a limit as a message and
   again as the turn's error, worded alike. The planner chat, the task chat and
   task views, a reload and the task's plain text now show it once, as the
