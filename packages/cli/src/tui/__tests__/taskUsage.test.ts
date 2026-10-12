@@ -71,3 +71,34 @@ describe('task row accounting', () => {
     expect(clearedText).toContain('Tasks total: 12.4k in · 3.1k out · $0.42 · 5s');
   });
 });
+
+describe('task row model name', () => {
+  const running = (byModel: AttemptUsage['byModel'], over: Partial<TaskView> = {}) =>
+    task({ status: 'running', assignedModel: { modelLabel: 'Sonnet 5.5' } as TaskView['assignedModel'], attemptUsage: [{ ...usage, byModel }], ...over });
+  const expanded = (t: TaskView) => {
+    const state = { ...initialState({ tasks: [t], rows: 40, cols: 140 }), expandedTaskId: t.id };
+    return planLayout(state, 40, 140).lines.map(stripAnsi).join('\n');
+  };
+
+  it('shows the assigned model before usage names one', () => {
+    const text = lines([running([])]);
+    expect(text).toContain('Sonnet 5.5');
+    expect(text).not.toContain('model unknown');
+  });
+
+  it('shows the model usage reports', () => {
+    const text = lines([running([{ source: 'claude-code', model: 'claude-sonnet-x', totals: { inputTokens: 1 } }])]);
+    expect(text).toContain('claude-sonnet-x');
+    expect(text).not.toContain('model unknown');
+  });
+
+  it('leaves an unnamed entry out of the row and labels it in the expanded view', () => {
+    const t = running([
+      { source: 'claude-code', model: 'claude-sonnet-x', totals: { inputTokens: 1 } },
+      { source: 'claude-code', totals: { inputTokens: 7000 } },
+    ]);
+    expect(lines([t])).not.toContain('model unknown');
+    expect(lines([t])).not.toContain('unattributed');
+    expect(expanded(t)).toContain('unattributed: 7k in');
+  });
+});
