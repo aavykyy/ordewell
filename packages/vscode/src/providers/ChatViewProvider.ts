@@ -72,9 +72,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   setPlanDockHeight(height: number | undefined): void {
     this.postMessage({ type: 'planDockHeight', height });
   }
-  setRunSettings(autonomous: boolean, run: GlobalRunSettings): void {
-    this.postMessage({ type: 'setRunSettings', autonomous, run });
+  setRunSettings(autonomous: boolean, run: GlobalRunSettings, maxParallel: number): void {
+    this.postMessage({ type: 'setRunSettings', autonomous, run, maxParallel });
   }
+  openSettings(): void { this.postMessage({ type: 'openSettings' }); }
   setTaskSkills(skills: { name: string; description: string }[]): void {
     this.postMessage({ type: 'setTaskSkills', skills });
   }

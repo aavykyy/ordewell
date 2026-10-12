@@ -9,7 +9,7 @@ import type { ApiProvider } from '../adapters/SecretStore';
 import type { ChatViewProvider, PlannerBackend } from '../providers/ChatViewProvider';
 import type { VendorModelOption } from '../plan/PlannerModelSwitch';
 import { configureModelAllowlist } from './configureModelAllowlist';
-import { runSettingsWizard, confirmRisks } from './settingsWizard';
+import { confirmRisks } from './runSettings';
 import { SLASH_COMMAND_NAMES, slashHelp } from './slashCommands';
 import { resolveAutonomousQuickPickItems, applyAutonomousChoice } from '../SlashAutonomous';
 import { runPlannerWizard } from './plannerWizard';
@@ -48,8 +48,6 @@ export interface SlashDeps {
   saveAutonomy(enabled: boolean): void;
   /** The user's run settings (ADR-0030): `change` saves them and applies them at once to this window's run. */
   runSettings: { get(): GlobalRunSettings; change(changes: Partial<GlobalRunSettings>): void };
-  /** How many AI tasks may run at once (`ordewell.maxParallelSessions`). */
-  maxParallel(): number;
   log(msg: string): void;
 }
 
@@ -333,14 +331,7 @@ export async function handleSlashCommand(text: string, deps: SlashDeps): Promise
     return;
   }
   if (cmd === '/settings') {
-    await runSettingsWizard({
-      autonomous: deps.config.autonomousMode,
-      run: deps.runSettings.get(),
-      maxParallel: deps.maxParallel(),
-      saveAutonomy: (enabled) => deps.saveAutonomy(enabled),
-      changeRunSettings: (changes) => deps.runSettings.change(changes),
-      setMaxParallel: (n) => deps.updateConfig('maxParallelSessions', n),
-    });
+    deps.chatProvider.openSettings();
     return;
   }
   if (cmd === '/supervisor' || cmd === '/automerge' || cmd === '/autorun') {

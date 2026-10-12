@@ -35,7 +35,6 @@ function makeDeps(overrides: Partial<SlashDeps> = {}): SlashDeps {
     recallPlannerModel: () => ({ model: '', effort: '', source: 'none' }),
     applyPlannerChoice: async () => {},
     runSettings: { get: () => ({ ...RUN_SETTINGS_DEFAULTS }), change: () => {} },
-    maxParallel: () => 5,
     saveAutonomy: () => {},
     log: () => {},
     ...overrides,
@@ -350,6 +349,14 @@ describe('conversation-editing slash commands', () => {
 
     it('are known commands', () => {
       for (const name of ['/supervisor act', '/automerge', '/autorun on']) expect(isKnownSlashCommand(name)).toBe(true);
+    });
+
+    it('/settings opens the Settings panel at its Run block, with no quick pick', async () => {
+      __resetQuickPicks();
+      const openSettings = vi.fn();
+      await handleSlashCommand('/settings', makeDeps({ chatProvider: { openSettings } as unknown as SlashDeps['chatProvider'] }));
+      expect(openSettings).toHaveBeenCalledOnce();
+      expect(__quickPicks).toHaveLength(0);
     });
   });
 

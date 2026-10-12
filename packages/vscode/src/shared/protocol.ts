@@ -144,11 +144,24 @@ export type WebviewToHost =
   /** The planner's own model and thinking effort, a pair so neither can outlive the other. */
   | { type: 'setPlannerModel'; modelId: string; effort?: string }
   /**
+   * One setting changed in the Settings panel's Run block (ADR-0030). The host
+   * validates and asks before Act or autorun; it answers with `setRunSettings`
+   * either way, so a declined change shows its old value again.
+   */
+  | { type: 'changeSettings'; change: SettingsChange }
+  /**
    * An action on an isolated run, from a task's conflict indicator or the
    * handoff card. Reviewing, merging, discarding and cleaning up are all
    * asymmetric operations the host alone can confirm and perform.
    */
   | { type: 'isolationAction'; action: IsolationActionKind; taskId?: string };
+
+/** One change from the Settings panel's Run block: Full/Guarded, run settings (ADR-0030) or the parallel limit. */
+export interface SettingsChange {
+  autonomous?: boolean;
+  run?: Partial<GlobalRunSettings>;
+  maxParallel?: number;
+}
 
 export type HostToWebview =
   | { type: 'setState'; state: ChatState }
@@ -171,8 +184,10 @@ export type HostToWebview =
   | { type: 'setRunners'; runners: RunnerMeta[] }
   /** The remembered plan dock height in px; absent until the user first drags it. */
   | { type: 'planDockHeight'; height?: number }
-  /** The user's autonomy level and run settings (ADR-0030), sent on ready and after each change. */
-  | { type: 'setRunSettings'; autonomous: boolean; run: GlobalRunSettings }
+  /** The user's autonomy level, run settings (ADR-0030) and parallel limit, sent on ready and after each change. */
+  | { type: 'setRunSettings'; autonomous: boolean; run: GlobalRunSettings; maxParallel: number }
+  /** `/settings`: open the Settings panel at its Run block. */
+  | { type: 'openSettings' }
   /** Discovered skills (global ~/.ordewell/skills/ + workspace .ordewell/skills/, global wins over workspace) for the /skill-name suggestion dropdown. */
   | { type: 'setSkills'; skills: { name: string; description: string; appliesTo?: 'planner' | 'task' }[] }
   /** Every `applies-to: task` skill, user-only ones included: what a task card's skill chips can attach. */
