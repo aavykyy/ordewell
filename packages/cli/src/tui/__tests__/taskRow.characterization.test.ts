@@ -36,7 +36,32 @@ describe('a plan row, pinned before its rules move to core', () => {
 
   it('draws a quiet running task with ~', () => {
     expect(frame([task({ status: 'in_progress', idleSince: '2026-01-01T00:00:00Z' })])).toContain('  ~  1 RUN Fix the parser');
-    expect(frame([task({ status: 'in_progress', idleSince: '2026-01-01T00:00:00Z' })])).toContain('quiet · claude-code');
+  });
+
+  it('leaves a quiet task to its ~ glyph rather than spelling it out', () => {
+    const out = frame([task({ status: 'in_progress', idleSince: '2026-01-01T00:00:00Z' })]);
+    expect(out).not.toContain('quiet');
+    expect(out).toMatch(/^\s+claude-code · default model$/m);
+  });
+
+  it('leaves a running task to its spinner, naming the runner first', () => {
+    const out = frame([task({ status: 'in_progress' })]);
+    expect(out).not.toContain('working');
+    expect(out).toMatch(/^\s+claude-code · default model$/m);
+  });
+
+  it.each(['completed', 'failed'] as const)('says no activity word on a %s row', (status) => {
+    const out = frame([task({ status })]);
+    expect(out).not.toContain('working');
+    expect(out).not.toContain('quiet');
+    expect(out).toMatch(/^\s+claude-code · default model$/m);
+  });
+
+  it('keeps the word that opens an approval and the one that names an awaiting task', () => {
+    expect(frame([task({ status: 'in_progress', awaitingApproval: 1 })]))
+      .toMatch(/^\s+waiting for approval — enter opens it · claude-code · default model$/m);
+    expect(frame([task({ status: 'awaiting_user', awaitingReason: 'input' })]))
+      .toMatch(/^\s+waiting for your input · claude-code · default model$/m);
   });
 
   it('names a manual and an ops task by kind', () => {
@@ -56,7 +81,6 @@ describe('a plan row, pinned before its rules move to core', () => {
   it('counts approvals beyond one, and puts them ahead of the status', () => {
     expect(frame([task({ status: 'in_progress', awaitingApproval: 1 })])).toContain('waiting for approval — enter opens it · claude-code');
     expect(frame([task({ status: 'in_progress', awaitingApproval: 3 })])).toContain('waiting for approval (3) — enter opens it · claude-code');
-    expect(frame([task({ status: 'in_progress' })])).toContain('    working · claude-code');
   });
 
   it('marks a conflict, naming the repo and files but not a lone root repo', () => {
