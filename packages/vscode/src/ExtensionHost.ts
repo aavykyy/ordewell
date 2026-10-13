@@ -240,7 +240,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       discoverOrchestratorModelOptions: () => discovery.options(),
       pickModelWithProvider: (...args) => discovery.pickModelWithProvider(...args),
       updateConfig: async (key, value) => services.config.update(key, value),
-      recordPlannerModel: (model, effort) => services.plannerModelMemory.remember(services.config.aiProvider, model, effort),
+      changePlanner: (change) => planner.pick(change),
       recallPlannerModel: (provider, harnessModels, vendorOptions) => recallPlannerModel(services.plannerModelMemory, provider, harnessModels, vendorOptions),
       applyPlannerChoice: (provider, modelId, effort) => planner.applyChoice(provider, modelId, effort),
       saveAutonomy,

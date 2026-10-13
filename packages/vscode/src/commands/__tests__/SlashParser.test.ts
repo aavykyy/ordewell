@@ -31,7 +31,7 @@ function makeDeps(overrides: Partial<SlashDeps> = {}): SlashDeps {
     discoverOrchestratorModelOptions: async () => [],
     pickModelWithProvider: async () => undefined,
     updateConfig: async () => {},
-    recordPlannerModel: () => {},
+    changePlanner: async () => {},
     recallPlannerModel: () => ({ model: '', effort: '', source: 'none' }),
     applyPlannerChoice: async () => {},
     runSettings: { get: () => ({ ...RUN_SETTINGS_DEFAULTS }), change: () => {} },
@@ -41,9 +41,9 @@ function makeDeps(overrides: Partial<SlashDeps> = {}): SlashDeps {
   };
 }
 
-describe('/model set records the pick against the current provider', () => {
-  it('records a harness planner model chosen by exact id', async () => {
-    const recordPlannerModel = vi.fn();
+describe('/model set hands the pick to the planner selection', () => {
+  it('hands over a harness planner model chosen by exact id', async () => {
+    const changePlanner = vi.fn(async () => {});
     const deps = makeDeps({
       config: { orchestratorModel: '', planningModel: '', enabledRunners: [], autonomousMode: true, apiKey: '', openAiBaseUrl: '', configuredProviders: [], aiProvider: 'claude-code', plannerThinkingEffort: '' },
       modelResolver: {
@@ -53,16 +53,18 @@ describe('/model set records the pick against the current provider', () => {
         refreshRunnerModels: () => {},
         modelsForRunners: async () => ({ 'claude-code': [harnessModel('claude-sonnet-4-5', ['low', 'high'])] }),
       },
-      recordPlannerModel,
+      changePlanner,
     });
 
     await handleSlashCommand('/model set claude-sonnet-4-5', deps);
 
-    expect(recordPlannerModel).toHaveBeenCalledWith('claude-sonnet-4-5', undefined);
+    expect(changePlanner).toHaveBeenCalledWith({ model: 'claude-sonnet-4-5' });
   });
 
-  it('drops a stale effort and records the model without it', async () => {
-    const recordPlannerModel = vi.fn();
+  // Whether the old effort survives is core's call (`selectPlanner`), so the
+  // command sends the model alone rather than deciding the effort itself.
+  it('sends a new model without the previous model\'s effort', async () => {
+    const changePlanner = vi.fn(async () => {});
     const deps = makeDeps({
       config: { orchestratorModel: '', planningModel: '', enabledRunners: [], autonomousMode: true, apiKey: '', openAiBaseUrl: '', configuredProviders: [], aiProvider: 'claude-code', plannerThinkingEffort: 'xhigh' },
       modelResolver: {
@@ -72,40 +74,40 @@ describe('/model set records the pick against the current provider', () => {
         refreshRunnerModels: () => {},
         modelsForRunners: async () => ({ 'claude-code': [harnessModel('claude-haiku-4-5', ['low'])] }),
       },
-      recordPlannerModel,
+      changePlanner,
     });
 
     await handleSlashCommand('/model set claude-haiku-4-5', deps);
 
-    expect(recordPlannerModel).toHaveBeenCalledWith('claude-haiku-4-5', undefined);
+    expect(changePlanner).toHaveBeenCalledWith({ model: 'claude-haiku-4-5' });
   });
 
-  it('records a vendor model chosen by a known shortcut', async () => {
-    const recordPlannerModel = vi.fn();
+  it('hands over a vendor model chosen by a known shortcut', async () => {
+    const changePlanner = vi.fn(async () => {});
     const deps = makeDeps({
       config: { orchestratorModel: '', planningModel: '', enabledRunners: [], autonomousMode: true, apiKey: '', openAiBaseUrl: '', configuredProviders: [], aiProvider: 'openrouter', plannerThinkingEffort: '' },
       discoverOrchestratorModelOptions: async () => [{ id: 'z-ai/glm-4.6', label: 'GLM 4.6', provider: 'openrouter' }],
-      recordPlannerModel,
+      changePlanner,
     });
 
     await handleSlashCommand('/model set z-ai/glm-4.6', deps);
 
-    expect(recordPlannerModel).toHaveBeenCalledWith('z-ai/glm-4.6');
+    expect(changePlanner).toHaveBeenCalledWith({ model: 'z-ai/glm-4.6' });
   });
 
-  it('records a vendor model picked from the quick pick when no shortcut matches', async () => {
-    const recordPlannerModel = vi.fn();
+  it('hands over a vendor model picked from the quick pick when no shortcut matches', async () => {
+    const changePlanner = vi.fn(async () => {});
     window.showQuickPick = vi.fn() as never;
     const deps = makeDeps({
       config: { orchestratorModel: '', planningModel: '', enabledRunners: [], autonomousMode: true, apiKey: '', openAiBaseUrl: '', configuredProviders: [], aiProvider: 'openrouter', plannerThinkingEffort: '' },
       discoverOrchestratorModelOptions: async () => [{ id: 'z-ai/glm-4.6', label: 'GLM 4.6', provider: 'openrouter' }],
       pickModelWithProvider: async () => 'z-ai/glm-4.6',
-      recordPlannerModel,
+      changePlanner,
     });
 
     await handleSlashCommand('/model set nonsense', deps);
 
-    expect(recordPlannerModel).toHaveBeenCalledWith('z-ai/glm-4.6');
+    expect(changePlanner).toHaveBeenCalledWith({ model: 'z-ai/glm-4.6' });
   });
 });
 
@@ -120,30 +122,24 @@ describe('/model set with a vendor model while a coding agent plans', () => {
   });
 
   it('switches the planner to the vendor and sets the model once confirmed', async () => {
-    const recordPlannerModel = vi.fn();
-    const updateConfig = vi.fn(async () => {});
+    const changePlanner = vi.fn(async () => {});
     window.showQuickPick = vi.fn() as never;
     window.showInformationMessage = vi.fn(async () => 'Switch planner') as never;
-    (commands.executeCommand as unknown as ReturnType<typeof vi.fn>).mockClear();
 
-    await handleSlashCommand('/model set deepseek/deepseek-v4-flash', vendorDeps({ recordPlannerModel, updateConfig }));
+    await handleSlashCommand('/model set deepseek/deepseek-v4-flash', vendorDeps({ changePlanner }));
 
-    expect(commands.executeCommand).toHaveBeenCalledWith('ordewell.setPlanner', 'openrouter');
-    expect(updateConfig).toHaveBeenCalledWith('orchestratorModel', 'deepseek/deepseek-v4-flash');
-    expect(recordPlannerModel).toHaveBeenCalledWith('deepseek/deepseek-v4-flash');
+    expect(changePlanner).toHaveBeenCalledWith({ provider: 'openrouter', model: 'deepseek/deepseek-v4-flash', effort: '' });
     expect(window.showQuickPick).not.toHaveBeenCalled();
   });
 
   it('leaves the planner and its model alone when the switch is declined', async () => {
-    const updateConfig = vi.fn(async () => {});
+    const changePlanner = vi.fn(async () => {});
     window.showQuickPick = vi.fn() as never;
     window.showInformationMessage = vi.fn(async () => undefined) as never;
-    (commands.executeCommand as unknown as ReturnType<typeof vi.fn>).mockClear();
 
-    await handleSlashCommand('/model set deepseek/deepseek-v4-flash', vendorDeps({ updateConfig }));
+    await handleSlashCommand('/model set deepseek/deepseek-v4-flash', vendorDeps({ changePlanner }));
 
-    expect(commands.executeCommand).not.toHaveBeenCalled();
-    expect(updateConfig).not.toHaveBeenCalled();
+    expect(changePlanner).not.toHaveBeenCalled();
     expect(window.showQuickPick).not.toHaveBeenCalled();
   });
 });
@@ -183,9 +179,9 @@ describe('/planner', () => {
   });
 });
 
-describe('/planner-effort records the effort against the current model', () => {
-  it('records the model with the newly chosen effort by exact id', async () => {
-    const recordPlannerModel = vi.fn();
+describe('/planner-effort hands the level to the planner selection', () => {
+  it('sends the chosen effort by exact id', async () => {
+    const changePlanner = vi.fn(async () => {});
     const deps = makeDeps({
       config: { orchestratorModel: 'claude-sonnet-4-5', planningModel: '', enabledRunners: [], autonomousMode: true, apiKey: '', openAiBaseUrl: '', configuredProviders: [], aiProvider: 'claude-code', plannerThinkingEffort: '' },
       modelResolver: {
@@ -195,12 +191,12 @@ describe('/planner-effort records the effort against the current model', () => {
         refreshRunnerModels: () => {},
         modelsForRunners: async () => ({ 'claude-code': [harnessModel('claude-sonnet-4-5', ['low', 'high'])] }),
       },
-      recordPlannerModel,
+      changePlanner,
     });
 
     await handleSlashCommand('/planner-effort high', deps);
 
-    expect(recordPlannerModel).toHaveBeenCalledWith('claude-sonnet-4-5', 'high');
+    expect(changePlanner).toHaveBeenCalledWith({ effort: 'high' });
   });
 });
 

@@ -234,6 +234,21 @@ describe('OrchestratorPool.updateSettings — planner model memory', () => {
     expect(result.plannerModels?.['claude-code']).toBeUndefined();
   });
 
+  it('keeps the effort across a model pick only where the new model offers it', () => {
+    process.env.AI_PROVIDER = 'opencode';
+    process.env.ORCHESTRATOR_MODEL = 'opencode/model-x';
+    process.env.ORDEWELL_PLANNER_EFFORT = 'high';
+    expect(pool.updateSettings({ orchestratorModel: 'opencode/model-y' }).plannerThinkingEffort).toBe('high');
+
+    process.env.AI_PROVIDER = 'claude-code';
+    process.env.ORCHESTRATOR_MODEL = 'claude-a';
+    process.env.ORDEWELL_PLANNER_EFFORT = 'high';
+    const result = pool.updateSettings({ orchestratorModel: 'claude-b' });
+
+    expect(result.plannerThinkingEffort).toBe('');
+    expect(result.plannerModels?.['claude-code']).toEqual({ model: 'claude-b' });
+  });
+
   it('records an effort-only change sent via env, the shape the CLI and TUI actually send', () => {
     // `ordewell planner-effort <level>` and the TUI's effort picker both go
     // through `persistEnv`/`updateSettings({ env: { ORDEWELL_PLANNER_EFFORT } })`

@@ -36,10 +36,13 @@ import {
   ensureStateDirIgnored,
   runnerForProvider,
   PlannerModelMemory,
+  selectPlanner,
   admitSettingsEnv,
   PROVIDER_CREDENTIAL_ENV,
   type AiProvider,
   type PlannerModelCandidate,
+  type PlannerSelectionChange,
+  type PlannerSelectionState,
   StructuredRunner,
 } from '@ordewell/core';
 import { WebConfig } from '../adapters/WebConfig';
@@ -237,7 +240,7 @@ export class OrchestratorPool {
   }
 
   /**
-   * The catalog `PlannerModelMemory.recall` should judge `provider`'s
+   * The catalog `selectPlanner` should judge `provider`'s
    * remembered model against — a harness planner's own runner catalog, or the
    * cross-provider picker list for a vendor (ADR-0009), same split as
    * `plannerModelItems` in the TUI reducer. Read from whatever the resolver
@@ -252,13 +255,25 @@ export class OrchestratorPool {
     return this.modelResolver.getCachedPickerOptions().map((o) => ({ id: o.id }));
   }
 
-  updateSettings(changes: Record<string, unknown>): SettingsUpdateResponse {
-    // Read before any of this call's changes land, so a switch is judged
-    // against what was actually in effect a moment ago.
-    const providerBefore = new WebConfig({
+  /**
+   * The provider planning right now. A vendor planner is resolved from its
+   * model id, so this is read again after a write rather than carried over.
+   */
+  private plannerProviderInEffect(): AiProvider {
+    return new WebConfig({
       enabledRunners: this.enabledRunnerOverride(),
       providerModelLists: this.cachedProviderLists,
     }).aiProvider;
+  }
+
+  updateSettings(changes: Record<string, unknown>): SettingsUpdateResponse {
+    // Read before any of this call's changes land, so a switch is judged
+    // against what was actually in effect a moment ago.
+    const current: PlannerSelectionState = {
+      provider: this.plannerProviderInEffect(),
+      model: process.env.ORCHESTRATOR_MODEL ?? '',
+      effort: process.env.ORDEWELL_PLANNER_EFFORT ?? '',
+    };
 
     // Only allowlisted keys reach `process.env`, and everything else comes back
     // to the caller by name — the daemon's environment is inherited by every
@@ -270,33 +285,25 @@ export class OrchestratorPool {
       : undefined;
     const admission = rawEnv ? admitSettingsEnv(rawEnv) : undefined;
     const envChanges = admission ? admission.accepted : undefined;
-    const incomingAiProvider = typeof envChanges?.AI_PROVIDER === 'string' ? envChanges.AI_PROVIDER : undefined;
-    // The name the client sent wins over re-deriving it from `config.aiProvider`
-    // later: for a vendor pick that resolution reads the model id, and a switch
-    // may have just cleared it — model-based resolution would misfire on the
-    // very call meant to establish the new provider.
-    const switchedToProvider: AiProvider | undefined =
-      incomingAiProvider && incomingAiProvider !== providerBefore ? (incomingAiProvider as AiProvider) : undefined;
-    const requestedModel = envChanges?.ORCHESTRATOR_MODEL ?? changes.orchestratorModel;
-    const explicitModel = typeof requestedModel === 'string' && requestedModel.trim().length > 0;
-    // Read the incoming provider's catalog now, before the env-touched refresh
-    // below clears the resolver's cache — recall must judge the memory against
-    // what was already discovered, not force a fresh (async) discovery here.
-    const switchRecall = switchedToProvider && !explicitModel
-      ? this.plannerModelMemory.recall(switchedToProvider, this.plannerCatalogFor(switchedToProvider))
+
+    // A pick arrives either as a top-level field (a vendor model, `ordewell
+    // model set`) or through env (`ordewell planner-effort`, the TUI's
+    // pickers); env wins, as it did when both were written in that order. The
+    // provider is the name the client sent, never re-derived from the model: a
+    // switch may have just cleared that model.
+    const plannerChange: PlannerSelectionChange = {
+      provider: envChanges?.AI_PROVIDER as AiProvider | undefined,
+      model: envChanges?.ORCHESTRATOR_MODEL ?? stringField(changes.orchestratorModel),
+      effort: envChanges?.ORDEWELL_PLANNER_EFFORT ?? stringField(changes.plannerThinkingEffort),
+    };
+    const touchesPlanner = Object.values(plannerChange).some((v) => v !== undefined);
+    // Judged against the incoming provider's catalog as already discovered —
+    // before the credential refresh below clears the resolver's cache — so a
+    // settings write never waits on (async) discovery.
+    const selection = touchesPlanner
+      ? selectPlanner(current, plannerChange, this.plannerModelMemory, this.plannerCatalogFor(plannerChange.provider ?? current.provider))
       : undefined;
 
-    if (switchedToProvider && explicitModel &&
-        typeof changes.plannerThinkingEffort !== 'string' && envChanges?.ORDEWELL_PLANNER_EFFORT === undefined) {
-      process.env.ORDEWELL_PLANNER_EFFORT = '';
-    }
-
-    if (typeof changes.orchestratorModel === 'string') {
-      process.env.ORCHESTRATOR_MODEL = changes.orchestratorModel;
-    }
-    if (typeof changes.plannerThinkingEffort === 'string') {
-      process.env.ORDEWELL_PLANNER_EFFORT = changes.plannerThinkingEffort;
-    }
     if (envChanges) {
       let touched = false;
       for (const [key, value] of Object.entries(envChanges)) {
@@ -304,7 +311,7 @@ export class OrchestratorPool {
         // Only a credential or endpoint change touches what a catalog
         // contains. A planner, model or effort pick does not, and invalidating
         // on one would wipe the very cache `plannerCatalogFor` reads
-        // synchronously below, right before the next call's switch needs it.
+        // synchronously, right before the next call's switch needs it.
         if (PROVIDER_CREDENTIAL_ENV.has(key)) touched = true;
       }
       // The scheduler reads the limit on every tick, but a raised one would
@@ -324,11 +331,9 @@ export class OrchestratorPool {
       }
     }
 
-    // Legacy clients send a blank model on switch; recall fills that clear,
-    // but must never replace an explicit model chosen in the same request.
-    if (switchRecall) {
-      process.env.ORCHESTRATOR_MODEL = switchRecall.model;
-      process.env.ORDEWELL_PLANNER_EFFORT = switchRecall.effort;
+    if (selection) {
+      process.env.ORCHESTRATOR_MODEL = selection.next.model;
+      process.env.ORDEWELL_PLANNER_EFFORT = selection.next.effort;
     }
 
     if (changes.modelAllowlist && typeof changes.modelAllowlist === 'object') {
@@ -342,26 +347,12 @@ export class OrchestratorPool {
       }
     }
 
-    // An explicit model/effort pick is remembered against whichever provider
-    // is in effect: the one this same call just switched to, or — resolved
-    // fresh, now that ORCHESTRATOR_MODEL reflects this call's changes —
-    // today's, so a vendor pick keys correctly off its model id. The pick
-    // arrives either as a top-level field (a vendor model, `ordewell model
-    // set`) or through env (`ordewell planner-effort`, the TUI's effort
-    // picker send ORDEWELL_PLANNER_EFFORT this way) — both are a real pick,
-    // including a switch with an explicit model, but never its legacy clear.
-    const envCarriesModelOrEffort = (envChanges?.AI_PROVIDER === undefined || explicitModel) &&
-      (typeof envChanges?.ORCHESTRATOR_MODEL === 'string' || typeof envChanges?.ORDEWELL_PLANNER_EFFORT === 'string');
-    if (typeof changes.orchestratorModel === 'string' || typeof changes.plannerThinkingEffort === 'string' || envCarriesModelOrEffort) {
-      const rememberProvider = switchedToProvider ?? new WebConfig({
-        enabledRunners: this.enabledRunnerOverride(),
-        providerModelLists: this.cachedProviderLists,
-      }).aiProvider;
-      this.plannerModelMemory.remember(
-        rememberProvider,
-        process.env.ORCHESTRATOR_MODEL || '',
-        process.env.ORDEWELL_PLANNER_EFFORT || '',
-      );
+    if (selection?.remember) {
+      const { provider, model, effort } = selection.remember;
+      // Without a switch a vendor pick is keyed by the provider its model id
+      // resolves to now, which the env written above already reflects.
+      const switched = provider !== current.provider;
+      this.plannerModelMemory.remember(switched ? provider : this.plannerProviderInEffect(), model, effort);
     }
 
     // Refused keys are named back rather than dropped: a client that sent one
@@ -370,7 +361,7 @@ export class OrchestratorPool {
     const rejectedEnvKeys = admission?.rejected ?? [];
     const settings: SettingsUpdateResponse = this.getSettings();
     if (rejectedEnvKeys.length > 0) settings.rejectedEnvKeys = rejectedEnvKeys;
-    if (switchRecall) settings.switchRecall = switchRecall;
+    if (selection?.recall) settings.switchRecall = selection.recall;
     return settings;
   }
 
@@ -570,3 +561,7 @@ export const scanWorkspaces = scanWorkspacesImpl;
 export function getSessionList(workspace: string) { return listSessions(workspace); }
 export function getSession(sessionId: string, workspace: string) { return loadSession(sessionId, workspace); }
 export function removeSession(sessionId: string, workspace: string) { return deleteSession(sessionId, workspace); }
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}

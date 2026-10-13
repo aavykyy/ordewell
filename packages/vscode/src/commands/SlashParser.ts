@@ -4,7 +4,7 @@ import {
   ORCHESTRATOR_SHORTCUTS, parseAutonomyLevel,
   automergeSummary, autorunSummary, parseCount, parseSwitch, supervisorSummary, type GlobalRunSettings,
 } from '@ordewell/core';
-import type { AiProvider, IConfig, RunnerRegistry, ModelResolver, SettingsService, RunnerModeInfo, DiscoveredModel, PlannerModelRecall } from '@ordewell/core';
+import type { AiProvider, IConfig, RunnerRegistry, ModelResolver, SettingsService, RunnerModeInfo, DiscoveredModel, PlannerModelRecall, PlannerSelectionChange } from '@ordewell/core';
 import type { ApiProvider } from '../adapters/SecretStore';
 import type { ChatViewProvider, PlannerBackend } from '../providers/ChatViewProvider';
 import type { VendorModelOption } from '../plan/PlannerModelSwitch';
@@ -38,8 +38,8 @@ export interface SlashDeps {
   discoverOrchestratorModelOptions(): Promise<{ id: string; label: string; provider: string; apiProvider?: AiProvider; description?: string; pricing?: string }[]>;
   pickModelWithProvider(options: { id: string; label: string; provider: string; apiProvider?: AiProvider; description?: string; pricing?: string }[], configuredProviders: ApiProvider[], placeHolder: string): Promise<string | undefined>;
   updateConfig(key: string, value: unknown): Promise<void>;
-  /** Remember `model`/`effort` as the current provider's planner choice (keyed by `config.aiProvider` at write time). */
-  recordPlannerModel(model: string, effort?: string): void;
+  /** Change who plans through core's one rule (`selectPlanner`), saving, remembering and showing the result. */
+  changePlanner(change: PlannerSelectionChange): Promise<void>;
   /** What the planner should land on for `provider`: its remembered model, else the catalog's first. */
   recallPlannerModel(provider: AiProvider, harnessModels: DiscoveredModel[] | undefined, vendorOptions: VendorModelOption[] | undefined): PlannerModelRecall;
   /** Switch backend, model and effort in one change and remember the pick. */
@@ -102,11 +102,7 @@ async function switchPlannerToVendorModel(arg: string, runner: string, deps: Sla
     'Switch planner',
   );
   if (choice !== 'Switch planner') return true;
-  await vscode.commands.executeCommand('ordewell.setPlanner', provider);
-  await deps.updateConfig('orchestratorModel', known);
-  await deps.updateConfig('plannerThinkingEffort', '');
-  deps.recordPlannerModel(known);
-  await deps.refreshPlannerState();
+  await deps.changePlanner({ provider, model: known, effort: '' });
   vscode.window.showInformationMessage(`Planner set to ${label}, model ${known}`);
   return true;
 }
@@ -135,16 +131,7 @@ async function pickHarnessPlannerModel(runner: string, arg: string, deps: SlashD
     if (!picked) return;
     modelId = picked.modelId;
   }
-  await deps.updateConfig('orchestratorModel', modelId);
-  // An effort from the previous model is a variant this one may not have; the
-  // planner would pass it straight to the agent and get a rejected turn.
-  const variants = models.find((m) => m.modelId === modelId)?.variants ?? [];
-  const effort = variants.some((v) => v.id === deps.config.plannerThinkingEffort) ? deps.config.plannerThinkingEffort : '';
-  if (!effort) {
-    await deps.updateConfig('plannerThinkingEffort', '');
-  }
-  deps.recordPlannerModel(modelId, effort || undefined);
-  await deps.refreshPlannerState();
+  await deps.changePlanner({ model: modelId });
   vscode.window.showInformationMessage(`Planner model set to: ${modelId}`);
 }
 
@@ -172,9 +159,7 @@ async function pickPlannerEffort(arg: string | undefined, deps: SlashDeps): Prom
       vscode.window.showWarningMessage(`Unknown effort: ${arg}. Available: ${variants.map((v) => v.id).join(', ')}.`);
       return;
     }
-    await deps.updateConfig('plannerThinkingEffort', match.id);
-    deps.recordPlannerModel(deps.config.orchestratorModel, match.id);
-    await deps.refreshPlannerState();
+    await deps.changePlanner({ effort: match.id });
     vscode.window.showInformationMessage(`Planner effort set to: ${match.id}`);
     return;
   }
@@ -186,9 +171,7 @@ async function pickPlannerEffort(arg: string | undefined, deps: SlashDeps): Prom
     { placeHolder: `Thinking effort for ${current!.modelLabel}` },
   );
   if (!picked) return;
-  await deps.updateConfig('plannerThinkingEffort', picked.effort);
-  deps.recordPlannerModel(deps.config.orchestratorModel, picked.effort || undefined);
-  await deps.refreshPlannerState();
+  await deps.changePlanner({ effort: picked.effort });
   vscode.window.showInformationMessage(`Planner effort set to: ${picked.effort || 'runner default'}`);
 }
 
@@ -221,15 +204,13 @@ export async function handleSlashCommand(text: string, deps: SlashDeps): Promise
     const options = await deps.discoverOrchestratorModelOptions();
     const known = knownModelId(args.slice(1).join(' '), options.map((o) => o.id), ORCHESTRATOR_SHORTCUTS);
     if (known) {
-      await deps.updateConfig('orchestratorModel', known);
-      deps.recordPlannerModel(known);
+      await deps.changePlanner({ model: known });
       vscode.window.showInformationMessage(`Planner model set to: ${known}`);
       return;
     }
     const picked = await deps.pickModelWithProvider(options, deps.config.configuredProviders, 'Pick the planner model');
     if (picked) {
-      await deps.updateConfig('orchestratorModel', picked);
-      deps.recordPlannerModel(picked);
+      await deps.changePlanner({ model: picked });
       vscode.window.showInformationMessage(`Planner model set to: ${picked}`);
     }
     return;

@@ -227,4 +227,11 @@ export {
   type PlannerModelRecall,
   type PlannerModelStore,
 } from './services/PlannerModelMemory';
+export {
+  selectPlanner,
+  type PlannerModelLookup,
+  type PlannerSelectionChange,
+  type PlannerSelectionResult,
+  type PlannerSelectionState,
+} from './services/selectPlanner';
 export { DEFAULT_MAX_PARALLEL, parseMaxParallel } from './utils/maxParallel';
