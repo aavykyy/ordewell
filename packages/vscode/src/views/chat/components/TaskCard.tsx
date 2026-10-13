@@ -46,9 +46,8 @@ interface TaskCardProps {
   isolation?: TaskIsolation | null;
   /** Opt in to resolving this task's merge conflict as an AI task. */
   onResolveConflict?: (taskId: string) => void;
-  taskOrderMap?: Map<string, number>;
   dependentCount?: number;
-  /** The task list this task belongs to — the dependency editor's candidate pool. */
+  /** The task list this task belongs to — the dependency editor's candidates and the tree its dependency references are labelled against. */
   siblings?: Task[];
   onDependenciesChange?: (taskId: string, dependencies: string[]) => void;
   onRunnerChange?: (taskId: string, runner: string) => void;
@@ -180,7 +179,7 @@ export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRu
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, models, modes, modelsByRunner, modesByRunner, runners, configuredProviders, modelApiMapping, isExecuting, output, idleSince, awaitingApproval = 0, isolation, onResolveConflict, taskOrderMap, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, mergeGate, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
+export default function TaskCard({ task, models, modes, modelsByRunner, modesByRunner, runners, configuredProviders, modelApiMapping, isExecuting, output, idleSince, awaitingApproval = 0, isolation, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, mergeGate, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const isControlled = expandedProp !== undefined;
   const expanded = isControlled ? expandedProp : internalExpanded;
@@ -196,7 +195,7 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
 
   const isolatedWork = isolation && isolation.state !== 'none' ? isolation : null;
   const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;
-  const row = taskRowView({ ...task, idleSince, awaitingApproval, isolation, mergeGate }, { orderOf: taskOrderMap, modes: activeModes });
+  const row = taskRowView({ ...task, idleSince, awaitingApproval, isolation, mergeGate }, { tasks: siblings, modes: activeModes });
   const conflictFiles = isolatedWork?.conflictFiles ?? [];
   const repair = isolatedWork?.repair ?? null;
 

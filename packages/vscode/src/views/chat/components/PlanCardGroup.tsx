@@ -103,7 +103,6 @@ export default function PlanCardGroup({
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const usage = planUsage(tasks);
   const sorted = [...tasks].sort((a, b) => a.order - b.order);
-  const taskOrderMap = new Map(tasks.map((t) => [t.id, t.order]));
   const mergeMode = mergeSelectedIds.length > 0;
 
   const dependentCountMap = useMemo(() => {
@@ -245,7 +244,6 @@ export default function PlanCardGroup({
                 runners={runners}
                 effectiveRunner={effectiveRunner}
                 isExecuting={isExecuting}
-                taskOrderMap={taskOrderMap}
                 dependentCount={dependentCountMap.get(task.id) ?? 0}
                 output={taskOutput?.[task.id]}
                 idleSince={taskIdle?.[task.id] ?? null}

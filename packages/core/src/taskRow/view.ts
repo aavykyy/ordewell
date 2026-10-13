@@ -1,7 +1,7 @@
 import { usageLine, type AttemptUsage, type UsageLine } from '../models/Usage';
 import type { AwaitingReason } from '../models/Task';
 import type { TaskIsolationState } from '../interfaces/IWorktreeIsolation';
-import { taskOrderLabel, taskRef } from '../services/TaskRefs';
+import { taskOrderLabel, taskRefOf } from '../services/TaskRefs';
 import { capConflictFiles } from '../services/conflictFiles';
 import { approvalLabel, awaitingLabel, isTaskRunning, resumeLabel, taskStatusKind, type TaskStatusKind } from './status';
 import { markAction, opsEditable, taskRowActions, type TaskRowAction, type TaskRowPlacement } from './actions';
@@ -39,13 +39,24 @@ export interface TaskRowIsolation {
   repairedFiles?: string[];
 }
 
+/**
+ * The plan a row labels its references against: the tree, so a subtask's
+ * dependency reads dotted ("#2.1") rather than by its parent-scoped order.
+ */
+interface PlanRefTask {
+  id: string;
+  order: number;
+  title: string;
+  subtasks?: readonly PlanRefTask[];
+}
+
 export interface TaskRowContext {
   /** Set for a subtask: it is labelled by its dotted order. */
   parent?: { order: number } | null;
   /** Which action set the row offers; a row with a parent is a subtask's unless told otherwise. */
   placement?: TaskRowPlacement;
-  /** Order of each task a dependency or gate may name; one missing from it is shown by id. */
-  orderOf?: ReadonlyMap<string, number>;
+  /** The plan tree a dependency or gate is labelled against; one it does not hold is shown by id. */
+  tasks?: readonly PlanRefTask[];
   /** The modes the task's runner declares; autonomy is a tag on one of them (ADR-0001). */
   modes?: readonly { id: string; autonomous?: boolean }[];
   /** What a resume time is read against; the clock when absent. */
@@ -99,11 +110,8 @@ export interface TaskRowView {
   opsEditable: boolean;
 }
 
-const refsOf = (ids: readonly string[], orderOf: ReadonlyMap<string, number> | undefined): string[] =>
-  ids.map((id) => {
-    const order = orderOf?.get(id);
-    return order === undefined ? id : taskRef({ order });
-  });
+const refsOf = (ids: readonly string[], tasks: readonly PlanRefTask[] | undefined): string[] =>
+  ids.map((id) => (tasks?.length ? taskRefOf(tasks, id) ?? id : id));
 
 /** A lone repository at the workspace root is not named: a group of one reads as it did before repo groups. */
 const namedRepo = (repo: string | undefined): string | null => (repo && repo !== '.' ? repo : null);
@@ -141,10 +149,10 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
     repaired: isolation?.repairedFiles?.length
       ? { files: capConflictFiles(isolation.repairedFiles), landed: isolation.state === 'integrated' }
       : null,
-    mergeGate: task.mergeGate?.length ? refsOf(task.mergeGate, context.orderOf) : null,
+    mergeGate: task.mergeGate?.length ? refsOf(task.mergeGate, context.tasks) : null,
     opsChangedFiles: task.status === 'awaiting_user' && task.awaitingReason === 'files-changed',
     forcedPastGate: task.forcedPastGate?.length ? task.forcedPastGate : null,
-    dependencies: refsOf(task.dependencies, context.orderOf),
+    dependencies: refsOf(task.dependencies, context.tasks),
     actions: taskRowActions(task, context.placement ?? (parent ? 'subtask' : 'task')),
     mark: markAction(task),
     opsEditable: opsEditable(task),

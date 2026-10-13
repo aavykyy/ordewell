@@ -595,7 +595,6 @@ export function planLayout(state: TuiState, rows: number, cols: number): PlanLay
   const firstRowLine = lines.length;
 
   const rowSpans: LineSpan[] = [];
-  const orderOf = new Map(state.tasks.map((task) => [task.id, task.order]));
   // An expanded task starts its editor at the end of its prompt. For a long
   // prompt, keeping only the task heading visible makes edits appear to do
   // nothing because the caret is below the viewport.
@@ -604,7 +603,7 @@ export function planLayout(state: TuiState, rows: number, cols: number): PlanLay
     // A blank line between top-level tasks; a subtask stays tight to its parent.
     if (i > 0 && !row.parent) lines.push('');
     const taskStart = lines.length;
-    const renderedTask = taskLines(state, row, i, cols, orderOf);
+    const renderedTask = taskLines(state, row, i, cols);
     if (row.task.id === state.expandedTaskId && renderedTask.editorLine !== undefined) {
       editorLine = taskStart + renderedTask.editorLine;
     }
@@ -700,9 +699,9 @@ interface TaskLines {
   editorLine?: number;
 }
 
-function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: number, orderOf: ReadonlyMap<string, number>): TaskLines {
+function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: number): TaskLines {
   const { task, parent } = planRow;
-  const row = taskRowView(task, { parent, orderOf, modes: modesForTask(state.modesByRunner, task) });
+  const row = taskRowView(task, { parent, tasks: state.tasks, modes: modesForTask(state.modesByRunner, task) });
   const selected = state.focus === 'plan' && index === state.selectedTask;
   const expanded = state.expandedTaskId === task.id;
   const rawIcon = row.status === 'running' ? SPINNER[state.spinnerFrame % SPINNER.length] : STATUS_ICON[row.status];

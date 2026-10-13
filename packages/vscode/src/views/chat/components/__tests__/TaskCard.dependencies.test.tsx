@@ -98,7 +98,7 @@ describe('TaskCard — dependency editor', () => {
   it('opens from the dependency badge, which is where a user looks for it', () => {
     render(
       <TaskCard task={makeTask({ dependencies: ['t1'] })} models={noModels} siblings={SIBLINGS}
-        taskOrderMap={new Map([['t1', 1]])} onDependenciesChange={vi.fn()} />,
+        onDependenciesChange={vi.fn()} />,
     );
 
     act(() => { fireEvent.click(screen.getByTitle(/click to edit/i)); });
