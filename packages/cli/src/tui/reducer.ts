@@ -107,6 +107,10 @@ function reduceAction(state: TuiState, action: Action): Step {
       if (!plannerInFlight(state)) {
         return step(settled);
       }
+      // The turn a force send stopped can settle with what it had said rather
+      // than fail as stopped (see `failed`); the forced turn is still running,
+      // and the held prompts wait for it.
+      if (state.forceSendPending) return step({ ...settled, status: 'planning', forceSendPending: null });
       return drainQueue(state, settled);
     }
 
