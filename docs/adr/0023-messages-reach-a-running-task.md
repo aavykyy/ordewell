@@ -132,7 +132,10 @@ turn-scoped and never touches the run's tasks.**
   lands — and answers the forced prompt alone in the turn that replaces it.
   The forced prompt waits before the stop, ahead of every input waiting but
   an earlier forced one, and behind the inputs the stopped turn took, so
-  nothing starts in between and the rest keep their order (F2). It stops
+  nothing starts in between and the rest keep their order (F2). A force
+  send is not an answer to a run update, as the user's stop is: a supervisor
+  wake-up turn it stops keeps its run update, which waits behind the forced
+  prompt and reaches the supervisor in its next turn (ADR-0029). It stops
   whichever planner turn holds the conversation; with none in flight it is a
   plain send. It never stops, halts or edits a task: the run is not the
   planner turn, as Esc in the planner chat already never halts the tasks. The
@@ -286,6 +289,11 @@ interrupt (D4 covers it either way).
   everything and listen" is easy to explain, but a correction to the planner
   is not a reason to stop tasks the user did not ask to stop, and the planner
   chat's own stop is already turn-scoped. Rejected (F5).
+- **A planner force send drops the stopped wake-up turn's run update, as a
+  stop does.** It was the first implementation, the rule for a stop applied
+  to any interruption. A stop is the user's answer to the run update; a force
+  send answers something else, and the supervisor would never hear of the
+  failure or the run's end it carried. Dropped (F5).
 
 ## Consequences
 
@@ -310,7 +318,8 @@ interrupt (D4 covers it either way).
 - ADR-0018's M1 states this decision.
 - `PlanTurns.forceSend` places the forced input and asks the Session to stop
   the planner turn (`PlannerConversation.stopTurn('force_send')`); a forced
-  input at the head of the pending inputs is a turn of its own.
+  input at the head of the pending inputs is a turn of its own. The wake-ups
+  of the turn it stopped stay pending, undelivered, behind the forced inputs.
 
 ## History
 
@@ -318,3 +327,4 @@ interrupt (D4 covers it either way).
 - 2026-10-06 — accepted and implemented on Claude Code, Codex and OpenCode 1.x, force send on every surface; OpenCode 2.x keeps the turn-end queue. ADR-0018 M1 rewritten.
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
 - 2026-10-13 — force send extended to the planner chat, turn-scoped (F5); core and daemon route.
+- 2026-10-13 — F5: a force send keeps the run update of a wake-up turn it stops.

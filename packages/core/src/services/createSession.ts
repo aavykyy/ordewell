@@ -48,7 +48,7 @@ import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { INotification } from '../interfaces/INotification';
 import type { IRunner } from '../interfaces/IRunner';
 import type { TaskOutputSource } from '../interfaces/TaskOutputSource';
-import type { IsolationMergeResult, IsolationView, IWorktreeIsolation } from '../interfaces/IWorktreeIsolation';
+import type { IsolationHandoff, IsolationMergeResult, IsolationView, IWorktreeIsolation } from '../interfaces/IWorktreeIsolation';
 import { migratePlanStateIsolation } from './isolationRecord';
 import type { IsolationRunController } from './IsolationRunController';
 import { PlanEditor } from './PlanEditor';
@@ -428,6 +428,13 @@ export class Session {
   private goal = '';
   private workspace: string;
   private readonly broadcast: SessionBroadcaster;
+  /**
+   * The handoff the surfaces hold, folded from what this Session sent them as
+   * they fold it, for one that joins late: the run record's own would also
+   * show a handoff after a stop, which hands nothing over, and miss what the
+   * supervisor has first.
+   */
+  private sentHandoff: IsolationHandoff | null = null;
   private readonly notifications: INotification;
   private readonly onNotice?: (notice: SessionNotice) => void;
   private readonly modelResolver: ModelResolver;
@@ -450,6 +457,8 @@ export class Session {
   private readonly supervision: RunSupervision;
   /** The open planner turn's, or the last one's once it settled; see {@link openTurn}. */
   private turnEffects: TurnEffects = this.newTurnEffects();
+  /** Every turn's effects with starts still owed: a turn's may still be running its starts when the next opens. */
+  private readonly owingEffects = new Set<TurnEffects>();
   private unlistenApprovals: (() => void) | null;
   private readonly plannerTools: PlannerToolHandler = plannerToolHandler({
     skills: () => this.workspaceSkills().listSkills(),
@@ -479,7 +488,12 @@ export class Session {
     this.catalog = parts.catalog;
     this.workspace = parts.workspace;
     this.fsAdapter = parts.fsAdapter;
-    this.broadcast = parts.broadcast;
+    this.broadcast = (msg) => {
+      if (msg.type === 'isolation_handoff' || msg.type === 'isolation_merge') {
+        this.sentHandoff = reduceRun({ ...EMPTY_RUN, handoff: this.sentHandoff }, msg).handoff;
+      }
+      parts.broadcast(msg);
+    };
     this.notifications = parts.notifications;
     this.onNotice = parts.onNotice;
     this.modelResolver = parts.modelResolver;
@@ -567,9 +581,8 @@ export class Session {
       changed: () => this.mutatePlan(() => true),
       save: () => this.persist({ background: true }),
       resendHandoff: () => {
-        const handoff = this.runs.view()?.handoff;
-        if (this.runs.isOpen || !handoff?.landed.length) return;
-        this.broadcast({ type: 'isolation_handoff', ...handoff });
+        const handoff = this.owedHandoff();
+        if (handoff) this.broadcast({ type: 'isolation_handoff', ...handoff });
       },
       deliver: (digest) => this.turns.enqueue({ source: 'supervisor', text: digest }),
       pump: () => this.turns.pump(),
@@ -633,6 +646,8 @@ export class Session {
   private async openTurn<T>(turn: () => Promise<T>): Promise<{ landed: T; effects: TurnEffects }> {
     const effects = this.newTurnEffects();
     this.turnEffects = effects;
+    for (const owing of this.owingEffects) if (!owing.outstanding) this.owingEffects.delete(owing);
+    this.owingEffects.add(effects);
     try {
       return { landed: await turn(), effects };
     } finally {
@@ -881,7 +896,7 @@ export class Session {
         this.persist({ background: true });
         relay.onIsolationChanged();
       },
-      onIsolationHandoff: (handoff) => relay.onIsolationHandoff(this.supervision.handoff(handoff)),
+      onIsolationHandoff: (handoff) => this.broadcast({ type: 'isolation_handoff', ...this.supervision.handoff(handoff) }),
       onExecutionComplete: () => {
         relay.onExecutionComplete();
         this.persist({ background: true });
@@ -939,11 +954,13 @@ export class Session {
     // Before the stop, whose save would otherwise write the abandoned turn's
     // steps into the plan it saves.
     this.events.dropSubagentRuns();
-    if (this.isExecuting || this.orchestrator.isRunning) this.stopExecution();
+    if (this.isExecuting || this.orchestrator.isRunning || this.orchestrator.isHaltedByFailure) this.stopExecution();
     this.conversation.abandonTurn();
     this.turns.abandon();
     this.supervision.reset();
     this.turnEffects.abandon();
+    for (const effects of this.owingEffects) effects.abandon();
+    this.owingEffects.clear();
     this.conversation.reset();
     // Totals belong to the plan they were recorded under; a fresh plan starts
     // its ledger from zero so the previous session's line never lingers.
@@ -953,6 +970,13 @@ export class Session {
     this.approvals.clear(isPlannerApproval);
     if (!keepGrants) this.approvalPolicy.reset();
     this.store.clearLog();
+    this.sentHandoff = null;
+  }
+
+  /** The handoff a settled run with landed work owes the user, unmarked; null while a run is open or nothing landed. */
+  private owedHandoff(): IsolationHandoff | null {
+    const handoff = this.runs.view()?.handoff;
+    return !this.runs.isOpen && handoff?.landed.length ? handoff : null;
   }
 
   /**
@@ -1528,9 +1552,7 @@ export class Session {
     if (!this.plan) return EMPTY_RUN;
     const planned = reduceRun(EMPTY_RUN, { type: 'plan_snapshot', plan: surfacePlan({ ...this.plan, tasks: this.store.snapshot() }) });
     const view = reduceRun(planned, this.events.statusMessage());
-    const isolation = this.runs.view();
-    // The handoff goes out when a run settles, so a run still open has none yet.
-    return isolation && !this.runs.isOpen ? reduceRun(view, { type: 'isolation_handoff', ...isolation.handoff }) : view;
+    return this.sentHandoff ? reduceRun(view, { type: 'isolation_handoff', ...this.sentHandoff }) : view;
   }
 
   /** The dependencies a task waits on at its merge gate (ADR-0020); empty when it waits for no Merge all. */
@@ -1739,6 +1761,8 @@ export class Session {
     // in the background, and git serializes it ahead of any worktree a run adds.
     if (adopting) {
       void this.runs.adopt(plan.isolation ?? null);
+      // What the surfaces were last sent is not saved; a settled run is handed over again as its resend would.
+      this.sentHandoff = this.owedHandoff();
     }
     if (opts?.persist !== false) this.persist();
     // A reopened session shows its token line again without waiting for the

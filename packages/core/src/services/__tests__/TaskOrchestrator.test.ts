@@ -1143,6 +1143,20 @@ describe('task attempts', () => {
     expectNoAttemptState(orchestrator);
   });
 
+  it('loading a plan forgets a failure\'s halt', async () => {
+    const { spawn, sessions } = sessionRunner();
+    const orchestrator = makeOrchestrator({ runner: { spawn } });
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' })]);
+    await orchestrator.approveReview();
+    await vi.waitFor(() => expect(sessions).toHaveLength(1));
+    sessions[0].emitExit(1);
+    await vi.waitFor(() => expect(orchestrator.isHaltedByFailure).toBe(true));
+
+    orchestrator.loadPlan([createTask({ id: 'o1', order: 1, title: 'Other', prompt: 'do other' })]);
+
+    expect(orchestrator.isHaltedByFailure).toBe(false);
+  });
+
   /** A runner whose spawns resolve only when the test says so. */
   function heldSpawns() {
     const pending: Array<{ resolve: (session: FakeRunnerSession) => void; reject: (err: Error) => void }> = [];

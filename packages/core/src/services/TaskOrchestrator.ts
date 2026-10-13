@@ -735,6 +735,10 @@ export class TaskOrchestrator {
     // A plan committed while the scheduler runs keeps that run, and its mode
     // with it; otherwise the next start decides afresh.
     this.runs.interrupt({ keepOpen: this.running });
+    // A failure's halt belongs to the plan it failed in, whose failed tasks this
+    // load gives a fresh chance: left set, the next retry would restart a run
+    // nobody started, and a usage-limit move would arm the scheduler.
+    this.haltedByFailure = false;
     this.planStatus = 'approved';
     this.reviewApproved = false;
     this.retryCounts.clear();

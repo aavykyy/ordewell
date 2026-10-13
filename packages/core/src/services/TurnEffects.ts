@@ -9,6 +9,8 @@ export interface TurnEffectsHost {
   notice(level: 'warn' | 'error', message: string): void;
 }
 
+const NO_EDIT = 'waited for an edit that did not land';
+
 interface DeferredStart {
   command: ExecutionCommand;
   actor: ExecutionActor;
@@ -33,7 +35,7 @@ export class TurnEffects {
 
   /** A start that waits for this turn's held edit. Asked for once the turn settled, it can never run as edited. */
   defer(command: ExecutionCommand, actor: ExecutionActor, intent: string): void {
-    if (this.settled) this.notDone(intent);
+    if (this.settled) this.notDone(intent, NO_EDIT);
     else this.deferred.push({ command, actor, intent });
   }
 
@@ -45,6 +47,9 @@ export class TurnEffects {
 
   get planSubmitted(): boolean { return this.submitted; }
 
+  /** Starts are still owed: the turn is open, or its deferred starts are still being run. */
+  get outstanding(): boolean { return !this.settled || this.deferred.length > 0; }
+
   /**
    * The turn ended. Its deferred starts go through the seam again — the
    * supervisor's at the level it has by now — when its edit landed. An edit
@@ -55,27 +60,41 @@ export class TurnEffects {
   settle(): void {
     if (this.settled) return;
     this.settled = true;
-    const due = this.deferred;
-    this.deferred = [];
     if (!this.editLanded) {
-      for (const { intent } of due) this.notDone(intent);
+      this.drop(NO_EDIT);
       return;
     }
     void (async () => {
-      for (const { command, actor } of due) {
+      // Taken one at a time, so an abandon while one runs drops the rest.
+      for (let next = this.deferred.shift(); next; next = this.deferred.shift()) {
+        const { command, actor } = next;
         const now: ExecutionActor = actor.kind === 'supervisor' ? { kind: 'supervisor', level: this.host.supervisorLevel() } : actor;
         await this.host.execute(command, now).catch((err: unknown) => this.host.notice('error', `Could not run what the planner queued: ${err instanceof Error ? err.message : String(err)}`));
       }
     })();
   }
 
-  /** The plan the turn served is gone: what it deferred must not run on the next one, edit landed or not. */
+  /**
+   * The plan the turn served is gone: what it deferred must not run on the
+   * next one, edit landed or not — a fork shares its task ids. A start
+   * already at the seam goes on; those after it are dropped.
+   */
   abandon(): void {
+    if (this.settled) {
+      this.drop('its plan was closed first');
+      return;
+    }
     this.editLanded = false;
     this.settle();
   }
 
-  private notDone(intent: string): void {
-    this.host.notice('warn', `Not done: ${intent} waited for an edit that did not land.`);
+  private drop(why: string): void {
+    const dropped = this.deferred;
+    this.deferred = [];
+    for (const { intent } of dropped) this.notDone(intent, why);
+  }
+
+  private notDone(intent: string, why: string): void {
+    this.host.notice('warn', `Not done: ${intent} ${why}.`);
   }
 }
