@@ -233,7 +233,10 @@ describe.runIf(live)('structured transport — live smoke', () => {
       await vi.waitFor(() => expect(events.some((e) => e.type === 'tool_call')).toBe(true), { timeout: 60_000, interval: 250 });
       await new Promise<void>((resolve) => setTimeout(resolve, 4000));
 
-      const id = turns.session.sendMessage('Before your next command, use the Bash tool to run `touch steered.txt`. Then carry on, and include the word PINEAPPLE in your final reply.');
+      // Claude Code shows a mid-turn message inside the tool result it lands
+      // in, and Haiku ignores one there that reads like an unrelated canary as
+      // an injection; a correction to the task at hand is acted on.
+      const id = turns.session.sendMessage('I forgot a step: before you run `echo step2done`, use the Bash tool to run `touch steered.txt`. Then carry on.');
       await turns.next();
 
       const at = (match: (e: StructuredEvent) => boolean) => events.findIndex(match);
@@ -251,7 +254,6 @@ describe.runIf(live)('structured transport — live smoke', () => {
       expect(touched, session.getOutput()).toBeGreaterThan(delivered);
       expect(touched).toBeLessThan(ended);
       expect(existsSync(join(dir, 'steered.txt'))).toBe(true);
-      expect(session.getOutput()).toContain('PINEAPPLE');
       expect(turns.session.queued()).toEqual([]);
     } finally {
       runner.stopAll();
