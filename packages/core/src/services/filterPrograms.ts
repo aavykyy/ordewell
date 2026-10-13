@@ -58,6 +58,44 @@ export function sedProgramArgs(binary: string, args: string[]): number[] {
   return readSed(binary, args).programArgs;
 }
 
+/** `10,40p`, `$p`, `5,+3p`, `100q`: a line-number address or two, then print or quit. */
+const PRINT_BY_LINE = /^(?:\d+|\$)?(?:\s*,\s*(?:\d+|\$|\+\d+))?\s*[pq]$/;
+
+/**
+ * Whether sed only prints lines by number, the read `head` and `tail` make
+ * without asking (ADR-0008). Every option must come before the first operand,
+ * so GNU's argument permutation and BSD's first-operand script agree on which
+ * word is the script.
+ */
+export function sedOnlyPrints(args: string[]): boolean {
+  const scripts: string[] = [];
+  let operands = 0;
+  for (let i = 0; i < args.length; i++) {
+    const token = args[i];
+    if (token === '--') { operands += args.length - i - 1; break; }
+    if (!/^-./.test(token)) { operands++; continue; }
+    if (operands > 0) return false;
+    if (SED_LONG_BOOLEANS.includes(token)) continue;
+    const long = /^--expression(?:=(.*))?$/s.exec(token);
+    const short = /^-([nErszu]*)e(.*)$/s.exec(token);
+    if (long || short) {
+      const inline = long ? long[1] : short?.[2] || undefined;
+      const script = inline ?? args[++i];
+      if (script === undefined) return false;
+      scripts.push(script);
+      continue;
+    }
+    if (!/^-[nErszu]+$/.test(token)) return false;
+  }
+  if (scripts.length === 0) {
+    const first = args.find((a) => !/^-./.test(a));
+    if (first === undefined) return false;
+    scripts.push(first);
+  }
+  const commands = scripts.join('\n').split(/[;\n]/).map((c) => c.trim()).filter(Boolean);
+  return commands.length > 0 && commands.every((c) => PRINT_BY_LINE.test(c));
+}
+
 interface FilterRead {
   refusal?: string;
   /** Indices into `args` holding program text. Empty when refused. */

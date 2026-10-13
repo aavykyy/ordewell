@@ -56,6 +56,8 @@
 
 ### Fixed
 
+- A planner reads a file's line range with `sed -n '10,40p'` without asking,
+  as it does with `head` and `tail`, and a denied command says how to rewrite it.
 - Codex works as the planner on machines where its sandbox cannot start,
   such as stock Ubuntu 24.04, instead of stopping with an error.
 - A planner reads back the long tool output its runner saved outside the

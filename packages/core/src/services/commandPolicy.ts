@@ -46,7 +46,7 @@ import type { ShellDialect } from './researchShell';
 import { SHELL_STATE_COMMANDS, dialectFor, lexAll, literalCdTarget, type Segment } from './shellLexer';
 import { REFUSED_RUNNERS, XARGS_TARGETS, unwrap } from './commandRunners';
 import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, subcommandOf, takesNextToken, valueFlagIn } from './flagPolicy';
-import { AWK_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, sedProgramArgs, sedRefusal } from './filterPrograms';
+import { AWK_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, sedOnlyPrints, sedProgramArgs, sedRefusal } from './filterPrograms';
 import { commandAllowedBy, scopeExcluded, type PlannerAllowlist } from './plannerAllowlist';
 import { EFFECT_REFUSAL_HINT, READ_REFUSAL_HINT, webCommand, wgetVersionCommands } from './webCommands';
 
@@ -371,6 +371,17 @@ export function pathRefs(command: string, opts: CommandPolicyOptions = {}): Path
   });
 }
 
+/**
+ * A literal `cd` that `followCd` left unfollowed, so the paths after it were
+ * judged from the workspace root: worth saying in a refusal, since the model
+ * otherwise sees a path it never meant.
+ */
+export function cdUnfollowed(command: string, opts: CommandPolicyOptions = {}): boolean {
+  const { segments } = lexAll(command.trim(), dialectFor(opts.dialect), opts.cdpathSet);
+  return segments.some((seg, i) => !seg.nested && literalCdTarget(seg) !== undefined
+    && segments.slice(i + 1).some((later) => !later.nested && !later.cwd?.length));
+}
+
 export function pathLikeArgs(command: string, opts: CommandPolicyOptions = {}): string[] {
   return pathRefs(command, opts).map((r) => r.path);
 }
@@ -533,7 +544,8 @@ function isAuto(seg: Segment, opts: CommandPolicyOptions): boolean {
   // from the workspace root is never more permissive than from a deeper
   // directory the root contains.
   if (seg.binary === 'cd') return !opts.cdpathSet && !seg.cdSteered && literalCdTarget(seg) !== undefined;
-  if (!AUTO_COMMANDS.includes(seg.binary)) return false;
+  const printsLines = SED_FAMILY.includes(seg.binary) && sedOnlyPrints(seg.args);
+  if (!AUTO_COMMANDS.includes(seg.binary) && !printsLines) return false;
   // `./cat` is whatever file the repository ships under that name, not `cat`.
   if (seg.binaryPath !== undefined) return false;
   // `x=/etc/passwd; cat $x` gives `cat` the lone argument `$x`, which

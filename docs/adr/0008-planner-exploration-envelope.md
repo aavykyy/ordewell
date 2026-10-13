@@ -23,7 +23,7 @@ Meanwhile paths were not confined at all. `PoolFileSystem.resolve()` was `path.i
 
 | tier | behavior |
 |---|---|
-| `auto` | read-only inspection — runs with no prompt (the historical allowlist, widened with `rg`, `find`, `jq`, `tail`, …) |
+| `auto` | read-only inspection — runs with no prompt (the historical allowlist, widened with `rg`, `find`, `jq`, `tail`, …, and `sed` printing lines by number) |
 | `ask` | anything else not obviously destructive — one approval, remembered at `scope` granularity for the session |
 | `refuse` | writes, privilege escalation, output redirection, piping or redirecting code into an interpreter, inline code in any spelling the interpreter accepts — never runs, never prompts |
 
@@ -218,8 +218,16 @@ How they are read, under the file's rule: when unsure, refuse.
 - **sed and awk programs are read.** A small parser for each finds the
   commands above, and refuses a program it cannot read — including one loaded
   from a file (`-f`), one the shell rewrites first, and a construct GNU and BSD
-  sed, or gawk and the one-true-awk, would end in different places. Plain
-  printing, substitution and field work stay on the prompt tier.
+  sed, or gawk and the one-true-awk, would end in different places.
+  Substitution, regex addresses and field work stay on the prompt tier.
+- **sed that prints lines by number is `auto`.** `sed -n '10,40p' f`,
+  `'$p'`, `'5,+3p'` and `'100q'` read what `head` and `tail` read, and models
+  reach for them to read part of a file; on the prompt tier every one was
+  denied under Full. A separate strict check admits only line-number or `$`
+  addresses with `p` or `q`, and the boolean options and `-e` before the
+  first operand, so GNU's argument permutation and BSD's first-operand
+  script agree on which word is the script. Anything else is read by the
+  general parser as before. Its files still go to path confinement.
 - **The word after `<` is a file, not an argument.** It was lexed as an
   argument, and it can come first, so `< cat rm x` classified as an auto-tier
   `cat` while the shell ran `rm x`. Input redirect targets are now kept apart
@@ -390,3 +398,4 @@ model's refusal to write were never security evidence.
 - 2026-10-10 — web reads decided by one policy for every planner, a hardened SSRF guard with pinned connections, `fetch`/`web_search` for research subagents without prompting, and `curl`/`wget` approved per origin ([ADR-0027](0027-web-reads-in-the-planner-envelope.md)).
 - 2026-10-11 — planners never run the repository's config (hooks, settings environment, helpers, plugins, unapproved MCP servers), and a harness planner's in-workspace read is judged on its resolved path ([ADR-0028](0028-planners-never-run-repository-config.md)).
 - 2026-10-13 — a harness planner reads back the output its runner saved for it this session, outside the workspace, as part of the envelope, and reads the workspace even with nobody to ask ([ADR-0032](0032-runner-state-outside-the-workspace.md)).
+- 2026-10-13 — `sed` printing lines by number moves to `auto`; a denied `sed` names the line reads that run without asking, and a path denied after an unfollowed `cd` says why it was judged from the root.

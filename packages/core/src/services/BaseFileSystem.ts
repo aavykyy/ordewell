@@ -8,7 +8,7 @@ import {
   GREP_DEFAULT_HEAD_LIMIT,
 } from '../interfaces/IFileSystem';
 import { IApproval, DENY_ALL } from '../interfaces/IApproval';
-import { classifyCommand, pathRefs, type CommandPolicyOptions } from './commandPolicy';
+import { cdUnfollowed, classifyCommand, pathRefs, type CommandPolicyOptions } from './commandPolicy';
 import { resolveResearchShell, researchShellWarning, researchPolicyOptions, type ResearchShell } from './researchShell';
 import { resolveWithin, resolveRef, grantScopeFor, isInertDevice } from './pathScope';
 import { definitionPattern, referencePattern, languageForId, includeGlobFor } from './symbolPatterns';
@@ -17,6 +17,9 @@ import { carriesSecret, sensitiveEnvValues } from './outboundSecrets';
 import { READ_REFUSAL_HINT, disableWebCommandStartup, pinWebCommandAddresses, wgetVersionCommands } from './webCommands';
 
 export { AUTO_COMMANDS, GIT_READONLY_SUBCOMMANDS, REFUSED_COMMANDS, classifyCommand, pathLikeArgs } from './commandPolicy';
+
+const SED_HINT = ` To read lines of a file, "head", "tail" and "sed -n '10,40p' FILE" run without approval.`;
+const CD_HINT = ' A "cd" is followed only on a line joined by "&&" alone, so after ";", "||", "&" or a newline every path is judged from the workspace root. Join the commands with "&&", or give paths from the root.';
 
 /**
  * The policy half of the planner's filesystem: path confinement, the tiered
@@ -258,8 +261,8 @@ export abstract class BaseFileSystem implements IFileSystem {
         return {
           success: false,
           output: outside.length > 0
-            ? `Access denied: "${command}" touches ${touched}, outside the workspace root (${root}), and was not approved. Keep research inside the workspace, or ask the user to approve this location.`
-            : `Command not approved: ${command}\nIt is outside the auto-allowed read-only set and the planner allowlist (${scope}). Continue without it. If it would change something outside the repository, add it to the plan as an ops task; if it only reads, ask the user to approve it or add it to the planner allowlist.`,
+            ? `Access denied: "${command}" touches ${touched}, outside the workspace root (${root}), and was not approved. Keep research inside the workspace, or ask the user to approve this location.${cdUnfollowed(command, this.policyOptions()) ? CD_HINT : ''}`
+            : `Command not approved: ${command}\nIt is outside the auto-allowed read-only set and the planner allowlist (${scope}). Continue without it. If it would change something outside the repository, add it to the plan as an ops task; if it only reads, ask the user to approve it or add it to the planner allowlist.${/(^| )g?sed( |$)/.test(scope) ? SED_HINT : ''}`,
           truncated: false,
         };
       }

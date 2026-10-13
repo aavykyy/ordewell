@@ -989,7 +989,11 @@ const FILTER_PROGRAMS: CorpusEntry[] = [
   { command: "sed 's/[/]/x/' file", tier: 'refuse' },
   { command: 'sed "s/$OLD/new/" file', tier: 'refuse' },
   { command: "busybox sed 's/x/y/e' file", tier: 'refuse' },
-  { command: "sed -n '1,40p' src/index.ts", tier: 'ask', scope: 'sed' },
+  // Printing by line number reads what `head` and `tail` read.
+  { command: "sed -n '1,40p' src/index.ts", tier: 'auto' },
+  { command: "sed -n '$p' src/index.ts", tier: 'auto' },
+  { command: "sed '100q' src/index.ts", tier: 'auto' },
+  { command: "sed -n '1,40p' src/index.ts -e 'w out'", tier: 'refuse' },
   { command: "sed -ne 's/^version: //p' config.yml", tier: 'ask', scope: 'sed' },
   { command: "sed -n '/start/,/end/p' notes.md", tier: 'ask', scope: 'sed' },
   { command: "sed -E 's/(foo|bar)/baz/g' file", tier: 'ask', scope: 'sed' },

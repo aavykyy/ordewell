@@ -219,6 +219,27 @@ describe('BaseFileSystem — bash tiers', () => {
     expect(request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', scope: '/etc/*' }));
   });
 
+  it('points a denied sed at the line reads that run without asking', async () => {
+    const fs = new TestFileSystem();
+    fs.setApproval({ request: vi.fn().mockResolvedValue(false) });
+
+    const denied = await fs.bash("sed -n 's/a/b/p' src/index.ts");
+    expect(denied.output).toContain(`"sed -n '10,40p' FILE" run without approval`);
+    expect((await fs.bash('npm test')).output).not.toContain('sed -n');
+  });
+
+  // The model wrote the path from the directory it cd'd into; the refusal names
+  // it from the root, which reads as a path it never meant without the reason.
+  it('says why a path after an unfollowed cd was judged from the root', async () => {
+    const fs = new TestFileSystem();
+    fs.setApproval({ request: vi.fn().mockResolvedValue(false) });
+
+    const unfollowed = await fs.bash('cd packages/core && ls; cat ../../../x');
+    expect(unfollowed.output).toContain('outside the workspace root');
+    expect(unfollowed.output).toContain('Join the commands with "&&"');
+    expect((await fs.bash('cat ../x')).output).not.toContain('"&&"');
+  });
+
   // `src/..` walks through a directory that exists, so the shell resolves the
   // rest against the workspace's parent: the path escapes however it starts.
   it('confines an auto-tier command whose relative path climbs out part-way through', async () => {
