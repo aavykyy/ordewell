@@ -174,12 +174,13 @@ describe('Merge at gates automatically', () => {
     const iso = new FakeWorktreeIsolation();
     iso.mergeResult = { outcome: 'blocked', blocked: [{ repo: '.', reason: 'conflict', files: ['x'] }] };
     const { runner, sessions } = harness(iso);
-    const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), runner, isolation: iso });
+    const orchestrator = TaskOrchestrator.compose({
+      config: fakeConfig(), notifications: fakeNotification(), runner, isolation: iso, runSettings: () => ({ mergeAtGatesAutomatically: true }),
+    });
     cleanup.push(() => orchestrator.stop());
     const event = vi.fn();
     orchestrator.subscribe({ onAutoMerge: event });
     orchestrator.loadPlan([change, ops]);
-    orchestrator.setMergeAtGatesAutomatically(true);
     await orchestrator.approveReview();
     sessions.at(-1)!.reportComplete({ status: 'done', summary: 'done' });
     await vi.waitFor(() => expect(event).toHaveBeenCalledWith({ trigger: { kind: 'gate', taskId: 'o2' }, result: iso.mergeResult }));
@@ -306,6 +307,55 @@ describe('Merge all at the end of the run', () => {
     expect(handoffs(messages)).toEqual([]);
     expect(session.isolationView()).toBeNull();
     expect(session.planState!.conversationHistory!.map((e) => e.content)).toEqual(['Ordewell setting: auto-merged for task 2']);
+  });
+});
+
+describe('who opened the run', () => {
+  const other = createTask({ id: 'c3', order: 3, prompt: 'other' });
+
+  it('keeps a run the supervisor opens at the run\'s own setting, changed meanwhile in another session', async () => {
+    const iso = new FakeWorktreeIsolation();
+    const { session, pass, messages } = harness(iso);
+    mergesAtGates(false);
+    session.loadPlan(plans([change, other]), 'goal', '/repo');
+    await session.runTask('c1');
+    pass();
+    await vi.waitFor(() => expect(handoffs(messages)).toHaveLength(1));
+
+    mergesAtGates(true);
+    await session.execute({ command: 'run_task', task: 'c3' }, { kind: 'supervisor', level: 'act' });
+    pass('c3');
+    await vi.waitFor(() => expect(handoffs(messages)).toHaveLength(2));
+
+    expect(merged(iso)).toEqual([]);
+    expect(session.planState!.runSettings).toMatchObject({ mergeAtGatesAutomatically: false });
+  });
+
+  it('starts the user\'s run afresh while a supervisor\'s merge_all is still merging', async () => {
+    const iso = new FakeWorktreeIsolation();
+    const merge = iso.mergeIntoCheckedOut.bind(iso);
+    let release: (() => void) | undefined;
+    iso.mergeIntoCheckedOut = async (run) => {
+      await new Promise<void>((resolve) => { release = resolve; });
+      return merge(run);
+    };
+    const { session, pass, messages } = harness(iso);
+    userSettings.supervisorLevel = 'act';
+    session.loadPlan(plans([change, other]), 'goal', '/repo');
+    await session.runTask('c1');
+    pass();
+    await vi.waitFor(() => expect(handoffs(messages).length).toBeGreaterThan(0));
+    expect(session.planState!.runSettings).toMatchObject({ supervisorLevel: 'act', supervisorRetryLimit: 2 });
+
+    Object.assign(userSettings, { supervisorLevel: 'watch', supervisorRetryLimit: 5 });
+    const merging = session.execute({ command: 'merge_all' }, { kind: 'supervisor', level: 'act' });
+    await vi.waitFor(() => expect(release).toBeDefined());
+    const executing = session.executePlan();
+
+    await vi.waitFor(() => expect(session.planState!.runSettings).toMatchObject({ supervisorLevel: 'watch', supervisorRetryLimit: 5 }));
+    release!();
+    await merging;
+    await executing;
   });
 });
 

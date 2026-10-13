@@ -102,12 +102,13 @@ export interface ExecutionHost {
   mergeGate(taskId: string): string[];
   /** The runner requests waiting on a task for an answer. */
   waitingRequests(taskId: string): readonly WaitingRequest[];
-  runPlan(): Promise<void>;
-  startTask(taskId: string): Promise<void>;
+  /** A start is told who asked: whether a run it opens continues the last one depends on it (ADR-0029). */
+  runPlan(actor: ExecutionActor): Promise<void>;
+  startTask(taskId: string, actor: ExecutionActor): Promise<void>;
   stopTask(taskId: string): Promise<void>;
   stopRun(): void;
-  retryTask(taskId: string): Promise<void>;
-  continueTask(taskId: string, message: string): Promise<void>;
+  retryTask(taskId: string, actor: ExecutionActor): Promise<void>;
+  continueTask(taskId: string, message: string, actor: ExecutionActor): Promise<void>;
   messageTask(taskId: string, text: string): string;
   denyRequest(requestId: string, note?: string): boolean;
   /** Merge all, through the queue landings and the user's Merge all share. */
@@ -298,7 +299,7 @@ export class ExecutionCommands {
     }
     return {
       act: async () => {
-        await this.host.runPlan();
+        await this.host.runPlan(actor);
         if (this.host.runBlocked()) return { message: BLOCKED_RUN };
         const started = this.all().filter(({ task }) => this.host.running(task.id));
         if (started.length > 0) return { message: `The plan is running: ${named(started)} started, and the rest start as their dependencies finish.` };
@@ -354,8 +355,8 @@ export class ExecutionCommands {
     return {
       act: async () => {
         // The Retry button's own path: it restarts a run a failure halted, and hands the task to a scheduler that runs.
-        if (settled) await this.host.retryTask(task.id);
-        if (!this.host.running(task.id) && !(settled && this.host.scheduling())) await this.host.startTask(task.id);
+        if (settled) await this.host.retryTask(task.id, actor);
+        if (!this.host.running(task.id) && !(settled && this.host.scheduling())) await this.host.startTask(task.id, actor);
         if (this.host.runBlocked()) return { message: BLOCKED_RUN };
         const verb = how === 'run' ? 'Started' : 'Retrying';
         return {
@@ -380,7 +381,7 @@ export class ExecutionCommands {
     if (unapproved) return { refusal: unapproved };
     return {
       act: async () => {
-        await this.host.continueTask(task.id, message);
+        await this.host.continueTask(task.id, message, actor);
         if (this.host.runBlocked()) return { message: BLOCKED_RUN };
         return { message: `Continuing ${label} in its saved session with your message.` };
       },

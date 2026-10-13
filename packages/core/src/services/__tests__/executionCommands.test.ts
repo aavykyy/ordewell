@@ -715,7 +715,7 @@ describe('the command seam\'s extension points', () => {
     const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
 
     expect(await commands.run({ command: 'run_task', task: 't1' }, PLANNER)).toMatchObject({ ok: true });
-    expect(host.startTask).toHaveBeenCalledWith('t1');
+    expect(host.startTask).toHaveBeenCalledWith('t1', PLANNER);
     expect(host.approve).toHaveBeenCalledWith(['t1']);
   });
 

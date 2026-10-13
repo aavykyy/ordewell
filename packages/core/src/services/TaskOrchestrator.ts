@@ -1,6 +1,6 @@
 import { McpAttachError } from './harness/ordewellBinding';
 import * as path from 'path';
-import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasks, flattenTasksWithParents, taskOrderLabel, waitsForReset } from '../models/Task';
+import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasks, flattenTasksWithParents, taskOrderLabel, waitsForReset, type RunSettings } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
 import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
@@ -41,6 +41,16 @@ import { resumeTime } from '../taskRow/status';
 export type AutoMergeTrigger = { kind: 'gate'; taskId: string } | { kind: 'run_end' };
 
 /**
+ * Who opened a run (ADR-0029): a call the user made, or one made for them; a
+ * call of the supervisor's own; or a usage-limit reset resuming what it paused.
+ * Only the user's starts a run's supervision afresh.
+ */
+export type RunOrigin = 'user' | 'supervisor' | 'limit-reset';
+
+/** What the scheduler reads of the open run's settings, at each decision it makes from them. */
+export type SchedulerRunSettings = Pick<RunSettings, 'mergeAtGatesAutomatically'>;
+
+/**
  * The one notification channel out of the orchestrator. Everything that used
  * to travel over a separate callback (onRefresh) is an observer event; the
  * Session subscribes once and turns these into SessionMessages.
@@ -55,7 +65,7 @@ export interface OrchestratorObserver {
    * save the outcome before any surface is told.
    */
   onTaskSettled?(data: { taskId: string }): void;
-  onRunStarted?(settings: { mergeAtGatesAutomatically: boolean }): void;
+  onRunStarted?(data: { origin: RunOrigin }): void;
   /** An automatic Merge all settled, at a gate or at the run's end; failures are attention events for a supervisor. */
   onAutoMerge?(data: { trigger: AutoMergeTrigger; result: IsolationMergeResult }): void;
   onTick?(): void;
@@ -190,6 +200,12 @@ export interface TaskOrchestratorDeps {
   skillsAt: (roots: readonly string[]) => SkillLookup;
   /** What the task's last saved attempt did, or null when it left no log (ADR-0020). */
   previousAttemptFromLog: (taskId: string) => string | null;
+  /**
+   * The open run's settings, read as each automatic merge is decided rather
+   * than copied when the run opens, so a change to the run under way applies
+   * at once (ADR-0030); absent before any run.
+   */
+  runSettings: () => SchedulerRunSettings | undefined;
 }
 
 /**
@@ -209,6 +225,7 @@ export interface TaskOrchestratorOptions {
   workspaceEnv?: (cwd: string) => Promise<WorkspaceEnv>;
   skillsAt?: (roots: readonly string[]) => SkillLookup;
   previousAttemptFromLog?: (taskId: string) => string | null;
+  runSettings?: () => SchedulerRunSettings | undefined;
 }
 
 /**
@@ -234,8 +251,6 @@ export class TaskOrchestrator {
   /** Planner turns in flight that new starts wait for (ADR-0029); running attempts carry on. */
   private startHolds = 0;
   private reviewApproved = false;
-  private nextAutoMerge = false;
-  private autoMerge = false;
   private autoMergeBlocked = false;
   private mergesInFlight = 0;
   /*
@@ -289,6 +304,7 @@ export class TaskOrchestrator {
   private observers: OrchestratorObserver[] = [];
   private skillsAt: (roots: readonly string[]) => SkillLookup;
   private previousAttemptFromLog: (taskId: string) => string | null;
+  private runSettings: () => SchedulerRunSettings | undefined;
 
   constructor(deps: TaskOrchestratorDeps) {
     this.config = deps.config;
@@ -303,6 +319,7 @@ export class TaskOrchestrator {
     this.workspaceEnv = deps.workspaceEnv;
     this.skillsAt = deps.skillsAt;
     this.previousAttemptFromLog = deps.previousAttemptFromLog;
+    this.runSettings = deps.runSettings;
 
     this.store.onMutate = () => this.emit('onTaskChanged');
     this.verifier.onVerdict((taskId, verdict) => { void this.deliverVerdict(taskId, verdict); });
@@ -369,6 +386,7 @@ export class TaskOrchestrator {
       workspaceEnv: options.workspaceEnv ?? ((cwd) => resolveWorkspaceEnv(cwd)),
       skillsAt: options.skillsAt ?? ((roots) => new SkillsService(roots)),
       previousAttemptFromLog: options.previousAttemptFromLog ?? (() => null),
+      runSettings: options.runSettings ?? (() => undefined),
     });
     return orchestrator;
   }
@@ -680,7 +698,7 @@ export class TaskOrchestrator {
    * over as before.
    */
   private async closeRun(): Promise<void> {
-    if (this.autoMerge && !this.autoMergeBlocked && !this.merging && this.runs.isolating && this.runMergeView()
+    if (this.mergesAutomatically() && !this.autoMergeBlocked && !this.merging && this.runs.isolating && this.runMergeView()
       && ![...this.attempts.values()].some((a) => mergeExcludes(a.kind))) {
       await this.mergeLanded({ kind: 'run_end' });
     }
@@ -762,7 +780,7 @@ export class TaskOrchestrator {
     if (this.isRunning) this.planStatus = 'running';
   }
 
-  async start(): Promise<void> {
+  async start(origin: RunOrigin = 'user'): Promise<void> {
     if (this.runs.blocked) return;
     if (this.running) {
       console.error('[TaskOrchestrator] start() called but already running — no-op');
@@ -773,7 +791,7 @@ export class TaskOrchestrator {
       this.emit('onReviewNeeded', { tasks: this.store.planTasks, planRunners: this.store.planRunners });
       return;
     }
-    this.openRun();
+    this.openRun(origin);
     console.log(`[TaskOrchestrator] Starting with ${this.store.allTasks.length} tasks (${this.store.allTasks.filter(t => t.type === 'ai' && t.prompt).length} AI ready)`);
     this.running = true;
     this.haltedByFailure = false;
@@ -1078,25 +1096,16 @@ export class TaskOrchestrator {
     return readiness;
   }
 
-  setMergeAtGatesAutomatically(enabled: boolean): void {
-    this.nextAutoMerge = enabled;
+  private mergesAutomatically(): boolean {
+    return this.runSettings()?.mergeAtGatesAutomatically ?? false;
   }
 
-  /** The run under way merges at gates, or stops, from now on (ADR-0030); a gate already reached merges at once. */
-  setMergeAtGatesNow(enabled: boolean): void {
-    this.nextAutoMerge = enabled;
-    if (!this.runs.isOpen || this.autoMerge === enabled) return;
-    this.autoMerge = enabled;
-    if (enabled && this.running) void this.tick();
-  }
-
-  private openRun(): void {
-    if (!this.runs.isOpen) {
-      this.autoMerge = this.nextAutoMerge;
-      this.autoMergeBlocked = false;
-      this.emit('onRunStarted', { mergeAtGatesAutomatically: this.autoMerge });
-    }
+  private openRun(origin: RunOrigin): void {
+    const opening = !this.runs.isOpen;
     this.runs.open();
+    if (!opening) return;
+    this.autoMergeBlocked = false;
+    this.emit('onRunStarted', { origin });
   }
 
   /**
@@ -1104,8 +1113,8 @@ export class TaskOrchestrator {
    * task's next attempt needs that ({@link decidesIsolation}). False while a
    * dirty tree waits on the user; `resume` is what their choice replays.
    */
-  private async openFor(taskId: string, resume: () => Promise<void>): Promise<boolean> {
-    this.openRun();
+  private async openFor(taskId: string, origin: RunOrigin, resume: () => Promise<void>): Promise<boolean> {
+    this.openRun(origin);
     return !decidesIsolation(this.nextAttemptKind(taskId)) || this.runs.decide(resume);
   }
 
@@ -1235,7 +1244,7 @@ export class TaskOrchestrator {
     // showing them alongside pending and running work.
   }
 
-  async retryTask(taskId: string): Promise<void> {
+  async retryTask(taskId: string, origin: RunOrigin = 'user'): Promise<void> {
     const task = this.store.get(taskId);
     if (!task) return;
     this.retryCounts.set(taskId, (this.retryCounts.get(taskId) ?? 0) + 1);
@@ -1247,7 +1256,7 @@ export class TaskOrchestrator {
     // A retry starts over from the integration tip, which by now holds what its
     // predecessors landed; the old attempt's worktree has nothing to offer it.
     await this.runs.release(taskId, { keep: false }, ended?.integration);
-    if (this.haltedByFailure && !this.running) await this.start();
+    if (this.haltedByFailure && !this.running) await this.start(origin);
     else await this.tick();
   }
 
@@ -1258,14 +1267,14 @@ export class TaskOrchestrator {
    * worktree keeps the same path, where the runner keeps its sessions, and
    * restores the previous work so that session's memory matches its files.
    */
-  async continueTask(taskId: string, message: string): Promise<void> {
+  async continueTask(taskId: string, message: string, origin: RunOrigin = 'user'): Promise<void> {
     const text = message.trim();
     if (!text) throw new TaskControlError('A message to continue a task with cannot be empty.');
     const task = this.store.get(taskId);
     if (!task) throw new TaskControlError(`No task ${taskId} in this plan.`);
     const eligible = continuability(task);
     if (!eligible.ok) throw new TaskControlError(eligible.reason);
-    if (!(await this.openFor(taskId, () => this.continueTask(taskId, message)))) return;
+    if (!(await this.openFor(taskId, origin, () => this.continueTask(taskId, message, origin)))) return;
     // The run may have started it while opening; the claim below must be the only one.
     if (this.attempts.has(taskId) || !continuability(task).ok) return;
 
@@ -1277,7 +1286,7 @@ export class TaskOrchestrator {
     // Claimed before anything is awaited, so a running scheduler never sees the
     // pending task and starts it afresh. Its prepare replaces the old worktree.
     const started = this.startTask(task, { message: text, resumeSessionId: eligible.sessionId });
-    if (this.haltedByFailure && !this.running) await this.start();
+    if (this.haltedByFailure && !this.running) await this.start(origin);
     await started;
   }
 
@@ -1405,7 +1414,7 @@ export class TaskOrchestrator {
    * waits for the user.
    */
   private async resumeTask(taskId: string): Promise<void> {
-    if (!(await this.openFor(taskId, () => this.resumeTask(taskId)))) return;
+    if (!(await this.openFor(taskId, 'limit-reset', () => this.resumeTask(taskId)))) return;
     const task = this.store.get(taskId);
     if (!task || !waitsForReset(task) || this.attempts.has(taskId)) return;
     const resumeSessionId = task.runnerSessionId;
@@ -1414,7 +1423,7 @@ export class TaskOrchestrator {
     this.onHold.delete(taskId);
     const continuation = resumeSessionId ? { message: LIMIT_RESET_MESSAGE, resumeSessionId } : null;
     const started = this.startTask(task, continuation, { autoResumed: true });
-    if (this.haltedByFailure && !this.running && !this.store.isAnyFailed() && !this.store.allTasks.some(waitsForReset)) await this.start();
+    if (this.haltedByFailure && !this.running && !this.store.isAnyFailed() && !this.store.allTasks.some(waitsForReset)) await this.start('limit-reset');
     await started;
   }
 
@@ -1425,12 +1434,12 @@ export class TaskOrchestrator {
    * tracking, and exit handling — callers must not re-spawn the runner themselves.
    * No-op if the task is unknown, not an AI task, or already running.
    */
-  async forceStartTask(taskId: string): Promise<void> {
+  async forceStartTask(taskId: string, origin: RunOrigin = 'user'): Promise<void> {
     const task = this.store.get(taskId);
     if (!task || task.type !== 'ai') return;
     if (this.attempts.has(taskId)) return;
     this.refuseOpsDuringMerge(task);
-    if (!(await this.openFor(taskId, () => this.forceStartTask(taskId)))) return;
+    if (!(await this.openFor(taskId, origin, () => this.forceStartTask(taskId, origin)))) return;
     this.onHold.delete(taskId);
     this.notePastGate(task);
     await this.startTask(task);
@@ -1466,7 +1475,7 @@ export class TaskOrchestrator {
     const task = this.store.get(taskId);
     if (!task || task.type !== 'ai') return;
     this.refuseOpsDuringMerge(task);
-    if (!(await this.openFor(taskId, () => this.runTask(taskId)))) return;
+    if (!(await this.openFor(taskId, 'user', () => this.runTask(taskId)))) return;
     this.onHold.delete(taskId);
     this.notePastGate(task);
     await this.startTask(task);
@@ -1477,7 +1486,7 @@ export class TaskOrchestrator {
   isAllComplete(): boolean { return this.store.isAllComplete(); }
   isAnyFailed(): boolean { return this.store.isAnyFailed(); }
 
-  async approveReview(): Promise<void> {
+  async approveReview(origin: RunOrigin = 'user'): Promise<void> {
     if (this.reviewApproved) {
       console.log('[TaskOrchestrator] approveReview() called but already approved — no-op');
       return;
@@ -1486,7 +1495,7 @@ export class TaskOrchestrator {
     this.planStatus = 'approved';
     this.emit('onTaskChanged');
     this.emit('onReviewApproved', { tasks: this.store.planTasks });
-    await this.start();
+    await this.start(origin);
   }
 
   async tick(): Promise<void> {
@@ -1513,7 +1522,7 @@ export class TaskOrchestrator {
       readiness = this.readiness();
     }
     if (!this.running) return;
-    if (this.autoMerge && !this.autoMergeBlocked && !this.merging
+    if (this.mergesAutomatically() && !this.autoMergeBlocked && !this.merging
       && ![...this.attempts.values()].some((a) => mergeExcludes(a.kind))) {
       const gate = this.store.allTasks.find((t) => this.getMergeGate(t.id).length > 0
         && !this.onHold.has(t.id) && t.dependencies.every((id) => this.store.isCompleted(id)));

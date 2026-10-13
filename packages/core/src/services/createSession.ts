@@ -11,7 +11,7 @@ import { PlanTurns } from './PlanTurns';
 import { Supervisor, type RunEventInput, type SupervisedRun } from './Supervisor';
 import { editedFields, SupervisionMemory, type GuardTrip } from './LoopGuards';
 import { Planner } from './Planner';
-import { TaskControlError, TaskOrchestrator, type OrchestratorObserver } from './TaskOrchestrator';
+import { TaskControlError, TaskOrchestrator, type OrchestratorObserver, type RunOrigin } from './TaskOrchestrator';
 import { PlanStore } from './PlanStore';
 import { ApprovalPolicy, effectiveApprovalMode } from './ApprovalPolicy';
 import { DEFAULT_PLANNER_ALLOWLIST } from './plannerAllowlist';
@@ -100,6 +100,11 @@ function lastAttemptDigest(location: TaskLogLocation, taskId: string): string | 
   if (attempt === undefined) return null;
   const events = readTaskLog(location, taskId, attempt);
   return events.length > 0 ? digestTaskLog(events, OPS_RETRY_DIGEST_CALLS) : null;
+}
+
+/** A run the supervisor opens continues the last; every other actor asks for the user (ADR-0029, ADR-0030). */
+function runOrigin(actor: ExecutionActor): RunOrigin {
+  return actor.kind === 'supervisor' ? 'supervisor' : 'user';
 }
 
 /** Supervisor levels, lowest first: a level only ever goes down during a run. */
@@ -286,6 +291,7 @@ export function createSession(deps: SessionDeps): Session {
     workspaceRoot: deps.workspaceRoot,
     skillsAt: (roots) => (deps.skillsService ?? new SkillsService(roots)).forRoot(roots),
     previousAttemptFromLog: (taskId) => lastAttemptDigest(session.taskLogLocation, taskId),
+    runSettings: () => session.planState?.runSettings,
   });
   const usage = new PlannerUsageLedger();
   const events = new SessionEventRelay({
@@ -453,8 +459,6 @@ export class Session {
   private readonly supervisor: Supervisor;
   /** What the loop guards remember from the user's start of a run to their next (ADR-0029). */
   private readonly guards = new SupervisionMemory();
-  /** Supervisor commands at the seam right now: a run they open continues the user's, rather than starting one. */
-  private supervisorActing = 0;
   /** The open planner turn's, or the last one's once it settled; see {@link openTurn}. */
   private turnEffects: TurnEffects = this.newTurnEffects();
   /** The run's handoff went out marked as an Act supervisor's, and is owed unmarked unless it merges (ADR-0029). */
@@ -614,13 +618,7 @@ export class Session {
    * tools come here; see {@link ExecutionCommands}.
    */
   async execute(command: ExecutionCommand, actor: ExecutionActor): Promise<CommandOutcome> {
-    if (actor.kind !== 'supervisor') return this.commands.run(command, actor);
-    this.supervisorActing++;
-    try {
-      return await this.commands.run(command, actor);
-    } finally {
-      this.supervisorActing--;
-    }
+    return this.commands.run(command, actor);
   }
 
   /** Retries an Act supervisor may make of one task (a loop guard), as the run holds them. */
@@ -687,12 +685,12 @@ export class Session {
       waitingRequests: (taskId) => this.approvals.outstanding()
         .filter(({ request }) => isRunnerApproval(request) && request.taskId === taskId)
         .map(({ id, request }) => ({ id, subject: request.subject })),
-      runPlan: () => this.runWholePlan(),
-      startTask: (taskId) => this.startOneTask(taskId),
+      runPlan: (actor) => this.runWholePlan(runOrigin(actor)),
+      startTask: (taskId, actor) => this.startOneTask(taskId, runOrigin(actor)),
       stopTask: (taskId) => this.cancelTask(taskId),
       stopRun: () => this.stopExecution(),
-      retryTask: (taskId) => this.restartTask(taskId),
-      continueTask: (taskId, message) => this.resumeTask(taskId, message),
+      retryTask: (taskId, actor) => this.restartTask(taskId, runOrigin(actor)),
+      continueTask: (taskId, message, actor) => this.resumeTask(taskId, message, runOrigin(actor)),
       messageTask: (taskId, text) => this.sendTaskMessage(taskId, text),
       denyRequest: (requestId, note) => this.resolveApproval(requestId, { decision: 'deny', ...(note ? { note } : {}) }),
       mergeAll: () => this.mergeRun(),
@@ -939,26 +937,22 @@ export class Session {
     const relay = this.events.observer(() => this.plan);
     return {
       ...relay,
-      onRunStarted: (settings) => {
+      onRunStarted: ({ origin }) => {
         if (!this.plan) return;
         // Only the user starts a run's supervision afresh. A run the supervisor
         // opens itself, or a usage-limit reset resumes, carries on the one
-        // before: its level, as lowered, and what the loop guards remember.
-        const prior = this.plan.runSettings;
-        const continued = prior !== undefined && (this.supervisorActing > 0 || this.controlsInFlight === 0);
-        if (continued) {
-          this.plan.runSettings = prior;
-          this.orchestrator.setMergeAtGatesNow(prior.mergeAtGatesAutomatically);
-        } else {
+        // before: its settings, its level as lowered, and what the loop guards remember.
+        const continued = this.plan.runSettings !== undefined && origin !== 'user';
+        if (!continued) {
           const user = this.userRunSettings();
           this.plan.runSettings = {
-            ...settings,
+            mergeAtGatesAutomatically: user.mergeAtGatesAutomatically,
             supervisorLevel: user.supervisorLevel,
             supervisorRetryLimit: user.supervisorRetryLimit,
             wakeUpReadBudget: user.wakeUpReadBudget,
           };
+          this.guards.forget();
         }
-        if (!continued) this.guards.forget();
         this.supervisor.runStarted(continued);
         this.persist({ background: true });
         this.events.planGenerated(this.plan, this.goal);
@@ -1476,20 +1470,19 @@ export class Session {
       else this.supervisor.setByUser();
       if (level !== 'act') this.handOver();
     }
-    if (changes.mergeAtGatesAutomatically !== undefined) {
-      settings.mergeAtGatesAutomatically = changes.mergeAtGatesAutomatically;
-      this.orchestrator.setMergeAtGatesNow(changes.mergeAtGatesAutomatically);
-    }
+    if (changes.mergeAtGatesAutomatically !== undefined) settings.mergeAtGatesAutomatically = changes.mergeAtGatesAutomatically;
     if (changes.supervisorRetryLimit !== undefined) settings.supervisorRetryLimit = changes.supervisorRetryLimit;
     if (changes.wakeUpReadBudget !== undefined) settings.wakeUpReadBudget = changes.wakeUpReadBudget;
     this.persist({ background: true });
+    // The scheduler reads the setting as it decides; a gate already reached merges now, not at the next event.
+    if (changes.mergeAtGatesAutomatically && this.orchestrator.isScheduling) void this.reschedule();
   }
 
   async executePlan(): Promise<void> {
     this.idlePlan();
     // Executing is the user's approval of every task in the plan (ADR-0029).
     this.approve(flattenTasks(this.store.planTasks).map((t) => t.id));
-    await this.runWholePlan();
+    await this.runWholePlan('user');
   }
 
   private idlePlan(): LegacyPlanState {
@@ -1498,9 +1491,8 @@ export class Session {
     return this.plan;
   }
 
-  private async runWholePlan(): Promise<void> {
+  private async runWholePlan(origin: RunOrigin): Promise<void> {
     const plan = this.idlePlan();
-    this.orchestrator.setMergeAtGatesAutomatically(this.userRunSettings().mergeAtGatesAutomatically);
     await this.withSave(async () => {
       // A scheduler armed from an earlier run but with nothing live — paused on a
       // hold, a user task, or a cancellation — would ignore the restart: `start`
@@ -1514,7 +1506,7 @@ export class Session {
 
       this.orchestrator.loadPlan(this.store.planTasks, plan.runners);
       // A plan with nothing left to run ends here: the scheduler announces it.
-      await this.orchestrator.approveReview();
+      await this.orchestrator.approveReview(origin);
     });
   }
 
@@ -1525,28 +1517,25 @@ export class Session {
     // executing it is (ADR-0029): without it the planner's starts refuse the
     // tasks as added since approval.
     this.approve(flattenTasks(this.store.planTasks).map((t) => t.id));
-    this.orchestrator.setMergeAtGatesAutomatically(this.userRunSettings().mergeAtGatesAutomatically);
-    await this.withSave(() => this.orchestrator.approveReview());
+    await this.withSave(() => this.orchestrator.approveReview('user'));
     return plan;
   }
 
   async forceStartTask(taskId: string): Promise<void> {
     this.approveTask(taskId);
-    await this.startOneTask(taskId);
+    await this.startOneTask(taskId, 'user');
   }
 
-  private async startOneTask(taskId: string): Promise<void> {
+  private async startOneTask(taskId: string, origin: RunOrigin): Promise<void> {
     if (!this.plan) return;
     this.requireTask(taskId);
-    this.orchestrator.setMergeAtGatesAutomatically(this.userRunSettings().mergeAtGatesAutomatically);
-    await this.withSave(() => this.orchestrator.forceStartTask(taskId));
+    await this.withSave(() => this.orchestrator.forceStartTask(taskId, origin));
   }
 
   async runTask(taskId: string): Promise<void> {
     if (!this.plan) return;
     this.requireTask(taskId);
     this.approveTask(taskId);
-    this.orchestrator.setMergeAtGatesAutomatically(this.userRunSettings().mergeAtGatesAutomatically);
     await this.withSave(() => this.orchestrator.runTask(taskId));
   }
 
@@ -1566,11 +1555,11 @@ export class Session {
 
   async retryTask(taskId: string): Promise<void> {
     this.approveTask(taskId);
-    await this.restartTask(taskId);
+    await this.restartTask(taskId, 'user');
   }
 
-  private async restartTask(taskId: string): Promise<void> {
-    await this.withSave(() => this.orchestrator.retryTask(taskId));
+  private async restartTask(taskId: string, origin: RunOrigin): Promise<void> {
+    await this.withSave(() => this.orchestrator.retryTask(taskId, origin));
   }
 
   /**
@@ -1580,11 +1569,11 @@ export class Session {
    */
   async continueTask(taskId: string, message: string): Promise<void> {
     this.approveTask(taskId);
-    await this.resumeTask(taskId, message);
+    await this.resumeTask(taskId, message, 'user');
   }
 
-  private async resumeTask(taskId: string, message: string): Promise<void> {
-    await this.withSave(() => this.orchestrator.continueTask(taskId, message));
+  private async resumeTask(taskId: string, message: string, origin: RunOrigin): Promise<void> {
+    await this.withSave(() => this.orchestrator.continueTask(taskId, message, origin));
   }
 
   async cancelTask(taskId: string): Promise<void> {
@@ -1850,7 +1839,6 @@ export class Session {
       this.guards.restore(plan.supervision?.guards);
       this.supervisor.restore(plan.supervision?.wake);
     }
-    this.orchestrator.setMergeAtGatesAutomatically(this.userRunSettings().mergeAtGatesAutomatically);
     this.goal = goal;
     this.workspace = workspace;
     // Saved before tasks carried the user's approval: executing a plan approved every task it held.
