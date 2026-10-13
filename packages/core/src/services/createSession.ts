@@ -11,7 +11,7 @@ import { PlanTurns } from './PlanTurns';
 import { Supervisor, type RunEventInput, type SupervisedRun } from './Supervisor';
 import { editedFields, SupervisionMemory, type GuardTrip } from './LoopGuards';
 import { Planner } from './Planner';
-import { TaskOrchestrator, type OrchestratorObserver } from './TaskOrchestrator';
+import { TaskControlError, TaskOrchestrator, type OrchestratorObserver } from './TaskOrchestrator';
 import { PlanStore } from './PlanStore';
 import { ApprovalPolicy, effectiveApprovalMode } from './ApprovalPolicy';
 import { DEFAULT_PLANNER_ALLOWLIST } from './plannerAllowlist';
@@ -56,6 +56,7 @@ import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { ExecutionCommands, mergeStopped, type CommandOutcome, type ExecutionCommand, type ExecutionHost } from './ExecutionCommands';
 import type { ExecutionActor, ExecutionRecord, SupervisorLevel } from '../models/Execution';
 import { dependencyMet } from './readiness';
+import { TurnEffects } from './TurnEffects';
 
 /**
  * Options for plan generation. Progress is not overridable: every planner
@@ -454,12 +455,8 @@ export class Session {
   private readonly guards = new SupervisionMemory();
   /** Supervisor commands at the seam right now: a run they open continues the user's, rather than starting one. */
   private supervisorActing = 0;
-  /** Starts the open turn asked for that wait on its own held edit; run once its reply lands. */
-  private deferred: { command: ExecutionCommand; actor: ExecutionActor; intent: string }[] = [];
-  /** The open turn's task edit landed, so what it deferred runs as edited. */
-  private editLanded = false;
-  /** The open turn's planner submitted a whole plan, which autorun starts once the turn ends (ADR-0030). */
-  private planSubmitted = false;
+  /** The open planner turn's, or the last one's once it settled; see {@link openTurn}. */
+  private turnEffects: TurnEffects = this.newTurnEffects();
   /** The run's handoff went out marked as an Act supervisor's, and is owed unmarked unless it merges (ADR-0029). */
   private handoffDeferred = false;
   private unlistenApprovals: (() => void) | null;
@@ -552,17 +549,13 @@ export class Session {
         // A turn that failed before persist leaves its runs unflushed; drop them so
         // the next turn's log cannot absorb a previous turn's uncommitted activity.
         this.events.dropSubagentRuns();
-        this.deferred = [];
-        this.editLanded = false;
-        this.planSubmitted = false;
         const reply = (turnSignal: AbortSignal | undefined, wakeUp?: WakeUpTurn) =>
           this.conversation.reply(prompt, { signal: turnSignal, onCommit: taken, wakeUps: prompt.wakeUps, ...(wakeUp ? { wakeUp } : {}) });
         // Wake-ups that ride with a user's message are context for the user's turn.
-        const landed = await (prompt.source === 'supervisor'
+        const { landed, effects } = await this.openTurn(() => (prompt.source === 'supervisor'
           ? this.supervisor.turn((turnSignal) => reply(turnSignal, this.supervisor.wakeUpTurn()), signal)
-          : reply(signal));
-        this.runDeferred();
-        if (prompt.source !== 'supervisor') this.autorunSubmitted();
+          : reply(signal)));
+        if (prompt.source !== 'supervisor') this.autorunSubmitted(effects);
         return landed;
       },
       notice: (message) => this.notice('error', message),
@@ -635,40 +628,40 @@ export class Session {
     return this.plan?.runSettings?.supervisorRetryLimit ?? this.userRunSettings().supervisorRetryLimit;
   }
 
+  private newTurnEffects(): TurnEffects {
+    return new TurnEffects({
+      execute: (command, actor) => this.execute(command, actor),
+      supervisorLevel: () => this.supervisor.level,
+      notice: (level, message) => this.notice(level, message),
+    });
+  }
+
+  /**
+   * Run one planner turn with its own {@link TurnEffects}, settled in a
+   * `finally`: a turn that throws — stopped, failed, discarded — still
+   * reports what it deferred as not done, rather than the next turn
+   * silently forgetting it.
+   */
+  private async openTurn<T>(turn: () => Promise<T>): Promise<{ landed: T; effects: TurnEffects }> {
+    const effects = this.newTurnEffects();
+    this.turnEffects = effects;
+    try {
+      return { landed: await turn(), effects };
+    } finally {
+      effects.settle();
+    }
+  }
+
   /**
    * Autorun (ADR-0030): a plan the planner submitted in the turn that just
    * ended starts as if the user had pressed Execute, through the seam, so the
    * timeline says autorun started it. Read now, not when the turn opened: the
    * switch is the user's to flip at any time.
    */
-  private autorunSubmitted(): void {
-    const submitted = this.planSubmitted;
-    this.planSubmitted = false;
-    if (!submitted || !this.userRunSettings().autorun || this.orchestrator.hasLiveWork) return;
+  private autorunSubmitted(effects: TurnEffects): void {
+    if (!effects.planSubmitted || !this.userRunSettings().autorun || this.orchestrator.hasLiveWork) return;
     void this.execute({ command: 'run_plan' }, { kind: 'autorun' })
       .catch((err: unknown) => this.notice('error', `Autorun could not start the plan: ${err instanceof Error ? err.message : String(err)}`));
-  }
-
-  /**
-   * The starts a turn deferred behind its own held edit, now that it landed:
-   * each goes through the seam again, so it is checked against the edited
-   * plan, and the supervisor's at the level it has by now. An edit that never
-   * landed — the turn stopped, or the edit refused as it landed — takes its
-   * starts with it: run on the unedited plan, they would not be what was asked.
-   */
-  private runDeferred(): void {
-    const due = this.deferred;
-    this.deferred = [];
-    if (!this.editLanded) {
-      for (const { intent } of due) this.notice('warn', `Not done: ${intent} waited for an edit that did not land.`);
-      return;
-    }
-    void (async () => {
-      for (const { command, actor } of due) {
-        const now: ExecutionActor = actor.kind === 'supervisor' ? { kind: 'supervisor', level: this.supervisor.level } : actor;
-        await this.execute(command, now).catch((err: unknown) => this.notice('error', `Could not run what the planner queued: ${err instanceof Error ? err.message : String(err)}`));
-      }
-    })();
   }
 
   /**
@@ -706,7 +699,7 @@ export class Session {
       record: (record, text) => this.recordExecution(record, text),
       guardTripped: (trip) => this.guardTripped(trip),
       heldEdit: (taskId) => this.heldEdit(taskId),
-      deferUntilLanded: (command, actor, intent) => { this.deferred.push({ command, actor, intent }); },
+      deferUntilLanded: (command, actor, intent) => this.turnEffects.defer(command, actor, intent),
     };
   }
 
@@ -1071,21 +1064,26 @@ export class Session {
   }
 
   /**
-   * A new plan starts from zero: drop the live planner conversation and every
-   * task, log, and pending turn left over from a previous plan on this
-   * Session. Without this, a long-lived Session (VS Code hosts exactly one)
-   * leaks the previous session's tasks into the per-turn plan block — the
-   * model is told they are the CURRENT plan and re-presents them as its draft.
+   * The plan scope ends: everything that belongs to the plan this Session
+   * holds goes, so nothing of it reaches the next one — a new plan, another
+   * session adopted, or the Session closed. Its run is stopped, the planner
+   * turn in flight is abandoned with its uncommitted subagent steps, what that
+   * turn deferred is settled, and the conversation, supervision, usage ledger,
+   * execution log and planner prompts are cleared. A new plan on the same
+   * Session keeps the scopes the user granted (`keepGrants`); a session
+   * boundary does not (ADR-0008).
    */
-  private beginFreshPlan(): void {
-    if (this.isExecuting) this.stopExecution();
+  private dropPlanScope({ keepGrants = false }: { keepGrants?: boolean } = {}): void {
+    // Before the stop, whose save would otherwise write the abandoned turn's
+    // steps into the plan it saves.
     this.events.dropSubagentRuns();
+    if (this.isExecuting || this.orchestrator.isRunning) this.stopExecution();
     this.conversation.abandonTurn();
     this.turns.abandon();
     this.supervisor.reset();
     this.handoffDeferred = false;
     this.guards.forget();
-    this.deferred = [];
+    this.turnEffects.abandon();
     this.conversation.reset();
     // Totals belong to the plan they were recorded under; a fresh plan starts
     // its ledger from zero so the previous session's line never lingers.
@@ -1093,7 +1091,18 @@ export class Session {
     // A prompt raised by the turn we are abandoning has nobody left to serve;
     // denying it unblocks the old research loop instead of stranding it.
     this.approvals.clear(isPlannerApproval);
+    if (!keepGrants) this.approvalPolicy.reset();
     this.store.clearLog();
+  }
+
+  /**
+   * A new plan starts from zero. Without this, a long-lived Session (VS Code
+   * hosts exactly one) leaks the previous session's tasks into the per-turn
+   * plan block — the model is told they are the CURRENT plan and re-presents
+   * them as its draft.
+   */
+  private beginFreshPlan(opts: { keepGrants?: boolean } = {}): void {
+    this.dropPlanScope(opts);
     this.orchestrator.loadPlan([]);
     void this.runs.adopt(null);
   }
@@ -1101,9 +1110,9 @@ export class Session {
   /**
    * Return the Session to a blank slate — hosts call this on "new session".
    * Everything scoped to the old session goes: the live AI conversation, plan,
-   * goal, tasks, execution log, pending turns, model cache, and (unless the
-   * host fixed one) the persisted identity, so nothing can bleed into the next
-   * session.
+   * goal, tasks, execution log, pending turns, approved scopes, model cache,
+   * and (unless the host fixed one) the persisted identity, so nothing can
+   * bleed into the next session.
    */
   reset(): void {
     // Null the plan first so orchestrator-stop observer callbacks
@@ -1112,9 +1121,6 @@ export class Session {
     this.plan = null;
     this.goal = '';
     this.beginFreshPlan();
-    // Session boundaries are hard (see ADR-0008): a path or command the user
-    // approved for the previous goal must not stay approved for the next one.
-    this.approvalPolicy.reset();
     this.catalog.reset();
     this.remintSessionId();
   }
@@ -1178,7 +1184,7 @@ export class Session {
     this.plan = null;
     this.goal = goal;
     this.remintSessionId();
-    this.beginFreshPlan();
+    this.beginFreshPlan({ keepGrants: true });
     const enabled = this.catalog.enabledRunners();
     const chosenRunners = runners.filter((r) => enabled.includes(r));
     if (chosenRunners.length === 0) throw new Error('None of the requested runners are enabled');
@@ -1224,7 +1230,7 @@ export class Session {
     this.plan = null;
     this.goal = goal;
     this.remintSessionId();
-    this.beginFreshPlan();
+    this.beginFreshPlan({ keepGrants: true });
     const enabled = this.catalog.enabledRunners();
     const chosenRunners = runners.filter((r) => enabled.includes(r));
     if (chosenRunners.length === 0) throw new Error('None of the requested runners are enabled');
@@ -1232,10 +1238,9 @@ export class Session {
     const now = new Date().toISOString();
     this.plan = { tasks: [], generatedAt: now, status: 'draft', runners: chosenRunners, lastUpdated: now };
 
-    this.planSubmitted = false;
-    const planned = await this.conversation.start(this.resolveSkillInvocation(goal), () => this.conversationOpening(chosenRunners), options?.signal);
-    this.autorunSubmitted();
-    return planned;
+    const { landed, effects } = await this.openTurn(() => this.conversation.start(this.resolveSkillInvocation(goal), () => this.conversationOpening(chosenRunners), options?.signal));
+    this.autorunSubmitted(effects);
+    return landed;
   }
 
   /**
@@ -1400,8 +1405,7 @@ export class Session {
    * tasks, and `rearm`, the one op meant to change a status, must stand.
    */
   private adoptPlannerTasks(tasks: readonly Task[], how: 'edit' | 'commit'): number {
-    if (how === 'edit') this.editLanded = true;
-    else this.planSubmitted = true;
+    this.turnEffects.landed(how);
     // A runner the planner was allowed to use joins the plan as its tasks land (#69).
     for (const runner of runnersOf(tasks)) this.editor.admitRunner(runner, this.catalog.known(runner));
     const runners = this.plan!.runners;
@@ -1509,10 +1513,9 @@ export class Session {
       this.store.resetForRun();
 
       this.orchestrator.loadPlan(this.store.planTasks, plan.runners);
+      // A plan with nothing left to run ends here: the scheduler announces it.
       await this.orchestrator.approveReview();
     });
-
-    if (!this.orchestrator.isRunning && !this.runs.blocked) this.events.executionComplete(this.plan);
   }
 
   async approveReview(): Promise<LegacyPlanState> {
@@ -1534,21 +1537,26 @@ export class Session {
 
   private async startOneTask(taskId: string): Promise<void> {
     if (!this.plan) return;
-    if (!this.store.get(taskId)) {
-      this.orchestrator.loadPlan(this.store.planTasks, this.plan.runners);
-    }
+    this.requireTask(taskId);
     this.orchestrator.setMergeAtGatesAutomatically(this.userRunSettings().mergeAtGatesAutomatically);
     await this.withSave(() => this.orchestrator.forceStartTask(taskId));
   }
 
   async runTask(taskId: string): Promise<void> {
     if (!this.plan) return;
+    this.requireTask(taskId);
     this.approveTask(taskId);
-    if (!this.store.get(taskId)) {
-      this.orchestrator.loadPlan(this.store.planTasks, this.plan.runners);
-    }
     this.orchestrator.setMergeAtGatesAutomatically(this.userRunSettings().mergeAtGatesAutomatically);
     await this.withSave(() => this.orchestrator.runTask(taskId));
+  }
+
+  /**
+   * A stale id — a task removed since the surface last drew it — is refused.
+   * Reloading the plan to find it never could, and reset the verifier under
+   * the agents still running, whose verdicts were then lost.
+   */
+  private requireTask(taskId: string): void {
+    if (!this.store.get(taskId)) throw new TaskControlError(`There is no task "${taskId}" in this plan.`);
   }
 
   /** Start whatever the scheduler can now fit — after the parallel limit was raised mid-run, say. */
@@ -1833,19 +1841,7 @@ export class Session {
     // re-adopting the current plan on approval) keeps the conversation; after
     // a drop, the first user send reseeds it from this plan's own transcript.
     const adopting = plan !== this.plan;
-    if (adopting) {
-      this.conversation.abandonTurn();
-      this.turns.abandon();
-      this.supervisor.reset();
-      this.handoffDeferred = false;
-      this.conversation.reset();
-      // The execution log is scoped to the outgoing plan.
-      this.store.clearLog();
-      // Approval scopes are equally session-scoped: a path or command approved
-      // for the previous plan must not stay approved for the newly adopted one.
-      this.approvals.clear(isPlannerApproval);
-      this.approvalPolicy.reset();
-    }
+    if (adopting) this.dropPlanScope();
     this.plan = plan;
     // A plan adopted off disk carries what supervision remembered: the loop
     // guards' memory and any batch inside its debounce window (ADR-0029). The
@@ -1895,21 +1891,15 @@ export class Session {
   }
 
   destroy(): void {
-    this.stopExecution();
     // Planning research runs on a separate conduit from task execution — a
     // live spawn_research_agent/bash tool call would otherwise keep running
     // server-side after the client has already moved on to a new session.
-    this.conversation.abandonTurn();
-    this.turns.abandon();
-    this.supervisor.reset();
-    this.handoffDeferred = false;
+    this.dropPlanScope();
     this.unlistenApprovals?.();
     this.unlistenApprovals = null;
-    this.conversation.reset();
     // Deny any still-pending approval prompts so their timers and awaited
     // continuations settle before the Session goes away.
     this.approvals.clear();
-    this.approvalPolicy.reset();
     this.unsubObserver?.();
     this.unsubObserver = null;
   }

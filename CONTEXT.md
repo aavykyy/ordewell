@@ -94,18 +94,32 @@ itself holds only what earns its keep — the session registry
 operations; routes reach a session's interface via `pool.session(id)` instead
 of per-verb forwarders, and the pool never caches plan state (the Session is
 the plan's owner).
-Session boundaries are hard: `startPlanning`/`generatePlan` begin from zero
-(`beginFreshPlan` drops any live conversation and every leftover task, log,
-and waiting planner turn), `loadPlan` of a *different* plan drops the live LLM
-conversation, the old plan's log and the callers of its waiting turns (the
-first user send reseeds from the adopted plan's own transcript, and inputs the
-adopted plan still holds are replayed), and hosts call `Session.reset()` on "new
-session" for a full wipe with a freshly minted identity. Nothing from one
-session may surface in another — a long-lived Session (VS Code hosts exactly
-one) otherwise presents the previous session's tasks to the planner as the
-current plan.
+Session boundaries are hard: every way a plan stops being the Session's ends
+its **plan scope** in one place (see there). `loadPlan` of a *different* plan
+then adopts the new one (the first user send reseeds from the adopted plan's
+own transcript, and inputs the adopted plan still holds are replayed), and
+hosts call `Session.reset()` on "new session" for a full wipe with a freshly
+minted identity. Nothing from one session may surface in another — a
+long-lived Session (VS Code hosts exactly one) otherwise presents the previous
+session's tasks to the planner as the current plan.
 *Avoid:* "the pool" (that's the web transport host), "the session manager" —
 Session is the lifecycle owner, not a registry.
+
+**Plan scope** (`Session.dropPlanScope`) — everything a Session holds that
+belongs to the plan it holds, and goes with it: the run (stopped, with its
+agents), the planner turn in flight (abandoned, its uncommitted subagent steps
+dropped before anything saves), what that turn deferred (its **turn effects**,
+reported as not done), the waiting turns' callers, the conversation,
+supervision and loop-guard memory, the planner usage ledger, the execution log
+and the planner's open prompts. It ends in one teardown, used by all four ways
+a plan stops being the Session's: a new plan (`startPlanning`/`generatePlan`),
+another session adopted (`loadPlan` of a *different* plan object), `reset`,
+and `destroy`. The scopes the user granted end with it at a session boundary
+(adopt, reset, destroy — ADR-0008), and are kept by a new plan started on the
+same Session. A host never stops the run or the runners itself around these
+calls. Re-adopting the *same* plan object (approval) is not a scope end.
+*Avoid:* "session reset" for the adopt or new-plan cases — only `reset` also
+mints a new identity and clears the model cache.
 
 **SessionCatalog** (`services/SessionCatalog.ts`) — what one session may
 assign, behind one interface: the enabled runners, their manifest modes, the
@@ -187,6 +201,18 @@ logging a fault.
 of this state, and the copies drifted; *Avoid:* confusing it with **Turn**, the
 streamed span a surface draws under one `turnId`: every user turn is a planner
 turn, but a compaction or a one-shot generation streams no Turn.
+
+**Turn effects** (`TurnEffects`) — what one planner turn leaves for its end:
+the starts it deferred behind its own held task edit (ADR-0029), whether that
+edit landed, and whether the planner submitted a whole plan, which autorun
+starts (ADR-0030). Made fresh for each reply and for the conversation's
+opening, and settled once in a `finally`, however the turn ends: when its edit
+landed, the deferred starts go through the command seam again, as edited;
+when it did not — the turn stopped, failed, was discarded, or its edit was
+refused as it landed — each is reported "Not done: … waited for an edit that
+did not land." A plan scope ending abandons them the same way, whether the
+edit landed or not, so none runs on the next plan. Nothing of one turn's
+effects carries into the next.
 
 **SessionMessage** — the single union every delivery surface consumes: the
 plan-lifecycle events (`plan_generated`, `planner_message`, `status_update`, …)

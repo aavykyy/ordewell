@@ -397,11 +397,10 @@ export function handleStopPlanning(deps: PlanManagerDeps): void {
  * view and the saved state.
  */
 export function handleNewSession(deps: Pick<PlanManagerDeps,
-  'session' | 'chatProvider' | 'runner' | 'fsAdapter' | 'setCurrentPlan' | 'setCurrentGoal' | 'log'>): void {
+  'session' | 'chatProvider' | 'fsAdapter' | 'setCurrentPlan' | 'setCurrentGoal' | 'log'>): void {
   // Abandons the planner turn in flight: it settles as discarded, which is
   // not reported into the new session.
   deps.session.reset();
-  deps.runner.stopAll();
   deps.setCurrentPlan(createEmptyPlan());
   deps.setCurrentGoal('');
   deps.chatProvider.setState('empty');
