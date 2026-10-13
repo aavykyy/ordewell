@@ -285,6 +285,7 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
   repairEvidence = new Map<string, RepairEvidence>();
   calls: FakeIsolationCall[] = [];
   private holds = new Map<string, Promise<void>>();
+  private verifyHolds = new Map<string, Promise<void>>();
   private runCount = 0;
 
   private log(call: FakeIsolationCall): void { this.calls.push(call); }
@@ -298,6 +299,13 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
   holdIntegration(taskId: string): () => void {
     let open!: () => void;
     this.holds.set(taskId, new Promise<void>((resolve) => { open = resolve; }));
+    return open;
+  }
+
+  /** Make `verifyRepair` for this task wait until the returned function is called. */
+  holdVerification(taskId: string): () => void {
+    let open!: () => void;
+    this.verifyHolds.set(taskId, new Promise<void>((resolve) => { open = resolve; }));
     return open;
   }
 
@@ -356,6 +364,7 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
 
   async verifyRepair(task: Task, _run: IsolationRun): Promise<RepairEvidence> {
     this.log({ op: 'verifyRepair', taskId: task.id });
+    await this.verifyHolds.get(task.id);
     return this.repairEvidence.get(task.id) ?? { ok: true };
   }
 

@@ -41,8 +41,13 @@ export interface AttemptWorkspace {
  * orchestrator turns these into observer events and decides what runs next.
  */
 export interface IsolationRunListener {
-  /** The run record changed and should be persisted with the plan. */
-  changed(): void;
+  /**
+   * The run record changed and should be persisted with the plan. `detached`
+   * is set instead when the record that changed is no longer the plan's own —
+   * a release that outlived the plan load that replaced its run — and belongs
+   * to the session that was left.
+   */
+  changed(detached?: IsolationRun): void;
   /** A run did not start: `repos` of the group have tracked changes. */
   blocked(repos: string[]): void;
   /** An isolated run closed and handed its integration branches over. */
@@ -395,18 +400,20 @@ export class IsolationRunController {
   /**
    * Let go of a task's worktree. `keep` leaves it and its branch for
    * inspection; otherwise both go. A landing still in flight settles first, so
-   * the worktree is never torn down underneath its merge.
+   * the worktree is never torn down underneath its merge. Bound to the run
+   * the call was made in: a plan loaded meanwhile adopts its own run, whose
+   * records share these task ids and are not this release's to touch.
    */
   async release(taskId: string, opts: { keep: boolean }, landing?: Promise<unknown> | null): Promise<void> {
-    await landing;
     const run = this.run;
+    await landing;
     if (!run?.tasks[taskId]) return;
     try {
       this.report(await this.isolation.release(run, taskId, opts));
     } catch (err) {
       this.notifications.warn(`Could not clean up the worktree of task ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
     }
-    this.listener.changed();
+    this.listener.changed(run === this.run ? undefined : run);
   }
 
   /**
