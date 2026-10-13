@@ -315,6 +315,14 @@ describe('reduceTaskLog', () => {
     expect(approvals[0]).not.toHaveProperty('forTask');
   });
 
+  it('shows a request that was never left open as settled, not waiting', () => {
+    const view = replayTaskLog([
+      start,
+      { type: 'approval_requested', approvalId: 'ap-1', tool: 'mcp__ordewell__task_complete', args: '{}', allowForTask: false, decided: 'allow' },
+    ]);
+    expect(view.blocks.find((b) => b.type === 'approval')).toMatchObject({ status: 'granted', decidedBy: 'asked' });
+  });
+
   it('takes the first answer to a request and ignores a repeated request', () => {
     const asked = replayTaskLog([start, { type: 'approval_requested', approvalId: 'ap-1', tool: 'Bash', args: '{}', allowForTask: false }]);
     const decided = replayTaskLog([{ type: 'approval_decided', approvalId: 'ap-1', decision: 'allow' }], asked);

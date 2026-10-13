@@ -359,6 +359,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   the list.
 - **A webview message that fails says so.** A handler error used to be dropped
   as an unhandled rejection; VS Code now logs it and shows the message.
+- **An approval the runner never waited on is no longer announced as waiting.**
+  An Ordewell tool, and a task's request under an auto-approving mode, is
+  allowed at once; the chat still told you "Task N waits for approval" for it.
+  The log now records that the request was already decided, and the notice, the
+  task view and a saved-log read leave it settled.
+- **A wrapped system notice keeps its colour in the terminal UI.** The second
+  and later rows of a system, error or run-update line now stay grey, red or
+  yellow like the first, and the doubled `·` before a system notice is gone.
 
 ## [0.9.1] — 2026-10-11
 

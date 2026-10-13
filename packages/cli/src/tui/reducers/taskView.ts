@@ -105,8 +105,8 @@ export function taskLogArrived(state: TuiState, action: Extract<Action, { type: 
 export function announceApprovals(state: TuiState, action: Extract<Action, { type: 'taskLog' }>): TuiState {
   if (state.taskView?.taskId === action.taskId) return state;
   const task = findTask(state.tasks, action.taskId);
-  const spoken = action.events.reduce((s, event) => (event.type === 'approval_requested'
-    ? say(s, 'system', `· Task ${task?.order ?? '?'} waits for approval: ${runnerToolSubject(event.tool, event.args)} — enter on it, then ctrl-y to allow or ctrl-g to deny`)
+  const spoken = action.events.reduce((s, event) => (event.type === 'approval_requested' && !event.decided
+    ? say(s, 'system', `Task ${task?.order ?? '?'} waits for approval: ${runnerToolSubject(event.tool, event.args)} — enter on it, then ctrl-y to allow or ctrl-g to deny`)
     : s), state);
   return spoken !== state ? { ...spoken, scroll: state.scroll } : spoken;
 }
@@ -119,7 +119,7 @@ export function announceCheckpoint(state: TuiState, action: Extract<Action, { ty
   const task = findTask(state.tasks, action.taskId) ?? state.tasks.find((t) => t.title === action.title);
   const label = task ? `Task ${task.order}` : action.title;
   const where = 'enter on it to answer';
-  const spoken = say(state, 'system', `· ${label} asks: ${truncateCheckpointSummary(action.summary)} — ${where}`);
+  const spoken = say(state, 'system', `${label} asks: ${truncateCheckpointSummary(action.summary)} — ${where}`);
   return { ...spoken, scroll: state.scroll };
 }
 

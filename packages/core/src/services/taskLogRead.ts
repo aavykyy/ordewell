@@ -52,7 +52,7 @@ function eventText(event: TaskLogEvent): string {
     case 'message_removed':
     case 'message_handed_over': return event.messageId;
     case 'error': return event.message;
-    case 'approval_requested': return `${event.approvalId} ${event.tool}${event.toolCallId ? ` (call ${event.toolCallId})` : ''}${event.allowForTask ? ' (task grant offered)' : ''} ${event.args}`;
+    case 'approval_requested': return `${event.approvalId} ${event.tool}${event.toolCallId ? ` (call ${event.toolCallId})` : ''}${event.decided ? ` (decided ${event.decided})` : ''}${event.allowForTask ? ' (task grant offered)' : ''} ${event.args}`;
     case 'approval_decided': return `${event.approvalId} ${event.decision}${event.note ? `: ${event.note}` : ''}`;
     case 'approval_withdrawn': return event.approvalId;
   }

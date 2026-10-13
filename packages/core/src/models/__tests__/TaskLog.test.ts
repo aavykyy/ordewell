@@ -52,6 +52,15 @@ describe('toTaskLogEvent', () => {
       .toEqual({ type: 'approval_requested', approvalId: 'p2', tool: 'Bash', args: '{}', allowForTask: false });
   });
 
+  it('keeps the answer a request already carries, so a decided one is never read as open', () => {
+    expect(toTaskLogEvent({
+      type: 'permission_request', id: 'p1', name: 'mcp__ordewell__task_complete', detail: '{}', input: {},
+      decided: { decision: 'allow' },
+    })).toEqual({ type: 'approval_requested', approvalId: 'p1', tool: 'mcp__ordewell__task_complete', args: '{}', allowForTask: false, decided: 'allow' });
+    expect(toTaskLogEvent({ type: 'permission_request', id: 'p2', name: 'Bash', detail: '{}', input: {}, suggestions: [] }))
+      .toEqual({ type: 'approval_requested', approvalId: 'p2', tool: 'Bash', args: '{}', allowForTask: false });
+  });
+
   it('keeps each answer, a denial with its note, and a request that went unanswered', () => {
     expect(toTaskLogEvent({ type: 'permission_decided', id: 'p1', decision: { decision: 'allowForTask' } }))
       .toEqual({ type: 'approval_decided', approvalId: 'p1', decision: 'allowForTask' });

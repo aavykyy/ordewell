@@ -507,7 +507,7 @@ describe('execution', () => {
     const state = reduce(initialState({ sessionId: 's1' }), arrived!).state;
     const text = messagesOf(state).at(-1)?.text ?? '';
     expect(text).not.toContain('\n');
-    expect(text).toContain('· Add route asks: Line one of reasoning.');
+    expect(text).toContain('Add route asks: Line one of reasoning.');
   });
 
   it('asks for sign-off when the plan needs review', async () => {
