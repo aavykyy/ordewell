@@ -707,11 +707,12 @@ describe('ClaudeCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     adapter.dispose();
   });
 
-  it('still asks about another server\'s tool', async () => {
+  // `mcp__ordewell__x__task_complete` is the tool `task_complete` of a server named `ordewell__x`.
+  it.each(['mcp__ordewellx__task_complete', 'mcp__ordewell__x__task_complete', 'mcp__ordewell__evil'])('still asks about another server\'s tool: %s', async (name) => {
     const request = {
       type: 'control_request',
       request_id: 'req-2',
-      request: { subtype: 'can_use_tool', tool_name: 'mcp__ordewellx__task_complete', input: {} },
+      request: { subtype: 'can_use_tool', tool_name: name, input: {} },
     };
     const { spawned, processDeps } = deps([`${JSON.stringify(request)}\n`]);
     const adapter = new ClaudeCodeAdapter(processDeps);

@@ -1009,6 +1009,20 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
     planner.dispose();
   });
 
+  it.each(['ordewell_x', 'ordewellx', 'Ordewell'])('asks about an elicitation from a server named %s like any other', async (serverName) => {
+    const { spawned, processDeps } = deps(handshake());
+    const adapter = new CodexAdapter(processDeps);
+    await adapter.start(taskStart('agent', { mcp }));
+    const events: AgentEvent[] = [];
+    void adapter.send('go', (e) => events.push(e));
+    spawned.processes[0].emitStdout(turnStarted('turn-a') + line({ id: 32, method: 'mcpServer/elicitation/request', params: { threadId: 'thr-task-1', turnId: 'turn-a', serverName, mode: 'form', message: `Allow ${serverName} to run task_complete?`, requestedSchema: { type: 'object', properties: {} } } }));
+    await tick();
+
+    expect(answerTo(spawned.processes[0], 32)).toBeUndefined();
+    expect(events.find((e) => e.type === 'permission_request')).toMatchObject({ id: '32', name: 'mcp_elicitation' });
+    adapter.dispose();
+  });
+
   it('shows an Ordewell tool call under the name Claude Code gives it, and another server\'s under its own', async () => {
     const call = (id: string, server: string, tool: string) => line({ method: 'item/started', params: { threadId: 'thr-task-1', turnId: 'turn-a', item: { id, type: 'mcpToolCall', server, tool, status: 'inProgress', arguments: { status: 'done', summary: 'ok' } } } });
     const done = (id: string, server: string, tool: string) => line({ method: 'item/completed', params: { threadId: 'thr-task-1', turnId: 'turn-a', item: { id, type: 'mcpToolCall', server, tool, status: 'completed', arguments: {}, result: { content: [{ type: 'text', text: 'Recorded.' }] } } } });

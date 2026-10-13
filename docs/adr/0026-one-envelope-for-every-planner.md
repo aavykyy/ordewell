@@ -64,7 +64,7 @@ web fetcher, and answers through the adapter.
 
 | request | decision |
 | --- | --- |
-| an Ordewell tool | allowed by the adapter at once (ADR-0022, S3) |
+| an Ordewell tool, by its exact name | allowed by the adapter at once (ADR-0022, S3) |
 | another MCP tool | kind `mcp_tool`, scoped to the tool's full name |
 | a fetch or a search | the web-read policy ([ADR-0027](0027-web-reads-in-the-planner-envelope.md)): exclusion, budget, approval, then the SSRF guard |
 | a read outside the workspace | kind `external_path`, scoped as ADR-0008 scopes a path |
@@ -265,3 +265,4 @@ refused from a workspace's environment files (ADR-0016).
   used to be refused before the path was looked at
   ([ADR-0032](0032-runner-state-outside-the-workspace.md)).
 - 2026-10-13 — Codex's own shell is off for a planner on a host where its sandbox cannot start ([ADR-0033](0033-codex-planner-without-its-sandbox.md)).
+- 2026-10-13 — a server named `ordewell_x` had its tools allowed at once as Ordewell's, past the `mcp_tool` approval: Claude Code's and OpenCode's adapters matched a prefix, and OpenCode's rule was `ordewell_*`. Ordewell's tools are now told apart by exact name (ADR-0022, S3).

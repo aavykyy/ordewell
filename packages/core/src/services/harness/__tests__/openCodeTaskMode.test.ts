@@ -787,6 +787,12 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
   const mcp = mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok-secret' });
   const ordewell = { type: 'remote', url: 'http://127.0.0.1:4555/mcp', headers: { Authorization: 'Bearer tok-secret' }, enabled: true };
   const configOf = (env: NodeJS.ProcessEnv) => JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? 'null') as unknown;
+  // One rule per tool by its exact name: a pattern would cover a repository server named `ordewell_<anything>` too.
+  const taskAllow = { ordewell_task_complete: 'allow', ordewell_checkpoint: 'allow' };
+  const plannerAllow = Object.fromEntries([
+    'list_runners', 'list_models', 'submit_plan', 'edit_plan', 'task_query', 'task_output', 'task_diff', 'run_command', 'fetch', 'web_search', 'load_skill',
+    'run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'message_task', 'answer_approval', 'merge_all',
+  ].map((tool) => [`ordewell_${tool}`, 'allow']));
 
   // A host running inside OpenCode carries its own configuration, which a child rightly keeps.
   beforeEach(() => { vi.stubEnv('OPENCODE_CONFIG_CONTENT', undefined); });
@@ -795,7 +801,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
   it('hands a task the server and an allow rule for its tools through the environment, never the command line', async () => {
     const { adapter, spawned, env } = await startTask(fakeServer(), taskStart({ mcp }));
 
-    expect(configOf(env)).toEqual({ mcp: { ordewell }, permission: { 'ordewell_*': 'allow' } });
+    expect(configOf(env)).toEqual({ mcp: { ordewell }, permission: taskAllow });
     expect(spawned.lastArgs().join(' ')).not.toContain('tok-secret');
     adapter.dispose();
   });
@@ -809,7 +815,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     stream.push(status('idle'));
     await turn;
 
-    expect((configOf(env) as { permission: Record<string, string> }).permission['ordewell_*']).toBe('allow');
+    expect((configOf(env) as { permission: Record<string, string> }).permission.ordewell_checkpoint).toBe('allow');
     expect(events).toContainEqual(expect.objectContaining({ type: 'permission_request', id: 'per_t', decided: { decision: 'allow' } }));
     adapter.dispose();
   });
@@ -817,7 +823,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
   it('hands the planner the same, beside the read-only agent', async () => {
     const { adapter, env } = await startTask(fakeServer(), { kind: 'planner', cwd: '/repo', systemPrompt: 'plan read-only', mcp });
 
-    expect(configOf(env)).toEqual({ mcp: { ordewell }, lsp: false, permission: { ...OPENCODE_PLANNER_PERMISSION, 'ordewell_*': 'allow' } });
+    expect(configOf(env)).toEqual({ mcp: { ordewell }, lsp: false, permission: { ...OPENCODE_PLANNER_PERMISSION, ...plannerAllow } });
     adapter.dispose();
   });
 
@@ -846,7 +852,8 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     const parentConfig = (own: typeof unrelated | Record<string, never> = unrelated) => JSON.stringify({
       ...own,
       mcp: { ...('mcp' in own ? own.mcp : {}), ordewell: parentEntry },
-      permission: { ...('permission' in own ? own.permission : {}), 'ordewell_*': 'allow' },
+      // `ordewell_*` is what an Ordewell before exact rules wrote.
+      permission: { ...('permission' in own ? own.permission : {}), 'ordewell_*': 'allow', ...taskAllow },
     });
     const carriesParent = (env: NodeJS.ProcessEnv) => Object.values(env).some((value) => value?.includes('parent-synthetic'));
 
@@ -892,7 +899,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
       expect(configOf(env)).toEqual({
         ...unrelated,
         mcp: { ...unrelated.mcp, ordewell },
-        permission: { ...unrelated.permission, 'ordewell_*': 'allow' },
+        permission: { ...unrelated.permission, ...taskAllow },
       });
       expect(carriesParent(env)).toBe(false);
       expect(await adapter.mcpAttached()).toBe(true);
@@ -909,7 +916,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
       bare.adapter.dispose();
 
       const tooled = await startTask(fakeServer(), taskStart({ mcp }), workspace);
-      expect(configOf(tooled.env)).toEqual({ model: 'workspace/model', mcp: { ordewell }, permission: { 'ordewell_*': 'allow' } });
+      expect(configOf(tooled.env)).toEqual({ model: 'workspace/model', mcp: { ordewell }, permission: taskAllow });
       expect(carriesParent(tooled.env)).toBe(false);
       tooled.adapter.dispose();
     });
@@ -935,7 +942,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     expect(configOf(env)).toEqual({
       model: 'anthropic/claude-sonnet-4',
       mcp: { other: { type: 'local', command: ['x'] }, ordewell },
-      permission: { bash: { '*': 'allow' }, 'ordewell_*': 'allow' },
+      permission: { bash: { '*': 'allow' }, ...taskAllow },
       agent: { build: { permission: { edit: 'ask' } } },
     });
     adapter.dispose();
@@ -945,7 +952,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     const { adapter, env } = await startTask(fakeServer(), taskStart({ mcp }), { OPENCODE_CONFIG_CONTENT: '{"permission":"ask"}' });
 
     const config = configOf(env) as { permission: Record<string, string> };
-    expect(Object.entries(config.permission)).toEqual([['*', 'ask'], ['ordewell_*', 'allow']]);
+    expect(Object.entries(config.permission)).toEqual([['*', 'ask'], ['ordewell_task_complete', 'allow'], ['ordewell_checkpoint', 'allow']]);
     adapter.dispose();
   });
 

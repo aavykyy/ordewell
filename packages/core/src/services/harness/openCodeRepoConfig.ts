@@ -3,6 +3,7 @@ import {
   isRecord, parseJsonc, readText, repoLevels,
   type InstructionFile, type ProjectMcpServer, type ProjectServers, type RepoConfigReader,
 } from './repoConfig';
+import { shadowsOrdewell } from './openCodeOrdewell';
 
 /** Where OpenCode reads a directory's config, in the order it layers them (checked against 1.18.35 and 2.0.26). */
 const CONFIG_FILES = ['opencode.json', 'opencode.jsonc', path.join('.opencode', 'opencode.json'), path.join('.opencode', 'opencode.jsonc')];
@@ -13,6 +14,7 @@ const INSTRUCTION_NAMES = ['AGENTS.md', 'CLAUDE.md', 'CONTEXT.md'];
 function server(name: string, entry: unknown, source: string): ProjectMcpServer | string | null {
   if (!isRecord(entry)) return 'not an object';
   if (entry.enabled === false) return null;
+  if (shadowsOrdewell(name)) return 'its name would give its tools the names of Ordewell\'s own';
   if (entry.type === 'remote') {
     if (typeof entry.url !== 'string') return 'no url';
     return { name, source, transport: 'remote', target: entry.url, names: isRecord(entry.headers) ? Object.keys(entry.headers) : [], definition: entry };

@@ -311,7 +311,7 @@ export class OpenCodeV2 {
 
   /** Allow the Ordewell server's tools, so a call never waits on a person (ADR-0022, S3). */
   private ordewellRules(): SessionRule[] {
-    return this.opts.mcp ? OPENCODE_ORDEWELL.sessionRules() : [];
+    return this.opts.mcp ? OPENCODE_ORDEWELL.sessionRules(this.opts.mcp, this.role) : [];
   }
 
   /** The planner's system prompt rides on the session as an instruction entry — a prompt has no system field. */

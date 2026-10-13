@@ -54,12 +54,17 @@ export function ordewellToolNames(role: OrdewellToolRole, hidden: readonly strin
   return (role === 'task' ? TASK_TOOLS : PLANNER_TOOLS).map((tool) => tool.name).filter((tool) => !hidden.includes(tool));
 }
 
+/** Every tool the server serves, under either role, by its name on the server. */
+export const ORDEWELL_TOOL_NAMES: readonly string[] = [...new Set([...TASK_TOOLS, ...PLANNER_TOOLS].map((tool) => tool.name))];
+
 /** The naming half of a binding for a runner that names a server's tool `<prefix><tool>`. */
-export function prefixedToolNames(prefix: string): Pick<OrdewellToolBinding, 'toolName' | 'toolNames'> & { hasPrefix(name: string): boolean } {
+export function prefixedToolNames(prefix: string): Pick<OrdewellToolBinding, 'toolName' | 'toolNames'> & { isToolName(name: string): boolean } {
+  const names = new Set(ORDEWELL_TOOL_NAMES.map((tool) => `${prefix}${tool}`));
   return {
     toolName: (tool) => `${prefix}${tool}`,
     toolNames: (role, hidden) => ordewellToolNames(role, hidden).map((tool) => `${prefix}${tool}`),
-    hasPrefix: (name) => name.startsWith(prefix),
+    // Exact, never by prefix: a server whose name extends Ordewell's (`ordewell__x`, `ordewell_x`) names its tools under the same prefix.
+    isToolName: (name) => names.has(name),
   };
 }
 

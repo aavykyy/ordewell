@@ -179,6 +179,15 @@ describe('OpenCodePermissions', () => {
     expect(replies).toHaveLength(1);
   });
 
+  // OpenCode names a tool `<server>_<tool>`, so a server named `ordewell_x` puts its tools under Ordewell's prefix.
+  it.each(['ordewell_x_task_complete', 'ordewell_evil', 'ordewell_'])('holds %s open: only Ordewell\'s own tool names are its', (name) => {
+    const { permissions, replies, events, onEvent } = desk(mcp);
+    permissions.ask(request('per_1', name), 'ses', false, new Set(), onEvent);
+
+    expect(events).toEqual([request('per_1', name)]);
+    expect(replies).toEqual([]);
+  });
+
   it('leaves any other task request open until a person answers it, once, on the session that asked', () => {
     const { permissions, replies, events, onEvent } = desk();
     permissions.ask(request('per_1'), 'ses_child', false, new Set(), onEvent);

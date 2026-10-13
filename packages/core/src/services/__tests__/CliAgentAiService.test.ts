@@ -1141,7 +1141,7 @@ describe('CliAgentAiService — Codex', () => {
     expect(threadStart.params.sandbox).toBe('read-only');
     expect(threadStart.params.developerInstructions).toContain('You have no shell of your own on this machine');
     const thinking = events.filter((e) => e.type === 'thinking').map((e) => e.text);
-    expect(thinking.filter((text) => text.includes('its own shell is off for planning'))).toHaveLength(1);
+    expect(thinking.filter((text) => text?.includes('its own shell is off for planning'))).toHaveLength(1);
     expect(thinking.join('\n')).toContain('apparmor_restrict_unprivileged_userns=0');
     expect(thinking.join('\n')).not.toContain('Codex configuration warning');
   });
