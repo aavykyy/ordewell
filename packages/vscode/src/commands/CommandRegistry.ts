@@ -8,7 +8,6 @@ import {
   SettingsService,
   type AiProvider,
   type ExecutionCommand,
-  type IRunner,
 } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 import { replayIsolation } from '../plan/isolation';
@@ -26,7 +25,6 @@ export interface CommandDeps {
   modelResolver: ModelResolver;
   config: VsCodeConfig;
   fsAdapter: VsCodeFileSystem;
-  runner: IRunner;
   settingsService: SettingsService;
   secretStore: SecretStore;
   getCurrentPlan: () => LegacyPlanState;
@@ -58,18 +56,17 @@ export function orderLabelItems(plan: LegacyPlanState): { label: string; descrip
 }
 
 /**
- * Wire a saved session into the running extension: stop any execution, adopt
- * the plan into the Session (so its tasks are executable and the conversation
- * can be resumed), and replay the chat transcript into the webview. No LLM
- * call happens here — the planner is only contacted when the user sends a
- * message. Returns false when the plan can't be loaded (e.g. runner mismatch).
+ * Wire a saved session into the running extension: adopt the plan into the
+ * Session, which ends the outgoing plan's run and planner turn, so its tasks
+ * are executable and the conversation can be resumed; then replay the chat
+ * transcript into the webview. No LLM call happens here — the planner is only
+ * contacted when the user sends a message. Returns false when the plan can't
+ * be loaded (e.g. runner mismatch).
  */
 function applyLoadedSession(
   loaded: { meta: { id: string; goal: string }; plan: LegacyPlanState },
   deps: CommandDeps,
 ): boolean {
-  deps.session.stopExecution();
-  deps.runner.stopAll();
   try {
     deps.session.loadPlan(loaded.plan, loaded.meta.goal, deps.fsAdapter.getWorkspaceRoot(), { sessionId: loaded.meta.id });
   } catch (err) {
@@ -375,7 +372,6 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         // Full core reset so the cleared plan can't resurface from the
         // Session's PlanStore or a still-live planner conversation.
         deps.session.reset();
-        deps.runner.stopAll();
         deps.setCurrentPlan(createEmptyPlan());
         deps.chatProvider.setState('empty');
         deps.chatProvider.conversation.reset();

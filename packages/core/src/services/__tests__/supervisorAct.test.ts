@@ -277,6 +277,32 @@ describe('the loop guards', () => {
     expect(env.notices).toContainEqual(expect.objectContaining({ level: 'warn', message: 'Not done: retry task #1 "Task t1" waited for an edit that did not land.' }));
   });
 
+  it('says a start queued behind an edit is not done when the wake-up turn that queued it is stopped', async () => {
+    const env = await failedOnce();
+
+    await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#1', changes: { prompt: 'do t1, importing from ./lib' } }] }, ctx);
+    await env.planner.tools().retryTask!({ task: '1', from: 'fresh' }, ctx);
+    env.session.abortPlannerTurn();
+    await settled();
+
+    expect(taskOf(env.session, 't1')).toMatchObject({ prompt: 'do t1', status: 'failed' });
+    expect(env.run.spawnedIds()).toEqual(['t1']);
+    expect(env.notices).toContainEqual(expect.objectContaining({ level: 'warn', message: 'Not done: retry task #1 "Task t1" waited for an edit that did not land.' }));
+  });
+
+  it('never runs a start queued behind an edit on another plan adopted before the turn ends', async () => {
+    const env = await failedOnce();
+    await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#1', changes: { prompt: 'do t1, importing from ./lib' } }] }, ctx);
+    await env.planner.tools().retryTask!({ task: '1', from: 'fresh' }, ctx);
+
+    env.session.loadPlan(plan([task('t1', 1, { status: 'failed' })]), 'another goal', testWorkspace, { sessionId: 'other' });
+    env.planner.calls[0].finish(prose('Fixed the import in task 1 and retried it.'));
+    await settled();
+
+    expect(env.run.spawnedIds()).toEqual(['t1']);
+    expect(env.notices).toContainEqual(expect.objectContaining({ level: 'warn', message: 'Not done: retry task #1 "Task t1" waited for an edit that did not land.' }));
+  });
+
   it('refuses re-adding a task it removed this run, and undoing its own edit', async () => {
     const env = await wokenUp(ACT, [task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { dependencies: ['t1'] })]);
     await env.planner.tools().editPlan!({ ops: [{ op: 'remove', taskId: '#3' }, { op: 'update', taskId: '#2', changes: { prompt: 'do t2 with Postgres' } }] }, ctx);

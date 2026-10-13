@@ -1361,3 +1361,59 @@ describe('saving a run as its tasks settle', () => {
     expect(saveSession).not.toHaveBeenCalled();
   });
 });
+
+describe('a task control naming a task the plan does not hold', () => {
+  it.each([
+    ['forceStartTask', (s: Session) => s.forceStartTask('gone')],
+    ['runTask', (s: Session) => s.runTask('gone')],
+  ])('%s is refused, and the run in progress keeps its agent and its verdict', async (_name, start) => {
+    const spawned: FakeRunnerSession[] = [];
+    const runner = {
+      spawn: vi.fn(async ({ taskId }: Parameters<IRunner['spawn']>[0]) => {
+        const s = new FakeRunnerSession(`s-${taskId}`, taskId);
+        spawned.push(s);
+        return s;
+      }),
+      stop: vi.fn(),
+      stopAll: vi.fn(),
+      activeCount: 0,
+    } satisfies IRunner;
+    const session = makeSession({ runner });
+    session.loadPlan({
+      tasks: [
+        createTask({ id: 't1', order: 1, title: 'First', prompt: 'one' }),
+        createTask({ id: 't2', order: 2, title: 'Second', prompt: 'two', dependencies: ['t1'] }),
+      ],
+      generatedAt: new Date().toISOString(),
+      status: 'draft',
+      runners: ['claude-code'],
+      lastUpdated: new Date().toISOString(),
+    }, 'Test', '/repo');
+    await session.executePlan();
+    await vi.waitFor(() => expect(spawned).toHaveLength(1));
+
+    await expect(start(session)).rejects.toThrow(/no task "gone"/i);
+
+    spawned[0].reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('completed'));
+    await vi.waitFor(() => expect(spawned.map((s) => s.taskId)).toEqual(['t1', 't2']));
+  });
+});
+
+describe('executing a plan whose tasks are all completed', () => {
+  it('announces the end of execution once', async () => {
+    const broadcast = vi.fn<(msg: SessionMessage) => void>();
+    const session = makeSession({ broadcast });
+    session.loadPlan({
+      tasks: [createTask({ id: 't1', order: 1, title: 'Done already', prompt: 'one', status: 'completed' })],
+      generatedAt: new Date().toISOString(),
+      status: 'approved',
+      runners: ['claude-code'],
+      lastUpdated: new Date().toISOString(),
+    }, 'Test', '/repo');
+
+    await session.executePlan();
+
+    expect(broadcast.mock.calls.filter(([msg]) => msg.type === 'execution_complete')).toHaveLength(1);
+  });
+});
