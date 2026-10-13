@@ -487,13 +487,16 @@ describe('the configured approval mode', () => {
     expect(effectiveApprovalMode('allow', false)).toBe('allow');
   });
 
-  it('lets Full read the web under auto, and nothing else (ADR-0027)', () => {
-    expect(effectiveApprovalMode('auto', true, 'url_fetch')).toBe('allow');
-    expect(effectiveApprovalMode('auto', true, 'web_search')).toBe('allow');
+  it('lets Full and Guarded read the web under auto, and nothing else (ADR-0027)', () => {
+    for (const autonomous of [true, false]) {
+      expect(effectiveApprovalMode('auto', autonomous, 'url_fetch')).toBe('allow');
+      expect(effectiveApprovalMode('auto', autonomous, 'web_search')).toBe('allow');
+    }
     expect(effectiveApprovalMode('auto', true, 'shell_command')).toBe('deny');
     expect(effectiveApprovalMode('auto', true, 'mcp_tool')).toBe('deny');
     expect(effectiveApprovalMode('auto', true, 'external_path')).toBe('deny');
-    expect(effectiveApprovalMode('auto', false, 'url_fetch')).toBe('ask');
+    expect(effectiveApprovalMode('auto', false, 'shell_command')).toBe('ask');
+    expect(effectiveApprovalMode('ask', false, 'url_fetch')).toBe('ask');
     expect(effectiveApprovalMode('deny', true, 'url_fetch')).toBe('deny');
   });
 

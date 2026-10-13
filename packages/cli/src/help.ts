@@ -134,8 +134,8 @@ Environment:
   OPENROUTER_BASE_URL        Default: https://openrouter.ai/api/v1
   ORDEWELL_AUTONOMOUS_MODE   true: Full, false: Guarded; overrides what "ordewell auto" saved
   ORDEWELL_APPROVAL_MODE     What the planner may run beyond read-only commands: auto (default:
-                             Guarded asks, Full runs only the allowlist and web reads), ask,
-                             allowlist or allow. File writes are always refused
+                             web reads run; otherwise Guarded asks, Full runs only the allowlist),
+                             ask, allowlist or allow. File writes are always refused
   ORDEWELL_APPROVAL_ALLOW    Extra allowlist entries, comma-separated: "gh issue list",
                              "gcloud * * list", "mcp:find-*", "https://docs.example.com/*";
                              "web_search:<provider>" covers one search provider (anthropic, openai,

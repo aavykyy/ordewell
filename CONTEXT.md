@@ -682,7 +682,7 @@ operation by its words, a scope is what one approval remembers).
 does not cover: `ask` the user, refuse it (`allowlist`), or run it (`allow`).
 The default, `auto`, follows the autonomy level: Guarded asks, Full refuses
 and the plan carries the change as an *ops task*. Web reads are the one
-exception: Full allows them (ADR-0027).
+exception: `auto` allows them at both levels (ADR-0027).
 *Avoid:* conflating it with a task's mode or the autonomy level itself.
 
 **Web-read policy** — the one decision every planner fetch and search goes

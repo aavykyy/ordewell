@@ -29,21 +29,23 @@ export type ApprovalMode = 'ask' | 'allow' | 'deny';
  * The configured mode. `auto` follows the autonomy level (ADR-0026): Guarded
  * asks, Full runs the allowlist alone and asks nobody, so a planner in Full
  * never waits on a person and never acts outside its standing approvals.
+ * Web reads are the exception at both levels.
  */
 export type ApprovalModeSetting = ApprovalMode | 'auto';
 
 /**
- * Web reads change nothing and Full's tasks already have the network, so Full
- * lets the planner read too (ADR-0027). Only `auto` grants this: an explicit
- * `allowlist` maps to the same `deny` for every other kind, and keeps web
- * reads refused.
+ * Web reads change nothing, the tasks the planner plans already have the
+ * network, and the guards that matter (SSRF, secret check, exclusions,
+ * budget) hold without a person, so `auto` lets the planner read without
+ * asking at either level (ADR-0027). An explicit `ask` still asks, and an
+ * explicit `allowlist` keeps web reads refused.
  */
-const FULL_ALLOWS: ReadonlySet<ApprovalKind> = new Set(['url_fetch', 'web_search']);
+const AUTO_ALLOWS: ReadonlySet<ApprovalKind> = new Set(['url_fetch', 'web_search']);
 
 export function effectiveApprovalMode(setting: ApprovalModeSetting, autonomous: boolean, kind?: ApprovalKind): ApprovalMode {
   if (setting !== 'auto') return setting;
-  if (!autonomous) return 'ask';
-  return kind !== undefined && FULL_ALLOWS.has(kind) ? 'allow' : 'deny';
+  if (kind !== undefined && AUTO_ALLOWS.has(kind)) return 'allow';
+  return autonomous ? 'deny' : 'ask';
 }
 
 /** A configured mode as written: `allowlist` is the user-facing name of `deny`, and anything unknown is `auto`. */
