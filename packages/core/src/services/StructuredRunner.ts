@@ -1,4 +1,4 @@
-import { McpAttachError } from './harness/ordewellBinding';
+import { spawnAttached } from './harness/ordewellBinding';
 import { EventEmitter } from 'events';
 import { spawn as nodeSpawn } from 'child_process';
 import type {
@@ -9,7 +9,7 @@ import type {
 } from '../interfaces/IRunner';
 import type { ApprovalDecision } from '../interfaces/IApproval';
 import { checkpointReply, type CheckpointAnswer, type TaskCompleteArgs } from './mcp/tools';
-import { sharedMcpServer, type McpCredential, type OrdewellMcpServer, type TaskTokenScope } from './mcp/OrdewellMcpServer';
+import { sharedMcpServer, type OrdewellMcpServer, type TaskTokenScope } from './mcp/OrdewellMcpServer';
 import { mcpClientConfig } from './mcp/clientConfig';
 import type { ResearchToolType } from '../models/Task';
 import { resolveTaskRunnerFlags } from '../plugins/resolveArgs';
@@ -255,25 +255,17 @@ export class StructuredSession extends AbstractRunnerSession {
   }
 
   /**
-   * One spawn of the runner on a fresh token. Null once the runner reports
-   * the server connected — or once the session ended meanwhile, which leaves
-   * nothing to start; otherwise why not, with the process killed and the
-   * token revoked. A runner that cannot be spawned at all throws instead:
-   * spawning it again would fail the same way.
+   * The runner on a fresh token, attached or respawned once (ADR-0025). Done
+   * once the runner reports the server connected — or once the session ended
+   * meanwhile, which leaves nothing to start. A runner that cannot be spawned
+   * at all throws instead: spawning it again would fail the same way.
    */
   private async startAttached(opts: TaskStartOptions): Promise<void> {
-    const first = await this.startWithTools(opts);
-    if (!first) return;
-    this.launch.onNotice?.(`${this.launch.runner} started without Ordewell's tools (${first}); respawning once.`);
-    const second = await this.startWithTools(opts);
-    if (second) throw new McpAttachError(`Could not start ${this.launch.runner} with Ordewell's tools, so the task was not sent to it. First spawn: ${first}. Respawn: ${second}.`);
-  }
-
-  private async startWithTools(opts: TaskStartOptions): Promise<string | null> {
     const { server, scope } = this.launch.tools;
-    let credential: McpCredential;
-    try {
-      credential = await server.issueTaskToken(scope, {
+    const spawned = await spawnAttached({
+      runner: this.launch.runner,
+      create: () => this.launch.createAdapter(this.launch.runner, this.launch.deps),
+      issueToken: () => server.issueTaskToken(scope, {
         taskComplete: async (report) => {
           this.structuredEmitter.emit('taskComplete', report);
           return { text: 'Recorded. End your turn now.' };
@@ -282,41 +274,25 @@ export class StructuredSession extends AbstractRunnerSession {
           if (!this.checkpointHandler) return { text: 'checkpoint is not available in this session.', isError: true };
           return checkpointReply(await this.checkpointHandler(question, signal));
         },
-      });
-    } catch (err) {
-      return `Ordewell's MCP server could not issue a token (${err instanceof Error ? err.message : String(err)})`;
-    }
-    if (this.exited) {
-      server.revoke(credential.token);
-      return null;
-    }
-    this.toolToken = credential.token;
-    this.startOptions = { ...opts, mcp: mcpClientConfig(credential) };
-    try {
-      await this.startAdapter(this.startOptions);
-    } catch (err) {
-      this.revokeTools();
-      throw err;
-    }
-    const adapter = this.adapter;
-    if (this.exited || !adapter) return null;
-    let attachFailure = `${this.launch.runner} did not report Ordewell's MCP server connected`;
-    try {
-      const attached = await adapter.mcpAttached();
-      if (attached && this.startupExit === null) {
-        this.adapterAttached = true;
-        return null;
-      }
-      if (this.startupExit !== null) attachFailure += ` (process exited with code ${this.startupExit})`;
-    } catch (err) {
-      attachFailure = `${this.launch.runner} could not check Ordewell's MCP attach state (${err instanceof Error ? err.message : String(err)})`;
-    }
-    if (this.exited) return null;
-    // Its exit is this session's doing, not the end of the attempt.
-    this.generation += 1;
-    adapter.dispose();
-    this.revokeTools();
-    return attachFailure;
+      }),
+      revoke: (token) => server.revoke(token),
+      start: (adapter, credential) => {
+        this.startOptions = { ...opts, mcp: mcpClientConfig(credential) };
+        return this.startAdapter(adapter, this.startOptions);
+      },
+      dispose: (adapter) => {
+        // Its exit is this session's doing, not the end of the attempt.
+        this.generation += 1;
+        adapter.dispose();
+      },
+      cancelled: () => this.exited,
+      startupExit: () => this.startupExit,
+      onRespawn: (failure) => this.launch.onNotice?.(`${this.launch.runner} started without Ordewell's tools (${failure}); respawning once.`),
+      failed: (first, second) => `Could not start ${this.launch.runner} with Ordewell's tools, so the task was not sent to it. First spawn: ${first}. Respawn: ${second}.`,
+    });
+    if (!spawned) return;
+    this.toolToken = spawned.token;
+    this.adapterAttached = true;
   }
 
   private revokeTools(): void {
@@ -346,9 +322,9 @@ export class StructuredSession extends AbstractRunnerSession {
     const adapter = this.adapter;
     this.generation += 1;
     this.turn?.abort.abort();
-    // An adapter still starting has no process yet to kill; `startAdapter`
-    // disposes it once it has one.
-    if (adapter && this.adapterStarted) adapter.dispose();
+    // An adapter not attached yet belongs to its spawn, which takes it back
+    // once it lands.
+    if (adapter && this.adapterAttached) adapter.dispose();
     this.withdrawPermissions();
     this.baseHandleExit(-1);
   }
@@ -517,24 +493,15 @@ export class StructuredSession extends AbstractRunnerSession {
     this.endTurn(turn, 'interrupted');
   }
 
-  private async startAdapter(opts: TaskStartOptions): Promise<void> {
-    const adapter = this.launch.createAdapter(this.launch.runner, this.launch.deps);
+  private async startAdapter(adapter: TaskModeAgentAdapter, opts: TaskStartOptions): Promise<void> {
     this.adapter = adapter;
     this.adapterStarted = false;
     this.adapterAttached = false;
     this.startupExit = null;
     const generation = this.generation;
-    try {
-      await adapter.start(opts);
-    } catch (err) {
-      adapter.dispose();
-      throw err;
-    }
+    await adapter.start(opts);
     this.adapterStarted = true;
-    if (this.exited || generation !== this.generation) {
-      adapter.dispose();
-      return;
-    }
+    if (this.exited || generation !== this.generation) return;
     adapter.onOutOfTurn?.((event) => this.handleOutOfTurn(adapter, generation, event));
     adapter.onProcessExit((code) => {
       if (generation !== this.generation) return;

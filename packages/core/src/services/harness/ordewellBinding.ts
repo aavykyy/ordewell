@@ -1,4 +1,4 @@
-import { ORDEWELL_MCP_SERVER_NAME, PLANNER_TOOLS, TASK_TOOLS } from '../mcp';
+import { ORDEWELL_MCP_SERVER_NAME, PLANNER_TOOLS, TASK_TOOLS, type McpCredential } from '../mcp';
 import type { PlannerStartOptions } from './AgentAdapter';
 
 export class McpAttachError extends Error {
@@ -69,6 +69,115 @@ export const MCP_CLIENT_TOOL_NAMES = prefixedToolNames(`mcp__${ORDEWELL_MCP_SERV
 /** `a`, `a and b`, `a, b and c`. */
 export function listed(items: string[]): string {
   return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
+/** An adapter as {@link spawnAttached} handles it. */
+interface SpawnedAdapter {
+  dispose(): void;
+  /** Absent: the runner cannot be handed the server at all. */
+  mcpAttached?(): Promise<boolean>;
+}
+
+/** A runner spawned with the Ordewell server connected, and the token it was spawned with. */
+export interface AttachedSpawn<A> {
+  adapter: A;
+  token: string;
+}
+
+/** What {@link spawnAttached} needs of the runner it spawns and the server it hands it. */
+export interface SpawnAttachSteps<A extends SpawnedAdapter> {
+  /** The runner as failures name it. */
+  runner: string;
+  create(): A;
+  issueToken(): Promise<McpCredential>;
+  revoke(token: string): void;
+  /** Start `adapter` on `credential`. A throw means the runner cannot be spawned at all, so it is not respawned. */
+  start(adapter: A, credential: McpCredential): Promise<void>;
+  /** Defaults to the adapter's own `dispose`. */
+  dispose?(adapter: A): void;
+  /** True once nobody wants the runner any more: what was spawned is taken back and nothing is returned. */
+  cancelled?(): boolean;
+  /** The code of a process that exited while starting; its attach report is not believed. */
+  startupExit?(): number | null;
+  /** Why the first spawn failed, told before the respawn. */
+  onRespawn?(failure: string): void;
+  /** The {@link McpAttachError}'s message once the respawn failed too. */
+  failed(first: string, second: string): string;
+}
+
+/**
+ * One runner with Ordewell's tools attached (ADR-0025): a spawn that does not
+ * report the server connected is killed with its token and respawned once on
+ * a fresh one; a second failure throws {@link McpAttachError}. Null once
+ * {@link SpawnAttachSteps.cancelled}, with nothing left running.
+ */
+export async function spawnAttached<A extends SpawnedAdapter>(steps: SpawnAttachSteps<A>): Promise<AttachedSpawn<A> | null> {
+  const first = await spawnOnce(steps);
+  if (typeof first !== 'string') return first;
+  steps.onRespawn?.(first);
+  const second = await spawnOnce(steps);
+  if (typeof second !== 'string') return second;
+  throw new McpAttachError(steps.failed(first, second));
+}
+
+async function spawnOnce<A extends SpawnedAdapter>(steps: SpawnAttachSteps<A>): Promise<AttachedSpawn<A> | null | string> {
+  let credential: McpCredential;
+  try {
+    credential = await steps.issueToken();
+  } catch (err) {
+    return `Ordewell's MCP server could not issue a token (${errorText(err)})`;
+  }
+  const { token } = credential;
+  if (steps.cancelled?.()) {
+    steps.revoke(token);
+    return null;
+  }
+  let adapter: A;
+  try {
+    adapter = steps.create();
+  } catch (err) {
+    steps.revoke(token);
+    throw err;
+  }
+  const takeBack = () => {
+    if (steps.dispose) steps.dispose(adapter);
+    else adapter.dispose();
+    steps.revoke(token);
+  };
+  if (!adapter.mcpAttached) {
+    takeBack();
+    return `${steps.runner} cannot be handed Ordewell's MCP server`;
+  }
+  try {
+    await steps.start(adapter, credential);
+  } catch (err) {
+    takeBack();
+    throw err;
+  }
+  if (steps.cancelled?.()) {
+    takeBack();
+    return null;
+  }
+  let failure = `${steps.runner} did not report Ordewell's MCP server connected`;
+  let attached = false;
+  try {
+    attached = await adapter.mcpAttached();
+    const exit = steps.startupExit?.() ?? null;
+    if (exit !== null) {
+      attached = false;
+      failure += ` (process exited with code ${exit})`;
+    }
+  } catch (err) {
+    failure = `${steps.runner} could not check Ordewell's MCP attach state (${errorText(err)})`;
+  }
+  const cancelled = steps.cancelled?.() ?? false;
+  if (attached && !cancelled) return { adapter, token };
+  takeBack();
+  return cancelled ? null : failure;
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /**

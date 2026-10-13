@@ -467,7 +467,10 @@ to name a tool, not the concept).
 report on the Ordewell server's connection, in one vocabulary for every runner.
 `pending` is the only state worth waiting through; `awaitAttach` polls until the
 runner says `connected` or `failed` or the deadline passes, and a runner that
-never attaches is respawned once before the task or planner turn fails.
+never attaches is respawned once before the task or planner turn fails. That
+rule is `spawnAttached`, the one spawn step task runners and harness planners
+share: it issues the token, starts the adapter, kills a spawn that did not
+attach along with its token, and throws `McpAttachError` after the respawn.
 *Avoid:* "healthy", "ready" (this is a report by the runner, not a probe of ours).
 
 **OpenCode server API** (`openCodeTransport`) — the HTTP protocol work OpenCode's
@@ -1396,6 +1399,16 @@ validated plan, `taskOps` and `taskQuery` envelopes instead of this server.
 *Avoid:* "CLI provider" — the thing on the other end is not a vendor. Do not
 call the coding agent a "provider" in prose; it is a runner being used as the
 planner.
+
+**Planner session** (`PlannerSession`, in `CliAgentAiService`) — one harness
+planner conversation or one-shot generation: its process, the *Planner token*
+that process was spawned with, its native session id (a resume hint that never
+outlives the session), its search decision and the subagents it reported. A
+session boundary discards the session object; a spawn still in flight for a
+discarded session kills its own process and revokes its token when it lands,
+and a one-shot never touches the conversation's session.
+*Avoid:* using it for the plan-level **Session**, which outlives many planner
+sessions.
 
 **Saved output** — a tool result too long for the context that a runner saved
 to a file outside the workspace, telling the model to read it back: Claude
