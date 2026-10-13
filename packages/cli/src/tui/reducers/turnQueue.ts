@@ -1,4 +1,5 @@
 import { aheadOfDraft, drainNext, unsendAll, unsendLatest as unsendNewest } from '@ordewell/core';
+import { commit } from '../editor';
 import { plannerInFlight, type TuiState } from '../state';
 import { cutTurn, say } from '../transcript';
 import { step, type Effect, type Step } from './shared';
@@ -16,7 +17,7 @@ export function drainQueue(state: TuiState, settled: TuiState): Step {
   const next = drainNext(state.queuedPrompts);
   // The arm aimed at the turn that just ended lapses with it — the next turn
   // starts unarmed, and its first Esc has to earn the stop again.
-  const ended = disarmStop({ ...settled, stopRequested: false });
+  const ended = disarmStop({ ...settled, stopRequested: false, forceSendPending: false });
   if (!next) return step(ended);
   const spoken = say(ended, 'user', next.text);
   const effect: Effect | null = state.sessionId
@@ -46,7 +47,7 @@ export function stopPlanning(state: TuiState, sessionId: string): Step {
   const dismissed = state.overlay?.kind === 'approval'
     ? { ...state, overlay: null, pendingApprovals: [] }
     : state;
-  return step(queueToEditor(cutTurn({ ...dismissed, stopArmed: false, stopRequested: true })), [{ type: 'cancelPlanning', sessionId }]);
+  return step(queueToEditor(cutTurn({ ...dismissed, stopArmed: false, stopRequested: true, forceSendPending: false })), [{ type: 'cancelPlanning', sessionId }]);
 }
 
 /**
@@ -77,6 +78,29 @@ function unsendLatest(state: TuiState): Step {
     stopArmed: false,
     editor: { ...state.editor, text, cursor: latest.text.length, historyIndex: state.editor.history.length, draft: '' },
   });
+}
+
+/**
+ * Send now in the planner chat (ADR-0023, F5): stop the planner turn in flight
+ * and answer the composer's text in the turn that replaces it — or, with the
+ * composer empty, the newest queued prompt. Turn-scoped: the run's tasks are
+ * never touched, and the prompts still held keep their order behind the forced
+ * one. Only reached while a turn is in flight; with none it is a plain send
+ * (see `submit`).
+ */
+export function forceSendPlanner(state: TuiState): Step {
+  if (!state.sessionId) return step(state);
+  const text = state.editor.text.trim();
+  if (text) {
+    return step({ ...state, editor: commit(state.editor), stopRequested: false, forceSendPending: true }, [
+      { type: 'forceSendPlannerMessage', sessionId: state.sessionId, message: text },
+    ]);
+  }
+  const latest = unsendNewest(state.queuedPrompts);
+  if (!latest) return step(say(state, 'system', 'Nothing to send now: type a message, or queue one with enter.'));
+  return step({ ...state, queuedPrompts: latest.rest, stopRequested: false, forceSendPending: true }, [
+    { type: 'forceSendPlannerMessage', sessionId: state.sessionId, message: latest.text },
+  ]);
 }
 
 /**

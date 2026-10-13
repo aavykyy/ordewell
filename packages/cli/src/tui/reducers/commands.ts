@@ -227,6 +227,7 @@ export function newSession(state: TuiState): Step {
     pendingApprovals: [],
     queuedPrompts: EMPTY_HOLD,
     stopArmed: false,
+    forceSendPending: false,
     overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
   }, closeEffects);
 }

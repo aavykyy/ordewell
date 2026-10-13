@@ -283,6 +283,12 @@ export class ApiClient {
     return res.plan;
   }
 
+  /** Send now (ADR-0023, F5): stop the planner turn in flight and answer `message` in the turn that replaces it. */
+  async forceSendPlannerMessage(sessionId: string, message: string): Promise<PlanResponse['plan']> {
+    const res = await this.call<PlanResponse>('POST', `/api/plans/${sessionId}/converse/message/now`, 'Send now failed', { message });
+    return res.plan;
+  }
+
   getRunners(): Promise<RunnersResponse> {
     return this.call('GET', '/api/runners', 'Failed to fetch runners');
   }

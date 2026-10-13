@@ -471,6 +471,12 @@ export interface TuiState {
    * turn with an error, and that error is the stop itself, not news.
    */
   stopRequested: boolean;
+  /**
+   * A force send stopped the turn in flight and the forced turn follows. The
+   * stopped turn's error is not news either, and the prompts held behind it
+   * keep their order rather than draining into the turn already on its way.
+   */
+  forceSendPending: boolean;
   toast: string;
   rows: number;
   cols: number;
@@ -641,6 +647,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     stopArmed: false,
     stopArmToken: 0,
     stopRequested: false,
+    forceSendPending: false,
     toast: '',
     rows: 24,
     cols: 80,
