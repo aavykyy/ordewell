@@ -244,6 +244,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **A subtask dependency reads by its dotted label** (`#2.1`) on a task row, in
   the terminal UI and on the VS Code card, instead of by an order that only
   meant something at the top level.
+- **A subtask is named by its dotted reference on every surface and in every
+  prompt.** The `ordewell task-*` commands, the terminal UI's pickers,
+  confirmations and notices, a handoff's landed list, and the prompts the
+  planner is given for a merge, a split and a conflict all read `#2.1` now,
+  never an order that only meant something at the top level.
 - **A task's thinking effort shows on its row in the terminal UI** when the
   terminal is wide enough, instead of only when the row is expanded.
 
@@ -380,6 +385,71 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **A wrapped system notice keeps its colour in the terminal UI.** The second
   and later rows of a system, error or run-update line now stay grey, red or
   yellow like the first, and the doubled `·` before a system notice is gone.
+- **A force send keeps a supervisor wake-up's run update.** A force send that
+  stopped a wake-up turn dropped its run update as a stop does. The update now
+  waits behind the forced prompt and reaches the supervisor in its next turn,
+  so a failure or a run's end it carried is not lost.
+- **A surface joining a finished run is handed the handoff that was sent.**
+  Reading it back out of the run record could show one after a stop, which
+  hands nothing over, and miss what the supervisor had marked first.
+- **A planner turn's starts do not outlive its plan.** When a plan is closed or
+  replaced before the edit its start waited on landed, the starts it deferred
+  are dropped with a notice; one already handed to the scheduler goes on.
+- **A failure's halt ends with the plan it failed in.** Loading a session after
+  a failure left the halt set, so the next retry would restart a run nobody
+  started and a usage-limit move would arm the scheduler.
+- **A stop cancels a repair for good.** A stop that arrived while a repair read
+  its evidence used to let its merge go ahead anyway; the attempt is no longer
+  the task's, so the conflict stays as it was and waits on you.
+- **A worktree release after a plan load lets go of the right run's task.** The
+  release is bound to the run it was asked in, not the one a plan load put in
+  its place, whose records share the task ids.
+- **Stop never signals a process-group id the system has recycled.** Once a
+  runner's group leader has exited, every signal to its group is preceded by
+  asking whether any member is left, so a group Ordewell cannot vouch for is
+  left alone.
+- **A descendant holding a runner's pipes no longer hangs its turn.** A runner
+  whose process exited but whose stdout or stderr was still held open used to
+  wait for `close` forever; the turn now ends a short grace after `exit`, and
+  the output written before it is still delivered.
+- **An OpenCode frame handler's throw is the turn's failure.** A throw while
+  reading the event stream used to be swallowed until the stream closed,
+  leaving a turn waiting on a permission request nobody would see; it now fails
+  the turn, and a request Ordewell already allowed is answered even if showing
+  it throws.
+- **A Claude Code or Codex project MCP server named `ordewell` is left out.**
+  Ordewell's own entry is written over that name, so an approval of it would
+  never take effect; the planner is told the server was not offered.
+- **A `readOnly` that cannot apply is reported, not dropped.** A `submit_plan`
+  that marks a manual task read-only now warns, as it does for `taskMode`, that
+  a manual task runs in no mode.
+- **A dependency cycle is refused as the chain it is.** The refusal names each
+  task on the cycle in dependency order and pins it to one of them, instead of
+  an unowned error a JSON retry repeated.
+- **The terminal UI's run view keeps up with the session it shows.** Joining a
+  run already going shows its status at once, a task updated by another surface
+  or the supervisor shows here too, and starting, loading or forking a session
+  begins from an empty run rather than the last one's tasks, merge gate and
+  checkpoint.
+- **Send now in the terminal UI keeps its edges.** A built-in command typed and
+  sent with `ctrl-s` runs as it does on enter instead of being forced through
+  as a message, a forced send whose turn fails puts the prompt back in the
+  composer or its place in the queue, and the stop of the turn it replaced is
+  not shown as an error.
+- **A narrow queued prompt keeps its message.** The takeback hint is given only
+  the columns the first row has left, instead of truncating the prompt it sits
+  after; a row too narrow for it drops the hint.
+- **Clearing a planner model no longer writes the word "undefined".** When the
+  daemon reports no effort, `ordewell model` and the terminal UI's `/model`
+  write an empty value, as `planner-effort default` does.
+- **A checkpoint you answered in VS Code is not reopened by a stale update.**
+  The panel remembers the answer by task and question, so a run view still
+  carrying the question — before the status update that clears the task, or
+  after another task's update — does not ask again; a different question still
+  opens.
+- **Send now treats a skill invocation as a planner prompt.** *Send now* on
+  `/name …` in VS Code now stops the turn and answers it as a planner message,
+  while a built-in command still goes to the host as Send does.
 
 ## [0.9.1] — 2026-10-11
 

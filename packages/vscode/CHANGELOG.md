@@ -104,6 +104,28 @@
   already-reached gate now.
 - **A webview message that fails says so**: the error is logged and shown
   instead of being dropped as an unhandled rejection.
+- **Send now treats a skill invocation as a planner prompt.** *Send now* on
+  `/name …` stops the turn and answers it as a planner message; a built-in
+  command still goes to the host as Send does.
+- **A checkpoint you answered is not reopened by a stale run update.** The
+  answer is remembered by task and question, so a view that still carries it —
+  before the status update clearing the task, or after another task's update —
+  does not ask again; a different question still opens.
+- **A chat that joins a finished run is handed the handoff that was sent**, not
+  the run record's, which could show one after a stop.
+- **A force send that stops a supervisor's wake-up turn keeps its run update**,
+  which reaches the supervisor in its next turn.
+- **Stopping a task while a repair reads its evidence no longer lands the
+  repair's work anyway**; the conflict stays as it was and waits on you.
+- **A runner whose process exited but whose output pipe is still held open no
+  longer hangs its turn**; the turn ends a short grace after `exit`, and output
+  written before it is still delivered.
+- **Stopping a task no longer signals a process-group id the system has
+  recycled** to another process.
+- **An OpenCode event-stream error now fails the turn** instead of leaving it
+  waiting on a permission request nobody would see.
+- **A handoff's landed list and the prompts a task is given name a subtask by
+  its dotted reference** (`#2.1`), not a bare order.
 
 ## [0.9.1] — 2026-10-11
 
