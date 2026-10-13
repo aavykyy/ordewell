@@ -88,6 +88,36 @@ describe.runIf(live)('structured transport — live smoke', () => {
     }
   }, TIMEOUT_MS);
 
+  // The CLI runs Sonnet for the `haiku` alias under `--permission-mode plan`;
+  // a read-only task on Haiku must still be answered by Haiku (ADR-0001).
+  it.runIf(model === 'haiku')('runs a read-only task on the haiku alias as Haiku', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-'));
+    writeFileSync(join(dir, 'README.md'), 'hello\n');
+    const runner = new StructuredRunner();
+    try {
+      const session = await runner.spawn({
+        taskId: 'live-plan-model',
+        runner: 'claude-code',
+        prompt: 'Do not use any tools other than task_complete. Call task_complete with status done and the summary: ok.',
+        modelId: 'haiku',
+        mode: 'plan',
+        cwd: dir,
+        registry: new RunnerRegistry(),
+      });
+      const models: string[] = [];
+      session.onEvent((event) => { if (event.type === 'usage' && event.record.model) models.push(event.record.model); });
+      const turns = turnEnds(session);
+
+      await turns.next();
+      expect(turns.reports).toEqual(['done']);
+      expect(models.length).toBeGreaterThan(0);
+      expect(models.every((m) => m.includes('haiku')), models.join(', ')).toBe(true);
+    } finally {
+      runner.stopAll();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
   it('keeps the turn open while background work runs, and reports completion after it', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-'));
     const runner = new StructuredRunner();
