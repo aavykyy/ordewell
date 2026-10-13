@@ -7,7 +7,6 @@ import { registerCommands, type CommandDeps } from './commands/CommandRegistry';
 import { handleSlashCommand, type SlashDeps } from './commands/SlashParser';
 import { confirmRisks } from './commands/runSettings';
 import { handleApprovePlan, handleSessionMessage, handleStartPlanning, type PlanManagerDeps } from './plan/PlanManager';
-import { replayIsolation } from './plan/isolation';
 import { routeWebviewMessage, type WebviewRouterDeps } from './plan/webviewRouter';
 import { saveCurrentSession, restoreState, persistState, type PersistenceDeps } from './state/StatePersistence';
 import { ModelDiscovery, sendModelConfig } from './ModelDiscovery';
@@ -300,7 +299,11 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     else services.chatProvider.restoreChat(state.plan);
     if (state.plan.tasks.length > 0) {
       services.chatProvider.showPlan(state.plan);
-      replayIsolation(managerDeps.session, services.chatProvider);
+      // The run view is the one thing the plan does not carry: task approvals,
+      // idle marks, isolation and an open checkpoint would otherwise be missing
+      // until the next update — which a task blocked on a runner approval never
+      // sends. Seed it from the session, not from a replay of the stream.
+      if (managerDeps.session.planState) services.chatProvider.adoptRun(managerDeps.session.runSnapshot());
     } else {
       services.chatProvider.setState('empty');
     }

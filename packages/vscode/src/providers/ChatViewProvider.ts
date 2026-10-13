@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
-import { type GlobalRunSettings, surfacePlan, type AiProvider, type LegacyPlanState, type SurfacePlan, type DiscoveredModel, type RunnerId, type TaskIsolation, type IsolationHandoff, type IsolationMergeResult, type RunMergeView } from '@ordewell/core';
+import { type GlobalRunSettings, surfacePlan, type AiProvider, type LegacyPlanState, type DiscoveredModel, type RunnerId, type RunView } from '@ordewell/core';
 import { ConversationViewHost, type SavedConversation } from '../ConversationViewHost';
+import { RunViewHost } from '../RunViewHost';
 import { renderWebviewHtml } from './webviewHtml';
 import type { ChatState, HostToWebview, ModelOption, PlannerBackend, RunnerMeta, RunnerModeMeta, WebviewToHost } from '../shared/protocol';
 
@@ -17,6 +18,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   readonly onMessage = this._onMessage.event;
   /** The planner conversation as the webview draws it; every planner event and local notice goes through here. */
   readonly conversation = new ConversationViewHost((msg) => this.postMessage(msg));
+  /** The run as the webview draws it; every session event and adopted snapshot goes through here (#S8c). */
+  readonly run = new RunViewHost((msg) => this.postMessage(msg));
 
   constructor(private readonly _extensionUri: vscode.Uri) {}
 
@@ -53,18 +56,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
   setState(state: ChatState): void { this.postMessage({ type: 'setState', state }); }
   showError(error: string): void { this.postMessage({ type: 'showError', error }); }
-  /** The session's own plan stays with the extension host (it persists and resumes from there); the webview is sent it without skill bodies. */
-  sendPlanUpdated(plan: LegacyPlanState): void {
-    const forWebview = surfacePlan(plan);
-    this._cachedPlan = forWebview;
-    this.postMessage({ type: 'planUpdated', plan: forWebview });
+  /**
+   * The session's own plan stays with the extension host (it persists and
+   * resumes from there); the webview is sent it without skill bodies. The plan
+   * is plan-level state only — every task's status lives on the run view.
+   */
+  showPlan(plan: LegacyPlanState): void {
+    this.postMessage({ type: 'planUpdated', plan: surfacePlan(plan) });
   }
+  /** What a webview that joined mid-run is owed: the run as folding every message would show it. */
+  adoptRun(view: RunView): void { this.run.adopt(view); }
   /** Live runner output for one task; the webview keeps the tail and renders it in that task's card. */
   sendTaskOutput(taskId: string, text: string): void { this.postMessage({ type: 'taskOutput', taskId, text }); }
-  /** Advisory silence timestamp for one task; null clears the stalled indicator. */
-  sendTaskIdle(taskId: string, idleSince: string | null): void { this.postMessage({ type: 'taskIdle', taskId, idleSince }); }
-  /** Runner requests one task waits on (ADR-0018, A1); 0 clears the card's badge. */
-  sendTaskApprovals(taskId: string, count: number): void { this.postMessage({ type: 'taskApprovals', taskId, count }); }
   setModels(models: DiscoveredModel[]): void {
     this.postMessage({ type: 'setModels', models });
   }
@@ -105,37 +108,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.postMessage({ type: 'conversationBusy', busy });
   }
 
-  showPlan(plan: LegacyPlanState): void { this.sendPlanUpdated(plan); }
-
-  // Legacy pass-throughs forwarding to new protocol types
-  planGenerated(plan: LegacyPlanState): void { this.sendPlanUpdated(plan); }
   planApproved(): void { this.setState('approved'); }
-  showCheckpoint(taskId: string, taskTitle: string, summary: string): void {
-    this.postMessage({ type: 'checkpoint', taskId, taskTitle, summary });
-  }
-
-  /** Where one task's isolated work stands — conflict indicator, branch and worktree. */
-  sendTaskIsolation(taskId: string, isolation: TaskIsolation): void {
-    this.postMessage({ type: 'taskIsolation', taskId, isolation });
-  }
-
-  /** The end-of-run handoff card: each repo's branch and base ref, and what landed. */
-  showIsolationHandoff(handoff: IsolationHandoff): void {
-    this.postMessage({ type: 'isolationHandoff', ...handoff });
-  }
-
-  /** What "Merge all" did, so a blocked or part-landed group is visible on the card. */
-  showIsolationMergeResult(result: IsolationMergeResult): void {
-    this.postMessage({ type: 'isolationMergeResult', result });
-  }
-
-  showRunMerge(runMerge: RunMergeView | null, tasks: Record<string, string[]>): void {
-    this.postMessage({ type: 'runMerge', runMerge, tasks });
-  }
 
   /** Drop the handoff card and every per-task isolation indicator. */
   clearIsolationHandoff(): void {
-    this.postMessage({ type: 'isolationCleared' });
+    this.run.clearIsolation();
   }
 
   // Config pass-throughs — store locally and emit on request
@@ -186,7 +163,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _configuredProviders: ApiProvider[] = [];
   private _modelDiscoveryErrors: Record<string, string> = {};
   private _plannerState: { backends: PlannerBackend[]; provider: string; runner?: string; effort?: string } | null = null;
-  private _cachedPlan: SurfacePlan | null = null;
 
   /**
    * Re-send every cached piece of state to the webview. Safe to call once the

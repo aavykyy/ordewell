@@ -38,7 +38,7 @@ describe('a task card, pinned before its rules move to core', () => {
   });
 
   it('reads Stalled while running with no recent output', () => {
-    render(<TaskCard task={makeTask({ status: 'in_progress' })} models={[]} isExecuting idleSince="2026-01-01T00:00:00Z" />);
+    render(<TaskCard task={makeTask({ status: 'in_progress' })} models={[]} isExecuting run={{ idleSince: '2026-01-01T00:00:00Z' }} />);
     expect(badge()?.textContent).toBe('Stalled');
     expect(badge()?.className).toBe('task-status-badge status-stalled');
     expect(document.querySelector('.task-check')?.getAttribute('title')).toBe('Stalled — no output recently');
@@ -62,7 +62,7 @@ describe('a task card, pinned before its rules move to core', () => {
   });
 
   it('counts approvals beyond one', () => {
-    render(<TaskCard task={makeTask({ status: 'in_progress' })} models={[]} isExecuting awaitingApproval={3} />);
+    render(<TaskCard task={makeTask({ status: 'in_progress' })} models={[]} isExecuting run={{ awaitingApproval: 3 }} />);
     expect(document.querySelector('.task-approval-badge')?.textContent).toBe('Waiting for approval (3)');
   });
 
@@ -75,7 +75,7 @@ describe('a task card, pinned before its rules move to core', () => {
   });
 
   it('names what a merge gate waits on', () => {
-    render(<TaskCard task={makeTask({ id: 'o2', order: 2 })} models={[]} mergeGate={['t1', 'ghost']} siblings={[makeTask({ id: 't1', order: 1, title: 'Setup' })]} />);
+    render(<TaskCard task={makeTask({ id: 'o2', order: 2 })} models={[]} run={{ mergeGate: ['t1', 'ghost'] }} siblings={[makeTask({ id: 't1', order: 1, title: 'Setup' })]} />);
     const gate = document.querySelector('.task-isolation-badge.gate');
     expect(gate?.textContent).toBe('Waits for Merge all');
     expect(gate?.getAttribute('title')).toBe('The work of #1, ghost is not merged into your branch yet. Merge all lets this task go on.');
@@ -86,7 +86,7 @@ describe('a task card, pinned before its rules move to core', () => {
     ['.', 'Conflict', 'Integrating this task conflicted: a.ts, b.ts. Its worktree and branch are kept.'],
   ])('badges a conflict in %s', (conflictRepo, text, title) => {
     const isolation: TaskIsolation = { ...isolated, state: 'conflict', conflictRepo, conflictFiles: ['a.ts', 'b.ts'] };
-    render(<TaskCard task={makeTask({ status: 'awaiting_user' })} models={[]} isolation={isolation} />);
+    render(<TaskCard task={makeTask({ status: 'awaiting_user' })} models={[]} run={{ isolation }} />);
     const el = document.querySelector('.task-isolation-badge.conflict');
     expect(el?.textContent).toBe(text);
     expect(el?.getAttribute('title')).toBe(title);
@@ -97,7 +97,7 @@ describe('a task card, pinned before its rules move to core', () => {
     [undefined, 'Repairing'],
   ])('badges a repair in flight', (repair, text) => {
     const isolation: TaskIsolation = { ...isolated, state: 'repairing', conflictFiles: ['a.ts'], repair };
-    render(<TaskCard task={makeTask({ status: 'in_progress' })} models={[]} isolation={isolation} />);
+    render(<TaskCard task={makeTask({ status: 'in_progress' })} models={[]} run={{ isolation }} />);
     const el = document.querySelector('.task-isolation-badge.repairing');
     expect(el?.textContent).toBe(text);
     expect(el?.getAttribute('title')).toBe('Repairing the conflict in its own worktree: a.ts.');
@@ -105,7 +105,7 @@ describe('a task card, pinned before its rules move to core', () => {
 
   it('notes the files a repair was for in the details', () => {
     const isolation: TaskIsolation = { ...isolated, state: 'integrated', repairedFiles: ['a.ts'] };
-    render(<TaskCard task={makeTask({ status: 'completed' })} models={[]} isolation={isolation} expanded onExpandedChange={noop} />);
+    render(<TaskCard task={makeTask({ status: 'completed' })} models={[]} run={{ isolation }} expanded onExpandedChange={noop} />);
     expect(document.querySelector('.task-isolation-repaired-note')?.textContent).toBe('Landed after repairing a conflict in a.ts.');
   });
 

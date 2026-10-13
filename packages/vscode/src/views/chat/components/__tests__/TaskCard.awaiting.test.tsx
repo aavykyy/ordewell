@@ -47,7 +47,7 @@ describe('what an awaiting task waits on (ADR-0018, W1)', () => {
   it('badges a task whose runner waits on an approval, and the badge opens its log (A1)', () => {
     const opened: string[] = [];
     render(<TaskCard task={makeTask({ status: 'in_progress', runnerSessionId: undefined })} models={[]} isExecuting
-      awaitingApproval={1} onOpenLog={(id) => opened.push(id)} />);
+      run={{ awaitingApproval: 1 }} onOpenLog={(id) => opened.push(id)} />);
     fireEvent.click(screen.getByText('Waiting for approval', { selector: '.task-approval-badge' }));
     expect(opened).toEqual(['t1']);
     // The status itself is left alone: the turn is still running.

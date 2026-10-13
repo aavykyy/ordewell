@@ -6,7 +6,7 @@ import type { SessionMessage } from '@ordewell/core';
 function deps(): PlanManagerDeps & { chatProvider: { sendTaskOutput: ReturnType<typeof vi.fn> } } {
   return {
     session: {} as PlanManagerDeps['session'],
-    chatProvider: { sendTaskOutput: vi.fn(), showCheckpoint: vi.fn(), conversation: { receive: vi.fn() } },
+    chatProvider: { sendTaskOutput: vi.fn(), run: { receive: vi.fn() }, conversation: { receive: vi.fn() } },
     isGeneratingPlan: () => false,
   } as unknown as PlanManagerDeps & { chatProvider: { sendTaskOutput: ReturnType<typeof vi.fn> } };
 }

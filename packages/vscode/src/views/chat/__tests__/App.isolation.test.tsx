@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, act, fireEvent, screen } from '@testing-library/react';
+import { EMPTY_RUN, type RunTask, type RunView } from '@ordewell/core';
 import App from '../App';
 
 const api = (globalThis as unknown as { __vscodeApi: { postMessage: ReturnType<typeof vi.fn> } }).__vscodeApi;
@@ -23,6 +24,12 @@ const plan = {
   lastUpdated: new Date().toISOString(),
 };
 
+/** A run view as the host would fold it: only the fields the cards read need be real. */
+function run(over: Partial<RunView>, tasks: Partial<RunTask>[] = []): RunView {
+  return { ...EMPTY_RUN, ...over, tasks: tasks.map((t) => ({ id: 't1', subtasks: [], ...t })) as RunTask[] };
+}
+const sendRun = (view: RunView) => send({ type: 'runView', view });
+
 const landed = [{ taskId: 't1', order: 1, title: 'Add rate limiting' }];
 const handoff = {
   repos: [{ path: '.', integrationBranch: 'ordewell/run-1/integration', baseRef: 'abcdef0123456789', landed }],
@@ -42,16 +49,16 @@ describe('App — worktree isolation (ADR-0013)', () => {
     render(<App />);
   });
 
-  it('shows the conflict indicator from a taskIsolation message', () => {
+  it('shows the conflict indicator from the run view', () => {
     send({ type: 'planUpdated', plan });
-    send({ type: 'taskIsolation', taskId: 't1', isolation: { state: 'conflict', branch: 'ordewell/run-1/1-a', worktree: '.ordewell/worktrees/run-1/1-a' } });
+    sendRun(run({}, [{ isolation: { state: 'conflict', branch: 'ordewell/run-1/1-a', worktree: '.ordewell/worktrees/run-1/1-a', repos: [] } }]));
 
     expect(screen.getByText('Conflict')).toBeTruthy();
   });
 
   it('shows the handoff card and posts the chosen action to the host', () => {
     send({ type: 'planUpdated', plan });
-    send({ type: 'isolationHandoff', ...handoff });
+    sendRun(run({ handoff }));
 
     expect(screen.getByText('ordewell/run-1/integration')).toBeTruthy();
     fireEvent.click(screen.getByText('Merge'));
@@ -60,27 +67,28 @@ describe('App — worktree isolation (ADR-0013)', () => {
 
   it('clears the handoff card when the run is discarded', () => {
     send({ type: 'planUpdated', plan });
-    send({ type: 'isolationHandoff', ...handoff });
+    sendRun(run({ handoff }));
     expect(document.querySelector('.isolation-handoff')).toBeTruthy();
 
-    send({ type: 'isolationCleared' });
+    sendRun(run({}, [{ isolation: { state: 'conflict', branch: 'b', worktree: 'w' } }]));
+    sendRun(EMPTY_RUN);
     expect(document.querySelector('.isolation-handoff')).toBeNull();
     expect(document.querySelector('.task-isolation-badge')).toBeNull();
   });
 
   it('shows a deferred handoff with its note, and drops the note when the unmarked handoff follows', () => {
     send({ type: 'planUpdated', plan });
-    send({ type: 'isolationHandoff', ...handoff, deferredTo: 'supervisor' });
+    sendRun(run({ handoff: { ...handoff, deferredTo: 'supervisor' } }));
     expect(screen.getByText(/supervisor may merge this when it wakes/i)).toBeTruthy();
 
-    send({ type: 'isolationHandoff', ...handoff });
+    sendRun(run({ handoff }));
     expect(screen.queryByText(/supervisor may merge this/i)).toBeNull();
     expect(document.querySelector('.isolation-handoff')).toBeTruthy();
   });
 
   it('offers Merge all for a repo group and posts it to the host', () => {
     send({ type: 'planUpdated', plan });
-    send({ type: 'isolationHandoff', ...groupHandoff });
+    sendRun(run({ handoff: groupHandoff }));
 
     fireEvent.click(screen.getByText('Merge all'));
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'isolationAction', action: 'merge', taskId: undefined });
@@ -88,17 +96,17 @@ describe('App — worktree isolation (ADR-0013)', () => {
 
   it('shows a blocked Merge all result naming each repo, and clears it with the run', () => {
     send({ type: 'planUpdated', plan });
-    send({ type: 'isolationHandoff', ...groupHandoff });
-    send({
-      type: 'isolationMergeResult',
-      result: { outcome: 'blocked', blocked: [{ repo: 'api', reason: 'conflict', files: ['src/a.ts'] }] },
-    });
+    sendRun(run({ handoff: groupHandoff }));
+    sendRun(run({
+      handoff: groupHandoff,
+      mergeResult: { outcome: 'blocked', blocked: [{ repo: 'api', reason: 'conflict', files: ['src/a.ts'] }] },
+    }));
 
     const block = document.querySelector('.isolation-merge-block');
     expect(block?.textContent).toContain('api');
     expect(block?.textContent).toContain('src/a.ts');
 
-    send({ type: 'isolationCleared' });
+    sendRun(EMPTY_RUN);
     expect(document.querySelector('.isolation-merge-result')).toBeNull();
   });
 });

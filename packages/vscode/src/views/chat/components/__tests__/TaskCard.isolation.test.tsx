@@ -29,7 +29,7 @@ describe('TaskCard — isolation conflict (ADR-0013)', () => {
         task={makeTask()}
         models={emptyModels}
         isExecuting={false}
-        isolation={{ state: 'conflict', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['.'], conflictRepo: '.' }}
+        run={{ isolation: { state: 'conflict', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['.'], conflictRepo: '.' } }}
       />,
     );
 
@@ -42,7 +42,7 @@ describe('TaskCard — isolation conflict (ADR-0013)', () => {
         task={makeTask({ status: 'in_progress' })}
         models={emptyModels}
         isExecuting={false}
-        isolation={{ state: 'active', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['.'] }}
+        run={{ isolation: { state: 'active', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['.'] } }}
       />,
     );
 
@@ -56,7 +56,7 @@ describe('TaskCard — isolation conflict (ADR-0013)', () => {
         task={makeTask()}
         models={emptyModels}
         isExecuting={false}
-        isolation={{ state: 'active', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['.'] }}
+        run={{ isolation: { state: 'active', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['.'] } }}
       />,
     );
 
@@ -73,7 +73,7 @@ describe('TaskCard — isolation conflict (ADR-0013)', () => {
         task={makeTask()}
         models={emptyModels}
         isExecuting={false}
-        isolation={{ state: 'conflict', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['.'], conflictRepo: '.' }}
+        run={{ isolation: { state: 'conflict', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['.'], conflictRepo: '.' } }}
         onResolveConflict={onResolveConflict}
       />,
     );
@@ -101,10 +101,10 @@ describe('TaskCard — conflict repair (ADR-0015)', () => {
         task={makeTask({ status: 'in_progress' })}
         models={emptyModels}
         isExecuting={false}
-        isolation={{
+        run={{ isolation: {
           state: 'repairing', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['.'],
           conflictFiles: ['a.ts'], repair: { attempt: 1, limit: 2 },
-        }}
+        } }}
       />,
     );
 
@@ -120,7 +120,7 @@ describe('TaskCard — conflict repair (ADR-0015)', () => {
         task={makeTask({ status: 'completed' })}
         models={emptyModels}
         isExecuting={false}
-        isolation={{ state: 'integrated', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['.'], repairedFiles: ['a.ts', 'b.ts'] }}
+        run={{ isolation: { state: 'integrated', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['.'], repairedFiles: ['a.ts', 'b.ts'] } }}
       />,
     );
 
@@ -134,7 +134,7 @@ describe('TaskCard — conflict repair (ADR-0015)', () => {
         task={makeTask({ status: 'completed' })}
         models={emptyModels}
         isExecuting={false}
-        isolation={{ state: 'integrated', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['.'] }}
+        run={{ isolation: { state: 'integrated', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['.'] } }}
       />,
     );
 
@@ -150,7 +150,7 @@ describe('TaskCard — repo group (ADR-0014)', () => {
         task={makeTask()}
         models={emptyModels}
         isExecuting={false}
-        isolation={{ state: 'conflict', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['api', 'web'], conflictRepo: 'api' }}
+        run={{ isolation: { state: 'conflict', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['api', 'web'], conflictRepo: 'api' } }}
       />,
     );
 
@@ -163,7 +163,7 @@ describe('TaskCard — repo group (ADR-0014)', () => {
         task={makeTask()}
         models={emptyModels}
         isExecuting={false}
-        isolation={{ state: 'active', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['api', 'web'] }}
+        run={{ isolation: { state: 'active', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['api', 'web'] } }}
       />,
     );
 
@@ -177,7 +177,7 @@ describe('TaskCard — repo group (ADR-0014)', () => {
         task={makeTask()}
         models={emptyModels}
         isExecuting={false}
-        isolation={{ state: 'active', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['.'] }}
+        run={{ isolation: { state: 'active', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['.'] } }}
       />,
     );
 

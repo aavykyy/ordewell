@@ -4,12 +4,14 @@ import TaskCard from './TaskCard';
 import NewTaskCard from './NewTaskCard';
 import type { TaskDraft } from './NewTaskCard';
 import type { RunnerMode, RunnerOption } from './TaskCard';
-import { Task, DiscoveredModel, TaskModelAssignment, TaskIsolation } from '@ordewell/core';
+import { Task, DiscoveredModel, TaskModelAssignment, RunTask, RunView } from '@ordewell/core';
 import { canMergeTasks, canSplitTask, planUsage } from '@ordewell/core/plan-utils';
 
 /** What each level allows, in the picker's tooltip: Act's risk is said where it is chosen (ADR-0029). */
 interface PlanCardGroupProps {
   tasks: Task[];
+  /** The run the host folded: each card's status badges read their own task entry. */
+  run: RunView;
   models: DiscoveredModel[];
   modelsByRunner?: Partial<Record<string, DiscoveredModel[]>>;
   modesByRunner?: Record<string, RunnerMode[]>;
@@ -19,12 +21,6 @@ interface PlanCardGroupProps {
   runnerLabels?: Record<string, string>;
   /** Tail of each running task's runner output, keyed by task id. */
   taskOutput?: Record<string, string>;
-  /** Advisory silence timestamp per task id; null/absent means not stalled. */
-  taskIdle?: Record<string, string | null>;
-  /** Runner requests waiting for an answer per task id (ADR-0018, A1). */
-  taskApprovals?: Record<string, number>;
-  /** Per-task isolation state (ADR-0013), keyed by task id. */
-  isolationByTask?: Record<string, TaskIsolation>;
   /** Opt in to resolving a conflicted task's merge as a new AI task. */
   onResolveConflict?: (taskId: string) => void;
   onRunnerChange?: (taskId: string, runner: string) => void;
@@ -38,8 +34,6 @@ interface PlanCardGroupProps {
   /** The `applies-to: task` catalog the skill chips attach from. */
   taskSkills?: { name: string; description: string }[];
   onSkillsChange?: (taskId: string, skills: string[]) => void;
-  /** Per task id, the dependencies it waits on at its merge gate (ADR-0020). */
-  mergeGates?: Record<string, string[]>;
   onRemoveTask?: (taskId: string) => void;
   onPromptChange?: (taskId: string, prompt: string) => void;
   onRetry?: (taskId: string) => void;
@@ -60,6 +54,7 @@ interface PlanCardGroupProps {
 
 export default function PlanCardGroup({
   tasks,
+  run,
   models,
   modelsByRunner,
   modesByRunner,
@@ -67,9 +62,6 @@ export default function PlanCardGroup({
   isExecuting,
   runnerLabels: _runnerLabels,
   taskOutput,
-  taskIdle,
-  taskApprovals,
-  isolationByTask,
   onResolveConflict,
   onRunnerChange,
   onDependenciesChange,
@@ -80,7 +72,6 @@ export default function PlanCardGroup({
   onOpsChange,
   taskSkills,
   onSkillsChange,
-  mergeGates,
   onRemoveTask,
   onPromptChange,
   onRetry,
@@ -104,6 +95,15 @@ export default function PlanCardGroup({
   const usage = planUsage(tasks);
   const sorted = [...tasks].sort((a, b) => a.order - b.order);
   const mergeMode = mergeSelectedIds.length > 0;
+
+  // One lookup for every card's own run entry, keyed by id: the plan draws the
+  // card, the run tells it what its status badges say.
+  const runByTask = useMemo(() => {
+    const byId = new Map<string, RunTask>();
+    const index = (entries: readonly RunTask[]): void => entries.forEach((t) => { byId.set(t.id, t); index(t.subtasks); });
+    index(run.tasks);
+    return byId;
+  }, [run]);
 
   const dependentCountMap = useMemo(() => {
     const m = new Map<string, number>();
@@ -237,6 +237,7 @@ export default function PlanCardGroup({
             >
               <TaskCard
                 task={task}
+                run={runByTask.get(task.id)}
                 models={taskModels}
                 modes={taskModes}
                 modelsByRunner={modelsByRunner}
@@ -246,9 +247,6 @@ export default function PlanCardGroup({
                 isExecuting={isExecuting}
                 dependentCount={dependentCountMap.get(task.id) ?? 0}
                 output={taskOutput?.[task.id]}
-                idleSince={taskIdle?.[task.id] ?? null}
-                awaitingApproval={taskApprovals?.[task.id] ?? 0}
-                isolation={isolationByTask?.[task.id] ?? null}
                 onResolveConflict={onResolveConflict}
                 siblings={sorted}
                 onDependenciesChange={onDependenciesChange}
@@ -259,7 +257,6 @@ export default function PlanCardGroup({
                 onOpsChange={onOpsChange}
                 taskSkills={taskSkills}
                 onSkillsChange={onSkillsChange}
-                mergeGate={mergeGates?.[task.id]}
                 onRemoveTask={onRemoveTask}
                 onPromptChange={onPromptChange}
                 onRetry={onRetry}

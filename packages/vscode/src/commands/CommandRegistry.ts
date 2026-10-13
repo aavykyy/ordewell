@@ -10,7 +10,6 @@ import {
   type ExecutionCommand,
 } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
-import { replayIsolation } from '../plan/isolation';
 import { forkConversation, rewindConversation, compactConversation } from '../plan/conversation';
 import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
@@ -78,8 +77,10 @@ function applyLoadedSession(
   // restoreChat first — it resets any stuck stop/busy state in the webview
   // before the plan and goal messages land.
   deps.chatProvider.restoreChat(loaded.plan);
-  if (loaded.plan.tasks.length > 0) deps.chatProvider.planGenerated(loaded.plan);
-  replayIsolation(deps.session, deps.chatProvider);
+  if (loaded.plan.tasks.length > 0) deps.chatProvider.showPlan(loaded.plan);
+  // The loaded session's run is a plan no message carried: seed the run view
+  // from the session, so isolation marks and a pending checkpoint come with it.
+  deps.chatProvider.adoptRun(deps.session.runSnapshot());
   saveState(loaded.plan, deps.fsAdapter.getWorkspaceRoot());
   return true;
 }

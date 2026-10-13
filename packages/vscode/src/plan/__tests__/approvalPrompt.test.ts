@@ -18,7 +18,7 @@ const SHELL_REQUEST: Extract<SessionMessage, { type: 'approval_request' }> = {
 function minimalDeps(): PlanManagerDeps {
   return {
     session: { resolveApproval: vi.fn().mockReturnValue(true) } as unknown as PlanManagerDeps['session'],
-    chatProvider: { conversation: { receive: vi.fn(), note: vi.fn() }, reveal: vi.fn() } as unknown as PlanManagerDeps['chatProvider'],
+    chatProvider: { conversation: { receive: vi.fn(), note: vi.fn() }, run: { receive: vi.fn() }, reveal: vi.fn() } as unknown as PlanManagerDeps['chatProvider'],
     isGeneratingPlan: () => false,
   } as unknown as PlanManagerDeps;
 }

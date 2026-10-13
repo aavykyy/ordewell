@@ -1,7 +1,5 @@
 import * as vscode from 'vscode';
-import { flattenTasks, type IsolationHandoff, type Session } from '@ordewell/core';
 import type { PlanManagerDeps } from './PlanManager';
-import type { ChatViewProvider } from '../providers/ChatViewProvider';
 
 export type IsolationActionKind = 'reviewDiff' | 'merge' | 'discard' | 'cleanup' | 'resolveConflict';
 
@@ -26,34 +24,6 @@ export function handleIsolationBlocked(message: string, deps: PlanManagerDeps): 
       deps.chatProvider.showError(`Could not continue the run: ${err instanceof Error ? err.message : String(err)}`);
     }
   });
-}
-
-/** Show the end-of-run handoff card. */
-export function handleIsolationHandoff(handoff: IsolationHandoff, deps: PlanManagerDeps): void {
-  deps.chatProvider.showIsolationHandoff(handoff);
-}
-
-/**
- * Re-tell a webview the plan's isolation from the run record: the stream only
- * reports changes, and a webview's state goes whenever it is disposed or a
- * session is loaded. The handoff card waits for a run in progress to settle,
- * as it would have on the stream.
- */
-export function replayIsolation(
-  session: Pick<Session, 'isolationView' | 'isExecuting' | 'runMergeView' | 'mergeGate' | 'planState'>,
-  chatProvider: Pick<ChatViewProvider, 'sendTaskIsolation' | 'showIsolationHandoff' | 'showRunMerge'>,
-): void {
-  const view = session.isolationView();
-  if (!view) return;
-  for (const [taskId, isolation] of Object.entries(view.tasks)) chatProvider.sendTaskIsolation(taskId, isolation);
-  if (!session.isExecuting) chatProvider.showIsolationHandoff(view.handoff);
-  const runMerge = session.runMergeView();
-  const gates: Record<string, string[]> = {};
-  for (const task of flattenTasks(session.planState?.tasks ?? [])) {
-    const waits = session.mergeGate(task.id);
-    if (waits.length > 0) gates[task.id] = waits;
-  }
-  chatProvider.showRunMerge(runMerge, gates);
 }
 
 /**

@@ -7,7 +7,7 @@ import { lastLine } from '../taskOutput';
 import { checkLabel } from '../checkLabel';
 import { useFollowOutput } from '../followOutput';
 import { dependencyCandidates, capConflictFiles, taskRowView } from '@ordewell/core/plan-utils';
-import type { Task, DiscoveredModel, TaskModelAssignment, TaskIsolation, TaskRowAction, TaskRowView, TaskStatusKind } from '@ordewell/core';
+import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, TaskRowAction, TaskRowView, TaskStatusKind } from '@ordewell/core';
 
 export interface RunnerMode {
   id: string;
@@ -38,12 +38,12 @@ interface TaskCardProps {
   isExecuting?: boolean;
   /** Tail of this task's live runner output, if any has arrived. */
   output?: string;
-  /** Advisory silence timestamp (VerdictEngine) — set while in_progress with no recent output. */
-  idleSince?: string | null;
-  /** Runner requests this task waits on (ADR-0018, A1); answered in its log tab. */
-  awaitingApproval?: number;
-  /** Per-task isolation state (ADR-0013), only when the plan has an isolation run. */
-  isolation?: TaskIsolation | null;
+  /**
+   * This task's own status as the run view holds it (#S8c): its stall mark,
+   * runner approvals, isolation and merge gate. Absent before the host has
+   * folded the run, in which case the plan's own fields are all there is.
+   */
+  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate'>;
   /** Opt in to resolving this task's merge conflict as an AI task. */
   onResolveConflict?: (taskId: string) => void;
   dependentCount?: number;
@@ -59,8 +59,6 @@ interface TaskCardProps {
   onOpsChange?: (taskId: string, ops: boolean) => void;
   taskSkills?: { name: string; description: string }[];
   onSkillsChange?: (taskId: string, skills: string[]) => void;
-  /** The dependencies this task waits on at its merge gate (ADR-0020); absent when it waits for no Merge all. */
-  mergeGate?: string[];
   onRemoveTask?: (taskId: string) => void;
   onPromptChange?: (taskId: string, prompt: string) => void;
   onRetry?: (taskId: string) => void;
@@ -179,7 +177,7 @@ export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRu
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, models, modes, modelsByRunner, modesByRunner, runners, configuredProviders, modelApiMapping, isExecuting, output, idleSince, awaitingApproval = 0, isolation, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, mergeGate, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
+export default function TaskCard({ task, run, models, modes, modelsByRunner, modesByRunner, runners, configuredProviders, modelApiMapping, isExecuting, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const isControlled = expandedProp !== undefined;
   const expanded = isControlled ? expandedProp : internalExpanded;
@@ -192,6 +190,13 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
   const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
   const [offeringResolve, setOfferingResolve] = useState(false);
   const sortedSubtasks = [...task.subtasks].sort((a, b) => a.order - b.order);
+
+  // The run's word on this task: absent until the host has folded a run, and
+  // then authoritative over the plan for everything status-only.
+  const idleSince = run?.idleSince ?? null;
+  const awaitingApproval = run?.awaitingApproval ?? 0;
+  const isolation = run?.isolation ?? null;
+  const mergeGate = run?.mergeGate;
 
   const isolatedWork = isolation && isolation.state !== 'none' ? isolation : null;
   const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;

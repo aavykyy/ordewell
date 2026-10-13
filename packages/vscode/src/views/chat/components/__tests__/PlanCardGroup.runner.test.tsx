@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import PlanCardGroup from '../PlanCardGroup';
 import type { Task, DiscoveredModel } from '@ordewell/core';
+import { EMPTY_RUN } from '@ordewell/core/plan-utils';
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -31,7 +32,7 @@ const CLAUDE_MODELS: DiscoveredModel[] = [{ modelId: 'claude-sonnet-4-5', modelL
 describe('PlanCardGroup — per-task runner', () => {
   it('forwards a runner change up with the task id', () => {
     const onRunnerChange = vi.fn();
-    render(<PlanCardGroup tasks={[makeTask()]} models={[]} runners={RUNNERS} onRunnerChange={onRunnerChange} />);
+    render(<PlanCardGroup run={EMPTY_RUN} tasks={[makeTask()]} models={[]} runners={RUNNERS} onRunnerChange={onRunnerChange} />);
     act(() => { fireEvent.click(screen.getByText('Test task')); });
 
     act(() => { fireEvent.change(screen.getByLabelText('Runner'), { target: { value: 'codex' } }); });
@@ -43,7 +44,7 @@ describe('PlanCardGroup — per-task runner', () => {
     // The model and mode lists a card shows must follow that card's runner —
     // two tasks on different runners cannot share one catalog.
     render(
-      <PlanCardGroup
+      <PlanCardGroup run={EMPTY_RUN}
         tasks={[makeTask({ assignedRunner: 'codex' })]}
         models={CLAUDE_MODELS}
         modelsByRunner={{ 'claude-code': CLAUDE_MODELS, codex: CODEX_MODELS }}

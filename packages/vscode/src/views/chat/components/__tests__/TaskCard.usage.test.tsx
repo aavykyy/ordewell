@@ -5,6 +5,7 @@ import TaskCard from '../TaskCard';
 import SubTaskCard from '../SubTaskCard';
 import PlanCardGroup from '../PlanCardGroup';
 import type { Task, AttemptUsage } from '@ordewell/core';
+import { EMPTY_RUN } from '@ordewell/core/plan-utils';
 
 const usage: AttemptUsage = { attempt: 1, runner: 'codex', startedAt: '', wallTimeMs: 5000, totals: { inputTokens: 12400, outputTokens: 3100, reportedCost: { USD: 0.42 } }, byModel: [{ source: 'codex', model: 'actual-model', totals: { inputTokens: 12400, outputTokens: 3100 } }], lastPromptTokens: 36000, contextWindow: 200000 };
 const task = (over: Partial<Task> = {}): Task => ({ id: 't', order: 1, title: 'Work', description: '', type: 'ai', status: 'completed', dependencies: [], subtasks: [], assignedRunner: 'codex', ...over });
@@ -25,7 +26,7 @@ describe('task card usage', () => {
 
   it('keeps the plan-wide Tasks total sum of all attempts', () => {
     const parent = task({ attemptUsage: [usage, { ...usage, attempt: 2 }] });
-    const { container } = render(<PlanCardGroup tasks={[parent]} models={[]} />);
+    const { container } = render(<PlanCardGroup run={EMPTY_RUN} tasks={[parent]} models={[]} />);
     expect(container.querySelector('.plan-usage')?.textContent).toContain('24,800 in · 6,200 out · $0.84 · 10s');
     expect(container.textContent).toContain('Tasks total');
   });

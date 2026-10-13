@@ -1,6 +1,6 @@
 import type { GlobalRunSettings } from '@ordewell/core';
-import { type SurfacePlan, type DiscoveredModel, type RunnerId, type IsolationHandoff, type IsolationMergeResult, type RunMergeView, type TaskIsolation, type AiProvider } from '@ordewell/core';
-import { DEFAULT_RUNNERS, EMPTY_HOLD, type PromptHold } from '@ordewell/core/plan-utils';
+import { type SurfacePlan, type DiscoveredModel, type RunnerId, type RunView, type RunTask, type AiProvider } from '@ordewell/core';
+import { DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, type PromptHold } from '@ordewell/core/plan-utils';
 import type { HostToWebview, PlannerBackend, RunnerMeta } from '../../shared/protocol';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, type PatchedView } from '../../shared/conversationPatch';
 import { appendTaskOutput, type TaskOutputMap } from './taskOutput';
@@ -55,18 +55,12 @@ export interface HostState {
   taskSkills: { name: string; description: string }[];
   checkpoint: { taskId: string; taskTitle: string; summary: string; pausedAt: number } | null;
   taskOutput: TaskOutputMap;
-  /** Advisory silence timestamp per task id; null/absent means not stalled. */
-  taskIdle: Record<string, string | null>;
-  taskApprovals: Record<string, number>;
-  /** Per-task isolation state (ADR-0013); only tasks an isolated run has touched appear. */
-  taskIsolation: Record<string, TaskIsolation>;
-  /** The end-of-run handoff card, present until the run is merged, discarded or restarted. */
-  handoff: IsolationHandoff | null;
-  mergeResult: IsolationMergeResult | null;
-  /** What Merge all would merge now, including a possible gate wait. */
-  runMerge: RunMergeView | null;
-  /** Per task id, the dependencies it waits on at its merge gate. */
-  taskGates: Record<string, string[]>;
+  /**
+   * The run as the host folded every session event (#S8c): each task's plan
+   * fields and status, the merge view, usage, run settings, handoff and last
+   * Merge all result. The per-task badges and the isolation cards read here.
+   */
+  run: RunView;
   /** Is the plan dock open? See planDock.ts for when this flips. */
   dockExpanded: boolean;
   /** The dock's dragged cap in px, remembered by the host; undefined keeps the stylesheet's default. */
@@ -104,13 +98,7 @@ export const INITIAL_HOST_STATE: HostState = {
   taskSkills: [],
   checkpoint: null,
   taskOutput: {},
-  taskIdle: {},
-  taskApprovals: {},
-  taskIsolation: {},
-  handoff: null,
-  mergeResult: null,
-  runMerge: null,
-  taskGates: {},
+  run: EMPTY_RUN,
   dockExpanded: false,
   dockHeight: undefined,
   stopped: false,
@@ -141,9 +129,9 @@ export type HostAction =
 
 /**
  * Clears what belongs to the previous session. Fields per kind:
- * - all kinds: error, plan, checkpoint, task output/idle/approvals, isolation
- *   state, pending edits, and the dock (the stalled/approval badges are keyed
- *   by task id, so they must not outlive the plan they described).
+ * - all kinds: error, plan, the run, checkpoint, task output, and the dock (the
+ *   run's per-task badges are keyed by task id, so they must not outlive the
+ *   plan they described).
  * - 'restore' and 'new' also: stop the running/planning flags and drop queued
  *   prompts. 'empty' leaves them: the host's own `state` says what runs next,
  *   and queued prompts survive an emptied plan.
@@ -159,13 +147,7 @@ export function resetSession(state: HostState, kind: SessionResetKind): HostStat
     plan: null,
     checkpoint: null,
     taskOutput: {},
-    taskIdle: {},
-    taskApprovals: {},
-    taskIsolation: {},
-    handoff: null,
-    mergeResult: null,
-    runMerge: null,
-    taskGates: {},
+    run: EMPTY_RUN,
     dockExpanded: nextDock(state.dockExpanded, 'session-reset'),
   };
   if (kind === 'empty') return next;
@@ -265,27 +247,18 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
     case 'taskOutput':
       return { ...state, taskOutput: appendTaskOutput(state.taskOutput, action.taskId, action.text ?? '') };
 
-    case 'taskIdle':
-      return { ...state, taskIdle: { ...state.taskIdle, [action.taskId]: action.idleSince } };
-
-    case 'taskApprovals':
-      if ((state.taskApprovals[action.taskId] ?? 0) === action.count) return state;
-      return { ...state, taskApprovals: { ...state.taskApprovals, [action.taskId]: action.count } };
-
-    case 'taskIsolation':
-      return { ...state, taskIsolation: { ...state.taskIsolation, [action.taskId]: action.isolation } };
-
-    case 'isolationHandoff':
-      return { ...state, handoff: { repos: action.repos ?? [], landed: action.landed ?? [], ...(action.deferredTo ? { deferredTo: action.deferredTo } : {}) } };
-
-    case 'isolationMergeResult':
-      return { ...state, mergeResult: action.result ?? null };
-
-    case 'isolationCleared':
-      return { ...state, taskIsolation: {}, handoff: null, mergeResult: null, runMerge: null, taskGates: {} };
-
-    case 'runMerge':
-      return { ...state, runMerge: action.runMerge ?? null, taskGates: action.tasks ?? {} };
+    // The run view replaces the per-field status, isolation and merge
+    // messages: one fold, and the checkpoint panel follows from it — so a
+    // webview that rejoins is re-told a checkpoint it never saw arrive.
+    case 'runView': {
+      const question = checkpointOf(action.view);
+      const checkpoint = question
+        ? state.checkpoint?.taskId === question.taskId
+          ? { ...question, pausedAt: state.checkpoint.pausedAt }
+          : { ...question, pausedAt: action.now }
+        : null;
+      return { ...state, run: action.view, checkpoint };
+    }
 
     case 'setModels':
       return { ...state, models: action.models ?? [] };
@@ -358,18 +331,22 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
     case 'openSettings':
       return { ...state, settingsRequest: state.settingsRequest + 1 };
 
-    case 'checkpoint':
-      return {
-        ...state,
-        checkpoint: {
-          taskId: action.taskId ?? '',
-          taskTitle: action.taskTitle ?? '',
-          summary: action.summary ?? '',
-          pausedAt: action.now,
-        },
-      };
-
     default:
       return state;
   }
+}
+
+/** The task, if any, parked at a checkpoint: the whole question the panel draws. */
+function checkpointOf(view: RunView): { taskId: string; taskTitle: string; summary: string } | null {
+  const find = (tasks: readonly RunTask[]): { taskId: string; taskTitle: string; summary: string } | null => {
+    for (const task of tasks) {
+      if (task.status === 'awaiting_user' && task.awaitingReason === 'checkpoint' && task.checkpoint) {
+        return { taskId: task.id, taskTitle: task.title, summary: task.checkpoint };
+      }
+      const nested = find(task.subtasks);
+      if (nested) return nested;
+    }
+    return null;
+  };
+  return find(view.tasks);
 }

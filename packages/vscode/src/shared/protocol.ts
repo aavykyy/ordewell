@@ -1,6 +1,6 @@
 import type { GlobalRunSettings,
-  AiProvider, DisplayBlock, DiscoveredModel, IsolationHandoff, IsolationMergeResult, RunMergeView, PromptHold, RunnerId, SurfacePlan,
-  TaskIsolation, TaskModelAssignment,
+  AiProvider, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunView, SurfacePlan,
+  TaskModelAssignment,
 } from '@ordewell/core';
 
 /*
@@ -171,10 +171,15 @@ export type HostToWebview =
   /** The planner is working without producing anything visible; keeps the webview's watchdog quiet. */
   | { type: 'plannerLiveness' }
   | { type: 'planUpdated'; plan: SurfacePlan }
+  /**
+   * The run as the host folded every session event: each task's plan fields and
+   * what the status stream said, the run's merge view, usage, run settings,
+   * handoff and last Merge all result. One message per change — the webview
+   * mirrors it, and a late joiner is sent `Session.runSnapshot()` through this
+   * same message.
+   */
+  | { type: 'runView'; view: RunView }
   | { type: 'taskOutput'; taskId: string; text: string }
-  | { type: 'taskIdle'; taskId: string; idleSince: string | null }
-  /** How many of a structured task's runner requests wait for an answer (ADR-0018, A1); 0 clears the badge. */
-  | { type: 'taskApprovals'; taskId: string; count: number }
   /** The queued prompts the host is holding for the next planner turn, oldest first. */
   | { type: 'heldPrompts'; prompts: PromptHold }
   /** Queued text the host gave back, to go above whatever is in the input. */
@@ -199,22 +204,6 @@ export type HostToWebview =
   | { type: 'setModelConfig'; modelConfig: { orchestrator: string; orchestratorProvider?: string } }
   | { type: 'setPlannerBackends'; backends: PlannerBackend[]; provider: string; runner?: string; effort?: string }
   | { type: 'setModelDiscoveryErrors'; errors: Record<string, string> }
-  | { type: 'checkpoint'; taskId: string; taskTitle: string; summary: string }
-  // Per-task isolation state (ADR-0013) — sent only for tasks that have one, so
-  // a shared-root plan's cards stay quiet (US34).
-  | { type: 'taskIsolation'; taskId: string; isolation: TaskIsolation }
-  // The end-of-run handoff: each repo's integration branch and base, and what
-  // landed, with the actions the host performs on request.
-  | { type: 'isolationHandoff'; repos: IsolationHandoff['repos']; landed: IsolationHandoff['landed']; deferredTo?: IsolationHandoff['deferredTo'] }
-  // What "Merge all" did: all-or-nothing per repo, or which repos one landed in
-  // before it stopped. A group of one reports its single merge as before.
-  | { type: 'isolationMergeResult'; result: IsolationMergeResult }
-  // The run's isolation is gone (discarded or the plan restarted); the handoff
-  // card and every conflict indicator clear.
-  | { type: 'isolationCleared' }
-  // Merge gates (ADR-0020): which tasks wait for Merge all, on which
-  // dependencies, and — while any does — what Merge all would merge now.
-  | { type: 'runMerge'; runMerge: RunMergeView | null; tasks: Record<string, string[]> }
   /**
    * A session was (re)loaded: the webview drops the previous session's plan,
    * task output, isolation and any stuck busy state. The conversation itself
