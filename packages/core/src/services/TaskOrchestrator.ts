@@ -340,6 +340,7 @@ export class TaskOrchestrator {
       this.store.markAwaitingUser(taskId, 'checkpoint');
       this.verifier.pauseIdle(taskId);
       this.emit('onTaskSettled', { taskId });
+      this.emit('onTaskChanged');
       this.emit('onCheckpoint', { taskId, taskTitle: task.title, summary });
     });
     this.verifier.onCheckpointWithdrawn((taskId) => {

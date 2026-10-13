@@ -75,6 +75,29 @@ async function expectSavedBeforeAnnounced(env: ReturnType<typeof setup>, control
 }
 
 describe('every user control saves before it announces', () => {
+  it('announces a checkpoint status with its question after saving the waiting task', async () => {
+    const env = setup([task('t1', 1)]);
+    await env.session.executePlan();
+    env.seen.length = 0;
+    env.messages.length = 0;
+
+    const answered = env.runnerSession('t1').callCheckpoint('Shall I proceed?');
+
+    expect(env.messages).toContainEqual(expect.objectContaining({
+      type: 'status_update',
+      tasks: [expect.objectContaining({
+        id: 't1', status: 'awaiting_user', awaitingReason: 'checkpoint', checkpoint: 'Shall I proceed?',
+      })],
+    }));
+    expect(env.seen).toEqual([
+      { kind: 'save', statuses: 't1:awaiting_user' },
+      { kind: 'status', statuses: 't1:awaiting_user' },
+    ]);
+    env.session.approveCheckpoint('t1');
+    await expect(answered).resolves.toEqual({ kind: 'continue' });
+    env.session.destroy();
+  });
+
   it('retry', async () => {
     const env = setup([task('t1', 1)]);
     await env.session.executePlan();
