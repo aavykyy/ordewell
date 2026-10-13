@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeWorktreeIsolation } from '../../testing';
 import type { SupervisorLevel } from '../../models/Execution';
 import type { SessionMessage } from '../SessionMessage';
+import { EMPTY_RUN, reduceRun } from '../runView';
 import { ctx, NOW, prose, settled, supervised, task, until, type Env } from './supervisorTestKit';
 
 /**
@@ -124,5 +125,44 @@ describe.each(['watch', 'off'] as const)('the end-of-run handoff with the superv
     }
 
     expect(handoffs(env)).toEqual([expect.not.objectContaining({ deferredTo: expect.anything() })]);
+  });
+});
+
+describe('the run snapshot\'s handoff is the one the live messages built', () => {
+  const live = (env: Env) => env.messages.reduce(reduceRun, EMPTY_RUN).handoff;
+
+  it('marked as the supervisor\'s while an Act supervisor has it, unmarked once it hands it over', async () => {
+    const env = await finished('act');
+    expect(env.session.runSnapshot().handoff).toEqual(live(env));
+    expect(live(env)).toMatchObject({ deferredTo: 'supervisor' });
+
+    await until(() => env.planner.calls.length === 1);
+    env.planner.calls[0].finish(prose('The run is yours to merge.'));
+    await settled();
+
+    expect(env.session.runSnapshot().handoff).toEqual(live(env));
+    expect(live(env)).not.toHaveProperty('deferredTo');
+  });
+
+  it('handed over again to a surface that joins after the session is reloaded', async () => {
+    const env = await finished('off');
+    await settled();
+
+    env.session.loadPlan(structuredClone(env.session.planState!), 'build it', '/repo');
+
+    expect(env.session.runSnapshot().handoff).toEqual(live(env));
+    expect(live(env)?.landed).toEqual([expect.objectContaining({ taskId: 't1' })]);
+  });
+
+  it('none after a stop, which hands nothing over', async () => {
+    const env = await supervised([task('t1', 1), task('t2', 2)], { settings: { supervisorLevel: 'off' }, isolation: new FakeWorktreeIsolation(), config: { worktreeIsolation: true } });
+    env.run.of('t1').reportComplete({ status: 'done', summary: '' });
+    await until(() => env.session.isolationView()?.handoff.landed.length === 1);
+
+    env.session.stopExecution();
+    await settled();
+
+    expect(live(env)).toBeNull();
+    expect(env.session.runSnapshot().handoff).toBeNull();
   });
 });

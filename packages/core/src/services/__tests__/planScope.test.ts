@@ -53,4 +53,29 @@ describe('the plan scope ends', () => {
     expect(runner.stopAll).toHaveBeenCalled();
     expect(session.isExecuting).toBe(false);
   });
+
+  it('when another plan is adopted after a failure halted the run, nothing of that run carries over', async () => {
+    const runner = {
+      spawn: vi.fn(async ({ taskId }: Parameters<IRunner['spawn']>[0]) => new FakeRunnerSession(`s-${taskId}`, taskId)),
+      stop: vi.fn(),
+      stopAll: vi.fn(),
+      activeCount: 0,
+    } satisfies IRunner;
+    const broadcast = vi.fn();
+    const session = makeSession({ runner, broadcast });
+    session.loadPlan({ ...savedPlan([createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' })]), status: 'approved' }, 'first goal', '/repo');
+    await session.executePlan();
+    await vi.waitFor(() => expect(runner.spawn).toHaveBeenCalled());
+    (await runner.spawn.mock.results[0].value).reportComplete({ status: 'failed', summary: '', reason: 'broke' });
+    await vi.waitFor(() => expect(session.isExecuting).toBe(false));
+
+    session.loadPlan({ ...savedPlan(), status: 'approved' }, 'other goal', '/repo', { sessionId: 'other' });
+    broadcast.mockClear();
+    runner.spawn.mockClear();
+    await session.retryTask('o1');
+
+    expect(broadcast.mock.calls.map(([m]) => m.type)).not.toContain('review_needed');
+    expect(runner.spawn).not.toHaveBeenCalled();
+    expect(session.status).toBe('approved');
+  });
 });

@@ -67,6 +67,8 @@ interface Running {
   release: () => void;
   /** The inputs it took, which stay on the plan until it ends. */
   ids: ReadonlySet<string>;
+  /** A force send stopped it. */
+  forceStopped?: true;
 }
 
 /** One planner message for a batch: the inputs in the order they came, each with the skills it loaded. */
@@ -95,8 +97,10 @@ export function turnPrompt(batch: readonly PendingPlanTurn[]): TurnPrompt {
  * in the save that lands their turn's outcome; a turn that ends without one
  * drops the user's then. A wake-up batch is only delivered by a turn that
  * lands with it, so it stays through a failed one — unless the user stopped
- * the turn, which was their answer to it. A reload therefore replays exactly
- * what no turn answered.
+ * the turn, which was their answer to it. A force send is not an answer to
+ * it (ADR-0023, F5): a turn it stopped keeps its wake-ups waiting, undelivered,
+ * for the supervisor's next turn. A reload therefore replays exactly what no
+ * turn answered.
  */
 export class PlanTurns {
   private readonly waiters = new Map<string, Waiter>();
@@ -134,6 +138,7 @@ export class PlanTurns {
   forceSend(input: PlanTurnInput): Promise<LegacyPlanState> {
     if (!this.running && !this.host.conversationBusy()) return this.enqueue(input);
     const settled = this.admit(input, true);
+    if (this.running) this.running.forceStopped = true;
     this.host.interrupt();
     return settled;
   }
@@ -226,13 +231,17 @@ export class PlanTurns {
     clearTimeout(timeout);
     // Abandoned: the hold is gone and every waiter has heard.
     if (this.running !== running) return;
+    const forceStopped = !outcome.ok && running.forceStopped === true;
     try {
       // A turn that landed nothing still had its say; the user's inputs go
-      // with it. A failure leaves the wake-ups undelivered.
-      const dropped = outcome.ok || isInterruption(outcome.err)
+      // with it. A failure, or a force send, leaves the wake-ups undelivered.
+      const dropped = outcome.ok || (isInterruption(outcome.err) && !forceStopped)
         ? ids
         : new Set(batch.filter((t) => t.source === 'user').map((t) => t.id));
-      if (this.take(plan, dropped)) this.host.persist();
+      const took = this.take(plan, dropped);
+      // Its wake-ups wait behind the forced inputs, each of which takes a turn alone first.
+      if (forceStopped) plan.pendingTurns = [...(plan.pendingTurns ?? []).filter((t) => t.forced), ...(plan.pendingTurns ?? []).filter((t) => !t.forced)];
+      if (took || forceStopped) this.host.persist();
       running.release();
       await this.host.resumeStarts();
     } catch (err) {
@@ -241,7 +250,10 @@ export class PlanTurns {
       running.release();
       this.running = null;
       const ended = outcome;
+      const waiting = new Set((plan.pendingTurns ?? []).map((t) => t.id));
       for (const t of batch) {
+        // Kept wake-ups are heard of from the turn that delivers them: the supervisor counts on it.
+        if (forceStopped && waiting.has(t.id)) continue;
         const delivered = this.settle(t.id, (w) => (ended.ok ? w.resolve(ended.plan) : w.reject(ended.err)));
         if (!delivered && !ended.ok && !isInterruption(ended.err) && t.source === 'user') this.host.notice(replayFailed(t, ended.err));
       }

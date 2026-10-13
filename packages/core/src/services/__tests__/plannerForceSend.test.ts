@@ -43,6 +43,22 @@ describe('planner force send', () => {
     expect(forcedStart).toMatchObject({ type: 'planner_turn_started', prompt: 'use Postgres instead', forced: true });
   });
 
+  it('keeps the run update of a wake-up turn it stops: the supervisor reads it in the turn after the forced one', async () => {
+    const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'watch' } });
+    env.run.of('t1').reportComplete({ status: 'done', summary: '' });
+    await until(() => env.planner.calls.length === 1);
+    expect(env.planner.calls[0].message).toContain('the run finished');
+
+    const forced = env.session.forceSendPrompt('add a README task');
+    await until(() => env.planner.calls.length === 2);
+    expect(env.planner.calls[1].message).not.toContain('the run finished');
+    env.planner.calls[1].finish(prose('Added.'));
+    await forced;
+
+    await until(() => env.planner.calls.length === 3);
+    expect(env.planner.calls[2].message).toContain('Run update:\n- the run finished');
+  });
+
   it('is a plain send when no turn is in flight', async () => {
     const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'off' } });
 

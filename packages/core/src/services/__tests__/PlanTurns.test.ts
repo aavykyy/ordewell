@@ -345,6 +345,29 @@ describe('PlanTurns: wake-ups (ADR-0029)', () => {
     expect(current.plan!.pendingTurns).toEqual([]);
   });
 
+  it('keeps the wake-ups of a turn a force send stopped, for the supervisor\'s next turn: the user did not answer them', async () => {
+    const { host, turns, current } = fakeHost();
+    const runner = new PlanTurns(host);
+    let delivered = false;
+    const woke = runner.enqueue(wakeUp()).then(() => { delivered = true; });
+
+    const forced = runner.forceSend({ source: 'user', text: 'use Postgres' });
+    turns[0].fail(new PlannerTurnStoppedError());
+    await flushMicrotasks();
+
+    expect(current.plan!.pendingTurns!.map((t) => t.text)).toEqual(['use Postgres', 'Run update:\n- task #1 failed']);
+    expect(turns[1].prompt).toMatchObject({ text: 'use Postgres', wakeUps: [], forced: true });
+    turns[1].land();
+    await forced;
+    await flushMicrotasks();
+    expect(delivered).toBe(false);
+
+    expect(turns[2].prompt).toMatchObject({ source: 'supervisor', wakeUps: ['Run update:\n- task #1 failed'] });
+    turns[2].land();
+    await woke;
+    expect(current.plan!.pendingTurns).toEqual([]);
+  });
+
   it('takes a wake-up while another kind of turn holds the conversation, and delivers it when that turn ends', async () => {
     const { host, turns, current } = fakeHost();
     host.conversationBusy.mockReturnValue(true);

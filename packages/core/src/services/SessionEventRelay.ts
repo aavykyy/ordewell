@@ -36,9 +36,10 @@ export interface SessionEventRelayDeps {
  * also need persistence before announcement, so Session owns those two
  * observers. A wait on a usage limit, and a task gone idle, reach surfaces as
  * the task's status; `onUsageLimitWait` and `onTaskIdle` themselves are for
- * the supervisor to wake on.
+ * the supervisor to wake on. The end-of-run handoff is marked by supervision
+ * and remembered for a surface joining late, so Session announces it too.
  */
-export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onRunStarted' | 'onAutoMerge' | 'onUsageLimitWait' | 'onTaskIdle'>>;
+export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onRunStarted' | 'onAutoMerge' | 'onUsageLimitWait' | 'onTaskIdle' | 'onIsolationHandoff'>>;
 
 /** One subagent's activity seen during a turn: its log entry plus the steps it ran. */
 interface SubagentRun {
@@ -104,9 +105,6 @@ export class SessionEventRelay {
       },
       onIsolationNotice: ({ level, message }) => {
         this.onNotice?.({ type: 'notice', level, message });
-      },
-      onIsolationHandoff: (handoff) => {
-        this.broadcast({ type: 'isolation_handoff', ...handoff });
       },
       onExecutionComplete: () => this.executionComplete(plan()),
     };
