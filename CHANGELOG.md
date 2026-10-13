@@ -215,6 +215,13 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **Planners read line ranges without asking.** `sed -n '10,40p' FILE` and
+  the other line-number prints run like `head` and `tail`, so a planner on
+  Full is no longer denied the way models most often read part of a file.
+  Substitutions and regex addresses still ask. A denied command now says how
+  to rewrite it: the line reads that run freely, or, for a path after a `cd`
+  on a line with `;`, that only `&&` chains are followed
+  ([ADR-0008](docs/adr/0008-planner-exploration-envelope.md)).
 - **Codex plans on stock Ubuntu.** Where Codex's sandbox cannot start
   (Ubuntu 23.10 and later restrict the user namespaces it needs), a Codex
   planner no longer stops with an error asking for `sudo`. It plans with its

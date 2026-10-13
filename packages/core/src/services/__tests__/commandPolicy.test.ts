@@ -722,7 +722,7 @@ describe('flags on permitted binaries are an allowlist, not an afterthought', ()
   // developer is being asked about, and refusing its flags would take work away
   // that the approval exists to authorise.
   it('leaves the flags of a prompted binary to the approval', () => {
-    expect(classifyCommand("sed -n '1,40p' file.ts").tier).toBe('ask');
+    expect(classifyCommand("sed -n 's/a/b/p' file.ts").tier).toBe('ask');
     expect(classifyCommand('curl -sI --max-time 5 https://example.com').tier).toBe('ask');
   });
 
@@ -1630,5 +1630,56 @@ describe('curl and wget refusal notes', () => {
     const result = classifyCommand(`curl --frobnicate ${url}`);
     expect(result.tier).toBe('refuse');
     expect(result.reason).toContain('web fetch tool');
+  });
+});
+
+/**
+ * Printing lines by number is the read `head` and `tail` already make, and it
+ * is how models most often read part of a file. On the prompt tier every one
+ * was denied under Full.
+ */
+describe('sed that only prints lines by number runs without asking', () => {
+  it.each([
+    "sed -n '1,80p' AGENTS.md",
+    'sed -n 1,80p AGENTS.md',
+    "sed -ne '10,20p' f",
+    "sed -n -e 5p -e '$p' f",
+    "sed -n '5,+3p;$p' f",
+    "sed '100q' f",
+    'gsed -n 1p f',
+    'wc -l a b && sed -n 1,80p a',
+    'cat f | sed -n 1,5p',
+  ])('%s is auto', (cmd) => {
+    expect(classifyCommand(cmd, { autonomous: true }).tier).toBe('auto');
+  });
+
+  // GNU permutes arguments and BSD reads the first operand as the script, so
+  // an option after an operand is read the way the general parser reads it.
+  it.each([
+    "sed -n 's/a/b/p' f",
+    "sed -n '/x/p' f",
+    "sed -n '1{p}' f",
+    'sed -n 1p f -e 2p',
+    'sed 1p -n f',
+    './sed -n 1p f',
+  ])('%s still asks', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('ask');
+  });
+
+  it.each([
+    "sed -n '1e rm x' f",
+    "sed -n '1w out' f",
+    'sed -i 1p f',
+    'sed -n -f script f',
+    'sed -n "$p" f',
+    'FOO=1 sed -n 1p f',
+    'xargs sed -n 1p < list',
+  ])('%s is still refused', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  it('leaves its files to path confinement', () => {
+    expect(pathLikeArgs("sed -n '1,5p' ../../etc/passwd")).toEqual(['../../etc/passwd']);
+    expect(pathLikeArgs('sed -ne1p /etc/shadow')).toEqual(['/etc/shadow']);
   });
 });
