@@ -242,7 +242,8 @@ export async function handlePlan(
 
   const stream = api.streamPlanning(sessionId, (event) => {
     renderStep(event);
-    void handleApproval(event);
+    // A run snapshot is not a planner message; this stream ignores it.
+    if (event.type !== 'run_snapshot') void handleApproval(event);
   });
 
   try {

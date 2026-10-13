@@ -443,9 +443,9 @@ describe('continuing a finished task (ADR-0018, K1)', () => {
 
   it('keeps the continuable flag in step with the daemon\'s status', () => {
     const base = initialState({ sessionId: 's1', tasks: [task({ status: 'completed' })] });
-    const on = reduce(base, { type: 'tasksStatus', sessionId: 's1', updates: { t1: { status: 'completed', continuable: true } } }).state;
+    const on = reduce(base, { type: 'statusUpdate', sessionId: 's1', tasks: [{ id: 't1', status: 'completed', verdict: null, continuable: true }] }).state;
     expect(on.tasks[0].continuable).toBe(true);
-    const off = reduce(on, { type: 'tasksStatus', sessionId: 's1', updates: { t1: { status: 'in_progress' } } }).state;
+    const off = reduce(on, { type: 'statusUpdate', sessionId: 's1', tasks: [{ id: 't1', status: 'in_progress', verdict: null }] }).state;
     expect(off.tasks[0].continuable).toBe(false);
   });
 });

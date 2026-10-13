@@ -424,9 +424,8 @@ describe('execution', () => {
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
     expect(h.actions).toContainEqual({
-      type: 'tasksStatus',
-      runMerge: null,
-      updates: { a: { status: 'in_progress', idleSince: null } },
+      type: 'statusUpdate',
+      tasks: [{ id: 'a', status: 'in_progress' }],
       sessionId: 's1',
     });
   });
@@ -459,9 +458,11 @@ describe('execution', () => {
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
     expect(h.actions).toContainEqual({
-      type: 'tasksStatus',
-      runMerge: null,
-      updates: { a: { status: 'completed', idleSince: null }, b: { status: 'running', idleSince: null } },
+      type: 'statusUpdate',
+      tasks: [
+        { id: 'a', status: 'completed', verdict: null },
+        { id: 'b', status: 'running', verdict: null },
+      ],
       sessionId: 's1',
     });
   });
@@ -793,9 +794,8 @@ describe('task control', () => {
 
     expect(order).toEqual(['streamExecution', 'taskControl']);
     expect(h.actions).toContainEqual({
-      type: 'tasksStatus',
-      runMerge: null,
-      updates: { t1: { status: 'in_progress', idleSince: null } },
+      type: 'statusUpdate',
+      tasks: [{ id: 't1', status: 'in_progress' }],
       sessionId: 's1',
     });
   });
@@ -1692,7 +1692,7 @@ describe('worktree isolation', () => {
 
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    expect(h.actions).toContainEqual({ type: 'tasksStatus', sessionId: 's1', runMerge: null, updates: { b: { status: 'awaiting_user', idleSince: null, isolation } } });
+    expect(h.actions).toContainEqual({ type: 'statusUpdate', sessionId: 's1', tasks: [{ id: 'b', status: 'awaiting_user', verdict: null, isolation }] });
   });
 
   it('carries mid-run landings without a gate from status updates and clears them after merging', async () => {
@@ -1705,9 +1705,9 @@ describe('worktree isolation', () => {
 
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    expect(h.actions.filter((a) => a.type === 'tasksStatus')).toEqual([
-      { type: 'tasksStatus', sessionId: 's1', updates: {}, runMerge: { waitingAtGate: false, paused: false, handoff: { repos, landed } } },
-      { type: 'tasksStatus', sessionId: 's1', updates: {}, runMerge: null },
+    expect(h.actions.filter((a) => a.type === 'statusUpdate')).toEqual([
+      { type: 'statusUpdate', sessionId: 's1', tasks: [], runMerge: { waitingAtGate: false, paused: false, repos, landed } },
+      { type: 'statusUpdate', sessionId: 's1', tasks: [] },
     ]);
   });
 
@@ -1735,7 +1735,7 @@ describe('worktree isolation', () => {
     emit({ type: 'isolation_blocked', reason: 'dirty', message: 'Tracked files have uncommitted changes' });
     emit({ type: 'status_update', tasks: [{ id: 'ops1', status: 'in_progress', verdict: null }] });
 
-    expect(types(h.actions)).toEqual(expect.arrayContaining(['isolationBlocked', 'tasksStatus']));
+    expect(types(h.actions)).toEqual(expect.arrayContaining(['isolationBlocked', 'statusUpdate']));
     end();
     await run;
   });

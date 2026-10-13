@@ -38,7 +38,7 @@ describe('planUpdated', () => {
     const s = send(initialState(), {
       type: 'planUpdated',
       plan: {
-        tasks: [],
+        phase: 'executing',
         executionLog: [{ id: 'a', order: 1, title: 'Done already', type: 'ai', status: 'completed', dependencies: [] }],
         pendingTasks: [{ id: 'b', order: 2, title: 'Still to do', type: 'ai', status: 'pending', dependencies: ['a'] }],
       },
@@ -51,6 +51,7 @@ describe('planUpdated', () => {
     const s = send(initialState(), {
       type: 'planUpdated',
       plan: {
+        phase: 'executing',
         executionLog: [{ id: 'c', order: 3, title: 'Third', status: 'completed' }],
         pendingTasks: [{ id: 'a', order: 1, title: 'First' }, { id: 'b', order: 2, title: 'Second' }],
       },
@@ -62,6 +63,7 @@ describe('planUpdated', () => {
     const s = send(initialState(), {
       type: 'planUpdated',
       plan: {
+        phase: 'executing',
         executionLog: [{ id: 'a', order: 1, title: 'Done', status: 'completed' }],
         pendingTasks: [{ id: 'a', order: 1, title: 'Done', status: 'pending' }],
       },
@@ -160,13 +162,13 @@ describe('execution', () => {
   };
 
   it('updates one task in place', () => {
-    const s = send(initialState(withTasks), { type: 'taskStatus', taskId: 'b', status: 'running' });
-    expect(s.tasks.map((t) => t.status)).toEqual(['pending', 'running']);
+    const s = send(initialState(withTasks), { type: 'statusUpdate', tasks: [{ id: 'b', status: 'in_progress', verdict: null }] });
+    expect(s.tasks.map((t) => t.status)).toEqual(['pending', 'in_progress']);
     expect(s.status).toBe('executing');
   });
 
   it('ignores a status for a task that is not in the plan', () => {
-    const s = send(initialState(withTasks), { type: 'taskStatus', taskId: 'zz', status: 'running' });
+    const s = send(initialState(withTasks), { type: 'statusUpdate', tasks: [{ id: 'zz', status: 'in_progress', verdict: null }] });
     expect(s.tasks.map((t) => t.status)).toEqual(['pending', 'pending']);
   });
 
@@ -220,33 +222,32 @@ describe('execution', () => {
 
   it('returns to idle on a status snapshot with nothing running', () => {
     const s = send(initialState(running), {
-      type: 'tasksStatus',
-      updates: { a: { status: 'completed' }, b: { status: 'pending' } },
+      type: 'statusUpdate',
+      tasks: [{ id: 'a', status: 'completed', verdict: null }, { id: 'b', status: 'pending', verdict: null }],
     });
     expect(s.status).toBe('idle');
   });
 
   it('returns to idle when a single task update leaves none running', () => {
     const s = send(initialState({ ...running, tasks: [withTasks.tasks![0], withTasks.tasks![1]] }), {
-      type: 'taskStatus',
-      taskId: 'a',
-      status: 'pending',
+      type: 'statusUpdate',
+      tasks: [{ id: 'a', status: 'pending', verdict: null }],
     });
     expect(s.status).toBe('idle');
   });
 
   it('still says executing while some task is running', () => {
     const s = send(initialState({ ...withTasks, status: 'idle' }), {
-      type: 'tasksStatus',
-      updates: { a: { status: 'completed' }, b: { status: 'in_progress' } },
+      type: 'statusUpdate',
+      tasks: [{ id: 'a', status: 'completed', verdict: null }, { id: 'b', status: 'in_progress', verdict: null }],
     });
     expect(s.status).toBe('executing');
   });
 
   it('does not let a run status clobber a planner turn in flight', () => {
     const s = send(initialState({ ...withTasks, status: 'researching' }), {
-      type: 'tasksStatus',
-      updates: { a: { status: 'pending' }, b: { status: 'pending' } },
+      type: 'statusUpdate',
+      tasks: [{ id: 'a', status: 'pending', verdict: null }, { id: 'b', status: 'pending', verdict: null }],
     });
     expect(s.status).toBe('researching');
   });

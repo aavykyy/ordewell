@@ -1,4 +1,4 @@
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type SupervisorLevel, type TaskLogEvent, type TaskLogView, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type RunTask, type RunView, type SupervisorLevel, type TaskLogEvent, type TaskLogView, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 import type { SaveSettingsEffect } from './reducers/settings';
 import type { StepperState } from './reducers/stepper';
@@ -357,6 +357,14 @@ export interface TuiState {
   busyLabel: string;
   sessionId: string | null;
   goal: string;
+  /**
+   * The run as core folds it (ADR-0017): every `SessionMessage` that changes a
+   * task, the handoff or a merge goes through `reduceRun`, and `tasks`,
+   * `handoff`, `runMerge` and the run settings below are derived from it. A
+   * plan refresh therefore keeps every status-only field the stream reported.
+   */
+  run: RunView;
+  /** Derived from `run`; the pane's own shape for a run task. */
   tasks: TaskView[];
   planApproved: boolean;
   focus: Focus;
@@ -561,6 +569,29 @@ export function findTask(tasks: TaskView[], id: string): TaskView | undefined {
   return undefined;
 }
 
+/** A task list as run-view tasks: every level carries a `subtasks` array, which `reduceRun` walks. */
+function asRunTasks(tasks: TaskView[]): RunTask[] {
+  return tasks.map((task) => ({ ...task, subtasks: asRunTasks(task.subtasks ?? []) } as unknown as RunTask));
+}
+
+/**
+ * The run view a caller seeds the pane with: its own when it hands one, else
+ * one built from the run-shaped fields it did hand (`tasks`, `handoff`,
+ * `runMerge`). Keeping the two in step is what lets a caller that seeds tasks
+ * directly still fold later messages through `reduceRun`.
+ */
+function seedRun(overrides: Partial<TuiState>): RunView {
+  if (overrides.run) return overrides.run;
+  return {
+    ...EMPTY_RUN,
+    tasks: asRunTasks(overrides.tasks ?? []),
+    handoff: overrides.handoff ?? null,
+    runMerge: overrides.runMerge
+      ? { waitingAtGate: overrides.runMerge.waitingAtGate, paused: overrides.runMerge.paused, repos: overrides.runMerge.handoff.repos, landed: overrides.runMerge.handoff.landed }
+      : null,
+  };
+}
+
 export function initialState(overrides: Partial<TuiState> = {}): TuiState {
   return {
     editor: emptyEditor(),
@@ -616,5 +647,6 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     exiting: false,
     spinnerFrame: 0,
     ...overrides,
+    run: seedRun(overrides),
   };
 }

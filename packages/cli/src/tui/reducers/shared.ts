@@ -1,25 +1,10 @@
-import type { AiProvider, ApprovalDecision, AwaitingReason, PlannerUsage, ResearchLogEntry, SerializedConversationMessage, SerializedPendingTurn, SessionMessage, SettingsResponse, GlobalRunSettings, TaskLogEvent } from '@ordewell/core';
+import type { AiProvider, ApprovalDecision, PlanUsage, PlannerUsage, ResearchLogEntry, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, TaskLogEvent } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
-  RunMergeView, HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
-  TaskIsolationView, TuiState,
+  HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
+  TuiState,
 } from '../state';
 import { say } from '../transcript';
-
-/** One task's entry in a daemon `status_update`, as the TUI keeps it. */
-export interface TaskStatusUpdate {
-  attemptUsage?: import('@ordewell/core').AttemptUsage[];
-  status: string;
-  idleSince?: string | null;
-  isolation?: TaskIsolationView;
-  awaitingReason?: AwaitingReason;
-  resumeAt?: string;
-  checkpoint?: string;
-  continuable?: boolean;
-  awaitingApproval?: number;
-  mergeGate?: string[];
-  forcedPastGate?: string[];
-}
 
 /** Side effects the runtime performs; the reducer itself stays pure. */
 export type Effect =
@@ -118,11 +103,13 @@ export type Action =
   | { type: 'taskLogLoaded'; taskId: string; attempts?: number[]; attempt: number; events: TaskLogEvent[]; sessionId?: string }
   /** Open a task's saved log in the chat pane. */
   | { type: 'taskViewRequested'; taskId: string; sessionId: string }
-  | { type: 'taskStarted'; taskId: string; title: string; runner?: string; sessionId?: string }
+  | { type: 'taskStarted'; taskId: string; order?: number; title: string; runner?: string; sessionId?: string }
   /** A task asked a checkpoint question; the chat pane says so, and where to answer. */
   | { type: 'taskCheckpoint'; taskId: string; title: string; summary: string; sessionId?: string }
-  | { type: 'taskStatus'; taskId: string; status: string; sessionId?: string }
-  | { type: 'tasksStatus'; updates: Record<string, TaskStatusUpdate>; runMerge?: RunMergeView | null; sessionId?: string }
+  /** The run's status stream: folded through core's `reduceRun`, status-only fields and all. */
+  | { type: 'statusUpdate'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage; sessionId?: string }
+  /** The run as the daemon sends it when a socket connects, before the next update. */
+  | { type: 'runSnapshot'; view: RunView; sessionId?: string }
   | { type: 'isolationBlocked'; message: string; repos?: string[]; sessionId?: string }
   | { type: 'isolationHandoff'; handoff: HandoffView; sessionId?: string }
   | { type: 'handoffDiff'; diff: string; sessionId?: string }
