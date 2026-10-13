@@ -20,6 +20,18 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   it cannot allow one. Effects still happen only in tasks: the planner still
   edits no file and runs nothing outside its envelope
   ([ADR-0029](docs/adr/0029-the-supervisor.md)).
+- **A repository cannot poison Ordewell's TOML reader.** Ordewell reads a
+  repository's `.codex/config.toml` and other TOML before anything is approved;
+  a `__proto__`, `constructor` or `prototype` key is now refused, and the
+  tables it builds are prototype-free, so a key in the file can never reach an
+  inherited member.
+- **A repository's MCP server cannot wear Ordewell's name.** A project server
+  named `ordewell_x` had its tools pre-approved as Ordewell's, which are never
+  asked about. Ordewell now recognises its own tools by the exact tool or
+  server name, never a prefix, and an OpenCode project server whose name could
+  give one of its tools an Ordewell name is not offered to the planner at all
+  ([ADR-0022](docs/adr/0022-ordewell-mcp-server.md),
+  [ADR-0028](docs/adr/0028-planners-never-run-repository-config.md)).
 
 ### Added
 
@@ -99,6 +111,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   the time resumes at once. Without a time, after a cancel, or when the limit
   is hit again at once, the task waits for a manual retry
   ([ADR-0018](docs/adr/0018-structured-runner-transport.md)).
+- **Send now in the planner chat.** `ctrl-s` in the terminal UI, and *Send now*
+  in VS Code, interrupts the planner turn in flight and answers the message
+  alone in the turn that replaces it, ahead of every prompt already queued; the
+  run's tasks carry on untouched, and a queued prompt the planner already has
+  is marked handed over. A running or waiting task's VS Code card also carries
+  a message box with the same button (`Ctrl+Enter`).
 
 ### Changed
 
@@ -200,6 +218,29 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   docs or ops tasks. Set `disable-model-invocation: true` in your copy in
   `~/.ordewell/skills/tdd/` to opt out. The other built-ins stay user-only
   ([ADR-0024](docs/adr/0024-unified-skills.md)).
+- **Internals reorganized behind narrower modules.** The three runner adapters
+  share one permission ledger; a run's settings and supervision have one owner
+  (`RunSupervision`); a spawn-with-tools is one step over a per-conversation
+  planner session; a Session's plan scope tears down in one place and each
+  planner turn's deferred effects settle with it; a task reference resolves
+  through one module; and the planner's task intake is one path for
+  `submit_plan` and `edit_plan`. Dead planning code that only tests exercised
+  is gone. No behaviour change beyond the fixes below.
+- **The run view is decided once, in core.** The terminal UI and VS Code fold
+  the same core view of a run instead of each rebuilding it, so a surface that
+  joins a run already going receives its current state at once rather than
+  waiting for the next change, and a task row's state reads the same in both.
+- **Planner selection is decided in core.** `/planner`, `/model` and
+  `/planner-effort` in every surface go through one decision. Reselecting the
+  planner already in use changes nothing; choosing a model keeps the current
+  effort only where that model offers it and drops one it does not; clearing
+  the model clears its effort; and the terminal UI and CLI now save the effort
+  the daemon answers to.
+- **A subtask dependency reads by its dotted label** (`#2.1`) on a task row, in
+  the terminal UI and on the VS Code card, instead of by an order that only
+  meant something at the top level.
+- **A task's thinking effort shows on its row in the terminal UI** when the
+  terminal is wide enough, instead of only when the row is expanded.
 
 ### Removed
 
@@ -268,6 +309,56 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   Show less under its first line.
 - **The task row names the model that reported usage.** It shows the assigned
   model until the first usage report instead of "model unknown".
+- **A task's runner is never swapped for another.** A plan or edit that names a
+  runner the plan may not use is refused, instead of being silently moved to
+  the first allowed runner; the model allowlist now walks subtasks as well as
+  tasks and says what it changed
+  ([ADR-0003](docs/adr/0003-per-runner-model-allowlist.md)).
+- **A subtask can be edited on its own.** A direct edit to a subtask, by its
+  dotted label or its title, used to fail with "Task not found"; it now finds
+  its target at any depth and checks its dependencies among its siblings, and
+  the planner is shown subtasks under their dotted labels.
+- **A plan replaced mid-turn keeps the old turn's research out of the new
+  plan.** When another plan is adopted while a planner turn is in flight, that
+  turn's saved subagent steps no longer land in the adopted plan or its save,
+  and the old plan's run is stopped with it, so no agent of the old plan is
+  left running.
+- **Executing a plan whose tasks are all done announces the end once**, not
+  twice.
+- **A run the supervisor opened keeps its own settings**, instead of merging
+  against your global setting; and Execute pressed while a supervisor's Merge
+  all was waiting on git starts a run of its own rather than continuing the
+  supervisor's, so it does not inherit a lowered level or the guards' memory.
+- **An Ordewell-tool approval is logged as decided on Codex too.** Claude Code
+  and Codex now cancel a permission request still open when the turn ends
+  (Claude Code keeps it while background work that may have raised it runs),
+  and a Codex MCP call is forgotten once it completes, so an approval can no
+  longer take its tool from a finished call.
+- **A planner process a failed send killed takes its token with it**, a start
+  that lands after a reset or a newer conversation takes its own process and
+  token back, and a permission answer the runner cannot take no longer surfaces
+  as an unhandled rejection.
+- **A runner's last line is not lost.** A pipe that closes with a final line
+  that has no trailing newline — often the failure or the turn end — now
+  delivers it, a process that dies mid-turn reports its stderr instead of
+  hanging, and a failure inside a consumer fails the turn rather than escaping
+  as an uncaught host exception.
+- **Stopping a run goes before its runners are killed**, so a conflict repair
+  that fires as the old session is killed cannot land work the stop just
+  cancelled; a second Mark complete no longer lands and announces the task
+  again; and changing the run settings under an open run merges an
+  already-reached gate now.
+- **A planner's response survives any character.** A reply whose bytes are
+  split across two reads is decoded once, so a multi-byte character is no
+  longer turned into `�`.
+- **Emoji and combining characters edit as one unit in the terminal UI.** The
+  composer's cursor, backspace, delete, selection and line truncation move by
+  grapheme, so `⚠️`, a family emoji and an accented `é` are no longer split.
+- **Deleting a live session works.** The session is stopped before its file is
+  removed, so a running session can no longer write itself back and reappear in
+  the list.
+- **A webview message that fails says so.** A handler error used to be dropped
+  as an unhandled rejection; VS Code now logs it and shows the message.
 
 ## [0.9.1] — 2026-10-11
 
