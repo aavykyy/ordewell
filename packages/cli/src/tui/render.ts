@@ -30,7 +30,6 @@ export function render(state: TuiState): string[] {
     : renderBody(state, rowsForBody, cols);
 
   const lines = [
-    renderAutonomy(state, cols),
     ...body,
     renderStatus(state, cols),
     ...renderInput(state),
@@ -186,26 +185,28 @@ function fit(lines: string[], rows: number, anchor: 'top' | 'bottom'): string[] 
 
 // ── Chrome ───────────────────────────────────────────────────────────────────
 
-function renderAutonomy(state: TuiState, cols: number): string {
-  const auto = state.autonomous ? style.yellow('● Full') : style.green('● Guarded');
-  return truncate(`${auto}${style.grey(' · ')}${runSettingsBadge(state)}`, cols);
-}
-
 /**
- * The run settings (ADR-0030), always shown, since a global setting that
- * applies at once is the kind that is forgotten while it is on. During a run,
- * the run's own level where a guard, a failure or another session left it
+ * Autonomy and the run settings (ADR-0030), shown at all times, since a global
+ * setting that applies at once is the kind that is forgotten while it is on —
+ * except on the bare welcome, whose Setup block already lists them. During a
+ * run, the run's own level where a guard, a failure or another session left it
  * different from the setting.
  */
+function settingsBadge(state: TuiState): string {
+  if (!state.taskView && state.tasks.length === 0 && state.conversation.blocks.length === 0) return '';
+  const auto = state.autonomous ? style.yellow('● Full') : style.green('● Guarded');
+  return `${auto}${style.grey(' · ')}${runSettingsBadge(state)}`;
+}
+
 function runSettingsBadge(state: TuiState): string {
   const { supervisorLevel, mergeAtGatesAutomatically, autorun } = state.runSettings;
-  const paint = (text: string, warn: boolean) => (warn ? style.yellow(text) : text);
+  const paint = (text: string, warn: boolean) => (warn ? style.yellow(text) : style.grey(text));
   const run = state.status === 'executing' ? state.runSupervisor : null;
   const actual = run?.unsupervised ? 'unsupervised' : run && run.level !== supervisorLevel ? SUPERVISOR_LEVEL_LABEL[run.level] : null;
   const level = `supervisor ${SUPERVISOR_LEVEL_LABEL[supervisorLevel]}${actual ? ` → ${actual}` : ''}`;
   return [
     paint(level, supervisorLevel === 'act'),
-    ...(mergeAtGatesAutomatically ? ['auto-merge'] : []),
+    ...(mergeAtGatesAutomatically ? [style.grey('auto-merge')] : []),
     ...(autorun ? [style.yellow('autorun')] : []),
   ].join(style.grey(' · '));
 }
@@ -221,7 +222,16 @@ function scrolledBackMark(state: TuiState): string {
   return state.focus !== 'plan' && state.scroll > 0 ? '↑ scrolled back · pgdn for live' : '';
 }
 
+/** The status on the left, the settings badge on the right while both fit; the status wins the row when not. */
 function renderStatus(state: TuiState, cols: number): string {
+  const left = statusText(state, cols);
+  const badge = settingsBadge(state);
+  if (!badge) return left;
+  const gap = cols - width(left) - width(badge);
+  return gap >= 2 ? `${left}${' '.repeat(gap)}${badge}` : left;
+}
+
+function statusText(state: TuiState, cols: number): string {
   const mark = scrolledBackMark(state);
   // A standing stop-arm outranks the busy label: with the arm up, the next key
   // decides the turn and that is what the row must say, in red, hard left.
@@ -236,7 +246,7 @@ function renderStatus(state: TuiState, cols: number): string {
   const verb = state.status === 'executing' ? 'Executing'
     : state.status === 'researching' ? 'Researching'
     : 'Planning';
-  return truncate(scrolled + style.yellow(`● ${verb}…${label}`), cols);
+  return truncate(`${scrolled}${style.brand('●')} ${verb}…${style.grey(label)}`, cols);
 }
 
 /**
@@ -281,7 +291,7 @@ function paintSpans(text: string, base: number, spans: Array<{ start: number; en
     const localStart = Math.max(cursor, Math.min(text.length, span.start - base));
     const localEnd = Math.max(0, Math.min(text.length, span.end - base));
     if (localEnd <= localStart) continue;
-    out += text.slice(cursor, localStart) + style.cyan(text.slice(localStart, localEnd));
+    out += text.slice(cursor, localStart) + style.brand(text.slice(localStart, localEnd));
     cursor = localEnd;
   }
   return out + text.slice(cursor);
@@ -302,7 +312,7 @@ function renderInput(state: TuiState): string[] {
 function composerLines(state: TuiState): string[] {
   const prompt = state.taskView
     ? style.accent(`${chatPromptLabel(state)} `)
-    : state.focus === 'plan' ? style.bandGrey('❯ ') : style.cyan('❯ ');
+    : state.focus === 'plan' ? style.bandGrey('❯ ') : style.brand('❯ ');
   // The driver hides the hardware cursor, so the frame marks the caret itself —
   // but only while keystrokes actually go to the editor.
   const lines = chatInputWrap(state);
@@ -352,8 +362,17 @@ function suggest(state: TuiState, room: number): string {
   return style.bandGrey(`  ${truncate(names, Math.max(0, room - 2))}`);
 }
 
+/**
+ * Packed on plain text, painted after: each hint's key in the default colour,
+ * what it does in grey, the way an overlay's `keyHints` reads.
+ */
 function renderFooter(state: TuiState, cols: number): string[] {
-  return packHints(footerHints(state), cols).map((line) => truncate(style.grey(line), cols));
+  const paint = (hint: string): string => {
+    const gap = hint.indexOf(' ');
+    return gap < 0 ? hint : `${hint.slice(0, gap)}${style.grey(hint.slice(gap))}`;
+  };
+  return packHints(footerHints(state), cols)
+    .map((line) => truncate(line.split(' · ').map(paint).join(style.grey(' · ')), cols));
 }
 
 // ── Body ─────────────────────────────────────────────────────────────────────
@@ -477,7 +496,7 @@ function renderOverlay(state: TuiState, rows: number, cols: number): string[] {
     const shown = secret ? '•'.repeat(overlay.value.length) : overlay.value;
     return frame(
       overlay.title,
-      [overlay.hint ? style.grey(overlay.hint) : '', '', `${style.cyan('❯')} ${shown}`, '', style.grey('enter confirms · esc cancels')],
+      [overlay.hint ? style.grey(overlay.hint) : '', '', `${style.brand('❯')} ${shown}`, '', style.grey('enter confirms · esc cancels')],
       rows,
       cols,
     );
@@ -516,7 +535,7 @@ function renderHandoff(
     });
   const actions = handoffActions(handoff).map((action, index) => {
     const active = index === overlay.index;
-    const caret = active ? style.cyan('❯') : ' ';
+    const caret = active ? style.brand('❯') : ' ';
     return `${caret} ${active ? style.bold(action.label) : action.label}${style.grey(` — ${action.hint}`)}`;
   });
   // A group answers per repo first: Merge all is one step over all of them, so
@@ -527,7 +546,7 @@ function renderHandoff(
   return frame(
     'Run handoff',
     [
-      `Branch  ${style.cyan(handoffBranch(handoff))}`,
+      `Branch  ${style.brand(handoffBranch(handoff))}`,
       style.grey(`Forked from ${handoffBase(handoff, 12)}`),
       '',
       ...perRepo,
@@ -589,7 +608,7 @@ function renderStepper(stepper: StepperState, rows: number, cols: number): strin
   const cancel = ['esc', 'closes'] as const;
   const switchStep = trail.length > 1 ? [['←/→', 'switch step'] as const] : [];
   if (active.number) {
-    const input = `${style.cyan('❯')} ${stepper.entry?.text ?? ''}${style.grey('▏')}`;
+    const input = `${style.brand('❯')} ${stepper.entry?.text ?? ''}${style.grey('▏')}`;
     const footer = keyHints([enter, ['↑/↓', 'change'], ...switchStep, cancel]);
     return frame(definition.title, [...top, '', input, style.grey(`At least ${active.number.min}.`), '', footer], rows, cols);
   }
@@ -711,7 +730,7 @@ const QUOTE_MAX_LINES = 8;
 function renderConfirm(overlay: Extract<Overlay, { kind: 'confirm' }>, rows: number, cols: number): string[] {
   const { choice, quote, note } = overlay;
   const inner = Math.max(1, cols - 3);
-  const options = (choice?.options ?? []).map((o, i) => `${i === choice?.index ? style.cyan('❯') : ' '} ${i + 1}. ${o.label}`);
+  const options = (choice?.options ?? []).map((o, i) => `${i === choice?.index ? style.brand('❯') : ' '} ${i + 1}. ${o.label}`);
   const hint = choice
     ? style.grey(`↑↓ move · enter or 1–${choice.options.length} chooses · esc cancels`)
     : style.grey('enter confirms · esc cancels');
@@ -735,7 +754,7 @@ function renderConfirm(overlay: Extract<Overlay, { kind: 'confirm' }>, rows: num
 function frame(title: string, body: string[], rows: number, cols: number): string[] {
   const inner = Math.max(1, cols - 2);
   const lines = [
-    style.grey(`┌─ ${style.bold(title)} ${'─'.repeat(Math.max(0, inner - width(title) - 3))}`),
+    `${style.grey('╭─ ')}${style.bold(style.brand(title))}${style.grey(` ${'─'.repeat(Math.max(0, inner - width(title) - 3))}`)}`,
     ...body.flatMap((line) => wrap(line, inner)).map((line) => ` ${truncate(line, inner)}`),
   ];
   return fit(lines, rows, 'top');

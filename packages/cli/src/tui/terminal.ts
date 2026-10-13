@@ -1,4 +1,4 @@
-import { paintOnly, style, truncate, width } from './ansi';
+import { paintOnly, palette, style, truncate, width, type Rgb } from './ansi';
 import { createKeyDecoder, type Key } from './keys';
 
 const ALT_SCREEN_ON = '\x1b[?1049h';
@@ -48,6 +48,24 @@ const CLEAR = '\x1b[2J';
 // nothing else writing to this tty (a shelled-out task terminal) inherits it.
 const AUTOWRAP_OFF = '\x1b[?7l';
 const AUTOWRAP_ON = '\x1b[?7h';
+// OSC 11: ask for the background colour, which the band is mixed from. A
+// terminal that does not know it stays silent, so nothing waits on the reply.
+const BACKGROUND_QUERY = '\x1b]11;?\x1b\\';
+// eslint-disable-next-line no-control-regex
+const BACKGROUND_REPLY = /\x1b\]11;rgba?:([0-9a-f]{1,4})\/([0-9a-f]{1,4})\/([0-9a-f]{1,4})(?:\/[0-9a-f]{1,4})?(?:\x07|\x1b\\)/i;
+
+/** Each channel of an `rgb:` reply is 1–4 hex digits wide, scaled to its own width. */
+const channel = (hex: string): number => Math.round((parseInt(hex, 16) / (16 ** hex.length - 1)) * 255);
+
+/** The reply to `BACKGROUND_QUERY` cut out of a chunk of input, so the key decoder never sees it. */
+export function takeBackgroundReply(chunk: string): { rest: string; background: Rgb | null } {
+  const match = BACKGROUND_REPLY.exec(chunk);
+  if (!match) return { rest: chunk, background: null };
+  return {
+    rest: chunk.slice(0, match.index) + chunk.slice(match.index + match[0].length),
+    background: { r: channel(match[1]), g: channel(match[2]), b: channel(match[3]) },
+  };
+}
 
 export interface TerminalOptions {
   input?: NodeJS.ReadStream;
@@ -56,6 +74,8 @@ export interface TerminalOptions {
   mouse?: boolean;
   onKey(key: Key): void;
   onResize(rows: number, cols: number): void;
+  /** The palette changed under a frame already drawn — the terminal reported its background. */
+  onRepaint?(): void;
 }
 
 export interface Terminal {
@@ -108,11 +128,16 @@ export function openTerminal(options: TerminalOptions): Terminal {
     ALT_SCREEN_ON + HIDE_CURSOR + PASTE_MODE_ON + KITTY_KEYBOARD_ON +
     ALT_SCROLL_SAVE + ALT_SCROLL_OFF + (mouse ? MOUSE_TRACKING_ON : '');
 
-  output.write(modes() + CLEAR);
+  output.write(modes() + CLEAR + (style.enabled ? BACKGROUND_QUERY : ''));
 
   const decode = createKeyDecoder();
   const onData = (chunk: string) => {
-    for (const key of decode(chunk)) options.onKey(key);
+    const { rest, background } = takeBackgroundReply(chunk);
+    if (background) {
+      palette.background = background;
+      options.onRepaint?.();
+    }
+    for (const key of decode(rest)) options.onKey(key);
   };
   const onResize = () => {
     // A shrink leaves glyphs beyond the new frame that row-anchored erase

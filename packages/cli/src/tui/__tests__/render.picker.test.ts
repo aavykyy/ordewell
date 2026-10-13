@@ -42,7 +42,7 @@ describe('picker rows', () => {
     const out = pickerScreen({ items: harnesses, hint: 'Who writes the plan.' });
     const top = out.findIndex((l) => l.includes('Planner'));
     expect(out.slice(top, top + 7)).toEqual([
-      '┌─ Planner ────────────────────────────────────────────────',
+      '╭─ Planner ────────────────────────────────────────────────',
       ' Who writes the plan.',
       '',
       ' ❯ 1. Claude Code ✔  coding agent',

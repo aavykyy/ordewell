@@ -284,7 +284,7 @@ describe('the task view draws as a runner, not the planner', () => {
     });
     const bottom = (state: TuiState, count = 1): string[] => {
       const rows = render(state).map((l) => stripAnsi(l).split('│')[0].trimEnd());
-      const end = bodyRows(state) + 1;
+      const end = bodyRows(state);
       return rows.slice(end - count, end);
     };
     const withUsage = (usage: AttemptUsage[], over: Partial<TaskLogState> = {}): TuiState =>

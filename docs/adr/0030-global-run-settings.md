@@ -116,6 +116,10 @@ warning, as the autonomous mode's `⚡` is. A status badge shows the same values
 at all times, not only during a run, and during a run shows the run's level
 where it differs from the global one: `Act → Watch (loop guard)`.
 
+*2026-10-13:* in the TUI the badge sits at the right end of the status row
+rather than on a row of its own, and is left off the bare welcome screen,
+whose Setup block already shows the same values.
+
 The two rows keep the glossary's line: *autonomy* names Full/Guarded only, and
 the other four are the **run settings**.
 

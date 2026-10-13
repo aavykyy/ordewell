@@ -234,11 +234,54 @@ export function wrap(text: string, max: number): string[] {
   return wrapLines(text, max).map((l) => l.line);
 }
 
-function colour(open: string): (text: string) => string {
-  return (text: string) => (style.enabled ? `\x1b[${open}m${text}\x1b[0m` : text);
+function colour(open: string | (() => string)): (text: string) => string {
+  return (text: string) => (style.enabled ? `\x1b[${typeof open === 'string' ? open : open()}m${text}\x1b[0m` : text);
 }
 
-const BAND_BG = '\x1b[48;5;234m';
+export interface Rgb { r: number; g: number; b: number }
+
+/** The logo's teal (assets/readme/logo-*.png), and its nearest xterm-256 slot. */
+const BRAND: Rgb = { r: 8, g: 145, b: 178 };
+const BRAND_256 = 31;
+
+/**
+ * What the terminal can paint. Truecolor is read from `COLORTERM`, the only
+ * signal terminals agree on; the background is asked of the terminal itself
+ * (see terminal.ts) and stays null where it never answers.
+ */
+export const palette: { truecolor: boolean; background: Rgb | null } = {
+  truecolor: /^(truecolor|24bit)$/i.test(process.env.COLORTERM ?? ''),
+  background: null,
+};
+
+const luminance = ({ r, g, b }: Rgb): number => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+
+/** The nearest of xterm-256's 24-step grey ramp, which every 256-colour terminal draws the same. */
+const greyRamp = ({ r, g, b }: Rgb): number =>
+  232 + Math.max(0, Math.min(23, Math.round(((r + g + b) / 3 - 8) / 10)));
+
+/**
+ * The band: the terminal's own background lifted a step toward its text, so it
+ * reads as a surface of the theme rather than a fixed grey laid over it — 234
+ * was a near-black slab on a light theme and a different hue on a tinted one.
+ * Unknown background, the old 234: dark terminals are the common case.
+ */
+function bandBg(): string {
+  const bg = palette.background;
+  if (!bg) return '48;5;234';
+  const dark = luminance(bg) < 0.5;
+  const toward = dark ? 255 : 0;
+  const amount = dark ? 0.07 : 0.05;
+  const mix = (c: number) => Math.round(c + (toward - c) * amount);
+  const lifted = { r: mix(bg.r), g: mix(bg.g), b: mix(bg.b) };
+  return palette.truecolor ? `48;2;${lifted.r};${lifted.g};${lifted.b}` : `48;5;${greyRamp(lifted)}`;
+}
+
+/** SGR 0 inside banded text, re-opening the band after it so a reset mid-row does not end the band. */
+const reBand = (text: string): string => {
+  const bg = `\x1b[${bandBg()}m`;
+  return `${bg}${text.split('\x1b[0m').join(`\x1b[0m${bg}`)}\x1b[0m`;
+};
 
 export const style = {
   /** Set false when the output is piped or the terminal has no colour. */
@@ -261,6 +304,8 @@ export const style = {
    * a dark background.
    */
   accent: colour('94'),
+  /** Ordewell's one accent, the logo's teal: marks, carets and headings — never a status. */
+  brand: colour(() => (palette.truecolor ? `38;2;${BRAND.r};${BRAND.g};${BRAND.b}` : `38;5;${BRAND_256}`)),
   /**
    * A list's active row, drawn as a bar. Inverse is re-asserted after every
    * reset inside, or the first painted word in the row would end the bar.
@@ -268,17 +313,15 @@ export const style = {
   highlight: (text: string): string =>
     (style.enabled ? `\x1b[7m${text.split('\x1b[0m').join('\x1b[0m\x1b[7m')}\x1b[0m` : text),
   /**
-   * The grey band the user's own messages sit on. The background is
-   * re-asserted after every reset inside, or the cyan `❯` and a skill token
-   * would end the band partway along the row. 234 is dark enough to stay a
-   * quiet band on a dark terminal and keeps default and cyan text legible.
+   * The band the user's own messages and the composer sit on (see `bandBg`).
+   * The background is re-asserted after every reset inside, or the `❯` and a
+   * skill token would end the band partway along the row.
    */
-  band: (text: string): string =>
-    (style.enabled ? `${BAND_BG}${text.split('\x1b[0m').join(`\x1b[0m${BAND_BG}`)}\x1b[0m` : text),
+  band: (text: string): string => (style.enabled ? reBand(text) : text),
   /**
    * Quiet text for use on the band. Bright black (`grey`) is a theme's own
    * background in some palettes and sits close to the band's, so hints and the
-   * blurred prompt would sink into it; a fixed mid grey stays readable on 234.
+   * blurred prompt would sink into it; a fixed mid grey stays readable on both.
    */
   bandGrey: colour('38;5;245'),
 };

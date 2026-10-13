@@ -165,7 +165,8 @@ describe('handleTui', () => {
 
     await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
     const frame = (fakeTerminal.draw.mock.calls.at(-1)![0] as string[]).join('\n');
-    expect(frame).toContain('● Guarded');
+    // eslint-disable-next-line no-control-regex
+    expect(frame.replace(/\x1b\[[0-9;]*m/g, '')).toMatch(/Autonomy\s+Guarded/);
     expect(frame).not.toContain('Full');
     vi.unstubAllEnvs();
   });
