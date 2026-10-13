@@ -1,4 +1,4 @@
-import { PlannerModelMemory, type PlannerModelCandidate, type PlannerModelRecall, type AiProvider, type DiscoveredModel } from '@ordewell/core';
+import type { PlannerModelMemory, PlannerModelCandidate, PlannerModelRecall, AiProvider, DiscoveredModel } from '@ordewell/core';
 
 export interface VendorModelOption {
   id: string;
@@ -8,8 +8,7 @@ export interface VendorModelOption {
  * What model and effort a switch to `provider` should land on. A harness
  * planner's catalog is that runner's own discovered models; a vendor's is the
  * API picker list (ADR-0009) — only one of the two ever applies for a given
- * provider. `applyPlanner` is the sole caller, so the DiscoveredModel/picker
- * shapes get normalized to `PlannerModelCandidate` in exactly one place.
+ * provider.
  */
 export function recallPlannerModel(
   memory: PlannerModelMemory,
@@ -17,8 +16,15 @@ export function recallPlannerModel(
   harnessModels: DiscoveredModel[] | undefined,
   vendorOptions: VendorModelOption[] | undefined,
 ): PlannerModelRecall {
-  const catalog: PlannerModelCandidate[] = harnessModels
+  return memory.recall(provider, plannerCatalog(harnessModels, vendorOptions));
+}
+
+/** The DiscoveredModel/picker shapes normalized to what core judges a planner pick against. */
+export function plannerCatalog(
+  harnessModels: DiscoveredModel[] | undefined,
+  vendorOptions: VendorModelOption[] | undefined,
+): PlannerModelCandidate[] {
+  return harnessModels
     ? harnessModels.map((m) => ({ id: m.modelId, variants: m.variants }))
     : (vendorOptions ?? []).map((o) => ({ id: o.id }));
-  return memory.recall(provider, catalog);
 }

@@ -1,11 +1,11 @@
 import {
-  CLI_PROVIDERS, getProviderMeta, plannerBackendEntries, runnerForProvider,
-  type AiProvider, type ModelResolver, type PlannerModelMemory,
-  type PlannerUsability, type RunnerInstallation,
+  CLI_PROVIDERS, getProviderMeta, plannerBackendEntries, runnerForProvider, selectPlanner,
+  type AiProvider, type ModelResolver, type PlannerModelCandidate, type PlannerModelMemory,
+  type PlannerSelectionChange, type PlannerSelectionResult, type PlannerUsability, type RunnerInstallation,
 } from '@ordewell/core';
 import type { VsCodeConfig } from './adapters/VsCodeConfig';
 import type { ChatViewProvider, PlannerBackend } from './providers/ChatViewProvider';
-import { recallPlannerModel } from './plan/PlannerModelSwitch';
+import { plannerCatalog } from './plan/PlannerModelSwitch';
 
 export interface PlannerSelectionDeps {
   config: VsCodeConfig;
@@ -42,37 +42,64 @@ export class PlannerSelection {
     return plannerBackendEntries(usability, this.deps.config.configuredProviders);
   }
 
-  /** Switch who plans. */
+  /** Switch who plans, landing on what that backend remembers (ADR-0009). */
   async apply(provider: AiProvider): Promise<void> {
     if (!getProviderMeta(provider)) return;
-    // A model id from the old backend is meaningless to the new one — an
-    // OpenRouter slug handed to Claude Code, or the reverse. `recallPlannerModel`
-    // restores what the user last picked *for this provider*, falling back to
-    // the catalog default, or blank when discovery has nothing yet.
-    const runner = runnerForProvider(provider);
-    const harnessModels = runner ? ((await this.deps.modelResolver.modelsForRunners([runner]))[runner] ?? []) : undefined;
-    const vendorOptions = runner ? undefined : await this.deps.modelResolver.pickerOptions();
-    const { model, effort } = recallPlannerModel(this.deps.plannerModelMemory, provider, harnessModels, vendorOptions);
-    await this.write(provider, model, effort);
+    await this.change({ provider });
     await this.publish(`Planner set to ${provider}`);
   }
 
   /**
    * Switch backend, model and effort as one change — the `/planner` wizard's
-   * last step. The pick is remembered here, not recalled: it is what the user
-   * just chose, so it has to win over whatever the memory held for the backend.
+   * last step. The pick is remembered, not recalled: it is what the user just
+   * chose, so it has to win over whatever the memory held for the backend.
    */
   async applyChoice(provider: AiProvider, modelId: string, effort: string): Promise<void> {
     if (!getProviderMeta(provider)) return;
-    await this.write(provider, modelId, effort);
-    this.deps.plannerModelMemory.remember(provider, modelId, effort);
+    await this.change({ provider, model: modelId, effort });
     await this.publish(`Planner set to ${provider}, model ${modelId}`);
   }
 
-  private async write(provider: AiProvider, model: string, effort: string): Promise<void> {
-    await this.deps.config.update('aiProvider', provider);
-    await this.deps.config.update('orchestratorModel', model);
-    await this.deps.config.update('plannerThinkingEffort', effort);
+  /** A model picked with no effort is a pick of the runner's default. */
+  async setModel(modelId: string, effort?: string): Promise<void> {
+    await this.change({ model: modelId, effort: effort ?? '' });
+    await this.publish(`Planner model set to ${modelId}`);
+  }
+
+  /** Any change of who plans, from a slash command or a picker. */
+  async pick(change: PlannerSelectionChange): Promise<void> {
+    const { next } = await this.change(change);
+    await this.publish(`Planner set to ${next.provider}, model ${next.model || '(none)'}, effort ${next.effort || 'default'}`);
+  }
+
+  /**
+   * Core decides (`selectPlanner`); this is only the storage — the extension's
+   * configuration and the shared settings file's memory.
+   */
+  private async change(change: PlannerSelectionChange): Promise<PlannerSelectionResult> {
+    const { config, plannerModelMemory } = this.deps;
+    const current = { provider: config.aiProvider, model: config.orchestratorModel, effort: config.plannerThinkingEffort ?? '' };
+    const catalog = await this.catalogFor(change.provider ?? current.provider);
+    const result = selectPlanner(current, change, plannerModelMemory, catalog);
+    const { next } = result;
+    if (!result.remember && !result.recall) return result;
+    if (next.provider !== current.provider) await config.update('aiProvider', next.provider);
+    await config.update('orchestratorModel', next.model);
+    await config.update('plannerThinkingEffort', next.effort);
+    if (result.remember) {
+      const { provider, model, effort } = result.remember;
+      // A vendor planner is resolved from its model id, so without a switch the
+      // pick is keyed by the provider that model now resolves to.
+      plannerModelMemory.remember(provider !== current.provider ? provider : config.aiProvider, model, effort);
+    }
+    return result;
+  }
+
+  private async catalogFor(provider: AiProvider): Promise<PlannerModelCandidate[]> {
+    const runner = runnerForProvider(provider);
+    return runner
+      ? plannerCatalog((await this.deps.modelResolver.modelsForRunners([runner]))[runner] ?? [], undefined)
+      : plannerCatalog(undefined, await this.deps.modelResolver.pickerOptions());
   }
 
   private async publish(logLine: string): Promise<void> {
@@ -89,13 +116,5 @@ export class PlannerSelection {
       runnerForProvider(provider) ?? undefined,
       this.deps.config.plannerThinkingEffort,
     );
-  }
-
-  async setModel(modelId: string, effort?: string): Promise<void> {
-    await this.deps.config.update('orchestratorModel', modelId);
-    await this.deps.config.update('plannerThinkingEffort', effort ?? '');
-    this.deps.plannerModelMemory.remember(this.deps.config.aiProvider, modelId, effort);
-    this.deps.sendModelConfig();
-    await this.sendState();
   }
 }

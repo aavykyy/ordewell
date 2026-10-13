@@ -44,9 +44,14 @@ export async function handleModel(subArgs: string[], injectedApi?: ApiClient): P
     }
   }
 
-  await api.updateSettings({ orchestratorModel: modelId });
-  writeEnvVar(findEnvFile(), 'ORCHESTRATOR_MODEL', modelId);
+  // The daemon keeps the effort only where the new model offers it, so `.env`
+  // takes whichever it settled on rather than the previous model's level.
+  const { plannerThinkingEffort } = await api.updateSettings({ orchestratorModel: modelId });
+  const envFile = findEnvFile();
+  writeEnvVar(envFile, 'ORCHESTRATOR_MODEL', modelId);
+  writeEnvVar(envFile, 'ORDEWELL_PLANNER_EFFORT', plannerThinkingEffort);
   process.env.ORCHESTRATOR_MODEL = modelId;
+  process.env.ORDEWELL_PLANNER_EFFORT = plannerThinkingEffort;
   console.log(`Planner model set to ${modelId}.`);
 }
 

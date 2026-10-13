@@ -1,3 +1,5 @@
+import { recallPlannerChoice } from './selectPlanner';
+
 /** What the user last picked for one planner backend. */
 export interface PlannerModelChoice {
   model: string;
@@ -35,8 +37,8 @@ export interface PlannerModelStore {
  * that listed it, so an OpenRouter slug handed to Claude Code points it at
  * something it cannot spawn. That clear is correct and stays; what was missing
  * is that switching *back* then forced a re-pick of a model the user had
- * already chosen. Both surfaces' clears and the restore now read one rule from
- * here rather than three copies drifting apart.
+ * already chosen. The rule itself is `selectPlanner`'s; this is the storage
+ * the surfaces that keep their memory in the settings file hand it.
  */
 export class PlannerModelMemory {
   constructor(private store: PlannerModelStore) {}
@@ -54,28 +56,16 @@ export class PlannerModelMemory {
     this.store.setPlannerModel(provider, level ? { model: id, effort: level } : { model: id });
   }
 
+  getPlannerModel(provider: string): PlannerModelChoice | undefined {
+    return this.store.getPlannerModel(provider);
+  }
+
   /**
    * What the model and effort should become when `provider` takes over the
    * planner, given the models it actually serves. The `source` is what the
    * three surfaces word their notice from — restored, defaulted, or nothing.
    */
   recall(provider: string, catalog: PlannerModelCandidate[]): PlannerModelRecall {
-    const remembered = this.store.getPlannerModel(provider);
-    const match = remembered && catalog.find((c) => c.id === remembered.model);
-    if (remembered && match) {
-      // An effort is a variant of a *specific* model, so a level the restored
-      // model does not declare is stale — dropped rather than passed on to an
-      // agent that never offered it.
-      const level = remembered.effort ?? '';
-      const survives = (match.variants ?? []).some((v) => v.id === level);
-      return { model: match.id, effort: survives ? level : '', source: 'remembered' };
-    }
-    // A planner switch should land on something runnable, so an unusable memory
-    // falls to the head of the catalog. An *empty* catalog means discovery is
-    // cold or the agent serves nothing, and an invented id would only fail
-    // later, at spawn.
-    const first = catalog[0];
-    if (first) return { model: first.id, effort: '', source: 'catalog-default' };
-    return { model: '', effort: '', source: 'none' };
+    return recallPlannerChoice(this.store.getPlannerModel(provider), catalog);
   }
 }

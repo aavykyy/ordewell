@@ -4,7 +4,7 @@ import { __resetConfig, __setConfig, configUpdates } from '../test/vscode.mock';
 import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { PlannerSelection } from '../PlannerSelection';
 
-function setup() {
+function setup(runnerModels: Record<string, { modelId: string; variants: { id: string }[] }[]> = {}) {
   const stored: Record<string, { model: string; effort?: string }> = {};
   const store: PlannerModelStore = {
     getPlannerModel: (p) => stored[p],
@@ -15,7 +15,7 @@ function setup() {
   const setPlannerBackends = vi.fn();
   const selection = new PlannerSelection({
     config: new VsCodeConfig(),
-    modelResolver: { modelsForRunners: async () => ({}), pickerOptions: async () => [] } as never,
+    modelResolver: { modelsForRunners: async (runners: string[]) => Object.fromEntries(runners.map((r) => [r, runnerModels[r] ?? []])), pickerOptions: async () => [] } as never,
     plannerModelMemory: memory,
     runnerInstallation: { plannerUsability: async () => ({ usable: true }) } as never,
     chatProvider: { setPlannerBackends } as never,
@@ -47,5 +47,53 @@ describe('PlannerSelection.applyChoice', () => {
     expect(sendModelConfig).toHaveBeenCalledOnce();
     expect(setPlannerBackends).toHaveBeenCalledOnce();
     expect(setPlannerBackends.mock.calls[0].slice(1)).toEqual(['claude-code', 'claude-code', 'high']);
+  });
+});
+
+describe('PlannerSelection.setModel', () => {
+  beforeEach(() => {
+    __resetConfig();
+    __setConfig({ aiProvider: 'claude-code', orchestratorModel: 'claude-a', plannerThinkingEffort: 'high' });
+  });
+
+  it('drops an effort the model was not picked with when the pick names none', async () => {
+    const { selection, memory } = setup();
+
+    await selection.setModel('claude-b');
+
+    expect(configUpdates).toEqual([
+      { key: 'orchestratorModel', value: 'claude-b' },
+      { key: 'plannerThinkingEffort', value: '' },
+    ]);
+    expect(memory.getPlannerModel('claude-code')).toEqual({ model: 'claude-b' });
+  });
+});
+
+describe('PlannerSelection.apply', () => {
+  beforeEach(() => {
+    __resetConfig();
+    __setConfig({ aiProvider: 'claude-code', orchestratorModel: 'claude-a', plannerThinkingEffort: '' });
+  });
+
+  it('restores what the new backend remembers', async () => {
+    const { selection, memory } = setup({ codex: [{ modelId: 'gpt-5-codex', variants: [{ id: 'high' }] }] });
+    memory.remember('codex', 'gpt-5-codex', 'high');
+
+    await selection.apply('codex');
+
+    expect(configUpdates).toEqual([
+      { key: 'aiProvider', value: 'codex' },
+      { key: 'orchestratorModel', value: 'gpt-5-codex' },
+      { key: 'plannerThinkingEffort', value: 'high' },
+    ]);
+  });
+
+  it('keeps the model of the planner already in use rather than re-recalling it', async () => {
+    const { selection, memory } = setup({ 'claude-code': [{ modelId: 'claude-b', variants: [] }] });
+    memory.remember('claude-code', 'claude-b');
+
+    await selection.apply('claude-code');
+
+    expect(configUpdates).toEqual([]);
   });
 });

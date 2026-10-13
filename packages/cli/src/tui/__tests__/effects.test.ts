@@ -948,6 +948,15 @@ describe('settings', () => {
     expect(h.api.updateSettings).toHaveBeenCalledWith({ orchestratorModel: 'a/b' });
   });
 
+  it('persists the effort the daemon settled on for the new model, not the old model\'s', async () => {
+    const h = harness({ updateSettings: vi.fn().mockResolvedValue({ orchestratorModel: 'haiku', plannerThinkingEffort: '' }) });
+    h.env.ORDEWELL_PLANNER_EFFORT = 'max';
+    await runEffect({ type: 'setModel', modelId: 'haiku' }, h.deps);
+
+    expect(h.env.ORDEWELL_PLANNER_EFFORT).toBe('');
+    expect(h.actions).toContainEqual({ type: 'settingsLoaded', settings: { orchestratorModel: 'haiku', plannerThinkingEffort: '' } });
+  });
+
   it('stores an api key under that provider env var', async () => {
     const h = harness();
     await runEffect({ type: 'setApiKey', provider: 'openrouter', key: 'sk-or-1' }, h.deps);

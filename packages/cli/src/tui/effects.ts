@@ -349,13 +349,16 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       dispatch({ type: 'notice', message: 'Interrupting the task…' });
       return;
 
-    case 'setModel':
-      // Daemon first, `.env` second — see `persistAfterDaemon` below.
-      await api.updateSettings({ orchestratorModel: effect.modelId });
-      deps.setEnvVar('ORCHESTRATOR_MODEL', effect.modelId);
-      dispatch({ type: 'settingsLoaded', settings: { orchestratorModel: effect.modelId } });
+    case 'setModel': {
+      // Daemon first, `.env` second — see `persistAfterDaemon` below. The
+      // effort is the daemon's to settle: it survives only where the new
+      // model offers it.
+      const { plannerThinkingEffort } = await api.updateSettings({ orchestratorModel: effect.modelId });
+      persistAfterDaemon(deps, { ORCHESTRATOR_MODEL: effect.modelId, ORDEWELL_PLANNER_EFFORT: plannerThinkingEffort });
+      dispatch({ type: 'settingsLoaded', settings: { orchestratorModel: effect.modelId, plannerThinkingEffort } });
       dispatch({ type: 'notice', message: `Planner model set to ${effect.modelId}.` });
       return;
+    }
 
     case 'setPlanner': {
       const meta = ALL_PROVIDERS[effect.provider as AiProvider];
