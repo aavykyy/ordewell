@@ -94,12 +94,7 @@ export async function handleTaskModel(subArgs: string[], injectedApi?: ApiClient
     }
 
     const assignedModel = assignedModelFor(model, task.assignedModel?.thinkingEffort);
-    await api.updateTask(sessionId, task.id, {
-      // JSON drops `undefined`; null is intentional so changing models also
-      // clears a stale legacy top-level effort on the persisted task.
-      assignedModel,
-      thinkingEffort: assignedModel.thinkingEffort ?? null,
-    });
+    await api.updateTask(sessionId, task.id, { assignedModel });
     console.log(`Task ${taskRef(task)} model set to ${model.label}.`);
     if (task.assignedModel?.thinkingEffort && !assignedModel.thinkingEffort) {
       console.log(`  ${model.label} does not expose "${task.assignedModel.thinkingEffort}", so the effort went back to the runner default.`);
@@ -140,7 +135,6 @@ export async function handleTaskEffort(subArgs: string[], injectedApi?: ApiClien
 
     await api.updateTask(sessionId, task.id, {
       assignedModel: task.assignedModel ? { ...task.assignedModel, thinkingEffort } : undefined,
-      thinkingEffort: thinkingEffort ?? null,
     });
     console.log(`Task ${taskRef(task)} thinking effort set to ${thinkingEffort ?? 'runner default'}.`);
   });

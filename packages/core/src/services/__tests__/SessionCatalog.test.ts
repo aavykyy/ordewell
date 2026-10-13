@@ -183,11 +183,11 @@ describe('SessionCatalog.admit', () => {
       assignedModel: { modelId: 'gpt-5', modelLabel: 'gpt-5', thinkingEffort: 'xhigh' },
     });
 
-    const unadmitted = coerceAssignments([task], catalog.allowlist(), ['codex'], catalog.models());
+    const unadmitted = coerceAssignments([task], catalog.allowlist(), catalog.models()).tasks;
     expect(unadmitted[0].assignedModel?.thinkingEffort).toBe('xhigh');
 
     catalog.admit('codex', [model('gpt-5', ['low', 'high'])]);
-    const admitted = coerceAssignments([task], catalog.allowlist(), ['codex'], catalog.models());
+    const admitted = coerceAssignments([task], catalog.allowlist(), catalog.models()).tasks;
     expect(admitted[0].assignedModel?.thinkingEffort).toBe('high');
     expect(admitted[0].assignedModel?.availableVariants).toEqual(['low', 'high']);
   });

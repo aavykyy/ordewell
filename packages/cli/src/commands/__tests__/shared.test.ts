@@ -15,7 +15,6 @@ const task = (over: Partial<SerializedTask>): SerializedTask => ({
   taskMode: 'build',
   prompt: null,
   userSteps: undefined,
-  thinkingEffort: undefined,
   autonomy: undefined,
   sliceType: undefined,
   userStoriesCovered: undefined,

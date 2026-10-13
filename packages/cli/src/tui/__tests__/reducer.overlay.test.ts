@@ -578,7 +578,6 @@ describe('plan pane', () => {
           thinkingEffort: undefined,
           availableVariants: ['low', 'high'],
         },
-        thinkingEffort: null,
       },
     })]);
   });
@@ -613,7 +612,6 @@ describe('plan pane', () => {
       type: 'updateTask',
       changes: expect.objectContaining({
         assignedModel: expect.objectContaining({ thinkingEffort: 'high' }),
-        thinkingEffort: 'high',
       }),
     })]);
   });

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { applyTaskOps, parseTaskOpsJson, textHasTaskOps, canMergeTasks, canSplitTask } from '../TaskOps';
 import { validateTaskEdit } from '../TaskEditValidator';
+import { validatePlanTasks } from '../PlanValidator';
 import { PlanParseError } from '../JsonExtractor';
 import { createTask, type Task } from '../../models/Task';
 
@@ -163,10 +164,18 @@ describe('applyTaskOps', () => {
     expect(res.tasks[0].assignedRunner).toBe('codex');
   });
 
-  it('applies a thinkingEffort change', () => {
-    const res = applyTaskOps(samplePlan(), [{ op: 'update', taskId: 'a', changes: { thinkingEffort: 'high' } }], ['claude-code']);
+  it('applies a thinkingEffort change to the assigned model, the one place the effort lives', () => {
+    const plan = samplePlan();
+    plan[0].assignedModel = { modelId: 'opus', modelLabel: 'Opus' };
+    const res = applyTaskOps(plan, [{ op: 'update', taskId: 'a', changes: { thinkingEffort: 'high' } }], ['claude-code']);
     expect(res.ok).toBe(true);
-    expect(res.tasks[0].thinkingEffort).toBe('high');
+    expect(res.tasks[0].assignedModel).toEqual({ modelId: 'opus', modelLabel: 'Opus', thinkingEffort: 'high' });
+    expect(res.tasks[0]).not.toHaveProperty('thinkingEffort');
+  });
+
+  it('refuses a thinkingEffort change on a task with no model to carry it', () => {
+    const res = applyTaskOps(samplePlan(), [{ op: 'update', taskId: 'a', changes: { thinkingEffort: 'high' } }], ['claude-code']);
+    expect(res.errors).toEqual(['op 1 (update): "thinkingEffort" is the assigned model\'s — set "assignedModel" with it']);
   });
 
   it('applies a standalone autonomy change, correcting HITL/AFK classification after the fact', () => {
@@ -178,7 +187,7 @@ describe('applyTaskOps', () => {
   it('rejects a runner outside the plan runner set', () => {
     const res = applyTaskOps(samplePlan(), [{ op: 'update', taskId: 'a', changes: { assignedRunner: 'aider' } }], ['claude-code']);
     expect(res.ok).toBe(false);
-    expect(res.errors[0]).toContain('runner');
+    expect(res.errors).toEqual(['op 1 (update): Task "Setup" has invalid assignedRunner "aider". Expected one of: claude-code']);
   });
 
   it('never lets the model change system-owned fields', () => {
@@ -213,8 +222,7 @@ describe('applyTaskOps', () => {
 
     it('flips AI to MAN when user steps are supplied, clearing the AI-only fields and naming them', () => {
       const plan = samplePlan();
-      plan[0].assignedModel = { modelId: 'claude-code/opus', modelLabel: 'Opus' };
-      plan[0].thinkingEffort = 'high';
+      plan[0].assignedModel = { modelId: 'claude-code/opus', modelLabel: 'Opus', thinkingEffort: 'high' };
       plan[0].autonomy = 'AFK';
       // taskMode defaults to 'build' via createTask, so it is already set.
       const res = applyTaskOps(plan, [{
@@ -226,7 +234,6 @@ describe('applyTaskOps', () => {
       expect(updated.type).toBe('user');
       expect(updated.userSteps).toHaveLength(1);
       expect(updated.assignedModel).toBeUndefined();
-      expect(updated.thinkingEffort).toBeUndefined();
       expect(updated.taskMode).toBeUndefined();
       expect(updated.autonomy).toBeUndefined();
       expect(res.summary[0]).toContain('cleared');
@@ -496,7 +503,7 @@ describe('applyTaskOps — batch handles', () => {
       { op: 'add', task: { title: 'Prereq' }, handle: 'h1' },
     ], ['claude-code']);
     expect(res.ok).toBe(false);
-    expect(res.errors[0]).toMatch(/defined later in this batch/);
+    expect(res.errors[0]).toMatch(/defined by a later op in this batch/);
     expect(res.tasks).toBe(original);
   });
 
@@ -965,6 +972,19 @@ describe('applyTaskOps — the mode a planner edit lands a task on (ADR-0031)', 
     expect(write.taskMode).toBe('auto');
     expect(write.subtasks[0].taskMode).toBe('auto');
     expect(read).not.toHaveProperty('readOnly');
+  });
+
+  it('refuses a read-only task\'s subtask on a runner with no read-only mode, in a plan as in an edit', () => {
+    const child = { title: 'Child', type: 'ai', sliceType: 'AFK', autonomy: 'AFK', assignedRunner: 'custom' };
+    const plan = validatePlanTasks({ tasks: [{ id: 'r', title: 'Review', sliceType: 'AFK', autonomy: 'AFK', readOnly: true, subtasks: [child] }] }, runners, MODES, true);
+    const edit = applyTaskOps(samplePlan(), [{ op: 'add', task: { title: 'Review', readOnly: true, subtasks: [child] as never } }], runners, catalog(true));
+
+    expect(plan.ok ? [] : plan.errors.map((e) => e.message)).toEqual([
+      'subtask "Child" of "Review": Runner "custom" has no read-only mode — assign a read-only task to one of: claude-code, opencode, or drop "readOnly"',
+    ]);
+    expect(edit.errors).toEqual([
+      'op 1 (add): subtask "Child" of "Review": Runner "custom" has no read-only mode — assign a read-only task to one of: claude-code, opencode, or drop "readOnly"',
+    ]);
   });
 
   it('refuses a mode named on an added subtask', () => {

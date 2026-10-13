@@ -160,7 +160,7 @@ describe('coerceAssignments', () => {
     const tasks = [opencodeTask('stray-model', 'high')];
     const allowlist = { opencode: ['allowed-a', 'allowed-b'] };
 
-    const result = coerceAssignments(tasks, allowlist);
+    const result = coerceAssignments(tasks, allowlist).tasks;
 
     expect(result[0].assignedModel!.modelId).toBe('allowed-a');
     expect(result[0].assignedModel!.thinkingEffort).toBeUndefined();
@@ -179,7 +179,7 @@ describe('coerceAssignments', () => {
       opencode: [{ modelId: 'gpt-5.6-sol', modelLabel: 'GPT', variants: [] }],
     };
 
-    const result = coerceAssignments(tasks, { 'claude-code': ['gpt-5.6-sol'] }, undefined, modelsByRunner);
+    const result = coerceAssignments(tasks, { 'claude-code': ['gpt-5.6-sol'] }, modelsByRunner).tasks;
 
     expect(result[0].assignedModel!.modelId).toBe('claude-sonnet-4-5');
   });
@@ -190,7 +190,7 @@ describe('coerceAssignments', () => {
       opencode: [{ modelId: 'allowed-a', modelLabel: 'Allowed A', variants: [{ id: 'low', label: 'Low' }] }],
     };
 
-    const result = coerceAssignments(tasks, { opencode: ['allowed-a'] }, undefined, modelsByRunner);
+    const result = coerceAssignments(tasks, { opencode: ['allowed-a'] }, modelsByRunner).tasks;
 
     expect(result[0].assignedModel).toMatchObject({
       modelId: 'allowed-a',
@@ -209,7 +209,7 @@ describe('coerceAssignments', () => {
     }];
     const allowlist = { opencode: ['allowed'] };
 
-    const result = coerceAssignments(tasks, allowlist);
+    const result = coerceAssignments(tasks, allowlist).tasks;
 
     expect(result[0].assignedModel!.modelId).toBe('stray');
   });
@@ -218,7 +218,7 @@ describe('coerceAssignments', () => {
     const tasks = [opencodeTask('stray-model')];
     const allowlist = { 'other-runner': ['allowed'] };
 
-    const result = coerceAssignments(tasks, allowlist);
+    const result = coerceAssignments(tasks, allowlist).tasks;
 
     expect(result[0].assignedModel!.modelId).toBe('stray-model');
   });
@@ -227,13 +227,13 @@ describe('coerceAssignments', () => {
     const tasks = [opencodeTask('allowed-a', 'high')];
     const allowlist = { opencode: ['allowed-a', 'allowed-b'] };
 
-    const result = coerceAssignments(tasks, allowlist);
+    const result = coerceAssignments(tasks, allowlist).tasks;
 
     expect(result[0].assignedModel!.modelId).toBe('allowed-a');
     expect(result[0].assignedModel!.thinkingEffort).toBe('high');
   });
 
-  it('rewrites tasks assigned to a runner not in allowedRunners', () => {
+  it('never moves a task to another runner, whatever that runner\'s allowlist says', () => {
     const tasks = [{
       id: 't1', order: 0, title: '', description: '',
       type: 'ai' as const, status: 'pending' as const,
@@ -243,23 +243,7 @@ describe('coerceAssignments', () => {
     }];
     const allowlist = { opencode: ['deepseek-v4-flash'] };
 
-    const result = coerceAssignments(tasks, allowlist, ['opencode']);
-
-    expect(result[0].assignedRunner).toBe('opencode');
-    expect(result[0].assignedModel!.modelId).toBe('deepseek-v4-flash');
-  });
-
-  it('leaves tasks with no allowlist untouched when allowedRunners is not passed', () => {
-    const tasks = [{
-      id: 't1', order: 0, title: '', description: '',
-      type: 'ai' as const, status: 'pending' as const,
-      dependencies: [], subtasks: [],
-      assignedRunner: 'claude-code' as const,
-      assignedModel: { modelId: 'claude-sonnet-4', modelLabel: 'Claude Sonnet 4' },
-    }];
-    const allowlist = { opencode: ['deepseek-v4-flash'] };
-
-    const result = coerceAssignments(tasks, allowlist);
+    const result = coerceAssignments(tasks, allowlist).tasks;
 
     expect(result[0].assignedRunner).toBe('claude-code');
     expect(result[0].assignedModel!.modelId).toBe('claude-sonnet-4');
@@ -275,7 +259,7 @@ describe('coerceAssignments', () => {
     const tasks = [task];
     const allowlist = { opencode: ['allowed'] };
 
-    const result = coerceAssignments(tasks, allowlist);
+    const result = coerceAssignments(tasks, allowlist).tasks;
     expect(result[0].assignedModel!.modelId).toBe('allowed');
   });
 
@@ -290,7 +274,7 @@ describe('coerceAssignments', () => {
       opencode: [{ modelId: 'discovered-a', modelLabel: 'Discovered A', variants: [] }],
     };
 
-    const result = coerceAssignments([task], {}, undefined, modelsByRunner);
+    const result = coerceAssignments([task], {}, modelsByRunner).tasks;
     expect(result[0].assignedModel!.modelId).toBe('discovered-a');
   });
 
@@ -302,7 +286,7 @@ describe('coerceAssignments', () => {
       assignedRunner: 'opencode' as const,
     };
 
-    const result = coerceAssignments([task], {});
+    const result = coerceAssignments([task], {}).tasks;
     expect(result[0].assignedModel).toBeUndefined();
   });
 
@@ -316,22 +300,22 @@ describe('coerceAssignments', () => {
     };
 
     it('keeps a valid effort as-is', () => {
-      const result = coerceAssignments([opencodeTask('p/limited', 'high')], {}, undefined, modelsByRunner);
+      const result = coerceAssignments([opencodeTask('p/limited', 'high')], {}, modelsByRunner).tasks;
       expect(result[0].assignedModel!.thinkingEffort).toBe('high');
     });
 
     it('maps an unsupported effort to the nearest variant the model offers', () => {
-      const result = coerceAssignments([opencodeTask('p/limited', 'xhigh')], {}, undefined, modelsByRunner);
+      const result = coerceAssignments([opencodeTask('p/limited', 'xhigh')], {}, modelsByRunner).tasks;
       expect(result[0].assignedModel!.thinkingEffort).toBe('high');
     });
 
     it('drops the effort entirely when the model has no variants', () => {
-      const result = coerceAssignments([opencodeTask('p/plain', 'high')], {}, undefined, modelsByRunner);
+      const result = coerceAssignments([opencodeTask('p/plain', 'high')], {}, modelsByRunner).tasks;
       expect(result[0].assignedModel!.thinkingEffort).toBeUndefined();
     });
 
     it('leaves the effort untouched when the model is not in the catalog', () => {
-      const result = coerceAssignments([opencodeTask('p/unknown', 'weird')], {}, undefined, modelsByRunner);
+      const result = coerceAssignments([opencodeTask('p/unknown', 'weird')], {}, modelsByRunner).tasks;
       expect(result[0].assignedModel!.thinkingEffort).toBe('weird');
     });
 
@@ -339,9 +323,8 @@ describe('coerceAssignments', () => {
       const result = coerceAssignments(
         [{ ...opencodeTask('p/limited', 'max') }],
         { opencode: ['p/limited'] },
-        undefined,
         modelsByRunner,
-      );
+      ).tasks;
       expect(result[0].assignedModel!.thinkingEffort).toBe('high');
     });
   });

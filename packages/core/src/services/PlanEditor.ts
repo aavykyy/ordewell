@@ -246,11 +246,11 @@ export class PlanEditor {
   }
 
   /**
-   * Make a runner a first-class member of this plan. Without this, the next
-   * planner turn's `coerceAssignments` would treat it as disallowed and snap
-   * every task on it back, silently undoing the user's choice; and that same
-   * pass clamps efforts against the remembered catalog, so a catalog missing
-   * from there makes the effort we just derived read as unverifiable.
+   * Make a runner a first-class member of this plan: the plan names every
+   * runner its tasks run on, and a planner edit may put a task on any of them.
+   * The next coercion clamps efforts against the remembered catalog, so a
+   * catalog missing from there makes the effort we just derived read as
+   * unverifiable.
    */
   admitRunner(runner: RunnerId, models: DiscoveredModel[]): void {
     const plan = this.plan();

@@ -468,8 +468,8 @@ export class Session {
     turnId: () => this.conversation.currentTurnId,
     recordSkillLoad: (skill) => this.conversation.recordPlannerSkill(skill),
     liveCatalog: () => this.liveCatalog(),
-    coerce: (tasks, runners) => coerceAssignments(tasks, this.catalog.allowlist(), runners, this.catalog.models()),
-    submitPlan: (tasks, runners) => this.submitPlanFromTool(tasks, runners),
+    coerce: (tasks) => coerceAssignments(tasks, this.catalog.allowlist(), this.catalog.models()),
+    submitPlan: (tasks) => this.submitPlanFromTool(tasks),
     editPlan: (ops) => this.editPlanFromTool(ops),
     tasks: () => this.store.planTasks,
     read: (signature, answer) => this.conversation.read(signature, answer),
@@ -525,7 +525,7 @@ export class Session {
       mutate: (op, notify) => this.mutatePlan(op, notify),
       broadcast: (msg) => this.broadcast(msg),
       broadcastPlan: (turnId) => this.events.planGenerated(this.plan, this.goal, turnId),
-      validateOps: (ops) => this.checkPlannerOps(ops, this.plan!.runners, this.catalog.edit()),
+      validateOps: (ops) => this.checkPlannerOps(ops),
       taskSkills: () => this.workspaceSkills(),
       notice: (level, message) => this.notice(level, message),
       adoptTasks: (tasks, how) => this.adoptPlannerTasks(tasks, how),
@@ -719,7 +719,8 @@ export class Session {
     const held = this.conversation.pendingOps();
     if (!held || held.length === 0 || !this.plan) return false;
     if (taskId === undefined) return true;
-    const result = applyTaskOps(this.store.planTasks, held, this.plan.runners, this.catalog.edit());
+    const runners = this.editRunners();
+    const result = applyTaskOps(this.store.planTasks, held, runners, this.catalog.edit(runners));
     const before = this.store.get(taskId);
     const after = result.ok ? flattenTasks(result.tasks).find((t) => t.id === taskId) : before;
     return !!before && (!after || editedFields(before, after).length > 0);
@@ -731,11 +732,22 @@ export class Session {
   }
 
   /**
-   * A planner edit checked as it is made and again as it lands: the applier's
-   * rules, then, for the supervisor, the oscillation guard.
+   * The runners a planner edit may put a task on: the plan's own, and every
+   * runner enabled now. An edit is checked as it is made and again as it lands
+   * against this one set, so what was accepted cannot be refused at commit.
    */
-  private checkPlannerOps(ops: TaskOp[], runners: RunnerId[], catalog: ReturnType<SessionCatalog['edit']>): ApplyTaskOpsResult {
-    const result = applyTaskOps(this.store.planTasks, ops, runners, catalog);
+  private editRunners(): RunnerId[] {
+    return [...new Set([...(this.plan?.runners ?? []), ...this.catalog.enabledRunners()])];
+  }
+
+  /**
+   * A planner edit checked as it is made and again as it lands: the applier's
+   * rules, then, for the supervisor, the oscillation guard. `held` are the
+   * ops the turn already holds, which `ops` join; errors are numbered by `ops`.
+   */
+  private checkPlannerOps(ops: TaskOp[], held: readonly TaskOp[] = []): ApplyTaskOpsResult {
+    const runners = this.editRunners();
+    const result = applyTaskOps(this.store.planTasks, ops, runners, this.catalog.edit(runners), held);
     if (!result.ok || !this.supervisorEditing()) return result;
     const trip = this.guards.checkEdit(this.store.planTasks, result.tasks);
     if (!trip) return result;
@@ -1294,15 +1306,9 @@ export class Session {
     return this.conversation.submit(submission);
   }
 
-  /**
-   * A plan the planner submitted through its tool, already checked against the
-   * live catalog. Its runners join `plan.runners` here, so a runner enabled
-   * since planning started is not snapped back by the commit (#69).
-   */
-  private submitPlanFromTool(tasks: Task[], runners: RunnerId[]): boolean {
-    if (!this.plan || !this.conversation.submit({ kind: 'plan', tasks })) return false;
-    for (const runner of runners) this.editor.admitRunner(runner, this.catalog.known(runner));
-    return true;
+  /** A plan the planner submitted through its tool, already checked against the live catalog. */
+  private submitPlanFromTool(tasks: Task[]): boolean {
+    return !!this.plan && this.conversation.submit({ kind: 'plan', tasks });
   }
 
   /**
@@ -1317,18 +1323,17 @@ export class Session {
     const turn = this.conversation.currentTurnId;
     // The held batch is read after this await, so two calls made in parallel
     // join one batch instead of one replacing the other.
-    const catalog = await this.liveCatalog();
+    await this.liveCatalog();
     if (this.conversation.currentTurnId !== turn) return refuse(PLANNER_TURN_ENDED);
     if (!this.plan || this.store.planTasks.length === 0) return refuse('There is no plan to edit yet: submit one with submit_plan.');
     const held = this.conversation.pendingOps();
     if (!held) return refuse('A whole plan was submitted in this reply and replaces the plan when it ends: make the edit in your next reply.');
 
-    const batch = [...held, ...ops];
-    const result = this.checkPlannerOps(batch, catalog.runners, this.catalog.edit(catalog.runners));
+    const result = this.checkPlannerOps(ops, held);
     if (!result.ok) return { ok: false, errors: result.errors };
-    for (const runner of runnersOf(result.tasks)) this.editor.admitRunner(runner, this.catalog.known(runner));
-    if (!this.conversation.submit({ kind: 'task_ops', ops: batch })) return refuse('No planning turn is open to take the edit.');
-    return { ok: true, summary: result.summary };
+    if (!this.conversation.submit({ kind: 'task_ops', ops: [...held, ...ops] })) return refuse('No planning turn is open to take the edit.');
+    const { coerced } = coerceAssignments(result.tasks, this.catalog.allowlist(), this.catalog.models());
+    return { ok: true, summary: result.summary, coerced: coerced.map(({ taskId: _id, ...rest }) => rest) };
   }
 
   /** Whether the planner conversation is live (started and not yet committed to a plan). */
@@ -1397,9 +1402,11 @@ export class Session {
   private adoptPlannerTasks(tasks: readonly Task[], how: 'edit' | 'commit'): number {
     if (how === 'edit') this.editLanded = true;
     else this.planSubmitted = true;
+    // A runner the planner was allowed to use joins the plan as its tasks land (#69).
+    for (const runner of runnersOf(tasks)) this.editor.admitRunner(runner, this.catalog.known(runner));
     const runners = this.plan!.runners;
     const before = this.store.planTasks;
-    let coerced = coerceAssignments(tasks, this.catalog.allowlist(), runners, this.catalog.models());
+    let coerced = coerceAssignments(tasks, this.catalog.allowlist(), this.catalog.models()).tasks;
     if (how === 'commit') coerced = keepExecutionState(before, carryPlannedModes(before, coerced, this.catalog.edit(runners)));
     // Tasks an Act supervisor adds are approved to run, ops tasks included (ADR-0029): choosing Act was the consent.
     const bySupervisor = this.supervisorEditing();

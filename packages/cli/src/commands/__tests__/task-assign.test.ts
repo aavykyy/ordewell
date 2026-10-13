@@ -138,7 +138,7 @@ describe('ordewell task-effort', () => {
     await capture(() => handleTaskEffort([...SESSION, '2', 'default'], new ApiClient(d.port)));
     // `null`, not absent: JSON drops undefined, and the stale persisted
     // top-level effort has to be cleared explicitly.
-    expect(updates(d.sent)[0].body.thinkingEffort).toBeNull();
+    expect(updates(d.sent)[0].body).not.toHaveProperty('thinkingEffort');
     expect(updates(d.sent)[0].body.assignedModel?.thinkingEffort).toBeUndefined();
     d.close();
   });

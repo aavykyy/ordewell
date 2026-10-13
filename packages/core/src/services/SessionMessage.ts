@@ -71,7 +71,6 @@ export type SerializedTask = {
   prompt: string | null;
   subtasks: SerializedTask[];
   userSteps: Task['userSteps'];
-  thinkingEffort: Task['thinkingEffort'];
   autonomy: Task['autonomy'];
   sliceType: Task['sliceType'];
   userStoriesCovered: Task['userStoriesCovered'];
@@ -318,7 +317,6 @@ export function serializeTask(t: Task): SerializedTask {
     prompt: t.prompt || null,
     subtasks: (t.subtasks || []).map(serializeTask),
     userSteps: t.userSteps || undefined,
-    thinkingEffort: t.thinkingEffort || undefined,
     autonomy: t.autonomy || undefined,
     sliceType: t.sliceType || undefined,
     userStoriesCovered: t.userStoriesCovered || undefined,

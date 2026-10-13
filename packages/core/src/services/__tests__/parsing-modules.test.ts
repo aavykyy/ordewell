@@ -50,14 +50,14 @@ describe('parsePlanJson', () => {
   });
 
   it('reads "ops" on a top-level AI task only (ADR-0020)', () => {
-    const tasks = parsePlanJson(JSON.stringify({ tasks: [
-      { id: 'o1', order: 1, title: 'Deploy', description: 'Deploy', type: 'ai', prompt: 'deploy', autonomy: 'AFK', sliceType: 'AFK', ops: true,
-        subtasks: [{ id: 's1', order: 1, title: 'Watch', description: 'Watch', type: 'ai', prompt: 'watch', ops: true }] },
-      { id: 'u2', order: 2, title: 'Check', description: 'Check', type: 'user', sliceType: 'HITL', ops: true, userSteps: [{ order: 1, instruction: 'look' }] },
-      { id: 't3', order: 3, title: 'Change', description: 'Change', type: 'ai', prompt: 'change', autonomy: 'AFK', sliceType: 'AFK' },
-    ] }), RUNNERS);
-    expect(tasks.map((t) => t.ops)).toEqual([true, undefined, undefined]);
-    expect(tasks[0].subtasks[0].ops).toBeUndefined();
+    const deploy = { id: 'o1', order: 1, title: 'Deploy', description: 'Deploy', type: 'ai', prompt: 'deploy', autonomy: 'AFK', sliceType: 'AFK', ops: true };
+    const change = { id: 't3', order: 3, title: 'Change', description: 'Change', type: 'ai', prompt: 'change', autonomy: 'AFK', sliceType: 'AFK' };
+    expect(parsePlanJson(JSON.stringify({ tasks: [deploy, change] }), RUNNERS).map((t) => t.ops)).toEqual([true, undefined]);
+
+    const watch = { id: 's1', order: 1, title: 'Watch', description: 'Watch', type: 'ai', prompt: 'watch', ops: true };
+    const check = { id: 'u2', order: 2, title: 'Check', description: 'Check', type: 'user', sliceType: 'HITL', ops: true, userSteps: [{ order: 1, instruction: 'look' }] };
+    expect(() => parsePlanJson(JSON.stringify({ tasks: [{ ...deploy, subtasks: [watch] }, change] }), RUNNERS)).toThrow(/only a top-level task can be an ops task/);
+    expect(() => parsePlanJson(JSON.stringify({ tasks: [deploy, check] }), RUNNERS)).toThrow(/only an AI task can be an ops task/);
   });
 
   it('falls back to title when the model omits both prompt and description', () => {

@@ -266,7 +266,6 @@ export function conflictResolverTask(task: Readonly<Task>, run: IsolationRun | n
     prompt: buildConflictResolutionPrompt(task, conflict, integrationBranch),
     assignedRunner: task.assignedRunner,
     assignedModel: task.assignedModel,
-    thinkingEffort: task.thinkingEffort,
     taskMode: task.taskMode,
     autonomy: 'AFK',
     sliceType: 'AFK',

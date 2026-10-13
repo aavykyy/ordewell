@@ -458,7 +458,6 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
           prompt: t.prompt || null,
           subtasks: t.subtasks || [],
           userSteps: t.userSteps || undefined,
-          thinkingEffort: t.thinkingEffort || undefined,
         })),
       };
       await nodeFs.writeFile(uri.fsPath, JSON.stringify(data, null, 2));

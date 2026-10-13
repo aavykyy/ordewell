@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { saveSession, listSessions, loadSession, loadSessionPlanState, getLatestSession, deleteSession } from '../sessionStore';
 import { canContinue } from '../../services/continuation';
-import { createEmptyPlan, createTask } from '../../models/Task';
+import { createEmptyPlan, createTask, type Task } from '../../models/Task';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -413,6 +413,23 @@ describe('sessionStore', () => {
     expect(canContinue(task)).toBe(true);
     expect(canContinue(task.subtasks![0])).toBe(true);
     expect(JSON.stringify(task)).not.toContain('transport');
+  });
+
+  it('moves a thinking effort saved on the task onto its model, subtasks included, keeping one the model already has', () => {
+    const plan = createEmptyPlan();
+    const legacy = (task: Task, effort: string) => ({ ...task, thinkingEffort: effort }) as Task;
+    plan.tasks = [legacy(createTask({
+      id: 't1', title: 'Parent', assignedModel: { modelId: 'opus', modelLabel: 'Opus' },
+      subtasks: [legacy(createTask({ id: 't2', title: 'Child', assignedModel: { modelId: 'opus', modelLabel: 'Opus', thinkingEffort: 'low' } }), 'high')],
+    }), 'high')];
+    const saved = saveSession(plan, 'Goal', tmpDir);
+
+    const [task] = loadSession(saved.id, tmpDir)!.plan.tasks;
+
+    expect(task.assignedModel?.thinkingEffort).toBe('high');
+    expect(task.subtasks[0].assignedModel?.thinkingEffort).toBe('low');
+    expect(task).not.toHaveProperty('thinkingEffort');
+    expect(task.subtasks[0]).not.toHaveProperty('thinkingEffort');
   });
 
   describe('a session saved while the terminal transport existed', () => {

@@ -81,12 +81,7 @@ function toTaskView(t: Record<string, unknown>, index: number): TaskView {
       ? {
           modelId: planLabel(model.modelId),
           modelLabel: planLabel(model.modelLabel ?? model.modelId),
-          thinkingEffort:
-            typeof model.thinkingEffort === 'string'
-              ? planLabel(model.thinkingEffort)
-              : typeof t.thinkingEffort === 'string'
-                ? planLabel(t.thinkingEffort)
-                : undefined,
+          thinkingEffort: typeof model.thinkingEffort === 'string' ? planLabel(model.thinkingEffort) : undefined,
           availableVariants: Array.isArray(model.availableVariants)
             ? model.availableVariants.map((variant: unknown) => planLabel(variant))
             : undefined,

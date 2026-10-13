@@ -78,17 +78,19 @@ describe('the ops flag, through each way a task is made or edited (ADR-0020)', (
       ['a literal true', { ops: true }, true],
       ['a quoted "true"', { ops: 'true' }, undefined],
       ['no flag', {}, undefined],
-      ['a manual task marked ops', { ops: true, type: 'user', sliceType: 'HITL', userSteps: [{ order: 1, instruction: 'x' }] }, undefined],
     ])('reads %s', (_label, raw, expected) => {
       const task = parsed(raw);
       expect(task.ops).toBe(expected);
       if (expected === undefined) expect(task).not.toHaveProperty('ops');
     });
 
-    it('drops the flag from a subtask, which runs with its parent', () => {
-      const task = parsed({ ops: true, subtasks: [{ id: 's1', order: 1, title: 'Watch', description: 'w', type: 'ai', prompt: 'watch', ops: true }] });
-      expect(task.ops).toBe(true);
-      expect(task.subtasks[0]).not.toHaveProperty('ops');
+    it('refuses the flag on a manual task, which runs nowhere', () => {
+      expect(() => parsed({ ops: true, type: 'user', sliceType: 'HITL', userSteps: [{ order: 1, instruction: 'x' }] })).toThrow(/only an AI task can be an ops task/);
+    });
+
+    it('refuses the flag on a subtask, which runs with its parent', () => {
+      expect(() => parsed({ ops: true, subtasks: [{ id: 's1', order: 1, title: 'Watch', description: 'w', type: 'ai', prompt: 'watch', ops: true }] }))
+        .toThrow(/only a top-level task can be an ops task/);
     });
   });
 
@@ -101,9 +103,9 @@ describe('the ops flag, through each way a task is made or edited (ADR-0020)', (
       expect(byTitle(tasks, 'New').ops).toBe(expected);
     });
 
-    it('adds a manual task marked ops as a manual task', () => {
-      const tasks = applied([{ op: 'add', task: { title: 'Check', type: 'user', userSteps: [{ order: 1, instruction: 'x', completed: false }], ops: true } }]);
-      expect(byTitle(tasks, 'Check')).not.toHaveProperty('ops');
+    it('refuses to add a manual task marked ops', () => {
+      expect(() => applied([{ op: 'add', task: { title: 'Check', type: 'user', userSteps: [{ order: 1, instruction: 'x', completed: false }], ops: true } }]))
+        .toThrow(/only an AI task can be an ops task/);
     });
 
     it('reads a quoted "true" on an update or a re-arm as a change task, stored absent', () => {

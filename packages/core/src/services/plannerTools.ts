@@ -3,6 +3,7 @@ import type { SkillInfo } from './SkillsService';
 import { modelInvocablePlannerSkills, snapshotSkill } from './skillInvocation';
 import { autonomyLevelLabel, readOnlyMode } from './ModeResolver';
 import { validatePlanTasks } from './PlanValidator';
+import type { CoercedTasks, Coercion } from './ModelAllowlistResolver';
 import {
   findTask, fitTail, taskQuerySignature, OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX, OUTPUT_TAIL_MAX_CHARS, TASK_QUERY_TASK_FIELDS, TASK_READ_ANSWER_OR_EDIT,
   type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog, type TaskQueryField,
@@ -31,9 +32,9 @@ export interface PlannerToolsHost {
   /** Enabled runners, their modes and their allowlisted models, as of now. */
   liveCatalog(): Promise<TaskQueryCatalog>;
   /** The assignments a commit of these tasks would land, under the allowlist in force (ADR-0003). */
-  coerce(tasks: readonly Task[], runners: RunnerId[]): Task[];
+  coerce(tasks: readonly Task[]): CoercedTasks;
   /** Hand a validated plan to the open planner turn. False when no turn is open. */
-  submitPlan(tasks: Task[], runners: RunnerId[]): boolean;
+  submitPlan(tasks: Task[]): boolean;
   /** Check a batch against the live catalog and hand it to the open planner turn, which commits it as it settles. */
   editPlan(ops: TaskOp[]): Promise<PlanEditOutcome>;
   /** The plan's tasks as they are now. */
@@ -70,16 +71,9 @@ export const PLANNER_TURN_ENDED = 'The planning turn this call was made in has e
 
 /** What an edit made through the tool came to. */
 export type PlanEditOutcome =
-  | { ok: true; summary: string[] }
+  // An edit's tasks get their ids as it lands, so what coercion changed is named by title.
+  | { ok: true; summary: string[]; coerced?: Omit<Coercion, 'taskId'>[] }
   | { ok: false; errors: string[] };
-
-/** A change the commit makes to a submitted task, named so it is never silent (ADR-0001). */
-interface Coercion {
-  taskId: string;
-  field: 'assignedRunner' | 'assignedModel' | 'thinkingEffort';
-  from: string | null;
-  to: string | null;
-}
 
 /** The runners a set of tasks runs on. A user task runs on none. */
 export function runnersOf(tasks: readonly Task[]): RunnerId[] {
@@ -173,9 +167,8 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       }
 
       const warnings = [...(result.warnings ?? []), ...skills.warnings];
-      const runners = runnersOf(result.tasks);
-      const coerced = coercions(result.tasks, host.coerce(result.tasks, runners));
-      if (!host.submitPlan(result.tasks, runners)) {
+      const { coerced } = host.coerce(result.tasks);
+      if (!host.submitPlan(result.tasks)) {
         return { isError: true, text: JSON.stringify({ ok: false, errors: [{ field: 'tasks', message: 'No planning turn is open to take the plan.' }] }) };
       }
       return answer({
@@ -250,6 +243,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       return answer({
         ok: true,
         summary: outcome.summary,
+        ...(outcome.coerced?.length ? { coerced: outcome.coerced } : {}),
         ...(skills.warnings.length > 0 ? { warnings: skills.warnings } : {}),
         next: 'The edit is applied when this reply ends, and the user is shown what changed. Tell them briefly; do not repeat it as JSON.',
       });
@@ -336,17 +330,3 @@ function notEnabled(runner: string, enabled: RunnerId[]): McpToolReply {
   return { isError: true, text: `Runner "${runner}" is not enabled. Enabled runners: ${enabled.join(', ') || '(none)'}.` };
 }
 
-function coercions(submitted: readonly Task[], landed: readonly Task[]): Coercion[] {
-  return submitted.flatMap((task, i) => {
-    const after = landed[i];
-    const out: Coercion[] = [];
-    if (after.assignedRunner !== task.assignedRunner) {
-      out.push({ taskId: task.id, field: 'assignedRunner', from: task.assignedRunner, to: after.assignedRunner });
-    }
-    const [fromModel, toModel] = [task.assignedModel?.modelId ?? null, after.assignedModel?.modelId ?? null];
-    if (fromModel !== toModel) out.push({ taskId: task.id, field: 'assignedModel', from: fromModel, to: toModel });
-    const [fromEffort, toEffort] = [task.assignedModel?.thinkingEffort ?? null, after.assignedModel?.thinkingEffort ?? null];
-    if (fromEffort !== toEffort) out.push({ taskId: task.id, field: 'thinkingEffort', from: fromEffort, to: toEffort });
-    return out;
-  });
-}

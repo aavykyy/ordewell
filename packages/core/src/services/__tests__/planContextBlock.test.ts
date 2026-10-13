@@ -15,7 +15,7 @@ describe('planContextBlock task-shape fields', () => {
           autonomy: 'AFK',
           sliceType: 'AFK',
           taskMode: 'build',
-          thinkingEffort: 'high',
+          assignedModel: { modelId: 'sonnet', modelLabel: 'Sonnet', thinkingEffort: 'high' },
         }),
         createTask({
           id: 'man-1',

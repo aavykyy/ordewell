@@ -1331,7 +1331,7 @@ export class PlannerConversation {
       const readOnly = t.taskMode !== undefined && t.taskMode === readOnlyMode(modes[t.assignedRunner]);
       const runFields = isMan
         ? `steps:${t.userSteps?.length ?? 0}`
-        : `${t.assignedModel ? `model:${t.assignedModel.modelId} ` : ''}${readOnly ? 'read-only ' : ''}effort:${t.thinkingEffort ?? '-'}`;
+        : `${t.assignedModel ? `model:${t.assignedModel.modelId} ` : ''}${readOnly ? 'read-only ' : ''}effort:${t.assignedModel?.thinkingEffort ?? '-'}`;
       return `#${t.order} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : t.ops ? 'AI ops' : 'AI'} runner:${t.assignedRunner} ${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:[${t.dependencies.map((d) => orderOf.get(d) ?? d).join(', ')}]${t.skills?.length ? ` skills:[${t.skills.join(', ')}]` : ''}`;
     });
   }

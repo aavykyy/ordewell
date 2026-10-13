@@ -1,11 +1,11 @@
-import { v4 as uuidv4 } from 'uuid';
 import {
   Task, RunnerId, flattenTasks,
   addTaskToPlan, removeTaskFromPlan, updateTaskInPlan, renumberTasks,
-  createTask, opsFlag, inheritedOps, inheritedSkills, skillNames,
+  opsFlag, inheritedOps, skillNames,
 } from '../models/Task';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
-import { validateTaskEdit, checkModelAndModeValidity, lockedTaskRefusal, type EditCatalog, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
+import { validateTaskEdit, lockedTaskRefusal, type EditCatalog, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
+import { plannedTask, checkPlanInvariants, detectCycle, taskWhere, MODE_NOT_THE_PLANNERS, MANUAL_NOT_READ_ONLY, type IntakeCatalog, type PlannedTask } from './PlannedTask';
 import { plannedMode, readOnlyMode, type PlannedMode } from './ModeResolver';
 
 /**
@@ -13,8 +13,12 @@ import { plannedMode, readOnlyMode, type PlannedMode } from './ModeResolver';
  * ConversationTurn). Task references accept a task id, a "#<order>" ref, or a
  * bare order number — cheap models rarely echo UUIDs correctly.
  */
-/** A task as the planner writes it: its fields, less the mode, plus whether it must not change files (ADR-0031). */
-export type PlannerTaskSpec = Partial<Task> & { readOnly?: boolean };
+/**
+ * A task as the planner writes it: its fields, less the mode, plus whether it
+ * must not change files (ADR-0031), and `thinkingEffort` as a name for its
+ * model's effort, so an effort can change without restating the model.
+ */
+export type PlannerTaskSpec = Partial<Task> & { readOnly?: boolean; thinkingEffort?: string | null };
 
 export type TaskOp =
   | { op: 'update'; taskId: string; changes: PlannerTaskSpec }
@@ -27,7 +31,7 @@ export type TaskOp =
 
 /** Fields the planner may change on an existing task. Everything else (id, status, verdict…) is system-owned. */
 export const UPDATABLE_FIELDS: (keyof Task)[] = [
-  'title', 'description', 'prompt', 'dependencies', 'assignedRunner', 'assignedModel', 'taskMode', 'thinkingEffort', 'type', 'userSteps', 'autonomy', 'sliceType', 'ops', 'skills',
+  'title', 'description', 'prompt', 'dependencies', 'assignedRunner', 'assignedModel', 'taskMode', 'type', 'userSteps', 'autonomy', 'sliceType', 'ops', 'skills',
 ];
 
 /**
@@ -37,7 +41,7 @@ export const UPDATABLE_FIELDS: (keyof Task)[] = [
  * running execution changes.
  */
 export function taskOpsProtocol(executionNote = '', tools = false): string[] {
-  const updateChanges = [...UPDATABLE_FIELDS.filter((f) => f !== 'taskMode'), 'readOnly']
+  const updateChanges = [...UPDATABLE_FIELDS.filter((f) => f !== 'taskMode'), 'thinkingEffort', 'readOnly']
     .map((f) => (f === 'dependencies' ? '"dependencies"?:["<id or #order>"]' : `"${f}"?`))
     .join(',');
   return [
@@ -135,7 +139,7 @@ function resolveRef(
   const ownerIdx = handleOwner.get(s);
   if (ownerIdx !== undefined) {
     if (ownerIdx >= opIndex) {
-      return { error: `handle "${s}" is defined later in this batch (op ${ownerIdx + 1}) and cannot be referenced yet` };
+      return { error: `handle "${s}" is defined by a later op in this batch and cannot be referenced yet` };
     }
     const id = handleId.get(s);
     if (!id) return { error: `handle "${s}" was never resolved` };
@@ -208,29 +212,6 @@ function findInTasks(tasks: Task[], id: string): Task | undefined {
 
 function findTopLevel(tasks: Task[], id: string): Task | undefined {
   return tasks.find((t) => t.id === id);
-}
-
-function detectCycle(tasks: Task[]): string | null {
-  const byId = new Map(tasks.map((t) => [t.id, t]));
-  const visiting = new Set<string>();
-  const done = new Set<string>();
-  const visit = (id: string): string | null => {
-    if (done.has(id)) return null;
-    if (visiting.has(id)) return id;
-    visiting.add(id);
-    for (const dep of byId.get(id)?.dependencies ?? []) {
-      const hit = visit(dep);
-      if (hit) return hit;
-    }
-    visiting.delete(id);
-    done.add(id);
-    return null;
-  };
-  for (const t of tasks) {
-    const hit = visit(t.id);
-    if (hit) return byId.get(hit)?.title ?? hit;
-  }
-  return null;
 }
 
 /** A task the repair may not reposition: execution has already reached it. */
@@ -402,9 +383,6 @@ export function canSplitTask(tasks: readonly Task[], taskId: string): { ok: bool
 }
 
 
-/** The planner names no mode (ADR-0031): it says read-only, and the mode follows. */
-const MODE_NOT_THE_PLANNERS = '"taskMode" is the user\'s to choose — set "readOnly": true on a task that must not change files, and leave it out otherwise';
-
 function askedReadOnly(spec: PlannerTaskSpec | undefined): boolean | undefined {
   return typeof spec?.readOnly === 'boolean' ? spec.readOnly : undefined;
 }
@@ -423,60 +401,10 @@ function landingMode(runner: RunnerId, readOnly: boolean | undefined, current: s
   return plannedMode(runner, catalog?.runnerModes, { readOnly, current }, catalog?.autonomousDefault ?? true);
 }
 
-/** A manual task runs in no mode, so it cannot be read-only. */
-const MANUAL_NOT_READ_ONLY = '"readOnly" is for AI tasks — a manual task runs in no mode';
-
 /** The fields an edit changed, as the planner names them: `readOnly` when that flipped, never the mode it landed on (ADR-0031). */
 function changedFields(target: Task, changes: Partial<Task>, catalog: EditCatalog | undefined): string[] {
   const fields = Object.keys(changes).filter((f) => f !== 'taskMode');
   if ('taskMode' in changes && isReadOnly({ ...target, ...changes }, catalog) !== isReadOnly(target, catalog)) fields.push('readOnly');
-  return fields;
-}
-
-/**
- * An added task's subtasks, built as a submitted plan's are: each runs as a
- * task of its own, so each gets a mode, a runner in the plan and a prompt, and
- * a read-only parent's stay read-only unless one says `readOnly: false`.
- * `createTask` stores their skills as a task's are: the edit's skill check
- * warned that a name no skill could have was not attached, so it must not be.
- */
-function plannedSubtasks(
-  subtasks: unknown,
-  parentReadOnly: boolean,
-  runners: RunnerId[],
-  catalog: EditCatalog | undefined,
-): { subtasks: Task[] } | { error: string } {
-  if (!Array.isArray(subtasks)) return { subtasks: [] };
-  const planned: Task[] = [];
-  for (const sub of subtasks as unknown[]) {
-    if (typeof sub !== 'object' || sub === null) continue;
-    const spec = sub as PlannerTaskSpec;
-    const where = `subtask "${spec.title ?? ''}"`;
-    if ('taskMode' in spec) return { error: `${where}: ${MODE_NOT_THE_PLANNERS}` };
-    const manual = spec.type === 'user';
-    if (manual && askedReadOnly(spec) === true) return { error: `${where}: ${MANUAL_NOT_READ_ONLY}` };
-    const readOnly = !manual && (askedReadOnly(spec) ?? parentReadOnly);
-    const runner = spec.assignedRunner && runners.includes(spec.assignedRunner) ? spec.assignedRunner : runners[0];
-    const mode = manual ? undefined : landingMode(runner, readOnly, undefined, catalog);
-    if (mode && !mode.ok) return { error: `${where}: ${mode.error}` };
-    const nested = plannedSubtasks(spec.subtasks, readOnly, runners, catalog);
-    if ('error' in nested) return nested;
-    planned.push(createTask({
-      ...taskFields(spec),
-      assignedRunner: runner,
-      ...(mode?.mode !== undefined ? { taskMode: mode.mode } : {}),
-      prompt: spec.prompt ?? (manual ? undefined : spec.description ?? spec.title),
-      subtasks: nested.subtasks,
-      status: 'pending',
-    }));
-  }
-  return { subtasks: planned };
-}
-
-/** A planner spec as task fields: `readOnly` is a request, not something a task stores. */
-function taskFields(spec: PlannerTaskSpec): Partial<Task> {
-  const fields: PlannerTaskSpec = { ...spec };
-  delete fields.readOnly;
   return fields;
 }
 
@@ -486,7 +414,17 @@ function taskFields(spec: PlannerTaskSpec): Partial<Task> {
  * completed tasks untouched), or nothing is returned and `errors` explains
  * why. The caller commits `tasks` on ok.
  */
-export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runners: RunnerId[], catalog?: EditCatalog): ApplyTaskOpsResult {
+export function applyTaskOps(
+  currentTasks: readonly Task[],
+  newOps: TaskOp[],
+  runners: RunnerId[],
+  catalog?: EditCatalog,
+  held: readonly TaskOp[] = [],
+): ApplyTaskOpsResult {
+  // Ops already accepted earlier in the batch apply first; errors number only
+  // the new ones, as the planner wrote them in the call it is answered for.
+  const ops = [...held, ...newOps];
+  const opLabel = (i: number) => (i < held.length ? `earlier op ${i + 1} (${ops[i].op})` : `op ${i - held.length + 1} (${ops[i].op})`);
   let tasks: Task[] = JSON.parse(JSON.stringify(currentTasks));
   const errors: string[] = [];
   const summary: string[] = [];
@@ -505,15 +443,15 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
     const handle = (op as { handle?: unknown }).handle;
     if (handle === undefined) continue;
     if (typeof handle !== 'string' || !handle.trim()) {
-      errors.push(`op ${i + 1} (${op.op}): handle must be a non-empty string`);
+      errors.push(`${opLabel(i)}: handle must be a non-empty string`);
       continue;
     }
     if (handleOwner.has(handle)) {
-      errors.push(`op ${i + 1} (${op.op}): handle "${handle}" is already used earlier in this batch`);
+      errors.push(`${opLabel(i)}: handle "${handle}" is already used earlier in this batch`);
       continue;
     }
     if (refCollidesWithExisting(handle, originalFlatAll)) {
-      errors.push(`op ${i + 1} (${op.op}): handle "${handle}" collides with an existing task reference`);
+      errors.push(`${opLabel(i)}: handle "${handle}" collides with an existing task reference`);
       continue;
     }
     handleOwner.set(handle, i);
@@ -532,6 +470,40 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
     }
     return { ids, bad };
   };
+
+  const intake: IntakeCatalog = { runners, runnerModes: catalog?.runnerModes, autonomousDefault: catalog?.autonomousDefault, models: catalog };
+
+  /**
+   * A planned task's dependency refs, at every depth, as ids: a subtask may
+   * name a task of its own tree by the id the planner gave it, or any task in
+   * the plan the way every op does.
+   */
+  const resolveTree = (planned: PlannedTask, opIndex: number): { task: Task } | { error: string } => {
+    const walk = (t: Task, parentTitle?: string): Task | string => {
+      const ids: string[] = [];
+      const bad: string[] = [];
+      for (const d of t.dependencies) {
+        const own = planned.renamed.get(d);
+        if (own) { ids.push(own); continue; }
+        const r = resolveDeps([d], opIndex);
+        ids.push(...r.ids);
+        bad.push(...r.bad);
+      }
+      if (bad.length) return `unknown dependencies${parentTitle !== undefined ? ` of ${taskWhere(t.title, parentTitle)}` : ''}: ${bad.join(', ')}`;
+      const subtasks: Task[] = [];
+      for (const sub of t.subtasks) {
+        const done = walk(sub, t.title);
+        if (typeof done === 'string') return done;
+        subtasks.push(done);
+      }
+      return { ...t, dependencies: ids.filter((id) => id !== t.id), subtasks };
+    };
+    const done = walk(planned.task);
+    return typeof done === 'string' ? { error: done } : { task: done };
+  };
+
+  /** Why the edit cannot have this planned task: a rule it breaks, or something it asked for that is not the planner's. */
+  const refusalOf = (planned: PlannedTask): string | undefined => [...planned.ignored, ...planned.errors][0]?.message;
 
   /**
    * The resolve-and-validate half shared by "update" and "rearm": resolve the
@@ -553,8 +525,10 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
     if (refuseRunning && target.status === 'in_progress') return { error: `${label}: ${lockedTaskRefusal(target, 're-armed')}` };
     if (op.changes && 'taskMode' in op.changes) return { error: `${label}: ${MODE_NOT_THE_PLANNERS}` };
     const changes = updatableChanges(op.changes);
-    if (changes.assignedRunner && !runners.includes(changes.assignedRunner)) {
-      return { error: `${label}: runner "${changes.assignedRunner}" is not in this plan's runner set [${runners.join(', ')}]` };
+    if (op.changes && 'thinkingEffort' in op.changes) {
+      const model = changes.assignedModel ?? target.assignedModel;
+      if (!model) return { error: `${label}: "thinkingEffort" is the assigned model's — set "assignedModel" with it` };
+      changes.assignedModel = { ...model, thinkingEffort: op.changes.thinkingEffort ?? undefined };
     }
     // Dependency refs are still unresolved (e.g. "#3") at this point, so the
     // check runs on everything but them; resolveDeps below handles them once
@@ -568,7 +542,9 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
     if (readOnly === true && (changes.type ?? target.type) === 'user') return { error: `${label}: ${MANUAL_NOT_READ_ONLY}` };
     const moved = changes.assignedRunner !== undefined && changes.assignedRunner !== target.assignedRunner;
     const becomesAi = changes.type === 'ai' && target.type === 'user';
-    if ((readOnly !== undefined || moved || becomesAi) && (changes.type ?? target.type) !== 'user') {
+    // A runner not allowed has no mode to land on; the plan's rules refuse it once the op is applied.
+    const known = runners.includes(changes.assignedRunner ?? target.assignedRunner);
+    if (known && (readOnly !== undefined || moved || becomesAi) && (changes.type ?? target.type) !== 'user') {
       const mode = landingMode(changes.assignedRunner ?? target.assignedRunner, readOnly ?? isReadOnly(target, catalog), target.taskMode, catalog);
       if (!mode.ok) return { error: `${label}: ${mode.error}` };
       if (mode.mode !== undefined && mode.mode !== target.taskMode) changes.taskMode = mode.mode;
@@ -581,8 +557,13 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
     return { target, changes, check };
   };
 
+  // A rule an op breaks is that op's to answer for. What the plan already
+  // broke before the batch — a task on a runner disabled since, say — is not,
+  // so it never blocks an unrelated edit.
+  let standing = new Set(checkPlanInvariants(currentTasks, runners).map((e) => e.message));
+
   for (const [i, op] of ops.entries()) {
-    const label = `op ${i + 1} (${op.op})`;
+    const label = opLabel(i);
     switch (op.op) {
       case 'update': {
         const prep = prepareEdit(op, i, label, 'planner');
@@ -603,29 +584,13 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
       case 'add': {
         const spec = op.task ?? {};
         if (!spec.title) { errors.push(`${label}: new task needs a title`); break; }
-        const { ids, bad } = resolveDeps(spec.dependencies, i);
-        if (bad.length) { errors.push(`${label}: unknown dependencies: ${bad.join(', ')}`); break; }
-        const runner = spec.assignedRunner && runners.includes(spec.assignedRunner) ? spec.assignedRunner : runners[0];
-        if ('taskMode' in spec) { errors.push(`${label}: ${MODE_NOT_THE_PLANNERS}`); break; }
-        const validity = checkModelAndModeValidity(runner, spec.assignedModel, undefined, catalog);
-        if (!validity.ok) { errors.push(`${label}: ${validity.error}`); break; }
-        if (spec.type === 'user' && askedReadOnly(spec) === true) { errors.push(`${label}: ${MANUAL_NOT_READ_ONLY}`); break; }
-        const mode = spec.type === 'user' ? undefined : landingMode(runner, askedReadOnly(spec), undefined, catalog);
-        if (mode && !mode.ok) { errors.push(`${label}: ${mode.error}`); break; }
-        const subs = plannedSubtasks(spec.subtasks, spec.type !== 'user' && askedReadOnly(spec) === true, runners, catalog);
-        if ('error' in subs) { errors.push(`${label}: ${subs.error}`); break; }
-        const newId = uuidv4();
-        tasks = addTaskToPlan(tasks, {
-          ...taskFields(spec),
-          ...(mode?.mode !== undefined ? { taskMode: mode.mode } : {}),
-          subtasks: subs.subtasks,
-          id: newId,
-          dependencies: ids,
-          assignedRunner: runner,
-          description: spec.description ?? spec.title,
-          prompt: spec.prompt ?? spec.description ?? spec.title,
-        });
-        if (op.handle) handleId.set(op.handle, newId);
+        const planned = plannedTask(spec, intake, { freshIds: true });
+        const refused = refusalOf(planned);
+        if (refused) { errors.push(`${label}: ${refused}`); break; }
+        const resolved = resolveTree(planned, i);
+        if ('error' in resolved) { errors.push(`${label}: ${resolved.error}`); break; }
+        tasks = addTaskToPlan(tasks, resolved.task);
+        if (op.handle) handleId.set(op.handle, resolved.task.id);
         summary.push(`Added "${spec.title}"`);
         break;
       }
@@ -672,33 +637,33 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
         if (bad.length) { errors.push(`${label}: unknown dependencies: ${bad.join(', ')}`); break; }
         const spec = op.merged ?? {};
         if (!spec.title) { errors.push(`${label}: merged task needs a title`); break; }
-        const runner = spec.assignedRunner && runners.includes(spec.assignedRunner) ? spec.assignedRunner : toMerge[0].assignedRunner;
-        if ('taskMode' in spec) { errors.push(`${label}: ${MODE_NOT_THE_PLANNERS}`); break; }
-        const mergedValidity = checkModelAndModeValidity(runner, spec.assignedModel, undefined, catalog);
-        if (!mergedValidity.ok) { errors.push(`${label}: ${mergedValidity.error}`); break; }
-        const mergedType = spec.type ?? (toMerge.some((t) => t.type === 'user') ? 'user' : 'ai');
         // Read-only only when every merged task was: one that writes makes the merged task write.
-        const current = (toMerge.find((t) => !isReadOnly(t, catalog)) ?? toMerge[0]).taskMode;
-        const mergedMode = mergedType === 'user' ? undefined : landingMode(runner, askedReadOnly(spec) ?? toMerge.every((t) => isReadOnly(t, catalog)), current, catalog);
-        if (mergedMode && !mergedMode.ok) { errors.push(`${label}: ${mergedMode.error}`); break; }
-        const mergedTask = createTask({
-          title: spec.title,
-          description: spec.description ?? toMerge.map((t) => t.description).filter(Boolean).join('\n\n'),
-          prompt: spec.prompt ?? (toMerge.map((t) => t.prompt).filter(Boolean).join('\n\n---\n\n') || undefined),
-          type: mergedType,
-          dependencies: ids,
-          assignedRunner: runner,
-          assignedModel: spec.assignedModel ?? toMerge.find((t) => t.assignedModel)?.assignedModel,
-          thinkingEffort: spec.thinkingEffort ?? toMerge.find((t) => t.thinkingEffort)?.thinkingEffort,
-          taskMode: mergedMode?.mode ?? current,
-          autonomy: spec.autonomy ?? toMerge.find((t) => t.autonomy)?.autonomy,
-          sliceType: spec.sliceType ?? toMerge.find((t) => t.sliceType)?.sliceType,
-          ops: inheritedOps(toMerge, spec.ops),
-          skills: inheritedSkills(spec.skills, toMerge.flatMap((t) => t.skills ?? [])),
-          userStoriesCovered: spec.userStoriesCovered ?? (toMerge.flatMap((t) => t.userStoriesCovered ?? []).length
-            ? [...new Set(toMerge.flatMap((t) => t.userStoriesCovered ?? []))]
-            : undefined),
+        const writes = toMerge.find((t) => !isReadOnly(t, catalog));
+        const stories = [...new Set(toMerge.flatMap((t) => t.userStoriesCovered ?? []))];
+        const planned = plannedTask(spec, intake, {
+          freshIds: true,
+          from: {
+            readOnly: !writes,
+            fields: {
+              description: toMerge.map((t) => t.description).filter(Boolean).join('\n\n'),
+              prompt: toMerge.map((t) => t.prompt).filter(Boolean).join('\n\n---\n\n') || undefined,
+              type: toMerge.some((t) => t.type === 'user') ? 'user' : 'ai',
+              assignedRunner: toMerge[0].assignedRunner,
+              assignedModel: toMerge.find((t) => t.assignedModel)?.assignedModel,
+              taskMode: (writes ?? toMerge[0]).taskMode,
+              autonomy: toMerge.find((t) => t.autonomy)?.autonomy,
+              sliceType: toMerge.find((t) => t.sliceType)?.sliceType,
+              ops: inheritedOps(toMerge),
+              skills: toMerge.flatMap((t) => t.skills ?? []),
+              userStoriesCovered: stories.length ? stories : undefined,
+            },
+          },
         });
+        const refused = refusalOf(planned);
+        if (refused) { errors.push(`${label}: ${refused}`); break; }
+        const built = resolveTree({ ...planned, task: { ...planned.task, dependencies: [] } }, i);
+        if ('error' in built) { errors.push(`${label}: ${built.error}`); break; }
+        const mergedTask: Task = { ...built.task, dependencies: ids };
         const mergedId = mergedTask.id;
         const firstId = toMerge[0].id;
         const result: Task[] = [];
@@ -742,27 +707,28 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
           } else {
             deps = prevId ? [prevId] : [];
           }
-          const runner = spec.assignedRunner && runners.includes(spec.assignedRunner) ? spec.assignedRunner : target.assignedRunner;
-          if ('taskMode' in spec) { errors.push(`${label}: split part ${p + 1}: ${MODE_NOT_THE_PLANNERS}`); buildError = true; break; }
-          const partValidity = checkModelAndModeValidity(runner, spec.assignedModel, undefined, catalog);
-          if (!partValidity.ok) { errors.push(`${label}: split part ${p + 1}: ${partValidity.error}`); buildError = true; break; }
-          const partMode = (spec.type ?? target.type) === 'user' ? undefined : landingMode(runner, askedReadOnly(spec) ?? isReadOnly(target, catalog), target.taskMode, catalog);
-          if (partMode && !partMode.ok) { errors.push(`${label}: split part ${p + 1}: ${partMode.error}`); buildError = true; break; }
-          const nt = createTask({
-            title: spec.title,
-            description: spec.description ?? spec.title,
-            prompt: spec.prompt ?? spec.description ?? spec.title,
-            type: spec.type ?? target.type,
-            dependencies: deps,
-            assignedRunner: runner,
-            assignedModel: spec.assignedModel ?? target.assignedModel,
-            taskMode: partMode?.mode ?? target.taskMode,
-            autonomy: spec.autonomy ?? target.autonomy,
-            sliceType: spec.sliceType ?? target.sliceType,
-            ops: inheritedOps([target], spec.ops),
-            skills: inheritedSkills(spec.skills, target.skills),
-            userStoriesCovered: spec.userStoriesCovered ?? target.userStoriesCovered,
+          const planned = plannedTask(spec, intake, {
+            freshIds: true,
+            from: {
+              readOnly: isReadOnly(target, catalog),
+              fields: {
+                type: target.type,
+                assignedRunner: target.assignedRunner,
+                assignedModel: target.assignedModel,
+                taskMode: target.taskMode,
+                autonomy: target.autonomy,
+                sliceType: target.sliceType,
+                ops: inheritedOps([target]),
+                skills: target.skills,
+                userStoriesCovered: target.userStoriesCovered,
+              },
+            },
           });
+          const refused = refusalOf(planned);
+          if (refused) { errors.push(`${label}: split part ${p + 1}: ${refused}`); buildError = true; break; }
+          const resolved = resolveTree({ ...planned, task: { ...planned.task, dependencies: [] } }, i);
+          if ('error' in resolved) { errors.push(`${label}: split part ${p + 1}: ${resolved.error}`); buildError = true; break; }
+          const nt: Task = { ...resolved.task, dependencies: deps };
           newTasks.push(nt);
           prevId = nt.id;
         }
@@ -804,30 +770,23 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
         errors.push(`${label}: unknown op "${(op as { op: string }).op}"`);
     }
     if (errors.length) break;
+    const now = checkPlanInvariants(tasks, runners).map((e) => e.message);
+    const broken = now.filter((m) => !standing.has(m));
+    if (broken.length) { errors.push(...broken.map((m) => `${label}: ${m}`)); break; }
+    standing = new Set(now);
   }
 
+  // Display order is maintained, not demanded: whatever the batch produced,
+  // the plan comes back with dependencies ahead of their dependents. The
+  // planner never has to re-declare the whole order to move one task.
   if (!errors.length) {
-    const flat = flattenTasks(tasks);
-    const idSet = new Set(flat.map((t) => t.id));
-    for (const t of flat) {
-      for (const dep of t.dependencies) {
-        if (!idSet.has(dep)) errors.push(`"${t.title}" depends on a task that no longer exists (${dep})`);
-      }
-    }
-    const cycleAt = detectCycle(flat);
-    if (cycleAt) errors.push(`Dependency cycle detected involving "${cycleAt}"`);
-    // Display order is maintained, not demanded: whatever the batch produced,
-    // the plan comes back with dependencies ahead of their dependents. The
-    // planner never has to re-declare the whole order to move one task.
-    if (!errors.length) {
-      const repaired = repairOrder(tasks);
-      if ('error' in repaired) {
-        errors.push(repaired.error);
-      } else {
-        const moves = describeMoves(tasks, repaired.tasks);
-        if (moves) summary.push(`Reordered to keep dependencies first: ${moves}`);
-        tasks = renumberTasks(repaired.tasks);
-      }
+    const repaired = repairOrder(tasks);
+    if ('error' in repaired) {
+      errors.push(repaired.error);
+    } else {
+      const moves = describeMoves(tasks, repaired.tasks);
+      if (moves) summary.push(`Reordered to keep dependencies first: ${moves}`);
+      tasks = renumberTasks(repaired.tasks);
     }
   }
 

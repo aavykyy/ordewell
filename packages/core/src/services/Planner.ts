@@ -132,7 +132,7 @@ export class Planner {
     }
 
     return {
-      tasks: coerceAssignments(tasks, req.perRunnerAllowlist ?? {}, req.runners, req.modelsByRunner),
+      tasks: coerceAssignments(tasks, req.perRunnerAllowlist ?? {}, req.modelsByRunner).tasks,
       generatedAt: now,
       status: 'draft',
       runners: req.runners,
@@ -154,6 +154,6 @@ export class Planner {
       req.runnerModes,
       plannerModesWith(req),
     );
-    return { tasks: coerceAssignments(result.tasks, req.perRunnerAllowlist ?? {}, req.existingPlan.runners, req.modelsByRunner) };
+    return { tasks: coerceAssignments(result.tasks, req.perRunnerAllowlist ?? {}, req.modelsByRunner).tasks };
   }
 }

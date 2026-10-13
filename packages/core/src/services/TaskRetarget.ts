@@ -46,10 +46,6 @@ export function runnerAssignment(
       thinkingEffort,
       availableVariants: model.variants.map((v) => v.id),
     };
-    // Task.thinkingEffort predates assignedModel.thinkingEffort and is still
-    // read by migration and task_ops. Left behind it would name an effort the
-    // new model has no variant for.
-    changes.thinkingEffort = thinkingEffort;
   }
 
   if (catalog.modes.length > 0) {
