@@ -162,6 +162,19 @@ describe('queued prompts', () => {
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendMessageNow', text: 'stop, use Postgres' });
   });
 
+  it('force sends a skill invocation but runs a built-in slash command as a command', () => {
+    post({ type: 'plannerTurn', active: true });
+
+    type('/grilling the cache');
+    fireEvent.click(document.querySelector('.chat-input-send-now')!);
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendMessageNow', text: '/grilling the cache' });
+
+    api.postMessage.mockClear();
+    type('/refresh');
+    fireEvent.click(document.querySelector('.chat-input-send-now')!);
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendMessage', text: '/refresh', runners: expect.any(Array), typed: true });
+  });
+
   it('has no Send now button outside a turn', () => {
     type('a normal message');
     expect(document.querySelector('.chat-input-send-now')).toBeNull();

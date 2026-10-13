@@ -135,6 +135,27 @@ describe('plan dock', () => {
     expect(document.querySelector('.checkpoint-panel')).toBeNull();
   });
 
+  it('does not re-open a checkpoint the user answered, but opens a different one', () => {
+    const view = (checkpoint: string) => ({
+      tasks: [{ id: 't1', title: 'Add rate limiting', status: 'awaiting_user', awaitingReason: 'checkpoint', checkpoint, subtasks: [] }],
+      runMerge: null, handoff: null, mergeResult: null,
+    });
+    send({ type: 'planUpdated', plan });
+    send({ type: 'runView', view: view('ready for review') });
+
+    fireEvent.click(document.querySelector('.checkpoint-approve-btn')!);
+    expect(document.querySelector('.checkpoint-panel')).toBeNull();
+
+    // Another task's status update arrives before the clearing one: the run
+    // still carries the question, and it must not re-open.
+    send({ type: 'runView', view: view('ready for review') });
+    expect(document.querySelector('.checkpoint-panel')).toBeNull();
+
+    // A genuinely different question opens it again.
+    send({ type: 'runView', view: view('a second review') });
+    expect(document.querySelector('.checkpoint-panel')).not.toBeNull();
+  });
+
   it('replays one chip per persisted revision marker, in order', () => {
     host.provider.restoreChat({
       conversationHistory: [

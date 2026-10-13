@@ -18,7 +18,7 @@ import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
 import { planSummaryLabel, nextDock } from './planDock';
 import { DetailContext } from './detail';
 import { useFollowOutput } from './followOutput';
-import { slashHelp } from '../../commands/slashCommands';
+import { isBuiltinSlashCommand, slashHelp } from '../../commands/slashCommands';
 import type { HostToWebview, SettingsChange, WebviewToHost } from '../../shared/protocol';
 import { hasHiddenDetail } from '@ordewell/core/plan-utils';
 import { patchedBlocks } from '../../shared/conversationPatch';
@@ -72,7 +72,6 @@ export default function App() {
   const setError = useCallback((v: string) => dispatch({ type: 'patchError', error: v }), []);
   const setIsReady = useCallback((v: boolean) => dispatch({ type: 'patchReady', ready: v }), []);
   const setRunners = useCallback((v: Updatable<RunnerId[]>) => dispatch({ type: 'patchRunners', runners: v }), []);
-  const setCheckpoint = useCallback((v: HostState['checkpoint']) => dispatch({ type: 'patchCheckpoint', checkpoint: v }), []);
   const setDockHeight = useCallback((v: number | undefined) => dispatch({ type: 'patchDockHeight', height: v }), []);
   const setDockExpanded = useCallback((v: Updatable<boolean>) => dispatch({ type: 'patchDockExpanded', expanded: v }), []);
   const blocks = useMemo(() => patchedBlocks(conversation), [conversation]);
@@ -374,10 +373,11 @@ export default function App() {
   }, []);
 
   // Send now (ADR-0023, F5): stop the planner turn and send this ahead of the
-  // queue. With no turn running it is a plain send; a slash command is one
-  // either way, since the hold never applies to commands.
+  // queue. With no turn running it is a plain send. A built-in slash command is
+  // the host's either way — the hold never applies to commands — but a skill
+  // invocation (`/name …`) is a planner prompt, so Send now stops the turn.
   const handleSendNow = useCallback((text: string) => {
-    if (!isResearchActive || text.startsWith('/')) {
+    if (!isResearchActive || isBuiltinSlashCommand(text)) {
       handleSend(text);
       return;
     }
@@ -438,7 +438,7 @@ export default function App() {
   const handleApproveCheckpoint = useCallback(() => {
     if (!checkpoint) return;
     vscode.postMessage({ type: 'answerCheckpoint', taskId: checkpoint.taskId, approved: true });
-    setCheckpoint(null);
+    dispatch({ type: 'checkpointAnswered' });
   }, [checkpoint]);
 
   const handleRejectCheckpoint = useCallback((reason: string) => {
@@ -447,7 +447,7 @@ export default function App() {
     // the task), and the panel is torn down immediately — leaving a decision
     // box on screen after the decision is made asks the user to answer twice.
     vscode.postMessage({ type: 'answerCheckpoint', taskId: checkpoint.taskId, approved: false, reason });
-    setCheckpoint(null);
+    dispatch({ type: 'checkpointAnswered' });
   }, [checkpoint]);
 
   const handleMergeTasks = useCallback((taskIds: string[]) => {

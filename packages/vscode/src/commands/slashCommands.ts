@@ -36,6 +36,16 @@ export const SLASH_COMMAND_NAMES: ReadonlySet<string> = new Set(
   SLASH_COMMANDS.map((c) => c.label.trim().slice(1).split(/\s+/)[0]),
 );
 
+/**
+ * Whether the text names a built-in the host answers itself, as opposed to a
+ * discovered skill invocation (or unknown) that goes to the planner. Pure, so
+ * the webview can share the rule without importing the host's parser.
+ */
+export function isBuiltinSlashCommand(text: string): boolean {
+  const name = text.trim().slice(1).split(/\s+/)[0]?.toLowerCase();
+  return !!name && SLASH_COMMAND_NAMES.has(name);
+}
+
 export function slashHelp(): string {
   return SLASH_COMMANDS.map((c) => `${c.label.trim()} — ${c.detail}`).join('\n');
 }
