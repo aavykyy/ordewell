@@ -1,19 +1,18 @@
-import { EMPTY_HOLD, fromTranscript, holdPrompt, isSupervisorLevel, taskStartedNotice } from '@ordewell/core';
-import { isolationOfPlan } from '../isolation';
+import { EMPTY_HOLD, fromTranscript, holdPrompt, taskStartedNotice, type RunnerId } from '@ordewell/core';
 import { chatEditorRoomFor } from './geometry';
 import { chatScrollMax } from './layout';
 import { activeToken, findCommand, parseSlash, tokenCompletions } from './slash';
 import { applyKey, commit } from './editor';
 import { say, wiped } from './transcript';
-import { blockedPicker, clearIsolation, handoffArrived, isolationForPlan, sameIsolation, showDiff, withDeferral } from './handoff';
-import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, type RunMergeView, type RunStatus, type TaskView, type TuiState } from './state';
+import { blockedPicker, handoffArrived, showDiff } from './handoff';
+import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, type RunStatus, type TaskView, type TuiState } from './state';
 import type { Key } from './keys';
 import { handleOverlayKey } from './reducers/overlays';
 import { handlePlanKey } from './reducers/planPane';
 import { announceApprovals, announceCheckpoint, continueTaskStep, handleTaskViewKey, openTaskView, taskLogAbandoned, taskLogArrived, taskLogLoaded } from './reducers/taskView';
 import { pickRewindTarget, runCommand, skillInTaskView, unknownCommand } from './reducers/commands';
 import { disarmStop, drainQueue, plannerEscape } from './reducers/turnQueue';
-import { applySettings, followSession, normalizeTasks, runLabel } from './reducers/incoming';
+import { applyIsolationRecord, applySettings, clearRunIsolation, foldRun, followSession, planSnapshot, runLabel, withRun } from './reducers/incoming';
 import { refillPicker } from './reducers/pickers';
 import { refreshStepper } from './reducers/stepper';
 import {
@@ -51,25 +50,23 @@ function reduceAction(state: TuiState, action: Action): Step {
     // Isolation belongs to one session's plan, and task ids repeat across
     // sessions, so nothing of the last one's may carry over into this.
     case 'sessionStarted':
-      return step(clearIsolation({ ...state, sessionId: action.sessionId, goal: action.goal, taskView: null }));
+      return step(withRun({ ...state, sessionId: action.sessionId, goal: action.goal, taskView: null }, clearRunIsolation(state.run)));
 
     // The daemon registers a session only once planning succeeds; when it does
     // not, holding on to the id would send every next message to a session the
     // server never had.
     case 'sessionCleared':
       // Prompts belong to the session that raised them; the old planner is gone.
-      return step({
-        ...clearIsolation(state),
+      return step(withRun({
+        ...state,
         sessionId: null,
         goal: '',
-        runAutoMerge: null,
-        runSupervisor: null,
         taskView: null,
         pendingApprovals: [],
         queuedPrompts: EMPTY_HOLD,
         stopArmed: false,
         overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
-      });
+      }, { ...clearRunIsolation(state.run), runSettings: undefined }));
 
     case 'chatRestored':
       if (stale(state, action.sessionId)) return step(state);
@@ -77,10 +74,12 @@ function reduceAction(state: TuiState, action: Action): Step {
 
     case 'planUpdated': {
       if (stale(state, action.sessionId)) return step(state);
-      // A saved plan carries its isolation record; a planner reply does not,
-      // and says nothing about it, so what the stream last reported stays.
-      const isolation = isolationOfPlan(action.plan);
-      const tasks = isolationForPlan(normalizeTasks(action.plan), isolation, state.tasks);
+      // The plan folds into the run view, which keeps every status-only field
+      // the stream last reported — a checkpoint, continuable, a merge gate. A
+      // saved plan's isolation record is read on top, since a load had no live
+      // stream to tell it; a planner reply carries none and leaves it as it was.
+      const folded = applyIsolationRecord(foldRun(state, planSnapshot(action.plan)), action.plan);
+      const { tasks } = folded;
       // A plan refresh can supersede the task whose prompt is open; the editor
       // survives only while its task does. The cursor is clamped against the
       // visible rows afterwards, so an expanded parent's subtasks count.
@@ -89,11 +88,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       const expandedTaskId =
         state.expandedTaskId && findTask(tasks, state.expandedTaskId) ? state.expandedTaskId : null;
       const next: TuiState = {
-        ...state,
-        tasks,
-        runAutoMerge: (action.plan as { runSettings?: { mergeAtGatesAutomatically: boolean } })?.runSettings?.mergeAtGatesAutomatically ?? null,
-        ...supervisorOf(action.plan),
-        handoff: isolation ? withDeferral(isolation.handoff, state.handoff) : state.handoff,
+        ...folded,
         status: plannerInFlight(state) ? 'idle' : state.status,
         busyLabel: '',
         expandedTaskId,
@@ -120,6 +115,12 @@ function reduceAction(state: TuiState, action: Action): Step {
       if (stale(state, action.sessionId)) return step(state);
       return step(followSession(state, action.message));
 
+    // The run as the daemon sends it when a socket connects: the whole view is
+    // adopted, so a surface joining mid-run has it before the next update.
+    case 'runSnapshot':
+      if (stale(state, action.sessionId)) return step(state);
+      return step(withRun(state, action.view));
+
     case 'taskLog':
       if (stale(state, action.sessionId)) return step(state);
       return step(announceApprovals(taskLogArrived(state, action), action));
@@ -142,66 +143,33 @@ function reduceAction(state: TuiState, action: Action): Step {
       // pending, so a genuine second start still speaks).
       const existing = findTask(state.tasks, action.taskId);
       if (existing && isTaskRunning(existing)) return step(state);
-      const tasks = state.tasks.map((t) => (t.id === action.taskId && !isTaskRunning(t) ? { ...t, status: 'in_progress' } : t));
-      const spoken = say(state, 'system', taskStartedNotice(action.title, action.runner));
-      return step({ ...spoken, tasks, status: 'executing', busyLabel: runLabel(tasks) });
+      const folded = foldRun(state, {
+        type: 'task_started',
+        taskId: action.taskId,
+        order: action.order ?? 0,
+        title: action.title,
+        runner: (action.runner ?? 'claude-code') as RunnerId,
+      });
+      const spoken = say(folded, 'system', taskStartedNotice(action.title, action.runner));
+      return step({ ...spoken, status: 'executing', busyLabel: runLabel(spoken.tasks, spoken.runMerge) });
     }
 
     case 'taskCheckpoint':
       if (stale(state, action.sessionId)) return step(state);
       return step(announceCheckpoint(state, action));
 
-    case 'taskStatus': {
-      if (stale(state, action.sessionId) || !state.tasks.some((t) => t.id === action.taskId)) return step(state);
-      // This event names no reason, so one kept from an earlier wait would be stale.
-      const tasks = state.tasks.map((t) => (t.id === action.taskId ? { ...t, status: action.status, awaitingReason: undefined, resumeAt: undefined, checkpoint: undefined } : t));
+    case 'statusUpdate': {
+      if (stale(state, action.sessionId)) return step(state);
+      const next = foldRun(state, {
+        type: 'status_update',
+        tasks: action.tasks,
+        ...(action.runMerge !== undefined ? { runMerge: action.runMerge } : {}),
+        ...(action.usage !== undefined ? { usage: action.usage } : {}),
+      });
       // The indicator follows the tasks, not the stream: once none is running
       // the run is over, whatever the daemon's scheduler still holds armed.
-      const status = runStatus(state, tasks);
-      return step({ ...state, status, tasks, busyLabel: status === 'executing' ? runLabel(tasks, state.runMerge) : state.busyLabel });
-    }
-
-    case 'tasksStatus': {
-      if (stale(state, action.sessionId)) return step(state);
-      const updates = action.updates;
-      let changed = false;
-      const applyStatus = (original: TaskView): TaskView => {
-        const subtasks = original.subtasks?.map(applyStatus);
-        const t = subtasks?.some((s, i) => s !== original.subtasks?.[i]) ? { ...original, subtasks } : original;
-        const update = updates[t.id];
-        if (update === undefined) return t;
-        const idleSince = update.idleSince ?? null;
-        const isolation = update.isolation ?? t.isolation;
-        const awaitingReason = update.awaitingReason;
-        const resumeAt = update.resumeAt;
-        const checkpoint = update.checkpoint;
-        const continuable = update.continuable === true;
-        const awaitingApproval = update.awaitingApproval;
-        const mergeGate = update.mergeGate;
-        const forcedPastGate = update.forcedPastGate;
-        const attemptUsage = update.attemptUsage ?? t.attemptUsage;
-        if (
-          JSON.stringify(attemptUsage) !== JSON.stringify(t.attemptUsage) || update.status !== t.status || idleSince !== (t.idleSince ?? null) || !sameIsolation(isolation, t.isolation)
-          || awaitingReason !== t.awaitingReason || resumeAt !== t.resumeAt || checkpoint !== t.checkpoint
-          || continuable !== (t.continuable ?? false) || awaitingApproval !== t.awaitingApproval
-          || !sameList(mergeGate, t.mergeGate) || !sameList(forcedPastGate, t.forcedPastGate)
-        ) {
-          changed = true;
-          return { ...t, status: update.status, idleSince, isolation, awaitingReason, resumeAt, checkpoint, continuable, awaitingApproval, mergeGate, forcedPastGate, attemptUsage };
-        }
-        return t;
-      };
-      const tasks = state.tasks.map(applyStatus);
-      // An update that does not say (an older daemon) leaves the view as it was.
-      const runMerge = action.runMerge === undefined ? state.runMerge : action.runMerge;
-      const runMergeChanged = !sameRunMerge(runMerge, state.runMerge);
-      // Skip a new state object when nothing actually changed — a no-op
-      // status_update still triggers a render via dispatch, but at least
-      // the reference equality lets downstream memos keep their hits.
-      if (!changed && !runMergeChanged) return step(state);
-      const next = { ...state, tasks, runMerge };
-      const status = runStatus(next, tasks);
-      return step({ ...next, status, busyLabel: status === 'executing' ? runLabel(tasks, runMerge) : state.busyLabel });
+      const status = runStatus(next, next.tasks);
+      return step({ ...next, status, busyLabel: status === 'executing' ? runLabel(next.tasks, next.runMerge) : state.busyLabel });
     }
 
     case 'isolationBlocked': {
@@ -211,7 +179,11 @@ function reduceAction(state: TuiState, action: Action): Step {
 
     case 'isolationHandoff': {
       if (stale(state, action.sessionId)) return step(state);
-      return step(handoffArrived(state, action.handoff));
+      // Announce against the handoff the pane already held — a deferred one for
+      // the same run words the follow-up as the supervisor leaving it — then
+      // fold the fresh handoff into the run view.
+      const announced = handoffArrived(state, action.handoff);
+      return step(foldRun(announced, { type: 'isolation_handoff', ...action.handoff }));
     }
 
     case 'handoffDiff': {
@@ -224,7 +196,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       // Whatever overlay the discard or merge was confirmed from is already closed; one
       // opened since (a picker, help) has nothing to do with the run and stays.
       const overlay = state.overlay?.kind === 'handoff' ? null : state.overlay;
-      return step({ ...clearIsolation(state), overlay });
+      return step({ ...withRun(state, clearRunIsolation(state.run)), overlay });
     }
 
     case 'executionComplete': {
@@ -299,8 +271,8 @@ function reduceAction(state: TuiState, action: Action): Step {
     // A fork holds no run, whatever the session it came from was doing — the
     // original keeps its run, and its events are stale from here on.
     case 'sessionForked':
-      return step({
-        ...clearIsolation(state),
+      return step(withRun({
+        ...state,
         sessionId: action.sessionId,
         goal: action.goal,
         taskView: null,
@@ -311,7 +283,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         queuedPrompts: EMPTY_HOLD,
         stopArmed: false,
         overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
-      });
+      }, clearRunIsolation(state.run)));
 
     // The rewound message comes back as a draft to edit and resend, so it lands
     // as if just typed: history is not being browsed, and nothing is parked.
@@ -386,15 +358,6 @@ function reduceAction(state: TuiState, action: Action): Step {
       if (!state.stopArmed || action.arm !== state.stopArmToken) return step(state);
       return step(disarmStop(state));
   }
-}
-
-function sameList(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
-  return (a ?? []).join('\0') === (b ?? []).join('\0');
-}
-
-function sameRunMerge(a: RunMergeView | null, b: RunMergeView | null): boolean {
-  if (!a || !b) return a === b;
-  return a.waitingAtGate === b.waitingAtGate && a.paused === b.paused && JSON.stringify(a.handoff) === JSON.stringify(b.handoff);
 }
 
 function runStatus(state: TuiState, tasks: TaskView[]): RunStatus {
@@ -535,14 +498,4 @@ function submit(state: TuiState): Step {
     : { type: 'startConversation', goal: text };
 
   return step({ ...spoken, status: 'planning', stopRequested: false }, [effect]);
-}
-
-/** The run's own supervisor level, read off a plan loosely: a plan with no run has none. */
-function supervisorOf(plan: unknown): Pick<TuiState, 'runSupervisor'> {
-  const { runSettings } = (plan ?? {}) as { runSettings?: { supervisorLevel?: unknown; unsupervised?: unknown } };
-  if (!runSettings) return { runSupervisor: null };
-  const unsupervised = typeof runSettings.unsupervised === 'string' ? runSettings.unsupervised : undefined;
-  return {
-    runSupervisor: { level: isSupervisorLevel(runSettings.supervisorLevel) ? runSettings.supervisorLevel : 'off', ...(unsupervised ? { unsupervised } : {}) },
-  };
 }

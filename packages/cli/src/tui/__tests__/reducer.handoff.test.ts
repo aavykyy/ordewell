@@ -346,32 +346,32 @@ describe('a merge while the handoff is deferred', () => {
 });
 
 describe('per-task isolation on the plan', () => {
-  const conflict = { state: 'conflict' as const, branch: 'ordewell/r1/2-t2', worktree: '/w/2-t2' };
+  const conflict = { state: 'conflict' as const, branch: 'ordewell/r1/2-t2', worktree: '/w/2-t2', repos: [] };
 
   it('takes each task\'s isolation from the status stream', () => {
     const { state } = apply(session({ tasks: [task({ id: 't2', status: 'awaiting_user' })] }), {
-      type: 'tasksStatus', sessionId: 's1', updates: { t2: { status: 'awaiting_user', isolation: conflict } },
+      type: 'statusUpdate', sessionId: 's1', tasks: [{ id: 't2', status: 'awaiting_user', verdict: null, isolation: conflict }],
     });
 
     expect(state.tasks[0].isolation).toEqual(conflict);
   });
 
   it('notices a repair attempt or its repaired files changing even when the state did not (ADR-0015)', () => {
-    const repairing = { state: 'repairing' as const, branch: 'b', worktree: 'w', repair: { attempt: 1, limit: 2 } };
+    const repairing = { state: 'repairing' as const, branch: 'b', worktree: 'w', repos: [], repair: { attempt: 1, limit: 2 } };
     const before = session({ tasks: [task({ id: 't2', status: 'in_progress', isolation: repairing })] });
 
     const { state } = apply(before, {
-      type: 'tasksStatus', sessionId: 's1',
-      updates: { t2: { status: 'in_progress', isolation: { ...repairing, repair: { attempt: 2, limit: 2 } } } },
+      type: 'statusUpdate', sessionId: 's1',
+      tasks: [{ id: 't2', status: 'in_progress', verdict: null, isolation: { ...repairing, repair: { attempt: 2, limit: 2 } } }],
     });
 
     expect(state.tasks[0].isolation).toEqual({ ...repairing, repair: { attempt: 2, limit: 2 } });
   });
 
   it('notices an isolation change even when the status did not', () => {
-    const before = session({ tasks: [task({ id: 't2', status: 'awaiting_user', isolation: { state: 'active', branch: 'b', worktree: 'w' } })] });
+    const before = session({ tasks: [task({ id: 't2', status: 'awaiting_user', isolation: { state: 'active', branch: 'b', worktree: 'w', repos: [] } })] });
 
-    const { state } = apply(before, { type: 'tasksStatus', sessionId: 's1', updates: { t2: { status: 'awaiting_user', isolation: conflict } } });
+    const { state } = apply(before, { type: 'statusUpdate', sessionId: 's1', tasks: [{ id: 't2', status: 'awaiting_user', verdict: null, isolation: conflict }] });
 
     expect(state.tasks[0].isolation?.state).toBe('conflict');
   });

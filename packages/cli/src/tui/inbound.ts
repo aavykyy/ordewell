@@ -1,8 +1,6 @@
-import { isAwaitingReason, type SessionMessage, type SessionNotice } from '@ordewell/core';
+import type { SessionMessage, SessionNotice } from '@ordewell/core';
 import type { WsEvent } from '../apiClient';
-import { sanitize } from './ansi';
 import type { Action } from './reducer';
-import type { TaskStatusUpdate } from './reducers/shared';
 
 /*
  * One session's inbound events, whichever subscription delivered them.
@@ -289,6 +287,15 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
   };
 
   const receive = (kind: Kind, id: string, event: WsEvent): void => {
+    // The daemon greets every socket with the run as it stands, so a client
+    // that joins mid-run has it before the next update. The first copy is
+    // adopted; a second subscription's is dropped like any other broadcast.
+    if (event.type === 'run_snapshot') {
+      flush();
+      if (!copies.first(id, identity(event))) return;
+      dispatch({ type: 'runSnapshot', view: event.view, sessionId });
+      return;
+    }
     if (isStreamed(event)) {
       // Streamed prose has one voice: the planning subscription. A run's own
       // socket ignores it, as it always has.
@@ -339,30 +346,18 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
  */
 function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionId: string): void {
   switch (event.type) {
-    case 'status_update': {
-      const updates: Record<string, TaskStatusUpdate> = {};
-      for (const task of event.tasks ?? []) {
-        updates[String(task.id)] = {
-          status: String(task.status),
-          idleSince: task.idleSince ?? null,
-          isolation: task.isolation,
-          awaitingReason: isAwaitingReason(task.awaitingReason) ? task.awaitingReason : undefined,
-          ...(typeof task.resumeAt === 'string' ? { resumeAt: task.resumeAt } : {}),
-          ...(typeof task.checkpoint === 'string' && task.checkpoint ? { checkpoint: sanitize(task.checkpoint) } : {}),
-          ...(task.continuable ? { continuable: true } : {}),
-          awaitingApproval: typeof task.awaitingApproval === 'number' && task.awaitingApproval > 0 ? task.awaitingApproval : undefined,
-          ...(task.mergeGate?.length ? { mergeGate: task.mergeGate.map(String) } : {}),
-          ...(Array.isArray(task.attemptUsage) ? { attemptUsage: task.attemptUsage as TaskStatusUpdate['attemptUsage'] } : {}),
-          ...(task.forcedPastGate?.length ? { forcedPastGate: task.forcedPastGate.map(String) } : {}),
-        };
-      }
-      const runMerge = event.runMerge ? { waitingAtGate: event.runMerge.waitingAtGate === true, paused: event.runMerge.paused === true, handoff: { repos: event.runMerge.repos, landed: event.runMerge.landed } } : null;
-      dispatch({ type: 'tasksStatus', updates, runMerge, sessionId });
+    case 'status_update':
+      dispatch({
+        type: 'statusUpdate',
+        tasks: event.tasks,
+        ...(event.runMerge ? { runMerge: event.runMerge } : {}),
+        ...(event.usage ? { usage: event.usage } : {}),
+        sessionId,
+      });
       return;
-    }
 
     case 'task_started':
-      dispatch({ type: 'taskStarted', taskId: String(event.taskId), title: String(event.title ?? event.taskId), runner: event.runner, sessionId });
+      dispatch({ type: 'taskStarted', taskId: String(event.taskId), order: event.order, title: String(event.title ?? event.taskId), runner: event.runner, sessionId });
       return;
 
     // The extension shows these in its checkpoint panel; here they are a

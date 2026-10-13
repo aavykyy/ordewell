@@ -93,7 +93,7 @@ export function isolationOfPlan(plan: unknown): PlanIsolationView | null {
       ...(Array.isArray(record.conflictFiles) && record.conflictFiles.length > 0 ? { conflictFiles: record.conflictFiles.map(String) } : {}),
       // No `repair` (attempt/limit): `conflictRepairAttempts` is server config, never
       // sent in a persisted plan, so it cannot be reconstructed here. A live
-      // `tasksStatus` update fills it in once the stream catches up.
+      // `status_update` fills it in once the stream catches up.
       ...(repairedFiles ? { repairedFiles } : {}),
     };
     if (state === 'integrated' && record.inHead !== true) {

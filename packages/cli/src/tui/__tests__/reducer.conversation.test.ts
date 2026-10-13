@@ -60,7 +60,7 @@ describe('switching to a fork', () => {
   it('then ignores the original session\'s events', () => {
     const { state } = reduce(initialState(planned), { type: 'sessionForked', sessionId: 'session-2', goal: 'g' });
 
-    const after = reduce(state, { type: 'taskStatus', taskId: 'task-1', status: 'in_progress', sessionId: 'session-1' });
+    const after = reduce(state, { type: 'statusUpdate', tasks: [{ id: 'task-1', status: 'in_progress', verdict: null }], sessionId: 'session-1' });
 
     expect(after.state.tasks[0].status).toBe('pending');
   });

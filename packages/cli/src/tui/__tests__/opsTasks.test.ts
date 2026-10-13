@@ -16,6 +16,8 @@ const handoff: HandoffView = {
   landed: [{ taskId: 't1', order: 1, title: 'Bump the version' }],
 };
 const runMerge: RunMergeView = { waitingAtGate: true, paused: true, handoff };
+/** The run's merge view as the wire carries it: repos and landed flat, not nested under the handoff. */
+const wireMerge = (m: RunMergeView) => ({ waitingAtGate: m.waitingAtGate, paused: m.paused, repos: m.handoff.repos, landed: m.handoff.landed });
 
 const change = (over: Partial<TaskView> = {}): TaskView => ({
   id: 't1', order: 1, title: 'Bump the version', type: 'ai', status: 'completed', dependencies: [], ...over,
@@ -38,14 +40,14 @@ describe('ops tasks and merge gates in the TUI (ADR-0020)', () => {
   it('takes the gate from a status update, and says the run is paused for Merge all', () => {
     const state = plan([change(), deploy()], { status: 'executing' });
 
-    const next = apply(state, { type: 'tasksStatus', sessionId: 's1', runMerge, updates: { o2: { status: 'pending', idleSince: null, mergeGate: ['t1'] } } }).state;
+    const next = apply(state, { type: 'statusUpdate', sessionId: 's1', runMerge: wireMerge(runMerge), tasks: [{ id: 'o2', status: 'pending', verdict: null, idleSince: null, mergeGate: ['t1'] }] }).state;
 
     expect(next.runMerge).toEqual(runMerge);
     expect(next.tasks[1].mergeGate).toEqual(['t1']);
     expect(next.status).toBe('executing');
     expect(next.busyLabel).toBe('paused for Merge all — /handoff merge');
 
-    const cleared = apply(next, { type: 'tasksStatus', sessionId: 's1', runMerge: null, updates: { o2: { status: 'in_progress', idleSince: null } } }).state;
+    const cleared = apply(next, { type: 'statusUpdate', sessionId: 's1', tasks: [{ id: 'o2', status: 'in_progress', verdict: null, idleSince: null }] }).state;
     expect(cleared.runMerge).toBeNull();
     expect(cleared.tasks[1].mergeGate).toBeUndefined();
   });
@@ -102,14 +104,14 @@ describe('ops tasks and merge gates in the TUI (ADR-0020)', () => {
 
   it('shows the unmerged landing count quietly and clears it without task status changes', () => {
     const state = plan([change(), change({ id: 't2', order: 2, status: 'in_progress' })], { status: 'executing' });
-    const next = apply(state, { type: 'tasksStatus', updates: {}, runMerge: { ...runMerge, waitingAtGate: false, paused: false } }).state;
+    const next = apply(state, { type: 'statusUpdate', tasks: [], runMerge: wireMerge({ ...runMerge, waitingAtGate: false, paused: false }) }).state;
 
     expect(frame(next)).toContain('1 landed task not merged');
     expect(frame(next)).not.toContain('paused for Merge all');
     expect(frame(next)).not.toContain('waits for Merge all');
     expect(next.overlay).toBeNull();
 
-    const cleared = apply(next, { type: 'tasksStatus', updates: {}, runMerge: null }).state;
+    const cleared = apply(next, { type: 'statusUpdate', tasks: [] }).state;
     expect(frame(cleared)).not.toContain('landed task');
   });
 

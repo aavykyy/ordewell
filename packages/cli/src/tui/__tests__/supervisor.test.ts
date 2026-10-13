@@ -96,7 +96,16 @@ describe('run settings in the TUI (ADR-0030)', () => {
   });
 
   it('marks a task the supervisor added', () => {
-    const added = plan({ tasks: [task, { ...task, id: 't2', order: 2, title: 'Add a cache', status: 'pending', addedBy: 'supervisor' }] });
+    const added = apply(plan(), {
+      type: 'planUpdated',
+      sessionId: 's1',
+      plan: {
+        tasks: [
+          { id: 't1', order: 1, title: 'Build', type: 'ai', status: 'in_progress', dependencies: [] },
+          { id: 't2', order: 2, title: 'Add a cache', type: 'ai', status: 'pending', dependencies: [], addedBy: 'supervisor' },
+        ],
+      },
+    }).state;
     expect(frame(added)).toMatch(/added by supervisor/);
     expect(frame(plan())).not.toMatch(/added by supervisor/);
   });

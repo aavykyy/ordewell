@@ -34,9 +34,9 @@ describe('what an awaiting task waits on, on its row', () => {
 describe('the reason, from the daemon', () => {
   it('is taken from each status update, and dropped once the task stops waiting', () => {
     const base = initialState({ sessionId: 's1', tasks: [task({ status: 'in_progress' })] });
-    const waiting = reduce(base, { type: 'tasksStatus', updates: { t1: { status: 'awaiting_user', awaitingReason: 'input' } }, sessionId: 's1' }).state;
+    const waiting = reduce(base, { type: 'statusUpdate', tasks: [{ id: 't1', status: 'awaiting_user', verdict: null, awaitingReason: 'input' }], sessionId: 's1' }).state;
     expect(waiting.tasks[0].awaitingReason).toBe('input');
-    const resumed = reduce(waiting, { type: 'tasksStatus', updates: { t1: { status: 'in_progress' } }, sessionId: 's1' }).state;
+    const resumed = reduce(waiting, { type: 'statusUpdate', tasks: [{ id: 't1', status: 'in_progress', verdict: null }], sessionId: 's1' }).state;
     expect(resumed.tasks[0].awaitingReason).toBeUndefined();
   });
 
@@ -52,8 +52,10 @@ describe('the reason, from the daemon', () => {
       ],
     };
     receive(wire as WsEvent);
-    const update = actions.find((a) => a.type === 'tasksStatus');
-    expect(update).toMatchObject({ updates: { t1: { awaitingReason: 'conflict' }, t2: { awaitingReason: undefined } } });
+    const base = initialState({ sessionId: 's1', tasks: [task({ id: 't1' }), task({ id: 't2' })] });
+    const state = actions.reduce((s, action) => reduce(s, action).state, base);
+    expect(state.tasks.find((t) => t.id === 't1')?.awaitingReason).toBe('conflict');
+    expect(state.tasks.find((t) => t.id === 't2')?.awaitingReason).toBeUndefined();
   });
 
   it('comes with a loaded plan', () => {

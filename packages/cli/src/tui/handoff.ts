@@ -2,8 +2,8 @@ import type { Effect, Step } from './reducers/shared';
 import { say } from './transcript';
 import { sanitize } from './ansi';
 import type { Key } from './keys';
-import { handoffBase, handoffBranch, isRepoGroup, repairedLanded, repairedNotice, reposWithWork, type PlanIsolationView } from '../isolation';
-import type { HandoffView, Overlay, PickerItem, TaskIsolationView, TaskView, TuiState } from './state';
+import { handoffBase, handoffBranch, isRepoGroup, repairedLanded, repairedNotice, reposWithWork } from '../isolation';
+import type { HandoffView, Overlay, PickerItem, TuiState } from './state';
 
 /**
  * The end-of-run handoff (ADR-0013): the run's work sits on one branch, and
@@ -262,43 +262,3 @@ export function chooseBlocked(state: TuiState, choice: BlockedChoice): Step {
 
 // ── Per-task isolation on the plan pane ──────────────────────────────────────
 
-export function sameIsolation(a: TaskIsolationView | undefined, b: TaskIsolationView | undefined): boolean {
-  return a?.state === b?.state && a?.branch === b?.branch && a?.worktree === b?.worktree
-    && a?.conflictRepo === b?.conflictRepo && (a?.repos ?? []).join('\0') === (b?.repos ?? []).join('\0')
-    && (a?.conflictFiles ?? []).join('\0') === (b?.conflictFiles ?? []).join('\0')
-    && a?.repair?.attempt === b?.repair?.attempt && a?.repair?.limit === b?.repair?.limit
-    && (a?.repairedFiles ?? []).join('\0') === (b?.repairedFiles ?? []).join('\0');
-}
-
-function mapTasks(tasks: TaskView[], map: (task: TaskView) => TaskView): TaskView[] {
-  return tasks.map((task) => {
-    const mapped = map(task);
-    return task.subtasks ? { ...mapped, subtasks: mapTasks(task.subtasks, map) } : mapped;
-  });
-}
-
-/** Isolation belongs to one session's run: forget it all, the handoff and every task's mark. */
-export function clearIsolation(state: TuiState): TuiState {
-  return {
-    ...state,
-    handoff: null,
-    runMerge: null,
-    tasks: mapTasks(state.tasks, ({ isolation: _dropped, ...task }) => task),
-  };
-}
-
-/**
- * Freshly normalized tasks with their isolation put back: from the saved plan's
- * run record when it came with one, else from what the tasks they replace showed.
- */
-export function isolationForPlan(tasks: TaskView[], record: PlanIsolationView | null, previous: TaskView[]): TaskView[] {
-  const known = new Map<string, TaskIsolationView>();
-  mapTasks(previous, (task) => {
-    if (task.isolation) known.set(task.id, task.isolation);
-    return task;
-  });
-  return mapTasks(tasks, (task) => {
-    const isolation = record ? (record.tasks[task.id] ?? { state: 'none' as const }) : known.get(task.id);
-    return isolation ? { ...task, isolation } : task;
-  });
-}

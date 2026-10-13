@@ -29,6 +29,7 @@ import type {
   ResolveConflictResponse,
   RewindTarget,
   RewindTargetsResponse,
+  RunSnapshotFrame,
   RunnersResponse,
   SessionListResponse,
   SessionMessage,
@@ -120,7 +121,7 @@ export interface ExecutionSummary {
  * compiled everywhere and was silently dropped by their `default:` arms. Naming
  * the real type turns that into a compile error at each surface.
  */
-export type WsEvent = SessionMessage | SessionNotice;
+export type WsEvent = SessionMessage | SessionNotice | RunSnapshotFrame;
 
 /** A held subscription to a session (`followSession`). `ended` is `'lost'` unless `close` ended it. */
 export interface SessionFollow {

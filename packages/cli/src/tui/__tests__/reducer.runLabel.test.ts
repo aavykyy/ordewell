@@ -29,12 +29,12 @@ describe('the status line during a run', () => {
     ({ state } = reduce(state, { type: 'taskStarted', taskId: 't2', title: 'Add reverse', runner: 'opencode', sessionId: 's1' }));
     expect(state.busyLabel).toBe('Add multiply · claude-code (+1 more)');
 
-    ({ state } = reduce(state, { type: 'tasksStatus', updates: { t1: { status: 'completed' }, t2: { status: 'in_progress' } }, sessionId: 's1' }));
+    ({ state } = reduce(state, { type: 'statusUpdate', tasks: [{ id: 't1', status: 'completed', verdict: null }, { id: 't2', status: 'in_progress', verdict: null }], sessionId: 's1' }));
     expect(state.busyLabel).toBe('Add reverse · opencode');
   });
 
   it('says the run is waiting on the user when only a conflicted task is left', () => {
-    const { state } = reduce(running(), { type: 'tasksStatus', updates: { t1: { status: 'completed' }, t2: { status: 'awaiting_user' } }, sessionId: 's1' });
+    const { state } = reduce(running(), { type: 'statusUpdate', tasks: [{ id: 't1', status: 'completed', verdict: null }, { id: 't2', status: 'awaiting_user', verdict: null }], sessionId: 's1' });
 
     expect(state.busyLabel).toBe('1 task waits for you');
   });
