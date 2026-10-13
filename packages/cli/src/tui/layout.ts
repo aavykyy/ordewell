@@ -393,9 +393,8 @@ function setupRow(label: string, value: string, command: string, cols: number): 
   return truncate(`${head}${gap}${style.grey(command)}`, cols - 1);
 }
 
-// Plain ASCII: mathematical alphanumerics fall back to wider glyphs in most
-// monospace fonts and overlap. Halves are painted separately so the cyan
-// reset never clips the bold.
+// The wordmark is plain ASCII: mathematical alphanumerics fall back to wider
+// glyphs in most monospace fonts and overlap.
 /**
  * The logo's icon on a braille dot grid (`#` stroke, `o` dot), traced from
  * assets/readme/logo-*.png: outer strokes that leave level, sweep into the
@@ -439,7 +438,7 @@ function brailleRows(grid: string[]): MarkCell[][] {
 const MARK = brailleRows([...MARK_TOP_HALF, ...[...MARK_TOP_HALF].reverse()]);
 
 /** Painted per frame, not at load: colour is only switched on or off once the terminal starts. */
-const paintMark = (row: MarkCell[]): string => row.map(({ glyph, dot }) => dot ? style.cyan(glyph) : glyph).join('');
+const paintMark = (row: MarkCell[]): string => row.map(({ glyph, dot }) => dot ? style.brand(glyph) : glyph).join('');
 
 const MARK_GAP = '  ';
 
@@ -453,11 +452,10 @@ const VERSION = cliVersion();
 function markLines(cols: number): string[] {
   const room = Math.max(0, cols - 1);
   const [top, mid, bottom] = MARK.map(paintMark);
-  // Letter-spaced because a bold `ew` fuses: `w` fills its cell and synthetic
-  // bold bleeds a pixel right. The halves are painted apart so the cyan reset
-  // never clips the bold, with the join between them left unstyled.
-  const spaced = (word: string): string => [...word].join(' ');
-  const wordmark = `${style.bold(spaced('orde'))} ${style.bold(style.cyan(spaced('well')))}`;
+  // As the logo sets it: `orde` plain, `well` bold in the brand teal. Only the
+  // second half is bold, so the `ew` join cannot fuse — synthetic bold bleeds a
+  // pixel right, out of the `e` and into the `w` when both were bold.
+  const wordmark = `orde${style.bold(style.brand('well'))}`;
   const named = `${mid}${MARK_GAP}${wordmark}`;
   const versioned = VERSION === 'unknown' ? named : `${named}${MARK_GAP}${style.grey(`v${VERSION}`)}`;
   const textRoom = room - width(mid) - MARK_GAP.length;
@@ -518,7 +516,7 @@ const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', 
 const STATUS_PAINT: Record<TaskStatusKind, (text: string) => string> = {
   done: style.green,
   running: style.yellow,
-  quiet: style.cyan,
+  quiet: style.brand,
   failed: style.red,
   blocked: style.red,
   awaiting: style.yellow,
@@ -565,7 +563,7 @@ export function planLayout(state: TuiState, rows: number, cols: number): PlanLay
   const totalUsage = planUsage(state.tasks);
   const unmerged = state.runMerge?.handoff.landed.length ?? 0;
   const lines = [
-    style.bold(truncate(`Plan ${done}/${state.tasks.length}`, cols)),
+    truncate(`${style.bold(style.brand('Plan'))} ${style.grey(`${done}/${state.tasks.length}`)}`, cols),
     totalUsage.attempts ? style.grey(truncate(`Tasks total: ${taskUsageText(totalUsage)}`, cols)) : '',
   ];
   if (unmerged > 0) {
@@ -582,6 +580,8 @@ export function planLayout(state: TuiState, rows: number, cols: number): PlanLay
   // nothing because the caret is below the viewport.
   let editorLine: number | undefined;
   planRows(state).forEach((row, i) => {
+    // A blank line between top-level tasks; a subtask stays tight to its parent.
+    if (i > 0 && !row.parent) lines.push('');
     const taskStart = lines.length;
     const renderedTask = taskLines(state, row, i, cols, orderOf);
     if (row.task.id === state.expandedTaskId && renderedTask.editorLine !== undefined) {
@@ -693,7 +693,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
       : row.kind === 'ops'
         ? style.magenta('OPS')
         : style.grey(' AI');
-  const caret = selected ? style.cyan('❯') : ' ';
+  const caret = selected ? style.brand('❯') : ' ';
 
   // A subtask row names itself by its dotted order ("2.1") and steps in under
   // its parent; the top-level order number keeps its two-wide pad.
@@ -735,7 +735,9 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   const skills = (task.skills ?? []).join(' · ');
   const origin = task.addedBy === 'supervisor' ? 'added by supervisor' : '';
   const meta = [activity, origin, runner, model].filter(Boolean).join(' · ');
-  if (meta) lines.push(style.grey(truncate(`${bodyPad}${meta}`, cols)));
+  // Runner and model hang under the title. Warnings and the expanded sheet
+  // keep the shallower `bodyPad`: they need the room more than the alignment.
+  if (meta) lines.push(style.grey(truncate(`${continuation}${meta}`, cols)));
   // The one isolation state that needs the user; every other stays out of the
   // row and shows only in the expanded detail below.
   if (row.conflict) {

@@ -102,6 +102,15 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **The terminal UI takes the logo's teal and your theme's background.** One
+  accent, the logo's teal, marks the prompt, the planner, carets, headings and
+  the welcome wordmark (now `ordewell` as the logo sets it, not letter-spaced);
+  yellow, green and red are left to mean a state. The grey band under your
+  messages and the composer is mixed from the background your terminal
+  reports, so it is a lighter step on a dark theme and a darker one on a light
+  theme instead of a near-black slab. The plan pane puts a blank line between
+  tasks and hangs runner and model under the title, and footer keys read
+  brighter than what they do.
 - **`/planner` is one stepped flow.** In the terminal UI and in VS Code it
   walks Harness › Model › Effort; VS Code saves once, at the end, and
   cancelling there applies nothing. `/planner <provider>`, `/model` and `/planner-effort`

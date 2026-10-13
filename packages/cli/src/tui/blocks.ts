@@ -39,9 +39,9 @@ function tailOf(text: string, max: number): string {
 // ── Messages and thinking ────────────────────────────────────────────────────
 
 const ROLE_PREFIX: Record<MessageRole, Paint> = {
-  user: (t) => `${style.cyan('❯')} ${t}`,
-  planner: (t) => `${style.magenta('◆')} ${t}`,
-  agent: (t) => `${style.magenta('◆')} ${t}`,
+  user: (t) => `${style.bandGrey('❯')} ${t}`,
+  planner: (t) => `${style.brand('◆')} ${t}`,
+  agent: (t) => `${style.brand('◆')} ${t}`,
   supervisor: (t) => `${style.yellow('◇')} ${t}`,
   wake_up: (t) => style.yellow(`↯ ${t}`),
   system: (t) => style.grey(`· ${t}`),
@@ -76,7 +76,7 @@ function skillPaintedLines(text: string, skills: readonly string[], room: number
       const from = Math.max(token.start - start, at);
       const to = Math.min(token.end - start, line.length);
       if (to <= from) continue;
-      painted += line.slice(at, from) + style.cyan(line.slice(from, to));
+      painted += line.slice(at, from) + style.brand(line.slice(from, to));
       at = to;
     }
     return painted + line.slice(at);
@@ -286,7 +286,7 @@ function subagentHeader(block: SubagentBlock, cols: number): string {
   const head = brief ? ' Agent: ' : ' Agent';
   const briefRoom = cols - width(`◆${head}  ${status}`);
   if (briefRoom < 4) return truncate(`◆${head}${brief}  ${status}`, cols);
-  const named = `${style.cyan('◆')}${head}${truncate(brief, briefRoom)}  ${SUBAGENT_PAINT[block.status](status)}`;
+  const named = `${style.brand('◆')}${head}${truncate(brief, briefRoom)}  ${SUBAGENT_PAINT[block.status](status)}`;
   const digest = firstLine(block.digest);
   const digestRoom = cols - width(named) - width(' · ');
   return digest && digestRoom >= 4 ? `${named}${style.grey(` · ${truncate(digest, digestRoom)}`)}` : named;
@@ -370,7 +370,7 @@ export function checkpointCardLines(order: number, question: string, cols: numbe
 function planLine(block: PlanBlock, cols: number): string {
   const count = block.taskCount === undefined ? '' : ` (${countOf(block.taskCount, 'task')})`;
   const text = block.status === 'building' ? 'Building plan…' : `Plan ${block.status}${count}`;
-  return `${style.cyan('◇')}${truncate(`◇ ${text}`, cols).slice(1)}`;
+  return `${style.brand('◇')}${truncate(`◇ ${text}`, cols).slice(1)}`;
 }
 
 function blockLines(block: DisplayBlock, cols: number, detailAll: boolean): string[] {

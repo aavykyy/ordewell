@@ -43,7 +43,7 @@ describe('a sent user message sits on a grey band', () => {
     ]);
   });
 
-  it('paints every band row, empty ones and rows after the cyan ❯ reset included', () => {
+  it('paints every band row, empty ones and rows after the ❯ reset included', () => {
     const rows = bandOf(draw([message('user', 'one two three four five six seven')], 16));
     expect(rows.length).toBeGreaterThan(3);
     for (const row of rows) {
@@ -52,12 +52,12 @@ describe('a sent user message sits on a grey band', () => {
       const inner = row.slice(0, -RESET.length);
       expect(inner.split(RESET).slice(1).every((after) => after.startsWith(GREY_BG) || after === '')).toBe(true);
     }
-    expect(rows[1]).toContain(`\x1b[36m❯${RESET}${GREY_BG}`);
+    expect(rows[1]).toContain(`${style.bandGrey('❯')}${GREY_BG}`);
   });
 
   it('keeps the band through a /skill token colour', () => {
     const rows = bandOf(draw([message('user', 'use /tdd here', { skills: ['tdd'] })], 24));
-    expect(rows[1]).toContain(`\x1b[36m/tdd${RESET}${GREY_BG}`);
+    expect(rows[1]).toContain(`${style.brand('/tdd')}${GREY_BG}`);
     expect(stripAnsi(rows[1])).toBe(`❯ use /tdd here${' '.repeat(9)}`);
   });
 

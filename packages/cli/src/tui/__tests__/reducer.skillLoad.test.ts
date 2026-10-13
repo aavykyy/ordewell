@@ -66,9 +66,9 @@ describe('a message that loads a skill', () => {
     const state = sent('/grilling it, /grilling again and /nope', [grilling]);
     const row = render(state).find((r) => stripAnsi(r).startsWith('❯')) ?? '';
 
-    expect(row).toContain(style.cyan('/grilling'));
+    expect(row).toContain(style.brand('/grilling'));
     expect(row).toContain(' /grilling again');
-    expect(row).not.toContain(style.cyan('/nope'));
+    expect(row).not.toContain(style.brand('/nope'));
   });
 
   it('cuts the path from the left in a narrow pane', () => {

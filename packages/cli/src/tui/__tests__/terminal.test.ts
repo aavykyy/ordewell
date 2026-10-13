@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { describe, expect, it, vi } from 'vitest';
-import { openTerminal } from '../terminal';
+import { openTerminal, takeBackgroundReply } from '../terminal';
 
 class FakeInput extends EventEmitter {
   isTTY = true;
@@ -404,5 +404,16 @@ describe('openTerminal', () => {
     expect(onKey).toHaveBeenCalledWith({ name: 'char', char: 'a' });
     terminal.close();
     expect(input.setRawMode).not.toHaveBeenCalled();
+  });
+});
+
+describe('the background reply', () => {
+  it('is cut out of the input and read at any channel width', () => {
+    expect(takeBackgroundReply('a\x1b]11;rgb:1e1e/1e1e/2e2e\x07b')).toEqual({ rest: 'ab', background: { r: 30, g: 30, b: 46 } });
+    expect(takeBackgroundReply('\x1b]11;rgb:ff/fa/00\x1b\\')).toEqual({ rest: '', background: { r: 255, g: 250, b: 0 } });
+  });
+
+  it('leaves input without one untouched', () => {
+    expect(takeBackgroundReply('\x1b[A')).toEqual({ rest: '\x1b[A', background: null });
   });
 });

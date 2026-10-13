@@ -119,6 +119,9 @@ export async function handleTui(subArgs: string[]): Promise<void> {
     mouse: mouseCapture,
     onKey: (key) => app.dispatch({ type: 'key', key }),
     onResize: (rows, cols) => app.dispatch({ type: 'resize', rows, cols }),
+    onRepaint: () => {
+      if (terminal) app.dispatch({ type: 'resize', ...terminal.size() });
+    },
   });
 
   const { rows, cols } = terminal.size();

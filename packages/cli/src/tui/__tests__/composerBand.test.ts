@@ -47,9 +47,9 @@ describe('the composer sits on the grey band', () => {
     expect(frame).toHaveLength(24);
   });
 
-  it('keeps the cyan prompt glyph, and the band after it', () => {
+  it('keeps the brand prompt glyph, and the band after it', () => {
     const [, text] = bandRows(typed('hello'));
-    expect(text).toContain(`${GREY_BG}\x1b[36m❯ ${RESET}${GREY_BG}`);
+    expect(text).toContain(`${GREY_BG}${style.brand('❯ ')}${GREY_BG}`);
   });
 
   it('shows the caret inside the band and carries the band on past it', () => {
@@ -78,10 +78,10 @@ describe('the composer sits on the grey band', () => {
     }
   });
 
-  it('paints a /skill token cyan on the band and keeps the band after it', () => {
+  it('paints a /skill token in the brand teal on the band and keeps the band after it', () => {
     registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
     const [, text] = bandRows(typed('use /grilling now'));
-    expect(text).toContain(`\x1b[36m/grilling${RESET}${GREY_BG}`);
+    expect(text).toContain(`${style.brand('/grilling')}${GREY_BG}`);
   });
 
   it('shows the suggestion hint in a grey that stays legible on the band, band intact after it', () => {
@@ -199,7 +199,7 @@ describe('a sent message on the band, in the whole frame', () => {
     }
     expect(stripAnsi(frame[at - 1]).trim()).toBe('');
     expect(stripAnsi(frame[at + 1]).trim()).toBe('');
-    expect(frame[at]).toContain(`${GREY_BG}\x1b[36m❯${RESET}${GREY_BG}`);
+    expect(frame[at]).toContain(`${GREY_BG}${style.bandGrey('❯')}${GREY_BG}`);
   });
 
   it('spans the chat pane and stops at the divider when the plan pane is up', () => {

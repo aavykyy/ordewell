@@ -33,7 +33,7 @@ export function renderMarkdown(source: string, cols: number): string[] {
     const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/);
     if (heading) {
       const paint = heading[1].length <= 2
-        ? (text: string) => style.bold(style.cyan(text))
+        ? (text: string) => style.bold(style.brand(text))
         : style.bold;
       out.push(...wrap(paint(inline(heading[2])), cols));
       continue;
@@ -152,5 +152,5 @@ function inline(text: string): string {
     // ORDEWELL_AUTONOMOUS_MODE. Code runs last so their content is untouched.
     .replace(/(^|[^\w])\*([^*]+)\*(?![\w*])/g, (_, prefix: string, italic: string) => `${prefix}${style.italic(italic)}`)
     .replace(/(^|[^\w])_([^_]+)_(?![\w_])/g, (_, prefix: string, italic: string) => `${prefix}${style.italic(italic)}`)
-    .replace(/`([^`]+)`/g, (_, code: string) => style.cyan(code));
+    .replace(/`([^`]+)`/g, (_, code: string) => style.brand(code));
 }

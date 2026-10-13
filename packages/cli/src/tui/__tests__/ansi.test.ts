@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { paintOnly, sanitize, stripAnsi, width, truncate, pad, style, wrap } from '../ansi';
+import { palette, paintOnly, sanitize, stripAnsi, width, truncate, pad, style, wrap } from '../ansi';
 
 describe('stripAnsi', () => {
   it('removes colour codes', () => {
@@ -164,5 +164,26 @@ describe('style', () => {
     style.enabled = false;
     expect(style.cyan('hi')).toBe('hi');
     style.enabled = true;
+  });
+});
+
+describe('the band, mixed from the terminal background', () => {
+  const bandOpen = (background: typeof palette.background, truecolor: boolean): string => {
+    const saved = { ...palette };
+    Object.assign(palette, { background, truecolor });
+    try { return style.band('x').split('x')[0]; } finally { Object.assign(palette, saved); }
+  };
+
+  it('keeps the dark 234 while the terminal has not said what its background is', () => {
+    expect(bandOpen(null, true)).toBe('\x1b[48;5;234m');
+  });
+
+  it('lifts a dark background a step toward white', () => {
+    expect(bandOpen({ r: 30, g: 30, b: 46 }, true)).toBe('\x1b[48;2;46;46;61m');
+  });
+
+  it('sinks a light background a step toward black, so its text stays dark-on-light', () => {
+    expect(bandOpen({ r: 250, g: 250, b: 250 }, true)).toBe('\x1b[48;2;238;238;238m');
+    expect(bandOpen({ r: 250, g: 250, b: 250 }, false)).toBe('\x1b[48;5;255m');
   });
 });

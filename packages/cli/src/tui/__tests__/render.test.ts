@@ -185,18 +185,22 @@ describe('welcome mark', () => {
   it('puts the wordmark and the version on the middle row only', () => {
     const lines = screen({ cols: 80, rows: 24 }).map(stripAnsi);
     const top = markAt(lines);
-    expect(lines[top + 1].trimEnd()).toMatch(new RegExp(`^${MARK[1]}\\s+o r d e w e l l\\s+v${CLI_VERSION.replace(/\./g, '\\.')}$`));
+    expect(lines[top + 1].trimEnd()).toMatch(new RegExp(`^${MARK[1]}\\s+ordewell\\s+v${CLI_VERSION.replace(/\./g, '\\.')}$`));
     expect(lines[top].trimEnd()).toBe(MARK[0]);
     expect(lines[top + 2].trimEnd()).toBe(MARK[2]);
   });
 
-  it('draws the wordmark letter-spaced as plain ASCII with both halves bold', () => {
+  it('draws the wordmark as plain ASCII, as the logo sets it: `well` bold in the brand teal', () => {
     style.enabled = true;
     let raw: string[];
-    try { raw = screen({ cols: 80, rows: 24 }); } finally { style.enabled = false; }
+    let wordmark: string;
+    try {
+      raw = screen({ cols: 80, rows: 24 });
+      wordmark = `orde${style.bold(style.brand('well'))}`;
+    } finally { style.enabled = false; }
     const middle = raw.find((l) => stripAnsi(l).startsWith(MARK[1]))!;
     expect([...middle].every((ch) => ch.codePointAt(0)! <= 0xffff)).toBe(true);
-    expect(middle).toContain('\x1b[1mo r d e\x1b[0m \x1b[1m\x1b[36mw e l l\x1b[0m');
+    expect(middle).toContain(wordmark);
   });
 
   it('mirrors the top row in the bottom one', () => {
@@ -225,12 +229,12 @@ describe('welcome mark', () => {
   });
 
   it('drops the version first, then cuts the wordmark, when the middle row runs out of room', () => {
-    // The pane leaves its last column free: 11 mark + 2 gap + 15 wordmark = 28.
-    const named = screen({ cols: 29, rows: 24 }).map(stripAnsi);
-    expect(named[markAt(named) + 1].trimEnd()).toBe(`${MARK[1]}  o r d e w e l l`);
+    // The pane leaves its last column free: 11 mark + 2 gap + 8 wordmark = 21.
+    const named = screen({ cols: 22, rows: 24 }).map(stripAnsi);
+    expect(named[markAt(named) + 1].trimEnd()).toBe(`${MARK[1]}  ordewell`);
     const cut = screen({ cols: 20, rows: 24 }).map(stripAnsi);
-    // 19 columns leave 6 for the wordmark: three letters, their spaces and the ellipsis.
-    expect(cut[markAt(cut) + 1].trimEnd()).toBe(`${MARK[1]}  o r d…`);
+    // 19 columns leave 6 for the wordmark: five letters and the ellipsis.
+    expect(cut[markAt(cut) + 1].trimEnd()).toBe(`${MARK[1]}  ordew…`);
   });
 
   it('no longer carries the description paragraph', () => {
@@ -658,7 +662,7 @@ describe('overlays', () => {
       const out = lines({ overlay: rewindOverlay('Make it stream\nand resumable') });
       const at = out.findIndex((l) => l.includes('Confirm you want to restore'));
 
-      expect(out.some((l) => l.startsWith('┌─ Rewind'))).toBe(true);
+      expect(out.some((l) => l.startsWith('╭─ Rewind'))).toBe(true);
       expect(out.slice(at, at + 12).map((l) => l.trim())).toEqual([
         'Confirm you want to restore to the point before you sent this message:',
         '',
@@ -841,7 +845,7 @@ describe('input cursor', () => {
         registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
         const s = initialState({ rows: 24, cols: 80 });
         const out = render({ ...s, editor: { ...s.editor, text: '/grilling ', cursor: 10 } });
-        expect(inputRow(out)).toContain(style.cyan('/grilling'));
+        expect(inputRow(out)).toContain(style.brand('/grilling'));
       });
     });
 
@@ -849,7 +853,7 @@ describe('input cursor', () => {
       withColour(() => {
         const s = initialState({ rows: 24, cols: 80 });
         const out = render({ ...s, editor: { ...s.editor, text: '/foo', cursor: 0 } });
-        expect(inputRow(out)).not.toContain(style.cyan('/foo'));
+        expect(inputRow(out)).not.toContain(style.brand('/foo'));
       });
     });
 
@@ -857,7 +861,7 @@ describe('input cursor', () => {
       withColour(() => {
         const s = initialState({ rows: 24, cols: 80 });
         const out = render({ ...s, editor: { ...s.editor, text: '/help', cursor: 0 } });
-        expect(inputRow(out)).not.toContain(style.cyan('/help'));
+        expect(inputRow(out)).not.toContain(style.brand('/help'));
       });
     });
 
@@ -866,7 +870,7 @@ describe('input cursor', () => {
         registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
         const s = initialState({ rows: 24, cols: 80 });
         const out = render({ ...s, editor: { ...s.editor, text: '/gri', cursor: 4 } });
-        expect(inputRow(out)).toContain(style.cyan('/gri'));
+        expect(inputRow(out)).toContain(style.brand('/gri'));
       });
     });
 
@@ -875,7 +879,7 @@ describe('input cursor', () => {
         registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
         const s = initialState({ rows: 24, cols: 80 });
         const out = render({ ...s, editor: { ...s.editor, text: '/grix', cursor: 5 } });
-        expect(inputRow(out)).not.toContain(style.cyan('/grix'));
+        expect(inputRow(out)).not.toContain(style.brand('/grix'));
       });
     });
 
@@ -885,7 +889,7 @@ describe('input cursor', () => {
         const s = initialState({ rows: 24, cols: 80 });
         const text = 'explain this bug /grilling please';
         const out = render({ ...s, editor: { ...s.editor, text, cursor: text.length } });
-        expect(inputRow(out)).toContain(style.cyan('/grilling'));
+        expect(inputRow(out)).toContain(style.brand('/grilling'));
       });
     });
 
