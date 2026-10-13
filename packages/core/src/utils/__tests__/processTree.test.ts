@@ -164,6 +164,21 @@ describe('killTree on a runner that leads its own process group', () => {
     child.emit('exit', null, 'SIGTERM');
   });
 
+  // A crash is not a cleanup. The leader's exitCode being set says only that
+  // the leader is gone; the shells, dev servers and MCP servers it started are
+  // still in the group, and Stop has to reach them.
+  it('signals the group after the leader has already exited', () => {
+    const { child, signals, h } = leader();
+    child.exitCode = 1;
+    killTree(child as unknown as ChildProcess, h.deps);
+
+    // SIGTERM first, then the liveness probe that cancels the escalation if
+    // the group is already empty (the leader's `exit` cannot do it here).
+    expect(signals).toEqual([[-UNUSED_PID, 'SIGTERM'], [-UNUSED_PID, 0]]);
+    h.fireHardKill();
+    expect(signals).toEqual([[-UNUSED_PID, 'SIGTERM'], [-UNUSED_PID, 0], [-UNUSED_PID, 'SIGKILL']]);
+  });
+
   it('still escalates to SIGKILL after the leader exits, since what it started can outlive it', () => {
     const { child, signals, h } = leader();
     killTree(child as unknown as ChildProcess, h.deps);
@@ -234,6 +249,27 @@ function firstPid(proc: ChildProcess): Promise<number> {
   });
 }
 
+/** Reads `proc`'s stdout one line at a time — for a host that prints more than a pid. */
+function lines(proc: ChildProcess): () => Promise<string> {
+  let buffer = '';
+  const ready: string[] = [];
+  let wake: (() => void) | null = null;
+  proc.stdout!.on('data', (chunk: Buffer) => {
+    buffer += chunk.toString();
+    let newline: number;
+    while ((newline = buffer.indexOf('\n')) >= 0) {
+      ready.push(buffer.slice(0, newline));
+      buffer = buffer.slice(newline + 1);
+    }
+    wake?.();
+    wake = null;
+  });
+  return async () => {
+    while (ready.length === 0) await new Promise<void>((resolve) => { wake = resolve; });
+    return ready.shift()!;
+  };
+}
+
 /** A shell that backgrounds a long sleep — the grandchild Stop used to miss — and prints its pid. */
 const SHELL_WITH_GRANDCHILD = ['-c', 'sleep 30 & echo $!; wait'];
 
@@ -267,6 +303,37 @@ describe('process groups, for real', () => {
       const exited = new Promise<NodeJS.Signals | null>((resolve) => hostProc.once('exit', (_code, sig) => resolve(sig)));
       hostProc.kill(signal);
       expect(await exited).toBe(signal);
+      expect(await gone(grandchild)).toBe(true);
+    } finally {
+      hostProc.kill('SIGKILL');
+      if (grandchild) try { process.kill(grandchild, 'SIGKILL'); } catch { /* gone, as it should be */ }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A crash is not a cleanup: the runner's group outlives it, and the host
+  // must still reach it on the way out. The group leaves the host's books only
+  // once it is empty, not the moment its leader exits.
+  posixIt('a host killed after its runner crashed still takes the runner\'s group with it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-host-'));
+    const host = join(dir, 'crash-host.mts');
+    writeFileSync(host, [
+      `import { spawn } from 'node:child_process';`,
+      `import { spawnInOwnGroup } from ${JSON.stringify(join(__dirname, '..', 'processTree.ts'))};`,
+      `const proc = spawnInOwnGroup((detached) => spawn('sh', ['-c', 'sleep 30 & echo $!'], { detached, stdio: ['ignore', 'pipe', 'inherit'] }));`,
+      `proc.stdout.pipe(process.stdout);`,
+      `proc.on('exit', () => process.stdout.write('leader-exited\\n'));`,
+      `setInterval(() => {}, 1000);`,
+    ].join('\n'));
+    const hostProc = spawn(process.execPath, ['--experimental-strip-types', '--no-warnings', host], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let grandchild = 0;
+    try {
+      const nextLine = lines(hostProc);
+      grandchild = Number(await nextLine());
+      expect(await nextLine()).toBe('leader-exited');
+      const exited = new Promise<NodeJS.Signals | null>((resolve) => hostProc.once('exit', (_code, sig) => resolve(sig)));
+      hostProc.kill('SIGTERM');
+      expect(await exited).toBe('SIGTERM');
       expect(await gone(grandchild)).toBe(true);
     } finally {
       hostProc.kill('SIGKILL');

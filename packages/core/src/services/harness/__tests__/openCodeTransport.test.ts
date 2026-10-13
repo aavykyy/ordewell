@@ -330,16 +330,19 @@ describe('openEventStream', () => {
     expect(activity).toBe(4);
   });
 
-  it('keeps reading when a frame\'s handler throws', async () => {
+  // A handler that throws is Ordewell's own failure, not a frame the runner
+  // sent badly. Swallowing it here hides a bug as if it were one more
+  // unparseable line; the caller hears it when the stream is closed.
+  it('surfaces a throwing frame handler instead of swallowing it as a bad frame', async () => {
     const frames: unknown[] = [];
     const close = await openEventStream<{ n: number }>(
       async (signal) => sseResponse({ signal }, ['data: {"n":1}\n\n', 'data: {"n":2}\n\n']).response,
-      (frame) => { frames.push(frame); if (frame.n === 1) throw new Error('bad frame'); },
+      (frame) => { frames.push(frame); if (frame.n === 1) throw new Error('handler blew up'); },
     );
-    for (let i = 0; i < 10 && frames.length < 2; i++) await tick();
-    await close();
+    for (let i = 0; i < 10 && frames.length < 1; i++) await tick();
 
-    expect(frames).toEqual([{ n: 1 }, { n: 2 }]);
+    await expect(close()).rejects.toThrow('handler blew up');
+    expect(frames).toEqual([{ n: 1 }]);
   });
 
   it('gives the turn its post when the server has no stream, or refuses it', async () => {

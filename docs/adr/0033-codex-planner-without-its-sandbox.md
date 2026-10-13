@@ -54,7 +54,7 @@ Codex task that needs a sandbox is still refused.**
   to Full access would rewrite the plan (ADR-0001). It is refused before the
   thread starts, and the message now offers the user's options: Full access,
   another runner, or fixing the host. A Full-access task still runs.
-- **The probe is unchanged.** macOS (Seatbelt) and Windows are never probed,
+- **The probe's decision is unchanged.** macOS (Seatbelt) and Windows are never probed,
   and a working bubblewrap or Landlock backend keeps Codex's shell as before.
 
 ## Key properties
@@ -94,3 +94,4 @@ Codex task that needs a sandbox is still refused.**
   ran `cat MARKER.txt` through `run_command`, answered with the file's word
   and showed the note once; and `plannerToolsLive` passed for Codex without
   its sandbox-probe stub, which is removed.
+- 2026-10-13 — the probe is launched in its own process group and killed, group and all, when it times out, instead of being left running.

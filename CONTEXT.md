@@ -471,10 +471,13 @@ and mode/discovery settings for the built-in runners); "adapter table".
 process a connector's adapter drives, whatever its protocol: launched under the
 cleaned runner environment in its own process group, its output decoded as
 UTF-8, its stderr tail kept for the failure message, its end observable, and
-its whole tree killed on dispose (**Kill tree**). Its `start` runs the
-adapter's handshake and takes the process down if that throws. The stdio
-adapters and OpenCode's server both build on it, so a lifecycle fix lands once;
-the protocol stays in the adapter.
+its whole tree killed on dispose (**Kill tree**). Its end is the process's
+`close`, after stdout has drained — acting on `exit` reported a runner's last
+line as never having arrived — and a last line left unterminated when the pipe
+closed is flushed rather than dropped. Its `start` runs the adapter's handshake
+and takes the process down if that throws. The stdio adapters and OpenCode's
+server both build on it, so a lifecycle fix lands once; the protocol stays in
+the adapter.
 *Avoid:* spawning or killing a runner in an adapter directly.
 
 **Ordewell tool binding** (`OrdewellToolBinding`) — how one connector hands its
@@ -2123,8 +2126,10 @@ without it "stop" terminated the shim and left the agent running, still holding
 the workspace and the subscription. One limit follows from how a runner is
 started. A detached runner is a session leader (`setsid`) with no controlling
 tty, so anything it does that opens `/dev/tty` — a password or confirmation
-prompt — fails rather than prompting. After the leader exits, the
-SIGKILL follow-up is sent only while the group still has members, since an
+prompt — fails rather than prompting. A leader's exit does not end its group: a
+crashed runner leaves shells and dev servers behind, so the group is kept until
+it is empty and Stop and host teardown still reach them. After the leader exits,
+the SIGKILL follow-up is sent only while the group still has members, since an
 empty group's id may have been recycled.
 *Avoid:* `proc.kill('SIGTERM')` at a dispose site — or a bare `proc.kill()`,
 which was the last one left, in `ModelDiscovery`'s Codex app-server probe.

@@ -408,11 +408,18 @@ export async function openEventStream<F>(
   const streamAbort = new AbortController();
   let connected!: () => void;
   const ready = new Promise<void>((resolve) => { connected = resolve; });
-  const live = streamEvents(connect, streamAbort.signal, onFrame, connected, onActivity);
+  // A frame handler that throws is Ordewell's own failure, not a frame the
+  // runner sent badly — the only thing that escapes the read loop below. Held
+  // until the caller closes the stream, and caught here so it does not surface
+  // as an unhandled rejection in the meantime.
+  let handlerError: unknown;
+  const live = streamEvents(connect, streamAbort.signal, onFrame, connected, onActivity)
+    .catch((err: unknown) => { handlerError = err; });
   await settleWithin(ready, { timeoutMs: STREAM_CONNECT_TIMEOUT_MS, onTimeout: () => undefined });
   return async () => {
     streamAbort.abort();
-    await live.catch(() => { /* the stream is best-effort */ });
+    await live;
+    if (handlerError !== undefined) throw handlerError;
   };
 }
 
@@ -444,11 +451,16 @@ async function streamEvents<F>(
     onActivity?.();
     lines.push(decoder.decode(value, { stream: true }), (line) => {
       if (!line.startsWith('data:')) return;
+      let frame: F;
       try {
-        onFrame(JSON.parse(line.slice(5).trim()) as F);
+        frame = JSON.parse(line.slice(5).trim()) as F;
       } catch {
         // A partial or unrecognized frame costs one event, not the turn.
+        return;
       }
+      // Outside the try: a throw here is the handler's, not the frame's, and
+      // must reach {@link openEventStream} as such.
+      onFrame(frame);
     });
   }
 }
