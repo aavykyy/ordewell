@@ -73,9 +73,13 @@ export function sessionsRoute(pool: OrchestratorPool) {
     return c.json({ attempt, events: taskLogForSurface(readTaskLog({ baseDir: ws, sessionId: c.req.param('id') }, c.req.param('taskId'), attempt)) } satisfies TaskLogResponse);
   });
 
+  // The live session goes first: it persists as it changes, so a session left
+  // running would write its file back and reappear in the list.
   router.delete('/:id', (c) => {
     const ws = c.req.query('workspace') || process.cwd();
-    const ok = removeSession(c.req.param('id'), ws);
+    const id = c.req.param('id');
+    pool.destroy(id);
+    const ok = removeSession(id, ws);
     return c.json({ ok } satisfies OkResponse);
   });
 

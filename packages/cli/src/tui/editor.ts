@@ -1,4 +1,4 @@
-import { wrapLines, type WrapLine } from './ansi';
+import { nextBoundary, previousBoundary, wrapLines, type WrapLine } from './ansi';
 import type { Key } from './keys';
 
 export interface EditorState {
@@ -36,16 +36,18 @@ export function applyKey(state: EditorState, key: Key, cols?: number): EditorSta
     case 'shift-enter':
     case 'alt-enter':
       return { ...state, text: text.slice(0, cursor) + '\n' + text.slice(cursor), cursor: cursor + 1 };
-    case 'backspace':
+    case 'backspace': {
       if (cursor === 0) return state;
-      return { ...state, text: text.slice(0, cursor - 1) + text.slice(cursor), cursor: cursor - 1 };
+      const start = previousBoundary(text, cursor);
+      return { ...state, text: text.slice(0, start) + text.slice(cursor), cursor: start };
+    }
     case 'delete':
       if (cursor >= text.length) return state;
-      return { ...state, text: text.slice(0, cursor) + text.slice(cursor + 1) };
+      return { ...state, text: text.slice(0, cursor) + text.slice(nextBoundary(text, cursor)) };
     case 'left':
-      return { ...state, cursor: Math.max(0, cursor - 1) };
+      return { ...state, cursor: previousBoundary(text, cursor) };
     case 'right':
-      return { ...state, cursor: Math.min(text.length, cursor + 1) };
+      return { ...state, cursor: nextBoundary(text, cursor) };
     case 'alt-left':
       return { ...state, cursor: previousWordStart(text, cursor) };
     case 'alt-right':

@@ -90,6 +90,36 @@ describe('ApiClient', () => {
     expect(fromB[0].id).toBe('server-b');
   });
 
+  it('reads a multi-byte character split across response chunks intact', async () => {
+    const body = Buffer.from(JSON.stringify([{ id: 'prompt-😀-é', goal: '', runners: [], taskCount: 0, status: '', createdAt: '', updatedAt: '' }]));
+    // Cut inside the 4-byte emoji so the first chunk ends on a partial sequence.
+    const cut = body.indexOf(Buffer.from('😀')) + 2;
+    const srv = await startCustomServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.write(body.subarray(0, cut));
+      setTimeout(() => res.end(body.subarray(cut)), 20);
+    });
+    servers.push(srv);
+
+    const sessions = await new ApiClient(srv.port).getSessions();
+    expect(sessions[0].id).toBe('prompt-😀-é');
+  });
+
+  it('reads a refused WebSocket upgrade body with a split multi-byte character intact', async () => {
+    const body = Buffer.from(JSON.stringify({ error: 'Token file: ~/café-😀/token' }));
+    const cut = body.indexOf(Buffer.from('😀')) + 1;
+    const srv = await startCustomServer((_req, res) => {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.write(body.subarray(0, cut));
+      setTimeout(() => res.end(body.subarray(cut)), 20);
+    });
+    servers.push(srv);
+    const port = srv.port;
+
+    const failure = await new ApiClient(port).streamExecution('session-x', () => {}).then(() => undefined, (err: Error) => err);
+    expect(failure?.message).toBe('Token file: ~/café-😀/token');
+  });
+
   it('generatePlan posts to the caller-provided sessionId instead of minting its own', async () => {
     let requestedUrl = '';
     const srv = await startCustomServer((req, res) => {

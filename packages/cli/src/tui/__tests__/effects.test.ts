@@ -1166,6 +1166,14 @@ describe('catalogs and sessions', () => {
     expect(types(h.actions)).toContain('sessionsLoaded');
   });
 
+  it('reports a delete the daemon refused instead of announcing it', async () => {
+    const h = harness({ deleteSession: vi.fn().mockResolvedValue({ ok: false }) });
+    await runEffect({ type: 'deleteSession', sessionId: 's9' }, h.deps);
+
+    expect(messageOf(h.actions, 'failed')).toBe('Could not delete s9: no saved session was removed.');
+    expect(h.actions.some((a) => a.type === 'notice' && /Deleted/.test(a.message))).toBe(false);
+  });
+
   it('refresh re-reads runners, settings and models', async () => {
     const h = harness();
     await runEffect({ type: 'refresh' }, h.deps);

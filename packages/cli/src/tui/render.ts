@@ -1,4 +1,4 @@
-import { pad, stripAnsi, style, truncate, width, wrap } from './ansi';
+import { firstGrapheme, graphemes, pad, stripAnsi, style, truncate, width, wrap } from './ansi';
 import { cursorInLines } from './editor';
 import { activeToken, skillMatchKind, slashTokens, tokenCompletions } from './slash';
 import {
@@ -85,7 +85,7 @@ function selectionSpans(state: TuiState): SelectionSpan[] {
  */
 function cells(line: string): string[] {
   const out: string[] = [];
-  for (const char of stripAnsi(line)) {
+  for (const char of graphemes(stripAnsi(line))) {
     out.push(char);
     for (let i = 1; i < Math.max(1, width(char)); i++) out.push('');
   }
@@ -133,7 +133,7 @@ function invertCells(line: string, from: number, to: number): string {
       out += piece + (inside ? INVERSE_ON : '');
       continue;
     }
-    for (const char of piece) {
+    for (const char of graphemes(piece)) {
       if (inside && col > to) {
         out += INVERSE_OFF;
         inside = false;
@@ -340,8 +340,8 @@ function composerLines(state: TuiState): string[] {
     if (!isCursorLine) return prefix + paintSpans(line, base, spans);
 
     const before = paintSpans(line.slice(0, col), base, spans);
-    const caretChar = line.slice(col, col + 1) || ' ';
-    const after = paintSpans(line.slice(col + 1), base + col + 1, spans);
+    const caretChar = firstGrapheme(line.slice(col)) || ' ';
+    const after = paintSpans(line.slice(col + caretChar.length), base + col + caretChar.length, spans);
     // The suggestion hint sits right after the caret — where the token being
     // composed actually is — rather than always at the end of the row, so it
     // still lands next to a `/skill` typed mid-sentence.

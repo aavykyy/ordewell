@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { loadSessionPlanState, openTaskLog, SessionNotFoundError } from '@ordewell/core';
+import { listSessions, loadSessionPlanState, openTaskLog, saveSession, SessionNotFoundError } from '@ordewell/core';
 import { sessionsRoute } from '../sessions';
 import type { OrchestratorPool } from '../../pool/orchestratorPool';
 
@@ -137,6 +137,41 @@ describe('POST /api/sessions/:id/load', () => {
 
     const res = await app2.request('/api/sessions/s1/load', { method: 'POST' });
     expect(res.status).toBe(500);
+  });
+});
+
+describe('DELETE /api/sessions/:id', () => {
+  let ws: string;
+  beforeEach(() => { ws = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-route-delete-')); });
+  afterEach(() => { fs.rmSync(ws, { recursive: true, force: true }); });
+
+  const savedPlan = { tasks: [], runners: [], status: 'draft', generatedAt: '2026-10-13T00:00:00.000Z' };
+
+  it('stops the live session before removing its files, or its next save writes them back', async () => {
+    const meta = saveSession(savedPlan as never, 'g', ws, 's1');
+    const filesWhenDestroyed: boolean[] = [];
+    const pool = fakePool({
+      destroy: vi.fn(() => { filesWhenDestroyed.push(listSessions(ws).some((s) => s.id === meta.id)); }),
+    } as Partial<OrchestratorPool>);
+    const app = new Hono();
+    app.route('/api/sessions', sessionsRoute(pool));
+
+    const res = await app.request(`/api/sessions/${meta.id}?workspace=${encodeURIComponent(ws)}`, { method: 'DELETE' });
+
+    expect(await res.json()).toEqual({ ok: true });
+    expect(pool.destroy).toHaveBeenCalledWith(meta.id);
+    expect(filesWhenDestroyed).toEqual([true]);
+    expect(listSessions(ws)).toEqual([]);
+  });
+
+  it('still reports failure when there was no saved file to remove', async () => {
+    const pool = fakePool();
+    const app = new Hono();
+    app.route('/api/sessions', sessionsRoute(pool));
+
+    const res = await app.request(`/api/sessions/missing?workspace=${encodeURIComponent(ws)}`, { method: 'DELETE' });
+
+    expect(await res.json()).toEqual({ ok: false });
   });
 });
 

@@ -34,6 +34,22 @@ export interface WebviewRouterDeps extends PlanManagerDeps {
  * action, and its handler goes through the Session.
  */
 export async function routeWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDeps): Promise<void> {
+  // The host's listener drops this promise, so a rejection from any handler
+  // would be unhandled and the user would be told nothing.
+  try {
+    await dispatchWebviewMessage(msg, deps);
+  } catch (err) {
+    reportFailure(msg.type, err, deps);
+  }
+}
+
+function reportFailure(what: string, err: unknown, deps: WebviewRouterDeps): void {
+  const message = err instanceof Error ? err.message : String(err);
+  deps.log(`[ERROR] webview message "${what}" failed: ${message}`);
+  deps.notifications.error(`Ordewell: ${message}`);
+}
+
+async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDeps): Promise<void> {
   switch (msg.type) {
     case 'ready':
       deps.extension.ready();
@@ -178,5 +194,5 @@ async function sendChat(text: string, typed: boolean, runners: RunnerId[] | unde
 function sendNextHeldPrompt(deps: WebviewRouterDeps): void {
   if (deps.isGeneratingPlan()) return;
   const next = deps.chatProvider.conversation.nextPrompt();
-  if (next !== undefined) void sendChat(next, true, undefined, deps);
+  if (next !== undefined) sendChat(next, true, undefined, deps).catch((err: unknown) => reportFailure('sendMessage', err, deps));
 }

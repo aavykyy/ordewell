@@ -52,6 +52,20 @@ describe('the composer sits on the grey band', () => {
     expect(text).toContain(`${GREY_BG}${style.brand('❯ ')}${GREY_BG}`);
   });
 
+  it('puts the caret over a whole emoji, not half its surrogate pair', () => {
+    const [, text] = bandRows(typed('a😀b', {}, 1));
+    expect(text).toContain(`a\x1b[7m😀${RESET}${GREY_BG}b`);
+  });
+
+  it('puts the caret over a whole emoji in the task prompt editor too', () => {
+    const state = initialState({
+      sessionId: 's1', rows: 30, cols: 100, focus: 'plan', tasks: [tasks[0]],
+      expandedTaskId: 'a',
+      taskEditor: { text: 'do 😀 it', cursor: 3, history: [], historyIndex: 0, draft: '' },
+    });
+    expect(render(state).join('\n')).toContain(`do ${style.inverse('😀')} it`);
+  });
+
   it('shows the caret inside the band and carries the band on past it', () => {
     const [, text] = bandRows(typed('abcdef', {}, 2));
     expect(text).toContain(`ab\x1b[7mc${RESET}${GREY_BG}def`);

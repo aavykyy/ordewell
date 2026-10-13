@@ -218,9 +218,12 @@ export class ApiClient {
             : DEFAULT_HTTP_TIMEOUT_MS,
       };
       const req = http.request(options, (res) => {
-        let data = '';
-        res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+        // Decoded once at the end: per-chunk decoding turns a character split
+        // across two chunks into U+FFFD.
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => { chunks.push(chunk); });
         res.on('end', () => {
+          const data = Buffer.concat(chunks).toString('utf8');
           try {
             resolve({ status: res.statusCode || 0, data: JSON.parse(data) });
           } catch {
@@ -530,9 +533,10 @@ export class ApiClient {
     // token file. Read it and raise that instead, keeping ws's own error-then-
     // close ordering so callers see no change in shape.
     socket.on('unexpected-response', (_req, res) => {
-      let body = '';
-      res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => { chunks.push(chunk); });
       res.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8');
         let reason = '';
         try {
           reason = (JSON.parse(body) as Partial<ErrorBody>).error ?? '';

@@ -97,6 +97,44 @@ export function width(text: string): number {
   return stringWidth(stripAnsi(text));
 }
 
+const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+// Printable ASCII is one column per code unit and never joins a neighbour, so
+// the common case skips the segmenter entirely.
+const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
+
+/**
+ * The grapheme clusters of `text`. A terminal draws `⚠️`, `👨‍👩‍👧` and `é` as a
+ * unit, so anything that measures or cuts a row has to treat them as one:
+ * walking code points measures `⚠` + VS16 as 1 column and splits a ZWJ emoji.
+ */
+export function graphemes(text: string): string[] {
+  if (PRINTABLE_ASCII.test(text)) return text.split('');
+  return Array.from(segmenter.segment(text), (s) => s.segment);
+}
+
+/** The first grapheme cluster of `text`, '' when it is empty. */
+export function firstGrapheme(text: string): string {
+  if (text === '') return '';
+  const code = text.charCodeAt(0);
+  if (code < 0x300 && (text.length === 1 || text.charCodeAt(1) < 0x300) && code !== 0x0d) return text[0];
+  return segmenter.segment(text).containing(0)?.segment ?? text[0];
+}
+
+/** The offset of the cluster boundary before `offset` (0 at the start). */
+export function previousBoundary(text: string, offset: number): number {
+  if (offset <= 0) return 0;
+  const code = text.charCodeAt(offset - 1);
+  const before = offset >= 2 ? text.charCodeAt(offset - 2) : 0;
+  if (code < 0x300 && before < 0x300 && code !== 0x0a) return offset - 1;
+  return segmenter.segment(text.slice(0, offset)).containing(offset - 1)?.index ?? offset - 1;
+}
+
+/** The offset of the cluster boundary after `offset` (`text.length` at the end). */
+export function nextBoundary(text: string, offset: number): number {
+  if (offset >= text.length) return text.length;
+  return offset + firstGrapheme(text.slice(offset)).length;
+}
+
 /** Cut to `max` visible columns, marking the cut with an ellipsis. */
 export function truncate(text: string, max: number): string {
   if (max <= 0) return '';
@@ -104,7 +142,7 @@ export function truncate(text: string, max: number): string {
 
   let out = '';
   let used = 0;
-  for (const char of stripAnsi(text)) {
+  for (const char of graphemes(stripAnsi(text))) {
     const w = stringWidth(char);
     if (used + w > max - 1) break;
     out += char;
@@ -136,7 +174,7 @@ function chopWord(piece: string, max: number): string[] {
   const chunks: string[] = [];
   let cur = '';
   let curWidth = 0;
-  for (const ch of piece) {
+  for (const ch of graphemes(piece)) {
     const w = stringWidth(ch);
     if (cur && curWidth + w > max) {
       chunks.push(cur);

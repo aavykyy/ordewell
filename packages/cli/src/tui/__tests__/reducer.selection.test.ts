@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { initialState, reduce, type Effect, type Step } from '../reducer';
 import { style, width } from '../ansi';
+import { render } from '../render';
 import type { TaskView, TuiState } from '../state';
 import { chatOf } from './chat';
 
@@ -111,6 +112,17 @@ describe('what a release copies', () => {
 
     expect(lines).toHaveLength(4);
     for (const line of lines) expect(width(line)).toBeLessThanOrEqual(CHAT_LAST);
+  });
+
+  it('addresses columns by grapheme cluster, so text after a ZWJ emoji copies from where it is drawn', () => {
+    const state = screenState({ conversation: chatOf(['user', '👨‍👩‍👧 NEEDLE tail']) });
+    const frame = render(state);
+    const row = frame.findIndex((line) => line.includes('NEEDLE'));
+    const prefix = frame[row].slice(0, frame[row].indexOf('NEEDLE'));
+
+    const text = copied(drag(state, [width(prefix) + 1, row + 1], [CHAT_LAST, row + 1]).effects);
+
+    expect(text).toBe('NEEDLE tail');
   });
 
   // A cell-addressed highlight left standing after release would drift once the

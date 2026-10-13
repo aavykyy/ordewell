@@ -262,6 +262,45 @@ describe('webview messages reach the session through one entry point each', () =
     });
   });
 
+  describe('a handler that rejects', () => {
+    it.each([
+      ['setPlanner', { type: 'setPlanner', provider: 'openrouter' }],
+      ['setPlannerModel', { type: 'setPlannerModel', modelId: 'some/model' }],
+      ['changeSettings', { type: 'changeSettings', change: { key: 'maxParallelSessions', value: 2 } }],
+    ] as unknown as Array<[keyof WebviewRouterDeps['extension'], WebviewToHost]>)(
+      'tells the user instead of leaving %s an unhandled rejection',
+      async (handler, msg) => {
+        vi.mocked(h.deps.extension[handler] as (...args: unknown[]) => unknown).mockRejectedValueOnce(new Error('config write refused'));
+
+        await expect(h.route(msg)).resolves.toBeUndefined();
+
+        expect(h.deps.notifications.error).toHaveBeenCalledWith(expect.stringContaining('config write refused'));
+      },
+    );
+
+    it.each<['addTask' | 'removeTask', WebviewToHost]>([
+      ['addTask', { type: 'addTask', draft: { title: 'Docs', dependencies: [] } }],
+      ['removeTask', { type: 'removeTask', taskId: 't2' }],
+    ])('tells the user when the session refuses a %s', async (method, msg) => {
+      showWarningMessage.mockResolvedValue('Remove');
+      vi.spyOn(h.session, method).mockRejectedValue(new Error('plan is locked'));
+
+      await expect(h.route(msg)).resolves.toBeUndefined();
+
+      expect(h.deps.notifications.error).toHaveBeenCalledWith(expect.stringContaining('plan is locked'));
+    });
+  });
+
+  describe('a held prompt that fails when it is sent on', () => {
+    it('is reported too, not left an unhandled rejection', async () => {
+      h.deps.chatProvider.conversation.holdPrompt('queued while busy');
+      h.deps.getPendingRunners = () => { throw new Error('runner set unreadable'); };
+
+      await h.route({ type: 'sendMessage', text: '/refresh', typed: true });
+      await vi.waitFor(() => expect(h.deps.notifications.error).toHaveBeenCalledWith(expect.stringContaining('runner set unreadable')));
+    });
+  });
+
   describe('chat', () => {
     it('sends a known slash command to the extension, and anything else to the planner', async () => {
       const converse = vi.spyOn(h.session, 'continueConversation').mockResolvedValue(h.session.planState!);
