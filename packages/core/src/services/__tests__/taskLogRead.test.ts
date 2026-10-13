@@ -9,6 +9,15 @@ describe('compact saved log reads', () => {
     expect(text).not.toContain('/workspace');
   });
 
+  it('says which messages Ordewell sent rather than the user', () => {
+    const text = renderTaskLog([
+      { type: 'turn_start', message: 'Call task_complete.', from: 'ordewell' },
+      { type: 'message_delivered', messageId: 'msg-2', text: 'Call it now.', from: 'ordewell' },
+    ]);
+    expect(text).toContain('(from Ordewell) Call task_complete.');
+    expect(text).toContain('msg-2 (from Ordewell): Call it now.');
+  });
+
   it('retains message and approval correlation while filtering out unrelated events', () => {
     const events: TaskLogEvent[] = [
       { type: 'message_queued', messageId: 'message1', text: 'Check it again.', forced: true },

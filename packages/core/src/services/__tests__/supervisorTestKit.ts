@@ -141,7 +141,7 @@ export async function until(condition: () => boolean): Promise<void> {
   expect(condition()).toBe(true);
 }
 
-export const waitForInput = (s: FakeRunnerSession) => s.emitTurnEnd('completed');
+export const waitForInput = (s: FakeRunnerSession) => s.waitForInput();
 
 export function hitLimit(s: FakeRunnerSession): void {
   s.emitEvent({ type: 'error', message: LIMIT });

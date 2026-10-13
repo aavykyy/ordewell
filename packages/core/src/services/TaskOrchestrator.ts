@@ -123,6 +123,9 @@ const CONTROL_WORDS = {
   force: 'send a message to',
 } as const;
 
+/** What Ordewell tells a runner whose turn ended without a `task_complete` call (ADR-0018, W1). */
+const COMPLETION_REMINDER = 'Your turn ended without calling `task_complete`. If the task is done, call `task_complete` with status `done` and your full report as the summary. If you are blocked, call it with status `blocked` and the reason. If you need something from the user, say exactly what and end your turn.';
+
 /**
  * One run of one task, from the moment the scheduler claims it until its
  * verdict, cancel, stop or plan load. Everything that has to die with the run
@@ -165,6 +168,8 @@ interface TaskAttempt {
   readonly autoResumed: boolean;
   /** The runner's own words for why the running turn failed, if it did. */
   turnError: string | null;
+  /** The completion reminder went out: once per attempt, so a second turn without `task_complete` waits for input. */
+  reminded: boolean;
 }
 
 type AttemptPhase = 'starting' | 'running' | 'integrating';
@@ -551,7 +556,9 @@ export class TaskOrchestrator {
    * A structured turn that ended without a `task_complete` call (ADR-0018, W1). No
    * verdict is guessed: the task waits for input, unless a checkpoint in the
    * same turn already has it waiting, or a queued message went straight out —
-   * the session never passes through idle then, so nothing flickers.
+   * the session never passes through idle then, so nothing flickers. The first
+   * turn of an attempt to end that way, cleanly, gets the completion reminder
+   * instead: weaker models often finish the work and report in prose.
    */
   private onTurnEnd(taskId: string, attempt: TaskAttempt, session: IRunnerSession, reason: StructuredTurnEnd): void {
     if (this.attempts.get(taskId) !== attempt || attempt.phase !== 'running' || attempt.decided) return;
@@ -569,6 +576,11 @@ export class TaskOrchestrator {
     if (reason === 'failed' && attempt.turnError !== null && classifyRunnerStop(attempt.turnError) === 'usage-limit') {
       // The runner is still up, but no turn can run until the limit resets.
       this.unawaited(this.stopOnLimit(taskId, attempt), `Could not pause task "${this.store.get(taskId)?.title ?? taskId}" on its usage limit`);
+      return;
+    }
+    if (reason === 'completed' && !attempt.reminded) {
+      attempt.reminded = true;
+      this.messageTask(taskId, COMPLETION_REMINDER, 'message', (live, message) => live.sendMessage(message, 'ordewell'));
       return;
     }
     this.store.markAwaitingUser(taskId, 'input');
@@ -1671,6 +1683,7 @@ export class TaskOrchestrator {
       skills: [],
       autoResumed: opts.autoResumed === true,
       turnError: null,
+      reminded: false,
     };
     this.spawnCounts.set(task.id, attempt.attempt);
     this.attempts.set(task.id, attempt);

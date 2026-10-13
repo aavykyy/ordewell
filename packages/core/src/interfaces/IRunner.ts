@@ -5,6 +5,11 @@ import type { TaskSkillSnapshot } from '../models/Task';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 /** How a structured turn ended. `failed` carries the agent's own words in the preceding `error` event. */
 export type StructuredTurnEnd = 'completed' | 'interrupted' | 'failed';
+/**
+ * Who sent a task message that is not the user's: Ordewell itself, for the
+ * completion reminder (ADR-0018, W1). Absent means the user.
+ */
+export type TaskMessageFrom = 'ordewell';
 
 /**
  * One normalized event from a structured task (ADR-0018, O1b): the adapter's
@@ -16,22 +21,23 @@ export type StructuredEvent =
   | Exclude<AgentEvent, { type: 'turn_end' | 'permission_cancelled' | 'message_delivered' | 'message_dropped' }>
   /**
    * `text` is the user message the turn answers; `messageId` is set when it had
-   * waited in the queue, `forced` when it was force sent (ADR-0023, Q2).
+   * waited in the queue, `forced` when it was force sent (ADR-0023, Q2), `from`
+   * when Ordewell sent it.
    */
-  | { type: 'turn_start'; text: string; messageId?: string; forced?: boolean }
+  | { type: 'turn_start'; text: string; messageId?: string; forced?: boolean; from?: TaskMessageFrom }
   | { type: 'turn_end'; reason: StructuredTurnEnd }
   /**
    * Waiting in Ordewell's queue — again, for a message the runner was handed
    * and let go of (ADR-0023, D4). `forced` puts it ahead of the rest, behind
    * earlier forced ones (F2); a message already listed moves there.
    */
-  | { type: 'message_queued'; messageId: string; text: string; forced?: boolean }
+  | { type: 'message_queued'; messageId: string; text: string; forced?: boolean; from?: TaskMessageFrom }
   | { type: 'message_removed'; messageId: string }
-  | { type: 'message_undelivered'; messageId: string; text: string }
+  | { type: 'message_undelivered'; messageId: string; text: string; from?: TaskMessageFrom }
   /** The runner accepted the message into its running turn; it can no longer be taken back (ADR-0023, D3). */
   | { type: 'message_handed_over'; messageId: string }
   /** The model read the message inside the running turn, at this point of it (ADR-0023, Q2). */
-  | { type: 'message_delivered'; messageId: string; text: string }
+  | { type: 'message_delivered'; messageId: string; text: string; from?: TaskMessageFrom }
   /** An open `permission_request` was answered, by whoever answered it (ADR-0018, A1). */
   | { type: 'permission_decided'; id: string; decision: ApprovalDecision }
   /** An open `permission_request` can no longer be answered: the runner withdrew it, or its process is gone. */
@@ -44,6 +50,7 @@ export interface QueuedTaskMessage {
   handedOver?: boolean;
   /** Force sent: it goes out as soon as the running turn is interrupted (ADR-0023, F1). */
   forced?: boolean;
+  from?: TaskMessageFrom;
 }
 
 export interface IRunnerSession {
@@ -62,8 +69,9 @@ export interface IRunnerSession {
    * Send a user message: at once when idle; while a turn runs, handed to the
    * runner for its next step where it can take one, otherwise queued until
    * the turn ends (ADR-0023). Returns its id, for {@link removeQueued}.
+   * `from` marks a message Ordewell sent rather than the user.
    */
-  sendMessage(text: string): string;
+  sendMessage(text: string, from?: TaskMessageFrom): string;
   /**
    * Force send (ADR-0023, F1–F3): interrupt the running turn, as
    * {@link interrupt} does, and deliver this message as the turn that

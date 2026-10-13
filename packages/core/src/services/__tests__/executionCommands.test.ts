@@ -391,12 +391,12 @@ describe('the command seam: message_task', () => {
 
   it('answers a task waiting for input', async () => {
     const env = await running();
-    env.latest('t1').emitTurnEnd('completed');
+    env.latest('t1').waitForInput();
     await vi.waitFor(() => expect(taskOf(env.session, 't1')!.awaitingReason).toBe('input'));
 
     await env.run({ command: 'message_task', task: 't1', text: 'yes, the second option' });
 
-    expect(env.latest('t1').delivered).toEqual(['yes, the second option']);
+    expect(env.latest('t1').delivered.at(-1)).toBe('yes, the second option');
     expect(taskOf(env.session, 't1')!.status).toBe('in_progress');
   });
 

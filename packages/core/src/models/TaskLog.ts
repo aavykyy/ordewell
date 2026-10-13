@@ -1,5 +1,5 @@
 import type { ApprovalDecision } from '../interfaces/IApproval';
-import type { StructuredEvent, StructuredTurnEnd } from '../interfaces/IRunner';
+import type { StructuredEvent, StructuredTurnEnd, TaskMessageFrom } from '../interfaces/IRunner';
 import type { SubagentOutcome, TaskSkillNotice, TaskSkillSnapshot } from './Task';
 import type { UsageRecord } from './Usage';
 
@@ -19,8 +19,12 @@ export type TaskLogEvent =
    * sent notices ({@link taskLogForSurface}).
    */
   | { type: 'task_skills'; skills: TaskSkillSnapshot[] | TaskSkillNotice[] }
-  /** A turn began by delivering `message`; `messageId` names it when it had been queued, `forced` when it was force sent. */
-  | { type: 'turn_start'; message: string; messageId?: string; forced?: boolean }
+  /**
+   * A turn began by delivering `message`; `messageId` names it when it had been
+   * queued, `forced` when it was force sent. `from` on this and the other
+   * message events marks one Ordewell sent rather than the user.
+   */
+  | { type: 'turn_start'; message: string; messageId?: string; forced?: boolean; from?: TaskMessageFrom }
   | { type: 'turn_end'; reason: StructuredTurnEnd }
   | { type: 'text_delta'; text: string }
   /** A complete run of the agent's reply, authoritative over the deltas streamed for it. */
@@ -38,16 +42,16 @@ export type TaskLogEvent =
    * Waiting in Ordewell's queue — again, for a message the runner was handed
    * and let go of (ADR-0023, D4). `forced` moves it ahead of the rest (F2).
    */
-  | { type: 'message_queued'; messageId: string; text: string; forced?: boolean }
+  | { type: 'message_queued'; messageId: string; text: string; forced?: boolean; from?: TaskMessageFrom }
   | { type: 'message_removed'; messageId: string }
-  | { type: 'message_undelivered'; messageId: string; text: string }
+  | { type: 'message_undelivered'; messageId: string; text: string; from?: TaskMessageFrom }
   /** The runner accepted a queued message into its running turn; it can no longer be taken back. */
   | { type: 'message_handed_over'; messageId: string }
   /**
    * The model read a message inside its running turn (ADR-0023, Q2), logged
    * where it read it. A message that opened a turn is that turn's `turn_start`.
    */
-  | { type: 'message_delivered'; messageId: string; text: string }
+  | { type: 'message_delivered'; messageId: string; text: string; from?: TaskMessageFrom }
   /** The agent's own words for a failed turn. */
   | { type: 'error'; message: string }
   /**
@@ -92,6 +96,10 @@ export function trimToolOutput(output: string): { output: string; omittedLines?:
   return { output: kept.map(capLine).join('\n'), omittedLines };
 }
 
+function sender({ from }: { from?: TaskMessageFrom }): { from?: TaskMessageFrom } {
+  return from ? { from } : {};
+}
+
 function withSubagent<E extends TaskLogEvent>(event: E, subagentId: string | undefined): E {
   return subagentId ? { ...event, subagentId } : event;
 }
@@ -104,7 +112,7 @@ export function toTaskLogEvent(event: StructuredEvent): TaskLogEvent | null {
   switch (event.type) {
     case 'turn_start':
       return {
-        type: 'turn_start', message: event.text, ...(event.messageId ? { messageId: event.messageId } : {}), ...(event.forced ? { forced: true } : {}),
+        type: 'turn_start', message: event.text, ...(event.messageId ? { messageId: event.messageId } : {}), ...(event.forced ? { forced: true } : {}), ...sender(event),
       };
     case 'turn_end':
       return { type: 'turn_end', reason: event.reason };
@@ -128,15 +136,15 @@ export function toTaskLogEvent(event: StructuredEvent): TaskLogEvent | null {
     case 'usage':
       return { type: 'usage', record: event.record };
     case 'message_queued':
-      return { type: 'message_queued', messageId: event.messageId, text: event.text, ...(event.forced ? { forced: true } : {}) };
+      return { type: 'message_queued', messageId: event.messageId, text: event.text, ...(event.forced ? { forced: true } : {}), ...sender(event) };
     case 'message_undelivered':
-      return { type: 'message_undelivered', messageId: event.messageId, text: event.text };
+      return { type: 'message_undelivered', messageId: event.messageId, text: event.text, ...sender(event) };
     case 'message_removed':
       return { type: 'message_removed', messageId: event.messageId };
     case 'message_handed_over':
       return { type: 'message_handed_over', messageId: event.messageId };
     case 'message_delivered':
-      return { type: 'message_delivered', messageId: event.messageId, text: event.text };
+      return { type: 'message_delivered', messageId: event.messageId, text: event.text, ...sender(event) };
     case 'error':
       return { type: 'error', message: event.message };
     case 'permission_request':

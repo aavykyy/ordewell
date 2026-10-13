@@ -13,6 +13,18 @@ describe('reduceTaskLog', () => {
     expect(unkeyed(view.blocks)).toEqual([{ type: 'message', role: 'user', text: 'Do the task', streaming: false }]);
   });
 
+  it('shows a message Ordewell sent as Ordewell\'s, not the user\'s, wherever the runner read it', () => {
+    const opened = replayTaskLog([start, { type: 'turn_end', reason: 'completed' }, { type: 'turn_start', message: 'Call task_complete.', from: 'ordewell' }]);
+    expect(unkeyed(opened.blocks).at(-1)).toEqual({ type: 'message', role: 'system', text: 'Ordewell: Call task_complete.', streaming: false });
+
+    const read = replayTaskLog([
+      start,
+      { type: 'message_queued', messageId: 'msg-1', text: 'Call task_complete.', from: 'ordewell' },
+      { type: 'message_delivered', messageId: 'msg-1', text: 'Call task_complete.', from: 'ordewell' },
+    ]);
+    expect(unkeyed(read.blocks).at(-1)).toEqual({ type: 'message', role: 'system', text: 'Ordewell: Call task_complete.', streaming: false });
+  });
+
   it('opens a turn the runner started itself without inventing a user message', () => {
     const view = replayTaskLog([{ type: 'turn_start', message: '' }, { type: 'text', text: 'FINISHED' }]);
     expect(view.working).toBe(true);

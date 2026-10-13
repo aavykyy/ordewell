@@ -467,6 +467,35 @@ describe('StructuredSession messages', () => {
     turn.session.kill();
   });
 
+  it('marks a message Ordewell sent on the turn it opens when idle', async () => {
+    const { runner, spawned } = harness([fixture('claude-code', 'task-no-marker'), fixture('claude-code', 'task-no-marker')]);
+    const turn = observe(await runner.spawn(options()));
+    await turn.nextTurnEnd();
+    turn.session.sendMessage('Call task_complete', 'ordewell');
+    await turn.nextTurnEnd();
+    expect(userTurns(spawned.processes[0].written)).toEqual(['Do the task', 'Call task_complete']);
+    expect(turn.events.filter((e) => e.type === 'turn_start').at(-1)).toEqual({ type: 'turn_start', text: 'Call task_complete', from: 'ordewell' });
+    turn.session.kill();
+  });
+
+  it('marks a message Ordewell sent while it is queued, and on the turn it opens', async () => {
+    const { runner, spawned } = harness([() => {}, fixture('claude-code', 'task-no-marker')]);
+    const turn = observe(await runner.spawn(options()));
+    await firstTurn(spawned);
+    const id = turn.session.sendMessage('Call task_complete', 'ordewell');
+    expect(turn.session.queued()).toEqual([{ id, text: 'Call task_complete', from: 'ordewell' }]);
+
+    spawned.processes[0].emitStdout(fixture('claude-code', 'task-no-marker'));
+    await turn.nextTurnEnd();
+    await turn.nextTurnEnd();
+    const marked = turn.events.filter((e) => (e.type === 'message_queued' || e.type === 'turn_start') && 'from' in e);
+    expect(marked).toEqual([
+      { type: 'message_queued', messageId: id, text: 'Call task_complete', from: 'ordewell' },
+      { type: 'turn_start', text: 'Call task_complete', messageId: id, from: 'ordewell' },
+    ]);
+    turn.session.kill();
+  });
+
   it('ignores a blank write', async () => {
     const { runner } = harness([() => {}]);
     const turn = observe(await runner.spawn(options()));

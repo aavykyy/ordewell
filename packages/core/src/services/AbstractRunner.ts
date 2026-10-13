@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredEvent, StructuredTurnEnd } from '../interfaces/IRunner';
+import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredEvent, StructuredTurnEnd, TaskMessageFrom } from '../interfaces/IRunner';
 import type { ApprovalDecision } from '../interfaces/IApproval';
 import type { CheckpointAnswer, TaskCompleteArgs } from './mcp/tools';
 
@@ -38,7 +38,7 @@ export abstract class AbstractRunnerSession implements IRunnerSession {
   abstract turnState(): 'working' | 'idle';
   abstract onTurnEnd(listener: (reason: StructuredTurnEnd) => void): void;
   abstract onEvent(listener: (event: StructuredEvent) => void): void;
-  abstract sendMessage(text: string): string;
+  abstract sendMessage(text: string, from?: TaskMessageFrom): string;
   abstract forceSend(text: string): string;
   abstract forceSendQueued(id: string): boolean;
   abstract removeQueued(id: string): boolean;

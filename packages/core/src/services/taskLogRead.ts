@@ -29,15 +29,15 @@ export const TASK_LOG_KINDS = Object.keys(LOG_KINDS) as [TaskLogEvent['type'], .
 function eventText(event: TaskLogEvent): string {
   switch (event.type) {
     case 'task_skills': return event.skills.map((s) => `${s.name} (${s.source})${'content' in s ? `\n${s.content}` : ''}`).join('\n');
-    case 'turn_start': return `${event.messageId ? `${event.messageId} ` : ''}${event.forced ? '(forced) ' : ''}${event.message}`;
+    case 'turn_start': return `${event.messageId ? `${event.messageId} ` : ''}${event.forced ? '(forced) ' : ''}${event.from ? '(from Ordewell) ' : ''}${event.message}`;
     case 'turn_end': return event.reason;
     case 'text_delta':
     case 'text':
     case 'thinking_delta':
     case 'thinking': return event.text;
-    case 'message_queued': return `${event.messageId}${event.forced ? ' (forced)' : ''}: ${event.text}`;
+    case 'message_queued': return `${event.messageId}${event.forced ? ' (forced)' : ''}${event.from ? ' (from Ordewell)' : ''}: ${event.text}`;
     case 'message_undelivered':
-    case 'message_delivered': return `${event.messageId}: ${event.text}`;
+    case 'message_delivered': return `${event.messageId}${event.from ? ' (from Ordewell)' : ''}: ${event.text}`;
     case 'tool_call': return `${event.id} ${event.name} ${event.args}`;
     case 'tool_result': return `${event.id} ${event.success ? 'ok' : 'failed'}${event.omittedLines ? ` (${event.omittedLines} saved lines omitted)` : ''}\n${event.output}`;
     case 'subagent_started': return `${event.subagentId}${event.model ? ` (${event.model})` : ''}: ${event.brief}`;

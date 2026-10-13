@@ -7,7 +7,7 @@ import { serializeTaskStatus, type SessionMessage } from '../SessionMessage';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { fakeConfig, FakeRunnerSession, flushMicrotasks } from '../../testing';
 import { fakeNotification, makeSession, saves, taskOf } from './sessionTestKit';
-import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
+import type { IRunner, IRunnerSession, StructuredEvent } from '../../interfaces/IRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 
 function setup() {
@@ -56,11 +56,11 @@ async function started(extra: Partial<Task> = {}) {
 const task = (orchestrator: TaskOrchestrator) => orchestrator.storeInstance.get('t1')!;
 
 describe('a structured turn that ends without a task_complete call', () => {
-  it('leaves the task waiting for input, saved and announced, with no verdict', async () => {
+  it('leaves the task waiting for input once the reminder\'s turn ends without one too, saved and announced, with no verdict', async () => {
     const { orchestrator, structured, seen, settled } = await started();
 
     structured.emitOutput('I need to know which database to use.\n');
-    structured.emitTurnEnd('completed');
+    structured.waitForInput();
 
     expect(task(orchestrator)).toMatchObject({ status: 'awaiting_user', awaitingReason: 'input' });
     expect(task(orchestrator).verdict).toBeUndefined();
@@ -101,7 +101,7 @@ describe('a structured turn that ends without a task_complete call', () => {
     try {
       const { orchestrator, structured } = await started();
       structured.emitOutput('working\n');
-      structured.emitTurnEnd('completed');
+      structured.waitForInput();
 
       vi.advanceTimersByTime(2 * IDLE_TIMEOUT_MS);
       expect(orchestrator.getIdleSince('t1')).toBeNull();
@@ -124,6 +124,106 @@ describe('a structured turn that ends without a task_complete call', () => {
   });
 });
 
+describe('the completion reminder', () => {
+  function turnStarts(session: FakeRunnerSession) {
+    const starts: Array<Extract<StructuredEvent, { type: 'turn_start' }>> = [];
+    session.onEvent((event) => { if (event.type === 'turn_start') starts.push(event); });
+    return starts;
+  }
+
+  it('reminds the runner once, from Ordewell, and keeps the task in progress', async () => {
+    const { orchestrator, structured, seen, settled } = await started();
+    const starts = turnStarts(structured);
+    seen.length = 0;
+
+    structured.emitOutput('All checks pass. Report: …\n');
+    structured.emitTurnEnd('completed');
+
+    expect(task(orchestrator).status).toBe('in_progress');
+    expect(seen.every((s) => s === 'in_progress')).toBe(true);
+    expect(settled).toEqual([]);
+    expect(starts).toHaveLength(1);
+    expect(starts[0]).toMatchObject({ from: 'ordewell' });
+    expect(starts[0]?.text).toMatch(/ended without calling `task_complete`/);
+    expect(starts[0]?.text).toMatch(/status `done`/);
+  });
+
+  it('is sent once: the reminder\'s own turn ending without task_complete waits for input', async () => {
+    const { orchestrator, structured, settled } = await started();
+
+    structured.emitTurnEnd('completed');
+    structured.emitTurnEnd('completed');
+
+    expect(structured.fromOrdewell).toHaveLength(1);
+    expect(task(orchestrator)).toMatchObject({ status: 'awaiting_user', awaitingReason: 'input' });
+    expect(settled).toEqual(['t1']);
+  });
+
+  it('completes normally when the runner answers it with task_complete', async () => {
+    const { orchestrator, structured } = await started();
+    structured.emitTurnEnd('completed');
+
+    structured.reportComplete({ status: 'done', summary: 'All done: report' });
+    structured.emitTurnEnd('completed');
+
+    await vi.waitFor(() => expect(task(orchestrator).status).toBe('completed'));
+    expect(task(orchestrator).outputSummary?.report).toBe('All done: report');
+  });
+
+  it('is not sent when a message of the user\'s goes out as the turn ends', async () => {
+    const { structured, orchestrator } = await started();
+    orchestrator.sendTaskMessage('t1', 'also add tests');
+
+    structured.emitTurnEnd('completed');
+
+    expect(structured.delivered).toEqual(['also add tests']);
+    expect(structured.fromOrdewell).toEqual([]);
+  });
+
+  it.each(['failed', 'interrupted'] as const)('is not sent after a turn that %s', async (reason) => {
+    const { orchestrator, structured } = await started();
+
+    structured.emitTurnEnd(reason);
+
+    expect(structured.fromOrdewell).toEqual([]);
+    expect(task(orchestrator)).toMatchObject({ status: 'awaiting_user', awaitingReason: 'input' });
+  });
+
+  it('is not sent while a checkpoint has the task waiting, nor when the turn holding it is stopped', async () => {
+    const { orchestrator, structured } = await started();
+    void structured.callCheckpoint('ok?');
+    expect(structured.fromOrdewell).toEqual([]);
+
+    // The runner sits in the open call, so only a stop ends that turn.
+    await orchestrator.interruptTask('t1');
+
+    expect(structured.fromOrdewell).toEqual([]);
+    expect(task(orchestrator)).toMatchObject({ status: 'awaiting_user', awaitingReason: 'input' });
+  });
+
+  it('is not sent when the turn stopped on a usage limit', async () => {
+    const { orchestrator, structured } = await started();
+    structured.emitEvent({ type: 'error', message: "You've hit your usage limit" });
+
+    structured.emitTurnEnd('failed');
+
+    await vi.waitFor(() => expect(task(orchestrator).awaitingReason).toBe('usage-limit'));
+    expect(structured.fromOrdewell).toEqual([]);
+  });
+
+  it('is sent afresh on a retry, a new attempt', async () => {
+    const { orchestrator, sessions } = await started();
+    sessions[0]!.waitForInput();
+
+    await orchestrator.retryTask('t1');
+    await orchestrator.forceStartTask('t1');
+    sessions[1]!.emitTurnEnd('completed');
+
+    expect(sessions[1]!.fromOrdewell).toHaveLength(1);
+    expect(task(orchestrator).status).toBe('in_progress');
+  });
+});
+
 describe('sending a structured task a message', () => {
   it('queues it behind a running turn, lists it in status updates, and can take it back', async () => {
     const { orchestrator, structured } = await started();
@@ -141,11 +241,11 @@ describe('sending a structured task a message', () => {
 
   it('delivers it at once to a task waiting for input, which is back in progress', async () => {
     const { orchestrator, structured } = await started();
-    structured.emitTurnEnd('completed');
+    structured.waitForInput();
 
     orchestrator.sendTaskMessage('t1', 'Postgres.');
 
-    expect(structured.delivered).toEqual(['Postgres.']);
+    expect(structured.delivered.at(-1)).toBe('Postgres.');
     expect(task(orchestrator).status).toBe('in_progress');
     expect(task(orchestrator).awaitingReason).toBeUndefined();
   });
@@ -219,7 +319,7 @@ describe('talking to a task without a live turn', () => {
 describe('the saved reason, cleared on every way out of waiting', () => {
   it('is dropped by a retry', async () => {
     const { orchestrator, structured } = await started();
-    structured.emitTurnEnd('completed');
+    structured.waitForInput();
 
     await orchestrator.retryTask('t1');
 
@@ -228,7 +328,7 @@ describe('the saved reason, cleared on every way out of waiting', () => {
 
   it('is dropped by Mark complete', async () => {
     const { orchestrator, structured } = await started();
-    structured.emitTurnEnd('completed');
+    structured.waitForInput();
 
     await orchestrator.markTaskComplete('t1');
 
@@ -238,7 +338,7 @@ describe('the saved reason, cleared on every way out of waiting', () => {
 
   it('is dropped by a cancel back to pending', async () => {
     const { orchestrator, structured } = await started();
-    structured.emitTurnEnd('completed');
+    structured.waitForInput();
 
     await orchestrator.cancelTask('t1');
 
@@ -248,7 +348,7 @@ describe('the saved reason, cleared on every way out of waiting', () => {
 
   it('is dropped when a process that died while waiting fails its verdict', async () => {
     const { orchestrator, structured } = await started();
-    structured.emitTurnEnd('completed');
+    structured.waitForInput();
 
     structured.emitExit(1);
     await vi.waitFor(() => expect(task(orchestrator).status).toBe('failed'));
@@ -279,12 +379,12 @@ describe('a checkpoint keeps its reason', () => {
 
   it('does not answer a live task that is waiting for input as though it were a checkpoint', async () => {
     const { orchestrator, structured } = await started();
-    structured.emitTurnEnd('completed');
+    structured.waitForInput();
 
     orchestrator.approveCheckpoint('t1');
 
     expect(task(orchestrator)).toMatchObject({ status: 'awaiting_user', awaitingReason: 'input' });
-    expect(structured.delivered).toEqual([]);
+    expect(structured.delivered).toEqual(structured.fromOrdewell);
   });
 });
 
@@ -323,7 +423,7 @@ describe('through the Session', () => {
     expect(lastStatus()).toMatchObject({ tasks: [{ id: 't1', status: 'in_progress', queued: [{ id, text: 'and the docs' }] }] });
     expect(session.removeQueuedTaskMessage('t1', id)).toBe(true);
 
-    sessions[0].emitTurnEnd('completed');
+    sessions[0].waitForInput();
     await vi.waitFor(() => expect(saves(session).mock.lastCall?.[0].tasks[0]).toMatchObject({ status: 'awaiting_user', awaitingReason: 'input' }));
     expect(lastStatus()).toMatchObject({ tasks: [{ id: 't1', status: 'awaiting_user', awaitingReason: 'input' }] });
   });
@@ -331,7 +431,7 @@ describe('through the Session', () => {
   it('saves a task back in progress before any surface hears of the message that woke it', async () => {
     const { session, sessions, broadcast } = sessionWith();
     await session.forceStartTask('t1');
-    sessions[0].emitTurnEnd('completed');
+    sessions[0].waitForInput();
     await flushMicrotasks();
 
     const savesBefore = saves(session).mock.calls.length;
@@ -343,7 +443,7 @@ describe('through the Session', () => {
 
     expect(saves(session).mock.calls.length).toBeGreaterThan(savesBefore);
     expect(savedWhenAnnounced).toBe('in_progress');
-    expect(sessions[0].delivered).toEqual(['go on']);
+    expect(sessions[0].delivered.at(-1)).toBe('go on');
   });
 
   it('interrupts through the Session, and refuses a task that is not running', async () => {

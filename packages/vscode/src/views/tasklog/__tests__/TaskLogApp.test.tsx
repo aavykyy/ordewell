@@ -77,6 +77,13 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(screen.queryByTitle('Remove this message')).toBeNull();
   });
 
+  it('shows the completion reminder as Ordewell\'s, not the user\'s', () => {
+    render(<TaskLogApp />);
+    const view = replayTaskLog([{ type: 'turn_start', message: 'Call task_complete.', from: 'ordewell' }]);
+    init({}, [...view.blocks]);
+    expect(screen.getByText('Ordewell: Call task_complete.')).toBeTruthy();
+  });
+
   it('lists queued messages and takes one back', () => {
     render(<TaskLogApp />);
     init({ queued: [{ id: 'q1', text: 'then add tests' }] });

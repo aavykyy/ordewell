@@ -628,6 +628,16 @@ it('shows an undelivered message in the task log and removes it from the queue',
   expect(plain(state)).toContain('use Postgres · not delivered');
 });
 
+it('shows the completion reminder as Ordewell\'s line, not on the user\'s band', () => {
+  const state = opened({ taskView: loaded({ view: replayTaskLog([
+    { type: 'turn_start', message: 'Do the task' },
+    { type: 'turn_end', reason: 'completed' },
+    { type: 'turn_start', message: 'Call task_complete.', from: 'ordewell' },
+  ]) }) });
+  expect(state.taskView?.view.blocks.at(-1)).toMatchObject({ role: 'system' });
+  expect(plain(state)).toContain('Ordewell: Call task_complete.');
+});
+
 describe('a message the runner reads mid-turn (ADR-0023)', () => {
   const handedOver = () => opened({
     taskView: loaded({

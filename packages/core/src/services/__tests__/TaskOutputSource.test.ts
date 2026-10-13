@@ -38,6 +38,17 @@ describe('BufferedTaskOutputSource', () => {
       expect(source.finalText('t1')).toBe('tests failed: 2 of 40');
     });
 
+    it('keeps the report the runner wrote before Ordewell reminded it to call task_complete', () => {
+      const source = new BufferedTaskOutputSource();
+      const session = new FakeRunnerSession('s1', 't1');
+      source.attach('t1', session);
+      session.emitOutput('Full report: all checks pass.\n');
+      session.emitEvent({ type: 'turn_start', text: 'Call task_complete.', from: 'ordewell' });
+      session.emitOutput('Understood.\n');
+
+      expect(source.finalText('t1')).toBe('Full report: all checks pass.\nUnderstood.');
+    });
+
     it('drops a summary reported before a later turn started', () => {
       const source = new BufferedTaskOutputSource();
       const session = new FakeRunnerSession('s1', 't1');

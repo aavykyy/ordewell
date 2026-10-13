@@ -83,7 +83,7 @@ describe('queued task messages before settlement', () => {
     session.reportComplete({ status: 'done', summary: '' });
     session.emitTurnEnd('completed');
     session.emitOutput('I have a question');
-    session.emitTurnEnd('completed');
+    session.waitForInput();
     await flushMicrotasks(50);
     expect(orchestrator.storeInstance.get('t1')?.status).toBe('awaiting_user');
     expect(orchestrator.storeInstance.get('t1')?.verdict).toBeUndefined();
