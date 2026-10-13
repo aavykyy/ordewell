@@ -293,6 +293,17 @@ describe('ConversationViewHost queued prompts', () => {
     expect(screen.posts.some((m) => m.type === 'plannerTurn' && !m.active)).toBe(false);
   });
 
+  it('takes one held prompt out by position for a Send now, leaving the rest in order', () => {
+    host.receive(started);
+    host.holdPrompt('one');
+    host.holdPrompt('two');
+    host.holdPrompt('three');
+
+    expect(host.takePrompt(1)).toBe('two');
+    expect(lastHold()).toEqual({ type: 'heldPrompts', prompts: ['one', 'three'] });
+    expect(host.takePrompt(9)).toBeUndefined();
+  });
+
   it('gives every held prompt back when the user stops the turn, rather than sending them after it', () => {
     host.receive(started);
     host.holdPrompt('one');
@@ -302,6 +313,17 @@ describe('ConversationViewHost queued prompts', () => {
 
     expect(screen.posts.filter((m) => m.type === 'promptUnsent')).toEqual([{ type: 'promptUnsent', text: 'one\ntwo' }]);
     expect(host.nextPrompt()).toBeUndefined();
+  });
+
+  it('keeps the held prompts when the turn was stopped by a force send, unlike a user stop', () => {
+    host.receive(started);
+    host.holdPrompt('one');
+    host.holdPrompt('two');
+
+    host.receive({ type: 'planner_turn_ended', turnId: TURN, outcome: 'stopped', forceSent: true });
+
+    expect(screen.posts.some((m) => m.type === 'promptUnsent')).toBe(false);
+    expect(host.nextPrompt()).toBe('one');
   });
 
   it('drops held prompts with the conversation on a new session, without putting them in the input', () => {

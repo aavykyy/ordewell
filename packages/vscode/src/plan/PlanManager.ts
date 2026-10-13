@@ -172,6 +172,22 @@ export async function handleContinueConversation(
 }
 
 /**
+ * Send now in the planner chat (ADR-0023, F5): the Session stops the turn in
+ * flight and answers `text` in the turn that replaces it. The run's tasks are
+ * untouched, and the host's held prompts are not given back — they drain in
+ * order once the forced turn ends.
+ */
+export async function handleSendMessageNow(
+  text: string,
+  deps: PlanManagerDeps,
+): Promise<void> {
+  await inPlannerTurn(deps, async () => {
+    const prior = JSON.stringify(deps.getCurrentPlan().tasks);
+    adoptTurnPlan(prior, await deps.session.forceSendPrompt(text), deps);
+  });
+}
+
+/**
  * Planner-driven merge (issue #18): route a merge request through the planner
  * conversation loop so the LLM produces the combined task, validated atomically
  * via applyTaskOps with corrective retries — not a mechanical client-side stub.

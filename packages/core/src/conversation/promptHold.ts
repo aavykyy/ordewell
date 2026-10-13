@@ -34,6 +34,15 @@ export function unsendLatest(hold: PromptHold): TakenPrompt | undefined {
 }
 
 /**
+ * Takes one prompt out by position — a "Send now" on that held row — leaving
+ * every other prompt in the order it was typed.
+ */
+export function takeAt(hold: PromptHold, index: number): TakenPrompt | undefined {
+  if (index < 0 || index >= hold.length) return undefined;
+  return { text: hold[index], rest: [...hold.slice(0, index), ...hold.slice(index + 1)] };
+}
+
+/**
  * A stopped turn takes its queue with it: the prompts were written against a
  * turn that no longer exists, so they come back as one draft to edit and
  * resend rather than firing off after the stop.

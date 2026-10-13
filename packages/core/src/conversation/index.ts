@@ -10,7 +10,7 @@ export type { TaskLogView } from './taskLog';
 export { toolHeadline, outputPreview, outputLines, diffStat, diffRows, diffSummary } from './format';
 export type { DiffRow, DiffRowKind } from './format';
 export type { OutputPreview } from './format';
-export { EMPTY_HOLD, holdPrompt, drainNext, unsendLatest, unsendAll, aheadOfDraft } from './promptHold';
+export { EMPTY_HOLD, holdPrompt, drainNext, unsendLatest, unsendAll, takeAt, aheadOfDraft } from './promptHold';
 export type { PromptHold, TakenPrompt } from './promptHold';
 export { NO_TURN, followTurn, stopTurn } from './turnGate';
 export type { TurnGate, GatedConversation } from './turnGate';

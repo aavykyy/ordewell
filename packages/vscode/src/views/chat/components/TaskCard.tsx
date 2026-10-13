@@ -70,6 +70,10 @@ interface TaskCardProps {
   onMarkComplete?: (taskId: string) => void;
   onMarkIncomplete?: (taskId: string) => void;
   onRunTask?: (taskId: string) => void;
+  /** Message the running or waiting task from its card (ADR-0018, M1); a plain message goes through the command seam. */
+  onSendMessage?: (taskId: string, text: string) => void;
+  /** Force send to the running task from its card (ADR-0023, F1): interrupt its turn and deliver this next. */
+  onSendMessageNow?: (taskId: string, text: string) => void;
   /** Open (or focus) this task's log tab (ADR-0018, V1). */
   onOpenLog?: (taskId: string) => void;
   /** Controlled expansion. When both are supplied the parent owns which card is
@@ -160,6 +164,40 @@ export function TaskActions({ taskId, actions, labels, handlers }: {
   );
 }
 
+/**
+ * A compact composer on a running or waiting task's card (ADR-0018, M1;
+ * ADR-0023, F1). Send is the plain task message the log sends; Send now
+ * interrupts the running turn and delivers this one next, as `ctrl-s` does in
+ * the TUI and `Ctrl+Enter` in the log.
+ */
+export function TaskMessageBox({ taskId, onSend, onSendNow }: {
+  taskId: string;
+  onSend: (taskId: string, text: string) => void;
+  onSendNow: (taskId: string, text: string) => void;
+}) {
+  const [text, setText] = useState('');
+  const canSend = text.trim().length > 0;
+  const send = () => { if (canSend) { onSend(taskId, text.trim()); setText(''); } };
+  const sendNow = () => { if (canSend) { onSendNow(taskId, text.trim()); setText(''); } };
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    e.preventDefault();
+    if (e.ctrlKey || e.metaKey) sendNow(); else send();
+  };
+  return (
+    <div className="task-message-box" onClick={(e) => e.stopPropagation()}>
+      <textarea className="task-message-input" value={text} rows={1}
+        placeholder="Message the task… (Enter to send, Ctrl+Enter to send now)"
+        onChange={(e) => setText(e.target.value)} onKeyDown={onKeyDown} />
+      <button type="button" className="task-message-send" disabled={!canSend} onClick={send}>Send</button>
+      <button type="button" className="task-message-send-now" disabled={!canSend}
+        title="Interrupt the running step and send this next, ahead of anything queued (Ctrl+Enter)" onClick={sendNow}>
+        Send now
+      </button>
+    </div>
+  );
+}
+
 const DEFAULT_MODES: RunnerMode[] = [
   { id: 'build', label: 'Build', description: 'Edit files and run commands' },
   { id: 'plan', label: 'Plan', description: 'Read-only analysis' },
@@ -177,7 +215,7 @@ export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRu
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, run, models, modes, modelsByRunner, modesByRunner, runners, configuredProviders, modelApiMapping, isExecuting, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
+export default function TaskCard({ task, run, models, modes, modelsByRunner, modesByRunner, runners, configuredProviders, modelApiMapping, isExecuting, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const isControlled = expandedProp !== undefined;
   const expanded = isControlled ? expandedProp : internalExpanded;
@@ -235,6 +273,11 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
 
   const runnerOptions = runnerOptionsFor(runners, task.assignedRunner);
   const canEditDeps = !isExecuting && !!onDependenciesChange;
+  // Only a running or waiting AI task has a runner turn to reach; a manual task
+  // or one not yet started has none.
+  const canMessage = task.type === 'ai'
+    && (row.status === 'running' || row.status === 'quiet' || row.status === 'awaiting')
+    && !!onSendMessage && !!onSendMessageNow;
 
   return (
     <div className={`task-card task-${task.type} ${expanded ? 'expanded' : ''}`}>
@@ -604,6 +647,8 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
               })}
             </div>
           )}
+
+          {canMessage && <TaskMessageBox taskId={task.id} onSend={onSendMessage!} onSendNow={onSendMessageNow!} />}
 
           {isExecuting && (
             <TaskActions taskId={task.id} actions={row.actions} labels={ACTION_LABELS}

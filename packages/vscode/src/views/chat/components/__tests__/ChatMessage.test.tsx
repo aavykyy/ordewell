@@ -24,6 +24,12 @@ describe('ChatMessage', () => {
     expect(container.querySelector('.chat-msg-user .chat-msg-content')!.textContent).toBe('use **JWT**');
   });
 
+  it('marks a force-sent user line as sent now', () => {
+    const { container } = render(<ChatMessage block={message({ role: 'user', text: 'stop, use Postgres', forced: true })} />);
+    expect(container.querySelector('.chat-msg-user .chat-msg-forced')!.textContent).toBe('sent now');
+    expect(container.querySelector('.chat-msg-user .chat-msg-content')!.textContent).toBe('stop, use Postgres');
+  });
+
   it('renders a planner reply as markdown', () => {
     const { container } = render(<ChatMessage block={message({ text: 'Use **JWT** in `auth.ts`' })} />);
     expect(container.querySelector('.chat-msg-planner strong')!.textContent).toBe('JWT');

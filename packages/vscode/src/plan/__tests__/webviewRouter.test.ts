@@ -312,6 +312,41 @@ describe('webview messages reach the session through one entry point each', () =
       expect(converse).toHaveBeenCalledWith('/my-skill do it');
     });
 
+    it('sends now: a mid-turn message stops the planner turn through forceSendPrompt', async () => {
+      const force = vi.spyOn(h.session, 'forceSendPrompt').mockResolvedValue(h.session.planState!);
+      h.deps.isGeneratingPlan = () => true;
+
+      await h.route({ type: 'sendMessageNow', text: 'use Postgres instead' });
+
+      expect(force).toHaveBeenCalledWith('use Postgres instead');
+    });
+
+    it('sends now with no turn running as a plain send', async () => {
+      const converse = vi.spyOn(h.session, 'continueConversation').mockResolvedValue(h.session.planState!);
+      const force = vi.spyOn(h.session, 'forceSendPrompt').mockResolvedValue(h.session.planState!);
+      h.deps.isGeneratingPlan = () => false;
+
+      await h.route({ type: 'sendMessageNow', text: 'a normal reply' });
+
+      expect(force).not.toHaveBeenCalled();
+      expect(converse).toHaveBeenCalledWith('a normal reply');
+    });
+
+    it('sends one held prompt now by position, leaving the rest held in order', async () => {
+      const force = vi.spyOn(h.session, 'forceSendPrompt').mockResolvedValue(h.session.planState!);
+      h.deps.isGeneratingPlan = () => true;
+      h.deps.chatProvider.conversation.holdPrompt('one');
+      h.deps.chatProvider.conversation.holdPrompt('two');
+      h.deps.chatProvider.conversation.holdPrompt('three');
+
+      await h.route({ type: 'sendHeldPromptNow', index: 1 });
+
+      expect(force).toHaveBeenCalledWith('two');
+      const holds = h.posts.filter((m): m is Extract<HostToWebview, { type: 'heldPrompts' }> => m.type === 'heldPrompts');
+      expect(holds.at(-1)?.prompts).toEqual(['one', 'three']);
+      expect(h.posts.some((m) => m.type === 'promptUnsent')).toBe(false);
+    });
+
     /** A live planner whose replies the test hands back one at a time, keeping each call's message and signal. */
     function heldPlanner() {
       const calls: { message: string; signal?: AbortSignal; finish: (text: string) => void }[] = [];

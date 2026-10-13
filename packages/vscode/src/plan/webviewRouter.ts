@@ -5,7 +5,7 @@ import { isKnownSlashCommand } from '../commands/SlashParser';
 import { handleIsolationAction } from './isolation';
 import {
   handleAddTask, handleCheckpointAnswer, handleMergePlan, handleNewSession, handleRemoveTask,
-  handleSendMessage, handleSplitPlan, handleStopPlanning, handleSystemCommand, handleTaskControl, handleTaskEdit, type PlanManagerDeps,
+  handleSendMessage, handleSendMessageNow, handleSplitPlan, handleStopPlanning, handleSystemCommand, handleTaskControl, handleTaskEdit, type PlanManagerDeps,
 } from './PlanManager';
 
 /** What the extension itself answers: the catalog, the planner choice and the task skills — none of it a plan action. */
@@ -70,6 +70,12 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
       return;
     case 'unsendPrompt':
       deps.chatProvider.conversation.unsendPrompt();
+      return;
+    case 'sendMessageNow':
+      await sendChatNow(msg.text, deps);
+      return;
+    case 'sendHeldPromptNow':
+      await sendHeldPromptNow(msg.index, deps);
       return;
     case 'sendSystemCommand':
       await handleSystemCommand(msg.command, msg.taskId ?? '', deps);
@@ -183,6 +189,30 @@ async function sendChat(text: string, typed: boolean, runners: RunnerId[] | unde
     await handleSendMessage(text, deps, runners ?? deps.getPendingRunners(), deps.setPendingRunners);
   }
   sendNextHeldPrompt(deps);
+}
+
+/**
+ * Send now (ADR-0023, F5). A planner turn in flight is stopped and the forced
+ * message answered in the turn that replaces it; with none in flight it is a
+ * plain send, so the same key works before a turn opens. The held prompts stay
+ * held — a force send is not a user stop — and drain in order once the forced
+ * turn ends.
+ */
+async function sendChatNow(text: string, deps: WebviewRouterDeps): Promise<void> {
+  if (!deps.isGeneratingPlan()) {
+    await sendChat(text, true, undefined, deps);
+    return;
+  }
+  if (text.trim()) deps.chatProvider.conversation.note('user', text);
+  await handleSendMessageNow(text, deps);
+  sendNextHeldPrompt(deps);
+}
+
+/** Send one held prompt now, by position: it is taken out of the hold and force sent; the rest keep their order. */
+async function sendHeldPromptNow(index: number, deps: WebviewRouterDeps): Promise<void> {
+  const text = deps.chatProvider.conversation.takePrompt(index);
+  if (text === undefined) return;
+  await sendChatNow(text, deps);
 }
 
 /**
