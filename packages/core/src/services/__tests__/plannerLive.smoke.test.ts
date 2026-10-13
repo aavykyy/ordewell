@@ -2,6 +2,7 @@ import { execFileSync, spawn } from 'child_process';
 import { describe, it, expect, vi } from 'vitest';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { fakeConfig, fakeFileSystem } from '../../testing';
+import type { PlannerToolsOffer } from '../AiService';
 
 /**
  * The opt-in live check for the planner harness process lifecycle.
@@ -30,6 +31,10 @@ const TIMEOUT_MS = 600_000;
  * running a single one, and the effort is then the runner's own default.
  */
 const liveModel = process.env.ORDEWELL_LIVE_MODEL;
+
+// A harness planner plans only through Ordewell's tools (ADR-0022), so it
+// refuses to start without them; these turns never submit, so none answer.
+const LIVE_PLANNER_TOOLS: PlannerToolsOffer = { sessionId: 'live', handler: {} };
 const CHEAPEST: Record<'claude-code' | 'codex' | 'opencode', { model: string; effort?: string }> = {
   // A full id, not the `haiku` alias: under `--permission-mode plan` the alias
   // has run Sonnet, and a task may still spawn in that mode.
@@ -82,6 +87,7 @@ describe.runIf(agents.length > 0)('harness planner process lifecycle — live', 
           runners: [agent],
           modelsByRunner: { [agent]: [] },
           fs: fakeFileSystem(),
+          plannerTools: LIVE_PLANNER_TOOLS,
           onProgress: () => {},
         });
 

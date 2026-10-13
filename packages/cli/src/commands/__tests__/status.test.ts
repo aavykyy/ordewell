@@ -4,6 +4,7 @@ import { readFileSync, mkdtempSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { ApiClient } from '../../apiClient';
+import { stripAnsi } from '../../tui/ansi';
 
 vi.mock('../../utils', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../utils')>()),
@@ -92,4 +93,33 @@ describe('handleStatus --output', () => {
     expect(stdout).toContain('Second nested');
     srv.close();
   });
+
+  // A running session's finished tasks come back in a flat execution log, a
+  // finished subtask both on its own and inside its parent.
+  it('lists each task once, at its own depth, when finished ones come from the execution log', async () => {
+    const fn = { id: 'mul-fn', order: 1, title: 'Add and export mul', status: 'completed' };
+    const test = { id: 'mul-test', order: 2, title: 'Test mul', status: 'completed' };
+    const executing = {
+      meta: SESSION.meta,
+      plan: {
+        phase: 'executing',
+        executionLog: [{ id: 'mul', order: 1, title: 'Add mul', status: 'completed', subtasks: [fn, test] }, fn, { id: 'readme', order: 2, title: 'README check', status: 'completed' }, test],
+        pendingTasks: [{ id: 'status', order: 3, title: 'Run git status', status: 'pending' }],
+      },
+    };
+    const srv = await startServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(executing));
+    });
+    const { handleStatus } = await import('../status');
+    const { stdout } = await capture(() =>
+      handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)),
+    );
+    const rows = stdout.split('\n').filter((line) => /^\s+[\d.]+\. /.test(line)).map((line) => stripAnsi(line).replace(/\[[^\]]*\] /, '').replace(/[✓○✗⟳⊘]/g, '').replace(/\s+/g, ' ').trim());
+
+    expect(rows).toEqual(['1. Add mul', '1.1. Add and export mul', '1.2. Test mul', '2. README check', '3. Run git status']);
+    expect(stdout).toContain('Tasks:    5 total  |  4 done');
+    srv.close();
+  });
 });
+

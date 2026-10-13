@@ -2,7 +2,8 @@ import { taskUsageText } from '../tui/blocks';
 import { writeFileSync } from 'fs';
 import { flag, hasFlag, readLastSession } from '../utils';
 import { iconFor } from '../utils/output';
-import { taskOrderLabel, taskRowView, planUsage } from '@ordewell/core';
+import { flattenTasks, taskOrderLabel, taskRowView, planUsage } from '@ordewell/core';
+import { allTasksOf } from '../utils/tasks';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, type SessionMeta } from '../apiClient';
 
@@ -65,20 +66,15 @@ function printOneSession(
   meta: SessionMeta,
   plan: Record<string, unknown>,
 ): void {
-  const tasks = (plan?.pendingTasks || plan?.tasks || []) as Array<import("@ordewell/core").Task>;
-  const executionLog = (plan?.executionLog || []) as Array<import("@ordewell/core").Task>;
-  const completed = tasks.filter((t: import("@ordewell/core").Task) => t.status === 'completed').length + executionLog.filter((t: import("@ordewell/core").Task) => t.status === 'completed').length;
-  const failed = tasks.filter((t: import("@ordewell/core").Task) => t.status === 'failed').length + executionLog.filter((t: import("@ordewell/core").Task) => t.status === 'failed').length;
-  const running = tasks.filter((t: import("@ordewell/core").Task) => t.status === 'in_progress').length;
-  const blocked = tasks.filter((t: import("@ordewell/core").Task) => t.status === 'blocked').length;
-
-  const allTasks = [...executionLog, ...tasks];
+  const allTasks = allTasksOf(plan);
+  const everyTask = flattenTasks(allTasks);
+  const count = (status: string) => everyTask.filter((t) => t.status === status).length;
 
   console.log(`Session:  ${sessionId}`);
   console.log(`Goal:     ${meta.goal}`);
   console.log(`Runner:   ${(meta.runners || []).join(', ')}  |  Status: ${meta.status}`);
   console.log(`Phase:    ${plan?.phase || 'unknown'}  |  Created: ${meta.createdAt}`);
-  console.log(`Tasks:    ${allTasks.length} total  |  ${completed} done  |  ${failed} failed  |  ${running} running  |  ${blocked} blocked\n`);
+  console.log(`Tasks:    ${everyTask.length} total  |  ${count('completed')} done  |  ${count('failed')} failed  |  ${count('in_progress')} running  |  ${count('blocked')} blocked\n`);
 
   const usage = planUsage(allTasks);
   if (usage.attempts) console.log(`Tasks total: ${taskUsageText(usage)}`);

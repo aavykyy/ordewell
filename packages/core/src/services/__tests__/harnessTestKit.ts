@@ -194,7 +194,7 @@ function spawner(onWrite: (written: string, proc: FakeAgentProcess, args: string
 export function fakeSpawn(replies: ScriptedReply[], options: FakeSpawnOptions = {}): FakeSpawnResult {
   const queue = [...replies];
   return spawner((chunk, proc, args) => {
-    if (answeredAttachCheck(chunk, proc, args)) return;
+    if (answeredAttachCheck(chunk, proc, args) || answeredModelControl(chunk, proc)) return;
     const reply = queue.shift();
     if (reply !== undefined) {
       if (typeof reply === 'function') reply(chunk, proc);
@@ -216,6 +216,30 @@ function answeredAttachCheck(chunk: string, proc: FakeAgentProcess, args: string
   if (msg.type !== 'control_request' || msg.request?.subtype !== 'mcp_status') return false;
   const mcpServers = args.includes('--mcp-config') ? [{ name: 'ordewell', status: 'connected' }] : [];
   proc.emitStdout(`${JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id, response: { mcpServers } } })}\n`);
+  return true;
+}
+
+/**
+ * Claude Code's `initialize` and `set_model` control requests, answered as
+ * `claude` 2.1.296 does: `initialize` lists each model value with the id it
+ * runs as. Control traffic, so neither takes a scripted reply.
+ */
+export const CLAUDE_INITIALIZE_MODELS = [
+  { value: 'default', resolvedModel: 'claude-opus-5-5' },
+  { value: 'opus', resolvedModel: 'claude-opus-5-5' },
+  { value: 'sonnet', resolvedModel: 'claude-sonnet-5-5' },
+  { value: 'haiku', resolvedModel: 'claude-haiku-5-5' },
+  { value: 'claude-haiku-5-5', resolvedModel: 'claude-haiku-5-5' },
+];
+
+function answeredModelControl(chunk: string, proc: FakeAgentProcess): boolean {
+  let msg: { type?: string; request_id?: string; request?: { subtype?: string } };
+  try { msg = JSON.parse(chunk) as typeof msg; } catch { return false; }
+  if (msg.type !== 'control_request') return false;
+  const subtype = msg.request?.subtype;
+  if (subtype !== 'initialize' && subtype !== 'set_model') return false;
+  const response = subtype === 'initialize' ? { response: { models: CLAUDE_INITIALIZE_MODELS } } : {};
+  proc.emitStdout(`${JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id, ...response } })}\n`);
   return true;
 }
 

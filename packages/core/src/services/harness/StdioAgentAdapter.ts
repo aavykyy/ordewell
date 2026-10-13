@@ -231,8 +231,8 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
 
   nativeSessionId(): string | null { return this.sessionId; }
 
-  onProcessExit(listener: (code: number) => void): void {
-    const fire = () => listener(this.runner.exitCode);
+  onProcessExit(listener: (code: number, lastWords?: string) => void): void {
+    const fire = () => listener(this.runner.exitCode, this.exitMessage());
     if (this.runner.exit) queueMicrotask(fire);
     else void this.runner.ended.then(fire);
   }

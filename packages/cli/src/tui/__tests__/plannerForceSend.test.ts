@@ -107,6 +107,19 @@ describe('the queue across a stop', () => {
     expect(effects).toEqual([]);
   });
 
+  it('keeps the held prompts when the turn a force send stopped settles with what it had said', () => {
+    const sent = reduce(withDraft(planning({ queuedPrompts: ['one', 'two'] }), 'now'), ctrlS).state;
+    const stopped = reduce(sent, { type: 'planUpdated', plan: {}, sessionId: 's1' });
+
+    expect(stopped.effects).toEqual([]);
+    expect(stopped.state.queuedPrompts).toEqual(['one', 'two']);
+    expect(stopped.state.status).toBe('planning');
+
+    const forced = reduce(stopped.state, { type: 'planUpdated', plan: {}, sessionId: 's1' });
+    expect(forced.effects).toEqual([{ type: 'sendMessage', sessionId: 's1', message: 'one' }]);
+    expect(forced.state.queuedPrompts).toEqual(['two']);
+  });
+
   it('shows the error and puts the composer text back when the forced send itself failed', () => {
     const sent = reduce(withDraft(planning(), 'use Postgres'), ctrlS).state;
     expect(sent.editor.text).toBe('');

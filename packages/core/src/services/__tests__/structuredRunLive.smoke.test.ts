@@ -80,7 +80,7 @@ describe.runIf(live)('structured run — live', () => {
       expect(first.runnerSessionId).toEqual(expect.any(String));
       // The summary is whatever the runner's task_complete call reported
       // (ADR-0022), worded by the model, so the run is checked by carrying it.
-      const summary = first.outputSummary?.logTail?.trim().split('\n')[0] ?? '';
+      const summary = first.outputSummary?.report?.trim().split('\n')[0] ?? '';
       expect(summary.length).toBeGreaterThan(0);
       await vi.waitFor(() => expect(exited(children[0])).toBe(true), { timeout: 10_000 });
 

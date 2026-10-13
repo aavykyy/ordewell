@@ -258,6 +258,37 @@ describe('PoolFileSystem', () => {
       const result = await fsAdapter.listDir('/no/such/dir');
       expect(result.success).toBe(false);
     });
+
+    // The planner's first look at a workspace is a three-level listing. It
+    // used to come from `tree`, and fell back to one level wherever `tree`
+    // is not installed: the planner then planned blind to every nested file.
+    it('lists nested entries to the depth asked for, without descending into dependencies', async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-pfs-tree-'));
+      try {
+        fs.mkdirSync(path.join(root, 'src', 'lib'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'src', 'calc.js'), '');
+        fs.writeFileSync(path.join(root, 'src', 'lib', 'deep.js'), '');
+        fs.mkdirSync(path.join(root, 'src', 'lib', 'too-deep'));
+        fs.writeFileSync(path.join(root, 'src', 'lib', 'too-deep', 'hidden.js'), '');
+        fs.mkdirSync(path.join(root, 'node_modules', 'left-pad'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'README.md'), '');
+
+        const result = await new PoolFileSystem(root).listDir('.', 3);
+
+        expect(result.success).toBe(true);
+        expect(result.output.split('\n')).toEqual([
+          'D node_modules',
+          'D src',
+          '  D lib',
+          '    D too-deep',
+          '    F deep.js',
+          '  F calc.js',
+          'F README.md',
+        ]);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('bash (inherited tier policy)', () => {

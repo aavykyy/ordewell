@@ -22,6 +22,7 @@ const LOG_KINDS = {
   approval_requested: true,
   approval_decided: true,
   approval_withdrawn: true,
+  runner_ended: true,
 } satisfies Record<TaskLogEvent['type'], true>;
 
 export const TASK_LOG_KINDS = Object.keys(LOG_KINDS) as [TaskLogEvent['type'], ...TaskLogEvent['type'][]];
@@ -55,6 +56,7 @@ function eventText(event: TaskLogEvent): string {
     case 'approval_requested': return `${event.approvalId} ${event.tool}${event.toolCallId ? ` (call ${event.toolCallId})` : ''}${event.decided ? ` (decided ${event.decided})` : ''}${event.allowForTask ? ' (task grant offered)' : ''} ${event.args}`;
     case 'approval_decided': return `${event.approvalId} ${event.decision}${event.note ? `: ${event.note}` : ''}`;
     case 'approval_withdrawn': return event.approvalId;
+    case 'runner_ended': return 'with calls still open';
   }
 }
 

@@ -66,7 +66,13 @@ export type TaskLogEvent =
   | { type: 'approval_requested'; approvalId: string; tool: string; args: string; allowForTask: boolean; toolCallId?: string; decided?: ApprovalDecision['decision'] }
   | { type: 'approval_decided'; approvalId: string; decision: ApprovalDecision['decision']; note?: string }
   /** The request went unanswered: the runner withdrew it, or its process ended. */
-  | { type: 'approval_withdrawn'; approvalId: string };
+  | { type: 'approval_withdrawn'; approvalId: string }
+  /**
+   * The runner's process ended. A call it had not reported back on is not
+   * running any more: a task's runner is ended the moment its `task_complete`
+   * lands, often before it reports that call's result.
+   */
+  | { type: 'runner_ended' };
 
 const HEAD_LINES = 60;
 const TAIL_LINES = 40;

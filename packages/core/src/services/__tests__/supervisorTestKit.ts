@@ -32,15 +32,16 @@ export interface PlannerCall {
 
 /**
  * A planner whose turns the test answers by hand. A stopped call settles as a
- * backend's does, with what it had, unless `ignoresStop` makes it hang.
+ * backend's does, with what it had (`saidBeforeStop`), unless `ignoresStop`
+ * makes it hang.
  */
 export function heldPlanner() {
   const calls: PlannerCall[] = [];
-  const state = { live: false, ignoresStop: false, tools: undefined as PlannerToolHandler | undefined };
+  const state = { live: false, ignoresStop: false, saidBeforeStop: 'Looking at task 1', tools: undefined as PlannerToolHandler | undefined };
   const take = (message: string, signal?: AbortSignal) => new Promise<ConversationTurn>((resolve, reject) => {
     calls.push({ message, signal, finish: resolve, fail: reject });
     signal?.addEventListener('abort', () => {
-      if (!state.ignoresStop) resolve({ kind: 'message', text: 'Looking at task 1', researchLog: [], aborted: true });
+      if (!state.ignoresStop) resolve({ kind: 'message', text: state.saidBeforeStop, researchLog: [], aborted: true });
     }, { once: true });
   });
   const aiService = {

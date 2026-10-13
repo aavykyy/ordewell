@@ -1,5 +1,6 @@
 import { serializeTask, type RunInput, type RunTask, type RunTaskStatus, type RunView, type SerializedTask, type SerializedTaskStatus, type SurfacePlan, type SurfacePlanState, type SurfaceTask } from './SessionMessage';
 import type { IsolationHandoff } from '../interfaces/IWorktreeIsolation';
+import { rejoinPlanTree } from '../models/Task';
 
 export const EMPTY_RUN: RunView = { tasks: [], runMerge: null, handoff: null, mergeResult: null };
 
@@ -89,9 +90,7 @@ function handoffOf({ type: _type, ...handoff }: Extract<RunInput, { type: 'isola
  */
 function planTasks(plan: SurfacePlan | SurfacePlanState): SurfaceTask[] {
   if ('tasks' in plan) return plan.tasks;
-  const byId = new Map<string, SurfaceTask>();
-  for (const task of [...plan.pendingTasks, ...(plan.phase === 'executing' ? plan.executionLog : [])]) byId.set(task.id, task);
-  return [...byId.values()].sort((a, b) => a.order - b.order);
+  return rejoinPlanTree<SurfaceTask>(plan.pendingTasks, plan.phase === 'executing' ? plan.executionLog : []);
 }
 
 export function reduceRun(view: RunView, input: RunInput): RunView {

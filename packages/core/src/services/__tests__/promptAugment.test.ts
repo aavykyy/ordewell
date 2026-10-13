@@ -40,6 +40,24 @@ describe('summarizeOutput', () => {
   });
 });
 
+describe('prior outputs of a subtask dependency', () => {
+  // "Task 1" names top-level task 1; a subtask is only ever its dotted label.
+  it('heads the report with the dependency\'s dotted label, never its bare order', () => {
+    const first = createTask({
+      id: 'fn', order: 1, title: 'Add and export mul', prompt: 'add mul',
+      outputSummary: { reviewReason: 'ok', report: 'Added mul to src/calc.js.', logTail: '', capturedAt: '2026-01-01T00:00:00Z' },
+    });
+    const second = createTask({ id: 'test', order: 2, title: 'Test mul', prompt: 'test mul', dependencies: ['fn'] });
+    const parent = createTask({ id: 'mul', order: 1, title: 'Add mul', prompt: 'mul', subtasks: [first, second] });
+    const other = createTask({ id: 'readme', order: 2, title: 'README check', prompt: 'readme' });
+
+    const out = composeAugmentedPrompt(second, [parent, other], { planMapEnabled: false });
+
+    expect(out).toContain('### Task 1.1: Add and export mul\n- Review: ok\n- Report:\n  Added mul to src/calc.js.');
+    expect(out).not.toContain('### Task 1:');
+  });
+});
+
 describe('augmentPromptWithPriorOutputs', () => {
   it('returns the original prompt when the task has no dependencies', () => {
     const t = createTask({ id: 'a', prompt: 'do A', dependencies: [] });

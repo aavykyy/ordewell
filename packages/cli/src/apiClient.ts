@@ -702,7 +702,11 @@ export class ApiClient {
       socket.once('error', () => resolve());
       socket.once('close', () => resolve());
     });
+    // `close()` only starts the handshake, and frames already on the wire are
+    // still emitted: the next turn's, which the next converse's stream also hears.
+    let closed = false;
     socket.on('message', (data: Buffer) => {
+      if (closed) return;
       try {
         onEvent(JSON.parse(data.toString()));
       } catch {
@@ -712,7 +716,7 @@ export class ApiClient {
     socket.on('error', () => {
       // Best-effort progress display — a broken WS never blocks plan generation.
     });
-    return { ready, close: () => socket.close() };
+    return { ready, close: () => { closed = true; socket.close(); } };
   }
 
   getSettings(): Promise<SettingsResponse> {

@@ -101,6 +101,25 @@ describe('TaskLogRecorder', () => {
     expect(file.saved).toEqual([{ type: 'error', message: 'boom' }]);
   });
 
+  // The orchestrator ends a runner as soon as its task_complete call lands,
+  // often before the runner reports that call's result.
+  it('closes a call still open when its runner ends, so no surface shows it running', async () => {
+    const session = new FakeRunnerSession('s1', 't1');
+    const file = memoryFile();
+    const sent: SessionMessage[] = [];
+    const recorder = new TaskLogRecorder({ broadcast: (m) => sent.push(m), location: () => ({ baseDir: '/ws', sessionId: 'sess' }), open: () => file });
+    await recorder.wrap(handing(session)).spawn(spawnOpts);
+    session.emitEvent({ type: 'turn_start', text: 'Do it' });
+    session.emitEvent({ type: 'tool_call', id: 'call-1', name: 'mcp__ordewell__task_complete', args: { status: 'done', summary: 'ok' } });
+    session.emitExit(-1);
+
+    for (const events of [file.saved, taskLogs(sent).flatMap((m) => m.events)]) {
+      const tools = replayTaskLog(events).blocks.filter((b) => b.type === 'tool');
+      expect(tools).toHaveLength(1);
+      expect(tools[0]).toMatchObject({ toolCallId: 'call-1', status: 'interrupted' });
+    }
+  });
+
   it('keeps streaming when the log cannot be saved', async () => {
     const session = new FakeRunnerSession('s1', 't1');
     const sent: SessionMessage[] = [];

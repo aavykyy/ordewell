@@ -3,6 +3,7 @@ export {
   createEmptyPlan,
   createTask,
   flattenTasks,
+  rejoinPlanTree,
   flattenTasksWithParents,
   isAwaitingReason,
   isUserMessage,
@@ -38,6 +39,8 @@ export * from './models/TaskLog';
 export * from './models/Execution';
 export * from './interfaces/IFileSystem';
 export { BaseFileSystem } from './services/BaseFileSystem';
+export { listTree } from './services/dirListing';
+export type { DirEntry } from './services/dirListing';
 export { STOPPED_TOOL_RESULT } from './services/executeTool';
 export { classifyCommand, AUTO_COMMANDS, GIT_READONLY_SUBCOMMANDS, REFUSED_COMMANDS } from './services/commandPolicy';
 export type { CommandTier, CommandClassification } from './services/commandPolicy';

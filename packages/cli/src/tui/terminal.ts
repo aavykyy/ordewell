@@ -181,9 +181,14 @@ export function openTerminal(options: TerminalOptions): Terminal {
       // later must not be able to ring the bell on every spinner tick or move
       // the cursor out from under the pane divider — from here on, the only
       // escapes that reach the terminal are the ones this app painted.
+      // With autowrap off the cursor stays on the last column after a full
+      // row, so an erase there would take that column's character with it.
       const { cols } = size();
       const rows = frame
-        .map((line, i) => `\x1b[${i + 1};1H${clampToCols(paintOnly(line), cols)}\x1b[K`)
+        .map((line, i) => {
+          const row = clampToCols(paintOnly(line), cols);
+          return `\x1b[${i + 1};1H${row}${width(row) < cols ? '\x1b[K' : ''}`;
+        })
         .join('');
       output.write(AUTOWRAP_OFF + rows + AUTOWRAP_ON);
     },

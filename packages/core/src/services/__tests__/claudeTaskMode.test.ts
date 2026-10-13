@@ -872,3 +872,34 @@ describe('ClaudeCodeAdapter steer', () => {
     expect(await task.steer('msg-1', 'hi')).toBe(false);
   });
 });
+
+describe('ClaudeCodeAdapter: a read-only task on a model alias', () => {
+  /** The control requests the adapter wrote, in order. */
+  function controlRequests(written: string[]): unknown[] {
+    return written.map((line) => JSON.parse(line) as { type?: string; request?: unknown })
+      .filter((msg) => msg.type === 'control_request')
+      .map((msg) => msg.request);
+  }
+
+  // Under `--permission-mode plan` the CLI runs Sonnet for the `haiku` alias,
+  // and only for the alias: a full id is run as given.
+  it('pins the id the CLI resolves the alias to, before its first turn', async () => {
+    const { spawned, processDeps } = deps([]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskIn('plan', { model: 'haiku' }));
+
+    expect(controlRequests(spawned.processes[0].written)).toEqual([{ subtype: 'initialize' }, { subtype: 'set_model', model: 'claude-haiku-5-5' }]);
+    adapter.dispose();
+  });
+
+  it('switches no model for a task in another mode, or for one already on a full id', async () => {
+    for (const start of [taskIn('acceptEdits', { model: 'haiku' }), taskIn('plan', { model: 'claude-haiku-5-5' })]) {
+      const { spawned, processDeps } = deps([]);
+      const adapter = new ClaudeCodeAdapter(processDeps);
+      await adapter.start(start);
+
+      expect(controlRequests(spawned.processes[0].written).filter((r) => (r as { subtype?: string }).subtype !== 'initialize')).toEqual([]);
+      adapter.dispose();
+    }
+  });
+});
