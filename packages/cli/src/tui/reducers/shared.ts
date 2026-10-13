@@ -1,4 +1,4 @@
-import type { AiProvider, ApprovalDecision, PlanUsage, PlannerUsage, ResearchLogEntry, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, TaskLogEvent } from '@ordewell/core';
+import type { AiProvider, ApprovalDecision, DaemonErrorCode, PlanUsage, PlannerUsage, ResearchLogEntry, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, TaskLogEvent } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
   HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
@@ -107,6 +107,7 @@ export type Action =
   | { type: 'taskViewRequested'; taskId: string; sessionId: string }
   | { type: 'taskStarted'; taskId: string; order?: number; title: string; runner?: string; sessionId?: string }
   /** A task asked a checkpoint question; the chat pane says so, and where to answer. */
+  | { type: 'taskUpdated'; taskId: string; changes: Record<string, unknown>; sessionId?: string }
   | { type: 'taskCheckpoint'; taskId: string; title: string; summary: string; sessionId?: string }
   /** The run's status stream: folded through core's `reduceRun`, status-only fields and all. */
   | { type: 'statusUpdate'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage; sessionId?: string }
@@ -131,7 +132,8 @@ export type Action =
   | { type: 'inputPrefilled'; text: string; sessionId?: string }
   | { type: 'rewindTargetsLoaded'; targets: RewindTargetView[]; sessionId?: string; pick?: number }
   | { type: 'runnersLoaded'; runners: RunnerView[]; orchestratorModel?: string }
-  | { type: 'failed'; message: string }
+  /** `code` is the daemon's stable reason for a refusal, when it gave one. */
+  | { type: 'failed'; message: string; code?: DaemonErrorCode }
   /** The workspace has no project marker — offer to initialize it rather than just failing. */
   | { type: 'workspaceNeedsInit'; goal: string; workspace: string }
   | { type: 'notice'; message: string; level?: 'info' | 'warn' | 'error' }

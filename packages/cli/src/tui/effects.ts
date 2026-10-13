@@ -82,7 +82,7 @@ export async function runEffect(effect: Effect, deps: EffectDeps): Promise<void>
     await perform(effect, deps);
   } catch (err) {
     if (!isConnectionRefused(err)) {
-      deps.dispatch({ type: 'failed', message: explain(err) });
+      deps.dispatch(failedFrom(err));
       return;
     }
 
@@ -105,12 +105,9 @@ export async function runEffect(effect: Effect, deps: EffectDeps): Promise<void>
     try {
       await perform(effect, deps);
     } catch (retryErr) {
-      deps.dispatch({
-        type: 'failed',
-        // A fresh daemon holds no sessions, so the retry of anything
-        // session-scoped legitimately 404s. Say which of the two happened.
-        message: isConnectionRefused(retryErr) ? describeConnectionRefused(deps.port) : explain(retryErr),
-      });
+      // A fresh daemon holds no sessions, so the retry of anything
+      // session-scoped legitimately 404s. Say which of the two happened.
+      deps.dispatch(isConnectionRefused(retryErr) ? { type: 'failed', message: describeConnectionRefused(deps.port) } : failedFrom(retryErr));
     }
   }
 }
@@ -125,6 +122,12 @@ function explain(err: unknown): string {
     return 'This server is no longer holding that session — it was probably restarted. Reload it with /sessions.';
   }
   return err instanceof Error ? err.message : String(err);
+}
+
+/** The failure a rejected call becomes, carrying the daemon's reason when it gave one. */
+function failedFrom(err: unknown): Extract<Action, { type: 'failed' }> {
+  const code = err instanceof DaemonError ? err.code : undefined;
+  return { type: 'failed', message: explain(err), ...(code ? { code } : {}) };
 }
 
 /**
@@ -164,8 +167,13 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       try {
         await converse(deps, sessionId, () => api.startConversation(sessionId, effect.goal, undefined, workspace, effect.allowInit));
       } catch (err) {
-        // The daemon registers a session only after planning succeeds, so this
-        // id points at nothing — keeping it would 404 every following message.
+        // The daemon registers a session before the opening turn runs, so a
+        // stopped one — by a force send, whose forced turn carries on — leaves
+        // a session the next reply belongs to.
+        if (err instanceof DaemonError && err.code === 'planner_turn_stopped') throw err;
+        // Any other failure means planning never completed and the daemon
+        // dropped it, so this id points at nothing — keeping it would 404
+        // every following message.
         unfollow(deps, sessionId);
         dispatch({ type: 'sessionCleared' });
         // Offer to initialize instead of just reporting failure — but only
@@ -360,7 +368,9 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       // Daemon first, `.env` second — see `persistAfterDaemon` below. The
       // effort is the daemon's to settle: it survives only where the new
       // model offers it.
-      const { plannerThinkingEffort } = await api.updateSettings({ orchestratorModel: effect.modelId });
+      const settled = await api.updateSettings({ orchestratorModel: effect.modelId });
+      // An effort the daemon did not report is cleared, not written as the word "undefined".
+      const plannerThinkingEffort = typeof settled.plannerThinkingEffort === 'string' ? settled.plannerThinkingEffort : '';
       persistAfterDaemon(deps, { ORCHESTRATOR_MODEL: effect.modelId, ORDEWELL_PLANNER_EFFORT: plannerThinkingEffort });
       dispatch({ type: 'settingsLoaded', settings: { orchestratorModel: effect.modelId, plannerThinkingEffort } });
       dispatch({ type: 'notice', message: `Planner model set to ${effect.modelId}.` });
@@ -515,13 +525,24 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     case 'loadSession': {
       // Followed first: a session still running goes on reporting while it loads.
       const shown = follows.get(deps.api)?.sessionId;
-      await follow(deps, effect.sessionId);
+      // The daemon greets a live session's socket with its run before this
+      // session is the one on screen, where the reducer would drop it as stale;
+      // it is held until `sessionStarted` has made it the one.
+      const inbound = inboundFor(deps.api, deps.dispatch, effect.sessionId);
+      inbound.holdSnapshot();
+      try {
+        await follow(deps, effect.sessionId);
+      } catch (err) {
+        inbound.releaseSnapshot(false);
+        throw err;
+      }
       // Adopting registers the session with the daemon, which is what makes the
       // restored plan executable — `getSession` alone only reads the file.
       let adopted: Awaited<ReturnType<OrdewellApi['adoptSession']>>;
       try {
         adopted = await api.adoptSession(effect.sessionId, workspace);
       } catch (err) {
+        inbound.releaseSnapshot(false);
         // The TUI stays on the session it showed, so it goes on following that one.
         if (shown) await follow(deps, shown);
         else unfollow(deps, effect.sessionId);
@@ -529,6 +550,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       }
       const { plan, goal } = adopted;
       dispatch({ type: 'sessionStarted', sessionId: effect.sessionId, goal });
+      inbound.releaseSnapshot(true);
       dispatch(restoredChat(plan, effect.sessionId));
       dispatch({ type: 'planUpdated', plan, sessionId: effect.sessionId });
       dispatch({ type: 'notice', message: `Loaded "${goal || effect.sessionId}".` });

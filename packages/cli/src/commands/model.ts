@@ -46,12 +46,15 @@ export async function handleModel(subArgs: string[], injectedApi?: ApiClient): P
 
   // The daemon keeps the effort only where the new model offers it, so `.env`
   // takes whichever it settled on rather than the previous model's level.
-  const { plannerThinkingEffort } = await api.updateSettings({ orchestratorModel: modelId });
+  const settled = await api.updateSettings({ orchestratorModel: modelId });
+  // A daemon that reports none has none: written as '' it clears the level, as
+  // `ordewell planner-effort default` does.
+  const effort = typeof settled.plannerThinkingEffort === 'string' ? settled.plannerThinkingEffort : '';
   const envFile = findEnvFile();
   writeEnvVar(envFile, 'ORCHESTRATOR_MODEL', modelId);
-  writeEnvVar(envFile, 'ORDEWELL_PLANNER_EFFORT', plannerThinkingEffort);
+  writeEnvVar(envFile, 'ORDEWELL_PLANNER_EFFORT', effort);
   process.env.ORCHESTRATOR_MODEL = modelId;
-  process.env.ORDEWELL_PLANNER_EFFORT = plannerThinkingEffort;
+  process.env.ORDEWELL_PLANNER_EFFORT = effort;
   console.log(`Planner model set to ${modelId}.`);
 }
 

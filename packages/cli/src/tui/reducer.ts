@@ -1,7 +1,7 @@
-import { EMPTY_HOLD, fromTranscript, holdPrompt, taskStartedNotice, type RunnerId } from '@ordewell/core';
+import { EMPTY_HOLD, EMPTY_RUN, fromTranscript, holdPrompt, taskStartedNotice, type RunnerId } from '@ordewell/core';
 import { chatEditorRoomFor } from './geometry';
 import { chatScrollMax } from './layout';
-import { activeToken, findCommand, parseSlash, tokenCompletions } from './slash';
+import { activeToken, findCommand, parseSlash, tokenCompletions, type ParsedCommand } from './slash';
 import { applyKey, commit } from './editor';
 import { say, wiped } from './transcript';
 import { blockedPicker, handoffArrived, showDiff } from './handoff';
@@ -11,7 +11,7 @@ import { handleOverlayKey } from './reducers/overlays';
 import { handlePlanKey } from './reducers/planPane';
 import { announceApprovals, announceCheckpoint, continueTaskStep, handleTaskViewKey, openTaskView, taskLogAbandoned, taskLogArrived, taskLogLoaded } from './reducers/taskView';
 import { pickRewindTarget, runCommand, skillInTaskView, unknownCommand } from './reducers/commands';
-import { disarmStop, drainQueue, forceSendPlanner, plannerEscape } from './reducers/turnQueue';
+import { disarmStop, drainQueue, forceSendPlanner, plannerEscape, restoreForced } from './reducers/turnQueue';
 import { applyIsolationRecord, applySettings, clearRunIsolation, foldRun, followSession, planSnapshot, runLabel, withRun } from './reducers/incoming';
 import { refillPicker } from './reducers/pickers';
 import { refreshStepper } from './reducers/stepper';
@@ -47,10 +47,11 @@ function reduceAction(state: TuiState, action: Action): Step {
     case 'key':
       return handleKey(state, action.key);
 
-    // Isolation belongs to one session's plan, and task ids repeat across
-    // sessions, so nothing of the last one's may carry over into this.
+    // A run belongs to one session's plan, and task ids repeat across sessions
+    // (`task-1`), so nothing of the last one's — a merge gate, a checkpoint, its
+    // tasks — may carry over into this.
     case 'sessionStarted':
-      return step(withRun({ ...state, sessionId: action.sessionId, goal: action.goal, taskView: null }, clearRunIsolation(state.run)));
+      return step(withRun({ ...state, sessionId: action.sessionId, goal: action.goal, taskView: null }, EMPTY_RUN));
 
     // The daemon registers a session only once planning succeeds; when it does
     // not, holding on to the id would send every next message to a session the
@@ -65,9 +66,9 @@ function reduceAction(state: TuiState, action: Action): Step {
         pendingApprovals: [],
         queuedPrompts: EMPTY_HOLD,
         stopArmed: false,
-        forceSendPending: false,
+        forceSendPending: null,
         overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
-      }, { ...clearRunIsolation(state.run), runSettings: undefined }));
+      }, EMPTY_RUN));
 
     case 'chatRestored':
       if (stale(state, action.sessionId)) return step(state);
@@ -117,10 +118,14 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step(followSession(state, action.message));
 
     // The run as the daemon sends it when a socket connects: the whole view is
-    // adopted, so a surface joining mid-run has it before the next update.
-    case 'runSnapshot':
+    // adopted, so a surface joining mid-run has it before the next update — and
+    // its status line with it, as a status update would have set it.
+    case 'runSnapshot': {
       if (stale(state, action.sessionId)) return step(state);
-      return step(withRun(state, action.view));
+      const next = withRun(state, action.view);
+      const status = runStatus(next, next.tasks);
+      return step({ ...next, status, busyLabel: status === 'executing' ? runLabel(next.tasks, next.runMerge) : state.busyLabel });
+    }
 
     case 'taskLog':
       if (stale(state, action.sessionId)) return step(state);
@@ -158,6 +163,12 @@ function reduceAction(state: TuiState, action: Action): Step {
     case 'taskCheckpoint':
       if (stale(state, action.sessionId)) return step(state);
       return step(announceCheckpoint(state, action));
+
+    // An edit from another surface or the supervisor; the plan itself is not
+    // re-read, so the patch is all there is to show it by.
+    case 'taskUpdated':
+      if (stale(state, action.sessionId)) return step(state);
+      return step(foldRun(state, { type: 'task_updated', taskId: action.taskId, changes: action.changes }));
 
     case 'statusUpdate': {
       if (stale(state, action.sessionId)) return step(state);
@@ -270,7 +281,8 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step(refillPicker({ ...state, rewindTargets: action.targets }, ['rewind']));
 
     // A fork holds no run, whatever the session it came from was doing — the
-    // original keeps its run, and its events are stale from here on.
+    // original keeps its run, and its events are stale from here on. Its plan
+    // arrives next, onto an empty run view.
     case 'sessionForked':
       return step(withRun({
         ...state,
@@ -283,9 +295,9 @@ function reduceAction(state: TuiState, action: Action): Step {
         pendingApprovals: [],
         queuedPrompts: EMPTY_HOLD,
         stopArmed: false,
-        forceSendPending: false,
+        forceSendPending: null,
         overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
-      }, clearRunIsolation(state.run)));
+      }, EMPTY_RUN));
 
     // The rewound message comes back as a draft to edit and resend, so it lands
     // as if just typed: history is not being browsed, and nothing is parked.
@@ -313,8 +325,13 @@ function reduceAction(state: TuiState, action: Action): Step {
       state = taskLogAbandoned(state);
       // A force send stopped the turn in flight; the forced turn is already on
       // its way, so the stop is not news and the prompts held behind it keep
-      // their order rather than draining into the turn replacing it.
-      if (state.forceSendPending) return step({ ...state, forceSendPending: false, busyLabel: '' });
+      // their order rather than draining into the turn replacing it. Only the
+      // stop is that: any other failure is the forced send's own, and its
+      // prompt is already out of the composer or the queue, so it goes back.
+      if (state.forceSendPending) {
+        if (action.code === 'planner_turn_stopped') return step({ ...state, forceSendPending: null, busyLabel: '' });
+        state = restoreForced(state);
+      }
       const quiet = plannerInFlight(state) && state.stopRequested;
       const reported = { ...(quiet ? state : say(state, 'error', action.message)), status: 'idle' as const, busyLabel: '' };
       // A planner turn dying IS a turn ending — the queue would otherwise wait
@@ -450,8 +467,11 @@ function handleKey(state: TuiState, key: Key): Step {
   if (key.name === 'enter') return submit(state);
   // Send now in the planner chat (ADR-0023, F5): mid-turn it interrupts the
   // turn and sends the composer text (or the newest queued prompt) next; with
-  // no turn in flight it is the plain send enter is.
-  if (key.name === 'ctrl-s') return plannerInFlight(state) ? forceSendPlanner(state) : submit(state);
+  // no turn in flight it is the plain send enter is. A TUI command in the
+  // composer is not a message to send, so it runs as it does on enter.
+  if (key.name === 'ctrl-s') {
+    return plannerInFlight(state) && !builtInCommand(state.editor.text) ? forceSendPlanner(state) : submit(state);
+  }
   if (key.name === 'escape') return step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
   // Page keys and the wheel scroll the transcript. Up/down always go to the
   // editor: single-line drafts get history recall, multi-line drafts get cursor
@@ -466,23 +486,32 @@ function handleKey(state: TuiState, key: Key): Step {
   return step({ ...state, editor: applyKey(state.editor, key, multilineEditor ? room : undefined) });
 }
 
+/**
+ * Only a built-in is dispatched by the TUI. In planner chat a skill-backed or
+ * unregistered /name goes to the planner like any other message, literal
+ * /name and all, so the daemon's own skill resolution (see
+ * resolveSkillInvocation) loads Ordewell's skill before a coding-agent
+ * planner ever sees the token and tries to resolve it itself.
+ */
+function builtInCommand(text: string): ParsedCommand | null {
+  const command = parseSlash(text);
+  const known = command && findCommand(command.name);
+  return command && known && known.source !== 'skill' ? command : null;
+}
+
 function submit(state: TuiState): Step {
   const text = state.editor.text.trim();
   if (!text) return step(state);
 
   const cleared: TuiState = { ...state, editor: commit(state.editor) };
+  const builtIn = builtInCommand(text);
+  if (builtIn) return runCommand(cleared, builtIn);
+  // The task view's composer has no skill resolution: a mistyped /retyr there
+  // would continue a finished task or reach a running agent, so it is refused.
   const command = parseSlash(text);
-  // Only a built-in is dispatched here. In planner chat a skill-backed or
-  // unregistered /name goes to the planner like any other message, literal
-  // /name and all, so the daemon's own skill resolution (see
-  // resolveSkillInvocation) loads Ordewell's skill before a coding-agent
-  // planner ever sees the token and tries to resolve it itself. The task
-  // view's composer has no such resolution: a mistyped /retyr there would
-  // continue a finished task or reach a running agent, so it is refused.
-  if (command) {
+  if (command && state.taskView) {
     const known = findCommand(command.name);
-    if (known && known.source !== 'skill') return runCommand(cleared, command);
-    if (state.taskView) return known ? skillInTaskView(cleared, command.name) : unknownCommand(cleared, command.name);
+    return known ? skillInTaskView(cleared, command.name) : unknownCommand(cleared, command.name);
   }
 
   // The task view's composer talks to the runner, not the planner: the daemon
@@ -507,5 +536,5 @@ function submit(state: TuiState): Step {
     ? { type: 'sendMessage', sessionId: state.sessionId, message: text }
     : { type: 'startConversation', goal: text };
 
-  return step({ ...spoken, status: 'planning', stopRequested: false, forceSendPending: false }, [effect]);
+  return step({ ...spoken, status: 'planning', stopRequested: false, forceSendPending: null }, [effect]);
 }

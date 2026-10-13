@@ -32,9 +32,11 @@ function httpGet(
 ): Promise<{ status: number; data: string }> {
   return new Promise((resolve, reject) => {
     const req = http.get(url, { timeout: timeoutMs, headers }, (res) => {
-      let data = '';
-      res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
-      res.on('end', () => resolve({ status: res.statusCode || 0, data }));
+      // Decoded once the body is whole: a multi-byte character split across two
+      // chunks would otherwise turn into U+FFFD at the seam.
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => { chunks.push(chunk); });
+      res.on('end', () => resolve({ status: res.statusCode || 0, data: Buffer.concat(chunks).toString('utf8') }));
     });
     req.on('error', reject);
     req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });

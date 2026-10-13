@@ -973,6 +973,14 @@ describe('settings', () => {
     expect(h.actions).toContainEqual({ type: 'settingsLoaded', settings: { orchestratorModel: 'haiku', plannerThinkingEffort: '' } });
   });
 
+  it('clears the persisted effort when the daemon reported none, rather than writing "undefined"', async () => {
+    const h = harness({ updateSettings: vi.fn().mockResolvedValue({ orchestratorModel: 'haiku' }) });
+    h.env.ORDEWELL_PLANNER_EFFORT = 'max';
+    await runEffect({ type: 'setModel', modelId: 'haiku' }, h.deps);
+
+    expect(h.env.ORDEWELL_PLANNER_EFFORT).toBe('');
+  });
+
   it('stores an api key under that provider env var', async () => {
     const h = harness();
     await runEffect({ type: 'setApiKey', provider: 'openrouter', key: 'sk-or-1' }, h.deps);
@@ -2138,6 +2146,44 @@ describe('following the session', () => {
     expect(h.follows[1].close).not.toHaveBeenCalled();
   });
 
+  it('lands the connect snapshot of a loaded session even though it arrives before the session is adopted', async () => {
+    const view = { tasks: [{ id: 'a', order: 1, title: 'A', type: 'ai', status: 'in_progress', dependencies: [], subtasks: [] }], runMerge: null, handoff: null, mergeResult: null };
+    const h: ReturnType<typeof following> = following({
+      adoptSession: vi.fn().mockImplementation(async () => {
+        h.follows.at(-1)!.emit({ type: 'run_snapshot', sessionId: 's9', view });
+        return { plan: { tasks: [{ id: 'a' }] }, goal: 'g' };
+      }),
+    });
+    await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
+
+    const order = types(h.actions);
+    expect(h.actions).toContainEqual({ type: 'runSnapshot', view, sessionId: 's9' });
+    expect(order.indexOf('runSnapshot')).toBeGreaterThan(order.indexOf('sessionStarted'));
+    expect(order.indexOf('runSnapshot')).toBeLessThan(order.indexOf('planUpdated'));
+  });
+
+  it('delivers a connect snapshot arriving after the load as it does any other', async () => {
+    const view = { tasks: [], runMerge: null, handoff: null, mergeResult: null };
+    const h = following();
+    await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
+    h.follows.at(-1)!.emit({ type: 'run_snapshot', sessionId: 's9', view });
+
+    expect(h.actions).toContainEqual({ type: 'runSnapshot', view, sessionId: 's9' });
+  });
+
+  it('drops the snapshot of a session whose load failed', async () => {
+    const view = { tasks: [], runMerge: null, handoff: null, mergeResult: null };
+    const h: ReturnType<typeof following> = following({
+      adoptSession: vi.fn().mockImplementation(async () => {
+        h.follows.at(-1)!.emit({ type: 'run_snapshot', sessionId: 's9', view });
+        throw new DaemonError('Session not found', 404, 'session_not_found');
+      }),
+    });
+    await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
+
+    expect(types(h.actions)).not.toContain('runSnapshot');
+  });
+
   it('goes on following the session on screen when loading another fails', async () => {
     const h = following({ adoptSession: vi.fn().mockRejectedValue(new DaemonError('Session not found', 404, 'session_not_found')) });
     await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
@@ -2161,6 +2207,16 @@ describe('following the session', () => {
     await runEffect({ type: 'closeSession', sessionId: 's1' }, h.deps);
 
     expect(h.follows[0].close).toHaveBeenCalled();
+  });
+
+  it('keeps the session when a force send stopped its opening turn, so the forced turn\'s reply lands', async () => {
+    const stopped = new DaemonError('The planner turn was stopped', 409, 'planner_turn_stopped');
+    const h = following({ startConversation: vi.fn().mockRejectedValue(stopped) });
+    await runEffect({ type: 'startConversation', goal: 'ship it' }, h.deps);
+
+    expect(types(h.actions)).not.toContain('sessionCleared');
+    expect(h.follows[0].close).not.toHaveBeenCalled();
+    expect(h.actions).toContainEqual({ type: 'failed', message: 'The planner turn was stopped', code: 'planner_turn_stopped' });
   });
 
   it('drops the follow of a first turn the daemon never registered', async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { emptyEditor, applyKey, commit, cursorPosition, type EditorState } from '../editor';
+import { emptyEditor, applyKey, commit, cursorPosition, moveCursorVertical, type EditorState } from '../editor';
 
 const at = (text: string, cursor = text.length): EditorState => ({
   ...emptyEditor(),
@@ -288,5 +288,23 @@ describe('applyKey — grapheme clusters', () => {
     const right = applyKey(at(text, 1), { name: 'right' });
     expect(right.cursor).toBe(1 + family.length);
     expect(applyKey(right, { name: 'left' }).cursor).toBe(1);
+  });
+});
+
+describe('moveCursorVertical — grapheme clusters', () => {
+  const family = '👨‍👩‍👧';
+
+  it('lands on a cluster boundary rather than inside a joined emoji', () => {
+    const text = `abc\n${family}x`;
+    // Two columns in on the first line; the cluster below is two columns wide.
+    const moved = moveCursorVertical(text, 2, 80, 1);
+
+    expect(moved).toBe(4 + family.length);
+  });
+
+  it('goes up to the boundary after a wide cluster at the same visual column', () => {
+    const text = `${family}ab\ncd`;
+
+    expect(moveCursorVertical(text, text.length, 80, -1)).toBe(family.length);
   });
 });
