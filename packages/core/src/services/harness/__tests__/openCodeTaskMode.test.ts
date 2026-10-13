@@ -315,6 +315,25 @@ describe('OpenCodeAdapter task mode — when a turn ends', () => {
     adapter.dispose();
   });
 
+  // The consumer is Ordewell, not the runner. A throw takes down the event
+  // stream that permission requests arrive on, and a server left blocked on
+  // one nobody sees would hang the turn; it fails instead, as the stdio
+  // adapters' turns do.
+  it('fails the turn when the consumer throws, rather than waiting on a server it can no longer hear', async () => {
+    const server = fakeServer();
+    const { adapter } = await startTask(server);
+    server.status[SES] = { type: 'busy' };
+    const turn = adapter.send('do the task', (e) => { if (e.type === 'assistant_text') throw new Error('consumer blew up'); });
+    const settled = expect(turn).rejects.toThrow('consumer blew up');
+    const stream = await server.stream();
+    stream.push(status('busy'));
+    stream.push(assistant('msg_a'));
+    stream.push(textPart('prt_1', 'msg_a', 'working'));
+
+    await settled;
+    adapter.dispose();
+  });
+
   it('fails the turn when its last assistant message carries an error', async () => {
     const server = fakeServer();
     const { adapter } = await startTask(server);

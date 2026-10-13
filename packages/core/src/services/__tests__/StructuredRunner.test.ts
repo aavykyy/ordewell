@@ -573,8 +573,9 @@ describe('StructuredSession exit', () => {
 
 describe('StructuredRunner: tools or nothing (ADR-0022)', () => {
   /** One fake process per spawn, its attach report scripted; the server records what it issued and took back. */
-  function attaching(reports: boolean[], { issueFails = 0 }: { issueFails?: number } = {}) {
-    const adapters: Array<{ sent: string[]; disposed: boolean; mcp?: TaskStartOptions['mcp'] }> = [];
+  /** A report of `'never'` is a check still waiting on the runner when the test acts. */
+  function attaching(reports: Array<boolean | 'never'>, { issueFails = 0 }: { issueFails?: number } = {}) {
+    const adapters: Array<{ sent: string[]; disposed: boolean; checking: boolean; mcp?: TaskStartOptions['mcp'] }> = [];
     const issued: string[] = [];
     const revoked: string[] = [];
     let failures = issueFails;
@@ -591,7 +592,7 @@ describe('StructuredRunner: tools or nothing (ADR-0022)', () => {
       revoke: (token: string) => { revoked.push(token); },
     } as unknown as OrdewellMcpServer;
     const createAdapter = (): TaskModeAgentAdapter => {
-      const record: (typeof adapters)[number] = { sent: [], disposed: false };
+      const record: (typeof adapters)[number] = { sent: [], disposed: false, checking: false };
       const attached = reports[adapters.length] ?? false;
       adapters.push(record);
       return {
@@ -603,7 +604,10 @@ describe('StructuredRunner: tools or nothing (ADR-0022)', () => {
         interrupt: async () => true,
         onProcessExit: () => {},
         answerPermission: () => false,
-        mcpAttached: async () => attached,
+        mcpAttached: () => {
+          record.checking = true;
+          return attached === 'never' ? new Promise<boolean>(() => {}) : Promise.resolve(attached);
+        },
       };
     };
     const notices: string[] = [];
@@ -649,6 +653,22 @@ describe('StructuredRunner: tools or nothing (ADR-0022)', () => {
     expect(env.adapters).toHaveLength(1);
     expect(env.notices[0]).toContain('could not issue a token (listen EADDRINUSE)');
     session.kill();
+  });
+
+  // Stop is not a request to finish attaching first: the session already
+  // reports its exit, so the process it was starting goes with it, at once.
+  it('takes back a process still checking its attach state the moment the session is stopped', async () => {
+    const env = attaching(['never']);
+    const spawned = env.spawn();
+    await until(() => env.adapters[0]?.checking === true);
+
+    env.runner.stopAll();
+
+    expect(env.adapters[0].disposed).toBe(true);
+    expect(env.revoked).toEqual(['tok-1']);
+    await spawned;
+    expect(env.adapters).toHaveLength(1);
+    expect(env.adapters[0].sent).toEqual([]);
   });
 
   it('fails the start when the respawn does not attach either, with nothing sent and nothing left running', async () => {

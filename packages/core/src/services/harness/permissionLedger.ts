@@ -57,8 +57,13 @@ export class PermissionLedger<Handle> {
     const { ordewell, suggestions, ask, ...shown } = request;
     const { role, autoApprove } = this.stance();
     if (ordewell || (role === 'task' && autoApprove)) {
-      onEvent({ type: 'permission_request', ...shown, decided: ALLOW });
-      this.reply(handle, ALLOW);
+      // Answered even when showing it throws: that is Ordewell's failure, and a
+      // runner left waiting on its completion call would hang the task.
+      try {
+        onEvent({ type: 'permission_request', ...shown, decided: ALLOW });
+      } finally {
+        this.reply(handle, ALLOW);
+      }
       return;
     }
     this.open.set(request.id, handle);

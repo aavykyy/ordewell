@@ -9,7 +9,7 @@ import type { ProjectMcpServer } from './repoConfig';
 import { hunksOf, markedLines } from './fileDiff';
 import {
   PendingSteers, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePermissions, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, raiseOnce, settleTurn, splitModelId,
-  streamTurn, turnLatch, usageRecord, type PermissionAnswer, type StreamTurn, type TurnLatch,
+  streamTurn, turnLatch, usageRecord, type EventStream, type PermissionAnswer, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
@@ -430,7 +430,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     if (this.task) return this.sendTask(this.task, message, onEvent, signal, onActivity);
 
     const turn = newTurnState();
-    const closeStream = await this.openStream(turn, onEvent, onActivity);
+    const stream = await this.openStream(turn, onEvent, onActivity);
 
     try {
       const model = this.planner?.model ? splitModelId(this.planner.model) : null;
@@ -443,12 +443,13 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
         ...(this.planner?.effort ? { variant: this.planner.effort } : {}),
         ...(this.planner ? plannerSystem(this.planner) : {}),
       };
-      const reply = await this.json<OpenCodeMessageResponse>('POST', `/session/${this.sessionId}/message`, body, signal);
+      const reply = await Promise.race([this.json<OpenCodeMessageResponse>('POST', `/session/${this.sessionId}/message`, body, signal), stream.failed]);
 
       if (signal?.aborted) { this.dispose(); return; }
       this.settle(reply, turn, onEvent);
     } catch (err) {
       if (signal?.aborted) { this.dispose(); return; }
+      if (stream.broken) throw err;
       // The POST is the turn's transport, not its work: the server plans on
       // regardless of what happened to this socket. So a transport failure
       // reads the reply back out of the session rather than losing a turn the
@@ -457,7 +458,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       if (recovered) { this.settle(recovered, turn, onEvent); return; }
       onEvent({ type: 'error', message: `The OpenCode planner turn failed: ${describeError(err)}` });
     } finally {
-      await closeStream();
+      await stream.close();
     }
   }
 
@@ -481,7 +482,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     this.interruptRequested = false;
     const turn: TaskTurn = Object.assign(turnLatch(), { userMessages: new Set<string>(), failure: null, messageError: null });
     this.taskTurn = turn;
-    const closeStream = await this.openStream(state, onEvent, onActivity);
+    const stream = await this.openStream(state, onEvent, onActivity);
     const poll = new AbortController();
 
     try {
@@ -497,6 +498,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       const settled = await settleTurn(turn, {
         signal,
         processEnded: this.processEnded,
+        streamFailed: stream.failed,
         exitMessage: () => this.exitMessage(),
         readBack: () => this.readBack(state, onEvent),
         permissions: this.permissions,
@@ -515,7 +517,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       this.steers.drain();
       this.taskTurn = null;
       poll.abort();
-      await closeStream();
+      await stream.close();
     }
   }
 
@@ -941,7 +943,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
   }
 
   /** `/event` for one turn — see {@link openEventStream}. Load-bearing for {@link onPermissionAsked}. */
-  private openStream(turn: TurnState, onEvent: (e: AgentEvent) => void, onActivity?: () => void): Promise<() => Promise<void>> {
+  private openStream(turn: TurnState, onEvent: (e: AgentEvent) => void, onActivity?: () => void): Promise<EventStream> {
     return openEventStream<OpenCodeEvent>(
       (signal) => this.deps.fetch(`${this.baseUrl}/event`, { signal, headers: this.headers() }),
       (frame) => this.onFrame(frame, turn, onEvent),

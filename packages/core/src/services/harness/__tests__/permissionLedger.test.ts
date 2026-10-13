@@ -50,6 +50,20 @@ describe('PermissionLedger', () => {
     },
   );
 
+  // A completion left unanswered holds the verdict hostage just as one put to
+  // a person would: the consumer showing it failing is Ordewell's bug, and the
+  // runner is answered regardless.
+  it.each([['an Ordewell tool', TASK, true], ['an auto-approved request', AUTO_TASK, false]])(
+    'answers %s even when showing it throws',
+    (_label, stance, ordewell) => {
+      const { permissions, replies } = ledger(stance);
+      const raise = () => permissions.raise(request('r1', { ordewell }), 'h1', () => { throw new Error('consumer blew up'); });
+
+      expect(raise).toThrow('consumer blew up');
+      expect(replies).toEqual([['h1', { decision: 'allow' }]]);
+    },
+  );
+
   it('holds a planner\'s request open with what it is for and none of the runner\'s grants', () => {
     const { permissions, replies, events, onEvent } = ledger(PLANNER);
     permissions.raise(request('r1', { toolUseId: 'call_1' }), 'h1', onEvent);

@@ -195,6 +195,8 @@ export class StructuredSession extends AbstractRunnerSession {
   private adapterStarted = false;
   private adapterAttached = false;
   private startupExit: number | null = null;
+  /** Aborted when the session ends, taking back a spawn still attaching. */
+  private readonly ended = new AbortController();
   /** Bumped whenever the adapter is replaced, so the old one's late events and exit are ignored. */
   private generation = 0;
   private output = '';
@@ -285,7 +287,7 @@ export class StructuredSession extends AbstractRunnerSession {
         this.generation += 1;
         adapter.dispose();
       },
-      cancelled: () => this.exited,
+      cancelled: this.ended.signal,
       startupExit: () => this.startupExit,
       onRespawn: (failure) => this.launch.onNotice?.(`${this.launch.runner} started without Ordewell's tools (${failure}); respawning once.`),
       failed: (first, second) => `Could not start ${this.launch.runner} with Ordewell's tools, so the task was not sent to it. First spawn: ${first}. Respawn: ${second}.`,
@@ -302,6 +304,7 @@ export class StructuredSession extends AbstractRunnerSession {
   }
 
   protected override baseHandleExit(code: number): void {
+    this.ended.abort();
     this.revokeTools();
     this.undeliverQueued();
     super.baseHandleExit(code);
@@ -322,8 +325,9 @@ export class StructuredSession extends AbstractRunnerSession {
     const adapter = this.adapter;
     this.generation += 1;
     this.turn?.abort.abort();
-    // An adapter not attached yet belongs to its spawn, which takes it back
-    // once it lands.
+    // An adapter not attached yet belongs to its spawn, which the session's
+    // exit cancels: taken back at once while it checks its attach state, or
+    // once its start lands.
     if (adapter && this.adapterAttached) adapter.dispose();
     this.withdrawPermissions();
     this.baseHandleExit(-1);

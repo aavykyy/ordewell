@@ -356,6 +356,8 @@ export function turnLatch(): TurnLatch {
 export interface TurnSettlement {
   signal?: AbortSignal;
   processEnded: Promise<void>;
+  /** The turn's {@link EventStream.failed}. */
+  streamFailed: Promise<never>;
   exitMessage(): string;
   /** Whatever of the turn's own messages the stream missed. */
   readBack(): Promise<void>;
@@ -366,9 +368,10 @@ export interface TurnSettlement {
 
 /**
  * Wait out a posted turn, then settle it: what the stream missed, the requests
- * left open, and how it ended. A server that exits first fails the turn.
- * False when the caller's signal aborted it, which the caller answers by
- * disposing of the server.
+ * left open, and how it ended. A server that exits first fails the turn; a
+ * frame handler that throws rejects it with that error. False when the
+ * caller's signal aborted it, which the caller answers by disposing of the
+ * server.
  */
 export async function settleTurn(turn: TurnLatch, how: TurnSettlement, onEvent: OnEvent): Promise<boolean> {
   const { signal } = how;
@@ -376,7 +379,7 @@ export async function settleTurn(turn: TurnLatch, how: TurnSettlement, onEvent: 
     if (signal?.aborted) resolve();
     signal?.addEventListener('abort', () => resolve(), { once: true });
   });
-  await Promise.race([turn.ended, aborted, how.processEnded]);
+  await Promise.race([turn.ended, aborted, how.processEnded, how.streamFailed]);
   if (signal?.aborted) return false;
   if (!turn.done) {
     onEvent({ type: 'error', message: how.exitMessage() });
@@ -393,33 +396,57 @@ export async function interruptAcknowledged(turn: TurnLatch, processEnded: Promi
   return settleWithin(turn.ended.then(() => true), { timeoutMs, ended: processEnded, onTimeout: () => false, onEnded: () => false });
 }
 
+/** One turn's event stream, open. */
+export interface EventStream {
+  /**
+   * Rejects with what a frame handler threw; never resolves. The stream is
+   * dead from then on, and it is the only channel permission requests arrive
+   * on: a turn still waiting on its server would wait on a request nobody
+   * sees, so it fails instead, as a stdio adapter's turn does.
+   */
+  readonly failed: Promise<never>;
+  /** Whether {@link failed} has rejected. */
+  readonly broken: boolean;
+  /** Ends the stream; rejects, as {@link failed} does, if a handler threw. */
+  close(): Promise<void>;
+}
+
 /**
  * Open the event stream for one turn and wait until it is connected. The
  * stream stopped being best-effort the moment permission answers moved onto
  * it: a request raised before we connect is one nobody answers, and the turn
  * hangs on it. Waiting is bounded so a server that never opens the stream
- * still gets its turn. Resolves to the stream's close.
+ * still gets its turn.
  */
 export async function openEventStream<F>(
   connect: (signal: AbortSignal) => Promise<Response | null>,
   onFrame: (frame: F) => void,
   onActivity?: () => void,
-): Promise<() => Promise<void>> {
+): Promise<EventStream> {
   const streamAbort = new AbortController();
   let connected!: () => void;
   const ready = new Promise<void>((resolve) => { connected = resolve; });
+  let fail!: (err: unknown) => void;
+  const failed = new Promise<never>((_resolve, reject) => { fail = reject; });
+  // Heard by whoever races it; a turn that ended first never does.
+  failed.catch(() => {});
   // A frame handler that throws is Ordewell's own failure, not a frame the
-  // runner sent badly — the only thing that escapes the read loop below. Held
-  // until the caller closes the stream, and caught here so it does not surface
-  // as an unhandled rejection in the meantime.
+  // runner sent badly — the only thing that escapes the read loop below.
   let handlerError: unknown;
   const live = streamEvents(connect, streamAbort.signal, onFrame, connected, onActivity)
-    .catch((err: unknown) => { handlerError = err; });
+    .catch((err: unknown) => {
+      handlerError = err;
+      fail(err);
+    });
   await settleWithin(ready, { timeoutMs: STREAM_CONNECT_TIMEOUT_MS, onTimeout: () => undefined });
-  return async () => {
-    streamAbort.abort();
-    await live;
-    if (handlerError !== undefined) throw handlerError;
+  return {
+    failed,
+    get broken() { return handlerError !== undefined; },
+    close: async () => {
+      streamAbort.abort();
+      await live;
+      if (handlerError !== undefined) throw handlerError;
+    },
   };
 }
 

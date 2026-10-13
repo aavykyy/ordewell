@@ -11,6 +11,13 @@ import type { AgentProcessDeps } from './AgentAdapter';
 /** Stderr kept for the failure message; a dying CLI's last words are the only useful diagnostic. */
 const STDERR_TAIL_CHARS = 4000;
 
+/**
+ * How long after 'exit' the pipes get to close before the process is ended
+ * anyway. Long enough for a dead CLI's buffered output to drain; short enough
+ * that a descendant still holding its stdout or stderr does not hang the turn.
+ */
+const CLOSE_GRACE_MS = 2000;
+
 export interface RunnerCommand {
   command: string;
   args: string[];
@@ -43,6 +50,8 @@ export class RunnerProcess {
   private exitStatus: RunnerExit | null = null;
   private stderrTail = '';
   private spawnEnv: NodeJS.ProcessEnv = {};
+  /** Stdout readers' end-of-stream flushes, for an end the pipe itself never reports. */
+  private readonly stdoutEnds = new Set<() => void>();
 
   constructor(private readonly deps: AgentProcessDeps) {
     this.ended = new Promise<void>((resolve) => { this.markEnded = resolve; });
@@ -109,11 +118,21 @@ export class RunnerProcess {
     // 'close', not 'exit': Node can report 'exit' while the pipes are still
     // draining, so a listener told then reads a process's last words as never
     // having arrived. 'close' is after both stdout and stderr have ended.
-    child.on('close', (code, signal) => { this.exitStatus = { code, signal }; this.markEnded(); });
+    child.on('close', (code, signal) => this.end({ code, signal }));
+    // 'close' waits on every holder of the pipes, and a descendant can hold
+    // them past the runner's own death — an inherited stderr, a process
+    // setsid'd out of the group that Stop's group signal cannot reach.
+    child.once('exit', (code, signal) => {
+      const grace = setTimeout(() => {
+        for (const flush of [...this.stdoutEnds]) flush();
+        this.end({ code, signal });
+      }, CLOSE_GRACE_MS);
+      grace.unref?.();
+      void this.ended.then(() => clearTimeout(grace));
+    });
     child.on('error', (err) => {
       this.appendStderr(`\n${err.message}`);
-      this.exitStatus = { code: -1, signal: null };
-      this.markEnded();
+      this.end({ code: -1, signal: null });
     });
 
     await handshake(child);
@@ -134,17 +153,23 @@ export class RunnerProcess {
     if (!child?.stdout) return () => {};
     const decoder = new StringDecoder('utf8');
     const onData = (chunk: Buffer) => onText(decoder.write(chunk));
+    const stop = () => {
+      this.stdoutEnds.delete(onStreamEnd);
+      child.stdout?.removeListener('data', onData);
+      child.stdout?.removeListener('end', onStreamEnd);
+    };
+    // Also called when the process ended without its pipe doing so; what a
+    // descendant writes after that is not the runner's.
     const onStreamEnd = () => {
+      stop();
       const tail = decoder.end();
       if (tail) onText(tail);
       onEnd?.();
     };
     child.stdout.on('data', onData);
     child.stdout.on('end', onStreamEnd);
-    return () => {
-      child.stdout?.removeListener('data', onData);
-      child.stdout?.removeListener('end', onStreamEnd);
-    };
+    this.stdoutEnds.add(onStreamEnd);
+    return stop;
   }
 
   /** The environment the process was spawned under, for any side process a handshake needs. */
@@ -179,6 +204,11 @@ export class RunnerProcess {
     const child = this.child;
     this.child = null;
     killTree(child, { platform: this.deps.platform });
+  }
+
+  private end(exit: RunnerExit): void {
+    this.exitStatus = exit;
+    this.markEnded();
   }
 
   private appendStderr(text: string): void {

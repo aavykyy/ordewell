@@ -179,3 +179,27 @@ describe('OpenCodeAdapter — recorded event stream', () => {
     });
   });
 });
+
+describe('OpenCodeAdapter — a planner consumer that throws', () => {
+  // The throw takes down the stream permission requests arrive on, so a
+  // server blocked on one would hold the message POST open for good.
+  it('fails the turn instead of waiting on a reply the server may never send', async () => {
+    const { sessionId, frames } = openCodeFixture('prose');
+    const fetchImpl = (async (input: string | URL, init?: RequestInit) => {
+      const path = String(input).replace('http://127.0.0.1:4096', '');
+      if (path === '/event') return sseResponse(init, frames).response;
+      if (init?.method === 'POST' && path === `/session/${sessionId}/message`) return new Promise<Response>(() => {});
+      const json = init?.method === 'POST' && path === '/session' ? { id: sessionId } : true;
+      return { ok: true, status: 200, statusText: 'OK', json: async () => json } as unknown as Response;
+    }) as unknown as typeof fetch;
+    const spawned = fakeSpawn([]);
+    const adapter = new OpenCodeAdapter({ spawn: spawned.spawn, fetch: fetchImpl, resolvePath: async () => '/usr/bin', isDirectory: () => true, exists: () => true });
+    const started = adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'plan read-only' });
+    for (let i = 0; i < 50 && spawned.processes.length === 0; i++) await Promise.resolve();
+    spawned.processes[0].emitStdout('opencode server listening on http://127.0.0.1:4096\n');
+    await started;
+
+    await expect(adapter.send('the goal', () => { throw new Error('consumer blew up'); })).rejects.toThrow('consumer blew up');
+    adapter.dispose();
+  });
+});

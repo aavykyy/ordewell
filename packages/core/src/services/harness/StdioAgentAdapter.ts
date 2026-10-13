@@ -164,8 +164,6 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
         this.turnActivity = null;
         this.hadTurn = true;
         signal?.removeEventListener('abort', onAbort);
-        this.process?.removeListener('close', onExit);
-        this.process?.removeListener('error', onExit);
       };
       const finish = () => {
         if (settled) return;
@@ -205,11 +203,10 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
 
       this.turnEmit = emit;
       this.turnActivity = onActivity ?? null;
-      // 'close', not 'exit': the process's last protocol line can still be
-      // arriving when Node reports 'exit', and reporting its death then makes
-      // that line read as never having come. 'close' is after the drain.
-      this.process!.once('close', onExit);
-      this.process!.once('error', onExit);
+      // The runner's end, not Node's 'exit': the process's last protocol line
+      // can still be arriving when Node reports 'exit', and reporting its death
+      // then makes that line read as never having come.
+      void this.runner.ended.then(onExit);
       if (signal?.aborted) { onAbort(); return; }
       signal?.addEventListener('abort', onAbort, { once: true });
 

@@ -1,7 +1,7 @@
 import * as os from 'os';
 import * as path from 'path';
 import {
-  NO_SERVERS, insideOnDisk, isRecord, readText,
+  NO_SERVERS, insideOnDisk, isRecord, readText, takesOrdewellsName,
   type InstructionFile, type ProjectMcpServer, type ProjectServers, type RepoConfigReader,
 } from './repoConfig';
 
@@ -37,6 +37,8 @@ function withImports(workspace: string, file: string, depth: number, seen: Set<s
 
 function server(name: string, entry: unknown, source: string): ProjectMcpServer | string {
   if (!isRecord(entry)) return 'not an object';
+  const taken = takesOrdewellsName(name);
+  if (taken) return taken;
   const remote = entry.type === 'http' || entry.type === 'sse' || (entry.type === undefined && typeof entry.url === 'string');
   if (remote) {
     if (typeof entry.url !== 'string') return 'no url';

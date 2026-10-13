@@ -248,6 +248,7 @@ describe('settleTurn', () => {
     permissions.raise({ id: 'per_1', name: 'bash', detail: '{}', ordewell: false }, { id: 'per_1', sessionId: 'ses' }, () => {});
     const how = {
       processEnded: new Promise<void>(() => {}),
+      streamFailed: new Promise<never>(() => {}),
       exitMessage: () => 'The server exited.',
       readBack: async () => { order.push('readBack'); },
       permissions,
@@ -256,6 +257,15 @@ describe('settleTurn', () => {
     };
     return { how, order, events, onEvent: (e: AgentEvent) => events.push(e) };
   }
+
+  it('rejects with what a frame handler threw, reporting nothing of its own', async () => {
+    const turn = turnLatch();
+    const { how, order, events, onEvent } = settlement({ streamFailed: Promise.reject(new Error('handler blew up')) });
+
+    await expect(settleTurn(turn, how, onEvent)).rejects.toThrow('handler blew up');
+    expect(order).toEqual([]);
+    expect(events).toEqual([]);
+  });
 
   it('reads back, cancels what is still open, then reports the outcome', async () => {
     const turn = turnLatch();
@@ -312,7 +322,7 @@ describe('openEventStream', () => {
     const frames: unknown[] = [];
     let activity = 0;
     let feed: ReturnType<typeof sseResponse>['stream'] | null = null;
-    const close = await openEventStream<unknown>(async (signal) => {
+    const { close } = await openEventStream<unknown>(async (signal) => {
       const { response, stream } = sseResponse({ signal });
       feed = stream;
       return response;
@@ -335,7 +345,7 @@ describe('openEventStream', () => {
   // unparseable line; the caller hears it when the stream is closed.
   it('surfaces a throwing frame handler instead of swallowing it as a bad frame', async () => {
     const frames: unknown[] = [];
-    const close = await openEventStream<{ n: number }>(
+    const { close } = await openEventStream<{ n: number }>(
       async (signal) => sseResponse({ signal }, ['data: {"n":1}\n\n', 'data: {"n":2}\n\n']).response,
       (frame) => { frames.push(frame); if (frame.n === 1) throw new Error('handler blew up'); },
     );
@@ -346,10 +356,10 @@ describe('openEventStream', () => {
   });
 
   it('gives the turn its post when the server has no stream, or refuses it', async () => {
-    const closeBodiless = await openEventStream(async () => ({ ok: true, body: null }) as unknown as Response, () => {});
-    await closeBodiless();
-    const closeRefused = await openEventStream(async () => { throw new Error('ECONNREFUSED'); }, () => {});
-    await closeRefused();
+    const bodiless = await openEventStream(async () => ({ ok: true, body: null }) as unknown as Response, () => {});
+    await bodiless.close();
+    const refused = await openEventStream(async () => { throw new Error('ECONNREFUSED'); }, () => {});
+    await refused.close();
   });
 
   it('stops waiting for a stream that never connects, and still closes it', async () => {
@@ -371,7 +381,7 @@ describe('openEventStream', () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(settled).toBe(true);
 
-      void (await open)();
+      void (await open).close();
       expect(aborted).toBe(true);
     } finally {
       vi.useRealTimers();
@@ -380,7 +390,7 @@ describe('openEventStream', () => {
 
   it('ends the stream on close', async () => {
     let aborted = false;
-    const close = await openEventStream(async (signal) => {
+    const { close } = await openEventStream(async (signal) => {
       signal.addEventListener('abort', () => { aborted = true; });
       return sseResponse({ signal }).response;
     }, () => {});

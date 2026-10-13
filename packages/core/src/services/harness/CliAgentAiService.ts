@@ -161,7 +161,7 @@ class PlannerSession {
    * or a process restart after it started; surfaces get each once, in order.
    */
   readonly subagents = { started: new Set<string>(), finished: new Set<string>() };
-  discarded = false;
+  private readonly discarding = new AbortController();
 
   constructor(private readonly server: OrdewellMcpServer) {}
 
@@ -173,9 +173,12 @@ class PlannerSession {
     this.token = null;
   }
 
-  /** Stop the process for good: a spawn still in flight takes itself back when it lands. */
+  /** Aborted once the session is discarded; a spawn still in flight takes itself back then. */
+  get discarded(): AbortSignal { return this.discarding.signal; }
+
+  /** Stop the process for good. */
   discard(): void {
-    this.discarded = true;
+    this.discarding.abort();
     this.stop();
   }
 }
@@ -647,7 +650,7 @@ export class CliAgentAiService implements IAiService {
       issueToken: () => server.issuePlannerToken({ sessionId: tools.sessionId, hidden: connectorFor(this.runner)?.ordewellTools.plannerHidden(start) }, tools.handler),
       revoke: (token) => server.revoke(token),
       start: (adapter, credential) => adapter.start({ ...start, mcp: mcpClientConfig(credential) }),
-      cancelled: () => session.discarded,
+      cancelled: session.discarded,
       failed: (first, second) => `Could not start the ${this.runner} planner with Ordewell's tools. First spawn: ${first}. Respawn: ${second}.`,
     });
     if (!spawned) throw new Error(`The ${this.runner} planner session ended before its agent started.`);

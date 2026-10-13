@@ -100,14 +100,33 @@ export interface SpawnAttachSteps<A extends SpawnedAdapter> {
   start(adapter: A, credential: McpCredential): Promise<void>;
   /** Defaults to the adapter's own `dispose`. */
   dispose?(adapter: A): void;
-  /** True once nobody wants the runner any more: what was spawned is taken back and nothing is returned. */
-  cancelled?(): boolean;
+  /**
+   * Aborted once nobody wants the runner any more: what was spawned is taken
+   * back and nothing is returned. A start is let finish first, since a process
+   * it has yet to launch would outlive a dispose; an attach check is not.
+   */
+  cancelled?: AbortSignal;
   /** The code of a process that exited while starting; its attach report is not believed. */
   startupExit?(): number | null;
   /** Why the first spawn failed, told before the respawn. */
   onRespawn?(failure: string): void;
   /** The {@link McpAttachError}'s message once the respawn failed too. */
   failed(first: string, second: string): string;
+}
+
+const CANCELLED = Symbol('cancelled');
+
+/** `work`'s outcome, or {@link CANCELLED} as soon as `signal` aborts, whichever comes first. */
+function unlessCancelled<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T | typeof CANCELLED> {
+  if (!signal) return work;
+  // Settles after the adapter it belongs to was taken back, for nobody.
+  work.catch(() => {});
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) { resolve(CANCELLED); return; }
+    const onAbort = () => resolve(CANCELLED);
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
 }
 
 /**
@@ -133,7 +152,8 @@ async function spawnOnce<A extends SpawnedAdapter>(steps: SpawnAttachSteps<A>): 
     return `Ordewell's MCP server could not issue a token (${errorText(err)})`;
   }
   const { token } = credential;
-  if (steps.cancelled?.()) {
+  const signal = steps.cancelled;
+  if (signal?.aborted) {
     steps.revoke(token);
     return null;
   }
@@ -144,7 +164,11 @@ async function spawnOnce<A extends SpawnedAdapter>(steps: SpawnAttachSteps<A>): 
     steps.revoke(token);
     throw err;
   }
+  let takenBack = false;
   const takeBack = () => {
+    if (takenBack) return;
+    takenBack = true;
+    signal?.removeEventListener('abort', takeBack);
     if (steps.dispose) steps.dispose(adapter);
     else adapter.dispose();
     steps.revoke(token);
@@ -159,14 +183,19 @@ async function spawnOnce<A extends SpawnedAdapter>(steps: SpawnAttachSteps<A>): 
     takeBack();
     throw err;
   }
-  if (steps.cancelled?.()) {
+  if (signal?.aborted) {
     takeBack();
     return null;
   }
+  // In the abort itself: whoever cancelled already reports the runner gone,
+  // and the check can wait out its whole deadline.
+  signal?.addEventListener('abort', takeBack, { once: true });
   let failure = `${steps.runner} did not report Ordewell's MCP server connected`;
   let attached = false;
   try {
-    attached = await adapter.mcpAttached();
+    const report = await unlessCancelled(adapter.mcpAttached(), signal);
+    if (report === CANCELLED) return null;
+    attached = report;
     const exit = steps.startupExit?.() ?? null;
     if (exit !== null) {
       attached = false;
@@ -175,10 +204,13 @@ async function spawnOnce<A extends SpawnedAdapter>(steps: SpawnAttachSteps<A>): 
   } catch (err) {
     failure = `${steps.runner} could not check Ordewell's MCP attach state (${errorText(err)})`;
   }
-  const cancelled = steps.cancelled?.() ?? false;
-  if (attached && !cancelled) return { adapter, token };
+  if (signal?.aborted) return null;
+  if (attached) {
+    signal?.removeEventListener('abort', takeBack);
+    return { adapter, token };
+  }
   takeBack();
-  return cancelled ? null : failure;
+  return failure;
 }
 
 function errorText(err: unknown): string {
