@@ -281,7 +281,7 @@ describe('Landing', () => {
 
     it('is built on the conflicted task\'s runner, model and mode, and merges its branch by hand', async () => {
       const { runs } = await resolving();
-      const t1 = task('t1', 1, { assignedModel: { modelId: 'opus', modelLabel: 'Opus' }, thinkingEffort: 'high', taskMode: 'acceptEdits' });
+      const t1 = task('t1', 1, { assignedModel: { modelId: 'opus', modelLabel: 'Opus', thinkingEffort: 'high' }, taskMode: 'acceptEdits' });
 
       const resolver = conflictResolverTask(t1, runs.current);
 
@@ -290,8 +290,7 @@ describe('Landing', () => {
         description: 'Merge ordewell/run1/1-t1 into ordewell/run1/integration by hand.',
         type: 'ai',
         assignedRunner: 'claude-code',
-        assignedModel: { modelId: 'opus', modelLabel: 'Opus' },
-        thinkingEffort: 'high',
+        assignedModel: { modelId: 'opus', modelLabel: 'Opus', thinkingEffort: 'high' },
         taskMode: 'acceptEdits',
         autonomy: 'AFK',
         sliceType: 'AFK',

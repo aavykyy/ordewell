@@ -3,6 +3,7 @@ import { canSetDependencies } from './TaskOps';
 import { effectiveAllowlist } from './ModelAllowlistResolver';
 import type { RunnerModeInfo } from './ModeResolver';
 import { NOT_STARTED } from '../taskRow/status';
+import { opsPlacementRefusal } from './PlannedTask';
 
 /**
  * Who is making the edit. The planner (`applyTaskOps`) and the direct-edit
@@ -39,7 +40,7 @@ export function lockedTaskRefusal(task: Pick<Task, 'title' | 'status'>, action =
   return null;
 }
 
-const AI_ONLY_FIELDS = ['assignedModel', 'thinkingEffort', 'taskMode', 'autonomy', 'ops'] as const satisfies readonly (keyof Task)[];
+const AI_ONLY_FIELDS = ['assignedModel', 'taskMode', 'autonomy', 'ops'] as const satisfies readonly (keyof Task)[];
 
 /**
  * The catalog a model/task-mode edit is checked against — the same discovered
@@ -139,11 +140,8 @@ function opsCheck(tasks: readonly Task[], target: Task, changes: Partial<Task>):
     return { ok: false, error: `"${target.title}" has started, so whether it is an ops task is fixed` };
   }
   if (!changes.ops) return null;
-  if ((changes.type ?? target.type) !== 'ai') return { ok: false, error: `"${target.title}" is a manual task — only an AI task can be an ops task` };
-  if (tasks.some((t) => t.subtasks?.some((s) => s.id === target.id))) {
-    return { ok: false, error: `"${target.title}" is a subtask, which runs with its parent — only a top-level task can be an ops task` };
-  }
-  return null;
+  const refused = opsPlacementRefusal(changes.type ?? target.type, tasks.some((t) => t.subtasks?.some((s) => s.id === target.id)));
+  return refused ? { ok: false, error: `"${target.title}" ${refused}` } : null;
 }
 
 /**

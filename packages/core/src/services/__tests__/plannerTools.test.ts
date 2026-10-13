@@ -11,7 +11,7 @@ import type { ConversationRequest } from '../AiService';
 import type { SessionRuntimeSettings } from '../createSession';
 import { surfacePlan, type SessionMessage, type SessionNotice } from '../SessionMessage';
 import type { SkillInfo, SkillsService } from '../SkillsService';
-import { createTask, type DiscoveredModel, type Task } from '../../models/Task';
+import { createTask, flattenTasks, type DiscoveredModel, type Task } from '../../models/Task';
 import { execFileSync } from 'child_process';
 import { writeFileSync } from 'fs';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
@@ -550,8 +550,8 @@ describe('submit_plan', () => {
     await session.startPlanning('add a cache', ['claude-code']);
 
     expect((submitted?.body as { coerced: unknown }).coerced).toEqual([
-      { taskId: 'a', field: 'assignedModel', from: 'claude-opus-4', to: 'claude-sonnet-4' },
-      { taskId: 'a', field: 'thinkingEffort', from: 'high', to: null },
+      { taskId: 'a', title: 'Task a', field: 'assignedModel', from: 'claude-opus-4', to: 'claude-sonnet-4' },
+      { taskId: 'a', title: 'Task a', field: 'thinkingEffort', from: 'high', to: null },
     ]);
     expect(session.planTasks[0].assignedModel?.modelId).toBe('claude-sonnet-4');
   });
@@ -1021,7 +1021,7 @@ describe('edit_plan', () => {
       isError: true,
       body: {
         ok: false,
-        errors: [{ op: 2, kind: 'update', message: 'runner "codex" is not in this plan\'s runner set [claude-code]' }],
+        errors: [{ op: 2, kind: 'update', message: 'Task "Fine" has invalid assignedRunner "codex". Expected one of: claude-code' }],
       },
     });
     expect(planner.session.planTasks.map((t) => t.title)).toEqual(['Task a', 'Task b']);
@@ -1091,6 +1091,168 @@ describe('edit_plan', () => {
       expect(planner.session.planTasks[0].title).toBe('Task a');
       expect(landed(planner).last).toBe('Task 1 is running: stop it first, or I can rename it once it finishes.');
     });
+  });
+});
+
+/**
+ * Every rule a planned task is held to, met the same way whether the task
+ * arrives in a whole plan or in an edit, subtasks included.
+ */
+describe('one intake for submit_plan and edit_plan', () => {
+  type Answer = { isError: boolean; body: unknown };
+
+  async function viaSubmit(tasks: unknown[], settings: Partial<SessionRuntimeSettings> = {}) {
+    let answer: Answer | undefined;
+    const { session } = plannerSession(fakeClaude({
+      turn: async (mcp) => {
+        answer = await call(mcp!, 'submit_plan', { tasks });
+        return 'Submitted.';
+      },
+    }), settings);
+    await session.startPlanning('add a cache', ['claude-code']);
+    return { answer: answer!, tasks: session.planTasks };
+  }
+
+  async function viaEdit(ops: unknown[], settings: Partial<SessionRuntimeSettings> = {}) {
+    let answer: Answer | undefined;
+    const planner = await planThen(async (mcp) => {
+      answer = await call(mcp!, 'edit_plan', { ops });
+      return 'Done.';
+    }, settings);
+    await planner.session.continueConversation('EDIT NOW');
+    return { answer: answer!, tasks: planner.session.planTasks };
+  }
+
+  const errorsOf = (answer: Answer) => (answer.body as { errors?: { op?: number; message: string }[] }).errors ?? [];
+  const sub = (title: string, extra: Record<string, unknown> = {}) => ({ title, type: 'ai', sliceType: 'AFK', autonomy: 'AFK', ...extra });
+
+  it('refuses a task or subtask on a runner that is not enabled, never moving it to another', async () => {
+    const submit = await viaSubmit([planTask('a', 1, 'claude-code', 'claude-sonnet-4', { subtasks: [sub('Child', { assignedRunner: 'nope' })] })]);
+    const editSub = await viaEdit([{ op: 'add', task: { title: 'Docs', subtasks: [sub('Child', { assignedRunner: 'nope' })] } }]);
+    const editTop = await viaEdit([{ op: 'add', task: { title: 'Docs', assignedRunner: 'nope' } }]);
+
+    expect(submit.answer.isError).toBe(true);
+    expect(errorsOf(submit.answer).map((e) => e.message)).toEqual(['subtask "Child" of "Task a" has invalid assignedRunner "nope". Expected one of: claude-code']);
+    expect(submit.tasks).toEqual([]);
+    expect(errorsOf(editSub.answer)).toEqual([{ op: 1, kind: 'add', message: 'subtask "Child" of "Docs" has invalid assignedRunner "nope". Expected one of: claude-code' }]);
+    expect(errorsOf(editTop.answer)).toEqual([{ op: 1, kind: 'add', message: 'Task "Docs" has invalid assignedRunner "nope". Expected one of: claude-code' }]);
+    expect(editSub.tasks.map((t) => t.title)).toEqual(['Task a', 'Task b']);
+    expect(editTop.tasks.map((t) => t.title)).toEqual(['Task a', 'Task b']);
+  });
+
+  it('gives every task an id of its own: a plan may not repeat one, an omitted one is made up, an edit\'s are Ordewell\'s', async () => {
+    const repeated = await viaSubmit([planTask('a', 1, 'claude-code', 'claude-sonnet-4', { subtasks: [sub('Child', { id: 'a' })] })]);
+    const omitted = await viaSubmit([1, 2].map((order) => ({ ...planTask('x', order, 'claude-code', 'claude-sonnet-4'), id: undefined })));
+    const edit = await viaEdit([{ op: 'add', task: { id: 'a', title: 'Docs', subtasks: [sub('Child', { id: 'b' })] } }]);
+
+    expect(errorsOf(repeated.answer).map((e) => e.message)).toEqual([
+      'subtask "Child" of "Task a" has id "a", which another task in the plan has too: every task, subtasks included, needs an id of its own',
+    ]);
+    expect(omitted.answer.isError).toBe(false);
+    expect(new Set(omitted.tasks.map((t) => t.id)).size).toBe(2);
+    expect(edit.answer.isError).toBe(false);
+    expect(new Set(flattenTasks(edit.tasks).map((t) => t.id)).size).toBe(4);
+  });
+
+  it('holds every dependency, subtasks\' included, to a task in the plan, resolving an added subtask\'s refs', async () => {
+    const submit = await viaSubmit([planTask('a', 1, 'claude-code', 'claude-sonnet-4', { subtasks: [sub('Child', { id: 'c', dependencies: ['zzz'] })] })]);
+    const unknown = await viaEdit([{ op: 'add', task: { title: 'Docs', subtasks: [sub('Child', { dependencies: ['zzz'] })] } }]);
+    const byRef = await viaEdit([{ op: 'add', task: { title: 'Docs', subtasks: [sub('Child', { dependencies: ['#1'] })] } }]);
+
+    expect(errorsOf(submit.answer).map((e) => e.message)).toEqual(['subtask "Child" of "Task a" depends on "zzz", which is not a task in the plan']);
+    expect(errorsOf(unknown.answer)).toEqual([{ op: 1, kind: 'add', message: 'unknown dependencies of subtask "Child" of "Docs": zzz (task "zzz" not found)' }]);
+    expect(byRef.answer.isError).toBe(false);
+    expect(byRef.tasks[2].subtasks[0].dependencies).toEqual([byRef.tasks[0].id]);
+  });
+
+  it('refuses a dependency cycle, naming the op that closed it', async () => {
+    const submit = await viaSubmit([
+      planTask('a', 1, 'claude-code', 'claude-sonnet-4', { dependencies: ['b'] }),
+      planTask('b', 2, 'claude-code', 'claude-sonnet-4', { dependencies: ['a'] }),
+    ]);
+    const edit = await viaEdit([
+      { op: 'add', task: { title: 'Docs', dependencies: ['#2'] }, handle: 'docs' },
+      { op: 'update', taskId: '#1', changes: { dependencies: ['docs'] } },
+    ]);
+
+    expect(errorsOf(submit.answer).map((e) => e.message)).toEqual(['Dependency cycle detected involving "Task a"']);
+    expect(errorsOf(edit.answer)).toEqual([{ op: 2, kind: 'update', message: 'Dependency cycle detected involving "Task a"' }]);
+    expect(edit.tasks.map((t) => t.title)).toEqual(['Task a', 'Task b']);
+  });
+
+  it('holds every task, subtasks included, to its slice: an AFK task has no user steps, a manual one is HITL', async () => {
+    const steps = [{ order: 1, instruction: 'Sign it off' }];
+    const submit = await viaSubmit([planTask('a', 1, 'claude-code', 'claude-sonnet-4', { subtasks: [sub('Child', { userSteps: steps })] })]);
+    const afk = await viaEdit([{ op: 'add', task: { title: 'Docs', autonomy: 'AFK', subtasks: [sub('Child', { userSteps: steps })] } }]);
+    const manual = await viaEdit([{ op: 'update', taskId: '#2', changes: { type: 'user', userSteps: steps } }]);
+    const manualSub = await viaEdit([{ op: 'add', task: { title: 'Docs', subtasks: [{ title: 'Sign', type: 'user', sliceType: 'AFK', userSteps: steps }] } }]);
+
+    expect(errorsOf(submit.answer).map((e) => e.message)).toEqual(['subtask "Child" of "Task a" has autonomy "AFK" but contains userSteps. AFK tasks must not have user touchpoints.']);
+    expect(errorsOf(afk.answer)).toEqual([{ op: 1, kind: 'add', message: 'subtask "Child" of "Docs" has autonomy "AFK" but contains userSteps. AFK tasks must not have user touchpoints.' }]);
+    expect(errorsOf(manual.answer)).toEqual([{ op: 1, kind: 'update', message: 'User Task "Task b" has sliceType "AFK". User tasks must have sliceType "HITL".' }]);
+    expect(errorsOf(manualSub.answer)).toEqual([{ op: 1, kind: 'add', message: 'User subtask "Sign" of "Docs" has sliceType "AFK". User tasks must have sliceType "HITL".' }]);
+  });
+
+  it('lets only a top-level AI task be an ops task', async () => {
+    const manual = { title: 'Sign', type: 'user', sliceType: 'HITL', userSteps: [{ order: 1, instruction: 'Sign it off' }], ops: true };
+    const submitSub = await viaSubmit([planTask('a', 1, 'claude-code', 'claude-sonnet-4', { subtasks: [sub('Child', { ops: true })] })]);
+    const submitManual = await viaSubmit([planTask('a', 1, 'claude-code', 'claude-sonnet-4'), { ...manual, id: 'b', order: 2 }]);
+    const editSub = await viaEdit([{ op: 'add', task: { title: 'Docs', subtasks: [sub('Child', { ops: true })] } }]);
+    const editManual = await viaEdit([{ op: 'add', task: manual }]);
+
+    expect(errorsOf(submitSub.answer).map((e) => e.message)).toEqual(['subtask "Child" of "Task a" is a subtask, which runs with its parent — only a top-level task can be an ops task']);
+    expect(errorsOf(submitManual.answer).map((e) => e.message)).toEqual(['Task "Sign" is a manual task — only an AI task can be an ops task']);
+    expect(errorsOf(editSub.answer)).toEqual([{ op: 1, kind: 'add', message: 'subtask "Child" of "Docs" is a subtask, which runs with its parent — only a top-level task can be an ops task' }]);
+    expect(errorsOf(editManual.answer)).toEqual([{ op: 1, kind: 'add', message: 'Task "Sign" is a manual task — only an AI task can be an ops task' }]);
+  });
+
+  it('clamps a subtask\'s thinking effort to its model\'s variants, and says so', async () => {
+    const opus = { modelId: 'claude-opus-4', modelLabel: 'Opus', thinkingEffort: 'xhigh' };
+    const submit = await viaSubmit([planTask('a', 1, 'claude-code', 'claude-sonnet-4', { subtasks: [sub('Child', { id: 'c', assignedModel: opus })] })]);
+    const edit = await viaEdit([{ op: 'add', task: { title: 'Docs', subtasks: [sub('Child', { assignedModel: opus })] } }]);
+
+    expect((submit.answer.body as { coerced: unknown }).coerced).toEqual([{ taskId: 'c', title: 'Child', field: 'thinkingEffort', from: 'xhigh', to: 'high' }]);
+    expect(submit.tasks[0].subtasks[0].assignedModel?.thinkingEffort).toBe('high');
+    expect((edit.answer.body as { coerced: unknown }).coerced).toContainEqual({ title: 'Child', field: 'thinkingEffort', from: 'xhigh', to: 'high' });
+    expect(edit.tasks[2].subtasks[0].assignedModel?.thinkingEffort).toBe('high');
+  });
+
+  it('holds a subtask\'s model to the allowlist: a plan\'s is moved and named, an edit\'s refused', async () => {
+    const settings = { modelAllowlist: { 'claude-code': ['claude-sonnet-4'] } };
+    const opus = { modelId: 'claude-opus-4', modelLabel: 'Opus' };
+    const submit = await viaSubmit([planTask('a', 1, 'claude-code', 'claude-sonnet-4', { subtasks: [sub('Child', { id: 'c', assignedModel: opus })] })], settings);
+    const edit = await viaEdit([{ op: 'add', task: { title: 'Docs', subtasks: [sub('Child', { assignedModel: opus })] } }], settings);
+
+    expect((submit.answer.body as { coerced: unknown }).coerced).toEqual([{ taskId: 'c', title: 'Child', field: 'assignedModel', from: 'claude-opus-4', to: 'claude-sonnet-4' }]);
+    expect(submit.tasks[0].subtasks[0].assignedModel?.modelId).toBe('claude-sonnet-4');
+    expect(errorsOf(edit.answer)).toEqual([{ op: 1, kind: 'add', message: 'subtask "Child" of "Docs": Model "claude-opus-4" is excluded by the allowlist for runner "claude-code"' }]);
+  });
+
+  it('keeps a task\'s thinking effort in one place, its model\'s, which an edit\'s "thinkingEffort" changes', async () => {
+    const opus = { modelId: 'claude-opus-4', modelLabel: 'Opus' };
+    const submit = await viaSubmit([planTask('a', 1, 'claude-code', 'claude-opus-4', { assignedModel: opus, thinkingEffort: 'high' })]);
+    const edit = await viaEdit([
+      { op: 'update', taskId: '#2', changes: { assignedModel: opus } },
+      { op: 'update', taskId: '#2', changes: { thinkingEffort: 'high' } },
+    ]);
+
+    expect(submit.tasks[0].assignedModel?.thinkingEffort).toBe('high');
+    expect(edit.answer.isError).toBe(false);
+    expect(edit.tasks[1].assignedModel).toMatchObject({ modelId: 'claude-opus-4', thinkingEffort: 'high' });
+    expect(edit.tasks[1]).not.toHaveProperty('thinkingEffort');
+  });
+
+  it('numbers an edit\'s errors by the call that made them, not by the ops the reply already holds', async () => {
+    let second: Answer | undefined;
+    const planner = await planThen(async (mcp) => {
+      await call(mcp!, 'edit_plan', { ops: [{ op: 'update', taskId: '#1', changes: { title: 'First' } }] });
+      second = await call(mcp!, 'edit_plan', { ops: [{ op: 'add', task: { title: 'Docs', assignedRunner: 'nope' } }] });
+      return 'Done.';
+    });
+    await planner.session.continueConversation('EDIT NOW');
+
+    expect(errorsOf(second!)).toEqual([{ op: 1, kind: 'add', message: 'Task "Docs" has invalid assignedRunner "nope". Expected one of: claude-code' }]);
+    expect(planner.session.planTasks.map((t) => t.title)).toEqual(['First', 'Task b']);
   });
 });
 
@@ -1354,7 +1516,7 @@ describe('a submission whose planner turn ends while its skill check runs', () =
       turnId: () => state.turn,
       recordSkillLoad: () => false,
       liveCatalog: async () => ({ runners: ['claude-code'], models: { 'claude-code': [{ modelId: 'claude-sonnet-4', modelLabel: 'Sonnet', variants: [] }] }, modes: {}, autonomousDefault: true }),
-      coerce: (tasks) => [...tasks],
+      coerce: (tasks) => ({ tasks: [...tasks], coerced: [] }),
       submitPlan: vi.fn(() => true),
       editPlan: vi.fn(async () => ({ ok: true as const, summary: [], queued: false })),
       tasks: () => [],

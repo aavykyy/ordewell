@@ -65,7 +65,7 @@ export function attemptShape(task: Readonly<Task>): AttemptShape {
     skills: [...(task.skills ?? [])].sort(),
     runner: task.assignedRunner,
     model: task.assignedModel?.modelId ?? null,
-    effort: task.assignedModel?.thinkingEffort ?? task.thinkingEffort ?? null,
+    effort: task.assignedModel?.thinkingEffort ?? null,
   };
 }
 

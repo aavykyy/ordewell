@@ -188,9 +188,7 @@ export function assignTaskModel(
     type: 'updateTask',
     sessionId,
     taskId: task.id,
-    // JSON drops `undefined`; null is intentional here so changing models can
-    // also clear a stale legacy top-level effort on the persisted task.
-    changes: { assignedModel, thinkingEffort: assignedModel.thinkingEffort ?? null },
+    changes: { assignedModel },
     message: `Task ${taskRef(task)} model set to ${model.label}.`,
   }]);
 }
@@ -246,7 +244,7 @@ export function assignTaskEffort(
     type: 'updateTask',
     sessionId,
     taskId: task.id,
-    changes: { assignedModel, thinkingEffort: thinkingEffort ?? null },
+    changes: { assignedModel },
     message: `Task ${taskRef(task)} thinking effort set to ${thinkingEffort ?? 'runner default'}.`,
   }]);
 }

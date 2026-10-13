@@ -304,7 +304,7 @@ describe('task control', () => {
     };
     expect(run('/task-effort task-a high', configured).effects).toEqual([expect.objectContaining({
       type: 'updateTask',
-      changes: expect.objectContaining({ thinkingEffort: 'high' }),
+      changes: { assignedModel: expect.objectContaining({ thinkingEffort: 'high' }) },
     })]);
   });
 });

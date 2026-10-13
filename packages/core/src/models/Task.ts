@@ -84,6 +84,10 @@ export function migrateLoadedTasks(tasks: readonly Task[]): void {
     }
     delete legacy.transport;
     delete (task as { completionMarker?: unknown }).completionMarker;
+    // The effort once had a second home on the task; the spawn reads only the model's.
+    const effort = (task as { thinkingEffort?: unknown }).thinkingEffort;
+    if (typeof effort === 'string' && task.assignedModel && !task.assignedModel.thinkingEffort) task.assignedModel.thinkingEffort = effort;
+    delete (task as { thinkingEffort?: unknown }).thinkingEffort;
     migrateLoadedTasks(task.subtasks ?? []);
   }
 }
@@ -118,7 +122,6 @@ export interface Task {
   outputSummary?: TaskOutputSummary;
   assignedModel?: TaskModelAssignment;
   assignedRunner: RunnerId;
-  thinkingEffort?: string;
   taskMode?: TaskMode;
   autonomy?: 'AFK' | 'HITL';
   sliceType?: 'HITL' | 'AFK';
@@ -697,7 +700,6 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     ...(overrides.attemptUsage ? { attemptUsage: structuredClone(overrides.attemptUsage) } : {}),
     assignedModel: overrides.assignedModel,
     assignedRunner: overrides.assignedRunner ?? 'claude-code',
-    thinkingEffort: overrides.thinkingEffort,
     taskMode: overrides.taskMode ?? 'build',
     autonomy: overrides.autonomy,
     sliceType: overrides.sliceType,
@@ -747,7 +749,7 @@ export function inheritedSkills(chosen: unknown, inherited: readonly string[] | 
  * untyped, and a quoted "true" read as ops would move a task out of its
  * worktree. Anything else is a change task, stored absent so saved plans need
  * no migration. Whether the task may be ops at all — a subtask may not — is
- * for whoever knows where it sits: parsing drops the flag, an edit refuses it.
+ * for whoever knows where it sits: the planner intake refuses it (`checkPlanInvariants`).
  */
 export function opsFlag(value: unknown, type: Task['type'] = 'ai'): true | undefined {
   return value === true && type === 'ai' ? true : undefined;
@@ -802,9 +804,6 @@ export function migrateTask(task: Record<string, unknown>): Task {
   }
   if (!task.assignedRunner) {
     task.assignedRunner = 'claude-code';
-  }
-  if (!task.thinkingEffort) {
-    task.thinkingEffort = undefined;
   }
   if (task.verdict && task.verification) {
     delete task.verification;

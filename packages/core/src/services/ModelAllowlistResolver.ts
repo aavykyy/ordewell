@@ -100,12 +100,33 @@ export function clampThinkingEffort(
   return undefined;
 }
 
+/** A change coercion made to a planned task, named so it is never silent (ADR-0001). */
+export interface Coercion {
+  taskId: string;
+  title: string;
+  field: 'assignedModel' | 'thinkingEffort';
+  from: string | null;
+  to: string | null;
+}
+
+export interface CoercedTasks {
+  tasks: Task[];
+  /** What changed, subtasks included, in plan order. */
+  coerced: Coercion[];
+}
+
+/**
+ * Snap each AI task's assignment, subtasks included, to what its runner may
+ * run: a model outside the allowlist moves to the allowlist's first, a missing
+ * one is filled in, and an effort is clamped to the model's variants. The
+ * runner is never changed — one the plan may not use is refused before a task
+ * gets here (`checkPlanInvariants`).
+ */
 export function coerceAssignments(
   tasks: readonly Task[],
   perRunnerAllowlist: Partial<Record<RunnerId, string[]>>,
-  allowedRunners?: RunnerId[],
   modelsByRunner?: Partial<Record<RunnerId, DiscoveredModel[]>>,
-): Task[] {
+): CoercedTasks {
   // When the discovered catalog is available, snap each assignment's
   // thinkingEffort to a variant the model really has and stamp the model's
   // variant ids on the assignment (runners need them at spawn time); a model
@@ -146,24 +167,8 @@ export function coerceAssignments(
     };
   };
 
-  return tasks.map((task) => {
+  const coerceOne = (task: Task): Task => {
     if (task.type === 'user') return task;
-
-    if (allowedRunners && !allowedRunners.includes(task.assignedRunner)) {
-      const fallbackRunner = allowedRunners[0];
-      const fallbackModels = allowedFor(fallbackRunner);
-      const fallbackModel = fallbackModels?.length
-        ? assignmentFor(fallbackRunner, fallbackModels[0])
-        : modelsByRunner?.[fallbackRunner]?.[0]
-          ? assignmentFor(fallbackRunner, modelsByRunner[fallbackRunner]![0].modelId)
-          : task.assignedModel;
-      return clampVariant({
-        ...task,
-        assignedRunner: fallbackRunner,
-        assignedModel: fallbackModel,
-      });
-    }
-
     const allowlist = allowedFor(task.assignedRunner);
     // No model assigned: fill in from the allowlist or discovered catalog so
     // merge/split/add outputs (which may omit assignedModel) always land with a
@@ -181,5 +186,16 @@ export function coerceAssignments(
     if (!allowlist || allowlist.length === 0) return clampVariant(task);
     if (allowlist.includes(task.assignedModel.modelId)) return clampVariant(task);
     return { ...task, assignedModel: assignmentFor(task.assignedRunner, allowlist[0]) };
+  };
+
+  const coerced: Coercion[] = [];
+  const walk = (list: readonly Task[]): Task[] => list.map((task) => {
+    const after = coerceOne(task);
+    const [fromModel, toModel] = [task.assignedModel?.modelId ?? null, after.assignedModel?.modelId ?? null];
+    if (fromModel !== toModel) coerced.push({ taskId: task.id, title: task.title, field: 'assignedModel', from: fromModel, to: toModel });
+    const [fromEffort, toEffort] = [task.assignedModel?.thinkingEffort ?? null, after.assignedModel?.thinkingEffort ?? null];
+    if (fromEffort !== toEffort) coerced.push({ taskId: task.id, title: task.title, field: 'thinkingEffort', from: fromEffort, to: toEffort });
+    return { ...after, subtasks: walk(task.subtasks ?? []) };
   });
+  return { tasks: walk(tasks), coerced };
 }

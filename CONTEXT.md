@@ -1207,8 +1207,8 @@ runner offers nothing, so that field is left untouched and the runner validates
 last (as in `coerceAssignments`). `Session.setTaskRunner` is the one entry
 point, and the *PlanEditor* behind it the one owner: async because it needs discovery, guarded before that call because listing
 models spawns the runner's own CLI, and it admits the runner into `plan.runners`
-— without which the next planner turn's `coerceAssignments` would treat it as
-disallowed and silently snap the task back. Both surfaces route through it
+— the set a planner edit checks a task's runner against, and which names every
+runner the plan's tasks run on. Both surfaces route through it
 (`PUT /api/plans/:s/tasks/:t` dispatches an `assignedRunner` in the body to it
 rather than writing the field), so no surface owns a second copy of the clamp.
 
@@ -1297,7 +1297,7 @@ catalog?)`) — the one checker behind both edit paths described above:
 `assignedModel`/`taskMode` is something the target runner actually offers —
 describes the *task*, not who is editing it, so both actors run the same
 check. A flip that is well-formed returns which fields the new type stripped
-of meaning (`TaskEditCheck.clear`) — `assignedModel`/`thinkingEffort`/
+of meaning (`TaskEditCheck.clear`) — `assignedModel` (and with it the effort)/
 `taskMode`/`autonomy` going to `user`, `userSteps` going to `ai` — named so the
 caller can force-clear them and say what was lost, rather than leaving stale
 values that describe a type the task no longer has. The `EditCatalog` a
@@ -1310,6 +1310,27 @@ safety net for paths that never reach this validator (a plan committed under a
 now-stale catalog); this validator refuses instead of coercing, because a
 planner mid-edit has a repair loop to answer to and a coerced value it never
 asked for would drift the plan without telling either side.
+
+**Planned task** (`plannedTask` + `checkPlanInvariants`, `services/PlannedTask.ts`)
+— the one intake for a task the planner writes, whichever route it took: a
+submitted plan (`submit_plan`, the plan envelope) or an edit that adds, merges
+or splits (`edit_plan`, `taskOps`). `plannedTask` builds the task and its
+subtasks from the planner's JSON — every fallback its omissions meet (the
+runner, the prompt, the slice inherited from a parent, the mode from read-only
+or not) is written there once — and reports what the planner may not set (a
+mode, read-only on a manual task) for the route to warn about or refuse.
+`checkPlanInvariants` holds the resulting tasks to the rules a plan keeps at
+every depth: unique ids, dependencies that exist, no cycle, a runner the plan may
+use, an AFK task with no user steps, a manual task HITL, and ops only on a
+top-level AI task. `validatePlanTasks` calls both on a whole plan; `applyTaskOps`
+calls `plannedTask` for each task an op makes and `checkPlanInvariants` after
+every op, so a broken rule is named against the op that broke it, and a rule the
+plan already broke before the batch never blocks an unrelated edit. An unknown
+runner is an error on every route, never swapped for another. A thinking effort
+lives only on the task's model (`assignedModel.thinkingEffort`); `edit_plan`'s
+`thinkingEffort` change is a name for it.
+*Avoid:* building a task from planner JSON anywhere else, and "fixing" a task
+the planner wrote by substitution — what it may not have is refused.
 
 **Task query** (`{"taskQuery":{"tasks":[...],"fields"?:[...],"catalog"?:true}}`)
 — the planner's read channel, alongside the plan and `taskOps` envelopes
@@ -1451,7 +1472,7 @@ what gives the surfaces' icon/label switches their exhaustiveness checking.
 **Stepped picker** — the TUI overlay that walks several dependent choices in one panel (`/planner`, `/settings`): the steps are listed at the top, enter saves the step at once (`/planner` then advances; `/settings` stays on the step), ←/→ jump between steps (tab/shift-tab still work) without saving the highlighted row, and esc closes from any step, keeping what was saved. A later step's options are rebuilt when an earlier choice changes. Short lists number their rows (digit keys select), labels and details are aligned in columns, and the current value carries a `(current)` marker. Numeric settings are typed (↑/↓ move by one), not picked from a list. VS Code's `/planner` is a multi-step quick pick with a Back button; VS Code's `/settings` is the Run block of the webview Settings panel, where each setting is saved as it is set.
 *Avoid:* "wizard" for the TUI overlay.
 
-**ModelAllowlistResolver** — the deep module owning the planner-visibility allowlist policy: narrowing what `modelsByRunner` the planner sees in its prompt (the nudge) and rewriting any emitted `assignedModel.modelId` outside the allowlist to `allowlist[0]` for that runner, wiping the paired `thinkingEffort` (the coerce). `coerceAssignments` also clamps each `thinkingEffort` to a variant the assigned model actually offers (per the discovered catalog, when passed): invalid efforts snap to the nearest rung of the known effort ladder (`clampThinkingEffort`), or to undefined — the runner default — when no mapping exists. Symmetric to `ModeResolver` — both own a planner policy paired with a post-parse fix. Reads its state from `SettingsService` (`UserSettings.modelAllowlist`, keyed by `RunnerId`, id-level not variant-level). The restriction is advice to the planner only: the per-task dropdown stays full (manual override is sovereign), `loadPlan` is untouched, and the orchestrator never consults it. A set allowlist is a hard bound on what the planner sees: allowlisted ids not covered by discovery are synthesized into the prompt list rather than falling back to the full discovered list (which would leak non-allowlisted models to the planner).
+**ModelAllowlistResolver** — the deep module owning the planner-visibility allowlist policy: narrowing what `modelsByRunner` the planner sees in its prompt (the nudge) and rewriting any emitted `assignedModel.modelId` outside the allowlist to `allowlist[0]` for that runner, wiping the paired `thinkingEffort` (the coerce). It walks subtasks too, never moves a task to another runner (an unknown runner is refused before coercion, see *Planned task*), and returns what it changed beside the tasks, which `submit_plan` and `edit_plan` report. `coerceAssignments` also clamps each `thinkingEffort` to a variant the assigned model actually offers (per the discovered catalog, when passed): invalid efforts snap to the nearest rung of the known effort ladder (`clampThinkingEffort`), or to undefined — the runner default — when no mapping exists. Symmetric to `ModeResolver` — both own a planner policy paired with a post-parse fix. Reads its state from `SettingsService` (`UserSettings.modelAllowlist`, keyed by `RunnerId`, id-level not variant-level). The restriction is advice to the planner only: the per-task dropdown stays full (manual override is sovereign), `loadPlan` is untouched, and the orchestrator never consults it. A set allowlist is a hard bound on what the planner sees: allowlisted ids not covered by discovery are synthesized into the prompt list rather than falling back to the full discovered list (which would leak non-allowlisted models to the planner).
 *Avoid:* "model filter", "model restriction service" — and do not collapse into `ModelResolver`; the discovery/routing module stays unaware of the policy, the same way `ModeResolver` stays separate from `ModelResolver`.
 
 **Provider model lists** — the canonical `{ openrouter[], google[] }` id lists

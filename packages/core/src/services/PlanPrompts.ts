@@ -673,7 +673,7 @@ export function buildModifyPlanPrompt(
       : 'Return the COMPLETE modified plan as a JSON object with a single "tasks" array.',
     '',
     'RULES:',
-    '- For each task, preserve these exact fields: id, order, title, description, type, status, dependencies, prompt, userSteps, subtasks, assignedModel, thinkingEffort, readOnly.',
+    '- For each task, preserve these exact fields: id, order, title, description, type, status, dependencies, prompt, userSteps, subtasks, assignedModel, readOnly.',
     '- DO NOT modify or delete completed tasks UNLESS the user explicitly asks to redo or replace them. If the user asks to redo a completed task, change its status from "completed" to "pending" and update its properties as requested.',
     '- DO NOT modify or delete tasks with status "in_progress" — they are currently executing.',
     '- DO NOT modify or delete tasks with status "failed" UNLESS the user asks to fix them — then update the prompt and change status from "failed" to "pending".',

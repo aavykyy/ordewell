@@ -1,6 +1,7 @@
-import { Task, createTask, opsFlag, skillNames, TaskModelAssignment, RunnerId } from '../models/Task';
+import { Task, RunnerId, flattenTasksWithParents } from '../models/Task';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, PLAN_ENVELOPE_KEY } from './JsonExtractor';
-import { plannedMode, type RunnerModeInfo } from './ModeResolver';
+import type { RunnerModeInfo } from './ModeResolver';
+import { plannedTask, checkPlanInvariants, taskWhere, type PlanTaskError } from './PlannedTask';
 
 export function parsePlanJson(
   raw: string,
@@ -65,13 +66,8 @@ function parsePlanObject(
   throw new PlanParseError(first.message, raw, { semantic: first.taskId !== undefined });
 }
 
-/** One reason a plan was refused, pinned to the task and field it is about. */
-export interface PlanTaskError {
-  /** Absent when the envelope itself is wrong rather than one of its tasks. */
-  taskId?: string;
-  field: string;
-  message: string;
-}
+export type { PlanTaskError } from './PlannedTask';
+export { requestedSkills } from './PlannedTask';
 
 /** `warnings` name what was accepted but not used, for a channel that can tell the planner. */
 export type PlanTasksResult = { ok: true; tasks: Task[]; warnings?: string[] } | { ok: false; errors: PlanTaskError[] };
@@ -79,8 +75,8 @@ export type PlanTasksResult = { ok: true; tasks: Task[]; warnings?: string[] } |
 /**
  * Every check a plan's tasks must pass, on an already-parsed `{ tasks }`
  * object — what a plan is held to whichever channel it arrived on. All
- * problems are reported, in the order the text path has always met them, so
- * the first is the one its corrective names.
+ * problems are reported, the slice classification first, so the first is the
+ * one the text path's corrective names.
  */
 export function validatePlanTasks(
   obj: unknown,
@@ -96,40 +92,23 @@ export function validatePlanTasks(
     return { ok: false, errors: [{ field: 'tasks', message: 'Plan contained no tasks' }] };
   }
 
-  const tasks = rawTasks.map((t) => parseTask(asRecord(t), runners, runnerModes, autonomousDefault));
-
-  const errors = verticalSliceErrors(tasks);
-  errors.push(...modeErrors(tasks));
-  for (const t of tasks) {
-    if (!runners.includes(t.assignedRunner)) {
-      errors.push({
-        taskId: t.id,
-        field: 'assignedRunner',
-        message: `Task "${t.title}" has invalid assignedRunner "${t.assignedRunner}". Expected one of: ${runners.join(', ')}`,
-      });
-    }
-  }
+  const planned = rawTasks.map((t) => plannedTask(t, { runners, runnerModes, autonomousDefault }));
+  const tasks = planned.map((p) => p.task);
+  const errors = [
+    ...sliceRequired(tasks),
+    ...planned.flatMap((p) => p.errors),
+    ...checkPlanInvariants(tasks, runners),
+  ];
 
   if (errors.length > 0) return { ok: false, errors };
-  const ignored = rawTasks.some(namesMode);
+  const ignored = planned.some((p) => p.ignored.some((i) => i.field === 'taskMode'));
   return ignored
     ? { ok: true, tasks, warnings: ['"taskMode" is not yours to set and was ignored: each task runs in its runner\'s mode for the user\'s autonomy level, or its read-only mode when you set "readOnly": true.'] }
     : { ok: true, tasks };
 }
 
-function namesMode(raw: unknown): boolean {
-  if (!isRecord(raw)) return false;
-  return raw.taskMode !== undefined || (Array.isArray(raw.subtasks) && raw.subtasks.some(namesMode));
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-// A non-object entry reads as an empty task, so the shape checks name it
-// instead of the parser throwing a TypeError out of the validator.
-function asRecord(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? value : {};
 }
 
 /**
@@ -145,148 +124,15 @@ export function looksLikePlanAttempt(raw: string): boolean {
 }
 
 /**
- * The parent's slice classification, handed to `ai` subtasks that omit their
- * own. Budget models emit sub-steps as bare `{id, order, title, description,
- * type}` — neither prompt has ever shown a populated `subtasks` entry — and the
- * recursive slice contract then rejected the whole plan. Inheriting invents no
- * information: an `ai` sub-step of an AFK slice is AFK. Deliberately NOT a
- * blanket `'AFK'` default, which would silently strip a human gate the planner
- * intended (`sliceType` is what puts the checkpoint instructions in the runner prompt,
- * and subtasks are schedulable — PlanStore.rebuild flattens them into
- * _allTasks). `type: 'user'` subtasks inherit nothing and must still declare
- * HITL themselves.
+ * A whole plan says how each task is sliced: an edit may leave it to the
+ * task's parent or the tasks it was made from, a submitted plan may not.
  */
-type InheritedSlice = { sliceType?: Task['sliceType']; autonomy?: Task['autonomy']; readOnly?: boolean };
-
-/**
- * What each parsed task asked to attach, as the planner wrote it. Kept beside
- * the task rather than on it: {@link skillNames} drops a name no skill could
- * have, and the plan's skill check still owes a warning for it. A copy of the
- * task (assignment coercion) does not carry it, so check what was parsed.
- */
-const skillsAsked = new WeakMap<Task, unknown[]>();
-
-/** Why a parsed task has no mode it can run in — a read-only task on a runner without a read-only mode. */
-const modeRefused = new WeakMap<Task, string>();
-
-/** The `skills` a parsed task was submitted with, before normalization; undefined for a task not parsed here. */
-export function requestedSkills(task: Task): readonly unknown[] | undefined {
-  return skillsAsked.get(task);
-}
-
-function parseTask(
-  raw: Record<string, unknown>,
-  runners: RunnerId[],
-  runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-  autonomousDefault = true,
-  inherited?: InheritedSlice,
-): Task {
-  const assignedRunner = typeof raw.assignedRunner === 'string' ? raw.assignedRunner : (runners[0] ?? 'claude-code');
-  const taskType = (raw.type === 'user' ? 'user' : 'ai') as Task['type'];
-  // A read-only task's subtasks run as tasks of their own, so they would
-  // otherwise get write access the planner said the work must not have.
-  const readOnly = taskType === 'ai' && (raw.readOnly === true || (raw.readOnly !== false && inherited?.readOnly === true));
-  const mode = plannedMode(assignedRunner, runnerModes, { readOnly }, autonomousDefault);
-  const title = String(raw.title ?? '');
-  const description = String(raw.description ?? '');
-  // Explicit child values always win; inheritance only fills a gap, and only
-  // for `ai` tasks.
-  const autonomy = taskType === 'ai' && typeof raw.autonomy === 'string' && (raw.autonomy === 'AFK' || raw.autonomy === 'HITL')
-    ? raw.autonomy
-    : (taskType === 'ai' ? inherited?.autonomy : undefined);
-  const sliceType = typeof raw.sliceType === 'string' && (raw.sliceType === 'HITL' || raw.sliceType === 'AFK')
-    ? raw.sliceType
-    : (taskType === 'ai' ? inherited?.sliceType : undefined);
-  const task = createTask({
-    id: String(raw.id ?? ''),
-    order: Number(raw.order ?? 0),
-    title,
-    description,
-    type: taskType,
-    dependencies: Array.isArray(raw.dependencies)
-      ? raw.dependencies.map(String)
-      : [],
-    // The planner sometimes omits `prompt` on an AI task while still filling in
-    // description/title — same fallback TaskOps.applyTaskOps uses for `add`, so
-    // a task never silently ends up unschedulable (getReadyTasks requires prompt).
-    prompt: raw.prompt ? String(raw.prompt) : (description || title || undefined),
-    userSteps: Array.isArray(raw.userSteps)
-      ? raw.userSteps.map(asRecord).map((s) => ({
-          order: Number(s.order ?? 0),
-          instruction: String(s.instruction ?? ''),
-          completed: false,
-        }))
-      : undefined,
-    subtasks: Array.isArray(raw.subtasks)
-      ? raw.subtasks.map((s: unknown) =>
-          parseTask(asRecord(s), runners, runnerModes, autonomousDefault, { sliceType, autonomy, readOnly }))
-      : [],
-    assignedModel: raw.assignedModel
-      ? {
-          modelId: String((raw.assignedModel as Record<string, unknown>).modelId ?? ''),
-          modelLabel: String((raw.assignedModel as Record<string, unknown>).modelLabel ?? ''),
-          thinkingEffort: (raw.assignedModel as Record<string, unknown>).thinkingEffort as TaskModelAssignment['thinkingEffort'],
-        }
-      : undefined,
-    assignedRunner,
-    thinkingEffort: raw.thinkingEffort ? String(raw.thinkingEffort) : undefined,
-    // A planner's own `taskMode` is never read (ADR-0031). With no runner
-    // modes to read, `plan` is the guess that keeps a read-only task from writing.
-    taskMode: (mode.ok ? mode.mode : undefined) ?? (readOnly && !runnerModes ? 'plan' : 'build'),
-    autonomy,
-    sliceType,
-    userStoriesCovered: Array.isArray(raw.userStoriesCovered)
-      ? raw.userStoriesCovered.map(String)
-      : undefined,
-    // A subtask runs with its parent, so only a top-level task carries it (ADR-0020).
-    ops: inherited ? undefined : opsFlag(raw.ops),
-    // Not inherited: a subtask's skills are its own.
-    skills: skillNames(raw.skills),
+function sliceRequired(tasks: readonly Task[]): PlanTaskError[] {
+  return flattenTasksWithParents(tasks).flatMap(({ task: t, parent }) => {
+    const where = taskWhere(t.title, parent?.title);
+    const errors: PlanTaskError[] = [];
+    if (!t.sliceType) errors.push({ taskId: t.id, field: 'sliceType', message: `${where} is missing sliceType. Every task must specify sliceType ("AFK" or "HITL").` });
+    if (t.type === 'ai' && !t.autonomy) errors.push({ taskId: t.id, field: 'autonomy', message: `AI ${where} is missing autonomy. Every AI task must specify autonomy ("AFK" or "HITL").` });
+    return errors;
   });
-  if (Array.isArray(raw.skills)) skillsAsked.set(task, raw.skills);
-  if (!mode.ok && taskType === 'ai') modeRefused.set(task, mode.error);
-  return task;
-}
-
-function modeErrors(tasks: Task[]): PlanTaskError[] {
-  return tasks.flatMap((t) => {
-    const refused = modeRefused.get(t);
-    return [
-      ...(refused ? [{ taskId: t.id, field: 'readOnly', message: `Task "${t.title}": ${refused}` }] : []),
-      ...modeErrors(t.subtasks),
-    ];
-  });
-}
-
-function verticalSliceErrors(tasks: Task[], parentTitle?: string): PlanTaskError[] {
-  // Without this the message names a title that appears nowhere in the plan's
-  // top-level `tasks` array, and neither the corrective nor a human can find
-  // the offending object.
-  const where = (t: Task) => (parentTitle ? `subtask "${t.title}" of "${parentTitle}"` : `Task "${t.title}"`);
-  const errors: PlanTaskError[] = [];
-
-  for (const t of tasks) {
-    const fail = (field: string, message: string) => errors.push({ taskId: t.id, field, message });
-
-    if (!t.sliceType) {
-      fail('sliceType', `${where(t)} is missing sliceType. Every task must specify sliceType ("AFK" or "HITL").`);
-    }
-
-    if (t.type === 'ai' && !t.autonomy) {
-      fail('autonomy', `AI ${where(t)} is missing autonomy. Every AI task must specify autonomy ("AFK" or "HITL").`);
-    }
-
-    if (t.autonomy === 'AFK' && t.userSteps && t.userSteps.length > 0) {
-      fail('userSteps', `${where(t)} has autonomy "AFK" but contains userSteps. AFK tasks must not have user touchpoints.`);
-    }
-
-    if (t.type === 'user' && t.sliceType && t.sliceType !== 'HITL') {
-      fail('sliceType', `User ${where(t)} has sliceType "${t.sliceType}". User tasks must have sliceType "HITL".`);
-    }
-
-    if (t.subtasks.length > 0) {
-      errors.push(...verticalSliceErrors(t.subtasks, t.title));
-    }
-  }
-  return errors;
 }

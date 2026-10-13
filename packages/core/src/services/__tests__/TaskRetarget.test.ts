@@ -100,14 +100,6 @@ describe('retargetTaskRunner', () => {
     });
   });
 
-  it('mirrors the clamped effort onto the legacy top-level field', () => {
-    const task = claudeTask({ thinkingEffort: 'adaptive' });
-
-    const changes = retargetTaskRunner(task, 'codex', { models: CODEX_MODELS, modes: CODEX_MODES });
-
-    expect(changes.thinkingEffort).toBe(changes.assignedModel?.thinkingEffort);
-  });
-
   it('omits the model assignment when the new runner catalog is empty', () => {
     const changes = retargetTaskRunner(claudeTask(), 'aider', { models: [], modes: CODEX_MODES });
 
@@ -168,13 +160,13 @@ describe('runnerAssignment', () => {
     expect(runnerAssignment({ models: [], modes: [] })).toEqual({});
   });
 
-  it('mirrors the derived effort onto the legacy top-level field', () => {
+  it('keeps the derived effort on the model alone', () => {
     const changes = runnerAssignment(
       { models: CODEX_MODELS, modes: CODEX_MODES },
       { assignedModel: { modelId: 'gpt-5-codex', modelLabel: 'GPT-5 Codex', thinkingEffort: 'high' }, taskMode: undefined },
     );
 
-    expect(changes.thinkingEffort).toBe('high');
     expect(changes.assignedModel!.thinkingEffort).toBe('high');
+    expect(changes).not.toHaveProperty('thinkingEffort');
   });
 });
