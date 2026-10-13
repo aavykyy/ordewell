@@ -151,6 +151,30 @@ describe('ApiClient', () => {
     stream.close();
   });
 
+  // A converse closes its stream once its turn settles, and the next queued
+  // prompt's converse opens another at once. Frames still arriving on the old
+  // one during its close handshake were heard twice: a reply streamed doubled.
+  it('streamPlanning delivers nothing more once closed, even frames already on the wire', async () => {
+    const wss = new WebSocketServer({ port: 0 });
+    await new Promise<void>((resolve) => wss.once('listening', () => resolve()));
+    const port = (wss.address() as { port: number }).port;
+    wss.on('connection', (ws) => {
+      ws.send(JSON.stringify({ type: 'planner_turn_ended', turnId: 't1', outcome: 'message' }));
+      ws.send(JSON.stringify({ type: 'planner_text_delta', turnId: 't2', segmentId: 's', text: 'uno' }));
+    });
+    servers.push({ close: () => wss.close() });
+
+    const events: { type: string }[] = [];
+    const stream = new ApiClient(port).streamPlanning('session-x', (e) => {
+      events.push(e as { type: string });
+      if ((e as { type: string }).type === 'planner_turn_ended') stream.close();
+    });
+    await stream.ready;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(events.map((e) => e.type)).toEqual(['planner_turn_ended']);
+  });
+
   it('streamPlanning says when its socket is open, and settles too when it cannot connect', async () => {
     const wss = new WebSocketServer({ port: 0 });
     await new Promise<void>((resolve) => wss.once('listening', () => resolve()));
