@@ -810,6 +810,10 @@ export class TaskOrchestrator {
     this.haltedByFailure = false;
     this.running = false;
     this.planStatus = 'approved';
+    // Let the verifier go before the runners: a killed session fires its exit
+    // synchronously, and under a still-valid generation that exit is a verdict
+    // — for a conflict repair, one that lands work the stop just cancelled.
+    this.verifier.reset();
     this.runner.stopAll();
     // Interrupted work is kept like a failed attempt's: inspectable, and off
     // `active` so a crash-recovery prune does not sweep it away. A stopped
@@ -1100,6 +1104,18 @@ export class TaskOrchestrator {
     return this.runSettings()?.mergeAtGatesAutomatically ?? false;
   }
 
+  /**
+   * The user changed the run settings under an open run (ADR-0030). The
+   * scheduler reads them at each decision it makes from them, so a merge gate
+   * already reached is merged now rather than at the next event. Fire-and-forget
+   * — no caller waits on the change — and its failure is said through
+   * {@link unawaited}, never left unhandled.
+   */
+  runSettingsChanged(): void {
+    if (!this.runs.isOpen || !this.running) return;
+    this.unawaited(this.tick(), 'Could not act on the changed run settings');
+  }
+
   private openRun(origin: RunOrigin): void {
     const opening = !this.runs.isOpen;
     this.runs.open();
@@ -1177,6 +1193,9 @@ export class TaskOrchestrator {
   async markTaskComplete(taskId: string): Promise<void> {
     const task = this.store.get(taskId);
     if (!task || task.status === 'completed') return;
+    // A second call made while the first awaits its landing finds no attempt —
+    // it was ended by the first — and would land, archive and announce again.
+    if (this.completing.has(taskId)) return;
 
     const ended = this.endAttempt(taskId, 'complete');
     const verdict = this.verifier.markComplete(task);
@@ -1286,8 +1305,10 @@ export class TaskOrchestrator {
     // Claimed before anything is awaited, so a running scheduler never sees the
     // pending task and starts it afresh. Its prepare replaces the old worktree.
     const started = this.startTask(task, { message: text, resumeSessionId: eligible.sessionId });
-    if (this.haltedByFailure && !this.running) await this.start(origin);
-    await started;
+    const resumed = this.haltedByFailure && !this.running ? this.start(origin) : Promise.resolve();
+    // Both are awaited even if one fails: the claimed attempt's start must not
+    // be left unhandled because restarting the run threw.
+    await Promise.all([resumed, started]);
   }
 
   /**
@@ -1423,8 +1444,10 @@ export class TaskOrchestrator {
     this.onHold.delete(taskId);
     const continuation = resumeSessionId ? { message: LIMIT_RESET_MESSAGE, resumeSessionId } : null;
     const started = this.startTask(task, continuation, { autoResumed: true });
-    if (this.haltedByFailure && !this.running && !this.store.isAnyFailed() && !this.store.allTasks.some(waitsForReset)) await this.start('limit-reset');
-    await started;
+    const resumed = this.haltedByFailure && !this.running && !this.store.isAnyFailed() && !this.store.allTasks.some(waitsForReset) ? this.start('limit-reset') : Promise.resolve();
+    // Both are awaited even if one fails: the claimed attempt's start must not
+    // be left unhandled because restarting the run threw.
+    await Promise.all([resumed, started]);
   }
 
   /**

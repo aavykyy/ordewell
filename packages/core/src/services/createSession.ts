@@ -1321,7 +1321,7 @@ export class Session {
   applyRunSettings(changes: Partial<GlobalRunSettings>): void {
     this.supervision.apply(changes);
     // The scheduler reads the setting as it decides; a gate already reached merges now, not at the next event.
-    if (changes.mergeAtGatesAutomatically && this.orchestrator.isScheduling) void this.reschedule();
+    if (changes.mergeAtGatesAutomatically) this.orchestrator.runSettingsChanged();
   }
 
   async executePlan(): Promise<void> {

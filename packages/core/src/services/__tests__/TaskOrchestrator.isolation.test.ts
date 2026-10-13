@@ -1269,6 +1269,70 @@ describe('TaskOrchestrator with worktree isolation', () => {
       expect(orchestrator.storeInstance.get('t1')!.status).toBe('in_progress');
       expect(isolation.taskIdsFor('integrate')).toEqual(['t1', resolver.id]);
     });
+
+    it('a stop does not land the repair: the kill that stop() makes is not a verdict', async () => {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.outcomes.set('t1', 'conflict');
+      isolation.conflictFiles.set('t1', ['a.ts']);
+      const spawned: FakeRunnerSession[] = [];
+      const runner: IRunner = {
+        spawn: vi.fn(async (o: Parameters<IRunner['spawn']>[0]) => {
+          const session = new FakeRunnerSession(`s${spawned.length + 1}`, o.taskId);
+          spawned.push(session);
+          return session;
+        }),
+        stop: vi.fn(),
+        // As a structured session's kill() does: the exit fires synchronously
+        // from stopAll(), which stop() runs before it tears the attempts down.
+        stopAll: vi.fn(() => { for (const session of spawned) session.emitExit(-1); }),
+        activeCount: 0,
+      };
+      const notifications = fakeNotification();
+      const orchestrator = TaskOrchestrator.compose({
+        config: fakeConfig({ worktreeIsolation: true, conflictRepairAttempts: 2 }),
+        notifications,
+        runner,
+        output: new BufferedTaskOutputSource(),
+        isolation,
+        workspaceRoot: () => '/repo',
+      });
+      orchestrator.loadPlan([task('t1', 1)]);
+      await orchestrator.approveReview();
+      spawned[0].reportComplete({ status: 'done', summary: '' });
+      await vi.waitFor(() => expect(spawned).toHaveLength(2));
+
+      orchestrator.stop();
+      await flushMicrotasks();
+
+      expect(orchestrator.storeInstance.get('t1')).toMatchObject({ status: 'awaiting_user', awaitingReason: 'conflict' });
+      // Only the stop's own keep-release: a verdict from the synchronous exit
+      // would have released the worktree through the repair's landing first.
+      expect(isolation.taskIdsFor('release')).toEqual(['t1']);
+    });
+  });
+
+  describe('Mark complete while a landing is in flight', () => {
+    it('a second call is a no-op rather than landing, archiving and announcing again', async () => {
+      const { orchestrator, isolation, pass, notifications } = setup();
+      const t1 = task('t1', 1);
+      orchestrator.loadPlan([t1]);
+      await orchestrator.approveReview();
+      const open = isolation.holdIntegration('t1');
+      pass(t1);
+      await vi.waitFor(() => expect(isolation.taskIdsFor('integrate')).toEqual(['t1']));
+
+      const first = orchestrator.markTaskComplete('t1');
+      const second = orchestrator.markTaskComplete('t1');
+      open();
+      await Promise.all([first, second]);
+
+      expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed');
+      // The first call lands through the verdict's landing already in flight;
+      // a second one would call `landVouched` and integrate again.
+      expect(isolation.taskIdsFor('integrate')).toEqual(['t1']);
+      const marked = vi.mocked(notifications.info).mock.calls.filter(([m]) => String(m) === 'Task "Task t1" marked complete.');
+      expect(marked).toHaveLength(1);
+    });
   });
 
   describe('the branches runs leave behind', () => {
