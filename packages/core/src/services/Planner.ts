@@ -41,19 +41,6 @@ export interface GeneratedPlan extends LegacyPlanState {
   skillWarnings?: string[];
 }
 
-export interface ModifyPlanRequest {
-  existingPlan: LegacyPlanState;
-  userRequest: string;
-  modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>>;
-  fs?: IFileSystem;
-  fetcher?: IWebFetcher;
-  onProgress?: (progress: ResearchProgress) => void;
-  runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
-  autonomousDefault?: boolean;
-  perRunnerAllowlist?: Partial<Record<RunnerId, string[]>>;
-  modes?: PlannerModes;
-}
-
 /** A one-shot plan refused for the skills it attaches; nothing of it was loaded. */
 export class PlanSkillsError extends Error {
   constructor(message: string) {
@@ -63,10 +50,10 @@ export class PlanSkillsError extends Error {
 }
 
 /**
- * Owns one-shot plan generation and plan modification — the "planning is a
- * different workload from execution" thesis, as a module. The conversational
- * planning loop (ADR-0002) lives on {@link Session}, which talks to the AI
- * service directly because the conversation state is held there.
+ * Owns one-shot plan generation — the "planning is a different workload from
+ * execution" thesis, as a module. The conversational planning loop (ADR-0002)
+ * lives on {@link Session}, which talks to the AI service directly because the
+ * conversation state is held there.
  */
 export class Planner {
   /**
@@ -140,20 +127,5 @@ export class Planner {
       researchLog,
       ...(skills && skills.warnings.length > 0 ? { skillWarnings: skills.warnings } : {}),
     };
-  }
-
-  async modify(req: ModifyPlanRequest): Promise<{ tasks: Task[] }> {
-    const filteredModels = filterModelsForPrompt(req.modelsByRunner, req.perRunnerAllowlist ?? {});
-    const result = await this.aiService.modifyPlan(
-      req.existingPlan,
-      req.userRequest,
-      filteredModels,
-      req.onProgress,
-      req.fs,
-      req.fetcher,
-      req.runnerModes,
-      plannerModesWith(req),
-    );
-    return { tasks: coerceAssignments(result.tasks, req.perRunnerAllowlist ?? {}, req.modelsByRunner).tasks };
   }
 }

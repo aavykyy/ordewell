@@ -675,67 +675,6 @@ describe('TaskOrchestrator', () => {
     });
   });
 
-  describe('mergeTasks', () => {
-    it('merges two tasks into one', () => {
-      const orchestrator = makeOrchestrator();
-      orchestrator.loadPlan([
-        createTask({ id: 'a', order: 1, title: 'Task A', description: 'First', prompt: 'do A', sliceType: 'AFK', autonomy: 'AFK' }),
-        createTask({ id: 'b', order: 2, title: 'Task B', description: 'Second', prompt: 'do B', sliceType: 'AFK', autonomy: 'AFK' }),
-        createTask({ id: 'c', order: 3, title: 'Task C', prompt: 'do C', dependencies: ['a'], sliceType: 'AFK', autonomy: 'AFK' }),
-      ]);
-
-      const merged = orchestrator.storeInstance.merge('a', 'b');
-
-      expect(orchestrator.storeInstance.allTasks.length).toBe(2);
-      expect(merged.title).toContain('Task A');
-      expect(merged.title).toContain('Task B');
-
-      const taskC = orchestrator.storeInstance.get('c');
-      expect(taskC?.dependencies).toEqual([merged.id]);
-    });
-
-    it('throws if task not found', () => {
-      const orchestrator = makeOrchestrator();
-      orchestrator.loadPlan([
-        createTask({ id: 'a', order: 1, title: 'A', prompt: 'x' }),
-      ]);
-      expect(() => orchestrator.storeInstance.merge('a', 'z')).toThrow('not found');
-    });
-  });
-
-  describe('splitTask', () => {
-    it('splits a task into multiple subtasks', () => {
-      const orchestrator = makeOrchestrator();
-      orchestrator.loadPlan([
-        createTask({ id: 'a', order: 1, title: 'Original', prompt: 'original', sliceType: 'AFK', autonomy: 'AFK' }),
-        createTask({ id: 'b', order: 2, title: 'Dependent', prompt: 'dep', dependencies: ['a'], sliceType: 'AFK', autonomy: 'AFK' }),
-      ]);
-
-      const split = orchestrator.storeInstance.split('a', [
-        { id: 's1', title: 'Part 1', prompt: 'first part', sliceType: 'AFK', autonomy: 'AFK' },
-        { id: 's2', title: 'Part 2', prompt: 'second part', sliceType: 'AFK', autonomy: 'AFK' },
-      ]);
-
-      expect(split).toHaveLength(2);
-      expect(orchestrator.storeInstance.allTasks.length).toBe(3);
-
-      const taskB = orchestrator.storeInstance.get('b');
-      expect(taskB?.dependencies).toContain(split[1].id);
-    });
-
-    it('throws if task not found', () => {
-      const orchestrator = makeOrchestrator();
-      orchestrator.loadPlan([]);
-      expect(() => orchestrator.storeInstance.split('nonexistent', [{ title: 'X' }])).toThrow('not found');
-    });
-
-    it('throws if no new task specs provided', () => {
-      const orchestrator = makeOrchestrator();
-      orchestrator.loadPlan([createTask({ id: 'a', order: 1, title: 'A', prompt: 'x' })]);
-      expect(() => orchestrator.storeInstance.split('a', [])).toThrow('at least one');
-    });
-  });
-
   describe('start hold in tick', () => {
     // The run is armed on a user gate; t1 is force-started past it so a
     // runner is live when the gate opens and the scheduler looks at t2.

@@ -12,7 +12,6 @@ import { IWebFetcher } from '../interfaces/IWebFetcher';
 import {
   buildResearchPrompt,
   buildPlanWithResults,
-  buildModifyPlanPrompt,
   buildResearchToolsPrompt,
   buildConversationSystemPrompt,
 } from './PlanPrompts';
@@ -23,7 +22,6 @@ import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
 import { IAiService, ConversationRequest, ConversationTurn } from './AiService';
 import { BaseAiService, ResearchChat, ResearchTurn, ToolResult, ConversationTurnContext } from './BaseAiService';
 import { toGeminiToolDeclarations } from './researchTools';
-import type { LegacyPlanState } from '../models/Task';
 
 const TOOL_DEFINITIONS = toGeminiToolDeclarations();
 /** With the task reads and execution tools a session offers its conversation (ADR-0029). */
@@ -309,7 +307,7 @@ export class GeminiService extends BaseAiService implements IAiService {
     return fullResponse;
   }
 
-  /** Gemini-specific stream over raw Parts for generatePlanDirect / modifyPlan. */
+  /** Gemini-specific stream over raw Parts for generatePlanDirect. */
   private async streamPlanTextWithParts(parts: Part[], repairHint: string | undefined, onToken: (token: string) => void): Promise<string> {
     const model = this.getPlanningModel();
     const finalParts: Part[] = repairHint ? [...parts, { text: `\n\n${repairHint}` }] : parts;
@@ -385,41 +383,6 @@ export class GeminiService extends BaseAiService implements IAiService {
       runnerModes,
       autonomousDefault,
     );
-  }
-
-  async modifyPlan(
-    existingPlan: LegacyPlanState,
-    userRequest: string,
-    modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>>,
-    onProgress?: (progress: ResearchProgress) => void,
-    fs?: IFileSystem,
-    _fetcher?: IWebFetcher,
-    runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-    modes: PlannerModes = DEFAULT_PLANNER_MODES,
-    _signal?: AbortSignal,
-  ): Promise<{ tasks: Task[] }> {
-    this.ensureInit();
-    const { autonomousDefault } = modes;
-    let aiflowContext: string | undefined;
-    if (fs) {
-      const collected = await new ContextCollector(fs).collect(existingPlan.runners[0] ?? 'claude-code');
-      if (collected.aiflowContext) aiflowContext = collected.aiflowContext;
-    }
-    const prompt = buildModifyPlanPrompt(existingPlan, userRequest, modelsByRunner, aiflowContext, runnerModes);
-    try {
-      const tasks = await generatePlanWithRepair((repairHint) =>
-        this.streamPlanTextWithParts([{ text: prompt }], repairHint, (token) =>
-          onProgress?.({ type: 'plan_token', planToken: token })
-        ),
-        existingPlan.runners,
-        2,
-        runnerModes,
-        autonomousDefault,
-      );
-      return { tasks };
-    } catch (err) {
-      throw new Error(`Plan modification failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
   }
 
 }

@@ -1,6 +1,5 @@
-import { DiscoveredModel, RunnerId, plannerTaskView, type PlannerTaskView, type Task } from '../models/Task';
-import type { LegacyPlanState } from '../models/Task';
-import { readOnlyMode, readOnlyRunners, type RunnerModeInfo } from './ModeResolver';
+import { DiscoveredModel, RunnerId, type Task } from '../models/Task';
+import { readOnlyRunners, type RunnerModeInfo } from './ModeResolver';
 import { DEFAULT_PLANNER_MODES, type IsolatedExecution, type PlannerModes } from './plannerModes';
 import { TASK_QUERY_PROTOCOL, TASK_READ_TOOLS_PROTOCOL } from './TaskQuery';
 import { SELF_REPO } from './isolationRecord';
@@ -631,67 +630,6 @@ export function buildPlanWithResults(
 ): string {
   return buildPlanPromptBase(userGoal, context, researchResults, modelsByRunner, runners, false, runnerModes, modes, tools);
 }
-
-/** A task as the modify prompt shows it: read-only or not, never its mode (ADR-0031). */
-function readOnlyView(task: PlannerTaskView, runnerModes: Record<RunnerId, RunnerModeInfo[]> | undefined): Record<string, unknown> {
-  const { taskMode, subtasks, ...rest } = task;
-  const readOnly = taskMode !== undefined && taskMode === readOnlyMode(runnerModes?.[task.assignedRunner]);
-  return { ...rest, ...(readOnly ? { readOnly: true as const } : {}), subtasks: subtasks.map((s) => readOnlyView(s, runnerModes)) };
-}
-
-export function buildModifyPlanPrompt(
-  existingPlan: LegacyPlanState,
-  userRequest: string,
-  modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>>,
-  aiflowContext?: string,
-  runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-  tools = false,
-): string {
-  const modelsJson = modelsJsonFor(modelsByRunner, existingPlan.runners);
-  const planJson = JSON.stringify(existingPlan.tasks.map((t) => readOnlyView(plannerTaskView(t), runnerModes)), null, 2);
-  const aiflowBlock = aiflowContext
-    ? `<aiflow_context>\n${aiflowContext}\n</aiflow_context>\n\n`
-    : '';
-
-  const modeGuide = runnerModes ? readOnlyGuide(runnerModes, tools) : '';
-
-  return [
-    'You are a software project planner. You previously generated a task plan and the user now wants to modify it.',
-    '',
-    'Here is the CURRENT plan as JSON:',
-    planJson,
-    '',
-    'Available models:',
-    modelsJson,
-    '',
-    `${aiflowBlock}USER MODIFICATION REQUEST:`,
-    userRequest,
-    '',
-    'Modify the plan according to the user request. You may add, remove, reorder, or change any task properties.',
-    tools
-      ? 'Call submit_plan with the COMPLETE modified plan in its "tasks" array.'
-      : 'Return the COMPLETE modified plan as a JSON object with a single "tasks" array.',
-    '',
-    'RULES:',
-    '- For each task, preserve these exact fields: id, order, title, description, type, status, dependencies, prompt, userSteps, subtasks, assignedModel, readOnly.',
-    '- DO NOT modify or delete completed tasks UNLESS the user explicitly asks to redo or replace them. If the user asks to redo a completed task, change its status from "completed" to "pending" and update its properties as requested.',
-    '- DO NOT modify or delete tasks with status "in_progress" — they are currently executing.',
-    '- DO NOT modify or delete tasks with status "failed" UNLESS the user asks to fix them — then update the prompt and change status from "failed" to "pending".',
-    '- DO NOT modify or delete tasks with status "blocked" UNLESS the user asks to unblock them. If unblocking, remove the failed dependency from the blocked task\'s dependencies array.',
-    '- When the user fixes a failed task, also update any blocked tasks that depend on it: change their status from "blocked" to "pending".',
-    '- Preserve existing task IDs for all unchanged, completed, and in-progress tasks.',
-    '- Only create new IDs for newly added tasks.',
-    '- When removing a task, update all other tasks that reference the deleted ID in their dependencies.',
-    '- Ensure dependency chains remain valid — no dangling references to deleted IDs.',
-    '- Renumber task "order" fields sequentially starting from 1 after insertions or deletions.',
-    '- When adding new tasks, assign appropriate models and thinking efforts based on complexity.',
-    ...(modeGuide ? ['', modeGuide] : []),
-    `- ${submitInstruction(tools)}`,
-  ].join('\n');
-}
-
-
-
 
 export function modelContextBlock(
   modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>>,

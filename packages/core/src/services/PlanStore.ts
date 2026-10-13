@@ -1,7 +1,7 @@
 import {
   Task, TaskSnapshot, TaskStatus, RunnerId, AwaitingReason, DEFAULT_RUNNERS, flattenTasks,
   addTaskToPlan, removeTaskFromPlan, updateTaskInPlan,
-  createTask, renumberTasks, opsFlag, inheritedOps, inheritedSkills, waitsForReset,
+  opsFlag, waitsForReset,
 } from '../models/Task';
 import { startAttemptUsage, addAttemptUsage, endAttemptUsage, type UsageRecord } from '../models/Usage';
 
@@ -38,7 +38,7 @@ export class PlanStore {
   private _onMutate: (() => void) | null = null;
   private _executionLog: TaskSnapshot[] = [];
 
-  /** Hook called after every structural mutation (add/remove/update/merge/split/resetForRun). */
+  /** Hook called after every structural mutation (add/remove/update/resetForRun). */
   set onMutate(cb: (() => void) | null) { this._onMutate = cb; }
 
   get planTasks(): ReadonlyArray<Readonly<Task>> { return this._planTasks; }
@@ -138,112 +138,6 @@ export class PlanStore {
     this.rebuild();
     this.notifyMutate();
     return this._taskMap.get(taskId);
-  }
-
-  mergeMultiple(taskIds: string[]): Task {
-    if (taskIds.length < 2) throw new Error('Must provide at least two task IDs to merge');
-    const sorted = [...new Set(taskIds)]
-      .map(id => ({ id, task: this._taskMap.get(id) }))
-      .filter(x => x.task)
-      .sort((a, b) => (a.task?.order ?? 0) - (b.task?.order ?? 0));
-
-    if (sorted.length < 2) throw new Error('At least two valid tasks required for merge');
-
-    let current = sorted[0].id;
-    for (let i = 1; i < sorted.length; i++) {
-      const merged = this.merge(current, sorted[i].id);
-      current = merged.id;
-    }
-    return this._taskMap.get(current)!;
-  }
-
-  merge(taskIdA: string, taskIdB: string): Task {
-    const taskA = this._taskMap.get(taskIdA);
-    const taskB = this._taskMap.get(taskIdB);
-    if (!taskA) throw new Error(`Task ${taskIdA} not found`);
-    if (!taskB) throw new Error(`Task ${taskIdB} not found`);
-
-    const mergedDeps = [...new Set([...taskA.dependencies, ...taskB.dependencies])]
-      .filter(depId => depId !== taskIdA && depId !== taskIdB);
-
-    const mergedStories = [...new Set([...(taskA.userStoriesCovered ?? []), ...(taskB.userStoriesCovered ?? [])])];
-
-    const mergedPrompt = [taskA.prompt, taskB.prompt].filter(Boolean).join('\n\n---\n\n');
-
-    const merged = createTask({
-      title: `${taskA.title} + ${taskB.title}`,
-      description: `${taskA.description}\n\n${taskB.description}`,
-      type: taskA.type === 'user' || taskB.type === 'user' ? 'user' : 'ai',
-      dependencies: mergedDeps,
-      prompt: mergedPrompt || undefined,
-      autonomy: taskA.autonomy ?? taskB.autonomy,
-      sliceType: taskA.sliceType ?? taskB.sliceType,
-      userStoriesCovered: mergedStories.length > 0 ? mergedStories : undefined,
-      assignedRunner: taskA.assignedRunner,
-      assignedModel: taskA.assignedModel,
-      taskMode: taskA.taskMode,
-      ops: inheritedOps([taskA, taskB]),
-      skills: [...(taskA.skills ?? []), ...(taskB.skills ?? [])],
-      order: Math.min(taskA.order, taskB.order),
-    });
-
-    const mergedId = merged.id;
-    const userIds = new Set([taskIdA, taskIdB]);
-    // Deduped: a task that depended on both merged halves would otherwise list
-    // the survivor twice.
-    const sanitized = this._planTasks
-      .filter(t => !userIds.has(t.id))
-      .map(t => ({
-        ...t,
-        dependencies: [...new Set(t.dependencies.map(depId => (userIds.has(depId) ? mergedId : depId)))],
-      }));
-
-    this._planTasks = renumberTasks([...sanitized, merged]);
-    this.rebuild();
-    this.notifyMutate();
-    return merged;
-  }
-
-  split(taskId: string, newTaskSpecs: Partial<Task>[]): Task[] {
-    const original = this._taskMap.get(taskId);
-    if (!original) throw new Error(`Task ${taskId} not found`);
-    if (!newTaskSpecs.length) throw new Error('Must provide at least one new task spec');
-
-    // Part 0 inherits the original's dependencies; every later part chains onto
-    // the id of the part actually created before it. Deriving the chain from the
-    // specs' own ids left a spec-less caller depending on a placeholder id that
-    // matched nothing in the plan.
-    const finalized: Task[] = [];
-    newTaskSpecs.forEach((spec, i) => {
-      finalized.push(createTask({
-        ...spec,
-        order: original.order + i,
-        dependencies: i === 0 ? [...original.dependencies] : [finalized[i - 1].id],
-        type: spec.type ?? original.type,
-        assignedRunner: spec.assignedRunner ?? original.assignedRunner,
-        assignedModel: spec.assignedModel ?? original.assignedModel,
-        taskMode: spec.taskMode ?? original.taskMode,
-        autonomy: spec.autonomy ?? original.autonomy,
-        sliceType: spec.sliceType ?? original.sliceType,
-        userStoriesCovered: spec.userStoriesCovered ?? original.userStoriesCovered,
-        ops: inheritedOps([original], spec.ops),
-        skills: inheritedSkills(spec.skills, original.skills),
-      }));
-    });
-
-    const tailId = finalized[finalized.length - 1].id;
-
-    const updatedOthers = this._planTasks
-      .filter(t => t.id !== taskId)
-      .map(t => ({
-        ...t,
-        dependencies: t.dependencies.map(depId => depId === taskId ? tailId : depId),
-      }));
-
-    this._planTasks = renumberTasks([...updatedOthers, ...finalized]);
-    this.rebuild();
-    this.notifyMutate();
-    return finalized;
   }
 
   /**

@@ -8,7 +8,6 @@ import {
   type ResearchProgress,
   type ResearchStep,
   type RunnerId,
-  type LegacyPlanState,
   DEFAULT_RUNNERS,
 } from '../../models/Task';
 import { addUsage, type UsageTotals } from '../../models/Usage';
@@ -21,7 +20,6 @@ import type { IAiService, ConversationRequest, ConversationTurn, PlannerToolsOff
 import {
   buildConversationSystemPrompt,
   buildPlanWithResults,
-  buildModifyPlanPrompt,
 } from '../PlanPrompts';
 import { repairLoop, resubmitPlanPrompt } from '../PlanRepair';
 import { validatePlanTasks } from '../PlanValidator';
@@ -854,26 +852,6 @@ export class CliAgentAiService implements IAiService {
       signal,
     );
     return plan.tasks;
-  }
-
-  async modifyPlan(
-    existingPlan: LegacyPlanState,
-    userRequest: string,
-    modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>>,
-    onProgress?: (progress: ResearchProgress) => void,
-    _fs?: IFileSystem,
-    _fetcher?: IWebFetcher,
-    runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-    modes: PlannerModes = DEFAULT_PLANNER_MODES,
-    signal?: AbortSignal,
-  ): Promise<{ tasks: Task[] }> {
-    const prompt = buildModifyPlanPrompt(existingPlan, userRequest, modelsByRunner, undefined, runnerModes, true);
-    try {
-      const plan = await this.submittedPlan(prompt, oneShotCatalog(existingPlan.runners, modelsByRunner, runnerModes, modes), onProgress, signal);
-      return { tasks: plan.tasks };
-    } catch (err) {
-      throw new Error(`Plan modification failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
   }
 }
 

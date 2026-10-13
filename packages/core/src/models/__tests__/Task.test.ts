@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createTask, createEmptyPlan, migrateLegacyPlan, migratePlanState, taskOrderLabel, flattenTasksWithParents, keepExecutionState, isAwaitingReason } from '../Task';
+import { createTask, createEmptyPlan, migratePlanState, taskOrderLabel, flattenTasksWithParents, keepExecutionState, isAwaitingReason } from '../Task';
 import { serializeTaskStatus } from '../../services/SessionMessage';
 import type { LegacyPlanState, PlanState, Message, TaskSnapshot } from '../Task';
 
@@ -178,92 +178,6 @@ describe('PlanState discriminated union', () => {
   });
 });
 
-describe('migrateLegacyPlan', () => {
-  it('migrates old flat plan to planning phase when status is draft', () => {
-    const legacy: LegacyPlanState = {
-      tasks: [],
-      generatedAt: '2024-01-01T00:00:00.000Z',
-      status: 'draft',
-      runners: ['claude-code'],
-      lastUpdated: '2024-01-01T00:00:00.000Z',
-    };
-    const result = migrateLegacyPlan(legacy);
-    expect(result.phase).toBe('planning');
-    expect(result.history).toEqual([]);
-    expect(result.pendingTasks).toEqual([]);
-  });
-
-  it('migrates old flat plan to executing phase when status is running', () => {
-    const task = createTask({ id: 't1', title: 'Do it', status: 'pending' });
-    const legacy: LegacyPlanState = {
-      tasks: [task],
-      generatedAt: '2024-01-01T00:00:00.000Z',
-      status: 'running',
-      runners: ['opencode'],
-      lastUpdated: '2024-01-01T00:00:00.000Z',
-    };
-    const result = migrateLegacyPlan(legacy);
-    expect(result.phase).toBe('executing');
-    if (result.phase === 'executing') {
-      expect(result.goal).toBe('Plan migration');
-      expect(result.runners).toEqual(['opencode']);
-      expect(result.status).toBe('running');
-      expect(result.executionLog).toEqual([]);
-      expect(result.pendingTasks).toHaveLength(1);
-    }
-  });
-
-  it('preserves queuedMessages and researchLog in planning phase history', () => {
-    const legacy: LegacyPlanState = {
-      tasks: [],
-      generatedAt: '2024-01-01T00:00:00.000Z',
-      status: 'draft',
-      runners: ['claude-code'],
-      lastUpdated: '2024-01-01T00:00:00.000Z',
-      queuedMessages: [{ id: 'qm1', text: 'waiting', timestamp: '2024' }],
-      researchLog: [{ id: 'rs1', tool: 'grep', args: 'test', result: 'found', success: true, outcome: 'success', timestamp: '2024' }],
-    };
-    const result = migrateLegacyPlan(legacy);
-    expect(result.phase).toBe('planning');
-    expect(result.history).toHaveLength(2);
-  });
-
-  it('carries a finished subagent into history as its brief and digest', () => {
-    const legacy: LegacyPlanState = {
-      tasks: [],
-      generatedAt: '2024-01-01T00:00:00.000Z',
-      status: 'draft',
-      runners: ['claude-code'],
-      lastUpdated: '2024-01-01T00:00:00.000Z',
-      researchLog: [{ id: 'sa1-log', type: 'subagent', subagentId: 'sa1', brief: 'find auth', outcome: 'done', digest: 'in auth.ts', timestamp: '2024-01-01T00:00:00.000Z' }],
-    };
-    const result = migrateLegacyPlan(legacy);
-    expect(result.history).toEqual([{
-      id: 'sa1-log',
-      role: 'system',
-      content: '{"subagentId":"sa1","brief":"find auth","outcome":"done","digest":"in auth.ts"}',
-      timestamp: Date.UTC(2024, 0, 1),
-    }]);
-  });
-
-  it('migrates old flat plan without researchLog to executing phase with empty log', () => {
-    const task = createTask({ id: 't1', title: 'Test', status: 'pending' });
-    const legacy: LegacyPlanState = {
-      tasks: [task],
-      generatedAt: '2024-01-01T00:00:00.000Z',
-      status: 'running',
-      runners: ['claude-code'],
-      lastUpdated: '2024-01-01T00:00:00.000Z',
-    };
-    const result = migrateLegacyPlan(legacy);
-    expect(result.phase).toBe('executing');
-    if (result.phase === 'executing') {
-      expect(result.executionLog).toEqual([]);
-      expect(result.runners).toEqual(['claude-code']);
-    }
-  });
-});
-
 describe('migratePlanState', () => {
   it('passes through new PlanState format unchanged', () => {
     const msg: Message = { id: 'm1', role: 'user', content: 'hi', timestamp: 1 };
@@ -328,6 +242,24 @@ describe('migratePlanState', () => {
     };
     const result = migratePlanState(legacy);
     expect(result.history.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('carries a finished subagent into history as its brief and digest', () => {
+    const legacy: LegacyPlanState = {
+      tasks: [],
+      generatedAt: '2024-01-01T00:00:00.000Z',
+      status: 'draft',
+      runners: ['claude-code'],
+      lastUpdated: '2024-01-01T00:00:00.000Z',
+      researchLog: [{ id: 'sa1-log', type: 'subagent', subagentId: 'sa1', brief: 'find auth', outcome: 'done', digest: 'in auth.ts', timestamp: '2024-01-01T00:00:00.000Z' }],
+    };
+    const result = migratePlanState(legacy);
+    expect(result.history).toEqual([{
+      id: 'sa1-log',
+      role: 'system',
+      content: '{"subagentId":"sa1","brief":"find auth","outcome":"done","digest":"in auth.ts"}',
+      timestamp: Date.UTC(2024, 0, 1),
+    }]);
   });
 
   it('migrates old format with failed tasks to executing phase', () => {

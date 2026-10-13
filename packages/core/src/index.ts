@@ -1,4 +1,35 @@
-export * from './models/Task';
+export {
+  DEFAULT_RUNNERS,
+  createEmptyPlan,
+  createTask,
+  flattenTasks,
+  flattenTasksWithParents,
+  isAwaitingReason,
+  isUserMessage,
+  migratePlanState,
+  resolveTaskRef,
+  taskOrderLabel,
+  taskRef,
+  titledTaskRef,
+} from './models/Task';
+export type {
+  AwaitingReason,
+  ConversationMessage,
+  DiscoveredModel,
+  LegacyPlanState,
+  PlanState,
+  ResearchLogEntry,
+  ResearchStep,
+  ResearchStepOutcome,
+  RunSettings,
+  RunnerId,
+  SkillLoad,
+  SkillLoadNotice,
+  Task,
+  TaskModelAssignment,
+  TaskStatus,
+  VerificationCheck,
+} from './models/Task';
 export * from './models/Session';
 export * from './models/Usage';
 export * from './models/TaskLog';
@@ -49,7 +80,7 @@ export { TaskOrchestrator, TaskControlError } from './services/TaskOrchestrator'
 export type { AutoMergeTrigger, OrchestratorObserver, TaskAttemptSnapshot, TaskOrchestratorDeps, TaskOrchestratorOptions } from './services/TaskOrchestrator';
 export { PlanStore } from './services/PlanStore';
 export { Planner } from './services/Planner';
-export type { PlanRequest, ModifyPlanRequest } from './services/Planner';
+export type { PlanRequest } from './services/Planner';
 export { ContextCollector } from './services/ContextCollector';
 export { discoverGeminiModels } from './services/ModelDiscovery';
 export type { ExecImpl } from './services/ModelDiscovery';
@@ -148,15 +179,8 @@ export { VerdictEngine } from './services/VerdictEngine';
 export type { VerdictListener, CheckpointListener } from './services/VerdictEngine';
 export * from './interfaces/TaskOutputSource';
 export { BufferedTaskOutputSource } from './services/BufferedTaskOutputSource';
-export * from './services/ModeResolver';
-export * from './services/ModelAllowlistResolver';
-export * from './services/TaskRetarget';
-export * from './services/PlanPrompts';
-export * from './services/JsonExtractor';
-export * from './services/PartialPlanParser';
-export * from './services/PlanValidator';
-export * from './services/PlanRepair';
-export * from './services/promptAugment';
+export { autonomyLevelLabel, parseAutonomyLevel, runnerModesFrom } from './services/ModeResolver';
+export type { RunnerModeInfo } from './services/ModeResolver';
 export { AbstractRunnerSession, AbstractRunner } from './services/AbstractRunner';
 export type { RunnerSpawnOptions } from './services/AbstractRunner';
 export { StructuredRunner, StructuredSession } from './services/StructuredRunner';

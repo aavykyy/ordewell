@@ -678,16 +678,16 @@ function osc52(text: string): string {
   return `\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x07`;
 }
 
-/**
- * A released selection, onto the clipboard. Synchronous and never throwing: a
- * missing `xclip`, or one that cannot open the display, falls through to the
- * terminal route rather than reporting a copy that did not happen.
- */
 async function saveMaxParallel(deps: EffectDeps, limit: number): Promise<void> {
   await deps.api.updateSettings({ env: { ORDEWELL_MAX_PARALLEL: String(limit) } });
   deps.setEnvVar('ORDEWELL_MAX_PARALLEL', String(limit));
 }
 
+/**
+ * A released selection, onto the clipboard. Synchronous and never throwing: a
+ * missing `xclip`, or one that cannot open the display, falls through to the
+ * terminal route rather than reporting a copy that did not happen.
+ */
 function copySelection(deps: EffectDeps, text: string): void {
   if (!text) return;
   const lines = text.split('\n').length;

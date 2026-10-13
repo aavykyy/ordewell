@@ -427,18 +427,6 @@ export interface PendingPlanTurn {
   forced?: true;
 }
 
-export interface PlanModificationWarnings {
-  deletedCompleted: string[];
-  changedCompleted: string[];
-  deletedInProgress: string[];
-  modifiedInProgress: string[];
-  brokenDependencies: string[];
-}
-
-export function emptyWarnings(): PlanModificationWarnings {
-  return { deletedCompleted: [], changedCompleted: [], deletedInProgress: [], modifiedInProgress: [], brokenDependencies: [] };
-}
-
 /**
  * The run's own copy of the user's run settings (ADR-0030): taken when the
  * user starts it, changed at once by a change made in this session, and
@@ -629,61 +617,6 @@ export function migratePlanState(raw: unknown): PlanState {
   };
 }
 
-export function migrateLegacyPlan(legacy: LegacyPlanState): PlanState {
-  const messages: Message[] = [];
-
-  if (legacy.researchLog) {
-    messages.push(...legacy.researchLog.map(logEntryToMessage));
-  }
-
-  if (legacy.queuedMessages) {
-    for (const qm of legacy.queuedMessages) {
-      messages.push({
-        id: qm.id,
-        role: 'system',
-        content: qm.text,
-        timestamp: new Date(qm.timestamp).getTime(),
-      });
-    }
-  }
-
-  const isPlanning = legacy.status === 'draft' || legacy.status === 'approved' || legacy.status === 'rejected';
-
-  if (isPlanning) {
-    return {
-      phase: 'planning',
-      history: messages,
-      message: 'Plan generation',
-      pendingTasks: legacy.tasks.filter((t) => t.status === 'pending' || t.status === ('draft' as never)),
-    };
-  }
-
-  const nonCompletedTasks = legacy.tasks.filter(
-    (t) => t.status !== 'completed' && t.status !== 'failed' && t.status !== 'blocked'
-  );
-
-  const completedSnapshot: TaskSnapshot[] = legacy.tasks
-    .filter((t) => t.status === 'completed' || t.status === 'failed')
-    .map((t) => ({
-      ...t,
-      completedAt: new Date(legacy.lastUpdated).getTime(),
-      verdict: t.verdict,
-      retryCount: 0,
-      finalized: true,
-    }));
-
-  return {
-    phase: 'executing',
-    history: messages,
-    message: 'Plan migration',
-    executionLog: completedSnapshot,
-    pendingTasks: nonCompletedTasks,
-    goal: 'Plan migration',
-    runners: legacy.runners,
-    status: legacy.status,
-  };
-}
-
 export { taskOrderLabel, taskRef, titledTaskRef, resolveTaskRef } from '../services/TaskRefs';
 
 export function createTask(overrides: Partial<Task> = {}): Task {
@@ -800,28 +733,6 @@ export function flattenTasksWithParents(tasks: readonly Task[]): TaskWithParent[
   };
   for (const t of tasks) walk(t, null);
   return rows;
-}
-
-export function migrateTask(task: Record<string, unknown>): Task {
-  if (!task.assignedModel) {
-    task.assignedModel = undefined;
-  }
-  if (!task.assignedRunner) {
-    task.assignedRunner = 'claude-code';
-  }
-  if (task.verdict && task.verification) {
-    delete task.verification;
-  }
-  if (!task.autonomy) {
-    task.autonomy = undefined;
-  }
-  if (!task.sliceType) {
-    task.sliceType = undefined;
-  }
-  if (!task.userStoriesCovered) {
-    task.userStoriesCovered = undefined;
-  }
-  return task as unknown as Task;
 }
 
 export function addTaskToPlan(tasks: readonly Task[], partial: Partial<Task>): Task[] {
@@ -953,59 +864,4 @@ export function plannerTaskView(task: Task): PlannerTaskView {
   const view: Record<string, unknown> = { ...task, subtasks: (task.subtasks ?? []).map(plannerTaskView) };
   for (const key of EXECUTION_ONLY) delete view[key];
   return view as PlannerTaskView;
-}
-
-export function validateModifiedPlan(original: Task[], modified: Task[]): PlanModificationWarnings {
-  const allOriginal = flattenTasks(original);
-  const allModified = flattenTasks(modified);
-  const warnings = emptyWarnings();
-  const originalMap = new Map(allOriginal.map((t) => [t.id, t]));
-  const modifiedIds = new Set(allModified.map((t) => t.id));
-
-  for (const ot of originalMap.values()) {
-    if (ot.status === 'completed' && !modifiedIds.has(ot.id)) {
-      warnings.deletedCompleted.push(ot.title);
-    } else if (ot.status === 'in_progress' && !modifiedIds.has(ot.id)) {
-      warnings.deletedInProgress.push(ot.title);
-    }
-  }
-
-  for (const mt of allModified) {
-    const orig = originalMap.get(mt.id);
-    if (orig) {
-      if (orig.status === 'completed' && mt.status !== 'completed') {
-        warnings.changedCompleted.push(orig.title);
-      }
-      if (orig.status === 'in_progress' && (mt.status !== 'in_progress' || mt.prompt !== orig.prompt)) {
-        warnings.modifiedInProgress.push(orig.title);
-      }
-      if (orig.status === 'failed' && mt.status === 'pending') {
-        for (const dt of allModified) {
-          if (dt.dependencies.includes(mt.id) && dt.status === 'blocked') {
-            dt.status = 'pending';
-          }
-        }
-      }
-    }
-  }
-
-  for (const t of allModified) {
-    for (const depId of t.dependencies) {
-      if (!modifiedIds.has(depId)) {
-        warnings.brokenDependencies.push(`${t.title} → ${depId}`);
-      }
-    }
-  }
-
-  return warnings;
-}
-
-export function warningsText(w: PlanModificationWarnings): string | null {
-  const lines: string[] = [];
-  if (w.deletedCompleted.length) lines.push(`Completed tasks deleted: ${w.deletedCompleted.join(', ')}`);
-  if (w.changedCompleted.length) lines.push(`Completed tasks modified: ${w.changedCompleted.join(', ')}`);
-  if (w.deletedInProgress.length) lines.push(`In-progress tasks deleted: ${w.deletedInProgress.join(', ')}`);
-  if (w.modifiedInProgress.length) lines.push(`In-progress tasks modified: ${w.modifiedInProgress.join(', ')}`);
-  if (w.brokenDependencies.length) lines.push(`Broken dependencies: ${w.brokenDependencies.join(', ')}`);
-  return lines.length > 0 ? lines.join('\n') : null;
 }

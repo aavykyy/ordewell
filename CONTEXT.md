@@ -13,8 +13,8 @@ This file is the vocabulary the rest of the documentation is written in (see
 
 **PlanStore** — the deep module owning all plan-shaped state: the task tree
 (`planTasks`), the flattened index (`allTasks`, `taskMap`), and `planRunners`.
-Owns structural CRUD (`add`/`remove`/`update`/`merge`/
-`split`), status mutations (`markCompleted`/`markFailed`/
+Owns structural CRUD (`add`/`remove`/
+`update`), status mutations (`markCompleted`/`markFailed`/
 `markInProgress`/`retry`), the named run-preparation op (`resetForRun` — flip
 AI tasks to approved, preserving completed ones unless the plan was freshly
 generated), runner-set validation, and the `rebuild` internal seam. Completed

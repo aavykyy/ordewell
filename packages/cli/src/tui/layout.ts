@@ -26,8 +26,8 @@ import { ALL_PROVIDERS, approvalLabel, awaitingLabel, hasHiddenDetail, resumeLab
  * imports only the bounds. Nothing here touches state or emits anything.
  */
 
-/** status, input, footer — everything that is not the body. */
-const CHROME_ROWS = 3;
+/** The status row — the one row of chrome the composer and footer do not account for. */
+const CHROME_ROWS = 1;
 
 // ── Chrome extents ───────────────────────────────────────────────────────────
 
@@ -237,7 +237,7 @@ export function packHints(hints: string[], cols: number): string[] {
  */
 export function bodyRows(state: TuiState): number {
   const footer = packHints(footerHints(state), state.cols).length;
-  return Math.max(0, state.rows - CHROME_ROWS - composerRows(state) - footer + 2);
+  return Math.max(0, state.rows - CHROME_ROWS - composerRows(state) - footer);
 }
 
 // ── Chat body ────────────────────────────────────────────────────────────────

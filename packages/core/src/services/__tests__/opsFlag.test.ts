@@ -179,37 +179,6 @@ describe('the ops flag, through each way a task is made or edited (ADR-0020)', (
 });
 
 describe('the ops flag of a task merged or split from others (ADR-0020)', () => {
-  describe('in the store', () => {
-    it('merges into an ops task only when both were ops', () => {
-      const store = new PlanStore();
-      store.load(plan(), ['claude-code']);
-
-      expect(store.merge('o3', 'o4').ops).toBe(true);
-      expect(store.merge('c1', store.allTasks.find((t) => t.ops)!.id)).not.toHaveProperty('ops');
-    });
-
-    it('merges an ops task with a manual task into a manual task', () => {
-      const store = new PlanStore();
-      store.load([...plan(), createTask({ id: 'u5', order: 5, title: 'Check', type: 'user' })], ['claude-code']);
-
-      const merged = store.merge('o3', 'u5');
-
-      expect(merged.type).toBe('user');
-      expect(merged).not.toHaveProperty('ops');
-    });
-
-    it('splits into parts that run where the task ran, unless a part says otherwise', () => {
-      const store = new PlanStore();
-      store.load(plan(), ['claude-code']);
-
-      const fromOps = store.split('o3', [{ title: 'Push' }, { title: 'Watch' }, { title: 'Bump', ops: false }]);
-      const fromChange = store.split('c1', [{ title: 'Half' }, { title: 'Release', ops: true }]);
-
-      expect(fromOps.map((t) => t.ops)).toEqual([true, true, undefined]);
-      expect(fromChange.map((t) => t.ops)).toEqual([undefined, true]);
-    });
-  });
-
   describe('in a planner edit', () => {
     it('merges into an ops task only when every task was ops, unless the merge says', () => {
       expect(byTitle(applied([{ op: 'merge', taskIds: ['o3', 'o4'], merged: { title: 'M' } }]), 'M').ops).toBe(true);

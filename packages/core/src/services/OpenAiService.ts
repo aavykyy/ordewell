@@ -14,7 +14,6 @@ import { IWebFetcher } from '../interfaces/IWebFetcher';
 import {
   buildResearchPrompt,
   buildPlanWithResults,
-  buildModifyPlanPrompt,
   buildResearchToolsPrompt,
   buildConversationSystemPrompt,
   buildSubagentSystemPrompt,
@@ -29,7 +28,6 @@ import { toOpenAiTools, toOpenAiSubagentTools } from './researchTools';
 import { getProviderMeta, stripModelPrefix } from './ProviderRegistry';
 import { compactToolMessages, type CompactableMessage } from './contextCompaction';
 import type { UsageRecord } from '../models/Usage';
-import type { LegacyPlanState } from '../models/Task';
 
 /** The subset of an OpenAI-compatible `usage` block this service reads. OpenRouter
  *  adds `cost` (credits, USD) and `prompt_tokens_details.cached_tokens`. */
@@ -414,39 +412,6 @@ export class OpenAiService extends BaseAiService implements IAiService {
       runnerModes,
       autonomousDefault,
     );
-  }
-
-  async modifyPlan(
-    existingPlan: LegacyPlanState,
-    userRequest: string,
-    modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>>,
-    onProgress?: (progress: ResearchProgress) => void,
-    fs?: IFileSystem,
-    _fetcher?: IWebFetcher,
-    runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-    modes: PlannerModes = DEFAULT_PLANNER_MODES,
-    signal?: AbortSignal,
-  ): Promise<{ tasks: Task[] }> {
-    this.ensureInit();
-    const { autonomousDefault } = modes;
-    let aiflowContext: string | undefined;
-    if (fs) {
-      const collected = await new ContextCollector(fs).collect(existingPlan.runners[0] ?? 'claude-code');
-      if (collected.aiflowContext) aiflowContext = collected.aiflowContext;
-    }
-    const prompt = buildModifyPlanPrompt(existingPlan, userRequest, modelsByRunner, aiflowContext, runnerModes);
-    try {
-      const tasks = await generatePlanWithRepair((repairHint) =>
-        this.streamPlanText(prompt, repairHint, (token) => onProgress?.({ type: 'plan_token', planToken: token }), undefined, signal),
-        existingPlan.runners,
-        2,
-        runnerModes,
-        autonomousDefault,
-      );
-      return { tasks };
-    } catch (err) {
-      throw new Error(`Plan modification failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
   }
 
 }

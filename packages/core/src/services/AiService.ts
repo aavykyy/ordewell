@@ -3,7 +3,6 @@ import { IConfig } from '../interfaces/IConfig';
 import { IFileSystem } from '../interfaces/IFileSystem';
 import { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { IApproval } from '../interfaces/IApproval';
-import type { LegacyPlanState } from '../models/Task';
 import type { RunnerModeInfo } from './ModeResolver';
 import { GeminiService } from './GeminiService';
 import { OpenAiService } from './OpenAiService';
@@ -188,18 +187,6 @@ export interface IAiService {
     modes?: PlannerModes,
     signal?: AbortSignal,
   ): Promise<Task[]>;
-
-  modifyPlan(
-    existingPlan: LegacyPlanState,
-    userRequest: string,
-    modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>>,
-    onProgress?: (progress: ResearchProgress) => void,
-    fs?: IFileSystem,
-    fetcher?: IWebFetcher,
-    runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-    modes?: PlannerModes,
-    signal?: AbortSignal,
-  ): Promise<{ tasks: Task[] }>;
 
   /**
    * Release everything this service holds: the conversation, any in-flight
