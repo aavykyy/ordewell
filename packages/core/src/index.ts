@@ -3,6 +3,7 @@ export {
   createEmptyPlan,
   createTask,
   flattenTasks,
+  rejoinPlanTree,
   flattenTasksWithParents,
   isAwaitingReason,
   isUserMessage,

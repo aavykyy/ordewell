@@ -724,6 +724,31 @@ export function flattenTasks(tasks: readonly Task[]): Task[] {
 }
 
 /**
+ * A phase-tagged plan rejoined into its tree. The execution log is flat — a
+ * finished subtask is logged on its own as well as inside its parent — and in
+ * the order tasks finished, so read as a list it puts subtasks at the top level
+ * under orders that clash with real top-level tasks. A task's own entry is the
+ * latest word on it: its parent's copy was taken when the parent last changed.
+ */
+export function rejoinPlanTree<T extends { id: string; order: number; subtasks?: T[] }>(pending: readonly T[], log: readonly T[]): T[] {
+  const latest = new Map<string, T>();
+  for (const task of [...pending, ...log]) latest.set(task.id, task);
+  const nested = new Set<string>();
+  const markNested = (task: T): void => {
+    for (const sub of task.subtasks ?? []) {
+      nested.add(sub.id);
+      markNested(sub);
+    }
+  };
+  for (const task of latest.values()) markNested(task);
+  const rebuild = (task: T): T => {
+    const own = latest.get(task.id) ?? task;
+    return own.subtasks?.length ? { ...own, subtasks: own.subtasks.map(rebuild) } : own;
+  };
+  return [...latest.values()].filter((task) => !nested.has(task.id)).map(rebuild).sort((a, b) => a.order - b.order);
+}
+
+/**
  * A flattened task with the parent it hangs under, null for a top-level task,
  * and the path label and reference (`#2.1.3`) `TaskRefs` renders for it.
  */

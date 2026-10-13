@@ -1,10 +1,10 @@
-import { resolveTaskRef } from '@ordewell/core';
+import { rejoinPlanTree, resolveTaskRef } from '@ordewell/core';
 
-/** Every task in a plan, finished ones first, regardless of plan shape. */
+/** The plan tree, whatever shape the plan arrived in: a saved one keeps finished tasks in a flat execution log. */
 export function allTasksOf(plan: Record<string, unknown>): Array<import("@ordewell/core").Task> {
   const tasks = (plan?.pendingTasks || plan?.tasks || []) as Array<import("@ordewell/core").Task>;
   const executionLog = (plan?.executionLog || []) as Array<import("@ordewell/core").Task>;
-  return [...executionLog, ...tasks];
+  return rejoinPlanTree(tasks, executionLog);
 }
 
 /** Resolve a user-supplied identifier — a task reference (see `resolveTaskRef`) or a unique ID prefix. */

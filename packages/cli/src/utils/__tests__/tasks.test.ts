@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createTask, taskOrderLabel } from '@ordewell/core';
-import { resolveTaskId } from '../tasks';
+import { allTasksOf, resolveTaskId } from '../tasks';
 
 function planWith(tasks: ReturnType<typeof createTask>[]) {
   return { pendingTasks: tasks, executionLog: [] };
@@ -55,4 +55,34 @@ describe('resolveTaskId', () => {
     expect(label).toBe('2.1');
     expect(resolveTaskId(plan, label)).toBe('child-1');
   });
+
+  // The execution log is flat: a finished subtask is logged on its own as
+  // well as inside its parent, in the order tasks finished.
+  it('never resolves a top-level order to a subtask the execution log holds on its own', () => {
+    const fn = createTask({ id: 'mul-fn', order: 1, status: 'completed' });
+    const test = createTask({ id: 'mul-test', order: 2, status: 'completed', dependencies: ['mul-fn'] });
+    const parent = createTask({ id: 'mul', order: 1, status: 'completed', subtasks: [fn, test] });
+    const readme = createTask({ id: 'readme', order: 2, status: 'completed' });
+    const plan = { pendingTasks: [createTask({ id: 'status', order: 3 })], executionLog: [parent, fn, test, readme] };
+
+    expect(resolveTaskId(plan, '2')).toBe('readme');
+    expect(resolveTaskId(plan, '1.2')).toBe('mul-test');
+  });
 });
+
+describe('allTasksOf', () => {
+  it('is the plan tree: each task once, at its own depth, in plan order', () => {
+    const fn = createTask({ id: 'mul-fn', order: 1, status: 'completed' });
+    const test = createTask({ id: 'mul-test', order: 2, status: 'completed' });
+    const staleParent = createTask({ id: 'mul', order: 1, status: 'completed', subtasks: [fn, { ...test, status: 'pending' }] });
+    const readme = createTask({ id: 'readme', order: 2, status: 'completed' });
+    const plan = { pendingTasks: [createTask({ id: 'status', order: 3 })], executionLog: [staleParent, fn, readme, test] };
+
+    const tree = allTasksOf(plan);
+
+    expect(tree.map((t) => t.id)).toEqual(['mul', 'readme', 'status']);
+    // The subtask's own entry is the later word on it.
+    expect(tree[0].subtasks?.map((t) => [t.id, t.status])).toEqual([['mul-fn', 'completed'], ['mul-test', 'completed']]);
+  });
+});
+

@@ -146,6 +146,23 @@ describe('reduceRun', () => {
       expect(view.tasks).toEqual([{ ...planned('t1', 1, { status: 'completed' }), subtasks: [] }, { ...planned('t2', 2), subtasks: [] }]);
       expect(view.runSettings).toEqual({ mergeAtGatesAutomatically: true });
     });
+
+    // The log is flat: a finished subtask is logged on its own as well as inside its parent.
+    it('keeps a finished subtask under its parent, never beside the top-level task with its order', () => {
+      const logged = (task: SurfaceTask) => ({ ...task, completedAt: 1, retryCount: 0, finalized: true });
+      const sub = surfaced('t1.2', 2, { status: 'completed' });
+      const view = reduceRun(EMPTY_RUN, {
+        type: 'plan_snapshot',
+        plan: {
+          phase: 'executing', history: [], message: '', goal: 'g', runners: ['claude-code'], status: 'running',
+          pendingTasks: [surfaced('t3', 3)],
+          executionLog: [logged(surfaced('t1', 1, { status: 'completed', subtasks: [surfaced('t1.2', 2)] })), logged(sub), logged(surfaced('t2', 2, { status: 'completed' }))],
+        },
+      });
+
+      expect(view.tasks.map((t) => t.id)).toEqual(['t1', 't2', 't3']);
+      expect(view.tasks[0].subtasks.map((t) => [t.id, t.status])).toEqual([['t1.2', 'completed']]);
+    });
   });
 
   describe('a plan refresh', () => {
