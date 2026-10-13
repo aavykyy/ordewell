@@ -242,6 +242,11 @@ describe('the row view, every status against every annotation', () => {
     expect(taskRowView(subject({ id: 's2', order: 2, dependencies: ['t1'] }), { parent: { order: 2 }, tasks: tree }).dependencies).toEqual(['#1']);
   });
 
+  it('shows a dependency by its id when there is no plan tree to label it against', () => {
+    expect(taskRowView(subject({ dependencies: ['t1'] })).dependencies).toEqual(['t1']);
+    expect(taskRowView(subject({ dependencies: ['t1'] }), { tasks: [] }).dependencies).toEqual(['t1']);
+  });
+
   it('marks a quiet task as still running', () => {
     expect(taskRowView(subject({ status: 'in_progress', idleSince: 'x' }))).toMatchObject({ status: 'quiet', running: true });
   });
