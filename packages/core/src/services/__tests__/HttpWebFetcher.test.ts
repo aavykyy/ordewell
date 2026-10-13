@@ -411,7 +411,7 @@ describe('HttpWebFetcher cross-origin redirects', () => {
       : response('<p>elsewhere</p>')));
   }
 
-  it('asks about the new origin in Guarded, and stops when it is declined', async () => {
+  it('asks about the new origin when the mode asks, and stops when it is declined', async () => {
     const request = vi.fn(async (req: ApprovalRequest) => req.scope === 'https://docs.example.com/*');
     const fetchImpl = redirecting('https://collect.example.net/page');
     const fetcher = makeFetcher({ approval: { request }, fetchImpl });
@@ -470,7 +470,7 @@ describe('HttpWebFetcher cross-origin redirects', () => {
 
   it('lets a research subagent follow only to an origin already standing', async () => {
     const approval = new ApprovalPolicy({
-      mode: (kind) => effectiveApprovalMode('auto', false, kind),
+      mode: (kind) => effectiveApprovalMode('ask', false, kind),
       preApproved: ['https://docs.example.com/*'],
       ask: async () => true,
     });

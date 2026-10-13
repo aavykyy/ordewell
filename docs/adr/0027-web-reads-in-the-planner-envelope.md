@@ -55,8 +55,9 @@ both could prompt and a subagent never may (ADR-0008, T6).
 **Every planner web read, a fetch or a search on any runner, is decided by one
 Ordewell web-read policy. The bytes travel the cheapest path that is still
 trustworthy: provider-side search and Claude's `WebFetch` stay native, and
-Ordewell's own `fetch` and `web_search` carry the rest.** Full allows web
-reads without asking; nothing else in Full changes.
+Ordewell's own `fetch` and `web_search` carry the rest.** Under `auto`, Full
+and Guarded allow web reads without asking; nothing else in either level
+changes. An explicit `ask` still asks.
 
 ### Decide centrally, carry natively
 
@@ -85,7 +86,8 @@ reads without asking; nothing else in Full changes.
   the policy cannot decide it call by call. It is decided once per planner
   spawn, before the planner's token is issued, so the thread's search and
   the token agree: on where the policy would allow a search through OpenAI
-  without asking — Full, `allow`, or a `web_search:openai` allowlist entry,
+  without asking — `auto` at either level, `allow`, or a `web_search:openai`
+  allowlist entry,
   and never past a `!web_search:*` exclusion or a zero budget — off
   otherwise, and then the planner searches through Ordewell's `web_search`,
   which can ask. The decision is asked again before every turn; when it
@@ -106,8 +108,8 @@ reads without asking; nothing else in Full changes.
   (ADR-0026), so it fetches through Ordewell's `fetch`.
 - **OpenCode.** `webfetch` is denied: OpenCode follows redirects itself, and
   Ordewell would vet only the first URL. `websearch` and `codesearch` stay
-  native and ask, so the policy decides each as a search: once per session
-  in Guarded, without asking in Full, with the secret check and the budget
+  native and ask, so the policy decides each as a search: without asking
+  under `auto`, once per session under `ask`, with the secret check and the budget
   applied to the query. They send it to a third party — Exa in 1.x, and in
   2.x the search provider chosen in OpenCode, Exa unless another was picked
   — and the approval names that party. They stay native because a
@@ -142,7 +144,7 @@ reads without asking; nothing else in Full changes.
 
 | approval mode | fetch | search |
 | --- | --- | --- |
-| `auto`, Guarded | asks once per origin | asks once per session per provider |
+| `auto`, Guarded | allowed without asking | allowed without asking |
 | `auto`, Full | allowed without asking | allowed without asking |
 | `ask` | asks once per origin | asks once per session per provider |
 | `allowlist` | only an origin the allowlist names; otherwise refused | only a provider the allowlist names; otherwise refused |
@@ -162,13 +164,21 @@ reads without asking; nothing else in Full changes.
   `!http://*` together refuse every web read; a web-read budget of 0 does
   the same. The planner allowlist setting and the CLI help say so.
 - **The allowlist still applies in every mode,** so a scope pattern
-  (`https://docs.example.com/*`) lets a Guarded fetch run without asking.
+  (`https://docs.example.com/*`) lets a fetch run without asking under `ask`.
 - **The policy reads the configured setting, not only the effective mode.**
   `effectiveApprovalMode` maps Full's `auto` and an explicit `allowlist` to the
   same `deny`; the web-read policy has to tell them apart, because only the
   first allows web reads.
 - **This narrowly revisits "Make Full autonomy `allow`"**, which ADR-0026
-  rejected, for web reads only. A web read changes nothing: it is a GET or a
+  rejected, for web reads only, and at both levels.
+
+  Guarded asked once per origin and once per session per provider until
+  2026-10-13. That prompt was the one check that needed a person, and it
+  checked the least: it showed an origin, not what the URL carried, and was
+  granted once per origin, so every read after it went unseen anyway. The
+  guards below run on every read, and the tasks the same session runs read
+  the web natively, without the planner's checks. A user who wants to see
+  each new origin sets `ask`. A web read changes nothing: it is a GET or a
   HEAD sent by Ordewell, with nothing of the user's attached. The Full tasks
   the planner plans already have the network, so refusing the planner the same
   reads protects nothing they cannot reach. And a planner that cannot read
@@ -178,8 +188,8 @@ reads without asking; nothing else in Full changes.
 
 ### Safety that does not depend on a person
 
-In Full nobody sees a web read before it happens, so what guards it has to
-hold without one:
+Under `auto` nobody sees a web read before it happens, at either level, so
+what guards it has to hold without one:
 
 - **A hardened SSRF guard, with the connection pinned to the vetted address.**
   The guard parses the address rather than matching strings: IPv4-mapped and
@@ -236,7 +246,7 @@ endpoint, reached through the same pinned transport as a fetch; the seam exists
 so a later backend is one class, not a refactor.
 
 - **The provider names itself to the policy.** The provider id flows into the
-  `search` decision, so Guarded's once-per-session approval names the backend
+  `search` decision, so `ask`'s once-per-session approval names the backend
   and says a third party receives the query.
 - **A backend that pushes back is backed off.** A 429 or 403, an HTTP 202
   (lite answers 202 only to serve its challenge), or a results-less page
@@ -248,14 +258,14 @@ so a later backend is one class, not a refactor.
   "recaptcha react" must not start a cooldown. Searches blocked together in
   one cooldown window count once. The cooldown is checked before the
   web-read policy, so a search that would only answer "temporarily
-  unavailable" neither prompts a Guarded user nor spends budget; it answers at
+  unavailable" neither prompts an `ask` user nor spends budget; it answers at
   once — no request goes out — telling the planner to fetch a documentation URL
   it already knows. A plain parse miss on a 200 with no challenge markup is
   not a block.
 - **A shared, short-lived cache of public responses.** Results and pages
   fetched without credentials, and not marked private by the response, are
   shared between planners for a short time. A cache hit still passes the
-  policy: a page cached for one session is not read by a Guarded session that
+  policy: a page cached for one session is not read by an `ask` session that
   has not been granted its origin, and an excluded origin is excluded from
   the cache too. A page is keyed by the URL asked for, so a body another
   origin answered through a redirect is never cached; neither is a truncated
@@ -269,8 +279,9 @@ and provider-native search for API planners are deferred to their own issue.
 Research subagents get `fetch` and `web_search`, and still never prompt
 (ADR-0008, T6):
 
-- **In Full,** without condition beyond the policy: nothing would prompt.
-- **In Guarded,** only an origin already granted in the session or covered by
+- **Under `auto`,** at either level, without condition beyond the policy:
+  nothing would prompt.
+- **Under `ask`,** only an origin already granted in the session or covered by
   the allowlist, and search only once the session has granted it. Anything
   that would ask is refused, with the message to report the gap in the
   digest.
@@ -362,9 +373,9 @@ filed as its own issue.
 
 - **One policy for every planner.** Whether a web read runs no longer depends
   on which CLI is planning; only how its bytes travel does.
-- **Full reads; it still does not act.** Web reads are the only thing Full
-  gains. Commands, MCP tools and paths keep ADR-0026's allowlist, and `curl`
-  stays refused.
+- **Reading is not acting.** Web reads are the only thing `auto` grants
+  unasked. In Full, commands, MCP tools and paths keep ADR-0026's allowlist
+  and `curl` stays refused; in Guarded, they still ask, `curl` included.
 - **The envelope bounds the planner, not the work.** It governs what the
   planner does while it researches. Effects belong in ops tasks
   (ADR-0020), which run in the session's mode and keep every native
@@ -375,7 +386,7 @@ filed as its own issue.
   through the web-read policy, the budget or `run_command`'s `curl`/`wget`
   rules. How an ops task is authorized beyond plan approval — the mandate,
   issue #23 — is deliberately out of scope here.
-- **Absent is denial (T5).** A Guarded web read with no approval channel, a
+- **Absent is denial (T5).** An `ask` web read with no approval channel, a
   dismissed card or a timeout is refused, as before.
 - **The secret check narrows, it does not close.** A Full planner that read
   an injected instruction can still put data in a URL, encoded past the check,
@@ -448,3 +459,8 @@ filed as its own issue.
 - 2026-10-11 — the Claude planner reads user settings only, so a
   repository's allow rules cannot skip the policy either
   ([ADR-0028](0028-planners-never-run-repository-config.md)).
+- 2026-10-13 — Guarded reads the web without asking under `auto`, as Full
+  does; the once-per-origin and once-per-session prompts move to an explicit
+  `ask`. Codex planners in Guarded get their native `cached` search. `curl`
+  and `wget` are unchanged: they are shell commands, and Guarded still asks
+  about them per origin.

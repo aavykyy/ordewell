@@ -1042,7 +1042,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
     it.each<[string, ApprovalModeSetting, boolean, string[], 'cached' | 'disabled']>([
       ['Full under auto', 'auto', true, [], 'cached'],
       ['an explicit allow', 'allow', false, [], 'cached'],
-      ['Guarded under auto', 'auto', false, [], 'disabled'],
+      ['Guarded under auto', 'auto', false, [], 'cached'],
       ['an explicit ask', 'ask', true, [], 'disabled'],
       ['an explicit allowlist, in Full', 'deny', true, [], 'disabled'],
       ['an explicit allowlist that names OpenAI search', 'deny', true, ['web_search:openai'], 'cached'],

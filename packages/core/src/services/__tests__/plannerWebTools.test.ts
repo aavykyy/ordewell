@@ -79,8 +79,19 @@ describe('the planner MCP tools fetch and web_search (ADR-0027)', () => {
     expect(transport).toHaveBeenCalledTimes(2);
   });
 
-  it('ask in Guarded, and read once granted', async () => {
-    const { client, ask } = await plannerClient({ answer: true });
+  it('read in Guarded without asking', async () => {
+    const { client, ask } = await plannerClient({});
+
+    const page = await client.callTool({ name: 'fetch', arguments: { url: 'https://docs.example.com/migrate' } });
+    const found = await client.callTool({ name: 'web_search', arguments: { query: 'hono routing' } });
+
+    expect(page.isError).toBe(false);
+    expect(found.isError).toBe(false);
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it('ask in ask mode, and read once granted', async () => {
+    const { client, ask } = await plannerClient({ setting: 'ask', answer: true });
 
     const page = await client.callTool({ name: 'fetch', arguments: { url: 'https://docs.example.com/migrate' } });
     const found = await client.callTool({ name: 'web_search', arguments: { query: 'hono routing' } });
@@ -90,8 +101,8 @@ describe('the planner MCP tools fetch and web_search (ADR-0027)', () => {
     expect(ask.mock.calls.map(([req]) => req.kind)).toEqual(['url_fetch', 'web_search']);
   });
 
-  it('are refused in Guarded with nobody to ask, and say why', async () => {
-    const { client, transport } = await plannerClient({});
+  it('are refused in ask mode with nobody to ask, and say why', async () => {
+    const { client, transport } = await plannerClient({ setting: 'ask' });
 
     const page = await client.callTool({ name: 'fetch', arguments: { url: 'https://docs.example.com/migrate' } });
     const found = await client.callTool({ name: 'web_search', arguments: { query: 'hono routing' } });
@@ -160,8 +171,14 @@ describe('a runner\'s own search, asked as kind search', () => {
     expect(ask).not.toHaveBeenCalled();
   });
 
-  it('asks in Guarded once per session, naming the third party that receives the query', async () => {
+  it('is allowed in Guarded without asking', async () => {
     const { ask, gate: g } = gate('auto', false, true);
+    expect(await decidePlannerPermission(websearch, {}, g)).toEqual({ decision: 'allow' });
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it('asks in ask mode once per session, naming the third party that receives the query', async () => {
+    const { ask, gate: g } = gate('ask', false, true);
     expect(await decidePlannerPermission(websearch, {}, g)).toEqual({ decision: 'allow' });
     expect(await decidePlannerPermission(openCodePlannerAsk('codesearch', { metadata: { query: 'zod refine' } }, []), {}, g)).toEqual({ decision: 'allow' });
 

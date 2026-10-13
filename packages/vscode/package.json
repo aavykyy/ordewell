@@ -272,7 +272,7 @@
           "type": "string",
           "enum": ["auto", "ask", "allowlist", "allow"],
           "enumDescriptions": [
-            "Follow the autonomy level: Guarded asks you, Full runs only the allowlist and web reads, and asks nobody.",
+            "Follow the autonomy level: web reads run at both levels; otherwise Guarded asks you, and Full runs only the allowlist and asks nobody.",
             "Ask you before any command, MCP tool, fetch or outside read the allowlist does not cover.",
             "Run only what the allowlist covers and refuse the rest without asking.",
             "Run everything except file writes, which are always refused."

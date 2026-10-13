@@ -137,8 +137,8 @@ export const RESEARCH_TOOLS: ResearchToolSpec[] = [
  * The toolset a research subagent gets: the same read-only exploration tools
  * the planner has, minus the spawn tool itself (no recursion). `fetch` and
  * `web_search` are included, but a subagent reaches them through a
- * non-prompting fetcher (ADR-0027, ADR-0008 T6): in Full they run as the
- * planner's do, and in Guarded only an origin or search already granted or
+ * non-prompting fetcher (ADR-0027, ADR-0008 T6): under `auto` they run as the
+ * planner's do, and under `ask` only an origin or search already granted or
  * allowlisted succeeds — anything that would ask is refused, never prompted.
  * `bash` stays gated the same way at the capability boundary.
  */

@@ -34,6 +34,9 @@
 
 ### Changed
 
+- **Guarded planners read the web without asking**, as Full does, behind the
+  same guards. Set `ordewell.plannerApprovals` to `ask` to approve each new
+  site and search provider.
 - **Run settings are saved on your machine, not on the plan**, and apply at
   once to the chat you change them in. The supervisor starts at Watch.
 - **A message sent during a run is answered at once** instead of waiting for

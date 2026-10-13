@@ -95,8 +95,26 @@ describe('WebReadPolicy in Full', () => {
 });
 
 describe('WebReadPolicy in Guarded', () => {
+  it('reads without asking under auto, as Full does', async () => {
+    const { reads, ask, decisions } = setup();
+
+    expect((await reads.decide({ kind: 'fetch', url: 'https://docs.example.com/a' })).allowed).toBe(true);
+    expect((await reads.decide({ kind: 'search', query: 'tokio', provider: 'duckduckgo' })).allowed).toBe(true);
+
+    expect(ask).not.toHaveBeenCalled();
+    expect(decisions.map((d) => [d.granted, d.source])).toEqual([[true, 'mode'], [true, 'mode']]);
+  });
+
+  it('lets an exclusion win', async () => {
+    const { reads } = setup({ allow: ['!https://*.internal.example/*'] });
+
+    expect((await reads.decide({ kind: 'fetch', url: 'https://wiki.internal.example/page' })).allowed).toBe(false);
+  });
+});
+
+describe('WebReadPolicy in ask mode', () => {
   it('asks once per origin', async () => {
-    const { reads, ask } = setup();
+    const { reads, ask } = setup({ setting: 'ask' });
 
     expect((await reads.decide({ kind: 'fetch', url: 'https://docs.example.com/a' })).allowed).toBe(true);
     expect((await reads.decide({ kind: 'fetch', url: 'https://docs.example.com/b?page=2' })).allowed).toBe(true);
@@ -106,7 +124,7 @@ describe('WebReadPolicy in Guarded', () => {
   });
 
   it('asks once per session for search, scoped to the provider', async () => {
-    const { reads, ask } = setup();
+    const { reads, ask } = setup({ setting: 'ask' });
 
     expect((await reads.decide({ kind: 'search', query: 'tokio changelog', provider: 'duckduckgo' })).allowed).toBe(true);
     expect((await reads.decide({ kind: 'search', query: 'serde derive', provider: 'duckduckgo' })).allowed).toBe(true);
@@ -119,14 +137,14 @@ describe('WebReadPolicy in Guarded', () => {
   });
 
   it('lets an allowlisted origin run without asking', async () => {
-    const { reads, ask } = setup({ allow: ['https://docs.example.com/*'] });
+    const { reads, ask } = setup({ setting: 'ask', allow: ['https://docs.example.com/*'] });
 
     expect((await reads.decide({ kind: 'fetch', url: 'https://docs.example.com/a' })).allowed).toBe(true);
     expect(ask).not.toHaveBeenCalled();
   });
 
   it('refuses a search the user declined', async () => {
-    const { reads } = setup({ answer: false });
+    const { reads } = setup({ setting: 'ask', answer: false });
 
     const decision = await reads.decide({ kind: 'search', query: 'tokio', provider: 'duckduckgo' });
 
@@ -366,8 +384,8 @@ describe('WebReadPolicy record', () => {
         ? { kind, url: 'https://docs.example.com/' }
         : { kind, query: 'tokio', provider: 'duckduckgo' };
       const mode = setup({ setting: 'deny', policy: { budget: () => 1 } });
-      const remembered = setup({ answer: false, policy: { budget: () => 1 } });
-      const missing = setup({ policy: { budget: () => 1 } });
+      const remembered = setup({ setting: 'ask', answer: false, policy: { budget: () => 1 } });
+      const missing = setup({ setting: 'ask', policy: { budget: () => 1 } });
       await remembered.reads.decide(read);
       remembered.decisions.length = 0;
       remembered.ask.mockClear();
@@ -384,8 +402,8 @@ describe('WebReadPolicy record', () => {
 
   it('records subagent grants from the mode, allowlist and remembered approval', async () => {
     const full = setup({ autonomous: true });
-    const listed = setup({ allow: ['https://docs.example.com/*', 'web_search:duckduckgo'] });
-    const remembered = setup();
+    const listed = setup({ setting: 'ask', allow: ['https://docs.example.com/*', 'web_search:duckduckgo'] });
+    const remembered = setup({ setting: 'ask' });
     const reads = [
       { kind: 'fetch' as const, url: 'https://docs.example.com/' },
       { kind: 'search' as const, query: 'tokio', provider: 'duckduckgo' },
@@ -458,10 +476,10 @@ describe('WebReadPolicy.searchesUnasked', () => {
   it.each<[string, Setup, boolean]>([
     ['Full under auto', { autonomous: true }, true],
     ['an explicit allow', { setting: 'allow' }, true],
-    ['Guarded under auto', {}, false],
+    ['Guarded under auto', {}, true],
     ['an explicit ask', { setting: 'ask', autonomous: true }, false],
     ['an explicit allowlist, in Full', { setting: 'deny', autonomous: true }, false],
-    ['Guarded, with the provider on the allowlist', { allow: ['web_search:openai'] }, true],
+    ['an explicit ask, with the provider on the allowlist', { setting: 'ask', allow: ['web_search:openai'] }, true],
   ])('%s → %s', (_label, given, expected) => {
     const { reads, ask, decisions } = setup(given);
 
@@ -471,7 +489,7 @@ describe('WebReadPolicy.searchesUnasked', () => {
   });
 
   it('follows a session grant of the same provider, and no other', async () => {
-    const { reads } = setup();
+    const { reads } = setup({ setting: 'ask' });
     await reads.decide({ kind: 'search', query: 'tokio', provider: 'openai' });
 
     expect(reads.searchesUnasked('openai')).toBe(true);
@@ -479,7 +497,7 @@ describe('WebReadPolicy.searchesUnasked', () => {
   });
 
   it('names a provider by its label when it asks, and grants by its id', async () => {
-    const { reads, ask } = setup();
+    const { reads, ask } = setup({ setting: 'ask' });
 
     await reads.decide({ kind: 'search', query: 'hono', provider: 'opencode', providerLabel: 'OpenCode\'s web search (Exa)' });
 
@@ -515,7 +533,7 @@ describe('WebReadPolicy resolves a name last', () => {
   });
 
   it('never resolves a host the user declined', async () => {
-    const { reads, ask, resolveHost } = spied({ answer: false });
+    const { reads, ask, resolveHost } = spied({ setting: 'ask', answer: false });
 
     const decision = await reads.decide({ kind: 'fetch', url: 'https://leaked-data.attacker.example/' });
 
@@ -525,7 +543,7 @@ describe('WebReadPolicy resolves a name last', () => {
   });
 
   it('never resolves a host a research subagent may not fetch', async () => {
-    const { reads, resolveHost } = spied({});
+    const { reads, resolveHost } = spied({ setting: 'ask' });
 
     const decision = await reads.decide({ kind: 'fetch', url: 'https://leaked-data.attacker.example/' }, { prompting: false });
 
@@ -548,7 +566,7 @@ describe('WebReadPolicy resolves a name last', () => {
     for (const [given, source] of [
       [{ autonomous: true }, 'mode'],
       [{ allow: ['https://*.example.com/*'] }, 'pre-approved'],
-      [{}, 'remembered'],
+      [{ setting: 'ask' }, 'remembered'],
     ] satisfies [Setup, string][]) {
       let turn = 'grant';
       const resolveHost = vi.fn(async (_host: string) => [PUBLIC_IP]);

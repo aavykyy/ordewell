@@ -102,6 +102,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **Guarded planners read the web without asking.** Under the default `auto`
+  approval mode, fetches and searches run at both levels, still behind the
+  private-address guard, the secret check, `!` exclusions and the web-read
+  budget. Set the approval mode to `ask` to approve each new site and search
+  provider. `curl` and `wget` still ask per site in Guarded
+  ([ADR-0027](docs/adr/0027-web-reads-in-the-planner-envelope.md)).
 - **The terminal UI takes the logo's teal and your theme's background.** One
   accent, the logo's teal, marks the prompt, the planner, carets, headings and
   the logo's dot; yellow, green and red are left to mean a state. The welcome

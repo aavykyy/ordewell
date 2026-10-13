@@ -45,9 +45,9 @@ function makeFetcher({ setting = 'auto', autonomous = false, allow = [], answer 
 }
 
 describe('research subagent web reads', () => {
-  it('lets a Full subagent read as the planner would, without asking', async () => {
+  it.each([true, false])('lets a subagent read as the planner would under auto (Full: %s), without asking', async (autonomous) => {
     const fetchImpl = vi.fn().mockResolvedValue(response('<p>page</p>'));
-    const { fetcher, ask } = makeFetcher({ autonomous: true, fetchImpl });
+    const { fetcher, ask } = makeFetcher({ autonomous, fetchImpl });
 
     const result = await fetcher.forSubagent().fetch('https://docs.example.com/a');
 
@@ -55,9 +55,9 @@ describe('research subagent web reads', () => {
     expect(ask).not.toHaveBeenCalled();
   });
 
-  it('refuses a Guarded subagent an ungranted origin without asking, and names the digest', async () => {
+  it('refuses a subagent in ask mode an ungranted origin without asking, and names the digest', async () => {
     const fetchImpl = vi.fn();
-    const { fetcher, ask } = makeFetcher({ fetchImpl });
+    const { fetcher, ask } = makeFetcher({ setting: 'ask', fetchImpl });
 
     const result = await fetcher.forSubagent().fetch('https://docs.example.com/a');
 
@@ -67,9 +67,9 @@ describe('research subagent web reads', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('lets a Guarded subagent read an origin the session already granted', async () => {
+  it('lets a subagent in ask mode read an origin the session already granted', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(response('<p>page</p>'));
-    const { fetcher, ask } = makeFetcher({ fetchImpl });
+    const { fetcher, ask } = makeFetcher({ setting: 'ask', fetchImpl });
 
     // The planner reads the origin once, so the grant is standing.
     await fetcher.decide({ kind: 'fetch', url: 'https://docs.example.com/a' });
@@ -81,9 +81,9 @@ describe('research subagent web reads', () => {
     expect(ask).toHaveBeenCalledTimes(1); // the subagent never raised a prompt
   });
 
-  it('lets a Guarded subagent read an allowlisted origin without asking', async () => {
+  it('lets a subagent in ask mode read an allowlisted origin without asking', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(response('<p>page</p>'));
-    const { fetcher, ask } = makeFetcher({ allow: ['https://docs.example.com/*'], fetchImpl });
+    const { fetcher, ask } = makeFetcher({ setting: 'ask', allow: ['https://docs.example.com/*'], fetchImpl });
 
     const result = await fetcher.forSubagent().fetch('https://docs.example.com/a');
 
@@ -93,7 +93,7 @@ describe('research subagent web reads', () => {
 
   it('gates subagent search the same way: refused until the session grants it', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(response(RESULTS));
-    const { fetcher, ask } = makeFetcher({ fetchImpl });
+    const { fetcher, ask } = makeFetcher({ setting: 'ask', fetchImpl });
     const sub = fetcher.forSubagent();
 
     const denied = await sub.search!('hono');
