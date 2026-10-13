@@ -79,9 +79,11 @@ async function submitsThroughTools(provider: 'claude-code' | 'codex', model: str
 
   settings = { ...settings, enabledRunners: [provider, other] };
   await session.continueConversation(
-    `I just enabled ${other}. Skip the outline: submit the plan now, exactly two AFK ai tasks — `
+    `I just enabled ${other}. Show the outline for exactly two AFK ai tasks — `
     + `the script on ${other}, and the test on ${provider}, depending on the script.`,
   );
+  expect(session.planTasks).toEqual([]);
+  await session.continueConversation('I confirm that outline. Submit exactly those two AFK ai tasks now.');
 
   console.log('planner tool calls:', toolCalls.join(', '));
   console.log('committed:', JSON.stringify(session.planTasks.map((t) => [t.title, t.assignedRunner, t.assignedModel?.modelId, t.taskMode])));
