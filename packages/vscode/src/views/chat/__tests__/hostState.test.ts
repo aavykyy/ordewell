@@ -102,6 +102,18 @@ describe('reduceHost runView', () => {
 
     expect(reduceHost(again, msg({ type: 'runView', view: EMPTY_RUN })).checkpoint).toBeNull();
   });
+
+  it('forgets the answered question with the session, and re-opens a different one', () => {
+    const asked = reduceHost(INITIAL_HOST_STATE, msg({ type: 'runView', view: runWith([checkpointTask]) }));
+    const answered = reduceHost(asked, { type: 'checkpointAnswered' });
+    expect(answered.checkpoint).toBeNull();
+    expect(reduceHost(answered, msg({ type: 'runView', view: runWith([checkpointTask]) })).checkpoint).toBeNull();
+
+    expect(resetSession(answered, 'restore').answeredCheckpoint).toBeNull();
+
+    const different = reduceHost(answered, msg({ type: 'runView', view: runWith([{ ...checkpointTask, checkpoint: 'another review' }]) }));
+    expect(different.checkpoint?.summary).toBe('another review');
+  });
 });
 
 describe('reduceHost runView isolation', () => {

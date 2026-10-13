@@ -10,7 +10,7 @@ import type { ChatViewProvider, PlannerBackend } from '../providers/ChatViewProv
 import type { VendorModelOption } from '../plan/PlannerModelSwitch';
 import { configureModelAllowlist } from './configureModelAllowlist';
 import { confirmRisks } from './runSettings';
-import { SLASH_COMMAND_NAMES, slashHelp } from './slashCommands';
+import { isBuiltinSlashCommand, slashHelp } from './slashCommands';
 import { resolveAutonomousQuickPickItems, applyAutonomousChoice } from '../SlashAutonomous';
 import { runPlannerWizard } from './plannerWizard';
 
@@ -19,8 +19,7 @@ import { runPlannerWizard } from './plannerWizard';
 // Session's own /skill-name substitution gets to resolve it rather than it
 // being swallowed here as "Unknown command".
 export function isKnownSlashCommand(text: string): boolean {
-  const name = text.trim().slice(1).split(/\s+/)[0]?.toLowerCase();
-  return !!name && SLASH_COMMAND_NAMES.has(name);
+  return isBuiltinSlashCommand(text);
 }
 
 export interface SlashDeps {

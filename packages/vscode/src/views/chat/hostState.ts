@@ -54,6 +54,13 @@ export interface HostState {
   skills: { name: string; description: string; appliesTo?: 'planner' | 'task' }[];
   taskSkills: { name: string; description: string }[];
   checkpoint: { taskId: string; taskTitle: string; summary: string; pausedAt: number } | null;
+  /**
+   * The checkpoint the user answered, by task id and question. A run view that
+   * still carries the question — the status update clearing the task has not
+   * arrived, or another task's update landed first — must not re-open the
+   * panel; only a different question does.
+   */
+  answeredCheckpoint: { taskId: string; summary: string } | null;
   taskOutput: TaskOutputMap;
   /**
    * The run as the host folded every session event (#S8c): each task's plan
@@ -97,6 +104,7 @@ export const INITIAL_HOST_STATE: HostState = {
   skills: [],
   taskSkills: [],
   checkpoint: null,
+  answeredCheckpoint: null,
   taskOutput: {},
   run: EMPTY_RUN,
   dockExpanded: false,
@@ -123,7 +131,7 @@ export type HostAction =
   | { type: 'patchError'; error: string }
   | { type: 'patchReady'; ready: boolean }
   | { type: 'patchRunners'; runners: Updatable<RunnerId[]> }
-  | { type: 'patchCheckpoint'; checkpoint: HostState['checkpoint'] }
+  | { type: 'checkpointAnswered' }
   | { type: 'patchDockHeight'; height: number | undefined }
   | { type: 'patchDockExpanded'; expanded: Updatable<boolean> };
 
@@ -146,6 +154,7 @@ export function resetSession(state: HostState, kind: SessionResetKind): HostStat
     error: '',
     plan: null,
     checkpoint: null,
+    answeredCheckpoint: null,
     taskOutput: {},
     run: EMPTY_RUN,
     dockExpanded: nextDock(state.dockExpanded, 'session-reset'),
@@ -192,8 +201,16 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
     case 'patchRunners':
       return { ...state, runners: resolve(action.runners, state.runners) };
 
-    case 'patchCheckpoint':
-      return { ...state, checkpoint: action.checkpoint };
+    case 'checkpointAnswered':
+      // The question is answered here, before the run says so: remember it so
+      // the next run view still carrying it does not re-open the panel.
+      return {
+        ...state,
+        checkpoint: null,
+        answeredCheckpoint: state.checkpoint
+          ? { taskId: state.checkpoint.taskId, summary: state.checkpoint.summary }
+          : state.answeredCheckpoint,
+      };
 
     case 'patchDockHeight':
       return { ...state, dockHeight: action.height };
@@ -252,12 +269,17 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
     // webview that rejoins is re-told a checkpoint it never saw arrive.
     case 'runView': {
       const question = checkpointOf(action.view);
-      const checkpoint = question
+      // A question the user already answered must not re-open the panel while
+      // the run still carries it. A different question is a new ask, and clears
+      // the memory; so does a view with no question at all.
+      const answered = !!question && state.answeredCheckpoint?.taskId === question.taskId
+        && state.answeredCheckpoint.summary === question.summary;
+      const checkpoint = question && !answered
         ? state.checkpoint?.taskId === question.taskId
           ? { ...question, pausedAt: state.checkpoint.pausedAt }
           : { ...question, pausedAt: action.now }
         : null;
-      return { ...state, run: action.view, checkpoint };
+      return { ...state, run: action.view, checkpoint, answeredCheckpoint: answered ? state.answeredCheckpoint : null };
     }
 
     case 'setModels':
