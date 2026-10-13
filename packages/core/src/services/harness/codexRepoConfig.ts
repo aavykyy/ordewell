@@ -1,7 +1,7 @@
 import * as path from 'path';
 import { parseToml } from './toml';
 import {
-  isRecord, readText, repoLevels,
+  isRecord, readText, repoLevels, takesOrdewellsName,
   type InstructionFile, type ProjectMcpServer, type ProjectServers, type RepoConfigReader,
 } from './repoConfig';
 
@@ -19,6 +19,8 @@ function keysOf(value: unknown): string[] {
 function server(name: string, entry: unknown, source: string): ProjectMcpServer | string | null {
   if (!isRecord(entry)) return 'not a table';
   if (entry.enabled === false) return null;
+  const taken = takesOrdewellsName(name);
+  if (taken) return taken;
   if (typeof entry.url === 'string') {
     const names = [...keysOf(entry.http_headers), ...keysOf(entry.env_http_headers), ...(typeof entry.bearer_token_env_var === 'string' ? ['Authorization'] : [])];
     return { name, source, transport: 'remote', target: entry.url, names, definition: entry };

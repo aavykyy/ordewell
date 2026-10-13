@@ -28,6 +28,12 @@ export interface FakeAgentProcess extends ChildProcess {
   emitStderr(chunk: string): void;
   /** End the process, as a crash or a normal exit. */
   exit(code: number, signal?: string): void;
+  /**
+   * End the process while something it started still holds its stdout and
+   * stderr — an inherited pipe, a descendant setsid'd out of the group: Node
+   * reports 'exit', and the pipes neither end nor close.
+   */
+  exitHoldingPipes(code: number | null, signal?: string): void;
 }
 
 /**
@@ -115,6 +121,10 @@ function makeProcess(): FakeAgentProcess {
     emitStderr: { value: (chunk: string) => stderr.emit('data', Buffer.from(chunk)), writable: false },
     exit: {
       value: (code: number, signal?: string) => { killed = true; end(code, signal ?? null); },
+      writable: false,
+    },
+    exitHoldingPipes: {
+      value: (code: number | null, signal?: string) => { killed = true; proc.emit('exit', code, signal ?? null); },
       writable: false,
     },
   });

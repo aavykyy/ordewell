@@ -247,6 +247,52 @@ describe('a runner\'s last line', () => {
   });
 });
 
+describe('a runner whose exit leaves its pipes held', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  // A descendant holding the runner's stdout or stderr keeps the pipes open
+  // past the runner's own exit, so 'close' never comes. The turn still ends,
+  // a short grace after 'exit', with what had arrived.
+  it('still ends the turn, delivering the last line that arrived', async () => {
+    const spawned = fakeSpawn([]);
+    const adapter = new ClaudeCodeAdapter(deps(spawned));
+    await adapter.start(taskStart);
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (event) => events.push(event));
+    await Promise.resolve();
+
+    spawned.processes[0].emitStdout(JSON.stringify({ type: 'result', subtype: 'success', session_id: 's1', is_error: false, result: 'done' }));
+    spawned.processes[0].exitHoldingPipes(0);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await turn;
+
+    expect(events).toContainEqual({ type: 'turn_end' });
+    adapter.dispose();
+  });
+
+  it('reports the death of a runner mid-turn, and its exit to the session', async () => {
+    const spawned = fakeSpawn([]);
+    const adapter = new ClaudeCodeAdapter(deps(spawned));
+    await adapter.start(taskStart);
+    vi.useFakeTimers();
+    const exits: number[] = [];
+    adapter.onProcessExit((code) => exits.push(code));
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (event) => events.push(event));
+    await Promise.resolve();
+
+    spawned.processes[0].emitStderr('fatal: out of memory\n');
+    spawned.processes[0].exitHoldingPipes(3);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await turn;
+
+    expect(events).toContainEqual({ type: 'error', message: expect.stringMatching(/exited with code 3\.\n\nfatal: out of memory/) });
+    expect(exits).toEqual([3]);
+    adapter.dispose();
+  });
+});
+
 describe('a consumer that throws', () => {
   // The consumer is Ordewell, not the runner: its bug is not a bad protocol
   // line. Left alone it becomes an uncaught exception inside the stdout

@@ -26,6 +26,17 @@ function isNoSuchProcess(err: unknown): boolean {
   return typeof err === 'object' && err !== null && 'code' in err && err.code === 'ESRCH';
 }
 
+/**
+ * Whether `proc` has reported its own end. A process killed by a signal
+ * reports `exitCode` null and `signalCode` set, and is as gone as one that
+ * exited with a code. Only a reported value counts: an object that reports
+ * neither is treated as running — the cost of a redundant kill is nothing,
+ * the cost of skipping a live one is an orphaned agent.
+ */
+function hasExited(proc: ChildProcess): boolean {
+  return typeof proc.exitCode === 'number' || typeof proc.signalCode === 'string';
+}
+
 export interface KillTreeDeps {
   platform?: NodeJS.Platform;
   /** Runs `taskkill`. Injected so the Windows path is testable off Windows. */
@@ -74,19 +85,28 @@ export function spawnInOwnGroup(spawn: (detached: boolean) => ChildProcess, plat
   // teardown still have to reach. The entry is dropped only once the group is
   // empty — an id with no members left can be recycled, and is no longer ours
   // to signal.
-  proc.once('exit', () => { if (!groupHasMembers(pgid)) ownGroups.delete(pgid); });
+  proc.once('exit', () => { if (!groupHasMembers(pgid)) forgetGroup(proc, pgid); });
   hookHostTeardown();
   return proc;
 }
 
 /** Whether any process still answers to `pgid`, as `kill(2)` sees it. */
-function groupHasMembers(pgid: number): boolean {
+function groupHasMembers(pgid: number, killImpl: (pid: number, signal: 0) => void = (pid, signal) => { process.kill(pid, signal); }): boolean {
   try {
-    process.kill(-pgid, 0);
+    killImpl(-pgid, 0);
     return true;
   } catch (err) {
     return !isNoSuchProcess(err);
   }
+}
+
+/**
+ * An empty group's id is recyclable, so it is no longer ours to signal: from
+ * here on `proc` is an ordinary exited process to {@link killTree}.
+ */
+function forgetGroup(proc: ChildProcess, pgid: number): void {
+  if (ownGroups.get(pgid) === proc) ownGroups.delete(pgid);
+  groupLeaders.delete(proc);
 }
 
 /**
@@ -102,6 +122,7 @@ function hookHostTeardown(): void {
   const stopAll = () => {
     for (const [pgid, leader] of ownGroups) {
       if (stopping.has(leader)) continue;
+      if (hasExited(leader) && !groupHasMembers(pgid)) continue;
       try { process.kill(-pgid, 'SIGTERM'); } catch { /* already gone */ }
     }
     ownGroups.clear();
@@ -136,15 +157,10 @@ export function killTree(proc: ChildProcess | null, deps: KillTreeDeps = {}): vo
   if (!proc) return;
 
   const platform = deps.platform ?? process.platform;
-  // `typeof … === 'number'`, not `!== null`: only a numeric exit code is
-  // positive evidence the process is gone. A running child reports null, and an
-  // object that reports neither is treated as running — the cost of a redundant
-  // kill is nothing, the cost of skipping a live one is an orphaned agent.
-  //
   // A group leader is the exception: its group outlives it, so a crashed
   // runner's shells, dev servers and MCP servers are still there to stop even
   // though the runner is not. That case falls through to the group path below.
-  if (!groupLeaders.has(proc) && (proc.killed || typeof proc.exitCode === 'number')) return;
+  if (!groupLeaders.has(proc) && (proc.killed || hasExited(proc))) return;
 
   const setTimeoutImpl = deps.setTimeoutImpl ?? ((fn, ms) => setTimeout(fn, ms) as unknown as { unref?: () => void });
   const clearTimeoutImpl = deps.clearTimeoutImpl ?? ((h) => clearTimeout(h as NodeJS.Timeout));
@@ -169,12 +185,21 @@ export function killTree(proc: ChildProcess | null, deps: KillTreeDeps = {}): vo
 
   if (groupLeaders.has(proc) && typeof proc.pid === 'number') {
     if (stopping.has(proc)) return;
-    stopping.add(proc);
     const pgid = proc.pid;
+    const killImpl = deps.killImpl ?? ((pid: number, signal: NodeJS.Signals | 0) => { process.kill(pid, signal); });
+    // Never signal a group we can't vouch for. While the leader lives its pid
+    // holds the id; once it is gone, only a member still in the group does,
+    // and an empty group's id may already be a stranger's. So once the leader
+    // has exited, every signal is preceded by asking.
+    const vouched = () => !hasExited(proc) || groupHasMembers(pgid, killImpl);
+    if (!vouched()) {
+      forgetGroup(proc, pgid);
+      return;
+    }
+    stopping.add(proc);
     // Taken over here, so the host's teardown and this path do not both signal
     // it (from here on `stopping`, not `ownGroups`, is what says so).
     ownGroups.delete(pgid);
-    const killImpl = deps.killImpl ?? ((pid: number, signal: NodeJS.Signals | 0) => { process.kill(pid, signal); });
     const signalGroup = (signal: NodeJS.Signals) => {
       try {
         killImpl(-pgid, signal);
@@ -184,26 +209,15 @@ export function killTree(proc: ChildProcess | null, deps: KillTreeDeps = {}): vo
     };
     signalGroup('SIGTERM');
     // Survives the leader's exit: what it started can outlive it, and a
-    // process ignoring SIGTERM is exactly the one that does. A pgid is never
-    // reused while a member lives, so the group is only at risk of being a
-    // stranger's once it is empty. The probe below catches a group that is
-    // already empty when the leader exits and cancels the follow-up; one that
-    // empties during the grace period is still signalled, a recycled id inside
-    // that window being the residual risk.
-    const hardKill = setTimeoutImpl(() => signalGroup('SIGKILL'), HARD_KILL_DELAY_MS);
+    // process ignoring SIGTERM is exactly the one that does. Asked again when
+    // it fires, so a group that emptied during the grace period is left alone;
+    // a stranger taking the id between that probe and the signal is the
+    // residual risk.
+    const hardKill = setTimeoutImpl(() => { if (vouched()) signalGroup('SIGKILL'); }, HARD_KILL_DELAY_MS);
     hardKill.unref?.();
-    const probeGroup = () => {
-      try {
-        killImpl(-pgid, 0);
-      } catch (err) {
-        if (isNoSuchProcess(err)) clearTimeoutImpl(hardKill);
-      }
-    };
-    // A leader that already exited will not fire `exit` again, and its group
-    // may still be alive, so probe now rather than wait for an event that has
-    // already happened.
-    if (typeof proc.exitCode === 'number') probeGroup();
-    else proc.once('exit', probeGroup);
+    if (!hasExited(proc)) {
+      proc.once('exit', () => { if (!groupHasMembers(pgid, killImpl)) clearTimeoutImpl(hardKill); });
+    }
     return;
   }
 

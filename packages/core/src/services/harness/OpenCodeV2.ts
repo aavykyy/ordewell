@@ -8,7 +8,7 @@ import type { ProjectMcpServer } from './repoConfig';
 import type { RaisedRequest } from './permissionLedger';
 import {
   autoApproves, delay, interruptAcknowledged, openCodePermissions, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, raiseOnce, settleTurn, splitModelId, streamTurn,
-  turnLatch, usageRecord, type OpenCodeTokens, type StreamTurn, type TurnLatch,
+  turnLatch, usageRecord, type EventStream, type OpenCodeTokens, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
 /** A turn's end is also read from `/api/session/active`, behind the stream, which can drop a frame. */
 const ACTIVE_POLL_INTERVAL_MS = 1000;
@@ -335,7 +335,7 @@ export class OpenCodeV2 {
     this.interruptRequested = false;
     const turn: Turn = Object.assign(turnLatch(), { outcome: null, failure: null });
     this.turn = turn;
-    const closeStream = await this.openStream(state, turn, onEvent, onActivity);
+    const stream = await this.openStream(state, turn, onEvent, onActivity);
     const poll = new AbortController();
 
     try {
@@ -352,6 +352,7 @@ export class OpenCodeV2 {
       await settleTurn(turn, {
         signal,
         processEnded: this.host.processEnded,
+        streamFailed: stream.failed,
         exitMessage: () => this.host.exitMessage(),
         readBack: () => this.readBack(state, onEvent),
         permissions: this.permissions,
@@ -364,7 +365,7 @@ export class OpenCodeV2 {
     } finally {
       this.turn = null;
       poll.abort();
-      await closeStream();
+      await stream.close();
     }
   }
 
@@ -445,7 +446,7 @@ export class OpenCodeV2 {
   }
 
   /** `/api/event` for one turn — see {@link openEventStream}. */
-  private openStream(state: TurnState, turn: Turn, onEvent: (e: AgentEvent) => void, onActivity?: () => void): Promise<() => Promise<void>> {
+  private openStream(state: TurnState, turn: Turn, onEvent: (e: AgentEvent) => void, onActivity?: () => void): Promise<EventStream> {
     return openEventStream<V2Frame>((signal) => this.host.openEvents(signal), (frame) => this.onFrame(frame, state, turn, onEvent), onActivity);
   }
 

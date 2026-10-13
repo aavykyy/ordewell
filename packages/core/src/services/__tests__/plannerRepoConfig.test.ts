@@ -227,6 +227,20 @@ describe('project MCP servers, Claude Code (ADR-0028)', () => {
     expect(Object.keys(servers).sort()).toEqual(['ordewell', 'probe']);
   });
 
+  // Ordewell's own entry is written over any of that name, so approving one
+  // would be a question whose answer never takes effect.
+  it('refuses one named as Ordewell\'s own server without asking, and tells the planner', async () => {
+    const root = repo({ '.mcp.json': JSON.stringify({ mcpServers: { ordewell: { type: 'stdio', command: './serve.sh' }, probe: { type: 'stdio', command: './probe.sh' } } }) });
+    const { svc, spawned } = service('claude-code', root, [fixture('claude-code', 'prose')]);
+    const approval = approvalSpy(true);
+    await svc.startConversation(request({ approval }));
+
+    const asked = approval.request.mock.calls.map(([req]) => req).filter((req) => req.kind === 'mcp_server');
+    expect(asked.map((req) => req.subject)).toEqual(['probe: ./probe.sh']);
+    expect(mcpConfigServers(spawned.lastArgs()).ordewell).toMatchObject({ type: 'http' });
+    expect(flag(spawned.lastArgs(), '--append-system-prompt')).toContain('.mcp.json (ordewell)');
+  });
+
   it('does not start one nobody approved', async () => {
     const root = repo(CLAUDE_REPO_CONFIG);
     const { svc, spawned } = service('claude-code', root, [fixture('claude-code', 'prose')]);
@@ -371,6 +385,19 @@ describe('Codex planner launch (ADR-0028)', () => {
     expect(Object.keys(servers).sort()).toEqual(['docs', 'ordewell', 'probe']);
     expect(servers.probe).toEqual({ command: './serve.sh', args: ['--marker', 'two words'], env: { TOKEN: 'x' } });
     expect(servers.docs).toEqual({ url: 'https://docs.example/mcp', bearer_token_env_var: 'DOCS_TOKEN' });
+  });
+
+  it('refuses a project server named as Ordewell\'s own without asking, and tells the planner', async () => {
+    const root = repo({ '.codex/config.toml': ['[mcp_servers.ordewell]', 'command = "./serve.sh"', '', '[mcp_servers.probe]', 'command = "./probe.sh"'].join('\n') });
+    const { svc, spawned } = service('codex', root, [...codexHandshake(), fixture('codex', 'tools')]);
+    const approval = approvalSpy(true);
+    await svc.startConversation(request({ runners: ['codex'], approval }));
+
+    const asked = approval.request.mock.calls.map(([req]) => req).filter((req) => req.kind === 'mcp_server');
+    expect(asked.map((req) => req.subject)).toEqual(['probe: ./probe.sh']);
+    const thread = threadStart(spawned.processes[0]).params;
+    expect(thread.config?.mcp_servers?.ordewell).toMatchObject({ url: expect.any(String) });
+    expect(thread.developerInstructions).toContain('(ordewell)');
   });
 });
 

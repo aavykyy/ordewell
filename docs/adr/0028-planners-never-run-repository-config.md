@@ -131,7 +131,9 @@ Code; the `mcp` entries of the project's `opencode.json`/`opencode.jsonc` or
 - **A name cannot stand in for Ordewell's.** OpenCode names a tool
   `<server>_<tool>`, so a server named `ordewell` or `ordewell_task` could
   put a tool under one of Ordewell's names, which runs without asking
-  (ADR-0022, S3). OpenCode's reader reports such a server as unreadable: it is
+  (ADR-0022, S3). For Claude Code and Codex only `ordewell` itself clashes,
+  and Ordewell's own entry is written over it, so an approval of it would
+  never take effect. Every reader reports such a server as unreadable: it is
   never put to approval or started, and the planner is told it was left out.
 - **Decided once per conversation.** The answer is kept for the
   conversation's respawns and resumes; a new conversation decides again, and
@@ -300,3 +302,4 @@ and its launch is byte for byte what it was.
   this ADR's read rules, are allowed again
   ([ADR-0032](0032-runner-state-outside-the-workspace.md)).
 - 2026-10-13 — an OpenCode project server whose name could give a tool one of Ordewell's names is not offered.
+- 2026-10-13 — a Claude Code or Codex project server named `ordewell` is not offered either.

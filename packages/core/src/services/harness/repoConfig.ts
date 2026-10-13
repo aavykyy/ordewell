@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, realpathSync, statSync } from 'fs';
 import * as path from 'path';
+import { ORDEWELL_MCP_SERVER_NAME } from '../mcp';
 
 /**
  * What a runner would load from a repository, read by Ordewell for that
@@ -44,6 +45,15 @@ export interface ProjectServers {
 }
 
 export const NO_SERVERS: ProjectServers = { servers: [], unreadable: [] };
+
+/**
+ * Why a project server named as Ordewell's own is left out, or null for any
+ * other name. Ordewell's entry is written over it, so asking a person to
+ * approve it would be a question whose answer never takes effect.
+ */
+export function takesOrdewellsName(name: string): string | null {
+  return name === ORDEWELL_MCP_SERVER_NAME ? 'Ordewell\'s own server goes by that name' : null;
+}
 
 /** How much of the repository's instruction files the planner is given, all files together. */
 const INSTRUCTIONS_MAX_CHARS = 40_000;

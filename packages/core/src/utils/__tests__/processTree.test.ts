@@ -9,6 +9,7 @@ import { killTree, spawnInOwnGroup, type KillTreeDeps } from '../processTree';
 class FakeChild extends EventEmitter {
   killed = false;
   exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
   pid: number | undefined = 4242;
   kill = vi.fn((_signal?: NodeJS.Signals) => { this.killed = true; return true; });
 }
@@ -172,11 +173,11 @@ describe('killTree on a runner that leads its own process group', () => {
     child.exitCode = 1;
     killTree(child as unknown as ChildProcess, h.deps);
 
-    // SIGTERM first, then the liveness probe that cancels the escalation if
-    // the group is already empty (the leader's `exit` cannot do it here).
-    expect(signals).toEqual([[-UNUSED_PID, 'SIGTERM'], [-UNUSED_PID, 0]]);
+    // Members first — the leader is gone, so its id is ours only while the
+    // group still answers — then SIGTERM, and again before the SIGKILL.
+    expect(signals).toEqual([[-UNUSED_PID, 0], [-UNUSED_PID, 'SIGTERM']]);
     h.fireHardKill();
-    expect(signals).toEqual([[-UNUSED_PID, 'SIGTERM'], [-UNUSED_PID, 0], [-UNUSED_PID, 'SIGKILL']]);
+    expect(signals).toEqual([[-UNUSED_PID, 0], [-UNUSED_PID, 'SIGTERM'], [-UNUSED_PID, 0], [-UNUSED_PID, 'SIGKILL']]);
   });
 
   it('still escalates to SIGKILL after the leader exits, since what it started can outlive it', () => {
@@ -203,6 +204,62 @@ describe('killTree on a runner that leads its own process group', () => {
 
     expect(h.isScheduled()).toBe(false);
     expect(signals).toEqual([[-UNUSED_PID, 'SIGTERM'], [-UNUSED_PID, 0]]);
+  });
+
+  // A leader's pid is its group's id, and once the leader is gone and the
+  // group empty that id can be handed to a stranger's group. Disposing a
+  // long-exited runner must ask first, not signal and then ask.
+  it('sends nothing to the group of a leader that exited once the group has emptied', () => {
+    const { child, signals } = leader();
+    const h = harness({
+      platform: 'linux',
+      killImpl: (pid, signal) => {
+        signals.push([pid, signal]);
+        throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' });
+      },
+    });
+    child.exitCode = 0;
+    killTree(child as unknown as ChildProcess, h.deps);
+
+    expect(signals.filter(([, signal]) => signal !== 0)).toEqual([]);
+    expect(h.isScheduled()).toBe(false);
+  });
+
+  // A leader killed by a signal reports `exitCode` null and `signalCode` set;
+  // it is as gone as one that exited with a code.
+  it('treats a leader killed by a signal as exited: it probes before it signals', () => {
+    const { child, signals } = leader();
+    const h = harness({
+      platform: 'linux',
+      killImpl: (pid, signal) => {
+        signals.push([pid, signal]);
+        if (signal === 0) throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' });
+      },
+    });
+    child.signalCode = 'SIGKILL';
+    killTree(child as unknown as ChildProcess, h.deps);
+
+    expect(signals).toEqual([[-UNUSED_PID, 0]]);
+    expect(h.isScheduled()).toBe(false);
+  });
+
+  it('checks the group still has members before the forced follow-up once its leader is gone', () => {
+    const { child, signals } = leader();
+    let members = true;
+    const h = harness({
+      platform: 'linux',
+      killImpl: (pid, signal) => {
+        signals.push([pid, signal]);
+        if (signal === 0 && !members) throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' });
+      },
+    });
+    child.signalCode = 'SIGSEGV';
+    killTree(child as unknown as ChildProcess, h.deps);
+    expect(signals).toEqual([[-UNUSED_PID, 0], [-UNUSED_PID, 'SIGTERM']]);
+
+    members = false;
+    h.fireHardKill();
+    expect(signals).toEqual([[-UNUSED_PID, 0], [-UNUSED_PID, 'SIGTERM'], [-UNUSED_PID, 0]]);
   });
 
   it('falls back to the direct child when the group cannot be signalled', () => {
@@ -338,6 +395,40 @@ describe('process groups, for real', () => {
     } finally {
       hostProc.kill('SIGKILL');
       if (grandchild) try { process.kill(grandchild, 'SIGKILL'); } catch { /* gone, as it should be */ }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Once a crashed runner's group has emptied, its id is recyclable and no
+  // longer the host's to signal on the way out.
+  posixIt('a host killed after its runner\'s group emptied signals nothing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-host-'));
+    const host = join(dir, 'empty-host.mts');
+    writeFileSync(host, [
+      `import { spawn } from 'node:child_process';`,
+      `import { writeSync } from 'node:fs';`,
+      `import { spawnInOwnGroup } from ${JSON.stringify(join(__dirname, '..', 'processTree.ts'))};`,
+      `const kill = process.kill.bind(process);`,
+      `process.kill = (pid, signal) => { if (pid < 0 && signal !== 0) writeSync(1, 'signalled ' + String(signal) + '\\n'); return kill(pid, signal); };`,
+      `const proc = spawnInOwnGroup((detached) => spawn('sh', ['-c', 'sleep 0.3 & echo $!'], { detached, stdio: ['ignore', 'pipe', 'inherit'] }));`,
+      `proc.stdout.pipe(process.stdout);`,
+      `proc.on('exit', () => process.stdout.write('leader-exited\\n'));`,
+      `setInterval(() => {}, 1000);`,
+    ].join('\n'));
+    const hostProc = spawn(process.execPath, ['--experimental-strip-types', '--no-warnings', host], { stdio: ['ignore', 'pipe', 'pipe'] });
+    try {
+      const nextLine = lines(hostProc);
+      const grandchild = Number(await nextLine());
+      expect(await nextLine()).toBe('leader-exited');
+      expect(await gone(grandchild)).toBe(true);
+      let rest = '';
+      hostProc.stdout!.on('data', (chunk: Buffer) => { rest += chunk.toString(); });
+      const exited = new Promise<void>((resolve) => hostProc.once('close', () => resolve()));
+      hostProc.kill('SIGTERM');
+      await exited;
+      expect(rest).not.toContain('signalled');
+    } finally {
+      hostProc.kill('SIGKILL');
       rmSync(dir, { recursive: true, force: true });
     }
   });
