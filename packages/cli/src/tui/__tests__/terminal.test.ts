@@ -21,6 +21,46 @@ class FakeOutput extends EventEmitter {
   });
 }
 
+/**
+ * What a VT-style screen shows after `bytes`, as ECMA-48 and DEC define it:
+ * cursor position (CUP), erase to end of line (EL 0, which clears the cell
+ * under the cursor too), and autowrap (DECAWM) — off, a character written in
+ * the last column leaves the cursor there. Colours are ignored.
+ */
+function screenAfter(bytes: string, rows: number, cols: number): string[] {
+  const grid = Array.from({ length: rows }, () => Array<string>(cols).fill(' '));
+  let row = 0;
+  let col = 0;
+  let autowrap = true;
+  for (let i = 0; i < bytes.length; i++) {
+    if (bytes[i] === '\x1b' && bytes[i + 1] === '[') {
+      // eslint-disable-next-line no-control-regex
+      const m = /^\x1b\[([?\d;]*)([A-Za-z])/.exec(bytes.slice(i));
+      if (!m) continue;
+      const [, params, final] = m;
+      if (final === 'H') {
+        const [r, c] = params.split(';').map((n) => Number(n) || 1);
+        row = (r ?? 1) - 1;
+        col = (c ?? 1) - 1;
+      } else if (final === 'K') {
+        for (let c = col; c < cols; c++) grid[row][c] = ' ';
+      } else if (params === '?7') {
+        autowrap = final === 'h';
+      }
+      i += m[0].length - 1;
+      continue;
+    }
+    if (col >= cols) {
+      if (!autowrap) col = cols - 1;
+      else { row++; col = 0; }
+    }
+    grid[row][col] = bytes[i];
+    col = autowrap ? col + 1 : Math.min(col + 1, cols);
+    if (!autowrap && col === cols) col = cols - 1;
+  }
+  return grid.map((r) => r.join('').trimEnd());
+}
+
 describe('openTerminal', () => {
   it('leaves the mouse to the terminal by default, so drag-select and copy still work', () => {
     const input = new FakeInput();
@@ -287,6 +327,26 @@ describe('openTerminal', () => {
     expect(output.writes.join('')).toContain('\x1b[?7h');
   });
 
+  // render() pads every row to the full width, and the plan pane ends on the
+  // last column: an erase after a full row took that column off every row.
+  it('keeps the last column of a row that fills the terminal', () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    output.columns = 10;
+    const terminal = openTerminal({
+      input: input as unknown as NodeJS.ReadStream,
+      output: output as unknown as NodeJS.WriteStream,
+      onKey: vi.fn(),
+      onResize: vi.fn(),
+    });
+
+    terminal.draw(['old row is long', 'second']);
+    terminal.draw(['abcdefghij', 'x']);
+
+    expect(screenAfter(output.writes.join(''), 2, 10)).toEqual(['abcdefghij', 'x']);
+    terminal.close();
+  });
+
   it('clamps a row wider than the terminal before writing it, even if render() did not', () => {
     const input = new FakeInput();
     const output = new FakeOutput();
@@ -299,12 +359,9 @@ describe('openTerminal', () => {
     });
 
     output.writes.length = 0;
-    terminal.draw(['x'.repeat(50)]);
-    const draw = output.writes.join('');
-    // eslint-disable-next-line no-control-regex
-    const row = /\x1b\[1;1H(.*?)\x1b\[K/.exec(draw)?.[1] ?? '';
+    terminal.draw(['x'.repeat(50), 'next']);
 
-    expect(row.length).toBeLessThanOrEqual(10);
+    expect(screenAfter(output.writes.join(''), 2, 10)).toEqual(['xxxxxxxxx…', 'next']);
     terminal.close();
   });
 
