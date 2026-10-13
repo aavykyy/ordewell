@@ -526,12 +526,25 @@ before failure (ADR-0025).
 call: `awaiting_user` with a saved reason, `input | checkpoint | conflict |
 files-changed` (a checkpoint wins over input; `files-changed` is an *ops task*
 that changed tracked files, ADR-0020), or `usage-limit` when what ended it was
-the runner's usage limit (see *Usage-limit resume*). No verdict and no automatic nudge; the user
-answers or marks the task complete. A pending runner approval is *not* waiting
+the runner's usage limit (see *Usage-limit resume*). No verdict is guessed. The
+first clean turn end of an attempt gets the *completion reminder* instead; after
+that the user answers or marks the task complete. A pending runner approval is *not* waiting
 for input — it arrives mid-turn, leaves the status alone, and "waiting for
 approval" is derived from the task's pending approvals.
 *Avoid:* "idle" (a silence guess, and its timer still runs during a turn),
 "paused", "blocked" (a dependency term).
+
+**Completion reminder** (ADR-0018, W1) — the one message Ordewell sends a
+runner whose turn ended cleanly without a `task_complete` call, telling it to
+call the tool with `done` and its full report, or `blocked` and the reason, or
+to say what it needs from the user. Once per attempt, for every task kind; not
+after a failed or interrupted turn, a usage limit, or while a user message is
+queued or owed. It goes through the task message seam marked `from: 'ordewell'`,
+the task stays `in_progress`, and the task log draws it as Ordewell's line, not
+the user's. The report before it remains the fallback summary. It is not
+completion evidence: if the next turn also ends without the call, the task
+waits for input.
+*Avoid:* "nudge" (the planner's corrective prompts), "auto-complete".
 
 **Continue** — a retry of a completed or failed structured task that resumes
 its saved runner session (Claude's `--resume`, Codex's `thread/resume`) with

@@ -42,7 +42,8 @@ export class BufferedTaskOutputSource implements TaskOutputSource {
     });
     session.onEvent((event) => {
       // A message read mid-turn starts the account of the work afresh, as a new turn does (ADR-0023).
-      if (capture.attached && (event.type === 'turn_start' || event.type === 'message_delivered')) {
+      // Ordewell's completion reminder asks for no new work, so the report before it stays.
+      if (capture.attached && (event.type === 'turn_start' || event.type === 'message_delivered') && event.from !== 'ordewell') {
         capture.reported = undefined;
         capture.turnStart = capture.dropped + capture.raw.length;
       }

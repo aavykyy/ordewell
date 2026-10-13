@@ -136,7 +136,7 @@ describe('TaskOrchestrator.continueTask', () => {
     expect(h.task('t1').runnerSessionId).toBe('native-t1-1');
   });
 
-  it('continues a failed task, and a continued turn that ends without a task_complete call waits for input', async () => {
+  it('continues a failed task, which is reminded afresh and then waits for input when its turns end without a task_complete call', async () => {
     const h = setup();
     h.orchestrator.loadPlan([plan()]);
     await h.orchestrator.forceStartTask('t1');
@@ -144,7 +144,11 @@ describe('TaskOrchestrator.continueTask', () => {
     await vi.waitFor(() => expect(h.task('t1').status).toBe('failed'));
 
     await h.orchestrator.continueTask('t1', 'the tests need Node 22');
-    (h.sessions[1] as FakeRunnerSession).emitTurnEnd('completed');
+    const continued = h.sessions[1] as FakeRunnerSession;
+    continued.emitTurnEnd('completed');
+    expect(h.task('t1').status).toBe('in_progress');
+    expect(continued.fromOrdewell).toHaveLength(1);
+    continued.emitTurnEnd('completed');
 
     expect(h.task('t1')).toMatchObject({ status: 'awaiting_user', awaitingReason: 'input' });
   });

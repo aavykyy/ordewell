@@ -43,6 +43,13 @@ describe('toTaskLogEvent', () => {
     expect(toTaskLogEvent({ type: 'turn_start', text: 'Do the task' })).toEqual({ type: 'turn_start', message: 'Do the task' });
   });
 
+  it('keeps who sent a message Ordewell sent, on every event that carries it', () => {
+    expect(toTaskLogEvent({ type: 'turn_start', text: 'Call it', from: 'ordewell' })).toEqual({ type: 'turn_start', message: 'Call it', from: 'ordewell' });
+    for (const type of ['message_queued', 'message_delivered', 'message_undelivered'] as const) {
+      expect(toTaskLogEvent({ type, messageId: 'msg-1', text: 'Call it', from: 'ordewell' })).toEqual({ type, messageId: 'msg-1', text: 'Call it', from: 'ordewell' });
+    }
+  });
+
   it('keeps a runner\'s tool request, whether it offered a grant for the task, and the call it is for', () => {
     expect(toTaskLogEvent({
       type: 'permission_request', id: 'p1', name: 'Write', detail: '{"file_path":"a.txt"}', input: { file_path: 'a.txt' },

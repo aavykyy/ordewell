@@ -6,6 +6,7 @@ import type {
   QueuedTaskMessage,
   StructuredEvent,
   StructuredTurnEnd,
+  TaskMessageFrom,
 } from '../interfaces/IRunner';
 import type { ApprovalDecision } from '../interfaces/IApproval';
 import { checkpointReply, type CheckpointAnswer, type TaskCompleteArgs } from './mcp/tools';
@@ -168,6 +169,7 @@ interface PendingMessage {
   stage: 'queued' | 'steering' | 'handed_over';
   /** Force sent (ADR-0023, F1): it opens the turn that replaces the interrupted one. */
   forced?: boolean;
+  from?: TaskMessageFrom;
 }
 
 interface SessionLaunch {
@@ -343,14 +345,15 @@ export class StructuredSession extends AbstractRunnerSession {
     this.structuredEmitter.on('event', listener);
   }
 
-  sendMessage(text: string): string {
+  sendMessage(text: string, from?: TaskMessageFrom): string {
     this.messageCount += 1;
     const id = `msg-${this.messageCount}`;
-    if (this.exited) this.emitEvent({ type: 'message_undelivered', messageId: id, text });
-    else if (this.state === 'idle' && this.adapterStarted) this.deliver(text);
+    const sender = from ? { from } : {};
+    if (this.exited) this.emitEvent({ type: 'message_undelivered', messageId: id, text, ...sender });
+    else if (this.state === 'idle' && this.adapterStarted) this.deliver(text, sender);
     else {
-      this.queue.push({ id, text, stage: 'queued' });
-      this.emitEvent({ type: 'message_queued', messageId: id, text });
+      this.queue.push({ id, text, stage: 'queued', ...sender });
+      this.emitEvent({ type: 'message_queued', messageId: id, text, ...sender });
       this.offerNext();
     }
     return id;
@@ -413,8 +416,8 @@ export class StructuredSession extends AbstractRunnerSession {
   }
 
   queued(): QueuedTaskMessage[] {
-    return this.queue.map(({ id, text, stage, forced }) => ({
-      id, text, ...(stage === 'queued' ? {} : { handedOver: true }), ...(forced ? { forced: true } : {}),
+    return this.queue.map(({ id, text, stage, forced, from }) => ({
+      id, text, ...(stage === 'queued' ? {} : { handedOver: true }), ...(forced ? { forced: true } : {}), ...(from ? { from } : {}),
     }));
   }
 
@@ -519,16 +522,20 @@ export class StructuredSession extends AbstractRunnerSession {
     });
   }
 
-  private openTurn(text: string, message?: Pick<PendingMessage, 'id' | 'forced'>): OpenTurn {
+  /** `message` is what opened the turn: a queued one has an id, one delivered straight from idle only its sender. */
+  private openTurn(text: string, message?: Partial<Pick<PendingMessage, 'id' | 'forced' | 'from'>>): OpenTurn {
     this.turnCount += 1;
     const turn: OpenTurn = { id: this.turnCount, abort: new AbortController(), ended: false, reason: 'completed', steerRefused: false };
     this.turn = turn;
     this.state = 'working';
-    this.emitEvent({ type: 'turn_start', text, ...(message ? { messageId: message.id } : {}), ...(message?.forced ? { forced: true } : {}) });
+    this.emitEvent({
+      type: 'turn_start', text,
+      ...(message?.id ? { messageId: message.id } : {}), ...(message?.forced ? { forced: true } : {}), ...(message?.from ? { from: message.from } : {}),
+    });
     return turn;
   }
 
-  private deliver(text: string, message?: PendingMessage): void {
+  private deliver(text: string, message?: Partial<Pick<PendingMessage, 'id' | 'forced' | 'from'>>): void {
     const adapter = this.adapter;
     if (!adapter) return;
     const turn = this.openTurn(text, message);
@@ -596,7 +603,7 @@ export class StructuredSession extends AbstractRunnerSession {
   private requeue(message: PendingMessage): void {
     const was = message.stage;
     message.stage = 'queued';
-    if (was === 'handed_over') this.emitEvent({ type: 'message_queued', messageId: message.id, text: message.text });
+    if (was === 'handed_over') this.emitEvent({ type: 'message_queued', messageId: message.id, text: message.text, ...(message.from ? { from: message.from } : {}) });
   }
 
   private route(adapter: TaskModeAgentAdapter, turn: OpenTurn | null, event: AgentEvent): void {
@@ -606,7 +613,7 @@ export class StructuredSession extends AbstractRunnerSession {
     else if (event.type === 'permission_cancelled') this.cancelPermission(adapter, event.id);
     else if (event.type === 'message_delivered') {
       const message = this.delivered(event.id);
-      if (message) this.emitEvent({ type: 'message_delivered', messageId: message.id, text: message.text });
+      if (message) this.emitEvent({ type: 'message_delivered', messageId: message.id, text: message.text, ...(message.from ? { from: message.from } : {}) });
     } else if (event.type === 'message_dropped') {
       const message = this.queue.find((m) => m.id === event.id);
       if (!message) return;
@@ -711,7 +718,7 @@ export class StructuredSession extends AbstractRunnerSession {
   private undeliverQueued(): void {
     const messages = this.queue;
     this.queue = [];
-    for (const { id, text } of messages) this.emitEvent({ type: 'message_undelivered', messageId: id, text });
+    for (const { id, text, from } of messages) this.emitEvent({ type: 'message_undelivered', messageId: id, text, ...(from ? { from } : {}) });
   }
 
   private emitEvent(event: StructuredEvent): void {

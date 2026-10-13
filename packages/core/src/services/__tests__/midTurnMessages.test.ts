@@ -464,7 +464,7 @@ describe('the attempt\'s verdict when a message is read mid-turn', () => {
     const id = orchestrator.sendTaskMessage('t1', 'Please check again');
     session.reportComplete({ status: 'done', summary: 'Finished' });
     session.deliverMidTurn(id);
-    session.emitTurnEnd('completed');
+    session.waitForInput();
     await flushMicrotasks(50);
     expect(orchestrator.storeInstance.get('t1')?.status).toBe('awaiting_user');
     expect(orchestrator.storeInstance.get('t1')?.verdict).toBeUndefined();
@@ -667,13 +667,13 @@ describe('force send through the orchestrator', () => {
   it('just delivers to a task waiting for input, which is back in progress', async () => {
     const { orchestrator, session } = scheduled();
     await orchestrator.forceStartTask('t1');
-    session.emitTurnEnd('completed');
+    session.waitForInput();
     await flushMicrotasks(50);
     expect(orchestrator.storeInstance.get('t1')?.status).toBe('awaiting_user');
 
     orchestrator.forceSendTaskMessage('t1', 'carry on');
     expect(session.interrupts).toBe(0);
-    expect(session.delivered).toEqual(['carry on']);
+    expect(session.delivered.at(-1)).toBe('carry on');
     expect(orchestrator.storeInstance.get('t1')?.status).toBe('in_progress');
     orchestrator.stop();
   });

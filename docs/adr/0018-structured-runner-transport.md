@@ -42,9 +42,22 @@ and completion evidence.
 - **A turn without a completion call is "waiting for input" (W1).** A turn that ends
   without a `task_complete` call makes the task `awaiting_user` with a saved reason:
   `input | checkpoint | conflict | files-changed`, or `usage-limit` for a turn
-  whose error is the runner's usage limit (U1). A checkpoint wins over input. There is no
-  automatic nudge — no verdict is guessed, and the user (later the supervisor,
-  #28) responds or marks the task complete. Approval requests arrive
+  whose error is the runner's usage limit (U1). A checkpoint wins over input. No
+  verdict is guessed. Weaker models often finish, report in prose and stop
+  without the call (#105), so the first turn of an attempt that ends cleanly
+  this way gets one **completion reminder** first: a message from Ordewell
+  telling the runner to call `task_complete` with `done` and its full report,
+  or `blocked` and the reason, or to say what it needs from the user and end
+  its turn. It goes through the message seam (M1) marked `from: 'ordewell'`,
+  so it is logged, delivered and replayed like any message but drawn as
+  Ordewell's, and the task stays `in_progress`. It is sent once per attempt
+  (a retry or continue gets its own), for every task kind, and never after a
+  failed or interrupted turn, a usage limit, or while a user message is queued
+  or owed. Only a `task_complete` call settles the task; if the reminder's
+  turn ends without one, the task waits for input and the user (or the
+  supervisor) responds or marks it complete. The reminder asks for no new
+  work, so the summary handed to dependents keeps the report written before
+  it. Approval requests arrive
   mid-turn and do **not** change task status: "waiting for approval" is derived
   from the task's pending approvals. The idle timer keeps running during a turn
   and is paused while the task waits, on input, a checkpoint or an open
@@ -206,6 +219,15 @@ transport is retained for take-over.
   structured contract (`IRunnerSession`).
 - **Raw JSON to `onOutput`.** Rejected: tool results would flood the bounded
   output buffer; full-fidelity consumers read events instead.
+- **No reminder; a turn without the call always waits for input.** The
+  earlier rule. Runs stalled on tasks whose work was done and reported, until
+  a person typed "call task_complete" (#105).
+- **Treating a final report in the text as completion.** Verdicts come only
+  from `task_complete`; the text is the runner's, and guessing would let a
+  confident summary pass unverified work.
+- **Reminding on every such turn.** A runner that is asking the user something
+  would be told to finish again and again; once is enough to catch a missed
+  call.
 - **A new `TaskStatus` for waiting, or `in_progress` plus a flag.** Waiting is
   a reason for the existing `awaiting_user`, which every surface already
   handles; a flag would leave two sources of truth.
@@ -264,3 +286,4 @@ transport is retained for take-over.
 - 2026-10-11 — direct and planner runner changes share resume cancellation and scheduler readiness; same-runner model changes preserve the account's wait.
 - 2026-10-11 — K1 and U1 preserve a continued attempt's unlanded work, with an atomic conflict fallback naming the preserved branches.
 - 2026-10-13 — a runner's end is observed at `close` (after stdout drains) with its last unterminated line flushed, and a throwing event consumer ends the turn rather than crashing the host or passing as a bad frame.
+- 2026-10-13 — W1: one completion reminder per attempt before a turn without `task_complete` waits for input (#105).

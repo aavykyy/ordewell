@@ -1,4 +1,4 @@
-import type { QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
+import type { QueuedTaskMessage, StructuredTurnEnd, TaskMessageFrom } from '../interfaces/IRunner';
 import type { ApprovalDecision } from '../interfaces/IApproval';
 import type { TaskLogEvent } from '../models/TaskLog';
 import { addPlannerUsage, isMeasured, usageLine, type PlannerUsage } from '../models/Usage';
@@ -230,11 +230,16 @@ function decideApproval(view: TaskLogView, { approvalId, decision, note }: Event
   return settleApproval(view, approvalId, (block) => answered(block, decision, note));
 }
 
-function startTurn(view: TaskLogView, { message, messageId }: Event<'turn_start'>): TaskLogView {
+function startTurn(view: TaskLogView, { message, messageId, from }: Event<'turn_start'>): TaskLogView {
   const queued = messageId ? view.queued.filter((m) => m.id !== messageId) : view.queued;
   const working = { ...view, queued, working: true, latestText: undefined };
   // A turn the runner opened itself has no user message to show.
-  return message ? append(working, (id) => settledMessage(id, 'user', message)) : working;
+  return message ? append(working, (id) => sentMessage(id, message, from)) : working;
+}
+
+/** A message to the runner, drawn as the user's unless Ordewell sent it (ADR-0018, W1). */
+function sentMessage(id: string, text: string, from: TaskMessageFrom | undefined): MessageBlock {
+  return from === 'ordewell' ? settledMessage(id, 'system', `Ordewell: ${text}`) : settledMessage(id, 'user', text);
 }
 
 const CUT: Record<StructuredTurnEnd, SubagentStatus | null> = { completed: null, interrupted: 'stopped', failed: 'failed' };
@@ -244,18 +249,19 @@ function endTurn(view: TaskLogView, { reason }: Event<'turn_end'>): TaskLogView 
   return reason === 'interrupted' ? append(closed, (id) => settledMessage(id, 'system', 'Interrupted.')) : closed;
 }
 
-function queueMessage(view: TaskLogView, { messageId, text, forced }: Event<'message_queued'>): TaskLogView {
+function queueMessage(view: TaskLogView, { messageId, text, forced, from }: Event<'message_queued'>): TaskLogView {
   const listed = view.queued.find((m) => m.id === messageId);
+  const sender = from ? { from } : {};
   if (forced) {
     // The session's own order (ADR-0023, F2): behind earlier forced messages, ahead of the rest.
     const rest = view.queued.filter((m) => m !== listed);
     const at = rest.findIndex((m) => !m.forced);
     const placed = at < 0 ? rest.length : at;
-    return { ...view, queued: [...rest.slice(0, placed), { id: messageId, text, forced: true }, ...rest.slice(placed)] };
+    return { ...view, queued: [...rest.slice(0, placed), { id: messageId, text, forced: true, ...sender }, ...rest.slice(placed)] };
   }
-  if (!listed) return { ...view, queued: [...view.queued, { id: messageId, text }] };
+  if (!listed) return { ...view, queued: [...view.queued, { id: messageId, text, ...sender }] };
   if (!listed.handedOver) return view;
-  return { ...view, queued: view.queued.map((m) => (m === listed ? { id: m.id, text: m.text } : m)) };
+  return { ...view, queued: view.queued.map((m) => (m === listed ? { id: m.id, text: m.text, ...sender } : m)) };
 }
 
 function handOver(view: TaskLogView, { messageId }: Event<'message_handed_over'>): TaskLogView {
@@ -266,7 +272,7 @@ function handOver(view: TaskLogView, { messageId }: Event<'message_handed_over'>
 
 /** The message joins the transcript where the runner read it, between the steps around it. */
 function deliverMidTurn(view: TaskLogView, event: Event<'message_delivered'>): TaskLogView {
-  return appendOutput(unqueueMessage(view, event), null, (id) => settledMessage(id, 'user', event.text));
+  return appendOutput(unqueueMessage(view, event), null, (id) => sentMessage(id, event.text, event.from));
 }
 
 function unqueueMessage(view: TaskLogView, { messageId }: { messageId: string }): TaskLogView {

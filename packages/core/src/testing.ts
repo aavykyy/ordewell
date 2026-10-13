@@ -1,6 +1,6 @@
 import type { IConfig } from './interfaces/IConfig';
 import type { IFileSystem, ToolOutcome } from './interfaces/IFileSystem';
-import type { IRunnerSession, QueuedTaskMessage, StructuredEvent, StructuredTurnEnd } from './interfaces/IRunner';
+import type { IRunnerSession, QueuedTaskMessage, StructuredEvent, StructuredTurnEnd, TaskMessageFrom } from './interfaces/IRunner';
 import type { ApprovalDecision } from './interfaces/IApproval';
 import type { CheckpointAnswer, TaskCompleteArgs } from './services/mcp/tools';
 import type {
@@ -100,6 +100,8 @@ export class FakeRunnerSession implements IRunnerSession {
   messages: QueuedTaskMessage[] = [];
   /** Every message a turn was started with, in order. */
   delivered: string[] = [];
+  /** The ones of {@link delivered} Ordewell sent: the completion reminder (ADR-0018, W1). */
+  fromOrdewell: string[] = [];
   interrupts = 0;
   private messageCount = 0;
   private turnEndCbs: Array<(reason: StructuredTurnEnd) => void> = [];
@@ -141,11 +143,11 @@ export class FakeRunnerSession implements IRunnerSession {
     if (!this.checkpointHandler) throw new Error('no checkpoint handler attached');
     return this.checkpointHandler(question, signal);
   }
-  sendMessage(text: string): string {
+  sendMessage(text: string, from?: TaskMessageFrom): string {
     this.messageCount += 1;
     const id = `msg-${this.messageCount}`;
-    if (this.state === 'idle') this.deliver(text);
-    else this.messages.push({ id, text });
+    if (this.state === 'idle') this.deliver(text, from);
+    else this.messages.push({ id, text, ...(from ? { from } : {}) });
     return id;
   }
   /** Interrupts, and the turn that replaces the interrupted one opens with the forced message. */
@@ -209,19 +211,29 @@ export class FakeRunnerSession implements IRunnerSession {
     const message = this.messages.find((m) => m.id === id);
     if (!message) return;
     this.messages = this.messages.filter((m) => m !== message);
-    this.emitEvent({ type: 'message_delivered', messageId: id, text: message.text });
+    this.emitEvent({ type: 'message_delivered', messageId: id, text: message.text, ...(message.from ? { from: message.from } : {}) });
+  }
+  /**
+   * The turn ends without a `task_complete` call, and so does the turn the
+   * completion reminder opens if one was sent (ADR-0018, W1): the task waits for input.
+   */
+  waitForInput(): void {
+    const reminders = this.fromOrdewell.length;
+    this.emitTurnEnd('completed');
+    if (this.fromOrdewell.length > reminders) this.emitTurnEnd('completed');
   }
   emitTurnEnd(reason: StructuredTurnEnd): void {
     const next = this.messages.shift();
     if (!next) this.state = 'idle';
     for (const cb of this.turnEndCbs) cb(reason);
-    if (next) this.deliver(next.text);
+    if (next) this.deliver(next.text, next.from);
   }
 
-  private deliver(text: string): void {
+  private deliver(text: string, from?: TaskMessageFrom): void {
     this.state = 'working';
     this.delivered.push(text);
-    this.emitEvent({ type: 'turn_start', text });
+    if (from === 'ordewell') this.fromOrdewell.push(text);
+    this.emitEvent({ type: 'turn_start', text, ...(from ? { from } : {}) });
   }
 }
 
