@@ -42,6 +42,11 @@
 
 ### Changed
 
+- **A task's report is its full `task_complete` summary**, shown ahead of any
+  log tail and handed whole (up to a cut) to dependent tasks.
+- **A runner is reminded once when its turn ends without `task_complete`.** The
+  reminder appears in the task view as an "Ordewell: …" line, not as your
+  message.
 - **Runners' own memory is off in Ordewell runs**: Claude Code's auto-memory
   and Codex's memories no longer load into planners or tasks.
 - **Guarded planners read the web without asking**, as Full does, behind the

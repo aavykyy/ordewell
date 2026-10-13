@@ -120,6 +120,21 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **A task's report is its full `task_complete` summary.** The summary is kept
+  whole as the task's `report` (cut at 20,000 characters, saying so), and
+  `task_query` and `task_output` return it ahead of any log tail. A dependent's
+  prior task outputs carry it in place of the tail, cut at 4,000 characters per
+  dependency; `logTail` is kept only for attempts that ended without a report.
+  Saved sessions load unchanged. The completion instruction now tells a runner
+  that the summary is its whole result, and that a read-only task's findings
+  belong there, not in a file.
+- **A runner is reminded once when its turn ends without `task_complete`.** A
+  clean turn end gets one reminder from Ordewell, once per attempt, before the
+  task waits for input; never after a failed or interrupted turn, a usage
+  limit, or while your message is queued. The task stays in progress and only
+  `task_complete` settles it. Task messages carry a `from: 'ordewell'` marker,
+  and the task log shows the reminder as an "Ordewell: …" system line
+  ([ADR-0018](docs/adr/0018-structured-runner-transport.md)).
 - **Runners' own memory is off in Ordewell runs.** Claude Code's auto-memory
   and Codex's memories no longer load into planners or tasks, so a plan and a
   task depend on the repository and your instruction files, not on notes
@@ -251,6 +266,16 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   never an order that only meant something at the top level.
 - **A task's thinking effort shows on its row in the terminal UI** when the
   terminal is wide enough, instead of only when the row is expanded.
+
+### Documentation
+
+- **What each part can touch.** [SECURITY.md](SECURITY.md#what-each-part-can-touch)
+  states what planners, change tasks, ops tasks and read-only tasks can read,
+  write and reach today, and what is planned
+  ([#90](https://github.com/ordewell/ordewell/issues/90),
+  [#93](https://github.com/ordewell/ordewell/issues/93),
+  [#99](https://github.com/ordewell/ordewell/issues/99),
+  [#104](https://github.com/ordewell/ordewell/issues/104)).
 
 ### Removed
 

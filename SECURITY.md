@@ -69,6 +69,53 @@ their own repositories. The parts most worth your attention:
   mode, environment or discovery configuration is in scope. External plugin
   manifests are ignored and are not loaded or executed.
 
+## What each part can touch
+
+What is true today, without containers. Nothing here is an OS-level sandbox
+except where [ADR-0011](docs/adr/0011-sandboxing-the-planners-shell.md) says so.
+
+- **Planners, research subagents and the supervisor only read.** They read the
+  workspace and the output their own runner saved for them this session, inside
+  the exploration envelope. Web reads go through the web-read policy; anything
+  else outside the envelope is asked about in Guarded and refused in Full. They
+  never write, and they never run the repository's own configuration (hooks,
+  project MCP servers, plugins)
+  ([ADR-0008](docs/adr/0008-planner-exploration-envelope.md),
+  [ADR-0026](docs/adr/0026-one-envelope-for-every-planner.md),
+  [ADR-0027](docs/adr/0027-web-reads-in-the-planner-envelope.md),
+  [ADR-0028](docs/adr/0028-planners-never-run-repository-config.md),
+  [ADR-0032](docs/adr/0032-runner-state-outside-the-workspace.md)).
+- **Change and ops tasks run as you**, with the runner's own native tools, in
+  the mode their plan assigned
+  ([ADR-0020](docs/adr/0020-ops-tasks-and-merge-gates.md)). They can read and
+  write outside the workspace (caches, temporary folders, your home directory)
+  and reach the network; nothing at the OS or network layer bounds them yet. A
+  change task works in its own git worktree. An ops task runs in your checkout,
+  after a merge gate has put what it depends on there.
+- **Read-only tasks use their runner's own read-only mode**
+  ([ADR-0031](docs/adr/0031-the-planner-says-read-only-not-a-mode.md)). That
+  mode differs by runner; Claude Code's plan mode, for example, may save notes
+  in its own config folder. A task's result is its `task_complete` report,
+  which Ordewell stores with the verdict.
+
+In practice:
+
+- Use **Guarded** for repositories you do not trust.
+- Review the plan before it runs. Approving it is the consent point; the
+  tasks then do what it says.
+- Ops tasks are where effects on the outside world happen: pushes, deploys,
+  cloud commands.
+
+Planned, not yet built:
+
+- A network egress guard for runners
+  ([#90](https://github.com/ordewell/ordewell/issues/90)).
+- An opt-in container setup with a credential broker and egress proxy
+  ([#93](https://github.com/ordewell/ordewell/issues/93),
+  [#99](https://github.com/ordewell/ordewell/issues/99)).
+- Read-only tasks defined by Ordewell rather than by each runner's mode
+  ([#104](https://github.com/ordewell/ordewell/issues/104)).
+
 ## What is out of scope
 
 - The behaviour of the coding agents Ordewell spawns (Claude Code, Codex,
