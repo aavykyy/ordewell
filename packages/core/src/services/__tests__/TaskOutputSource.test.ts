@@ -54,6 +54,30 @@ describe('BufferedTaskOutputSource', () => {
     });
   });
 
+  describe('report', () => {
+    it('is the task_complete summary alone, never the screen', () => {
+      const source = new BufferedTaskOutputSource();
+      const session = new FakeRunnerSession('s1', 't1');
+      source.attach('t1', session);
+      session.emitOutput('working\n');
+      expect(source.report('t1')).toBeUndefined();
+
+      session.reportComplete({ status: 'done', summary: ' Three findings: a, b, c. ' });
+
+      expect(source.report('t1')).toBe('Three findings: a, b, c.');
+    });
+
+    it('is dropped when a message read mid-turn supersedes the call (ADR-0023)', () => {
+      const source = new BufferedTaskOutputSource();
+      const session = new FakeRunnerSession('s1', 't1');
+      source.attach('t1', session);
+      session.reportComplete({ status: 'done', summary: 'done early' });
+      session.emitEvent({ type: 'message_delivered', messageId: 'm1', text: 'also do X' });
+
+      expect(source.report('t1')).toBeUndefined();
+    });
+  });
+
   describe('liveTail', () => {
     it('is null for a task that never had a session', () => {
       const source = new BufferedTaskOutputSource();

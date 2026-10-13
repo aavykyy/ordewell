@@ -1,8 +1,12 @@
-import type { Task, TaskSkillSnapshot } from '../models/Task';
+import type { Task, TaskOutputSummary, TaskSkillSnapshot } from '../models/Task';
 import { flattenTasks, flattenTasksWithParents } from '../models/Task';
 import { renderTaskSkills } from './taskSkills';
 
 const MAX_TAIL_CHARS = 500;
+/** Whole findings fit; a runaway summary does not bloat the session file, which holds every task's report. */
+const MAX_REPORT_CHARS = 20_000;
+/** Each dependency's share of a dependent's prompt, which carries every direct dependency's report. */
+const MAX_DEPENDENCY_REPORT_CHARS = 4_000;
 const DEFAULT_PLAN_MAP_MAX_ENTRIES = 30;
 const PLAN_MAP_MIN_TASKS = 3;
 
@@ -10,13 +14,21 @@ export interface PriorOutput {
   order: number;
   title: string;
   reviewReason: string;
+  report?: string;
   logTail: string;
 }
 
-export function summarizeOutput(reviewReason: string | undefined, output: string): { reviewReason: string; logTail: string; capturedAt: string } {
+function capReport(report: string): string {
+  if (report.length <= MAX_REPORT_CHARS) return report;
+  return `${report.slice(0, MAX_REPORT_CHARS).trimEnd()}\n\n[Report cut by Ordewell at ${MAX_REPORT_CHARS} characters; the rest was not kept.]`;
+}
+
+export function summarizeOutput(reviewReason: string | undefined, output: string, report?: string): TaskOutputSummary {
+  const kept = report?.trim();
   return {
     reviewReason: (reviewReason ?? '').trim(),
-    logTail: (output ?? '').slice(-MAX_TAIL_CHARS).trim(),
+    ...(kept ? { report: capReport(kept) } : {}),
+    logTail: kept ? '' : (output ?? '').slice(-MAX_TAIL_CHARS).trim(),
     capturedAt: new Date().toISOString(),
   };
 }
@@ -31,10 +43,20 @@ export function collectDirectDependencyOutputs(task: Task, allTasks: readonly Ta
       order: dep.order,
       title: dep.title,
       reviewReason: dep.outputSummary.reviewReason,
+      report: dep.outputSummary.report,
       logTail: dep.outputSummary.logTail,
     });
   }
   return out;
+}
+
+function indent(text: string): string {
+  return text.split('\n').map((l) => '  ' + l).join('\n');
+}
+
+function dependencyReport(report: string): string {
+  if (report.length <= MAX_DEPENDENCY_REPORT_CHARS) return report;
+  return `${report.slice(0, MAX_DEPENDENCY_REPORT_CHARS)}\n(report cut here: ${report.length - MAX_DEPENDENCY_REPORT_CHARS} more characters)`;
 }
 
 export function renderPriorOutputs(outputs: PriorOutput[]): string {
@@ -42,11 +64,9 @@ export function renderPriorOutputs(outputs: PriorOutput[]): string {
   const blocks = outputs
     .sort((a, b) => a.order - b.order)
     .map((o) => {
-      const tail = o.logTail
-        ? o.logTail.split('\n').map((l) => '  ' + l).join('\n')
-        : '  (no output captured)';
       const reason = o.reviewReason || '(no review note)';
-      return `### Task ${o.order}: ${o.title}\n- Review: ${reason}\n- Tail:\n${tail}`;
+      const output = o.report ? `- Report:\n${indent(dependencyReport(o.report))}` : `- Tail:\n${o.logTail ? indent(o.logTail) : '  (no output captured)'}`;
+      return `### Task ${o.order}: ${o.title}\n- Review: ${reason}\n${output}`;
     });
   return `## Prior task outputs\n\n${blocks.join('\n\n')}`;
 }
@@ -145,9 +165,7 @@ export interface ComposeOptions {
  * part of the work already.
  */
 function renderPreviousAttempt(output: string): string {
-  const tail = output.trim()
-    ? output.trim().split('\n').map((l) => '  ' + l).join('\n')
-    : '  (no output captured)';
+  const tail = output.trim() ? indent(output.trim()) : '  (no output captured)';
   return [
     '## Previous attempt',
     '',
@@ -158,7 +176,10 @@ function renderPreviousAttempt(output: string): string {
   ].join('\n');
 }
 
-const COMPLETION_INSTRUCTION = '\n\nWhen you have fully completed this task, call the `task_complete` tool with status `done` and a summary of what you did; the tasks that depend on this one are given that summary. If you cannot complete it, call `task_complete` with status `blocked` or `failed` and the reason instead.';
+const COMPLETION_INSTRUCTION = [
+  '\n\nWhen you have fully completed this task, call the `task_complete` tool with status `done` and a summary of what you did. If you cannot complete it, call `task_complete` with status `blocked` or `failed` and the reason instead.',
+  '\n\nThe `task_complete` summary is this task\'s report: the planner and the tasks that depend on this one read it, and nothing else you write reaches them. Put the full result there — findings, decisions, anything a reader needs to act on it. A review or other read-only task especially: its findings are its result, so put them all in the summary, and do not write the report to a file.',
+].join('');
 
 const CHECKPOINT_INSTRUCTION = [
   '## Human-in-the-loop checkpoints',

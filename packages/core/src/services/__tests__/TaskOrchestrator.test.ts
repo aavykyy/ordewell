@@ -1344,6 +1344,7 @@ describe('task attempts', () => {
       detach: () => {},
       reset: () => {},
       finalText: () => '',
+      report: () => undefined,
       liveTail: () => null,
     };
     const orchestrator = makeOrchestrator({ runner: { spawn, stop }, output: throwingOutput });
@@ -1588,7 +1589,7 @@ describe('TaskOrchestrator task output', () => {
     sessions[0].reportComplete({ status: 'done', summary: 'Renamed the module and updated imports.' });
     await settle();
 
-    expect(orchestrator.storeInstance.get('t1')!.outputSummary?.logTail).toBe('Renamed the module and updated imports.');
+    expect(orchestrator.storeInstance.get('t1')!.outputSummary?.report).toBe('Renamed the module and updated imports.');
   });
   it('exposes a running task\'s recent output, rendered clean', async () => {
     const { sessions, spawn } = sessionRunner();

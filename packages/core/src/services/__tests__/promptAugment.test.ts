@@ -19,6 +19,25 @@ describe('summarizeOutput', () => {
     const s = summarizeOutput(undefined, 'out');
     expect(s.reviewReason).toBe('');
   });
+
+  it('keeps a report whole, and no tail beside it', () => {
+    const report = 'Finding: '.padEnd(9000, 'y') + 'END';
+    const s = summarizeOutput('Verified', report, report);
+    expect(s.report).toBe(report);
+    expect(s.logTail).toBe('');
+  });
+
+  it('cuts a report past 20000 characters, and says so in what it keeps', () => {
+    const s = summarizeOutput('Verified', '', 'a'.repeat(20000) + 'q'.repeat(5000));
+    expect(s.report!.startsWith('a'.repeat(20000) + '\n\n[Report cut by Ordewell at 20000 characters')).toBe(true);
+    expect(s.report).not.toContain('q');
+  });
+
+  it('keeps the tail when there is no report', () => {
+    const s = summarizeOutput('Failed verification', 'last words', undefined);
+    expect(s).not.toHaveProperty('report');
+    expect(s.logTail).toBe('last words');
+  });
 });
 
 describe('augmentPromptWithPriorOutputs', () => {
@@ -45,6 +64,30 @@ describe('augmentPromptWithPriorOutputs', () => {
     expect(out).toContain('Review: all green');
     expect(out).toContain('created src/auth.ts');
     expect(out.endsWith('do B')).toBe(true);
+  });
+
+  it('hands a dependent the report in place of the tail', () => {
+    const dep = createTask({
+      id: 'a', order: 1, title: 'Review auth', prompt: 'do A',
+      outputSummary: { reviewReason: 'Verified', report: 'Findings:\n1. token never expires\n2. no rate limit', logTail: '', capturedAt: 'x' },
+    });
+    const cur = createTask({ id: 'b', order: 2, title: 'Fix auth', prompt: 'do B', dependencies: ['a'] });
+    const out = augmentPromptWithPriorOutputs(cur, [dep, cur]);
+    expect(out).toContain('- Report:\n  Findings:\n  1. token never expires\n  2. no rate limit');
+    expect(out).not.toContain('Tail');
+    expect(out).not.toContain('no output captured');
+  });
+
+  it('cuts a dependency report past 4000 characters for the prompt, and says so', () => {
+    const dep = createTask({
+      id: 'a', order: 1, title: 'Review', prompt: 'do A',
+      outputSummary: { reviewReason: 'Verified', report: 'k'.repeat(4000) + 'z'.repeat(3000), logTail: '', capturedAt: 'x' },
+    });
+    const cur = createTask({ id: 'b', order: 2, title: 'Fix', prompt: 'do B', dependencies: ['a'] });
+    const out = augmentPromptWithPriorOutputs(cur, [dep, cur]);
+    expect(out).toContain('k'.repeat(4000));
+    expect(out).not.toContain('z');
+    expect(out).toContain('(report cut here: 3000 more characters)');
   });
 
   it('skips non-direct (transitive) dependencies', () => {
@@ -249,6 +292,20 @@ describe('composeAugmentedPrompt', () => {
     expect(out).toContain('`blocked` or `failed`');
     expect(out).not.toContain('ORDEWELL');
     expect(out).not.toContain('marker');
+  });
+
+  it('says the task_complete summary is the report the planner and dependents read, never a file', () => {
+    const out = composeAugmentedPrompt(createTask({ id: 'a', prompt: 'review it' }), []);
+    expect(out).toContain('summary is this task\'s report');
+    expect(out).toContain('the planner and the tasks that depend on this one');
+    expect(out).toMatch(/findings, decisions/);
+    expect(out).toMatch(/read-only task/);
+    expect(out).toMatch(/do not write the report to a file/);
+  });
+
+  it('reminds a continued task where its report goes', () => {
+    const out = composeContinuationPrompt(createTask({ id: 'a', prompt: 'review it' }), 'Look again');
+    expect(out).toContain('summary is this task\'s report');
   });
   const TDD: TaskSkillSnapshot = { name: 'tdd', source: 'global', path: '/g/tdd/SKILL.md', content: 'RED then GREEN.\n' };
 

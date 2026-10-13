@@ -277,7 +277,9 @@ function verdictDetail(verdict: Verdict | undefined) {
 }
 
 function outputSummaryDetail({ outputSummary }: Task) {
-  return outputSummary ? { reviewReason: outputSummary.reviewReason, ...(outputSummary.logTail ? { logTail: outputSummary.logTail } : {}) } : null;
+  if (!outputSummary) return null;
+  const { reviewReason, report, logTail } = outputSummary;
+  return { reviewReason, ...(report ? { report } : {}), ...(logTail ? { logTail } : {}) };
 }
 
 /** A subtask's order restarts under its parent, so a read names it by its dotted reference, never a bare order. */

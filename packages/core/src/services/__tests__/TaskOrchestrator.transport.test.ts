@@ -205,8 +205,35 @@ describe('completing through task_complete (ADR-0022)', () => {
 
     const task = orchestrator.storeInstance.get('t1')!;
     expect(task.verdict?.checks[0].name).toBe('task_complete');
-    expect(task.outputSummary?.logTail).toBe('Added the parser and its tests.');
+    expect(task.outputSummary?.report).toBe('Added the parser and its tests.');
     expect(runner.stop).toHaveBeenCalledWith('s1');
+  });
+
+  it('keeps a long task_complete summary whole as the task report', async () => {
+    const { runner, sessions } = routingRunner();
+    const orchestrator = orchestratorWith(runner);
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Review', prompt: 'review it' })]);
+    await orchestrator.forceStartTask('t1');
+    const findings = Array.from({ length: 40 }, (_, i) => `Finding ${i + 1}: services/Foo.ts:${i + 10} drops the error on retry.`).join('\n');
+
+    (sessions[0] as FakeRunnerSession).reportComplete({ status: 'done', summary: findings });
+    await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
+
+    const summary = orchestrator.storeInstance.get('t1')!.outputSummary!;
+    expect(summary.report).toBe(findings);
+    expect(summary.report).toContain('Finding 1: services/Foo.ts:10');
+  });
+
+  it('keeps the reason of a blocked call as its report', async () => {
+    const { runner, sessions } = routingRunner();
+    const orchestrator = orchestratorWith(runner);
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
+    await orchestrator.forceStartTask('t1');
+
+    (sessions[0] as FakeRunnerSession).reportComplete({ status: 'blocked', summary: 'Tried the migration; the schema file is missing.', reason: 'no schema' });
+    await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('failed'));
+
+    expect(orchestrator.storeInstance.get('t1')!.outputSummary?.report).toBe('Tried the migration; the schema file is missing.');
   });
 
   it('fails a task on a blocked call, saying why', async () => {
