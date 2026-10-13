@@ -175,12 +175,13 @@ function queuedTaskBubble(message: QueuedTaskMessage, selected: boolean, cols: n
 }
 
 /**
- * What the task view's state is, in the header's words: a runner request
- * waiting for an answer wins — the turn is live but stopped on it — then a
- * live turn, then what an `awaiting_user` task waits on (a checkpoint over
- * plain input), then the task's own status.
+ * Completion can kill a runner before its log's turn ends, so a settled
+ * task's status wins. Otherwise a runner request waiting for an answer wins,
+ * then a live turn, then what an `awaiting_user` task waits on (a checkpoint
+ * over plain input), then the task's own status.
  */
 function taskActivity(task: TaskView | undefined, working: boolean): string {
+  if (task?.status === 'completed' || task?.status === 'failed') return task.status;
   const approvals = approvalLabel(task?.awaitingApproval);
   if (approvals) return inRow(approvals);
   if (working) return 'working';

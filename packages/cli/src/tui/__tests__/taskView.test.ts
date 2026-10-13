@@ -455,6 +455,16 @@ describe('continuing a finished task (ADR-0018, K1)', () => {
 describe('the task view header says what the task is doing', () => {
   const header = (state: TuiState): string => plain({ ...state, cols: 160 }).split('\n').find((line) => line.includes('→ Task 1 ·')) ?? '';
 
+  it('shows a completed task after its runner was stopped with a turn still open', () => {
+    const completed = opened({
+      tasks: [task({ status: 'completed', continuable: true })],
+      taskView: loaded({ view: replayTaskLog([{ type: 'turn_start', message: 'Do the task' }]) }),
+    });
+
+    expect(header(completed)).toContain('· completed');
+    expect(header(completed)).not.toContain('· working');
+  });
+
   it.each([
     ['input', 'waiting for your input'],
     ['checkpoint', 'checkpoint'],
