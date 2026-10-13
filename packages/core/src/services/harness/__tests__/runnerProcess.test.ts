@@ -224,6 +224,50 @@ describe('the OpenCode server banner', () => {
   });
 });
 
+describe('a runner\'s last line', () => {
+  // The pipe can close with a complete line still in the buffer — no trailing
+  // newline to flush it. Acting on the process's `exit` also reads the line as
+  // never having arrived and reports a bare "exited with code 0" instead, so
+  // the runner's own last words replace the truth.
+  it('is delivered when the process ends without a trailing newline', async () => {
+    const spawned = fakeSpawn([]);
+    const adapter = new ClaudeCodeAdapter(deps(spawned));
+    await adapter.start(taskStart);
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (event) => events.push(event));
+    await Promise.resolve();
+
+    spawned.processes[0].emitStdout(JSON.stringify({ type: 'result', subtype: 'success', session_id: 's1', is_error: false, result: 'done' }));
+    spawned.processes[0].exit(0);
+    await turn;
+
+    expect(events).toContainEqual({ type: 'turn_end' });
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    adapter.dispose();
+  });
+});
+
+describe('a consumer that throws', () => {
+  // The consumer is Ordewell, not the runner: its bug is not a bad protocol
+  // line. Left alone it becomes an uncaught exception inside the stdout
+  // listener, which takes the host down; instead the turn ends and the caller
+  // hears the error.
+  it('does not escape the stdout listener as an uncaught host exception', async () => {
+    const spawned = fakeSpawn([]);
+    const adapter = new ClaudeCodeAdapter(deps(spawned));
+    await adapter.start(taskStart);
+    const turn = adapter.send('go', (event) => { throw new Error(`consumer blew up on ${event.type}`); });
+    const settled = expect(turn).rejects.toThrow('consumer blew up on assistant_text');
+    await Promise.resolve();
+
+    const assistant = JSON.stringify({ type: 'assistant', session_id: 's1', message: { id: 'm1', role: 'assistant', content: [{ type: 'text', text: 'hello' }] } });
+    expect(() => spawned.processes[0].emitStdout(`${assistant}\n`)).not.toThrow();
+
+    await settled;
+    adapter.dispose();
+  });
+});
+
 describe('a runner\'s output split mid-character', () => {
   /** `text` as bytes, cut inside its first multibyte character after `after`. */
   function splitInside(text: string, after: string): [Buffer, Buffer] {

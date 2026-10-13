@@ -104,9 +104,12 @@ export class RunnerProcess {
     child.stderr?.on('data', (chunk: Buffer) => this.appendStderr(stderrText.write(chunk)));
     // A write racing the process's death (a turn, an interrupt, a permission
     // answer) fails with EPIPE asynchronously; unheard, it crashes the host.
-    // The exit path already reports the death, with its stderr tail.
+    // The close path already reports the death, with its stderr tail.
     child.stdin?.on('error', () => {});
-    child.on('exit', (code, signal) => { this.exitStatus = { code, signal }; this.markEnded(); });
+    // 'close', not 'exit': Node can report 'exit' while the pipes are still
+    // draining, so a listener told then reads a process's last words as never
+    // having arrived. 'close' is after both stdout and stderr have ended.
+    child.on('close', (code, signal) => { this.exitStatus = { code, signal }; this.markEnded(); });
     child.on('error', (err) => {
       this.appendStderr(`\n${err.message}`);
       this.exitStatus = { code: -1, signal: null };
@@ -120,14 +123,28 @@ export class RunnerProcess {
    * Hear the process's stdout as text, until the returned function is called.
    * A read can end inside a multibyte character; decoding each chunk alone
    * turns both halves into U+FFFD.
+   *
+   * `onEnd`, when given, fires once the stream has ended — after the decoder's
+   * own remainder is handed over. Its job is the framing layer's leftover: a
+   * pipe can close with a complete line still buffered but unterminated, and
+   * nothing else will come to flush it.
    */
-  readStdout(onText: (text: string) => void): () => void {
+  readStdout(onText: (text: string) => void, onEnd?: () => void): () => void {
     const child = this.child;
     if (!child?.stdout) return () => {};
     const decoder = new StringDecoder('utf8');
     const onData = (chunk: Buffer) => onText(decoder.write(chunk));
+    const onStreamEnd = () => {
+      const tail = decoder.end();
+      if (tail) onText(tail);
+      onEnd?.();
+    };
     child.stdout.on('data', onData);
-    return () => { child.stdout?.removeListener('data', onData); };
+    child.stdout.on('end', onStreamEnd);
+    return () => {
+      child.stdout?.removeListener('data', onData);
+      child.stdout?.removeListener('end', onStreamEnd);
+    };
   }
 
   /** The environment the process was spawned under, for any side process a handshake needs. */

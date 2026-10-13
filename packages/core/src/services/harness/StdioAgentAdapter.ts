@@ -112,13 +112,23 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
    * that had already come and gone.
    */
   private readProtocol(): void {
-    this.runner.readStdout((text) => this.stdout.push(text, (line) => {
+    const deliver = (line: string) => {
       // Ahead of `handleLine`, which some agents (Claude Code's subagent
       // transcript) deliberately parse into nothing at all — the process is
       // still working even on a line that yields no event.
       this.turnActivity?.();
       this.handleLine(line, (event) => this.announce(event));
-    }));
+    };
+    this.runner.readStdout(
+      (text) => this.stdout.push(text, deliver),
+      // The pipe can close with a final line complete but unterminated. The
+      // process's own last line is often the one that matters — a failure or a
+      // turn end — so it is delivered rather than dropped.
+      () => {
+        const rest = this.stdout.flush();
+        if (rest) deliver(rest);
+      },
+    );
   }
 
   /**
@@ -146,32 +156,45 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
       return;
     }
 
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
       let settled = false;
-      const finish = () => {
-        if (settled) return;
+      const release = () => {
         settled = true;
         this.turnEmit = null;
         this.turnActivity = null;
         this.hadTurn = true;
         signal?.removeEventListener('abort', onAbort);
-        this.process?.removeListener('exit', onExit);
+        this.process?.removeListener('close', onExit);
         this.process?.removeListener('error', onExit);
+      };
+      const finish = () => {
+        if (settled) return;
+        release();
         resolve();
+      };
+      // A consumer that throws is Ordewell's own failure, not the runner's: it
+      // ends the turn and reaches the caller as a rejection, rather than
+      // escaping the stdout listener as an uncaught host exception.
+      const fail = (err: unknown) => {
+        if (settled) return;
+        release();
+        reject(err instanceof Error ? err : new Error(String(err)));
       };
 
       const emit = (event: AgentEvent) => {
-        onEvent(event);
+        if (settled) return;
+        try {
+          onEvent(event);
+        } catch (err) {
+          fail(err);
+          return;
+        }
         if (event.type === 'turn_end' || event.type === 'error') finish();
       };
 
       // A process that dies mid-turn must surface its stderr, not hang the
       // planner behind a `turn_end` that will never come.
-      const onExit = () => {
-        if (settled) return;
-        onEvent({ type: 'error', message: this.exitMessage() });
-        finish();
-      };
+      const onExit = () => emit({ type: 'error', message: this.exitMessage() });
       const onAbort = () => {
         if (settled) return;
         // Stop means stop: the agent is holding real context we are abandoning,
@@ -182,7 +205,10 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
 
       this.turnEmit = emit;
       this.turnActivity = onActivity ?? null;
-      this.process!.once('exit', onExit);
+      // 'close', not 'exit': the process's last protocol line can still be
+      // arriving when Node reports 'exit', and reporting its death then makes
+      // that line read as never having come. 'close' is after the drain.
+      this.process!.once('close', onExit);
       this.process!.once('error', onExit);
       if (signal?.aborted) { onAbort(); return; }
       signal?.addEventListener('abort', onAbort, { once: true });
@@ -197,8 +223,7 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
       try {
         this.process!.stdin!.write(this.turnPayload(message));
       } catch (err) {
-        onEvent({ type: 'error', message: `Could not send to ${this.agentId}: ${err instanceof Error ? err.message : String(err)}` });
-        finish();
+        emit({ type: 'error', message: `Could not send to ${this.agentId}: ${err instanceof Error ? err.message : String(err)}` });
       }
     });
   }

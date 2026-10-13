@@ -169,7 +169,10 @@ nothing there.
   the workspace and the subscription, invisible to the surface that thought it
   had stopped. `taskkill /T` walks the tree; POSIX keeps its SIGTERM → SIGKILL
   escalation, sent to the runner's process group (see CONTEXT.md, *Kill
-  tree*). Every dispose path means `ModelDiscovery`'s too: its
+  tree*). A leader's exit does not end that group — a crashed runner leaves its
+  shells and dev servers running — so the group is signalled after the leader
+  is gone and kept on the host's books until it is empty. Every dispose path
+  means `ModelDiscovery`'s too: its
   Codex app-server probe held the one remaining bare `kill()`, so a discovery
   call against a shim install left the app-server holding its port after the
   call that started it had returned.
@@ -246,3 +249,4 @@ measured on a Windows host; the rest has not been run on one.
 - 2026-10-07 — POSIX stop signals the runner's process group rather than the direct child.
 - 2026-10-09 — the system-prompt advice names task skills, the mode toggles being gone (ADR-0024).
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
+- 2026-10-13 — a returned exit code no longer skips a group leader: the group is signalled and tracked until it is empty.

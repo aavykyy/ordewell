@@ -1,4 +1,6 @@
+import type { ChildProcess } from 'child_process';
 import type { AgentProcessDeps } from './AgentAdapter';
+import { killTree, spawnInOwnGroup } from '../../utils/processTree';
 
 /** A probe that hangs must not hold up session start; an unclear answer means "change nothing". */
 const PROBE_TIMEOUT_MS = 10000;
@@ -125,6 +127,7 @@ function runProbe(
   return new Promise((resolve) => {
     let output = '';
     let settled = false;
+    let proc: ChildProcess | null = null;
     const finish = (code: number | null) => {
       if (settled) return;
       settled = true;
@@ -132,14 +135,19 @@ function runProbe(
       resolve({ code, output });
     };
 
-    const timer = setTimeout(() => finish(null), PROBE_TIMEOUT_MS);
+    const timer = setTimeout(() => {
+      finish(null);
+      // The answer is refused, so the probe has no owner left; nothing knows
+      // its pid, and leaving it running would hold the workspace for the
+      // host's lifetime. Its own process group, like every runner.
+      killTree(proc, { platform: deps.platform });
+    }, PROBE_TIMEOUT_MS);
     timer.unref?.();
 
-    let proc;
     try {
-      proc = deps.spawn('codex', ['sandbox', ...flags, '--', '/bin/true'], {
-        env, stdio: ['pipe', 'pipe', 'pipe'], cwd,
-      });
+      proc = spawnInOwnGroup((detached) => deps.spawn('codex', ['sandbox', ...flags, '--', '/bin/true'], {
+        env, stdio: ['pipe', 'pipe', 'pipe'], cwd, detached,
+      }), deps.platform);
     } catch {
       finish(null);
       return;
@@ -148,6 +156,8 @@ function runProbe(
     proc.stdout?.on('data', (chunk: Buffer) => { output += chunk.toString(); });
     proc.stderr?.on('data', (chunk: Buffer) => { output += chunk.toString(); });
     proc.on('error', () => finish(null));
-    proc.on('exit', (code) => finish(code));
+    // 'close', not 'exit': the answer is what the probe printed, and Node can
+    // fire 'exit' before the pipe has drained.
+    proc.on('close', (code) => finish(code));
   });
 }

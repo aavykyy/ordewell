@@ -70,6 +70,17 @@ function makeProcess(): FakeAgentProcess {
   let killed = false;
   let stdinEnded = false;
 
+  // The order a real child reports an end in: the process's `exit`, then the
+  // stdio streams draining (`end`), then `close` once they have. Adapters act
+  // on `close` and flush a partial last line on `end`, so the fake has to send
+  // both or a turn would never finish.
+  const end = (code: number | null, signal: string | null) => {
+    proc.emit('exit', code, signal);
+    stdout.emit('end');
+    stderr.emit('end');
+    proc.emit('close', code, signal);
+  };
+
   Object.defineProperties(proc, {
     stdout: { value: stdout, writable: false },
     stderr: { value: stderr, writable: false },
@@ -95,7 +106,7 @@ function makeProcess(): FakeAgentProcess {
       value: (signal?: string) => {
         if (killed) return false;
         killed = true;
-        queueMicrotask(() => proc.emit('exit', null, signal ?? 'SIGTERM'));
+        queueMicrotask(() => end(null, signal ?? 'SIGTERM'));
         return true;
       },
       writable: false,
@@ -103,7 +114,7 @@ function makeProcess(): FakeAgentProcess {
     emitStdout: { value: (chunk: string) => stdout.emit('data', Buffer.from(chunk)), writable: false },
     emitStderr: { value: (chunk: string) => stderr.emit('data', Buffer.from(chunk)), writable: false },
     exit: {
-      value: (code: number, signal?: string) => { killed = true; proc.emit('exit', code, signal ?? null); },
+      value: (code: number, signal?: string) => { killed = true; end(code, signal ?? null); },
       writable: false,
     },
   });
