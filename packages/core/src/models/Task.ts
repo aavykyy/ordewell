@@ -364,6 +364,8 @@ export interface ConversationMessage {
   skill?: SkillLoad;
   /** Present exactly when `kind` is 'execution'. */
   execution?: ExecutionRecord;
+  /** A user's message that was force sent, stopping the turn before it (ADR-0023). */
+  forced?: true;
 }
 
 /**
@@ -421,6 +423,8 @@ export interface PendingPlanTurn {
   timestamp: string;
   /** What its `/name` tokens loaded when it was sent, so a replay sends the same skills. */
   skills?: SkillLoad[];
+  /** Force sent: it waits ahead of every input not forced, and its turn is its own (ADR-0023, F2). */
+  forced?: true;
 }
 
 export interface PlanModificationWarnings {

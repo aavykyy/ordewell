@@ -60,14 +60,14 @@ function finalSegmentIndex(blocks: readonly DisplayBlock[], turnId: string, past
   return -1;
 }
 
-function openTurn(view: ConversationView, { turnId, prompt = '', skills = [], wakeUps = [] }: Message<'planner_turn_started'>): ConversationView {
+function openTurn(view: ConversationView, { turnId, prompt = '', skills = [], wakeUps = [], forced }: Message<'planner_turn_started'>): ConversationView {
   const adopted = takePendingInputs(view, prompt, wakeUps, turnId);
   view = adopted.view;
   wakeUps = wakeUps.slice(adopted.wakeUps);
-  if (wakeUps.length === 0) return adopted.prompt || (prompt === '' && adopted.wakeUps > 0) ? view : promptLine(view, turnId, prompt, skills);
+  if (wakeUps.length === 0) return adopted.prompt || (prompt === '' && adopted.wakeUps > 0) ? view : promptLine(view, turnId, prompt, skills, forced);
   // A wake-up turn has no message; otherwise the run updates go ahead of the
   // message they were delivered with, where the transcript keeps them.
-  const said = prompt === '' || adopted.prompt ? view : promptLine(view, turnId, prompt, skills);
+  const said = prompt === '' || adopted.prompt ? view : promptLine(view, turnId, prompt, skills, forced);
   const at = prompt === '' ? said.blocks.length : findLastIndex(said.blocks, (b) => b.type === 'message' && b.role === 'user' && b.turnId === turnId);
   const updates = wakeUps.map((text, n) => settledMessage(`b${said.nextId + n}`, 'wake_up', text, turnId));
   return { ...said, blocks: [...said.blocks.slice(0, at), ...updates, ...said.blocks.slice(at)], nextId: said.nextId + updates.length };
@@ -103,15 +103,15 @@ function takePendingInputs(view: ConversationView, prompt: string | undefined, w
   };
 }
 
-function promptLine(view: ConversationView, turnId: string, prompt: string, skills: NonNullable<Message<'planner_turn_started'>['skills']>): ConversationView {
+function promptLine(view: ConversationView, turnId: string, prompt: string, skills: NonNullable<Message<'planner_turn_started'>['skills']>, forced?: boolean): ConversationView {
   // A surface shows its user's prompt the moment it is sent; the turn that
   // answers it adopts that line rather than repeating it.
   const i = findLastIndex(view.blocks, (b) => b.type === 'message' && b.role === 'user');
   const sent = view.blocks[i];
   const adopted = sent?.type === 'message' && sent.turnId === undefined && sent.text === prompt;
   const said: ConversationView = adopted
-    ? { ...view, blocks: replaceAt(view.blocks, i, userMessage(sent.id, prompt, skills, turnId)) }
-    : append(view, (id) => userMessage(id, prompt, skills, turnId));
+    ? { ...view, blocks: replaceAt(view.blocks, i, userMessage(sent.id, prompt, skills, { turnId, forced })) }
+    : append(view, (id) => userMessage(id, prompt, skills, { turnId, forced }));
   if (skills.length === 0) return said;
   // Directly under the message that loaded them, wherever that line sits.
   const at = adopted ? i + 1 : findLastIndex(said.blocks, (b) => b.type === 'message' && b.role === 'user') + 1;

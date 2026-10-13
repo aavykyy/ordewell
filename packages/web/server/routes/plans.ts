@@ -426,6 +426,20 @@ export function plansRoute(pool: OrchestratorPool) {
     }
   });
 
+  // Send now (ADR-0023): stops the planner turn in flight — never the run's
+  // tasks — and answers this message in the turn that replaces it, ahead of
+  // anything waiting. With no turn in flight it is the plain send above.
+  router.post('/:sessionId/converse/message/now', async (c) => {
+    try {
+      const { message } = await c.req.json();
+      if (!message) return c.json({ error: 'message is required' }, 400);
+      const plan = await pool.session(c.req.param('sessionId')).forceSendPrompt(message);
+      return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
+    } catch (err) {
+      return failure(c, err, 'conversation message');
+    }
+  });
+
   // Fork and rewind act on the conversation, never on the plan: the task list
   // rides along as-is (ADR-0002, update of 2026-09-25). A rewind is a fork from
   // just before a user message; the original session is left as it was.

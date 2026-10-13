@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { Hono } from 'hono';
-import { ConversationBusyError, ConversationEditError, listSessions, loadSession, saveSession, type LegacyPlanState, SessionNotFoundError } from '@ordewell/core';
+import { ConversationBusyError, ConversationEditError, PlannerTurnStoppedError, listSessions, loadSession, saveSession, type LegacyPlanState, SessionNotFoundError } from '@ordewell/core';
 import { OrchestratorPool } from '../../pool/orchestratorPool';
 import { plansRoute } from '../plans';
 
@@ -181,6 +181,46 @@ describe('POST /:sessionId/converse/message', () => {
 
     expect(res.status).toBe(409);
     expect(((await res.json()) as { error: string }).error).toMatch(/planner is answering/);
+  });
+});
+
+describe('POST /:sessionId/converse/message/now', () => {
+  it('force sends the message and answers the plan its turn landed, like a plain send', async () => {
+    const forceSendPrompt = vi.fn().mockResolvedValue({ tasks: [] });
+    const app = appFor(poolWith({ forceSendPrompt }));
+
+    const res = await post(app, 'converse/message/now', { message: 'use Postgres instead' });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ plan: { tasks: [] } });
+    expect(forceSendPrompt).toHaveBeenCalledWith('use Postgres instead');
+  });
+
+  it('needs a message', async () => {
+    const forceSendPrompt = vi.fn();
+    const app = appFor(poolWith({ forceSendPrompt }));
+
+    expect((await post(app, 'converse/message/now', {})).status).toBe(400);
+    expect(forceSendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('is a 404 for a session the daemon does not hold', async () => {
+    const app = appFor(poolWith({ forceSendPrompt: vi.fn() }));
+
+    const res = await app.request('/api/plans/nope/converse/message/now', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'now' }),
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  it('answers a stopped forced turn as the plain route does', async () => {
+    const forceSendPrompt = vi.fn().mockRejectedValue(new PlannerTurnStoppedError());
+    const app = appFor(poolWith({ forceSendPrompt }));
+
+    const res = await post(app, 'converse/message/now', { message: 'now' });
+
+    expect(res.status).toBe(409);
   });
 });
 

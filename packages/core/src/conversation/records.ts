@@ -15,10 +15,14 @@ export function settledMessage(id: string, role: MessageRole, text: string, turn
   return { type: 'message', id, role, text, streaming: false, ...(turnId ? { turnId } : {}) };
 }
 
-/** The user's message, marked with the skills it loaded when it loaded any. */
-export function userMessage(id: string, text: string, skills: readonly SkillLoadNotice[], turnId?: string): MessageBlock {
+/** The user's message, marked with the skills it loaded when it loaded any, and when it was force sent. */
+export function userMessage(id: string, text: string, skills: readonly SkillLoadNotice[], { turnId, forced }: { turnId?: string; forced?: boolean } = {}): MessageBlock {
   const block = settledMessage(id, 'user', text, turnId);
-  return skills.length > 0 ? { ...block, skills: skills.map((s) => s.name) } : block;
+  return {
+    ...block,
+    ...(skills.length > 0 ? { skills: skills.map((s) => s.name) } : {}),
+    ...(forced ? { forced: true } : {}),
+  };
 }
 
 /** What a surface is told of a load: everything but the body, which only the planner is sent. */

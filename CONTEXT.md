@@ -185,7 +185,8 @@ into it. A turn that continues the dialogue is refused while another is live
 (`ConversationBusyError`, 409 from the daemon) — except a reply sent during a
 reply, which **PlanTurns** takes in the next turn instead; one that starts a
 fresh plan supersedes it. `abortPlannerTurn` *stops* the turn: it still settles, with
-whatever the backend had, as `stopped`. A turn whose plan is dropped under it —
+whatever the backend had, as `stopped`. A **Force send** stops it the same way,
+marked as stopped by one, and the forced message's turn follows. A turn whose plan is dropped under it —
 a new plan, another session adopted, the session closed — is *abandoned*:
 stopped, the conversation freed at once, and whatever it settles is discarded
 (`PlannerTurnDiscardedError`) instead of committed. So is a reply cut off by
@@ -649,6 +650,16 @@ F1–F4). The task stays `in_progress` through the switch. With no turn running
 it is a plain send; a handed-over message cannot be force sent. On Codex the interrupt stops the agent waiting,
 not the command, which runs to its end. TUI `ctrl-s`, VS Code *Send now* /
 `Ctrl+Enter`.
+In the planner chat (`Session.forceSendPrompt`, F5) it is turn-scoped: it
+stops the **Planner turn** in flight the way a stop does — the turn's
+**Turn effects** settle as for any stop — and **PlanTurns** answers the forced
+message alone in the turn that replaces it, ahead of every input waiting;
+nothing can start in between. It never stops, halts or edits the run's tasks.
+The stopped turn ends with `forceSent` on its `planner_turn_ended`, so a
+surface keeps the prompts it holds, in order, instead of handing them back as
+it does after a stop; the forced message carries `forced` on its
+`planner_turn_started`, its transcript entry and its pending input, so a
+reload still marks it. Daemon `POST /api/plans/:id/converse/message/now`.
 *Avoid:* "force-start" (starting a task past its dependencies), "priority" or
 "urgent" message, and "interrupt" for the whole action — a plain interrupt
 ends in waiting for input, a force send does not.

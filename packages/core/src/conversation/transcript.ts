@@ -24,7 +24,7 @@ function fromEntry(entry: SerializedConversationMessage, loaded: readonly SkillL
     const { skill } = entry;
     return (id) => skillLoadBlock(id(), skillLoadNotice(skill));
   }
-  if (entry.role === 'user' && !entry.kind) return (id) => userMessage(id(), entry.content, loaded.map(skillLoadNotice));
+  if (entry.role === 'user' && !entry.kind) return (id) => userMessage(id(), entry.content, loaded.map(skillLoadNotice), { forced: entry.forced });
   return (id) => settledMessage(id(), roleOf(entry), entry.content);
 }
 
@@ -158,7 +158,7 @@ export function fromTranscript(
       blocks.push(settledMessage(id(), 'wake_up', input.text));
     } else {
       const skills = (input.skills ?? []).map(skillLoadNotice);
-      blocks.push(userMessage(id(), input.text, skills));
+      blocks.push(userMessage(id(), input.text, skills, { forced: input.forced }));
       blocks.push(...skills.map((skill) => skillLoadBlock(id(), skill)));
     }
     pendingInputs.push({ input: { ...input, skills: input.skills?.map(skillLoadNotice) }, blockIds: blocks.slice(start).map((block) => block.id) });

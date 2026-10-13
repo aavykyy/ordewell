@@ -35,6 +35,8 @@ export interface MessageBlock {
   segmentId?: string;
   /** A user's message: the skills its `/name` tokens loaded, for a surface to mark those tokens (see `loadedSkillTokens`). */
   skills?: readonly string[];
+  /** A user's message that was force sent ("Send now"), stopping the turn before it (ADR-0023). */
+  forced?: true;
 }
 
 export interface ThinkingDisplayBlock {

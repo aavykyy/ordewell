@@ -25,6 +25,8 @@ export interface PlanTurnInput {
 export interface TurnPrompt extends SkillInvocation {
   source: PlanTurnSource;
   wakeUps: string[];
+  /** The message was force sent: the turn replaces the one it stopped. */
+  forced?: true;
 }
 
 export interface PlanTurnsHost {
@@ -35,6 +37,11 @@ export interface PlanTurnsHost {
   mayWake(): boolean;
   /** Save the pending list. A background save: it must not count as settling a turn in flight. */
   persist(): void;
+  /**
+   * Stop the planner turn holding the conversation for a force send: it ends
+   * as stopped by one, not by the user. The run's tasks are not touched.
+   */
+  interrupt(): void;
   /** Hold the scheduler's new starts; the returned release is idempotent. */
   holdStarts(): () => void;
   /** Tick an armed scheduler after a release, so what became ready during the turn starts. */
@@ -58,6 +65,8 @@ interface Waiter {
 /** The turn in flight, compared by identity: an abandoned one finds another, or none, in its place. */
 interface Running {
   release: () => void;
+  /** The inputs it took, which stay on the plan until it ends. */
+  ids: ReadonlySet<string>;
 }
 
 /** One planner message for a batch: the inputs in the order they came, each with the skills it loaded. */
@@ -68,6 +77,7 @@ export function turnPrompt(batch: readonly PendingPlanTurn[]): TurnPrompt {
     text: fromUser.map((t) => t.text).join('\n\n'),
     skills: fromUser.flatMap((t) => t.skills ?? []),
     wakeUps: batch.filter((t) => t.source === 'supervisor').map((t) => t.text),
+    ...(batch.some((t) => t.forced) ? { forced: true } : {}),
   };
 }
 
@@ -107,19 +117,41 @@ export class PlanTurns {
    * conversation it is refused, as a reply always was.
    */
   enqueue(input: PlanTurnInput): Promise<LegacyPlanState> {
-    const plan = this.host.plan();
-    if (!plan) return Promise.reject(new Error('No planning conversation to continue'));
     // A wake-up is never refused: it waits for the conversation like any input
     // that arrives during a turn, and is delivered when it frees.
-    if (input.source === 'user' && !this.running && this.host.conversationBusy()) return Promise.reject(new ConversationBusyError('send a message'));
+    if (input.source === 'user' && this.host.plan() && !this.running && this.host.conversationBusy()) return Promise.reject(new ConversationBusyError('send a message'));
+    return this.admit(input, false);
+  }
+
+  /**
+   * Force send (ADR-0023, F5): stop the planner turn in flight — whatever
+   * kind holds the conversation — and answer this input in the turn that
+   * replaces it, alone, ahead of every input waiting but an earlier forced
+   * one; the rest keep their order behind it. Nothing can start between the
+   * two: the input waits before the stop, and the next turn takes it first.
+   * With no turn in flight it is a plain send.
+   */
+  forceSend(input: PlanTurnInput): Promise<LegacyPlanState> {
+    if (!this.running && !this.host.conversationBusy()) return this.enqueue(input);
+    const settled = this.admit(input, true);
+    this.host.interrupt();
+    return settled;
+  }
+
+  private admit(input: PlanTurnInput, forced: boolean): Promise<LegacyPlanState> {
+    const plan = this.host.plan();
+    if (!plan) return Promise.reject(new Error('No planning conversation to continue'));
     const entry: PendingPlanTurn = {
       id: `turn-${Date.now()}-${++this.seq}`,
       source: input.source,
       text: input.text,
       timestamp: new Date().toISOString(),
       ...(input.skills && input.skills.length > 0 ? { skills: [...input.skills] } : {}),
+      ...(forced ? { forced: true } : {}),
     };
-    plan.pendingTurns = [...(plan.pendingTurns ?? []), entry];
+    const pending = plan.pendingTurns ?? [];
+    const at = forced ? pending.findIndex((t) => !t.forced && !this.running?.ids.has(t.id)) : -1;
+    plan.pendingTurns = at === -1 ? [...pending, entry] : [...pending.slice(0, at), entry, ...pending.slice(at)];
     this.host.persist();
     const settled = new Promise<LegacyPlanState>((resolve, reject) => {
       this.waiters.set(entry.id, { resolve, reject, signal: input.signal });
@@ -156,20 +188,25 @@ export class PlanTurns {
     this.waiters.clear();
   }
 
-  /** What waits, oldest first, less any input whose caller stopped it before its turn began. */
+  /**
+   * What the next turn takes: what waits, oldest first, less any input whose
+   * caller stopped it before its turn began — or a forced input alone.
+   */
   private liveBatch(plan: LegacyPlanState): PendingPlanTurn[] {
     const pending = plan.pendingTurns ?? [];
     const stopped = pending.filter((t) => this.waiters.get(t.id)?.signal?.aborted);
-    if (stopped.length === 0) return pending;
-    this.take(plan, new Set(stopped.map((t) => t.id)));
-    this.host.persist();
-    for (const t of stopped) this.settle(t.id, (w) => w.reject(new PlannerTurnStoppedError()));
-    return plan.pendingTurns ?? [];
+    if (stopped.length > 0) {
+      this.take(plan, new Set(stopped.map((t) => t.id)));
+      this.host.persist();
+      for (const t of stopped) this.settle(t.id, (w) => w.reject(new PlannerTurnStoppedError()));
+    }
+    const live = plan.pendingTurns ?? [];
+    return live[0]?.forced ? [live[0]] : live;
   }
 
   private async run(plan: LegacyPlanState, batch: readonly PendingPlanTurn[]): Promise<void> {
     const ids = new Set(batch.map((t) => t.id));
-    const running: Running = { release: this.host.holdStarts() };
+    const running: Running = { release: this.host.holdStarts(), ids };
     this.running = running;
     const timeout = setTimeout(() => {
       running.release();

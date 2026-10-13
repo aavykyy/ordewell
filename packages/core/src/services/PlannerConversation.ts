@@ -88,13 +88,20 @@ function spendRead(reads: ReadBudget, signature: string): 'refused' | 'answer' |
 export class PlannerTurn {
   private readonly controller = new AbortController();
   private dropped = false;
+  private forced = false;
 
   get signal(): AbortSignal { return this.controller.signal; }
 
   /** The plan it was answering was dropped under it, so nothing it settles may land. */
   get abandoned(): boolean { return this.dropped; }
 
-  stop(): void { this.controller.abort(); }
+  /** A force send stopped it, not the user: the forced turn follows. A turn already stopped stays the user's stop. */
+  get forceSent(): boolean { return this.forced; }
+
+  stop(by?: 'force_send'): void {
+    if (by === 'force_send' && !this.controller.signal.aborted) this.forced = true;
+    this.controller.abort();
+  }
 
   abandon(): void {
     this.dropped = true;
@@ -151,6 +158,8 @@ interface UserTurn {
   wakeUp?: WakeUpTurn;
   /** Where its failure returns the dialogue to, once it has written to it. */
   checkpoint?: TranscriptSnapshot | null;
+  /** Its message was force sent. */
+  forced?: boolean;
   /** Handed in since the backend last answered; see {@link PlannerConversation.submit}. */
   submitted?: PlannerSubmission;
   /**
@@ -351,6 +360,8 @@ export interface ReplyOptions {
   wakeUps?: readonly string[];
   /** Set when the turn is a wake-up's alone. */
   wakeUp?: WakeUpTurn;
+  /** The user's message was force sent: the turn replaces the one it stopped (ADR-0023). */
+  forced?: boolean;
 }
 
 /** Refused while tasks run: a whole plan replaces the run's, and only an edit can leave running work as it is. */
@@ -395,9 +406,9 @@ export class PlannerConversation {
   }
 
   /** Stop the planner turn in flight; it settles as stopped. False when none is. */
-  stopTurn(): boolean {
+  stopTurn(by?: 'force_send'): boolean {
     if (!this.live) return false;
-    this.live.stop();
+    this.live.stop(by);
     return true;
   }
 
@@ -782,7 +793,7 @@ export class PlannerConversation {
     return this.userTurn({ refuseAs: 'send a message' }, sent, options.signal, (userTurn) => {
       userTurn.onCommit = options.onCommit;
       return this.replyTurn(sent, wakeUps, userTurn);
-    }, { wakeUps, wakeUp: options.wakeUp });
+    }, { wakeUps, wakeUp: options.wakeUp, forced: options.forced });
   }
 
   private async replyTurn(message: SkillInvocation, wakeUps: readonly string[], userTurn: UserTurn): Promise<SettledTurn> {
@@ -800,7 +811,7 @@ export class PlannerConversation {
     // holding the same input after a save; the two leave together in the save
     // that lands the outcome.
     const entries: ConversationMessage[] = wakeUps.map((content): ConversationMessage => ({ role: 'user', content, timestamp: now, kind: 'wake_up' }));
-    if (fromUser) entries.push(...this.userEntries(message, now));
+    if (fromUser) entries.push(...this.userEntries(message, now, userTurn.forced));
     userTurn.input = {
       entries,
       research: fromUser ? [{ id: `up-${Date.now()}`, type: 'user_prompt', content: message.text, timestamp: now }] : [],
@@ -893,13 +904,16 @@ export class PlannerConversation {
     prompt: SkillInvocation,
     signal: AbortSignal | undefined,
     run: (turn: UserTurn) => Promise<SettledTurn>,
-    delivered: { wakeUps?: readonly string[]; wakeUp?: WakeUpTurn } = {},
+    delivered: { wakeUps?: readonly string[]; wakeUp?: WakeUpTurn; forced?: boolean } = {},
   ): Promise<LegacyPlanState> {
     const { turn: planner, release } = this.claim(admission, signal);
     const turnId = uuidv4();
     const stream = new TurnStream(turnId, (p) => this.host.onProgress(p));
-    const { wakeUp } = delivered;
-    const turn: UserTurn = { stream, planner, signal: planner.signal, plan: this.host.plan(), reads: freshReadBudget(wakeUp), ...(wakeUp ? { wakeUp } : {}) };
+    const { wakeUp, forced } = delivered;
+    const turn: UserTurn = {
+      stream, planner, signal: planner.signal, plan: this.host.plan(), reads: freshReadBudget(wakeUp),
+      ...(wakeUp ? { wakeUp } : {}), ...(forced ? { forced } : {}),
+    };
     this.openTurn = turn;
     const skills = prompt.skills.map(skillLoadNotice);
     const wakeUps = delivered.wakeUps ?? [];
@@ -908,6 +922,7 @@ export class PlannerConversation {
       ...(skills.length > 0 ? { skills } : {}),
       ...(wakeUps.length > 0 ? { wakeUps: [...wakeUps] } : {}),
       ...(wakeUp ? { supervisor: true } : {}),
+      ...(forced ? { forced: true } : {}),
     });
     let outcome: PlannerTurnOutcome = 'error';
     try {
@@ -927,7 +942,10 @@ export class PlannerConversation {
       release();
       // A stop can still settle — a backend hands back what it had as a
       // message — but the user asked for it to end, and that is what it did.
-      this.host.broadcast({ type: 'planner_turn_ended', turnId, outcome: planner.signal.aborted ? 'stopped' : outcome });
+      this.host.broadcast({
+        type: 'planner_turn_ended', turnId, outcome: planner.signal.aborted ? 'stopped' : outcome,
+        ...(planner.forceSent ? { forceSent: true } : {}),
+      });
     }
   }
 
@@ -938,9 +956,9 @@ export class PlannerConversation {
   }
 
   /** The message as typed, then one entry per skill it loaded, sharing its timestamp so a reload keeps them together. */
-  private userEntries({ text, skills }: SkillInvocation, timestamp: string): ConversationMessage[] {
+  private userEntries({ text, skills }: SkillInvocation, timestamp: string, forced?: boolean): ConversationMessage[] {
     return [
-      { role: 'user', content: text, timestamp },
+      { role: 'user', content: text, timestamp, ...(forced ? { forced: true } : {}) },
       ...skills.map((skill): ConversationMessage => ({ role: 'user', content: skillLoadLabel(skill), timestamp, kind: 'skill_load', skill })),
     ];
   }
