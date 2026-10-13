@@ -160,7 +160,7 @@ model's behalf, which is precisely what a coding agent replaces.
   Codex's `configWarning` — reaches the timeline instead of being dropped for
   arriving before the first turn. That warning is the difference between a
   visible problem and a planner that reads nothing and plans confidently anyway.
-- **A planner that cannot run a command does not plan.** Codex's Linux
+- **A planner whose shell cannot start reads through Ordewell's.** Codex's Linux
   sandbox is bubblewrap, which needs unprivileged user namespaces; Ubuntu 24.04
   restricts those through AppArmor and ships no `bwrap` profile, so every
   command dies with `bwrap: loopback: Failed RTM_NEWADDR` and Codex answers from
@@ -170,10 +170,12 @@ model's behalf, which is precisely what a coding agent replaces.
   into `use_legacy_landlock`, the pre-bubblewrap backend, which needs no
   namespace and still denies writes; an unrecognized failure changes nothing,
   because that backend is deprecated upstream and a healthy Codex must not be
-  moved onto it on weak evidence. Both backends failing is fatal at handshake,
-  naming the two documented fixes: a Codex that explores nothing is the silent
-  success this repo forbids, and it is worth more as a visible error than as a
-  confident blind plan.
+  moved onto it on weak evidence. With both backends failing, the planner
+  starts with Codex's own shell switched off and reads through `run_command`
+  alone, and a note names the two documented fixes
+  ([ADR-0033](0033-codex-planner-without-its-sandbox.md)). A Codex that
+  explores nothing is still the silent success this repo forbids, so a
+  planner without Ordewell's tools is refused at handshake.
 - **All four surfaces get it for free.** VS Code, web, CLI and TUI consume
   `SessionMessage` and `ResearchProgress`; the harness planner emits the same
   events from the same `Session`. No surface learns that a coding agent is on
@@ -277,3 +279,4 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-10-10 — harness planners research inside ADR-0008's envelope (ADR-0026).
 - 2026-10-11 — execution tools through the command seam, a further exception to read-only planners ([ADR-0029](0029-the-supervisor.md)).
 - 2026-10-12 — the terminal UI's `/planner` saves each step on enter, with the later steps at their pre-selection, instead of applying nothing until the last step; esc closes and keeps what was saved. Users wanted to see a choice take effect and leave with esc. A harness is never saved without a model to go with it.
+- 2026-10-13 — a Codex planner on a host where no sandbox starts plans with its own shell off, through `run_command`, instead of being refused ([ADR-0033](0033-codex-planner-without-its-sandbox.md)).

@@ -215,6 +215,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **Codex plans on stock Ubuntu.** Where Codex's sandbox cannot start
+  (Ubuntu 23.10 and later restrict the user namespaces it needs), a Codex
+  planner no longer stops with an error asking for `sudo`. It plans with its
+  own shell off and reads the workspace through Ordewell's `run_command`, as
+  the other planners do, and a note says how to give it its shell back. A
+  Codex task that needs the sandbox is still refused, and the message now
+  offers Full access or another runner
+  ([ADR-0033](docs/adr/0033-codex-planner-without-its-sandbox.md)).
 - **A planner reads back its runner's saved output.** When Claude Code or
   OpenCode saves a long tool result to a file outside the workspace, the
   planner reads that file without asking, in Guarded and Full, as it did

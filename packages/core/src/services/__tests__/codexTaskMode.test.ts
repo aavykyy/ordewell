@@ -187,6 +187,7 @@ describe('CodexAdapter task sandbox', () => {
     const started = adapter.start(taskStart('agent'));
     await expect(started).rejects.toThrow('kernel.apparmor_restrict_unprivileged_userns=0');
     await expect(started).rejects.toThrow(/run the task again/);
+    await expect(started).rejects.toThrow(/Full access or another runner/);
     await expect(started).rejects.not.toThrow(/plan/i);
     expect(sentNamed(spawned.processes[0]?.written ?? [], 'thread/start')).toHaveLength(0);
     // Refused before any thread existed, the app-server is no use to anyone.

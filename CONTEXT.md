@@ -1383,7 +1383,9 @@ planner prompt is always *appended* to the agent's own instructions, never
 substituted for them, or the agent forgets what its tools are. A planner must
 also be *able* to read: Codex's sandbox is probed before its handshake
 (`codexSandbox.ts`), because a bubblewrap that cannot create user namespaces
-leaves it answering from memory rather than from the repository. A harness
+leaves its own shell running nothing. Where no backend starts, a planner's
+Codex shell is switched off and it reads through `run_command` alone
+(ADR-0033); a task that needs the sandbox is refused. A harness
 planner also gets the *Planner token* and its tools (ADR-0022): `list_runners`
 and `list_models` read the live catalog, `task_query` and `task_output` read
 tasks, and `submit_plan`/`edit_plan` are the only writes, all pre-authorized.

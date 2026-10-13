@@ -17,7 +17,7 @@ export type CodexSandboxDecision =
   | 'default'
   /** Bubblewrap cannot start; Codex's pre-bubblewrap Landlock backend can. */
   | 'legacy-landlock'
-  /** Both backends failed. Codex can run no command at all, so it cannot explore. */
+  /** Both backends failed. Codex's own shell can run no command at all. */
   | 'unavailable';
 
 /**
@@ -70,17 +70,49 @@ export async function probeCodexSandbox(
   return landlock.code === 0 ? 'legacy-landlock' : 'unavailable';
 }
 
-/** The message shown when Codex has no working sandbox, naming both documented fixes. */
+const NAMESPACE_CAUSE = "Its Linux sandbox needs unprivileged user namespaces, which this kernel restricts (Ubuntu 24.04's AppArmor default), and the legacy Landlock backend did not work either.";
+
+const SYSCTL_FIX = '  sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0';
+
+/** The message shown when Codex has no working sandbox and cannot do without one, naming both documented fixes. */
 export function codexSandboxUnavailableMessage(role: 'planner' | 'task' = 'planner'): string {
+  if (role === 'task') {
+    return [
+      "Codex cannot start a sandbox on this machine, so it can run no command in this task's mode.",
+      '',
+      NAMESPACE_CAUSE,
+      '',
+      'Give the task Full access or another runner, or allow user namespaces:',
+      SYSCTL_FIX,
+      '',
+      'or install an AppArmor profile for bwrap, then run the task again.',
+    ].join('\n');
+  }
   return [
     'Codex cannot start a sandbox on this machine, so it can run no command and cannot read the workspace.',
     '',
-    "Its Linux sandbox needs unprivileged user namespaces, which this kernel restricts (Ubuntu 24.04's AppArmor default), and the legacy Landlock backend did not work either.",
+    NAMESPACE_CAUSE,
     '',
     'Either allow them:',
-    '  sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0',
+    SYSCTL_FIX,
     '',
-    `or install an AppArmor profile for bwrap, then ${role === 'task' ? 'run the task again' : 'plan with Codex again'}.`,
+    'or install an AppArmor profile for bwrap, then plan with Codex again.',
+  ].join('\n');
+}
+
+/**
+ * Shown once when a planner starts with Codex's own shell switched off
+ * because no sandbox backend works (ADR-0033): planning goes on, and the note
+ * says what is missing and how to get it back.
+ */
+export function codexShellOffNote(): string {
+  return [
+    "Codex cannot start its sandbox on this machine, so its own shell is off for planning. It reads the workspace through Ordewell's run_command, under the same command rules as every other planner.",
+    '',
+    `${NAMESPACE_CAUSE} To give Codex its own shell back:`,
+    SYSCTL_FIX,
+    '',
+    'or install an AppArmor profile for bwrap, then start a new planning session.',
   ].join('\n');
 }
 

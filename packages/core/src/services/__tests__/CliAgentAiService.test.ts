@@ -1123,18 +1123,36 @@ describe('CliAgentAiService — Codex', () => {
     expect(thinking).toContain('apparmor_restrict_unprivileged_userns=0');
   });
 
-  it('refuses to plan blind when no sandbox backend works', async () => {
-    const { svc } = service(
+  it('plans with Codex\'s own shell off when no sandbox backend works', async () => {
+    const { svc, spawned } = service(
       'codex',
-      codexHandshake(),
+      [fixture('codex', 'handshake-warning'), fixture('codex', 'new-conversation'), fixture('codex', 'tools')],
       {},
       { probe: () => ({ code: 1, output: 'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted' }) },
     );
+    const { events, onProgress } = collector();
+    await svc.startConversation(request({ onProgress, runners: ['codex'] }));
 
-    // A Codex that can run no command still answers — from memory. Failing here
-    // is the fail-safe: a visible failure instead of a confident blind plan.
-    await expect(svc.startConversation(request({ runners: ['codex'] })))
-      .rejects.toThrow(/apparmor_restrict_unprivileged_userns/);
+    // Stock Ubuntu 24.04 restricts the user namespaces Codex's sandbox needs.
+    // Refusing there made Codex unusable as a planner, though `run_command`
+    // reads the workspace without Codex's own shell.
+    const threadStart = JSON.parse(spawned.processes[0].written[1]);
+    expect(threadStart.params.config.features).toEqual({ shell_tool: false, unified_exec: false });
+    expect(threadStart.params.sandbox).toBe('read-only');
+    expect(threadStart.params.developerInstructions).toContain('You have no shell of your own on this machine');
+    const thinking = events.filter((e) => e.type === 'thinking').map((e) => e.text);
+    expect(thinking.filter((text) => text.includes('its own shell is off for planning'))).toHaveLength(1);
+    expect(thinking.join('\n')).toContain('apparmor_restrict_unprivileged_userns=0');
+    expect(thinking.join('\n')).not.toContain('Codex configuration warning');
+  });
+
+  it('keeps Codex\'s own shell when its sandbox starts', async () => {
+    const { svc, spawned } = service('codex', [...codexHandshake(), fixture('codex', 'tools')]);
+    await svc.startConversation(request({ runners: ['codex'] }));
+
+    const threadStart = JSON.parse(spawned.processes[0].written[1]);
+    expect(threadStart.params.config.features).toBeUndefined();
+    expect(threadStart.params.developerInstructions).toContain('not your own shell');
   });
 
   it('ends the turn on a non-retryable error rather than waiting for a completion that never comes', async () => {

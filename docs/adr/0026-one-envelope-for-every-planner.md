@@ -48,6 +48,9 @@ needs is an ops task ([ADR-0020](0020-ops-tasks-and-merge-gates.md)).
   `task` subagents, which would run with whatever permission their agent
   has). Codex's shell stays, inside its read-only, network-less sandbox; its
   instructions point it at `run_command`, as a task's point it at its tools.
+  Where that sandbox cannot start, Codex's shell is switched off and
+  `run_command` is its only one
+  ([ADR-0033](0033-codex-planner-without-its-sandbox.md)).
 - Every harness pre-authorizes the Ordewell server's tools (ADR-0022), so all
   three planners have `run_command`. It runs in Ordewell's process, so a
   network command works once it is approved.
@@ -261,3 +264,4 @@ refused from a workspace's environment files (ADR-0016).
   workspace and of its session's saved output decided: allowed, where it
   used to be refused before the path was looked at
   ([ADR-0032](0032-runner-state-outside-the-workspace.md)).
+- 2026-10-13 — Codex's own shell is off for a planner on a host where its sandbox cannot start ([ADR-0033](0033-codex-planner-without-its-sandbox.md)).
