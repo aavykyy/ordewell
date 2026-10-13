@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { IncomingMessage } from 'http';
 import type { Duplex } from 'stream';
-import { DAEMON_SUBPROTOCOL } from '@ordewell/core';
+import { DAEMON_SUBPROTOCOL, type RunSnapshotFrame } from '@ordewell/core';
 import { OrchestratorPool } from '../pool/orchestratorPool';
 
 export function createWsHandler(pool: OrchestratorPool) {
@@ -26,6 +26,10 @@ export function createWsHandler(pool: OrchestratorPool) {
     });
 
     ws.send(JSON.stringify({ type: 'connected', sessionId }));
+    // The stream reports changes only. Taken and subscribed in one turn, so no
+    // broadcast can fall between the snapshot and the first message after it.
+    const view = pool.runSnapshot(sessionId);
+    if (view) ws.send(JSON.stringify({ type: 'run_snapshot', sessionId, view } satisfies RunSnapshotFrame));
     pool.subscribe(sessionId, ws);
   });
 

@@ -8,6 +8,7 @@ import {
   serializeTask,
   serializeTaskStatus,
   type SessionBroadcaster,
+  type SessionMessage,
   type SessionNotice,
 } from './SessionMessage';
 import { surfaceStep } from '../conversation/records';
@@ -118,10 +119,15 @@ export class SessionEventRelay {
     // Hosts that render from the plan object (VS Code) read statuses off it
     // when a status_update arrives, so it has to be current by then.
     plan.tasks = this.store.snapshot();
+    this.broadcast(this.statusMessage());
+  }
+
+  /** Every task's status as it stands, in the message a status update carries. */
+  statusMessage(): Extract<SessionMessage, { type: 'status_update' }> {
     const runMerge = this.orchestrator.runMergeView();
-    this.broadcast({
+    return {
       type: 'status_update',
-      usage: planUsage(plan.tasks),
+      usage: planUsage(this.store.snapshot()),
       tasks: this.store.allTasks.map((t) => serializeTaskStatus(
         t,
         this.orchestrator.getIdleSince(t.id),
@@ -132,7 +138,7 @@ export class SessionEventRelay {
         this.checkpointQuestion(t.id),
       )),
       ...(runMerge ? { runMerge } : {}),
-    });
+    };
   }
 
   /**

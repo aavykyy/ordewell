@@ -4,6 +4,7 @@ import {
   createSession,
   type ConversationCompaction,
   type ConversationFork,
+  type RunView,
   type SessionMessage,
   type SessionNotice,
   type SessionRuntimeSettings,
@@ -128,6 +129,8 @@ export class OrchestratorPool {
     return this.sessions.get(sessionId)?.currentPlanState ?? null;
   }
   getGoal(sessionId: string): string { return this.sessions.get(sessionId)?.currentGoal ?? ''; }
+  /** Null for a session this process is not holding: there is no run to describe. */
+  runSnapshot(sessionId: string): RunView | null { return this.sessions.get(sessionId)?.runSnapshot() ?? null; }
 
   private runtimeSettings(): SessionRuntimeSettings {
     return sessionRuntimeSettings(this.settingsService.getAll());

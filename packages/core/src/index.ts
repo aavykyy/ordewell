@@ -133,7 +133,13 @@ export type {
   SurfaceTask,
   SurfacePlan,
   SurfacePlanState,
+  PlanSnapshot,
+  RunInput,
+  RunTask,
+  RunTaskStatus,
+  RunView,
 } from './services/SessionMessage';
+export { EMPTY_RUN, reduceRun } from './services/runView';
 export { serializeTask, serializeTaskStatus, serializePlan, surfacePlan, surfacePlanState, executionSummary, truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH } from './services/SessionMessage';
 export { summarizeToolCall, classifyOutcome } from './services/researchStepSummary';
 export * from './conversation';

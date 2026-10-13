@@ -22,6 +22,7 @@ function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
     getInstalledRunners: vi.fn().mockReturnValue([]),
     subscribe: vi.fn(),
     unsubscribe: vi.fn(),
+    runSnapshot: vi.fn().mockReturnValue(null),
     ...overrides,
   } as unknown as OrchestratorPool;
 }
