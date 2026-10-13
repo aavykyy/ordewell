@@ -148,6 +148,7 @@ const FOLLOW_ON_TURN_GRACE_MS = 5000;
  * by then is not coming, and the planner falls back to the envelopes.
  */
 const MCP_ATTACH_TIMEOUT_MS = 10_000;
+const MODEL_PIN_TIMEOUT_MS = 10_000;
 const MCP_STATUS_POLL_MS = 100;
 
 /** A denial's `message` is required by the CLI; this stands in when nobody wrote a note. */
@@ -206,8 +207,11 @@ interface ControlResponse {
   subtype?: string;
   request_id?: string;
   error?: string;
-  /** `mcp_status`: every MCP server the session has, and whether it connected. */
-  response?: { mcpServers?: { name?: string; status?: string }[] };
+  /**
+   * `mcp_status`: every MCP server the session has, and whether it connected.
+   * `initialize`: every model the CLI offers, and the id each value runs as.
+   */
+  response?: { mcpServers?: { name?: string; status?: string }[]; models?: { value?: string; resolvedModel?: string }[] };
 }
 
 interface ClaudeLine {
@@ -466,6 +470,19 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     this.mcpConfig = null;
   }
 
+  /**
+   * Under `--permission-mode plan` the CLI runs Sonnet for the `haiku` alias,
+   * though it runs a full id as given: a read-only task would silently run a
+   * dearer model than its plan names (ADR-0001). The CLI's own list says what
+   * the alias resolves to now; that id is pinned before the first turn.
+   */
+  protected override async handshake(opts: AgentStartOptions): Promise<void> {
+    if (opts.kind !== 'task' || opts.flags.permissionMode !== 'plan' || !opts.model) return;
+    const listed = (await this.control({ subtype: 'initialize' }, MODEL_PIN_TIMEOUT_MS))?.response?.models;
+    const resolved = listed?.find((m) => m.value === opts.model)?.resolvedModel;
+    if (resolved && resolved !== opts.model) await this.control({ subtype: 'set_model', model: resolved }, MODEL_PIN_TIMEOUT_MS);
+  }
+
   /** Asks the CLI itself, which reports `pending` until its connection attempt settles. */
   async mcpAttached(): Promise<boolean> {
     if (!this.mcpConfig) return false;
@@ -504,7 +521,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   }
 
   /** Send a control request and wait for its answer; null when none came in time or the process ended. */
-  private control(request: { subtype: string }, timeoutMs: number): Promise<ControlResponse | null> {
+  private control(request: { subtype: string; model?: string }, timeoutMs: number): Promise<ControlResponse | null> {
     if (!this.process) return Promise.resolve(null);
     this.controlCount += 1;
     const requestId = `ordewell-${request.subtype}-${this.controlCount}`;
