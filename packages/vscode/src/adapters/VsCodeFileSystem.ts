@@ -9,6 +9,7 @@ import {
   buildFallbackGrepArgs,
   GREP_PCRE_PROBE_ARGS,
   grepRegexFromProbe,
+  listTree,
   type GrepRegex,
   filterFallbackByAnchoredInclude,
   applyHeadLimit,
@@ -248,20 +249,9 @@ export class VsCodeFileSystem extends BaseFileSystem {
   }
 
   protected async listDirImpl(absPath: string, depth: number): Promise<ToolOutcome> {
-    if (depth > 1) {
-      const result = await run('tree', ['-L', String(depth), '-I', 'node_modules|.git|dist|build', absPath], { timeout: 10_000, env: this.searchEnv() });
-      if (result.code === 0 && result.stdout.trim()) {
-        const lines = result.stdout.trim().split('\n');
-        return { success: true, output: lines.slice(0, 300).join('\n'), truncated: lines.length > 300 };
-      }
-      // `tree` is not installed everywhere; fall through to a flat listing.
-    }
     try {
-      const entries = await vscode.workspace.fs.readDirectory(vscode.Uri.file(absPath));
-      const lines = entries.slice(0, 200).map(([name, type]) =>
-        `${type === vscode.FileType.Directory ? 'D' : 'F'} ${name}`
-      );
-      return { success: true, output: lines.join('\n') || '(empty directory)', truncated: entries.length > 200 };
+      return await listTree(absPath, depth, async (abs) =>
+        (await vscode.workspace.fs.readDirectory(vscode.Uri.file(abs))).map(([name, type]) => ({ name, directory: type === vscode.FileType.Directory })));
     } catch (err) {
       return { success: false, output: `List error: ${err}`, truncated: false };
     }
