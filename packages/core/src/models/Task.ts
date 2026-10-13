@@ -33,6 +33,9 @@ export interface Verdict {
 
 export interface TaskOutputSummary {
   reviewReason: string;
+  /** The `task_complete` summary, the task's report; absent when the attempt ended without one, and from sessions saved before it was kept. */
+  report?: string;
+  /** Empty when there is a report: the turn's final text is the report itself. */
   logTail: string;
   capturedAt: string;
 }

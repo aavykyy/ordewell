@@ -968,6 +968,38 @@ describe('task_query with task skills', () => {
   });
 });
 
+describe('task_query with a task report', () => {
+  it('reads an ended task\'s report whole, ahead of its log tail', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'ordewell-task-report-'));
+    let read: { isError: boolean; body: unknown } | undefined;
+    const { session } = plannerSession(fakeClaude({
+      turn: async (mcp) => {
+        read = await call(mcp!, 'task_query', { tasks: ['#1'], fields: ['outputSummary'] });
+        return 'I see.';
+      },
+    }));
+    const report = Array.from({ length: 50 }, (_, i) => `${i + 1}. src/cache.ts:${i + 1} never evicts`).join('\n');
+    try {
+      session.loadPlan({
+        tasks: [createTask({
+          id: 'a', order: 1, title: 'Review', prompt: 'p', assignedRunner: 'claude-code', status: 'completed',
+          outputSummary: { reviewReason: 'Verified', report, logTail: '', capturedAt: '2026-10-05T10:00:00Z' },
+        })],
+        generatedAt: '2026-10-05T09:00:00Z', lastUpdated: '2026-10-05T09:00:00Z', status: 'approved', runners: ['claude-code'],
+        conversationHistory: [{ role: 'user', content: 'review it', timestamp: '2026-10-05T09:00:00Z' }],
+      }, 'review it', workspace, { persist: false });
+
+      await session.continueConversation('what did it find?');
+
+      const [task] = (read?.body as { tasks: { outputSummary: unknown }[] }).tasks;
+      expect(task.outputSummary).toEqual({ reviewReason: 'Verified', report });
+      expect(Object.keys(task.outputSummary as object)).toEqual(['reviewReason', 'report']);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('edit_plan', () => {
   const ops = [
     { op: 'update', taskId: '#2', changes: { title: 'Wire it in', prompt: 'wire the cache in' } },

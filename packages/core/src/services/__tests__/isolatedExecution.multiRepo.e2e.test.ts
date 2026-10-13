@@ -382,7 +382,7 @@ describe.skipIf(!hasGit)('isolated execution over a folder of three repositories
     release = true;
     await settled(env);
     expect(taskOf(session, 't1')!.status).toBe('completed');
-    expect(taskOf(session, 't1')!.outputSummary?.logTail).toBe('Renamed in both repositories.');
+    expect(taskOf(session, 't1')!.outputSummary?.report).toBe('Renamed in both repositories.');
     expect(env.agent.errors).toEqual([]);
   }, 60_000);
 

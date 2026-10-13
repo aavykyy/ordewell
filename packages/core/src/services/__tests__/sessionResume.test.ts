@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { PlanStore } from '../PlanStore';
 import { createTask, type LegacyPlanState } from '../../models/Task';
 import { makeSession, testWorkspace, saves } from './sessionTestKit';
+import { augmentPromptWithPriorOutputs } from '../promptAugment';
 
 function savedDialoguePlan(): LegacyPlanState {
   return {
@@ -109,6 +110,27 @@ describe('plan_generated markers', () => {
     const last = plan.conversationHistory![plan.conversationHistory!.length - 1];
     expect(last.kind).toBe('plan_generated');
     expect(last.role).toBe('assistant');
+  });
+});
+
+describe('a session saved before task reports were kept', () => {
+  it('loads its output summaries unchanged, and still hands dependents the tail', () => {
+    const saved = JSON.parse(`{
+      "tasks": [
+        { "id": "a", "order": 1, "title": "Setup", "description": "", "type": "ai", "status": "completed", "dependencies": [], "subtasks": [], "prompt": "p", "assignedRunner": "claude-code",
+          "outputSummary": { "reviewReason": "Verified", "logTail": "created src/db.ts", "capturedAt": "2026-01-01T00:00:00Z" } },
+        { "id": "b", "order": 2, "title": "Wire", "description": "", "type": "ai", "status": "pending", "dependencies": ["a"], "subtasks": [], "prompt": "wire it", "assignedRunner": "claude-code" }
+      ],
+      "generatedAt": "2026-01-01T00:00:00Z", "lastUpdated": "2026-01-01T00:00:00Z", "status": "approved", "runners": ["claude-code"],
+      "conversationHistory": [{ "role": "user", "content": "set it up", "timestamp": "2026-01-01T00:00:00Z" }]
+    }`) as LegacyPlanState;
+    const session = makeSession();
+
+    session.loadPlan(saved, 'set it up', testWorkspace, { persist: false });
+
+    const [setup, wire] = session.planTasks;
+    expect(setup.outputSummary).toEqual({ reviewReason: 'Verified', logTail: 'created src/db.ts', capturedAt: '2026-01-01T00:00:00Z' });
+    expect(augmentPromptWithPriorOutputs(wire, session.planTasks)).toContain('- Tail:\n  created src/db.ts');
   });
 });
 

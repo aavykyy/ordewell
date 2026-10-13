@@ -69,6 +69,10 @@ export class BufferedTaskOutputSource implements TaskOutputSource {
     return clean(capture.raw.slice(Math.max(0, (capture.turnStart ?? 0) - capture.dropped)));
   }
 
+  report(taskId: string): string | undefined {
+    return this.captures.get(taskId)?.reported;
+  }
+
   liveTail(taskId: string, opts: LiveTailOptions): LiveTail | null {
     const capture = this.captures.get(taskId);
     if (!capture) return null;

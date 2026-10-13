@@ -27,6 +27,8 @@ export interface TaskOutputSource {
   reset(): void;
   /** The task's final answer: the summary its runner reported through `task_complete`, else what its last turn said. */
   finalText(taskId: string): string;
+  /** The summary the runner reported through `task_complete` in its latest turn, if it made that call. */
+  report(taskId: string): string | undefined;
   /** Recent output of the task's latest capture, or null if it never had one. */
   liveTail(taskId: string, opts: LiveTailOptions): LiveTail | null;
 }

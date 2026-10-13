@@ -102,6 +102,17 @@ describe('rendering the output read', () => {
     expect(asked).toEqual([{ taskId: 'b', maxLines: 80 }]);
   });
 
+  it('answers an ended task with its whole report, before any log tail', () => {
+    const reviewed = tasks();
+    const report = Array.from({ length: 60 }, (_, i) => `${i + 1}. services/Auth.ts:${i + 1} swallows the refresh error`).join('\n');
+    reviewed[0].outputSummary = { reviewReason: 'Verified', report, logTail: '', capturedAt: 'x' };
+    reviewed[1].outputSummary = { reviewReason: 'Failed verification', logTail: 'npm ERR! missing script', capturedAt: 'x' };
+    const answer = renderTaskQueryAnswer({ tasks: ['#1', '#2'], fields: ['outputSummary'], catalog: false }, reviewed, catalog);
+
+    expect(answer).toContain(`outputSummary: Verified\nreport:\n${report}\n`);
+    expect(answer).toContain('outputSummary: Failed verification\nlog tail:\nnpm ERR! missing script');
+  });
+
   it('says when a task has never run in this session instead of answering silence', () => {
     const { asked, liveOutput } = fakeLive({});
     const answer = renderTaskQueryAnswer(

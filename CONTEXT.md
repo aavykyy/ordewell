@@ -771,10 +771,27 @@ to `VerdictEngine`, which alone produces the verdict after checking the current
 generation. Evidence held behind an undelivered message is superseded when
 that message is read. Only `done` passes; `blocked` and `failed` carry their
 reason. The
-`summary` is the output handed to dependent tasks.
+`summary` is the task's *Report*.
 *Avoid:* "self-report" or "the model says it's done" (it is the runner's
 explicit signal bound to the attempt, not a judgement anyone weighs), and
 "tool verdict" (the tool produces no verdict).
+
+**Report** — the `summary` of the completion call that settled a task's
+attempt, kept whole with its verdict as `outputSummary.report` (cut at 20,000
+characters, saying so in what is kept). It is the task's result as its
+readers get it: `task_query` and `task_output` return it ahead of any log
+tail, and a dependent's *Prior task outputs* carry it in place of the tail,
+cut to 4,000 characters per dependency. A call superseded by a later turn or
+a message read mid-turn leaves no report. The **output summary**
+(`outputSummary`) is what a task's end left behind: the verdict reason, the
+report, and a `logTail` of the last turn's text only when there is no report
+— an attempt that ended without a completion call, or a session saved before
+reports were kept. The task prompt tells a runner the report is its whole
+result, a read-only task's findings included, and never to write it to a
+file instead.
+*Avoid:* "log tail" for the report (the tail is a cut of the screen; the
+report is what the runner chose to say), "task output" (that is the live
+`output` read).
 
 **Spawn toolkit** — the shared process policy behind the runner adapters:
 `planDirectLaunch` (`utils/launch.ts`), runner environment cleanup

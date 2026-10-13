@@ -280,7 +280,7 @@ function renderField(task: Task, field: TaskQueryField, ctx: OutputRenderContext
     case 'outputSummary': {
       const o = task.outputSummary;
       if (!o) return ['outputSummary: (none)'];
-      return [`outputSummary: ${o.reviewReason}`, ...(o.logTail ? ['log tail:', o.logTail] : [])];
+      return [`outputSummary: ${o.reviewReason}`, ...(o.report ? ['report:', o.report] : []), ...(o.logTail ? ['log tail:', o.logTail] : [])];
     }
     case 'userStoriesCovered': {
       const stories = task.userStoriesCovered ?? [];
