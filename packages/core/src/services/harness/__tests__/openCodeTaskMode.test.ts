@@ -975,9 +975,31 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     await turn;
 
     expect(server.requests.find((r) => r.path === '/permission/per_t/reply')?.body).toEqual({ reply: 'once' });
-    expect(events).toContainEqual(expect.objectContaining({ type: 'permission_request', id: 'per_t', decided: { decision: 'allow' } }));
+    expect(events.find((e) => e.type === 'permission_request' && e.id === 'per_t')).toEqual({
+      type: 'permission_request',
+      id: 'per_t',
+      name: 'ordewell_task_complete',
+      detail: JSON.stringify({ scope: '*' }),
+      input: {},
+      toolUseId: 'call_1',
+      decided: { decision: 'allow' },
+    });
     expect(events.find((e) => e.type === 'permission_request' && e.id === 'per_b')).not.toHaveProperty('decided');
     expect(server.requests.some((r) => r.path === '/permission/per_b/reply')).toBe(false);
+    adapter.dispose();
+  });
+
+  // OpenCode names a tool `<server>_<tool>`, so a server named `ordewell_x` puts its tools under Ordewell's prefix.
+  it.each(['ordewell_x_task_complete', 'ordewell_evil'])('asks about %s though it was given the server: only Ordewell\'s own tool names are its', async (permission) => {
+    const server = fakeServer();
+    const { adapter, events, turn, stream } = await turnWith(server, taskStart({ ...planMode, mcp }));
+    stream.push(ask('per_x', { permission }));
+    await until(() => events.some((e) => e.type === 'permission_request'));
+    stream.push(status('idle'));
+    await turn;
+
+    expect(events.find((e) => e.type === 'permission_request')).not.toHaveProperty('decided');
+    expect(server.requests.some((r) => r.path === '/permission/per_x/reply')).toBe(false);
     adapter.dispose();
   });
 

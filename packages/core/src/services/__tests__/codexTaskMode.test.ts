@@ -509,6 +509,17 @@ describe('CodexAdapter task approvals', () => {
     adapter.dispose();
   });
 
+  it('cancels a request still open when the turn ends, as every runner does', async () => {
+    const { adapter, proc, events } = await openTurn([commandApproval(7)]);
+    proc.emitStdout(turnCompleted('turn-a'));
+    await tick();
+
+    expect(events.slice(-2)).toEqual([{ type: 'permission_cancelled', id: '7' }, { type: 'turn_end' }]);
+    expect(adapter.answerPermission('7', { decision: 'allow' })).toBe(false);
+    expect(answerTo(proc, 7)).toBeUndefined();
+    adapter.dispose();
+  });
+
   it('withdraws nothing when Codex confirms an answer this adapter gave', async () => {
     const { adapter, proc, events } = await openTurn([commandApproval(7)]);
     adapter.answerPermission('7', { decision: 'allow' });
@@ -730,6 +741,23 @@ describe('CodexAdapter planner boundary (ADR-0008/0009)', () => {
     await tick();
 
     expect(events.find((e) => e.type === 'permission_request')).toMatchObject({ ask: { kind: 'mcp', tool: 'add-tasks', server: 'todoist' } });
+    adapter.dispose();
+  });
+
+  it('does not name the tool from a call that has finished: a later approval may be for another', async () => {
+    const { spawned, processDeps } = deps(plannerHandshake());
+    const adapter = new CodexAdapter(processDeps);
+    await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN' });
+    const proc = spawned.processes[0];
+    const events: AgentEvent[] = [];
+    void adapter.send('plan it', (e) => events.push(e));
+    const call = (status: string, method: string) => line({ method, params: { threadId: 'thr-codex-1', turnId: 't', item: { type: 'mcpToolCall', id: 'm1', server: 'todoist', tool: 'find-tasks', status, arguments: {} } } });
+    proc.emitStdout(call('inProgress', 'item/started') + call('completed', 'item/completed') + mcpToolApproval(33, 'Allow this call?'));
+    await tick();
+
+    // With no tool to scope an approval to, it is refused rather than held.
+    expect(events.filter((e) => e.type === 'permission_request')).toEqual([expect.objectContaining({ id: '33', decided: { decision: 'deny' } })]);
+    expect(answerTo(proc, 33)?.result).toEqual({ action: 'decline' });
     adapter.dispose();
   });
 });
@@ -983,7 +1011,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
     });
   });
 
-  it('answers an approval Codex still raises for an Ordewell tool at once, in a task and in a planner', async () => {
+  it('answers an approval Codex still raises for an Ordewell tool at once and shows it decided, in a task and in a planner', async () => {
     const ask = (id: number) => line({ id, method: 'mcpServer/elicitation/request', params: { threadId: 'thr-task-1', turnId: 'turn-a', serverName: 'ordewell', mode: 'form', message: 'Allow ordewell to run task_complete?', requestedSchema: { type: 'object', properties: {} } } });
     const task = await (async () => {
       const { spawned, processDeps } = deps(handshake());
@@ -996,7 +1024,10 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       return { adapter, proc: spawned.processes[0], events };
     })();
     expect(answerTo(task.proc, 30)?.result).toEqual({ action: 'accept', content: {} });
-    expect(task.events.filter((e) => e.type === 'permission_request')).toEqual([]);
+    // Its question names no tool and no call of the server is under way, so only the server can be named.
+    expect(task.events.filter((e) => e.type === 'permission_request')).toEqual([
+      { type: 'permission_request', id: '30', name: 'ordewell', detail: '{}', input: {}, decided: { decision: 'allow' } },
+    ]);
     task.adapter.dispose();
 
     const { spawned, processDeps } = deps(plannerHandshake());

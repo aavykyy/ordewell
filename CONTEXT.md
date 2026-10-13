@@ -565,11 +565,22 @@ runner's own session-scoped grant, offered only when it proposed one) and
 whole decision from any answerer, a person or later the supervisor (#28). The
 task stays `in_progress`: "waiting for approval" is derived from its pending
 requests. Cancel, stop and retry deny them before the runner goes; one the
-runner cancels itself, or whose process ends, is *withdrawn*. OpenCode's `build` mode (`--auto` on 2.x)
+runner cancels itself, one still open when its turn ends, or one whose process
+ends, is *withdrawn*. OpenCode's `build` mode (`--auto` on 2.x)
 answers its own requests: they are logged as requested and decided, never
 carded.
 *Avoid:* "permission prompt" for Ordewell's side (that is Claude's protocol),
 and "awaiting approval" as a task status.
+
+**Permission ledger** (`PermissionLedger`) — the one table every runner
+adapter's permission requests go through (ADR-0026): an Ordewell tool, named
+exactly, is allowed at once; a task's request under an auto-approving mode is
+answered at once; both are logged as decided. Anything else is held open — a
+task's with the runner's own grants, a planner's with what it is for — until
+it is answered, withdrawn by the runner, or cancelled because its turn ended.
+An adapter supplies only how to read its runner's request and how to reply,
+so the same request logs the same events on every runner.
+*Avoid:* "permission queue" (requests are answered in any order).
 
 **Task message** (`sendMessage`, `QueuedTaskMessage`) — a message sent to a
 structured task while its attempt lives (ADR-0018 M1, ADR-0023). Ordewell owns

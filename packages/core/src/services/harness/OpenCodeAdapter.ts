@@ -8,8 +8,8 @@ import type { McpClientConfig } from '../mcp';
 import type { ProjectMcpServer } from './repoConfig';
 import { hunksOf, markedLines } from './fileDiff';
 import {
-  OpenCodePermissions, PendingSteers, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, settleTurn, splitModelId,
-  streamTurn, turnLatch, usageRecord, type PermissionAnswer, type PermissionRequest, type StreamTurn, type TurnLatch,
+  PendingSteers, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePermissions, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, raiseOnce, settleTurn, splitModelId,
+  streamTurn, turnLatch, usageRecord, type PermissionAnswer, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
@@ -269,9 +269,9 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
   private interruptRequested = false;
   /** The user's MCP servers, as `/mcp` last listed them: what tells a planner's MCP tool request from a built-in's (ADR-0026). */
   private mcpServers: string[] = [];
-  private readonly permissions = new OpenCodePermissions(
+  private readonly permissions = openCodePermissions(
     (id, sessionId, decision) => this.replyPermission(id, sessionId, permissionReply(decision, 'reply')),
-    () => this.ordewell,
+    () => ({ role: this.task ? 'task' : 'planner', autoApprove: !!this.task && autoApproves(this.task) }),
   );
   /** Messages handed into the running task turn, until the model reads them (ADR-0023). Kept across turns: the server keeps the message too. */
   private readonly steers = new PendingSteers();
@@ -912,27 +912,12 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     if (part.time?.end) this.emitPart(part, turn, onEvent, subagentId);
   }
 
-  /** A planner's request is refused (T1); a task's is answered at once or left open for a card. */
+  /** A planner's request is held for its envelope (ADR-0026); a task's is answered at once or left open for a card. */
   private onPermissionAsked(ask: OpenCodePermissionAsk, seen: Set<string>, onEvent: (e: AgentEvent) => void): void {
     const id = ask.id;
     if (!id) return;
-    const sessionId = ask.sessionID ?? this.sessionId ?? '';
     const name = permissionName(ask);
-    if (!this.task) {
-      // Held for the planner's envelope (ADR-0026), which answers through `answerPermission`.
-      this.permissions.ask({
-        type: 'permission_request',
-        id,
-        name,
-        detail: permissionDetail(ask),
-        input: ask.metadata ?? {},
-        ...(ask.tool?.callID ? { toolUseId: ask.tool.callID } : {}),
-        ask: openCodePlannerAsk(name, ask, this.mcpServers),
-      }, sessionId, false, seen, onEvent);
-      return;
-    }
-    const request: PermissionRequest = {
-      type: 'permission_request',
+    raiseOnce(this.permissions, {
       id,
       name,
       detail: permissionDetail(ask),
@@ -940,8 +925,9 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       // The patterns `always` would grant: the runner's own offer, and the only grounds for "Allow for this task".
       ...(ask.always?.length ? { suggestions: ask.always } : {}),
       ...(ask.tool?.callID ? { toolUseId: ask.tool.callID } : {}),
-    };
-    this.permissions.ask(request, sessionId, autoApproves(this.task), seen, onEvent);
+      ...(this.task ? {} : { ask: openCodePlannerAsk(name, ask, this.mcpServers) }),
+      ordewell: !!this.ordewell && OPENCODE_ORDEWELL.isOrdewellAsk(name),
+    }, ask.sessionID ?? this.sessionId ?? '', seen, onEvent);
   }
 
   /**
