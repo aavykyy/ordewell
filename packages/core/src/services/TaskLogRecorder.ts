@@ -85,9 +85,12 @@ export class TaskLogRecorder {
       this.deps.broadcast({ type: 'task_log', taskId, attempt, events: taskLogForSurface(events) });
     };
 
+    const openCalls = new Set<string>();
     session.onEvent((event) => {
       const entry = toTaskLogEvent(event);
       if (!entry) return;
+      if (entry.type === 'tool_call') openCalls.add(entry.id);
+      else if (entry.type === 'tool_result') openCalls.delete(entry.id);
       pending.push(entry);
       // A turn's end is what a surface shows "waiting for input" on, and an
       // approval is someone's to answer, so these go out at once rather than
@@ -98,6 +101,9 @@ export class TaskLogRecorder {
         timer.unref?.();
       }
     });
-    session.onExit(() => flush());
+    session.onExit(() => {
+      if (openCalls.size > 0) pending.push({ type: 'runner_ended' });
+      flush();
+    });
   }
 }
