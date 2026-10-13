@@ -102,6 +102,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **Runners' own memory is off in Ordewell runs.** Claude Code's auto-memory
+  and Codex's memories no longer load into planners or tasks, so a plan and a
+  task depend on the repository and your instruction files, not on notes
+  outside it. Your runners' memory outside Ordewell is untouched
+  ([ADR-0032](docs/adr/0032-runner-state-outside-the-workspace.md)).
 - **Guarded planners read the web without asking.** Under the default `auto`
   approval mode, fetches and searches run at both levels, still behind the
   private-address guard, the secret check, `!` exclusions and the web-read
@@ -210,6 +215,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **A planner reads back its runner's saved output.** When Claude Code or
+  OpenCode saves a long tool result to a file outside the workspace, the
+  planner reads that file without asking, in Guarded and Full, as it did
+  before planners stopped loading the repository's config. Only the files its
+  own session saved count; a link out of them is still asked about
+  ([ADR-0032](docs/adr/0032-runner-state-outside-the-workspace.md)).
+- **A one-shot planner reads the workspace.** A planner with nobody to ask
+  had every Claude Code read refused, inside the workspace too.
 - **A usage limit shows once.** Claude Code reports a limit as a message and
   again as the turn's error, worded alike. The planner chat, the task chat and
   task views, a reload and the task's plain text now show it once, as the

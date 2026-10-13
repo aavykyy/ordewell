@@ -70,7 +70,7 @@ describe('CodexAdapter task start', () => {
     const adapter = new CodexAdapter(processDeps);
     await adapter.start(taskStart('agent', { cwd: '/worktrees/task-4', model: 'gpt-5.5' }));
 
-    expect(spawned.lastArgs()).toEqual(['app-server']);
+    expect(spawned.lastArgs()).toEqual(['app-server', '-c', 'features.memories=false']);
     const [threadStart] = sentNamed(spawned.processes[0].written, 'thread/start');
     expect(threadStart.params).toEqual({
       cwd: '/worktrees/task-4',
@@ -797,7 +797,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
     expect(threadStart.params?.config).toEqual({ mcp_servers: { ordewell: ordewellServer } });
     // Codex lists MCP tools only on request, so the thread says where to look.
     expect(threadStart.params?.developerInstructions).toContain('mcp__ordewell__task_complete');
-    expect(spawned.lastArgs()).toEqual(['app-server']);
+    expect(spawned.lastArgs()).toEqual(['app-server', '-c', 'features.memories=false']);
     expect(spawned.lastEnv().ORDEWELL_MCP_TOKEN_0).toBe('Bearer tok-secret');
     expect(JSON.stringify(spawned.processes[0].written)).not.toContain('tok-secret');
     adapter.dispose();

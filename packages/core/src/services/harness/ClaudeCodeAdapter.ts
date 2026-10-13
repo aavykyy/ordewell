@@ -1,4 +1,7 @@
 import { randomUUID } from 'crypto';
+import { realpathSync } from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import type { SubagentOutcome } from '../../models/Task';
 import { partedPromptUsage, type UsageRecord } from '../../models/Usage';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
@@ -44,6 +47,32 @@ const PLANNER_SETTINGS = JSON.stringify({
   disableAllHooks: true,
   permissions: { ask: ['WebFetch', 'WebFetch(domain:*)', 'WebSearch', 'mcp__*', 'Read', 'Grep', 'Glob', 'LS'] },
 });
+
+/**
+ * Claude Code's own memory is off for planners and tasks alike (ADR-0032): a
+ * plan or a task depends on the repository, not on notes outside it that no
+ * reviewer sees. The variable wins over a setting that turns it on (checked
+ * live on 2.1.296), and with it off the CLI leaves the memory instructions
+ * and index out of the system prompt.
+ */
+const NO_AUTO_MEMORY = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' };
+
+/**
+ * Whether `abs` is in the folder Claude Code saves this session's long tool
+ * results to, `<config>/projects/<project>/<session>/tool-results/`, before
+ * telling the model to read them back (checked live on 2.1.296). The project
+ * segment is the CLI's own name for the working directory, so any is taken:
+ * the session id alone ties the folder to this planner. `abs` is resolved on
+ * disk, so a link planted in the folder is judged where it points (ADR-0032).
+ */
+function inSavedOutput(abs: string, configDir: string, sessionId: string): boolean {
+  let projects: string;
+  try { projects = realpathSync.native(path.join(configDir, 'projects')); } catch { return false; }
+  const rel = path.relative(projects, abs);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return false;
+  const [project, session, folder] = rel.split(path.sep);
+  return Boolean(project) && session === sessionId && folder === 'tool-results';
+}
 
 /** Claude Code's read tools, by the input field that names their path. */
 const PATH_TOOLS: Record<string, { field: string; directory: boolean }> = {
@@ -317,6 +346,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private mcpConfig: OwnerOnlyFile | null = null;
   /** Whether this process was given the server, so its tools' requests are Ordewell's own. */
   private givenOrdewell = false;
+  /** The `CLAUDE_CONFIG_DIR` a planner runs under, where the CLI saves its long tool results. */
+  private configDir: string | null = null;
   /** Messages written into a running task turn, by the `uuid` their echo will carry, until it does (ADR-0023). */
   private readonly steers = new Map<string, string>();
   /** The last turn's `result` ended it, so a steer's echo now opens a turn the CLI started for that message. */
@@ -348,7 +379,12 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       this.reportedCostUsd = undefined;
       this.pendingResume = opts.resumeSessionId;
     }
-    return { command: 'claude', args };
+    this.configDir = workspace.CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude');
+    return { command: 'claude', args, env: NO_AUTO_MEMORY };
+  }
+
+  savedOutput(abs: string): boolean {
+    return this.configDir !== null && this.sessionId !== null && inSavedOutput(abs, this.configDir, this.sessionId);
   }
 
   /**
@@ -374,7 +410,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       this.pendingResume = opts.resumeSessionId;
     }
     if (opts.mcp) args.push(...this.ordewellServerArgs(opts.mcp, 'task'));
-    return { command: 'claude', args };
+    return { command: 'claude', args, env: NO_AUTO_MEMORY };
   }
 
   /**

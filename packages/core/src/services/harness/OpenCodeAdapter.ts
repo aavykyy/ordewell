@@ -986,6 +986,9 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
 
   unusableProjectServers(): ProjectMcpServer[] { return this.v2?.unusableProjectServers() ?? []; }
 
+  /** 2.x only: a 1.x server's saved output was never checked, so it is asked about as any outside read. */
+  savedOutput(abs: string): boolean { return this.v2?.savedOutput(abs) ?? false; }
+
   /** Asks the server, which lists every MCP server it has with the state of its connection. */
   async mcpAttached(): Promise<boolean> {
     const ordewell = this.ordewell;

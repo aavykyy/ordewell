@@ -7,12 +7,15 @@ import type { PlannerAsk } from './AgentAdapter';
 /**
  * What a harness planner's own tool requests are decided against (ADR-0026):
  * the session's approval policy, the API planner's, and the web fetcher, whose
- * web-read policy decides a fetch (ADR-0027). Absent means nobody can be asked.
+ * web-read policy decides a fetch (ADR-0027). Without `approval` nobody can be
+ * asked, and only what the envelope holds anyway is allowed: the workspace and
+ * the runner's own saved output (ADR-0032).
  */
 export interface PlannerPermissionGate {
-  approval: IApproval;
+  approval?: IApproval;
   fetcher?: IWebFetcher;
   workspaceRoot: string;
+  savedOutput?: (abs: string) => boolean;
 }
 
 // `other` is not always a write: a read the envelope has no rule for lands here
@@ -21,6 +24,7 @@ const UNKNOWN_TOOL_DENIAL = 'The Ordewell planner is read-only and its envelope 
 const OPS_HINT = 'Continue without it. If it would change something outside the repository, add it to the plan as an ops task; if it only reads, ask the user to approve it or add it to the planner allowlist.';
 
 const ALLOW: ApprovalDecision = { decision: 'allow' };
+const NOBODY_TO_ASK = 'Nobody can approve this here. Continue without it.';
 
 const SUBJECT_MAX_CHARS = 400;
 
@@ -47,16 +51,18 @@ function readTarget(root: string, target: string): { abs: string; inside: boolea
 export async function decidePlannerPermission(
   ask: PlannerAsk | undefined,
   input: Record<string, unknown>,
-  gate: PlannerPermissionGate | undefined,
+  gate: PlannerPermissionGate,
 ): Promise<ApprovalDecision> {
   if (!ask || ask.kind === 'other') return deny(ask?.note ?? UNKNOWN_TOOL_DENIAL);
-  if (!gate) return deny('Nobody can approve this here. Continue without it.');
+  if (ask.kind === 'path') return decideRead(ask, gate);
+  const { approval } = gate;
+  if (!approval) return deny(NOBODY_TO_ASK);
 
   switch (ask.kind) {
     case 'mcp': {
       const args = JSON.stringify(input);
       const subject = `${ask.server ?? 'MCP'} · ${ask.tool} ${args.length > SUBJECT_MAX_CHARS ? `${args.slice(0, SUBJECT_MAX_CHARS)}…` : args}`;
-      const granted = await gate.approval.request({
+      const granted = await approval.request({
         kind: 'mcp_tool',
         subject,
         scope: ask.scope,
@@ -82,16 +88,18 @@ export async function decidePlannerPermission(
       });
       return decision.allowed ? ALLOW : deny(decision.reason);
     }
-    case 'path': {
-      const { abs, inside } = readTarget(gate.workspaceRoot, ask.path);
-      if (inside) return ALLOW;
-      const granted = await gate.approval.request({
-        kind: 'external_path',
-        subject: abs,
-        scope: grantScopeFor(abs, ask.directory ? 'directory' : 'file'),
-        detail: `Planner research wants to read ${abs}, outside the workspace (${gate.workspaceRoot}).`,
-      });
-      return granted ? ALLOW : deny(`Access denied: "${abs}" is outside the workspace and was not approved.`);
-    }
   }
+}
+
+async function decideRead(ask: Extract<PlannerAsk, { kind: 'path' }>, gate: PlannerPermissionGate): Promise<ApprovalDecision> {
+  const { abs, inside } = readTarget(gate.workspaceRoot, ask.path);
+  if (inside || gate.savedOutput?.(abs)) return ALLOW;
+  if (!gate.approval) return deny(NOBODY_TO_ASK);
+  const granted = await gate.approval.request({
+    kind: 'external_path',
+    subject: abs,
+    scope: grantScopeFor(abs, ask.directory ? 'directory' : 'file'),
+    detail: `Planner research wants to read ${abs}, outside the workspace (${gate.workspaceRoot}).`,
+  });
+  return granted ? ALLOW : deny(`Access denied: "${abs}" is outside the workspace and was not approved.`);
 }

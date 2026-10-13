@@ -1,3 +1,4 @@
+import { realpathSync } from 'fs';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { AgentEvent, PlannerStartOptions, TaskStartOptions } from './AgentAdapter';
 import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION, OPENCODE_SEARCH_OFF, type OpenCodeSessionRule as SessionRule } from './openCodeOrdewell';
@@ -71,8 +72,12 @@ interface V2Frame {
     resources?: string[];
     save?: string[];
     source?: { type?: string; messageID?: string; id?: string };
-    /** On a delegating call's progress, the child session it runs; on a file edit's success, the diff of each file it changed. */
-    metadata?: { sessionID?: string; status?: string; files?: unknown };
+    /**
+     * On a delegating call's progress, the child session it runs; on a file
+     * edit's success, the diff of each file it changed; on a result too long
+     * for the context, the file the whole of it was saved to.
+     */
+    metadata?: { sessionID?: string; status?: string; files?: unknown; truncated?: unknown; outputPath?: unknown };
   };
 }
 
@@ -148,6 +153,8 @@ interface TurnState extends StreamTurn<V2Frame> {
   briefs: Map<string, string>;
   /** Assistant messages whose text the stream delivered, so a read-back does not repeat them. */
   streamedMessages: Set<string>;
+  /** A `read` call's id → the path it reads; its `external_directory` request names only the folder. */
+  readPaths: Map<string, string>;
 }
 
 interface Turn extends TurnLatch {
@@ -156,7 +163,7 @@ interface Turn extends TurnLatch {
 }
 
 function newTurnState(): TurnState {
-  return { ...streamTurn<V2Frame>(), toolNames: new Map(), stepModels: new Map(), briefs: new Map(), streamedMessages: new Set() };
+  return { ...streamTurn<V2Frame>(), toolNames: new Map(), stepModels: new Map(), briefs: new Map(), streamedMessages: new Set(), readPaths: new Map() };
 }
 
 function contentText(content: V2ToolContent[] | undefined): string {
@@ -207,6 +214,12 @@ export class OpenCodeV2 {
   private exposed: string[] = [];
   /** Approved project servers whose tools this OpenCode would list only inside `execute`, which a planner may not use. */
   private unusable: ProjectMcpServer[] = [];
+  /**
+   * The files this session's long tool results were saved to, resolved on
+   * disk. OpenCode keeps every session's in one shared folder, so the planner
+   * reads back only these, never the folder (ADR-0032).
+   */
+  private readonly saved = new Set<string>();
   private readonly permissions = new OpenCodePermissions(
     (id, sessionId, decision) => this.replyPermission(id, sessionId, decision),
     () => this.opts.mcp,
@@ -226,6 +239,8 @@ export class OpenCodeV2 {
   nativeSessionId(): string | null { return this.sessionId; }
 
   unusableProjectServers(): ProjectMcpServer[] { return [...this.unusable]; }
+
+  savedOutput(abs: string): boolean { return this.saved.has(abs); }
 
   async start(): Promise<void> {
     await this.exposeServers();
@@ -514,6 +529,7 @@ export class OpenCodeV2 {
         state.seen.add(`call:${id}`);
         const input = data.input ?? {};
         const name = state.toolNames.get(id) ?? 'tool';
+        if (name === 'read' && typeof input.path === 'string') state.readPaths.set(id, input.path);
         const brief = typeof input.description === 'string' ? input.description : typeof input.prompt === 'string' ? input.prompt : '';
         state.briefs.set(id, brief);
         onEvent({ type: 'tool_call', id, name, args: input, subagentId });
@@ -529,6 +545,7 @@ export class OpenCodeV2 {
         if (!id || state.seen.has(`result:${id}`)) return;
         state.seen.add(`result:${id}`);
         const success = frame.type === 'session.tool.success';
+        if (success && this.role === 'planner') this.rememberSaved(data.metadata);
         const output = success ? editDiff(data.metadata) || contentText(data.content) : data.error?.message ?? data.error?.type ?? '';
         onEvent({ type: 'tool_result', id, name: state.toolNames.get(id) ?? 'tool', output, success, subagentId });
         if (!subagentId) this.finishChild(id, success, output, state, onEvent);
@@ -540,6 +557,14 @@ export class OpenCodeV2 {
         return;
       default:
     }
+  }
+
+  /** Checked live on 2.0.27: the result names its file in `outputPath` beside `truncated: true`. */
+  private rememberSaved(metadata: NonNullable<V2Frame['data']>['metadata']): void {
+    if (metadata?.truncated !== true || typeof metadata.outputPath !== 'string') return;
+    let real: string;
+    try { real = realpathSync.native(metadata.outputPath); } catch { return; }
+    this.saved.add(real);
   }
 
   private adoptChild(data: NonNullable<V2Frame['data']>, state: TurnState, onEvent: (e: AgentEvent) => void, turn: Turn): void {
@@ -590,7 +615,8 @@ export class OpenCodeV2 {
       // `/api/mcp` may have been read before OpenCode listed the approved servers; they are known from the start.
       // An unusable one is running too, but what reaches its tools is `execute`, and the planner was told it has none.
       const listed = (this.host.mcpServers?.() ?? []).filter((name) => !this.unusable.some((server) => server.name === name));
-      const target = openCodePlannerAsk(request.name, { patterns: ask.resources }, [...listed, ...this.exposed]);
+      const read = request.name === 'external_directory' && ask.source?.id ? state.readPaths.get(ask.source.id) : undefined;
+      const target = openCodePlannerAsk(request.name, { patterns: ask.resources, ...(read ? { metadata: { filepath: read } } : {}) }, [...listed, ...this.exposed]);
       this.permissions.ask({ ...request, ask: target }, session, false, state.seen, onEvent);
     } else this.permissions.ask(request, session, this.opts.kind === 'task' && autoApproves(this.opts), state.seen, onEvent);
   }

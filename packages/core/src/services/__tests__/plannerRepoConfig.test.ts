@@ -551,3 +551,81 @@ describe('task launches (ADR-0028)', () => {
     if (configured.mcpConfig) expect(Object.keys((JSON.parse(configured.mcpConfig) as { mcpServers: object }).mcpServers)).toEqual(['ordewell']);
   });
 });
+
+describe('runner state outside the workspace (ADR-0032)', () => {
+  /** A `CLAUDE_CONFIG_DIR` holding a saved tool result for session `session`. */
+  function savedResult(session: string): { configDir: string; file: string } {
+    const configDir = repo({ [`projects/-repo/${session}/tool-results/b1.txt`]: 'row 1' });
+    return { configDir, file: join(configDir, `projects/-repo/${session}/tool-results/b1.txt`) };
+  }
+
+  it('starts a Claude Code planner with its own memory off', async () => {
+    const { svc, spawned } = service('claude-code', repo(), [fixture('claude-code', 'prose')]);
+    await svc.startConversation(request());
+
+    expect(spawned.lastEnv().CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe('1');
+  });
+
+  it('starts a Codex planner with its own memories off', async () => {
+    const { svc, spawned } = service('codex', repo(), [...codexHandshake(), fixture('codex', 'tools')]);
+    await svc.startConversation(request({ runners: ['codex'], approval: approvalSpy(false) }));
+
+    expect(spawned.lastArgs()).toEqual(['app-server', '-c', 'features.memories=false']);
+  });
+
+  it('starts a Claude Code task with its own memory off', async () => {
+    const spawned = fakeSpawn([]);
+    const deps: AgentProcessDeps = {
+      spawn: spawned.spawn, fetch: (async () => { throw new Error('no HTTP in this test'); }) as unknown as typeof fetch,
+      resolvePath: async () => '/usr/bin', platform: 'linux', isDirectory: () => true, exists: () => true, workspaceEnv: async () => ({}),
+    };
+    const adapter = createTaskAdapter('claude-code', deps);
+    await adapter.start({ kind: 'task', cwd: repo(), mode: 'acceptEdits', flags: { permissionMode: 'acceptEdits', modeSettings: {} } });
+
+    expect(spawned.lastEnv().CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe('1');
+    adapter.dispose();
+  });
+
+  it('lets a Claude Code planner read back its own session\'s saved tool result, asking nobody', async () => {
+    const { configDir, file } = savedResult('sess');
+    const { svc, spawned } = service('claude-code', repo(), reachingFor('Read', { file_path: file }), { workspaceEnv: { CLAUDE_CONFIG_DIR: configDir } });
+    const approval = approvalSpy(false);
+    await svc.startConversation(request({ approval }));
+
+    expect(controlAnswer(spawned.processes[0])).toBe('allow');
+    expect(approval.request).not.toHaveBeenCalled();
+  });
+
+  it('asks about another session\'s saved tool result', async () => {
+    const { configDir, file } = savedResult('another-session');
+    const { svc, spawned } = service('claude-code', repo(), reachingFor('Read', { file_path: file }), { workspaceEnv: { CLAUDE_CONFIG_DIR: configDir } });
+    const approval = approvalSpy(false);
+    await svc.startConversation(request({ approval }));
+
+    expect(controlAnswer(spawned.processes[0])).toBe('deny');
+    expect(approval.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path' }));
+  });
+
+  it('asks about a link planted in the saved-output folder, judged where it points', async () => {
+    const { configDir } = savedResult('sess');
+    const outside = repo({ 'secret.txt': 'hunter2' });
+    const planted = join(configDir, 'projects/-repo/sess/tool-results/planted.txt');
+    symlinkSync(join(outside, 'secret.txt'), planted);
+    const { svc, spawned } = service('claude-code', repo(), reachingFor('Read', { file_path: planted }), { workspaceEnv: { CLAUDE_CONFIG_DIR: configDir } });
+    const approval = approvalSpy(false);
+    await svc.startConversation(request({ approval }));
+
+    expect(controlAnswer(spawned.processes[0])).toBe('deny');
+    expect(approval.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: join(outside, 'secret.txt') }));
+  });
+
+  it('reads the workspace and its saved output with nobody to ask, and refuses the rest', async () => {
+    const { configDir, file } = savedResult('sess');
+    const root = repo({ 'src/a.ts': 'export const a = 1;' });
+    for (const [target, answer] of [[join(root, 'src/a.ts'), 'allow'], [file, 'allow'], ['/etc/hosts', 'deny']] as const) {
+      const { svc, spawned } = service('claude-code', root, reachingFor('Read', { file_path: target }), { workspaceEnv: { CLAUDE_CONFIG_DIR: configDir } });
+      await svc.startConversation(request());
+      expect(controlAnswer(spawned.processes[0])).toBe(answer);
+    }
+  });
+});

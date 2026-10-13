@@ -34,6 +34,8 @@
 
 ### Changed
 
+- **Runners' own memory is off in Ordewell runs**: Claude Code's auto-memory
+  and Codex's memories no longer load into planners or tasks.
 - **Guarded planners read the web without asking**, as Full does, behind the
   same guards. Set `ordewell.plannerApprovals` to `ask` to approve each new
   site and search provider.
@@ -54,6 +56,8 @@
 
 ### Fixed
 
+- A planner reads back the long tool output its runner saved outside the
+  workspace, without asking.
 - A usage limit shows once in the planner chat and in a task's log.
 - **Show full / Show less** reads a checkpoint's summary in full.
 - A resumed task keeps the paused attempt's uncommitted work in an isolated

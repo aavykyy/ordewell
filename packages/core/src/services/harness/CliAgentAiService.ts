@@ -150,7 +150,7 @@ export class CliAgentAiService implements IAiService {
    * every session boundary — nothing from one goal may reach the next.
    */
   private lastNativeSessionId: string | null = null;
-  /** `gate` is what the agent's own tool requests are decided against; absent, only Ordewell's tools are allowed (ADR-0026). */
+  /** `gate` is what the agent's own tool requests are decided against; absent, nobody can be asked, so only Ordewell's tools and the reads the envelope holds anyway are allowed (ADR-0026, ADR-0032). */
   private conversation: { startOptions: PlannerStartOptions; tools: PlannerToolsOffer; gate?: PlannerPermissionGate } | null = null;
   /**
    * What the runner's own session-wide search is decided against
@@ -404,7 +404,11 @@ export class CliAgentAiService implements IAiService {
     const streamedThinking = new Set<string>();
     // Calls whose permission request the envelope denied: their failed result is a denial, not a failure.
     const deniedCalls = new Set<string>();
-    const gate = this.conversation?.gate;
+    const gate: PlannerPermissionGate = {
+      workspaceRoot: this.conversation?.startOptions.cwd ?? this.workspaceRoot(),
+      ...this.conversation?.gate,
+      savedOutput: (abs) => adapter.savedOutput?.(abs) ?? false,
+    };
     const subagentUsage = new Map<string, UsageTotals>();
     let error: string | undefined;
     let stepIndex = 0;

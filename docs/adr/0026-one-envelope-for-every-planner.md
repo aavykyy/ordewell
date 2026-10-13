@@ -257,3 +257,7 @@ refused from a workspace's environment files (ADR-0016).
   can list Ordewell's tools only inside code mode is refused as a planner,
   and a planner session created without the deny is not resumed
   ([ADR-0028](0028-planners-never-run-repository-config.md)).
+- 2026-10-13 — a planner with no approval channel still has its reads of the
+  workspace and of its session's saved output decided: allowed, where it
+  used to be refused before the path was looked at
+  ([ADR-0032](0032-runner-state-outside-the-workspace.md)).
