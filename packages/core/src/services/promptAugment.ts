@@ -1,5 +1,5 @@
 import type { Task, TaskOutputSummary, TaskSkillSnapshot } from '../models/Task';
-import { flattenTasks, flattenTasksWithParents } from '../models/Task';
+import { flattenTasksWithParents } from '../models/Task';
 import { renderTaskSkills } from './taskSkills';
 
 const MAX_TAIL_CHARS = 500;
@@ -11,7 +11,8 @@ const DEFAULT_PLAN_MAP_MAX_ENTRIES = 30;
 const PLAN_MAP_MIN_TASKS = 3;
 
 export interface PriorOutput {
-  order: number;
+  /** The dependency's path label, dotted for a subtask (`1.1`). */
+  label: string;
   title: string;
   reviewReason: string;
   report?: string;
@@ -33,14 +34,14 @@ export function summarizeOutput(reviewReason: string | undefined, output: string
   };
 }
 
+/** `allTasks` is the plan tree, read in plan order, so a subtask is named by its dotted label. */
 export function collectDirectDependencyOutputs(task: Task, allTasks: readonly Task[]): PriorOutput[] {
-  const byId = new Map(allTasks.map((t) => [t.id, t]));
+  const deps = new Set(task.dependencies ?? []);
   const out: PriorOutput[] = [];
-  for (const depId of task.dependencies ?? []) {
-    const dep = byId.get(depId);
-    if (!dep || !dep.outputSummary) continue;
+  for (const { task: dep, label } of flattenTasksWithParents(allTasks)) {
+    if (!deps.has(dep.id) || !dep.outputSummary) continue;
     out.push({
-      order: dep.order,
+      label,
       title: dep.title,
       reviewReason: dep.outputSummary.reviewReason,
       report: dep.outputSummary.report,
@@ -59,14 +60,25 @@ function dependencyReport(report: string): string {
   return `${report.slice(0, MAX_DEPENDENCY_REPORT_CHARS)}\n(report cut here: ${report.length - MAX_DEPENDENCY_REPORT_CHARS} more characters)`;
 }
 
+/** Plan order of two path labels: `2` before `10`, and `1.2` before `1.10`. */
+function compareLabels(a: string, b: string): number {
+  const as = a.split('.').map(Number);
+  const bs = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(as.length, bs.length); i++) {
+    const diff = (as[i] ?? -1) - (bs[i] ?? -1);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
 export function renderPriorOutputs(outputs: PriorOutput[]): string {
   if (outputs.length === 0) return '';
   const blocks = outputs
-    .sort((a, b) => a.order - b.order)
+    .sort((a, b) => compareLabels(a.label, b.label))
     .map((o) => {
       const reason = o.reviewReason || '(no review note)';
       const output = o.report ? `- Report:\n${indent(dependencyReport(o.report))}` : `- Tail:\n${o.logTail ? indent(o.logTail) : '  (no output captured)'}`;
-      return `### Task ${o.order}: ${o.title}\n- Review: ${reason}\n${output}`;
+      return `### Task ${o.label}: ${o.title}\n- Review: ${reason}\n${output}`;
     });
   return `## Prior task outputs\n\n${blocks.join('\n\n')}`;
 }
@@ -206,8 +218,7 @@ export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], op
     if (map) blocks.push(map);
   }
 
-  const flat = flattenTasks(allTasks);
-  const outputs = collectDirectDependencyOutputs(task, flat);
+  const outputs = collectDirectDependencyOutputs(task, allTasks);
   if (outputs.length > 0) blocks.push(renderPriorOutputs(outputs));
 
   if (opts?.previousAttempt !== undefined) blocks.push(renderPreviousAttempt(opts.previousAttempt));
