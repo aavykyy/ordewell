@@ -56,6 +56,8 @@
 
 ### Fixed
 
+- Codex works as the planner on machines where its sandbox cannot start,
+  such as stock Ubuntu 24.04, instead of stopping with an error.
 - A planner reads back the long tool output its runner saved outside the
   workspace, without asking.
 - A usage limit shows once in the planner chat and in a task's log.

@@ -19,12 +19,6 @@ import { FakeRunnerSession, fakeConfig, makeSession } from './sessionTestKit';
  *   ORDEWELL_LIVE_AGENTS=claude-code npx vitest run --root packages/core plannerToolsLive
  *   ORDEWELL_LIVE_AGENTS=codex       npx vitest run --root packages/core plannerToolsLive
  *
- * Codex's planner needs a working sandbox, which a host that restricts user
- * namespaces does not have. ORDEWELL_LIVE_CODEX_NO_SANDBOX=1 answers Codex's
- * sandbox probe as if it passed, so the tool calls — which the sandbox does
- * not touch — can still be checked there; the planner then cannot read the
- * workspace, which this case never asks of it.
- *
  * The planner runs on the cheapest model — Haiku for Claude Code,
  * `gpt-5.6-luna` for Codex — unless ORDEWELL_LIVE_MODEL says otherwise, which
  * applies to both, so set it only with one runner. The catalog offers the same
@@ -48,11 +42,6 @@ const CATALOG: Record<string, DiscoveredModel[]> = {
 
 const cleanup: (() => Promise<void> | void)[] = [];
 afterEach(async () => { for (const undo of cleanup.splice(0).reverse()) await undo(); });
-
-/** Codex's `sandbox` probe, answered as passing: see the header. */
-const spawnWithoutSandboxProbe: typeof spawn = ((command: string, args: string[], options: Parameters<typeof spawn>[2]) => (
-  args[0] === 'sandbox' ? spawn('/bin/true', [], options) : spawn(command, args, options)
-)) as typeof spawn;
 
 /** A runner enabled mid-conversation is on the plan `submit_plan` commits (#69), with the planner on `provider`. */
 async function submitsThroughTools(provider: 'claude-code' | 'codex', model: string, spawnFn: typeof spawn): Promise<void> {
@@ -189,6 +178,6 @@ describe.runIf(live)('Claude Code planner tools — live', () => {
 
 describe.runIf(liveCodex)('Codex planner tools — live', () => {
   it('reads a runner enabled mid-conversation and commits a plan on it through submit_plan (#69)', async () => {
-    await submitsThroughTools('codex', codexModel, process.env.ORDEWELL_LIVE_CODEX_NO_SANDBOX ? spawnWithoutSandboxProbe : spawn);
+    await submitsThroughTools('codex', codexModel, spawn);
   }, 600_000);
 });

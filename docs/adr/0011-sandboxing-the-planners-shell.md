@@ -23,8 +23,9 @@ This repo's planner already spawns coding-agent *runners* (Claude Code, Codex,
 OpenCode) to do the actual mutation, on the thesis that mutation belongs to a
 sandboxed, supervised process rather than to the planner itself. One of those
 runners already lives up to that thesis for its own shell: Codex requires an
-OS-level sandbox to start at all. `codexSandbox.ts` probes for bubblewrap
-(Linux) or Landlock as a fallback, refuses to run with neither, and the reason
+OS-level sandbox for its own shell. `codexSandbox.ts` probes for bubblewrap
+(Linux) or Landlock as a fallback, switches Codex's shell off with neither
+([ADR-0033](0033-codex-planner-without-its-sandbox.md)), and the reason
 that check exists is exactly this document's problem — a classifier or
 approval policy that is merely correct is not the same guarantee as a kernel
 that will not allow the write in the first place ([ADR-0009](0009-coding-agents-as-planners.md),
@@ -127,3 +128,4 @@ ADR-0008 stay as they are.
 - 2026-10-10 — `curl`/`wget` approved per origin and refused in Full; an
   egress filtering proxy through this sandbox's network namespace planned as
   phase 2 ([ADR-0027](0027-web-reads-in-the-planner-envelope.md)).
+- 2026-10-13 — a Codex planner whose own sandbox cannot start has its shell switched off, leaving `run_command` as its only shell ([ADR-0033](0033-codex-planner-without-its-sandbox.md)).

@@ -6,7 +6,7 @@ import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { UsageRecord } from '../../models/Usage';
 import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
 import { markedLines } from './fileDiff';
-import { probeCodexSandbox, codexSandboxUnavailableMessage, type CodexSandboxDecision } from './codexSandbox';
+import { probeCodexSandbox, codexSandboxUnavailableMessage, codexShellOffNote, type CodexSandboxDecision } from './codexSandbox';
 import { ORDEWELL_MCP_SERVER_NAME } from '../mcp';
 import { untrustedProjects } from './codexRepoConfig';
 import { CODEX_ORDEWELL } from './codexOrdewell';
@@ -303,6 +303,12 @@ const ANNOUNCED_REQUESTS = new Set([
 const NO_MEMORIES = ['-c', 'features.memories=false'];
 
 /**
+ * Codex's shell tools, all of them, off: with them gone its code-mode `exec`
+ * and its subagents have no way to start a process either (codex-cli 0.162.1).
+ */
+const NO_OWN_SHELL = { shell_tool: false, unified_exec: false };
+
+/**
  * Codex as a planner (ADR-0009) and as a task's runner (ADR-0018, #54), over
  * its `app-server` stdio JSON-RPC transport. The start switch decides the
  * thread's settings and who answers its requests; everything a turn reports
@@ -352,6 +358,8 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   /** The row each announced file of an in-flight `fileChange` item is shown under, by the file's shown path. */
   private readonly fileChangeRows = new Map<string, Map<string, string>>();
   private sandbox: CodexSandboxDecision = 'default';
+  /** A planner on a host where no sandbox starts: Codex's own shell is off, and `run_command` is its only one (ADR-0033). */
+  private ownShellOff = false;
   /** The Ordewell server's startup state, as Codex last reported it for this thread. */
   private mcpStartup: string | null = null;
   private mcpStartupSettled: (() => void) | null = null;
@@ -385,7 +393,12 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     this.sandbox = await probeCodexSandbox(this.deps, opts.cwd, this.spawnEnv);
     // A full-access task asks for no sandbox, so a host without one is no reason to refuse it.
     const needsSandbox = opts.kind === 'planner' || opts.flags.permissionMode !== 'danger-full-access';
-    if (this.sandbox === 'unavailable' && needsSandbox) throw new Error(codexSandboxUnavailableMessage(opts.kind));
+    // A planner still reads through Ordewell's `run_command`, so it plans with
+    // its own shell off instead of not at all. A task has no such second shell,
+    // and switching its mode would rewrite the plan (ADR-0001).
+    this.ownShellOff = this.sandbox === 'unavailable' && opts.kind === 'planner' && !!opts.mcp;
+    if (this.sandbox === 'unavailable' && needsSandbox && !this.ownShellOff) throw new Error(codexSandboxUnavailableMessage(opts.kind));
+    if (this.ownShellOff) this.announce({ type: 'thinking', text: codexShellOffNote() });
 
     // A binary that rejects `app-server` outright dies immediately; waiting
     // out the timeout would turn a one-line diagnostic into a 30s stall.
@@ -442,8 +455,12 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       cwd: opts?.cwd,
       ...(opts?.model ? { model: opts.model } : {}),
     };
+    const features = {
+      ...(this.sandbox === 'legacy-landlock' ? { use_legacy_landlock: true } : {}),
+      ...(this.ownShellOff ? NO_OWN_SHELL : {}),
+    };
     const config = {
-      ...(this.sandbox === 'legacy-landlock' ? { features: { use_legacy_landlock: true } } : {}),
+      ...(Object.keys(features).length > 0 ? { features } : {}),
       ...(opts?.mcp ? { mcp_servers: CODEX_ORDEWELL.threadServers(opts.mcp) } : {}),
     };
     const threadConfig = Object.keys(config).length ? { config } : {};
@@ -486,7 +503,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       // replaces it — which takes Codex's description of its own tools with
       // it, and a planner that has forgotten it can read the workspace
       // answers from a web search instead.
-      developerInstructions: [opts?.systemPrompt, opts?.mcp ? CODEX_ORDEWELL.plannerInstructions(nativeSearch, opts.mcp.hidden) : ''].filter(Boolean).join('\n\n') || undefined,
+      developerInstructions: [opts?.systemPrompt, opts?.mcp ? CODEX_ORDEWELL.plannerInstructions(nativeSearch, opts.mcp.hidden, !this.ownShellOff) : ''].filter(Boolean).join('\n\n') || undefined,
     };
   }
 
@@ -736,6 +753,8 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
           emit({ type: 'thinking', text: landlockFallbackNote(this.role) });
           return;
         }
+        // The shell-off note already said this, with what it means for planning.
+        if (this.ownShellOff && /bubblewrap|user namespace/i.test(text)) return;
         if (text) emit({ type: 'thinking', text: `Codex configuration warning: ${text}` });
         return;
       }

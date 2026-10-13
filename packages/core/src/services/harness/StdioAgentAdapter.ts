@@ -117,14 +117,20 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
       // transcript) deliberately parse into nothing at all — the process is
       // still working even on a line that yields no event.
       this.turnActivity?.();
-      this.handleLine(line, (event) => {
-        if (this.turnEmit) this.turnEmit(event);
-        else if (this.hadTurn && this.outOfTurnListener) this.outOfTurnListener(event);
-        else if (!this.hadTurn && !TURN_SCOPED_EVENTS.has(event.type) && this.betweenTurns.length < BETWEEN_TURN_EVENT_CAP) {
-          this.betweenTurns.push(event);
-        }
-      });
+      this.handleLine(line, (event) => this.announce(event));
     }));
+  }
+
+  /**
+   * Deliver an event that no protocol line carries, the way a line's would be:
+   * to the open turn, or held for the first one.
+   */
+  protected announce(event: AgentEvent): void {
+    if (this.turnEmit) this.turnEmit(event);
+    else if (this.hadTurn && this.outOfTurnListener) this.outOfTurnListener(event);
+    else if (!this.hadTurn && !TURN_SCOPED_EVENTS.has(event.type) && this.betweenTurns.length < BETWEEN_TURN_EVENT_CAP) {
+      this.betweenTurns.push(event);
+    }
   }
 
   /** Resolves when the process ends, so a handshake can lose the race instead of waiting out its timeout. */
