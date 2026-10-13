@@ -27,6 +27,7 @@ function fakeHost(current: { plan: LegacyPlanState | null } = { plan: plan() }) 
     conversationBusy: vi.fn(() => false),
     mayWake: vi.fn(() => true),
     persist: vi.fn(() => { saved.push((current.plan?.pendingTurns ?? []).map((t) => t.text)); }),
+    interrupt: vi.fn(),
     holdStarts: vi.fn(() => {
       holds++;
       let held = true;
@@ -165,6 +166,67 @@ describe('PlanTurns', () => {
 
     await expect(runner.enqueue({ source: 'user', text: 'and CSV' })).rejects.toBeInstanceOf(ConversationBusyError);
     expect(turns).toHaveLength(0);
+  });
+
+  it('force sends past a turn of another kind: stops it, and answers the forced input first when it lets go', async () => {
+    const { host, turns, saved } = fakeHost();
+    host.conversationBusy.mockReturnValue(true);
+    const runner = new PlanTurns(host);
+    const wakeUp = runner.enqueue({ source: 'supervisor', text: 'task 1 failed' });
+
+    const forced = runner.forceSend({ source: 'user', text: 'use Postgres' });
+
+    expect(host.interrupt).toHaveBeenCalledTimes(1);
+    expect(saved.at(-1)).toEqual(['use Postgres', 'task 1 failed']);
+    host.conversationBusy.mockReturnValue(false);
+    runner.pump();
+    expect(turns).toHaveLength(1);
+    expect(turns[0].prompt).toMatchObject({ text: 'use Postgres', wakeUps: [], forced: true });
+    turns[0].land();
+    await forced;
+    await flushMicrotasks();
+    expect(turns[1].prompt).toMatchObject({ source: 'supervisor', wakeUps: ['task 1 failed'] });
+    expect(turns[1].prompt.forced).toBeUndefined();
+    turns[1].land();
+    await wakeUp;
+  });
+
+  it('queues a second force send behind the first, both ahead of a plain input', async () => {
+    const { host, turns, current } = fakeHost();
+    const runner = new PlanTurns(host);
+    const first = runner.enqueue({ source: 'user', text: 'one' });
+    const plain = runner.enqueue({ source: 'user', text: 'two' });
+
+    const forcedA = runner.forceSend({ source: 'user', text: 'now A' });
+    const forcedB = runner.forceSend({ source: 'user', text: 'now B' });
+
+    expect(host.interrupt).toHaveBeenCalledTimes(2);
+    expect(current.plan!.pendingTurns!.map((t) => t.text)).toEqual(['one', 'now A', 'now B', 'two']);
+    turns[0].fail(new PlannerTurnStoppedError());
+    await expect(first).rejects.toBeInstanceOf(PlannerTurnStoppedError);
+    await flushMicrotasks();
+    expect(turns.map((t) => t.prompt.text)).toEqual(['one', 'now A']);
+    turns[1].land();
+    await forcedA;
+    await flushMicrotasks();
+    turns[2].land();
+    await forcedB;
+    await flushMicrotasks();
+    expect(turns.map((t) => t.prompt.text)).toEqual(['one', 'now A', 'now B', 'two']);
+    turns[3].land();
+    await plain;
+  });
+
+  it('is a plain send with no turn in flight', async () => {
+    const { host, turns } = fakeHost();
+    const runner = new PlanTurns(host);
+
+    const sent = runner.forceSend({ source: 'user', text: 'and CSV' });
+
+    expect(host.interrupt).not.toHaveBeenCalled();
+    expect(turns[0].prompt.forced).toBeUndefined();
+    turns[0].land();
+    await sent;
   });
 
   it('waits for the conversation when another turn took it between two of its own', async () => {

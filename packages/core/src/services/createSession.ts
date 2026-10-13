@@ -532,6 +532,7 @@ export class Session {
       conversationBusy: () => this.conversation.isTurnInFlight,
       mayWake: () => this.supervision.mayWake(),
       persist: () => this.persist({ background: true }),
+      interrupt: () => { this.conversation.stopTurn('force_send'); },
       holdStarts: () => this.orchestrator.holdStarts(),
       resumeStarts: async () => {
         if (this.orchestrator.isRunning) await this.withSave(() => this.orchestrator.tick(), { background: true });
@@ -541,7 +542,7 @@ export class Session {
         // the next turn's log cannot absorb a previous turn's uncommitted activity.
         this.events.dropSubagentRuns();
         const reply = (turnSignal: AbortSignal | undefined, wakeUp?: WakeUpTurn) =>
-          this.conversation.reply(prompt, { signal: turnSignal, onCommit: taken, wakeUps: prompt.wakeUps, ...(wakeUp ? { wakeUp } : {}) });
+          this.conversation.reply(prompt, { signal: turnSignal, onCommit: taken, wakeUps: prompt.wakeUps, forced: prompt.forced, ...(wakeUp ? { wakeUp } : {}) });
         // Wake-ups that ride with a user's message are context for the user's turn.
         const { landed, effects } = await this.openTurn(() => (prompt.source === 'supervisor'
           ? this.supervision.wakeUp(reply, signal)
@@ -1111,6 +1112,18 @@ export class Session {
   async continueConversation(userMessage: string, options?: GeneratePlanOptions): Promise<LegacyPlanState> {
     if (!this.plan) throw new Error('No planning conversation to continue');
     return this.turns.enqueue({ source: 'user', ...this.resolveSkillInvocation(userMessage), signal: options?.signal });
+  }
+
+  /**
+   * Send now in the planner chat (ADR-0023): stop the planner turn in flight
+   * and answer `text` in the turn that replaces it, ahead of anything waiting.
+   * Turn-scoped — the run's tasks carry on untouched, and what the stopped
+   * turn deferred is settled as for any stop. With no turn in flight it is a
+   * plain {@link continueConversation}.
+   */
+  async forceSendPrompt(text: string, options?: GeneratePlanOptions): Promise<LegacyPlanState> {
+    if (!this.plan) throw new Error('No planning conversation to continue');
+    return this.turns.forceSend({ source: 'user', ...this.resolveSkillInvocation(text), signal: options?.signal });
   }
 
   /**

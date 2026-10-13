@@ -23,7 +23,9 @@ and reaches the model at the runner's next step boundary — after the tool call
 in flight, within the same turn. Where a runner cannot take a message
 mid-turn, or refuses one, the message waits for the turn to end, as before.
 *Force send* interrupts the running tool call and delivers its message
-straight away.**
+straight away. In the planner chat, force send stops the planner turn in
+flight and answers its message in the turn that replaces it; it is
+turn-scoped and never touches the run's tasks.**
 
 ## Key properties
 
@@ -102,7 +104,8 @@ straight away.**
   since the runner has it. The surfaces: `ctrl-s` in the TUI task view (the composer text, or
   the selected queued message when the composer is empty), *Send now* and
   `Ctrl+Enter` in the VS Code task log, and `POST …/tasks/:task/messages/now`
-  and `…/messages/:id/now` on the daemon.
+  and `…/messages/:id/now` on the daemon. The planner chat's force send is
+  F5.
 - **The forced message goes first; the rest keep their order (F2).** Messages
   still in Ordewell's queue follow the forced one in the order they were sent.
   Messages already handed over to the runner are where the runners differ:
@@ -120,6 +123,25 @@ straight away.**
   to its end, and reports it later, in the next turn. On Codex, force send
   therefore stops the agent waiting on the command, not the command itself,
   and the adapter drops that late report as belonging to a finished turn.
+- **In the planner chat, force send is turn-scoped (F5).** A prompt typed
+  while the planner answers waits for the turn's end, held by the surface.
+  Force send (`Session.forceSendPrompt`, `POST …/converse/message/now`)
+  stops the planner turn in flight through the same path a stop takes — the
+  harness planner's tool call in flight is stopped, and what the turn
+  deferred behind its edit is reported not done, since that edit never
+  lands — and answers the forced prompt alone in the turn that replaces it.
+  The forced prompt waits before the stop, ahead of every input waiting but
+  an earlier forced one, and behind the inputs the stopped turn took, so
+  nothing starts in between and the rest keep their order (F2). It stops
+  whichever planner turn holds the conversation; with none in flight it is a
+  plain send. It never stops, halts or edits a task: the run is not the
+  planner turn, as Esc in the planner chat already never halts the tasks. The
+  stopped turn ends `stopped` with `forceSent` on its `planner_turn_ended`,
+  which tells a surface to keep its held prompts in order rather than hand
+  them back to the input as it does after a stop. The forced prompt carries
+  `forced` on its `planner_turn_started`, its pending input and its
+  transcript entry, and the shared conversation view marks its line from
+  either, so a reload shows it as sent now (Q2).
 
 ### Per runner
 
@@ -260,6 +282,10 @@ interrupt (D4 covers it either way).
 - **Force send as interrupt plus a normal send.** The interrupted turn would
   become "waiting for input" for a moment, and the forced message would queue
   behind anything already waiting. F2 and F3 exist to avoid both.
+- **A planner force send that stops the run too.** One key for "stop
+  everything and listen" is easy to explain, but a correction to the planner
+  is not a reason to stop tasks the user did not ask to stop, and the planner
+  chat's own stop is already turn-scoped. Rejected (F5).
 
 ## Consequences
 
@@ -282,9 +308,13 @@ interrupt (D4 covers it either way).
 - `VerdictEngine` holds completion evidence while a message is undelivered,
   and voids it when a message is read (D6).
 - ADR-0018's M1 states this decision.
+- `PlanTurns.forceSend` places the forced input and asks the Session to stop
+  the planner turn (`PlannerConversation.stopTurn('force_send')`); a forced
+  input at the head of the pending inputs is a turn of its own.
 
 ## History
 
 - 2026-10-06 — proposed, with the per-runner probe above (Claude Code 2.1.291, Codex 0.160.0, OpenCode 1.18.34).
 - 2026-10-06 — accepted and implemented on Claude Code, Codex and OpenCode 1.x, force send on every surface; OpenCode 2.x keeps the turn-end queue. ADR-0018 M1 rewritten.
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
+- 2026-10-13 — force send extended to the planner chat, turn-scoped (F5); core and daemon route.

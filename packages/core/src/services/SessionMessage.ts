@@ -159,16 +159,19 @@ export type SessionMessage =
    * message, as typed, when the turn answers one; `skills` are what its
    * `/name` tokens loaded, absent when none did. `wakeUps` are the wake-up
    * digests the turn delivers, shown ahead of the prompt; `supervisor` marks a
-   * wake-up turn, which no user message opened (ADR-0029).
+   * wake-up turn, which no user message opened (ADR-0029). `forced`: the
+   * prompt was force sent, and this turn replaces the one it stopped.
    */
-  | { type: 'planner_turn_started'; turnId: string; prompt?: string; skills?: SkillLoadNotice[]; wakeUps?: string[]; supervisor?: true }
+  | { type: 'planner_turn_started'; turnId: string; prompt?: string; skills?: SkillLoadNotice[]; wakeUps?: string[]; supervisor?: true; forced?: true }
   | { type: 'planner_skill_loaded'; turnId: string; skill: SkillLoadNotice }
   /**
    * A planner turn is over; nothing more carries its `turnId`. Emitted exactly
    * once per `planner_turn_started`, stop and failure included, after the
-   * turn's `planner_message` when it has one.
+   * turn's `planner_message` when it has one. `forceSent`: a force send
+   * stopped it, and the forced turn follows — the user did not stop the
+   * conversation, so a surface keeps the prompts it holds (ADR-0023, F2).
    */
-  | { type: 'planner_turn_ended'; turnId: string; outcome: PlannerTurnOutcome }
+  | { type: 'planner_turn_ended'; turnId: string; outcome: PlannerTurnOutcome; forceSent?: true }
   /**
    * Reply prose as it streams, appended in order within its segment. A segment
    * is one continuous run of model text; text before a tool call is its own
