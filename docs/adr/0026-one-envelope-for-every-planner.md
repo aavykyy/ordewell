@@ -58,13 +58,16 @@ needs is an ops task ([ADR-0020](0020-ops-tasks-and-merge-gates.md)).
 ### The harness's own requests reach the approval seam
 
 Each adapter reads its runner's permission request into one shape — an MCP
-tool, a fetch, a read outside the workspace, or anything else — and holds it
-open. `CliAgentAiService` decides it against the session's approval policy and
-web fetcher, and answers through the adapter.
+tool, a fetch, a read outside the workspace, or anything else — and hands it
+to one permission ledger (`permissionLedger.ts`), shared by planners and
+tasks on every runner. The ledger holds it open, and cancels any request
+still open when the turn ends. `CliAgentAiService` decides it against the
+session's approval policy and web fetcher, and answers through the adapter;
+the adapter only turns the answer into its runner's reply.
 
 | request | decision |
 | --- | --- |
-| an Ordewell tool, by its exact name | allowed by the adapter at once (ADR-0022, S3) |
+| an Ordewell tool, by its exact name | allowed by the ledger at once and logged as decided (ADR-0022, S3) |
 | another MCP tool | kind `mcp_tool`, scoped to the tool's full name |
 | a fetch or a search | the web-read policy ([ADR-0027](0027-web-reads-in-the-planner-envelope.md)): exclusion, budget, approval, then the SSRF guard |
 | a read outside the workspace | kind `external_path`, scoped as ADR-0008 scopes a path |
@@ -80,8 +83,8 @@ How each runner raises them, checked live (Claude Code 2.1.296, codex-cli
   `Read` each arrive as `can_use_tool`, a subagent's on the same channel.
 - **Codex** runs with `approvalPolicy: on-request`. A user's MCP tool arrives
   as an `mcpServer/elicitation/request` with `codex_approval_kind:
-  mcp_tool_call`; the server is named, the tool is in the question or the call
-  Codex last started on that server. Command, file-change and permission
+  mcp_tool_call`; the server is named, the tool is in the question or the
+  latest call Codex started on that server and has not finished. Command, file-change and permission
   requests are still declined at once.
 - **OpenCode** gets Ordewell's whole permission policy for the planner's
   server, replacing any it inherited: a catch-all `ask`, its own read tools
@@ -266,3 +269,4 @@ refused from a workspace's environment files (ADR-0016).
   ([ADR-0032](0032-runner-state-outside-the-workspace.md)).
 - 2026-10-13 — Codex's own shell is off for a planner on a host where its sandbox cannot start ([ADR-0033](0033-codex-planner-without-its-sandbox.md)).
 - 2026-10-13 — a server named `ordewell_x` had its tools allowed at once as Ordewell's, past the `mcp_tool` approval: Claude Code's and OpenCode's adapters matched a prefix, and OpenCode's rule was `ordewell_*`. Ordewell's tools are now told apart by exact name (ADR-0022, S3).
+- 2026-10-13 — the three adapters' copies of the permission table disagreed: Codex allowed an Ordewell tool without logging it, only OpenCode cancelled a request left open at a turn's end, and Codex named an approval's tool from a call that had already finished. One permission ledger now holds the table for every runner.

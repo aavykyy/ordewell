@@ -417,8 +417,9 @@ describe('OpenCode 2.x — permission requests', () => {
     await turn;
 
     expect(server.requests.find((r) => r.path === `/api/session/${SES}/permission/per_1/reply`)?.body).toEqual({ decision: 'once' });
-    expect(events.find((e) => e.type === 'permission_request')).toMatchObject({
-      id: 'per_1', name: 'shell', suggestions: ['echo *'], toolUseId: 'call_1', decided: { decision: 'allow' },
+    // Already decided, it offers no grant to choose.
+    expect(events.find((e) => e.type === 'permission_request')).toEqual({
+      type: 'permission_request', id: 'per_1', name: 'shell', detail: expect.any(String), input: expect.any(Object), toolUseId: 'call_1', decided: { decision: 'allow' },
     });
     adapter.dispose();
   });

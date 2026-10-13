@@ -5,10 +5,11 @@ import type { AgentEvent, TaskStartOptions } from '../AgentAdapter';
 import { mcpClientConfig } from '../../mcp';
 import { sseResponse } from '../../__tests__/harnessTestKit';
 import {
-  ChildSessions, OpenCodePermissions, PendingSteers, ReplyText, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePlannerAsk, openEventStream, permissionReply, plannerSystem, settleTurn,
-  splitModelId, turnLatch, usageRecord, type PermissionRequest,
+  ChildSessions, PendingSteers, ReplyText, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePermissions, openCodePlannerAsk, openEventStream, permissionReply, plannerSystem, raiseOnce, settleTurn,
+  splitModelId, turnLatch, usageRecord,
 } from '../openCodeTransport';
 import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION } from '../openCodeOrdewell';
+import type { LedgerStance, RaisedRequest } from '../permissionLedger';
 
 /**
  * The protocol work OpenCode 1.x and 2.x share, driven directly. The adapter
@@ -130,101 +131,45 @@ describe('autoApproves', () => {
   });
 });
 
-describe('OpenCodePermissions', () => {
-  const mcp = mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok' });
-  const request = (id: string, name = 'bash'): PermissionRequest => ({ type: 'permission_request', id, name, detail: '{}' });
+describe('openCodePermissions', () => {
+  const request = (id: string, name = 'bash'): RaisedRequest => ({ id, name, detail: '{}', ordewell: false });
+  const TASK: LedgerStance = { role: 'task', autoApprove: false };
 
-  function desk(ordewell: typeof mcp | null = null, failReplies = false) {
+  function desk(failReplies = false) {
     const replies: [string, string, ApprovalDecision][] = [];
     const events: AgentEvent[] = [];
-    const permissions = new OpenCodePermissions(async (id, sessionId, decision) => {
+    const permissions = openCodePermissions(async (id, sessionId, decision) => {
       replies.push([id, sessionId, decision]);
       if (failReplies) throw new Error('gone');
-    }, () => ordewell);
+    }, () => TASK);
     return { permissions, replies, events, onEvent: (e: AgentEvent) => events.push(e) };
   }
 
-  it('holds a planner\'s request open for its envelope, once however often it is raised', () => {
+  it('raises a request once however often a turn sees it, and answers it on the session that asked', () => {
     const { permissions, replies, events, onEvent } = desk();
     const seen = new Set<string>();
-    permissions.ask(request('per_1'), 'ses', false, seen, onEvent);
-    permissions.ask(request('per_1'), 'ses', false, seen, onEvent);
+    raiseOnce(permissions, request('per_1'), 'ses_child', seen, onEvent);
+    raiseOnce(permissions, request('per_1'), 'ses_child', seen, onEvent);
 
-    expect(events).toEqual([request('per_1')]);
-    expect(replies).toEqual([]);
+    expect(events).toEqual([{ type: 'permission_request', id: 'per_1', name: 'bash', detail: '{}', suggestions: [] }]);
     expect(permissions.answer('per_1', { decision: 'deny', note: 'no' })).toBe(true);
-    expect(replies).toEqual([['per_1', 'ses', { decision: 'deny', note: 'no' }]]);
-  });
-
-  it('allows the planner its Ordewell tool at once', () => {
-    const { permissions, replies, onEvent } = desk(mcp);
-    permissions.ask(request('per_1', 'ordewell_submit_plan'), 'ses', false, new Set(), onEvent);
-
-    expect(replies).toEqual([['per_1', 'ses', { decision: 'allow' }]]);
-  });
-
-  it('answers a task\'s request at once under auto approvals, and shows it decided', () => {
-    const { permissions, replies, events, onEvent } = desk();
-    permissions.ask(request('per_1'), 'ses', true, new Set(), onEvent);
-
-    expect(events).toEqual([{ ...request('per_1'), decided: { decision: 'allow' } }]);
-    expect(replies).toEqual([['per_1', 'ses', { decision: 'allow' }]]);
-  });
-
-  it('answers a task\'s Ordewell tool at once under any mode', () => {
-    const { permissions, replies, events, onEvent } = desk(mcp);
-    permissions.ask(request('per_1', 'ordewell_task_complete'), 'ses', false, new Set(), onEvent);
-
-    expect(events).toEqual([{ ...request('per_1', 'ordewell_task_complete'), decided: { decision: 'allow' } }]);
-    expect(replies).toHaveLength(1);
-  });
-
-  // OpenCode names a tool `<server>_<tool>`, so a server named `ordewell_x` puts its tools under Ordewell's prefix.
-  it.each(['ordewell_x_task_complete', 'ordewell_evil', 'ordewell_'])('holds %s open: only Ordewell\'s own tool names are its', (name) => {
-    const { permissions, replies, events, onEvent } = desk(mcp);
-    permissions.ask(request('per_1', name), 'ses', false, new Set(), onEvent);
-
-    expect(events).toEqual([request('per_1', name)]);
-    expect(replies).toEqual([]);
-  });
-
-  it('leaves any other task request open until a person answers it, once, on the session that asked', () => {
-    const { permissions, replies, events, onEvent } = desk();
-    permissions.ask(request('per_1'), 'ses_child', false, new Set(), onEvent);
-
-    expect(events).toEqual([request('per_1')]);
-    expect(replies).toEqual([]);
-    expect(permissions.answer('per_1', { decision: 'deny', note: 'no' })).toBe(true);
-    expect(permissions.answer('per_1', { decision: 'allow' })).toBe(false);
     expect(replies).toEqual([['per_1', 'ses_child', { decision: 'deny', note: 'no' }]]);
   });
 
-  it('withdraws a request OpenCode settled itself, and only an open one', () => {
-    const { permissions, events, onEvent } = desk();
-    permissions.ask(request('per_1'), 'ses', false, new Set(), onEvent);
-    permissions.withdraw('per_1', onEvent);
-    permissions.withdraw('per_1', onEvent);
-    permissions.withdraw(undefined, onEvent);
-
-    expect(events.slice(1)).toEqual([{ type: 'permission_cancelled', id: 'per_1' }]);
-    expect(permissions.answer('per_1', { decision: 'allow' })).toBe(false);
-  });
-
-  it('cancels every request still open', () => {
-    const { permissions, events, onEvent } = desk();
-    permissions.ask(request('per_1'), 'ses', false, new Set(), onEvent);
-    permissions.ask(request('per_2'), 'ses', false, new Set(), onEvent);
-    permissions.cancelAll(onEvent);
-    permissions.cancelAll(onEvent);
-
-    expect(events.slice(2)).toEqual([{ type: 'permission_cancelled', id: 'per_1' }, { type: 'permission_cancelled', id: 'per_2' }]);
-  });
-
   it('takes a reply the server fails as answered', async () => {
-    const { permissions, onEvent } = desk(null, true);
-    permissions.ask(request('per_1'), 'ses', false, new Set(), onEvent);
+    const { permissions, onEvent } = desk(true);
+    raiseOnce(permissions, request('per_1'), 'ses', new Set(), onEvent);
     expect(permissions.answer('per_1', { decision: 'allow' })).toBe(true);
     await tick();
+  });
+
+  // OpenCode names a tool `<server>_<tool>`, so a server named `ordewell_x` puts its tools under Ordewell's prefix.
+  it.each(['ordewell_x_task_complete', 'ordewell_evil', 'ordewell_'])('does not take %s for an Ordewell tool: only its own tool names are', (name) => {
+    expect(OPENCODE_ORDEWELL.isOrdewellAsk(name)).toBe(false);
+  });
+
+  it.each(['ordewell_submit_plan', 'ordewell_task_complete'])('takes %s for an Ordewell tool', (name) => {
+    expect(OPENCODE_ORDEWELL.isOrdewellAsk(name)).toBe(true);
   });
 });
 
@@ -299,8 +244,8 @@ describe('settleTurn', () => {
   function settlement(overrides: Partial<Parameters<typeof settleTurn>[1]> = {}) {
     const order: string[] = [];
     const events: AgentEvent[] = [];
-    const permissions = new OpenCodePermissions(async () => {}, () => null);
-    permissions.ask({ type: 'permission_request', id: 'per_1', name: 'bash', detail: '{}' }, 'ses', false, new Set(), () => {});
+    const permissions = openCodePermissions(async () => {}, () => ({ role: 'planner', autoApprove: false }));
+    permissions.raise({ id: 'per_1', name: 'bash', detail: '{}', ordewell: false }, { id: 'per_1', sessionId: 'ses' }, () => {});
     const how = {
       processEnded: new Promise<void>(() => {}),
       exitMessage: () => 'The server exited.',

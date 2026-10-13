@@ -11,6 +11,7 @@ import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
 import { markedLines, structuredPatchText } from './fileDiff';
 import { ORDEWELL_MCP_SERVER_NAME, type McpClientConfig, type OwnerOnlyFile } from '../mcp';
 import { CLAUDE_ORDEWELL } from './claudeOrdewell';
+import { PermissionLedger } from './permissionLedger';
 import { settleWithin } from './settleWithin';
 import { awaitAttach, type OrdewellToolRole } from './ordewellBinding';
 import { claudeLocalServers } from './claudeRepoConfig';
@@ -151,6 +152,27 @@ const MCP_STATUS_POLL_MS = 100;
 
 /** A denial's `message` is required by the CLI; this stands in when nobody wrote a note. */
 const DEFAULT_DENIAL = 'Denied in Ordewell. Continue without it, or say what you need.';
+
+/** What a `can_use_tool` answer echoes back. */
+interface ClaudeAskHandle {
+  id: string;
+  input: Record<string, unknown>;
+  suggestions: unknown[];
+}
+
+/**
+ * The answer in the shape the CLI validates: an allow echoes the call's own
+ * input (an absent one is warned about and replaced), and "for this task"
+ * hands back Claude's own suggestions — never a grant of Ordewell's making.
+ */
+function canUseToolAnswer({ input, suggestions }: ClaudeAskHandle, decision: ApprovalDecision): Record<string, unknown> {
+  if (decision.decision === 'deny') return { behavior: 'deny', message: decision.note?.trim() || DEFAULT_DENIAL };
+  return {
+    behavior: 'allow',
+    updatedInput: input,
+    ...(decision.decision === 'allowForTask' && suggestions.length > 0 ? { updatedPermissions: suggestions } : {}),
+  };
+}
 
 interface ClaudeBlock {
   type: string;
@@ -305,8 +327,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private readonly pendingControl = new Map<string, (response: ControlResponse | null) => void>();
   /** An interrupt was sent during the current turn, so an aborted result is that interrupt, not a failure. */
   private interruptRequested = false;
-  /** A task's tool requests still waiting for an answer, by request id, with what the answer echoes back. */
-  private readonly openPermissions = new Map<string, { input: Record<string, unknown>; suggestions: unknown[] }>();
+  private readonly permissions = new PermissionLedger<ClaudeAskHandle>(
+    (handle, decision) => this.writeLine({ type: 'control_response', response: { subtype: 'success', request_id: handle.id, response: canUseToolAnswer(handle, decision) } }),
+    () => ({ role: this.role, autoApprove: false }),
+  );
 
   /** Whether this turn has already emitted reply text — see {@link handleLine}. */
   private turnHasText = false;
@@ -503,25 +527,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     this.process?.stdin?.end();
   }
 
-  /**
-   * The answer to an open tool request, in the shape the CLI validates: an
-   * allow echoes the call's own input (an absent one is warned about and
-   * replaced), and "for this task" hands back Claude's own suggestions — never
-   * a grant of Ordewell's making.
-   */
   answerPermission(id: string, decision: ApprovalDecision): boolean {
-    const open = this.openPermissions.get(id);
-    if (!open || !this.process) return false;
-    this.openPermissions.delete(id);
-    const response = decision.decision === 'deny'
-      ? { behavior: 'deny', message: decision.note?.trim() || DEFAULT_DENIAL }
-      : {
-        behavior: 'allow',
-        updatedInput: open.input,
-        ...(decision.decision === 'allowForTask' && open.suggestions.length > 0 ? { updatedPermissions: open.suggestions } : {}),
-      };
-    this.writeLine({ type: 'control_response', response: { subtype: 'success', request_id: id, response } });
-    return true;
+    return this.process ? this.permissions.answer(id, decision) : false;
   }
 
   dispose(): void {
@@ -595,19 +602,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         const input = msg.request.input ?? {};
         const id = msg.request_id ?? '';
         const name = msg.request.tool_name ?? 'unknown';
-        if (this.givenOrdewell && CLAUDE_ORDEWELL.isOrdewellAsk(name)) {
-          // A task's `--allowedTools` should have settled it already; a
-          // planner's arrives through its ask rule. A completion that waited
-          // on a person would hold the verdict hostage (ADR-0022, S3).
-          this.writeLine({ type: 'control_response', response: { subtype: 'success', request_id: id, response: { behavior: 'allow', updatedInput: input } } });
-          emit({ type: 'permission_request', id, name, detail: JSON.stringify(input), input, decided: { decision: 'allow' } });
-          return;
-        }
         // A planner's grants are the session policy's, never Claude's own.
         const suggestions = this.role === 'task' ? msg.request.permission_suggestions ?? [] : [];
-        this.openPermissions.set(id, { input, suggestions });
-        emit({
-          type: 'permission_request',
+        // A task's `--allowedTools` should have settled an Ordewell tool already; a planner's arrives through its ask rule.
+        this.permissions.raise({
           id,
           name,
           detail: JSON.stringify(input),
@@ -615,16 +613,15 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
           suggestions,
           ...(msg.request.tool_use_id ? { toolUseId: msg.request.tool_use_id } : {}),
           ...(this.role === 'planner' ? { ask: plannerAsk(name, input, msg.request.mcp_server?.name) } : {}),
-        });
+          ordewell: this.givenOrdewell && CLAUDE_ORDEWELL.isOrdewellAsk(name),
+        }, { id, input, suggestions }, emit);
         return;
       }
 
       // Claude gave up on a request it asked — an interrupt cancels the call.
-      case 'control_cancel_request': {
-        const id = msg.request_id;
-        if (id && this.openPermissions.delete(id)) emit({ type: 'permission_cancelled', id });
+      case 'control_cancel_request':
+        this.permissions.withdraw(msg.request_id, emit);
         return;
-      }
 
       case 'control_response': {
         const requestId = msg.response?.request_id;
@@ -701,17 +698,14 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         this.reportSessionCost(msg, emit);
         if (this.interruptRequested && (msg.is_error || msg.subtype !== 'success')) {
           this.interruptRequested = false;
-          this.turnClosed = true;
-          emit({ type: 'turn_end', interrupted: true });
+          this.closeTurn({ type: 'turn_end', interrupted: true }, emit);
         } else if (msg.is_error || (msg.subtype && msg.subtype !== 'success')) {
-          this.turnClosed = true;
-          emit({ type: 'error', message: msg.result?.trim() || msg.errors?.join('\n').trim() || `Claude Code ended the turn: ${msg.subtype ?? 'error'}` });
+          this.closeTurn({ type: 'error', message: msg.result?.trim() || msg.errors?.join('\n').trim() || `Claude Code ended the turn: ${msg.subtype ?? 'error'}` }, emit);
         } else if (this.role === 'task' && this.backgroundTaskCount > 0) {
           this.resultHeld = true;
         } else {
           this.resultHeld = false;
-          this.turnClosed = true;
-          emit({ type: 'turn_end' });
+          this.closeTurn({ type: 'turn_end' }, emit);
         }
         return;
 
@@ -744,10 +738,16 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     this.followOnTimer = setTimeout(() => {
       this.followOnTimer = null;
       this.resultHeld = false;
-      this.turnClosed = true;
-      emit({ type: 'turn_end' });
+      this.closeTurn({ type: 'turn_end' }, emit);
     }, FOLLOW_ON_TURN_GRACE_MS);
     this.followOnTimer.unref?.();
+  }
+
+  /** A subagent left running in the background outlives the turn, and a request it raised still waits on its answer. */
+  private closeTurn(end: AgentEvent, emit: (event: AgentEvent) => void): void {
+    this.turnClosed = true;
+    if (this.backgroundTaskCount === 0) this.permissions.endTurn(emit);
+    emit(end);
   }
 
   private startSubagent(id: string, input: Record<string, unknown>, emit: (event: AgentEvent) => void): void {

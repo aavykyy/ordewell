@@ -554,13 +554,41 @@ describe('ClaudeCodeAdapter in task mode', () => {
       name: 'Write',
       detail: JSON.stringify({ file_path: '/repo/a.txt', content: 'a' }),
       input: { file_path: '/repo/a.txt', content: 'a' },
-      suggestions: [],
       toolUseId: expect.any(String),
       ask: { kind: 'other' },
     });
     expect(adapter.answerPermission('9a948184-6792-4049-85b1-3e837387f618', { decision: 'deny', note: 'no' })).toBe(true);
     const answer = JSON.parse(spawned.processes[0].written[1]) as { response: { response: { behavior: string; message: string } } };
     expect(answer.response.response).toEqual({ behavior: 'deny', message: 'no' });
+    adapter.dispose();
+  });
+
+  it('cancels a request still open when the turn ends, as every runner does', async () => {
+    const result = { type: 'result', subtype: 'success', is_error: false, session_id: 'sess-1', result: 'Stopped.' };
+    const { spawned, processDeps } = deps([fixture('claude-code', 'permission-task') + `${JSON.stringify(result)}\n`]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskIn('default'));
+    const events: AgentEvent[] = [];
+    await adapter.send('Write a.txt', (e) => events.push(e));
+
+    expect(events.slice(-2)).toEqual([{ type: 'permission_cancelled', id: '9a948184-6792-4049-85b1-3e837387f618' }, { type: 'turn_end' }]);
+    expect(adapter.answerPermission('9a948184-6792-4049-85b1-3e837387f618', { decision: 'allow' })).toBe(false);
+    expect(spawned.processes[0].written).toHaveLength(1);
+    adapter.dispose();
+  });
+
+  it('keeps a planner\'s request open past a turn end while background work that may have raised it still runs', async () => {
+    const background = { type: 'system', subtype: 'background_tasks_changed', session_id: 'sess-1', tasks: [{ id: 'bg-1' }] };
+    const result = { type: 'result', subtype: 'success', is_error: false, session_id: 'sess-1', result: 'Researching in the background.' };
+    const { processDeps } = deps([`${JSON.stringify(background)}\n` + fixture('claude-code', 'permission-task') + `${JSON.stringify(result)}\n`]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN' });
+    const events: AgentEvent[] = [];
+    await adapter.send('Plan it', (e) => events.push(e));
+
+    expect(events.at(-1)).toEqual({ type: 'turn_end' });
+    expect(events.some((e) => e.type === 'permission_cancelled')).toBe(false);
+    expect(adapter.answerPermission('9a948184-6792-4049-85b1-3e837387f618', { decision: 'deny' })).toBe(true);
     adapter.dispose();
   });
 
@@ -698,9 +726,13 @@ describe('ClaudeCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
       type: 'control_response',
       response: { subtype: 'success', request_id: 'req-1', response: { behavior: 'allow', updatedInput: { status: 'done', summary: 'ok' } } },
     });
-    expect(events.find((e) => e.type === 'permission_request')).toMatchObject({
+    expect(events.find((e) => e.type === 'permission_request')).toEqual({
+      type: 'permission_request',
       id: 'req-1',
       name: 'mcp__ordewell__task_complete',
+      detail: JSON.stringify({ status: 'done', summary: 'ok' }),
+      input: { status: 'done', summary: 'ok' },
+      toolUseId: 'tu-1',
       decided: { decision: 'allow' },
     });
     expect(adapter.answerPermission('req-1', { decision: 'deny' })).toBe(false);

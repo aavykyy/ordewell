@@ -5,9 +5,10 @@ import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION, OPENCODE_SEARCH_OFF, ty
 import { hunksOf } from './fileDiff';
 import { heldServersNote } from './projectServers';
 import type { ProjectMcpServer } from './repoConfig';
+import type { RaisedRequest } from './permissionLedger';
 import {
-  OpenCodePermissions, autoApproves, delay, interruptAcknowledged, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, settleTurn, splitModelId, streamTurn,
-  turnLatch, usageRecord, type OpenCodeTokens, type PermissionRequest, type StreamTurn, type TurnLatch,
+  autoApproves, delay, interruptAcknowledged, openCodePermissions, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, raiseOnce, settleTurn, splitModelId, streamTurn,
+  turnLatch, usageRecord, type OpenCodeTokens, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
 /** A turn's end is also read from `/api/session/active`, behind the stream, which can drop a frame. */
 const ACTIVE_POLL_INTERVAL_MS = 1000;
@@ -220,9 +221,9 @@ export class OpenCodeV2 {
    * reads back only these, never the folder (ADR-0032).
    */
   private readonly saved = new Set<string>();
-  private readonly permissions = new OpenCodePermissions(
+  private readonly permissions = openCodePermissions(
     (id, sessionId, decision) => this.replyPermission(id, sessionId, decision),
-    () => this.opts.mcp,
+    () => ({ role: this.role, autoApprove: this.opts.kind === 'task' && autoApproves(this.opts) }),
   );
 
   constructor(
@@ -591,19 +592,20 @@ export class OpenCodeV2 {
     if (record) onEvent({ type: 'usage', record });
   }
 
-  private permissionRequest(ask: NonNullable<V2Frame['data']>): PermissionRequest | null {
+  private permissionRequest(ask: NonNullable<V2Frame['data']>): RaisedRequest | null {
     const id = ask.id;
     if (!id) return null;
     const scope = (ask.resources ?? []).join(', ');
+    const name = ask.action ?? 'permission';
     return {
-      type: 'permission_request',
       id,
-      name: ask.action ?? 'permission',
+      name,
       detail: JSON.stringify(scope ? { scope } : {}),
       input: ask.resources ? { resources: ask.resources } : {},
       // The patterns `always` would grant: the runner's own offer, and the only grounds for "Allow for this task".
       ...(ask.save?.length ? { suggestions: ask.save } : {}),
       ...(ask.source?.id ? { toolUseId: ask.source.id } : {}),
+      ordewell: !!this.opts.mcp && OPENCODE_ORDEWELL.isOrdewellAsk(name),
     };
   }
 
@@ -616,8 +618,8 @@ export class OpenCodeV2 {
       // An unusable one is running too, but what reaches its tools is `execute`, and the planner was told it has none.
       const listed = (this.host.mcpServers?.() ?? []).filter((name) => !this.unusable.some((server) => server.name === name));
       const read = request.name === 'external_directory' && ask.source?.id ? state.readPaths.get(ask.source.id) : undefined;
-      const target = openCodePlannerAsk(request.name, { patterns: ask.resources, ...(read ? { metadata: { filepath: read } } : {}) }, [...listed, ...this.exposed]);
-      this.permissions.ask({ ...request, ask: target }, session, false, state.seen, onEvent);
-    } else this.permissions.ask(request, session, this.opts.kind === 'task' && autoApproves(this.opts), state.seen, onEvent);
+      request.ask = openCodePlannerAsk(request.name, { patterns: ask.resources, ...(read ? { metadata: { filepath: read } } : {}) }, [...listed, ...this.exposed]);
+    }
+    raiseOnce(this.permissions, request, session, state.seen, onEvent);
   }
 }

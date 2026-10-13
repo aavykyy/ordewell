@@ -1,9 +1,9 @@
 import { randomBytes } from 'crypto';
 import { partedPromptUsage, type UsageRecord } from '../../models/Usage';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
-import type { McpClientConfig } from '../mcp';
 import { LineBuffer, type AgentEvent, type PlannerAsk, type PlannerStartOptions, type TaskStartOptions } from './AgentAdapter';
 import { OPENCODE_ORDEWELL, OPENCODE_SEARCH_PROVIDER } from './openCodeOrdewell';
+import { PermissionLedger, type LedgerStance, type RaisedRequest } from './permissionLedger';
 import { settleWithin } from './settleWithin';
 
 /**
@@ -19,7 +19,6 @@ import { settleWithin } from './settleWithin';
 const STREAM_CONNECT_TIMEOUT_MS = 5000;
 
 type OnEvent = (event: AgentEvent) => void;
-export type PermissionRequest = Extract<AgentEvent, { type: 'permission_request' }>;
 
 /**
  * OpenCode's own tools and permission kinds. Anything else a planner is asked
@@ -212,78 +211,36 @@ export class PendingSteers {
   }
 }
 
-const ALLOW: ApprovalDecision = { decision: 'allow' };
-
-/**
- * A session's permission requests, from the frame that raises one to the
- * answer. OpenCode blocks the turn on every request until it is answered, so
- * each one is answered or left open for a person — never dropped.
- */
-export class OpenCodePermissions {
-  /** Requests waiting for an answer, by request id, with the session that asked. */
-  private readonly open = new Map<string, string>();
-
-  constructor(
-    private readonly reply: (id: string, sessionId: string, decision: ApprovalDecision) => Promise<void>,
-    /** The Ordewell server the runner was given; its tools are never refused (ADR-0022, S3). */
-    private readonly ordewell: () => McpClientConfig | null | undefined,
-  ) {}
-
-  /**
-   * A task's request, or a planner's (with `autoApprove` false) for the
-   * planner's envelope to answer (ADR-0026). Under a mode whose manifest sets `approvals: auto` it is
-   * answered at once with what `opencode run --auto` answers, so the same plan
-   * follows the manifest (ADR-0001), and announced already
-   * decided so the log still shows it. Any other mode leaves it open for an
-   * approval card.
-   */
-  ask(request: PermissionRequest, sessionId: string, autoApprove: boolean, seen: Set<string>, onEvent: OnEvent): void {
-    if (!firstSight(request.id, seen)) return;
-    // Whatever the mode, a completion that waited on a person would hold the verdict hostage (ADR-0022, S3).
-    if (this.isOrdewellTool(request.name) || autoApprove) {
-      onEvent({ ...request, decided: ALLOW });
-      this.send(request.id, sessionId, ALLOW);
-      return;
-    }
-    this.open.set(request.id, sessionId);
-    onEvent(request);
-  }
-
-  /** A person's answer to an open request. False when it is not open. */
-  answer(id: string, decision: ApprovalDecision): boolean {
-    const sessionId = this.open.get(id);
-    if (sessionId === undefined) return false;
-    this.open.delete(id);
-    this.send(id, sessionId, decision);
-    return true;
-  }
-
-  /** Answered by OpenCode itself: a reject also refuses the session's other requests and an `always` grants the ones it covers. */
-  withdraw(id: string | undefined, onEvent: OnEvent): void {
-    if (id && this.open.delete(id)) onEvent({ type: 'permission_cancelled', id });
-  }
-
-  /** OpenCode asks only mid-turn and blocks on the answer, so a request still open once the turn is over was dropped by the abort that ended it. */
-  cancelAll(onEvent: OnEvent): void {
-    for (const id of [...this.open.keys()]) {
-      this.open.delete(id);
-      onEvent({ type: 'permission_cancelled', id });
-    }
-  }
-
-  private isOrdewellTool(name: string): boolean {
-    return !!this.ordewell() && OPENCODE_ORDEWELL.isOrdewellAsk(name);
-  }
-
-  private send(id: string, sessionId: string, decision: ApprovalDecision): void {
-    void this.reply(id, sessionId, decision).catch(() => { /* a server that forgot the request will not hang on it either */ });
-  }
+/** What answering an OpenCode request takes: its id, and the session that asked, which the older reply path names. */
+export interface OpenCodeAskHandle {
+  id: string;
+  sessionId: string;
 }
 
-function firstSight(id: string, seen: Set<string>): boolean {
-  if (seen.has(`perm:${id}`)) return false;
-  seen.add(`perm:${id}`);
-  return true;
+/** A session's permission requests (ADR-0026), answered through `reply`. */
+export function openCodePermissions(
+  reply: (id: string, sessionId: string, decision: ApprovalDecision) => Promise<void>,
+  stance: () => LedgerStance,
+): PermissionLedger<OpenCodeAskHandle> {
+  return new PermissionLedger(({ id, sessionId }, decision) => {
+    void reply(id, sessionId, decision).catch(() => { /* a server that forgot the request will not hang on it either */ });
+  }, stance);
+}
+
+/**
+ * OpenCode blocks the turn on every request until it is answered, and can
+ * send one twice in a turn; it is raised once, and never dropped.
+ */
+export function raiseOnce(
+  permissions: PermissionLedger<OpenCodeAskHandle>,
+  request: RaisedRequest,
+  sessionId: string,
+  seen: Set<string>,
+  onEvent: OnEvent,
+): void {
+  if (seen.has(`perm:${request.id}`)) return;
+  seen.add(`perm:${request.id}`);
+  permissions.raise(request, { id: request.id, sessionId }, onEvent);
 }
 
 /**
@@ -402,7 +359,7 @@ export interface TurnSettlement {
   exitMessage(): string;
   /** Whatever of the turn's own messages the stream missed. */
   readBack(): Promise<void>;
-  permissions: OpenCodePermissions;
+  permissions: PermissionLedger<OpenCodeAskHandle>;
   /** The event that ends a turn that ran to its end. */
   outcome(): AgentEvent;
 }
@@ -426,7 +383,7 @@ export async function settleTurn(turn: TurnLatch, how: TurnSettlement, onEvent: 
     return true;
   }
   await how.readBack();
-  how.permissions.cancelAll(onEvent);
+  how.permissions.endTurn(onEvent);
   onEvent(how.outcome());
   return true;
 }
