@@ -1,4 +1,4 @@
-import { nextBoundary, previousBoundary, wrapLines, type WrapLine } from './ansi';
+import { graphemes, nextBoundary, previousBoundary, width, wrapLines, type WrapLine } from './ansi';
 import type { Key } from './keys';
 
 export interface EditorState {
@@ -126,7 +126,11 @@ export function cursorInLines(lines: WrapLine[], cursor: number, textLen: number
   return { line: lines.length - 1, col: last.line.length };
 }
 
-/** Move the cursor up or down one visual (wrapped) line, keeping it at approximately the same column. */
+/**
+ * Move the cursor up or down one visual (wrapped) line, keeping it at
+ * approximately the same column. The column is a screen column and the landing
+ * is on a cluster boundary, so a wide or joined glyph is never entered halfway.
+ */
 export function moveCursorVertical(text: string, cursor: number, cols: number, direction: 1 | -1): number {
   const lines = wrapLines(text, cols);
   const { line, col } = cursorPosition(text, cursor, cols);
@@ -134,8 +138,16 @@ export function moveCursorVertical(text: string, cursor: number, cols: number, d
   const targetIndex = line + direction;
   if (targetIndex < 0 || targetIndex >= lines.length) return cursor;
 
+  const column = width(lines[line].line.slice(0, col));
   const target = lines[targetIndex];
-  return target.start + Math.min(col, target.line.length);
+  let offset = 0;
+  let used = 0;
+  for (const cluster of graphemes(target.line)) {
+    used += width(cluster);
+    if (used > column) break;
+    offset += cluster.length;
+  }
+  return target.start + offset;
 }
 
 /** Start of the previous whitespace-delimited word, including trailing space. */

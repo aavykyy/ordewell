@@ -26,12 +26,12 @@ function firstLine(text: string): string {
 
 /** The end of `text` that fits in `max` columns. */
 function tailOf(text: string, max: number): string {
-  const chars = [...text];
+  const clusters = graphemes(text);
   let out = '';
   let used = 0;
-  for (let i = chars.length - 1; i >= 0 && used + width(chars[i]) <= max; i--) {
-    out = chars[i] + out;
-    used += width(chars[i]);
+  for (let i = clusters.length - 1; i >= 0 && used + width(clusters[i]) <= max; i--) {
+    out = clusters[i] + out;
+    used += width(clusters[i]);
   }
   return out;
 }

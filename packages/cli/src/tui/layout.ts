@@ -112,17 +112,30 @@ export function queuedPromptRows(state: TuiState, cols: number): string[] {
   return state.queuedPrompts.flatMap((text) => queuedBubble(text, cols));
 }
 
+/** The columns a queued row's marker (or its continuation indent) takes before the text. */
+const MARKER_LEAD = 2;
+
+/** Fewer columns than this left after the text cannot say what a hint is, so none is drawn. */
+const MIN_HINT_COLS = 10;
+
+/** A queued row's hint, cut to the columns its text left. Never the text that gives way. */
+function hintAfter(text: string, tag: string, cols: number): string {
+  const left = cols - width(text);
+  return left >= MIN_HINT_COLS ? truncate(tag, left) : '';
+}
+
 /** One queued prompt wrapped under a dimmed marker, the takeback hint on its first row. */
 function queuedBubble(text: string, cols: number): string[] {
   const tag = ' · queued · esc to unsend · ctrl-s sends now';
   const prefix = `◇  ${tag}`;
-  // The hint is reserved only while it leaves room to read the prompt; a narrow
-  // pane drops it rather than squeezing the text to a column. `truncate` would
-  // otherwise cut the text, since the hint sits at the row's end.
-  const reserved = cols - width(prefix) >= 12 ? width(prefix) : 0;
-  const room = Math.max(1, cols - reserved);
+  // The hint is reserved only while it leaves room to read the prompt. A
+  // narrow pane gives it what the first row has left, and the text is still
+  // wrapped under the marker's own two columns — or every full-width row would
+  // lose its tail to `truncate`.
+  const roomy = cols - width(prefix) >= 12;
+  const room = Math.max(1, cols - (roomy ? width(prefix) : MARKER_LEAD));
   return wrap(text, room).map((line, i) => i === 0
-    ? truncate(`${style.grey(`◇ ${line}`)}${tag}`, cols)
+    ? `${style.grey(`◇ ${line}`)}${hintAfter(`◇ ${line}`, tag, cols)}`
     : truncate(style.grey(`  ${line}`), cols));
 }
 
@@ -154,10 +167,10 @@ function queuedTaskBubble(message: QueuedTaskMessage, selected: boolean, cols: n
   // leaves room to read the message, so a narrow pane drops it instead of
   // squeezing the text to a column.
   const prefix = `❯ ◇  ${tag}`;
-  const reserved = cols - width(prefix) >= 12 ? width(prefix) : 0;
-  const room = Math.max(1, cols - reserved);
+  const roomy = cols - width(prefix) >= 12;
+  const room = Math.max(1, cols - (roomy ? width(prefix) : MARKER_LEAD));
   return wrap(text, room).map((line, i) => i === 0
-    ? truncate(`${marker} ${selected ? style.bold(line) : line}${style.grey(tag)}`, cols)
+    ? `${marker} ${selected ? style.bold(line) : line}${style.grey(hintAfter(`◇ ${line}`, tag, cols))}`
     : truncate(`  ${line}`, cols));
 }
 

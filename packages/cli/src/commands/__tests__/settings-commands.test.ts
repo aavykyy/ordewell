@@ -205,6 +205,20 @@ describe('ordewell model', () => {
     d.close();
   });
 
+  it('clears the effort in .env when the daemon did not report one, rather than writing "undefined"', async () => {
+    const d = await fakeDaemon({ settings: { aiProvider: 'claude-code', plannerThinkingEffort: undefined }, models: CATALOG });
+    const { handleModel } = await import('../model');
+    await capture(() => handleModel(['set', 'sonnet'], new ApiClient(d.port)));
+
+    const { readFileSync } = await import('fs');
+    const { findEnvFile } = await import('../../utils/env');
+    const env = readFileSync(findEnvFile(), 'utf8');
+    expect(env).toContain('ORCHESTRATOR_MODEL=sonnet');
+    expect(env).not.toContain('undefined');
+    expect(process.env.ORDEWELL_PLANNER_EFFORT).toBe('');
+    d.close();
+  });
+
   it('does not scope a vendor planner to a runner catalog', async () => {
     const d = await fakeDaemon({ settings: { aiProvider: 'openrouter' }, models: CATALOG });
     const { handleModel } = await import('../model');

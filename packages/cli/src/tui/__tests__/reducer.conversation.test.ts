@@ -58,7 +58,8 @@ describe('switching to a fork', () => {
   });
 
   it('then ignores the original session\'s events', () => {
-    const { state } = reduce(initialState(planned), { type: 'sessionForked', sessionId: 'session-2', goal: 'g' });
+    const forked = reduce(initialState(planned), { type: 'sessionForked', sessionId: 'session-2', goal: 'g' }).state;
+    const state = reduce(forked, { type: 'planUpdated', sessionId: 'session-2', plan: { tasks: [{ id: 'task-1', order: 1, title: 'T', type: 'ai', status: 'pending', dependencies: [] }] } }).state;
 
     const after = reduce(state, { type: 'statusUpdate', tasks: [{ id: 'task-1', status: 'in_progress', verdict: null }], sessionId: 'session-1' });
 

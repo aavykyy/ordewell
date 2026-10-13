@@ -113,4 +113,39 @@ describe('the connect snapshot', () => {
 
     expect(actions).toEqual([{ type: 'runSnapshot', view, sessionId: 's1' }]);
   });
+
+  it('is adopted again when a reconnect greets with the same view', () => {
+    const view = loaded([task({ id: 'x' })]).run;
+    const actions: Action[] = [];
+    const inbound = inboundFor({}, (action) => actions.push(action), 's1');
+
+    inbound.execution()({ type: 'run_snapshot', sessionId: 's1', view } as WsEvent);
+    inbound.execution()({ type: 'run_snapshot', sessionId: 's1', view } as WsEvent);
+
+    expect(actions.map((a) => a.type)).toEqual(['runSnapshot', 'runSnapshot']);
+  });
+
+  it('brings the status of a run the TUI joined mid-flight', () => {
+    const view = loaded([task({ id: 'x', status: 'in_progress' })]).run;
+
+    const state = reduce(initialState({ sessionId: 's1' }), { type: 'runSnapshot', view, sessionId: 's1' }).state;
+
+    expect(state.status).toBe('executing');
+    expect(state.busyLabel).toContain('A');
+  });
+});
+
+describe('a task edited elsewhere', () => {
+  it('shows at once when another surface or the supervisor edits it', () => {
+    const state = loaded([task(), task({ id: 'b', order: 2, title: 'B' })]);
+    const actions: Action[] = [];
+    inboundFor({}, (action) => actions.push(action), 's1').execution()(
+      { type: 'task_updated', taskId: 'b', changes: { title: 'B, renamed', assignedRunner: 'codex' } } as WsEvent,
+    );
+
+    const next = actions.reduce((current, action) => reduce(current, action).state, state);
+
+    expect(findTask(next.tasks, 'b')).toMatchObject({ title: 'B, renamed', assignedRunner: 'codex' });
+    expect(findTask(next.tasks, 'a')?.title).toBe('A');
+  });
 });

@@ -334,6 +334,12 @@ export interface TaskLogState {
   queuedIndex: number;
 }
 
+/** A prompt a force send took out of the composer, or out of the queue at `queueIndex`. */
+export interface ForcedPrompt {
+  text: string;
+  queueIndex?: number;
+}
+
 export interface TuiState {
   editor: EditorState;
   /**
@@ -475,8 +481,9 @@ export interface TuiState {
    * A force send stopped the turn in flight and the forced turn follows. The
    * stopped turn's error is not news either, and the prompts held behind it
    * keep their order rather than draining into the turn already on its way.
+   * It holds what the send took, so a send that itself fails can give it back.
    */
-  forceSendPending: boolean;
+  forceSendPending: ForcedPrompt | null;
   toast: string;
   rows: number;
   cols: number;
@@ -647,7 +654,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     stopArmed: false,
     stopArmToken: 0,
     stopRequested: false,
-    forceSendPending: false,
+    forceSendPending: null,
     toast: '',
     rows: 24,
     cols: 80,

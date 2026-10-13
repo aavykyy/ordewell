@@ -79,6 +79,17 @@ describe('ctrl-s in the planner chat', () => {
     expect(state.editor.text).toBe('');
   });
 
+  it('runs a TUI command in the composer as enter does, rather than sending it to the planner', () => {
+    const { state, effects } = reduce(withDraft(planning(), '/stop'), ctrlS);
+    expect(effects).toEqual([{ type: 'cancelPlanning', sessionId: 's1' }]);
+    expect(state.forceSendPending).toBeNull();
+  });
+
+  it('still force sends a slash line that is not a TUI command, for the planner to resolve', () => {
+    const { effects } = reduce(withDraft(planning(), '/some-skill with args'), ctrlS);
+    expect(effects).toEqual([{ type: 'forceSendPlannerMessage', sessionId: 's1', message: '/some-skill with args' }]);
+  });
+
   it('says what to do when there is nothing to send', () => {
     const { state, effects } = reduce(planning(), ctrlS);
     expect(effects).toEqual([]);
@@ -89,11 +100,42 @@ describe('ctrl-s in the planner chat', () => {
 describe('the queue across a stop', () => {
   it('keeps the held prompts when the stopped turn was a force send', () => {
     const sent = reduce(withDraft(planning({ queuedPrompts: ['one', 'two'] }), 'now'), ctrlS).state;
-    const { state, effects } = reduce(sent, { type: 'failed', message: 'The planner turn was stopped.' });
+    const { state, effects } = reduce(sent, { type: 'failed', message: 'The planner turn was stopped.', code: 'planner_turn_stopped' });
 
     expect(state.queuedPrompts).toEqual(['one', 'two']);
     expect(state.status).toBe('planning');
     expect(effects).toEqual([]);
+  });
+
+  it('shows the error and puts the composer text back when the forced send itself failed', () => {
+    const sent = reduce(withDraft(planning(), 'use Postgres'), ctrlS).state;
+    expect(sent.editor.text).toBe('');
+
+    const { state, effects } = reduce(sent, { type: 'failed', message: 'connect ECONNREFUSED' });
+
+    expect(state.editor.text).toBe('use Postgres');
+    expect(lastSaid(state)).toMatchObject({ role: 'error', text: 'connect ECONNREFUSED' });
+    expect(state.status).toBe('idle');
+    expect(effects).toEqual([]);
+  });
+
+  it('keeps what was typed since above the restored composer text', () => {
+    const sent = reduce(withDraft(planning(), 'use Postgres'), ctrlS).state;
+    const { state } = reduce(withDraft(sent, 'and also'), { type: 'failed', message: 'nope', code: 'refused' });
+
+    expect(state.editor.text).toBe('use Postgres\nand also');
+  });
+
+  it('puts a force-sent queued prompt back at its position when the send failed', () => {
+    const sent = reduce(planning({ queuedPrompts: ['one', 'two', 'three'] }), ctrlS).state;
+    expect(sent.queuedPrompts).toEqual(['one', 'two']);
+
+    const { state, effects } = reduce(sent, { type: 'failed', message: 'nope', code: 'session_not_found' });
+
+    // The turn dying is a turn ending, so the oldest prompt goes out as it does after any failure.
+    expect(effects).toEqual([{ type: 'sendMessage', sessionId: 's1', message: 'one' }]);
+    expect(state.queuedPrompts).toEqual(['two', 'three']);
+    expect(lastSaid(state)).toMatchObject({ role: 'user', text: 'one' });
   });
 
   it('still returns the queue to the input on a user stop', () => {

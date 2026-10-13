@@ -35,3 +35,15 @@ describe('a wrapped line keeps the colour it started in', () => {
     expect(lines[1].startsWith('\x1b[')).toBe(false);
   });
 });
+
+describe('the live thinking line keeps the end of a row too short for it', () => {
+  it('never cuts a joined emoji in half', () => {
+    const family = '👨‍👩‍👧';
+    const block = { type: 'thinking' as const, id: 't1', text: `${'x'.repeat(40)}${family}`, streaming: true };
+
+    // Room for the ellipsis and two columns: one whole cluster, not a dangling joiner and its last member.
+    const [row] = conversationLines([block], 25, false).filter((line) => line !== '');
+
+    expect(stripAnsi(row)).toMatch(new RegExp(`·\\s…${family}$`, 'u'));
+  });
+});

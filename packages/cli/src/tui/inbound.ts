@@ -1,4 +1,4 @@
-import type { SessionMessage, SessionNotice } from '@ordewell/core';
+import type { RunView, SessionMessage, SessionNotice } from '@ordewell/core';
 import type { WsEvent } from '../apiClient';
 import type { Action } from './reducer';
 
@@ -190,6 +190,14 @@ export interface SessionInbound {
   redrawn(content: string, timestamp?: string): void;
   /** A burst held for batching goes out now, in order. */
   flush(): void;
+  /**
+   * Keeps the connect snapshot instead of delivering it. A load follows the
+   * session before it is the one on screen, so a snapshot dispatched at once
+   * would meet the reducer's stale check and be dropped.
+   */
+  holdSnapshot(): void;
+  /** Delivers the snapshot held (when `deliver`), then hands them out as they come again. */
+  releaseSnapshot(deliver: boolean): void;
 }
 
 const inbounds = new WeakMap<object, Map<string, SessionInbound>>();
@@ -226,6 +234,8 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
   const DELTA_DEBOUNCE_MS = 75;
   let held: Streamed | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let holdingSnapshot = false;
+  let heldSnapshot: RunView | null = null;
 
   const flush = (): void => {
     if (timer !== null) {
@@ -288,12 +298,13 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
 
   const receive = (kind: Kind, id: string, event: WsEvent): void => {
     // The daemon greets every socket with the run as it stands, so a client
-    // that joins mid-run has it before the next update. The first copy is
-    // adopted; a second subscription's is dropped like any other broadcast.
+    // that joins mid-run has it before the next update. Never counted as a
+    // copy: a reconnect greets with a view identical to an earlier one, and
+    // adopting a snapshot twice changes nothing.
     if (event.type === 'run_snapshot') {
       flush();
-      if (!copies.first(id, identity(event))) return;
-      dispatch({ type: 'runSnapshot', view: event.view, sessionId });
+      if (holdingSnapshot) heldSnapshot = event.view;
+      else dispatch({ type: 'runSnapshot', view: event.view, sessionId });
       return;
     }
     if (isStreamed(event)) {
@@ -335,6 +346,16 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
       pending.add(replyKey(content, timestamp));
     },
     flush,
+    holdSnapshot: () => {
+      holdingSnapshot = true;
+      heldSnapshot = null;
+    },
+    releaseSnapshot: (deliver) => {
+      holdingSnapshot = false;
+      const view = heldSnapshot;
+      heldSnapshot = null;
+      if (deliver && view) dispatch({ type: 'runSnapshot', view, sessionId });
+    },
   };
 }
 
@@ -404,10 +425,13 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
       dispatch({ type: 'taskLog', taskId: String(event.taskId), attempt: event.attempt, events: event.events, sessionId });
       return;
 
+    case 'task_updated':
+      dispatch({ type: 'taskUpdated', taskId: String(event.taskId), changes: event.changes, sessionId });
+      return;
+
     // Raw runner chatter. Listed rather than defaulted, so a new lifecycle
     // variant fails to compile here until someone decides what a run's watcher
     // does with it.
-    case 'task_updated':
     case 'task_output':
       return;
 

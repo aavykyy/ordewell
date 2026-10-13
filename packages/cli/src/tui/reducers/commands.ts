@@ -1,5 +1,5 @@
 import {
-  ALL_PROVIDERS, EMPTY_CONVERSATION, EMPTY_HOLD, NO_TURN, PROVIDER_PRIORITY, autonomyLevelLabel, parseAutonomyLevel, parseMaxParallel, runnerForProvider, type AiProvider,
+  ALL_PROVIDERS, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, PROVIDER_PRIORITY, autonomyLevelLabel, parseAutonomyLevel, parseMaxParallel, runnerForProvider, type AiProvider,
 } from '@ordewell/core';
 import { handoffCommand } from '../handoff';
 import { findCommand, type ParsedCommand } from '../slash';
@@ -15,6 +15,7 @@ import {
   addTask, confirmForceStartPastGate, openTaskDepsPicker, taskCommand, taskOpsCommand, taskEffortCommand, taskModeCommand, taskModelCommand, taskRunnerCommand, taskSkillsCommand,
 } from './taskEdits';
 import { stopPlanning } from './turnQueue';
+import { withRun } from './incoming';
 import { automergeCommand, autorunCommand, supervisorCommand } from './runSettings';
 import { openSettings } from './settings';
 import { fail, step, withSession, type Effect, type Step, type TaskAction } from './shared';
@@ -205,13 +206,11 @@ export function newSession(state: TuiState): Step {
   // Without this, the outgoing session's execution stream stays open and its
   // task updates keep landing on whatever id matches in the fresh state below.
   const closeEffects: Effect[] = state.sessionId ? [{ type: 'closeSession', sessionId: state.sessionId }] : [];
-  return step({
+  return step(withRun({
     ...state,
-    handoff: null,
     sessionId: null,
     goal: '',
     taskView: null,
-    tasks: [],
     planApproved: false,
     conversation: EMPTY_CONVERSATION,
     turnGate: NO_TURN,
@@ -227,9 +226,9 @@ export function newSession(state: TuiState): Step {
     pendingApprovals: [],
     queuedPrompts: EMPTY_HOLD,
     stopArmed: false,
-    forceSendPending: false,
+    forceSendPending: null,
     overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
-  }, closeEffects);
+  }, EMPTY_RUN), closeEffects);
 }
 
 function setModel(state: TuiState, args: string[]): Step {
