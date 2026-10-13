@@ -1395,6 +1395,15 @@ validated plan, `taskOps` and `taskQuery` envelopes instead of this server.
 call the coding agent a "provider" in prose; it is a runner being used as the
 planner.
 
+**Saved output** — a tool result too long for the context that a runner saved
+to a file outside the workspace, telling the model to read it back: Claude
+Code's session `tool-results/` folder, the file OpenCode 2.x names in
+`outputPath`. Codex saves none. A harness planner reads its own session's
+saved output as it reads the workspace, never asked and in any mode; the
+adapter's `savedOutput` says what counts, after the path is resolved on disk
+(ADR-0032). Not a runner's *memory*, which is off in every Ordewell run,
+planner and task alike. *Avoid:* "spill file".
+
 **agent_tool** — the `ResearchToolType` member for a harness planner's own tools
 that Ordewell has no equivalent for (`Edit`, `TodoWrite`, `Task`, whatever ships
 next). The agent's real name travels in `ResearchStep.toolLabel`, so a timeline

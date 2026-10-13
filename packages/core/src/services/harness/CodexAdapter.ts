@@ -295,6 +295,14 @@ const ANNOUNCED_REQUESTS = new Set([
 ]);
 
 /**
+ * Codex's own memory is off for planners and tasks alike (ADR-0032). The
+ * feature flag is the switch over both halves, reading memories into a thread
+ * and building them from past sessions, so it is set on the process
+ * (codex-cli 0.162.1).
+ */
+const NO_MEMORIES = ['-c', 'features.memories=false'];
+
+/**
  * Codex as a planner (ADR-0009) and as a task's runner (ADR-0018, #54), over
  * its `app-server` stdio JSON-RPC transport. The start switch decides the
  * thread's settings and who answers its requests; everything a turn reports
@@ -361,7 +369,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
 
   protected spawnSpec(opts: AgentStartOptions): SpawnSpec {
     this.startOpts = opts;
-    return { command: 'codex', args: ['app-server'], ...(opts.mcp ? { env: CODEX_ORDEWELL.env(opts.mcp) } : {}) };
+    return { command: 'codex', args: ['app-server', ...NO_MEMORIES], ...(opts.mcp ? { env: CODEX_ORDEWELL.env(opts.mcp) } : {}) };
   }
 
   /**

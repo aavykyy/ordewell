@@ -290,3 +290,7 @@ and its launch is byte for byte what it was.
   the model listed its tools without `execute`, a direct call to an approved
   project server's tool was asked about and returned, and `submit_plan`
   committed the plan.
+- 2026-10-13 — a runner's own memory is off for planners and tasks, and a
+  Claude planner's reads of its session's saved tool results, asked since
+  this ADR's read rules, are allowed again
+  ([ADR-0032](0032-runner-state-outside-the-workspace.md)).

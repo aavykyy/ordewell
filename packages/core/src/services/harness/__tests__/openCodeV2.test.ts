@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { OpenCodeAdapter } from '../OpenCodeAdapter';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, SpawnFn, TaskStartOptions } from '../AgentAdapter';
 import { fakeSpawn, sseResponse, type FakeEventStream } from '../../__tests__/harnessTestKit';
@@ -887,5 +890,41 @@ describe('OpenCode 2.x — file edits', () => {
 
     expect(events.find((e) => e.type === 'tool_result')).toMatchObject({ output: 'Could not find oldString in sum.js.', success: false });
     adapter.dispose();
+  });
+});
+
+describe('OpenCode 2.x — a planner\'s saved output (ADR-0032)', () => {
+  it('lets the planner read back exactly the files its own results were saved to, never the shared folder', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'ordewell-tool-output-'));
+    const saved = join(folder, 'tool_mine');
+    const unsaved = join(folder, 'tool_short');
+    const other = join(folder, 'tool_another_session');
+    for (const file of [saved, unsaved, other]) writeFileSync(file, 'row 1');
+    try {
+      const server = fakeServer();
+      const { adapter } = await start(server, plannerStart());
+      const events: AgentEvent[] = [];
+      void adapter.send('go', (e) => events.push(e));
+      const stream = await server.stream();
+      await until(() => server.requests.some((r) => r.path.endsWith('/prompt')));
+      stream.push(started());
+      for (const [id, outputPath, truncated] of [['call_long', saved, true], ['call_short', unsaved, false]] as const) {
+        for (const f of call(id, {}, 'probe_dump')) stream.push(f);
+        stream.push(frame('session.tool.success', { id, content: [{ type: 'text', text: 'row 1' }], metadata: { truncated, outputPath } }));
+      }
+      for (const f of call('call_read', { path: saved, offset: 1 }, 'read')) stream.push(f);
+      stream.push({ type: 'permission.asked', data: { id: 'per_1', sessionID: SES, action: 'external_directory', resources: [`${folder}/*`], source: { type: 'tool', messageID: MSG, id: 'call_read' } } });
+      await until(() => events.some((e) => e.type === 'permission_request'));
+
+      // The request names the folder; the call it came from names the file.
+      expect(events.flatMap((e) => (e.type === 'permission_request' ? [e.ask] : []))).toEqual([{ kind: 'path', path: saved, directory: false }]);
+      expect(adapter.savedOutput(realpathSync.native(saved))).toBe(true);
+      expect(adapter.savedOutput(realpathSync.native(unsaved))).toBe(false);
+      expect(adapter.savedOutput(realpathSync.native(other))).toBe(false);
+      expect(adapter.savedOutput(realpathSync.native(folder))).toBe(false);
+      adapter.dispose();
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
   });
 });

@@ -238,6 +238,14 @@ export interface AgentAdapter {
   unusableProjectServers?(): ProjectMcpServer[];
 
   /**
+   * Whether `abs`, already resolved on disk, is output this runner saved
+   * outside the workspace for this session and told its planner to read back
+   * (ADR-0032). The planner reads it as it reads the workspace. Absent on a
+   * runner that saves none.
+   */
+  savedOutput?(abs: string): boolean;
+
+  /**
    * Answer an open `permission_request`. False when the id is not open — it
    * was answered, cancelled, or never asked. Absent on an adapter that leaves
    * no planner request open.
