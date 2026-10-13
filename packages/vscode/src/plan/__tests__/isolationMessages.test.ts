@@ -1,77 +1,80 @@
 import { describe, it, expect, vi } from 'vitest';
+import { EMPTY_RUN, reduceRun, type LegacyPlanState, type RunView, type SerializedTask, type TaskIsolation } from '@ordewell/core';
+import { RunViewHost } from '../../RunViewHost';
 import { handleSessionMessage } from '../PlanManager';
 import type { PlanManagerDeps } from '../PlanManager';
-import { replayIsolation } from '../isolation';
-import type { IsolationView, LegacyPlanState, RunMergeView, TaskIsolation } from '@ordewell/core';
 
-function deps() {
-  const chatProvider = {
-    sendTaskIdle: vi.fn(),
-    sendTaskApprovals: vi.fn(),
-    conversation: { receive: vi.fn() },
-    sendTaskIsolation: vi.fn(),
-    showIsolationHandoff: vi.fn(),
-    showIsolationMergeResult: vi.fn(),
-    clearIsolationHandoff: vi.fn(),
-    showRunMerge: vi.fn(),
-    showPlan: vi.fn(),
+function planned(id: string, order: number): SerializedTask {
+  return {
+    id, order, title: `Task ${id}`, type: 'ai', status: 'pending', description: 'd', dependencies: [],
+    assignedRunner: 'claude-code', assignedModel: null, taskMode: 'build', prompt: null, subtasks: [],
+    userSteps: undefined, autonomy: undefined, sliceType: undefined, userStoriesCovered: undefined,
   };
-  const plan = { status: 'draft', tasks: [] };
+}
+
+/** A host-like deps where the run view is real, so the fold is the thing under test. */
+function deps(opts: { isolated?: boolean } = {}): { d: PlanManagerDeps; posted: RunView[]; run: RunViewHost } {
+  const posted: RunView[] = [];
+  const run = new RunViewHost((m) => { if (m.type === 'runView') posted.push(m.view); });
+  run.adopt(reduceRun(EMPTY_RUN, {
+    type: 'plan_generated',
+    plan: { tasks: [planned('t1', 1), planned('o2', 2)], runners: ['claude-code'], generatedAt: 'x' },
+    goal: 'g',
+    runners: ['claude-code'],
+  }));
+  const isolation = opts.isolated ? { tasks: {}, handoff: { repos: [], landed: [] } } : null;
+  const plan = { status: 'draft', tasks: [] } as unknown as LegacyPlanState;
   const d = {
-    session: { isExecuting: true, status: 'running', isolationView: () => null },
-    chatProvider,
+    session: { isExecuting: true, status: 'running', isolationView: () => isolation },
+    chatProvider: { run, conversation: { receive: vi.fn() }, showPlan: vi.fn(), clearIsolationHandoff: () => run.clearIsolation() },
     getCurrentPlan: () => plan,
     isGeneratingPlan: () => false,
   } as unknown as PlanManagerDeps;
-  return { d, chatProvider };
+  return { d, posted, run };
 }
 
-describe('worktree isolation messages (ADR-0013)', () => {
-  it('forwards each task\'s isolation to the webview', () => {
-    const { d, chatProvider } = deps();
+const last = (posted: RunView[]): RunView => posted.at(-1)!;
+
+describe('worktree isolation folds onto the run view (ADR-0013)', () => {
+  it('puts each task\'s isolation on the run, and leaves a shared-root task quiet', () => {
+    const { d, posted } = deps();
     const conflict: TaskIsolation = { state: 'conflict', branch: 'ordewell/r/1-a', worktree: '/w/1-a', repos: [], conflictRepo: '.' };
 
     handleSessionMessage({
       type: 'status_update',
       tasks: [
         { id: 't1', status: 'awaiting_user', verdict: null, isolation: conflict },
-        { id: 't2', status: 'in_progress', verdict: null },
+        { id: 'o2', status: 'in_progress', verdict: null },
       ],
     }, d);
 
-    // Only the task that has one: a shared-root plan stays quiet.
-    expect(chatProvider.sendTaskIsolation.mock.calls).toEqual([['t1', conflict]]);
+    expect(last(posted).tasks.map((t) => [t.id, t.isolation])).toEqual([['t1', conflict], ['o2', undefined]]);
   });
 
-  it('posts the end-of-run handoff to the webview', () => {
-    const { d, chatProvider } = deps();
+  it('holds the end-of-run handoff as sent', () => {
+    const { d, posted } = deps();
     const landed = [{ taskId: 't1', order: 1, title: 'A' }];
-    const handoff = {
-      repos: [{ path: '.', integrationBranch: 'ordewell/r/integration', baseRef: 'abc123', landed }],
-      landed,
-    };
+    const handoff = { repos: [{ path: '.', integrationBranch: 'ordewell/r/integration', baseRef: 'abc123', landed }], landed };
 
     handleSessionMessage({ type: 'isolation_handoff', ...handoff }, d);
 
-    expect(chatProvider.showIsolationHandoff).toHaveBeenCalledWith(handoff);
+    expect(last(posted).handoff).toEqual(handoff);
   });
 
-  it('passes the supervisor deferral on to the webview, and leaves it off an unmarked handoff', () => {
-    const { d, chatProvider } = deps();
+  it('passes the supervisor deferral on, and replaces it with the unmarked handoff that follows', () => {
+    const { d, posted } = deps();
     const landed = [{ taskId: 't1', order: 1, title: 'A' }];
-    const handoff = {
-      repos: [{ path: '.', integrationBranch: 'ordewell/r/integration', baseRef: 'abc123', landed }],
-      landed,
-    };
+    const handoff = { repos: [{ path: '.', integrationBranch: 'ordewell/r/integration', baseRef: 'abc123', landed }], landed };
 
     handleSessionMessage({ type: 'isolation_handoff', ...handoff, deferredTo: 'supervisor' }, d);
-    handleSessionMessage({ type: 'isolation_handoff', ...handoff }, d);
+    expect(last(posted).handoff).toEqual({ ...handoff, deferredTo: 'supervisor' });
 
-    expect(chatProvider.showIsolationHandoff.mock.calls).toEqual([[{ ...handoff, deferredTo: 'supervisor' }], [handoff]]);
+    handleSessionMessage({ type: 'isolation_handoff', ...handoff }, d);
+    expect(last(posted).handoff).toEqual(handoff);
   });
 
-  it('posts a repo group handoff with each repo its own work', () => {
-    const { d, chatProvider } = deps();
+  it('holds a repo group handoff with each repo its own work', () => {
+    const { d, posted } = deps();
     const apiLanded = [{ taskId: 't1', order: 1, title: 'A' }];
     const webLanded = [{ taskId: 't2', order: 2, title: 'B' }];
     const handoff = {
@@ -84,11 +87,11 @@ describe('worktree isolation messages (ADR-0013)', () => {
 
     handleSessionMessage({ type: 'isolation_handoff', ...handoff }, d);
 
-    expect(chatProvider.showIsolationHandoff).toHaveBeenCalledWith(handoff);
+    expect(last(posted).handoff).toEqual(handoff);
   });
 
-  it('forwards a blocked Merge all result with every repo it names', () => {
-    const { d, chatProvider } = deps();
+  it('holds a blocked Merge all result with every repo it names', () => {
+    const { d, posted } = deps();
     const result = {
       outcome: 'blocked' as const,
       blocked: [
@@ -99,14 +102,13 @@ describe('worktree isolation messages (ADR-0013)', () => {
 
     handleSessionMessage({ type: 'isolation_merge', result }, d);
 
-    expect(chatProvider.showIsolationMergeResult).toHaveBeenCalledWith(result);
-    expect(chatProvider.clearIsolationHandoff).not.toHaveBeenCalled();
+    expect(last(posted).mergeResult).toEqual(result);
   });
 
   // Core clears a fully merged run up and forgets it: the card and every mark
   // would otherwise offer a merge of branches that no longer exist.
-  it('tells the webview which tasks wait at a merge gate, and what Merge all would merge (ADR-0020)', () => {
-    const { d, chatProvider } = deps();
+  it('puts each task\'s merge gate on the run, and what Merge all would merge (ADR-0020)', () => {
+    const { d, posted } = deps();
     const runMerge = { waitingAtGate: true, paused: true, repos: [], landed: [{ taskId: 't1', order: 1, title: 'A' }] };
 
     handleSessionMessage({
@@ -115,117 +117,39 @@ describe('worktree isolation messages (ADR-0013)', () => {
       runMerge,
     }, d);
 
-    expect(chatProvider.showRunMerge).toHaveBeenCalledWith(runMerge, { o2: ['t1'] });
+    expect(last(posted).runMerge).toEqual(runMerge);
+    expect(last(posted).tasks.find((t) => t.id === 'o2')!.mergeGate).toEqual(['t1']);
   });
 
-  it('keeps the marks after a Merge all mid-run, whose run goes on', () => {
-    const { d, chatProvider } = deps();
-    (d.session as unknown as { isolationView: () => unknown }).isolationView = () => ({ tasks: {}, handoff: { repos: [], landed: [] } });
+  it('keeps the per-task marks after a Merge all mid-run, whose run goes on', () => {
+    const { d, posted } = deps({ isolated: true });
+    handleSessionMessage({ type: 'status_update', tasks: [{ id: 't1', status: 'in_progress', verdict: null, isolation: { state: 'conflict', branch: 'b', worktree: 'w', repos: [] } }] }, d);
 
     handleSessionMessage({ type: 'isolation_merge', result: { outcome: 'merged' } }, d);
 
-    expect(chatProvider.clearIsolationHandoff).not.toHaveBeenCalled();
+    expect(last(posted).mergeResult).toEqual({ outcome: 'merged' });
+    expect(last(posted).tasks.find((t) => t.id === 't1')!.isolation?.state).toBe('conflict');
   });
 
   it('drops the handoff card and the marks once Merge all merged everything', () => {
-    const { d, chatProvider } = deps();
+    const { d, posted } = deps();
+    handleSessionMessage({ type: 'isolation_handoff', repos: [], landed: [] }, d);
+    handleSessionMessage({ type: 'status_update', tasks: [{ id: 't1', status: 'in_progress', verdict: null, isolation: { state: 'conflict', branch: 'b', worktree: 'w', repos: [] } }] }, d);
 
     handleSessionMessage({ type: 'isolation_merge', result: { outcome: 'merged' } }, d);
 
-    expect(chatProvider.clearIsolationHandoff).toHaveBeenCalled();
-    expect(chatProvider.showIsolationMergeResult).not.toHaveBeenCalled();
+    expect(last(posted).mergeResult).toBeNull();
+    expect(last(posted).handoff).toBeNull();
+    expect(last(posted).tasks.find((t) => t.id === 't1')!.isolation).toBeUndefined();
   });
 
   it('drops a handoff card deferred to the supervisor when the supervisor merges the run', () => {
-    const { d, chatProvider } = deps();
+    const { d, posted } = deps();
     const landed = [{ taskId: 't1', order: 1, title: 'A' }];
-    handleSessionMessage({
-      type: 'isolation_handoff',
-      repos: [{ path: '.', integrationBranch: 'ordewell/r/integration', baseRef: 'abc123', landed }],
-      landed,
-      deferredTo: 'supervisor',
-    }, d);
+    handleSessionMessage({ type: 'isolation_handoff', repos: [{ path: '.', integrationBranch: 'i', baseRef: 'abc', landed }], landed, deferredTo: 'supervisor' }, d);
 
     handleSessionMessage({ type: 'isolation_merge', result: { outcome: 'merged' } }, d);
 
-    expect(chatProvider.clearIsolationHandoff).toHaveBeenCalled();
-  });
-});
-
-// The stream only reports changes, and a webview loses its state whenever it is
-// disposed — so a reconnect or a loaded session is re-told from the run record.
-describe('replaying isolation to a webview that was not listening', () => {
-  const view: IsolationView = {
-    tasks: { t2: { state: 'conflict', branch: 'ordewell/r/2-b', worktree: '/w/2-b', repos: [], conflictRepo: '.' } },
-    handoff: {
-      repos: [{ path: '.', integrationBranch: 'ordewell/r/integration', baseRef: 'abc123', landed: [{ taskId: 't1', order: 1, title: 'A' }] }],
-      landed: [{ taskId: 't1', order: 1, title: 'A' }],
-    },
-  };
-
-  function replay(opts: { view: IsolationView | null; executing: boolean; runMerge?: RunMergeView | null; gates?: Record<string, string[]> }) {
-    const chatProvider = { sendTaskIsolation: vi.fn(), showIsolationHandoff: vi.fn(), showRunMerge: vi.fn() };
-    const planState = { tasks: [{ id: 't1', subtasks: [] }, { id: 'o2', subtasks: [] }] } as unknown as LegacyPlanState;
-    replayIsolation({
-      isolationView: () => opts.view,
-      isExecuting: opts.executing,
-      runMergeView: () => opts.runMerge ?? null,
-      mergeGate: (taskId: string) => opts.gates?.[taskId] ?? [],
-      planState,
-    }, chatProvider);
-    return chatProvider;
-  }
-
-  it('re-tells a run paused at a merge gate (ADR-0020)', () => {
-    const runMerge: RunMergeView = { waitingAtGate: true, paused: true, repos: view.handoff.repos, landed: view.handoff.landed };
-    const chatProvider = replay({ view, executing: true, runMerge, gates: { o2: ['t1'] } });
-
-    expect(chatProvider.showRunMerge).toHaveBeenCalledWith(runMerge, { o2: ['t1'] });
-  });
-
-  it('replays mergeable landings while the run has no gate', () => {
-    const runMerge: RunMergeView = { waitingAtGate: false, paused: false, ...view.handoff };
-    const chatProvider = replay({ view, executing: true, runMerge });
-
-    expect(chatProvider.showRunMerge).toHaveBeenCalledWith(runMerge, {});
-    expect(chatProvider.showIsolationHandoff).not.toHaveBeenCalled();
-  });
-
-  it('re-sends every task mark and the handoff card of a settled run', () => {
-    const chatProvider = replay({ view, executing: false });
-
-    expect(chatProvider.sendTaskIsolation.mock.calls).toEqual([['t2', view.tasks.t2]]);
-    expect(chatProvider.showIsolationHandoff).toHaveBeenCalledWith(view.handoff);
-  });
-
-  it('holds the handoff card back while the run is still executing', () => {
-    const chatProvider = replay({ view, executing: true });
-
-    expect(chatProvider.sendTaskIsolation).toHaveBeenCalledTimes(1);
-    expect(chatProvider.showIsolationHandoff).not.toHaveBeenCalled();
-  });
-
-  it('says nothing for a plan that never isolated', () => {
-    const chatProvider = replay({ view: null, executing: false });
-
-    expect(chatProvider.sendTaskIsolation).not.toHaveBeenCalled();
-    expect(chatProvider.showIsolationHandoff).not.toHaveBeenCalled();
-  });
-
-  it('replays a repo group mark and handoff, naming each repo', () => {
-    const group: IsolationView = {
-      tasks: { t1: { state: 'conflict', branch: 'ordewell/r/1-a', worktree: '/w/1-a', repos: ['api', 'web'], conflictRepo: 'api' } },
-      handoff: {
-        repos: [
-          { path: 'api', integrationBranch: 'ordewell/r/integration', baseRef: 'aaa111', landed: [{ taskId: 't1', order: 1, title: 'A' }] },
-          { path: 'web', integrationBranch: 'ordewell/r/integration', baseRef: 'bbb222', landed: [] },
-        ],
-        landed: [{ taskId: 't1', order: 1, title: 'A' }],
-      },
-    };
-    const chatProvider = replay({ view: group, executing: false });
-
-    expect(chatProvider.sendTaskIsolation.mock.calls).toEqual([['t1', group.tasks.t1]]);
-    expect(chatProvider.showIsolationHandoff).toHaveBeenCalledWith(group.handoff);
+    expect(last(posted).handoff).toBeNull();
   });
 });

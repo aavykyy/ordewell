@@ -4,6 +4,7 @@ import { render, screen, fireEvent, act } from '@testing-library/react';
 import PlanCardGroup from '../PlanCardGroup';
 
 import type { Task, DiscoveredModel } from '@ordewell/core';
+import { EMPTY_RUN } from '@ordewell/core/plan-utils';
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -26,7 +27,7 @@ const emptyModels: DiscoveredModel[] = [];
 describe('PlanCardGroup — Execute Plan / Stop', () => {
   it('renders Execute Plan button when not executing', () => {
     render(
-      <PlanCardGroup
+      <PlanCardGroup run={EMPTY_RUN}
         tasks={[makeTask()]}
         models={emptyModels}
         isExecuting={false}
@@ -38,7 +39,7 @@ describe('PlanCardGroup — Execute Plan / Stop', () => {
 
   it('renders Stop button when executing', () => {
     render(
-      <PlanCardGroup
+      <PlanCardGroup run={EMPTY_RUN}
         tasks={[makeTask()]}
         models={emptyModels}
         isExecuting={true}
@@ -51,7 +52,7 @@ describe('PlanCardGroup — Execute Plan / Stop', () => {
   it('calls onExecutePlan when Execute Plan is clicked', () => {
     const onExecutePlan = vi.fn();
     render(
-      <PlanCardGroup
+      <PlanCardGroup run={EMPTY_RUN}
         tasks={[makeTask()]}
         models={emptyModels}
         isExecuting={false}
@@ -65,7 +66,7 @@ describe('PlanCardGroup — Execute Plan / Stop', () => {
   it('calls onStopExecution when Stop is clicked', () => {
     const onStopExecution = vi.fn();
     render(
-      <PlanCardGroup
+      <PlanCardGroup run={EMPTY_RUN}
         tasks={[makeTask()]}
         models={emptyModels}
         isExecuting={true}
@@ -78,7 +79,7 @@ describe('PlanCardGroup — Execute Plan / Stop', () => {
 
   it('hides action bar when neither callback is provided', () => {
     render(
-      <PlanCardGroup
+      <PlanCardGroup run={EMPTY_RUN}
         tasks={[makeTask()]}
         models={emptyModels}
         isExecuting={false}
@@ -89,7 +90,7 @@ describe('PlanCardGroup — Execute Plan / Stop', () => {
 
   it('renders per-task Run Task button via onRunTask when not executing', () => {
     render(
-      <PlanCardGroup
+      <PlanCardGroup run={EMPTY_RUN}
         tasks={[makeTask()]}
         models={emptyModels}
         isExecuting={false}
@@ -112,7 +113,7 @@ describe('PlanCardGroup — no reordering', () => {
   ];
 
   const renderGroup = () => render(
-    <PlanCardGroup tasks={twoTasks} models={emptyModels} isExecuting={false}
+    <PlanCardGroup run={EMPTY_RUN} tasks={twoTasks} models={emptyModels} isExecuting={false}
       onExecutePlan={vi.fn()} onMerge={vi.fn()} onSplit={vi.fn()} />,
   );
 
@@ -152,7 +153,7 @@ describe('PlanCardGroup — no reordering', () => {
   });
 
   it('drops the action row entirely when it would have no buttons', () => {
-    render(<PlanCardGroup tasks={twoTasks} models={emptyModels} isExecuting={false} />);
+    render(<PlanCardGroup run={EMPTY_RUN} tasks={twoTasks} models={emptyModels} isExecuting={false} />);
     expect(document.querySelector('.task-inline-actions')).toBeNull();
   });
 });
@@ -168,7 +169,7 @@ describe('PlanCardGroup — per-task model list fallback', () => {
   // flat merged list so a degraded/empty runner never shows an empty picker.
   it('falls back to the flat model list when the runner discovered zero models', () => {
     render(
-      <PlanCardGroup
+      <PlanCardGroup run={EMPTY_RUN}
         tasks={[makeTask({ assignedRunner: 'claude-code' })]}
         models={flatModels}
         modelsByRunner={{ 'claude-code': [] }}
@@ -194,7 +195,7 @@ describe('PlanCardGroup — accordion expansion', () => {
   ];
 
   it('keeps at most one task body open at a time', () => {
-    render(<PlanCardGroup tasks={tasks} models={emptyModels} isExecuting={false} />);
+    render(<PlanCardGroup run={EMPTY_RUN} tasks={tasks} models={emptyModels} isExecuting={false} />);
     fireEvent.click(screen.getByText('First'));
     expect(document.querySelectorAll('.task-card-body')).toHaveLength(1);
 
@@ -206,7 +207,7 @@ describe('PlanCardGroup — accordion expansion', () => {
   });
 
   it('collapses an open task when its header is clicked again', () => {
-    render(<PlanCardGroup tasks={tasks} models={emptyModels} isExecuting={false} />);
+    render(<PlanCardGroup run={EMPTY_RUN} tasks={tasks} models={emptyModels} isExecuting={false} />);
     fireEvent.click(screen.getByText('First'));
     expect(document.querySelectorAll('.task-card-body')).toHaveLength(1);
     fireEvent.click(screen.getByText('First'));
@@ -218,7 +219,7 @@ describe('PlanCardGroup — planner-driven split', () => {
   it('calls onSplit(taskId) directly with no manual spec dialog', () => {
     const onSplit = vi.fn();
     render(
-      <PlanCardGroup
+      <PlanCardGroup run={EMPTY_RUN}
         tasks={[makeTask({ id: 't1', order: 1 }), makeTask({ id: 't2', order: 2, title: 'Other' })]}
         models={emptyModels}
         isExecuting={false}
@@ -236,7 +237,7 @@ describe('PlanCardGroup — planner-driven split', () => {
   it('shows an inline error and does not call onSplit for a completed task', () => {
     const onSplit = vi.fn();
     render(
-      <PlanCardGroup
+      <PlanCardGroup run={EMPTY_RUN}
         tasks={[makeTask({ id: 't1', order: 1, status: 'completed' })]}
         models={emptyModels}
         isExecuting={false}
@@ -261,7 +262,7 @@ describe('PlanCardGroup — planner-driven merge', () => {
   it('calls onMerge with the selected consecutive task ids', () => {
     const onMerge = vi.fn();
     render(
-      <PlanCardGroup tasks={chain()} models={emptyModels} isExecuting={false} onMerge={onMerge} />,
+      <PlanCardGroup run={EMPTY_RUN} tasks={chain()} models={emptyModels} isExecuting={false} onMerge={onMerge} />,
     );
     fireEvent.click(screen.getAllByTitle(/Select tasks to merge/)[0]); // t1
     fireEvent.click(screen.getAllByTitle(/Select task to merge/)[0]);  // t2
@@ -272,7 +273,7 @@ describe('PlanCardGroup — planner-driven merge', () => {
   it('shows an inline error for a non-consecutive selection and does not call onMerge', () => {
     const onMerge = vi.fn();
     render(
-      <PlanCardGroup tasks={chain()} models={emptyModels} isExecuting={false} onMerge={onMerge} />,
+      <PlanCardGroup run={EMPTY_RUN} tasks={chain()} models={emptyModels} isExecuting={false} onMerge={onMerge} />,
     );
     fireEvent.click(screen.getAllByTitle(/Select tasks to merge/)[0]); // t1
     fireEvent.click(screen.getAllByTitle(/Select task to merge/)[1]);  // t3 (skips t2)
@@ -288,7 +289,7 @@ describe('PlanCardGroup — planner-driven merge', () => {
       makeTask({ id: 't2', order: 2, title: 'B' }),
     ];
     render(
-      <PlanCardGroup tasks={tasks} models={emptyModels} isExecuting={false} onMerge={onMerge} />,
+      <PlanCardGroup run={EMPTY_RUN} tasks={tasks} models={emptyModels} isExecuting={false} onMerge={onMerge} />,
     );
     fireEvent.click(screen.getAllByTitle(/Select tasks to merge/)[0]); // t1
     fireEvent.click(screen.getAllByTitle(/Select task to merge/)[0]);  // t2

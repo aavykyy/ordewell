@@ -64,8 +64,7 @@ export default function App() {
     conversation, plan, isExecuting, isResearchActive, conversationBusy, error, models, modelsByRunner,
     runnerList, enabledRunnerIds, runners, held, unsent, modesByRunner, modelConfig,
     modelOptions, configuredProviders, planner, isReady, modelDiscoveryErrors,
-    skills, taskSkills, checkpoint, taskOutput, taskIdle, taskApprovals, taskIsolation, handoff,
-    mergeResult, runMerge, taskGates, dockExpanded, dockHeight, settingsRequest,
+    skills, taskSkills, checkpoint, taskOutput, run, dockExpanded, dockHeight, settingsRequest,
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
   const setIsResearchActive = useCallback((v: boolean) => dispatch({ type: 'patchResearchActive', active: v }), []);
@@ -600,7 +599,7 @@ export default function App() {
               say when a task is blocked on the user, or the approval would sit
               unseen behind it. */}
           {checkpoint && <span className="plan-dock-approval">1 awaiting approval</span>}
-          {runMerge && <span className="plan-dock-summary">{runMerge.landed.length} unmerged</span>}
+          {run.runMerge && <span className="plan-dock-summary">{run.runMerge.landed.length} unmerged</span>}
         </button>
         <div
           className="plan-dock-body"
@@ -617,21 +616,20 @@ export default function App() {
               onReject={handleRejectCheckpoint}
             />
           )}
-          {runMerge && !runMerge.waitingAtGate && isExecuting && (
+          {run.runMerge && !run.runMerge.waitingAtGate && isExecuting && (
             <div className="plan-merge-actions">
-              <span>{runMerge.landed.length} landed task{runMerge.landed.length === 1 ? '' : 's'} not merged</span>
+              <span>{run.runMerge.landed.length} landed task{run.runMerge.landed.length === 1 ? '' : 's'} not merged</span>
               <button className="task-action-btn run" onClick={() => handleIsolationAction('merge')}>Merge all</button>
             </div>
           )}
           <PlanCardGroup
             tasks={plan.tasks}
+            run={run}
             models={models}
             modelsByRunner={modelsByRunner}
             modesByRunner={modesByRunner}
             isExecuting={isExecuting}
             taskOutput={taskOutput}
-            taskIdle={taskIdle}
-            taskApprovals={taskApprovals}
             runnerLabels={runnerLabelMap}
             runners={runnerList}
             onRunnerChange={handleRunnerChange}
@@ -643,7 +641,6 @@ export default function App() {
             onOpsChange={handleOpsChange}
             taskSkills={taskSkills}
             onSkillsChange={handleSkillsChange}
-            mergeGates={taskGates}
             onRemoveTask={handleRemoveTask}
             onPromptChange={handlePromptChange}
             onRetry={handleRetry}
@@ -658,25 +655,24 @@ export default function App() {
             onExecutePlan={handleExecutePlan}
             onStopExecution={handleStopExecution}
             onRunTask={handleRunTask}
-            isolationByTask={taskIsolation}
             onResolveConflict={handleResolveConflict}
             onOpenLog={handleOpenTaskLog}
           />
-          {handoff && !isExecuting && !runMerge?.waitingAtGate && (
+          {run.handoff && !isExecuting && !run.runMerge?.waitingAtGate && (
             <HandoffCard
-              repos={handoff.repos}
-              landed={handoff.landed}
-              deferredTo={handoff.deferredTo}
-              mergeResult={mergeResult}
+              repos={run.handoff.repos}
+              landed={run.handoff.landed}
+              deferredTo={run.handoff.deferredTo}
+              mergeResult={run.mergeResult}
               onAction={(action) => handleIsolationAction(action)}
             />
           )}
-          {runMerge?.waitingAtGate && (
+          {run.runMerge?.waitingAtGate && (
             <HandoffCard
-              repos={runMerge.repos}
-              landed={runMerge.landed}
-              mergeResult={mergeResult}
-              midRun={{ paused: runMerge.paused }}
+              repos={run.runMerge.repos}
+              landed={run.runMerge.landed}
+              mergeResult={run.mergeResult}
+              midRun={{ paused: run.runMerge.paused }}
               onAction={(action) => handleIsolationAction(action)}
             />
           )}

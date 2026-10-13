@@ -109,14 +109,14 @@ describe('plan dock', () => {
   it('names a task blocked on the user even while the dock is collapsed', () => {
     send({ type: 'planUpdated', plan });
     fireEvent.click(document.querySelector('.plan-dock-bar')!);
-    send({ type: 'checkpoint', taskId: 't1', taskTitle: 'Add rate limiting', summary: 'ready for review' });
+    send({ type: 'runView', view: { tasks: [{ id: 't1', title: 'Add rate limiting', status: 'awaiting_user', awaitingReason: 'checkpoint', checkpoint: 'ready for review', subtasks: [] }], runMerge: null, handoff: null, mergeResult: null } });
 
     expect(document.querySelector('.plan-dock-approval')).toBeTruthy();
   });
 
   it('dismisses the checkpoint panel and posts a reject action when rejected', () => {
     send({ type: 'planUpdated', plan });
-    send({ type: 'checkpoint', taskId: 't1', taskTitle: 'Add rate limiting', summary: 'ready for review' });
+    send({ type: 'runView', view: { tasks: [{ id: 't1', title: 'Add rate limiting', status: 'awaiting_user', awaitingReason: 'checkpoint', checkpoint: 'ready for review', subtasks: [] }], runMerge: null, handoff: null, mergeResult: null } });
     api.postMessage.mockClear();
 
     fireEvent.click(document.querySelector('.checkpoint-reject-btn')!);

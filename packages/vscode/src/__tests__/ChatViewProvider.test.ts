@@ -91,7 +91,7 @@ describe('ChatViewProvider.setModels', () => {
   });
 });
 
-describe('ChatViewProvider.sendPlanUpdated', () => {
+describe('ChatViewProvider.showPlan', () => {
   const body = 'Ask hard questions. SECRET-BODY';
   const load: SkillLoad = { invokedBy: 'user', name: 'grilling', source: 'global', path: '~/.ordewell/skills/grilling/SKILL.md', content: body };
 
@@ -104,7 +104,7 @@ describe('ChatViewProvider.sendPlanUpdated', () => {
       pendingTurns: [{ id: 'turn-1', source: 'user' as const, text: '/grilling go', timestamp: '2026-01-01T00:00:01Z', skills: [load] }],
     };
 
-    provider.sendPlanUpdated(plan);
+    provider.showPlan(plan);
 
     expect(JSON.stringify(posted)).not.toContain('SECRET-BODY');
     expect(posted[0]).toMatchObject({ type: 'planUpdated', plan: { conversationHistory: [{ skill: { name: 'grilling' } }] } });

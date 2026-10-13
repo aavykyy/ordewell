@@ -250,7 +250,7 @@ describe('TaskCard — Stalled state', () => {
         task={makeTask({ status: 'in_progress' })}
         models={emptyModels}
         isExecuting
-        idleSince="2026-08-18T00:00:00.000Z"
+        run={{ idleSince: '2026-08-18T00:00:00.000Z' }}
       />,
     );
 
@@ -278,7 +278,7 @@ describe('TaskCard — Stalled state', () => {
         task={makeTask({ status: 'in_progress' })}
         models={emptyModels}
         isExecuting
-        idleSince="2026-08-18T00:00:00.000Z"
+        run={{ idleSince: '2026-08-18T00:00:00.000Z' }}
       />,
     );
     expect(screen.getByText('Stalled')).toBeTruthy();
@@ -288,7 +288,7 @@ describe('TaskCard — Stalled state', () => {
         task={makeTask({ status: 'in_progress' })}
         models={emptyModels}
         isExecuting
-        idleSince={null}
+        run={{ idleSince: null }}
       />,
     );
 

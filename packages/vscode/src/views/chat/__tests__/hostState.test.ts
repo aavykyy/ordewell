@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { LegacyPlanState } from '@ordewell/core';
+import { EMPTY_RUN, type LegacyPlanState, type RunTask, type RunView } from '@ordewell/core';
 import { reduceHost, resetSession, INITIAL_HOST_STATE, type HostState, type HostMessage } from '../hostState';
 
 const NOW = 1_000;
@@ -9,6 +9,10 @@ function planWith(status: string): LegacyPlanState {
   return { status, tasks: [] } as unknown as LegacyPlanState;
 }
 
+function runWith(tasks: Partial<RunTask>[], over: Partial<RunView> = {}): RunView {
+  return { ...EMPTY_RUN, ...over, tasks: tasks.map((t) => ({ subtasks: [], ...t })) as RunTask[] };
+}
+
 function staleSession(): HostState {
   return {
     ...INITIAL_HOST_STATE,
@@ -16,29 +20,25 @@ function staleSession(): HostState {
     isExecuting: true,
     isResearchActive: true,
     error: 'boom',
-    taskIdle: { t1: '2026-01-01T00:00:00Z' },
-    taskApprovals: { t1: 2 },
-    taskOutput: { t1: [] } as unknown as HostState['taskOutput'],
-    taskGates: { t1: ['t0'] },
+    run: runWith([{ id: 't1', awaitingApproval: 2, idleSince: '2026-01-01T00:00:00Z', mergeGate: ['t0'] }]),
     dockExpanded: true,
   };
 }
 
 describe('resetSession', () => {
-  it('clears stale stalled and approval badges on restore', () => {
+  it('clears the run and the plan on restore', () => {
     const next = reduceHost(staleSession(), msg({ type: 'restoreChat' }));
-    expect(next.taskIdle).toEqual({});
-    expect(next.taskApprovals).toEqual({});
+    expect(next.run).toEqual(EMPTY_RUN);
     expect(next.plan).toBeNull();
+    expect(next.checkpoint).toBeNull();
     expect(next.isResearchActive).toBe(false);
     expect(next.isExecuting).toBe(false);
   });
 
-  it("'empty' clears badges but leaves running flags and held prompts alone", () => {
+  it("'empty' clears the run but leaves running flags and held prompts alone", () => {
     const held = { ...INITIAL_HOST_STATE.held };
     const next = resetSession({ ...staleSession(), held, stopped: true }, 'empty');
-    expect(next.taskIdle).toEqual({});
-    expect(next.taskApprovals).toEqual({});
+    expect(next.run).toEqual(EMPTY_RUN);
     expect(next.error).toBe('');
     expect(next.isResearchActive).toBe(true);
     expect(next.held).toBe(held);
@@ -76,33 +76,49 @@ describe('reduceHost gates', () => {
     const sent = reduceHost(cleared, { type: 'turnRequested' });
     expect(reduceHost(sent, msg({ type: 'showError', error: 'real' })).error).toBe('real');
   });
+});
 
-  it('stamps the checkpoint with the action clock', () => {
-    const next = reduceHost(INITIAL_HOST_STATE, msg({ type: 'checkpoint', taskId: 't1', taskTitle: 'T', summary: 's' }));
-    expect(next.checkpoint?.pausedAt).toBe(NOW);
+describe('reduceHost runView', () => {
+  const checkpointTask = { id: 't1', title: 'Add rate limiting', status: 'awaiting_user' as const, awaitingReason: 'checkpoint' as const, checkpoint: 'ready for review' };
+
+  it('adopts the run as sent', () => {
+    const view = runWith([{ id: 't1', awaitingApproval: 2, idleSince: '2026-01-01T00:00:00Z' }]);
+    const next = reduceHost(INITIAL_HOST_STATE, msg({ type: 'runView', view }));
+    expect(next.run).toBe(view);
   });
 
-  it('only changes the approvals reference when the count changes', () => {
-    const once = reduceHost(INITIAL_HOST_STATE, msg({ type: 'taskApprovals', taskId: 't1', count: 1 }));
-    expect(reduceHost(once, msg({ type: 'taskApprovals', taskId: 't1', count: 1 }))).toBe(once);
+  it('stamps a checkpoint question that arrives on the run view', () => {
+    const next = reduceHost(INITIAL_HOST_STATE, msg({ type: 'runView', view: runWith([checkpointTask]) }));
+    expect(next.checkpoint?.pausedAt).toBe(NOW);
+    expect(next.checkpoint?.taskTitle).toBe('Add rate limiting');
+    expect(next.checkpoint?.summary).toBe('ready for review');
+  });
+
+  it('keeps the paused clock across a re-sent view, and clears the panel when the question is gone', () => {
+    const waiting = msg({ type: 'runView', view: runWith([checkpointTask]) });
+    const first = reduceHost(INITIAL_HOST_STATE, { ...waiting, now: 500 });
+    const again = reduceHost(first, { ...waiting, now: 9_000 });
+    expect(again.checkpoint?.pausedAt).toBe(500);
+
+    expect(reduceHost(again, msg({ type: 'runView', view: EMPTY_RUN })).checkpoint).toBeNull();
   });
 });
 
-describe('reduceHost isolationHandoff', () => {
+describe('reduceHost runView isolation', () => {
   const landed = [{ taskId: 't1', order: 1, title: 'A' }];
   const repos = [{ path: '.', integrationBranch: 'ordewell/r/integration', baseRef: 'abc', landed }];
 
   it('keeps the supervisor deferral on the handoff', () => {
-    const next = reduceHost(INITIAL_HOST_STATE, msg({ type: 'isolationHandoff', repos, landed, deferredTo: 'supervisor' }));
+    const next = reduceHost(INITIAL_HOST_STATE, msg({ type: 'runView', view: runWith([], { handoff: { repos, landed, deferredTo: 'supervisor' } }) }));
 
-    expect(next.handoff).toEqual({ repos, landed, deferredTo: 'supervisor' });
+    expect(next.run.handoff).toEqual({ repos, landed, deferredTo: 'supervisor' });
   });
 
   it('replaces a deferred handoff with the unmarked one that follows it', () => {
-    const deferred = reduceHost(INITIAL_HOST_STATE, msg({ type: 'isolationHandoff', repos, landed, deferredTo: 'supervisor' }));
+    const deferred = reduceHost(INITIAL_HOST_STATE, msg({ type: 'runView', view: runWith([], { handoff: { repos, landed, deferredTo: 'supervisor' } }) }));
 
-    const next = reduceHost(deferred, msg({ type: 'isolationHandoff', repos, landed }));
+    const next = reduceHost(deferred, msg({ type: 'runView', view: runWith([], { handoff: { repos, landed } }) }));
 
-    expect(next.handoff).toEqual({ repos, landed });
+    expect(next.run.handoff).toEqual({ repos, landed });
   });
 });

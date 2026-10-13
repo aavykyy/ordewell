@@ -9,7 +9,7 @@ import type { TaskDraft, TaskEdit } from '../shared/protocol';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
-import { handleIsolationBlocked, handleIsolationHandoff } from './isolation';
+import { handleIsolationBlocked } from './isolation';
 import { removalPrompt, taskFromDraft } from './taskEdit';
 import { ALREADY_HANDED_OVER } from '../providers/TaskLogPanel';
 
@@ -73,7 +73,7 @@ export function finishPlannerTurn(
   const planChanged = opts?.planChanged ?? true;
   if (plan.tasks.length > 0) {
     if (planChanged) {
-      deps.chatProvider.planGenerated(plan);
+      deps.chatProvider.showPlan(plan);
     }
   } else {
     deps.chatProvider.setState('planDraft');
@@ -224,10 +224,11 @@ export async function handleApprovePlan(deps: PlanManagerDeps): Promise<void> {
   }
   const plan = deps.getCurrentPlan();
   plan.status = 'approved';
-  saveState(plan, deps.fsAdapter.getWorkspaceRoot());
   // New task objects, not edits in place: the plan's tasks are the Session's
   // snapshot of its store, and the plan object itself must stay the same one
-  // so `loadPlan` keeps the live planner conversation.
+  // so `loadPlan` keeps the live planner conversation. Saved once, after the
+  // approval is complete — an earlier write would persist approved status over
+  // tasks that have not been approved yet.
   plan.tasks = approvedTasks(plan.tasks);
   deps.session.loadPlan(plan, deps.getCurrentGoal(), deps.fsAdapter.getWorkspaceRoot());
   deps.chatProvider.planApproved();
@@ -345,6 +346,7 @@ export async function handleRemoveTask(taskId: string, deps: PlanManagerDeps): P
   }
   if (deps.session.planState) deps.setCurrentPlan(deps.session.planState);
   deps.chatProvider.setState('empty');
+  deps.chatProvider.run.reset();
   clearState(deps.fsAdapter.getWorkspaceRoot());
   deps.persistState();
 }
@@ -405,6 +407,7 @@ export function handleNewSession(deps: Pick<PlanManagerDeps,
   deps.setCurrentGoal('');
   deps.chatProvider.setState('empty');
   deps.chatProvider.conversation.reset();
+  deps.chatProvider.run.reset();
   clearState(deps.fsAdapter.getWorkspaceRoot());
   deps.log('New session started');
 }
@@ -488,6 +491,9 @@ export function handleSessionMessage(
   deps: PlanManagerDeps,
 ): void {
   deps.chatProvider.conversation.receive(msg);
+  // Every session event feeds the run view too; the card badges, isolation
+  // marks and merge/handoff cards are drawn from it, not from the plan.
+  deps.chatProvider.run.receive(msg);
   if (msg.type === 'approval_request') {
     // The chat card is the question now, so make sure the user is looking at
     // it. Nothing blocks here: the session's research loop awaits the answer on
@@ -496,9 +502,6 @@ export function handleSessionMessage(
     return;
   }
   switch (msg.type) {
-    case 'checkpoint':
-      deps.chatProvider.showCheckpoint(msg.taskId, msg.taskTitle, msg.summary);
-      break;
     // Runner chatter was dropped here entirely, so a task that failed mid-run
     // showed a red card and nothing else. The webview keeps only the tail.
     case 'task_output':
@@ -508,22 +511,14 @@ export function handleSessionMessage(
       deps.chatProvider.conversation.note('system', taskStartedNotice(msg.title, msg.runner));
       break;
     case 'status_update': {
+      // The run view already holds each task's status; the host's plan only
+      // carries the plan-level status the dock reads.
       const plan = deps.getCurrentPlan();
       plan.status = deps.session.isExecuting
         ? 'running'
         : deps.session.status === 'completed'
           ? 'completed'
           : 'draft';
-      const gates: Record<string, string[]> = {};
-      for (const task of msg.tasks) {
-        deps.chatProvider.sendTaskIdle(task.id, task.idleSince ?? null);
-        deps.chatProvider.sendTaskApprovals(task.id, task.awaitingApproval ?? 0);
-        // A shared-root plan sends none; only a task with isolated work reports
-        // it, so the cards stay quiet unless isolation has something to say.
-        if (task.isolation) deps.chatProvider.sendTaskIsolation(task.id, task.isolation);
-        if (task.mergeGate) gates[task.id] = task.mergeGate;
-      }
-      deps.chatProvider.showRunMerge(msg.runMerge ?? null, gates);
       deps.chatProvider.showPlan(plan);
       break;
     }
@@ -555,14 +550,18 @@ export function handleSessionMessage(
     case 'isolation_blocked':
       handleIsolationBlocked(msg.message, deps);
       break;
-    // An isolated run settled: the branch its work landed on and what landed.
-    // Sent before `execution_complete`; the webview shows the handoff card.
-    case 'isolation_handoff':
-      handleIsolationHandoff({ repos: msg.repos, landed: msg.landed, ...(msg.deferredTo ? { deferredTo: msg.deferredTo } : {}) }, deps);
+    // What Merge all did, whether this host asked for it or another surface did,
+    // is folded onto the run view above. A full merge with nothing left to
+    // isolate is the end of the run: core has cleared it up, and the per-task
+    // marks go with the cards.
+    case 'isolation_merge':
+      if (msg.result.outcome === 'merged' && !deps.session.isolationView()) deps.chatProvider.clearIsolationHandoff();
       break;
-    // Drawn by the conversation view above, or not by this surface at all.
-    // Named so a new SessionMessage variant fails to compile until someone
-    // decides what it means here.
+    // Drawn by the conversation view or the run view above, or not by this
+    // surface at all. Named so a new SessionMessage variant fails to compile
+    // until someone decides what it means here.
+    case 'checkpoint':
+    case 'isolation_handoff':
     case 'planner_message':
     case 'plan_token':
     case 'planner_text_delta':
@@ -583,16 +582,6 @@ export function handleSessionMessage(
     case 'approval_decided':
     case 'execution_action':
     case 'task_log':
-      break;
-    // What Merge all did, whether this host asked for it or another surface did.
-    // The webview shows a blocked or part-landed group per repo; core's notices
-    // already told the user in prose. A full merge is the end of the run: core
-    // has cleared it up, so there is no card left to show.
-    case 'isolation_merge':
-      // A run merged at a gate goes on (ADR-0020): its record, and the marks
-      // the next status update re-sends, stay.
-      if (msg.result.outcome !== 'merged') deps.chatProvider.showIsolationMergeResult(msg.result);
-      else if (!deps.session.isolationView()) deps.chatProvider.clearIsolationHandoff();
       break;
     default: {
       const exhaustive: never = msg;

@@ -7,7 +7,7 @@ import { RUN_SETTINGS_DEFAULTS,
   createTask, RunnerRegistry,
   type AiProvider, type DiscoveredModel, type IRunner, type LegacyPlanState,
   type ModelResolver, type PlannerModelMemory, type RunnerInstallation,
-  type Session, type SessionDeps, type SettingsService,
+  type RunView, type Session, type SessionDeps, type SettingsService,
 } from '@ordewell/core';
 import { createExtension, type ExtensionServices } from '../ExtensionHost';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
@@ -41,13 +41,14 @@ function fakeChat() {
       receive: vi.fn(), note: vi.fn(), holdPrompt: vi.fn(), unsendPrompt: vi.fn(),
       nextPrompt: vi.fn(() => undefined), stop: vi.fn(), reset: vi.fn(), reload: vi.fn(), resync: vi.fn(),
     },
+    run: { receive: vi.fn(), adopt: vi.fn(), reset: vi.fn(), clearIsolation: vi.fn() },
     resendAllState: vi.fn(),
     restoreChat: vi.fn(),
     replaceConversation: vi.fn(),
     setState: vi.fn(),
     showError: vi.fn(),
     showPlan: vi.fn(),
-    planGenerated: vi.fn(),
+    adoptRun: vi.fn(),
     planApproved: vi.fn(),
     setPlanDockHeight: vi.fn(),
     setRunSettings: vi.fn(),
@@ -64,12 +65,7 @@ function fakeChat() {
     setModelDiscoveryErrors: vi.fn(),
     setPlannerBackends: vi.fn(),
     clearIsolationHandoff: vi.fn(),
-    sendTaskIdle: vi.fn(),
-    sendTaskIsolation: vi.fn(),
     sendTaskOutput: vi.fn(),
-    showCheckpoint: vi.fn(),
-    showIsolationHandoff: vi.fn(),
-    showIsolationMergeResult: vi.fn(),
     reveal: vi.fn(),
   };
   return { messages, provider };
@@ -145,6 +141,7 @@ function fakeSession() {
     status: 'draft',
     planState: null,
     planTasks: [],
+    runSnapshot: vi.fn(() => ({ tasks: [], runMerge: null, handoff: null, mergeResult: null })),
     isolationView: vi.fn(() => null),
     removeQueuedMessage: vi.fn(),
     reset: vi.fn(),
@@ -299,6 +296,31 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
       expect.arrayContaining([expect.objectContaining({ id: 'claude-code', usable: true })]),
       'openrouter', undefined, '',
     ));
+  });
+
+  it('seeds the run view when the webview reconnects, so a task waiting on a runner approval keeps its badge', async () => {
+    await h.host.start();
+    h.chat.messages.fire({ type: 'sendMessage', text: 'build a parser', typed: true });
+    await vi.waitFor(() => expect(h.session.spies.startPlanning).toHaveBeenCalled());
+
+    // A run is going and a task is blocked on a runner approval: nothing on the
+    // wire will say so again until the user answers, so a recreated webview has
+    // to be told now.
+    (h.session.spies as unknown as { planState: unknown }).planState = {};
+    const view: RunView = {
+      tasks: [{
+        id: 't1', order: 1, title: 'Parse JSON', type: 'ai', status: 'in_progress', description: '', dependencies: [],
+        assignedRunner: 'claude-code', assignedModel: null, taskMode: 'build', prompt: 'do it', subtasks: [],
+        userSteps: undefined, autonomy: undefined, sliceType: undefined, userStoriesCovered: undefined,
+        verdict: null, awaitingApproval: 2,
+      }],
+      runMerge: null, handoff: null, mergeResult: null,
+    };
+    h.session.spies.runSnapshot = vi.fn(() => view);
+
+    h.chat.messages.fire({ type: 'ready' });
+
+    await vi.waitFor(() => expect(h.chat.provider.adoptRun).toHaveBeenCalledWith(view));
   });
 
   it('remembers the dragged plan dock height for the next webview to open', async () => {

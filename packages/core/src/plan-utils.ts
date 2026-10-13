@@ -21,5 +21,8 @@ export type { RefTask } from './services/TaskRefs';
 // The one runner default, shared with the webview so its initial state cannot
 // drift from the plans the host builds.
 export { DEFAULT_RUNNERS } from './models/Task';
+// The run view is pure too: a surface seeds its state from the one empty run
+// rather than re-declaring the shape.
+export { EMPTY_RUN } from './services/runView';
 
 export * from './models/Usage';
