@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildConflictRepairPrompt, buildConflictResolutionPrompt, buildConversationSystemPrompt, buildModifyPlanPrompt, buildPlanWithResults, buildResearchPrompt, buildResearchToolsPrompt, buildSubagentSystemPrompt } from '../PlanPrompts';
+import { buildConflictRepairPrompt, buildConflictResolutionPrompt, buildConversationSystemPrompt, buildPlanWithResults, buildResearchPrompt, buildResearchToolsPrompt, buildSubagentSystemPrompt } from '../PlanPrompts';
 import type { RepoGroupLayout } from '../../interfaces/IWorktreeIsolation';
 import { createTask, type DiscoveredModel, type RunnerId } from '../../models/Task';
 
@@ -70,28 +70,9 @@ describe('task skill catalog', () => {
   });
 });
 
-describe('buildModifyPlanPrompt', () => {
-  it('shows the current plan without what only execution reads', () => {
-    const ran = {
-      ...createTask({ id: 'a', title: 'A', status: 'failed', skills: ['tdd'], subtasks: [createTask({ id: 'a1', title: 'A1' })] }),
-      attemptSkills: [{ name: 'tdd', source: 'global' as const, path: '/g/tdd/SKILL.md', content: 'WHOLE TDD BODY' }],
-      outputSummary: { reviewReason: 'r', logTail: 'LOG TAIL', capturedAt: '' },
-    };
-    const now = new Date().toISOString();
-
-    const prompt = buildModifyPlanPrompt({ tasks: [ran], generatedAt: now, status: 'approved', runners: ['claude-code'], lastUpdated: now }, 'restyle', {});
-
-    expect(prompt).toContain('"title": "A1"');
-    expect(prompt).not.toMatch(/WHOLE TDD BODY|LOG TAIL|attemptSkills|completionMarker/);
-  });
-});
-
 describe('the one-shot prompts, per transport', () => {
-  const now = new Date().toISOString();
-  const plan = { tasks: [createTask({ id: 'a', title: 'A' })], generatedAt: now, status: 'approved' as const, runners: ['claude-code' as RunnerId], lastUpdated: now };
   const prompts = (tools: boolean) => [
     buildPlanWithResults('goal', '', '', {}, ['claude-code'], undefined, DEFAULT_PLANNER_MODES, tools),
-    buildModifyPlanPrompt(plan, 'restyle', {}, undefined, undefined, tools),
   ];
 
   it('ask a coding agent for submit_plan and never for JSON in its reply', () => {

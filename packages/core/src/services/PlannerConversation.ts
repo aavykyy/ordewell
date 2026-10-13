@@ -1262,18 +1262,6 @@ export class PlannerConversation {
   }
 
   /**
-   * The catalog the planner may actually draw from — model ids and task-mode
-   * ids, per runner in the plan — emitted on EVERY turn, before any plan exists
-   * or after. The system prompt shows this once at conversation start; a long
-   * clarifying conversation outlives that single showing and the planner
-   * starts misquoting it, so this re-states it per turn instead.
-   *
-   * The host's catalog is allowlist-filtered, so a restricted allowlist stays a
-   * hard bound on every turn, and reads the plan's runners live, so a runner
-   * admitted mid-session by a retarget is shown like every other. A planner
-   * with Ordewell's tools gets a reminder to read the catalog instead.
-   */
-  /**
    * The autorun rule (ADR-0030) when it changed since the planner was last
    * told — in the opening prompt or an earlier turn — so a switch mid-
    * conversation reaches its next turn without repeating in every one.
@@ -1285,6 +1273,18 @@ export class PlannerConversation {
     return now ? AUTORUN_ON : AUTORUN_OFF;
   }
 
+  /**
+   * The catalog the planner may actually draw from — model ids and task-mode
+   * ids, per runner in the plan — emitted on EVERY turn, before any plan exists
+   * or after. The system prompt shows this once at conversation start; a long
+   * clarifying conversation outlives that single showing and the planner
+   * starts misquoting it, so this re-states it per turn instead.
+   *
+   * The host's catalog is allowlist-filtered, so a restricted allowlist stays a
+   * hard bound on every turn, and reads the plan's runners live, so a runner
+   * admitted mid-session by a retarget is shown like every other. A planner
+   * with Ordewell's tools gets a reminder to read the catalog instead.
+   */
   private catalogBlock(): string | null {
     if (!this.host.plan()) return null;
     if (this.host.aiService().plannerToolsAttached?.()) return PLANNER_TOOLS_REMINDER;

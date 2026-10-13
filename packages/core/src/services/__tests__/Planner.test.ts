@@ -18,7 +18,6 @@ function fakeAiService(): IAiService {
     hasActiveConversation: vi.fn().mockReturnValue(false),
     researchAndPlan: vi.fn().mockResolvedValue({ tasks: [], researchLog: [], researchResults: '' }),
     generatePlanDirect: vi.fn().mockResolvedValue([]),
-    modifyPlan: vi.fn().mockResolvedValue({ tasks: [] }),
     reset: vi.fn(),
   };
 }
@@ -127,62 +126,6 @@ describe('Planner', () => {
       expect(callModels['opencode'][0].modelId).toBe('kimi-2.6');
       expect(plan.tasks[0].assignedModel?.modelId).toBe('kimi-2.6');
       expect(plan.tasks[0].assignedModel?.thinkingEffort).toBeUndefined();
-    });
-  });
-
-  describe('modify', () => {
-    it('delegates to aiService.modifyPlan with the existing plan', async () => {
-      const aiService = fakeAiService();
-      const updated = createTask({ id: 'm1', order: 1, title: 'Updated', prompt: 'y' });
-      (aiService.modifyPlan as import("vitest").Mock).mockResolvedValue({ tasks: [updated] });
-
-      const planner = new Planner(fakeConfig(), aiService);
-      const existingPlan = {
-        tasks: [],
-        generatedAt: '',
-        status: 'draft' as const,
-        runners: ['claude-code' as const],
-        lastUpdated: '',
-      };
-      const result = await planner.modify({
-        existingPlan,
-        userRequest: 'add a task',
-        modelsByRunner: {},
-      });
-
-      expect(aiService.modifyPlan).toHaveBeenCalledWith(
-        existingPlan,
-        'add a task',
-        {},
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        // The boolean tail collapsed into one mode set; a request that names no
-        // toggles still has to arrive as a complete, defaulted one.
-        DEFAULT_PLANNER_MODES,
-      );
-      expect(result.tasks[0].title).toBe('Updated');
-    });
-
-    it('filters modelsByRunner before modifyPlan and coerces returned tasks', async () => {
-      const strayTask = createTask({ id: 'm1', order: 1, title: 'Task', prompt: 'x', assignedRunner: 'opencode', assignedModel: { modelId: 'gpt-5', modelLabel: 'GPT-5', thinkingEffort: 'high' } });
-      const aiService = fakeAiService();
-      (aiService.modifyPlan as import("vitest").Mock).mockResolvedValue({ tasks: [strayTask] });
-
-      const planner = new Planner(fakeConfig(), aiService);
-      const result = await planner.modify({
-        existingPlan: { tasks: [], generatedAt: '', status: 'draft', runners: ['opencode'], lastUpdated: '' },
-        userRequest: 'add',
-        modelsByRunner: { 'opencode': [discoveredModel('kimi-2.6'), discoveredModel('gpt-5')] },
-        perRunnerAllowlist: { 'opencode': ['kimi-2.6'] },
-      });
-
-      const callModels: Record<string, DiscoveredModel[]> = (aiService.modifyPlan as import("vitest").Mock).mock.calls[0][2];
-      expect(callModels['opencode']).toHaveLength(1);
-      expect(callModels['opencode'][0].modelId).toBe('kimi-2.6');
-      expect(result.tasks[0].assignedModel?.modelId).toBe('kimi-2.6');
-      expect(result.tasks[0].assignedModel?.thinkingEffort).toBeUndefined();
     });
   });
 

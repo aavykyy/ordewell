@@ -4,8 +4,7 @@ import { generatePlanWithRepair, JSON_REPAIR_INSTRUCTION } from '../PlanRepair';
 import { extractJsonObject, PlanParseError } from '../JsonExtractor';
 import { parsePartialPlan } from '../PartialPlanParser';
 import { autonomyLevelLabel, parseAutonomyLevel } from '../ModeResolver';
-import { buildResearchPrompt, buildPlanWithResults, buildModifyPlanPrompt } from '../PlanPrompts';
-import { createTask } from '../../models/Task';
+import { buildResearchPrompt, buildPlanWithResults } from '../PlanPrompts';
 
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
 
@@ -677,26 +676,5 @@ describe('the planner prompt asks for read-only, never a mode', () => {
     const prompt = buildPlanWithResults('g', '', '', {}, ['claude-code'], runnerModes, modes({ autonomousDefault }));
     expect(prompt).toContain('"readOnly": false');
     expect(prompt).not.toContain('"readOnly": true,');
-  });
-
-  it('shows the modify prompt which tasks are read-only, and no mode', () => {
-    const tasks = [
-      createTask({ id: 'r', order: 1, title: 'Review', assignedRunner: 'claude-code', taskMode: 'plan', subtasks: [createTask({ id: 's', order: 1, title: 'Sub', assignedRunner: 'claude-code', taskMode: 'bypassPermissions' })] }),
-      createTask({ id: 'w', order: 2, title: 'Write', assignedRunner: 'claude-code', taskMode: 'bypassPermissions' }),
-    ];
-    const existingPlan = { tasks, generatedAt: '', status: 'draft' as const, runners: ['claude-code' as const], lastUpdated: '' };
-    const prompt = buildModifyPlanPrompt(existingPlan, '', {}, undefined, runnerModes);
-    expect(prompt).not.toContain('taskMode');
-    expect(prompt).not.toContain('bypassPermissions');
-    // The guide's own `"readOnly": true on an AI task` is not a task.
-    expect(prompt.match(/"readOnly": true(?! on)/g)).toHaveLength(1);
-  });
-
-  it('asks the modify prompt to keep readOnly, not taskMode', () => {
-    const existingPlan = { tasks: [], generatedAt: '', status: 'draft' as const, runners: ['claude-code' as const], lastUpdated: '' };
-    const prompt = buildModifyPlanPrompt(existingPlan, '', {}, undefined, runnerModes);
-    expect(prompt).toContain('readOnly');
-    expect(prompt).not.toContain('taskMode');
-    expect(prompt).not.toContain('bypassPermissions');
   });
 });

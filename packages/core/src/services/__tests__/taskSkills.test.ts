@@ -362,13 +362,9 @@ describe('the skills field', () => {
     ];
     const merged = (skills: unknown) => applyTaskOps(plan, [{ op: 'merge', taskIds: ['#1', '#2'], merged: { title: 'AB', skills } as never }], ['claude-code']).tasks[0].skills;
     const split = (skills: unknown) => applyTaskOps(plan, [{ op: 'split', taskId: '#2', parts: [{ title: 'B1', skills } as never, { title: 'B2' }] }], ['claude-code']).tasks[1].skills;
-    const store = new PlanStore();
-    store.load(plan, ['claude-code']);
-    store.split('b', [{ title: 'B1', skills: 'deploy' as never }, { title: 'B2', skills: [] }]);
 
     expect([merged('tdd'), merged([7]), merged([]), merged(['docs'])]).toEqual([['tdd', 'deploy'], ['tdd', 'deploy'], undefined, ['docs']]);
     expect([split('tdd'), split({}), split([]), split(['docs'])]).toEqual([['deploy'], ['deploy'], undefined, ['docs']]);
-    expect(store.planTasks.map((t) => t.skills)).toEqual([['tdd'], ['deploy'], undefined]);
   });
 
   it('keeps only names a skill could have, lower-cased as /name parses them', () => {
