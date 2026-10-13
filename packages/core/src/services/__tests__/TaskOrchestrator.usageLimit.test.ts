@@ -230,6 +230,49 @@ describe('a task paused on a usage limit', () => {
     await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
     expect(spawn).toHaveBeenCalledTimes(1);
   });
+
+  it('awaits the resumed attempt\'s start when restarting the run throws, instead of leaving it unhandled', async () => {
+    const sessions: FakeRunnerSession[] = [];
+    let boom = false;
+    const runner = {
+      spawn: vi.fn(async (o: RunnerSpawnOptions): Promise<IRunnerSession> => {
+        if (boom) throw new Error('spawn boom');
+        const session = new FakeRunnerSession(`s${sessions.length + 1}`, o.taskId, `native-${sessions.length + 1}`);
+        sessions.push(session);
+        return session;
+      }),
+      stop: vi.fn(),
+      stopAll: vi.fn(),
+      activeCount: 0,
+    } satisfies IRunner;
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const orchestrator = TaskOrchestrator.compose({
+        config: fakeConfig(),
+        notifications: fakeNotification(),
+        runner,
+        output: new BufferedTaskOutputSource(),
+        registry: new RunnerRegistry(),
+        workspaceRoot: () => '/repo',
+        workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
+        runSettings: () => { if (boom) throw new Error('settings boom'); return { mergeAtGatesAutomatically: false }; },
+      });
+      orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
+      await orchestrator.approveReview();
+      hitLimitInTurn(sessions[0]);
+      await until(() => orchestrator.storeInstance.get('t1')!.status === 'awaiting_user');
+      expect(orchestrator.isHaltedByFailure).toBe(true);
+
+      boom = true;
+      await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now());
+      await flushMicrotasks(50);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
 });
 
 describe('a plan loaded with a task still waiting on a usage limit', () => {

@@ -208,6 +208,59 @@ describe('TaskOrchestrator.continueTask', () => {
     expect(h.notifications.error).toHaveBeenCalledWith(expect.stringContaining('could not start: my-plugin has no structured connector'));
     expect(h.requests).toHaveLength(0);
   });
+
+  it('awaits the claimed start when restarting the halted run throws, instead of leaving it unhandled', async () => {
+    const sessions: FakeRunnerSession[] = [];
+    let boom = false;
+    const runner = {
+      spawn: vi.fn(async (o: RunnerSpawnOptions): Promise<IRunnerSession> => {
+        if (boom) throw new Error('spawn boom');
+        const session = new FakeRunnerSession(`s${sessions.length + 1}`, o.taskId, `native-${sessions.length + 1}`);
+        sessions.push(session);
+        return session;
+      }),
+      stop: vi.fn(),
+      stopAll: vi.fn(),
+      activeCount: 0,
+    } satisfies IRunner;
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const orchestrator = TaskOrchestrator.compose({
+        config: fakeConfig({ worktreeIsolation: false }),
+        notifications: fakeNotification(),
+        runner,
+        output: new BufferedTaskOutputSource(),
+        registry: new RunnerRegistry(),
+        workspaceRoot: () => '/repo',
+        workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
+        // Throws only once the halt is in place, so restarting it is what fails.
+        runSettings: () => { if (boom) throw new Error('settings boom'); return { mergeAtGatesAutomatically: false }; },
+      });
+      orchestrator.loadPlan([
+        createTask({ id: 't1', order: 1, title: 'Parse JSON', prompt: 'ORIGINAL PROMPT BODY' }),
+        createTask({ id: 't2', order: 2, title: 'Other', prompt: 'two' }),
+      ]);
+      await orchestrator.runTask('t1');
+      sessions[0].reportComplete({ status: 'done', summary: '' });
+      await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
+
+      // A full-plan run that fails a task halts; continuing resumes it.
+      await orchestrator.approveReview();
+      await vi.waitFor(() => expect(orchestrator.storeInstance.get('t2')!.status).toBe('in_progress'));
+      sessions.find((s) => s.taskId === 't2')!.emitExit(1);
+      await vi.waitFor(() => expect(orchestrator.storeInstance.get('t2')!.status).toBe('failed'));
+      expect(orchestrator.isHaltedByFailure).toBe(true);
+
+      boom = true;
+      await expect(orchestrator.continueTask('t1', 'go on')).rejects.toThrow();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
 });
 
 describe('a continue whose session cannot be resumed', () => {
