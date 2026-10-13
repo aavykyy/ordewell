@@ -1,4 +1,4 @@
-import { titledTaskRef } from '../services/TaskRefs';
+import { findTaskRef, titledTaskRef } from '../services/TaskRefs';
 
 interface Named {
   id: string;
@@ -7,20 +7,11 @@ interface Named {
   subtasks?: readonly Named[];
 }
 
-function findNamed(tasks: readonly Named[], id: string): Named | undefined {
-  for (const task of tasks) {
-    if (task.id === id) return task;
-    const nested = findNamed(task.subtasks ?? [], id);
-    if (nested) return nested;
-  }
-  return undefined;
-}
-
-/** Each id as "#N title", subtasks included; one the plan no longer holds stays a bare id. */
+/** Each id as "#N title", subtasks dotted, by the plan's tree; one it no longer holds stays a bare id. */
 export function titledRefs(ids: readonly string[], tasks: readonly Named[]): string[] {
   return ids.map((id) => {
-    const task = findNamed(tasks, id);
-    return task ? titledTaskRef(task) : id;
+    const found = findTaskRef(tasks, id);
+    return found ? titledTaskRef(found.task, found.parent) : id;
   });
 }
 

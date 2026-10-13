@@ -75,7 +75,7 @@ describe('a task card, pinned before its rules move to core', () => {
   });
 
   it('names what a merge gate waits on', () => {
-    render(<TaskCard task={makeTask({ id: 'o2', order: 2 })} models={[]} mergeGate={['t1', 'ghost']} taskOrderMap={new Map([['t1', 1]])} />);
+    render(<TaskCard task={makeTask({ id: 'o2', order: 2 })} models={[]} mergeGate={['t1', 'ghost']} siblings={[makeTask({ id: 't1', order: 1, title: 'Setup' })]} />);
     const gate = document.querySelector('.task-isolation-badge.gate');
     expect(gate?.textContent).toBe('Waits for Merge all');
     expect(gate?.getAttribute('title')).toBe('The work of #1, ghost is not merged into your branch yet. Merge all lets this task go on.');
@@ -116,7 +116,7 @@ describe('a task card, pinned before its rules move to core', () => {
 
   it('names dependencies by order, and an unknown one by its id', () => {
     render(<TaskCard task={makeTask({ id: 't3', order: 3, dependencies: ['t1', 'ghost'] })} models={[]} isExecuting
-      taskOrderMap={new Map([['t1', 1]])} expanded onExpandedChange={noop} />);
+      siblings={[makeTask({ id: 't1', order: 1, title: 'Setup' })]} expanded onExpandedChange={noop} />);
     expect(document.querySelector('.task-dep-badge.dep-in')?.getAttribute('title')).toBe('Depends on: #1, ghost');
     expect(document.querySelector('.task-deps')?.textContent).toBe('Depends on: #1, ghost');
   });

@@ -10,7 +10,7 @@ const STATUSES = ['pending', 'approved', 'blocked', 'in_progress', 'awaiting_use
 const subject = (over: Partial<TaskRowSubject> = {}): TaskRowSubject => ({
   id: 't2', order: 2, type: 'ai', status: 'pending', dependencies: [], ...over,
 });
-const orderOf = new Map([['t1', 1], ['t2', 2]]);
+const tasks = [{ id: 't1', order: 1, title: 'One' }, { id: 't2', order: 2, title: 'Two' }];
 
 describe('status kind', () => {
   it.each([
@@ -204,7 +204,7 @@ describe('the row view, every status against every annotation', () => {
   const cases = STATUSES.flatMap((status) => annotations.map(([name, over, check]) => [status, name, over, check] as const));
 
   it.each(cases)('%s with %s', (status, _name, over, check) => {
-    const view = taskRowView(subject({ status, ...over }), { orderOf, modes: [{ id: 'yolo', autonomous: true }] });
+    const view = taskRowView(subject({ status, ...over }), { tasks, modes: [{ id: 'yolo', autonomous: true }] });
     expect(view.status).toBe(taskStatusKind({ status }));
     check(view, status);
   });
@@ -231,6 +231,17 @@ describe('the row view, every status against every annotation', () => {
     expect(taskRowView(subject({ taskMode: 'yolo' })).autonomous).toBe(false);
   });
 
+  it('labels a dependency against the plan tree, so a sibling subtask reads dotted', () => {
+    const tree = [
+      { id: 't1', order: 1, title: 'Setup' },
+      { id: 't2', order: 2, title: 'Build', subtasks: [{ id: 's1', order: 1, title: 'Sibling' }, { id: 's2', order: 2, title: 'Other' }] },
+      { id: 't3', order: 3, title: 'Test' },
+    ];
+    expect(taskRowView(subject({ id: 's2', order: 2, dependencies: ['s1'] }), { parent: { order: 2 }, tasks: tree }).dependencies).toEqual(['#2.1']);
+    expect(taskRowView(subject({ dependencies: ['t3'] }), { tasks: tree }).dependencies).toEqual(['#3']);
+    expect(taskRowView(subject({ id: 's2', order: 2, dependencies: ['t1'] }), { parent: { order: 2 }, tasks: tree }).dependencies).toEqual(['#1']);
+  });
+
   it('marks a quiet task as still running', () => {
     expect(taskRowView(subject({ status: 'in_progress', idleSince: 'x' }))).toMatchObject({ status: 'quiet', running: true });
   });
@@ -242,8 +253,8 @@ describe('texts', () => {
     { id: 'b', order: 2, title: 'Deploy' },
   ];
 
-  it('names tasks by order and title, subtasks included, and a missing one by id', () => {
-    expect(titledRefs(['a', 'a1', 'ghost'], plan)).toEqual(['#1 Fix', '#1 Nested', 'ghost']);
+  it('names tasks by order and title, subtasks dotted, and a missing one by id', () => {
+    expect(titledRefs(['a', 'a1', 'ghost'], plan)).toEqual(['#1 Fix', '#1.1 Nested', 'ghost']);
   });
 
   it.each([
