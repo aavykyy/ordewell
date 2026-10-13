@@ -1,7 +1,7 @@
 import { createSkillsService, EnvConfig } from '@ordewell/core';
-import { canSetDependencies, dependencyCandidates, taskRef, titledTaskRef } from '@ordewell/core/plan-utils';
+import { canSetDependencies, dependencyCandidates, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf } from '@ordewell/core/plan-utils';
 import { assignedModelFor, effortsForTask, modelsForTask, modesForTask, runnerAccepts } from '../tui/taskAssignment';
-import type { TaskView } from '../tui/state';
+import { findTask, type TaskView } from '../tui/state';
 import type { ApiClient } from '../apiClient';
 import { positionals } from '../utils';
 import { flag } from '../utils/args';
@@ -15,6 +15,12 @@ import { withResolvedTask } from './task-control';
  * validated against the task's runner rather than the global catalog.
  */
 
+/** The reference the plan renders for a task — dotted for a subtask. */
+const refOf = (tasks: readonly TaskView[], task: TaskView): string => taskRefOf(tasks, task.id) ?? taskRef(task);
+
+/** The reference and title the plan renders for a task — dotted for a subtask. */
+const namedOf = (tasks: readonly TaskView[], task: TaskView): string => titledTaskRefOf(tasks, task.id) ?? titledTaskRef(task);
+
 /** Resolves the task, hands over its `TaskView` plus the value the user typed. */
 async function withTask(
   subArgs: string[],
@@ -25,7 +31,7 @@ async function withTask(
 ): Promise<void> {
   await withResolvedTask(subArgs, usage, injectedApi, async (api, sessionId, taskId, plan) => {
     const tasks = taskViews(plan);
-    const task = tasks.find((t) => t.id === taskId);
+    const task = findTask(tasks, taskId);
     if (!task) fail(`Task not found in the plan: ${taskId}`);
     // The first positional is the task identifier itself; the value is the second.
     const [, ...rest] = positionals(subArgs);
@@ -37,14 +43,14 @@ async function withTask(
 const RUNNER_USAGE = 'Usage: ordewell task-runner <task-id-or-order> [<runner>] [--session-id <id>]';
 
 export async function handleTaskRunner(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
-  await withTask(subArgs, RUNNER_USAGE, injectedApi, async (api, sessionId, task, _tasks, runner) => {
+  await withTask(subArgs, RUNNER_USAGE, injectedApi, async (api, sessionId, task, tasks, runner) => {
     if (task.type !== 'ai') {
       fail('Manual tasks do not run on an executor, so they have no runner.');
     }
 
     const state = await api.getRunners();
     if (!runner) {
-      console.log(`\nRunner · ${titledTaskRef(task)}\n`);
+      console.log(`\nRunner · ${namedOf(tasks, task)}\n`);
       for (const r of state.runners) {
         console.log(`  ${r.id === task.assignedRunner ? '*' : ' '} ${r.id.padEnd(14)} ${r.name}${r.enabled ? '' : '  (not enabled for planning)'}`);
       }
@@ -61,19 +67,19 @@ export async function handleTaskRunner(subArgs: string[], injectedApi?: ApiClien
     // new runner's catalog. Naming a model here would race that derive and
     // could persist one the runner cannot spawn.
     await api.updateTask(sessionId, task.id, { assignedRunner: runner });
-    console.log(`Task ${taskRef(task)} runner set to ${runner} — its model, effort and mode were re-picked for it.`);
+    console.log(`Task ${refOf(tasks, task)} runner set to ${runner} — its model, effort and mode were re-picked for it.`);
   });
 }
 
 const MODEL_USAGE = 'Usage: ordewell task-model <task-id-or-order> [<model-id>] [--session-id <id>]';
 
 export async function handleTaskModel(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
-  await withTask(subArgs, MODEL_USAGE, injectedApi, async (api, sessionId, task, _tasks, modelId) => {
+  await withTask(subArgs, MODEL_USAGE, injectedApi, async (api, sessionId, task, tasks, modelId) => {
     const catalog = await fetchCatalog(api);
     const options = modelsForTask(catalog.models, task);
 
     if (!modelId) {
-      console.log(`\nModel · ${titledTaskRef(task)}${task.assignedRunner ? ` (${task.assignedRunner})` : ''}\n`);
+      console.log(`\nModel · ${namedOf(tasks, task)}${task.assignedRunner ? ` (${task.assignedRunner})` : ''}\n`);
       if (options.length === 0) console.log('  No models discovered for this runner — try `ordewell refresh`.');
       for (const m of options) {
         const detail = [m.provider, m.variants?.length ? `${m.variants.length} effort levels` : 'runner default effort']
@@ -95,7 +101,7 @@ export async function handleTaskModel(subArgs: string[], injectedApi?: ApiClient
 
     const assignedModel = assignedModelFor(model, task.assignedModel?.thinkingEffort);
     await api.updateTask(sessionId, task.id, { assignedModel });
-    console.log(`Task ${taskRef(task)} model set to ${model.label}.`);
+    console.log(`Task ${refOf(tasks, task)} model set to ${model.label}.`);
     if (task.assignedModel?.thinkingEffort && !assignedModel.thinkingEffort) {
       console.log(`  ${model.label} does not expose "${task.assignedModel.thinkingEffort}", so the effort went back to the runner default.`);
     }
@@ -105,13 +111,13 @@ export async function handleTaskModel(subArgs: string[], injectedApi?: ApiClient
 const EFFORT_USAGE = 'Usage: ordewell task-effort <task-id-or-order> [<level>|default] [--session-id <id>]';
 
 export async function handleTaskEffort(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
-  await withTask(subArgs, EFFORT_USAGE, injectedApi, async (api, sessionId, task, _tasks, level) => {
+  await withTask(subArgs, EFFORT_USAGE, injectedApi, async (api, sessionId, task, tasks, level) => {
     const catalog = await fetchCatalog(api);
     const variants = effortsForTask(catalog.models, task);
     const current = task.assignedModel?.thinkingEffort;
 
     if (!level) {
-      console.log(`\nThinking effort · ${titledTaskRef(task)}\n`);
+      console.log(`\nThinking effort · ${namedOf(tasks, task)}\n`);
       console.log(`  ${current ? ' ' : '*'} default        Let the executor choose`);
       for (const v of variants) {
         console.log(`  ${v.id === current ? '*' : ' '} ${v.id.padEnd(14)} ${v.label}`);
@@ -136,19 +142,19 @@ export async function handleTaskEffort(subArgs: string[], injectedApi?: ApiClien
     await api.updateTask(sessionId, task.id, {
       assignedModel: task.assignedModel ? { ...task.assignedModel, thinkingEffort } : undefined,
     });
-    console.log(`Task ${taskRef(task)} thinking effort set to ${thinkingEffort ?? 'runner default'}.`);
+    console.log(`Task ${refOf(tasks, task)} thinking effort set to ${thinkingEffort ?? 'runner default'}.`);
   });
 }
 
 const MODE_USAGE = 'Usage: ordewell task-mode <task-id-or-order> [<mode>] [--session-id <id>]';
 
 export async function handleTaskMode(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
-  await withTask(subArgs, MODE_USAGE, injectedApi, async (api, sessionId, task, _tasks, mode) => {
+  await withTask(subArgs, MODE_USAGE, injectedApi, async (api, sessionId, task, tasks, mode) => {
     const catalog = await fetchCatalog(api);
     const modes = modesForTask(catalog.modesByRunner, task);
 
     if (!mode) {
-      console.log(`\nMode · ${titledTaskRef(task)}${task.assignedRunner ? ` (${task.assignedRunner})` : ''}\n`);
+      console.log(`\nMode · ${namedOf(tasks, task)}${task.assignedRunner ? ` (${task.assignedRunner})` : ''}\n`);
       if (modes.length === 0) {
         console.log('  This task has no runner, or its runner declares no modes.');
       }
@@ -171,7 +177,7 @@ export async function handleTaskMode(subArgs: string[], injectedApi?: ApiClient)
     }
 
     await api.updateTask(sessionId, task.id, { taskMode: chosen.id });
-    console.log(`Task ${taskRef(task)} mode set to ${chosen.label}.`);
+    console.log(`Task ${refOf(tasks, task)} mode set to ${chosen.label}.`);
   });
 }
 
@@ -182,13 +188,13 @@ export async function handleTaskDeps(subArgs: string[], injectedApi?: ApiClient)
     const candidates = dependencyCandidates(tasks, task.id);
 
     if (!value) {
-      console.log(`\nDependencies · ${titledTaskRef(task)}\n`);
+      console.log(`\nDependencies · ${namedOf(tasks, task)}\n`);
       if (candidates.length === 0) {
-        console.log(`  Nothing runs before ${taskRef(task)}, so it has no possible dependencies.`);
+        console.log(`  Nothing runs before ${refOf(tasks, task)}, so it has no possible dependencies.`);
       }
       for (const c of candidates) {
         const chosen = task.dependencies.includes(c.id);
-        console.log(`  ${chosen ? '*' : ' '} ${c.id}  ${titledTaskRef(c)}${c.status === 'completed' ? '  (already completed)' : ''}`);
+        console.log(`  ${chosen ? '*' : ' '} ${c.id}  ${namedOf(tasks, c)}${c.status === 'completed' ? '  (already completed)' : ''}`);
       }
       console.log(`\n  * = current. ${DEPS_USAGE}`);
       return;
@@ -208,15 +214,15 @@ export async function handleTaskDeps(subArgs: string[], injectedApi?: ApiClient)
 
     await api.updateTask(sessionId, task.id, { dependencies });
     console.log(dependencies.length > 0
-      ? `Task ${taskRef(task)} now depends on ${dependencies.length} task${dependencies.length === 1 ? '' : 's'}.`
-      : `Task ${taskRef(task)} no longer depends on anything.`);
+      ? `Task ${refOf(tasks, task)} now depends on ${dependencies.length} task${dependencies.length === 1 ? '' : 's'}.`
+      : `Task ${refOf(tasks, task)} no longer depends on anything.`);
   });
 }
 
 const SKILLS_USAGE = 'Usage: ordewell task-skills <task-id-or-order> [<name> [<name> …]|<name,name,…>|none] [--session-id <id>] [--workspace <path>]';
 
 export async function handleTaskSkills(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
-  await withTask(subArgs, SKILLS_USAGE, injectedApi, async (api, sessionId, task, _tasks, value) => {
+  await withTask(subArgs, SKILLS_USAGE, injectedApi, async (api, sessionId, task, tasks, value) => {
     if (task.type !== 'ai') fail('Manual tasks do not run an executor, so they take no skills.');
     // User-only skills are included: attaching by hand is a user invocation.
     const catalog = createSkillsService(flag(subArgs, '--workspace') || process.cwd(), new EnvConfig().workspaceRepos)
@@ -224,7 +230,7 @@ export async function handleTaskSkills(subArgs: string[], injectedApi?: ApiClien
       .filter((s) => s.appliesTo === 'task');
 
     if (!value) {
-      console.log(`\nSkills · ${titledTaskRef(task)}\n`);
+      console.log(`\nSkills · ${namedOf(tasks, task)}\n`);
       if (catalog.length === 0) console.log('  No task skills found (applies-to: task in .ordewell/skills/ or ~/.ordewell/skills/).');
       for (const s of catalog) {
         console.log(`  ${task.skills?.includes(s.name) ? '*' : ' '} ${s.name}${s.description ? `  ${s.description}` : ''}`);
@@ -244,8 +250,8 @@ export async function handleTaskSkills(subArgs: string[], injectedApi?: ApiClien
 
     await api.updateTask(sessionId, task.id, { skills });
     console.log(skills.length > 0
-      ? `Task ${taskRef(task)} skills set to ${skills.join(', ')}.`
-      : `Task ${taskRef(task)} has no skills attached.`);
+      ? `Task ${refOf(tasks, task)} skills set to ${skills.join(', ')}.`
+      : `Task ${refOf(tasks, task)} has no skills attached.`);
   }, { joinValue: true });
 }
 
@@ -258,7 +264,7 @@ const OPS_USAGE = 'Usage: ordewell task-ops <task-id-or-order> [on|off] [--sessi
 export async function handleTaskOps(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   await withTask(subArgs, OPS_USAGE, injectedApi, async (api, sessionId, task, tasks, value) => {
     if (!value) {
-      console.log(`\n${titledTaskRef(task)} is ${task.ops ? 'an ops task: it runs in your checkout once the work it depends on is merged' : 'a change task: it runs in its own worktree'}.`);
+      console.log(`\n${namedOf(tasks, task)} is ${task.ops ? 'an ops task: it runs in your checkout once the work it depends on is merged' : 'a change task: it runs in its own worktree'}.`);
       console.log(`\n  ${OPS_USAGE}`);
       return;
     }
@@ -269,7 +275,7 @@ export async function handleTaskOps(subArgs: string[], injectedApi?: ApiClient):
 
     await api.updateTask(sessionId, task.id, { ops: to === 'on' });
     console.log(to === 'on'
-      ? `Task ${taskRef(task)} is an ops task: it runs in your checkout once the work it depends on is merged.`
-      : `Task ${taskRef(task)} is a change task: it runs in its own worktree.`);
+      ? `Task ${refOf(tasks, task)} is an ops task: it runs in your checkout once the work it depends on is merged.`
+      : `Task ${refOf(tasks, task)} is a change task: it runs in its own worktree.`);
   });
 }

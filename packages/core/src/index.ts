@@ -10,7 +10,9 @@ export {
   resolveTaskRef,
   taskOrderLabel,
   taskRef,
+  taskRefOf,
   titledTaskRef,
+  titledTaskRefOf,
 } from './models/Task';
 export type {
   AwaitingReason,

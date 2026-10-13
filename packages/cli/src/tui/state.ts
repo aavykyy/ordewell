@@ -1,4 +1,4 @@
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type RunTask, type RunView, type SupervisorLevel, type TaskLogEvent, type TaskLogView, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type RunTask, type RunView, type SupervisorLevel, type TaskLogEvent, type TaskLogView, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 import type { SaveSettingsEffect } from './reducers/settings';
 import type { StepperState } from './reducers/stepper';
@@ -580,6 +580,20 @@ export function findTask(tasks: TaskView[], id: string): TaskView | undefined {
     if (found) return found;
   }
   return undefined;
+}
+
+/**
+ * The reference the plan renders for a task: "#2", or the dotted "#2.1" for a
+ * subtask. Looked up against the tree, so a subtask is not named by the order
+ * it has under its parent.
+ */
+export function refFor(state: TuiState, task: TaskView): string {
+  return taskRefOf(state.tasks, task.id) ?? taskRef(task);
+}
+
+/** The reference and title the plan renders for a task, dotted for a subtask. */
+export function titledRefFor(state: TuiState, task: TaskView): string {
+  return titledTaskRefOf(state.tasks, task.id) ?? titledTaskRef(task);
 }
 
 /** A task list as run-view tasks: every level carries a `subtasks` array, which `reduceRun` walks. */

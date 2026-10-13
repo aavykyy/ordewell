@@ -344,6 +344,20 @@ describe('the resolver task prompt', () => {
   });
 });
 
+describe('a landing-conflict prompt for a subtask', () => {
+  const subtask = createTask({ id: 's1', order: 1, title: 'Edit both', prompt: 'change the API and its client' });
+  const plan = [
+    createTask({ id: 't1', order: 1, title: 'Setup' }),
+    createTask({ id: 'p2', order: 2, title: 'Parent', subtasks: [subtask] }),
+  ];
+
+  it('names the subtask by its dotted reference against the plan tree', () => {
+    const p = buildConflictResolutionPrompt(subtask, { branch: 'ordewell/r1/2.1-edit-both', repos: ['.'], conflictRepo: '.' }, 'ordewell/r1/integration', plan);
+
+    expect(p.split('\n')[0]).toBe('Task #2.1 "Edit both" passed, but merging its branch `ordewell/r1/2.1-edit-both` into `ordewell/r1/integration` conflicted.');
+  });
+});
+
 describe('the conflict repair prompt', () => {
   const conflicted = createTask({ id: 't1', order: 3, title: 'Edit both', prompt: 'change the API and its client' });
 

@@ -52,8 +52,8 @@ export function completesTask(outcome: LandingOutcome): outcome is Extract<Landi
 export interface LandingDeps {
   runs: IsolationRunController;
   config: Pick<IConfig, 'conflictRepairAttempts'>;
-  /** Read-only: only the orchestrator changes a task. */
-  tasks: Pick<PlanStore, 'get'>;
+  /** Read-only: only the orchestrator changes a task. `planTasks` labels a subtask by its dotted reference. */
+  tasks: Pick<PlanStore, 'get' | 'planTasks'>;
 }
 
 const NOTHING_TO_LAND: LandingOutcome = { kind: 'nothing-to-land', messages: [] };
@@ -71,7 +71,7 @@ const NOTHING_TO_LAND: LandingOutcome = { kind: 'nothing-to-land', messages: [] 
 export class Landing {
   private readonly runs: IsolationRunController;
   private readonly config: Pick<IConfig, 'conflictRepairAttempts'>;
-  private readonly tasks: Pick<PlanStore, 'get'>;
+  private readonly tasks: Pick<PlanStore, 'get' | 'planTasks'>;
 
   constructor(deps: LandingDeps) {
     this.runs = deps.runs;
@@ -171,7 +171,7 @@ export class Landing {
       ...(record?.conflictRepo ? { conflictRepo: record.conflictRepo } : {}),
       ...(record?.conflictFiles ? { conflictFiles: record.conflictFiles } : {}),
     };
-    return buildConflictRepairPrompt(task, conflict, integrationBranchNameOf(run));
+    return buildConflictRepairPrompt(task, conflict, integrationBranchNameOf(run), this.tasks.planTasks);
   }
 
   private hasUnlandedWork(taskId: string): boolean {
@@ -255,7 +255,7 @@ export class Landing {
  * task's landing is in conflict. Linking the two, so the conflicted task lands
  * once the resolver has, stays with the caller.
  */
-export function conflictResolverTask(task: Readonly<Task>, run: IsolationRun | null): Partial<Task> | null {
+export function conflictResolverTask(task: Readonly<Task>, run: IsolationRun | null, plan?: readonly Task[]): Partial<Task> | null {
   const record = run?.tasks[task.id];
   if (!run || record?.status !== 'conflict') return null;
   const integrationBranch = integrationBranchNameOf(run);
@@ -268,7 +268,7 @@ export function conflictResolverTask(task: Readonly<Task>, run: IsolationRun | n
     title: `Resolve merge conflict: ${task.title}`,
     description: `Merge ${record.branch} into ${integrationBranch} by hand.`,
     type: 'ai',
-    prompt: buildConflictResolutionPrompt(task, conflict, integrationBranch),
+    prompt: buildConflictResolutionPrompt(task, conflict, integrationBranch, plan),
     assignedRunner: task.assignedRunner,
     assignedModel: task.assignedModel,
     taskMode: task.taskMode,

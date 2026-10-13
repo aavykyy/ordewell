@@ -1,6 +1,6 @@
-import { ALL_PROVIDERS, CLI_PROVIDERS, plannerBackendEntries, runnerForProvider, titledTaskRef, type AiProvider, type PlannerUsability } from '@ordewell/core';
+import { ALL_PROVIDERS, CLI_PROVIDERS, plannerBackendEntries, runnerForProvider, type AiProvider, type PlannerUsability } from '@ordewell/core';
 import { dependencyCandidates } from '@ordewell/core/plan-utils';
-import { findTask, type ModelView, type PickerItem, type PickerState, type TuiState } from '../state';
+import { findTask, titledRefFor, type ModelView, type PickerItem, type PickerState, type TuiState } from '../state';
 import { effortsForTask, modelsForRunner, modelsForTask, modesForTask } from '../taskAssignment';
 
 /** The picker id meaning "the runner's own default", as opposed to a model variant. */
@@ -149,7 +149,7 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
   if (action.kind === 'set-task-deps') {
     return dependencyCandidates(state.tasks, action.taskId).map((candidate) => ({
       id: candidate.id,
-      label: titledTaskRef(candidate),
+      label: titledRefFor(state, candidate),
       detail: candidate.status === 'completed' ? 'already completed' : undefined,
     }));
   }

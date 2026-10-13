@@ -1,4 +1,4 @@
-import { findTaskRef, titledTaskRef } from '../services/TaskRefs';
+import { titledTaskRef, titledTaskRefOf } from '../services/TaskRefs';
 
 interface Named {
   id: string;
@@ -9,10 +9,7 @@ interface Named {
 
 /** Each id as "#N title", subtasks dotted, by the plan's tree; one it no longer holds stays a bare id. */
 export function titledRefs(ids: readonly string[], tasks: readonly Named[]): string[] {
-  return ids.map((id) => {
-    const found = findTaskRef(tasks, id);
-    return found ? titledTaskRef(found.task, found.parent) : id;
-  });
+  return ids.map((id) => titledTaskRefOf(tasks, id) ?? id);
 }
 
 /**

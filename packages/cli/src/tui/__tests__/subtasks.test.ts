@@ -240,3 +240,19 @@ describe('per-task pickers opened on a subtask row', () => {
     expect(runnerItems.length).toBeGreaterThan(0);
   });
 });
+
+describe('a subtask is named by its dotted reference in a prompt', () => {
+  it('says the dotted reference in the remove confirmation, not the parent-scoped order', () => {
+    const onFirstChild = press(state({ expandedTaskId: 'p1' }), 'down');
+    const confirming = press(onFirstChild, 'char', 'd');
+    expect(confirming.overlay).toMatchObject({ kind: 'confirm', title: 'Remove #1.1 First child?' });
+  });
+
+  it('says the dotted reference when a subtask prompt edit is committed', () => {
+    const edited = press(press(press(state({ expandedTaskId: 'p1' }), 'down'), 'right'), 'char', 'x');
+    const { effects } = reduce(edited, { type: 'key', key: { name: 'enter' } });
+    expect(effects).toEqual([
+      expect.objectContaining({ type: 'updateTask', taskId: 's1', message: 'Task #1.1 prompt updated.' }),
+    ]);
+  });
+});

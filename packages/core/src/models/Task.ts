@@ -618,7 +618,7 @@ export function migratePlanState(raw: unknown): PlanState {
   };
 }
 
-export { taskOrderLabel, taskRef, titledTaskRef, resolveTaskRef } from '../services/TaskRefs';
+export { taskOrderLabel, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, resolveTaskRef } from '../services/TaskRefs';
 
 export function createTask(overrides: Partial<Task> = {}): Task {
   const skills = skillNames(overrides.skills);

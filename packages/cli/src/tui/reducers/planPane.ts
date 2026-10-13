@@ -1,7 +1,7 @@
-import { markAction, resumeLabel, taskRef } from '@ordewell/core';
+import { markAction, resumeLabel } from '@ordewell/core';
 import { applyKey, emptyEditor, type EditorState } from '../editor';
 import { taskEditorRoom } from '../geometry';
-import { findTask, planRows, selectedPlanRow, type TaskView, type TuiState } from '../state';
+import { findTask, planRows, refFor, selectedPlanRow, type TaskView, type TuiState } from '../state';
 import type { Key } from '../keys';
 import { scrollDelta, scrollPlan, settlePlan } from './pointer';
 import { openTaskView } from './taskView';
@@ -140,7 +140,7 @@ function commitTaskEdit(state: TuiState, task: TaskView, editor: EditorState): S
     sessionId: state.sessionId,
     taskId: task.id,
     changes: { prompt },
-    message: `Task ${taskRef(task)} prompt updated.`,
+    message: `Task ${refFor(state, task)} prompt updated.`,
   }]);
 }
 

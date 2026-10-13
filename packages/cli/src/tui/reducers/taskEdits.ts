@@ -1,5 +1,5 @@
-import { dependentsNotice, dependentsOf, pastGateConfirmation, taskRef, titledRefs, titledTaskRef } from '@ordewell/core/plan-utils';
-import { findTask, type ModelView, type TaskView, type TuiState } from '../state';
+import { dependentsNotice, dependentsOf, pastGateConfirmation, titledRefs } from '@ordewell/core/plan-utils';
+import { findTask, refFor, titledRefFor, type ModelView, type TaskView, type TuiState } from '../state';
 import { assignedModelFor, effortsForTask, modesForTask, runnerAccepts } from '../taskAssignment';
 import { picker, pickerItemsFor } from './pickers';
 import { fail, step, withSession, type Step } from './shared';
@@ -12,7 +12,7 @@ export function openTaskRunnerPicker(state: TuiState, task: TaskView): Step {
       ...state,
       overlay: {
         kind: 'picker',
-        picker: picker(`Runner · ${titledTaskRef(task)}`, pickerItemsFor(state, action), action, {
+        picker: picker(`Runner · ${titledRefFor(state, task)}`, pickerItemsFor(state, action), action, {
           hint: 'Changing the runner re-picks this task model, effort and mode for it.',
         }),
       },
@@ -25,7 +25,7 @@ export function confirmRemoveTask(state: TuiState, task: TaskView): Step {
     ...state,
     overlay: {
       kind: 'confirm',
-      title: `Remove ${titledTaskRef(task)}?`,
+      title: `Remove ${titledRefFor(state, task)}?`,
       message: dependentsNotice(dependentsOf(state.tasks, task.id)) ?? 'This cannot be undone.',
       action: { kind: 'remove-task', taskId: task.id },
     },
@@ -40,15 +40,15 @@ export function toggleTaskOps(state: TuiState, task: TaskView, subtask: boolean,
   if (!state.sessionId) return fail(state, 'No active plan.');
   if (task.type !== 'ai') return fail(state, 'Only an AI task can be an ops task — a manual task already runs outside any worktree.');
   if (subtask) return fail(state, 'A subtask runs with its parent; make the parent an ops task instead.');
-  if (!!task.ops === to) return fail(state, `${taskRef(task)} is already ${to ? 'an ops' : 'a change'} task.`);
+  if (!!task.ops === to) return fail(state, `${refFor(state, task)} is already ${to ? 'an ops' : 'a change'} task.`);
   return step(state, [{
     type: 'updateTask',
     sessionId: state.sessionId,
     taskId: task.id,
     changes: { ops: to },
     message: to
-      ? `Task ${taskRef(task)} is an ops task: it runs in your checkout once the work it depends on is merged.`
-      : `Task ${taskRef(task)} is a change task: it runs in its own worktree.`,
+      ? `Task ${refFor(state, task)} is an ops task: it runs in your checkout once the work it depends on is merged.`
+      : `Task ${refFor(state, task)} is a change task: it runs in its own worktree.`,
   }]);
 }
 
@@ -61,7 +61,7 @@ export function confirmForceStartPastGate(state: TuiState, task: TaskView): Step
     ...state,
     overlay: {
       kind: 'confirm',
-      title: `Force start ${titledTaskRef(task)}?`,
+      title: `Force start ${titledRefFor(state, task)}?`,
       message: pastGateConfirmation(titledRefs(task.mergeGate ?? [], state.tasks), 'It'),
       action: { kind: 'force-start-gated', taskId: task.id },
     },
@@ -71,12 +71,12 @@ export function confirmForceStartPastGate(state: TuiState, task: TaskView): Step
 export function openTaskDepsPicker(state: TuiState, task: TaskView): Step {
   const action = { kind: 'set-task-deps' as const, taskId: task.id };
   const items = pickerItemsFor(state, action);
-  if (items.length === 0) return fail(state, `Nothing runs before ${taskRef(task)}, so it has no possible dependencies.`);
+  if (items.length === 0) return fail(state, `Nothing runs before ${refFor(state, task)}, so it has no possible dependencies.`);
   return step({
     ...state,
     overlay: {
       kind: 'picker',
-      picker: picker(`Depends on · ${titledTaskRef(task)}`, items, action, {
+      picker: picker(`Depends on · ${titledRefFor(state, task)}`, items, action, {
         hint: 'Only tasks earlier in the plan can be dependencies.',
         multi: true,
         filterable: true,
@@ -97,7 +97,7 @@ export function openTaskSkillsPicker(state: TuiState, task: TaskView): Step {
     ...state,
     overlay: {
       kind: 'picker',
-      picker: picker(`Skills · ${titledTaskRef(task)}`, items, action, {
+      picker: picker(`Skills · ${titledRefFor(state, task)}`, items, action, {
         hint: "Attached skills go into this task's prompt when it starts.",
         multi: true,
         filterable: true,
@@ -114,8 +114,8 @@ export function assignTaskSkills(state: TuiState, sessionId: string, task: TaskV
     taskId: task.id,
     changes: { skills },
     message: skills.length > 0
-      ? `Task ${taskRef(task)} skills set to ${skills.join(', ')}.`
-      : `Task ${taskRef(task)} has no skills attached.`,
+      ? `Task ${refFor(state, task)} skills set to ${skills.join(', ')}.`
+      : `Task ${refFor(state, task)} has no skills attached.`,
   }]);
 }
 
@@ -131,7 +131,7 @@ export function openTaskModePicker(state: TuiState, task: TaskView): Step {
       ...state,
       overlay: {
         kind: 'picker',
-        picker: picker(`Mode · ${taskRef(task)}`, pickerItemsFor(state, action), action, {
+        picker: picker(`Mode · ${refFor(state, task)}`, pickerItemsFor(state, action), action, {
           hint: `Modes declared by ${task.assignedRunner}.`,
         }),
       },
@@ -147,7 +147,7 @@ export function openTaskModelPicker(state: TuiState, task: TaskView): Step {
       ...state,
       overlay: {
         kind: 'picker',
-        picker: picker(`Model · ${titledTaskRef(task)}`, pickerItemsFor(state, action), action, {
+        picker: picker(`Model · ${titledRefFor(state, task)}`, pickerItemsFor(state, action), action, {
           hint: task.assignedRunner
             ? `Showing models discovered for ${task.assignedRunner}.`
             : 'Choose the model this task will run with.',
@@ -168,7 +168,7 @@ export function openTaskEffortPicker(state: TuiState, task: TaskView): Step {
       ...state,
       overlay: {
         kind: 'picker',
-        picker: picker(`Thinking effort · ${taskRef(task)}`, pickerItemsFor(state, action), action, {
+        picker: picker(`Thinking effort · ${refFor(state, task)}`, pickerItemsFor(state, action), action, {
           hint: `${task.assignedModel.modelLabel} · choose runner default or a supported effort`,
         }),
       },
@@ -189,7 +189,7 @@ export function assignTaskModel(
     sessionId,
     taskId: task.id,
     changes: { assignedModel },
-    message: `Task ${taskRef(task)} model set to ${model.label}.`,
+    message: `Task ${refFor(state, task)} model set to ${model.label}.`,
   }]);
 }
 
@@ -211,7 +211,7 @@ export function assignTaskRunner(
     sessionId,
     taskId: task.id,
     changes: { assignedRunner: runner },
-    message: `Task ${taskRef(task)} runner set to ${runnerLabel}.`,
+    message: `Task ${refFor(state, task)} runner set to ${runnerLabel}.`,
   }]);
 }
 
@@ -227,7 +227,7 @@ export function assignTaskMode(
     sessionId,
     taskId: task.id,
     changes: { taskMode: mode },
-    message: `Task ${taskRef(task)} mode set to ${modeLabel}.`,
+    message: `Task ${refFor(state, task)} mode set to ${modeLabel}.`,
   }]);
 }
 
@@ -245,7 +245,7 @@ export function assignTaskEffort(
     sessionId,
     taskId: task.id,
     changes: { assignedModel },
-    message: `Task ${taskRef(task)} thinking effort set to ${thinkingEffort ?? 'runner default'}.`,
+    message: `Task ${refFor(state, task)} thinking effort set to ${thinkingEffort ?? 'runner default'}.`,
   }]);
 }
 

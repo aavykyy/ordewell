@@ -70,6 +70,16 @@ export function taskRefOf<T extends RefTask<T>>(tasks: readonly T[], id: string)
 }
 
 /**
+ * The reference and title {@link titledTaskRef} renders for the task a plan
+ * tree holds, by id — its full path, dotted, for a subtask. Undefined when the
+ * tree holds no such task.
+ */
+export function titledTaskRefOf<T extends RefTask<T>>(tasks: readonly T[], id: string): string | undefined {
+  const found = findTaskRef(tasks, id);
+  return found && `#${found.label} ${found.task.title}`;
+}
+
+/**
  * Resolve a written reference to a task at any depth: an id, then an order
  * label with or without "#" ("#2", "2", "#2.1"), then an exact title.
  *
