@@ -755,10 +755,18 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
       : row.running ? 'working' : row.awaiting ? inRow(row.awaiting) : '';
   const skills = (task.skills ?? []).join(' · ');
   const origin = task.addedBy === 'supervisor' ? 'added by supervisor' : '';
-  const meta = [activity, origin, runner, model].filter(Boolean).join(' · ');
+  const meta = [activity, origin, runner, model];
+  // The variant rides on the meta line only when the whole line still fits;
+  // when it does not, the effort gives way rather than truncating the model.
+  const variant = task.type === 'ai' ? sanitize(task.assignedModel?.thinkingEffort ?? '') : '';
+  const withVariant = variant ? [...meta, variant] : meta;
+  const metaLine = variant && width(`${continuation}${withVariant.filter(Boolean).join(' · ')}`) <= cols
+    ? withVariant
+    : meta;
+  const metaText = metaLine.filter(Boolean).join(' · ');
   // Runner and model hang under the title. Warnings and the expanded sheet
   // keep the shallower `bodyPad`: they need the room more than the alignment.
-  if (meta) lines.push(style.grey(truncate(`${continuation}${meta}`, cols)));
+  if (metaText) lines.push(style.grey(truncate(`${continuation}${metaText}`, cols)));
   // The one isolation state that needs the user; every other stays out of the
   // row and shows only in the expanded detail below.
   if (row.conflict) {
