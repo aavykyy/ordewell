@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import { describe, it, expect } from 'vitest';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { fakeConfig, fakeFileSystem } from '../../testing';
+import type { PlannerToolsOffer } from '../AiService';
 import type { ResearchStep } from '../../models/Task';
 
 /**
@@ -44,6 +45,10 @@ const TIMEOUT_MS = 420_000;
  * running a single one, and the effort is then the runner's own default.
  */
 const liveModel = process.env.ORDEWELL_LIVE_MODEL;
+
+// A harness planner plans only through Ordewell's tools (ADR-0022), so it
+// refuses to start without them; these turns never submit, so none answer.
+const LIVE_PLANNER_TOOLS: PlannerToolsOffer = { sessionId: 'live', handler: {} };
 const CHEAPEST: Record<'claude-code' | 'codex' | 'opencode', { model: string; effort?: string }> = {
   // A full id, not the `haiku` alias: under `--permission-mode plan` the alias
   // has run Sonnet, and a task may still spawn in that mode.
@@ -71,6 +76,7 @@ describe.runIf(requested.length > 0)('harness planners — live smoke', () => {
           runners: [agent],
           modelsByRunner: { [agent]: [] },
           fs: fakeFileSystem(),
+          plannerTools: LIVE_PLANNER_TOOLS,
           onProgress: (p) => { if (p.step) steps.push(p.step); },
         });
 
@@ -102,6 +108,7 @@ describe.runIf(requested.length > 0)('harness planners — live smoke', () => {
           runners: [agent],
           modelsByRunner: { [agent]: [] },
           fs: fakeFileSystem(),
+          plannerTools: LIVE_PLANNER_TOOLS,
           onProgress: () => {},
         });
 
