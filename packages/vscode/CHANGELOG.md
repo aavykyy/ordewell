@@ -7,6 +7,9 @@
 - **The planner cannot change your run settings.** `/supervisor`, `/automerge`,
   `/autorun` and `/auto` are yours alone; a supervisor can deny a runner's
   approval but never allow one.
+- **A repository cannot poison Ordewell's TOML reader**, and a project MCP
+  server named to look like Ordewell's own (`ordewell_x`) no longer has its
+  tools pre-approved: Ordewell recognises its own tools by exact name.
 
 ### Added
 
@@ -31,6 +34,11 @@
   for the latest attempt; hover for the per-model breakdown.
 - **A task paused on a usage limit resumes on its own.** The card reads
   "Resumes at 8:10pm" with a **Cancel resume** button.
+- **Send now in the planner chat.** *Send now* (or `Ctrl+Enter` when there is no
+  turn running) stops the planner turn in flight and answers your message in
+  the turn that replaces it, ahead of anything queued; the run's tasks carry
+  on. A running or waiting task's card carries a message box with the same
+  button, as the task log does.
 
 ### Changed
 
@@ -46,6 +54,14 @@
 - **The planner no longer names a mode**; it marks a task read-only or not, and
   a task it adds or moves gets its runner's mode for your Full/Guarded level.
 - **The built-in `tdd` task skill** is attached by the planner on its own.
+- **The run is drawn from one core view.** A chat that joins a run already going
+  receives its current state at once instead of waiting for the next change,
+  and a task card reads the same as the terminal UI's row.
+- **Planner selection is decided in core.** Reselecting the planner already in
+  use changes nothing; choosing a model keeps the current effort only where
+  that model offers it and drops one it does not; clearing the model clears its
+  effort.
+- **A subtask dependency reads by its dotted label** (`#2.1`) on a task card.
 
 ### Removed
 
@@ -68,6 +84,26 @@
   run, and a task moved to another runner leaves its usage-limit wait.
 - A coding-agent planner's reply stays beside the plan it submits.
 - A message is no longer shown twice after a reload.
+- A task's runner is never swapped for another: a plan or edit naming a runner
+  the plan may not use is refused, and the model allowlist now checks subtasks
+  too.
+- A subtask can be edited on its own, by its dotted label or its title, instead
+  of failing with "Task not found".
+- A plan replaced mid-turn keeps the old turn's saved research out of the new
+  plan and stops the old plan's run with it.
+- Executing a plan whose tasks are all done announces the end once, not twice.
+- A run the supervisor opened keeps its own settings, and Execute pressed while
+  a supervisor's Merge all waits on git starts a run of its own.
+- An Ordewell-tool approval is logged as decided on Codex too, and Claude Code
+  and Codex cancel a permission request still open when the turn ends.
+- A runner's final line is not lost when its pipe closes without a trailing
+  newline, and a process that dies mid-turn reports its stderr instead of
+  hanging.
+- Stopping a run goes before its runners are killed, a second Mark complete no
+  longer lands the task again, and a changed run setting merges an
+  already-reached gate now.
+- **A webview message that fails says so**: the error is logged and shown
+  instead of being dropped as an unhandled rejection.
 
 ## [0.9.1] — 2026-10-11
 
