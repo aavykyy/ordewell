@@ -10,7 +10,6 @@ import type { ForkedDialogue } from './conversationFork';
 import { condensedNotice, extractSummary, keptTail, summaryRequest } from './conversationSummary';
 import type { ConversationMessage, LegacyPlanState, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
 import { flattenTasksWithParents, isUserMessage } from '../models/Task';
-import { taskRef } from './TaskRefs';
 import type { ExecutionRecord } from '../models/Execution';
 import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation } from './skillInvocation';
 import { skillLoadNotice, surfaceStep } from '../conversation/records';
@@ -1323,7 +1322,7 @@ export class PlannerConversation {
     // has nothing running to lock, and takes a whole plan as well as an edit.
     const locked = flattenTasksWithParents(tasks).filter(({ task }) => task.status === 'in_progress');
     const execNote = this.host.isExecuting()
-      ? `\nExecution is RUNNING${locked.length ? ` — these tasks are locked: ${locked.map(({ task, parent }) => taskRef(task, parent ?? undefined)).join(', ')}` : ''}. No new task starts until your reply ends; your task edits apply then, to tasks that have not started. An edit aimed at a running task is refused — the user can stop it first, or you can change it after it finishes. Do not submit a whole new plan while tasks run.`
+      ? `\nExecution is RUNNING${locked.length ? ` — these tasks are locked: ${locked.map(({ ref }) => ref).join(', ')}` : ''}. No new task starts until your reply ends; your task edits apply then, to tasks that have not started. An edit aimed at a running task is refused — the user can stop it first, or you can change it after it finishes. Do not submit a whole new plan while tasks run.`
       : '';
     return [
       '<current_plan>',
@@ -1341,7 +1340,7 @@ export class PlannerConversation {
     const tasks = this.host.tasks();
     if (!this.host.plan() || tasks.length === 0) return null;
     const rows = flattenTasksWithParents(tasks);
-    const refOf = new Map(rows.map(({ task, parent }) => [task.id, taskRef(task, parent ?? undefined)]));
+    const refOf = new Map(rows.map(({ task, ref }) => [task.id, ref]));
     const { modes } = this.host.catalog();
     return rows.map(({ task: t, parent }) => {
       const isMan = t.type === 'user';

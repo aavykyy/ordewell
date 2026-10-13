@@ -1218,9 +1218,12 @@ not a running agent's internal state.
 
 **Task reference (`TaskRefs`)** — how anyone names a task in *the plan*: its id,
 its **label** with or without `#` (`#2`, `2`, or `#2.1` for the first subtask of
-task 2), or its exact title. A label is the task's order under its parent:
-subtask orders restart at 1 under each top-level task, so `#N` always means
-top-level task N and a subtask is reachable only by its dotted label. One module
+task 2), or its exact title. A label is the task's order under its parent,
+written as the full path from the top level at any depth (`#3.2.1`): subtask
+orders restart at 1 under each parent, so `#N` always means top-level task N and
+a subtask is reachable only by its dotted label. Every read tool (`task_query`,
+`task_read`, `task_output`, `task_diff`) names a task by that label, never by a
+bare order. One module
 both renders labels (`taskOrderLabel`, `taskRef`, `titledTaskRef`) and resolves
 references against the plan tree (`resolveTaskRef`) — every planner op and read
 tool, the per-turn plan block (which lists subtasks under their dotted labels),
@@ -1378,9 +1381,12 @@ mode, read-only on a manual task) for the route to warn about or refuse.
 every depth: unique ids, dependencies that exist, no cycle, a runner the plan may
 use, an AFK task with no user steps, a manual task HITL, and ops only on a
 top-level AI task. `validatePlanTasks` calls both on a whole plan; `applyTaskOps`
-calls `plannedTask` for each task an op makes and `checkPlanInvariants` after
-every op, so a broken rule is named against the op that broke it, and a rule the
-plan already broke before the batch never blocks an unrelated edit. An unknown
+calls `plannedTask` for each task an op makes and `checkPlanInvariants` on the
+batch's final state, so a later op may complete an earlier one; a broken rule is
+named against the op that first broke it, and a rule the plan already broke
+before the batch (matched by task and rule, not by wording) never blocks an
+unrelated edit. A dependency cycle is a rule a task breaks, and names the tasks
+on it. Flipping a task to a manual one makes it HITL, as every manual task is. An unknown
 runner is an error on every route, never swapped for another. A thinking effort
 lives only on the task's model (`assignedModel.thinkingEffort`); `edit_plan`'s
 `thinkingEffort` change is a name for it.

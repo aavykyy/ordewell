@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { addAttemptUsage, startAttemptUsage, endAttemptUsage, planUsage, usageLine, isMeasured, addPlannerUsage } from '../Usage';
-import { createTask, keepExecutionState, plannerTaskView } from '../Task';
+import { createTask, keepExecutionState } from '../Task';
 import { PlanStore } from '../../services/PlanStore';
 
 const start = '2026-10-11T10:00:00Z';
@@ -78,7 +78,6 @@ describe('attempt usage', () => {
     const updated = store.snapshot();
     const rewritten = keepExecutionState(updated, [createTask({ id: 'task', title: 'Edited' })]);
     expect(rewritten[0].attemptUsage).toEqual(updated[0].attemptUsage);
-    expect(plannerTaskView(updated[0])).not.toHaveProperty('attemptUsage');
   });
 
   it('applies the same model attribution and context reset to planner usage', () => {

@@ -243,31 +243,39 @@ export function checkPlanInvariants(tasks: readonly Task[], runners: readonly Ru
       if (!ids.has(dep)) errors.push({ taskId: t.id, field: 'dependencies', message: `${taskWhere(t.title, parent?.title)} depends on "${dep}", which is not a task in the plan` });
     }
   }
-  const cycleAt = detectCycle(rows.map((r) => r.task));
-  if (cycleAt) errors.push({ field: 'dependencies', message: `Dependency cycle detected involving "${cycleAt}"` });
+  const cycle = findCycle(rows.map((r) => r.task));
+  // Pinned to a task on the cycle: a plan whose only fault is a rule a task
+  // breaks is worth naming back to the planner, not re-asking for as JSON.
+  if (cycle) errors.push({ taskId: cycle[0].id, field: 'dependencies', message: `Dependency cycle detected: ${[...cycle, cycle[0]].map((t) => `"${t.title}"`).join(' → ')}` });
   return errors;
 }
 
-/** The title of a task on a dependency cycle, or null when there is none. */
-export function detectCycle(tasks: readonly Task[]): string | null {
+/** The tasks on one dependency cycle, in dependency order, or null when there is none. A self-dependency is a cycle of one. */
+export function findCycle(tasks: readonly Task[]): Task[] | null {
   const byId = new Map(tasks.map((t) => [t.id, t]));
-  const visiting = new Set<string>();
+  const path: string[] = [];
   const done = new Set<string>();
-  const visit = (id: string): string | null => {
+  const visit = (id: string): string[] | null => {
     if (done.has(id)) return null;
-    if (visiting.has(id)) return id;
-    visiting.add(id);
+    const at = path.indexOf(id);
+    if (at >= 0) return path.slice(at);
+    path.push(id);
     for (const dep of byId.get(id)?.dependencies ?? []) {
       const hit = visit(dep);
       if (hit) return hit;
     }
-    visiting.delete(id);
+    path.pop();
     done.add(id);
     return null;
   };
   for (const t of tasks) {
     const hit = visit(t.id);
-    if (hit) return byId.get(hit)?.title ?? hit;
+    if (hit) return hit.map((id) => byId.get(id)!);
   }
   return null;
+}
+
+/** The title of a task on a dependency cycle, or null when there is none. */
+export function detectCycle(tasks: readonly Task[]): string | null {
+  return findCycle(tasks)?.[0].title ?? null;
 }

@@ -1175,8 +1175,8 @@ describe('one intake for submit_plan and edit_plan', () => {
       { op: 'update', taskId: '#1', changes: { dependencies: ['docs'] } },
     ]);
 
-    expect(errorsOf(submit.answer).map((e) => e.message)).toEqual(['Dependency cycle detected involving "Task a"']);
-    expect(errorsOf(edit.answer)).toEqual([{ op: 2, kind: 'update', message: 'Dependency cycle detected involving "Task a"' }]);
+    expect(errorsOf(submit.answer).map((e) => e.message)).toEqual(['Dependency cycle detected: "Task a" → "Task b" → "Task a"']);
+    expect(errorsOf(edit.answer)).toEqual([{ op: 2, kind: 'update', message: 'Dependency cycle detected: "Task a" → "Docs" → "Task b" → "Task a"' }]);
     expect(edit.tasks.map((t) => t.title)).toEqual(['Task a', 'Task b']);
   });
 
@@ -1189,7 +1189,8 @@ describe('one intake for submit_plan and edit_plan', () => {
 
     expect(errorsOf(submit.answer).map((e) => e.message)).toEqual(['subtask "Child" of "Task a" has autonomy "AFK" but contains userSteps. AFK tasks must not have user touchpoints.']);
     expect(errorsOf(afk.answer)).toEqual([{ op: 1, kind: 'add', message: 'subtask "Child" of "Docs" has autonomy "AFK" but contains userSteps. AFK tasks must not have user touchpoints.' }]);
-    expect(errorsOf(manual.answer)).toEqual([{ op: 1, kind: 'update', message: 'User Task "Task b" has sliceType "AFK". User tasks must have sliceType "HITL".' }]);
+    expect(manual.answer.isError).toBe(false);
+    expect(manual.tasks[1]).toMatchObject({ type: 'user', sliceType: 'HITL' });
     expect(errorsOf(manualSub.answer)).toEqual([{ op: 1, kind: 'add', message: 'User subtask "Sign" of "Docs" has sliceType "AFK". User tasks must have sliceType "HITL".' }]);
   });
 
@@ -1382,8 +1383,8 @@ describe('task_query', () => {
       isError: false,
       body: {
         tasks: [
-          { id: 'a', order: 1, title: 'Task a', status: 'approved', type: 'ai', prompt: 'create the cache module in src/cache.ts', userStoriesCovered: null },
-          { id: 'b', order: 2, title: 'Task b', status: 'approved', type: 'ai', prompt: 'do b', userStoriesCovered: ['As a dev I want it fast'] },
+          { id: 'a', ref: '#1', title: 'Task a', status: 'approved', type: 'ai', prompt: 'create the cache module in src/cache.ts', userStoriesCovered: null },
+          { id: 'b', ref: '#2', title: 'Task b', status: 'approved', type: 'ai', prompt: 'do b', userStoriesCovered: ['As a dev I want it fast'] },
           { ref: 'nope', error: 'no task matches this reference in the current plan.' },
         ],
       },
@@ -1422,7 +1423,7 @@ describe('task_output', () => {
 
     await session.continueConversation('how is it going?');
 
-    const task = { id: 'a', order: 1, title: 'Task a', status: 'in_progress' };
+    const task = { id: 'a', ref: '#1', title: 'Task a', status: 'in_progress' };
     expect(answers).toEqual([
       { task, running: true, output: 'line 2\nline 3', nextOffset: 21 },
       { task, running: true, output: 'line 4\nline 5', nextOffset: 35 },
@@ -1475,7 +1476,7 @@ describe('task_output', () => {
       expect(answer).toEqual({
         isError: false,
         body: {
-          task: { id: 'a', order: 1, title: 'Setup', status: 'completed' },
+          task: { id: 'a', ref: '#1', title: 'Setup', status: 'completed' },
           running: false,
           reason: expect.stringContaining('not running'),
           verdict: { outcome: 'pass', reason: 'Completion marker found', checks: [{ name: 'completion_marker', result: 'pass' }] },
@@ -1607,6 +1608,15 @@ describe('task references in the read tools', () => {
 
     const output = await handler.taskOutput!({ task: '#2' }, context);
     expect(JSON.parse(output.text).task.id).toBe('b');
+  });
+
+  it('names a subtask by its dotted reference, never by its order under the parent', async () => {
+    const reply = await handler.taskQuery!({ tasks: ['#1.2'], fields: ['description'] }, context);
+    expect(JSON.parse(reply.text).tasks[0]).toMatchObject({ id: 'a2', ref: '#1.2' });
+    expect(JSON.parse(reply.text).tasks[0]).not.toHaveProperty('order');
+
+    const output = await handler.taskOutput!({ task: '#1.2' }, context);
+    expect(JSON.parse(output.text).task).toEqual({ id: 'a2', ref: '#1.2', title: 'Seed', status: 'pending' });
   });
 });
 

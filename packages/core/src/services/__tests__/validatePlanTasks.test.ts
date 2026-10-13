@@ -20,6 +20,46 @@ describe('validatePlanTasks', () => {
   });
 });
 
+describe('validatePlanTasks: a dependency cycle', () => {
+  const cyclic = {
+    tasks: [
+      { ...slice, id: 'a', order: 1, title: 'Task a', description: 'd', dependencies: ['b'] },
+      { ...slice, id: 'b', order: 2, title: 'Task b', description: 'd', dependencies: ['a'] },
+    ],
+  };
+
+  it('is a rule broken by a task, naming the tasks on the cycle', () => {
+    const result = validatePlanTasks(cyclic, ['claude-code']);
+    expect(result.ok).toBe(false);
+    const [error] = !result.ok ? result.errors : [];
+    expect(error.taskId).toBe('a');
+    expect(error.field).toBe('dependencies');
+    expect(error.message).toBe('Dependency cycle detected: "Task a" → "Task b" → "Task a"');
+  });
+
+  it('names a task that depends on itself', () => {
+    const result = validatePlanTasks({ tasks: [{ ...slice, id: 'a', order: 1, title: 'Task a', description: 'd', dependencies: ['a'] }] }, ['claude-code']);
+    expect(!result.ok && result.errors[0].message).toBe('Dependency cycle detected: "Task a" → "Task a"');
+  });
+
+  it('is worth naming in the corrective, not a plan that could not be parsed', () => {
+    let caught: unknown;
+    try { parsePlanJson(JSON.stringify(cyclic), ['claude-code']); } catch (err) { caught = err; }
+    expect(caught).toMatchObject({ semantic: true });
+  });
+});
+
+describe('validatePlanTasks: readOnly on a manual task', () => {
+  it('is accepted and reported as ignored, like taskMode', () => {
+    const result = validatePlanTasks({ tasks: [
+      { id: 'u', order: 1, title: 'Sign off', description: 'd', type: 'user', dependencies: [], sliceType: 'HITL', readOnly: true,
+        userSteps: [{ order: 1, instruction: 'Sign', completed: false }], subtasks: [] },
+    ] }, ['claude-code']);
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.warnings).toEqual([expect.stringMatching(/"readOnly".*"Sign off"|"Sign off".*"readOnly"/)]);
+  });
+});
+
 /** The text path's verdict on the same object, in validatePlanTasks' shape. */
 function viaText(obj: unknown, runners: string[]) {
   try {

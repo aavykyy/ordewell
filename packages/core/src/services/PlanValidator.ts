@@ -101,10 +101,14 @@ export function validatePlanTasks(
   ];
 
   if (errors.length > 0) return { ok: false, errors };
-  const ignored = planned.some((p) => p.ignored.some((i) => i.field === 'taskMode'));
-  return ignored
-    ? { ok: true, tasks, warnings: ['"taskMode" is not yours to set and was ignored: each task runs in its runner\'s mode for the user\'s autonomy level, or its read-only mode when you set "readOnly": true.'] }
-    : { ok: true, tasks };
+  const ignored = planned.flatMap((p) => p.ignored);
+  const warnings = [
+    ...(ignored.some((i) => i.field === 'taskMode')
+      ? ['"taskMode" is not yours to set and was ignored: each task runs in its runner\'s mode for the user\'s autonomy level, or its read-only mode when you set "readOnly": true.']
+      : []),
+    ...ignored.filter((i) => i.field === 'readOnly').map((i) => `${i.message} — it was ignored.`),
+  ];
+  return warnings.length > 0 ? { ok: true, tasks, warnings } : { ok: true, tasks };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

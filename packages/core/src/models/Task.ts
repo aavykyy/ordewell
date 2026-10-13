@@ -6,6 +6,7 @@ import type { SkillSource } from '../services/SkillsService';
 import type { SupervisionMemorySnapshot } from '../services/LoopGuards';
 import type { SupervisorSnapshot } from '../services/Supervisor';
 import { SKILL_NAME_PATTERN } from '../conversation/skillTokens';
+import { taskOrderLabel } from '../services/TaskRefs';
 
 export interface UserStep {
   order: number;
@@ -719,17 +720,23 @@ export function flattenTasks(tasks: readonly Task[]): Task[] {
   return tasks.flatMap((t) => [t, ...flattenTasks(t.subtasks ?? [])]);
 }
 
-/** A flattened task with the parent it hangs under, null for a top-level task. */
+/**
+ * A flattened task with the parent it hangs under, null for a top-level task,
+ * and the path label and reference (`#2.1.3`) `TaskRefs` renders for it.
+ */
 export interface TaskWithParent {
   task: Task;
   parent: Task | null;
+  label: string;
+  ref: string;
 }
 
 export function flattenTasksWithParents(tasks: readonly Task[]): TaskWithParent[] {
   const rows: TaskWithParent[] = [];
-  const walk = (t: Task, parent: Task | null) => {
-    rows.push({ task: t, parent });
-    for (const sub of t.subtasks ?? []) walk(sub, t);
+  const walk = (t: Task, parent: Task | null, parentLabel?: string) => {
+    const label = taskOrderLabel(t, parent ? { order: parent.order, label: parentLabel } : undefined);
+    rows.push({ task: t, parent, label, ref: `#${label}` });
+    for (const sub of t.subtasks ?? []) walk(sub, t, label);
   };
   for (const t of tasks) walk(t, null);
   return rows;
@@ -847,21 +854,4 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
   };
 
   return renumberTasks(overlay(rewrite, current));
-}
-
-/** What only execution reads; {@link keepExecutionState} puts it back on whatever a planner returns. */
-const EXECUTION_ONLY = ['attemptUsage', 'attemptSkills', 'runnerSessionId', 'awaitingReason', 'resumeAt', 'forcedPastGate', 'outputSummary'] as const satisfies readonly (keyof Task)[];
-
-export type PlannerTaskView = Omit<Task, typeof EXECUTION_ONLY[number] | 'subtasks'> & { subtasks: PlannerTaskView[] };
-
-/**
- * A task as a planner prompt carries it. An attempt's skill snapshots are
- * whole SKILL.md bodies and an output summary holds a log tail: sent on every
- * planner call, they cost tokens and invite the planner to edit state it does
- * not own.
- */
-export function plannerTaskView(task: Task): PlannerTaskView {
-  const view: Record<string, unknown> = { ...task, subtasks: (task.subtasks ?? []).map(plannerTaskView) };
-  for (const key of EXECUTION_ONLY) delete view[key];
-  return view as PlannerTaskView;
 }

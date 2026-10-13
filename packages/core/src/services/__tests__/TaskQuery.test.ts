@@ -54,6 +54,20 @@ describe('reading a task\'s skills', () => {
   });
 });
 
+describe('naming a subtask', () => {
+  it('heads a subtask by its dotted reference, so a read #2.1 is not taken for top-level #1', () => {
+    const plan = [
+      createTask({ id: 'a', order: 1, title: 'Setup' }),
+      createTask({ id: 'b', order: 2, title: 'Build', subtasks: [createTask({ id: 'b1', order: 1, title: 'Sub' })] }),
+    ];
+
+    const answer = renderTaskQueryAnswer({ tasks: ['#2.1'], fields: ['skills'], catalog: false }, plan, catalog);
+
+    expect(answer).toContain('#2.1 id=b1 "Sub"');
+    expect(answer).not.toContain('#1 id=b1');
+  });
+});
+
 describe('rendering the output read', () => {
   it('answers a running task with its clean tail, the resume offset, and a running marker', () => {
     const { asked, liveOutput } = fakeLive({ b: { text: 'compiling\nlinking', nextOffset: 1234, running: true } });

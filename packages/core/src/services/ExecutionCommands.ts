@@ -1,5 +1,5 @@
 import { flattenTasksWithParents, type Task, type TaskStatus } from '../models/Task';
-import { resolveTaskRef, taskRef } from './TaskRefs';
+import { resolveTaskRef } from './TaskRefs';
 import type { ExecutionActor, ExecutionCommandName, ExecutionRecord, SupervisorLevel } from '../models/Execution';
 import type { ApprovalRequest, IApproval } from '../interfaces/IApproval';
 import type { IsolationMergeResult } from '../interfaces/IWorktreeIsolation';
@@ -520,7 +520,7 @@ export class ExecutionCommands {
   }
 
   private all(): Located[] {
-    return flattenTasksWithParents(this.host.tasks() ?? []).map(({ task, parent }) => ({ task, ref: taskRef(task, parent ?? undefined) }));
+    return flattenTasksWithParents(this.host.tasks() ?? []).map(({ task, ref }) => ({ task, ref }));
   }
 
   private located(id: string): Located | undefined {

@@ -14,31 +14,43 @@ export interface RefTask<T> {
   subtasks?: readonly T[];
 }
 
-/** Parent-scoped dotted order label for a task, e.g. "2.1" for the first subtask of task 2. */
-export function taskOrderLabel(task: { order: number }, parent?: { order: number }): string {
-  return parent ? `${parent.order}.${task.order}` : String(task.order);
+/**
+ * The parent a label extends. A label is the full path ("3.2.1"), so a parent
+ * below the top level carries the label it was itself reached by; without one
+ * the parent's order stands for it, which is right for a top-level parent.
+ */
+export interface RefParent {
+  order: number;
+  label?: string;
+}
+
+/** Dotted path label for a task, e.g. "2.1" for the first subtask of task 2, "2.1.3" one level down. */
+export function taskOrderLabel(task: { order: number }, parent?: RefParent): string {
+  return parent ? `${parent.label ?? parent.order}.${task.order}` : String(task.order);
 }
 
 /** How a surface refers to a task in prose: "#2", or "#2.1" for a subtask. */
-export function taskRef(task: { order: number }, parent?: { order: number }): string {
+export function taskRef(task: { order: number }, parent?: RefParent): string {
   return `#${taskOrderLabel(task, parent)}`;
 }
 
 /** A task named in full, as a confirmation or a picker title does: "#2 Deploy". */
-export function titledTaskRef(task: { order: number; title: string }, parent?: { order: number }): string {
+export function titledTaskRef(task: { order: number; title: string }, parent?: RefParent): string {
   return `${taskRef(task, parent)} ${task.title}`;
 }
 
-/** A task found in a plan tree, with the parent whose order its label extends. */
+/** A task found in a plan tree, with its parent and the full path label its reference extends. */
 export interface RefTaskMatch<T> {
   task: T;
   parent?: T;
+  label: string;
 }
 
-function* depthFirst<T extends RefTask<T>>(tasks: readonly T[], parent?: T): Generator<RefTaskMatch<T>> {
+function* depthFirst<T extends RefTask<T>>(tasks: readonly T[], parent?: T, parentLabel?: string): Generator<RefTaskMatch<T>> {
   for (const task of tasks) {
-    yield { task, parent };
-    yield* depthFirst(task.subtasks ?? [], task);
+    const label = taskOrderLabel(task, parent ? { order: parent.order, label: parentLabel } : undefined);
+    yield { task, parent, label };
+    yield* depthFirst(task.subtasks ?? [], task, label);
   }
 }
 
@@ -50,11 +62,11 @@ export function findTaskRef<T extends RefTask<T>>(tasks: readonly T[], id: strin
 
 /**
  * The reference {@link taskRef} renders for the task a plan tree holds, by id
- * — dotted for a subtask. Undefined when the tree holds no such task.
+ * — its full path, dotted, for a subtask. Undefined when the tree holds no such task.
  */
 export function taskRefOf<T extends RefTask<T>>(tasks: readonly T[], id: string): string | undefined {
   const found = findTaskRef(tasks, id);
-  return found && taskRef(found.task, found.parent);
+  return found && `#${found.label}`;
 }
 
 /**
@@ -63,17 +75,21 @@ export function taskRefOf<T extends RefTask<T>>(tasks: readonly T[], id: string)
  *
  * An order label is read against the tree, never a flattened list: subtask
  * orders restart at 1 under each parent, so "#2" always means top-level task 2
- * and a subtask is reachable only by its dotted label.
+ * and a subtask is reachable only by its dotted path ("#2.1", "#2.1.3").
  */
 export function resolveTaskRef<T extends RefTask<T>>(tasks: readonly T[], ref: string | number): T | undefined {
   const s = String(ref).trim();
   if (!s) return undefined;
   for (const { task } of depthFirst(tasks)) if (task.id === s) return task;
   const label = s.startsWith('#') ? s.slice(1) : s;
-  if (/^\d+(\.\d+)?$/.test(label)) {
-    const [top, sub] = label.split('.').map(Number);
-    const parent = tasks.find((t) => t.order === top);
-    return sub === undefined ? parent : parent?.subtasks?.find((t) => t.order === sub);
+  if (/^\d+(\.\d+)*$/.test(label)) {
+    let level: readonly T[] | undefined = tasks;
+    let found: T | undefined;
+    for (const order of label.split('.').map(Number)) {
+      found = level?.find((t) => t.order === order);
+      level = found?.subtasks;
+    }
+    return found;
   }
   for (const { task } of depthFirst(tasks)) if (task.title === s) return task;
   return undefined;

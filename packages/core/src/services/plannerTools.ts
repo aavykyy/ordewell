@@ -18,7 +18,7 @@ import { taskReadPage } from './taskReadPage';
 import type { TaskDiffRead, TaskDiffResult } from './taskDiffRead';
 import type { ToolOutcome } from '../interfaces/IFileSystem';
 import type { CommandOutcome, ExecutionCommand } from './ExecutionCommands';
-import { resolveTaskRef } from './TaskRefs';
+import { resolveTaskRef, taskRefOf } from './TaskRefs';
 
 /**
  * The session side of the planner's catalog and submission tools (ADR-0022):
@@ -194,7 +194,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       if (!task) return { isError: true, text: JSON.stringify({ ok: false, error: `No task matches "${ref}" in the current plan.` }) };
       const maxLines = Math.min(lines ?? OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX);
       return read(host, JSON.stringify(['output', task.id, maxLines, since ?? null, attempt ?? null, kinds ? [...kinds].sort() : null]), async () => {
-        const head = { task: { id: task.id, order: task.order, title: task.title, status: task.status } };
+        const head = { task: taskHead(host.tasks(), task) };
         if (attempt !== undefined || kinds !== undefined) {
           const attempts = host.taskLogAttempts(task.id);
           const selected = attempt ?? attempts.at(-1);
@@ -226,7 +226,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       return read(host, JSON.stringify(['diff', task.id, options]), async () => {
         const result = await host.taskDiff(task.id, options);
         if (!result.available) return { ok: false, error: result.reason };
-        return { task: { id: task.id, order: task.order, title: task.title, status: task.status }, ...taskReadPage(result.text, options) };
+        return { task: taskHead(host.tasks(), task), ...taskReadPage(result.text, options) };
       });
     },
 
@@ -280,16 +280,22 @@ function outputSummaryDetail({ outputSummary }: Task) {
   return outputSummary ? { reviewReason: outputSummary.reviewReason, ...(outputSummary.logTail ? { logTail: outputSummary.logTail } : {}) } : null;
 }
 
+/** A subtask's order restarts under its parent, so a read names it by its dotted reference, never a bare order. */
+function refOf(plan: readonly Task[], task: Task): string {
+  return taskRefOf(plan, task.id) ?? `#${task.order}`;
+}
+
+function taskHead(plan: readonly Task[], task: Task) {
+  return { id: task.id, ref: refOf(plan, task), title: task.title, status: task.status };
+}
+
 /** A requested field with nothing in it reads `null`, so a missing answer is never mistaken for a field not asked for. */
 function taskDetail(plan: readonly Task[], ref: string, fields: readonly TaskQueryField[]) {
   const task = resolveTaskRef(plan, ref);
   if (!task) return { ref, error: 'no task matches this reference in the current plan.' };
   const wants = (field: TaskQueryField) => fields.includes(field);
   return {
-    id: task.id,
-    order: task.order,
-    title: task.title,
-    status: task.status,
+    ...taskHead(plan, task),
     type: task.type === 'user' ? 'user' : 'ai',
     ...(wants('description') ? { description: task.description || null } : {}),
     ...(wants('prompt') ? { prompt: task.prompt || null } : {}),

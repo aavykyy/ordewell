@@ -1,4 +1,4 @@
-import { flattenTasks, flattenTasksWithParents, taskRef, type RunSettings, type SupervisionSnapshot, type Task } from '../models/Task';
+import { flattenTasks, flattenTasksWithParents, type RunSettings, type SupervisionSnapshot, type Task } from '../models/Task';
 import type { ExecutionActor, ExecutionRecord, SupervisorLevel } from '../models/Execution';
 import type { IsolationHandoff } from '../interfaces/IWorktreeIsolation';
 import type { GlobalRunSettings } from './SettingsService';
@@ -268,7 +268,7 @@ export class RunSupervision {
   /** `#3 "Title"`, how a run update names a task. */
   private describeTask(taskId: string): string {
     const found = flattenTasksWithParents([...this.host.tasks()]).find(({ task }) => task.id === taskId);
-    return found ? `${taskRef(found.task, found.parent ?? undefined)} "${found.task.title}"` : taskId;
+    return found ? `${found.ref} "${found.task.title}"` : taskId;
   }
 
   /** The event a task settling on its own is for the supervisor; null for one it hears of another way. */

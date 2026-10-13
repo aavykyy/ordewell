@@ -2,7 +2,7 @@ import type { DiscoveredModel, RunnerId, Task } from '../models/Task';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_QUERY_ENVELOPE_KEY } from './JsonExtractor';
 import { readOnlyMode, type RunnerModeInfo } from './ModeResolver';
 import type { LiveTail, LiveTailOptions } from '../interfaces/TaskOutputSource';
-import { resolveTaskRef } from './TaskRefs';
+import { resolveTaskRef, taskRefOf } from './TaskRefs';
 
 /**
  * The planner's read channel: a `{"taskQuery":{...}}` reply asking Ordewell to
@@ -294,12 +294,12 @@ function renderField(task: Task, field: TaskQueryField, ctx: OutputRenderContext
   }
 }
 
-function renderTask(task: Task, fields: readonly TaskQueryField[], ctx: OutputRenderContext): string[] {
+function renderTask(task: Task, ref: string, fields: readonly TaskQueryField[], ctx: OutputRenderContext): string[] {
   // The tail renders after the task's other fields and before the closing
   // blank, so its budget is computed against everything already committed —
   // including this task's own bounded fields.
   const lines = [
-    `#${task.order} id=${task.id} "${task.title}" [${task.status}] type:${task.type === 'user' ? 'MAN' : 'AI'}`,
+    `${ref} id=${task.id} "${task.title}" [${task.status}] type:${task.type === 'user' ? 'MAN' : 'AI'}`,
     ...fields.filter((f) => f !== 'output').flatMap((f) => renderField(task, f, ctx)),
     ...(fields.includes('output') ? renderLiveOutput(task.id, ctx) : []),
     '',
@@ -356,7 +356,7 @@ export function renderTaskQueryAnswer(
         body.push(`${ref}: no task matches this reference in the current plan.`, '');
         continue;
       }
-      body.push(...renderTask(task, fields, ctx));
+      body.push(...renderTask(task, taskRefOf(tasks, task.id) ?? `#${task.order}`, fields, ctx));
     }
     blocks.push(['<task_detail>', ...body, '</task_detail>'].join('\n'));
   }

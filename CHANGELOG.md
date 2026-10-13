@@ -21,7 +21,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   edits no file and runs nothing outside its envelope
   ([ADR-0029](docs/adr/0029-the-supervisor.md)).
 - **A repository cannot poison Ordewell's TOML reader.** Ordewell reads a
-  repository's `.codex/config.toml` and other TOML before anything is approved;
+  repository's `.codex/config.toml` before anything is approved;
   a `__proto__`, `constructor` or `prototype` key is now refused, and the
   tables it builds are prototype-free, so a key in the file can never reach an
   inherited member.
@@ -225,7 +225,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   planner turn's deferred effects settle with it; a task reference resolves
   through one module; and the planner's task intake is one path for
   `submit_plan` and `edit_plan`. Dead planning code that only tests exercised
-  is gone. No behaviour change beyond the fixes below.
+  is gone. Behaviour changed in a few places, listed here: `submit_plan` now
+  refuses a duplicate task id, a dependency on a task that is not in the plan,
+  a dependency cycle and ops on a subtask, as `edit_plan` always did, and a
+  task's thinking effort is one field (saved plans are migrated on load), so an
+  `edit_plan` effort change reaches the runner that task is spawned with. The
+  rest of the changes are the fixes below.
 - **The run view is decided once, in core.** The terminal UI and VS Code fold
   the same core view of a run instead of each rebuilding it, so a surface that
   joins a run already going receives its current state at once rather than
@@ -244,6 +249,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Removed
 
+- **Parts of `@ordewell/core`'s public surface.** The package now exports
+  what the terminal UI, VS Code, the daemon and the benchmarks import by name,
+  not whole modules. The `./order-labels` subpath is gone (use
+  `@ordewell/core/plan-utils`), and so are `Planner.modify`,
+  `IAiService.modifyPlan`, `migrateLegacyPlan`, `PlanStore`'s `merge`,
+  `mergeMultiple` and `split` (a plan's merges and splits go through
+  `applyTaskOps`), and the modify-plan prompt builders. An embedder that
+  imported one of these names must use its replacement.
 - **Per-plan supervisor controls.** The plan pane's `G`, `W` and `L` keys and
   VS Code's plan-card controls are gone; use `/supervisor`, `/automerge` and
   `/autorun`. The daemon's per-plan settings route and

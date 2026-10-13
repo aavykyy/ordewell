@@ -109,8 +109,8 @@ export class PlanEditor {
     if ((changes.dependencies || changes.type || changes.assignedModel || changes.taskMode || 'ops' in changes) && target) {
       const check = validateTaskEdit('direct', this.store.planTasks, taskId, changes, this.catalog.edit());
       if (!check.ok) throw new PlanEditError(check.error ?? 'Those changes are not valid');
-      if (check.clear?.length) {
-        changes = { ...changes, ...Object.fromEntries(check.clear.map((f) => [f, undefined])) };
+      if (check.clear?.length || check.set) {
+        changes = { ...changes, ...Object.fromEntries((check.clear ?? []).map((f) => [f, undefined])), ...check.set };
       }
     }
     const plan = await this.commit(
