@@ -201,6 +201,49 @@ describe('applyTaskOps', () => {
     expect(res.tasks[0].autonomy).toBe('HITL');
   });
 
+  it('holds the plan to its rules once, on the batch\'s final state: a later op may complete an earlier one', () => {
+    const plan = samplePlan();
+    plan[0].type = 'user';
+    plan[0].userSteps = [{ order: 1, instruction: 'do the thing', completed: false }];
+    plan[0].autonomy = undefined;
+    const res = applyTaskOps(plan, [
+      { op: 'update', taskId: 'a', changes: { autonomy: 'AFK' } },
+      { op: 'update', taskId: 'a', changes: { type: 'ai', prompt: 'do the thing autonomously' } },
+    ], ['claude-code']);
+    expect(res.errors).toEqual([]);
+    expect(res.tasks[0]).toMatchObject({ type: 'ai', autonomy: 'AFK' });
+    expect(res.tasks[0].userSteps).toBeUndefined();
+  });
+
+  it('names the op that broke a rule the batch ends in breach of', () => {
+    const plan = samplePlan();
+    plan[0].type = 'user';
+    plan[0].userSteps = [{ order: 1, instruction: 'do the thing', completed: false }];
+    plan[0].autonomy = undefined;
+    const res = applyTaskOps(plan, [
+      { op: 'update', taskId: 'a', changes: { autonomy: 'AFK' } },
+      { op: 'update', taskId: 'b', changes: { title: 'Build v2' } },
+    ], ['claude-code']);
+    expect(res.ok).toBe(false);
+    expect(res.errors).toEqual([expect.stringMatching(/^op 1 \(update\): .*autonomy "AFK" but contains userSteps/)]);
+  });
+
+  it('lets a task whose runner was disabled since be retitled: a standing breach is matched by task and rule, not by wording', () => {
+    const plan = samplePlan();
+    plan[0].assignedRunner = 'codex';
+    const res = applyTaskOps(plan, [{ op: 'update', taskId: 'a', changes: { title: 'Setup v2' } }], ['claude-code']);
+    expect(res.errors).toEqual([]);
+    expect(res.tasks[0].title).toBe('Setup v2');
+  });
+
+  it('refuses a rule broken on a task whose title is already in breach of the same rule elsewhere', () => {
+    const plan = samplePlan();
+    plan[0].assignedRunner = 'codex';
+    const res = applyTaskOps(plan, [{ op: 'update', taskId: 'b', changes: { title: 'Setup' } }, { op: 'update', taskId: 'c', changes: { assignedRunner: 'aider' } }], ['claude-code']);
+    expect(res.ok).toBe(false);
+    expect(res.errors[0]).toMatch(/^op 2 \(update\): .*invalid assignedRunner "aider"/);
+  });
+
   it('rejects a runner outside the plan runner set', () => {
     const res = applyTaskOps(samplePlan(), [{ op: 'update', taskId: 'a', changes: { assignedRunner: 'aider' } }], ['claude-code']);
     expect(res.ok).toBe(false);
@@ -256,6 +299,18 @@ describe('applyTaskOps', () => {
       expect(res.summary[0]).toContain('cleared');
       expect(res.summary[0]).toContain('assignedModel');
       expect(res.summary[0]).toContain('taskMode');
+    });
+
+    it('flips an AFK task to a manual one in a single op: user tasks are always HITL', () => {
+      const plan = samplePlan();
+      plan[0].sliceType = 'AFK';
+      plan[0].autonomy = 'AFK';
+      const res = applyTaskOps(plan, [{
+        op: 'update', taskId: 'a',
+        changes: { type: 'user', userSteps: [{ order: 1, instruction: 'flip the switch', completed: false }] },
+      }], ['claude-code']);
+      expect(res.errors).toEqual([]);
+      expect(res.tasks[0]).toMatchObject({ type: 'user', sliceType: 'HITL' });
     });
 
     it('flips MAN to AI when a prompt is supplied, clearing user steps and naming it', () => {

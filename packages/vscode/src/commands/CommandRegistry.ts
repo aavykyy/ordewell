@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { promises as nodeFs } from 'fs';
 import {
-  Session, LegacyPlanState, createEmptyPlan, Task, flattenTasks, flattenTasksWithParents, taskOrderLabel,
+  Session, LegacyPlanState, createEmptyPlan, Task, flattenTasks, flattenTasksWithParents,
   ModelResolver, RunnerRegistry, saveState, clearState,
   listSessions, loadSession,
   SettingsService,
@@ -44,12 +44,12 @@ export interface CommandDeps {
 
 /**
  * QuickPick items over every task in a plan, subtasks dotted under their parent
- * — same `taskOrderLabel` the webview cards render, so the palette pickers and
+ * — same path label the webview cards render, so the palette pickers and
  * the rendered plan never disagree about what "2.1" means.
  */
 export function orderLabelItems(plan: LegacyPlanState): { label: string; description: string }[] {
-  return flattenTasksWithParents(plan.tasks).map(({ task, parent }) => ({
-    label: `${taskOrderLabel(task, parent ?? undefined)}. ${task.title}`,
+  return flattenTasksWithParents(plan.tasks).map(({ task, label }) => ({
+    label: `${label}. ${task.title}`,
     description: task.id,
   }));
 }

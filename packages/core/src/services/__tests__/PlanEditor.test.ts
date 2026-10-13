@@ -204,8 +204,9 @@ describe('PlanEditor.updateTask', () => {
 
     expect(task('t1')!.assignedModel).toBeUndefined();
     expect(task('t1')!.taskMode).toBeUndefined();
+    expect(task('t1')!.sliceType).toBe('HITL');
     const [update] = sent;
-    expect(update.type === 'task_updated' && Object.keys(update.changes).sort()).toEqual(['assignedModel', 'taskMode', 'type', 'userSteps']);
+    expect(update.type === 'task_updated' && Object.keys(update.changes).sort()).toEqual(['assignedModel', 'sliceType', 'taskMode', 'type', 'userSteps']);
   });
 
   it('stores an ops flag turned off as absent', async () => {

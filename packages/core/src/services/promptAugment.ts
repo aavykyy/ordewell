@@ -1,5 +1,5 @@
 import type { Task, TaskSkillSnapshot } from '../models/Task';
-import { flattenTasks, flattenTasksWithParents, taskOrderLabel } from '../models/Task';
+import { flattenTasks, flattenTasksWithParents } from '../models/Task';
 import { renderTaskSkills } from './taskSkills';
 
 const MAX_TAIL_CHARS = 500;
@@ -88,7 +88,7 @@ function pickWindow(sorted: PlanMapRow[], currentIdx: number, max: number): { wi
 /**
  * Numbered task list for the model's context. `planTasks` is the nested task
  * tree; subtasks render indented under their parent with the same dotted
- * `taskOrderLabel` the other surfaces use, so an `N.M` the model echoes back
+ * path label the other surfaces use, so an `N.M` the model echoes back
  * matches what `resolveTaskId` accepts.
  */
 export function renderPlanMap(planTasks: readonly Task[], currentTaskId: string, opts?: { maxEntries?: number }): string {
@@ -96,10 +96,7 @@ export function renderPlanMap(planTasks: readonly Task[], currentTaskId: string,
   if (rows.length < PLAN_MAP_MIN_TASKS) return '';
 
   // Top-level tasks first in order, then each parent's subtasks under it.
-  const sorted = rows.map((r) => ({
-    ...r,
-    label: taskOrderLabel(r.task, r.parent ?? undefined),
-  })).sort((a, b) => {
+  const sorted = [...rows].sort((a, b) => {
     const parentDiff = (a.parent?.order ?? -1) - (b.parent?.order ?? -1);
     if (parentDiff !== 0) return parentDiff;
     return a.task.order - b.task.order;

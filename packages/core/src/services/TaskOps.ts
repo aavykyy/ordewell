@@ -6,7 +6,7 @@ import {
 import { resolveTaskRef } from './TaskRefs';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
 import { validateTaskEdit, lockedTaskRefusal, type EditCatalog, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
-import { plannedTask, checkPlanInvariants, detectCycle, taskWhere, MODE_NOT_THE_PLANNERS, MANUAL_NOT_READ_ONLY, type IntakeCatalog, type PlannedTask } from './PlannedTask';
+import { plannedTask, checkPlanInvariants, detectCycle, taskWhere, MODE_NOT_THE_PLANNERS, MANUAL_NOT_READ_ONLY, type IntakeCatalog, type PlannedTask, type PlanTaskError } from './PlannedTask';
 import { plannedMode, readOnlyMode, type PlannedMode } from './ModeResolver';
 
 /**
@@ -64,7 +64,7 @@ export function taskOpsProtocol(executionNote = '', tools = false): string[] {
     'Keep dependencies consistent: no cycles, no references to removed tasks, and never touch running or completed tasks — "rearm" is the one exception, below.',
     ...(tools ? ['edit_plan checks the batch when you call it and answers with what it will change, or with the error to fix — call it again in the same reply. The edit is applied when your reply ends; edits you make in one reply join one batch.'] : []),
     'Just declare the dependencies you want — display order is repaired for you afterwards, so a rewire or a newly added prerequisite never needs a "reorder" op. Only a task that is running or completed cannot be shifted, so an edit that would need one to move is rejected.' + executionNote,
-    'Flipping "type" between "ai" and "user" is a content change, not just a label: an update to "user" needs "userSteps" in the SAME op, and an update to "ai" needs "prompt" in the SAME op — the model/mode/effort/autonomy fields (flipping to "user") or the userSteps (flipping to "ai") are cleared automatically.',
+    'Flipping "type" between "ai" and "user" is a content change, not just a label: an update to "user" needs "userSteps" in the SAME op, and an update to "ai" needs "prompt" in the SAME op — the model/mode/effort/autonomy fields (flipping to "user", which also makes the task HITL) or the userSteps (flipping to "ai") are cleared automatically.',
     '"skills" in "changes" REPLACES the task\'s whole skill list. To add one, send the names the plan block shows in its skills:[...] plus the new one; to drop one, send the rest; [] removes them all.',
     '"rearm" puts a failed OR completed task back to pending — verdict and output summary are cleared, any dependents it had blocked are released, and it may carry field changes (e.g. a corrected "prompt") applied in the same op. A running task cannot be re-armed. Never rearm a task just to relabel it — only when it should actually run again.',
   ];
@@ -492,6 +492,7 @@ export function applyTaskOps(
     const check = validateTaskEdit(audience, tasks, target.id, changesForCheck, catalog);
     if (!check.ok) return { error: `${label}: ${check.error}` };
     for (const field of check.clear ?? []) (changes as Record<string, unknown>)[field] = undefined;
+    Object.assign(changes, check.set);
     const readOnly = askedReadOnly(op.changes);
     if (readOnly === true && (changes.type ?? target.type) === 'user') return { error: `${label}: ${MANUAL_NOT_READ_ONLY}` };
     const moved = changes.assignedRunner !== undefined && changes.assignedRunner !== target.assignedRunner;
@@ -511,10 +512,15 @@ export function applyTaskOps(
     return { target, changes, check };
   };
 
-  // A rule an op breaks is that op's to answer for. What the plan already
-  // broke before the batch — a task on a runner disabled since, say — is not,
-  // so it never blocks an unrelated edit.
-  let standing = new Set(checkPlanInvariants(currentTasks, runners).map((e) => e.message));
+  // A rule the batch ends in breach of is the op's that first broke it. What
+  // the plan already broke before the batch — a task on a runner disabled
+  // since, say — is not, so it never blocks an unrelated edit. A breach is
+  // told by its task and rule, not its wording: the wording carries the title,
+  // which an edit may change.
+  const breachKey = (e: PlanTaskError) => `${e.taskId ?? ''}\u0000${e.field}`;
+  const standing = new Set(checkPlanInvariants(currentTasks, runners).map(breachKey));
+  const brokenBy = new Map<string, string>();
+  let lastLabel = opLabel(0);
 
   for (const [i, op] of ops.entries()) {
     const label = opLabel(i);
@@ -724,10 +730,19 @@ export function applyTaskOps(
         errors.push(`${label}: unknown op "${(op as { op: string }).op}"`);
     }
     if (errors.length) break;
-    const now = checkPlanInvariants(tasks, runners).map((e) => e.message);
-    const broken = now.filter((m) => !standing.has(m));
-    if (broken.length) { errors.push(...broken.map((m) => `${label}: ${m}`)); break; }
-    standing = new Set(now);
+    lastLabel = label;
+    // Invariants are judged on the final state, so a later op may complete an
+    // earlier one; here they only record which op a breach belongs to.
+    const now = new Set(checkPlanInvariants(tasks, runners).map(breachKey));
+    for (const key of brokenBy.keys()) if (!now.has(key)) brokenBy.delete(key);
+    for (const key of now) if (!standing.has(key) && !brokenBy.has(key)) brokenBy.set(key, label);
+  }
+
+  if (!errors.length) {
+    for (const e of checkPlanInvariants(tasks, runners)) {
+      const key = breachKey(e);
+      if (!standing.has(key)) errors.push(`${brokenBy.get(key) ?? lastLabel}: ${e.message}`);
+    }
   }
 
   // Display order is maintained, not demanded: whatever the batch produced,

@@ -1,4 +1,4 @@
-import { flattenTasks, flattenTasksWithParents, taskRef, type Task } from '../models/Task';
+import { flattenTasks, flattenTasksWithParents, type Task } from '../models/Task';
 import type { ExecutionCommandName, ExecutionRecord } from '../models/Execution';
 import { UPDATABLE_FIELDS } from './TaskOps';
 import type { ExecutionCommand } from './ExecutionCommands';
@@ -277,7 +277,7 @@ export class SupervisionMemory {
       case 'run_task': return target && this.failedWith.has(target.task.id) ? [{ ...target, unchangedCounts: true }] : [];
       case 'run_plan': return flattenTasksWithParents([...tasks])
         .filter(({ task }) => this.failedWith.has(task.id) && task.status !== 'completed')
-        .map(({ task, parent }) => ({ task, ref: taskRef(task, parent ?? undefined), unchangedCounts: true }));
+        .map(({ task, ref }) => ({ task, ref, unchangedCounts: true }));
       default: return [];
     }
   }

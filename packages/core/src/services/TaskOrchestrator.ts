@@ -1,6 +1,6 @@
 import { McpAttachError } from './harness/ordewellBinding';
 import * as path from 'path';
-import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasks, flattenTasksWithParents, taskOrderLabel, waitsForReset, type RunSettings } from '../models/Task';
+import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasks, flattenTasksWithParents, waitsForReset, type RunSettings } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
 import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
@@ -1574,9 +1574,9 @@ export class TaskOrchestrator {
       const remaining = this.store.allTasks.filter(t => t.status !== 'completed');
       console.log(`[TaskOrchestrator] tick(): no work. remaining=${remaining.length}, completed=${this.store.isAllComplete()}`);
       const remainingById = new Map(remaining.map((t) => [t.id, t]));
-      for (const { task, parent } of flattenTasksWithParents(this.store.planTasks)) {
+      for (const { task, label } of flattenTasksWithParents(this.store.planTasks)) {
         if (!remainingById.has(task.id)) continue;
-        console.log(`  - ${taskOrderLabel(task, parent ?? undefined)}. ${task.title} [${task.type}/${task.status}] prompt=${!!task.prompt}`);
+        console.log(`  - ${label}. ${task.title} [${task.type}/${task.status}] prompt=${!!task.prompt}`);
       }
       if (this.store.isAllComplete()) {
         // Genuinely done — stop the loop so a fresh Execute click can start it again.

@@ -1,13 +1,23 @@
 import { describe, it, expect } from 'vitest';
 import { createTask } from '../../models/Task';
-import { resolveTaskRef, taskOrderLabel, taskRef, titledTaskRef } from '../TaskRefs';
+import { flattenTasksWithParents } from '../../models/Task';
+import { findTaskRef, resolveTaskRef, taskOrderLabel, taskRef, taskRefOf, titledTaskRef } from '../TaskRefs';
 
 // Task #1 holds two subtasks, so subtask orders 1 and 2 shadow top-level #1
 // and #2 in a flattened plan — the shape every older grammar got wrong.
 const plan = [
   createTask({
     id: 'build-id', order: 1, title: 'Build',
-    subtasks: [createTask({ id: 'lint-id', order: 1, title: 'Lint' }), createTask({ id: 'test-id', order: 2, title: 'Test' })],
+    subtasks: [
+      createTask({ id: 'lint-id', order: 1, title: 'Lint' }),
+      createTask({
+        id: 'test-id', order: 2, title: 'Test',
+        subtasks: [
+          createTask({ id: 'unit-id', order: 1, title: 'Unit' }),
+          createTask({ id: 'e2e-id', order: 2, title: 'E2E', subtasks: [createTask({ id: 'smoke-id', order: 1, title: 'Smoke' })] }),
+        ],
+      }),
+    ],
   }),
   createTask({ id: 'deploy-id', order: 2, title: 'Deploy' }),
   createTask({ id: 'docs-id', order: 3, title: '2' }),
@@ -41,7 +51,12 @@ describe('resolveTaskRef', () => {
     ['1.1', 'lint-id'],
     ['#2.1', undefined],
     ['#4', undefined],
-    ['#1.2.1', undefined],
+    ['#1.2.1', 'unit-id'],
+    ['1.2.2.1', 'smoke-id'],
+    ['#1.1.1', undefined],
+    ['#1.2.3', undefined],
+    ['#2.1.1', undefined],
+    ['#1.2.', undefined],
     ['#1.x', undefined],
     ['#', undefined],
     ['', undefined],
@@ -58,9 +73,22 @@ describe('resolveTaskRef', () => {
   });
 
   it('round-trips every label it renders, at every depth', () => {
-    for (const top of plan) {
-      expect(resolveTaskRef(plan, taskRef(top))).toBe(top);
-      for (const sub of top.subtasks) expect(resolveTaskRef(plan, taskRef(sub, top))).toBe(sub);
+    const rows = flattenTasksWithParents(plan);
+    expect(rows.map((r) => r.task.id)).toContain('smoke-id');
+    for (const { task, ref } of rows) {
+      expect(resolveTaskRef(plan, ref)).toBe(task);
+      expect(resolveTaskRef(plan, taskRefOf(plan, task.id) ?? '')).toBe(task);
     }
+  });
+
+  it('labels a task by its full path below depth 2', () => {
+    const smoke = findTaskRef(plan, 'smoke-id');
+    expect(smoke?.label).toBe('1.2.2.1');
+    expect(taskRefOf(plan, 'unit-id')).toBe('#1.2.1');
+    expect(flattenTasksWithParents(plan).find((r) => r.task.id === 'smoke-id')?.ref).toBe('#1.2.2.1');
+  });
+
+  it('extends a labelled parent', () => {
+    expect(taskRef({ order: 1 }, { order: 2, label: '1.2' })).toBe('#1.2.1');
   });
 });

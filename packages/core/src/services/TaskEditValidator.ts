@@ -26,6 +26,8 @@ export interface TaskEditCheck {
    * for — nothing to clear reads as nothing lost.
    */
   clear?: (keyof Task)[];
+  /** Fields a flip forces to a value rather than strips — a user task is always HITL — applied with {@link clear}. */
+  set?: Partial<Task>;
 }
 
 /**
@@ -119,7 +121,12 @@ function typeCoherenceCheck(target: Task, changes: Partial<Task>): TaskEditCheck
     if (!Array.isArray(changes.userSteps) || changes.userSteps.length === 0) {
       return { ok: false, error: `"${target.title}" cannot become a manual task without user steps — include "userSteps" in this edit` };
     }
-    return { ok: true, clear: AI_ONLY_FIELDS.filter((f) => target[f] !== undefined) };
+    return {
+      ok: true,
+      clear: AI_ONLY_FIELDS.filter((f) => target[f] !== undefined),
+      // User tasks are held to HITL, so a flip that kept the AI task's slice would be refused by the plan's own rules.
+      ...(target.sliceType !== 'HITL' ? { set: { sliceType: 'HITL' as const } } : {}),
+    };
   }
 
   // changes.type === 'ai'

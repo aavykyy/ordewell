@@ -76,7 +76,8 @@ that offers the same mode.
   read-only task's AI subtasks are read-only too, in a submitted plan or an
   added task, unless a subtask says `readOnly: false`.
 - **A manual task cannot be read-only.** It runs in no mode. A submitted plan
-  ignores the mark on one; an edit that asks for it is refused.
+  ignores the mark on one and `submit_plan` says so in its warnings; an edit
+  that asks for it is refused.
 - **A merge is read-only only when every merged task was.** One task that
   writes makes the merged task write; its "current" mode is the first such
   task's.
@@ -133,8 +134,8 @@ guess that keeps it from writing.
   `resolveTaskMode`, and gains the table above as one function; the edit path
   and the plan parser both call it. The Guarded ceiling on planner edits goes:
   the planner can no longer name a mode for it to refuse.
-- The plan block, `list_runners`, the catalog read, the modify-plan prompt and
-  `edit_plan`'s summaries show `read-only` and which runners take it, never a
+- The plan block, `list_runners`, the catalog read and `edit_plan`'s
+  summaries show `read-only` and which runners take it, never a
   mode name. The approval card a Guarded user
   answers still names the mode: it is for the user.
 - `submit_plan`'s silent swap is gone with `resolveTaskMode`, so its
@@ -153,3 +154,6 @@ guess that keeps it from writing.
 - 2026-10-12 — subtasks inherit read-only; a manual task cannot be read-only;
   a user's runner change keeps read-only by tag;
   the no-modes fallback is named.
+- 2026-10-13 — the modify-plan prompt left the list of what shows `read-only`
+  (the one-shot modify path is gone); `submit_plan` reports `readOnly` on a
+  manual task as ignored, as it does `taskMode`.
