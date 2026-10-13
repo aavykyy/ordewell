@@ -4,7 +4,7 @@ import type { IsolationMergeResult } from './interfaces/IWorktreeIsolation';
 import type { SessionMeta } from './models/Session';
 import type { DiscoveredModel } from './models/Task';
 import type { PendingApproval } from './services/PendingApprovals';
-import type { SurfacePlan, SurfacePlanState } from './services/SessionMessage';
+import type { RunView, SurfacePlan, SurfacePlanState } from './services/SessionMessage';
 import type { ConversationCompaction, RewindTarget } from './services/PlannerConversation';
 import type { PlannerModelRecall } from './services/PlannerModelMemory';
 import type { OrchestratorOption } from './services/ProviderRouting';
@@ -243,4 +243,15 @@ export interface ApprovalsResponse {
 export interface ApprovalAnswerResponse extends OkResponse {
   granted: boolean;
   decision: ApprovalDecision['decision'];
+}
+
+/**
+ * What a session's socket sends right after `connected`: its run as it stands,
+ * so a client that joins mid-run has the run view before the next update.
+ * Every frame after it is a `SessionMessage` or `SessionNotice`.
+ */
+export interface RunSnapshotFrame {
+  type: 'run_snapshot';
+  sessionId: string;
+  view: RunView;
 }

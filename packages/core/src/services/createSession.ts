@@ -30,7 +30,8 @@ import { RUN_SETTINGS_DEFAULTS, runSettingsOf, type GlobalRunSettings, type User
 import { SkillsService } from './SkillsService';
 import { resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
 import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
-import type { RunMergeView, SessionBroadcaster, SessionNotice } from './SessionMessage';
+import { surfacePlan, type RunMergeView, type RunView, type SessionBroadcaster, type SessionNotice } from './SessionMessage';
+import { EMPTY_RUN, reduceRun } from './runView';
 import { SessionEventRelay } from './SessionEventRelay';
 import { saveSession } from '../utils/sessionStore';
 import { listTaskLogAttempts, readTaskLog, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
@@ -1503,6 +1504,20 @@ export class Session {
    */
   isolationView(): IsolationView | null {
     return this.runs.view();
+  }
+
+  /**
+   * The run as a surface that has folded every message so far would hold it,
+   * for one that joins now: the stream reports changes only. What Merge all
+   * last did is not kept, so it is not here.
+   */
+  runSnapshot(): RunView {
+    if (!this.plan) return EMPTY_RUN;
+    const planned = reduceRun(EMPTY_RUN, { type: 'plan_snapshot', plan: surfacePlan({ ...this.plan, tasks: this.store.snapshot() }) });
+    const view = reduceRun(planned, this.events.statusMessage());
+    const isolation = this.runs.view();
+    // The handoff goes out when a run settles, so a run still open has none yet.
+    return isolation && !this.runs.isOpen ? reduceRun(view, { type: 'isolation_handoff', ...isolation.handoff }) : view;
   }
 
   /** The dependencies a task waits on at its merge gate (ADR-0020); empty when it waits for no Merge all. */

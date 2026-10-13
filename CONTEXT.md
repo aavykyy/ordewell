@@ -1699,6 +1699,23 @@ accounts for (`transcriptAt`) is what tells a reconnecting surface what is new.
 messages to a drawing, and streamed semi-states live in it;
 *Avoid:* a surface holding its own parallel mirror of the view.
 
+**Run view** (`RunView`, `reduceRun`, `EMPTY_RUN`, `Session.runSnapshot()`) —
+the conversation view's counterpart for a run: each task's plan fields and its
+status-only fields, plus the run's merge view, usage, run settings, handoff and
+last Merge all result. `reduceRun` folds `SessionMessage`s and plan snapshots
+(`plan_snapshot`: a plan a surface read whole) into it, and is the one place
+that decides what a plan refresh keeps: plan fields (title, dependencies,
+`addedBy`, skills, …) come from the plan, absent meaning none; status-only
+fields (verdict, `idleSince`, isolation, checkpoint, queued messages,
+`continuable`, `awaitingApproval`, merge gate, `forcedPastGate`) stay as the
+last status update said, the checkpoint question only while the task still
+waits at it. A status update replaces every status field it covers. The daemon
+sends `Session.runSnapshot()` as a `run_snapshot` frame right after
+`connected`, so a client that joins mid-run has the run before the next update.
+*Avoid:* a surface deciding for itself which task fields survive a plan
+refresh — the surfaces disagreed, and one dropped checkpoints and `addedBy`;
+*Avoid:* "task state" for the whole of it — a task's status is one field.
+
 **Turn gate** (`TurnGate`, `followTurn`, `stopTurn`) — the stop rule, beside
 the conversation view: which planner turn a surface has open and which one
 its user stopped. A stop ends the turn on screen at once, and whatever the

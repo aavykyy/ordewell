@@ -1,4 +1,4 @@
-import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, PendingPlanTurn, ResearchStep, RunnerId, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, Verdict } from '../models/Task';
+import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, PendingPlanTurn, ResearchStep, RunnerId, RunSettings, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, Verdict } from '../models/Task';
 import type { AttemptUsage, ModelUsage, PlanUsage, UsageTotals } from '../models/Usage';
 import type { ExecutionRecord } from '../models/Execution';
 import type { TaskLogEvent } from '../models/TaskLog';
@@ -12,7 +12,7 @@ import { skillLoadNotice, surfaceStep } from '../conversation/records';
 
 export type SerializedTaskStatus = {
   id: string;
-  status: string;
+  status: Task['status'];
   verdict: { outcome: 'pass' | 'fail'; reason: string; checks: Verdict['checks'] } | null;
   /** Advisory silence timestamp from VerdictEngine — not part of task status semantics. */
   idleSince?: string | null;
@@ -293,6 +293,38 @@ export type SessionMessage =
     };
 
 /**
+ * A plan a surface read whole rather than off the message stream: a route's
+ * answer, a loaded session. Folds into a {@link RunView} as a plan refresh.
+ */
+export type PlanSnapshot = { type: 'plan_snapshot'; plan: SurfacePlan | SurfacePlanState };
+
+/** What only the status stream says about a task; a plan refresh keeps these as they were. */
+export type RunTaskStatus = Partial<Pick<
+  SerializedTaskStatus,
+  'verdict' | 'idleSince' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate'
+>>;
+
+/** A task in the run view: the plan's fields, then the status stream's. */
+export type RunTask = Omit<SerializedTask, 'subtasks'> & RunTaskStatus & { subtasks: RunTask[] };
+
+/**
+ * A session's run as every surface draws it (the [run view](../../../../CONTEXT.md)):
+ * folded from {@link SessionMessage}s and plan snapshots by `reduceRun`, or
+ * taken whole from `Session.runSnapshot()` by a surface that joins late.
+ */
+export interface RunView {
+  /** In plan order, subtasks nested under their parent. */
+  tasks: RunTask[];
+  runSettings?: RunSettings;
+  runMerge: RunMergeView | null;
+  usage?: PlanUsage;
+  handoff: IsolationHandoff | null;
+  mergeResult: IsolationMergeResult | null;
+}
+
+export type RunInput = SessionMessage | PlanSnapshot;
+
+/**
  * A line a run wants the user to read — how it isolates, what it shares. Not a
  * {@link SessionMessage}: hosts that show notices as toasts already do, and
  * widening the union would break every exhaustive switch over it. A host with
@@ -302,7 +334,7 @@ export type SessionNotice = { type: 'notice'; level: 'info' | 'warn' | 'error'; 
 
 export type SessionBroadcaster = (msg: SessionMessage) => void;
 
-export function serializeTask(t: Task): SerializedTask {
+export function serializeTask(t: SurfaceTask): SerializedTask {
   return {
     id: t.id,
     order: t.order,
