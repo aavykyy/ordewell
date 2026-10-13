@@ -161,11 +161,28 @@ describe('Landing', () => {
       return env;
     }
 
+    const current = () => true;
+
+    it('never lands once its attempt is no longer the task\'s by the time its evidence is read', async () => {
+      const { landing, isolation, t1, record } = await repairing();
+      isolation.outcomes.set('t1', 'merged');
+      let stopped = false;
+      const open = isolation.holdVerification('t1');
+
+      const settled = landing.settleRepair(t1, passed, () => !stopped);
+      stopped = true;
+      open();
+
+      expect(await settled).toMatchObject({ kind: 'awaiting_user', messages: [] });
+      expect(isolation.taskIdsFor('integrate')).toEqual(['t1']);
+      expect(record('t1')?.status).toBe('repairing');
+    });
+
     it('lands once its evidence holds and the merge goes through, naming the files it repaired', async () => {
       const { landing, isolation, t1, record } = await repairing();
       isolation.outcomes.set('t1', 'merged');
 
-      expect(await landing.settleRepair(t1, passed)).toEqual({
+      expect(await landing.settleRepair(t1, passed, current)).toEqual({
         kind: 'landed',
         messages: [{ level: 'info', text: 'Task "Task t1" landed after repairing a conflict in a.ts.', repairLog: true }],
       });
@@ -176,7 +193,7 @@ describe('Landing', () => {
     it('fails without its completion marker, leaving the conflict as it was', async () => {
       const { landing, isolation, t1, record } = await repairing();
 
-      const outcome = await landing.settleRepair(t1, verdict('fail', 'exited without its completion marker'));
+      const outcome = await landing.settleRepair(t1, verdict('fail', 'exited without its completion marker'), current);
 
       expect(outcome).toEqual({
         kind: 'awaiting_user',
@@ -196,7 +213,7 @@ describe('Landing', () => {
       const { landing, isolation, t1, record } = await repairing();
       isolation.repairEvidence.set('t1', { ok: false, reason: 'conflict-markers', repo: '.', files: ['a.ts'] });
 
-      const outcome = await landing.settleRepair(t1, passed);
+      const outcome = await landing.settleRepair(t1, passed, current);
 
       expect(outcome).toMatchObject({ kind: 'awaiting_user', reason: 'repair-failed' });
       expect(outcome.messages[0].text).toContain('finished, but left conflict markers in a.ts, so it did not land');
@@ -207,7 +224,7 @@ describe('Landing', () => {
     it('is spent when it starts: a failed one is not handed back', async () => {
       const { landing, t1 } = await repairing();
 
-      await landing.settleRepair(t1, verdict('fail', 'stopped'));
+      await landing.settleRepair(t1, verdict('fail', 'stopped'), current);
 
       expect(landing.nextRepair('t1')).toEqual({ n: 2, limit: 2 });
     });
@@ -215,10 +232,10 @@ describe('Landing', () => {
     it('that conflicts again is a fresh conflict, owed the next repair until they run out', async () => {
       const { landing, runs, t1 } = await repairing();
 
-      expect(await landing.settleRepair(t1, passed)).toMatchObject({ kind: 'repair-needed', repair: { n: 2, limit: 2 } });
+      expect(await landing.settleRepair(t1, passed, current)).toMatchObject({ kind: 'repair-needed', repair: { n: 2, limit: 2 } });
 
       await runs.attemptCwd(t1, 'repair');
-      const outcome = await landing.settleRepair(t1, passed);
+      const outcome = await landing.settleRepair(t1, passed, current);
       expect(outcome).toMatchObject({ kind: 'awaiting_user', reason: 'conflict' });
       expect(outcome.messages.at(-1)).toEqual({ level: 'info', text: 'Task "Task t1" has had 2 of its 2 conflict repairs, so its conflict waits for you.', repairLog: true });
     });

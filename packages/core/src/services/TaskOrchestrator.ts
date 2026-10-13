@@ -13,6 +13,7 @@ import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type {
   IsolationHandoff,
   IsolationMergeResult,
+  IsolationRun,
   IWorktreeIsolation,
   TreeSnapshot,
 } from '../interfaces/IWorktreeIsolation';
@@ -84,8 +85,12 @@ export interface OrchestratorObserver {
   onReviewNeeded?(data: { tasks: Task[]; planRunners: RunnerId[] }): void;
   onReviewApproved?(data: { tasks: Task[] }): void;
   onCheckpoint?(data: { taskId: string; taskTitle: string; summary: string }): void;
-  /** The isolation run record changed and should be persisted with the plan. */
-  onIsolationChanged?(): void;
+  /**
+   * The isolation run record changed and should be persisted with the plan.
+   * `detached` is the record of a run another plan has replaced since — a
+   * release that outlived a plan load — for the session it belongs to.
+   */
+  onIsolationChanged?(detached?: IsolationRun): void;
   /** A run did not start: the tree is dirty, and the user picks stash or no isolation. `repos` names the dirty repos of a group. */
   onIsolationBlocked?(data: { reason: 'dirty'; repos: string[] }): void;
   /** An isolated run settled; emitted before `onExecutionComplete`, which surfaces treat as terminal. */
@@ -365,7 +370,7 @@ export class TaskOrchestrator {
       notifications: options.notifications,
       workspaceRoot,
       listener: {
-        changed: () => orchestrator.emit('onIsolationChanged'),
+        changed: (detached) => orchestrator.emit('onIsolationChanged', detached),
         blocked: (repos) => orchestrator.emit('onIsolationBlocked', { reason: 'dirty', repos }),
         handoff: (handoff) => orchestrator.emit('onIsolationHandoff', handoff),
         notice: (level, message) => orchestrator.emit('onIsolationNotice', { level, message }),
@@ -1011,7 +1016,7 @@ export class TaskOrchestrator {
    * never a failed task, so never a halted run.
    */
   private async settleRepair(task: Task, attempt: TaskAttempt, verdict: Verdict): Promise<void> {
-    const outcome = await this.land(attempt, () => this.landing.settleRepair(task, verdict));
+    const outcome = await this.land(attempt, () => this.landing.settleRepair(task, verdict, () => this.attempts.get(task.id) === attempt));
     if (this.attempts.get(task.id) !== attempt) return;
     this.endAttempt(task.id, 'verdict');
     await this.applyLanding(task, outcome, () => {

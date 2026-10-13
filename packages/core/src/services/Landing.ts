@@ -102,10 +102,15 @@ export class Landing {
    * task keeps the verdict its own work earned. Evidence comes before the
    * queue, and the landing after it is the one every task goes through, so a
    * repair the tip has moved past again is a fresh conflict, not a pass.
+   * `current` says whether the attempt is still the task's: a stop that comes
+   * while the evidence is read has already cancelled the work, and the merge
+   * must not bring it in anyway.
    */
-  async settleRepair(task: Task, verdict: Verdict): Promise<LandingOutcome> {
+  async settleRepair(task: Task, verdict: Verdict, current: () => boolean): Promise<LandingOutcome> {
     if (verdict.outcome !== 'pass') return this.unrepaired(task, `did not finish (${verdict.reason})`);
     const evidence = await this.runs.verifyRepair(task);
+    // Whatever ended the attempt has already kept its worktree and said so.
+    if (!current()) return { kind: 'awaiting_user', reason: 'repair-failed', messages: [] };
     if (!evidence.ok) return this.unrepaired(task, this.describeEvidence(evidence));
     const landing = await this.runs.integrate(task);
     if (landing !== 'merged') return this.unmerged(task, landing);

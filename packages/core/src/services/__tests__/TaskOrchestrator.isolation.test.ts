@@ -3,7 +3,7 @@ import { TaskOrchestrator } from '../TaskOrchestrator';
 import { createTask, type Task } from '../../models/Task';
 import type { IRunner } from '../../interfaces/IRunner';
 import type { IConfig } from '../../interfaces/IConfig';
-import type { IsolationAvailability, IsolationMergeResult, RepairEvidence } from '../../interfaces/IWorktreeIsolation';
+import type { IsolationAvailability, IsolationMergeResult, IsolationRun, RepairEvidence } from '../../interfaces/IWorktreeIsolation';
 import { fakeConfig, FakeRunnerSession, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
@@ -277,6 +277,26 @@ describe('TaskOrchestrator with worktree isolation', () => {
     orchestrator.stop();
 
     await vi.waitFor(() => expect(isolation.calls).toContainEqual({ op: 'release', taskId: 't1', keep: true }));
+  });
+
+  it('keeps a stopped task\'s worktree in the run it was stopped in, though another plan adopts its own right after', async () => {
+    const { orchestrator, isolation } = setup();
+    orchestrator.loadPlan([task('t1', 1)]);
+    await orchestrator.approveReview();
+    const stoppedRun = orchestrator.runs.current!;
+    const changed: unknown[] = [];
+    orchestrator.subscribe({ onIsolationChanged: (run) => changed.push(run) });
+    // The next plan's run carries a record under the same id: ids are only unique within a plan.
+    const nextRun: IsolationRun = { ...stoppedRun, id: 'run9', tasks: { t1: { ...stoppedRun.tasks.t1, status: 'active' } } };
+
+    orchestrator.stop();
+    const adopting = orchestrator.runs.adopt({ run: nextRun, resolvers: {} });
+    await adopting;
+
+    await vi.waitFor(() => expect(stoppedRun.tasks.t1.status).toBe('kept'));
+    expect(isolation.taskIdsFor('release')).toEqual(['t1']);
+    expect(nextRun.tasks.t1.status).toBe('active');
+    expect(changed).toContain(stoppedRun);
   });
 
   it('gives Run task and Force start the same worktree guarantees', async () => {
@@ -1177,6 +1197,29 @@ describe('TaskOrchestrator with worktree isolation', () => {
       expect(orchestrator.storeInstance.get('t1')!.status).toBe('awaiting_user');
       expect(orchestrator.storeInstance.get('t1')!.verdict?.outcome).toBe('pass');
       expect(isolation.calls).toContainEqual({ op: 'release', taskId: 't1', keep: true });
+    });
+
+    it('does not land a repair whose verdict a stop overtook while its evidence was being checked', async () => {
+      const { orchestrator, isolation, pass, passLatest, spawn } = repairing();
+      const t1 = task('t1', 1);
+      orchestrator.loadPlan([t1]);
+      await orchestrator.approveReview();
+      pass(t1);
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(orchestrator.getAttempt('t1')?.phase).toBe('running'));
+      isolation.outcomes.set('t1', 'merged');
+      const openEvidence = isolation.holdVerification('t1');
+      passLatest(t1);
+      await vi.waitFor(() => expect(isolation.taskIdsFor('verifyRepair')).toEqual(['t1']));
+
+      orchestrator.stop();
+      openEvidence();
+      await flushMicrotasks();
+      await flushMicrotasks();
+
+      expect(isolation.taskIdsFor('integrate')).toEqual(['t1']);
+      expect(orchestrator.storeInstance.get('t1')!.status).toBe('awaiting_user');
+      expect(orchestrator.runs.taskIsolation('t1')).toMatchObject({ state: 'conflict' });
     });
 
     describe('restored from disk', () => {
