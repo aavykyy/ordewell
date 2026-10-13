@@ -19,7 +19,7 @@ const task = (over: Partial<TaskView> = {}): TaskView => ({
   ...over,
 });
 
-const asked = (approvalId: string, allowForTask = true): TaskLogEvent => ({
+const asked = (approvalId: string, allowForTask = true): Extract<TaskLogEvent, { type: 'approval_requested' }> => ({
   type: 'approval_requested', approvalId, tool: 'Bash', args: '{"command":"npm test"}', allowForTask,
 });
 
@@ -142,7 +142,13 @@ describe('the notice a request raises', () => {
   it('speaks in the planner chat, where the task view is not open', () => {
     const state = initialState({ sessionId: 's1', tasks: [task()] });
     const next = reduce(state, arrived([asked('ap-1')])).state;
-    expect(next.conversation.blocks.at(-1)).toMatchObject({ text: '· Task 2 waits for approval: Bash(npm test) — enter on it, then ctrl-y to allow or ctrl-g to deny' });
+    expect(next.conversation.blocks.at(-1)).toMatchObject({ text: 'Task 2 waits for approval: Bash(npm test) — enter on it, then ctrl-y to allow or ctrl-g to deny' });
+  });
+
+  it('says nothing about a request the runner already answered itself', () => {
+    const state = initialState({ sessionId: 's1', tasks: [task()] });
+    const next = reduce(state, arrived([{ ...asked('ap-1'), decided: 'allow' }])).state;
+    expect(next.conversation).toBe(state.conversation);
   });
 
   it('says nothing in the view already showing the card', () => {

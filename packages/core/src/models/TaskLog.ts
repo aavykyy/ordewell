@@ -54,9 +54,12 @@ export type TaskLogEvent =
    * The runner asked to use a tool its mode does not cover (ADR-0018, A1).
    * `approvalId` is what the answer is given under; `args` is the call's
    * arguments as JSON; `allowForTask` says the runner offered its own
-   * session-scoped grant.
+   * session-scoped grant. `decided` is set when the request was never left
+   * open — an Ordewell tool or an auto-approving mode — so a surface does not
+   * offer to answer what is already answered (it is still followed by the
+   * matching `approval_decided`, which a reader may rely on).
    */
-  | { type: 'approval_requested'; approvalId: string; tool: string; args: string; allowForTask: boolean; toolCallId?: string }
+  | { type: 'approval_requested'; approvalId: string; tool: string; args: string; allowForTask: boolean; toolCallId?: string; decided?: ApprovalDecision['decision'] }
   | { type: 'approval_decided'; approvalId: string; decision: ApprovalDecision['decision']; note?: string }
   /** The request went unanswered: the runner withdrew it, or its process ended. */
   | { type: 'approval_withdrawn'; approvalId: string };
@@ -143,6 +146,7 @@ export function toTaskLogEvent(event: StructuredEvent): TaskLogEvent | null {
         tool: event.name,
         args: event.detail,
         allowForTask: (event.suggestions?.length ?? 0) > 0,
+        ...(event.decided ? { decided: event.decided.decision } : {}),
         ...(event.toolUseId ? { toolCallId: event.toolUseId } : {}),
       };
     case 'permission_decided': {

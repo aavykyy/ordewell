@@ -1,4 +1,5 @@
 import type { QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
+import type { ApprovalDecision } from '../interfaces/IApproval';
 import type { TaskLogEvent } from '../models/TaskLog';
 import { addPlannerUsage, isMeasured, usageLine, type PlannerUsage } from '../models/Usage';
 import { sameMessage } from '../utils/sameMessage';
@@ -191,16 +192,21 @@ export function runnerToolSubject(tool: string, args: string): string {
   return headline.keyArg ? `${headline.name}(${headline.keyArg})` : headline.name;
 }
 
-function requestApproval(view: TaskLogView, { approvalId, tool, args, allowForTask, toolCallId }: Event<'approval_requested'>): TaskLogView {
+function requestApproval(view: TaskLogView, { approvalId, tool, args, allowForTask, toolCallId, decided }: Event<'approval_requested'>): TaskLogView {
   if (view.blocks.some((b) => b.type === 'approval' && b.approvalId === approvalId)) return view;
-  return append(view, (id) => ({
-    type: 'approval', id, approvalId, kind: 'runner_tool',
-    subject: runnerToolSubject(tool, args),
-    scope: tool,
-    status: 'pending',
-    ...(allowForTask ? { allowForTask } : {}),
-    ...(toolCallId ? { toolCallId } : {}),
-  }));
+  return append(view, (id) => {
+    const block: ApprovalBlock = {
+      type: 'approval', id, approvalId, kind: 'runner_tool',
+      subject: runnerToolSubject(tool, args),
+      scope: tool,
+      status: 'pending',
+      ...(allowForTask ? { allowForTask } : {}),
+      ...(toolCallId ? { toolCallId } : {}),
+    };
+    // Already answered at the source (an Ordewell tool, an auto-approving
+    // mode): shown settled rather than as something still waiting on a person.
+    return decided ? answered(block, decided) : block;
+  });
 }
 
 function settleApproval(view: TaskLogView, approvalId: string, settle: (block: ApprovalBlock) => ApprovalBlock): TaskLogView {
@@ -210,14 +216,18 @@ function settleApproval(view: TaskLogView, approvalId: string, settle: (block: A
   return { ...view, blocks: replaceAt(view.blocks, i, settle(block)) };
 }
 
-function decideApproval(view: TaskLogView, { approvalId, decision, note }: Event<'approval_decided'>): TaskLogView {
-  return settleApproval(view, approvalId, (block) => ({
+function answered(block: ApprovalBlock, decision: ApprovalDecision['decision'], note?: string): ApprovalBlock {
+  return {
     ...block,
     status: decision === 'deny' ? 'denied' : 'granted',
     decidedBy: 'asked',
     ...(decision === 'allowForTask' ? { forTask: true } : {}),
     ...(note ? { note } : {}),
-  }));
+  };
+}
+
+function decideApproval(view: TaskLogView, { approvalId, decision, note }: Event<'approval_decided'>): TaskLogView {
+  return settleApproval(view, approvalId, (block) => answered(block, decision, note));
 }
 
 function startTurn(view: TaskLogView, { message, messageId }: Event<'turn_start'>): TaskLogView {

@@ -48,14 +48,23 @@ const ROLE_PREFIX: Record<MessageRole, Paint> = {
   error: (t) => `${style.red('✗')} ${style.red(t)}`,
 };
 
+// A wrapped line's rows after the first keep the role's colour when the first
+// row is painted as a whole (system grey, error red, wake_up yellow); the
+// markdown roles carry their own colour inside the text and the user's rows
+// sit on a band, so those stay as they were.
+const ROLE_CONTINUATION: Partial<Record<MessageRole, Paint>> = {
+  system: style.grey,
+  error: style.red,
+  wake_up: style.yellow,
+};
+
 function messageLines(block: MessageBlock, cols: number): string[] {
   const text = sanitize(block.text);
   const room = Math.max(1, cols - 2);
   const wrapped = block.role === 'planner' || block.role === 'agent' || block.role === 'supervisor'
     ? renderMarkdown(text, room)
     : block.skills ? skillPaintedLines(text, block.skills, room) : wrap(text, room);
-  // A run update is the supervisor's input, not anyone's words: all of it keeps its colour.
-  const rest: Paint = block.role === 'wake_up' ? style.yellow : (t) => t;
+  const rest: Paint = ROLE_CONTINUATION[block.role] ?? ((t) => t);
   const rows = wrapped.map((line, i) => (i === 0 ? ROLE_PREFIX[block.role](line) : rest(`  ${line}`)));
   // A forced message ("Send now") stopped the turn before it; the note rides
   // its first row and the band's pad drops it when the pane is too narrow.

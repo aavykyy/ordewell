@@ -25,6 +25,13 @@ describe('compact saved log reads', () => {
     expect(text).not.toContain('Working.');
   });
 
+  it('says a request was already decided, so the read is not mistaken for an open wait', () => {
+    const text = renderTaskLog([
+      { type: 'approval_requested', approvalId: 'approval1', tool: 'mcp__ordewell__task_complete', args: '{}', allowForTask: false, decided: 'allow' },
+    ]);
+    expect(text).toContain('approval1 mcp__ordewell__task_complete (decided allow)');
+  });
+
   it('skips future event kinds saved by a newer runner without blocking the rest of an attempt', () => {
     const events = [{ type: 'future_event', data: 'ignored' }, { type: 'error', message: 'Known error.' }] as unknown as TaskLogEvent[];
     expect(renderTaskLog(events)).toBe('[2 error] Known error.\n');
