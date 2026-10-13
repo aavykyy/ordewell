@@ -1,4 +1,4 @@
-import { McpAttachError } from './ordewellBinding';
+import { spawnAttached } from './ordewellBinding';
 import { spawn as nodeSpawn } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -41,7 +41,7 @@ import { connectorFor, createPlannerAdapter } from './connectors';
 import { mapAgentTool, normalizeAgentArgs } from './agentTools';
 import { decidePlannerPermission, type PlannerPermissionGate } from './plannerPermissions';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
-import { mcpClientConfig, sharedMcpServer, type McpCredential, type OrdewellMcpServer } from '../mcp';
+import { mcpClientConfig, sharedMcpServer, type OrdewellMcpServer } from '../mcp';
 import { instructionsBlock, repoRoot } from './repoConfig';
 import { NOT_APPROVED, decideProjectServers, fileProjectServerApprovals, heldServersNote, recordUnusable, type ProjectServerApprovals } from './projectServers';
 import type { IApproval } from '../../interfaces/IApproval';
@@ -123,6 +123,65 @@ function failureAfterReply(run: string, blockAt: number, error: string): string 
   return before && opensWithJsonObject(before) !== true ? `${before}\n\n${error}` : error;
 }
 
+/** What a planner session is spawned with and decides its runner's requests against. */
+interface PlannerSessionStart {
+  startOptions: PlannerStartOptions;
+  tools: PlannerToolsOffer;
+  /** What the agent's own tool requests are decided against; absent, nobody can be asked, so only Ordewell's tools and the reads the envelope holds anyway are allowed (ADR-0026, ADR-0032). */
+  gate?: PlannerPermissionGate;
+}
+
+/**
+ * One planner session — a conversation or a one-shot: its process, the token
+ * that process was spawned with, and what a respawn needs. The service drops
+ * a session by identity, so a start that lands after its session was
+ * discarded takes its own process back instead of reviving it.
+ */
+class PlannerSession {
+  adapter: AgentAdapter | null = null;
+  /** The planner token the running process was spawned with; revoked with the process (ADR-0022, A3). */
+  token: string | null = null;
+  /** The {@link PlannerStartOptions.nativeSearch} the running process was spawned with. */
+  nativeSearch = false;
+  /**
+   * The agent's own session id, kept across a process death so the next turn
+   * can resume warm context instead of re-reading the repository. Never
+   * outlives the session — nothing from one goal may reach the next.
+   */
+  nativeSessionId: string | null = null;
+  /** Set once the first spawn attached. */
+  start: PlannerSessionStart | null = null;
+  /**
+   * What the runner's own session-wide search is decided against
+   * (ADR-0027), asked again before every turn: the session's mode, its
+   * exclusions or its budget can change between turns. Absent, it is off.
+   */
+  searchesUnasked: ((provider: string) => boolean) | undefined;
+  /**
+   * Every subagent this session has reported starting, and finishing.
+   * Agents restate a subagent's state as it changes, and one can finish a turn
+   * or a process restart after it started; surfaces get each once, in order.
+   */
+  readonly subagents = { started: new Set<string>(), finished: new Set<string>() };
+  discarded = false;
+
+  constructor(private readonly server: OrdewellMcpServer) {}
+
+  /** Kill the planner process, and with it the token it was spawned with. The session can spawn another. */
+  stop(): void {
+    this.adapter?.dispose();
+    this.adapter = null;
+    if (this.token) this.server.revoke(this.token);
+    this.token = null;
+  }
+
+  /** Stop the process for good: a spawn still in flight takes itself back when it lands. */
+  discard(): void {
+    this.discarded = true;
+    this.stop();
+  }
+}
+
 /**
  * A coding agent driven as Ordewell's planner (ADR-0009).
  *
@@ -143,34 +202,11 @@ export class CliAgentAiService implements IAiService {
   private readonly workspaceRoot: () => string;
   private environmentSecrets: string[] = [];
 
-  private adapter: AgentAdapter | null = null;
-  /**
-   * The agent's own session id, kept across a process death so the next turn
-   * can resume warm context instead of re-reading the repository. Cleared at
-   * every session boundary — nothing from one goal may reach the next.
-   */
-  private lastNativeSessionId: string | null = null;
-  /** `gate` is what the agent's own tool requests are decided against; absent, nobody can be asked, so only Ordewell's tools and the reads the envelope holds anyway are allowed (ADR-0026, ADR-0032). */
-  private conversation: { startOptions: PlannerStartOptions; tools: PlannerToolsOffer; gate?: PlannerPermissionGate } | null = null;
-  /**
-   * What the runner's own session-wide search is decided against
-   * (ADR-0027), asked again before every turn: the session's mode, its
-   * exclusions or its budget can change between turns. Absent, it is off.
-   */
-  private searchesUnasked: ((provider: string) => boolean) | undefined;
-  private readonly mcpServer: OrdewellMcpServer | undefined;
+  /** The conversation's session, from its start until the next session boundary. */
+  private session: PlannerSession | null = null;
+  private readonly mcpServer: OrdewellMcpServer;
   private readonly projectServerApprovals: ProjectServerApprovals;
-  /** The planner token the running process was spawned with; revoked with the process (ADR-0022, A3). */
-  private plannerToken: string | null = null;
-  /** The {@link PlannerStartOptions.nativeSearch} the running process was spawned with. */
-  private adapterNativeSearch = false;
   private activeAbort: AbortController | null = null;
-  /**
-   * Every subagent this conversation has reported starting, and finishing.
-   * Agents restate a subagent's state as it changes, and one can finish a turn
-   * or a process restart after it started; surfaces get each once, in order.
-   */
-  private readonly subagents = { started: new Set<string>(), finished: new Set<string>() };
 
   constructor(private config: IConfig, deps: CliAgentAiServiceDeps = {}) {
     const runner = runnerForProvider(config.aiProvider);
@@ -196,7 +232,7 @@ export class CliAgentAiService implements IAiService {
     this.projectServerApprovals = deps.projectServerApprovals ?? fileProjectServerApprovals();
   }
 
-  hasActiveConversation(): boolean { return this.conversation !== null; }
+  hasActiveConversation(): boolean { return this.session?.start != null; }
 
   /**
    * False when the running agent process was spawned under a model/effort the
@@ -207,46 +243,45 @@ export class CliAgentAiService implements IAiService {
    * on the old model. No conversation yet is vacuously "current".
    */
   conversationMatchesConfig(): boolean {
-    if (!this.conversation) return true;
-    return this.conversation.startOptions.model === this.plannerModel()
-      && this.conversation.startOptions.effort === this.config.plannerThinkingEffort;
+    const start = this.session?.start;
+    if (!start) return true;
+    return start.startOptions.model === this.plannerModel()
+      && start.startOptions.effort === this.config.plannerThinkingEffort;
   }
 
   /** Always: a conversation whose planner cannot reach the Ordewell MCP server fails to start rather than falling back to the envelopes. */
   plannerToolsAttached(): boolean { return true; }
 
   /** The agent's own session id, a resumption hint only — Ordewell's transcript is authoritative (T4). */
-  nativeSessionId(): string | null { return this.adapter?.nativeSessionId() ?? null; }
+  nativeSessionId(): string | null { return this.session?.adapter?.nativeSessionId() ?? null; }
 
   heldSecrets(): readonly string[] { return this.environmentSecrets; }
 
   restart(): void {
     this.activeAbort?.abort();
     this.activeAbort = null;
-    this.disposeAdapter();
+    this.session?.stop();
   }
 
   reset(): void {
     this.activeAbort?.abort();
     this.activeAbort = null;
-    this.disposeAdapter();
-    this.environmentSecrets = [];
     // Session boundaries are hard (ADR-0008): the next goal must not resume
     // the previous goal's agent session.
-    this.lastNativeSessionId = null;
-    this.conversation = null;
-    this.searchesUnasked = undefined;
-    this.subagents.started.clear();
-    this.subagents.finished.clear();
+    this.session?.discard();
+    this.session = null;
+    this.environmentSecrets = [];
   }
 
   // --- Conversation (ADR-0002) ---
 
   async startConversation(req: ConversationRequest): Promise<ConversationTurn> {
     this.reset();
-    if (!this.mcpServer || !req.plannerTools) {
+    if (!req.plannerTools) {
       throw new Error(`The ${this.runner} planner plans through Ordewell's MCP tools, and this session has no server to hand it.`);
     }
+    const session = new PlannerSession(this.mcpServer);
+    this.session = session;
 
     const contextStr = await collectResearchContext(req.fs, req.runners);
     const systemPrompt = buildConversationSystemPrompt(
@@ -268,19 +303,25 @@ export class CliAgentAiService implements IAiService {
       effort: this.config.plannerThinkingEffort,
     };
     // Without an approval channel there is no gate, so nothing would decide a search.
-    if (req.approval && fetcher?.searchesUnasked) this.searchesUnasked = (provider) => fetcher.searchesUnasked?.(provider) ?? false;
+    if (req.approval && fetcher?.searchesUnasked) session.searchesUnasked = (provider) => fetcher.searchesUnasked?.(provider) ?? false;
     const tools = req.plannerTools;
-    const adapter = await this.startAdapter(startOptions, tools);
-    recordUnusable(adapter.unusableProjectServers?.() ?? [], req.approval);
+    try {
+      const adapter = await this.startAdapter(startOptions, tools, session);
+      recordUnusable(adapter.unusableProjectServers?.() ?? [], req.approval);
+    } catch (err) {
+      if (this.session === session) this.session = null;
+      session.discard();
+      throw err;
+    }
 
     const gate = req.approval ? { approval: req.approval, fetcher: req.fetcher, workspaceRoot: startOptions.cwd } : undefined;
-    this.conversation = { startOptions, tools, gate };
+    session.start = { startOptions, tools, gate };
 
     // A reloaded session replays its transcript instead of re-running the
     // research the agent already paid for. The agent gets it as context, not
     // as turns: the reply we act on is the one the user's new message opens.
     const opening = this.openingMessage(req);
-    return this.runConversation(opening, req.onProgress, req.signal);
+    return this.runConversation(session, opening, req.onProgress, req.signal);
   }
 
   async continueConversation(
@@ -288,8 +329,9 @@ export class CliAgentAiService implements IAiService {
     onProgress: (progress: ResearchProgress) => void,
     signal?: AbortSignal,
   ): Promise<ConversationTurn> {
-    if (!this.conversation) throw new Error('No active planner conversation. Start planning first.');
-    return this.runConversation(userMessage, onProgress, signal);
+    const session = this.session;
+    if (!session?.start) throw new Error('No active planner conversation. Start planning first.');
+    return this.runConversation(session, userMessage, onProgress, signal);
   }
 
   private openingMessage(req: ConversationRequest): string {
@@ -318,6 +360,7 @@ export class CliAgentAiService implements IAiService {
    * continued while it left subagents running in the background.
    */
   private async runConversation(
+    session: PlannerSession,
     message: string,
     onProgress: (progress: ResearchProgress) => void,
     signal?: AbortSignal,
@@ -330,7 +373,7 @@ export class CliAgentAiService implements IAiService {
     const carried: string[] = [];
 
     const send = async (text: string): Promise<ReplyAttempt> => {
-      let turn = await this.runTurn(text, onProgress, combined);
+      let turn = await this.runTurn(session, text, onProgress, combined);
       const researchLog: ResearchLogEntry[] = [...turn.researchLog];
       // The agent ended its turn with subagents still running, so whatever
       // they find is about to be said into a closed turn. Ask for it while a
@@ -338,7 +381,7 @@ export class CliAgentAiService implements IAiService {
       while (turn.backgroundAgents > 0 && agentWaits < MAX_AGENT_WAITS && turn.text.trim() && !turn.error && !turn.aborted && !combined?.aborted) {
         agentWaits++;
         carried.push(turn.text);
-        turn = await this.runTurn(waitForAgentsPrompt(turn.backgroundAgents), onProgress, combined);
+        turn = await this.runTurn(session, waitForAgentsPrompt(turn.backgroundAgents), onProgress, combined);
         researchLog.push(...turn.researchLog);
       }
       return {
@@ -380,11 +423,12 @@ export class CliAgentAiService implements IAiService {
    * at once, which all three of these do routinely.
    */
   private async runTurn(
+    session: PlannerSession,
     message: string,
     onProgress: (progress: ResearchProgress) => void,
     signal?: AbortSignal,
   ): Promise<HarnessTurn> {
-    const adapter = await this.ensureAdapter();
+    const adapter = await this.ensureAdapter(session);
     const pendingCalls = new Map<string, { tool: ResearchStep['tool']; toolLabel?: string; args: string; subagentId?: string }>();
     const researchLog: ResearchStep[] = [];
     let text = '';
@@ -405,8 +449,8 @@ export class CliAgentAiService implements IAiService {
     // Calls whose permission request the envelope denied: their failed result is a denial, not a failure.
     const deniedCalls = new Set<string>();
     const gate: PlannerPermissionGate = {
-      workspaceRoot: this.conversation?.startOptions.cwd ?? this.workspaceRoot(),
-      ...this.conversation?.gate,
+      workspaceRoot: session.start?.startOptions.cwd ?? this.workspaceRoot(),
+      ...session.start?.gate,
       savedOutput: (abs) => adapter.savedOutput?.(abs) ?? false,
     };
     const subagentUsage = new Map<string, UsageTotals>();
@@ -443,7 +487,7 @@ export class CliAgentAiService implements IAiService {
       onProgress({ type: 'tool_result', toolResult: output, step, toolCallId: id, subagentId });
     };
 
-    await adapter.send(message, (event: AgentEvent) => {
+    const sent = adapter.send(message, (event: AgentEvent) => {
       switch (event.type) {
         case 'assistant_text_delta':
           streamedRun += event.text;
@@ -490,14 +534,14 @@ export class CliAgentAiService implements IAiService {
         }
 
         case 'subagent_started':
-          if (this.subagents.started.has(event.subagentId)) return;
-          this.subagents.started.add(event.subagentId);
+          if (session.subagents.started.has(event.subagentId)) return;
+          session.subagents.started.add(event.subagentId);
           onProgress({ type: 'subagent_started', subagentId: event.subagentId, brief: event.brief, model: event.model });
           return;
 
         case 'subagent_finished':
-          if (!this.subagents.started.has(event.subagentId) || this.subagents.finished.has(event.subagentId)) return;
-          this.subagents.finished.add(event.subagentId);
+          if (!session.subagents.started.has(event.subagentId) || session.subagents.finished.has(event.subagentId)) return;
+          session.subagents.finished.add(event.subagentId);
           onProgress({
             type: 'subagent_finished', subagentId: event.subagentId, outcome: event.outcome, digest: event.digest,
             usage: subagentUsage.get(event.subagentId),
@@ -533,7 +577,9 @@ export class CliAgentAiService implements IAiService {
                   else announceDenial(`Access denied: "${event.name}" was refused. ${decision.note ?? ''}`.trim());
                 }
                 adapter.answerPermission?.(id, decision);
-              });
+              })
+              // A runner that cannot take its answer has lost its process, and its turn ends on that error.
+              .catch(() => {});
             return;
           }
           if (event.decided?.decision !== 'deny') return;
@@ -549,6 +595,12 @@ export class CliAgentAiService implements IAiService {
           return;
       }
     }, signal, () => onProgress({ type: 'liveness' }));
+    try {
+      await sent;
+    } catch (err) {
+      session.stop();
+      throw err;
+    }
 
     const finalSegment = segmentId;
     const finalRunStart = runStart;
@@ -560,12 +612,12 @@ export class CliAgentAiService implements IAiService {
       settle(id, 'The agent ended the turn without reporting this call\'s result.', false, 'not_executed');
     }
 
-    this.lastNativeSessionId = adapter.nativeSessionId() ?? this.lastNativeSessionId;
+    session.nativeSessionId = adapter.nativeSessionId() ?? session.nativeSessionId;
     // A failed turn usually means the process is gone, and an aborted one kills
     // the process by contract. Either way the adapter cannot be sent to again —
     // `dispose()` is terminal — so drop it and let the next turn restart from
     // the session id rather than throwing into a dead stdin.
-    if (error || signal?.aborted) this.disposeAdapter();
+    if (error || signal?.aborted) session.stop();
 
     if (error) {
       const failure = failureAfterReply(text.slice(finalRunStart), Math.max(blockStart, finalRunStart) - finalRunStart, error);
@@ -583,16 +635,28 @@ export class CliAgentAiService implements IAiService {
   /**
    * The only way this service starts an agent, and it takes a planner start by
    * type: the read-only boundary (ADR-0008/0009) cannot be crossed into task
-   * mode from here without changing this signature.
+   * mode from here without changing this signature. A planner that cannot
+   * reach its tools cannot submit a plan, so it is respawned once and never
+   * left to plan without them (ADR-0025).
    */
-  private async startAdapter(opts: PlannerStartOptions, tools: PlannerToolsOffer): Promise<AgentAdapter> {
-    // A planner that cannot reach its tools cannot submit a plan, so it is
-    // respawned once and never left to plan without them.
-    const first = await this.startWithTools(opts, tools);
-    if (typeof first !== 'string') return first;
-    const second = await this.startWithTools(opts, tools);
-    if (typeof second !== 'string') return second;
-    throw new McpAttachError(`Could not start the ${this.runner} planner with Ordewell's tools. First spawn: ${first}. Respawn: ${second}.`);
+  private async startAdapter(opts: PlannerStartOptions, tools: PlannerToolsOffer, session: PlannerSession): Promise<AgentAdapter> {
+    const server = this.mcpServer;
+    // Decided once, here, so the token's tools and the session's config are the same decision.
+    const start: PlannerStartOptions = { ...opts, nativeSearch: this.nativeSearch(session) };
+    const spawned = await spawnAttached({
+      runner: this.runner,
+      create: () => this.newAdapter(),
+      issueToken: () => server.issuePlannerToken({ sessionId: tools.sessionId, hidden: connectorFor(this.runner)?.ordewellTools.plannerHidden(start) }, tools.handler),
+      revoke: (token) => server.revoke(token),
+      start: (adapter, credential) => adapter.start({ ...start, mcp: mcpClientConfig(credential) }),
+      cancelled: () => session.discarded,
+      failed: (first, second) => `Could not start the ${this.runner} planner with Ordewell's tools. First spawn: ${first}. Respawn: ${second}.`,
+    });
+    if (!spawned) throw new Error(`The ${this.runner} planner session ended before its agent started.`);
+    session.adapter = spawned.adapter;
+    session.token = spawned.token;
+    session.nativeSearch = start.nativeSearch ?? false;
+    return spawned.adapter;
   }
 
   private newAdapter(): AgentAdapter {
@@ -601,59 +665,10 @@ export class CliAgentAiService implements IAiService {
     return adapter;
   }
 
-  /** One spawn with the Ordewell server injected: the adapter once the runner reports it connected, otherwise why not, with nothing left running. */
-  private async startWithTools(opts: PlannerStartOptions, tools: PlannerToolsOffer): Promise<AgentAdapter | string> {
-    const server = this.mcpServer;
-    if (!server) return 'no Ordewell MCP server was given';
-    const adapter = this.newAdapter();
-    if (!adapter.mcpAttached) {
-      adapter.dispose();
-      return `${this.runner} cannot be handed Ordewell's MCP server`;
-    }
-    // Decided once, here, so the token's tools and the session's config are the same decision.
-    const start: PlannerStartOptions = { ...opts, nativeSearch: this.nativeSearch() };
-    let credential: McpCredential;
-    try {
-      credential = await server.issuePlannerToken({ sessionId: tools.sessionId, hidden: connectorFor(this.runner)?.ordewellTools.plannerHidden(start) }, tools.handler);
-    } catch (err) {
-      adapter.dispose();
-      return `Ordewell's MCP server could not issue a token (${err instanceof Error ? err.message : String(err)})`;
-    }
-    try {
-      await adapter.start({ ...start, mcp: mcpClientConfig(credential) });
-    } catch (err) {
-      adapter.dispose();
-      server.revoke(credential.token);
-      throw err;
-    }
-    let failure = `${this.runner} did not report Ordewell's MCP server connected`;
-    try {
-      if (await adapter.mcpAttached()) {
-        this.adapter = adapter;
-        this.plannerToken = credential.token;
-        this.adapterNativeSearch = start.nativeSearch ?? false;
-        return adapter;
-      }
-    } catch (err) {
-      failure = `${this.runner} could not check Ordewell's MCP attach state (${err instanceof Error ? err.message : String(err)})`;
-    }
-    adapter.dispose();
-    server.revoke(credential.token);
-    return failure;
-  }
-
-  /** Kill the planner process, and with it the token it was spawned with. */
-  private disposeAdapter(): void {
-    this.adapter?.dispose();
-    this.adapter = null;
-    if (this.plannerToken) this.mcpServer?.revoke(this.plannerToken);
-    this.plannerToken = null;
-  }
-
   /** Whether the web-read policy lets the runner's own session-wide search run unasked now (ADR-0027). */
-  private nativeSearch(): boolean {
+  private nativeSearch(session: PlannerSession): boolean {
     const provider = connectorFor(this.runner)?.ordewellTools.sessionSearchProvider;
-    return provider !== undefined && (this.searchesUnasked?.(provider) ?? false);
+    return provider !== undefined && (session.searchesUnasked?.(provider) ?? false);
   }
 
   /**
@@ -667,13 +682,12 @@ export class CliAgentAiService implements IAiService {
    * keep searching unasked after Full turned Guarded. Codex 0.162 applies
    * `thread/resume`'s `config.web_search` either way (checked live).
    */
-  private async ensureAdapter(): Promise<AgentAdapter> {
-    if (this.adapter && this.adapterNativeSearch === this.nativeSearch()) return this.adapter;
-    this.disposeAdapter();
-    const conversation = this.conversation;
-    if (!conversation) throw new Error('No active planner conversation.');
-    await this.startAdapter({ ...conversation.startOptions, resumeSessionId: this.lastNativeSessionId ?? undefined }, conversation.tools);
-    return this.adapter!;
+  private async ensureAdapter(session: PlannerSession): Promise<AgentAdapter> {
+    if (session.adapter && session.nativeSearch === this.nativeSearch(session)) return session.adapter;
+    session.stop();
+    const start = session.start;
+    if (!start) throw new Error('No active planner conversation.');
+    return this.startAdapter({ ...start.startOptions, resumeSessionId: session.nativeSessionId ?? undefined }, start.tools, session);
   }
 
   /**
@@ -732,16 +746,6 @@ export class CliAgentAiService implements IAiService {
    * prose around it is not streamed at all, since no turn is open to show it in.
    */
   private async oneShot(prompt: string, catalog: OneShotCatalog, onProgress?: (p: ResearchProgress) => void, signal?: AbortSignal): Promise<OneShot> {
-    const previous = this.adapter;
-    const previousConversation = this.conversation;
-    const previousSessionId = this.lastNativeSessionId;
-    const previousToken = this.plannerToken;
-    const previousNativeSearch = this.adapterNativeSearch;
-    const previousSearchesUnasked = this.searchesUnasked;
-    this.adapter = null;
-    this.plannerToken = null;
-    this.searchesUnasked = undefined;
-
     let submitted: Task[] | undefined;
     let refused: string[] = [];
     // A call still waiting on the skill check when the session ends must not record a plan nobody reads.
@@ -783,12 +787,17 @@ export class CliAgentAiService implements IAiService {
       model: this.plannerModel(),
       effort: this.config.plannerThinkingEffort,
     };
-    let oneShotAdapter: AgentAdapter | null = null;
+    // Its own session, never the conversation's: a one-shot leaves no process
+    // behind, and its agent session must not become the conversation's resume
+    // hint — restarting the chat into a plan-generation session would cross
+    // two sessions that never shared a goal.
+    const session = new PlannerSession(this.mcpServer);
     try {
-      oneShotAdapter = await this.startAdapter(startOptions, tools);
-      this.conversation = { startOptions, tools };
+      await this.startAdapter(startOptions, tools, session);
+      session.start = { startOptions, tools };
       const splitter = new ReplySplitter();
       const turn = await this.runTurn(
+        session,
         'Follow the instructions in your system prompt and produce the plan now.',
         (p) => {
           if (p.type !== 'text_delta') return onProgress?.(p);
@@ -801,21 +810,7 @@ export class CliAgentAiService implements IAiService {
       return { tasks: submitted, refused, text: turn.text, researchLog: turn.researchLog };
     } finally {
       ended = true;
-      // A one-shot never leaves a process behind, and never disturbs a
-      // conversational session that happened to be open around it — including
-      // when its own agent failed to start, which happens before there is
-      // anything to dispose.
-      oneShotAdapter?.dispose();
-      if (this.plannerToken) this.mcpServer?.revoke(this.plannerToken);
-      this.adapter = previous;
-      this.plannerToken = previousToken;
-      this.adapterNativeSearch = previousNativeSearch;
-      this.searchesUnasked = previousSearchesUnasked;
-      this.conversation = previousConversation;
-      // The one-shot's own agent session must not become the conversation's
-      // resume hint: restarting the chat into a plan-generation session would
-      // cross two sessions that never shared a goal.
-      this.lastNativeSessionId = previousSessionId;
+      session.discard();
     }
   }
 

@@ -9,7 +9,7 @@ import { fakeMcpServer, fakeSpawn, fixture, openCodeFixture, planJson, scriptedA
 import type { McpToolReply, SubmitPlanArgs } from '../mcp/tools';
 import type { SkillLookup } from '../taskSkills';
 import type { SkillInfo } from '../SkillsService';
-import type { AgentEvent } from '../harness/AgentAdapter';
+import type { AgentAdapter, AgentEvent } from '../harness/AgentAdapter';
 import type { ApprovalRequest } from '../../interfaces/IApproval';
 import { addPlannerUsage, plannerContextFill } from '../../models/Usage';
 import { TurnStream } from '../replyStream';
@@ -2064,6 +2064,112 @@ describe('CliAgentAiService — resource lifecycle', () => {
     svc.reset();
     expect(() => { svc.reset(); svc.reset(); }).not.toThrow();
     expect(spawned.processes[0].killed).toBe(true);
+  });
+
+  /**
+   * Planner processes as records: each one's start can be held open, and its
+   * turn scripted. The server records what it issued and took back.
+   */
+  function planners(behave: (index: number) => { holdStart?: boolean; send?: AgentAdapter['send']; answerPermission?: AgentAdapter['answerPermission'] } = () => ({})) {
+    const mcp = fakeMcpServer();
+    const processes: Array<{ disposed: boolean; sent: string[]; release: () => void; startCalled: boolean }> = [];
+    const svc = new CliAgentAiService(fakeConfig({ aiProvider: 'claude-code' }), {
+      workspaceRoot: () => '/repo',
+      mcpServer: mcp,
+      createAdapter: () => {
+        const behavior = behave(processes.length);
+        const record = { disposed: false, sent: [] as string[], release: () => {}, startCalled: false };
+        processes.push(record);
+        return {
+          agentId: 'claude-code',
+          start: async () => {
+            record.startCalled = true;
+            if (behavior.holdStart) await new Promise<void>((resolve) => { record.release = resolve; });
+          },
+          send: async (message, onEvent, signal, onLiveness) => {
+            record.sent.push(message);
+            if (behavior.send) return behavior.send(message, onEvent, signal, onLiveness);
+            onEvent({ type: 'assistant_text', text: `reply ${processes.indexOf(record) + 1}` });
+            onEvent({ type: 'turn_end' });
+          },
+          nativeSessionId: () => null,
+          dispose: () => { record.disposed = true; },
+          mcpAttached: async () => true,
+          answerPermission: behavior.answerPermission,
+        };
+      },
+    });
+    return { svc, mcp, processes };
+  }
+
+  it('takes back a planner whose start lands after a reset, rather than reviving its process and token', async () => {
+    const { svc, mcp, processes } = planners(() => ({ holdStart: true }));
+    const starting = svc.startConversation(request());
+    await vi.waitFor(() => expect(processes[0]?.startCalled).toBe(true));
+
+    svc.reset();
+    processes[0].release();
+
+    await expect(starting).rejects.toThrow();
+    expect(processes[0]).toMatchObject({ disposed: true, sent: [] });
+    expect(mcp.heldTokens()).toEqual([]);
+    expect(svc.hasActiveConversation()).toBe(false);
+    expect(svc.nativeSessionId()).toBeNull();
+  });
+
+  it('keeps the second conversation when the first one\'s start lands after it', async () => {
+    const { svc, mcp, processes } = planners((index) => ({ holdStart: index === 0 }));
+    const first = svc.startConversation(request({ goal: 'first' }));
+    await vi.waitFor(() => expect(processes[0]?.startCalled).toBe(true));
+
+    const second = await svc.startConversation(request({ goal: 'second' }));
+    processes[0].release();
+    await expect(first).rejects.toThrow();
+
+    expect(second.text).toBe('reply 2');
+    expect(processes[0]).toMatchObject({ disposed: true, sent: [] });
+    expect(mcp.heldTokens()).toEqual(['tok-2']);
+    const next = await svc.continueConversation('and then?', () => {});
+    expect(next.text).toBe('reply 2');
+    expect(processes).toHaveLength(2);
+    expect(processes[1].sent).toHaveLength(2);
+  });
+
+  it('kills the planner and revokes its token when sending it a turn fails', async () => {
+    const { svc, mcp, processes } = planners(() => ({ send: async () => { throw new Error('EPIPE'); } }));
+
+    await expect(svc.startConversation(request())).rejects.toThrow('EPIPE');
+
+    expect(processes[0].disposed).toBe(true);
+    expect(mcp.heldTokens()).toEqual([]);
+  });
+
+  it('leaves no unhandled rejection when the planner cannot take a permission answer', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      let answered = false;
+      const { svc } = planners(() => ({
+        send: async (_message, onEvent) => {
+          onEvent({ type: 'permission_request', id: 'req-1', name: 'Write', detail: '/etc/hosts' });
+          await vi.waitFor(() => expect(answered).toBe(true));
+          onEvent({ type: 'assistant_text', text: 'ok' });
+          onEvent({ type: 'turn_end' });
+        },
+        answerPermission: () => {
+          answered = true;
+          throw new Error('stdin closed');
+        },
+      }));
+
+      await svc.startConversation(request({ approval: approvalSpy(false) }));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 });
 
