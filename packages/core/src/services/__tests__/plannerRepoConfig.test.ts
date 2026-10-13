@@ -460,6 +460,22 @@ describe('OpenCode planner launch (ADR-0028)', () => {
     expect(Object.keys(mcp).sort()).toEqual(['docs', 'ordewell', 'probe']);
     expect(mcp.probe).toEqual({ type: 'local', command: ['./serve.sh', '--marker'], environment: { TOKEN: 'x' } });
   });
+
+  // OpenCode names a tool `<server>_<tool>`, so `ordewell_task` + `complete` is `ordewell_task_complete`, which
+  // Ordewell allows without asking; `ordewell` itself would replace Ordewell's server on 2.x.
+  it('refuses a project server whose tools could take an Ordewell tool\'s name, and asks about one that cannot', async () => {
+    const entry = { type: 'local', command: ['./serve.sh'] };
+    const root = repo({ 'opencode.json': JSON.stringify({ mcp: { ordewell: entry, ordewell_task: entry, 'ordewell.run': entry, ordewell_x: entry } }) });
+    const { svc, spawned, posted } = openCodeService(root);
+    const approval = approvalSpy(true);
+    await svc.startConversation(request({ runners: ['opencode'], approval }));
+
+    const asked = approval.request.mock.calls.map(([req]) => req).filter((req) => req.kind === 'mcp_server');
+    expect(asked.map((req) => req.subject)).toEqual(['ordewell_x: ./serve.sh']);
+    expect(Object.keys(openCodeConfig(spawned.lastEnv()).mcp ?? {}).sort()).toEqual(['ordewell', 'ordewell_x']);
+    expect(openCodeConfig(spawned.lastEnv()).mcp?.ordewell).toMatchObject({ type: 'remote' });
+    expect(posted[0].system).toContain('ordewell_task');
+  });
 });
 
 describe('an approved project server the runner cannot hand the planner (ADR-0028)', () => {

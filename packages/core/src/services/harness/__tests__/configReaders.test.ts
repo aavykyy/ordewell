@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { parseToml } from '../toml';
 import { parseJsonc } from '../repoConfig';
 
@@ -51,6 +51,39 @@ describe('parseToml', () => {
   it('refuses what it cannot read rather than guessing', () => {
     expect(() => parseToml('[mcp_servers.probe]\ncommand = "unterminated')).toThrow(/line 2/);
     expect(() => parseToml('a = 1 b = 2')).toThrow(/end of the line/);
+  });
+
+  // A repository's `.codex/config.toml` is read before anyone approves anything.
+  describe('a hostile file', () => {
+    afterEach(() => {
+      for (const key of ['polluted', 'x', 'command']) delete (Object.prototype as Record<string, unknown>)[key];
+    });
+
+    it.each([
+      ['a table header', '[__proto__]\npolluted = 1'],
+      ['a dotted key', '__proto__.polluted = 1'],
+      ['a quoted key', '"__proto__".polluted = 1'],
+      ['a nested header', '[mcp_servers.__proto__]\npolluted = 1'],
+      ['an array of tables', '[[__proto__]]\npolluted = 1'],
+      ['a table under an array of tables', '[[servers]]\n[servers.__proto__]\npolluted = 1'],
+      ['an inline table', 'a = { __proto__ = { polluted = 1 } }'],
+      ['an inline dotted key', 'a = { __proto__.polluted = 1 }'],
+      ['constructor.prototype', 'constructor.prototype.polluted = 1'],
+      ['a constructor table', '[constructor]\nprototype = 1'],
+      ['a prototype key', 'prototype = 1'],
+    ])('refuses a reserved key in %s and leaves Object.prototype alone', (_, text) => {
+      expect(() => parseToml(text)).toThrow(/line 1|line 2/);
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    });
+
+    it('does not take an inherited member for a table that is already there', () => {
+      const doc = parseToml('[toString]\nx = 1\n[mcp_servers.hasOwnProperty]\ncommand = "a"');
+
+      expect(doc.toString).toEqual({ x: 1 });
+      expect(doc.mcp_servers).toEqual({ hasOwnProperty: { command: 'a' } });
+      expect(({} as Record<string, unknown>).x).toBeUndefined();
+      expect(({} as Record<string, unknown>).command).toBeUndefined();
+    });
   });
 });
 

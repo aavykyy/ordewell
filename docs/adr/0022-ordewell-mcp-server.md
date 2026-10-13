@@ -86,11 +86,18 @@ on the same mechanism.
   without its tools. One automatic respawn is allowed; a second attach failure
   fails the task or planner turn. There is no marker fallback.
 - **Pre-authorized, in every mode (S3).** Calling an Ordewell tool never
-  triggers a permission prompt: Claude Code `--allowedTools mcp__ordewell__*`,
-  Codex's per-server approval configuration, OpenCode's permission rules.
-  Otherwise the done signal, or the plan itself, would wait on a person. The
-  grant names the `ordewell` server only and loosens nothing else: a harness
-  planner stays in its read-only mode for every other tool.
+  triggers a permission prompt: Claude Code `--allowedTools` with each tool's
+  full name, Codex's per-server approval configuration, OpenCode's permission
+  rule per tool. Otherwise the done signal, or the plan itself, would wait on
+  a person. The grant names the `ordewell` server only and loosens nothing
+  else: a harness planner stays in its read-only mode for every other tool.
+  A request is taken for an Ordewell tool's by its exact name (Claude Code,
+  OpenCode) or server name (Codex), never by a prefix: a server named
+  `ordewell_x` or `ordewell__x` names its tools under Ordewell's prefix.
+  OpenCode joins server and tool with `_`, so a server named `ordewell_task`
+  would have its `complete` named `ordewell_task_complete`; a project server
+  whose name could do that is not offered to a planner
+  ([ADR-0028](0028-planners-never-run-repository-config.md)).
 - **Prompts teach the connected tools (S4).** The connector checks the runner's
   own MCP attach state before sending the prompt. A failed attach receives no
   task or planning prompt.
@@ -254,3 +261,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-11 — execution tools and `task_diff`, live planner turns, wake-up turns ([ADR-0029](0029-the-supervisor.md)).
 - 2026-10-11 — live planner turns implemented: `edit_plan` checks a mid-run edit at the call, with no queued outcome.
 - 2026-10-11 — wake-up turns implemented: their reads spend the plan's wake-up read budget, and `submit_plan` and `edit_plan` are refused in them at Watch.
+- 2026-10-13 — S3 by exact name: OpenCode's `ordewell_*` rule and the Claude Code and OpenCode prefix matches pre-approved a repository server named `ordewell_x`'s tools; checked against OpenCode 2.0.27's tool naming.

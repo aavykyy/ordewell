@@ -128,6 +128,11 @@ Code; the `mcp` entries of the project's `opencode.json`/`opencode.jsonc` or
   `!mcp-server:*` turns project servers off.
 - **Remote servers follow the same rule.** A URL the repository chose can
   receive the user's headers and the planner's tool arguments.
+- **A name cannot stand in for Ordewell's.** OpenCode names a tool
+  `<server>_<tool>`, so a server named `ordewell` or `ordewell_task` could
+  put a tool under one of Ordewell's names, which runs without asking
+  (ADR-0022, S3). OpenCode's reader reports such a server as unreadable: it is
+  never put to approval or started, and the planner is told it was left out.
 - **Decided once per conversation.** The answer is kept for the
   conversation's respawns and resumes; a new conversation decides again, and
   remembered approvals answer it without asking. A one-shot plan has no
@@ -294,3 +299,4 @@ and its launch is byte for byte what it was.
   Claude planner's reads of its session's saved tool results, asked since
   this ADR's read rules, are allowed again
   ([ADR-0032](0032-runner-state-outside-the-workspace.md)).
+- 2026-10-13 — an OpenCode project server whose name could give a tool one of Ordewell's names is not offered.

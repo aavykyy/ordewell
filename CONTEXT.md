@@ -455,7 +455,8 @@ the protocol stays in the adapter.
 runner the Ordewell MCP server (ADR-0022). It covers the runner's names for the
 server's tools (`toolName`/`toolNames`), which of the runner's permission
 requests are for them and so are never refused or left waiting
-(`isOrdewellAsk`), what the runner's own status word for the server means
+(`isOrdewellAsk`, by the tool's exact name or the server's, never a prefix
+another server's name could extend), what the runner's own status word for the server means
 (`attachState`), and the runner-specific injection that writes the server into
 its launch or configuration. Every supported connector has one. Task runners
 and coding-agent planners must connect their tools before receiving a prompt;

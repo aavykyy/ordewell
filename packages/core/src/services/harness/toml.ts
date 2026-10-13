@@ -16,6 +16,13 @@ class TomlError extends Error {}
 
 const BARE_KEY = /[A-Za-z0-9_-]/;
 const ESCAPES: Record<string, string> = { b: '\b', t: '\t', n: '\n', f: '\f', r: '\r', '"': '"', '\\': '\\', e: '\x1b' };
+/** The file is the repository's, read before anything is approved: a key that could reach a prototype is refused. */
+const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/** Prototype-free, so neither a lookup nor a write by a key from the file can reach an inherited member. */
+function newTable(): Record<string, unknown> {
+  return Object.create(null) as Record<string, unknown>;
+}
 
 class TomlReader {
   private i = 0;
@@ -23,7 +30,7 @@ class TomlReader {
   constructor(private readonly src: string) {}
 
   document(): Record<string, unknown> {
-    const root: Record<string, unknown> = {};
+    const root = newTable();
     let table = root;
     for (;;) {
       this.skipBlank(true);
@@ -34,9 +41,9 @@ class TomlReader {
         this.expect(']]');
         const parent = this.tableAt(root, path.slice(0, -1));
         const last = path[path.length - 1];
-        const list = parent[last] ?? (parent[last] = []);
+        const list = Object.hasOwn(parent, last) ? parent[last] : (parent[last] = []);
         if (!Array.isArray(list)) throw this.fail(`${path.join('.')} is not an array of tables`);
-        table = {};
+        table = newTable();
         list.push(table);
       } else if (this.src[this.i] === '[') {
         this.i += 1;
@@ -58,8 +65,8 @@ class TomlReader {
   private tableAt(from: Record<string, unknown>, path: string[]): Record<string, unknown> {
     let table = from;
     for (const part of path) {
-      const next = table[part];
-      if (next === undefined) table = (table[part] = {}) as Record<string, unknown>;
+      const next = Object.hasOwn(table, part) ? table[part] : undefined;
+      if (next === undefined) table = table[part] = newTable();
       else if (isRecord(next)) table = next;
       else if (Array.isArray(next) && isRecord(next[next.length - 1])) table = next[next.length - 1] as Record<string, unknown>;
       else throw this.fail(`${part} is not a table`);
@@ -80,6 +87,7 @@ class TomlReader {
         if (this.i === start) throw this.fail('expected a key');
         parts.push(this.src.slice(start, this.i));
       }
+      if (RESERVED_KEYS.has(parts[parts.length - 1])) throw this.fail(`${parts[parts.length - 1]} is not allowed as a key`);
       this.skipBlank(false);
       if (this.src[this.i] !== '.') return parts;
       this.i++;
@@ -119,7 +127,7 @@ class TomlReader {
 
   private inlineTable(): Record<string, unknown> {
     this.i++;
-    const table: Record<string, unknown> = {};
+    const table = newTable();
     for (;;) {
       this.skipBlank(true);
       if (this.src[this.i] === '}') { this.i++; return table; }

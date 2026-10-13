@@ -1,14 +1,30 @@
 import { ORDEWELL_MCP_SERVER_NAME, type McpClientConfig } from '../mcp';
-import { prefixedToolNames, type OrdewellToolBinding } from './ordewellBinding';
+import { ORDEWELL_TOOL_NAMES, prefixedToolNames, type OrdewellToolBinding, type OrdewellToolRole } from './ordewellBinding';
 
 /**
- * OpenCode names an MCP tool `<server>_<tool>`, and keys its permission rules
- * by that name (checked against 1.18.34).
+ * OpenCode names an MCP tool `<server>_<tool>`, each part with anything but
+ * letters, digits, `_` and `-` turned into `_`, and keys its permission rules
+ * by that name (checked against 1.18.34; the character rule against 2.0.27).
  */
 const NAMES = prefixedToolNames(`${ORDEWELL_MCP_SERVER_NAME}_`);
 
-/** The permission rule that covers every tool of the server. */
-const RULE = NAMES.toolName('*');
+/** The rule an Ordewell before exact rules wrote, still stripped from an inherited configuration. */
+const PATTERN_RULE = NAMES.toolName('*');
+
+/**
+ * Whether a server of this name could put a tool under one of Ordewell's
+ * names: `ordewell_task` with a tool `complete` is `ordewell_task_complete`,
+ * which Ordewell allows unasked, and `ordewell` is Ordewell's own server.
+ */
+export function shadowsOrdewell(server: string): boolean {
+  const prefix = `${server.replace(/[^a-zA-Z0-9_-]/g, '_')}_`;
+  return ORDEWELL_TOOL_NAMES.some((tool) => NAMES.toolName(tool).startsWith(prefix));
+}
+
+/** One allow per tool `role` is served, by its exact name: a pattern would cover another server's tools too. */
+function allowRules(mcp: McpClientConfig, role: OrdewellToolRole): Record<string, 'allow'> {
+  return Object.fromEntries(NAMES.toolNames(role, mcp.hidden).map((name) => [name, 'allow']));
+}
 
 /**
  * A planner server's whole permission policy (ADR-0026), in order: OpenCode
@@ -76,7 +92,7 @@ export interface OpenCodeOrdewellBinding extends OrdewellToolBinding<string> {
   /** The 1.x server's `OPENCODE_CONFIG_CONTENT` with the server added — see {@link mergeOrdewellConfig}. */
   configContent(existing: string | undefined, mcp: McpClientConfig | null, role: 'planner' | 'task', projectServers?: Record<string, unknown>): string | null;
   /** The rules a 2.x session is created with so the server's tools never wait on a person (ADR-0022, S3). */
-  sessionRules(): OpenCodeSessionRule[];
+  sessionRules(mcp: McpClientConfig, role: OrdewellToolRole): OpenCodeSessionRule[];
   /**
    * What a planner's instructions add about web reads (ADR-0027). `ownSearch`
    * false: its `websearch` is off for the session, and Ordewell's is the search.
@@ -97,21 +113,20 @@ function deepMerge(base: Record<string, unknown>, over: Record<string, unknown>)
   return merged;
 }
 
-/** `config` without a field's `key`, and without the field once that was all it held. */
-function dropEntry(config: Record<string, unknown>, field: string, key: string): void {
+/** `config` without a field's keys that `drop` names, and without the field once that was all it held. */
+function dropEntries(config: Record<string, unknown>, field: string, drop: (key: string) => boolean): void {
   const entries = config[field];
-  if (!isRecord(entries) || !Object.hasOwn(entries, key)) return;
-  const rest = { ...entries };
-  delete rest[key];
+  if (!isRecord(entries) || !Object.keys(entries).some(drop)) return;
+  const rest = Object.fromEntries(Object.entries(entries).filter(([key]) => !drop(key)));
   if (Object.keys(rest).length > 0) config[field] = rest;
   else delete config[field];
 }
 
-/** `config` without what an Ordewell merge puts there: the reserved server entry and the rule allowing its tools. */
+/** `config` without what an Ordewell merge puts there: the reserved server entry and the rules allowing its tools. */
 function withoutOrdewell(config: Record<string, unknown>): Record<string, unknown> {
   const kept = { ...config };
-  dropEntry(kept, 'mcp', ORDEWELL_MCP_SERVER_NAME);
-  dropEntry(kept, 'permission', RULE);
+  dropEntries(kept, 'mcp', (key) => key === ORDEWELL_MCP_SERVER_NAME);
+  dropEntries(kept, 'permission', (key) => key === PATTERN_RULE || NAMES.isToolName(key));
   return kept;
 }
 
@@ -167,7 +182,7 @@ function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig 
     // A language server opened on a file the planner reads can run the
     // repository's toolchain; 1.x's `read` opens every file it reads (ADR-0028).
     ...(role === 'planner' ? { lsp: false } : {}),
-    permission: { ...(role === 'planner' ? OPENCODE_PLANNER_PERMISSION : {}), ...(mcp ? { [RULE]: 'allow' } : {}) },
+    permission: { ...(role === 'planner' ? OPENCODE_PLANNER_PERMISSION : {}), ...(mcp ? allowRules(mcp, role) : {}) },
   };
   return JSON.stringify(deepMerge({ ...base, ...(policy === undefined ? {} : { permission: policy }) }, ours));
 }
@@ -177,11 +192,11 @@ export const OPENCODE_ORDEWELL: OpenCodeOrdewellBinding = {
   toolNames: NAMES.toolNames,
   plannerHidden: () => [],
   /** A permission request's `permission`, which for a tool is its name. */
-  isOrdewellAsk: (permission) => NAMES.hasPrefix(permission),
+  isOrdewellAsk: (permission) => NAMES.isToolName(permission),
   /** `/mcp` lists a server only once it has started connecting, as `pending` until it settles. */
   attachState: (status) => (status === 'connected' ? 'connected' : status === undefined || status === null || status === 'pending' ? 'pending' : 'failed'),
   configContent: mergeOrdewellConfig,
-  sessionRules: () => [{ action: RULE, resource: '*', effect: 'allow' }],
+  sessionRules: (mcp, role) => Object.keys(allowRules(mcp, role)).map((action) => ({ action, resource: '*', effect: 'allow' })),
   plannerInstructions: (ownSearch = true) => [
     `Read web pages with \`${NAMES.toolName('fetch')}\`. Your own \`webfetch\` is off while planning: it follows redirects Ordewell cannot check.`,
     ownSearch

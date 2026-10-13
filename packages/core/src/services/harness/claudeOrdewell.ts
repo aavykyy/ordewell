@@ -19,7 +19,7 @@ export const CLAUDE_ORDEWELL: ClaudeOrdewellBinding = {
   /** ADR-0027: `WebSearch` and `WebFetch` carry Claude's web reads, both asked through the policy. */
   plannerHidden: () => ['fetch', 'web_search'],
   /** `can_use_tool`'s `tool_name`. */
-  isOrdewellAsk: (toolName: string) => MCP_CLIENT_TOOL_NAMES.hasPrefix(toolName),
+  isOrdewellAsk: (toolName: string) => MCP_CLIENT_TOOL_NAMES.isToolName(toolName),
   /** `mcp_status` reports `pending` until the CLI's connection attempt settles. */
   attachState: (status) => (status === 'connected' ? 'connected' : status === 'pending' ? 'pending' : 'failed'),
 
