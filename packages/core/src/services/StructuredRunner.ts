@@ -196,7 +196,7 @@ export class StructuredSession extends AbstractRunnerSession {
   private adapter: TaskModeAgentAdapter | null = null;
   private adapterStarted = false;
   private adapterAttached = false;
-  private startupExit: number | null = null;
+  private startupExit: string | null = null;
   /** Aborted when the session ends, taking back a spawn still attaching. */
   private readonly ended = new AbortController();
   /** Bumped whenever the adapter is replaced, so the old one's late events and exit are ignored. */
@@ -510,10 +510,10 @@ export class StructuredSession extends AbstractRunnerSession {
     this.adapterStarted = true;
     if (this.exited || generation !== this.generation) return;
     adapter.onOutOfTurn?.((event) => this.handleOutOfTurn(adapter, generation, event));
-    adapter.onProcessExit((code) => {
+    adapter.onProcessExit((code, lastWords) => {
       if (generation !== this.generation) return;
       if (!this.adapterAttached) {
-        this.startupExit = code;
+        this.startupExit = lastWords ?? `${this.launch.runner} exited with code ${code}`;
         return;
       }
       this.lastSessionId = adapter.nativeSessionId() ?? this.lastSessionId;

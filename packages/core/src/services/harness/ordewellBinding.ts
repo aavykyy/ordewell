@@ -8,6 +8,18 @@ export class McpAttachError extends Error {
   }
 }
 
+/**
+ * A runner that exited on its own while starting, in its own last words. It
+ * refused what it was started with (a resume it cannot find, a flag it does
+ * not know), so a respawn on the same arguments would only fail again.
+ */
+export class RunnerStartupExit extends Error {
+  constructor(lastWords: string) {
+    super(lastWords);
+    this.name = 'RunnerStartupExit';
+  }
+}
+
 /** Which token's tools a runner is handed (ADR-0022, A1). */
 export type OrdewellToolRole = 'task' | 'planner';
 
@@ -106,8 +118,11 @@ export interface SpawnAttachSteps<A extends SpawnedAdapter> {
    * it has yet to launch would outlive a dispose; an attach check is not.
    */
   cancelled?: AbortSignal;
-  /** The code of a process that exited while starting; its attach report is not believed. */
-  startupExit?(): number | null;
+  /**
+   * How a process that exited while starting ended, in its own words; null
+   * while it runs. Its attach report is not believed, and it is not respawned.
+   */
+  startupExit?(): string | null;
   /** Why the first spawn failed, told before the respawn. */
   onRespawn?(failure: string): void;
   /** The {@link McpAttachError}'s message once the respawn failed too. */
@@ -132,7 +147,8 @@ function unlessCancelled<T>(work: Promise<T>, signal: AbortSignal | undefined): 
 /**
  * One runner with Ordewell's tools attached (ADR-0025): a spawn that does not
  * report the server connected is killed with its token and respawned once on
- * a fresh one; a second failure throws {@link McpAttachError}. Null once
+ * a fresh one; a second failure throws {@link McpAttachError}. One that exited
+ * while starting throws {@link RunnerStartupExit} instead. Null once
  * {@link SpawnAttachSteps.cancelled}, with nothing left running.
  */
 export async function spawnAttached<A extends SpawnedAdapter>(steps: SpawnAttachSteps<A>): Promise<AttachedSpawn<A> | null> {
@@ -198,10 +214,11 @@ async function spawnOnce<A extends SpawnedAdapter>(steps: SpawnAttachSteps<A>): 
     attached = report;
     const exit = steps.startupExit?.() ?? null;
     if (exit !== null) {
-      attached = false;
-      failure += ` (process exited with code ${exit})`;
+      takeBack();
+      throw new RunnerStartupExit(exit);
     }
   } catch (err) {
+    if (err instanceof RunnerStartupExit) throw err;
     failure = `${steps.runner} could not check Ordewell's MCP attach state (${errorText(err)})`;
   }
   if (signal?.aborted) return null;

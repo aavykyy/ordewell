@@ -11,6 +11,7 @@ import type { LegacyPlanState } from '../../models/Task';
 import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
 import type { IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
+import { RunnerStartupExit } from '../harness/ordewellBinding';
 
 /**
  * Runner sessions with controllable resume behavior.
@@ -305,6 +306,47 @@ describe('a continue whose session cannot be resumed', () => {
 
     expect(h.task('t1').status).toBe('failed');
     expect(h.task('t1').outputSummary?.reviewReason).toBe('Could not continue task "Parse JSON": could not start: claude: command not found. Retry starts it afresh.');
+  });
+
+  // What `claude --resume` does with a session it cannot find: says so on
+  // stderr and exits before Ordewell's tools are even checked.
+  it('fails in the runner\'s own words when it exits while starting on the saved session', async () => {
+    const exiting = {
+      spawn: vi.fn(async () => { throw new RunnerStartupExit('The claude-code task runner exited with code 1.\n\nNo conversation found with session ID: sess-1'); }),
+      stop: vi.fn(),
+      stopAll: vi.fn(),
+      activeCount: 0,
+    } satisfies IRunner;
+    const h = setup({ runner: exiting });
+    h.orchestrator.loadPlan([plan({ status: 'completed', runnerSessionId: 'sess-1' })]);
+
+    await h.orchestrator.continueTask('t1', 'go on');
+
+    expect(h.task('t1').status).toBe('failed');
+    expect(h.task('t1').outputSummary?.reviewReason).toBe('Could not continue task "Parse JSON": claude-code could not find its saved session. Retry starts it afresh.');
+    expect(h.task('t1').outputSummary?.logTail).toContain('No conversation found with session ID: sess-1');
+    expect(exiting.spawn).toHaveBeenCalledTimes(1);
+    // The runner refused the session, so it is no longer offered to continue.
+    expect(continuability(h.task('t1')).ok).toBe(false);
+  });
+});
+
+describe('a fresh start whose runner exits while starting', () => {
+  it('fails the task in the runner\'s own words, rather than holding it as never started', async () => {
+    const exiting = {
+      spawn: vi.fn(async () => { throw new RunnerStartupExit('The claude-code task runner exited with code 1.\n\nInvalid API key'); }),
+      stop: vi.fn(),
+      stopAll: vi.fn(),
+      activeCount: 0,
+    } satisfies IRunner;
+    const h = setup({ runner: exiting });
+    h.orchestrator.loadPlan([plan()]);
+
+    await h.orchestrator.forceStartTask('t1');
+
+    expect(h.task('t1').status).toBe('failed');
+    expect(h.task('t1').outputSummary?.logTail).toContain('Invalid API key');
+    expect(h.notifications.error).toHaveBeenCalledWith(expect.stringContaining('Invalid API key'));
   });
 });
 

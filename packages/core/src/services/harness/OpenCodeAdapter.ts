@@ -676,8 +676,8 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     return interruptAcknowledged(turn, this.processEnded, timeoutMs);
   }
 
-  onProcessExit(listener: (code: number) => void): void {
-    void this.processEnded.then(() => listener(this.runner.exitCode));
+  onProcessExit(listener: (code: number, lastWords?: string) => void): void {
+    void this.processEnded.then(() => listener(this.runner.exitCode, this.exitMessage()));
   }
 
   answerPermission(id: string, decision: ApprovalDecision): boolean {

@@ -1,4 +1,4 @@
-import { McpAttachError } from './harness/ordewellBinding';
+import { McpAttachError, RunnerStartupExit } from './harness/ordewellBinding';
 import * as path from 'path';
 import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasks, flattenTasksWithParents, waitsForReset, type RunSettings } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
@@ -1805,9 +1805,14 @@ export class TaskOrchestrator {
       // Each way out settles the task's status before it awaits anything, so
       // no tick in between finds it in progress with no attempt.
       if (attempt.kind.kind === 'continuation') {
-        const reason = unresumedMessage(task, `could not start: ${err instanceof Error ? err.message : String(err)}`);
+        // A runner that exits while starting on a saved session has refused it.
+        const refused = err instanceof RunnerStartupExit;
+        const reason = refused
+          ? unresumedMessage(task, `${attempt.runner} could not find its saved session`)
+          : unresumedMessage(task, `could not start: ${err instanceof Error ? err.message : String(err)}`);
         this.store.markFailed(task.id);
-        this.store.setTaskOutputSummary(task.id, summarizeOutput(reason, ''));
+        if (refused) this.store.setTaskRunnerSessionId(task.id, undefined);
+        this.store.setTaskOutputSummary(task.id, summarizeOutput(reason, refused ? err.message : ''));
         await this.runs.release(task.id, { keep: false });
         this.notifications.error(reason);
         this.emit('onTaskSettled', { taskId: task.id });
@@ -1838,7 +1843,7 @@ export class TaskOrchestrator {
         await this.tick();
         return false;
       }
-      if (err instanceof McpAttachError) {
+      if (err instanceof McpAttachError || err instanceof RunnerStartupExit) {
         this.store.markFailed(task.id);
         this.store.setTaskOutputSummary(task.id, summarizeOutput(err.message, err.message));
         await this.runs.release(task.id, { keep: true });

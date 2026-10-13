@@ -270,8 +270,11 @@ export interface TaskModeAgentAdapter extends AgentAdapter {
    * for a planner and wrong for a task, which may report completion there.
    */
   onOutOfTurn?(listener: (event: AgentEvent) => void): void;
-  /** Registers a listener for the process ending, for any reason. Fires at most once. */
-  onProcessExit(listener: (code: number) => void): void;
+  /**
+   * Registers a listener for the process ending, for any reason. Fires at most
+   * once. `lastWords` is how it ended, with its stderr tail.
+   */
+  onProcessExit(listener: (code: number, lastWords?: string) => void): void;
   /**
    * Hand a message to the running turn, for the runner to show the model at
    * its next step boundary (ADR-0023, D1–D2). Resolves true once the runner

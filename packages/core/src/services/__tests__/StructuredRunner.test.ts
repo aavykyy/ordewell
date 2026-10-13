@@ -715,3 +715,29 @@ describe('StructuredRunner: tools or nothing (ADR-0022)', () => {
     expect(env.notices).toHaveLength(1);
   });
 });
+
+describe('StructuredRunner: a runner that exits while it starts', () => {
+  // Recorded from `claude` 2.1.296: a resume it cannot find is refused on
+  // stderr and the process exits 1, before it answers the attach check.
+  it('fails the start in the runner\'s own words, without a respawn on the same arguments', async () => {
+    const spawned = fakeSpawn([]);
+    const spawn: SpawnFn = (command, args, spawnOptions) => {
+      const child = spawned.spawn(command, args, spawnOptions);
+      const proc = spawned.processes.at(-1)!;
+      queueMicrotask(() => {
+        proc.emitStderr('No conversation found with session ID: 0d6c1a52-3b7e-4f7e-9d1a-5b0c2e4f8a11\n');
+        proc.exit(1);
+      });
+      return child;
+    };
+    const runner = new StructuredRunner({
+      process: { spawn, resolvePath: async () => '/usr/bin', platform: 'linux', isDirectory: () => true, exists: () => true },
+      createAdapter: claudeTurnEndQueue,
+    });
+
+    await expect(runner.spawn(options({ resumeSessionId: '0d6c1a52-3b7e-4f7e-9d1a-5b0c2e4f8a11' })))
+      .rejects.toThrow('No conversation found with session ID: 0d6c1a52-3b7e-4f7e-9d1a-5b0c2e4f8a11');
+    expect(spawned.processes).toHaveLength(1);
+    expect(runner.activeCount).toBe(0);
+  });
+});
