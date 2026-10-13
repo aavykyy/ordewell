@@ -75,6 +75,9 @@ export function footerHints(state: TuiState): string[] {
   const escHint = !planning ? null
     : state.queuedPrompts.length > 0 ? 'esc unsend'
     : 'esc ×2 stop planning';
+  // Send now is the composer's key, so it is named only where the composer
+  // owns it: the chat pane, with a turn in flight.
+  const sendNowHint = planning ? 'ctrl-s send now' : null;
 
   if (state.focus === 'plan') {
     // `expandedTaskId` alone only means subtask rows are revealed — the editor
@@ -96,6 +99,7 @@ export function footerHints(state: TuiState): string[] {
     '/help', 'tab plan',
     ...detailHint,
     ...(escHint ? [escHint] : []),
+    ...(sendNowHint ? [sendNowHint] : []),
     'ctrl-c quit',
   ];
 }
@@ -110,9 +114,15 @@ export function queuedPromptRows(state: TuiState, cols: number): string[] {
 
 /** One queued prompt wrapped under a dimmed marker, the takeback hint on its first row. */
 function queuedBubble(text: string, cols: number): string[] {
-  const room = Math.max(1, cols - width('◇  · queued · esc to unsend'));
+  const tag = ' · queued · esc to unsend · ctrl-s sends now';
+  const prefix = `◇  ${tag}`;
+  // The hint is reserved only while it leaves room to read the prompt; a narrow
+  // pane drops it rather than squeezing the text to a column. `truncate` would
+  // otherwise cut the text, since the hint sits at the row's end.
+  const reserved = cols - width(prefix) >= 12 ? width(prefix) : 0;
+  const room = Math.max(1, cols - reserved);
   return wrap(text, room).map((line, i) => i === 0
-    ? truncate(`${style.grey(`◇ ${line}`)} · queued · esc to unsend`, cols)
+    ? truncate(`${style.grey(`◇ ${line}`)}${tag}`, cols)
     : truncate(style.grey(`  ${line}`), cols));
 }
 
@@ -133,14 +143,19 @@ export function taskQueuedRows(state: TuiState, cols: number): string[] {
 function queuedTaskTag({ handedOver, forced }: QueuedTaskMessage, selected: boolean): string {
   if (forced) return ' · sending now';
   if (handedOver) return ' · handed over';
-  return selected ? ' · queued · ctrl-r removes' : ' · queued';
+  return selected ? ' · queued · ctrl-r removes · ctrl-s sends now' : ' · queued';
 }
 
 function queuedTaskBubble(message: QueuedTaskMessage, selected: boolean, cols: number): string[] {
   const { text } = message;
   const marker = selected ? style.accent('❯') : style.grey('◇');
   const tag = queuedTaskTag(message, selected);
-  const room = Math.max(1, cols - width(`❯ ◇  ${tag}`));
+  // As with the planner's queued rows: the hint is reserved only while it
+  // leaves room to read the message, so a narrow pane drops it instead of
+  // squeezing the text to a column.
+  const prefix = `❯ ◇  ${tag}`;
+  const reserved = cols - width(prefix) >= 12 ? width(prefix) : 0;
+  const room = Math.max(1, cols - reserved);
   return wrap(text, room).map((line, i) => i === 0
     ? truncate(`${marker} ${selected ? style.bold(line) : line}${style.grey(tag)}`, cols)
     : truncate(`  ${line}`, cols));
@@ -924,6 +939,7 @@ function commandSheetBody(cols: number): string[] {
   body.push(
     style.grey('tab switches panes · pgup/pgdn scroll · ctrl-o toggles full detail · esc takes back a queued prompt, otherwise esc twice stops · ctrl-l clears · ctrl-c quits'),
     style.grey('alt-enter inserts a newline · ? lists the plan pane\'s keys, once tab has put you there'),
+    style.grey('  in the planner chat, ctrl-s sends now: stops the running planner turn and sends the composer text next — or, with it empty, the newest queued prompt'),
   );
   // One line each: the sheet clips every line to the frame, and the task
   // view's keys run far past any width on a single one.

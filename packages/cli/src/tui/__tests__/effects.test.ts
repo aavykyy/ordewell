@@ -100,7 +100,7 @@ describe('planning', () => {
   });
 
   /** A harness whose planning socket the test drives from inside the REST call. */
-  function streaming(call: (emit: (e: unknown) => void) => Promise<unknown>, method: 'startConversation' | 'sendConversationMessage' = 'startConversation') {
+  function streaming(call: (emit: (e: unknown) => void) => Promise<unknown>, method: 'startConversation' | 'sendConversationMessage' | 'forceSendPlannerMessage' = 'startConversation') {
     let emit: (e: unknown) => void = () => {};
     return harness({
       streamPlanning: vi.fn().mockImplementation((_id: string, cb: (e: unknown) => void) => {
@@ -189,6 +189,22 @@ describe('planning', () => {
     await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'add a hardening task' }, h.deps);
 
     expect(heard(h.actions)).toEqual([{ type: 'planner_message', content: 'Tasks updated:\n- #3 added', timestamp: 'x' }]);
+  });
+
+  it('send now posts to the force-send route and settles its reply like any turn', async () => {
+    const h = streaming(async () => ({
+      tasks: [],
+      conversationHistory: [
+        { role: 'user', content: 'use Postgres instead', forced: true },
+        { role: 'assistant', content: 'Switching to Postgres.', timestamp: 'x' },
+      ],
+    }), 'forceSendPlannerMessage');
+
+    await runEffect({ type: 'forceSendPlannerMessage', sessionId: 's1', message: 'use Postgres instead' }, h.deps);
+
+    expect(h.api.forceSendPlannerMessage).toHaveBeenCalledWith('s1', 'use Postgres instead');
+    expect(heard(h.actions)).toEqual([{ type: 'planner_message', content: 'Switching to Postgres.', timestamp: 'x' }]);
+    expect(h.actions).toContainEqual(expect.objectContaining({ type: 'planUpdated', sessionId: 's1' }));
   });
 
   it('falls back to the REST reply when the socket delivered a different turn', async () => {

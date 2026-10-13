@@ -18,7 +18,7 @@ import { inboundFor } from './inbound';
  * a test double is checked against what the client really returns.
  */
 export type OrdewellApi = Pick<ApiClient,
-  | 'startConversation' | 'sendConversationMessage' | 'executePlan' | 'stopExecution' | 'cancelPlanning'
+  | 'startConversation' | 'sendConversationMessage' | 'forceSendPlannerMessage' | 'executePlan' | 'stopExecution' | 'cancelPlanning'
   | 'taskControl' | 'markTaskComplete' | 'markTaskIncomplete' | 'cancelResume'
   | 'getTaskLogAttempts' | 'getTaskLog'
   | 'sendTaskMessage' | 'removeQueuedTaskMessage' | 'forceSendTaskMessage' | 'forceSendQueuedTaskMessage'
@@ -183,6 +183,13 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
 
     case 'sendMessage':
       await converse(deps, effect.sessionId, () => api.sendConversationMessage(effect.sessionId, effect.message));
+      return;
+
+    // Send now in the planner chat (ADR-0023, F5): the daemon stops the turn
+    // in flight and answers the forced prompt in the turn that replaces it,
+    // ahead of the queue; its reply settles here like any turn's.
+    case 'forceSendPlannerMessage':
+      await converse(deps, effect.sessionId, () => api.forceSendPlannerMessage(effect.sessionId, effect.message));
       return;
 
     case 'execute':

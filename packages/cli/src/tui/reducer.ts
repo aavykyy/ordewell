@@ -11,7 +11,7 @@ import { handleOverlayKey } from './reducers/overlays';
 import { handlePlanKey } from './reducers/planPane';
 import { announceApprovals, announceCheckpoint, continueTaskStep, handleTaskViewKey, openTaskView, taskLogAbandoned, taskLogArrived, taskLogLoaded } from './reducers/taskView';
 import { pickRewindTarget, runCommand, skillInTaskView, unknownCommand } from './reducers/commands';
-import { disarmStop, drainQueue, plannerEscape } from './reducers/turnQueue';
+import { disarmStop, drainQueue, forceSendPlanner, plannerEscape } from './reducers/turnQueue';
 import { applyIsolationRecord, applySettings, clearRunIsolation, foldRun, followSession, planSnapshot, runLabel, withRun } from './reducers/incoming';
 import { refillPicker } from './reducers/pickers';
 import { refreshStepper } from './reducers/stepper';
@@ -65,6 +65,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         pendingApprovals: [],
         queuedPrompts: EMPTY_HOLD,
         stopArmed: false,
+        forceSendPending: false,
         overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
       }, { ...clearRunIsolation(state.run), runSettings: undefined }));
 
@@ -282,6 +283,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         pendingApprovals: [],
         queuedPrompts: EMPTY_HOLD,
         stopArmed: false,
+        forceSendPending: false,
         overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
       }, clearRunIsolation(state.run)));
 
@@ -309,6 +311,10 @@ function reduceAction(state: TuiState, action: Action): Step {
       // A failed call may have been the task view's log read; the view falls
       // back to whatever the live stream sent rather than waiting forever.
       state = taskLogAbandoned(state);
+      // A force send stopped the turn in flight; the forced turn is already on
+      // its way, so the stop is not news and the prompts held behind it keep
+      // their order rather than draining into the turn replacing it.
+      if (state.forceSendPending) return step({ ...state, forceSendPending: false, busyLabel: '' });
       const quiet = plannerInFlight(state) && state.stopRequested;
       const reported = { ...(quiet ? state : say(state, 'error', action.message)), status: 'idle' as const, busyLabel: '' };
       // A planner turn dying IS a turn ending — the queue would otherwise wait
@@ -442,6 +448,10 @@ function handleKey(state: TuiState, key: Key): Step {
   }
 
   if (key.name === 'enter') return submit(state);
+  // Send now in the planner chat (ADR-0023, F5): mid-turn it interrupts the
+  // turn and sends the composer text (or the newest queued prompt) next; with
+  // no turn in flight it is the plain send enter is.
+  if (key.name === 'ctrl-s') return plannerInFlight(state) ? forceSendPlanner(state) : submit(state);
   if (key.name === 'escape') return step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
   // Page keys and the wheel scroll the transcript. Up/down always go to the
   // editor: single-line drafts get history recall, multi-line drafts get cursor
@@ -497,5 +507,5 @@ function submit(state: TuiState): Step {
     ? { type: 'sendMessage', sessionId: state.sessionId, message: text }
     : { type: 'startConversation', goal: text };
 
-  return step({ ...spoken, status: 'planning', stopRequested: false }, [effect]);
+  return step({ ...spoken, status: 'planning', stopRequested: false, forceSendPending: false }, [effect]);
 }

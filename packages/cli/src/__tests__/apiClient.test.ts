@@ -410,6 +410,25 @@ describe('ApiClient — adopting a saved session', () => {
     ]);
   });
 
+  it('send now in the planner chat posts to the converse/now route (ADR-0023, F5)', async () => {
+    const hits: string[] = [];
+    const srv = await startCustomServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => { body += String(chunk); });
+      req.on('end', () => {
+        hits.push(`${req.method} ${req.url} ${body}`.trim());
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ plan: { tasks: [] } }));
+      });
+    });
+    servers.push(srv);
+    const client = new ApiClient(srv.port);
+
+    expect(await client.forceSendPlannerMessage('s1', 'use Postgres instead')).toEqual({ tasks: [] });
+
+    expect(hits).toEqual(['POST /api/plans/s1/converse/message/now {"message":"use Postgres instead"}']);
+  });
+
   it('continues a finished task on its own route, and surfaces a refusal (ADR-0018, K1)', async () => {
     const hits: string[] = [];
     const srv = await startCustomServer((req, res) => {

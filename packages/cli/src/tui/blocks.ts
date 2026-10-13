@@ -57,6 +57,9 @@ function messageLines(block: MessageBlock, cols: number): string[] {
   // A run update is the supervisor's input, not anyone's words: all of it keeps its colour.
   const rest: Paint = block.role === 'wake_up' ? style.yellow : (t) => t;
   const rows = wrapped.map((line, i) => (i === 0 ? ROLE_PREFIX[block.role](line) : rest(`  ${line}`)));
+  // A forced message ("Send now") stopped the turn before it; the note rides
+  // its first row and the band's pad drops it when the pane is too narrow.
+  if (block.role === 'user' && block.forced) rows[0] = `${rows[0]}${style.grey(' · sent now')}`;
   return block.role === 'user' ? onBand(rows, cols) : rows;
 }
 
