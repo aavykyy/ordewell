@@ -19,6 +19,7 @@ import type {
 } from '../interfaces/IWorktreeIsolation';
 import { createWorktreeIsolation } from './GitWorktreeIsolation';
 import { SELF_REPO } from './isolationRecord';
+import { taskRefOf } from './TaskRefs';
 import { IsolationRunController } from './IsolationRunController';
 import { completesTask, Landing, type LandingMessage, type LandingOutcome, type UnlandedOutcome } from './Landing';
 import { classifyRunnerStop, readUsageLimitReset, stopsRunner, type AttemptEnd } from './runnerExit';
@@ -953,7 +954,7 @@ export class TaskOrchestrator {
     if (!task || !attempt) return;
     attempt.decided = true;
 
-    console.error(`[TaskOrchestrator] Task #${task.order} "${task.title}" verdict=${verdict.outcome}`);
+    console.error(`[TaskOrchestrator] Task ${taskRefOf(this.store.planTasks, task.id) ?? `#${task.order}`} "${task.title}" verdict=${verdict.outcome}`);
     console.error(`[TaskOrchestrator] Runner: ${task.assignedRunner}, Model: ${task.assignedModel?.modelId ?? 'default'}`);
     console.error(`[TaskOrchestrator] Prompt preview: ${(task.prompt ?? '').slice(0, 200)}`);
     if (attempt.kind.kind === 'repair') return this.settleRepair(task, attempt, verdict);
@@ -1103,7 +1104,7 @@ export class TaskOrchestrator {
     });
 
     for (const { task, reasons } of readiness.excluded) {
-      console.log(`[TaskOrchestrator] excluded: #${task.order} "${task.title}" — ${reasons.join(', ')}`);
+      console.log(`[TaskOrchestrator] excluded: ${taskRefOf(this.store.planTasks, task.id) ?? `#${task.order}`} "${task.title}" — ${reasons.join(', ')}`);
     }
     console.log(`[TaskOrchestrator] getReadyTasks: ${readiness.candidateCount} candidates, ${Math.max(0, maxParallel - active)} slots, maxParallel=${maxParallel}`);
     return readiness;

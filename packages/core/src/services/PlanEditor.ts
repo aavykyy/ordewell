@@ -216,7 +216,7 @@ export class PlanEditor {
   async addConflictResolver(taskId: string): Promise<LegacyPlanState | null> {
     if (!this.plan()) return null;
     const task = this.store.get(taskId);
-    const draft = task ? conflictResolverTask(task, this.runs.current) : null;
+    const draft = task ? conflictResolverTask(task, this.runs.current, this.store.planTasks) : null;
     if (!draft) throw new PlanEditError('Only a task whose merge conflicted can be resolved as a task');
     return this.commit(() => {
       const resolver = this.store.add(draft);

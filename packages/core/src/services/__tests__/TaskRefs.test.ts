@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createTask } from '../../models/Task';
 import { flattenTasksWithParents } from '../../models/Task';
-import { findTaskRef, resolveTaskRef, taskOrderLabel, taskRef, taskRefOf, titledTaskRef } from '../TaskRefs';
+import { findTaskRef, resolveTaskRef, taskOrderLabel, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf } from '../TaskRefs';
 
 // Task #1 holds two subtasks, so subtask orders 1 and 2 shadow top-level #1
 // and #2 in a flattened plan — the shape every older grammar got wrong.
@@ -86,6 +86,13 @@ describe('resolveTaskRef', () => {
     expect(smoke?.label).toBe('1.2.2.1');
     expect(taskRefOf(plan, 'unit-id')).toBe('#1.2.1');
     expect(flattenTasksWithParents(plan).find((r) => r.task.id === 'smoke-id')?.ref).toBe('#1.2.2.1');
+  });
+
+  it('names a task in full by the plan tree, at any depth', () => {
+    expect(titledTaskRefOf(plan, 'deploy-id')).toBe('#2 Deploy');
+    expect(titledTaskRefOf(plan, 'unit-id')).toBe('#1.2.1 Unit');
+    expect(titledTaskRefOf(plan, 'smoke-id')).toBe('#1.2.2.1 Smoke');
+    expect(titledTaskRefOf(plan, 'ghost')).toBeUndefined();
   });
 
   it('extends a labelled parent', () => {

@@ -336,3 +336,23 @@ describe('ordewell task-skills', () => {
     fs.rmSync(ws, { recursive: true, force: true });
   });
 });
+
+describe('ordewell task labels on a subtask', () => {
+  const NESTED = {
+    tasks: [
+      {
+        id: 'parent-1', order: 1, title: 'Parent', type: 'ai', status: 'pending', dependencies: [],
+        assignedRunner: 'claude-code', taskMode: 'build', assignedModel: null,
+        subtasks: [{ id: 'sub-1', order: 1, title: 'Sub A', type: 'ai', status: 'pending', dependencies: [] }],
+      },
+    ],
+  };
+
+  it('names a subtask by its dotted reference, not its parent-scoped order', async () => {
+    const d = await fakeDaemon(NESTED);
+    const { handleTaskRunner } = await import('../task-assign');
+    const { stdout } = await capture(() => handleTaskRunner([...SESSION, 'sub-1'], new ApiClient(d.port)));
+    expect(stdout).toContain('Runner · #1.1 Sub A');
+    d.close();
+  });
+});

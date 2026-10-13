@@ -1,6 +1,6 @@
-import { taskRef, type AiProvider } from '@ordewell/core';
+import { type AiProvider } from '@ordewell/core';
 import { bodyRows, helpScrollMax } from '../layout';
-import { findTask, visibleItems, type PickerItem, type PickerState, type TuiState } from '../state';
+import { findTask, refFor, visibleItems, type PickerItem, type PickerState, type TuiState } from '../state';
 import type { Key } from '../keys';
 import { handleApprovalKey } from './approvals';
 import { keyPrompt, newSession, pickRewindTarget, withIdlePlanner } from './commands';
@@ -200,8 +200,8 @@ function choose(state: TuiState, picker: PickerState, item: PickerItem | undefin
       taskId: task.id,
       changes: { dependencies: picker.chosen },
       message: picker.chosen.length > 0
-        ? `Task ${taskRef(task)} now depends on ${picker.chosen.length} task${picker.chosen.length === 1 ? '' : 's'}.`
-        : `Task ${taskRef(task)} no longer depends on anything.`,
+        ? `Task ${refFor(state, task)} now depends on ${picker.chosen.length} task${picker.chosen.length === 1 ? '' : 's'}.`
+        : `Task ${refFor(state, task)} no longer depends on anything.`,
     }]);
   }
   if (picker.action.kind === 'set-task-skills') {

@@ -3,6 +3,7 @@ import { readOnlyRunners, type RunnerModeInfo } from './ModeResolver';
 import { DEFAULT_PLANNER_MODES, type IsolatedExecution, type PlannerModes } from './plannerModes';
 import { TASK_QUERY_PROTOCOL, TASK_READ_TOOLS_PROTOCOL } from './TaskQuery';
 import { SELF_REPO } from './isolationRecord';
+import { taskRefOf } from './TaskRefs';
 import type { SkillInfo } from './SkillsService';
 import { modelInvocablePlannerSkills, modelInvocableTaskSkills } from './skillInvocation';
 
@@ -666,7 +667,7 @@ export function modelContextBlock(
 export function buildMergePrompt(taskIds: string[], tasks: readonly Task[], tools = false): string {
   const idSet = new Set(taskIds);
   const selected = tasks.filter((t) => idSet.has(t.id)).sort((a, b) => a.order - b.order);
-  const refs = selected.map((t) => `#${t.order} "${t.title}" (id=${t.id})`).join(', ');
+  const refs = selected.map((t) => `${taskRefOf(tasks, t.id) ?? `#${t.order}`} "${t.title}" (id=${t.id})`).join(', ');
   return [
     `Merge these tasks into ONE combined task: ${refs}.`,
     'Write a clear combined title, description, and prompt that cover all of their work.',
@@ -687,7 +688,7 @@ export function buildSplitPrompt(taskId: string, tasks: readonly Task[], tools =
   const task = tasks.find((t) => t.id === taskId);
   if (!task) return `Split task ${taskId} into smaller tasks.`;
   return [
-    `Split task #${task.order} "${task.title}" (id=${task.id}) into multiple smaller tasks that together accomplish the same work.`,
+    `Split task ${taskRefOf(tasks, task.id) ?? `#${task.order}`} "${task.title}" (id=${task.id}) into multiple smaller tasks that together accomplish the same work.`,
     'Decompose it into a sensible ordered sequence. Write a clear title, description, and prompt for each part.',
     'The first part inherits the original task\'s dependencies. Each later part depends on the previous part. Tasks that depended on the original now depend on the LAST part.',
     `Set "assignedRunner" and "assignedModel" on each part — use the runners and models ${tools ? 'list_runners and list_models return' : 'listed in <available_models> above'}. You may assign different models to different parts (e.g. a stronger model for a complex part, a faster one for a simple part).`,
@@ -711,13 +712,15 @@ export function buildConflictResolutionPrompt(
   task: Task,
   conflict: { branch: string; repos: string[]; conflictRepo?: string },
   integrationBranch: string,
+  plan?: readonly Task[],
 ): string {
   const { branch } = conflict;
+  const ref = taskRefOf(plan ?? [], task.id) ?? `#${task.order}`;
   const asked = `What the task was asked to do:\n${task.prompt ?? task.description}`;
   const repos = conflict.repos.filter((repo) => repo !== SELF_REPO);
   if (repos.length === 0) {
     return [
-      `Task #${task.order} "${task.title}" passed, but merging its branch \`${branch}\` into \`${integrationBranch}\` conflicted.`,
+      `Task ${ref} "${task.title}" passed, but merging its branch \`${branch}\` into \`${integrationBranch}\` conflicted.`,
       `This working tree starts at the tip of \`${integrationBranch}\`. Run \`git merge --no-ff ${branch}\` here and resolve every conflict so that both sides' intent survives: keep the work already integrated and add what the task contributed. Do not drop either side wholesale.`,
       'Build and test the result the way this project does, then commit the merge.',
       '',
@@ -725,7 +728,7 @@ export function buildConflictResolutionPrompt(
     ].join('\n');
   }
   return [
-    `Task #${task.order} "${task.title}" passed, but landing its branch \`${branch}\` on \`${integrationBranch}\` conflicted in ${conflict.conflictRepo ?? repos[0]}. A task lands in every repository it changed or in none, so none of its work has landed yet.`,
+    `Task ${ref} "${task.title}" passed, but landing its branch \`${branch}\` on \`${integrationBranch}\` conflicted in ${conflict.conflictRepo ?? repos[0]}. A task lands in every repository it changed or in none, so none of its work has landed yet.`,
     `This workspace holds every repository at its usual path, each starting at the tip of \`${integrationBranch}\`. In each repository the task changed — ${repos.join(', ')} — run \`git merge --no-ff ${branch}\` inside that repository's directory, and resolve every conflict so that both sides' intent survives: keep the work already integrated and add what the task contributed. Do not drop either side wholesale.`,
     'Build and test the result the way this project does, then commit the merge in each repository.',
     '',
@@ -744,15 +747,17 @@ export function buildConflictRepairPrompt(
   task: Task,
   conflict: { branch: string; repos: string[]; conflictRepo?: string; conflictFiles?: string[] },
   integrationBranch: string,
+  plan?: readonly Task[],
 ): string {
   const { branch } = conflict;
+  const ref = taskRefOf(plan ?? [], task.id) ?? `#${task.order}`;
   const files = conflict.conflictFiles ?? [];
   const asked = `What the task was asked to do:\n${task.prompt ?? task.description}`;
   const resolve = 'resolve every conflict so that both sides\' intent survives: keep the work already integrated and add what the task contributed.';
   const repos = conflict.repos.filter((repo) => repo !== SELF_REPO);
   if (repos.length === 0) {
     return [
-      `Task #${task.order} "${task.title}" passed, but merging its branch \`${branch}\` into \`${integrationBranch}\` conflicted${files.length > 0 ? ` in ${files.join(', ')}` : ''}. None of its work has landed yet.`,
+      `Task ${ref} "${task.title}" passed, but merging its branch \`${branch}\` into \`${integrationBranch}\` conflicted${files.length > 0 ? ` in ${files.join(', ')}` : ''}. None of its work has landed yet.`,
       `This is the task's own worktree, on \`${branch}\`, with its work committed. Run \`git merge --no-edit ${integrationBranch}\` here and ${resolve} Never drop either side wholesale, and never abort the merge or reset it away.`,
       'Build and test the result the way this project does, commit the merge, and only then call `task_complete`.',
       '',
@@ -761,7 +766,7 @@ export function buildConflictRepairPrompt(
   }
   const stoppedIn = conflict.conflictRepo ?? repos[0];
   return [
-    `Task #${task.order} "${task.title}" passed, but landing its branch \`${branch}\` on \`${integrationBranch}\` conflicted in ${stoppedIn}${files.length > 0 ? ` (${files.join(', ')})` : ''}. A task lands in every repository it changed or in none, so none of its work has landed yet.`,
+    `Task ${ref} "${task.title}" passed, but landing its branch \`${branch}\` on \`${integrationBranch}\` conflicted in ${stoppedIn}${files.length > 0 ? ` (${files.join(', ')})` : ''}. A task lands in every repository it changed or in none, so none of its work has landed yet.`,
     `This is the task's own workspace, with each repository at its usual path on \`${branch}\` and the task's work committed. In each repository the task changed — ${repos.join(', ')} — run \`git merge --no-edit ${integrationBranch}\` inside that repository's directory, and ${resolve} Never drop either side wholesale, and never abort a merge or reset it away.`,
     'Build and test the result the way this project does, commit the merge in each repository, and only then call `task_complete`.',
     '',

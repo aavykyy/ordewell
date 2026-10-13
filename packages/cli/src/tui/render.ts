@@ -8,7 +8,7 @@ import {
 import { chatEditorRoomFor, chatPaneWidth, chatPromptLabel, paneColumns, planPaneWidth } from './geometry';
 import { currentHandoff, diffRoom, handoffActions } from './handoff';
 import { handoffBase, handoffBranch, isRepoGroup, repoResultLines } from '../isolation';
-import { capConflictFiles, titledTaskRef } from '@ordewell/core';
+import { capConflictFiles, titledTaskRef, titledTaskRefOf } from '@ordewell/core';
 import { matchingItems, plannerInFlight, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
 import type { StepperState } from './reducers/stepper';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
@@ -531,7 +531,7 @@ function renderHandoff(
       const repaired = task.repairedFiles?.length
         ? style.yellow(` — repaired (${capConflictFiles(task.repairedFiles)})`)
         : '';
-      return `  ${style.green('✓')} ${titledTaskRef(task)}${repaired}`;
+      return `  ${style.green('✓')} ${titledTaskRefOf(state.tasks, task.taskId) ?? titledTaskRef(task)}${repaired}`;
     });
   const actions = handoffActions(handoff).map((action, index) => {
     const active = index === overlay.index;
