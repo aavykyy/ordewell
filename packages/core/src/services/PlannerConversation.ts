@@ -1242,10 +1242,13 @@ export class PlannerConversation {
     }
 
     // Budget models occasionally return an empty content turn after tool use —
-    // surface that visibly instead of rendering a blank bubble.
+    // surface that visibly instead of rendering a blank bubble. A stopped turn
+    // is empty because it was cut short, which is not the model's fault.
     const text = turn.text.trim()
       ? turn.text
-      : '(The planner returned an empty response. Reply to continue, or rephrase your goal.)';
+      : userTurn.signal.aborted
+        ? '(Stopped before replying.)'
+        : '(The planner returned an empty response. Reply to continue, or rephrase your goal.)';
     const supervisor = userTurn.wakeUp !== undefined;
     return this.host.mutate(
       () => {

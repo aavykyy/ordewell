@@ -43,6 +43,20 @@ describe('planner force send', () => {
     expect(forcedStart).toMatchObject({ type: 'planner_turn_started', prompt: 'use Postgres instead', forced: true });
   });
 
+  it('records a turn it stopped before any reply as stopped, not as an empty response', async () => {
+    const env = await answering();
+    env.planner.state.saidBeforeStop = '';
+
+    const forced = env.session.forceSendPrompt('use Postgres instead');
+    await until(() => env.planner.calls.length === 2);
+    env.planner.calls[1].finish(prose('Switching to Postgres.'));
+    await forced;
+    await env.answered;
+
+    const history = env.session.planState!.conversationHistory!.map((e) => e.content);
+    expect(history.slice(-4)).toEqual(['why is task 1 slow?', '(Stopped before replying.)', 'use Postgres instead', 'Switching to Postgres.']);
+  });
+
   it('keeps the run update of a wake-up turn it stops: the supervisor reads it in the turn after the forced one', async () => {
     const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'watch' } });
     env.run.of('t1').reportComplete({ status: 'done', summary: '' });
