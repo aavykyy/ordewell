@@ -3,7 +3,7 @@ import { cursorInLines, type CursorPosition } from './editor';
 import { checkpointCardLines, conversationLines, taskUsageText, usageMeasures, tokenLine } from './blocks';
 import { chatEditorRoomFor, chatPaneWidth, planPaneWidth } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
-import { findTask, planRows, plannerInFlight, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
+import { findTask, planRows, plannerInFlight, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
@@ -196,7 +196,7 @@ function taskActivity(task: TaskView | undefined, working: boolean): string {
 function taskHeaderLines(state: TuiState, tv: NonNullable<TuiState['taskView']>, cols: number): string[] {
   const task = findTask(state.tasks, tv.taskId);
   const parts = [
-    `→ Task ${task?.order ?? '?'}`,
+    `→ Task ${task ? refFor(state, task).slice(1) : '?'}`,
     task?.title ?? '(task removed)',
     task?.assignedRunner ?? '',
     taskActivity(task, tv.view.working),

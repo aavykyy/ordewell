@@ -465,6 +465,17 @@ describe('the task view header says what the task is doing', () => {
     expect(header(completed)).not.toContain('· working');
   });
 
+  it('names a subtask by its dotted reference in the log header', () => {
+    const subtask = task({ id: 'child', order: 1, title: 'Inspect greeting' });
+    const state = opened({
+      tasks: [task({ id: 'parent', order: 2, subtasks: [subtask] })],
+      taskView: loaded({ taskId: 'child' }),
+      cols: 160,
+    });
+
+    expect(plain(state).split('\n')[0]).toContain('→ Task 2.1 · Inspect greeting');
+  });
+
   it.each([
     ['input', 'waiting for your input'],
     ['checkpoint', 'checkpoint'],
