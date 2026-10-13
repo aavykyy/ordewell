@@ -45,7 +45,7 @@ const loadSkillInput = z.object({
   name: z.string().min(1).describe('The name of an Ordewell planner skill to load.'),
 });
 
-const taskRef = z.union([z.string().min(1), z.number().int().min(0)]).describe('A task id, "#order", a bare order, or a title.');
+const taskRef = z.union([z.string().min(1), z.number().int().min(0)]).describe('A task id, "#order" ("#2.1" for a subtask), a bare order, or a title.');
 
 const modelAssignment = z.looseObject({
   modelId: z.string(),

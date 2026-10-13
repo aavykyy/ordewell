@@ -1568,6 +1568,48 @@ describe('a submission whose planner turn ends while its skill check runs', () =
   });
 });
 
+describe('task references in the read tools', () => {
+  const context = { signal: new AbortController().signal };
+  const plan = [
+    createTask({
+      id: 'a', order: 1, title: 'Setup',
+      subtasks: [createTask({ id: 'a1', order: 1, title: 'Config' }), createTask({ id: 'a2', order: 2, title: 'Seed' })],
+    }),
+    createTask({ id: 'b', order: 2, title: 'Build' }),
+  ];
+  const handler = plannerToolHandler({
+    skills: () => [],
+    turnId: () => 'turn-1',
+    recordSkillLoad: () => false,
+    liveCatalog: async () => ({ runners: ['claude-code'], models: {}, modes: {}, autonomousDefault: true }),
+    coerce: (tasks) => ({ tasks: [...tasks], coerced: [] }),
+    submitPlan: () => true,
+    editPlan: async () => ({ ok: true as const, summary: [], queued: false }),
+    tasks: () => plan,
+    read: async (_signature, answerRead) => ({ status: 'answered', value: await answerRead(), landNow: false }),
+    liveOutput: () => null,
+    lastAttempt: () => null,
+    taskLogAttempts: () => [],
+    taskLog: () => [],
+    taskDiff: async () => ({ available: false, reason: 'not available' }),
+    runCommand: async () => ({ success: true, output: '', truncated: false }),
+    fetchUrl: async () => ({ success: true, output: '', truncated: false }),
+    webSearch: async () => undefined,
+    execute: async () => ({ ok: true, message: '' }),
+    editsRefused: () => undefined,
+    taskSkills: () => ({ findSkill: () => undefined, searchedDirs: () => [], uncommitted: async () => new Map() }),
+  });
+
+  it('reads #2 as top-level task 2 once task 1 has subtasks, and a subtask by its dotted label', async () => {
+    const reply = await handler.taskQuery!({ tasks: ['#2', '#1.2'], fields: ['description'] }, context);
+    const body = JSON.parse(reply.text) as { tasks: { id: string }[] };
+    expect(body.tasks.map((t) => t.id)).toEqual(['b', 'a2']);
+
+    const output = await handler.taskOutput!({ task: '#2' }, context);
+    expect(JSON.parse(output.text).task.id).toBe('b');
+  });
+});
+
 describe('a one-shot coding-agent planner', () => {
   it('requires attached tools, accepts submit_plan, and revokes its token when done', async () => {
     const server = newServer();

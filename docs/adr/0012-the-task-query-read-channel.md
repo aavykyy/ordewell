@@ -34,8 +34,10 @@ carries in full, once, on the turn that actually needs it.
 Ordewell already parses. `classifyPlannerReply` (`PlanRepair.ts`) recognizes
 it and a malformed attempt (`broken_task_query`) the same way it recognizes a
 botched plan or a botched edit: worth a corrective re-emit, not silence.
-`TaskQuery.ts` owns the wire shape, the reference resolver (id / `#order` /
-bare order / exact title), and the rendered answer; `PlannerConversation.drainTaskQueries`
+`TaskQuery.ts` owns the wire shape and the rendered answer, resolving each
+reference through the one task-reference grammar every op and tool shares
+(`resolveTaskRef`: id / `#order` or dotted `#order.sub` / bare order / exact
+title); `PlannerConversation.drainTaskQueries`
 owns the loop, the budget, and the injection.
 
 A query is answered **outside** `repairLoop`, in its own small loop, before a
@@ -250,3 +252,4 @@ ADR-0008's exploration envelope is unchanged.
 - 2026-10-11 — saved attempt log reads and task diffs, paged through the shared read budget on both planner transports.
 - 2026-10-11 — mid-run edits are applied or refused at once, with no queue for a read to wait behind ([ADR-0029](0029-the-supervisor.md)).
 - 2026-10-11 — T4: a wake-up turn spends the plan's wake-up read budget in place of the per-user-turn caps ([ADR-0029](0029-the-supervisor.md)).
+- 2026-10-13 — references resolve through the shared `TaskRefs` grammar, which reaches subtasks by their dotted label.

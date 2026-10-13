@@ -600,6 +600,26 @@ describe('task_ops conversation turns', () => {
     const userEntries = plan.conversationHistory!.filter((m) => m.role === 'user');
     expect(userEntries[userEntries.length - 1].content).toBe('how many tasks are there?');
   });
+
+  it('lists subtasks in the plan block under their dotted labels', async () => {
+    const continueConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'ok', researchLog: [] });
+    const session = makeSession({
+      aiService: { startConversation: vi.fn(), continueConversation, hasActiveConversation: () => true, reset: vi.fn() },
+    });
+    const plan = planWithTasks();
+    plan.tasks[1].subtasks = [
+      createTask({ id: 'b1', order: 1, title: 'Compile', prompt: 'p', assignedRunner: 'claude-code' }),
+      createTask({ id: 'b2', order: 2, title: 'Bundle', prompt: 'p', dependencies: ['b1'], assignedRunner: 'claude-code' }),
+    ];
+    session.loadPlan(plan, 'g', testWorkspace, { persist: false });
+
+    await session.continueConversation('what is there?');
+
+    const outgoing = String(continueConversation.mock.calls[0][0]);
+    expect(outgoing).toMatch(/^#2 id=b "Build"/m);
+    expect(outgoing).toMatch(/^ {2}#2\.1 id=b1 "Compile"/m);
+    expect(outgoing).toMatch(/^ {2}#2\.2 id=b2 "Bundle" .*deps:\[#2\.1\]/m);
+  });
 });
 
 describe('requestMerge — planner-driven merge', () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createTask, resolveOrderLabel, type TaskSkillSnapshot } from '../../models/Task';
+import { createTask, resolveTaskRef, type TaskSkillSnapshot } from '../../models/Task';
 import { augmentPromptWithPriorOutputs, composeAugmentedPrompt, composeContinuationPrompt, renderPlanMap, summarizeOutput } from '../promptAugment';
 
 describe('summarizeOutput', () => {
@@ -196,7 +196,7 @@ describe('renderPlanMap', () => {
     const solo = createTask({ id: 'a', order: 1, title: 'Solo' });
     const out = renderPlanMap([solo, parent], 's1');
     expect(out).toMatch(/2\.1\. \[NOW\s*\] Sub one.*← you are here/);
-    expect(resolveOrderLabel([solo, parent], '2.1')?.id).toBe('s1');
+    expect(resolveTaskRef([solo, parent], '2.1')?.id).toBe('s1');
   });
 });
 

@@ -3,7 +3,7 @@ import {
   taskRowView, taskStatusKind, isTaskRunning, awaitingLabel, approvalLabel, resumeLabel, resumeTime, taskRowActions, markAction, markRequestFor, opsEditable,
   titledRefs, dependentsNotice, pastGateConfirmation, newTaskFields, type TaskRowSubject, type TaskRowAction,
 } from '..';
-import { taskRef, titledTaskRef } from '../../order-labels';
+import { taskRef, titledTaskRef } from '../../services/TaskRefs';
 
 const STATUSES = ['pending', 'approved', 'blocked', 'in_progress', 'awaiting_user', 'completed', 'failed'] as const;
 

@@ -1,4 +1,5 @@
-import { flattenTasksWithParents, resolveOrderLabel, taskRef, type Task, type TaskStatus } from '../models/Task';
+import { flattenTasksWithParents, type Task, type TaskStatus } from '../models/Task';
+import { resolveTaskRef, taskRef } from './TaskRefs';
 import type { ExecutionActor, ExecutionCommandName, ExecutionRecord, SupervisorLevel } from '../models/Execution';
 import type { ApprovalRequest, IApproval } from '../interfaces/IApproval';
 import type { IsolationMergeResult } from '../interfaces/IWorktreeIsolation';
@@ -183,7 +184,7 @@ export class ExecutionCommands {
       // A task the turn's own edit adds is not in the plan until the reply ends, and nothing then starts it on the turn's behalf.
       return this.refuse(command, actor, undefined, actor.kind !== 'user' && this.host.heldEdit()
         ? `${missing} If your edit adds it, it lands as this reply ends, so it cannot start in this turn: tell the user, who starts it.`
-        : `${missing} Name it by id, "#order" or exact title.`);
+        : `${missing} Name it by id, "#order" (a subtask "#order.sub") or exact title.`);
     }
 
     const consent = this.consent(actor, command.command);
@@ -525,16 +526,10 @@ export class ExecutionCommands {
     return this.all().find(({ task }) => task.id === id);
   }
 
-  /** A reference as a caller writes one: an id, "#order" or a dotted "#4.1", a bare order, or an exact title. */
+  /** A reference as a caller writes one — see {@link resolveTaskRef}. */
   private locate(ref: string): Located | undefined {
-    const ref_ = ref.trim();
-    const all = this.all();
-    const byId = all.find(({ task }) => task.id === ref_);
-    if (byId) return byId;
-    const label = ref_.startsWith('#') ? ref_.slice(1) : ref_;
-    const byOrder = resolveOrderLabel([...(this.host.tasks() ?? [])], label);
-    if (byOrder) return all.find(({ task }) => task.id === byOrder.id);
-    return all.find(({ task }) => task.title === ref_);
+    const task = resolveTaskRef(this.host.tasks() ?? [], ref);
+    return task && this.located(task.id);
   }
 }
 
