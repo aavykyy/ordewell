@@ -120,6 +120,10 @@ ordewell task-deps 3 1,2            # make it wait for tasks 1 and 2
    diff, then merge it into your branch or discard the run. If a task or a merge
    needs your attention, Ordewell shows you where.
 
+The planner only reads; tasks run as you, in the mode the plan assigns. For
+exactly what each part can touch and what to use for untrusted repositories, see
+[SECURITY.md](SECURITY.md#what-each-part-can-touch).
+
 Folders containing several repositories are handled as one workspace: each task
 gets a worktree of every repository and lands in all of them or none. See
 [isolation and handoff](https://ordewell.ai/docs#isolation) for details.
