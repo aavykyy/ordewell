@@ -1091,8 +1091,9 @@ aborts with the user's tree untouched, and the gate waits for the user with a
 notice. The orchestrator's `onAutoMerge` observer event carries the gated task
 and merge result for a supervisor's wake-up; a failed automatic merge waits for
 a user merge or the next run before automatic merging resumes. The run's copy
-is in `runSettings`; a change applies to it at once in the session it is made
-in. The timeline records "auto-merged for task N", attributed to Ordewell
+is in `runSettings`, which the scheduler reads as it decides each merge (it
+holds no copy of its own); a change applies to it at once in the session it is
+made in. The timeline records "auto-merged for task N", attributed to Ordewell
 setting. It also merges at the end of a run (ADR-0029, amended 2026-10-12): the
 end-of-run handoff is sent only if that merge stops. With it and an Act
 supervisor's `merge_all` both off, Ordewell never merges for the user
@@ -1779,8 +1780,9 @@ notes are in the same `conversationHistory`, marked with their own message
 `kind` (`supervisor`, and `wake_up` for the **Run update** it was given) so
 surfaces style them apart from replies to the user. One module owns when it
 wakes and how it fails: `Supervisor` (`services/Supervisor.ts`), fed run
-events by the Session and batching them through `WakePolicy`. What it may do
-is set by the run's **Supervisor level** and checked at the **Command seam**.
+events by **Run supervision** and batching them through `WakePolicy`. What it
+may do is set by the run's **Supervisor level** and checked at the **Command
+seam**.
 It decides what to do next, never whether a task passed — verdicts come from
 evidence. The run never depends on it: a wake-up turn that still fails after one
 restart leaves the run *unsupervised* (carrying on as Off, with a notice and a
@@ -1802,9 +1804,9 @@ tripped wake-up-rate guard or a failed supervisor lowers it for the rest of the
 run; the user's `/supervisor` sets it, up or down, at once in the session it is
 typed in, lifting such a lowering with the guards' memory kept. A run the
 supervisor restarts itself, or a usage-limit reset resumes, keeps the level the
-run had; a start of the user's copies the global value afresh. A slim
-precursor of the mandate (#23): Watch is `observe`, Act becomes `control` +
-`replan`.
+run had; a start of the user's copies the global value afresh (see **Run
+origin**). A slim precursor of the mandate (#23): Watch is `observe`, Act
+becomes `control` + `replan`.
 *Avoid:* "autonomous", "autonomy" or "auto" for it — those name the runner
 permission modes and the Full/Guarded autonomy level (ADR-0001), a separate
 setting; a Guarded session can have an Act supervisor. *Avoid:* "mandate" until
@@ -1817,10 +1819,33 @@ started, watched and merged: **Supervisor level**, **Auto-merge at gates**,
 (`/supervisor`, `/automerge`, `/autorun`) or `PATCH /api/settings`, never by the
 planner. A change applies at once to the session it is made in; another
 session's run under way keeps its values until it ends. A run's own copy is
-`runSettings` on the plan; the plan stores no other copy.
+`runSettings` on the plan, which only **Run supervision** writes; the plan
+stores no other copy.
 *Avoid:* "autonomy" or "autonomy settings" for them — *autonomy* is the
 Full/Guarded level only, shown on its own Setup row; *Avoid:* "plan settings"
 (they stopped being per plan).
+
+**Run supervision** (`RunSupervision`, `services/RunSupervision.ts`) — the deep
+module owning one plan's run supervision (ADR-0029, ADR-0030): the run's own
+**Run settings** (`runSettings`), whether a run starts afresh or continues the
+last (by its **Run origin**), the user's change applied to the run at once
+(`apply`), the lowerings — a tripped wake-up-rate guard to Watch, a failed
+supervisor to unsupervised — the **Loop guards**' memory, and the end-of-run
+handoff an Act supervisor has first. It owns the `Supervisor`, which decides
+when the planner wakes. The Session forwards run events to it and reads back
+only the level; the scheduler reads the run's settings through one
+`runSettings()` callback as it decides, and nothing is pushed to it.
+*Avoid:* "supervisor" for the module — the Supervisor is the planner
+conversation taking turns; Run supervision holds the run to its settings.
+
+**Run origin** (`RunOrigin`: `user` / `supervisor` / `limit-reset`) — who opened
+a run, passed with the call that opens it, from the Command seam's actor down
+to the scheduler's `onRunStarted`: a call of the user's or one made for them (a
+planner turn they started, autorun), the supervisor's own, or a usage-limit
+reset resuming what it paused. Only `user` starts a run's supervision afresh,
+copying the user's settings and clearing the guards' memory; the others
+continue the run before. Never inferred from what else is in flight: the user's
+Execute while a supervisor's `merge_all` still merges is the user's.
 
 **Autorun** — the **Run setting** that starts a plan when the planner submits
 it, approved as if the user had pressed Execute; off by default, set with
@@ -1917,11 +1942,11 @@ prompt and model unchanged, at the Command seam — a start of a failed task is 
 retry however it is asked for; no re-adding a task it removed or reverting its
 own edit, on the edit path; and a wake-up-rate limit (`WAKE_UP_RATE`) in the
 `Supervisor`, which drops the run to Watch. What they remember
-(`SupervisionMemory`) lasts from the user's start of a run to their next, and is
-saved on the plan (`supervision`, beside the wake policy's undelivered events)
-so a daemon restart picks it up where it was. Each
-refusal is a note to the model naming the guard and what would be accepted;
-each tripped guard posts a supervisor message to the user, once.
+(`SupervisionMemory`, kept by **Run supervision**) lasts from the user's start
+of a run to their next, and is saved on the plan (`supervision`, beside the
+wake policy's undelivered events) so a daemon restart picks it up where it
+was. Each refusal is a note to the model naming the guard and what would be
+accepted; each tripped guard posts a supervisor message to the user, once.
 *Avoid:* "rate limit" for the set — only one guard is about rate.
 
 ---

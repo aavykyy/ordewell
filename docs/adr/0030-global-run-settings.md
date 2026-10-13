@@ -278,10 +278,11 @@ the daemon reads it from there at generation.
 ## Consequences
 
 - `UserSettings` gains the six values; the plan loses four fields and keeps
-  `runSettings`. `Session.setSupervisorLevel`, `setMergeAtGatesAutomatically`,
-  `setSupervisorRetryLimit`, `setWakeUpReadBudget` and `lowerSupervisor` become one session-scoped
-  apply behind the settings change; the orchestrator's next-run auto-merge
-  value goes.
+  `runSettings`, which one module owns (`RunSupervision`): it copies them at
+  a run the user starts, keeps them for a run that continues, and applies the
+  user's change to the run under way (`Session.applyRunSettings`). The
+  scheduler keeps no value of its own: it reads the run's `runSettings` as it
+  decides each automatic merge.
 - The TUI and VS Code gain the commands and the Setup rows, and lose `G`, `W`,
   `L` and the plan-card controls. VS Code's `ordewell.autonomousMode` goes.
 - The planner prompt gains an autorun branch: no outline gate, submit after the
@@ -310,3 +311,7 @@ the daemon reads it from there at generation.
   `mergeAtGatesAutomatically` are unchanged; the handoff is not opened by the
   surfaces while an automatic merge is coming
   ([ADR-0029](0029-the-supervisor.md), "Merge at gates automatically").
+- 2026-10-13 — one owner of the run's settings (`RunSupervision`); the
+  scheduler reads them as it decides instead of holding a copy pushed from
+  several places. A run the supervisor opened had merged by the user's setting
+  from another session rather than by its own.
