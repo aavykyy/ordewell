@@ -229,6 +229,21 @@ body {
   color: #fff;
 }
 
+/* A force-sent line (ADR-0023, F5): it stopped the turn before it, so it is
+   marked apart from an ordinary reply. */
+.chat-msg-forced {
+  display: inline-block;
+  margin-bottom: 3px;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: color-mix(in srgb, #fff 25%, transparent);
+  color: #fff;
+}
+
 /* The supervisor (ADR-0029) speaks in the planner's bubble, marked so its
    notes read apart from replies to the user, and so does what woke it. */
 .chat-msg-supervisor .chat-msg-bubble {
@@ -2536,6 +2551,26 @@ body {
 .send-btn.processing:hover:not(:disabled) {
   background: var(--red);
   color: #fff;
+}
+
+/* Send now (ADR-0023, F5): a live planner turn with text typed, beside Send. */
+.chat-input-send-now {
+  align-self: center;
+  flex-shrink: 0;
+  margin: 3px 0;
+  padding: 5px 8px;
+  font-family: inherit;
+  font-size: 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.chat-input-send-now:hover {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
 }
 
 /* ---- Approval Bar ---- */
@@ -4867,6 +4902,23 @@ body {
   color: var(--red);
 }
 
+.queued-prompt-now {
+  margin-right: auto;
+  padding: 1px 6px;
+  font-family: inherit;
+  font-size: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.queued-prompt-now:hover {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+
 .stop-hint {
   padding: 4px 14px 0;
   font-size: 11px;
@@ -5335,6 +5387,62 @@ body {
 .task-log-input:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+/* A task card's compact message box (ADR-0018, M1; ADR-0023, F1): the same
+   Send and Send now the task log offers, without leaving the plan dock. */
+.task-message-box {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+  margin-top: 8px;
+}
+
+.task-message-input {
+  flex: 1;
+  resize: none;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.task-message-input::placeholder {
+  color: var(--text-placeholder);
+}
+
+.task-message-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.task-message-send,
+.task-message-send-now {
+  font-family: inherit;
+  font-size: 11px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.task-message-send:hover:not(:disabled),
+.task-message-send-now:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+
+.task-message-send:disabled,
+.task-message-send-now:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* Ops tasks and merge gates (ADR-0020) */

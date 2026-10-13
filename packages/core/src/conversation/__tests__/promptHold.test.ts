@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { EMPTY_HOLD, aheadOfDraft, drainNext, holdPrompt, unsendAll, unsendLatest } from '../promptHold';
+import { EMPTY_HOLD, aheadOfDraft, drainNext, holdPrompt, takeAt, unsendAll, unsendLatest } from '../promptHold';
 
 describe('prompt hold', () => {
   it('sends held prompts in the order they were typed', () => {
@@ -32,5 +32,12 @@ describe('prompt hold', () => {
   it('puts an unsent prompt back above the draft being typed', () => {
     expect(aheadOfDraft('take this back', 'half a thought')).toBe('take this back\nhalf a thought');
     expect(aheadOfDraft('take this back', '')).toBe('take this back');
+  });
+
+  it('takes one prompt out of the middle for a Send now, leaving the rest in order', () => {
+    const held = holdPrompt(holdPrompt(holdPrompt(EMPTY_HOLD, 'one'), 'two'), 'three');
+
+    expect(takeAt(held, 1)).toEqual({ text: 'two', rest: ['one', 'three'] });
+    expect(takeAt(EMPTY_HOLD, 0)).toBeUndefined();
   });
 });

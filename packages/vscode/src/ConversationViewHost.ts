@@ -1,7 +1,7 @@
 import type { LegacyPlanState, SessionMessage } from '@ordewell/core';
 // The browser-safe entry, so the webview's tests can run the host's view too.
 import {
-  drainNext, EMPTY_CONVERSATION, EMPTY_HOLD, followTurn, fromTranscript, holdPrompt, NO_TURN, stopTurn, unsendAll, unsendLatest,
+  drainNext, EMPTY_CONVERSATION, EMPTY_HOLD, followTurn, fromTranscript, holdPrompt, NO_TURN, stopTurn, takeAt, unsendAll, unsendLatest,
   type ConversationInput, type ConversationView, type DisplayBlock, type GatedConversation, type LocalEntry, type PromptHold,
   type TurnGate,
 } from '@ordewell/core/plan-utils';
@@ -81,6 +81,17 @@ export class ConversationViewHost {
     if (!next) return undefined;
     this.showHeld(next.rest);
     return next.text;
+  }
+
+  /**
+   * Take one held prompt out by position for a "Send now" on its row: the
+   * caller force sends it, and the rest stay held in the order they were typed.
+   */
+  takePrompt(index: number): string | undefined {
+    const taken = takeAt(this.held, index);
+    if (!taken) return undefined;
+    this.showHeld(taken.rest);
+    return taken.text;
   }
 
   /**

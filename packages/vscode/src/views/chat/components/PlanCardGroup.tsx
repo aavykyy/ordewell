@@ -48,6 +48,9 @@ interface PlanCardGroupProps {
   onExecutePlan?: () => void;
   onStopExecution?: () => void;
   onRunTask?: (taskId: string) => void;
+  /** Message a running or waiting task from its card (ADR-0018, M1; ADR-0023, F1). */
+  onSendMessage?: (taskId: string, text: string) => void;
+  onSendMessageNow?: (taskId: string, text: string) => void;
   /** Open (or focus) a structured task's log tab (ADR-0018, V1). */
   onOpenLog?: (taskId: string) => void;
 }
@@ -86,6 +89,8 @@ export default function PlanCardGroup({
   onExecutePlan,
   onStopExecution,
   onRunTask,
+  onSendMessage,
+  onSendMessageNow,
   onOpenLog,
 }: PlanCardGroupProps) {
   const [mergeSelectedIds, setMergeSelectedIds] = useState<string[]>([]);
@@ -267,6 +272,8 @@ export default function PlanCardGroup({
                 onMarkComplete={onMarkComplete}
                 onMarkIncomplete={onMarkIncomplete}
                 onRunTask={onRunTask}
+                onSendMessage={onSendMessage}
+                onSendMessageNow={onSendMessageNow}
                 onOpenLog={onOpenLog}
                 expanded={expandedTaskId === task.id}
                 onExpandedChange={(next) => setExpandedTaskId(next ? task.id : null)}

@@ -340,6 +340,17 @@ export default function App() {
     vscode.postMessage({ type: 'openTaskLog', taskId });
   }, []);
 
+  // A card's message box (ADR-0018, M1; ADR-0023, F1) uses the same routes the
+  // task log does: a plain message through the command seam, Send now through
+  // the Session's force send.
+  const handleTaskMessage = useCallback((taskId: string, text: string) => {
+    vscode.postMessage({ type: 'sendTaskMessage', taskId, text });
+  }, []);
+
+  const handleTaskMessageNow = useCallback((taskId: string, text: string) => {
+    vscode.postMessage({ type: 'sendTaskMessageNow', taskId, text });
+  }, []);
+
   const handleMarkComplete = useCallback((taskId: string) => {
     const taskTitle = planRef.current?.tasks.find((t) => t.id === taskId)?.title ?? taskId;
     vscode.postMessage({ type: 'sendSystemCommand', command: 'markComplete', taskId });
@@ -360,6 +371,22 @@ export default function App() {
 
   const handleUnsend = useCallback(() => {
     vscode.postMessage({ type: 'unsendPrompt' });
+  }, []);
+
+  // Send now (ADR-0023, F5): stop the planner turn and send this ahead of the
+  // queue. With no turn running it is a plain send; a slash command is one
+  // either way, since the hold never applies to commands.
+  const handleSendNow = useCallback((text: string) => {
+    if (!isResearchActive || text.startsWith('/')) {
+      handleSend(text);
+      return;
+    }
+    setStopArmed(false);
+    vscode.postMessage({ type: 'sendMessageNow', text });
+  }, [isResearchActive, handleSend]);
+
+  const handleHeldSendNow = useCallback((index: number) => {
+    vscode.postMessage({ type: 'sendHeldPromptNow', index });
   }, []);
 
   const stopTurn = useCallback(() => {
@@ -655,6 +682,8 @@ export default function App() {
             onExecutePlan={handleExecutePlan}
             onStopExecution={handleStopExecution}
             onRunTask={handleRunTask}
+            onSendMessage={handleTaskMessage}
+            onSendMessageNow={handleTaskMessageNow}
             onResolveConflict={handleResolveConflict}
             onOpenLog={handleOpenTaskLog}
           />
@@ -891,7 +920,7 @@ export default function App() {
           onResolveApproval={handleResolveApproval}
         />
 
-        <QueuedPrompts prompts={held} onUnsend={handleUnsend} />
+        <QueuedPrompts prompts={held} onUnsend={handleUnsend} onSendNow={handleHeldSendNow} />
 
         {isResearchActive && !streaming && (
           <div className="chat-msg-working">
@@ -908,6 +937,7 @@ export default function App() {
 
       <ChatInput
         onSend={handleSend}
+        onSendNow={handleSendNow}
         onStop={handleStop}
         onEscape={handleEscape}
         disabled={conversationBusy}
@@ -917,6 +947,7 @@ export default function App() {
         harnessPlannerModels={harnessPlannerModels}
         configuredProviders={configuredProviders}
         isProcessing={isGenerating}
+        isTurnRunning={isResearchActive}
         unsent={unsent}
         skills={skills}
       />

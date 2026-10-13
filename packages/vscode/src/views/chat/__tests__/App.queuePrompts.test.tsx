@@ -130,6 +130,43 @@ describe('queued prompts', () => {
     expect(document.querySelector('.send-btn')?.getAttribute('title')).toBe('Stop (Esc Esc)');
   });
 
+  it('offers Send now on each held row, and posts that row\'s position', () => {
+    post({ type: 'plannerTurn', active: true });
+    post({ type: 'heldPrompts', prompts: ['one', 'two'] });
+
+    const buttons = [...document.querySelectorAll('.queued-prompt-now')];
+    expect(buttons).toHaveLength(2);
+    fireEvent.click(buttons[1]);
+
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendHeldPromptNow', index: 1 });
+  });
+
+  it('shows a Send now beside the composer while a turn runs, and it force sends the typed text', () => {
+    post({ type: 'plannerTurn', active: true });
+    type('stop, use Postgres');
+
+    const sendNow = document.querySelector('.chat-input-send-now');
+    expect(sendNow).toBeTruthy();
+    fireEvent.click(sendNow!);
+
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendMessageNow', text: 'stop, use Postgres' });
+    expect(textarea().value).toBe('');
+  });
+
+  it('sends now on Ctrl+Enter', () => {
+    post({ type: 'plannerTurn', active: true });
+    type('stop, use Postgres');
+
+    fireEvent.keyDown(textarea(), { key: 'Enter', ctrlKey: true });
+
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendMessageNow', text: 'stop, use Postgres' });
+  });
+
+  it('has no Send now button outside a turn', () => {
+    type('a normal message');
+    expect(document.querySelector('.chat-input-send-now')).toBeNull();
+  });
+
   it('sends nothing on Enter with an empty input mid-turn', () => {
     post({ type: 'plannerTurn', active: true });
 

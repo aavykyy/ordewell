@@ -41,6 +41,10 @@ interface ChatInputProps {
   harnessPlannerModels?: ModelOption[];
   configuredProviders?: ApiProvider[];
   isProcessing?: boolean;
+  /** A planner turn is in flight: with text typed, Send now stops it and sends ahead of the queue. */
+  isTurnRunning?: boolean;
+  /** Send now (ADR-0023, F5); with no turn running the host sends it as a plain message. */
+  onSendNow?: (text: string) => void;
   onStop?: () => void;
   /** Esc with no suggestion list open. True when the key was spent; otherwise it clears the input. */
   onEscape?: () => boolean;
@@ -254,6 +258,8 @@ export default function ChatInput({
   harnessPlannerModels,
   configuredProviders = [],
   isProcessing = false,
+  isTurnRunning = false,
+  onSendNow,
   onStop,
   onEscape,
   disabledReason,
@@ -455,7 +461,20 @@ export default function ChatInput({
     textareaRef.current?.focus();
   }, [unsent]);
 
-  const canSubmit = isProcessing || (!disabled && text.trim().length > 0);
+  const canSend = !disabled && text.trim().length > 0;
+  const canSubmit = isProcessing || canSend;
+  // A live planner turn and something typed: Send now stops the turn and sends
+  // ahead of the queue, beside the Send that queues for the turn's end.
+  const canSendNow = !!onSendNow && isTurnRunning && canSend;
+  // Stop only while a turn is live and nothing is typed, so typing a message
+  // always turns the button back into Send — as the task log's composer does.
+  const stops = isProcessing && !canSend;
+
+  const sendNow = () => {
+    if (!canSendNow) return;
+    onSendNow!(text.trim());
+    setText('');
+  };
 
   const applyModel = (id: string) => {
     onSend(`/model set ${id}`);
@@ -594,6 +613,10 @@ export default function ChatInput({
 
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
+      if ((e.ctrlKey || e.metaKey) && canSendNow) {
+        sendNow();
+        return;
+      }
       handleSubmit();
     }
   };
@@ -696,14 +719,24 @@ export default function ChatInput({
                 rows={1}
               />
             </div>
+            {canSendNow && (
+              <button
+                className="chat-input-send-now"
+                onClick={sendNow}
+                title="Send now (Ctrl+Enter) — stop the planner turn and send this ahead of the queue"
+                type="button"
+              >
+                Send now
+              </button>
+            )}
             <button
-              className={`send-btn${isProcessing ? ' processing' : ''}`}
-              onClick={isProcessing && onStop ? onStop : handleSubmit}
+              className={`send-btn${stops ? ' processing' : ''}`}
+              onClick={stops && onStop ? onStop : handleSubmit}
               disabled={!canSubmit}
-              title={isProcessing ? 'Stop (Esc Esc)' : disabled && disabledReason ? disabledReason : 'Send (Enter)'}
+              title={stops ? 'Stop (Esc Esc)' : disabled && disabledReason ? disabledReason : 'Send (Enter)'}
               type="button"
             >
-              {isProcessing ? (
+              {stops ? (
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
                   <rect x="0" y="0" width="12" height="12" rx="2" />
                 </svg>
