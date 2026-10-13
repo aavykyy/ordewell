@@ -616,11 +616,14 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       dispatch({ type: 'notice', message: 'Added a task that merges the conflicted branch by hand. Run it with E (run plan); when it lands, the conflicted task lands through it.' });
       return;
 
-    case 'deleteSession':
-      await api.deleteSession(effect.sessionId, workspace);
+    case 'deleteSession': {
+      const { ok } = await api.deleteSession(effect.sessionId, workspace);
       await loadSessions(deps);
-      dispatch({ type: 'notice', message: `Deleted ${effect.sessionId}.` });
+      dispatch(ok
+        ? { type: 'notice', message: `Deleted ${effect.sessionId}.` }
+        : { type: 'failed', message: `Could not delete ${effect.sessionId}: no saved session was removed.` });
       return;
+    }
 
     case 'saveSession':
       // Plans are persisted server-side as they change; this only confirms it.

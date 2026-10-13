@@ -5,7 +5,7 @@ import {
   type UsageLine, type UsageTotals,
   type SkillLoadBlock, type SubagentBlock, type SubagentStatus, type ThinkingDisplayBlock, type ToolBlock,
 } from '@ordewell/core';
-import { pad, sanitize, style, truncate, width, wrap, wrapLines } from './ansi';
+import { graphemes, pad, sanitize, style, truncate, width, wrap, wrapLines } from './ansi';
 import { renderMarkdown } from './markdown';
 
 /*
@@ -157,7 +157,7 @@ const PATH_LIKE = /^(?![a-z][a-z0-9+.-]*:\/\/)\S*\/\S*$/i;
 function truncatePath(path: string, max: number): string {
   if (width(path) <= max) return path;
   let tail = '';
-  for (const char of Array.from(path).reverse()) {
+  for (const char of graphemes(path).reverse()) {
     if (width(char + tail) > max - 1) break;
     tail = char + tail;
   }

@@ -1,4 +1,4 @@
-import { pad, sanitize, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
+import { firstGrapheme, pad, sanitize, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
 import { cursorInLines, type CursorPosition } from './editor';
 import { checkpointCardLines, conversationLines, taskUsageText, usageMeasures, tokenLine } from './blocks';
 import { chatEditorRoomFor, chatPaneWidth, planPaneWidth } from './geometry';
@@ -854,7 +854,8 @@ function taskPromptLines(wrapped: WrapLine[], cursor: CursorPosition, pad = '   
     ...wrapped.map(({ line }, i) => {
       if (i !== cursor.line) return `${pad}${line}`;
       const col = cursor.col;
-      return `${pad}${line.slice(0, col)}${style.inverse(line.slice(col, col + 1) || ' ')}${line.slice(col + 1)}`;
+      const caret = firstGrapheme(line.slice(col)) || ' ';
+      return `${pad}${line.slice(0, col)}${style.inverse(caret)}${line.slice(col + caret.length)}`;
     }),
   ];
 }

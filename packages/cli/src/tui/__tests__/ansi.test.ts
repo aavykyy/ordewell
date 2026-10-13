@@ -42,6 +42,11 @@ describe('truncate', () => {
   it('drops the text entirely when there is no room', () => {
     expect(truncate('abc', 0)).toBe('');
   });
+
+  it('never cuts inside a ZWJ sequence', () => {
+    const cut = truncate('👨‍👩‍👧👨‍👩‍👧👨‍👩‍👧', 5);
+    expect(cut).toBe('👨‍👩‍👧👨‍👩‍👧…');
+  });
 });
 
 describe('sanitize', () => {
@@ -147,6 +152,11 @@ describe('wrap', () => {
 
   it('keeps runs of spaces inside a line', () => {
     expect(wrap('a    b', 20)).toEqual(['a    b']);
+  });
+
+  it('hard-splits a run of ZWJ emoji between clusters, never inside one', () => {
+    const family = '👨‍👩‍👧';
+    expect(wrap(family.repeat(5), 4)).toEqual([family.repeat(2), family.repeat(2), family]);
   });
 
   it('keeps indentation on a line it has to wrap', () => {

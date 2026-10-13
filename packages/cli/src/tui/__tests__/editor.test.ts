@@ -256,3 +256,37 @@ describe('history', () => {
     expect(s.cursor).toBe('second'.length);
   });
 });
+
+describe('applyKey — grapheme clusters', () => {
+  const family = '👨‍👩‍👧';
+
+  it('removes a whole emoji on backspace, not half its surrogate pair', () => {
+    const next = applyKey(at('a😀'), { name: 'backspace' });
+    expect(next.text).toBe('a');
+    expect(next.cursor).toBe(1);
+  });
+
+  it('removes a ZWJ sequence as one unit on backspace', () => {
+    const next = applyKey(at(`a${family}`), { name: 'backspace' });
+    expect(next.text).toBe('a');
+    expect(next.cursor).toBe(1);
+  });
+
+  it('removes a base letter with its combining accent on backspace', () => {
+    const next = applyKey(at('né'), { name: 'backspace' });
+    expect(next.text).toBe('n');
+  });
+
+  it('removes the whole cluster under the cursor on delete', () => {
+    const next = applyKey(at(`${family}b`, 0), { name: 'delete' });
+    expect(next.text).toBe('b');
+    expect(next.cursor).toBe(0);
+  });
+
+  it('moves the caret across a cluster in one press, in both directions', () => {
+    const text = `a${family}b`;
+    const right = applyKey(at(text, 1), { name: 'right' });
+    expect(right.cursor).toBe(1 + family.length);
+    expect(applyKey(right, { name: 'left' }).cursor).toBe(1);
+  });
+});
