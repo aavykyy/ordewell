@@ -38,9 +38,10 @@ describe('plan pane — idle indicator', () => {
   it('shows a quiet task without a terminal hint', () => {
     const idle = plain(planState({ tasks: [task({ idleSince: '2026-08-18T00:00:00.000Z' })] }));
 
-    expect(idle).toContain('quiet');
+    expect(idle).toContain('~');
     expect(idle).not.toContain('terminal');
     expect(idle).not.toContain('working');
+    expect(idle).not.toContain('quiet');
   });
 
   it('reverts to the spinner once idleSince clears', () => {

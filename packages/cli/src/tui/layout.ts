@@ -773,13 +773,13 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
     : '';
   const runner = task.assignedRunner ?? '';
   const bodyPad = parent ? '      ' : '    ';
-  // "working" over an agent that has printed nothing for a minute hid the one
-  // case that needs the user: an agent stopped at a question.
+  // Only a state that wants the user gets a word: a runner approval ("enter
+  // opens it") and a task stopped at a question. Running and quiet are the
+  // status glyph's job — the spinner and the static '~' — so a running row
+  // reads `runner · model` and nothing is repeated above it.
   const activity = row.approvals
     ? `${inRow(row.approvals)} — enter opens it`
-    : row.status === 'quiet'
-      ? 'quiet'
-      : row.running ? 'working' : row.awaiting ? inRow(row.awaiting) : '';
+    : row.awaiting ? inRow(row.awaiting) : '';
   const skills = (task.skills ?? []).join(' · ');
   const origin = task.addedBy === 'supervisor' ? 'added by supervisor' : '';
   const meta = [activity, origin, runner, model];

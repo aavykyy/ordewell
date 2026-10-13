@@ -243,11 +243,13 @@ describe('the task view draws as a runner, not the planner', () => {
   });
 
   it('names the task, its runner and its live state in the header', () => {
-    const out = plain(opened());
+    // Wide enough that the header's trailing state word is not truncated away.
+    const out = plain(opened({ cols: 160 }));
     expect(out).toContain('→ Task 1');
     expect(out).toContain('Refactor PlanStore');
-    expect(out).toContain('claude-code');
-    expect(out).toContain('working');
+    // The log ends with a completed turn, so the header reads the saved status;
+    // "working" is the header's word only while a turn is live.
+    expect(out).toContain('claude-code · in_progress');
     expect(out).toContain('ctrl-r remove queued');
     expect(out).toContain('ctrl-x interrupt');
   });

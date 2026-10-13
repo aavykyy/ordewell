@@ -474,7 +474,7 @@ describe('plan pane', () => {
     expect(out).not.toContain('▶');
     expect(out).toMatch(/[⠀-⣿]/);
     expect(out).toContain('RUN');
-    expect(out).toContain('working');
+    expect(out).not.toContain('working');
   });
 });
 
