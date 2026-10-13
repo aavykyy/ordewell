@@ -159,82 +159,54 @@ describe('top bar', () => {
 });
 
 describe('welcome mark', () => {
-  // The mark as designed on its dot grid: three strokes converging on the dot.
-  const MARK = [
-    '⠛⠓⠶⣤⣀⠀⠀⠀⢀⣀⡀',
-    '⠶⠶⠶⠶⣿⣿⠶⠆⣿⣿⣿',
-    '⣤⡤⠶⠛⠉⠀⠀⠀⠈⠉⠁',
-  ];
-  const markAt = (lines: string[]): number => lines.findIndex((l) => l.startsWith(MARK[0]));
+  // One row of each half of the braille wordmark, enough to tell which form is drawn.
+  const BIG_ORDE = '⣿⣿    ⣿⡇ ⣿⣿   ⣿⣿   ⢸⣿⡇⢸⣿⡿⠿⠿⠿⠿⠟';
+  const BIG_WELL = ' ⢸⣿⡀⣿⠇⢹⣇⢸⣿⠁ ⣿⡿⠿⠿⠿⠿⠿ ⢸⣿  ⣿⣿';
+  const BANNER = '⠛⠛⠶⣤⡀';
+  const plain = (over: Partial<TuiState>): string[] => screen(over).map(stripAnsi).map((l) => l.trimEnd());
 
-  it('draws the 3-row mark at the left edge of an 80x24 terminal', () => {
-    const lines = screen({ cols: 80, rows: 24 }).map(stripAnsi);
-    const top = markAt(lines);
-    expect(top).toBeGreaterThanOrEqual(0);
-    expect(lines[top + 1].startsWith(MARK[1])).toBe(true);
-    expect(lines[top + 2].startsWith(MARK[2])).toBe(true);
+  it('draws the full banner where the pane has room for it and the whole welcome', () => {
+    const big = plain({ cols: 120, rows: 40 });
+    expect(big[0].startsWith(BANNER)).toBe(true);
+    expect(big[3]).toContain(BIG_ORDE + BIG_WELL);
+    expect(big.join('\n')).toContain('Describe a goal to start planning.');
   });
 
-  it('stays whole at a very short height, pinned above the rest of the welcome', () => {
-    const lines = screen({ cols: 80, rows: 10 }).map(stripAnsi);
-    const top = markAt(lines);
-    expect(top).toBeGreaterThanOrEqual(0);
-    expect(lines[top + 1].startsWith(MARK[1])).toBe(true);
-    expect(lines[top + 2].startsWith(MARK[2])).toBe(true);
-  });
-  it('puts the wordmark and the version on the middle row only', () => {
-    const lines = screen({ cols: 80, rows: 24 }).map(stripAnsi);
-    const top = markAt(lines);
-    expect(lines[top + 1].trimEnd()).toMatch(new RegExp(`^${MARK[1]}\\s+ordewell\\s+v${CLI_VERSION.replace(/\./g, '\\.')}$`));
-    expect(lines[top].trimEnd()).toBe(MARK[0]);
-    expect(lines[top + 2].trimEnd()).toBe(MARK[2]);
+  it('drops the icon before the braille wordmark, then breaks that between `orde` and `well`', () => {
+    const word = plain({ cols: 70, rows: 40 });
+    expect(word[3]).toBe(BIG_ORDE + BIG_WELL);
+    expect(word.some((l) => l.startsWith(BANNER))).toBe(false);
+
+    const split = plain({ cols: 40, rows: 60 });
+    expect(split[3]).toBe(BIG_ORDE);
+    expect(split[9]).toBe(BIG_WELL);
   });
 
-  it('draws the wordmark as plain ASCII, as the logo sets it: `well` bold in the brand teal', () => {
+  it('goes without a logo where none fits above the whole welcome', () => {
+    // Wide but short: even the one-line wordmark would push the Setup block off the pane.
+    expect(plain({ cols: 120, rows: 20 })[0]).toBe('Describe a goal to start planning.');
+    // Tall but narrower than `orde`.
+    expect(plain({ cols: 30, rows: 60 })[0]).toBe('Describe a goal to start');
+  });
+
+  it('paints `orde` in the default colour and `well` in the accent', () => {
     style.enabled = true;
     let raw: string[];
-    let wordmark: string;
+    let well: string;
     try {
-      raw = screen({ cols: 80, rows: 24 });
-      wordmark = `orde${style.bold(style.brand('well'))}`;
+      raw = screen({ cols: 70, rows: 40 });
+      well = style.brand(BIG_WELL);
     } finally { style.enabled = false; }
-    const middle = raw.find((l) => stripAnsi(l).startsWith(MARK[1]))!;
-    expect([...middle].every((ch) => ch.codePointAt(0)! <= 0xffff)).toBe(true);
-    expect(middle).toContain(wordmark);
+    expect(raw[3].trimEnd()).toBe(`${BIG_ORDE}${well}`);
   });
 
-  it('mirrors the top row in the bottom one', () => {
-    // Swaps braille dot rows 1↔4 and 2↔3 in each column of a cell.
-    const flip = (row: string): string => [...row].map((ch) => {
-      const bits = ch.codePointAt(0)! - 0x2800;
-      const pairs: Array<[number, number]> = [[0x01, 0x40], [0x02, 0x04], [0x08, 0x80], [0x10, 0x20]];
-      let out = 0;
-      for (const [a, b] of pairs) {
-        if (bits & a) out |= b;
-        if (bits & b) out |= a;
-      }
-      return String.fromCodePoint(0x2800 + out);
-    }).join('');
-    const lines = screen({ cols: 80, rows: 24 }).map(stripAnsi);
-    const top = markAt(lines);
-    expect(lines[top + 2].trimEnd()).toBe(flip(lines[top].trimEnd()));
-  });
-
-  it('keeps the whole mark at 40 columns, cutting the version before the wordmark', () => {
-    const lines = screen({ cols: 40, rows: 24 }).map(stripAnsi);
-    const top = markAt(lines);
-    expect(top).toBeGreaterThanOrEqual(0);
-    expect(lines[top + 1].startsWith(MARK[1])).toBe(true);
-    expect(lines[top + 2].startsWith(MARK[2])).toBe(true);
-  });
-
-  it('drops the version first, then cuts the wordmark, when the middle row runs out of room', () => {
-    // The pane leaves its last column free: 11 mark + 2 gap + 8 wordmark = 21.
-    const named = screen({ cols: 22, rows: 24 }).map(stripAnsi);
-    expect(named[markAt(named) + 1].trimEnd()).toBe(`${MARK[1]}  ordewell`);
-    const cut = screen({ cols: 20, rows: 24 }).map(stripAnsi);
-    // 19 columns leave 6 for the wordmark: five letters and the ellipsis.
-    expect(cut[markAt(cut) + 1].trimEnd()).toBe(`${MARK[1]}  ordew…`);
+  it('carries the version on the workspace row, not beside the mark', () => {
+    const lines = plain({ cols: 70, rows: 40, workspace: '/home/dev/ordewell-tui' });
+    expect(lines.slice(0, 6).join('\n')).not.toContain(CLI_VERSION);
+    expect(lines.find((l) => l.includes('ordewell-tui'))).toBe(`/home/dev/ordewell-tui · v${CLI_VERSION}`);
+    // A workspace path too long for the row keeps its path and drops the version.
+    const long = `/w/${'x'.repeat(70)}`;
+    expect(plain({ cols: 80, rows: 24, workspace: long }).find((l) => l.includes(long))).toBe(long);
   });
 
   it('no longer carries the description paragraph', () => {
@@ -1473,7 +1445,7 @@ describe('the token line', () => {
     type: 'planner_usage', totals: { inputTokens: 12_400, outputTokens: 3_100 }, ...over,
   });
   /** The chat pane's bottom row: the last body row, just above the status row. */
-  const bottomRow = (state: TuiState): string => stripAnsi(render(state)[bodyRows(state)]).trimEnd();
+  const bottomRow = (state: TuiState): string => stripAnsi(render(state)[bodyRows(state) - 1]).trimEnd();
 
   it('sits on the chat pane\'s bottom row with the totals and how full the context is', () => {
     const state = heard(80, { type: 'planner_message', content: 'Which database?', timestamp: '' }, usage({ contextFill: { usedTokens: 36_000, windowTokens: 200_000 } }));
@@ -1510,7 +1482,7 @@ describe('the token line', () => {
     const state = heard(80, ...Array.from({ length: 40 }, (_, i): SessionMessage => ({ type: 'planner_message', content: `reply ${i}`, timestamp: '' })));
 
     expect(bottomRow(state)).toBe('');
-    expect(stripAnsi(render(state)[bodyRows(state) - 1])).toContain('reply 39');
+    expect(stripAnsi(render(state)[bodyRows(state) - 2])).toContain('reply 39');
   });
 });
 
@@ -1587,7 +1559,7 @@ describe('a reloaded session', () => {
   const saved = (state: TuiState): string[] => {
     const tall = { ...state, rows: 80 };
     const rows = render(tall).map((r) => stripAnsi(r).trimEnd());
-    const shown = rows.slice(rows.indexOf('❯ Add rate limiting'), bodyRows(tall) + 1);
+    const shown = rows.slice(rows.indexOf('❯ Add rate limiting'), bodyRows(tall));
     const thinking = shown.findIndex((r) => r.startsWith('∴'));
     const kept = thinking < 0 ? shown : [...shown.slice(0, thinking), ...shown.slice(shown.indexOf('', thinking))];
     return kept.filter(Boolean);
@@ -1618,7 +1590,7 @@ describe('queued prompts with the conversation', () => {
 
     expect(rows[bubble]).toBe('◇ Use SQLite · queued · esc to unsend');
     expect(bubble).toBeGreaterThan(rows.findIndex((r) => r.startsWith('○ Bash(npm test)')));
-    expect(rows[bodyRows(state)]).toBe('900 in · 80 out');
-    expect(bubble).toBeLessThan(bodyRows(state));
+    expect(rows[bodyRows(state) - 1]).toBe('900 in · 80 out');
+    expect(bubble).toBeLessThan(bodyRows(state) - 1);
   });
 });

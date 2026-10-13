@@ -135,10 +135,10 @@ describe('the composer sits on the grey band', () => {
 
 describe('the band rows are part of the layout', () => {
   it('takes exactly two rows from the body', () => {
-    // rows − status − autonomy − footer(1) − composer(1 text + 2 band)
-    expect(bodyRows(typed('hi'))).toBe(24 - 2 - 1 - 3);
-    expect(bodyRows(typed('a\nb\nc'))).toBe(24 - 2 - 1 - 5);
-    expect(bodyRows(typed('hi', { focus: 'plan', tasks }))).toBe(24 - 2 - 1 - 3);
+    // rows − status − footer(1) − composer(1 text + 2 band)
+    expect(bodyRows(typed('hi'))).toBe(24 - 1 - 1 - 3);
+    expect(bodyRows(typed('a\nb\nc'))).toBe(24 - 1 - 1 - 5);
+    expect(bodyRows(typed('hi', { focus: 'plan', tasks }))).toBe(24 - 1 - 1 - 3);
   });
 
   it('keeps the frame exactly as tall as the terminal, as the draft grows', () => {
@@ -155,9 +155,9 @@ describe('the band rows are part of the layout', () => {
     expect(max).toBeGreaterThan(0);
 
     const top = render({ ...base, scroll: max }).map(stripAnsi);
-    expect(top[1]).toContain('line 00');
+    expect(top[0]).toContain('line 00');
     const oneShort = render({ ...base, scroll: max - 1 }).map(stripAnsi);
-    expect(oneShort[1]).not.toContain('line 00');
+    expect(oneShort[0]).not.toContain('line 00');
   });
 
   it('shows the newest line directly above the status row at the tail', () => {
@@ -180,7 +180,7 @@ describe('with colour off', () => {
     expect(at).toBeGreaterThan(0);
     expect(frame[at - 1].trim()).toBe('');
     expect(frame[at + 1].trim()).toBe('');
-    expect(bodyRows(typed('hi'))).toBe(24 - 2 - 1 - 3);
+    expect(bodyRows(typed('hi'))).toBe(24 - 1 - 1 - 3);
   });
 });
 

@@ -26,8 +26,8 @@ import { ALL_PROVIDERS, approvalLabel, awaitingLabel, hasHiddenDetail, resumeLab
  * imports only the bounds. Nothing here touches state or emits anything.
  */
 
-/** skills, status, input, footer — everything that is not the body. */
-const CHROME_ROWS = 4;
+/** status, input, footer — everything that is not the body. */
+const CHROME_ROWS = 3;
 
 // ── Chrome extents ───────────────────────────────────────────────────────────
 
@@ -283,7 +283,7 @@ export function chatLayout(state: TuiState, rows: number, cols: number): ChatLay
   const card = tv && checkpoint ? checkpointCardLines(findTask(state.tasks, tv.taskId)?.order ?? 0, checkpoint, cols, waitingApproval(tv) !== undefined) : [];
   const answering = chatBodyLines(blocks, cols, state.detailAll, tv ? waitingApproval(tv) : undefined);
   const body = card.length > 0 ? [...answering, ...card] : answering;
-  const transcript = !welcome ? body : body.length === 0 ? welcomeLines(state, cols) : [...welcomeLines(state, cols), '', ...body];
+  const transcript = !welcome ? body : body.length === 0 ? welcomeLines(state, rows, cols) : [...welcomeLines(state, rows, cols), '', ...body];
   // The queued prompts paint as part of the tail, newest last — they are the
   // turns that have not gone out yet, and they travel where a sent message
   // would have appeared. A task's queue is its own, taken back one at a time.
@@ -298,18 +298,9 @@ export function chatLayout(state: TuiState, rows: number, cols: number): ChatLay
   // so a short pane never trades its last conversation row for a breakdown.
   const footer = usage.slice(0, Math.max(1, rows - taskHeader.length - 1));
   const space = Math.max(0, rows - taskHeader.length - footer.length);
-  // The welcome alone in a pane too short for it would lose its mark to the
-  // newest-lines-win rule below, so the mark stays put while the rest scrolls.
-  // Once the conversation starts, the welcome scrolls away like any line.
-  const pinned = welcome && body.length === 0 && bubbles.length === 0 && content.length > space
-    ? content.slice(0, Math.min(WELCOME_MARK_ROWS, space))
-    : [];
-  const header = [...taskHeader, ...pinned];
-  const lines = content.slice(pinned.length);
-  const room = space - pinned.length;
   // Content that fits hangs off the top so the welcome does not jump when the
   // first message lands; once it overflows the newest lines win the pane.
-  return { lines, header, footer, anchor: lines.length > room ? 'bottom' : 'top', maxScroll: Math.max(0, lines.length - room) };
+  return { lines: content, header: taskHeader, footer, anchor: content.length > space ? 'bottom' : 'top', maxScroll: Math.max(0, content.length - space) };
 }
 
 const tokenRow = (blocks: readonly DisplayBlock[], cols: number): string[] => {
@@ -393,32 +384,10 @@ function setupRow(label: string, value: string, command: string, cols: number): 
   return truncate(`${head}${gap}${style.grey(command)}`, cols - 1);
 }
 
-// The wordmark is plain ASCII: mathematical alphanumerics fall back to wider
-// glyphs in most monospace fonts and overlap.
-/**
- * The logo's icon on a braille dot grid (`#` stroke, `o` dot), traced from
- * assets/readme/logo-*.png: outer strokes that leave level, sweep into the
- * middle one and run on with it as one trunk, a one-dot gap, then the round
- * dot. Strokes are two dots thick because a line centred on 12 dot rows needs
- * an even width; the dot is three strokes across, as near the logo's four as
- * three rows allow. Only the top half is drawn — the bottom is its mirror.
- *
- * Braille rather than quadrant blocks: 2×4 dots a cell instead of 2×2 is what
- * lets three strokes and a round dot share three rows.
- */
-const MARK_TOP_HALF = [
-  '###...................',
-  '######................',
-  '....####..............',
-  '......####.......oooo.',
-  '........####....oooooo',
-  '###############.oooooo',
-];
+interface MarkCell { glyph: string; dot: boolean }
 
 /** Dot bits of a braille cell, by [row][column] within its 2×4 grid. */
 const BRAILLE_BITS = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]];
-
-interface MarkCell { glyph: string; dot: boolean }
 
 /** Each 4-dot band of the grid as one row of braille cells. */
 function brailleRows(grid: string[]): MarkCell[][] {
@@ -435,41 +404,91 @@ function brailleRows(grid: string[]): MarkCell[][] {
   }));
 }
 
-const MARK = brailleRows([...MARK_TOP_HALF, ...[...MARK_TOP_HALF].reverse()]);
-
 /** Painted per frame, not at load: colour is only switched on or off once the terminal starts. */
 const paintMark = (row: MarkCell[]): string => row.map(({ glyph, dot }) => dot ? style.brand(glyph) : glyph).join('');
 
-const MARK_GAP = '  ';
-
 const VERSION = cliVersion();
 
-/**
- * The middle row carries the wordmark and the version. Short of room the
- * version goes first, then the wordmark is cut; the mark itself is never
- * dropped, only cut like any row once the pane is narrower than it.
- */
-function markLines(cols: number): string[] {
-  const room = Math.max(0, cols - 1);
-  const [top, mid, bottom] = MARK.map(paintMark);
-  // As the logo sets it: `orde` plain, `well` bold in the brand teal. Only the
-  // second half is bold, so the `ew` join cannot fuse — synthetic bold bleeds a
-  // pixel right, out of the `e` and into the `w` when both were bold.
-  const wordmark = `orde${style.bold(style.brand('well'))}`;
-  const named = `${mid}${MARK_GAP}${wordmark}`;
-  const versioned = VERSION === 'unknown' ? named : `${named}${MARK_GAP}${style.grey(`v${VERSION}`)}`;
-  const textRoom = room - width(mid) - MARK_GAP.length;
-  const middle = width(versioned) <= room ? versioned
-    : width(named) <= room ? named
-    : textRoom > 0 ? `${mid}${MARK_GAP}${truncate(wordmark, textRoom)}`
-    : truncate(mid, room);
-  return [truncate(top, room), middle, truncate(bottom, room)];
+/** The version rides on the workspace row rather than costing the welcome a row of its own. */
+function workspaceLine(workspace: string, cols: number): string {
+  const versioned = VERSION === 'unknown' ? workspace : `${workspace} · v${VERSION}`;
+  return style.grey(width(versioned) <= cols - 1 ? versioned : workspace);
 }
 
-/** The welcome's mark rows, which a pane too short for the whole welcome keeps pinned. */
-const WELCOME_MARK_ROWS = MARK.length;
+/**
+ * The full logo's icon, for a pane with room for it, on a braille dot grid:
+ * strokes two dots thick that leave level and ease into
+ * the trunk, which runs flush into the dot. The dot starts on a cell boundary
+ * and fills its cells alone — a braille cell takes one colour, so a cell that
+ * held both trunk and dot would paint one of them the other's colour. Its rows
+ * run 4, 6, 8, 8 dots wide to read round. Only the top half is drawn.
+ */
+const BANNER_ICON_TOP_HALF = [
+  '####..............................',
+  '######............................',
+  '....####..........................',
+  '......###.........................',
+  '.......####.......................',
+  '.........###......................',
+  '..........####....................',
+  '............###...................',
+  '.............###............oooo..',
+  '..............####.........oooooo.',
+  '................######....oooooooo',
+  '##########################oooooooo',
+];
 
-function welcomeLines(state: TuiState, cols: number): string[] {
+const BANNER_ICON = brailleRows([...BANNER_ICON_TOP_HALF, ...[...BANNER_ICON_TOP_HALF].reverse()]);
+
+/** The lowercase wordmark traced into braille cells, one string per icon row. */
+const BANNER_WORD = [
+  '                   ⢸⣿⡇                            ⢸⣿  ⣿⣿',
+  ' ⣀⣤⣤⣤⣤⡀  ⣤⣤⢀⣤⡄ ⣀⣤⣤⣤⣸⣿⡇  ⣠⣤⣤⣤⣀ ⢠⣤⡄  ⣤⣤  ⣠⣤  ⣠⣤⣤⣤⣀  ⢸⣿  ⣿⣿',
+  '⣰⣿⠏⠁⠈⢻⣿⡆ ⣿⣿⠟⠉⠁⣰⣿⠏⠉⠉⢻⣿⡇ ⣾⡟⠁ ⠙⣿⡆ ⣿⣧ ⢸⡿⣿⡄ ⣿⡏ ⣾⡿⠁ ⠙⣿⣆ ⢸⣿  ⣿⣿',
+  '⣿⣿    ⣿⡇ ⣿⣿   ⣿⣿   ⢸⣿⡇⢸⣿⡿⠿⠿⠿⠿⠟ ⢸⣿⡀⣿⠇⢹⣇⢸⣿⠁ ⣿⡿⠿⠿⠿⠿⠿ ⢸⣿  ⣿⣿',
+  '⠹⣿⣦⣀⣀⣼⣿⠃ ⣿⣿   ⠸⣿⣦⣀⣠⣾⣿⡇ ⢿⣷⣀⣀⣠⣶⠆  ⢿⣿⡿ ⠘⣿⣿⡏  ⢻⣷⣄⣀⣠⣶⠆ ⢸⣿  ⣿⣿',
+  ' ⠈⠙⠛⠛⠉   ⠉⠉    ⠈⠙⠛⠋⠈⠉⠁  ⠉⠛⠛⠋⠁   ⠈⠉⠁  ⠉⠉    ⠉⠛⠛⠋⠁  ⠈⠉  ⠉⠉',
+];
+
+const BANNER_GAP = '  ';
+/** Column where `well` begins in every wordmark row. */
+const BANNER_WELL_COL = 30;
+
+/** Only the dot and `well` take the accent, as in the logo. */
+function bannerLines(): string[] {
+  return BANNER_ICON.map((icon, i) => {
+    const cells = [...BANNER_WORD[i]];
+    const word = cells.slice(0, BANNER_WELL_COL).join('') + style.brand(cells.slice(BANNER_WELL_COL).join(''));
+    return `${paintMark(icon)}${BANNER_GAP}${word}`;
+  });
+}
+
+/** A wordmark's rows cut at `well`, kept as drawn for one line and trimmed flush left for two. */
+interface Wordmark { line: Array<[string, string]>; orde: string[]; well: string[] }
+
+function wordmark(rows: string[], wellCol: number): Wordmark {
+  const line = rows.map((row): [string, string] => [[...row].slice(0, wellCol).join(''), [...row].slice(wellCol).join('').trimEnd()]);
+  const indent = Math.min(...line.map(([, well]) => well.length - well.trimStart().length));
+  return { line, orde: line.map(([orde]) => orde.trimEnd()), well: line.map(([, well]) => well.slice(indent)) };
+}
+
+const BANNER_WORDMARK = wordmark(BANNER_WORD, BANNER_WELL_COL);
+
+const oneLine = ({ line }: Wordmark): string[] => line.map(([orde, well]) => orde + style.brand(well));
+const twoLines = ({ orde, well }: Wordmark): string[] => [...orde, ...well.map((row) => style.brand(row))];
+
+/**
+ * The largest logo the pane has room for, with the whole welcome under it: the
+ * full banner, then the wordmark alone on one line, then on two. A pane too
+ * small for all three goes without — the Setup block matters more than the logo.
+ */
+function welcomeLogo(restRows: number, rows: number, cols: number): string[] {
+  return [bannerLines(), oneLine(BANNER_WORDMARK), twoLines(BANNER_WORDMARK)]
+    .find((lines) => lines.every((line) => width(line) <= cols - 1) && lines.length + restRows <= rows) ?? [];
+}
+
+/** `rows` is the pane the welcome is painted into. */
+function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
   const planner = plannerSetup(state);
   const enabledRunners = state.runners.filter((r) => r.enabled).map((r) => r.name);
   const canPlan = planner.ready
@@ -504,9 +523,11 @@ function welcomeLines(state: TuiState, cols: number): string[] {
       ),
       '',
     ];
-  const tail = [...notice, style.grey('/help   all commands'), style.grey(state.workspace)];
+  const tail = [...notice, style.grey('/help   all commands'), workspaceLine(state.workspace, cols)];
 
-  return [...markLines(cols), '', ...prompt, '', ...setup, ...tail];
+  const rest = ['', ...prompt, '', ...setup, ...tail];
+  const logo = welcomeLogo(rest.length, rows, cols);
+  return logo.length > 0 ? [...logo, ...rest] : rest.slice(1);
 }
 
 // ── Plan pane ────────────────────────────────────────────────────────────────

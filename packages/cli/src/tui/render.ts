@@ -30,7 +30,6 @@ export function render(state: TuiState): string[] {
     : renderBody(state, rowsForBody, cols);
 
   const lines = [
-    renderAutonomy(state, cols),
     ...body,
     renderStatus(state, cols),
     ...renderInput(state),
@@ -186,17 +185,19 @@ function fit(lines: string[], rows: number, anchor: 'top' | 'bottom'): string[] 
 
 // ── Chrome ───────────────────────────────────────────────────────────────────
 
-function renderAutonomy(state: TuiState, cols: number): string {
-  const auto = state.autonomous ? style.yellow('● Full') : style.green('● Guarded');
-  return truncate(`${auto}${style.grey(' · ')}${runSettingsBadge(state)}`, cols);
-}
-
 /**
- * The run settings (ADR-0030), always shown, since a global setting that
- * applies at once is the kind that is forgotten while it is on. During a run,
- * the run's own level where a guard, a failure or another session left it
+ * Autonomy and the run settings (ADR-0030), shown at all times, since a global
+ * setting that applies at once is the kind that is forgotten while it is on —
+ * except on the bare welcome, whose Setup block already lists them. During a
+ * run, the run's own level where a guard, a failure or another session left it
  * different from the setting.
  */
+function settingsBadge(state: TuiState): string {
+  if (!state.taskView && state.tasks.length === 0 && state.conversation.blocks.length === 0) return '';
+  const auto = state.autonomous ? style.yellow('● Full') : style.green('● Guarded');
+  return `${auto}${style.grey(' · ')}${runSettingsBadge(state)}`;
+}
+
 function runSettingsBadge(state: TuiState): string {
   const { supervisorLevel, mergeAtGatesAutomatically, autorun } = state.runSettings;
   const paint = (text: string, warn: boolean) => (warn ? style.yellow(text) : style.grey(text));
@@ -221,7 +222,16 @@ function scrolledBackMark(state: TuiState): string {
   return state.focus !== 'plan' && state.scroll > 0 ? '↑ scrolled back · pgdn for live' : '';
 }
 
+/** The status on the left, the settings badge on the right while both fit; the status wins the row when not. */
 function renderStatus(state: TuiState, cols: number): string {
+  const left = statusText(state, cols);
+  const badge = settingsBadge(state);
+  if (!badge) return left;
+  const gap = cols - width(left) - width(badge);
+  return gap >= 2 ? `${left}${' '.repeat(gap)}${badge}` : left;
+}
+
+function statusText(state: TuiState, cols: number): string {
   const mark = scrolledBackMark(state);
   // A standing stop-arm outranks the busy label: with the arm up, the next key
   // decides the turn and that is what the row must say, in red, hard left.
