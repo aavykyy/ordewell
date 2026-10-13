@@ -424,3 +424,8 @@ until #30 exists.
 - 2026-10-12 — merge automatically also at the end of a run, and the end-of-run
   handoff is deferred while an automatic merge or an Act supervisor's merge is
   coming (see "Merge at gates automatically").
+- 2026-10-13 — run supervision has one owner (`RunSupervision`), and who opened
+  a run travels with the call that opened it rather than being read from what
+  else was in flight: the user's Execute while a supervisor's `merge_all` was
+  still merging had continued the run before, its lowered level and the
+  guards' memory included.
