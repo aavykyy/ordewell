@@ -9,7 +9,8 @@ import { TurnStream } from './replyStream';
 import type { ForkedDialogue } from './conversationFork';
 import { condensedNotice, extractSummary, keptTail, summaryRequest } from './conversationSummary';
 import type { ConversationMessage, LegacyPlanState, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
-import { isUserMessage } from '../models/Task';
+import { flattenTasksWithParents, isUserMessage } from '../models/Task';
+import { taskRef } from './TaskRefs';
 import type { ExecutionRecord } from '../models/Execution';
 import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation } from './skillInvocation';
 import { skillLoadNotice, surfaceStep } from '../conversation/records';
@@ -1302,9 +1303,9 @@ export class PlannerConversation {
     const tools = this.host.aiService().plannerToolsAttached?.() ?? false;
     // Gated on live runners, not on an armed scheduler: a paused-but-armed run
     // has nothing running to lock, and takes a whole plan as well as an edit.
-    const locked = tasks.filter((t) => t.status === 'in_progress');
+    const locked = flattenTasksWithParents(tasks).filter(({ task }) => task.status === 'in_progress');
     const execNote = this.host.isExecuting()
-      ? `\nExecution is RUNNING${locked.length ? ` — these tasks are locked: ${locked.map((t) => `#${t.order}`).join(', ')}` : ''}. No new task starts until your reply ends; your task edits apply then, to tasks that have not started. An edit aimed at a running task is refused — the user can stop it first, or you can change it after it finishes. Do not submit a whole new plan while tasks run.`
+      ? `\nExecution is RUNNING${locked.length ? ` — these tasks are locked: ${locked.map(({ task, parent }) => taskRef(task, parent ?? undefined)).join(', ')}` : ''}. No new task starts until your reply ends; your task edits apply then, to tasks that have not started. An edit aimed at a running task is refused — the user can stop it first, or you can change it after it finishes. Do not submit a whole new plan while tasks run.`
       : '';
     return [
       '<current_plan>',
@@ -1317,13 +1318,14 @@ export class PlannerConversation {
     ].filter(Boolean).join('\n');
   }
 
-  /** One line per task with stable references — null until the plan has tasks. */
+  /** One line per task, subtasks indented under their parent, with stable references — null until the plan has tasks. */
   private currentPlanLines(): string[] | null {
     const tasks = this.host.tasks();
     if (!this.host.plan() || tasks.length === 0) return null;
-    const orderOf = new Map(tasks.map((t) => [t.id, `#${t.order}`]));
+    const rows = flattenTasksWithParents(tasks);
+    const refOf = new Map(rows.map(({ task, parent }) => [task.id, taskRef(task, parent ?? undefined)]));
     const { modes } = this.host.catalog();
-    return tasks.map((t) => {
+    return rows.map(({ task: t, parent }) => {
       const isMan = t.type === 'user';
       // A MAN task has no model or mode to run under — the field that means
       // something there is how many steps the human still has to do. The
@@ -1332,7 +1334,7 @@ export class PlannerConversation {
       const runFields = isMan
         ? `steps:${t.userSteps?.length ?? 0}`
         : `${t.assignedModel ? `model:${t.assignedModel.modelId} ` : ''}${readOnly ? 'read-only ' : ''}effort:${t.assignedModel?.thinkingEffort ?? '-'}`;
-      return `#${t.order} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : t.ops ? 'AI ops' : 'AI'} runner:${t.assignedRunner} ${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:[${t.dependencies.map((d) => orderOf.get(d) ?? d).join(', ')}]${t.skills?.length ? ` skills:[${t.skills.join(', ')}]` : ''}`;
+      return `${parent ? '  ' : ''}${refOf.get(t.id)} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : t.ops ? 'AI ops' : 'AI'} runner:${t.assignedRunner} ${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:[${t.dependencies.map((d) => refOf.get(d) ?? d).join(', ')}]${t.skills?.length ? ` skills:[${t.skills.join(', ')}]` : ''}`;
     });
   }
 }

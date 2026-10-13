@@ -1,4 +1,4 @@
-import { Task, RunnerId, DiscoveredModel, TaskModelAssignment, TaskMode } from '../models/Task';
+import { Task, flattenTasksWithParents, RunnerId, DiscoveredModel, TaskModelAssignment, TaskMode } from '../models/Task';
 import { canSetDependencies } from './TaskOps';
 import { effectiveAllowlist } from './ModelAllowlistResolver';
 import type { RunnerModeInfo } from './ModeResolver';
@@ -134,13 +134,13 @@ function typeCoherenceCheck(target: Task, changes: Partial<Task>): TaskEditCheck
  * top-level AI task can be ops, and the flag decides where the task runs, so
  * once it has started it is fixed, like its runner session.
  */
-function opsCheck(tasks: readonly Task[], target: Task, changes: Partial<Task>): TaskEditCheck | null {
+function opsCheck(target: Task, isSubtask: boolean, changes: Partial<Task>): TaskEditCheck | null {
   if (!('ops' in changes) || !!changes.ops === !!target.ops) return null;
   if (!NOT_STARTED.has(target.status)) {
     return { ok: false, error: `"${target.title}" has started, so whether it is an ops task is fixed` };
   }
   if (!changes.ops) return null;
-  const refused = opsPlacementRefusal(changes.type ?? target.type, tasks.some((t) => t.subtasks?.some((s) => s.id === target.id)));
+  const refused = opsPlacementRefusal(changes.type ?? target.type, isSubtask);
   return refused ? { ok: false, error: `"${target.title}" ${refused}` } : null;
 }
 
@@ -151,6 +151,9 @@ function opsCheck(tasks: readonly Task[], target: Task, changes: Partial<Task>):
  * unschedulable, and type/content coherence on an AI↔MAN flip — describe the
  * task rather than who asked, so they run for both, through the same
  * {@link canSetDependencies} guard the pickers and the API read.
+ *
+ * `tasks` is the plan tree: the target is found at any depth, and its
+ * dependencies are checked among its siblings, the list its order is in.
  */
 export function validateTaskEdit(
   actor: TaskEditActor,
@@ -159,21 +162,22 @@ export function validateTaskEdit(
   changes: Partial<Task>,
   catalog?: EditCatalog,
 ): TaskEditCheck {
-  const target = tasks.find((t) => t.id === taskId);
-  if (!target) return { ok: false, error: 'Task not found' };
+  const found = flattenTasksWithParents(tasks).find(({ task }) => task.id === taskId);
+  if (!found) return { ok: false, error: 'Task not found' };
+  const { task: target, parent } = found;
 
   const locked = actor === 'planner' ? lockedTaskRefusal(target, 'modified') : null;
   if (locked) return { ok: false, error: locked };
 
   if (changes.dependencies) {
-    const depCheck = canSetDependencies(tasks, taskId, changes.dependencies);
+    const depCheck = canSetDependencies(parent?.subtasks ?? tasks, taskId, changes.dependencies);
     if (!depCheck.ok) return depCheck;
   }
 
   const coherence = typeCoherenceCheck(target, changes);
   if (coherence && !coherence.ok) return coherence;
 
-  const ops = opsCheck(tasks, target, changes);
+  const ops = opsCheck(target, parent !== null, changes);
   if (ops) return ops;
 
   const validity = checkModelAndModeValidity(changes.assignedRunner ?? target.assignedRunner, changes.assignedModel, changes.taskMode, catalog);

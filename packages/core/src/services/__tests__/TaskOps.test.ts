@@ -49,6 +49,23 @@ describe('applyTaskOps', () => {
     expect(res.summary[0]).toContain('Build');
   });
 
+  it('reads #N as top-level task N, and a subtask by its dotted label, once a task has subtasks', () => {
+    const plan = samplePlan();
+    plan[0].subtasks = [
+      createTask({ id: 'a1', order: 1, title: 'Config', assignedRunner: 'claude-code' }),
+      createTask({ id: 'a2', order: 2, title: 'Seed', assignedRunner: 'claude-code' }),
+    ];
+    const res = applyTaskOps(plan, [
+      { op: 'update', taskId: '#2', changes: { title: 'Build v2' } },
+      { op: 'update', taskId: '#1.2', changes: { title: 'Seed v2' } },
+      { op: 'add', task: { title: 'Docs', dependencies: ['#2'] } },
+    ], ['claude-code']);
+    expect(res.errors).toEqual([]);
+    expect(res.tasks[1].title).toBe('Build v2');
+    expect(res.tasks[0].subtasks[1].title).toBe('Seed v2');
+    expect(res.tasks[3].dependencies).toEqual(['b']);
+  });
+
   it('adds a task with dependencies resolved from order refs', () => {
     const res = applyTaskOps(samplePlan(), [{ op: 'add', task: { title: 'Docs', dependencies: ['#3'] } }], ['claude-code']);
     expect(res.ok).toBe(true);

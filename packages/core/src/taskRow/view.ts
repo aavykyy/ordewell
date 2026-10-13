@@ -1,7 +1,7 @@
 import { usageLine, type AttemptUsage, type UsageLine } from '../models/Usage';
 import type { AwaitingReason } from '../models/Task';
 import type { TaskIsolationState } from '../interfaces/IWorktreeIsolation';
-import { taskOrderLabel, taskRef } from '../order-labels';
+import { taskOrderLabel, taskRef } from '../services/TaskRefs';
 import { capConflictFiles } from '../services/conflictFiles';
 import { approvalLabel, awaitingLabel, isTaskRunning, resumeLabel, taskStatusKind, type TaskStatusKind } from './status';
 import { markAction, opsEditable, taskRowActions, type TaskRowAction, type TaskRowPlacement } from './actions';

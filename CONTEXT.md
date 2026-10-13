@@ -1175,6 +1175,20 @@ block.
 list of tasks with per-task model, thinking effort, runner, and mode. It is data,
 not a running agent's internal state.
 
+**Task reference (`TaskRefs`)** — how anyone names a task in *the plan*: its id,
+its **label** with or without `#` (`#2`, `2`, or `#2.1` for the first subtask of
+task 2), or its exact title. A label is the task's order under its parent:
+subtask orders restart at 1 under each top-level task, so `#N` always means
+top-level task N and a subtask is reachable only by its dotted label. One module
+both renders labels (`taskOrderLabel`, `taskRef`, `titledTaskRef`) and resolves
+references against the plan tree (`resolveTaskRef`) — every planner op and read
+tool, the per-turn plan block (which lists subtasks under their dotted labels),
+execution commands and the CLI read the same grammar. A batch handle is the one
+reference `applyTaskOps` adds on top, and order labels and titles in a batch
+resolve against the plan as it stood before the batch began.
+*Avoid:* "#N" for a subtask, resolving an order against a flattened task list;
+`TaskRef` (the structural dependency-edit type below) for a written reference.
+
 **Runner set** — the ordered `runners: RunnerId[]` a plan may execute across,
 carried on *the plan* and the session. Every task carries an `assignedRunner`
 drawn from the set (always present, even for single-runner plans). Size is the

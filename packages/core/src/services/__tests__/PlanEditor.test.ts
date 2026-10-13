@@ -37,11 +37,11 @@ function tasks(): Task[] {
  * is the session's contract in miniature — the op runs, and only a change is
  * saved and announced — so what the editor hands it is all that is asserted.
  */
-function setup(opts: { plan?: boolean; allowlist?: Partial<Record<RunnerId, string[]>>; catalogs?: Record<RunnerId, RunnerCatalog>; run?: IsolationRun | null; skills?: SkillInfo[]; uncommitted?: SkillLookup['uncommitted'] } = {}) {
+function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Record<RunnerId, string[]>>; catalogs?: Record<RunnerId, RunnerCatalog>; run?: IsolationRun | null; skills?: SkillInfo[]; uncommitted?: SkillLookup['uncommitted'] } = {}) {
   const store = new PlanStore();
   const now = '2026-01-01T00:00:00Z';
   const plan: LegacyPlanState | null = opts.plan === false ? null : { tasks: [], generatedAt: now, status: 'approved', runners: ['claude-code'], lastUpdated: now };
-  store.load(tasks(), ['claude-code']);
+  store.load(opts.tasks ?? tasks(), ['claude-code']);
   const events: string[] = [];
   const sent: SessionMessage[] = [];
   const remembered: Partial<Record<RunnerId, DiscoveredModel[]>> = {};
@@ -86,6 +86,22 @@ function setup(opts: { plan?: boolean; allowlist?: Partial<Record<RunnerId, stri
 }
 
 describe('PlanEditor.updateTask', () => {
+  it('edits a subtask\'s dependencies, model and ops flag, checking dependencies among its siblings', async () => {
+    const withSubtasks = tasks();
+    withSubtasks[1].subtasks = [
+      createTask({ id: 's1', order: 1, title: 'Compile', prompt: 'compile', assignedRunner: 'claude-code' }),
+      createTask({ id: 's2', order: 2, title: 'Bundle', prompt: 'bundle', assignedRunner: 'claude-code' }),
+    ];
+    const { editor, task } = setup({ tasks: withSubtasks });
+
+    await editor.updateTask('s2', { dependencies: ['s1'], assignedModel: { modelId: 'claude-haiku-4-5', modelLabel: 'Haiku' } });
+    expect(task('s2')!.dependencies).toEqual(['s1']);
+    expect(task('s2')!.assignedModel?.modelId).toBe('claude-haiku-4-5');
+
+    await expect(editor.updateTask('s1', { dependencies: ['s2'] })).rejects.toThrow('comes after it');
+    await expect(editor.updateTask('s1', { ops: true })).rejects.toThrow('subtask');
+  });
+
   const skill = (name: string, appliesTo: SkillInfo['appliesTo']): SkillInfo => ({
     name, description: name, metadata: { name, description: name }, content: '', path: `/g/${name}/SKILL.md`, source: 'global', appliesTo, modelInvocable: false, userInvocable: true,
   });

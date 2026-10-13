@@ -2,6 +2,7 @@ import type { DiscoveredModel, RunnerId, Task } from '../models/Task';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_QUERY_ENVELOPE_KEY } from './JsonExtractor';
 import { readOnlyMode, type RunnerModeInfo } from './ModeResolver';
 import type { LiveTail, LiveTailOptions } from '../interfaces/TaskOutputSource';
+import { resolveTaskRef } from './TaskRefs';
 
 /**
  * The planner's read channel: a `{"taskQuery":{...}}` reply asking Ordewell to
@@ -46,7 +47,7 @@ const ANSWER_TAIL_RESERVE = 4_000;
 export const OUTPUT_TAIL_MAX_CHARS = TASK_QUERY_ANSWER_MAX_CHARS - ANSWER_TAIL_RESERVE;
 
 export interface TaskQuery {
-  /** Task references to read in full — an id, "#order", a bare order, or a title. */
+  /** Task references to read in full, as {@link resolveTaskRef} reads them. */
   tasks: string[];
   /** Narrows what comes back. Omitted means every field in {@link TASK_QUERY_FIELDS}. */
   fields?: TaskQueryField[];
@@ -213,18 +214,6 @@ export const TASK_QUERY_REMINDER =
 export const TASK_READ_TOOLS_REMINDER =
   '- To READ a task in full (prompt, user steps, verdict, user stories), a running task\'s output, or the whole model/mode catalog before editing, call task_query, task_output or task_diff — they change nothing — and then call edit_plan with your ops.';
 
-/** Resolve a query reference — an id, "#order", a bare order, or an exact title. */
-export function findTask(tasks: readonly Task[], ref: string): Task | undefined {
-  const byId = tasks.find((t) => t.id === ref);
-  if (byId) return byId;
-  const orderStr = ref.startsWith('#') ? ref.slice(1) : ref;
-  if (/^\d+$/.test(orderStr)) {
-    const byOrder = tasks.filter((t) => t.order === Number(orderStr));
-    if (byOrder.length === 1) return byOrder[0];
-  }
-  return tasks.find((t) => t.title === ref);
-}
-
 /**
  * Where an `output` read is answered from: the orchestrator's live capture of
  * the task's latest attempt. Injected so this module stays planner-side and
@@ -360,7 +349,7 @@ export function renderTaskQueryAnswer(
   if (query.tasks.length > 0) {
     const body: string[] = [];
     for (const ref of query.tasks) {
-      const task = findTask(tasks, ref);
+      const task = resolveTaskRef(tasks, ref);
       // A miss is answered, not swallowed: silence reads to the planner as a
       // transport failure and it asks again, burning the same budget twice.
       if (!task) {

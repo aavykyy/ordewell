@@ -5,7 +5,7 @@ import { autonomyLevelLabel, readOnlyMode } from './ModeResolver';
 import { validatePlanTasks } from './PlanValidator';
 import type { CoercedTasks, Coercion } from './ModelAllowlistResolver';
 import {
-  findTask, fitTail, taskQuerySignature, OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX, OUTPUT_TAIL_MAX_CHARS, TASK_QUERY_TASK_FIELDS, TASK_READ_ANSWER_OR_EDIT,
+  fitTail, taskQuerySignature, OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX, OUTPUT_TAIL_MAX_CHARS, TASK_QUERY_TASK_FIELDS, TASK_READ_ANSWER_OR_EDIT,
   type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog, type TaskQueryField,
 } from './TaskQuery';
 import type { TaskOp } from './TaskOps';
@@ -18,6 +18,7 @@ import { taskReadPage } from './taskReadPage';
 import type { TaskDiffRead, TaskDiffResult } from './taskDiffRead';
 import type { ToolOutcome } from '../interfaces/IFileSystem';
 import type { CommandOutcome, ExecutionCommand } from './ExecutionCommands';
+import { resolveTaskRef } from './TaskRefs';
 
 /**
  * The session side of the planner's catalog and submission tools (ADR-0022):
@@ -189,7 +190,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     },
 
     async taskOutput({ task: ref, lines, since, attempt, kinds }) {
-      const task = findTask(flattenTasks(host.tasks()), String(ref));
+      const task = resolveTaskRef(host.tasks(), ref);
       if (!task) return { isError: true, text: JSON.stringify({ ok: false, error: `No task matches "${ref}" in the current plan.` }) };
       const maxLines = Math.min(lines ?? OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX);
       return read(host, JSON.stringify(['output', task.id, maxLines, since ?? null, attempt ?? null, kinds ? [...kinds].sort() : null]), async () => {
@@ -220,7 +221,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     },
 
     async taskDiff({ task: ref, ...options }) {
-      const task = findTask(flattenTasks(host.tasks()), String(ref));
+      const task = resolveTaskRef(host.tasks(), ref);
       if (!task) return { isError: true, text: JSON.stringify({ ok: false, error: `No task matches "${ref}" in the current plan.` }) };
       return read(host, JSON.stringify(['diff', task.id, options]), async () => {
         const result = await host.taskDiff(task.id, options);
@@ -281,7 +282,7 @@ function outputSummaryDetail({ outputSummary }: Task) {
 
 /** A requested field with nothing in it reads `null`, so a missing answer is never mistaken for a field not asked for. */
 function taskDetail(plan: readonly Task[], ref: string, fields: readonly TaskQueryField[]) {
-  const task = findTask(flattenTasks(plan), ref);
+  const task = resolveTaskRef(plan, ref);
   if (!task) return { ref, error: 'no task matches this reference in the current plan.' };
   const wants = (field: TaskQueryField) => fields.includes(field);
   return {

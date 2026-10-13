@@ -680,7 +680,7 @@ export function migrateLegacyPlan(legacy: LegacyPlanState): PlanState {
   };
 }
 
-export { taskOrderLabel, taskRef, titledTaskRef, resolveOrderLabel } from '../order-labels';
+export { taskOrderLabel, taskRef, titledTaskRef, resolveTaskRef } from '../services/TaskRefs';
 
 export function createTask(overrides: Partial<Task> = {}): Task {
   const skills = skillNames(overrides.skills);

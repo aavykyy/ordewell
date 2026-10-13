@@ -1,4 +1,4 @@
-import { titledTaskRef } from '../order-labels';
+import { titledTaskRef } from '../services/TaskRefs';
 
 interface Named {
   id: string;

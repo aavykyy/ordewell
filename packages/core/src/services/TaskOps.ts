@@ -3,6 +3,7 @@ import {
   addTaskToPlan, removeTaskFromPlan, updateTaskInPlan, renumberTasks,
   opsFlag, inheritedOps, skillNames,
 } from '../models/Task';
+import { resolveTaskRef } from './TaskRefs';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
 import { validateTaskEdit, lockedTaskRefusal, type EditCatalog, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
 import { plannedTask, checkPlanInvariants, detectCycle, taskWhere, MODE_NOT_THE_PLANNERS, MANUAL_NOT_READ_ONLY, type IntakeCatalog, type PlannedTask } from './PlannedTask';
@@ -56,7 +57,7 @@ export function taskOpsProtocol(executionNote = '', tools = false): string[] {
     `    {"op":"rearm","taskId":"<id or #order>","changes"?:{${updateChanges}}}`,
     '  ]}',
     tools ? '- For sweeping changes, you may instead call submit_plan with the full plan.' : '- For sweeping changes, you may instead emit a full {"tasks":[...]} plan JSON.',
-    'Every "<id or #order>" ref in a batch resolves against the plan shown above, before any op in the batch runs — an earlier remove/merge/split never shifts what a later "#N" means.',
+    'Every "<id or #order>" ref in a batch resolves against the plan shown above, before any op in the batch runs — an earlier remove/merge/split never shifts what a later "#N" means. "#N" is top-level task N; a subtask is named by its dotted label ("#2.1"), as the plan lists it.',
     'Give "add", "merge", or "split" a "handle" (any name you choose, unused elsewhere in this batch) to let a LATER op in the same batch reference the task it produces — for "split", the handle names its last part. A handle used before its defining op is rejected.',
     `When creating or changing tasks, set "assignedRunner" and "assignedModel" ({"modelId","modelLabel","thinkingEffort"?}) using only the runners and models ${tools ? 'list_runners and list_models return' : 'listed in <available_models>'}.`,
     'Set "readOnly": true on a task that must not change any file, and "readOnly": false to lift it; you never set "taskMode". A task you move, split or edit keeps being read-only or not unless you say otherwise, and so do the subtasks of a read-only task you add.',
@@ -115,20 +116,21 @@ function parseTaskOpsObject(json: string, text: string): TaskOp[] {
 type RefResolution = { id: string } | { error: string };
 
 /**
- * Resolve a task reference (id, "#3", "3", or a batch handle) to a task id.
+ * Resolve an op's task reference to a task id: a batch handle, or anything
+ * {@link resolveTaskRef} reads.
  *
- * `#order` and title matches are pinned to `originalScope` — the plan as it
+ * Order labels and title matches are pinned to `originalTree` — the plan as it
  * stood before the batch began — so an earlier op's renumbering can never
  * make a later op's "#4" land on a different task than the planner saw. A
  * literal id has no such drift (ids are stable across mutations), so id
- * matches check `liveScope` — the batch's current, mutated tasks — which is
+ * matches check `liveTree` — the batch's current, mutated tasks — which is
  * also how a later op reaches a task created earlier in the same batch
  * without a handle (e.g. a split's own chained parts).
  */
 function resolveRef(
   ref: unknown,
-  originalScope: readonly Task[],
-  liveScope: Task[],
+  originalTree: readonly Task[],
+  liveTree: Task[],
   handleOwner: Map<string, number>,
   handleId: Map<string, string>,
   opIndex: number,
@@ -146,53 +148,9 @@ function resolveRef(
     return { id };
   }
 
-  const byLiveId = liveScope.find((t) => t.id === s);
-  if (byLiveId) return { id: byLiveId.id };
-  const orderStr = s.startsWith('#') ? s.slice(1) : s;
-  if (/^\d+$/.test(orderStr)) {
-    const order = Number(orderStr);
-    const byOrder = originalScope.filter((t) => t.order === order);
-    if (byOrder.length === 1) return { id: byOrder[0].id };
-  }
-  const byTitle = originalScope.find((t) => t.title === s);
-  if (byTitle) return { id: byTitle.id };
-  return { error: `task "${s}" not found` };
-}
-
-/**
- * The task references an op carries, before a batch handle resolves; an `add`
- * names none. Used to tell whether a batch reaches a task a runner is running.
- */
-export function taskOpRefs(op: TaskOp): string[] {
-  switch (op.op) {
-    case 'update':
-    case 'remove':
-    case 'split':
-    case 'rearm':
-      return [op.taskId];
-    case 'merge':
-    case 'reorder':
-      return op.taskIds;
-    case 'add':
-      return [];
-  }
-}
-
-/** Whether a written reference names `task` by id, `#order`, bare order, or title. */
-export function refMatchesTask(ref: unknown, task: Pick<Task, 'id' | 'order' | 'title'>): boolean {
-  if (typeof ref !== 'string' && typeof ref !== 'number') return false;
-  const s = String(ref).trim();
-  if (task.id === s) return true;
-  const orderStr = s.startsWith('#') ? s.slice(1) : s;
-  return (/^\d+$/.test(orderStr) && task.order === Number(orderStr)) || task.title === s;
-}
-
-/** Whether `name` already denotes an existing task by id, `#order`, or title. */
-function refCollidesWithExisting(name: string, originalFlatAll: Task[]): boolean {
-  if (originalFlatAll.some((t) => t.id === name)) return true;
-  const orderStr = name.startsWith('#') ? name.slice(1) : name;
-  if (/^\d+$/.test(orderStr) && originalFlatAll.some((t) => t.order === Number(orderStr))) return true;
-  return originalFlatAll.some((t) => t.title === name);
+  if (findInTasks(liveTree, s)) return { id: s };
+  const task = resolveTaskRef(originalTree, s);
+  return task ? { id: task.id } : { error: `task "${s}" not found` };
 }
 
 /** The fields of a planner's `changes` it may set, with the ops flag read as every entry point reads it. */
@@ -206,7 +164,7 @@ function updatableChanges(raw: Partial<Task> | undefined): Partial<Task> {
   return changes;
 }
 
-function findInTasks(tasks: Task[], id: string): Task | undefined {
+function findInTasks(tasks: readonly Task[], id: string): Task | undefined {
   return flattenTasks(tasks).find((t) => t.id === id);
 }
 
@@ -429,10 +387,6 @@ export function applyTaskOps(
   const errors: string[] = [];
   const summary: string[] = [];
 
-  // Frozen snapshot every ref resolves `#order`/title matches against, so an
-  // earlier op's renumbering can never shift what a later op's "#N" means.
-  const originalFlatAll = flattenTasks(currentTasks);
-
   // Batch handles: planner-chosen names for a task an add/merge/split op is
   // about to create, so a later op in the same batch can reference it before
   // it has a real id. Pre-scanned up front — a bad handle refuses the whole
@@ -450,7 +404,7 @@ export function applyTaskOps(
       errors.push(`${opLabel(i)}: handle "${handle}" is already used earlier in this batch`);
       continue;
     }
-    if (refCollidesWithExisting(handle, originalFlatAll)) {
+    if (resolveTaskRef(currentTasks, handle)) {
       errors.push(`${opLabel(i)}: handle "${handle}" collides with an existing task reference`);
       continue;
     }
@@ -463,7 +417,7 @@ export function applyTaskOps(
     const bad: string[] = [];
     const liveFlat = flattenTasks(tasks);
     for (const d of Array.isArray(deps) ? deps : []) {
-      const r = resolveRef(d, originalFlatAll, liveFlat, handleOwner, handleId, opIndex);
+      const r = resolveRef(d, currentTasks, tasks, handleOwner, handleId, opIndex);
       if ('error' in r) { bad.push(`${String(d)} (${r.error})`); continue; }
       if (!liveFlat.some((t) => t.id === r.id)) { bad.push(`${String(d)} (no longer exists in this batch)`); continue; }
       ids.push(r.id);
@@ -518,7 +472,7 @@ export function applyTaskOps(
     audience: TaskEditActor,
     refuseRunning = false,
   ): { target: Task; changes: Partial<Task>; check: TaskEditCheck } | { error: string } => {
-    const ref = resolveRef(op.taskId, originalFlatAll, flattenTasks(tasks), handleOwner, handleId, opIndex);
+    const ref = resolveRef(op.taskId, currentTasks, tasks, handleOwner, handleId, opIndex);
     if ('error' in ref) return { error: `${label}: ${ref.error}` };
     const target = findInTasks(tasks, ref.id);
     if (!target) return { error: `${label}: task "${op.taskId}" no longer exists in this batch (removed, merged, or split by an earlier op)` };
@@ -535,7 +489,7 @@ export function applyTaskOps(
     // they're real ids.
     const changesForCheck: Partial<Task> = { ...changes };
     delete changesForCheck.dependencies;
-    const check = validateTaskEdit(audience, flattenTasks(tasks), target.id, changesForCheck, catalog);
+    const check = validateTaskEdit(audience, tasks, target.id, changesForCheck, catalog);
     if (!check.ok) return { error: `${label}: ${check.error}` };
     for (const field of check.clear ?? []) (changes as Record<string, unknown>)[field] = undefined;
     const readOnly = askedReadOnly(op.changes);
@@ -595,7 +549,7 @@ export function applyTaskOps(
         break;
       }
       case 'remove': {
-        const ref = resolveRef(op.taskId, originalFlatAll, flattenTasks(tasks), handleOwner, handleId, i);
+        const ref = resolveRef(op.taskId, currentTasks, tasks, handleOwner, handleId, i);
         if ('error' in ref) { errors.push(`${label}: ${ref.error}`); break; }
         const target = findInTasks(tasks, ref.id);
         if (!target) { errors.push(`${label}: task "${op.taskId}" no longer exists in this batch (removed, merged, or split by an earlier op)`); break; }

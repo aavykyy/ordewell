@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createTask, createEmptyPlan, migrateLegacyPlan, migratePlanState, taskOrderLabel, resolveOrderLabel, flattenTasksWithParents, keepExecutionState, isAwaitingReason } from '../Task';
+import { createTask, createEmptyPlan, migrateLegacyPlan, migratePlanState, taskOrderLabel, flattenTasksWithParents, keepExecutionState, isAwaitingReason } from '../Task';
 import { serializeTaskStatus } from '../../services/SessionMessage';
 import type { LegacyPlanState, PlanState, Message, TaskSnapshot } from '../Task';
 
@@ -78,45 +78,6 @@ describe('taskOrderLabel', () => {
     const parent = createTask({ id: 'p1', order: 2 });
     const subtask = createTask({ id: 'c1', order: 1 });
     expect(taskOrderLabel(subtask, parent)).toBe('2.1');
-  });
-});
-
-describe('resolveOrderLabel', () => {
-  it('round-trips a top-level label', () => {
-    const top = createTask({ id: 't1', order: 2 });
-    const tasks = [createTask({ id: 't0', order: 1 }), top];
-    expect(resolveOrderLabel(tasks, taskOrderLabel(top))).toBe(top);
-  });
-
-  it('round-trips a subtask label', () => {
-    const child = createTask({ id: 'c1', order: 1 });
-    const parent = createTask({ id: 'p1', order: 2, subtasks: [createTask({ id: 'c0', order: 0 }), child] });
-    const tasks = [parent, createTask({ id: 't0', order: 1 })];
-    expect(resolveOrderLabel(tasks, taskOrderLabel(child, parent))).toBe(child);
-  });
-
-  it('returns undefined for a non-existent top-level order', () => {
-    const tasks = [createTask({ id: 't1', order: 1 })];
-    expect(resolveOrderLabel(tasks, '2')).toBeUndefined();
-  });
-
-  it('returns undefined for a subtask under the wrong parent', () => {
-    const parent = createTask({ id: 'p1', order: 2, subtasks: [createTask({ id: 'c0', order: 0 })] });
-    const tasks = [createTask({ id: 't0', order: 1 }), parent];
-    expect(resolveOrderLabel(tasks, '2.1')).toBeUndefined();
-  });
-
-  it('returns undefined for non-numeric labels', () => {
-    const tasks = [createTask({ id: 't1', order: 1 })];
-    expect(resolveOrderLabel(tasks, 'abc')).toBeUndefined();
-    expect(resolveOrderLabel(tasks, '1.x')).toBeUndefined();
-    expect(resolveOrderLabel(tasks, '')).toBeUndefined();
-  });
-
-  it('returns undefined for labels with more than two dotted segments', () => {
-    const parent = createTask({ id: 'p1', order: 1, subtasks: [createTask({ id: 'c1', order: 1 })] });
-    const tasks = [parent];
-    expect(resolveOrderLabel(tasks, '1.1.1')).toBeUndefined();
   });
 });
 
