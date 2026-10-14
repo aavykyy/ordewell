@@ -440,6 +440,15 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   the turn ended, and a task update during a turn sent mid-run hid
   "Planning…", Esc-to-stop and Send now, and broke the held-prompt queue. The
   turn and the run now have separate states.
+- **A failure that is not the planner's no longer ends a planner turn in the
+  TUI.** A task log that would not load, an approval answer that could not be
+  delivered or a failed session delete still print their error, but
+  "Planning…", Esc-to-stop and Send now stay up and held prompts stay held
+  until the turn really ends.
+- **Running, stopping or a plan update during a planner turn no longer makes
+  the VS Code chat think the planner has finished.** The working indicator,
+  Esc-to-stop, queueing a message and Send now keep working until the turn
+  ends, and a chat panel reloaded mid-turn shows the planner as working.
 - **A coding-agent planner's reply stays beside the plan or edit it submits.**
   The message used to vanish the moment the turn settled, live and on reload.
 - **A user message is no longer shown twice on replay**, and a view rebuilt
