@@ -60,8 +60,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   **Act** (it may also run, stop and retry tasks, message runners, deny
   approvals, edit the plan task by task and merge, without asking). A wake-up
   is a digest, one line per event with the passes since the last one, never a
-  log. Its notes are marked as the supervisor's in the chat. It decides what
-  to do next, never whether a task passed
+  log; it is a planner turn, so it uses the planner's usage, and
+  `/supervisor off` turns it off. Its notes are marked as the supervisor's in
+  the chat. It decides what to do next, never whether a task passed
   ([ADR-0029](docs/adr/0029-the-supervisor.md)).
 - **The supervisor can skip a task at Act.** `skip_task` gives up waiting for
   a task that failed, is blocked or is waiting for input, with a required
@@ -90,7 +91,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   who acted: you, a planner turn or the supervisor. In a turn you started,
   stops and messages go through, starts and retries ask you in Guarded and
   follow plan approval in Full, and `merge_all` is refused because Merge all is
-  yours to press.
+  yours to press. A start queued behind an edit in the same reply is checked
+  against the task as edited, so one that could never run is refused while
+  the planner can still say so. One refused after the edit lands is shown to
+  you as a system line and passed to the planner's next turn, and a start
+  waiting on an edit that never lands, or on a plan closed or replaced first,
+  is dropped with a notice.
 - **The planner can read why an attempt failed.** `task_output` reads any
   attempt's saved log, filtered by event kind and paged, and the new
   `task_diff` lists the files an attempt changed, then one file's diff.
@@ -101,7 +107,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   ([ADR-0013](docs/adr/0013-worktree-isolation.md),
   [ADR-0020](docs/adr/0020-ops-tasks-and-merge-gates.md)).
 - **Merge automatically.** `/automerge on` merges for you at each merge gate
-  and, now, at the end of a run: a run that settles with landed work not yet
+  and at the end of a run: a run that settles with landed work not yet
   merged runs Merge all itself, by the same preflight. A conflict or a dirty
   overlap aborts with your tree untouched and the run is handed over as
   before. The timeline reads "auto-merged at the end of the run".
@@ -109,10 +115,16 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   `/supervisor retries <n>`, `/supervisor reads <n>`, `/automerge [on|off]`
   and `/autorun [on|off]` report the value when bare and set it with an
   argument; `ordewell supervisor`, `ordewell automerge` and `ordewell autorun`
-  do the same from the shell. The welcome screen's Setup block gains an
-  **Autonomy** row and a **Run** row, and a badge shows the values at all
-  times. `/supervisor act` and `/autorun on` ask you to confirm and say what
-  they allow ([ADR-0030](docs/adr/0030-global-run-settings.md)).
+  do the same from the shell. They are yours, not the plan's: saved
+  machine-wide in `settings.json`, a change applies at once, in either
+  direction, to the session it is typed in, and to other sessions from their
+  next run, and your command also lifts a lowering a guard or a failure made,
+  with the guards' counts kept. The welcome screen's Setup block gains an
+  **Autonomy** row and a **Run** row, a badge at the right end of the terminal
+  UI's status row shows the values (left off the bare welcome, whose Setup
+  block shows the same), and so does VS Code's plan bar. `/supervisor act` and
+  `/autorun on` ask you to confirm and say what they allow
+  ([ADR-0030](docs/adr/0030-global-run-settings.md)).
 - **Autorun.** With `/autorun on`, a plan the planner submits is approved and
   started as if you had pressed Execute, and the planner skips the outline
   gate but still asks clarifying questions. It fires on a submission only,
@@ -122,19 +134,29 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **Read-only tasks.** A review, an audit or an analysis that must not change
   files is marked read-only in the plan, and runs in its runner's read-only
   mode (`plan` on Claude Code, Codex and OpenCode) at either level. It stays
-  read-only through a move or a split, and its AI subtasks inherit it
+  read-only through a move or a split, and its AI subtasks inherit it. Only
+  an AI task that is not an ops task can be read-only: a submitted plan that
+  marks a manual or ops task ignores the mark with a warning, an edit that
+  asks it of an ops task is refused, and the planner is told that a task which
+  must run tests, scripts or builds is not read-only
   ([ADR-0031](docs/adr/0031-the-planner-says-read-only-not-a-mode.md)).
 - **Usage on every task attempt.** Each attempt records its tokens, reported
-  cost and wall time, grouped by the model that actually ran, and the task
-  row, the plan total, `ordewell status` and the VS Code task card show them.
-  A measure a runner did not report reads "unknown", never zero, and usage with
-  no model named is labelled "unattributed".
+  cost and wall time, grouped by the model that actually ran. The terminal
+  UI's task view pins the usage of the attempt on screen in its footer, with
+  a per-model breakdown; `ordewell status` lists it under each task; and the
+  plan pane and VS Code's plan card show a *Tasks total*. A task row names the
+  model that reported usage, the assigned one until then. A measure a runner
+  did not report reads "unknown", never zero, and usage with no model named is
+  labelled "unattributed".
 - **A task paused on a usage limit resumes by itself.** When the runner names
   the reset (Claude Code and Codex do, OpenCode does not), the task shows
-  "Resumes at 8:10pm" with a cancel and is continued from its saved session at
-  that time. Tasks paused on one runner share one wait, and a plan loaded after
-  the time resumes at once. Without a time, after a cancel, or when the limit
-  is hit again at once, the task waits for a manual retry
+  "Resumes at 8:10pm" with *Don't resume* and is continued from its saved
+  session at that time. Tasks paused on one runner share one wait, and a plan
+  loaded after the time resumes at once. Moving a paused task to another
+  runner, by hand or by a planner edit, cancels its wait and makes it ready on
+  the new runner; the other tasks on the old runner keep theirs, and a model
+  change on the same runner keeps it. Without a time, after *Don't resume*, or
+  when the limit is hit again at once, the task waits for a manual retry
   ([ADR-0018](docs/adr/0018-structured-runner-transport.md)).
 - **Resume now, when the limit resets early.** A task paused on a usage limit
   resumes in its saved session as soon as you say so, instead of waiting for
@@ -144,21 +166,28 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   resumes with it. The planner and an Act supervisor resume it with
   `retry_task` from `"session"`, and a message sent to it with `message_task`
   resumes it too. A resume that hits the limit again at once waits for you.
-  The cancel is now labelled *Don't resume*, and Skip is offered while the
-  task is paused ([ADR-0018](docs/adr/0018-structured-runner-transport.md)).
+  Skip is offered while the task is paused
+  ([ADR-0018](docs/adr/0018-structured-runner-transport.md)).
 - **Send now in the planner chat.** `ctrl-s` in the terminal UI, and *Send now*
-  in VS Code, interrupts the planner turn in flight and answers the message
-  alone in the turn that replaces it, ahead of every prompt already queued; the
-  run's tasks carry on untouched, and a queued prompt the planner already has
-  is marked handed over. A running or waiting task's VS Code card also carries
-  a message box with the same button (`Ctrl+Enter`).
+  in VS Code, interrupts the planner turn in flight — one another client
+  started too — and answers the message alone in the turn that replaces it,
+  ahead of every prompt already queued, which stays held until that turn ends;
+  the run's tasks carry on untouched, and a queued prompt the planner already
+  has is marked handed over. A built-in command sent this way runs as it does
+  on enter, while a skill invocation (`/name …`) goes to the planner as a
+  prompt. A forced turn that fails puts your message back in the composer or
+  its place in the queue, and the stop of the turn it replaced is not shown as
+  an error. A supervisor wake-up it stops keeps its run update for the
+  supervisor's next turn. A message sent this way is marked as sent now, in
+  the chat and in a task's log, after a reload and when it wraps. A running or
+  waiting task's VS Code card also carries a message box with the same button
+  (`Ctrl+Enter`).
 
 ### Changed
 
 - **Esc from a task's chat returns to the plan pane on that task.** It used to
   drop back to the planner chat; now the cursor lands on the task you opened,
   revealing its parent if the task is a subtask.
-
 - **The terminal UI's status row speaks for the selected chat only.** It said
   `Executing…` or `Researching… Read(file) (+2 more)` whichever chat was on
   screen. It now reads `Planning…` in the planner's chat and `Working…` in a
@@ -219,68 +248,52 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   budget. Set the approval mode to `ask` to approve each new site and search
   provider. `curl` and `wget` still ask per site in Guarded
   ([ADR-0027](docs/adr/0027-web-reads-in-the-planner-envelope.md)).
-- **The terminal UI takes the logo's teal and your theme's background.** One
+- **The terminal UI takes the logo's teal, and the welcome's logo fits the
+  terminal.** One
   accent, the logo's teal, marks the prompt, the planner, carets, headings and
   the logo's dot; yellow, green and red are left to mean a state. The welcome
   draws the full logo, icon and wordmark, when the terminal has room for it,
   and in a smaller one the wordmark alone, broken over two lines when narrow;
   a terminal too small for any of them skips the logo. The version sits after
-  the workspace path at the foot of the welcome. The
-  grey band under your messages and the composer is mixed from the background
-  your terminal reports, so it is a lighter step on a dark theme and a darker
-  one on a light theme instead of a near-black slab. The plan pane puts a blank line between
-  tasks and hangs runner and model under the title, and footer keys read
-  brighter than what they do. The autonomy and run settings badge moves from
-  its own top row to the right end of the status row, and is left off the
-  welcome, whose Setup block shows the same.
+  the workspace path at the foot of the welcome, and the description
+  paragraph under the prompt is gone. Footer keys read brighter than what
+  they do.
 - **`/planner` is one stepped flow.** In the terminal UI and in VS Code it
-  walks Harness › Model › Effort; VS Code saves once, at the end, and
-  cancelling there applies nothing. `/planner <provider>`, `/model` and `/planner-effort`
-  remain as shortcuts. The user-facing name is now *planner model*; the
+  walks Harness › Model › Effort. In the terminal UI enter saves each step at
+  once and moves on to the next, and esc closes from any step, keeping what
+  was saved; VS Code saves once, at the end, and cancelling there applies
+  nothing. `/planner <provider>`, `/model` and `/planner-effort` remain as
+  shortcuts. The user-facing name is now *planner model*; the
   `orchestratorModel` setting and `ORCHESTRATOR_MODEL` are unchanged.
 - **`/settings` walks your run settings.** Autonomy, supervisor (with retries
   and reads), merge automatically, autorun and parallel are set in one stepped
-  panel in the terminal UI, and only what changed is saved. In VS Code they are
-  a Run block in the chat's Settings panel: each is clicked or typed and saved
-  at once, and Act and autorun still ask first. The individual commands remain.
-- **Parallel, retries and reads take a typed number.** In the terminal UI's
-  `/settings` they are numbers, typed or moved by ↑/↓, instead of preset lists.
+  panel in the terminal UI. Enter saves the step's value at once, if it
+  changed, and stays on the step to show it; esc closes from any step, keeping
+  what was saved; parallel, retries and reads are numbers, typed or moved by
+  ↑/↓. In VS Code they are a Run block in the chat's Settings panel: each is
+  clicked or typed and saved at once. Act and autorun still ask first on both.
+  The individual commands remain.
 - **Terminal pickers are restyled.** Short lists are numbered, labels and
   details are aligned, and the current value is marked. Multi-choice pickers
   switch steps with ←/→ (tab and shift-tab still work).
-- **The welcome shows a compact 3-row logo at every terminal size.** The mark
-  carries the wordmark (plain bold text, letter-spaced) and version beside it, and stays at
-  the top of a short terminal; the large braille banner, its one-line fallback and the
-  description paragraph are gone.
-- **Esc closes the `/settings` and `/planner` menus** in the terminal UI,
-  discarding choices not yet confirmed, instead of going back a step.
-- **Enter saves at once in the terminal UI's `/settings` and `/planner`.** The
-  menu shows the new value straight away and esc keeps it; `/settings` stays on
-  the step, `/planner` moves on, and Act and autorun still ask first.
 - **Your messages and the input box sit on a grey band.** In the terminal UI's
   chat and task view each message you sent is set off by a grey band the width
   of the pane, so it is easy to find when scrolling back, and the input box you
-  type in is on the same band.
-- **Plan rows are one line plus a meta line.** Skills, effort and mode show
-  when a row is expanded. Per-task usage moved out of the rows into the task
-  view's pinned footer, with time and a per-model breakdown; *Tasks total*
-  stays at the top. VS Code task cards drop per-task usage too, and show
-  model and mode badges only when expanded.
+  type in is on the same band. The band is mixed from the background your
+  terminal reports: a lighter step on a dark theme, a darker one on a light
+  theme.
+- **Plan rows are slimmer.** In the terminal UI a row is its title with runner
+  and model hung under it, plus the thinking effort when the terminal is wide
+  enough, and a blank line separates tasks; skills, effort and mode show when
+  a row is expanded. VS Code task cards show model and mode only when
+  expanded.
 - **The plan footer shows only the keys that apply** to the selected task,
   plus `? keys` for the full key sheet.
 - **A running task is marked quiet after 10 minutes without output** (was 5),
   so a long build and test run no longer wakes the supervisor for nothing.
-
-- **Run settings belong to you, not the plan.** The supervisor level, merge
-  automatically, the retry limit, the wake-up read budget, autorun and
-  Full/Guarded are saved machine-wide in `settings.json`. A change applies at
-  once, in either direction, to the session it is typed in, and to other
-  sessions from their next run; your command also lifts a lowering a guard
-  or a failure made, with the guards' counts kept. Older plans' own values are
-  ignored. The supervisor level defaults to **Watch**, so a wake-up is a
-  planner turn and uses the planner's usage; `/supervisor off` turns it off.
-- **Full/Guarded is saved with them.** A value in `~/.ordewell/.env` or in
-  VS Code's `ordewell.autonomousMode` is copied to `settings.json` once.
+- **Full/Guarded is saved machine-wide with the run settings**, in
+  `settings.json`, and applies the way they do. A value in `~/.ordewell/.env`
+  or in VS Code's `ordewell.autonomousMode` is copied to `settings.json` once.
   `ORDEWELL_AUTONOMOUS_MODE` still overrides it from the environment, and
   `/auto` says so when it does.
 - **The planner says read-only, never a mode.** A plan or an edit that names a
@@ -329,16 +342,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   effort only where that model offers it and drops one it does not; clearing
   the model clears its effort; and the terminal UI and CLI now save the effort
   the daemon answers to.
-- **A subtask dependency reads by its dotted label** (`#2.1`) on a task row, in
-  the terminal UI and on the VS Code card, instead of by an order that only
-  meant something at the top level.
 - **A subtask is named by its dotted reference on every surface and in every
-  prompt.** The `ordewell task-*` commands, the terminal UI's pickers,
-  confirmations and notices, a handoff's landed list, and the prompts the
-  planner is given for a merge, a split and a conflict all read `#2.1` now,
-  never an order that only meant something at the top level.
-- **A task's thinking effort shows on its row in the terminal UI** when the
-  terminal is wide enough, instead of only when the row is expanded.
+  prompt.** A dependency on a task row in the terminal UI and on the VS Code
+  card, the `ordewell task-*` commands, the terminal UI's pickers,
+  confirmations, notices and task-log header, a handoff's landed list, the
+  heading of a dependent's prior task output (where subtask 1.1 read as
+  "Task 1"), and the prompts the planner is given for a merge, a split and a
+  conflict all read `#2.1` now, never an order that only meant something at
+  the top level.
 
 ### Documentation
 
@@ -360,11 +371,6 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   `mergeMultiple` and `split` (a plan's merges and splits go through
   `applyTaskOps`), and the modify-plan prompt builders. An embedder that
   imported one of these names must use its replacement.
-- **Per-plan supervisor controls.** The plan pane's `G`, `W` and `L` keys and
-  VS Code's plan-card controls are gone; use `/supervisor`, `/automerge` and
-  `/autorun`. The daemon's per-plan settings route and
-  `POST /api/plans/:sessionId/supervisor/lower` go with them, replaced by
-  `PATCH /api/settings` with a `run` object and an optional `sessionId`.
 - **The `ordewell.autonomousMode` VS Code setting.** Use `/auto full` or
   `/auto guarded`.
 - **The list of queued plan edits above VS Code's input**, with its withdraw
@@ -378,15 +384,6 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   when they compact. It is now in the runner's instructions (system prompt,
   developer instructions, or OpenCode's instruction entry), which they keep
   whole, and a resumed session gets it again.
-- **A start queued behind the same reply's edit is never lost silently.** A
-  supervisor that edited a task and retried it in one reply was told
-  "Queued", and the retry was then refused after the turn, with nobody told.
-  A queued start is now checked against the task as edited before it is
-  queued, so one that could never run is refused while the planner can still
-  say so. One refused after the edit lands is now shown to you as a system
-  line, "The queued retry of task #N … did not run", and passed to the
-  planner's next turn
-  ([ADR-0029](docs/adr/0029-the-supervisor.md)).
 - **Planners read line ranges without asking.** `sed -n '10,40p' FILE` and
   the other line-number prints run like `head` and `tail`, so a planner on
   Full is no longer denied the way models most often read part of a file.
@@ -413,11 +410,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **A usage limit shows once.** Claude Code reports a limit as a message and
   again as the turn's error, worded alike. The planner chat, the task chat and
   task views, a reload and the task's plain text now show it once, as the
-  failure, and a real reply before it stays.
-- **Usage-limit waits are released when a task changes runner.** Moving a
-  paused task to another runner, by hand or by a planner edit, cancels its
-  scheduled resume and makes it ready on the new runner. Other tasks on the old
-  runner keep their wait, and a model change on the same runner keeps it.
+  failure, and a real reply before it stays (#79; thanks
+  [@mayuriphad](https://github.com/mayuriphad), #96).
 - **A resumed attempt keeps the paused attempt's uncommitted work in an
   isolated run.** A continue starts at the integration tips and restores the
   previous attempt's unlanded edits. If a conflict prevents that, the agent is
@@ -425,21 +419,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **A plan edit after a run no longer shows every task as not done in the
   TUI.** The tasks were still completed; only the display read as if the run's
   work had been lost.
-- **The TUI follows the session it shows.** Runs started by autorun, the
-  planner's run tools or the supervisor, and the supervisor's reports after a
-  run's end, are drawn without waiting for you to act.
 - **A coding-agent planner's reply stays beside the plan or edit it submits.**
   The message used to vanish the moment the turn settled, live and on reload.
-- **A supervised run finishes after an edited retry.** A planner edit made after
-  a failure ended the run is reconciled into it and keeps the failed task
-  failed, so the retry resumes the run instead of running that task alone. A
-  start deferred behind an edit that never lands is dropped, with a notice.
 - **A user message is no longer shown twice on replay**, and a view rebuilt
   mid-turn shows the turn's inputs.
 - **A checkpoint's summary can be read in full in VS Code**, with Show full and
   Show less under its first line.
-- **The task row names the model that reported usage.** It shows the assigned
-  model until the first usage report instead of "model unknown".
 - **A task's runner is never swapped for another.** A plan or edit that names a
   runner the plan may not use is refused, instead of being silently moved to
   the first allowed runner; the model allowlist now walks subtasks as well as
@@ -456,10 +441,6 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   left running.
 - **Executing a plan whose tasks are all done announces the end once**, not
   twice.
-- **A run the supervisor opened keeps its own settings**, instead of merging
-  against your global setting; and Execute pressed while a supervisor's Merge
-  all was waiting on git starts a run of its own rather than continuing the
-  supervisor's, so it does not inherit a lowered level or the guards' memory.
 - **An Ordewell-tool approval is logged as decided on Codex too.** Claude Code
   and Codex now cancel a permission request still open when the turn ends
   (Claude Code keeps it while background work that may have raised it runs),
@@ -476,9 +457,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   as an uncaught host exception.
 - **Stopping a run goes before its runners are killed**, so a conflict repair
   that fires as the old session is killed cannot land work the stop just
-  cancelled; a second Mark complete no longer lands and announces the task
-  again; and changing the run settings under an open run merges an
-  already-reached gate now.
+  cancelled; and a second Mark complete no longer lands and announces the task
+  again.
 - **A planner's response survives any character.** A reply whose bytes are
   split across two reads is decoded once, so a multi-byte character is no
   longer turned into `�`.
@@ -498,19 +478,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **A wrapped system notice keeps its colour in the terminal UI.** The second
   and later rows of a system, error or run-update line now stay grey, red or
   yellow like the first, and the doubled `·` before a system notice is gone.
-- **A force send keeps a supervisor wake-up's run update.** A force send that
-  stopped a wake-up turn dropped its run update as a stop does. The update now
-  waits behind the forced prompt and reaches the supervisor in its next turn,
-  so a failure or a run's end it carried is not lost.
-- **A surface joining a finished run is handed the handoff that was sent.**
-  Reading it back out of the run record could show one after a stop, which
-  hands nothing over, and miss what the supervisor had marked first.
-- **A planner turn's starts do not outlive its plan.** When a plan is closed or
-  replaced before the edit its start waited on landed, the starts it deferred
-  are dropped with a notice; one already handed to the scheduler goes on.
 - **A run that ended on a failure ends with the plan it failed in.** Loading a
-  session after a failure left the run waiting on a retry, so the next retry would restart a run nobody
-  started and a usage-limit move would arm the scheduler.
+  session after a failure left the run waiting on a retry, so the next retry
+  would restart a run nobody started and a usage-limit move would arm the
+  scheduler.
 - **A stop cancels a repair for good.** A stop that arrived while a repair read
   its evidence used to let its merge go ahead anyway; the attempt is no longer
   the task's, so the conflict stays as it was and waits on you.
@@ -533,36 +504,19 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **A Claude Code or Codex project MCP server named `ordewell` is left out.**
   Ordewell's own entry is written over that name, so an approval of it would
   never take effect; the planner is told the server was not offered.
-- **A `readOnly` that cannot apply is reported, not dropped.** A `submit_plan`
-  that marks a manual task read-only now warns, as it does for `taskMode`, that
-  a manual task runs in no mode.
 - **A dependency cycle is refused as the chain it is.** The refusal names each
   task on the cycle in dependency order and pins it to one of them, instead of
   an unowned error a JSON retry repeated.
-- **The terminal UI's run view keeps up with the session it shows.** Joining a
-  run already going shows its status at once, a task updated by another surface
-  or the supervisor shows here too, and starting, loading or forking a session
-  begins from an empty run rather than the last one's tasks, merge gate and
-  checkpoint.
-- **Send now in the terminal UI keeps its edges.** A built-in command typed and
-  sent with `ctrl-s` runs as it does on enter instead of being forced through
-  as a message, a forced send whose turn fails puts the prompt back in the
-  composer or its place in the queue, and the stop of the turn it replaced is
-  not shown as an error.
+- **The terminal UI's run view keeps up with the session it shows.** A task
+  updated by another surface shows here too, and starting, loading or forking
+  a session begins from an empty run rather than the last one's tasks, merge
+  gate and checkpoint.
 - **A narrow queued prompt keeps its message.** The takeback hint is given only
   the columns the first row has left, instead of truncating the prompt it sits
   after; a row too narrow for it drops the hint.
 - **Clearing a planner model no longer writes the word "undefined".** When the
   daemon reports no effort, `ordewell model` and the terminal UI's `/model`
   write an empty value, as `planner-effort default` does.
-- **A checkpoint you answered in VS Code is not reopened by a stale update.**
-  The panel remembers the answer by task and question, so a run view still
-  carrying the question — before the status update that clears the task, or
-  after another task's update — does not ask again; a different question still
-  opens.
-- **Send now treats a skill invocation as a planner prompt.** *Send now* on
-  `/name …` in VS Code now stops the turn and answers it as a planner message,
-  while a built-in command still goes to the host as Send does.
 - **A read-only Claude task runs the model its plan names.** Under
   `--permission-mode plan` the `claude` CLI ran Sonnet for the `haiku` alias,
   so a read-only task on Haiku ran, and was billed, as Sonnet. The alias is
@@ -577,10 +531,6 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   was not found, and a fresh start fails with the runner's own message.
 - **A planner turn stopped before any reply is recorded as stopped**, not as
   "The planner returned an empty response".
-- **Send now in the terminal UI keeps held prompts behind the forced turn.** A
-  stopped turn that settled with a partial reply drained the next queued prompt
-  while the forced turn was still running. Send now also reaches a planner turn
-  another client started, and clears its pending mark when that turn ends.
 - **A planner turn's stream stops at its close**, so the next turn no longer
   draws the same text twice.
 - **The terminal UI keeps the last column of a full-width row.** The plan pane
@@ -593,12 +543,6 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **`ordewell status` shows each finished subtask once**, under its parent,
   and an id such as `2` no longer resolves to subtask 1.2 when that finished
   first.
-- **A subtask is named by its dotted label everywhere a task is referenced**:
-  in a dependent's prior-output heading, where subtask 1.1 read as "Task 1",
-  and in the terminal UI's task-log header.
-- **The sent-now mark survives a reload and a wrap.** A task message sent with
-  Send now lost its mark when the log was replayed, and a wrapped one in the
-  terminal UI dropped it when the first row was full.
 - **A task log's header shows the task's settled status**, not "working", when
   its runner was ended before closing its last turn.
 - **A daemon publishes its token only once its port is bound.** Two daemons
@@ -608,12 +552,6 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   "running", without the controls to answer it, until another update arrived.
 - **OpenCode starts with `PWD` set to its workspace**, not to the directory the
   daemon or a previous workspace left in the environment.
-- **An ops task is never read-only.** The planner could mark one `readOnly`,
-  which put it in a read-only mode that refused the commands it existed to run.
-  A submitted plan now ignores the mark on an ops task, with a warning, and an
-  edit that asks for it is refused; the planner is also told that a task which
-  must run tests, scripts or builds is not read-only
-  ([ADR-0031](docs/adr/0031-the-planner-says-read-only-not-a-mode.md)).
 - **A planner under worktree isolation names files from the workspace root.**
   An absolute path in a task's prompt pointed at your checkout instead of the
   task's own worktree, so a read-only task reported files without the earlier
@@ -631,8 +569,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **Deleting the session the terminal UI shows starts a fresh one.** The view
   stayed on the deleted session, and every next action failed with a message
   that blamed a daemon restart; that message now names a deletion as well.
-- **The planner picker names an effort once** ("Low effort", not "Low effort
-  effort"), and **the session list counts "1 task"** in the singular.
+- **The session list counts "1 task"** in the singular.
 
 ## [0.9.1] — 2026-10-11
 
