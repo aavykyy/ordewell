@@ -1,4 +1,4 @@
-import { SettingsService, autonomyLevelLabel, parseAutonomyLevel } from '@ordewell/core';
+import { SettingsService, autonomyLevelLabel, codexSandboxNotice, parseAutonomyLevel } from '@ordewell/core';
 import type { ApiClient } from '../apiClient';
 import { positionals } from '../utils';
 import { connect, fail, fetchCatalog } from './shared';
@@ -15,6 +15,10 @@ export async function handleRunners(subArgs: string[], injectedApi?: ApiClient):
     for (const r of state.runners) {
       console.log(`  ${r.enabled ? '✓' : ' '} ${r.id.padEnd(14)} ${r.name}${r.enabled ? '' : '  (disabled)'}`);
     }
+    // After the runner list, so the daemon has re-probed the host by now. A
+    // catalog that cannot be read leaves the list as it is.
+    const notice = codexSandboxNotice((await fetchCatalog(api).catch(() => null))?.modesByRunner);
+    if (notice) console.log(`\n  ${notice.line}\n  ${notice.docs}`);
     console.log(`\n  ✓ = offered to the planner. ${USAGE}`);
     return;
   }

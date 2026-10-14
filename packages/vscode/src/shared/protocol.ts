@@ -32,6 +32,8 @@ export interface RunnerModeMeta {
   description: string;
   cliValue?: string;
   autonomous?: boolean;
+  /** Why this host cannot run the mode (a failed probe); shown, never assignable. */
+  unavailable?: string;
 }
 
 export interface ModelOption {
@@ -208,7 +210,8 @@ export type HostToWebview =
   | { type: 'setConfiguredProviders'; providers: AiProvider[] }
   | { type: 'setModelOptions'; modelOptions: ModelOption[] }
   | { type: 'setModelsByRunner'; modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>> }
-  | { type: 'setModesByRunner'; modesByRunner: Record<string, RunnerModeMeta[]> }
+  /** `notice` is the one line the runner list shows while a runner's modes are off on this host, and the page that explains it. */
+  | { type: 'setModesByRunner'; modesByRunner: Record<string, RunnerModeMeta[]>; notice?: { line: string; docs: string } | null }
   | { type: 'setModelConfig'; modelConfig: { orchestrator: string; orchestratorProvider?: string } }
   | { type: 'setPlannerBackends'; backends: PlannerBackend[]; provider: string; runner?: string; effort?: string }
   | { type: 'setModelDiscoveryErrors'; errors: Record<string, string> }

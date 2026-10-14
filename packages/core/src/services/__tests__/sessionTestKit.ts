@@ -48,6 +48,8 @@ export interface SessionOverrides {
   settings?: SessionDeps['settings'];
   sessionId?: string;
   runner?: IRunner;
+  /** Defaults to the built-in manifests; a test of a host-dependent catalog marks modes unavailable on its own. */
+  registry?: RunnerRegistry;
   /** Fakes go through the constructor seam — Partial so a test only stubs the calls it expects. */
   aiService?: Partial<IAiService>;
   planner?: Partial<SessionPlanner>;
@@ -104,7 +106,7 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
     config: overrides.config ?? fakeConfig(),
     notifications: fakeNotification(),
     runner,
-    registry: new RunnerRegistry(),
+    registry: overrides.registry ?? new RunnerRegistry(),
     workspaceRoot: overrides.workspaceRoot ?? (() => testWorkspace),
     fsAdapter: overrides.fsAdapter ?? fakeFs(),
     broadcast: overrides.broadcast ?? vi.fn(),

@@ -1,3 +1,4 @@
+import { unavailableTaskModeMessage } from './ModeResolver';
 import { spawnAttached } from './harness/ordewellBinding';
 import { EventEmitter } from 'events';
 import { spawn as nodeSpawn } from 'child_process';
@@ -749,6 +750,10 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
   async spawn(opts: RunnerSpawnOptions): Promise<IRunnerSession> {
     const manifest = opts.registry?.get(opts.runner)?.manifest;
     if (!manifest) throw new Error(`No runner manifest is registered for "${opts.runner}".`);
+    // Before a process or a worktree's worth of waiting: the task was planned
+    // with a mode this host cannot run, and the reason already says how to fix it.
+    const unavailable = unavailableTaskModeMessage(manifest, opts.mode);
+    if (unavailable) throw new Error(unavailable);
 
     this.spawnCount += 1;
     const id = `ordewell-structured-${opts.taskId.slice(0, 8)}-${this.spawnCount}`;

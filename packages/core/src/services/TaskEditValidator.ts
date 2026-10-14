@@ -1,7 +1,7 @@
 import { Task, flattenTasksWithParents, RunnerId, DiscoveredModel, TaskModelAssignment, TaskMode } from '../models/Task';
 import { canSetDependencies } from './TaskOps';
 import { effectiveAllowlist } from './ModelAllowlistResolver';
-import type { RunnerModeInfo } from './ModeResolver';
+import { unavailableModeReason, type RunnerModeInfo } from './ModeResolver';
 import { NOT_STARTED } from '../taskRow/status';
 import { opsPlacementRefusal } from './PlannedTask';
 
@@ -100,6 +100,8 @@ export function checkModelAndModeValidity(
     if (modes && modes.length > 0 && !modes.some((m) => m.id === taskMode)) {
       return { ok: false, error: `Runner "${runner}" has no task mode "${taskMode}" — valid modes: ${modes.map((m) => m.id).join(', ')}` };
     }
+    const unavailable = unavailableModeReason(modes, taskMode);
+    if (unavailable) return { ok: false, error: `Mode "${taskMode}" of runner "${runner}" is unavailable on this host: ${unavailable}` };
   }
 
   return { ok: true };

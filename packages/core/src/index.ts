@@ -119,6 +119,7 @@ export { StdioAgentAdapter } from './services/harness/StdioAgentAdapter';
 export type { SpawnSpec } from './services/harness/StdioAgentAdapter';
 export { ClaudeCodeAdapter } from './services/harness/ClaudeCodeAdapter';
 export { CodexAdapter } from './services/harness/CodexAdapter';
+export { CodexSandboxAvailability, codexSandboxNotice, CODEX_SANDBOX_DOCS, CODEX_SANDBOX_OFF_LINE } from './services/harness/codexSandbox';
 export { OpenCodeAdapter } from './services/harness/OpenCodeAdapter';
 export { mapAgentTool, normalizeAgentArgs } from './services/harness/agentTools';
 export type { MappedTool } from './services/harness/agentTools';

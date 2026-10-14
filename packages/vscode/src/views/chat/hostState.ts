@@ -40,6 +40,8 @@ export interface HostState {
   /** The last queued text the host gave back; `seq` makes a repeat of the same words land again. */
   unsent: { text: string; seq: number } | null;
   modesByRunner: Record<string, RunnerMode[]>;
+  /** The one line a runner's modes being off on this host puts above the plan, with the page that explains it. */
+  runnerNotice: { line: string; docs: string } | null;
   modelConfig: { orchestrator: string; orchestratorProvider?: string } | null;
   /** The user's autonomy level, run settings (ADR-0030) and parallel limit; null until the host sends them. */
   runSettings: { autonomous: boolean; run: GlobalRunSettings; maxParallel: number } | null;
@@ -93,6 +95,7 @@ export const INITIAL_HOST_STATE: HostState = {
   held: EMPTY_HOLD,
   unsent: null,
   modesByRunner: {},
+  runnerNotice: null,
   modelConfig: null,
   runSettings: null,
   settingsRequest: 0,
@@ -289,7 +292,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
       return { ...state, modelsByRunner: action.modelsByRunner ?? {} };
 
     case 'setModesByRunner':
-      return { ...state, modesByRunner: action.modesByRunner ?? {} };
+      return { ...state, modesByRunner: action.modesByRunner ?? {}, runnerNotice: action.notice ?? null };
 
     case 'setModelConfig':
       return { ...state, modelConfig: action.modelConfig ?? null };

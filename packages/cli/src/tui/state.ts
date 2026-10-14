@@ -109,6 +109,8 @@ export interface ModeView {
   description?: string;
   /** Tagged `autonomous: true` on the manifest — runs without permission prompts. */
   autonomous?: boolean;
+  /** Why this host cannot run the mode (a failed probe); it is listed, never assignable. */
+  unavailable?: string;
 }
 
 export interface SkillChoiceView {

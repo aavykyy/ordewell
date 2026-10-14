@@ -134,7 +134,8 @@ The [documentation](https://ordewell.ai/docs) covers the planner options, skills
 commands, configuration and platform notes. Design decisions, including the options
 that were rejected, are recorded as [architecture decision records](docs/adr/), and
 [CONTEXT.md](CONTEXT.md) defines the project's vocabulary. To write your own
-planner or task skills, see the [skills guide](docs/skills.md).
+planner or task skills, see the [skills guide](docs/skills.md). If Codex's
+sandbox cannot start on your machine, see [troubleshooting](docs/troubleshooting.md).
 
 ## Where it's going
 

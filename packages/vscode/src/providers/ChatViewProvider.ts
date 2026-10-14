@@ -120,9 +120,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this._modelsByRunner = modelsByRunner;
     this.postMessage({ type: 'setModelsByRunner', modelsByRunner });
   }
-  setModesByRunner(modesByRunner: Record<string, RunnerModeMeta[]>): void {
+  setModesByRunner(modesByRunner: Record<string, RunnerModeMeta[]>, notice: { line: string; docs: string } | null = null): void {
     this._modesByRunner = modesByRunner;
-    this.postMessage({ type: 'setModesByRunner', modesByRunner });
+    this._runnerNotice = notice;
+    this.postMessage({ type: 'setModesByRunner', modesByRunner, notice });
   }
   setRunnerList(runners: { id: string; displayName: string }[]): void {
     this._runnerList = runners;
@@ -156,6 +157,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private _modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>> = {};
   private _modesByRunner: Record<string, RunnerModeMeta[]> = {};
+  private _runnerNotice: { line: string; docs: string } | null = null;
   private _runnerList: { id: string; displayName: string }[] = [];
   private _enabledRunnerIds: string[] = [];
   private _modelConfig: { orchestrator: string; orchestratorProvider?: string } | null = null;
@@ -198,7 +200,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.postMessage({ type: 'setModelDiscoveryErrors', errors: this._modelDiscoveryErrors });
     }
     if (this._modesByRunner && Object.keys(this._modesByRunner).length > 0) {
-      this.postMessage({ type: 'setModesByRunner', modesByRunner: this._modesByRunner });
+      this.postMessage({ type: 'setModesByRunner', modesByRunner: this._modesByRunner, notice: this._runnerNotice });
     }
     if (this._modelConfig) {
       this.postMessage({ type: 'setModelConfig', modelConfig: this._modelConfig });

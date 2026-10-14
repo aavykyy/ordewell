@@ -19,7 +19,7 @@ import { SecretStore } from './adapters/SecretStore';
 import type { VsCodeConfig } from './adapters/VsCodeConfig';
 import type { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
 import type { VsCodeNotification } from './adapters/VsCodeNotification';
-import type { IRunner, RunnerInstallation, RunnerRegistry, ModelResolver, SettingsService, PlannerModelMemory } from '@ordewell/core';
+import type { CodexSandboxAvailability, IRunner, RunnerInstallation, RunnerRegistry, ModelResolver, SettingsService, PlannerModelMemory } from '@ordewell/core';
 
 // A VS Code layout preference, not a run setting: it lives in globalState rather
 // than SettingsService, whose file the CLI and web surfaces also read.
@@ -49,6 +49,8 @@ export interface ExtensionServices {
   config: VsCodeConfig;
   runnerRegistry: RunnerRegistry;
   runnerInstallation: RunnerInstallation;
+  /** Probes whether Codex's sandbox starts on this host; absent in tests that must not start `codex`. */
+  codexSandbox?: Pick<CodexSandboxAvailability, 'refresh'>;
   fsAdapter: VsCodeFileSystem;
   notifications: VsCodeNotification;
   runner: IRunner;
@@ -165,6 +167,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     config: services.config,
     runnerRegistry: services.runnerRegistry,
     runnerInstallation: services.runnerInstallation,
+    codexSandbox: services.codexSandbox,
     modelResolver: services.modelResolver,
     chatProvider: services.chatProvider,
     secretStore: services.secretStore,

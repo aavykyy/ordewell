@@ -50,10 +50,23 @@ Codex task that needs a sandbox is still refused.**
   planner has the Ordewell server. A planner without it would have no way to
   read, and is refused as before. In practice every harness planner has the
   server (ADR-0025).
-- **Tasks are unchanged.** A task has no second shell, and switching its mode
-  to Full access would rewrite the plan (ADR-0001). It is refused before the
-  thread starts, and the message now offers the user's options: Full access,
-  another runner, or fixing the host. A Full-access task still runs.
+- **Tasks are told, not surprised.** A task has no second shell, and
+  switching its mode to Full access would rewrite the plan (ADR-0001). So the
+  probe's answer goes into the runner catalog: each Codex mode the manifest
+  tags `sandboxed` (`agent`, `plan`) carries an `unavailable` reason on this
+  host, and Full access does not. The planner is not offered them: `list_runners`
+  shows Codex without a read-only mode, a read-only task cannot be assigned to
+  it (ADR-0031's refusal names the runners that can), and under Guarded a task
+  on Codex is refused rather than moved to Full access. `submit_plan` and
+  `edit_plan` refuse such a mode with the reason, as does a hand edit on any
+  surface, and a task already holding one fails at spawn, before a worktree is
+  made, with the same reason. The reason names the options: Full access,
+  another runner, or fixing the host.
+- **One probe per daemon, asked again on a runner-list refresh.** The answer
+  is cached; refreshing the runner list (and a daemon restart) probes again,
+  so a host fixed while Ordewell runs is noticed. The surfaces show one line,
+  *Codex sandbox unavailable on this host: read-only and Guarded modes are
+  off*, with a link to the troubleshooting page.
 - **The probe's decision is unchanged.** macOS (Seatbelt) and Windows are never probed,
   and a working bubblewrap or Landlock backend keeps Codex's shell as before.
 
@@ -67,7 +80,9 @@ Codex task that needs a sandbox is still refused.**
 - The planner is still read-only. The sandbox stays `read-only`, file changes
   are declined, and `run_command` keeps ADR-0008's classifier.
 - The degraded state is visible: the note names what is missing and both
-  fixes.
+  fixes, and the runner list says which Codex modes are off.
+- A task is never assigned a Codex mode the host cannot run, so the failure
+  shows when the plan is made, not only when the task starts.
 
 ## Considered options
 
@@ -84,6 +99,11 @@ Codex task that needs a sandbox is still refused.**
 - **Turn the shell off on every host, so Codex always reads through
   `run_command`.** Not now: on a host where the sandbox works, Codex's own
   read-only shell is the better-contained one until ADR-0011 lands.
+- **Hide the sandboxed modes instead of listing them as unavailable.**
+  Rejected: a user would not learn why Codex offers only Full access, and a
+  saved plan's task would fail with a generic "no such mode".
+- **Fall back to Full access for a Guarded task on Codex.** Rejected: it
+  hands a task access nobody chose (ADR-0001).
 
 ## History
 
@@ -95,3 +115,4 @@ Codex task that needs a sandbox is still refused.**
   and showed the note once; and `plannerToolsLive` passed for Codex without
   its sandbox-probe stub, which is removed.
 - 2026-10-13 — the probe is launched in its own process group and killed, group and all, when it times out, instead of being left running.
+- 2026-10-14 — Codex's sandboxed modes are marked unavailable in the catalog while the probe fails, so they are not assigned and a task holding one fails at spawn with the reason.

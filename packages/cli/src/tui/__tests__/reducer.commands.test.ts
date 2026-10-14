@@ -373,3 +373,47 @@ describe('system commands', () => {
     expect(messagesOf(state).some((m) => m.role === 'user')).toBe(false);
   });
 });
+
+describe('a runner mode this host cannot run', () => {
+  const REASON = "Codex's sandbox cannot start on this host.";
+  const codexTask = task({ id: 'task-a', order: 1, assignedRunner: 'codex', taskMode: 'fullAccess' });
+  const hosted: Partial<TuiState> = {
+    sessionId: 'session-1',
+    tasks: [codexTask],
+    modesByRunner: {
+      codex: [
+        { id: 'agent', label: 'Agent', unavailable: REASON },
+        { id: 'plan', label: 'Plan', unavailable: REASON },
+        { id: 'fullAccess', label: 'Full access', autonomous: true },
+      ],
+    },
+  };
+
+  it('/task-mode refuses it with the reason and sends no edit', () => {
+    const { state, effects } = run('/task-mode task-a plan', hosted);
+
+    expect(effects).toEqual([]);
+    expect(lastMessage(state)?.text).toContain(REASON);
+  });
+
+  it('/task-mode still sets a mode the host can run', () => {
+    expect(run('/task-mode task-a fullAccess', hosted).effects).toEqual([expect.objectContaining({ type: 'updateTask', changes: { taskMode: 'fullAccess' } })]);
+  });
+
+  it('is listed greyed out in the mode picker, with the one-line notice for the host', () => {
+    const { state } = run('/task-mode task-a', hosted);
+
+    expect(state.overlay).toMatchObject({
+      kind: 'picker',
+      picker: {
+        hint: expect.stringContaining('Codex sandbox unavailable on this host: read-only and Guarded modes are off'),
+        items: [
+          expect.objectContaining({ id: 'agent', disabled: true }),
+          expect.objectContaining({ id: 'plan', disabled: true }),
+          expect.not.objectContaining({ disabled: true }),
+        ],
+      },
+    });
+  });
+});
+

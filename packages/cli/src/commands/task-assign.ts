@@ -1,4 +1,4 @@
-import { createSkillsService, EnvConfig } from '@ordewell/core';
+import { codexSandboxNotice, createSkillsService, EnvConfig } from '@ordewell/core';
 import { canSetDependencies, dependencyCandidates, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf } from '@ordewell/core/plan-utils';
 import { assignedModelFor, effortsForTask, modelsForTask, modesForTask, runnerAccepts } from '../tui/taskAssignment';
 import { findTask, type TaskView } from '../tui/state';
@@ -159,8 +159,10 @@ export async function handleTaskMode(subArgs: string[], injectedApi?: ApiClient)
         console.log('  This task has no runner, or its runner declares no modes.');
       }
       for (const m of modes) {
-        console.log(`  ${m.id === task.taskMode ? '*' : ' '} ${m.id.padEnd(14)} ${m.label}${m.description ? ` — ${m.description}` : ''}`);
+        console.log(`  ${m.id === task.taskMode ? '*' : ' '} ${m.id.padEnd(14)} ${m.label}${m.unavailable ? ' — unavailable on this host' : m.description ? ` — ${m.description}` : ''}`);
       }
+      const notice = codexSandboxNotice(catalog.modesByRunner);
+      if (notice) console.log(`\n  ${notice.line}\n  ${notice.docs}`);
       console.log(`\n  ${MODE_USAGE}`);
       return;
     }
@@ -175,6 +177,8 @@ export async function handleTaskMode(subArgs: string[], injectedApi?: ApiClient)
           : `${task.assignedRunner ?? 'This task'} declares no modes.`,
       );
     }
+
+    if (chosen.unavailable) fail(`Mode "${chosen.id}" of ${task.assignedRunner} is unavailable on this host: ${chosen.unavailable}`);
 
     await api.updateTask(sessionId, task.id, { taskMode: chosen.id });
     console.log(`Task ${refOf(tasks, task)} mode set to ${chosen.label}.`);

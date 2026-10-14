@@ -5593,3 +5593,11 @@ body {
 }
 .task-usage { margin-left: 6px; }
 .plan-usage { padding: 4px 8px; }
+
+.runner-notice {
+  margin: 6px 0;
+  padding: 6px 8px;
+  font-size: 0.9em;
+  border-left: 3px solid var(--vscode-editorWarning-foreground);
+  color: var(--vscode-descriptionForeground);
+}

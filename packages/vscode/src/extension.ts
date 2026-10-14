@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import { createSession, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner } from '@ordewell/core';
+import { spawn as nodeSpawn } from 'child_process';
+import { createSession, CodexSandboxAvailability, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner } from '@ordewell/core';
 import { ChatViewProvider } from './providers/ChatViewProvider';
 import { VsCodeConfig, moveAutonomyFromVsCodeSetting } from './adapters/VsCodeConfig';
 import { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
@@ -39,6 +40,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       config,
       runnerRegistry,
       runnerInstallation: new RunnerInstallation(runnerRegistry),
+      codexSandbox: new CodexSandboxAvailability(
+        runnerRegistry,
+        { spawn: nodeSpawn, fetch: globalThis.fetch },
+        { cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd(), env: process.env },
+      ),
       fsAdapter: new VsCodeFileSystem(),
       notifications: new VsCodeNotification(),
       // Tasks run on the structured transport (ADR-0018) as plain child processes.

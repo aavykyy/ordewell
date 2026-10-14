@@ -29,13 +29,13 @@ function routingRunner() {
   return { runner, sessions, requests };
 }
 
-function orchestratorWith(runner: IRunner, notifications = fakeNotification()) {
+function orchestratorWith(runner: IRunner, notifications = fakeNotification(), registry = new RunnerRegistry()) {
   return TaskOrchestrator.compose({
     config: fakeConfig(),
     notifications,
     runner,
     output: new BufferedTaskOutputSource(),
-    registry: new RunnerRegistry(),
+    registry,
     workspaceRoot: () => '/repo',
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
   });
@@ -129,6 +129,22 @@ describe('a runner with no structured connector', () => {
     expect(task.status).toBe('pending');
     expect(task.runnerSessionId).toBeUndefined();
     expect(notifications.error).toHaveBeenCalledWith(expect.stringContaining('my-plugin has no structured connector, so Ordewell cannot run its tasks'));
+  });
+});
+
+describe('a task whose mode this host cannot run', () => {
+  it('fails at spawn with the reason, before a worktree or the runner is touched', async () => {
+    const { runner } = routingRunner();
+    const notifications = fakeNotification();
+    const registry = new RunnerRegistry();
+    registry.setUnavailableModes('codex', { plan: 'Codex sandbox cannot start on this host.' });
+    const orchestrator = orchestratorWith(runner, notifications, registry);
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', assignedRunner: 'codex', taskMode: 'plan' })], ['codex']);
+
+    await orchestrator.forceStartTask('t1');
+
+    expect(runner.spawn).not.toHaveBeenCalled();
+    expect(notifications.error).toHaveBeenCalledWith(expect.stringContaining('Mode "plan" of Codex is unavailable on this host: Codex sandbox cannot start on this host.'));
   });
 });
 

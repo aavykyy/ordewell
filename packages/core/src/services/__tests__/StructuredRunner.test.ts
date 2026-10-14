@@ -234,6 +234,17 @@ describe('StructuredRunner spawn', () => {
     session.kill();
   });
 
+  it('fails a task whose mode the host cannot run before starting anything, with the reason', async () => {
+    const { runner, spawned } = harness([]);
+    const noSandbox = new RunnerRegistry();
+    noSandbox.setUnavailableModes('codex', { plan: 'Codex sandbox cannot start on this host.' });
+
+    await expect(runner.spawn(options({ runner: 'codex', mode: 'plan', registry: noSandbox })))
+      .rejects.toThrow('Mode "plan" of Codex is unavailable on this host: Codex sandbox cannot start on this host.');
+    expect(spawned.processes).toHaveLength(0);
+    expect(runner.activeCount).toBe(0);
+  });
+
   it('refuses an unknown runner before spawning a process', async () => {
     const { runner, spawned } = harness([]);
     await expect(runner.spawn(options({ runner: 'removed-runner' }))).rejects.toThrow('No runner manifest is registered for "removed-runner".');
