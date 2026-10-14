@@ -318,14 +318,14 @@ describe('leftover queue on a settling turn whose queue was emptied another way'
 });
 
 describe('rendering — queued prompts', () => {
-  it('renders as dimmed bubbles below the transcript, in order, marked `queued · esc to unsend`', () => {
+  it('renders as dimmed bubbles below the transcript, in order, the newest marked `queued · esc to unsend`', () => {
     style.enabled = false;
     try {
       const out = render(planningState({ queuedPrompts: ['extra thought', 'and another'] })).join('\n');
 
       expect(out).toContain('extra thought');
       expect(out).toContain('queued · esc to unsend');
-      expect((out.match(/queued · esc to unsend/g) ?? []).length).toBe(2);
+      expect((out.match(/queued · esc to unsend/g) ?? []).length).toBe(1);
       // Ordering: the first queued prompt paints above the second.
       expect(out.indexOf('extra thought')).toBeLessThan(out.indexOf('and another'));
     } finally {

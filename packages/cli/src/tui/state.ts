@@ -341,14 +341,29 @@ export interface TaskLogState {
   loaded: boolean;
   /** Keep following the newest attempt as the task retries; a manual switch turns this off. */
   followLatest: boolean;
-  /** Which queued message the remove key targets. */
-  queuedIndex: number;
+  /**
+   * Which pending message ctrl-r and ctrl-s (with the composer empty) act on,
+   * as picked with ctrl-n/ctrl-p; null until one is picked, which defaults to
+   * the newest (see `queuedTarget`).
+   */
+  queuedIndex: number | null;
   /**
    * Why the composer's last text was not sent, drawn in the view in place of
    * its key hints until the next send: the planner chat, where other notices
    * go, is not on screen.
    */
   notice?: string;
+}
+
+/**
+ * The index of the pending message the task view's keys act on: the one
+ * picked, or the newest not already being sent now. -1 when there is none.
+ */
+export function queuedTarget(tv: TaskLogState): number {
+  const { queued } = tv.view;
+  if (tv.queuedIndex !== null) return Math.min(tv.queuedIndex, queued.length - 1);
+  for (let i = queued.length - 1; i >= 0; i--) if (!queued[i].forced) return i;
+  return -1;
 }
 
 /** A prompt a force send took out of the composer, or out of the queue at `queueIndex`. */

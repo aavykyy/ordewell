@@ -49,4 +49,14 @@ describe('queued task message rows on a narrow pane', () => {
       expect(said(rows)).toBe(words);
     });
   }
+
+  it('drops the send-now key before the state of a handed-over message', () => {
+    const tv = view('a short note');
+    const handed: TaskLogState = { ...tv, view: { ...tv.view, queued: [{ id: 'm1', text: 'a short note', forced: false, handedOver: true }] } };
+    const [wide] = taskQueuedRows(initialState({ taskView: handed }), 120);
+    const [narrow] = taskQueuedRows(initialState({ taskView: handed }), 50);
+
+    expect(plain(wide)).toBe('❯ a short note · waiting for the current step · ctrl-s sends now');
+    expect(plain(narrow)).toBe('❯ a short note · waiting for the current step');
+  });
 });

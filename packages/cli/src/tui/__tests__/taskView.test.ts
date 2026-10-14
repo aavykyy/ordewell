@@ -227,6 +227,7 @@ describe('talking to the task', () => {
         view: replayTaskLog([{ type: 'message_queued', messageId: 'm1', text: 'use Postgres' }]),
         queuedIndex: 0,
       }),
+      cols: 160,
     });
     const out = plain(queued);
     expect(out).toContain('use Postgres');
@@ -754,9 +755,9 @@ describe('a message the runner reads mid-turn (ADR-0023)', () => {
     }),
   });
 
-  it('shows a handed-over message as handed over, and ctrl-r leaves it with the runner', () => {
-    const out = plain(handedOver());
-    expect(out).toContain('use Postgres · handed over');
+  it('shows a handed-over message as waiting for the current step, and ctrl-r leaves it with the runner', () => {
+    const out = plain({ ...handedOver(), cols: 160 });
+    expect(out).toContain('use Postgres · waiting for the current step');
     expect(out).not.toContain('use Postgres · queued');
     expect(out).toContain('also tests · queued');
 

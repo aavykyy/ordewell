@@ -190,6 +190,17 @@ describe('what the planner chat shows for force send', () => {
     expect(narrowRow).not.toContain('ctrl-s sends now');
   });
 
+  it('puts the queued hints on the newest prompt only, the one esc and ctrl-s take', () => {
+    const out = plain(planning({ queuedPrompts: ['first thought', 'second thought'], cols: 200 }));
+    expect(out).toMatch(/first thought · queued(?! ·)/);
+    expect(out).toContain('second thought · queued · esc to unsend · ctrl-s sends now');
+  });
+
+  it('drops ctrl-s from the newest prompt while the composer holds text, which ctrl-s would send instead', () => {
+    const out = plain(withDraft(planning({ queuedPrompts: ['a parked thought'], cols: 200 }), 'typing'));
+    expect(out).toMatch(/a parked thought · queued · esc to unsend(?! ·)/);
+  });
+
   it('marks the forced user message, from a reloaded transcript too', () => {
     const conversation = fromTranscript(
       [{ role: 'user', content: 'use Postgres instead', timestamp: '2026-10-13T00:00:00.000Z', forced: true }],
@@ -218,8 +229,8 @@ describe('what the task view shows for force send', () => {
       taskView: log([{ id: 'm1', text: 'use Postgres' }, { id: 'm2', text: 'stop now', forced: true }]),
     });
     const out = plain(state);
-    expect(out).toContain('use Postgres · queued · ctrl-r removes · ctrl-s sends now');
-    expect(out).toContain('stop now · sending now');
+    expect(out).toContain('use Postgres · queued · ctrl-s sends now · ctrl-r removes');
+    expect(out).toContain('stop now · sending now…');
   });
 });
 

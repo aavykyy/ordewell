@@ -3,7 +3,7 @@ import { cursorInLines, type CursorPosition } from './editor';
 import { checkpointCardLines, conversationLines, taskUsageText, usageMeasures, tokenLine } from './blocks';
 import { chatEditorRoomFor, chatPaneWidth, planPaneWidth } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
-import { findTask, isTaskRunning, planRows, plannerInFlight, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
+import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, queuedTarget, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
@@ -77,7 +77,11 @@ export function footerHints(state: TuiState): string[] {
     : 'esc ×2 stop planning';
   // Send now is the composer's key, so it is named only where the composer
   // owns it: the chat pane, with a turn in flight.
-  const sendNowHint = planning ? 'ctrl-s send now' : null;
+  // A task's composer queues its text behind the running step; ctrl-s is the
+  // other way to send it, named while there is text it would send.
+  const tv = state.taskView;
+  const taskSends = !!tv && tv.view.working && !!state.editor.text.trim() && !continuesTask(findTask(state.tasks, tv.taskId));
+  const sendNowHint = planning || taskSends ? 'ctrl-s send now' : null;
 
   if (state.focus === 'plan') {
     // `expandedTaskId` alone only means subtask rows are revealed — the editor
@@ -106,10 +110,14 @@ export function footerHints(state: TuiState): string[] {
 
 /**
  * The queue's bubbles, one bubble per prompt, in queue order. Not part of the
- * conversation view: a prompt joins it only once it is sent.
+ * conversation view: a prompt joins it only once it is sent. Esc and ctrl-s
+ * take the newest, so only its row names them; ctrl-s takes the composer's
+ * text instead while there is any.
  */
 export function queuedPromptRows(state: TuiState, cols: number): string[] {
-  return state.queuedPrompts.flatMap((text) => queuedBubble(text, cols));
+  const newest = state.queuedPrompts.length - 1;
+  const keys = [' · esc to unsend', ...(state.editor.text.trim() ? [] : [' · ctrl-s sends now'])];
+  return state.queuedPrompts.flatMap((text, i) => queuedBubble(text, i === newest ? [' · queued', ...keys] : [' · queued'], cols));
 }
 
 /** The columns a queued row's marker (or its continuation indent) takes before the text. */
@@ -118,59 +126,74 @@ const MARKER_LEAD = 2;
 /** Fewer columns than this left after the text cannot say what a hint is, so none is drawn. */
 const MIN_HINT_COLS = 10;
 
-/** A queued row's hint, cut to the columns its text left. Never the text that gives way. */
-function hintAfter(text: string, tag: string, cols: number): string {
+/** Columns of text a row keeps before its hint is given up rather than squeeze the text. */
+const MIN_TEXT_COLS = 12;
+
+/**
+ * A queued row's hint: as many of its parts (the state first, then each key)
+ * as fit whole in the columns its text left, else the state cut to them.
+ * Never the text that gives way.
+ */
+function hintAfter(text: string, parts: string[], cols: number): string {
   const left = cols - width(text);
-  return left >= MIN_HINT_COLS ? truncate(tag, left) : '';
+  if (left < MIN_HINT_COLS) return '';
+  for (let n = parts.length; n > 0; n--) {
+    const tag = parts.slice(0, n).join('');
+    if (width(tag) <= left) return tag;
+  }
+  return truncate(parts[0] ?? '', left);
 }
 
-/** One queued prompt wrapped under a dimmed marker, the takeback hint on its first row. */
-function queuedBubble(text: string, cols: number): string[] {
-  const tag = ' · queued · esc to unsend · ctrl-s sends now';
-  const prefix = `◇  ${tag}`;
-  // The hint is reserved only while it leaves room to read the prompt. A
-  // narrow pane gives it what the first row has left, and the text is still
-  // wrapped under the marker's own two columns — or every full-width row would
-  // lose its tail to `truncate`.
-  const roomy = cols - width(prefix) >= 12;
-  const room = Math.max(1, cols - (roomy ? width(prefix) : MARKER_LEAD));
-  return wrap(text, room).map((line, i) => i === 0
-    ? `${style.grey(`◇ ${line}`)}${hintAfter(`◇ ${line}`, tag, cols)}`
+/**
+ * The columns to wrap a queued message's text to under a marker of `lead`
+ * columns. The hint is reserved only while it leaves room to read the text:
+ * the keys go first, then the state, and a narrow pane still wraps under the
+ * marker's own two columns — or every full-width row would lose its tail to
+ * `truncate`.
+ */
+function queuedRoom(lead: string, parts: string[], cols: number): number {
+  for (const tag of [parts.join(''), parts[0] ?? '']) {
+    if (cols - width(`${lead}${tag}`) >= MIN_TEXT_COLS) return cols - width(`${lead}${tag}`);
+  }
+  return Math.max(1, cols - MARKER_LEAD);
+}
+
+/** One queued prompt wrapped under a dimmed marker, its hint on its first row. */
+function queuedBubble(text: string, parts: string[], cols: number): string[] {
+  return wrap(text, queuedRoom('◇  ', parts, cols)).map((line, i) => i === 0
+    ? `${style.grey(`◇ ${line}`)}${hintAfter(`◇ ${line}`, parts, cols)}`
     : truncate(style.grey(`  ${line}`), cols));
 }
 
 /**
- * The task view's undelivered messages, one bubble each, in queue order. A
- * queued message has not reached the runner yet, and the highlighted one is
- * what ctrl-r takes back (and, with the composer empty, what ctrl-s sends
- * now); a handed-over one the runner already has and will show the model at
- * its next step; a forced one goes once the running turn is interrupted
- * (ADR-0023).
+ * The task view's pending messages, one bubble each, in queue order, each
+ * with its state (ADR-0023): queued — not with the runner yet, removable;
+ * waiting for the current step — handed over, the runner reads it at its next
+ * step; sending now — forced, until it is delivered. The message the keys act
+ * on is highlighted and carries them: ctrl-s with the composer empty (it sends
+ * the composer's text otherwise), ctrl-r while it can still be removed.
  */
 export function taskQueuedRows(state: TuiState, cols: number): string[] {
   const tv = state.taskView;
   if (!tv) return [];
-  return tv.view.queued.flatMap((message, i) => queuedTaskBubble(message, i === tv.queuedIndex, cols));
+  const target = queuedTarget(tv);
+  const sends = !state.editor.text.trim();
+  return tv.view.queued.flatMap((message, i) => queuedTaskBubble(message, i === target, sends, cols));
 }
 
-function queuedTaskTag({ handedOver, forced }: QueuedTaskMessage, selected: boolean): string {
-  if (forced) return ' · sending now';
-  if (handedOver) return ' · handed over';
-  return selected ? ' · queued · ctrl-r removes · ctrl-s sends now' : ' · queued';
+function queuedTaskParts({ handedOver, forced }: QueuedTaskMessage, target: boolean, sends: boolean): string[] {
+  if (forced) return [' · sending now…'];
+  const sendNow = target && sends ? [' · ctrl-s sends now'] : [];
+  if (handedOver) return [' · waiting for the current step', ...sendNow];
+  return [' · queued', ...sendNow, ...(target ? [' · ctrl-r removes'] : [])];
 }
 
-function queuedTaskBubble(message: QueuedTaskMessage, selected: boolean, cols: number): string[] {
+function queuedTaskBubble(message: QueuedTaskMessage, target: boolean, sends: boolean, cols: number): string[] {
   const { text } = message;
-  const marker = selected ? style.accent('❯') : style.grey('◇');
-  const tag = queuedTaskTag(message, selected);
-  // As with the planner's queued rows: the hint is reserved only while it
-  // leaves room to read the message, so a narrow pane drops it instead of
-  // squeezing the text to a column.
-  const prefix = `❯ ◇  ${tag}`;
-  const roomy = cols - width(prefix) >= 12;
-  const room = Math.max(1, cols - (roomy ? width(prefix) : MARKER_LEAD));
-  return wrap(text, room).map((line, i) => i === 0
-    ? `${marker} ${selected ? style.bold(line) : line}${style.grey(hintAfter(`◇ ${line}`, tag, cols))}`
+  const marker = target ? style.accent('❯') : style.grey('◇');
+  const parts = queuedTaskParts(message, target, sends);
+  return wrap(text, queuedRoom('❯ ◇  ', parts, cols)).map((line, i) => i === 0
+    ? `${marker} ${target ? style.bold(line) : line}${style.grey(hintAfter(`◇ ${line}`, parts, cols))}`
     : truncate(`  ${line}`, cols));
 }
 
@@ -1025,8 +1048,8 @@ function commandSheetBody(cols: number): string[] {
   body.push(
     '',
     style.bold('In a task view (enter on a task)'),
-    style.grey('  ctrl-s sends now: interrupts the running step, then delivers the composer text — or, with it empty, the selected queued message'),
-    style.grey('  ctrl-n/ctrl-p select a queued message · ctrl-r removes it · ctrl-x interrupts'),
+    style.grey('  ctrl-s sends now: interrupts the running step, then delivers the composer text — or, with it empty, the highlighted pending message'),
+    style.grey('  ctrl-n/ctrl-p pick a pending message (the newest until you do) · ctrl-r removes a queued one · ctrl-x interrupts'),
     style.grey('  ctrl-y allows a tool request (its keys sit under it) · ctrl-t allows it for the task · ctrl-g denies it, with the composer text as the note'),
     style.grey('  at a checkpoint, ctrl-y approves and ctrl-g rejects, with the composer text as the reason · /checkpoint <id> approve|reject [reason] from anywhere'),
     style.grey('  alt←/→ changes attempt · esc returns'),
