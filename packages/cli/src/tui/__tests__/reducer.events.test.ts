@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { initialState, reduce } from '../reducer';
 import type { TuiState } from '../state';
+import { chatActivity } from '../layout';
 import { lastMessage } from './chat';
 
 const send = (state: TuiState, action: Parameters<typeof reduce>[1]) => reduce(state, action).state;
@@ -141,11 +142,11 @@ describe('planner conversation', () => {
     expect(settled.status).toBe('idle');
   });
 
-  it('shows research progress on the spinner and in the transcript', () => {
+  it('shows research progress in the transcript, with the status row at Planning', () => {
     const s = send({ ...initialState(), status: 'planning' }, {
       type: 'sessionMessage', message: { type: 'research_step', tool: 'grep', args: '{"pattern":"auth"}' },
     });
-    expect(s.busyLabel).toBe('Grep(auth)');
+    expect(chatActivity(s)?.label).toBe('Planning…');
     expect(s.conversation.blocks).toEqual([
       expect.objectContaining({ type: 'tool', headline: { name: 'Grep', keyArg: 'auth' }, status: 'pending' }),
     ]);
@@ -185,12 +186,10 @@ describe('execution', () => {
     const live = initialState({
       ...withTasks,
       status: 'executing',
-      busyLabel: 'Running a',
       tasks: [{ ...withTasks.tasks![0], status: 'completed' }, { ...withTasks.tasks![1], status: 'in_progress' }],
     });
     const s = send(live, { type: 'executionLost' });
     expect(s.status).toBe('idle');
-    expect(s.busyLabel).toBe('');
     expect(s.tasks.map((t) => t.status)).toEqual(['completed', 'in_progress']);
     expect(lastMessage(s)?.text).toContain('Lost the connection');
     expect(lastMessage(s)?.text).not.toContain('Restart the daemon');
@@ -200,7 +199,7 @@ describe('execution', () => {
   // The follow socket is open while nothing runs, so losing it is only news
   // when a run is on screen.
   it('says the run is no longer followed when the follow is lost mid-run', () => {
-    const live = initialState({ ...withTasks, sessionId: 's1', status: 'executing', busyLabel: 'Running a' });
+    const live = initialState({ ...withTasks, sessionId: 's1', status: 'executing' });
     const s = send(live, { type: 'followLost', sessionId: 's1' });
     expect(s.status).toBe('idle');
     expect(lastMessage(s)?.text).toContain('Lost the connection');
@@ -245,11 +244,11 @@ describe('execution', () => {
   });
 
   it('does not let a run status clobber a planner turn in flight', () => {
-    const s = send(initialState({ ...withTasks, status: 'researching' }), {
+    const s = send(initialState({ ...withTasks, status: 'planning' }), {
       type: 'statusUpdate',
       tasks: [{ id: 'a', status: 'pending', verdict: null }, { id: 'b', status: 'pending', verdict: null }],
     });
-    expect(s.status).toBe('researching');
+    expect(s.status).toBe('planning');
   });
 
   it('counts the pane when a stop arrives without a tally', () => {

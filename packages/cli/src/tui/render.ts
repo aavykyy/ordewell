@@ -4,6 +4,9 @@ import { activeToken, skillMatchKind, slashTokens, tokenCompletions } from './sl
 import {
   bodyRows, chatInputWrap, chatLayout, footerHints, helpLayout, type HelpSheet, packHints, planLayout, planOffset,
   stopHint,
+  chatActivity,
+  DOT_TICKS,
+  runHint,
 } from './layout';
 import { chatEditorRoomFor, chatPaneWidth, chatPromptLabel, paneColumns, planPaneWidth } from './geometry';
 import { currentHandoff, diffRoom, handoffActions } from './handoff';
@@ -233,20 +236,21 @@ function renderStatus(state: TuiState, cols: number): string {
 
 function statusText(state: TuiState, cols: number): string {
   const mark = scrolledBackMark(state);
-  // A standing stop-arm outranks the busy label: with the arm up, the next key
+  // A standing stop-arm outranks the activity: with the arm up, the next key
   // decides the turn and that is what the row must say, in red, hard left.
   const armed = stopHint(state);
-  if (state.status === 'idle') {
-    const notes = [mark, state.toast].filter(Boolean).join(' · ');
-    return notes ? truncate(style.grey(notes), cols) : '';
-  }
   if (armed) return truncate(style.red(armed), cols);
-  const scrolled = mark ? style.grey(`${mark} · `) : '';
-  const label = state.busyLabel ? ` ${state.busyLabel}` : '';
-  const verb = state.status === 'executing' ? 'Executing'
-    : state.status === 'researching' ? 'Researching'
-    : 'Planning';
-  return truncate(`${scrolled}${style.brand('●')} ${verb}…${style.grey(label)}`, cols);
+  const activity = chatActivity(state);
+  // Without a plan pane the run has nowhere else to show what it waits on.
+  const hint = planPaneWidth(state) === 0 ? runHint(state) : '';
+  const notes = [mark, activity && !activity.busy ? activity.label : '', hint, state.toast].filter(Boolean).join(' · ');
+  if (activity?.busy) {
+    const lit = Math.floor(state.spinnerFrame / DOT_TICKS) % 2 === 0;
+    const dot = lit ? style.brand('●') : style.grey('●');
+    const scrolled = mark ? style.grey(`${mark} · `) : '';
+    return truncate(`${scrolled}${dot} ${activity.label}`, cols);
+  }
+  return notes ? truncate(style.grey(notes), cols) : '';
 }
 
 /**

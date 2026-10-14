@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { initialState, reduce } from '../reducer';
 import type { TaskView, TuiState } from '../state';
+import { chatActivity } from '../layout';
 import { messagesOf } from './chat';
 
 function run(text: string, overrides: Partial<TuiState> = {}) {
@@ -33,7 +34,8 @@ describe('/fork', () => {
     expect(lastError(state)).toMatch(/No active plan/);
   });
 
-  it.each(['planning', 'researching'] as const)('waits for the planner while it is %s', (status) => {
+  it('waits for the planner while it is planning', () => {
+    const status = 'planning' as const;
     const { effects, state } = run('/fork', { ...planned, status });
     expect(effects).toEqual([]);
     expect(lastError(state)).toMatch(/planner is still answering/);
@@ -46,7 +48,7 @@ describe('/fork', () => {
 
 describe('switching to a fork', () => {
   it('adopts the fork as the current session, not running and not yet approved', () => {
-    const from = initialState({ ...planned, status: 'executing', planApproved: true, busyLabel: 'running #1' });
+    const from = initialState({ ...planned, status: 'executing', planApproved: true, condensing: true });
 
     const { state } = reduce(from, { type: 'sessionForked', sessionId: 'session-2', goal: 'build me a parser' });
 
@@ -54,7 +56,7 @@ describe('switching to a fork', () => {
     expect(state.goal).toBe('build me a parser');
     expect(state.status).toBe('idle');
     expect(state.planApproved).toBe(false);
-    expect(state.busyLabel).toBe('');
+    expect(state.condensing).toBe(false);
   });
 
   it('then ignores the original session\'s events', () => {
@@ -163,7 +165,8 @@ describe('/rewind', () => {
     expect(lastError(loaded)).toMatch(/planner is still answering/);
   });
 
-  it.each(['planning', 'researching'] as const)('gives a busy planner no popup, %s', (status) => {
+  it('gives a busy planner no popup, planning', () => {
+    const status = 'planning' as const;
     for (const text of ['/rewind', '/rewind 4']) {
       const { effects, state } = run(text, { ...planned, status });
       expect(effects).toEqual([]);
@@ -284,7 +287,8 @@ describe('/compact', () => {
 
     expect(effects).toEqual([{ type: 'compactConversation', sessionId: 'session-1' }]);
     expect(state.status).toBe('planning');
-    expect(state.busyLabel).toMatch(/Condensing/);
+    expect(state.condensing).toBe(true);
+    expect(chatActivity(state)?.label).toBe('Condensing…');
   });
 
   it('needs a session to condense', () => {
@@ -293,7 +297,8 @@ describe('/compact', () => {
     expect(lastError(state)).toMatch(/No active plan/);
   });
 
-  it.each(['planning', 'researching'] as const)('waits for the planner while it is %s', (status) => {
+  it('waits for the planner while it is planning', () => {
+    const status = 'planning' as const;
     const { effects, state } = run('/compact', { ...planned, status });
     expect(effects).toEqual([]);
     expect(lastError(state)).toMatch(/planner is still answering/);

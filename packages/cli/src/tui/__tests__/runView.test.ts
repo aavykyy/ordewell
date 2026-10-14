@@ -131,7 +131,6 @@ describe('the connect snapshot', () => {
     const state = reduce(initialState({ sessionId: 's1' }), { type: 'runSnapshot', view, sessionId: 's1' }).state;
 
     expect(state.status).toBe('executing');
-    expect(state.busyLabel).toContain('A');
   });
 });
 

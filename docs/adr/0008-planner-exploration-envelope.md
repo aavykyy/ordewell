@@ -74,11 +74,11 @@ no UI pattern-matches refusal text of its own. Over-budget calls are reported as
   calls that announced no id.
 - **Each surface renders it in its own idiom, from the same fields.** VS Code
   gives each call an icon plus a chevron to its output; the TUI appends one
-  transcript line per call and settles it in place, counting the rest of a
-  parallel round on the spinner; `ordewell plan` — the only audit log a piped or
-  CI run leaves — prints the issued call and then the outcome line. Reasoning is
-  behind `--verbose` there, and on the TUI status row, because it is the noisiest
-  part of the stream.
+  transcript line per call and settles it in place, and its status row says
+  only that the planner is planning, never which call is out; `ordewell plan` —
+  the only audit log a piped or CI run leaves — prints the issued call and then
+  the outcome line. Reasoning is behind `--verbose` there, and collapsed in the
+  TUI transcript, because it is the noisiest part of the stream.
 - **Runner output reaches the VS Code task card.** `task_output` was dropped by
   `handleSessionMessage`, so a task that failed mid-run showed a red card and
   nothing else. The webview keeps a per-task tail and clears it on every session
@@ -399,3 +399,4 @@ model's refusal to write were never security evidence.
 - 2026-10-11 — planners never run the repository's config (hooks, settings environment, helpers, plugins, unapproved MCP servers), and a harness planner's in-workspace read is judged on its resolved path ([ADR-0028](0028-planners-never-run-repository-config.md)).
 - 2026-10-13 — a harness planner reads back the output its runner saved for it this session, outside the workspace, as part of the envelope, and reads the workspace even with nobody to ask ([ADR-0032](0032-runner-state-outside-the-workspace.md)).
 - 2026-10-13 — `sed` printing lines by number moves to `auto`; a denied `sed` names the line reads that run without asking, and a path denied after an unfollowed `cd` says why it was judged from the root.
+- 2026-10-14 — the TUI status row no longer lists the planner's in-flight calls: it relates to the selected chat only and says Planning, with the calls in the transcript.

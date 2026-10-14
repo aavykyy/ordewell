@@ -138,7 +138,7 @@ export type Action =
   | { type: 'workspaceNeedsInit'; goal: string; workspace: string }
   | { type: 'notice'; message: string; level?: 'info' | 'warn' | 'error' }
   | { type: 'resize'; rows: number; cols: number }
-  | { type: 'spinnerTick' };
+  | { type: 'spinnerTick'; by?: number };
 
 export interface Step {
   state: TuiState;

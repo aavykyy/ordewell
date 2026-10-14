@@ -129,6 +129,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **The terminal UI's status row speaks for the selected chat only.** It said
+  `Executing…` or `Researching… Read(file) (+2 more)` whichever chat was on
+  screen. It now reads `Planning…` in the planner's chat and `Working…` in a
+  running task's, pulses its dot while that chat is busy, and is empty when it
+  is not; what the planner or runner is doing stays in the chat itself. A task
+  that paused on a usage limit shows when it resumes. What the run waits on —
+  tasks that wait for you, a pause for Merge all — moved to the plan pane's
+  title, where it shows whichever chat is selected.
 - **Skip no longer lands a task's work.** Skip used to mark the task complete,
   landing whatever it had done as if you had vouched for it. A skipped task now
   ends as **skipped**: no verdict, and nothing it produced lands. Its worktree

@@ -213,13 +213,13 @@ describe('reduce — a planner reply', () => {
   });
 
   it('settles the busy status on planUpdated, whatever the reply before it', () => {
-    const busy = { ...spoken('Which database?'), status: 'planning' as const, busyLabel: 'reading files' };
+    const busy = { ...spoken('Which database?'), status: 'planning' as const, condensing: true };
     // `planUpdated` is the settle: the reply's text (this action) is dispatched
     // first, then the settle follows and ends the turn.
     const replied = reduce(busy, reply('Which database?', 's1')).state;
     const { state } = reduce(replied, { type: 'planUpdated', plan: { tasks: [] }, sessionId: 's1' });
     expect(state.status).toBe('idle');
-    expect(state.busyLabel).toBe('');
+    expect(state.condensing).toBe(false);
   });
 });
 

@@ -1,11 +1,9 @@
 import {
   isAwaitingReason, isSupervisorLevel, reduceRun,
-  type DisplayBlock, type PlanSnapshot, type RunInput, type RunTask, type RunView, type SessionMessage, type SettingsResponse, type SurfacePlan, type SurfacePlanState,
+  type PlanSnapshot, type RunInput, type RunTask, type RunView, type SessionMessage, type SettingsResponse, type SurfacePlan, type SurfacePlanState,
 } from '@ordewell/core';
 import { sanitize } from '../ansi';
-import {
-  isTaskRunning, plannerInFlight, type TaskView, type TuiState,
-} from '../state';
+import type { TaskView, TuiState } from '../state';
 import { isolationOfPlan } from '../../isolation';
 import { hear } from '../transcript';
 import { dropApproval, enqueueApproval } from './approvals';
@@ -181,56 +179,11 @@ export function applySettings(state: TuiState, settings: Partial<SettingsRespons
 }
 
 /**
- * What a run is doing right now, from the tasks themselves. It used to be the
- * last `task_started` title, which went on naming a task long after it had
- * finished — and said nothing once the run was only waiting on the user.
- */
-export function runLabel(tasks: TaskView[], runMerge: TuiState['runMerge'] = null): string {
-  const running = tasks.filter(isTaskRunning);
-  if (running.length > 0) {
-    const [first] = running;
-    const name = first.assignedRunner ? `${first.title} · ${first.assignedRunner}` : first.title;
-    return running.length > 1 ? `${name} (+${running.length - 1} more)` : name;
-  }
-  const waiting = tasks.filter((t) => t.status === 'awaiting_user').length;
-  if (waiting > 0) return waiting === 1 ? '1 task waits for you' : `${waiting} tasks wait for you`;
-  // As plain as a task that waits on the user: the run waits on a merge (ADR-0020).
-  return runMerge?.paused ? 'paused for Merge all — /handoff merge' : '';
-}
-
-/** A label for the status row, which is one row: text from a model flattened onto it. */
-const statusText = (text: string): string => sanitize(text).replace(/\s+/g, ' ').trim();
-
-/** What the conversation has in flight: calls awaiting their result, and subagents still at work, oldest first. */
-function inFlight(blocks: readonly DisplayBlock[]): string[] {
-  return blocks.flatMap((block): string[] => {
-    if (block.type === 'tool') return block.status === 'pending' ? [statusText(`${block.headline.name}(${block.headline.keyArg})`)] : [];
-    if (block.type !== 'subagent' || block.status !== 'running') return [];
-    return [statusText(`Agent(${block.brief})`), ...inFlight(block.children)];
-  });
-}
-
-/**
- * The status row during a planner turn, read off the conversation: it says
- * researching while a call is out, and names the newest one. A parallel round
- * opens several calls at once, so it counts the rest rather than flickering
- * between filenames and leaving whichever landed last.
- */
-function turnActivity(state: TuiState): TuiState {
-  if (!plannerInFlight(state)) return state;
-  const open = inFlight(state.conversation.blocks);
-  const status = open.length > 0 ? 'researching' : 'planning';
-  const newest = open.at(-1) ?? '';
-  const busyLabel = open.length > 1 ? `${newest} (+${open.length - 1} more)` : newest;
-  return status === state.status && busyLabel === state.busyLabel ? state : { ...state, status, busyLabel };
-}
-
-/**
  * One planner message into the TUI. The conversation view takes all of it; an
  * approval request also queues its modal, since the planner waits on the answer.
  */
 export function followSession(state: TuiState, message: SessionMessage): TuiState {
-  const heard = turnActivity(hear(state, message));
+  const heard = hear(state, message);
   if (message.type === 'approval_request') {
     const { id, kind, subject, scope, detail } = message;
     // A task runner's request is answered in its task view, never in the planner's modal.
