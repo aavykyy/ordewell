@@ -41,7 +41,11 @@ export interface TaskOutputSummary {
 }
 
 export type TaskType = 'ai' | 'user';
-export type TaskStatus = 'pending' | 'approved' | 'in_progress' | 'completed' | 'failed' | 'blocked' | 'awaiting_user';
+/**
+ * `skipped` is terminal and verdict-less: the task will not be waited for, and
+ * nothing it did lands. Its dependents go ahead without it.
+ */
+export type TaskStatus = 'pending' | 'approved' | 'in_progress' | 'completed' | 'failed' | 'blocked' | 'awaiting_user' | 'skipped';
 export type TaskMode = string;
 
 /**
@@ -141,6 +145,8 @@ export interface Task {
    * waits for a manual retry. Set only with `awaitingReason` `usage-limit`.
    */
   resumeAt?: string;
+  /** Why the task was skipped, as whoever skipped it put it; set only while `status` is `skipped`, and not always then. */
+  skipReason?: string;
   /**
    * An ops task (ADR-0020): it changes no repository files, runs at the
    * workspace root rather than in a worktree, and waits for the change tasks

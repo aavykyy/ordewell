@@ -1033,7 +1033,7 @@ export class TaskOrchestrator {
     this.emit('onTaskChanged');
     if (!this.running) {
       if (this.attempts.size === 0) {
-        if (this.store.isAllComplete()) this.planStatus = 'completed';
+        if (this.store.isFinished()) this.planStatus = 'completed';
         this.emit('onTick');
         if (this.settled) await this.closeRun();
         this.emit('onExecutionComplete');
@@ -1286,6 +1286,30 @@ export class TaskOrchestrator {
     this.notifications.info(`Task "${task.title}" marked not done.`);
     this.emit('onTaskChanged');
     await this.tick();
+  }
+
+  /**
+   * Skip: end a task as `skipped`, with no verdict and nothing of its work
+   * landed. Its worktree is kept, as a failed attempt's is, so the user can
+   * still look at it or Mark complete it later. Its dependents go ahead
+   * without it, and a run that ended on a failure continues for them, as a
+   * retry would continue it. A running task is stopped before it is skipped.
+   */
+  async skipTask(taskId: string, reason?: string, origin: RunOrigin = 'user'): Promise<void> {
+    const task = this.store.get(taskId);
+    if (!task || task.status === 'completed' || task.status === 'skipped' || this.completing.has(taskId)) return;
+    if (task.status === 'in_progress') throw new TaskControlError(`Task "${task.title}" is running: stop it before skipping it.`);
+    const resumes = this.awaitsResume;
+    this.cancelScheduledResume(taskId);
+    const ended = this.endAttempt(taskId, 'skip');
+    this.verifier.clear(task);
+    this.store.markSkipped(taskId, reason?.trim() || undefined);
+    this.onHold.delete(taskId);
+    this.notifications.info(`Task "${task.title}" skipped: none of its work lands, and the tasks that depend on it go ahead without it.`);
+    this.emit('onTaskChanged');
+    await this.runs.release(taskId, { keep: true }, ended?.integration);
+    if (resumes) await this.start(origin);
+    else await this.tick();
   }
 
   private logAndArchive(task: Task, verdict: Verdict): void {
@@ -1601,7 +1625,7 @@ export class TaskOrchestrator {
     console.log(`[TaskOrchestrator] tick(): ${ready.length} ready, ${this.attempts.size} active, held=${this.startHolds}`);
 
     if (ready.length === 0 && this.attempts.size === 0) {
-      const remaining = this.store.allTasks.filter(t => t.status !== 'completed');
+      const remaining = this.store.allTasks.filter(t => t.status !== 'completed' && t.status !== 'skipped');
       console.log(`[TaskOrchestrator] tick(): no work. remaining=${remaining.length}, completed=${this.store.isAllComplete()}`);
       const remainingById = new Map(remaining.map((t) => [t.id, t]));
       for (const { task, label } of flattenTasksWithParents(this.store.planTasks)) {
@@ -1609,11 +1633,11 @@ export class TaskOrchestrator {
         console.log(`  - ${label}. ${task.title} [${task.type}/${task.status}] prompt=${!!task.prompt}`);
       }
       const blocked = blockingFailures(this.store.planTasks);
-      if (this.store.isAllComplete()) {
+      if (remaining.length === 0) {
         // Genuinely done — stop the loop so a fresh Execute click can start it again.
         this.running = false;
         this.planStatus = 'completed';
-        this.notifications.info('All tasks completed!');
+        this.sayFinished();
         this.emit('onTaskChanged');
         this.emit('onTick');
         await this.closeRun();
@@ -1666,11 +1690,19 @@ export class TaskOrchestrator {
   }
 
   /** How a run that ended on failures ends: what it finished, what failed, and what that blocks. */
+  /** Skipped work is not completed work, so a run with any says so rather than that everything completed. */
+  private sayFinished(): void {
+    const skipped = this.store.allTasks.filter((t) => t.status === 'skipped').length;
+    if (skipped === 0) this.notifications.info('All tasks completed!');
+    else this.notifications.info(`Run finished: ${this.store.completedCount} completed, ${skipped} skipped.`);
+  }
+
   private sayEndedOnFailure(blocked: ReadonlyMap<string, string[]>): void {
     const tasks = this.store.allTasks;
     const failed = tasks.filter((t) => t.status === 'failed');
     const stuck = tasks.filter((t) => t.status === 'blocked' || blocked.has(t.id));
-    const counts = `${tasks.filter((t) => t.status === 'completed').length} completed, ${failed.length} failed, ${stuck.length} blocked`;
+    const skipped = tasks.filter((t) => t.status === 'skipped').length;
+    const counts = `${tasks.filter((t) => t.status === 'completed').length} completed, ${failed.length} failed, ${stuck.length} blocked${skipped > 0 ? `, ${skipped} skipped` : ''}`;
     const retry = stuck.length > 0 ? ' A blocked task starts once the failed task it waits on is retried and passes.' : '';
     this.tell('warn', `Run finished: ${counts}.${retry}`);
   }

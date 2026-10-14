@@ -93,7 +93,7 @@ model's behalf, which is precisely what a coding agent replaces.
   plan mode alone cannot supply the invariant.
   *Amended by [ADR-0029](0029-the-supervisor.md):* the planner's execution
   tools (`run_plan`, `run_task`, `stop_task`, `stop_run`, `retry_task`,
-  `message_task`, `answer_approval`, `merge_all`) are a further explicit
+  `message_task`, `answer_approval`, `merge_all`, `skip_task`) are a further explicit
   exception. They change what runs, through one core command seam that checks
   the supervisor level and the plan's approval; they edit no file and run
   nothing outside the envelope, so mutation still belongs to the runners.
@@ -280,3 +280,4 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-10-11 — execution tools through the command seam, a further exception to read-only planners ([ADR-0029](0029-the-supervisor.md)).
 - 2026-10-12 — the terminal UI's `/planner` saves each step on enter, with the later steps at their pre-selection, instead of applying nothing until the last step; esc closes and keeps what was saved. Users wanted to see a choice take effect and leave with esc. A harness is never saved without a model to go with it.
 - 2026-10-13 — a Codex planner on a host where no sandbox starts plans with its own shell off, through `run_command`, instead of being refused ([ADR-0033](0033-codex-planner-without-its-sandbox.md)).
+- 2026-10-14 — `skip_task` joins the execution tools ([ADR-0029](0029-the-supervisor.md)).

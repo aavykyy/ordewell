@@ -18,7 +18,9 @@ export type ExecutionCommand =
   /** `answer` is checked here rather than typed: an `allow` must reach the seam to be refused with its reason. */
   | { command: 'answer_approval'; task: string; approval?: string; answer: string; note?: string }
   /** Merge all: the run's landed work into the user's branch (ADR-0013). */
-  | { command: 'merge_all' };
+  | { command: 'merge_all' }
+  /** End a task as skipped: nothing it did lands, and its dependents go ahead without it. `reason` is required of anyone but the user. */
+  | { command: 'skip_task'; task: string; reason?: string };
 
 /**
  * What a call came to: `message` is written for the caller, a model included,
@@ -48,7 +50,7 @@ export type SupervisorPolicy = (level: SupervisorLevel, command: ExecutionComman
 export const SUPERVISOR_LEVELS: SupervisorPolicy = (level) => {
   switch (level) {
     case 'act': return { kind: 'allow' };
-    case 'watch': return { kind: 'refuse', reason: 'You are the supervisor at Watch: you read and suggest, and cannot run, stop, retry or message tasks, answer approvals or merge. Suggest it to the user instead; their reply is an ordinary message, and you can do it then.' };
+    case 'watch': return { kind: 'refuse', reason: 'You are the supervisor at Watch: you read and suggest, and cannot run, stop, retry, skip or message tasks, answer approvals or merge. Suggest it to the user instead; their reply is an ordinary message, and you can do it then.' };
     case 'off': return { kind: 'refuse', reason: 'The supervisor is off for this run, so it cannot act. Suggest it to the user instead.' };
   }
 };
@@ -110,6 +112,8 @@ export interface ExecutionHost {
   stopTask(taskId: string): Promise<void>;
   stopRun(): void;
   retryTask(taskId: string, actor: ExecutionActor): Promise<void>;
+  /** End the task as skipped, landing nothing of it; see {@link TaskOrchestrator.skipTask}. */
+  skipTask(taskId: string, reason: string | undefined, actor: ExecutionActor): Promise<void>;
   continueTask(taskId: string, message: string, actor: ExecutionActor): Promise<void>;
   messageTask(taskId: string, text: string): string;
   denyRequest(requestId: string, note?: string): boolean;
@@ -141,6 +145,8 @@ export interface ExecutionCommandsDeps {
 const STARTS: ReadonlySet<ExecutionCommandName> = new Set(['run_plan', 'run_task', 'retry_task']);
 
 const MERGE_IS_USERS = 'Merge all is the user\'s: they are in this conversation, and press Merge all themselves. Tell them the work is ready to merge.';
+
+const SKIP_IS_USERS = 'Skipping a task is the user\'s in their own turn: they are in this conversation, and skip it themselves. Suggest it, with why; only the supervisor at Act skips, in a wake-up turn.';
 
 const NEVER_ALLOWS = 'answer_approval never allows. A runner asks because its mode did not cover the request, and allowing it would widen the mode the plan gave the task. Deny it with a note saying what to do instead, or escalate it to the user.';
 
@@ -186,7 +192,9 @@ export class ExecutionCommands {
       const missing = `No task matches "${command.task}" in the current plan.`;
       // A task the turn's own edit adds is not in the plan until the reply ends, and nothing then starts it on the turn's behalf.
       return this.refuse(command, actor, undefined, actor.kind !== 'user' && this.host.heldEdit()
-        ? `${missing} If your edit adds it, it lands as this reply ends, so it cannot start in this turn: tell the user, who starts it.`
+        ? command.command === 'skip_task'
+          ? `${missing} If your edit adds it, a task you add in this reply cannot be skipped in it: leave it out of the edit instead.`
+          : `${missing} If your edit adds it, it lands as this reply ends, so it cannot start in this turn: tell the user, who starts it.`
         : `${missing} Name it by id, "#order" (a subtask "#order.sub") or exact title.`);
     }
 
@@ -259,6 +267,8 @@ export class ExecutionCommands {
       case 'autorun': return { kind: 'allow' };
       // A merge by proxy would add a route to the user's branch for nothing: they are present, and can press it (ADR-0029).
       case 'planner-turn': if (command === 'merge_all') return { kind: 'refuse', reason: MERGE_IS_USERS };
+        // Skip decides that work will not be waited for: the user decides that, or a supervisor they let act.
+        if (command === 'skip_task') return { kind: 'refuse', reason: SKIP_IS_USERS };
         return !STARTS.has(command) || this.host.autonomous() ? { kind: 'allow' } : { kind: 'ask' };
       case 'supervisor': return this.supervisor(actor.level, command);
     }
@@ -277,6 +287,7 @@ export class ExecutionCommands {
       case 'message_task': return this.prepareMessage(located!, command.text);
       case 'answer_approval': return this.prepareAnswer(located!, command);
       case 'merge_all': return this.prepareMergeAll();
+      case 'skip_task': return this.prepareSkip(located!, actor, command.reason);
     }
   }
 
@@ -286,7 +297,8 @@ export class ExecutionCommands {
     if (this.host.hasLiveWork()) {
       return { refusal: `The plan is already running (${named(live)} ${live.length === 1 ? 'is' : 'are'} running). Start one more ready task with run_task, or wait.` };
     }
-    const toRun = all.filter(({ task }) => task.type === 'ai' && task.status !== 'completed');
+    // A new run leaves a skipped task skipped, as it leaves a completed one done.
+    const toRun = all.filter(({ task }) => task.type === 'ai' && task.status !== 'completed' && task.status !== 'skipped');
     if (toRun.length === 0) return { refusal: 'Every task has already completed: there is nothing left to run.' };
     // Autorun is the user's standing instruction: its run is the user's approval, as Execute plan is.
     if (actor.kind !== 'user' && actor.kind !== 'autorun') {
@@ -325,7 +337,9 @@ export class ExecutionCommands {
     if (task.status === 'completed') {
       return { refusal: `${capitalize(label)} has already completed. Continue it with retry_task from "session" and a message, or ask the user to mark it not done.` };
     }
-    const settled = task.status === 'failed' || task.status === 'awaiting_user';
+    const skipped = this.skippedRefusal(located, actor);
+    if (skipped) return { refusal: skipped };
+    const settled = task.status === 'failed' || task.status === 'awaiting_user' || task.status === 'skipped';
     if (how === 'run' && settled) {
       const next = task.status === 'awaiting_user' && task.awaitingReason === 'input'
         ? 'Answer it with message_task, or start a new attempt with retry_task.'
@@ -376,6 +390,8 @@ export class ExecutionCommands {
     if (this.host.running(task.id) || task.status === 'in_progress') {
       return { refusal: `${capitalize(label)} is running: stop it first with stop_task, or steer it with message_task.` };
     }
+    const skipped = this.skippedRefusal(located, actor);
+    if (skipped) return { refusal: skipped };
     const eligible = continuability(task);
     if (!eligible.ok) return { refusal: `${eligible.reason} A fresh retry (from "fresh") starts it over from its prompt.` };
     if (!message?.trim()) return { refusal: `Continuing ${label} in its saved session needs a message: what the runner should do next.` };
@@ -464,6 +480,42 @@ export class ExecutionCommands {
     };
   }
 
+  /**
+   * A skip is a decision not to wait for the task. Running it again undoes
+   * that decision, so the supervisor leaves it to the user rather than going
+   * round between the two.
+   */
+  private skippedRefusal(located: Located, actor: ExecutionActor): string | null {
+    if (located.task.status !== 'skipped' || actor.kind !== 'supervisor') return null;
+    return `${capitalize(describe(located))} was skipped: whether it runs again is the user's to decide. Tell them if it should.`;
+  }
+
+  /**
+   * A skip ends a task without a verdict and lands nothing, so it never
+   * vouches for work. Anyone but the user names why, and the supervisor only
+   * gives up on a task that already needs someone: failed, blocked, or
+   * waiting for input.
+   */
+  private prepareSkip(located: Located, actor: ExecutionActor, reason: string | undefined): Prepared {
+    const { task } = located;
+    const label = describe(located);
+    const why = reason?.trim() || undefined;
+    if (task.status === 'in_progress') return { refusal: `${capitalize(label)} is running: stop it first with stop_task, or let it finish.` };
+    if (task.status === 'completed') return { refusal: `${capitalize(label)} has completed: its work landed, so there is nothing to skip.` };
+    if (task.status === 'skipped') return { refusal: `${capitalize(label)} is already skipped.` };
+    if (actor.kind !== 'user') {
+      if (!why) return { refusal: `Skipping ${label} needs a reason: it is shown to the user and told to the tasks that depend on it.` };
+      const waits = task.status === 'failed' || task.status === 'blocked' || task.status === 'awaiting_user' || this.host.blockedBy(task.id).length > 0;
+      if (!waits) return { refusal: `${capitalize(label)} has not started and nothing blocks it: the supervisor skips only a task that failed, is blocked or is waiting for input.` };
+    }
+    return {
+      act: async () => {
+        await this.host.skipTask(task.id, why, actor);
+        return { message: `Skipped ${label}: none of its work lands, and the tasks that depend on it go ahead without it, told why.` };
+      },
+    };
+  }
+
   /** Why a start is not the user's to have made, or null: the user's own call is its own approval. */
   private unapproved(located: Located, actor: ExecutionActor): string | null {
     if (actor.kind === 'user' || actor.kind === 'autorun' || this.addedMayStart(actor) || this.host.taskApproved(located.task.id)) return null;
@@ -500,6 +552,7 @@ export class ExecutionCommands {
       case 'message_task': return `message ${label}`;
       case 'answer_approval': return `answer ${label}'s request`;
       case 'merge_all': return 'merge all';
+      case 'skip_task': return `skip ${label}`;
     }
   }
 
@@ -568,6 +621,7 @@ const STATUS_WORDS: Record<TaskStatus, string> = {
   failed: 'failed',
   blocked: 'is blocked',
   awaiting_user: 'is waiting for the user',
+  skipped: 'was skipped',
 };
 
 function statusWords(task: Readonly<Task>): string {
@@ -586,6 +640,7 @@ function doneDetail(command: ExecutionCommand): string | undefined {
   if (command.command === 'message_task') return command.text;
   if (command.command === 'retry_task' && command.from === 'session') return command.message;
   if (command.command === 'answer_approval') return command.note?.trim() || undefined;
+  if (command.command === 'skip_task') return command.reason?.trim() || undefined;
   return undefined;
 }
 
@@ -613,6 +668,7 @@ function describeExecution(record: ExecutionRecord, command?: ExecutionCommand):
       message_task: `message ${label}`,
       answer_approval: `answer a request of ${label}`,
       merge_all: 'merge all',
+      skip_task: `skip ${label}`,
     }[record.command];
     return record.outcome === 'declined'
       ? `${who} asked to ${asked}; you declined.`
@@ -639,6 +695,7 @@ function doneWords(record: ExecutionRecord, label: string, continued: boolean, e
       ? { action: `left a request of ${label} for you to answer`, tail: '.' }
       : { action: `denied a request of ${label}`, tail: record.detail ? ` with the note "${record.detail}".` : '.' };
     case 'merge_all': return { action: 'merged the run\'s work into your branch', tail: '.' };
+    case 'skip_task': return { action: `skipped ${label}`, tail: quoted };
   }
 }
 

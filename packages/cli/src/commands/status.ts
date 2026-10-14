@@ -2,7 +2,7 @@ import { taskUsageText } from '../tui/blocks';
 import { writeFileSync } from 'fs';
 import { flag, hasFlag, readLastSession } from '../utils';
 import { iconFor } from '../utils/output';
-import { blockedByLabel, blockingFailures, flattenTasks, taskOrderLabel, taskRowView, planUsage } from '@ordewell/core';
+import { blockedByLabel, blockingFailures, skippedLabel, flattenTasks, taskOrderLabel, taskRowView, planUsage } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, type SessionMeta } from '../apiClient';
@@ -75,7 +75,7 @@ function printOneSession(
   console.log(`Goal:     ${meta.goal}`);
   console.log(`Runner:   ${(meta.runners || []).join(', ')}  |  Status: ${meta.status}`);
   console.log(`Phase:    ${plan?.phase || 'unknown'}  |  Created: ${meta.createdAt}`);
-  console.log(`Tasks:    ${everyTask.length} total  |  ${count('completed')} done  |  ${count('failed')} failed  |  ${count('in_progress')} running  |  ${count('blocked')} blocked\n`);
+  console.log(`Tasks:    ${everyTask.length} total  |  ${count('completed')} done  |  ${count('failed')} failed  |  ${count('in_progress')} running  |  ${count('blocked')} blocked  |  ${count('skipped')} skipped\n`);
 
   const usage = planUsage(allTasks);
   if (usage.attempts) console.log(`Tasks total: ${taskUsageText(usage)}`);
@@ -86,6 +86,7 @@ function printOneSession(
     console.log(`  ${taskOrderLabel(t).padStart(2)}. ${icon} [${shortId}] ${t.title}${model}`);
     const row = taskRowView({ ...t, dependencies: t.dependencies ?? [] }, { tasks: allTasks });
     if (row.blockedBy) console.log(`      ${blockedByLabel(row.blockedBy)}`);
+    if (row.status === 'skipped') console.log(`      ${skippedLabel(row.skipReason)}`);
     if (row.usage) console.log(`      ${taskUsageText(row.usage)}`);
     for (const sub of t.subtasks || []) {
       const subIcon = iconFor(blocked.has(sub.id) ? 'blocked' : sub.status);
@@ -94,6 +95,7 @@ function printOneSession(
       console.log(`    ${taskOrderLabel(sub, t)}. ${subIcon} [${subShortId}] ${sub.title}${subModel}`);
       const subRow = taskRowView({ ...sub, dependencies: sub.dependencies ?? [] }, { parent: t, tasks: allTasks });
       if (subRow.blockedBy) console.log(`        ${blockedByLabel(subRow.blockedBy)}`);
+      if (subRow.status === 'skipped') console.log(`        ${skippedLabel(subRow.skipReason)}`);
       if (subRow.usage) console.log(`        ${taskUsageText(subRow.usage)}`);
     }
   }

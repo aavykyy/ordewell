@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   taskRowView, taskStatusKind, isTaskRunning, awaitingLabel, approvalLabel, resumeLabel, resumeTime, taskRowActions, markAction, markRequestFor, opsEditable,
-  titledRefs, dependentsNotice, pastGateConfirmation, newTaskFields, blockedByLabel, type TaskRowSubject, type TaskRowAction,
+  titledRefs, dependentsNotice, pastGateConfirmation, newTaskFields, blockedByLabel, skippedLabel, type TaskRowSubject, type TaskRowAction,
 } from '..';
 import { taskRef, titledTaskRef } from '../../services/TaskRefs';
 
-const STATUSES = ['pending', 'approved', 'blocked', 'in_progress', 'awaiting_user', 'completed', 'failed'] as const;
+const STATUSES = ['pending', 'approved', 'blocked', 'in_progress', 'awaiting_user', 'completed', 'failed', 'skipped'] as const;
 
 const subject = (over: Partial<TaskRowSubject> = {}): TaskRowSubject => ({
   id: 't2', order: 2, type: 'ai', status: 'pending', dependencies: [], ...over,
@@ -25,6 +25,7 @@ describe('status kind', () => {
     ['completed', null, 'done', false],
     ['completed', '2026-01-01T00:00:00Z', 'done', false],
     ['failed', null, 'failed', false],
+    ['skipped', null, 'skipped', false],
     ['something-new', null, 'todo', false],
   ])('%s, silent since %s, is %s', (status, idleSince, kind, running) => {
     expect(taskStatusKind({ status, idleSince })).toBe(kind);
@@ -84,9 +85,9 @@ describe('a task paused on a usage limit', () => {
 
   it('offers to cancel the resume only while one is scheduled', () => {
     const resumeAt = new Date(2026, 9, 11, 20, 10).toISOString();
-    expect(taskRowActions({ ...paused, resumeAt })).toEqual(['cancel-resume', 'complete']);
+    expect(taskRowActions({ ...paused, resumeAt })).toEqual(['cancel-resume', 'skip', 'complete']);
     expect(taskRowActions({ ...paused, resumeAt }, 'subtask')).toEqual(['cancel-resume', 'complete']);
-    expect(taskRowActions(paused)).toEqual(['complete']);
+    expect(taskRowActions(paused)).toEqual(['skip', 'complete']);
     expect(taskRowView(subject({ ...paused, resumeAt }), { now }).resumes).toBe('Resumes at 8:10pm');
     expect(taskRowView(subject(paused), { now }).resumes).toBeNull();
   });
@@ -105,16 +106,18 @@ describe('actions per status', () => {
     ['approved', 'ai', ['force-start'], ['force-start', 'skip']],
     ['blocked', 'ai', ['skip', 'force-start'], []],
     ['in_progress', 'ai', ['cancel'], ['cancel', 'complete']],
-    ['awaiting_user', 'ai', ['complete'], ['complete']],
+    ['awaiting_user', 'ai', ['skip', 'complete'], ['complete']],
     ['completed', 'ai', ['uncomplete'], ['uncomplete']],
-    ['failed', 'ai', [], []],
+    ['failed', 'ai', ['skip'], ['skip']],
+    ['skipped', 'ai', ['complete'], ['complete']],
     ['pending', 'user', ['complete'], ['skip']],
     ['approved', 'user', ['complete'], ['skip']],
     ['blocked', 'user', ['skip', 'complete'], []],
     ['in_progress', 'user', ['cancel', 'complete'], ['cancel']],
-    ['awaiting_user', 'user', ['complete'], ['complete']],
+    ['awaiting_user', 'user', ['skip', 'complete'], ['complete']],
     ['completed', 'user', ['complete', 'uncomplete'], ['uncomplete']],
-    ['failed', 'user', ['complete'], []],
+    ['failed', 'user', ['skip', 'complete'], ['skip']],
+    ['skipped', 'user', ['complete'], ['complete']],
   ];
 
   it.each(table)('a %s %s task offers %j, as a subtask %j', (status, type, asTask, asSubtask) => {
@@ -135,7 +138,7 @@ describe('actions per status', () => {
 
   it.each([
     ['complete', 'complete'],
-    ['skip', 'complete'],
+    ['skip', null],
     ['uncomplete', 'uncomplete'],
     ['cancel', null],
     ['force-start', null],
@@ -263,6 +266,28 @@ describe('the row view, every status against every annotation', () => {
     expect(taskRowView(subject({ id: 't4', order: 4 }), { tasks: tree })).toMatchObject({ status: 'todo', blockedBy: null });
     expect(taskRowView(subject({ id: 't3', order: 3, dependencies: ['t2'] }))).toMatchObject({ status: 'todo', blockedBy: null });
     expect(blockedByLabel(['#1', '#2.1'])).toBe('Blocked by #1, #2.1');
+  });
+
+  it('offers Skip on a task a failure blocks, though its own status is not blocked', () => {
+    const tree = [
+      { id: 't1', order: 1, title: 'Setup', status: 'failed', dependencies: [] },
+      { id: 't2', order: 2, title: 'Build', status: 'pending', dependencies: ['t1'] },
+    ];
+
+    expect(taskRowView(subject({ id: 't2', order: 2, dependencies: ['t1'] }), { tasks: tree }).actions).toEqual(['skip', 'force-start']);
+  });
+
+  it('shows a skipped task as skipped, with its reason, and releases what depends on it', () => {
+    const tree = [
+      { id: 't1', order: 1, title: 'Setup', status: 'skipped', dependencies: [] },
+      { id: 't2', order: 2, title: 'Build', status: 'pending', dependencies: ['t1'] },
+    ];
+
+    expect(taskRowView(subject({ id: 't1', order: 1, status: 'skipped', skipReason: 'no GPU here' }), { tasks: tree })).toMatchObject({ status: 'skipped', skipReason: 'no GPU here', running: false });
+    expect(taskRowView(subject({ id: 't1', order: 1, status: 'skipped' })).skipReason).toBeNull();
+    expect(skippedLabel('no GPU here')).toBe('Skipped: no GPU here');
+    expect(skippedLabel(null)).toBe('Skipped');
+    expect(taskRowView(subject({ id: 't2', order: 2, dependencies: ['t1'] }), { tasks: tree })).toMatchObject({ status: 'todo', blockedBy: null });
   });
 
   it('marks a quiet task as still running', () => {

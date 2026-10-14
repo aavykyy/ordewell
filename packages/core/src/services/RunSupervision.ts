@@ -156,8 +156,8 @@ export class RunSupervision {
 
   /** The run finished; a handoff deferred to the supervisor is resent once its wake-up turn on it is over. */
   runFinished(): void {
-    const { total, completed, failed, blocked } = executionSummary(flattenTasks([...this.host.tasks()]));
-    this.supervisor.observe({ kind: 'run_finished', detail: `${completed} of ${total} tasks completed${failed > 0 ? `, ${failed} failed` : ''}${blocked > 0 ? `, ${blocked} blocked` : ''}` });
+    const { total, completed, failed, blocked, skipped } = executionSummary(flattenTasks([...this.host.tasks()]));
+    this.supervisor.observe({ kind: 'run_finished', detail: `${completed} of ${total} tasks completed${failed > 0 ? `, ${failed} failed` : ''}${blocked > 0 ? `, ${blocked} blocked` : ''}${skipped > 0 ? `, ${skipped} skipped` : ''}` });
     if (!this.supervisor.awaitsRunEnd) this.handOver();
   }
 

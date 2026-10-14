@@ -13,6 +13,7 @@ function deps(gate: string[]) {
     forceStartTask: vi.fn().mockResolvedValue(undefined),
     markTaskComplete: vi.fn().mockResolvedValue(undefined),
     markTaskIncomplete: vi.fn().mockResolvedValue(undefined),
+    execute: vi.fn().mockResolvedValue({ ok: true, message: 'Skipped.' }),
   };
   const d = {
     session,
@@ -35,8 +36,14 @@ describe('host task texts, pinned before they move to core', () => {
     );
   });
 
+  it('skip reaches the command seam as the user, and never marks the task complete', async () => {
+    const { d, session } = deps([]);
+    await handleSystemCommand('skip', 'fix', d);
+    expect(session.execute).toHaveBeenCalledWith({ command: 'skip_task', task: 'fix' }, { kind: 'user' });
+    expect(session.markTaskComplete).not.toHaveBeenCalled();
+  });
+
   it.each([
-    ['skip', 'markTaskComplete'],
     ['markComplete', 'markTaskComplete'],
     ['markIncomplete', 'markTaskIncomplete'],
   ] as const)('%s calls %s', async (command, method) => {

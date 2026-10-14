@@ -80,6 +80,7 @@ function runTaskToView(t: RunTask): TaskView {
     isolation: t.isolation as TaskView['isolation'],
     awaitingReason: t.status === 'awaiting_user' && isAwaitingReason(t.awaitingReason) ? t.awaitingReason : undefined,
     ...(t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit' && typeof t.resumeAt === 'string' ? { resumeAt: t.resumeAt } : {}),
+    ...(t.status === 'skipped' && typeof t.skipReason === 'string' ? { skipReason: sanitize(t.skipReason) } : {}),
     checkpoint: typeof t.checkpoint === 'string' ? sanitize(t.checkpoint) : undefined,
     continuable: t.continuable === true,
     awaitingApproval: t.awaitingApproval,

@@ -118,6 +118,17 @@ describe('a plan row, pinned before its rules move to core', () => {
     expect(out.match(/⊘ blocked by #1 — runs once it is retried and passes/g)).toHaveLength(2);
   });
 
+  it('draws a skipped task apart from a done one, with why, and lets what depends on it go ahead', () => {
+    const out = frame([
+      task({ status: 'skipped', skipReason: 'the host has no GPU' }),
+      task({ id: 't2', order: 2, title: 'Wire the parser', dependencies: ['t1'] }),
+    ]);
+    expect(out).toContain('  »  1  AI Fix the parser');
+    expect(out).toContain('» skipped: the host has no GPU — nothing of it landed; m done lands its kept work');
+    expect(out).toContain('  ·  2  AI Wire the parser');
+    expect(out).not.toContain('blocked by');
+  });
+
   it('warns about an ops task that changed tracked files', () => {
     expect(frame([deploy({ status: 'awaiting_user', awaitingReason: 'files-changed' })]))
       .toContain('⚠ an ops task changed tracked files — check them, then m done or /retry');

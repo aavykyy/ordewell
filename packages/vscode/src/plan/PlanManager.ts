@@ -223,10 +223,11 @@ export async function executeUserCommand(session: Pick<Session, 'execute'>, comm
   if (!outcome.ok) throw new Error(outcome.message);
 }
 
+/** A new run leaves a skipped task skipped, as it leaves a completed one done: running it again is a retry. */
 function approvedTasks(tasks: Task[]): Task[] {
   return tasks.map((t) => ({
     ...t,
-    status: t.status === 'completed' ? t.status : 'approved',
+    status: t.status === 'completed' || t.status === 'skipped' ? t.status : 'approved',
     subtasks: approvedTasks(t.subtasks ?? []),
   }));
 }
@@ -445,7 +446,7 @@ export async function confirmPastGate(taskId: string, session: Pick<Session, 'me
 }
 
 /** The webview's names for the task row actions that end in a mark. */
-const ROW_ACTION: Record<string, TaskRowAction> = { skip: 'skip', markComplete: 'complete', markIncomplete: 'uncomplete' };
+const ROW_ACTION: Record<string, TaskRowAction> = { markComplete: 'complete', markIncomplete: 'uncomplete' };
 
 export async function handleSystemCommand(
   command: string,
@@ -463,7 +464,10 @@ export async function handleSystemCommand(
       case 'retry':
         await executeUserCommand(deps.session, { command: 'retry_task', task: taskId, from: 'fresh' });
         break;
+      // Skip lands nothing, so it is never a mark: only Mark complete vouches for work.
       case 'skip':
+        await executeUserCommand(deps.session, { command: 'skip_task', task: taskId });
+        break;
       case 'markComplete':
       case 'markIncomplete':
         await (markRequestFor(ROW_ACTION[command]) === 'uncomplete'

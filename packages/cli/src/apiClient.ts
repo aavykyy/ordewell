@@ -321,6 +321,11 @@ export class ApiClient {
     return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/complete`, 'Mark complete failed');
   }
 
+  /** Skip: end the task without landing its work, so what depends on it goes ahead; never a mark complete. */
+  skipTask(sessionId: string, taskId: string, reason?: string): Promise<OkResponse> {
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/skip`, 'Skip failed', reason ? { reason } : {});
+  }
+
   markTaskIncomplete(sessionId: string, taskId: string): Promise<OkResponse> {
     return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/uncomplete`, 'Mark not done failed');
   }

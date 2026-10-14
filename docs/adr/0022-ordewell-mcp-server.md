@@ -154,7 +154,8 @@ planner tools are recorded here as an explicit entry against both:
 - **Execution tools are a further explicit entry (P5).** *Added by
   [ADR-0029](0029-the-supervisor.md).* `run_plan`, `run_task`, `stop_task`,
   `stop_run`, `retry_task`, `message_task`, `answer_approval` (deny or
-  escalate, never allow) and `merge_all` change what runs, not files. They
+  escalate, never allow), `merge_all` and `skip_task` (lands nothing, never
+  marks work complete) change what runs, not files. They
   reach the scheduler only through one core command seam, which checks the
   supervisor level, who started the turn and the plan's approval; `task_diff`
   joins the reads. Absent a grant at the seam, the call is refused.
@@ -262,3 +263,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-11 — live planner turns implemented: `edit_plan` checks a mid-run edit at the call, with no queued outcome.
 - 2026-10-11 — wake-up turns implemented: their reads spend the plan's wake-up read budget, and `submit_plan` and `edit_plan` are refused in them at Watch.
 - 2026-10-13 — S3 by exact name: OpenCode's `ordewell_*` rule and the Claude Code and OpenCode prefix matches pre-approved a repository server named `ordewell_x`'s tools; checked against OpenCode 2.0.27's tool naming.
+- 2026-10-14 — `skip_task` joins the execution tools ([ADR-0029](0029-the-supervisor.md)).

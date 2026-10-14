@@ -17,6 +17,8 @@ export interface PriorOutput {
   reviewReason: string;
   report?: string;
   logTail: string;
+  /** Set for a dependency that was skipped: nothing of it landed. `reason` is the skipper's, when they gave one. */
+  skipped?: { reason?: string };
 }
 
 function capReport(report: string): string {
@@ -39,13 +41,16 @@ export function collectDirectDependencyOutputs(task: Task, allTasks: readonly Ta
   const deps = new Set(task.dependencies ?? []);
   const out: PriorOutput[] = [];
   for (const { task: dep, label } of flattenTasksWithParents(allTasks)) {
-    if (!deps.has(dep.id) || !dep.outputSummary) continue;
+    const skipped = dep.status === 'skipped' ? { ...(dep.skipReason ? { reason: dep.skipReason } : {}) } : undefined;
+    // A skip is said even of a task that never ran: the dependent starts without it.
+    if (!deps.has(dep.id) || (!dep.outputSummary && !skipped)) continue;
     out.push({
       label,
       title: dep.title,
-      reviewReason: dep.outputSummary.reviewReason,
-      report: dep.outputSummary.report,
-      logTail: dep.outputSummary.logTail,
+      reviewReason: dep.outputSummary?.reviewReason ?? '',
+      report: dep.outputSummary?.report,
+      logTail: dep.outputSummary?.logTail ?? '',
+      ...(skipped ? { skipped } : {}),
     });
   }
   return out;
@@ -76,9 +81,12 @@ export function renderPriorOutputs(outputs: PriorOutput[]): string {
   const blocks = outputs
     .sort((a, b) => compareLabels(a.label, b.label))
     .map((o) => {
+      const heading = `### Task ${o.label}: ${o.title}`;
+      const skip = o.skipped ? `- Skipped${o.skipped.reason ? `: ${o.skipped.reason.replace(/\.$/, '')}` : ' (no reason given)'}. None of its work landed, so it is not in your tree; do not count on it.` : '';
+      if (o.skipped && !o.reviewReason && !o.report && !o.logTail) return `${heading}\n${skip}`;
       const reason = o.reviewReason || '(no review note)';
       const output = o.report ? `- Report:\n${indent(dependencyReport(o.report))}` : `- Tail:\n${o.logTail ? indent(o.logTail) : '  (no output captured)'}`;
-      return `### Task ${o.label}: ${o.title}\n- Review: ${reason}\n${output}`;
+      return `${heading}\n${skip ? `${skip}\n` : ''}- Review: ${reason}\n${output}`;
     });
   return `## Prior task outputs\n\n${blocks.join('\n\n')}`;
 }
@@ -94,6 +102,7 @@ function planMapStatus(task: Task, isCurrent: boolean): string {
   if (isCurrent) return 'NOW';
   if (task.status === 'completed') return 'done';
   if (task.status === 'failed') return 'failed';
+  if (task.status === 'skipped') return 'skipped';
   if (task.status === 'blocked') return 'blocked';
   if (task.status === 'in_progress') return 'running';
   if (task.type === 'user') return 'user';

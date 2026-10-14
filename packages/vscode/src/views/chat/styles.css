@@ -2769,6 +2769,11 @@ body {
   background: var(--text-muted);
 }
 
+.task-status-dot.status-skipped {
+  background: transparent;
+  border: 1px solid var(--text-muted);
+}
+
 .task-status-dot.status-stalled {
   background: var(--purple);
 }
@@ -2804,6 +2809,13 @@ body {
 
 .task-status-badge.status-pending {
   background: rgba(139, 148, 158, 0.1);
+  color: var(--text-muted);
+}
+
+/* Muted and outlined, never green: nothing of a skipped task landed, so it must not read as done. */
+.task-status-badge.status-skipped {
+  background: transparent;
+  border: 1px dashed var(--text-muted);
   color: var(--text-muted);
 }
 
@@ -2860,6 +2872,11 @@ body {
    animated ring here would contradict the state it's signaling. */
 .task-check.stalled {
   border-color: var(--purple);
+}
+
+.task-check.skipped {
+  border-style: dashed;
+  border-color: var(--text-muted);
 }
 
 .task-check.clickable {

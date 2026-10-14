@@ -18,15 +18,18 @@ type Rule = readonly [TaskRowAction, (task: ActionSubject) => boolean];
 const UNSTARTED_AI = (t: ActionSubject): boolean => t.type === 'ai' && NOT_STARTED.has(t.status);
 const QUEUED = (t: ActionSubject): boolean => t.status === 'pending' || t.status === 'approved';
 const RESUMES = (t: ActionSubject): boolean => t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit' && !!t.resumeAt;
+/** Work that holds up what depends on it until someone acts: Skip lets the run go on without it. */
+const HOLDS_UP = (t: ActionSubject): boolean => t.status === 'failed' || t.status === 'blocked' || t.status === 'awaiting_user';
 
 // Order is the order a surface lays the actions out in.
 const TASK_RULES: readonly Rule[] = [
   ['cancel', (t) => t.status === 'in_progress'],
   ['cancel-resume', RESUMES],
-  ['skip', (t) => t.status === 'blocked'],
+  ['skip', HOLDS_UP],
   ['force-start', UNSTARTED_AI],
-  // A manual task has no runner to report it done, so it can always be marked.
-  ['complete', (t) => t.status === 'awaiting_user' || t.type === 'user'],
+  // A manual task has no runner to report it done, so it can always be marked;
+  // a skipped one's kept work can still be vouched for.
+  ['complete', (t) => t.status === 'awaiting_user' || t.status === 'skipped' || t.type === 'user'],
   ['uncomplete', (t) => t.status === 'completed'],
 ];
 
@@ -35,8 +38,8 @@ const SUBTASK_RULES: readonly Rule[] = [
   ['cancel-resume', RESUMES],
   ['complete', (t) => t.status === 'in_progress' && t.type === 'ai'],
   ['force-start', (t) => t.type === 'ai' && QUEUED(t)],
-  ['skip', QUEUED],
-  ['complete', (t) => t.status === 'awaiting_user'],
+  ['skip', (t) => QUEUED(t) || t.status === 'failed'],
+  ['complete', (t) => t.status === 'awaiting_user' || t.status === 'skipped'],
   ['uncomplete', (t) => t.status === 'completed'],
 ];
 
@@ -56,11 +59,11 @@ export function markAction(task: { status: string }): 'complete' | 'uncomplete' 
 
 /**
  * The mark an action asks the session for, or null when it is not a mark.
- * Skip has no request of its own: a skipped task is marked complete, so the
- * run moves on past it.
+ * Skip is not one: it ends the task without vouching for its work, which
+ * only Mark complete does.
  */
 export function markRequestFor(action: string): 'complete' | 'uncomplete' | null {
-  if (action === 'complete' || action === 'skip') return 'complete';
+  if (action === 'complete') return 'complete';
   if (action === 'uncomplete') return 'uncomplete';
   return null;
 }

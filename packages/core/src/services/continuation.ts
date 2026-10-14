@@ -5,7 +5,7 @@ export type Continuability = { ok: true; sessionId: string } | { ok: false; reas
 
 /**
  * The rule every surface offers Continue by and the orchestrator enforces: a
- * completed or failed task whose last attempt left a session id behind. A
+ * completed, failed or skipped task whose last attempt left a session id behind. A
  * conflict is resolved by its repair, not a new turn — Retry covers it.
  */
 export function continuability(task: Task): Continuability {
@@ -14,7 +14,7 @@ export function continuability(task: Task): Continuability {
   if (task.status === 'awaiting_user' && task.awaitingReason === 'conflict') {
     return refuse('its work is waiting on a merge conflict. Resolve or repair the conflict instead.');
   }
-  if (task.status !== 'completed' && task.status !== 'failed') return refuse('only a completed or failed task can be.');
+  if (task.status !== 'completed' && task.status !== 'failed' && task.status !== 'skipped') return refuse('only a completed, failed or skipped task can be.');
   if (!task.runnerSessionId) return refuse('its runner left no saved session to resume. Use Retry instead.');
   return { ok: true, sessionId: task.runnerSessionId };
 }

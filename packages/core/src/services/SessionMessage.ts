@@ -23,6 +23,8 @@ export type SerializedTaskStatus = {
   awaitingReason?: AwaitingReason;
   /** When a task paused on a usage limit resumes on its own (ISO time); absent when it waits for a manual retry. */
   resumeAt?: string;
+  /** Why a `skipped` task was skipped; absent when no reason was given, and on any other status. */
+  skipReason?: string;
   /** The whole question of the checkpoint the task waits at; absent when it waits at none. */
   checkpoint?: string;
   /** Messages waiting for a structured task's turn to end, oldest first; absent when there are none. */
@@ -78,6 +80,8 @@ export type SerializedTask = {
   /** As on {@link SerializedTaskStatus}: only while the task is `awaiting_user`. */
   awaitingReason?: AwaitingReason;
   resumeAt?: string;
+  /** As on {@link SerializedTaskStatus}: only while the task is `skipped`. */
+  skipReason?: string;
   /** Set only on an ops task (ADR-0020). */
   ops?: true;
   /** Task skills attached by name; absent when none. */
@@ -358,6 +362,7 @@ export function serializeTask(t: SurfaceTask): SerializedTask {
     userStoriesCovered: t.userStoriesCovered || undefined,
     ...(t.status === 'awaiting_user' && t.awaitingReason ? { awaitingReason: t.awaitingReason } : {}),
     ...(t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit' && t.resumeAt ? { resumeAt: t.resumeAt } : {}),
+    ...(t.status === 'skipped' && t.skipReason ? { skipReason: t.skipReason } : {}),
     ...(t.ops ? { ops: true as const } : {}),
     ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
     ...(t.skills?.length ? { skills: [...t.skills] } : {}),
@@ -386,6 +391,7 @@ export function serializeTaskStatus(
     ...(t.status === 'awaiting_user' && t.awaitingReason ? { awaitingReason: t.awaitingReason } : {}),
     ...(t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit' && t.resumeAt ? { resumeAt: t.resumeAt } : {}),
     ...(t.status === 'awaiting_user' && t.awaitingReason === 'checkpoint' && checkpoint ? { checkpoint } : {}),
+    ...(t.status === 'skipped' && t.skipReason ? { skipReason: t.skipReason } : {}),
     ...(queued.length > 0 ? { queued: queued.map((m) => ({ ...m })) } : {}),
     ...(canContinue(t) ? { continuable: true as const } : {}),
     ...(awaitingApproval > 0 ? { awaitingApproval } : {}),
@@ -438,12 +444,17 @@ export function serializePlan(plan: LegacyPlanState): SerializedPlan {
   };
 }
 
-/** What a finished run did, task by task: `blocked` are those a failure kept from starting (ADR-0034). */
+/**
+ * What a finished run did, task by task: `blocked` are those a failure kept
+ * from starting (ADR-0034); `skipped` ended without a verdict and landed
+ * nothing, so they are neither completed nor failed.
+ */
 export interface ExecutionSummary {
   total: number;
   completed: number;
   failed: number;
   blocked: number;
+  skipped: number;
 }
 
 export function executionSummary(tasks: readonly Task[]): ExecutionSummary {
@@ -453,6 +464,7 @@ export function executionSummary(tasks: readonly Task[]): ExecutionSummary {
     completed: tasks.filter((t) => t.status === 'completed').length,
     failed: tasks.filter((t) => t.status === 'failed').length,
     blocked: tasks.filter((t) => t.status === 'blocked' || blocked.has(t.id)).length,
+    skipped: tasks.filter((t) => t.status === 'skipped').length,
   };
 }
 

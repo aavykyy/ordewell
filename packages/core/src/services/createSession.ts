@@ -696,6 +696,7 @@ export class Session {
       stopTask: (taskId) => this.cancelTask(taskId),
       stopRun: () => this.stopExecution(),
       retryTask: (taskId, actor) => this.restartTask(taskId, runOrigin(actor)),
+      skipTask: (taskId, reason, actor) => this.withSave(() => this.orchestrator.skipTask(taskId, reason, runOrigin(actor))),
       continueTask: (taskId, message, actor) => this.resumeTask(taskId, message, runOrigin(actor)),
       messageTask: (taskId, text) => this.sendTaskMessage(taskId, text),
       denyRequest: (requestId, note) => this.resolveApproval(requestId, { decision: 'deny', ...(note ? { note } : {}) }),

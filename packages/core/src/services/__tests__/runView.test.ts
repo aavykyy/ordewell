@@ -104,7 +104,7 @@ describe('reduceRun', () => {
     { type: 'checkpoint', taskId: 't1', taskTitle: 'Task t1', summary: 'Keep the old API?' },
     { type: 'review_needed', tasks: [planned('t1', 1, { status: 'completed' })] },
     { type: 'review_approved' },
-    { type: 'execution_complete', summary: { total: 1, completed: 1, failed: 0, blocked: 0 } },
+    { type: 'execution_complete', summary: { total: 1, completed: 1, failed: 0, blocked: 0, skipped: 0 } },
     { type: 'execution_stopped' },
     { type: 'task_output', taskId: 't1', text: 'npm test' },
     { type: 'task_log', taskId: 't1', attempt: 1, events: [] },

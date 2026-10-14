@@ -29,7 +29,8 @@ export type ExecutionCommandName =
   | 'retry_task'
   | 'message_task'
   | 'answer_approval'
-  | 'merge_all';
+  | 'merge_all'
+  | 'skip_task';
 
 /**
  * One call at the command seam as the timeline keeps it: what was asked, by

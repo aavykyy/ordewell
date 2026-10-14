@@ -97,6 +97,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     stopTask: ({ task }) => execute({ command: 'stop_task', task: String(task) }),
     stopRun: () => execute({ command: 'stop_run' }),
     retryTask: ({ task, from, message }) => execute({ command: 'retry_task', task: String(task), from, ...(message !== undefined ? { message } : {}) }),
+    skipTask: ({ task, reason }) => execute({ command: 'skip_task', task: String(task), reason }),
     messageTask: ({ task, text }) => execute({ command: 'message_task', task: String(task), text }),
     answerApproval: ({ task, approval, answer: reply, note }) => execute({
       command: 'answer_approval', task: String(task), answer: reply,

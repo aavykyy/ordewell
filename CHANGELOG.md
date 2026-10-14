@@ -47,6 +47,15 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   log. Its notes are marked as the supervisor's in the chat. It decides what
   to do next, never whether a task passed
   ([ADR-0029](docs/adr/0029-the-supervisor.md)).
+- **The supervisor can skip a task at Act.** `skip_task` gives up waiting for
+  a task that failed, is blocked or is waiting for input, with a required
+  reason that the timeline shows and the dependents are told. Like your Skip,
+  it lands nothing; the supervisor can never mark work complete. At Watch it
+  is refused like the other execution tools, and a planner turn you started
+  cannot skip. A skip of a task the supervisor retried counts against its
+  retry limit, it cannot skip a task its own edit adds in the same reply, and
+  it never runs a skipped task again: that is yours to decide
+  ([ADR-0029](docs/adr/0029-the-supervisor.md)).
 - **Guards that keep Act from looping.** A task is retried at most twice by
   default (`/supervisor retries <n>`), an identical retry or re-adding a
   task it removed is refused, and more than six wake-ups in 30 minutes with no
@@ -120,6 +129,32 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **Skip no longer lands a task's work.** Skip used to mark the task complete,
+  landing whatever it had done as if you had vouched for it. A skipped task now
+  ends as **skipped**: no verdict, and nothing it produced lands. Its worktree
+  and branch are kept, as a failed task's are, so you can still look at it,
+  retry it or Mark complete it later. The tasks that depend on it go ahead
+  without it, and their prompt says it was skipped and why. Skipped is shown
+  apart from done and failed in the terminal UI, VS Code and `ordewell
+  status`, and counted on its own in a run's summary. Skip is offered on a
+  failed, blocked or waiting task; `ordewell skip <id> --reason "…"` takes an
+  optional reason. **Mark complete is unchanged**: it is how you vouch for work,
+  and it lands it.
+- **A failed task blocks only its dependents.** A failure used to halt the
+  whole run until it was retried. Now independent work keeps starting, the
+  failed task's dependents (and theirs) are shown "blocked by #N" on every
+  surface, and the run ends once nothing else can start, counting what
+  completed, failed and is blocked. Retrying the failed task, or skipping it,
+  continues that run, and what it blocked starts
+  ([ADR-0034](docs/adr/0034-a-failed-task-blocks-only-its-dependents.md)).
+- **Codex's read-only and Guarded modes are off where its sandbox cannot
+  start.** Ordewell checks Codex's sandbox once per daemon. On a host where it
+  cannot start (stock Ubuntu 23.10 and later, many containers), those modes are
+  listed as unavailable with the reason, never assigned by the planner or the
+  pickers, and a task already in one fails at start saying why; Ordewell never
+  swaps the mode for another. Full access is not sandboxed and stays available.
+  [docs/troubleshooting.md](docs/troubleshooting.md) explains the cause and how
+  to fix it ([ADR-0033](docs/adr/0033-codex-planner-without-its-sandbox.md)).
 - **A task's report is its full `task_complete` summary.** The summary is kept
   whole as the task's `report` (cut at 20,000 characters, saying so), and
   `task_query` and `task_output` return it ahead of any log tail. A dependent's
@@ -342,8 +377,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   run's end, are drawn without waiting for you to act.
 - **A coding-agent planner's reply stays beside the plan or edit it submits.**
   The message used to vanish the moment the turn settled, live and on reload.
-- **A supervised run finishes after an edited retry.** A planner edit made while
-  a failure halts the run is reconciled into it and keeps the failed task
+- **A supervised run finishes after an edited retry.** A planner edit made after
+  a failure ended the run is reconciled into it and keeps the failed task
   failed, so the retry resumes the run instead of running that task alone. A
   start deferred behind an edit that never lands is dropped, with a notice.
 - **A user message is no longer shown twice on replay**, and a view rebuilt
@@ -420,8 +455,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **A planner turn's starts do not outlive its plan.** When a plan is closed or
   replaced before the edit its start waited on landed, the starts it deferred
   are dropped with a notice; one already handed to the scheduler goes on.
-- **A failure's halt ends with the plan it failed in.** Loading a session after
-  a failure left the halt set, so the next retry would restart a run nobody
+- **A run that ended on a failure ends with the plan it failed in.** Loading a
+  session after a failure left the run waiting on a retry, so the next retry would restart a run nobody
   started and a usage-limit move would arm the scheduler.
 - **A stop cancels a repair for good.** A stop that arrived while a repair read
   its evidence used to let its merge go ahead anyway; the attempt is no longer

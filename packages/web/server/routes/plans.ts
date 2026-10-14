@@ -148,6 +148,18 @@ export function plansRoute(pool: OrchestratorPool) {
     });
   }
 
+  // Skip ends the task without landing its work (never a mark complete); the user's reason is optional.
+  router.post('/:sessionId/tasks/:taskId/skip', async (c) => {
+    try {
+      const body: unknown = await c.req.json().catch(() => ({}));
+      const reason = typeof body === 'object' && body !== null && 'reason' in body && typeof body.reason === 'string' ? body.reason : undefined;
+      await runUserCommand(pool.session(c.req.param('sessionId')), { command: 'skip_task', task: c.req.param('taskId'), ...(reason ? { reason } : {}) });
+      return c.json({ ok: true } satisfies OkResponse);
+    } catch (err) {
+      return failure(c, err, 'skip');
+    }
+  });
+
   router.post('/:sessionId/tasks/:taskId/force-start', async (c) => {
     try {
       await pool.session(c.req.param('sessionId')).forceStartTask(c.req.param('taskId'));

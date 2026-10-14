@@ -56,7 +56,7 @@ export const PLAN_KEYS = {
     // `m` toggles, so the hint names the direction it will go for this task.
     hint: (task) => (task && markAction(task) === 'uncomplete' ? 'm undone' : 'm done'),
   },
-  skip: { keys: 's', meaning: 'skip the task', group: 'Status', hint: 's skip' },
+  skip: { keys: 's', meaning: 'skip the task: none of its work lands, and what depends on it goes ahead', group: 'Status', hint: 's skip' },
   remove: { keys: 'd', meaning: 'remove the task', group: 'Status' },
   add: { keys: 'a', meaning: 'add a task', group: 'Status', hint: 'a add' },
 
@@ -98,8 +98,9 @@ function taskKeyIds(task: TaskView | undefined, runActive: boolean): PlanKeyId[]
     case 'running':
     case 'quiet':
       return runActive ? ['log', 'cancel', 'stop'] : ['log', 'cancel'];
-    case 'awaiting': return ['log', 'mark'];
-    case 'failed': return ['retry', 'log'];
+    case 'awaiting': return ['log', 'mark', 'skip'];
+    case 'failed': return ['retry', 'skip', 'log'];
+    case 'skipped':
     case 'done': return ['mark', 'log'];
     case 'blocked': return ['start', 'skip', 'runPlan'];
     default: return row.kind === 'user' ? ['mark', 'runPlan'] : ['start', 'runPlan', 'model', 'effort'];

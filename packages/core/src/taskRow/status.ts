@@ -6,7 +6,7 @@ import type { AwaitingReason } from '../models/Task';
  * nothing for a while — the status is still `in_progress`, so only the row,
  * never the store, tells the two apart.
  */
-export type TaskStatusKind = 'todo' | 'running' | 'quiet' | 'awaiting' | 'blocked' | 'failed' | 'done';
+export type TaskStatusKind = 'todo' | 'running' | 'quiet' | 'awaiting' | 'blocked' | 'failed' | 'skipped' | 'done';
 
 /** A task with a runner live behind it. `in_progress` is the store's own status. */
 export const isTaskRunning = (task: { status: string }): boolean =>
@@ -19,6 +19,7 @@ export function taskStatusKind(task: { status: string; idleSince?: string | null
   switch (task.status) {
     case 'completed': return 'done';
     case 'failed': return 'failed';
+    case 'skipped': return 'skipped';
     case 'blocked': return 'blocked';
     case 'awaiting_user': return 'awaiting';
   }
@@ -42,6 +43,11 @@ export function awaitingLabel(task: { status: string; awaitingReason?: AwaitingR
 /** "Blocked by #1, #2.1": the failed tasks a blocked task waits on, by reference (ADR-0034). */
 export function blockedByLabel(refs: readonly string[]): string {
   return `Blocked by ${refs.join(', ')}`;
+}
+
+/** "Skipped: no GPU on this host", or "Skipped" when no reason was given. */
+export function skippedLabel(reason: string | null): string {
+  return reason ? `Skipped: ${reason}` : 'Skipped';
 }
 
 /** Runner requests a task waits on (ADR-0018, A1); null when none do. */

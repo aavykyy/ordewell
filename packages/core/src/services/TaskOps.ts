@@ -711,7 +711,7 @@ export function applyTaskOps(
         const prep = prepareEdit(op, i, label, 'direct', true);
         if ('error' in prep) { errors.push(prep.error); break; }
         const { target, changes, check } = prep;
-        tasks = updateTaskInPlan(tasks, target.id, { ...changes, status: 'pending', verdict: undefined, outputSummary: undefined, awaitingReason: undefined, resumeAt: undefined });
+        tasks = updateTaskInPlan(tasks, target.id, { ...changes, status: 'pending', verdict: undefined, outputSummary: undefined, awaitingReason: undefined, resumeAt: undefined, skipReason: undefined });
         // Dependents parked at 'blocked' by this task's earlier failure have
         // nothing else to release them — the scheduler reads `status` directly,
         // not a live recomputation of the dependency graph.

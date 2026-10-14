@@ -93,10 +93,11 @@ export async function followExecution(
       console.log('\nPlan needs your sign-off — run `ordewell approve` to continue.');
     }
     if (event.type === 'execution_complete') {
-      const s = event as { summary?: { completed?: number; failed?: number; blocked?: number; total: number } };
+      const s = event as { summary?: { completed?: number; failed?: number; blocked?: number; skipped?: number; total: number } };
       const summary = s.summary || { total: 0 };
+      const skipped = summary.skipped ? `, ${summary.skipped} skipped` : '';
       console.log(
-        `\nDone. ${summary.completed || 0} completed, ${summary.failed || 0} failed, ${summary.blocked ?? (summary.total - (summary.completed || 0) - (summary.failed || 0))} blocked.`,
+        `\nDone. ${summary.completed || 0} completed, ${summary.failed || 0} failed, ${summary.blocked ?? (summary.total - (summary.completed || 0) - (summary.failed || 0))} blocked${skipped}.`,
       );
     }
     if (event.type === 'execution_stopped') {

@@ -290,8 +290,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
     vscode.commands.registerCommand('ordewell.skipTask', async (taskItem?: Task) => {
       const taskId = taskItem?.id;
       if (!taskId) return;
-      await deps.session.markTaskComplete(taskId);
-      deps.persistState();
+      await userCommand({ command: 'skip_task', task: taskId });
     }),
   );
   context.subscriptions.push(

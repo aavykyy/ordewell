@@ -872,8 +872,8 @@ itself blocked (ADR-0034). The scheduler never starts it, its own dependents are
 blocked with it, and every surface shows it "blocked by #N", naming the failed
 tasks it waits on. Independent work keeps starting: a failure stops only what
 depends on it. Nothing is stored — the rule reads statuses and dependencies —
-so a retry of the failed task that passes unblocks its dependents, which then
-start. A run with nothing running and only failed and blocked tasks left ends,
+so a retry of the failed task that passes, or a *Skip* of it, unblocks its
+dependents, which then start. A run with nothing running and only failed and blocked tasks left ends,
 counting completed, failed and blocked; a retry of a task in it continues that
 run (`TaskOrchestrator.awaitsResume`), and a planner edit made meanwhile is
 reconciled into it rather than reloaded over it, leaving the failed task failed:
@@ -882,7 +882,24 @@ is never blocked. A usage-limit pause holds the whole run until its reset, and a
 merge gate keeps it waiting; neither is a block.
 *Avoid:* "halted run" — a failure no longer halts the run; "waiting" for it — a
 task waiting on its dependencies starts on its own once they complete, a blocked
-one only after a retry.
+one only after a retry or a skip.
+
+**Skipped task** (`status: 'skipped'`, `TaskOrchestrator.skipTask`, the
+`skip_task` command) — a task ended by *Skip*: a terminal state with no
+Verdict, in which nothing the task produced lands. Its worktree and branch are
+kept, as a failed task's are, so it can still be looked at, retried or marked
+complete. Its dependents are released — a skipped dependency is met for the
+blocked rule and the scheduler — and each is told in its prompt that the
+dependency was skipped, with the reason (`skipReason`), and that its work is
+not in their tree. Every surface shows it apart from done and failed (the task
+row view's `skipped` status kind), and run summaries count it on its own. A
+new run leaves it skipped, as it leaves a completed task done; a retry or Mark
+complete takes it out of the state. The user may skip any task that is not
+running or completed, a reason optional; the supervisor only at Act, with a
+reason, and only a task that failed, is blocked or is waiting for input — and
+it never runs a skipped task again (ADR-0029).
+*Avoid:* "completed" or "done" for it — nothing of it landed; "cancelled" —
+a cancel returns a task to pending.
 
 **Attempt usage** (`AttemptUsage`, `Task.attemptUsage`) — the persisted ledger
 of one task attempt: its number, runner, start and end timestamps, wall time,
@@ -1622,6 +1639,23 @@ cannot take one. It is a request, not a task field: the task stores the mode.
 *Avoid:* "plan mode task" (`plan` is one runner's mode id, not the concept),
 "analysis task".
 
+**Unavailable mode** (`RunnerModeInfo.unavailable`,
+`RunnerRegistry.setUnavailableModes`, `unavailableModeReason`) — a mode a
+runner's manifest declares but this host cannot run, carrying the reason. It
+is listed, with the reason, but never assigned: the planner is not offered it,
+a plan or an edit that puts a task in it is refused, and a task already in one
+fails at start saying why. Nothing swaps it for another mode (ADR-0001). Today
+only Codex's sandboxed modes become unavailable, on a failed *Sandbox probe*.
+*Avoid:* "disabled mode" — the user did not turn it off; "hidden" — it is
+shown.
+
+**Sandbox probe** (`probeCodexSandbox`, `CodexSandboxAvailability`) — the
+once-per-daemon `codex sandbox` check that decides whether Codex's sandbox can
+start on this host. Only its `unavailable` decision makes Codex's read-only and
+Guarded modes *Unavailable modes*, and a Codex planner plan with its own shell
+off (ADR-0033); `docs/troubleshooting.md` says how to fix the host.
+*Avoid:* "capability check".
+
 ---
 
 ## Verification
@@ -1642,9 +1676,10 @@ from `cancelTask` (which returns a task to `pending` and places it on hold) and
 from automatic completion (which is produced by the VerdictEngine when the
 runner makes a **Completion call**).
 A clean runner exit without a completion call is a failed verdict, never implicit
-completion.
-*Avoid:* "skip" for this concept in backend code — the VS Code `skip`
-affordance is implemented as Mark complete.
+completion. It is the user's vouch for the work, and the only way to land work
+no passing verdict landed: the supervisor cannot Mark complete. Works on a
+*Skipped task* too, landing its kept work.
+*Avoid:* "skip" for this concept — Skip lands nothing (see *Skipped task*).
 
 **Mark not done** — the inverse user action, and the only way back out of a
 completion: `markTaskIncomplete` returns a `completed` task to `pending`, drops
@@ -1657,8 +1692,9 @@ reached `completed` returns to `approved`. It is a no-op on any task that is not
 completed. Both directions are one affordance per surface, never two: the VS
 Code task-check ring toggles, and the TUI's `m` picks its direction from the
 selected task's status (footer hint follows: `m done` / `m undone`).
-*Avoid:* "un-skip", "reopen" — and do not model it as `retryTask`, which counts
-a retry attempt and releases the hold.
+*Avoid:* "un-skip" — a skipped task is not completed, so this does not apply to
+it; "reopen" — and do not model it as `retryTask`, which counts a retry attempt
+and releases the hold.
 
 **VerdictEngine** — the deep module owning the verification state machine:
 **Completion calls** from token-bound handlers, `checkpoint` tool calls and
@@ -1867,9 +1903,10 @@ note in the transcript; `runSettings.unsupervised` says why).
 Watch by default, set with `/supervisor` (ADR-0029, ADR-0030). Off: the planner
 speaks only when the user writes. Watch: wake-up turns read and suggest;
 execution tools and plan edits are refused, with a note telling it to suggest
-the action to the user. Act: wake-up turns may also run, stop and retry tasks,
-message runners, deny approvals, edit the plan task by task (a whole new plan
-is refused) and merge (`merge_all`), without asking, inside the **Loop
+the action to the user. Act: wake-up turns may also run, stop, retry and skip
+tasks (`skip_task`, with a reason; never Mark complete), message runners, deny
+approvals, edit the plan task by task (a whole new plan is refused) and merge
+(`merge_all`), without asking, inside the **Loop
 guards**; a task it adds is approved to run, ops tasks included
 (`addedBy: 'supervisor'`, shown on the task). A run holds its own copy,
 `runSettings.supervisorLevel`, which the Command seam reads at each call. A
@@ -1987,7 +2024,7 @@ paused.
 **Command seam** (`ExecutionCommands`, `Session.execute`) — the one core entry
 point every execution action reaches the scheduler through: `run_plan`,
 `run_task`, `stop_task`, `stop_run`, `retry_task`, `message_task`,
-`answer_approval`, `merge_all` (ADR-0029, #91).
+`answer_approval`, `merge_all`, `skip_task` (ADR-0029, #91).
 It checks who asked (user, planner turn, supervisor), the Supervisor level,
 plan approval and the loop guards, refuses with an actionable note, and records
 each action in the timeline with who asked. No planner tool reaches into
@@ -2002,7 +2039,8 @@ edit to land, then goes through the seam again; an edit that never lands — the
 turn stopped, or the edit refused as it landed — drops the start, with a
 notice, rather than running it on the unedited plan. `merge_all` is refused in a
 user-started turn — the user presses Merge all — and allowed only to a
-supervisor at Act.
+supervisor at Act; so is `skip_task`, which needs a reason from anyone but the
+user. The user's Skip reaches the seam as the user.
 `answer_approval` denies or escalates, never allows: allowing would widen the
 mode the plan gave the task.
 *Avoid:* "command surface" — that is the set of user commands by name (slash
@@ -2012,8 +2050,10 @@ commands and `ordewell` subcommands); *Avoid:* "action API".
 action executes (`services/LoopGuards.ts`): a retry limit per task
 (`supervisorRetryLimit`, default 2) and no retry with the failed attempt's
 prompt and model unchanged, at the Command seam — a start of a failed task is a
-retry however it is asked for; no re-adding a task it removed or reverting its
-own edit, on the edit path; and a wake-up-rate limit (`WAKE_UP_RATE`) in the
+retry however it is asked for, and a skip of a task it retried counts against
+the same limit; no skip of a task its own edit adds in the same reply; no run,
+retry or re-arming edit of a skipped task; no re-adding a task it removed or
+reverting its own edit, on the edit path; and a wake-up-rate limit (`WAKE_UP_RATE`) in the
 `Supervisor`, which drops the run to Watch. What they remember
 (`SupervisionMemory`, kept by **Run supervision**) lasts from the user's start
 of a run to their next, and is saved on the plan (`supervision`, beside the
@@ -2049,8 +2089,9 @@ runner, which VS Code words "Stalled" and the TUI marks "~"), the *row actions*
 it offers (`taskRowActions`, differing by *placement*: a task or a subtask), its
 ops and isolation state, and its merge gate. Task references are shared too
 (`#2.1`, `#2 Deploy`). A **mark request** (`markRequestFor`) is the one reading
-of Mark complete and Skip: skip has no request of its own and marks the task
-complete. A surface chooses words, glyphs and casing and nothing else; a row
+of Mark complete and Mark not done. Skip is not a mark: it goes to the
+`skip_task` command, which ends the task as a *Skipped task* without vouching
+for its work. A surface chooses words, glyphs and casing and nothing else; a row
 state a surface needs and the view lacks is added to the view, not branched on
 in the surface.
 *Avoid:* "idle" (a silence guess, and the name of a state that is not this

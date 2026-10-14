@@ -95,7 +95,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
           </button>
         )}
 
-        {(isExecuting || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked') && (
+        {(isExecuting || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked' || row.status === 'skipped') && (
           <span className={`task-status-badge ${status.cls}`}>{status.label}</span>
         )}
 
