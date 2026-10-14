@@ -222,3 +222,17 @@ export const RELOAD_PLAN = {
   ],
   generatedAt: '2026-01-01T00:00:03.000Z', status: 'draft', runners: ['claude-code'], lastUpdated: '2026-01-01T00:00:03.000Z',
 };
+
+/**
+ * A task's log (ADR-0018, V1) mid-turn with one pending message in each state:
+ * force sent, already handed over to the runner, and still in Ordewell's queue.
+ */
+export const TASK_LOG_PENDING = [
+  { type: 'turn_start', message: 'Add a JSON parser' },
+  { type: 'text_delta', text: 'Reading the parser module first, then running the suite.' },
+  { type: 'tool_call', id: 'c1', name: 'Bash', args: '{"command":"npm test"}' },
+  { type: 'message_queued', messageId: 'm1', text: 'use the streaming API' },
+  { type: 'message_handed_over', messageId: 'm1' },
+  { type: 'message_queued', messageId: 'm2', text: 'then add tests for empty input' },
+  { type: 'message_queued', messageId: 'm3', text: 'stop — the schema is in docs/schema.json', forced: true },
+];

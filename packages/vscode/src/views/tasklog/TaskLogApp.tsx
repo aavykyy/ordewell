@@ -6,6 +6,7 @@ import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type Patched
 import type { HostToTaskLog, TaskLogStatus, TaskLogToHost } from '../../shared/taskLogProtocol';
 import { taskCommand, useRunnerCommands } from '../chat/components/RunnerCommands';
 import { taskLogState } from './taskLogState';
+import PendingMessages, { QUEUE_TITLE, SendKeyHint, isSendNowKey, type PendingMessage } from '../chat/components/PendingMessages';
 
 declare function acquireVsCodeApi(): { postMessage(message: TaskLogToHost): void };
 
@@ -19,7 +20,7 @@ const STOP_ARM_MS = 2_000;
  * One structured task's log (ADR-0018, V1), in its own editor tab. It draws
  * the same display blocks as the planner chat through the same components and
  * stylesheet, and adds what only a task has: a live-state header, a message
- * box that also stops the turn, the queued messages, and an attempt switcher. The host
+ * box that also stops the turn, the pending messages, and an attempt switcher. The host
  * reduces the log and patches blocks in; nothing here knows the event format.
  */
 export default function TaskLogApp() {
@@ -105,6 +106,14 @@ export default function TaskLogApp() {
     setText('');
   };
 
+  const pending = useMemo((): PendingMessage[] => (status?.queued ?? []).map((m) => ({
+    key: m.id,
+    text: m.text,
+    state: m.forced ? 'sending' : m.handedOver ? 'waiting' : 'queued',
+    onSendNow: m.forced ? undefined : () => vscode.postMessage({ type: 'sendQueuedTaskMessageNow', id: m.id }),
+    onRemove: m.forced || m.handedOver ? undefined : () => vscode.postMessage({ type: 'removeQueuedTaskMessage', id: m.id }),
+  })), [status?.queued]);
+
   // The pairing is what keeps a stray tap from interrupting a turn, so an arm
   // lapses on its own, and never outlives the turn it was aimed at.
   useEffect(() => {
@@ -131,7 +140,7 @@ export default function TaskLogApp() {
     }
     if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
     e.preventDefault();
-    if ((e.ctrlKey || e.metaKey) && canSendNow) sendNow();
+    if (isSendNowKey(e) && canSendNow) sendNow();
     else send();
   };
 
@@ -193,43 +202,18 @@ export default function TaskLogApp() {
               onAnswerApproval={(id, decision) => vscode.postMessage({ type: 'answerApproval', id, decision })} />}
       </div>
 
-      {status && status.queued.length > 0 && (
-        <div className="task-log-queued">
-          <div className="task-log-queued-title">Queued ({status.queued.length})</div>
-          {status.queued.map((message) => (
-            <div key={message.id} className="task-log-queued-item">
-              <span className="task-log-queued-text">{message.text}</span>
-              {message.forced
-                ? <span className="task-log-queued-state" title="Goes as soon as the running step is interrupted">sending now</span>
-                : message.handedOver
-                ? <span className="task-log-queued-state" title="The runner has this message and reads it after its current step">handed over</span>
-                : <>
-                    <button type="button" className="task-log-queued-now" title="Interrupt the running step and send this message next"
-                      onClick={() => vscode.postMessage({ type: 'sendQueuedTaskMessageNow', id: message.id })}>Send now</button>
-                    <button type="button" className="task-log-queued-remove" title="Remove this message"
-                      onClick={() => vscode.postMessage({ type: 'removeQueuedTaskMessage', id: message.id })}>&#10005;</button>
-                  </>}
-            </div>
-          ))}
-        </div>
-      )}
-
       {stopArmed && <div className="stop-hint" role="status">Press Esc again to stop</div>}
+
+      <PendingMessages messages={pending} />
 
       <div className="task-log-composer">
         {completion.palette}
         <textarea className="task-log-input" value={text} rows={2}
           placeholder={`${resumes ? 'The limit has reset? A message to resume it with…' : continues ? 'Continue the task in its saved session…' : 'Message the task…'} (Enter to send, Shift+Enter for a new line)`}
           onChange={(e) => completion.change(e.target.value)} onKeyDown={onComposerKeyDown} />
-        {canSendNow && (
-          <button type="button" className="task-log-send-now" aria-label="Send now"
-            title="Interrupt the running step and send this next, ahead of anything queued (Ctrl+Enter)" onClick={sendNow}>
-            Send now
-          </button>
-        )}
         <button type="button" className={`send-btn${stops ? ' processing' : ''}`}
           disabled={!stops && !canSend}
-          title={stops ? 'Interrupt (Esc Esc)' : `${sendLabel} (Enter)`} aria-label={stops ? 'Interrupt' : sendLabel}
+          title={stops ? 'Interrupt (Esc Esc)' : canSendNow ? QUEUE_TITLE : `${sendLabel} (Enter)`} aria-label={stops ? 'Interrupt' : sendLabel}
           onClick={stops ? () => vscode.postMessage({ type: 'interruptTask' }) : send}>
           {stops ? (
             <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
@@ -241,6 +225,7 @@ export default function TaskLogApp() {
             </svg>
           )}
         </button>
+        {canSendNow && <SendKeyHint />}
       </div>
     </div>
   );

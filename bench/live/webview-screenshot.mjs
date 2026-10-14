@@ -16,6 +16,10 @@
  *   - a retracted attempt's text never reaches the screen
  *   - a prompt typed while a turn is live is held, with its own × unsend;
  *     Esc takes it back, and Esc Esc (nothing queued) arms then stops the turn
+ *   - held prompts stack above the composer, each with Send now; with a draft
+ *     typed mid-turn the composer has one button and a key hint
+ *   - the task log (/tasklog) stacks its pending messages the same way, one in
+ *     each state, Send now on all but the forced one, × only on the queued one
  *
  * Runs at 420px (the sidebar width) and 900px, under both a dark and a light
  * VS Code theme (bench/live/webview-harness.mjs's `?theme=`) — the full state
@@ -29,7 +33,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { chromium } from './load-playwright.mjs';
 import { createDriver } from './host-driver.mjs';
-import { MAIN_SCENARIO, RELOAD_FIXTURE, RELOAD_PLAN } from './scenarios.mjs';
+import { MAIN_SCENARIO, RELOAD_FIXTURE, RELOAD_PLAN, TASK_LOG_PENDING } from './scenarios.mjs';
+import { replayTaskLog } from '../../packages/core/dist/plan-utils.mjs';
 
 function arg(name, fallback) {
   const i = process.argv.indexOf(`--${name}`);
@@ -188,6 +193,69 @@ async function expandAllRoundTrip(page) {
   check(await page.locator('.activity-think.expanded').count() === 0, 'expand-all: collapses back as one toggle');
 }
 
+const PENDING_CONTRAST = ['.pending-message-text', '.pending-message-state', '.send-key-hint'];
+
+async function checkContrast(page, label, selectors) {
+  for (const sel of selectors) {
+    const ratio = await contrastRatio(page, sel);
+    if (ratio === null) continue;
+    check(ratio >= 4.5, `contrast ${label} ${sel}: ${ratio.toFixed(2)}:1 (WCAG AA text needs 4.5:1)`);
+  }
+}
+
+/**
+ * Held prompts above the composer with a draft typed mid-turn, the first
+ * hovered so its actions show. Posted straight to the page and cleared after,
+ * so the host-driven tour that follows sees no difference.
+ */
+async function pendingPlanner(page, label, file) {
+  await send(page, { type: 'heldPrompts', prompts: ['also cover caching', 'and keep the public routes stable: no breaking changes to the API'] });
+  await page.fill('.chat-input-row textarea', 'use Postgres, not SQLite');
+  await page.hover('.pending-message >> nth=0');
+  await page.waitForTimeout(200); // the actions fade in
+  check(await page.locator('.pending-messages .pending-message').count() === 2, `pending-planner ${label}: both held prompts stacked`);
+  check(await page.locator('.message-list .pending-messages').count() === 0, `pending-planner ${label}: the stack sits outside the conversation`);
+  check(await page.evaluate(() => document.querySelector('.pending-messages')?.nextElementSibling?.classList.contains('chat-input')), `pending-planner ${label}: directly above the composer`);
+  check(await page.locator('.pending-message-now').count() === 2, `pending-planner ${label}: Send now on each`);
+  check(await page.locator('.pending-message-remove').count() === 1, `pending-planner ${label}: only the newest carries the ×`);
+  check(await page.locator('.chat-input-row button').count() === 1, `pending-planner ${label}: one button in the composer`);
+  check((await page.locator('.send-key-hint').innerText()).includes('send now'), `pending-planner ${label}: the key hint names send now`);
+  await checkContrast(page, `pending-planner ${label}`, PENDING_CONTRAST);
+  await page.screenshot({ path: path.join(OUT, file) });
+  await page.mouse.move(0, 0);
+  await page.fill('.chat-input-row textarea', '');
+  await send(page, { type: 'heldPrompts', prompts: [] });
+}
+
+async function pendingTaskLog(width, theme) {
+  const label = `${width}/${theme}`;
+  const page = await browser.newPage({ viewport: { width, height: 640 } });
+  await page.goto(`${BASE}/tasklog?theme=${theme}`);
+  await page.waitForFunction(() => window.__posted.some((m) => m.type === 'ready'));
+  const view = replayTaskLog(TASK_LOG_PENDING);
+  await send(page, {
+    type: 'init',
+    blocks: view.blocks,
+    status: {
+      taskId: 't2', order: 2, title: 'Add a JSON parser', runner: 'claude-code', planStatus: 'in_progress',
+      awaitingApproval: 0, working: true, queued: view.queued, attempts: [1], attempt: 1, continuable: false,
+    },
+  });
+  await page.fill('.task-log-input', 'and log every parse error');
+  await page.hover('.pending-message >> nth=1');
+  await page.waitForTimeout(200);
+  const states = await page.locator('.pending-message-state').allInnerTexts();
+  check(JSON.stringify(states) === JSON.stringify(['sending now…', 'waiting for the current step', 'queued']), `tasklog ${label}: each pending message says where it stands (${states.join(' | ')})`);
+  check(await page.locator('.pending-message-now').count() === 2, `tasklog ${label}: Send now on the handed-over and queued ones, not the forced one`);
+  check(await page.locator('.pending-message-remove').count() === 1, `tasklog ${label}: × only on the one still queued`);
+  check(await page.getByText(/^Queued \(/).count() === 0, `tasklog ${label}: no Queued (n) heading`);
+  check(await page.locator('.task-log-composer button').count() === 1, `tasklog ${label}: one button in the composer`);
+  check((await page.locator('.send-key-hint').innerText()).includes('send now'), `tasklog ${label}: the key hint names send now`);
+  await checkContrast(page, `tasklog ${label}`, PENDING_CONTRAST);
+  await page.screenshot({ path: path.join(OUT, `tasklog-pending-${width}-${theme}.png`) });
+  await page.close();
+}
+
 async function queuedPromptAndEscape(page) {
   // Someone typing a follow-up while a turn streams is watching it, i.e. at
   // the bottom already — App's own scroll-pin only follows new content while
@@ -200,14 +268,14 @@ async function queuedPromptAndEscape(page) {
   // a short wait here would screenshot mid-animation with the bubble still
   // clipped below the fold.
   await page.waitForTimeout(500);
-  check(await page.locator('.queued-prompt').count() === 1, 'queued-prompt: held while the turn is live');
-  check((await page.locator('.queued-prompt-bubble').innerText()) === 'add caching too', 'queued-prompt: shows the held text');
-  check(await page.locator('.queued-prompt-unsend').count() === 1, 'queued-prompt: the newest carries the × unsend');
+  check(await page.locator('.pending-message').count() === 1, 'queued-prompt: held while the turn is live');
+  check((await page.locator('.pending-message-text').innerText()) === 'add caching too', 'queued-prompt: shows the held text');
+  check(await page.locator('.pending-message-remove').count() === 1, 'queued-prompt: the newest carries the × unsend');
   await page.screenshot({ path: path.join(OUT, 'queued-prompt.png') });
 
   await page.evaluate(() => window.__pressEscape());
   await page.waitForTimeout(60);
-  check(await page.locator('.queued-prompt').count() === 0, 'esc-unsend: Esc takes back the queued prompt');
+  check(await page.locator('.pending-message').count() === 0, 'esc-unsend: Esc takes back the queued prompt');
   check(await page.locator('.chat-input-row textarea').inputValue() === 'add caching too', 'esc-unsend: the text lands back in the input');
 
   await page.evaluate(() => window.__pressEscape());
@@ -292,6 +360,7 @@ for (const combo of COMBOS) {
       if (combo.primary) await assertMark(page, s.mark);
       if (s.mark === 'subagent-collapsed' && combo.primary) await expandAllRoundTrip(page);
       if (s.mark === 'turn-open') {
+        await pendingPlanner(page, `${combo.width}/${combo.theme}`, `pending-planner-${combo.width}-${combo.theme}.png`);
         if (combo.primary) await queuedPromptAndEscape(page);
       }
     }
@@ -306,6 +375,11 @@ for (const combo of COMBOS) {
   }
 
   await page.close();
+}
+
+for (const combo of COMBOS) {
+  console.log(`\n== task log, ${combo.width}px, ${combo.theme} theme ==`);
+  await pendingTaskLog(combo.width, combo.theme);
 }
 
 await browser.close();

@@ -15,7 +15,7 @@ describe('queued prompts', () => {
     api.postMessage.mockClear();
   });
 
-  it('follows the newly queued prompt into view, not just new conversation blocks', () => {
+  it('keeps the conversation at its end when a queued prompt takes height from it', () => {
     post({ type: 'plannerTurn', active: true });
     const list = document.querySelector('.message-list') as HTMLElement;
     let top = 0;
@@ -40,11 +40,14 @@ describe('queued prompts', () => {
 
     post({ type: 'heldPrompts', prompts: ['also cover caching'] });
 
-    const items = [...document.querySelectorAll('.conversation-queued .queued-prompt')];
+    const items = [...document.querySelectorAll('.pending-messages .pending-message')];
     expect(items).toHaveLength(1);
-    expect(items[0].textContent).toContain('also cover caching');
-    expect(items[0].textContent).toContain('queued');
+    expect(items[0].querySelector('.pending-message-text')?.textContent).toBe('also cover caching');
+    expect(items[0].querySelector('.pending-message-state')?.textContent).toBe('queued');
     expect(document.querySelector('.chat-msg-user')).toBeNull();
+    // A stack above the composer, not part of the conversation.
+    expect(document.querySelector('.message-list .pending-messages')).toBeNull();
+    expect(document.querySelector('.pending-messages')?.nextElementSibling?.classList.contains('chat-input')).toBe(true);
   });
 
   it('takes the newest back with its ×, above the draft, and planning keeps going', () => {
@@ -52,8 +55,10 @@ describe('queued prompts', () => {
     post({ type: 'heldPrompts', prompts: ['one', 'two'] });
     type('half a thought');
 
-    const unsend = document.querySelectorAll('.queued-prompt-unsend');
+    const unsend = document.querySelectorAll('.pending-message-remove');
     expect(unsend).toHaveLength(1);
+    expect(unsend[0].getAttribute('aria-label')).toBe('Remove pending message: two');
+    expect(unsend[0].getAttribute('title')).toBe('Unsend (Esc)');
     fireEvent.click(unsend[0]);
 
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'unsendPrompt' });
@@ -62,7 +67,7 @@ describe('queued prompts', () => {
     post({ type: 'heldPrompts', prompts: ['one'] });
 
     expect(textarea().value).toBe('two\nhalf a thought');
-    expect(document.querySelectorAll('.queued-prompt')).toHaveLength(1);
+    expect(document.querySelectorAll('.pending-message')).toHaveLength(1);
     expect(posted().some((m) => m.type === 'stopResearch')).toBe(false);
     expect(document.querySelector('.chat-msg-working')).not.toBeNull();
   });
@@ -134,23 +139,33 @@ describe('queued prompts', () => {
     post({ type: 'plannerTurn', active: true });
     post({ type: 'heldPrompts', prompts: ['one', 'two'] });
 
-    const buttons = [...document.querySelectorAll('.queued-prompt-now')];
+    const buttons = [...document.querySelectorAll('.pending-message-now')];
     expect(buttons).toHaveLength(2);
+    expect(buttons[0].getAttribute('aria-label')).toBe('Send now: one');
+    expect(buttons[0].getAttribute('title')).toContain('(Ctrl+Enter)');
     fireEvent.click(buttons[1]);
 
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendHeldPromptNow', index: 1 });
   });
 
-  it('shows a Send now beside the composer while a turn runs, and it force sends the typed text', () => {
+  it('sends a held row now on Ctrl+Enter while focus is on it', () => {
     post({ type: 'plannerTurn', active: true });
+    post({ type: 'heldPrompts', prompts: ['one', 'two'] });
+
+    fireEvent.keyDown(document.querySelectorAll('.pending-message-now')[0], { key: 'Enter', ctrlKey: true });
+
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendHeldPromptNow', index: 0 });
+  });
+
+  it('has one button while a turn runs: the hint and its tooltip name the key that sends now', () => {
+    post({ type: 'plannerTurn', active: true });
+    expect(document.querySelector('.send-key-hint')).toBeNull();
+
     type('stop, use Postgres');
 
-    const sendNow = document.querySelector('.chat-input-send-now');
-    expect(sendNow).toBeTruthy();
-    fireEvent.click(sendNow!);
-
-    expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendMessageNow', text: 'stop, use Postgres' });
-    expect(textarea().value).toBe('');
+    expect(document.querySelectorAll('.chat-input-row button')).toHaveLength(1);
+    expect(document.querySelector('.send-key-hint')?.textContent).toBe('Enter queue · Ctrl+Enter send now');
+    expect(document.querySelector('.send-btn')?.getAttribute('title')).toBe('Queue (Enter) · Send now (Ctrl+Enter)');
   });
 
   it('sends now on Ctrl+Enter', () => {
@@ -166,18 +181,21 @@ describe('queued prompts', () => {
     post({ type: 'plannerTurn', active: true });
 
     type('/grilling the cache');
-    fireEvent.click(document.querySelector('.chat-input-send-now')!);
+    expect(document.querySelector('.send-key-hint')).not.toBeNull();
+    fireEvent.keyDown(textarea(), { key: 'Enter', ctrlKey: true });
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendMessageNow', text: '/grilling the cache' });
 
     api.postMessage.mockClear();
     type('/refresh');
-    fireEvent.click(document.querySelector('.chat-input-send-now')!);
+    expect(document.querySelector('.send-key-hint')).toBeNull();
+    fireEvent.keyDown(textarea(), { key: 'Enter', ctrlKey: true });
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendMessage', text: '/refresh', runners: expect.any(Array), typed: true });
   });
 
-  it('has no Send now button outside a turn', () => {
+  it('has no key hint outside a turn, where Enter just sends', () => {
     type('a normal message');
-    expect(document.querySelector('.chat-input-send-now')).toBeNull();
+    expect(document.querySelector('.send-key-hint')).toBeNull();
+    expect(document.querySelector('.send-btn')?.getAttribute('title')).toBe('Send (Enter)');
   });
 
   it('sends nothing on Enter with an empty input mid-turn', () => {

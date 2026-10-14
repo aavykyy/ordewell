@@ -19,7 +19,9 @@
  *   node bench/live/webview-harness.mjs                 # serves on http://127.0.0.1:3798
  *
  * `?theme=dark|light` sets the `--vscode-*` custom properties a driving
- * script wants for contrast screenshots; dark is the default.
+ * script wants for contrast screenshots; dark is the default. `/tasklog`
+ * serves the task log panel's bundle the same way: it draws nothing until a
+ * driving script posts it an `init` through `window.__send`.
  */
 import http from 'node:http';
 import fs from 'node:fs';
@@ -89,7 +91,7 @@ function themeStyle(name) {
   return `:root { ${decls} }`;
 }
 
-function page(theme) {
+function page(theme, script) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -131,16 +133,18 @@ function page(theme) {
     ta?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
   };
 </script>
-<script type="module" src="/chat.js"></script>
+<script type="module" src="/${script}"></script>
 </body>
 </html>`;
 }
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1');
-  if (url.pathname === '/' || url.pathname === '/index.html') {
+  const script = url.pathname === '/' || url.pathname === '/index.html' ? 'chat.js'
+    : url.pathname === '/tasklog' ? 'tasklog.js' : null;
+  if (script) {
     const theme = url.searchParams.get('theme') === 'light' ? 'light' : 'dark';
-    res.writeHead(200, { 'content-type': 'text/html' }).end(page(theme));
+    res.writeHead(200, { 'content-type': 'text/html' }).end(page(theme, script));
     return;
   }
   const file = path.join(dist, url.pathname.replace(/^\//, ''));

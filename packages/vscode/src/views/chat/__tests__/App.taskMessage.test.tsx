@@ -33,13 +33,13 @@ const input = () => document.querySelector('.task-message-input') as HTMLTextAre
 describe('messaging a running task from its plan card', () => {
   beforeEach(setup);
 
-  it('sends a plain message and a Send now through the task-message routes', () => {
+  it('sends a plain message, and a Ctrl+Enter one now, through the task-message routes', () => {
     fireEvent.change(input(), { target: { value: 'use Postgres' } });
     act(() => { fireEvent.click(document.querySelector('.task-message-send')!); });
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendTaskMessage', taskId: 't1', text: 'use Postgres' });
 
     fireEvent.change(input(), { target: { value: 'stop now' } });
-    act(() => { fireEvent.click(document.querySelector('.task-message-send-now')!); });
+    act(() => { fireEvent.keyDown(input(), { key: 'Enter', ctrlKey: true }); });
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendTaskMessageNow', taskId: 't1', text: 'stop now' });
   });
 });

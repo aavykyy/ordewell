@@ -92,18 +92,36 @@ describe('messaging a running or waiting task from its card', () => {
     expect(input().value).toBe('');
   });
 
-  it('sends now on Send now and on Ctrl+Enter', () => {
+  it('sends now on Ctrl+Enter or Cmd+Enter, with one Send button and no second one', () => {
     const onSendMessage = vi.fn();
     const onSendMessageNow = vi.fn();
     renderCard(makeTask(), { onSendMessage, onSendMessageNow });
 
+    expect(screen.getAllByRole('button', { name: /send/i })).toHaveLength(1);
     type('stop now');
-    fireEvent.click(document.querySelector('.task-message-send-now')!);
-    type('and this too');
     fireEvent.keyDown(input(), { key: 'Enter', ctrlKey: true });
+    type('and this too');
+    fireEvent.keyDown(input(), { key: 'Enter', metaKey: true });
 
     expect(onSendMessageNow.mock.calls).toEqual([['t1', 'stop now'], ['t1', 'and this too']]);
     expect(onSendMessage).not.toHaveBeenCalled();
+  });
+
+  it('names both keys while a turn runs and something is typed, in a hint and on Send', () => {
+    renderCard(makeTask(), { onSendMessage: vi.fn(), onSendMessageNow: vi.fn() });
+    expect(document.querySelector('.send-key-hint')).toBeNull();
+
+    type('use Postgres');
+
+    expect(document.querySelector('.send-key-hint')?.textContent).toBe('Enter queue · Ctrl+Enter send now');
+    expect(document.querySelector('.task-message-send')?.getAttribute('title')).toBe('Queue (Enter) · Send now (Ctrl+Enter)');
+  });
+
+  it('has no key hint on a task waiting for input, which has no turn to interrupt', () => {
+    renderCard(makeTask({ status: 'awaiting_user', awaitingReason: 'input' }), { onSendMessage: vi.fn(), onSendMessageNow: vi.fn() });
+    type('use Postgres');
+    expect(document.querySelector('.send-key-hint')).toBeNull();
+    expect(document.querySelector('.task-message-send')?.getAttribute('title')).toBe('Send (Enter)');
   });
 
   it('sends a plain message on Enter', () => {
@@ -118,9 +136,8 @@ describe('messaging a running or waiting task from its card', () => {
     expect(onSendMessageNow).not.toHaveBeenCalled();
   });
 
-  it('disables both sends with nothing typed', () => {
+  it('disables Send with nothing typed', () => {
     renderCard(makeTask(), { onSendMessage: vi.fn(), onSendMessageNow: vi.fn() });
     expect(document.querySelector('.task-message-send')).toBeDisabled();
-    expect(document.querySelector('.task-message-send-now')).toBeDisabled();
   });
 });

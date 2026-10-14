@@ -12,6 +12,8 @@
   --text-secondary: var(--vscode-descriptionForeground, #8b949e);
   --text-muted: color-mix(in srgb, var(--text-secondary) 70%, transparent);
   --text-placeholder: var(--vscode-input-placeholderForeground, var(--text-muted));
+  /* Small secondary text that still has to clear AA on a tinted or input background. */
+  --text-hint: color-mix(in srgb, var(--text-secondary) 70%, var(--text-primary));
   --accent: var(--vscode-focusBorder, #58a6ff);
   --accent-emphasis: var(--vscode-button-background, #1f6feb);
   --accent-subtle: color-mix(in srgb, var(--accent) 8%, transparent);
@@ -2553,26 +2555,6 @@ body {
   color: #fff;
 }
 
-/* Send now (ADR-0023, F5): a live planner turn with text typed, beside Send. */
-.chat-input-send-now {
-  align-self: center;
-  flex-shrink: 0;
-  margin: 3px 0;
-  padding: 5px 8px;
-  font-family: inherit;
-  font-size: 11px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.chat-input-send-now:hover {
-  color: var(--text-primary);
-  border-color: var(--text-muted);
-}
-
 /* ---- Approval Bar ---- */
 .approval-bar {
   display: flex;
@@ -4861,79 +4843,165 @@ body {
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
-/* ---- Queued prompts ----
-   Typed during a planner turn and held for the next one: a user bubble,
-   dimmed because it has not been sent, with the newest one's way back. */
-.conversation-queued {
+/* ---- Pending messages ----
+   Typed during a turn and not yet read: a compact stack above the composer in
+   the user bubble's shape, tinted and dashed because it has not gone yet.
+   Shared by the planner chat and the task log. */
+.pending-messages {
+  list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 4px 14px;
+  flex-shrink: 0;
+  gap: 4px;
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 8px 14px 0;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-primary);
 }
 
-.queued-prompt {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  opacity: 0.55;
+/* The stack and the composer read as one block. */
+.pending-messages + .chat-input,
+.pending-messages + .task-log-composer {
+  border-top-color: transparent;
 }
 
-.queued-prompt-bubble {
-  padding: 6px 10px;
-  border: 1px dashed var(--border-muted);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-  color: var(--text-secondary);
+.pending-message {
+  padding: 5px 10px 3px;
+  border: 1px dashed color-mix(in srgb, var(--accent-emphasis) 60%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-emphasis) 8%, var(--bg-primary));
   font-size: 12px;
+  line-height: 1.5;
+}
+
+.pending-message-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--text-primary);
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.queued-prompt-meta {
+.pending-message-meta {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 4px;
-  margin-top: 2px;
-  font-size: 10px;
-  color: var(--text-muted);
+  gap: 6px;
+  min-height: 20px;
+  font-size: 11px;
+  color: var(--text-hint);
 }
 
-.queued-prompt-unsend {
-  width: 16px;
-  height: 16px;
+.pending-message-state {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-message.sending {
+  border-style: solid;
+}
+
+/* High contrast themes draw edges, not tints. */
+body.vscode-high-contrast .pending-message,
+body.vscode-high-contrast-light .pending-message {
+  border-color: var(--vscode-contrastBorder);
+  background: transparent;
+}
+
+.pending-message.sending .pending-message-state {
+  color: var(--slash-token-fg);
+}
+
+/* Out of the way until wanted, but never out of the tab order or the
+   accessibility tree: opacity, not display. */
+.pending-message-actions {
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.pending-message:hover .pending-message-actions,
+.pending-message:focus-within .pending-message-actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .pending-message-actions { opacity: 1; }
+}
+
+.pending-message-now,
+.pending-message-remove {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 6px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: 4px;
   background: transparent;
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1;
+  color: var(--text-hint);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 18px;
   cursor: pointer;
 }
 
-.queued-prompt-unsend:hover {
+.pending-message-remove {
+  font-size: 13px;
+}
+
+.pending-message-now:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.pending-message-remove:hover {
   background: var(--red-subtle);
   color: var(--red);
 }
 
-.queued-prompt-now {
-  margin-right: auto;
-  padding: 1px 6px;
-  font-family: inherit;
-  font-size: 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
+.pending-message-now:focus-visible,
+.pending-message-remove:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 
-.queued-prompt-now:hover {
-  color: var(--text-primary);
-  border-color: var(--text-muted);
+/* The composer's key hint while a turn runs and something is typed: one
+   quiet line under the input, in place of a second button. */
+.send-key-hint {
+  flex: 0 0 100%;
+  text-align: right;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-hint);
+}
+
+.chat-input-inner .send-key-hint {
+  padding: 0 10px 6px;
+}
+
+.task-log-composer .send-key-hint {
+  margin-top: -4px;
+}
+
+.task-message-box .send-key-hint {
+  margin-top: -2px;
+}
+
+.send-key-hint kbd,
+.pending-message-now kbd {
+  padding: 0 3px;
+  border: 1px solid var(--border-muted);
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 14px;
 }
 
 .stop-hint {
@@ -5295,85 +5363,6 @@ body {
   color: var(--text-muted);
 }
 
-.task-log-queued {
-  flex-shrink: 0;
-  padding: 6px 14px;
-  border-top: 1px solid var(--border-subtle);
-  background: var(--bg-secondary);
-}
-
-.task-log-queued-title {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  margin-bottom: 4px;
-}
-
-.task-log-queued-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 0;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.task-log-queued-text {
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.task-log-queued-remove {
-  font-family: inherit;
-  font-size: 11px;
-  line-height: 1;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.task-log-queued-remove:hover {
-  color: var(--red);
-}
-
-.task-log-queued-now,
-.task-log-send-now {
-  font-family: inherit;
-  font-size: 11px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.task-log-queued-now {
-  padding: 1px 6px;
-}
-
-.task-log-send-now {
-  align-self: stretch;
-  padding: 0 10px;
-}
-
-.task-log-queued-now:hover,
-.task-log-send-now:hover {
-  color: var(--text-primary);
-  border-color: var(--text-muted);
-}
-
-.task-log-queued-state {
-  font-size: 11px;
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-
 .task-log-composer {
   display: flex;
   gap: 8px;
@@ -5407,7 +5396,7 @@ body {
 }
 
 /* A task card's compact message box (ADR-0018, M1; ADR-0023, F1): the same
-   Send and Send now the task log offers, without leaving the plan dock. */
+   Send and Ctrl+Enter the task log offers, without leaving the plan dock. */
 .task-message-box {
   display: flex;
   gap: 6px;
@@ -5437,8 +5426,7 @@ body {
   border-color: var(--accent);
 }
 
-.task-message-send,
-.task-message-send-now {
+.task-message-send {
   font-family: inherit;
   font-size: 11px;
   padding: 4px 8px;
@@ -5450,14 +5438,12 @@ body {
   flex-shrink: 0;
 }
 
-.task-message-send:hover:not(:disabled),
-.task-message-send-now:hover:not(:disabled) {
+.task-message-send:hover:not(:disabled) {
   color: var(--text-primary);
   border-color: var(--text-muted);
 }
 
-.task-message-send:disabled,
-.task-message-send-now:disabled {
+.task-message-send:disabled {
   opacity: 0.4;
   cursor: default;
 }

@@ -12,7 +12,7 @@ import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import { handleIsolationBlocked } from './isolation';
 import { removalPrompt, taskFromDraft } from './taskEdit';
-import { ALREADY_HANDED_OVER } from '../providers/TaskLogPanel';
+import { ALREADY_DELIVERED } from '../providers/TaskLogPanel';
 
 export interface PlanManagerDeps {
   session: Session;
@@ -391,7 +391,7 @@ export async function handleTaskControl(
     else if (control.kind === 'messageNow') deps.session.forceSendTaskMessage(taskId, control.text);
     else if (control.kind === 'removeQueued') deps.session.removeQueuedTaskMessage(taskId, control.id);
     else if (control.kind === 'queuedNow') {
-      if (!deps.session.forceSendQueuedTaskMessage(taskId, control.id)) throw new Error(ALREADY_HANDED_OVER);
+      if (!deps.session.forceSendQueuedTaskMessage(taskId, control.id)) throw new Error(ALREADY_DELIVERED);
     } else await deps.session.interruptTask(taskId);
   } catch (err) {
     void vscode.window.showWarningMessage(err instanceof Error ? err.message : String(err));

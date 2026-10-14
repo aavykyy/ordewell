@@ -161,7 +161,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     expect(h.session.forceSendQueuedTaskMessage).toHaveBeenCalledWith('t1', 'q1');
   });
 
-  it('says so when the runner already had the message it was asked to send now, and shows a refusal', () => {
+  it('says so when the runner already read the message it was asked to send now, and shows a refusal', () => {
     const h = harness();
     h.session.forceSendQueuedTaskMessage.mockReturnValue(false);
     h.session.forceSendTaskMessage.mockImplementation(() => { throw new Error('Task is not running, so there is no turn to send a message to.'); });
@@ -173,7 +173,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     __panels[0].__receive({ type: 'sendTaskMessageNow', text: 'now' });
 
     expect(posted(__panels[0])).toEqual([
-      { type: 'showError', error: expect.stringMatching(/runner already has that message/) },
+      { type: 'showError', error: expect.stringMatching(/runner has already read that message/) },
       { type: 'showError', error: expect.stringMatching(/no turn to send a message to/) },
     ]);
   });

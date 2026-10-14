@@ -73,9 +73,9 @@ describe('a task paused on a usage limit (#84)', () => {
     render(<TaskCard task={makeTask()} run={saved} models={[]} expanded onExpandedChange={() => {}}
       onSendMessage={(id, text) => sent.push([id, text])} onSendMessageNow={() => {}} />);
     fireEvent.change(screen.getByPlaceholderText(/resume it with/), { target: { value: 'limits reset, go on' } });
+    expect(document.querySelector('.send-key-hint')).toBeNull();
     fireEvent.click(screen.getByText('Resume'));
     expect(sent).toEqual([['t1', 'limits reset, go on']]);
-    expect(screen.queryByText('Send now')).toBeNull();
   });
 
   it('says it on a subtask card as well', () => {

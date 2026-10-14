@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import type { AiProvider } from '@ordewell/core';
 import { aheadOfDraft } from '@ordewell/core/plan-utils';
-import { SLASH_COMMANDS } from '../../../commands/slashCommands';
+import { SLASH_COMMANDS, isBuiltinSlashCommand } from '../../../commands/slashCommands';
+import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
 
 // Core owns the union; a hand-copied duplicate diverged the moment ADR-0009
 // added the three harness planners.
@@ -41,9 +42,9 @@ interface ChatInputProps {
   harnessPlannerModels?: ModelOption[];
   configuredProviders?: ApiProvider[];
   isProcessing?: boolean;
-  /** A planner turn is in flight: with text typed, Send now stops it and sends ahead of the queue. */
+  /** A planner turn is in flight: with text typed, Enter queues it and Ctrl+Enter sends it now. */
   isTurnRunning?: boolean;
-  /** Send now (ADR-0023, F5); with no turn running the host sends it as a plain message. */
+  /** Send now (ADR-0023, F5), on Ctrl+Enter; with no turn running the host sends it as a plain message. */
   onSendNow?: (text: string) => void;
   onStop?: () => void;
   /** Esc with no suggestion list open. True when the key was spent; otherwise it clears the input. */
@@ -463,9 +464,12 @@ export default function ChatInput({
 
   const canSend = !disabled && text.trim().length > 0;
   const canSubmit = isProcessing || canSend;
-  // A live planner turn and something typed: Send now stops the turn and sends
-  // ahead of the queue, beside the Send that queues for the turn's end.
+  // A live planner turn and something typed: Enter queues it for the turn's
+  // end, Ctrl+Enter stops the turn and sends it ahead of the queue.
   const canSendNow = !!onSendNow && isTurnRunning && canSend;
+  // A built-in command is the host's either way, never held, so neither key
+  // the hint names would apply to it.
+  const queues = canSendNow && !isBuiltinSlashCommand(text.trim());
   // Stop only while a turn is live and nothing is typed, so typing a message
   // always turns the button back into Send — as the task log's composer does.
   const stops = isProcessing && !canSend;
@@ -613,7 +617,7 @@ export default function ChatInput({
 
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      if ((e.ctrlKey || e.metaKey) && canSendNow) {
+      if (isSendNowKey(e) && canSendNow) {
         sendNow();
         return;
       }
@@ -719,21 +723,11 @@ export default function ChatInput({
                 rows={1}
               />
             </div>
-            {canSendNow && (
-              <button
-                className="chat-input-send-now"
-                onClick={sendNow}
-                title="Send now (Ctrl+Enter) — stop the planner turn and send this ahead of the queue"
-                type="button"
-              >
-                Send now
-              </button>
-            )}
             <button
               className={`send-btn${stops ? ' processing' : ''}`}
               onClick={stops && onStop ? onStop : handleSubmit}
               disabled={!canSubmit}
-              title={stops ? 'Stop (Esc Esc)' : disabled && disabledReason ? disabledReason : 'Send (Enter)'}
+              title={stops ? 'Stop (Esc Esc)' : disabled && disabledReason ? disabledReason : queues ? QUEUE_TITLE : 'Send (Enter)'}
               type="button"
             >
               {stops ? (
@@ -747,6 +741,7 @@ export default function ChatInput({
               )}
             </button>
           </div>
+          {queues && <SendKeyHint />}
         </div>
       </div>
     </div>
