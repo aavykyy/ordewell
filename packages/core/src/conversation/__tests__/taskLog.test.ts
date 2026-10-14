@@ -397,6 +397,18 @@ describe('reduceTaskLog with messages read mid-turn (ADR-0023)', () => {
 });
 
 describe('reduceTaskLog with force send (ADR-0023, F1–F2)', () => {
+  it('keeps the sent-now mark on a delivered forced message when the log is replayed', () => {
+    const view = replayTaskLog([
+      start,
+      { type: 'turn_end', reason: 'interrupted' },
+      { type: 'turn_start', message: 'Stop waiting', messageId: 'forced-1', forced: true },
+    ]);
+
+    expect(view.blocks).toContainEqual(expect.objectContaining({
+      type: 'message', role: 'user', text: 'Stop waiting', forced: true,
+    }));
+  });
+
   const queued = replayTaskLog([
     start,
     { type: 'message_queued', messageId: 'msg-1', text: 'use Postgres' },

@@ -230,11 +230,11 @@ function decideApproval(view: TaskLogView, { approvalId, decision, note }: Event
   return settleApproval(view, approvalId, (block) => answered(block, decision, note));
 }
 
-function startTurn(view: TaskLogView, { message, messageId, from }: Event<'turn_start'>): TaskLogView {
+function startTurn(view: TaskLogView, { message, messageId, from, forced }: Event<'turn_start'>): TaskLogView {
   const queued = messageId ? view.queued.filter((m) => m.id !== messageId) : view.queued;
   const working = { ...view, queued, working: true, latestText: undefined };
   // A turn the runner opened itself has no user message to show.
-  return message ? append(working, (id) => sentMessage(id, message, from)) : working;
+  return message ? append(working, (id) => ({ ...sentMessage(id, message, from), ...(forced ? { forced: true } : {}) })) : working;
 }
 
 /** A message to the runner, drawn as the user's unless Ordewell sent it (ADR-0018, W1). */

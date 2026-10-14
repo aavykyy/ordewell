@@ -22,35 +22,30 @@ if (portIdx !== -1 && args[portIdx + 1]) {
 const watchParentIdx = args.indexOf('--watch-parent');
 const watchParentPid = watchParentIdx !== -1 ? parseInt(args[watchParentIdx + 1], 10) : undefined;
 
-// Minted before the socket is listening, so no request can arrive before there
-// is a token to check it against.
-const { token, file: tokenFile } = mintDaemonToken(port);
-const admission = { port, token, tokenFile };
-
 // Tasks run on the structured transport (ADR-0018) as plain child processes,
 // so one runner serves every plan whatever the host has.
 const pool = new OrchestratorPool({ runner: new StructuredRunner() });
-const app = createApp(pool, admission);
-
-// Warm the model caches at startup (same as the VS Code extension's activation
-// refresh): runner model discovery + provider routing lists, so the first
-// request/plan doesn't pay the discovery latency and stale caches are rebuilt.
-pool.getProviderModels().catch((err) => {
-  console.error(`[web] model discovery warmup failed: ${err?.message ?? err}`);
-});
-
-app.get('/', (c) => c.json({ message: 'Ordewell API', docs: '/api/workspaces' }));
-
-const server = createServer(createRequestListener(app));
-
-attachWsHandler(server, pool, admission);
+const server = createServer();
+let ownsToken = false;
 
 server.listen(port, '127.0.0.1', () => {
+  // A losing startup must not replace the listening daemon's credential.
+  // This callback installs admission before the event loop can serve a request.
+  const { token, file: tokenFile } = mintDaemonToken(port);
+  ownsToken = true;
+  const admission = { port, token, tokenFile };
+  const app = createApp(pool, admission);
+  app.get('/', (c) => c.json({ message: 'Ordewell API', docs: '/api/workspaces' }));
+  server.on('request', createRequestListener(app));
+  attachWsHandler(server, pool, admission);
+  pool.getProviderModels().catch((err) => {
+    console.error(`[web] model discovery warmup failed: ${err?.message ?? err}`);
+  });
   console.error(`[web] Ordewell API server: http://localhost:${port}`);
 });
 
 function shutdown(): void {
-  clearDaemonToken(port);
+  if (ownsToken) clearDaemonToken(port);
   pool.destroyAll();
   server.close();
   process.exit(0);

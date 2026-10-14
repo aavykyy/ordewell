@@ -3,7 +3,7 @@ import { cursorInLines, type CursorPosition } from './editor';
 import { checkpointCardLines, conversationLines, taskUsageText, usageMeasures, tokenLine } from './blocks';
 import { chatEditorRoomFor, chatPaneWidth, planPaneWidth } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
-import { findTask, planRows, plannerInFlight, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
+import { findTask, planRows, plannerInFlight, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
@@ -175,12 +175,13 @@ function queuedTaskBubble(message: QueuedTaskMessage, selected: boolean, cols: n
 }
 
 /**
- * What the task view's state is, in the header's words: a runner request
- * waiting for an answer wins — the turn is live but stopped on it — then a
- * live turn, then what an `awaiting_user` task waits on (a checkpoint over
- * plain input), then the task's own status.
+ * Completion can kill a runner before its log's turn ends, so a settled
+ * task's status wins. Otherwise a runner request waiting for an answer wins,
+ * then a live turn, then what an `awaiting_user` task waits on (a checkpoint
+ * over plain input), then the task's own status.
  */
 function taskActivity(task: TaskView | undefined, working: boolean): string {
+  if (task?.status === 'completed' || task?.status === 'failed') return task.status;
   const approvals = approvalLabel(task?.awaitingApproval);
   if (approvals) return inRow(approvals);
   if (working) return 'working';
@@ -195,7 +196,7 @@ function taskActivity(task: TaskView | undefined, working: boolean): string {
 function taskHeaderLines(state: TuiState, tv: NonNullable<TuiState['taskView']>, cols: number): string[] {
   const task = findTask(state.tasks, tv.taskId);
   const parts = [
-    `→ Task ${task?.order ?? '?'}`,
+    `→ Task ${task ? refFor(state, task).slice(1) : '?'}`,
     task?.title ?? '(task removed)',
     task?.assignedRunner ?? '',
     taskActivity(task, tv.view.working),
