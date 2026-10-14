@@ -127,7 +127,7 @@ describe('TaskOrchestrator.continueTask', () => {
     expect(request).toMatchObject({ resumeSessionId: 'native-t1-1', runner: 'claude-code' });
     expect(request.prompt.startsWith('also handle arrays\n')).toBe(true);
     expect(request.prompt).toContain('continuing this task in the same session');
-    expect(request.prompt).toContain('call the `task_complete` tool');
+    expect(request.prompt).not.toContain('task_complete');
     expect(request.prompt).not.toContain('ORIGINAL PROMPT BODY');
     expect(h.task('t1').status).toBe('in_progress');
   });

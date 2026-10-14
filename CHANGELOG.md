@@ -152,6 +152,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **Esc from a task's chat returns to the plan pane on that task.** It used to
+  drop back to the planner chat; now the cursor lands on the task you opened,
+  revealing its parent if the task is a subtask.
+
 - **The terminal UI's status row speaks for the selected chat only.** It said
   `Executing…` or `Researching… Read(file) (+2 more)` whichever chat was on
   screen. It now reads `Planning…` in the planner's chat and `Working…` in a
@@ -365,6 +369,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **A task's completion rule survives its runner compacting its own context.**
+  How a task ends — `task_complete` with its full report — was only in the
+  first message, which Claude Code, Codex and OpenCode may summarise or cut
+  when they compact. It is now in the runner's instructions (system prompt,
+  developer instructions, or OpenCode's instruction entry), which they keep
+  whole, and a resumed session gets it again.
 - **A start queued behind the same reply's edit is never lost silently.** A
   supervisor that edited a task and retried it in one reply was told
   "Queued", and the retry was then refused after the turn, with nobody told.

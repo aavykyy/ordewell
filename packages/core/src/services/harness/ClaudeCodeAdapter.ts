@@ -10,7 +10,7 @@ import { claudeThinkingArgs } from '../../plugins/resolveArgs';
 import type { AgentEvent, AgentStartOptions, PlannerAsk, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
 import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
 import { markedLines, structuredPatchText } from './fileDiff';
-import { ORDEWELL_MCP_SERVER_NAME, type McpClientConfig, type OwnerOnlyFile } from '../mcp';
+import { ORDEWELL_MCP_SERVER_NAME, TASK_COMPLETION_CONTRACT, type McpClientConfig, type OwnerOnlyFile } from '../mcp';
 import { CLAUDE_ORDEWELL } from './claudeOrdewell';
 import { PermissionLedger } from './permissionLedger';
 import { settleWithin } from './settleWithin';
@@ -458,7 +458,9 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   /**
    * A task's run: the manifest decides what its mode and effort mean
    * (ADR-0001), and this adds only the protocol around them. No tool list and
-   * no system prompt — the task's prompt is its first turn. `--permission-prompt-tool stdio` routes the questions the mode
+   * system prompt beyond the completion contract — the task's prompt is its
+   * first turn, and the contract is where the CLI's own compaction cannot
+   * summarise it away. `--permission-prompt-tool stdio` routes the questions the mode
    * leaves open to the control channel, where the adapter must answer them;
    * without it `-p` refuses them silently and nothing can ever surface one.
    */
@@ -477,7 +479,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       this.reportedCostUsd = undefined;
       this.pendingResume = opts.resumeSessionId;
     }
-    if (opts.mcp) args.push(...this.ordewellServerArgs(opts.mcp, 'task'));
+    if (opts.mcp) args.push('--append-system-prompt', TASK_COMPLETION_CONTRACT, ...this.ordewellServerArgs(opts.mcp, 'task'));
     return { command: 'claude', args, env: NO_AUTO_MEMORY };
   }
 

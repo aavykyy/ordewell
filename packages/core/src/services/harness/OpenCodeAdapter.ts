@@ -4,7 +4,7 @@ import { RunnerProcess } from './runnerProcess';
 import { OpenCodeV2 } from './OpenCodeV2';
 import { OPENCODE_CONFIG_VARIABLE, OPENCODE_ORDEWELL, OPENCODE_PLANNER_ENV } from './openCodeOrdewell';
 import { awaitAttach } from './ordewellBinding';
-import type { McpClientConfig } from '../mcp';
+import { TASK_COMPLETION_CONTRACT, type McpClientConfig } from '../mcp';
 import type { ProjectMcpServer } from './repoConfig';
 import { hunksOf, markedLines } from './fileDiff';
 import {
@@ -525,7 +525,9 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
   /**
    * The prompt that carries a task message: the mode as the agent, the task
    * model and effort, and only `question` withheld. A steer names its own
-   * `messageID` so the frames can be told apart from the first prompt's.
+   * `messageID` so the frames can be told apart from the first prompt's. Every
+   * prompt carries the completion contract as its `system`, which the server
+   * keeps whole where it summarises the messages themselves.
    */
   private taskPromptBody(task: TaskStartOptions, message: string, messageID?: string): Record<string, unknown> {
     const model = task.model ? splitModelId(task.model) : null;
@@ -534,6 +536,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       // The manifest's meaning of the task's mode (ADR-0001): for OpenCode a mode is an agent.
       agent: task.flags.permissionMode,
       tools: TASK_DISABLED_TOOLS,
+      ...(task.mcp ? { system: TASK_COMPLETION_CONTRACT } : {}),
       ...(model ? { model } : {}),
       ...(task.flags.effort ? { variant: task.flags.effort } : {}),
       ...(messageID ? { messageID } : {}),

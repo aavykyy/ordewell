@@ -78,7 +78,7 @@ describe('opening and closing the task view', () => {
     expect(effects).toEqual([]);
   });
 
-  it('esc clears a draft first, then closes back to the planner chat', () => {
+  it('esc clears a draft first, then closes back to the plan pane', () => {
     const withDraft = { ...opened(), editor: { ...opened().editor, text: 'half typed', cursor: 10 } };
     const cleared = reduce(withDraft, { type: 'key', key: key('escape') }).state;
     expect(cleared.taskView).not.toBeNull();
@@ -667,7 +667,41 @@ describe('following the live attempt', () => {
   });
 });
 
-describe('esc back to the planner', () => {
+describe('esc back to the plan pane', () => {
+  const two = [task({ id: 'a' }), task({ id: 'b', order: 2 })];
+
+  it('focuses the plan with the cursor on the task that was open', () => {
+    const state = opened({ tasks: two, taskView: loaded({ taskId: 'b' }), selectedTask: 0 });
+    const back = reduce(state, { type: 'key', key: key('escape') }).state;
+    expect(back.taskView).toBeNull();
+    expect(back.focus).toBe('plan');
+    expect(back.selectedTask).toBe(1);
+  });
+
+  it('reveals a collapsed parent and selects the subtask', () => {
+    const tasks = [task({ id: 'p', subtasks: [task({ id: 'c' })] }), task({ id: 'q', order: 2 })];
+    const state = opened({ tasks, taskView: loaded({ taskId: 'c' }), selectedTask: 1, expandedTaskId: null });
+    const back = reduce(state, { type: 'key', key: key('escape') }).state;
+    expect(back.expandedTaskId).toBe('p');
+    expect(back.selectedTask).toBe(1);
+  });
+
+  it('only focuses the plan when the task is gone', () => {
+    const state = opened({ tasks: two, taskView: loaded({ taskId: 'zzz' }), selectedTask: 1 });
+    const back = reduce(state, { type: 'key', key: key('escape') }).state;
+    expect(back.focus).toBe('plan');
+    expect(back.selectedTask).toBe(1);
+  });
+
+  it('an open overlay takes the esc first', () => {
+    const state = opened({ overlay: { kind: 'help', scroll: 0, sheet: 'keys' } });
+    const back = reduce(state, { type: 'key', key: key('escape') }).state;
+    expect(back.overlay).toBeNull();
+    expect(back.taskView).not.toBeNull();
+  });
+});
+
+describe('esc back from a task log, planner chat', () => {
   it('puts the planner conversation back in the pane, and the composer back on the planner', () => {
     const withPlanner = opened({ conversation: chatOf(['planner', 'Which database should the cache use?']) });
     expect(plain(withPlanner)).not.toContain('Which database should the cache use?');

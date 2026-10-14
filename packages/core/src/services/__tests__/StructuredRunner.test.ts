@@ -5,6 +5,7 @@ import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import type { IRunnerSession, StructuredEvent, StructuredTurnEnd } from '../../interfaces/IRunner';
 import type { AgentEvent, SpawnFn, AgentStartOptions, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
 import type { OrdewellMcpServer } from '../mcp/OrdewellMcpServer';
+import { TASK_COMPLETION_CONTRACT } from '../mcp';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
 import { claudeTurnEndQueue, fakeSpawn, fixture, type FakeSpawnResult, type ScriptedReply } from './harnessTestKit';
 
@@ -158,7 +159,8 @@ describe('StructuredRunner spawn', () => {
     expect(args[args.indexOf('--permission-mode') + 1]).toBe(expected);
     // Only the question tool: a task keeps every other tool its mode allows.
     expect(args[args.indexOf('--disallowedTools') + 1]).toBe('AskUserQuestion');
-    expect(args).not.toContain('--append-system-prompt');
+    // The one system prompt a task has: how it ends, which the CLI's compaction cannot summarise away.
+    expect(args[args.indexOf('--append-system-prompt') + 1]).toContain('call the `task_complete` tool with status `done`');
     expect(args).not.toContain('--dangerously-skip-permissions');
     session.kill();
   });
@@ -179,6 +181,7 @@ describe('StructuredRunner spawn', () => {
       '--thinking', 'enabled', '--effort', 'high',
       '--model', 'sonnet',
       '--resume', 'sess-prev',
+      '--append-system-prompt', TASK_COMPLETION_CONTRACT,
       '--mcp-config', expect.stringMatching(/mcp\.json$/),
       '--allowedTools', 'mcp__ordewell__task_complete,mcp__ordewell__checkpoint',
     ]);
@@ -195,7 +198,7 @@ describe('StructuredRunner spawn', () => {
     const session = await runner.spawn(options({ thinkingEffort, modelId }));
     const args = spawned.lastArgs();
     const from = args.indexOf('--disallowedTools') + 2;
-    const to = args.indexOf(modelId ? '--model' : '--mcp-config');
+    const to = args.indexOf(modelId ? '--model' : '--append-system-prompt');
     expect(args.slice(from, to)).toEqual(expected);
     session.kill();
   });
