@@ -432,9 +432,9 @@ describe('planner bar', () => {
 
   it('asks for a coding agent or a key when neither is present', () => {
     send({ type: 'setConfiguredProviders', providers: [] });
-    send({ type: 'setPlannerBackends', backends: [backends[1]], provider: '' });
+    send({ type: 'setPlannerBackends', backends: backends.map((b) => ({ ...b, usable: false })), provider: '' });
     const started = document.querySelector('.get-started');
-    expect(started?.textContent).toContain('Claude Code');
+    expect(started?.textContent).toContain('Claude Code or Codex');
     expect(started?.textContent).toContain('API key');
   });
 
@@ -445,8 +445,9 @@ describe('planner bar', () => {
   });
 
   it('tells the user what to install when no runner is detected', () => {
+    sendHarnessPlanner();
     send({ type: 'setRunners', runners: [] });
-    expect(document.querySelector('.setup-block-empty')?.textContent).toContain('Claude Code');
+    expect(document.querySelector('.setup-block-empty')?.textContent).toContain('install Claude Code or Codex');
   });
 
   it('shows the planner picker with no API key configured', () => {

@@ -101,7 +101,7 @@
       },
       {
         "command": "ordewell.toggleRunner",
-        "title": "Ordewell: Toggle Runner (Claude Code / OpenCode)"
+        "title": "Ordewell: Toggle Runner"
       },
       {
         "command": "ordewell.addTask",
@@ -201,25 +201,7 @@
         "ordewell.aiProvider": {
           "type": "string",
           "default": "",
-          "enum": [
-            "",
-            "google",
-            "openrouter",
-            "openai_compatible",
-            "claude-code",
-            "codex",
-            "opencode"
-          ],
-          "enumDescriptions": [
-            "Auto-detect from the API keys you have set",
-            "Google Gemini API",
-            "OpenRouter API",
-            "A custom OpenAI-compatible endpoint",
-            "Plan with the Claude Code CLI — no API key, uses your subscription",
-            "Plan with the Codex CLI — no API key, uses your subscription",
-            "Plan with the OpenCode CLI — no API key, uses your subscription"
-          ],
-          "description": "AI provider — auto-detected from keys if left blank. The last three plan with a coding agent already installed on this machine, so no API key is needed."
+          "description": "Who plans: an API provider (google, openrouter, openai_compatible, or another vendor), or the id of a coding-agent runner installed on this machine, which plans on its own subscription with no API key. Auto-detected from the API keys you have set if left blank. The runner ids are the ones /runners lists; an unknown value is reported when it is set. Set it from the planner picker (/planner) rather than by hand."
         },
         "ordewell.plannerThinkingEffort": {
           "type": "string",

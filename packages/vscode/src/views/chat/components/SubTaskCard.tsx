@@ -50,10 +50,12 @@ const DEFAULT_MODES: RunnerMode[] = [
   { id: 'plan', label: 'Plan', description: 'Read-only analysis' },
 ];
 
-const RUNNER_ABBREV: Record<string, string> = {
-  'claude-code': 'CC',
-  'opencode': 'OC',
-};
+/** Two letters from a runner's display name: its word initials, or the first two letters of a single word. */
+function runnerAbbrev(displayName: string): string {
+  const words = displayName.match(/[A-Z][a-z0-9]*|[a-z0-9]+/g) ?? [];
+  const letters = words.length > 1 ? words.slice(0, 2).map((w) => w[0]).join('') : (words[0] ?? displayName).slice(0, 2);
+  return letters.toUpperCase();
+}
 
 export default function SubTaskCard({ task, parentTask, tasks, models, modes, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry: _onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog }: SubTaskCardProps) {
   const [expanded, setExpanded] = useState(false);
@@ -62,7 +64,8 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
   const modelClass = task.assignedModel ? getModelClass(task.assignedModel.modelId) : '';
   const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;
   const runnerOptions = runnerOptionsFor(runners, task.assignedRunner);
-  const runnerAbbrev = effectiveRunner ? (RUNNER_ABBREV[effectiveRunner] ?? effectiveRunner.slice(0, 2).toUpperCase()) : null;
+  const effectiveRunnerName = runnerOptions.find((r) => r.id === effectiveRunner)?.displayName ?? effectiveRunner;
+  const runnerBadge = effectiveRunnerName ? runnerAbbrev(effectiveRunnerName) : null;
   const row = taskRowView(task, { parent: parentTask, placement: 'subtask', tasks });
   const status = statusBadge(row);
 
@@ -116,8 +119,8 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
             {task.assignedModel.thinkingEffort && (
               <> &middot; {task.assignedModel.thinkingEffort}</>
             )}
-            {runnerAbbrev && (
-              <span className="task-runner-abbrev">{runnerAbbrev}</span>
+            {runnerBadge && (
+              <span className="task-runner-abbrev">{runnerBadge}</span>
             )}
           </span>
         )}

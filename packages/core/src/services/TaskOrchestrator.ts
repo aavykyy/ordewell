@@ -1838,7 +1838,7 @@ export class TaskOrchestrator {
       // refused before a worktree is made for it.
       if (!supportsTaskMode(attempt.runner)) {
         const name = this.registry?.get(attempt.runner)?.manifest.displayName ?? attempt.runner;
-        throw new Error(`${name} has no structured connector, so Ordewell cannot run its tasks. Assign the task to Claude Code, Codex or OpenCode.`);
+        throw new Error(`${name} has no structured connector, so Ordewell cannot run its tasks. Assign the task to another runner.`);
       }
       // The plan fixed this mode when it was made and ADR-0001 forbids
       // swapping it here, so a host that cannot run it ends the attempt

@@ -137,7 +137,7 @@ function printPlan(plan: PlanBody, sessionId: string, runners: string[], models:
 /**
  * Planner settings this CLI documents as environment variables. The daemon
  * reads them from *its* environment, inherited once when it was spawned, so
- * `AI_PROVIDER=codex ordewell plan …` — the invocation `ordewell --help` prints —
+ * `AI_PROVIDER=<runner> ordewell plan …` — the invocation `ordewell --help` prints —
  * did nothing at all against a daemon that was already running: the variable
  * was set on a client process that only speaks HTTP. Forwarding them is what
  * makes the documented form mean what it says.

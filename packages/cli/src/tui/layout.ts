@@ -8,6 +8,7 @@ import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
+import { runnerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
 import { approvalLabel, getProviderMeta, isApiProvider, awaitingLabel, blockedByLabel, skippedLabel, hasHiddenDetail, resumeLabel, resumeTime, runnerForProvider, taskRowView, planUsage, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
 
@@ -642,7 +643,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     ? []
     : [
       ...wrap(
-        style.yellow('Ordewell needs one coding agent installed (Claude Code, Codex, OpenCode) — or an API key from a provider such as OpenRouter, added with /key.'),
+        style.yellow(`Ordewell needs one coding agent installed (${runnerNamesOr()}) — or an API key from a provider such as OpenRouter, added with /key.`),
         Math.max(1, cols - 1),
       ),
       '',

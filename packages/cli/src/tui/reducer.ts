@@ -1,4 +1,4 @@
-import { blockingFailures, EMPTY_HOLD, EMPTY_RUN, fromTranscript, holdPrompt, taskStartedNotice, type RunnerId } from '@ordewell/core';
+import { blockingFailures, DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, fromTranscript, holdPrompt, taskStartedNotice, type RunnerId } from '@ordewell/core';
 import { chatEditorRoomFor } from './geometry';
 import { SPINNER_CYCLE, chatScrollMax } from './layout';
 import { activeToken, composerCompletions, findCommand, parseRunnerCommand, parseSlash, runnerCommandFor, type ParsedCommand } from './slash';
@@ -138,7 +138,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         taskId: action.taskId,
         order: action.order ?? 0,
         title: action.title,
-        runner: (action.runner ?? 'claude-code') as RunnerId,
+        runner: (action.runner ?? DEFAULT_RUNNERS[0]) as RunnerId,
       });
       const spoken = say(folded, 'system', taskStartedNotice(action.title, action.runner));
       return step({ ...spoken, status: 'executing' });

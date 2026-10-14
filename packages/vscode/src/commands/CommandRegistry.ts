@@ -3,7 +3,7 @@ import * as path from 'path';
 import { promises as nodeFs } from 'fs';
 import {
   Session, LegacyPlanState, createEmptyPlan, Task, flattenTasks, flattenTasksWithParents,
-  ModelResolver, RunnerRegistry, saveState, clearState,
+  DEFAULT_RUNNERS, ModelResolver, RunnerRegistry, saveState, clearState,
   listSessions, loadSession,
   SettingsService,
   type AiProvider,
@@ -154,7 +154,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
 
       if (typeValue === 'ai') {
         prompt = await vscode.window.showInputBox({ prompt: 'AI Prompt', placeHolder: 'Detailed instructions for the AI assistant' });
-        const defaultRunner = plan.runners[0] ?? 'claude-code';
+        const defaultRunner = plan.runners[0] ?? DEFAULT_RUNNERS[0];
         const manifest = deps.runnerRegistry.getManifest(defaultRunner);
         const runnerModes = manifest?.modes ?? [];
 

@@ -20,6 +20,7 @@ import type { VsCodeConfig } from './adapters/VsCodeConfig';
 import type { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
 import type { VsCodeNotification } from './adapters/VsCodeNotification';
 import type { CodexSandboxAvailability, IRunner, RunnerInstallation, RunnerRegistry, ModelResolver, SettingsService, PlannerModelMemory } from '@ordewell/core';
+import { plannerSettingProblem } from './plannerSetting';
 
 // A VS Code layout preference, not a run setting: it lives in globalState rather
 // than SettingsService, whose file the CLI and web surfaces also read.
@@ -352,6 +353,17 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     vscodeApi.window.showInformationMessage(`Up to ${limit} AI task${limit === 1 ? '' : 's'} now run at once.`);
   }
 
+  // Warned once per value: a config change fires for every setting, and the
+  // same typo would otherwise re-raise the toast on each one.
+  let warnedPlannerSetting: string | undefined;
+  function checkPlannerSetting(): void {
+    const value = services.config.rawAiProvider;
+    if (value === warnedPlannerSetting) return;
+    const problem = plannerSettingProblem(value);
+    warnedPlannerSetting = problem ? value : undefined;
+    if (problem) vscodeApi.window.showWarningMessage(problem);
+  }
+
   async function start(): Promise<void> {
     services.context.subscriptions.push(
       vscodeApi.window.registerWebviewViewProvider('ordewellChatView', services.chatProvider, { webviewOptions: { retainContextWhenHidden: true } }),
@@ -368,8 +380,10 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     );
 
     restoreState(persistenceDeps());
+    checkPlannerSetting();
 
     services.context.subscriptions.push(services.config.onDidChange(() => {
+      checkPlannerSetting();
       sendRunSettings();
       // A raised parallel limit would otherwise wait for the next verdict to
       // be seen; a no-op while nothing runs.
