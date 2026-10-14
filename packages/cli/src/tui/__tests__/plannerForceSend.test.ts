@@ -61,6 +61,23 @@ describe('ctrl-s in the planner chat', () => {
     expect(state.editor.text).toBe('');
   });
 
+  it('force sends when the session reports a planner turn started by another client', () => {
+    const idle = initialState({ sessionId: 's1', status: 'idle' });
+    const busy = reduce(idle, { type: 'sessionMessage', sessionId: 's1', message: { type: 'planner_turn_started', turnId: 'remote', prompt: 'Research the repository' } }).state;
+    expect(reduce(withDraft(busy, 'Answer this first'), ctrlS).effects).toEqual([
+      { type: 'forceSendPlannerMessage', sessionId: 's1', message: 'Answer this first' },
+    ]);
+  });
+
+  it('settles the force-send request for a turn started by another client', () => {
+    const idle = initialState({ sessionId: 's1', status: 'idle' });
+    const busy = reduce(idle, { type: 'sessionMessage', sessionId: 's1', message: { type: 'planner_turn_started', turnId: 'remote', prompt: 'Research the repository' } }).state;
+    const sent = reduce(withDraft(busy, 'Answer this first'), ctrlS).state;
+    const settled = reduce(sent, { type: 'planUpdated', plan: {}, sessionId: 's1' }).state;
+    expect(settled.forceSendPending).toBeNull();
+    expect(settled.status).toBe('idle');
+  });
+
   it('force sends the newest queued prompt when the composer is empty, keeping the rest in order', () => {
     const { state, effects } = reduce(planning({ queuedPrompts: ['one', 'two'] }), ctrlS);
     expect(effects).toEqual([{ type: 'forceSendPlannerMessage', sessionId: 's1', message: 'two' }]);
