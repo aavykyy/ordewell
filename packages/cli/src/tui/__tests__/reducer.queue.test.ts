@@ -116,7 +116,7 @@ describe('the turn settling sends the next queued prompt', () => {
 
   it('a failing turn sends the queued prompt too', () => {
     const state = queued();
-    const { state: after, effects } = reduce(state, { type: 'failed', message: 'the planner timed out' });
+    const { state: after, effects } = reduce(state, { type: 'failed', message: 'the planner timed out', turn: true });
 
     expect(effects).toEqual([{ type: 'sendMessage', sessionId: 'session-1', message: 'follow up' }]);
     expect(after.planner).toBe('planning');

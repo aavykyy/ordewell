@@ -135,8 +135,12 @@ export type Action =
   | { type: 'inputPrefilled'; text: string; sessionId?: string }
   | { type: 'rewindTargetsLoaded'; targets: RewindTargetView[]; sessionId?: string; pick?: number }
   | { type: 'runnersLoaded'; runners: RunnerView[]; orchestratorModel?: string }
-  /** `code` is the daemon's stable reason for a refusal, when it gave one. */
-  | { type: 'failed'; message: string; code?: DaemonErrorCode }
+  /**
+   * `code` is the daemon's stable reason for a refusal, when it gave one.
+   * `turn` marks a failure of the planner turn's own call, the only kind that
+   * ends the turn; anything else failing mid-turn leaves it running.
+   */
+  | { type: 'failed'; message: string; code?: DaemonErrorCode; turn?: true }
   /** The workspace has no project marker — offer to initialize it rather than just failing. */
   | { type: 'workspaceNeedsInit'; goal: string; workspace: string }
   | { type: 'notice'; message: string; level?: 'info' | 'warn' | 'error' }

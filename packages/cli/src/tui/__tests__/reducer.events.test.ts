@@ -361,7 +361,7 @@ describe('loaded data', () => {
 
 describe('messages from the runtime', () => {
   it('shows a failure as an error turn and clears any spinner', () => {
-    const s = send({ ...initialState(), planner: 'planning' }, { type: 'failed', message: 'boom' });
+    const s = send({ ...initialState(), planner: 'planning' }, { type: 'failed', message: 'boom', turn: true });
     expect(lastMessage(s)).toMatchObject({ role: 'error', text: 'boom' });
     expect(s.planner).toBe('idle');
   });

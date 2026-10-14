@@ -124,7 +124,7 @@ describe('a stopped turn on screen', () => {
 
 describe('the stopped turn\'s own failure', () => {
   const escape = (state: TuiState) => reduce(state, { type: 'key', key: { name: 'escape' } }).state;
-  const fail = (state: TuiState, message: string) => reduce(state, { type: 'failed', message }).state;
+  const fail = (state: TuiState, message: string) => reduce(state, { type: 'failed', message, turn: true }).state;
 
   it('is not reported as an error: the user asked for it, and the stop says so itself', () => {
     const stopped = escape(escape(initialState({ planner: 'planning', sessionId: 'session-1' })));

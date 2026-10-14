@@ -407,7 +407,7 @@ describe('planning', () => {
 
     await runEffect({ type: 'startConversation', goal: 'x' }, h.deps);
     expect(close).toHaveBeenCalled();
-    expect(h.actions).toContainEqual({ type: 'failed', message: 'no key' });
+    expect(h.actions).toContainEqual({ type: 'failed', message: 'no key', turn: true });
   });
 
   it('continues an open conversation', async () => {
@@ -2221,7 +2221,7 @@ describe('following the session', () => {
 
     expect(types(h.actions)).not.toContain('sessionCleared');
     expect(h.follows[0].close).not.toHaveBeenCalled();
-    expect(h.actions).toContainEqual({ type: 'failed', message: 'The planner turn was stopped', code: 'planner_turn_stopped' });
+    expect(h.actions).toContainEqual({ type: 'failed', message: 'The planner turn was stopped', code: 'planner_turn_stopped', turn: true });
   });
 
   it('drops the follow of a first turn the daemon never registered', async () => {
