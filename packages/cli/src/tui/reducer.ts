@@ -105,7 +105,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         focus: tasks.length === 0 ? 'chat' : state.focus,
       });
       if (!plannerInFlight(state)) {
-        return step(settled);
+        return step({ ...settled, forceSendPending: null });
       }
       // The turn a force send stopped can settle with what it had said rather
       // than fail as stopped (see `failed`); the forced turn is still running,
@@ -476,7 +476,7 @@ function handleKey(state: TuiState, key: Key): Step {
   // no turn in flight it is the plain send enter is. A TUI command in the
   // composer is not a message to send, so it runs as it does on enter.
   if (key.name === 'ctrl-s') {
-    return plannerInFlight(state) && !builtInCommand(state.editor.text) ? forceSendPlanner(state) : submit(state);
+    return (plannerInFlight(state) || state.turnGate.open !== null) && !builtInCommand(state.editor.text) ? forceSendPlanner(state) : submit(state);
   }
   if (key.name === 'escape') return step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
   // Page keys and the wheel scroll the transcript. Up/down always go to the

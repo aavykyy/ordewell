@@ -324,6 +324,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
         }
         this.ordewell = ordewellConfig === null ? null : opts.mcp ?? null;
         return {
+          PWD: opts.cwd,
           ...(opts.kind === 'planner' ? OPENCODE_PLANNER_ENV : {}),
           ...(ordewellConfig === null ? {} : { [OPENCODE_CONFIG_VARIABLE]: ordewellConfig }),
           OPENCODE_SERVER_USERNAME: SERVER_USERNAME,

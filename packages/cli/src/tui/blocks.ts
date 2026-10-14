@@ -66,9 +66,11 @@ function messageLines(block: MessageBlock, cols: number): string[] {
     : block.skills ? skillPaintedLines(text, block.skills, room) : wrap(text, room);
   const rest: Paint = ROLE_CONTINUATION[block.role] ?? ((t) => t);
   const rows = wrapped.map((line, i) => (i === 0 ? ROLE_PREFIX[block.role](line) : rest(`  ${line}`)));
-  // A forced message ("Send now") stopped the turn before it; the note rides
-  // its first row and the band's pad drops it when the pane is too narrow.
-  if (block.role === 'user' && block.forced) rows[0] = `${rows[0]}${style.grey(' · sent now')}`;
+  if (block.role === 'user' && block.forced) {
+    const note = style.grey(' · sent now');
+    if (width(rows[0]) + width(note) <= cols) rows[0] += note;
+    else rows.push(` ${note}`);
+  }
   return block.role === 'user' ? onBand(rows, cols) : rows;
 }
 
