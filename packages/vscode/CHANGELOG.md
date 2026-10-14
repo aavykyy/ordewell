@@ -1,5 +1,29 @@
 # Change Log
 
+## [0.10.2] — 2026-10-14
+
+### Added
+
+- **Markdown renders in chat.** Tables, lists, code blocks and quotes display
+  properly; wide tables scroll sideways. Raw HTML is off, only `http(s)` links
+  are links, images show as text, and a single newline is a line break.
+- **Settings panel.** The toggle stays pinned while the body scrolls, and the
+  Run section is a dropdown, collapsed by default with a one-line summary;
+  `/settings` expands it.
+- **A paused task moved to another runner keeps its uncommitted work** instead
+  of starting from scratch (#94).
+
+### Changed
+
+- **`ordewell.aiProvider` is validated at runtime.** An unknown value shows a
+  warning listing the valid choices, and the planner is detected from your API
+  keys instead.
+
+### Fixed
+
+- **Esc closes an expanded task first**, before it reaches the planner turn or
+  clears what you typed.
+
 ## [0.10.1] — 2026-10-14
 
 No extension changes; released alongside the CLI's fixes.

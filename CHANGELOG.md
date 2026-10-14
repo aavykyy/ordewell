@@ -6,6 +6,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
+## [0.10.2] — 2026-10-14
+
+### Added
+
+- **Markdown in replies reads as Markdown.** Tables, lists, code blocks and
+  quotes render in VS Code and in the terminal from one shared parser in
+  `@ordewell/core`. Raw HTML is off, only `http(s)` links are links and
+  images show as text; a single newline is a line break. In VS Code a wide
+  table scrolls sideways. In the terminal a table too wide for the pane is
+  printed one record per row, separated by a rule, and a link prints its URL
+  after its text.
+- **A paused task moved to another runner keeps its uncommitted work.** A task
+  paused on a usage limit and moved to a different runner starts from the
+  previous attempt's files, with a note in its prompt that they came from
+  another runner and may be unfinished. If that work conflicts with what
+  landed meanwhile, the task starts fresh and the note names the saved branch
+  (#94).
+- **VS Code Settings panel.** The panel's toggle stays pinned while the body
+  scrolls, and the Run section is its own dropdown, collapsed by default with a
+  one-line summary of its values; `/settings` expands it.
+
+### Changed
+
+- **A built-in runner is declared once.** Its manifest and connector are the
+  only place a built-in runner is named; the CLI help, `/runners`, the
+  pickers and VS Code read the registry instead of a copy (#72).
+- **VS Code's planner setting is validated, not a fixed dropdown.**
+  `ordewell.aiProvider` accepts any planner the registry knows; an unknown
+  value raises a warning listing the valid choices and the planner is
+  detected from your API keys instead.
+- **Contributors:** `npm run test:quick` and `npm run test:changed` run a
+  smaller test loop, and CONTRIBUTING's "Adding a runner" describes the
+  manifest-and-connector path.
+
+### Fixed
+
+- **`ordewell key set claude-code …` no longer writes a key under an empty
+  name.** A runner that is not an API provider is refused and points to
+  `ordewell key` for the list (#72).
+- **Esc in VS Code closes an expanded task first.** It no longer clears the
+  draft, unsends a queued prompt or arms a stop on the planner turn while a
+  task card is open.
+
 ## [0.10.1] — 2026-10-14
 
 ### Changed
