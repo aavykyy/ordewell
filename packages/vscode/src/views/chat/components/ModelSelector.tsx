@@ -346,6 +346,7 @@ export default function ModelSelector({
                   onChange={(e) => setSearch(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Escape') {
+                      e.preventDefault();
                       setSearch('');
                       closeDropdown();
                     }
