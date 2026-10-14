@@ -1,6 +1,6 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { CodexAdapter } from '../harness/CodexAdapter';
-import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskStartOptions } from '../harness/AgentAdapter';
+import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskStartOptions, TaskModeAgentAdapter } from '../harness/AgentAdapter';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import { CODEX_MANIFEST } from '../../plugins/builtin/codex.manifest';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
@@ -210,7 +210,7 @@ describe('CodexAdapter task sandbox', () => {
     const adapter = new CodexAdapter(processDeps);
     await adapter.start(taskStart('agent'));
     const events: AgentEvent[] = [];
-    await adapter.send('fix sum', (e) => events.push(e));
+    await adapter.send('fix sum', (e) => e.type !== 'runner_loaded' && events.push(e));
 
     const note = events.find((e) => e.type === 'thinking');
     expect(note?.type === 'thinking' && note.text).toMatch(/legacy Landlock/);
@@ -228,7 +228,7 @@ describe('CodexAdapter task turn end', () => {
   ])('ends the turn exactly once on %s', async (_label, endings) => {
     const { adapter, proc } = await startedTask();
     const events: string[] = [];
-    const turn = adapter.send('go', (e) => events.push(e.type));
+    const turn = adapter.send('go', (e) => e.type !== 'runner_loaded' && events.push(e.type));
     proc.emitStdout(turnStarted('turn-a'));
     for (const ending of endings) proc.emitStdout(ending);
     await turn;
@@ -249,7 +249,7 @@ describe('CodexAdapter task turn end', () => {
     await first;
 
     const events: string[] = [];
-    const second = adapter.send('again', (e) => events.push(e.type));
+    const second = adapter.send('again', (e) => e.type !== 'runner_loaded' && events.push(e.type));
     // Both late: the first turn's completion, and an idle before the new turn has started.
     proc.emitStdout(turnCompleted('turn-a') + threadIdle());
     await tick();
@@ -264,7 +264,7 @@ describe('CodexAdapter task turn end', () => {
   it('treats a retrying error as a heartbeat, not the end of the turn', async () => {
     const { adapter, proc } = await startedTask();
     const events: AgentEvent[] = [];
-    const turn = adapter.send('go', (e) => events.push(e));
+    const turn = adapter.send('go', (e) => e.type !== 'runner_loaded' && events.push(e));
     proc.emitStdout(turnStarted('turn-a') + line({ method: 'error', params: { threadId: 'thr-task-1', turnId: 'turn-a', willRetry: true, error: { message: 'stream disconnected; retrying' } } }));
     await tick();
     expect(events).toEqual([]);
@@ -278,7 +278,7 @@ describe('CodexAdapter task turn end', () => {
   it('ignores a subagent thread going idle', async () => {
     const { adapter, proc } = await startedTask();
     const events: string[] = [];
-    void adapter.send('go', (e) => events.push(e.type));
+    void adapter.send('go', (e) => e.type !== 'runner_loaded' && events.push(e.type));
     proc.emitStdout(turnStarted('turn-a') + threadIdle('thr-child-1'));
     await tick();
     expect(events).toEqual([]);
@@ -290,7 +290,7 @@ describe('CodexAdapter task interrupt', () => {
   it('interrupts the running turn by both its ids, and the turn ends as interrupted', async () => {
     const { adapter, proc } = await startedTask();
     const events: AgentEvent[] = [];
-    const turn = adapter.send('go', (e) => events.push(e));
+    const turn = adapter.send('go', (e) => e.type !== 'runner_loaded' && events.push(e));
     proc.emitStdout(turnStarted('turn-a'));
 
     const acknowledged = adapter.interrupt(1000);
@@ -364,7 +364,7 @@ describe('CodexAdapter task interrupt', () => {
     await interrupted;
 
     const events: AgentEvent[] = [];
-    const next = adapter.send('stop sleeping, write the file', (e) => events.push(e));
+    const next = adapter.send('stop sleeping, write the file', (e) => e.type !== 'runner_loaded' && events.push(e));
     proc.emitStdout(turnStarted('turn-b')
       + line({ method: 'item/completed', params: { threadId: 'thr-task-1', turnId: 'turn-a', item: { ...sleep, aggregatedOutput: '', exitCode: 0 } } })
       + line({ method: 'item/started', params: { threadId: 'thr-task-1', turnId: 'turn-b', item: { id: 'cmd-2', type: 'commandExecution', command: 'touch done', cwd: '/repo' } } })
@@ -392,7 +392,7 @@ const commandApproval = (id: number) => line({
 async function openTurn(lines: string[], mode = 'agent') {
   const started = await startedTask(mode);
   const events: AgentEvent[] = [];
-  void started.adapter.send('go', (e) => events.push(e));
+  void started.adapter.send('go', (e) => e.type !== 'runner_loaded' && events.push(e));
   started.proc.emitStdout(turnStarted('turn-a') + lines.join(''));
   await tick();
   return { ...started, events };
@@ -560,7 +560,7 @@ describe('CodexAdapter task channels', () => {
   it('reports commands, file changes, usage and reply text as the planner does, a changed file as a row named for its change', async () => {
     const { adapter, proc } = await startedTask();
     const events: AgentEvent[] = [];
-    const turn = adapter.send('fix sum', (e) => events.push(e));
+    const turn = adapter.send('fix sum', (e) => e.type !== 'runner_loaded' && events.push(e));
     proc.emitStdout(fixture('codex', 'task-turn'));
     await turn;
 
@@ -582,7 +582,7 @@ describe('CodexAdapter task channels', () => {
   it('reports a declined file change as a failed row, announcing a change it never saw start', async () => {
     const { adapter, proc } = await startedTask();
     const events: AgentEvent[] = [];
-    void adapter.send('fix sum', (e) => events.push(e));
+    void adapter.send('fix sum', (e) => e.type !== 'runner_loaded' && events.push(e));
     proc.emitStdout(turnStarted('turn-a') + fileChangeDone('item_f2', 'declined', [{ path: '/repo/x.ts', kind: { type: 'add' }, diff: 'x\n' }]));
     await tick();
 
@@ -707,7 +707,7 @@ describe('CodexAdapter planner boundary (ADR-0008/0009)', () => {
     await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN' });
     const proc = spawned.processes[0];
     const events: AgentEvent[] = [];
-    void adapter.send('plan it', (e) => events.push(e));
+    void adapter.send('plan it', (e) => e.type !== 'runner_loaded' && events.push(e));
     proc.emitStdout(mcpToolApproval(31, 'Allow the todoist MCP server to run tool "find-tasks"?'));
     await tick();
 
@@ -733,7 +733,7 @@ describe('CodexAdapter planner boundary (ADR-0008/0009)', () => {
     await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN' });
     const proc = spawned.processes[0];
     const events: AgentEvent[] = [];
-    void adapter.send('plan it', (e) => events.push(e));
+    void adapter.send('plan it', (e) => e.type !== 'runner_loaded' && events.push(e));
     proc.emitStdout(
       line({ method: 'item/started', params: { threadId: 'thr-codex-1', turnId: 't', item: { type: 'mcpToolCall', id: 'm1', server: 'todoist', tool: 'add-tasks', status: 'inProgress', arguments: {} } } })
       + mcpToolApproval(32, 'Allow this call?'),
@@ -750,7 +750,7 @@ describe('CodexAdapter planner boundary (ADR-0008/0009)', () => {
     await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN' });
     const proc = spawned.processes[0];
     const events: AgentEvent[] = [];
-    void adapter.send('plan it', (e) => events.push(e));
+    void adapter.send('plan it', (e) => e.type !== 'runner_loaded' && events.push(e));
     const call = (status: string, method: string) => line({ method, params: { threadId: 'thr-codex-1', turnId: 't', item: { type: 'mcpToolCall', id: 'm1', server: 'todoist', tool: 'find-tasks', status, arguments: {} } } });
     proc.emitStdout(call('inProgress', 'item/started') + call('completed', 'item/completed') + mcpToolApproval(33, 'Allow this call?'));
     await tick();
@@ -792,7 +792,7 @@ describe('a Codex task on the structured transport', () => {
     const session = await runner.spawn(spawnOptions);
 
     const events: StructuredEvent[] = [];
-    session.onEvent((e) => events.push(e));
+    session.onEvent((e) => e.type !== 'runner_loaded' && events.push(e));
     await until(() => sentNamed(spawned.processes[0].written, 'turn/start').length > 0);
     const proc = spawned.processes[0];
     proc.emitStdout(turnStarted('turn-a') + commandApproval(0));
@@ -1018,7 +1018,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       const adapter = new CodexAdapter(processDeps);
       await adapter.start(taskStart('agent', { mcp }));
       const events: AgentEvent[] = [];
-      void adapter.send('go', (e) => events.push(e));
+      void adapter.send('go', (e) => e.type !== 'runner_loaded' && events.push(e));
       spawned.processes[0].emitStdout(turnStarted('turn-a') + ask(30));
       await tick();
       return { adapter, proc: spawned.processes[0], events };
@@ -1045,7 +1045,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
     const adapter = new CodexAdapter(processDeps);
     await adapter.start(taskStart('agent', { mcp }));
     const events: AgentEvent[] = [];
-    void adapter.send('go', (e) => events.push(e));
+    void adapter.send('go', (e) => e.type !== 'runner_loaded' && events.push(e));
     spawned.processes[0].emitStdout(turnStarted('turn-a') + line({ id: 32, method: 'mcpServer/elicitation/request', params: { threadId: 'thr-task-1', turnId: 'turn-a', serverName, mode: 'form', message: `Allow ${serverName} to run task_complete?`, requestedSchema: { type: 'object', properties: {} } } }));
     await tick();
 
@@ -1184,7 +1184,7 @@ describe('CodexAdapter task steer (ADR-0023)', () => {
   it('steers into the running turn by both its ids, under a client message id its userMessage item later names', async () => {
     const { adapter, proc } = await startedTask();
     const events: AgentEvent[] = [];
-    void adapter.send('go', (e) => events.push(e));
+    void adapter.send('go', (e) => e.type !== 'runner_loaded' && events.push(e));
     proc.emitStdout(turnStarted('turn-a'));
 
     const accepted = adapter.steer('msg-1', 'use Postgres');
@@ -1247,7 +1247,7 @@ describe('CodexAdapter task steer (ADR-0023)', () => {
   ] as const)('drops a steer the turn ended %s without consuming, ahead of the turn\'s end', async (_label, endings, ended) => {
     const { adapter, proc } = await startedTask();
     const events: AgentEvent[] = [];
-    void adapter.send('go', (e) => events.push(e));
+    void adapter.send('go', (e) => e.type !== 'runner_loaded' && events.push(e));
     proc.emitStdout(turnStarted('turn-a'));
     const accepted = adapter.steer('msg-1', 'use Postgres');
     const [steer] = sentNamed(proc.written, 'turn/steer');
@@ -1263,7 +1263,7 @@ describe('CodexAdapter task steer (ADR-0023)', () => {
   it('refuses a steer still unanswered when the turn ends, and ignores the answer that lands after', async () => {
     const { adapter, proc } = await startedTask();
     const events: AgentEvent[] = [];
-    void adapter.send('go', (e) => events.push(e));
+    void adapter.send('go', (e) => e.type !== 'runner_loaded' && events.push(e));
     proc.emitStdout(turnStarted('turn-a'));
     const refused = adapter.steer('msg-1', 'use Postgres');
     const [steer] = sentNamed(proc.written, 'turn/steer');
@@ -1297,7 +1297,7 @@ describe('CodexAdapter task steer (ADR-0023)', () => {
   it('delivers a message whose userMessage item lands before its steer is answered, once', async () => {
     const { adapter, proc } = await startedTask();
     const events: AgentEvent[] = [];
-    void adapter.send('go', (e) => events.push(e));
+    void adapter.send('go', (e) => e.type !== 'runner_loaded' && events.push(e));
     proc.emitStdout(turnStarted('turn-a'));
     const accepted = adapter.steer('msg-1', 'use Postgres');
     const [steer] = sentNamed(proc.written, 'turn/steer');
@@ -1312,7 +1312,7 @@ describe('CodexAdapter task steer (ADR-0023)', () => {
   it('takes the turn\'s own input and another client\'s messages for nothing it sent', async () => {
     const { adapter, proc } = await startedTask();
     const events: AgentEvent[] = [];
-    void adapter.send('go', (e) => events.push(e));
+    void adapter.send('go', (e) => e.type !== 'runner_loaded' && events.push(e));
     proc.emitStdout(turnStarted('turn-a') + userMessage(null) + userMessage('someone-else'));
     await tick();
     expect(events).toEqual([]);
@@ -1327,7 +1327,7 @@ describe('a Codex task taking a message mid-turn on the structured transport', (
     const session = await runner.spawn({ taskId: 'task-0012-steer', runner: 'codex', prompt: 'Fix sum', modelId: 'gpt-5.5', mode: 'fullAccess', cwd: '/repo', registry: new RunnerRegistry() });
 
     const events: StructuredEvent[] = [];
-    session.onEvent((e) => events.push(e));
+    session.onEvent((e) => e.type !== 'runner_loaded' && events.push(e));
     await until(() => sentNamed(spawned.processes[0].written, 'turn/start').length > 0);
     const proc = spawned.processes[0];
     proc.emitStdout(turnStarted('turn-a') + line({ method: 'item/started', params: { threadId: 'thr-task-1', turnId: 'turn-a', item: { id: 'cmd-1', type: 'commandExecution', command: 'sleep 20', cwd: '/repo' } } }));
@@ -1374,4 +1374,72 @@ describe('a Codex task taking a message mid-turn on the structured transport', (
     expect(session.turnState()).toBe('working');
     session.kill();
   });
+});
+
+
+describe('CodexAdapter native commands', () => {
+  it('lists native compaction and enabled skills for this workspace, without custom prompts or TUI commands', async () => {
+    const { processDeps, spawned } = deps(handshake(), { codexDiscovery: (method) => method === 'skills/list'
+      ? { data: [{ cwd: '/repo', skills: [
+        { name: 'hello', description: 'Say hello', path: '/repo/.agents/skills/hello/SKILL.md', enabled: true },
+        { name: 'off', description: 'Disabled', path: '/repo/off', enabled: false },
+      ], errors: [] }] }
+      : { data: [{ name: 'ordewell', runtimeStatus: 'ready' }, { name: 'docs', runtimeStatus: 'ready' }], nextCursor: null } });
+    const adapter: TaskModeAgentAdapter = new CodexAdapter(processDeps);
+    await adapter.start(taskStart('fullAccess'));
+    expect(adapter.commands?.()).toEqual([
+      { name: 'compact', description: 'Compact the conversation context', kind: 'builtin' },
+      { name: 'hello', description: 'Say hello', kind: 'skill' },
+    ]);
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('hi', (e) => events.push(e));
+    spawned.processes[0].emitStdout(line({ method: 'turn/completed', params: { threadId: 'thr-task-1', turn: { id: 'turn-hello', status: 'completed' } } }));
+    await turn;
+    expect(events.find((e) => e.type === 'runner_loaded')).toEqual({ type: 'runner_loaded', commands: adapter.commands?.(), mcpServers: [{ name: 'docs', status: 'ready' }] });
+    expect(sentNamed(spawned.processes[0].written, 'skills/list')[0].params).toEqual({ cwds: ['/repo'] });
+    adapter.dispose();
+  });
+});
+
+
+it('invokes a discovered Codex skill as typed native input with its arguments and plan effort', async () => {
+  const { processDeps, spawned } = deps(handshake(), { codexDiscovery: (method) => method === 'skills/list'
+    ? { data: [{ cwd: '/repo', skills: [{ name: 'hello', description: 'Say hello', path: '/repo/hello/SKILL.md', enabled: true }] }] }
+    : { data: [] } });
+  const adapter: TaskModeAgentAdapter = new CodexAdapter(processDeps);
+  await adapter.start(taskStart('fullAccess', { model: 'gpt-5.5' }));
+  const events: AgentEvent[] = [];
+  const turn = adapter.invokeCommand!('hello', 'Bob', (e) => events.push(e));
+  spawned.processes[0].emitStdout(line({ method: 'turn/completed', params: { threadId: 'thr-task-1', turn: { id: 'skill-turn', status: 'completed' } } }));
+  await turn;
+  expect(sentNamed(spawned.processes[0].written, 'turn/start')[0].params).toEqual({
+    threadId: 'thr-task-1', input: [{ type: 'skill', name: 'hello', path: '/repo/hello/SKILL.md' }, { type: 'text', text: 'Bob' }], effort: 'high',
+  });
+  expect(events.at(-1)).toEqual({ type: 'turn_end' });
+  adapter.dispose();
+});
+
+
+it('waits for Codex native compaction to finish and reports manual and automatic boundaries', async () => {
+  const { processDeps, spawned } = deps(handshake());
+  const adapter: TaskModeAgentAdapter = new CodexAdapter(processDeps);
+  await adapter.start(taskStart('fullAccess'));
+  const events: AgentEvent[] = [];
+  let ended = false;
+  const turn = adapter.invokeCommand!('compact', '', (e) => events.push(e)).then(() => { ended = true; });
+  const proc = spawned.processes[0];
+  const request = sentNamed(proc.written, 'thread/compact/start')[0];
+  expect(request.params).toEqual({ threadId: 'thr-task-1' });
+  proc.emitStdout(line({ id: request.id, result: {} }) + line({ method: 'item/completed', params: { threadId: 'unrelated-thread', item: { id: 'unrelated-compact', type: 'contextCompaction' } } }));
+  await tick();
+  expect(ended).toBe(false);
+  proc.emitStdout(turnStarted('compact-turn') + line({ method: 'item/completed', params: { threadId: 'thr-task-1', item: { id: 'compact-item', type: 'contextCompaction' } } }) + turnCompleted('compact-turn'));
+  await turn;
+  expect(events.filter((e) => e.type === 'compaction')).toEqual([{ type: 'compaction', trigger: 'manual' }]);
+  const next = adapter.send('continue', (e) => events.push(e));
+  proc.emitStdout(turnStarted('next-turn') + line({ method: 'item/completed', params: { threadId: 'thr-task-1', item: { id: 'auto-item', type: 'contextCompaction' } } }) + turnCompleted('next-turn'));
+  await next;
+  expect(events.filter((e) => e.type === 'compaction')).toEqual([{ type: 'compaction', trigger: 'manual' }, { type: 'compaction', trigger: 'auto' }]);
+  expect(sentNamed(proc.written, 'turn/start')).toHaveLength(1);
+  adapter.dispose();
 });

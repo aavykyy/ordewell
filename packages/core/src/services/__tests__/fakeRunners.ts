@@ -175,6 +175,8 @@ function codex(script: FakeRunnerScript): FakeRunner {
         const status = script.attach === 'connected' ? 'ready' : 'failed';
         proc.emitStdout(line({ jsonrpc: '2.0', method: 'mcpServer/startupStatus/updated', params: { name: 'ordewell', status } }));
       }
+    } else if (msg.method === 'skills/list' || msg.method === 'mcpServerStatus/list') {
+      proc.emitStdout(line({ jsonrpc: '2.0', id: msg.id, result: { data: [], nextCursor: null } }));
     } else if (msg.method === 'turn/start') {
       const turn = `turn-${++turns}`;
       proc.emitStdout(line({ jsonrpc: '2.0', id: msg.id, result: { turn: { id: turn, status: 'inProgress', items: [] } } }));

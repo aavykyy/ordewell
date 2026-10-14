@@ -265,6 +265,6 @@ describe('a message read mid-turn in the saved task log (ADR-0023)', () => {
     expect(replayed).toEqual(live);
     expect(replayed.queued).toEqual([]);
     expect(replayed.blocks.map((b) => (b.type === 'message' ? `${b.role}:${b.text}` : b.type)))
-      .toEqual(['user:Do the task', 'tool', 'user:use Postgres', 'agent:Using Postgres.']);
+      .toEqual(['user:Do the task', 'runner_loaded', 'tool', 'user:use Postgres', 'agent:Using Postgres.']);
   });
 });

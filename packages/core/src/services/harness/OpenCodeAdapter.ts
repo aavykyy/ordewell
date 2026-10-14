@@ -1,4 +1,5 @@
 import type { ChildProcess } from 'child_process';
+import type { RunnerCommand, RunnerMcpServer } from '../../models/RunnerCommand';
 import { randomBytes } from 'crypto';
 import { RunnerProcess } from './runnerProcess';
 import { OpenCodeV2 } from './OpenCodeV2';
@@ -252,6 +253,10 @@ function newTurnState(): TurnState {
  */
 export class OpenCodeAdapter implements TaskModeAgentAdapter {
   readonly agentId = 'opencode';
+  private nativeCommands: RunnerCommand[] = [];
+  private readonly nativeSkills = new Map<string, string>();
+  private manualCompaction = false;
+  private loaded: { commands: RunnerCommand[]; mcpServers: RunnerMcpServer[] } | null = null;
 
   private process: ChildProcess | null = null;
   private baseUrl: string | null = null;
@@ -290,6 +295,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
   async start(opts: AgentStartOptions): Promise<void> {
     try {
       await this.launch(opts);
+      if (opts.kind === 'task') await this.loadCommands();
     } catch (err) {
       // The server is already down; this clears what the adapter held for it.
       this.dispose();
@@ -417,8 +423,64 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     this.sessionId = created.id;
   }
 
+  commands(): RunnerCommand[] { return this.nativeCommands.map((command) => ({ ...command })); }
+
+  private async loadCommands(): Promise<void> {
+    // OpenCode 2.0.28's model route awaits plugin activation; its command and skill routes can return an incomplete startup list.
+    if (this.v2) await this.json('GET', '/api/model');
+    const prefix = this.v2 ? '/api' : '';
+    const listed = await this.json<unknown>('GET', `${prefix}/command`).catch(() => null);
+    const skills = await this.json<unknown>('GET', `${prefix}/skill`).catch(() => null);
+    const entries = (value: unknown): unknown[] | null => {
+      const data = this.v2 && value && typeof value === 'object' ? (value as { data?: unknown }).data : value;
+      return Array.isArray(data) ? data : null;
+    };
+    const commands = entries(listed);
+    const skillList = entries(skills);
+    if (!commands && !skillList) return;
+    // Checked on 1.18.34 and 2.0.28: TUI-only built-ins have no command API; compaction has its own session route.
+    this.nativeCommands = [{ name: 'compact', description: 'Compact the conversation context', kind: 'builtin', aliases: ['summarize'] }];
+    for (const entry of commands ?? []) {
+      if (!entry || typeof entry !== 'object') continue;
+      const command = entry as { name?: unknown; description?: unknown; source?: unknown };
+      const name = command.name;
+      if (typeof name !== 'string' || this.nativeCommands.some((c) => c.name === name || c.aliases?.includes(name))) continue;
+      this.nativeCommands.push({ name, description: typeof command.description === 'string' ? command.description : '', kind: command.source === 'skill' ? 'skill' : 'command' });
+    }
+    for (const entry of skillList ?? []) {
+      if (!entry || typeof entry !== 'object') continue;
+      const skill = entry as { name?: unknown; id?: unknown; description?: unknown };
+      const name = skill.name;
+      if (typeof name !== 'string' || this.nativeCommands.some((c) => c.name === name || c.aliases?.includes(name))) continue;
+      this.nativeSkills.set(name, typeof skill.id === 'string' ? skill.id : name);
+      this.nativeCommands.push({ name, description: typeof skill.description === 'string' ? skill.description : '', kind: 'skill' });
+    }
+    const servers = this.v2 ? await this.v2McpStatus() : await this.json<Record<string, { status?: string }>>('GET', '/mcp').catch(() => null);
+    this.loaded = { commands: this.commands(), mcpServers: Object.entries(servers ?? {}).filter(([name]) => name !== 'ordewell').map(([name, state]) => ({ name, ...(state.status ? { status: state.status } : {}) })) };
+  }
+
+  async invokeCommand(name: string, args: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal): Promise<void> {
+    const command = this.nativeCommands.find((entry) => entry.name === name || entry.aliases?.includes(name));
+    if (!command) { onEvent({ type: 'error', message: `OpenCode did not report command /${name}.` }); return; }
+    this.emitLoaded(onEvent);
+    if (this.v2) {
+      await this.v2.invokeCommand(command.name, args, onEvent, signal, this.nativeSkills.get(command.name));
+      if (signal?.aborted) this.dispose();
+      return;
+    }
+    if (!this.task || !this.baseUrl || !this.sessionId) throw new Error('OpenCode task session is not started');
+    await this.sendTask(this.task, args, onEvent, signal, undefined, { name: command.name, args });
+  }
+
+  private emitLoaded(onEvent: (event: AgentEvent) => void): void {
+    if (!this.loaded) return;
+    onEvent({ type: 'runner_loaded', ...this.loaded });
+    this.loaded = null;
+  }
+
   async send(message: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal, onActivity?: () => void): Promise<void> {
     if (!this.baseUrl || !this.sessionId) throw new Error(`OpenCode ${this.role()} session is not started`);
+    this.emitLoaded(onEvent);
     if (this.exited) {
       onEvent({ type: 'error', message: this.exitMessage() });
       return;
@@ -478,6 +540,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     onEvent: (event: AgentEvent) => void,
     signal?: AbortSignal,
     onActivity?: () => void,
+    command?: { name: string; args: string },
   ): Promise<void> {
     const state = newTurnState();
     this.interruptRequested = false;
@@ -488,6 +551,27 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
 
     try {
       try {
+        if (command?.name === 'compact') {
+          if (command.args.trim()) { onEvent({ type: 'error', message: 'OpenCode native compaction does not accept arguments.' }); return; }
+          const model = task.model ? splitModelId(task.model) : null;
+          if (!model) { onEvent({ type: 'error', message: 'OpenCode 1.x compaction requires an assigned model.' }); return; }
+          this.manualCompaction = true;
+          const compacted = await this.json<boolean>('POST', `/session/${this.sessionId}/summarize`, { ...model, auto: false }, signal);
+          if (compacted !== true) { onEvent({ type: 'error', message: 'OpenCode did not compact the session.' }); return; }
+          if (signal?.aborted) { this.dispose(); return; }
+          onEvent({ type: 'turn_end' });
+          return;
+        }
+        if (command) {
+          const reply = await this.json<OpenCodeMessageResponse>('POST', `/session/${this.sessionId}/command`, {
+            command: command.name, arguments: command.args, agent: task.flags.permissionMode,
+            ...(task.model ? { model: task.model } : {}),
+            ...(task.flags.effort ? { variant: task.flags.effort } : {}),
+          }, signal);
+          if (signal?.aborted) { this.dispose(); return; }
+          this.settle(reply, state, onEvent);
+          return;
+        }
         await this.json('POST', `/session/${this.sessionId}/prompt_async`, this.taskPromptBody(task, message), signal);
       } catch (err) {
         if (signal?.aborted) { this.dispose(); return; }
@@ -516,6 +600,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       else this.dispose();
     } finally {
       this.steers.drain();
+      this.manualCompaction = false;
       this.taskTurn = null;
       poll.abort();
       await stream.close();
@@ -871,6 +956,10 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     }
     const session = props.sessionID;
     if (session && session !== this.sessionId && !turn.children.follows(session)) return;
+    if (frame.type === 'session.compacted' && session === this.sessionId) {
+      onEvent({ type: 'compaction', trigger: this.manualCompaction ? 'manual' : 'auto' });
+      return;
+    }
     if (session === this.sessionId && this.taskTurn) this.followTaskTurn(frame, this.taskTurn, onEvent);
     // Answered before anything waits on the `task` call naming its session: a
     // subagent's request blocks the turn exactly as the session's own does.
