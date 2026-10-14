@@ -102,7 +102,7 @@ export default function NewTaskCard({
     <div className="task-add-form">
       <input className="task-add-title" placeholder="Task title" value={title} autoFocus
         onChange={(e) => setTitle(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Escape') reset(); }} />
+        onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); reset(); } }} />
 
       <textarea className="task-prompt-textarea" placeholder="Prompt for the runner (defaults to the title)"
         rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)} />

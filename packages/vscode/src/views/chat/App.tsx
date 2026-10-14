@@ -82,6 +82,7 @@ export default function App() {
   const detail = useMemo(() => ({ detailAll, setDetailAll }), [detailAll]);
   /** A first Esc during a planner turn: one more within `STOP_ARM_MS` stops it. */
   const [stopArmed, setStopArmed] = useState(false);
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const [showModelInfo, setShowModelInfo] = useState(false);
   const [slashOutput, setSlashOutput] = useState('');
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false);
@@ -432,6 +433,10 @@ export default function App() {
   // prompt, else arm a stop, else commit it. Outside a turn it is the input's.
   // The stop is the turn's even mid-run: Esc Esc never halts the tasks.
   const handleEscape = useCallback((): boolean => {
+    if (expandedTaskId !== null) {
+      setExpandedTaskId(null);
+      return true;
+    }
     if (!isResearchActive) return false;
     if (held.length > 0) {
       setStopArmed(false);
@@ -443,7 +448,21 @@ export default function App() {
       setStopArmed(true);
     }
     return true;
-  }, [isResearchActive, held, stopArmed, handleUnsend, stopTurn]);
+  }, [expandedTaskId, isResearchActive, held, stopArmed, handleUnsend, stopTurn]);
+
+  // Esc closes an open card first, wherever focus is. Inner handlers (card
+  // editors, pickers, the input) mark theirs with preventDefault, so one Esc
+  // does one thing.
+  useEffect(() => {
+    if (expandedTaskId === null) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      e.preventDefault();
+      setExpandedTaskId(null);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [expandedTaskId]);
 
   // The pairing is what keeps a stray tap from cancelling a turn, so an arm
   // lapses on its own, and never outlives the turn it was aimed at.
@@ -673,6 +692,8 @@ export default function App() {
           )}
           <TaskCommandsBridge.Provider value={postTaskCommand}>
             <PlanCardGroup
+              expandedTaskId={expandedTaskId}
+              onExpandedTaskChange={setExpandedTaskId}
               tasks={plan.tasks}
               run={run}
               models={models}

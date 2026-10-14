@@ -325,7 +325,10 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
 
   const handlePromptKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handlePromptSave();
-    if (e.key === 'Escape') setEditingPrompt(null);
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      setEditingPrompt(null);
+    }
   };
 
   const toggleStep = (order: number) => {

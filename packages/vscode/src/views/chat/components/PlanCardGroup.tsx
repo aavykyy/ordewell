@@ -54,6 +54,9 @@ interface PlanCardGroupProps {
   onSendMessageNow?: (taskId: string, text: string) => void;
   /** Open (or focus) a structured task's log tab (ADR-0018, V1). */
   onOpenLog?: (taskId: string) => void;
+  /** Owned by the host surface when it must close the open card itself (Esc). */
+  expandedTaskId?: string | null;
+  onExpandedTaskChange?: (taskId: string | null) => void;
 }
 
 export default function PlanCardGroup({
@@ -94,11 +97,15 @@ export default function PlanCardGroup({
   onSendMessage,
   onSendMessageNow,
   onOpenLog,
+  expandedTaskId: expandedTaskIdProp,
+  onExpandedTaskChange,
 }: PlanCardGroupProps) {
   const [mergeSelectedIds, setMergeSelectedIds] = useState<string[]>([]);
   const [mergeValidationError, setMergeValidationError] = useState<string | null>(null);
   // Accordion: at most one top-level task open at a time.
-  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+  const [internalExpandedTaskId, setInternalExpandedTaskId] = useState<string | null>(null);
+  const expandedTaskId = expandedTaskIdProp !== undefined ? expandedTaskIdProp : internalExpandedTaskId;
+  const setExpandedTaskId = onExpandedTaskChange ?? setInternalExpandedTaskId;
   const usage = planUsage(tasks);
   const sorted = [...tasks].sort((a, b) => a.order - b.order);
   const mergeMode = mergeSelectedIds.length > 0;
@@ -187,6 +194,7 @@ export default function PlanCardGroup({
 
   const handleMergeKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
+      e.preventDefault();
       cancelMerge();
     }
   }, [cancelMerge]);
