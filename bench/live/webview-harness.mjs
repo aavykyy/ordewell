@@ -104,7 +104,7 @@ function page(theme, script) {
   body { margin: 0; }
 </style>
 </head>
-<body>
+<body class="vscode-${theme}">
 <div id="root"></div>
 <script>
   window.__posted = [];

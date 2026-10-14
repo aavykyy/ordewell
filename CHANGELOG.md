@@ -361,6 +361,13 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   "Task 1"), and the prompts the planner is given for a merge, a split and a
   conflict all read `#2.1` now, never an order that only meant something at
   the top level.
+- **VS Code's task cards stand out in light themes.** A card used the
+  sidebar colour, which light themes paint the same near-white as the plan
+  behind it, so only its outline showed. Cards now take a fill a step toward
+  the theme's text colour, with hover and the open card a step further; dark
+  themes look as before and high-contrast themes keep plain outlines. In light
+  themes the badges, task numbers and secondary text on a card now reach AA
+  contrast.
 
 ### Documentation
 
