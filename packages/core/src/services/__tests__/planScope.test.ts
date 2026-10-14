@@ -54,7 +54,7 @@ describe('the plan scope ends', () => {
     expect(session.isExecuting).toBe(false);
   });
 
-  it('when another plan is adopted after a failure halted the run, nothing of that run carries over', async () => {
+  it('when another plan is adopted after a run ended on a failure, nothing of that run carries over', async () => {
     const runner = {
       spawn: vi.fn(async ({ taskId }: Parameters<IRunner['spawn']>[0]) => new FakeRunnerSession(`s-${taskId}`, taskId)),
       stop: vi.fn(),

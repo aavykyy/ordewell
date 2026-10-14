@@ -105,6 +105,26 @@ describe('a task paused on a usage limit', () => {
     expect(spawn.mock.calls[2][0].taskId).toBe('t2');
   });
 
+  it('holds the run until the reset even past a failure, then resumes it (ADR-0034)', async () => {
+    const { orchestrator, sessions, spawn, task } = setup({ maxParallelSessions: 2 });
+    orchestrator.loadPlan([
+      createTask({ id: 't1', order: 1, title: 'Paused', prompt: 'do first' }),
+      createTask({ id: 'f', order: 2, title: 'Fails', prompt: 'do it' }),
+      createTask({ id: 't3', order: 3, title: 'Independent', prompt: 'do third' }),
+    ]);
+    await orchestrator.approveReview();
+
+    hitLimitInTurn(sessions[0]);
+    await until(() => task('t1').status === 'awaiting_user');
+    sessions[1].reportComplete({ status: 'failed', summary: '', reason: 'broke' });
+    await until(() => task('f').status === 'failed');
+    expect(spawn).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now());
+    await until(() => spawn.mock.calls.length === 4);
+    expect(spawn.mock.calls.slice(2).map(([o]) => o.taskId)).toEqual(['t1', 't3']);
+  });
+
   it('pauses the same way when the runner exits on the limit', async () => {
     const { orchestrator, sessions, spawn, task } = setup();
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
@@ -263,7 +283,7 @@ describe('a task paused on a usage limit', () => {
       await orchestrator.approveReview();
       hitLimitInTurn(sessions[0]);
       await until(() => orchestrator.storeInstance.get('t1')!.status === 'awaiting_user');
-      expect(orchestrator.isHaltedByFailure).toBe(true);
+      expect(orchestrator.awaitsResume).toBe(true);
 
       boom = true;
       await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now());

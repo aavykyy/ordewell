@@ -347,6 +347,24 @@ describe('the loop guards', () => {
   });
 });
 
+describe('a failure at Act (ADR-0034)', () => {
+  it('ends the run with the failed task\'s dependent blocked, and a retry after an edit runs the dependent once it passes', async () => {
+    const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], ACT);
+    env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
+    await until(() => env.planner.calls.length === 1);
+    expect(env.planner.calls[0].message).toMatch(/failed: .*the import is wrong; it blocks task #2 "Task t2"/);
+
+    await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#1', changes: { prompt: 'do t1, importing from ./lib' } }] }, ctx);
+    await env.planner.tools().retryTask!({ task: '1', from: 'fresh' }, ctx);
+    env.planner.calls[0].finish(prose('Fixed the import in task 1 and retried it.'));
+    await until(() => env.run.spawnedIds().length === 2);
+    env.run.of('t1').reportComplete({ status: 'done', summary: '' });
+
+    await until(() => env.run.spawnedIds().includes('t2'));
+    expect(env.run.spawnedIds()).toEqual(['t1', 't1', 't2']);
+  });
+});
+
 describe('merge_all as a planner tool', () => {
   /** An Act run whose change task landed, its ops task waiting at the gate, and the supervisor woken by task 3. */
   async function gated() {

@@ -121,5 +121,27 @@ describe('handleStatus --output', () => {
     expect(stdout).toContain('Tasks:    5 total  |  4 done');
     srv.close();
   });
-});
 
+  it('counts and names the tasks a failure blocks (ADR-0034)', async () => {
+    const session = {
+      meta: { ...SESSION.meta, status: 'approved' },
+      plan: {
+        pendingTasks: [
+          { id: 't1', order: 1, title: 'One', status: 'failed', dependencies: [] },
+          { id: 't2', order: 2, title: 'Two', status: 'pending', dependencies: ['t1'] },
+          { id: 't3', order: 3, title: 'Three', status: 'pending', dependencies: ['t2'] },
+        ],
+      },
+    };
+    const srv = await startServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(session));
+    });
+    const { handleStatus } = await import('../status');
+    const { stdout } = await capture(() => handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)));
+
+    expect(stdout).toContain('1 failed  |  0 running  |  2 blocked');
+    expect(stripAnsi(stdout).match(/Blocked by #1/g)).toHaveLength(2);
+    srv.close();
+  });
+});

@@ -268,6 +268,15 @@ describe('execution', () => {
     expect(s.status).toBe('idle');
     expect(lastMessage(s)?.text).toBe('Execution stopped — 1/2 tasks complete · 1 failed.');
   });
+
+  it('says how many tasks a failure blocked when the run finishes (ADR-0034)', () => {
+    const s = send(initialState({ ...withTasks, status: 'executing' }), {
+      type: 'executionComplete',
+      summary: { total: 5, completed: 2, failed: 1, blocked: 2 },
+    });
+
+    expect(lastMessage(s)?.text).toBe('Execution finished — 2/5 tasks complete · 1 failed · 2 blocked.');
+  });
 });
 
 describe('loaded data', () => {

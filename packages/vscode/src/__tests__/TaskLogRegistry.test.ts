@@ -290,7 +290,7 @@ describe('task-log tabs over a whole run (ADR-0018, V1)', () => {
       { type: 'task_log', taskId: 't1', attempt: 1, events: [{ type: 'approval_requested', approvalId: 'ap-1', tool: 'Write', args: '{}', allowForTask: false }] },
       { type: 'status_update', tasks: [] },
       { type: 'task_updated', taskId: 't1', changes: { status: 'awaiting_user' } },
-      { type: 'execution_complete', summary: { total: 1, completed: 0, failed: 1 } },
+      { type: 'execution_complete', summary: { total: 1, completed: 0, failed: 1, blocked: 0 } },
       { type: 'execution_stopped' },
     ];
     for (const msg of heard) h.registry.receive(msg);

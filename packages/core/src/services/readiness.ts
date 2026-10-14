@@ -2,10 +2,11 @@ import type { Task } from '../models/Task';
 import type { PlanStore } from './PlanStore';
 import type { IsolationRunController } from './IsolationRunController';
 import { classifyAttempt, mergeExcludes } from './attemptKind';
+import { blockingFailures } from './blocking';
 
 /** What the scheduler may read to decide what runs: read-only plan state, the holds, and the open isolated run. */
 export interface ReadinessInput {
-  store: Pick<PlanStore, 'allTasks' | 'isCompleted' | 'isFailed' | 'isOps'>;
+  store: Pick<PlanStore, 'allTasks' | 'isCompleted' | 'isOps'>;
   /** Task ids pulled out of auto-scheduling (cancelled, or a spawn that failed). */
   onHold: ReadonlySet<string>;
   /**
@@ -41,7 +42,7 @@ export interface Readiness {
 /**
  * The scheduler's readiness rule as one pure function over the plan and the
  * holds: an AI task with a prompt is ready while it is pending or approved,
- * off hold, unblocked, and every dependency's work is on the integration
+ * off hold, not blocked (ADR-0034), and every dependency's work is on the integration
  * branch. An ops task also waits at its merge gate, and while a Merge all is
  * under way (ADR-0020). `active` is the slots already taken, so no more than
  * `maxParallel` run at once.
@@ -51,13 +52,14 @@ export function selectReadyTasks(input: ReadinessInput): Readiness {
   if (active >= maxParallel) return { ready: [], candidateCount: 0, excluded: [], gated: [] };
   const availableSlots = maxParallel - active;
 
+  const blocked = blockingFailures(store.allTasks);
   const gated: Task[] = [];
   const candidates = store.allTasks.filter((t) => {
     if (t.status !== 'pending' && t.status !== 'approved') return false;
     if (t.type === 'user') return false;
     if (!t.prompt) return false;
     if (onHold.has(t.id)) return false;
-    if (isBlocked(t, store)) return false;
+    if (blockedIn(t, blocked)) return false;
     if (!t.dependencies.every((depId) => dependencyMet(depId, store, runs))) return false;
     if (heldByMerge(t, input)) return false;
     if (mergeGate(t, store, runs).length > 0) {
@@ -69,7 +71,7 @@ export function selectReadyTasks(input: ReadinessInput): Readiness {
 
   const excluded = store.allTasks
     .filter((t) => t.type === 'ai' && t.prompt && !candidates.includes(t))
-    .map((task) => ({ task, reasons: exclusionReasons(task, input) }));
+    .map((task) => ({ task, reasons: exclusionReasons(task, input, blocked) }));
 
   return {
     ready: candidates.sort((a, b) => a.order - b.order).slice(0, availableSlots),
@@ -79,12 +81,13 @@ export function selectReadyTasks(input: ReadinessInput): Readiness {
   };
 }
 
-/** A task is blocked when it was parked as blocked, or a dependency of it failed. */
-export function isBlocked(task: Readonly<Task>, store: Pick<PlanStore, 'isFailed'>): boolean {
-  if (task.status === 'blocked') return true;
-  if (task.dependencies.length > 0) return task.dependencies.some((depId) => store.isFailed(depId));
-  return false;
+/** A task is blocked when it was parked as blocked, or a dependency of it failed or is blocked (ADR-0034). */
+export function isBlocked(task: Readonly<Task>, store: Pick<PlanStore, 'allTasks'>): boolean {
+  return blockedIn(task, blockingFailures(store.allTasks));
 }
+
+const blockedIn = (task: Readonly<Task>, blocked: ReadonlyMap<string, string[]>): boolean =>
+  task.status === 'blocked' || blocked.has(task.id);
 
 /**
  * In an isolated run a dependency is met once its work is on the integration
@@ -118,12 +121,12 @@ export function mergeGate(
   return task.dependencies.filter((depId) => store.isCompleted(depId) && runs.awaitsMerge(depId));
 }
 
-function exclusionReasons(task: Readonly<Task>, input: ReadinessInput): string[] {
+function exclusionReasons(task: Readonly<Task>, input: ReadinessInput, blocked: ReadonlyMap<string, string[]>): string[] {
   const { store, onHold, runs } = input;
   const reasons: string[] = [];
   if (task.status !== 'pending' && task.status !== 'approved') reasons.push(`status=${task.status}`);
   if (onHold.has(task.id)) reasons.push('on-hold');
-  if (isBlocked(task, store)) reasons.push('blocked');
+  if (blockedIn(task, blocked)) reasons.push('blocked');
   if (!task.dependencies.every((depId) => dependencyMet(depId, store, runs))) reasons.push('deps');
   if (mergeGate(task, store, runs).length > 0) reasons.push('merge-gate');
   if (heldByMerge(task, input)) reasons.push('merging');

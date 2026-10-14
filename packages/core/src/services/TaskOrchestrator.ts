@@ -25,6 +25,7 @@ import { completesTask, Landing, type LandingMessage, type LandingOutcome, type 
 import { classifyRunnerStop, readUsageLimitReset, stopsRunner, type AttemptEnd } from './runnerExit';
 import { UsageLimitWaits } from './UsageLimitWaits';
 import { mergeGate, selectReadyTasks, type Readiness } from './readiness';
+import { blockingFailures } from './blocking';
 import {
   attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, mergeExcludes, takesSkills,
   type AttemptKind, type Continuation,
@@ -271,12 +272,14 @@ export class TaskOrchestrator {
    */
   private retryCounts = new Map<string, number>();
   private spawnCounts = new Map<string, number>();
+  /** A full-plan run a usage-limit pause holds: no new start until the reset resumes it. */
+  private heldOnLimit = false;
   /**
-   * A full-plan run a failure paused. Retrying the failed task is the explicit
-   * resume the pause waits for — without this a retry only reset the task to
-   * pending and nothing ran until the user also re-ran the whole plan.
+   * A full-plan run that ended with failed tasks and the tasks they block
+   * (ADR-0034). A retry of a failed task continues it, so what it blocked
+   * starts once it passes — without this the retried task ran alone.
    */
-  private haltedByFailure = false;
+  private endedOnFailure = false;
   /** A Merge all is under way: no ops task starts until it ends (ADR-0020). */
   private merging = false;
   /** The last "waiting for Merge all" notice, so a run paused at a gate says it once, not on every tick. */
@@ -627,8 +630,11 @@ export class TaskOrchestrator {
   get isReviewApproved(): boolean { return this.reviewApproved; }
   /** The scheduler is driving the plan: ready tasks start on their own as slots free. Narrower than {@link isRunning}. */
   get isScheduling(): boolean { return this.running; }
-  /** A full-plan run a failure paused, which a retry of the failed task resumes. */
-  get isHaltedByFailure(): boolean { return this.haltedByFailure && !this.running; }
+  /**
+   * A full-plan run with nothing starting that something still resumes: a
+   * usage limit's reset, or a retry of a failed task its blocked tasks wait on.
+   */
+  get awaitsResume(): boolean { return !this.running && (this.heldOnLimit || this.endedOnFailure); }
   get status(): 'approved' | 'running' | 'completed' { return this.planStatus; }
   get activeTaskIds(): string[] { return [...this.activeSessionMap.keys()]; }
   /** Task id → session id of every attempt whose runner is up; a spawn in flight has no session yet. */
@@ -746,6 +752,11 @@ export class TaskOrchestrator {
     return mergeGate(task, this.store, this.runs);
   }
 
+  /** The failed tasks a task not started yet waits on, through its dependencies (ADR-0034); empty when it is not blocked. */
+  getBlockedBy(taskId: string): string[] {
+    return blockingFailures(this.store.planTasks).get(taskId) ?? [];
+  }
+
   loadPlan(tasks: readonly Task[], planRunners: RunnerId[] = [...DEFAULT_RUNNERS]): void {
     this.store.load(tasks, planRunners);
     const repairs = this.endAllAttempts('load').filter((a) => a.kind.kind === 'repair' && a.worktree);
@@ -753,10 +764,11 @@ export class TaskOrchestrator {
     // A plan committed while the scheduler runs keeps that run, and its mode
     // with it; otherwise the next start decides afresh.
     this.runs.interrupt({ keepOpen: this.running });
-    // A failure's halt belongs to the plan it failed in, whose failed tasks this
+    // A held or ended run belongs to the plan it was in, whose failed tasks this
     // load gives a fresh chance: left set, the next retry would restart a run
     // nobody started, and a usage-limit move would arm the scheduler.
-    this.haltedByFailure = false;
+    this.heldOnLimit = false;
+    this.endedOnFailure = false;
     this.planStatus = 'approved';
     this.reviewApproved = false;
     this.retryCounts.clear();
@@ -778,7 +790,7 @@ export class TaskOrchestrator {
    * "pending" would offer the scheduler work a runner is already doing.
    *
    * A failed task stays failed, unlike a plan load's fresh chance: an edit is
-   * not a retry, and a run a failure halted waits for that retry.
+   * not a retry, and the tasks it blocks wait for that retry (ADR-0034).
    */
   reconcilePlan(newTasks: Task[], planRunners: RunnerId[] = [...DEFAULT_RUNNERS]): void {
     const adopted = [...newTasks];
@@ -816,20 +828,23 @@ export class TaskOrchestrator {
     this.openRun(origin);
     console.log(`[TaskOrchestrator] Starting with ${this.store.allTasks.length} tasks (${this.store.allTasks.filter(t => t.type === 'ai' && t.prompt).length} AI ready)`);
     this.running = true;
-    this.haltedByFailure = false;
+    this.heldOnLimit = false;
+    this.endedOnFailure = false;
     this.planStatus = 'running';
     this.emit('onTaskChanged');
     await this.tick();
   }
 
-  private haltOnFailure(): void {
-    if (this.running) this.haltedByFailure = true;
+  /** A usage-limit pause holds the run: spawning more would spend the same exhausted limit. */
+  private holdOnLimit(): void {
+    if (this.running) this.heldOnLimit = true;
     this.running = false;
     this.planStatus = 'approved';
   }
 
   stop(): void {
-    this.haltedByFailure = false;
+    this.heldOnLimit = false;
+    this.endedOnFailure = false;
     this.running = false;
     this.planStatus = 'approved';
     // Let the verifier go before the runners: a killed session fires its exit
@@ -919,7 +934,8 @@ export class TaskOrchestrator {
    * a throw from reading the output, landing, releasing a worktree or the tick
    * after would be an unhandled rejection — and an attempt left integrating is
    * live work forever. One that never settled fails (a repair waits on the
-   * user, as its conflict did); either way the run halts and says why.
+   * user, as its conflict did) and blocks only its dependents; either way the
+   * run says why and goes on.
    */
   private async deliverVerdict(taskId: string, verdict: Verdict): Promise<void> {
     const attempt = this.attempts.get(taskId);
@@ -938,8 +954,7 @@ export class TaskOrchestrator {
           // Its landing may be what threw, so the release does not wait on it.
           if (attempt.worktree) this.unawaited(this.runs.release(taskId, { keep: true }), `Could not keep the worktree of task "${title}"`);
         }
-        this.haltOnFailure();
-        this.tell('error', unsettled ? `Task "${title}" could not be settled: ${reason}` : `Task "${title}" settled, but the run could not go on: ${reason}`);
+        this.tell('error', unsettled ? `Task "${title}" could not be settled: ${reason}` : `Task "${title}" settled, but what follows it could not be scheduled: ${reason}`);
         this.unawaited(this.afterVerdict(taskId), 'The run could not be closed');
       } catch (cleanupErr) {
         // Nothing awaits a verdict, so this is the last place its failure can surface.
@@ -996,11 +1011,10 @@ export class TaskOrchestrator {
       this.pauseOnLimit(task, attempt, attempt.session?.getOutput() ?? '');
       if (attempt.worktree) await this.runs.release(taskId, { keep: true });
     } else {
+      // Missing completion evidence is a hard boundary for what depends on
+      // this task: its dependents are blocked until a retry passes
+      // (ADR-0034). Independent work keeps starting.
       this.store.markFailed(taskId);
-      // Missing completion evidence is a hard boundary: do not launch more
-      // work from a full-plan run until the user retries/resumes explicitly.
-      // Already-active parallel tasks may finish, but no new task is spawned.
-      this.haltOnFailure();
       this.notifications.error(unresumedReason ?? `Task "${task.title}" failed verification: ${verdict.reason}`);
       if (attempt.worktree) await this.runs.release(taskId, { keep: true });
     }
@@ -1031,7 +1045,7 @@ export class TaskOrchestrator {
   /**
    * A repair's verdict never replaces the verdict the task's own work earned,
    * and a repair that does not land leaves the task waiting on the user —
-   * never a failed task, so never a halted run.
+   * never a failed task, so never one that blocks its dependents.
    */
   private async settleRepair(task: Task, attempt: TaskAttempt, verdict: Verdict): Promise<void> {
     const outcome = await this.land(attempt, () => this.landing.settleRepair(task, verdict, () => this.attempts.get(task.id) === attempt));
@@ -1068,8 +1082,8 @@ export class TaskOrchestrator {
 
   /**
    * Work that did not land waits on the user — it never fails the task or
-   * halts the run — unless its conflict is owed a repair, which takes the slot
-   * the ending attempt freed and never one more than the run allows.
+   * blocks its dependents — unless its conflict is owed a repair, which takes
+   * the slot the ending attempt freed and never one more than the run allows.
    */
   private settleUnlanded(task: Task, outcome: UnlandedOutcome): void {
     this.store.markAwaitingUser(task.id, 'conflict');
@@ -1289,6 +1303,7 @@ export class TaskOrchestrator {
   async retryTask(taskId: string, origin: RunOrigin = 'user'): Promise<void> {
     const task = this.store.get(taskId);
     if (!task) return;
+    const resumes = this.awaitsResume;
     this.retryCounts.set(taskId, (this.retryCounts.get(taskId) ?? 0) + 1);
     const ended = this.endAttempt(taskId, 'retry');
     this.store.retry(taskId);
@@ -1298,7 +1313,8 @@ export class TaskOrchestrator {
     // A retry starts over from the integration tip, which by now holds what its
     // predecessors landed; the old attempt's worktree has nothing to offer it.
     await this.runs.release(taskId, { keep: false }, ended?.integration);
-    if (this.haltedByFailure && !this.running) await this.start(origin);
+    // A retry resumes a run that waits on one, so what the task blocked starts once it passes (ADR-0034).
+    if (resumes) await this.start(origin);
     else await this.tick();
   }
 
@@ -1328,7 +1344,7 @@ export class TaskOrchestrator {
     // Claimed before anything is awaited, so a running scheduler never sees the
     // pending task and starts it afresh. Its prepare replaces the old worktree.
     const started = this.startTask(task, { message: text, resumeSessionId: eligible.sessionId });
-    const resumed = this.haltedByFailure && !this.running ? this.start(origin) : Promise.resolve();
+    const resumed = this.awaitsResume ? this.start(origin) : Promise.resolve();
     // Both are awaited even if one fails: the claimed attempt's start must not
     // be left unhandled because restarting the run threw.
     await Promise.all([resumed, started]);
@@ -1361,9 +1377,9 @@ export class TaskOrchestrator {
     if ((next.assignedRunner ?? this.store.planRunners[0]) === this.store.resolveTaskRunner(task)) return changes;
     this.cancelScheduledResume(taskId);
     this.onHold.delete(taskId);
-    if (this.haltedByFailure && !this.store.isAnyFailed()) {
+    if (this.heldOnLimit) {
       this.running = true;
-      this.haltedByFailure = false;
+      this.heldOnLimit = false;
       this.planStatus = 'running';
     }
     return { ...changes, status: 'pending', awaitingReason: undefined, resumeAt: undefined };
@@ -1380,7 +1396,7 @@ export class TaskOrchestrator {
    */
   private pauseOnLimit(task: Readonly<Task>, attempt: TaskAttempt, said: string): void {
     this.store.markAwaitingUser(task.id, 'usage-limit');
-    this.haltOnFailure();
+    this.holdOnLimit();
     const kept = attempt.worktree ? ' — its worktree is kept' : '';
     const reset = readUsageLimitReset(attempt.runner, said);
     const relapsed = attempt.autoResumed && Date.now() - Date.parse(attempt.startedAt) < RELAPSE_MS;
@@ -1454,8 +1470,7 @@ export class TaskOrchestrator {
   /**
    * Retry a task paused on a usage limit, continuing its saved session where
    * it left one (ADR-0018, K1), then release the hold the pause put on the
-   * run — once nothing else waits on a reset, and never past a failure, which
-   * waits for the user.
+   * run once nothing else waits on a reset.
    */
   private async resumeTask(taskId: string): Promise<void> {
     if (!(await this.openFor(taskId, 'limit-reset', () => this.resumeTask(taskId)))) return;
@@ -1467,7 +1482,7 @@ export class TaskOrchestrator {
     this.onHold.delete(taskId);
     const continuation = resumeSessionId ? { message: LIMIT_RESET_MESSAGE, resumeSessionId } : null;
     const started = this.startTask(task, continuation, { autoResumed: true });
-    const resumed = this.haltedByFailure && !this.running && !this.store.isAnyFailed() && !this.store.allTasks.some(waitsForReset) ? this.start('limit-reset') : Promise.resolve();
+    const resumed = this.heldOnLimit && !this.running && !this.store.allTasks.some(waitsForReset) ? this.start('limit-reset') : Promise.resolve();
     // Both are awaited even if one fails: the claimed attempt's start must not
     // be left unhandled because restarting the run threw.
     await Promise.all([resumed, started]);
@@ -1547,8 +1562,8 @@ export class TaskOrchestrator {
   async tick(): Promise<void> {
     this.recoverOrphans();
     if (!this.running) {
-      // A run the scheduler is not driving — a manual task run, or a halted
-      // plan's remaining attempts — is closed by a verdict only. Ended by
+      // A run the scheduler is not driving — a manual task run, or a run held
+      // on a usage limit with attempts left — is closed by a verdict only. Ended by
       // cancel, Mark complete or a failed spawn instead, it would stay open, and
       // the next run would inherit its mode rather than decide its own.
       if (this.attempts.size === 0 && this.runs.isOpen && this.settled) await this.closeRun();
@@ -1592,11 +1607,23 @@ export class TaskOrchestrator {
         if (!remainingById.has(task.id)) continue;
         console.log(`  - ${label}. ${task.title} [${task.type}/${task.status}] prompt=${!!task.prompt}`);
       }
+      const blocked = blockingFailures(this.store.planTasks);
       if (this.store.isAllComplete()) {
         // Genuinely done — stop the loop so a fresh Execute click can start it again.
         this.running = false;
         this.planStatus = 'completed';
         this.notifications.info('All tasks completed!');
+        this.emit('onTaskChanged');
+        this.emit('onTick');
+        await this.closeRun();
+        this.emit('onExecutionComplete');
+      } else if (remaining.every((t) => t.status === 'failed' || t.status === 'blocked' || blocked.has(t.id))) {
+        // Nothing left can start until a failed task is retried (ADR-0034):
+        // the run ends, and a retry continues it.
+        this.running = false;
+        this.endedOnFailure = true;
+        this.planStatus = 'approved';
+        this.sayEndedOnFailure(blocked);
         this.emit('onTaskChanged');
         this.emit('onTick');
         await this.closeRun();
@@ -1635,6 +1662,16 @@ export class TaskOrchestrator {
       if (task) await this.startTask(task);
     }
     this.emit('onTick');
+  }
+
+  /** How a run that ended on failures ends: what it finished, what failed, and what that blocks. */
+  private sayEndedOnFailure(blocked: ReadonlyMap<string, string[]>): void {
+    const tasks = this.store.allTasks;
+    const failed = tasks.filter((t) => t.status === 'failed');
+    const stuck = tasks.filter((t) => t.status === 'blocked' || blocked.has(t.id));
+    const counts = `${tasks.filter((t) => t.status === 'completed').length} completed, ${failed.length} failed, ${stuck.length} blocked`;
+    const retry = stuck.length > 0 ? ' A blocked task starts once the failed task it waits on is retried and passes.' : '';
+    this.tell('warn', `Run finished: ${counts}.${retry}`);
   }
 
   /** Whether the scheduler may start `id` now: it passes every readiness gate and a slot is free. */
@@ -1836,7 +1873,6 @@ export class TaskOrchestrator {
         this.store.markFailed(task.id);
         this.store.setTaskOutputSummary(task.id, summarizeOutput(err.message, ''));
         await this.runs.release(task.id, { keep: false });
-        this.haltOnFailure();
         this.tell('error', err.message);
         this.emit('onTaskSettled', { taskId: task.id });
         this.emit('onTaskChanged');
@@ -1847,7 +1883,6 @@ export class TaskOrchestrator {
         this.store.markFailed(task.id);
         this.store.setTaskOutputSummary(task.id, summarizeOutput(err.message, err.message));
         await this.runs.release(task.id, { keep: true });
-        this.haltOnFailure();
         this.tell('error', err.message);
         this.emit('onTaskSettled', { taskId: task.id });
         this.emit('onTaskChanged');

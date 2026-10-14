@@ -2,7 +2,7 @@ import { taskUsageText } from '../tui/blocks';
 import { writeFileSync } from 'fs';
 import { flag, hasFlag, readLastSession } from '../utils';
 import { iconFor } from '../utils/output';
-import { flattenTasks, taskOrderLabel, taskRowView, planUsage } from '@ordewell/core';
+import { blockedByLabel, blockingFailures, flattenTasks, taskOrderLabel, taskRowView, planUsage } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, type SessionMeta } from '../apiClient';
@@ -68,7 +68,8 @@ function printOneSession(
 ): void {
   const allTasks = allTasksOf(plan);
   const everyTask = flattenTasks(allTasks);
-  const count = (status: string) => everyTask.filter((t) => t.status === status).length;
+  const blocked = blockingFailures(everyTask.map((t) => ({ ...t, subtasks: [], dependencies: t.dependencies ?? [] })));
+  const count = (status: string) => everyTask.filter((t) => t.status === status || (status === 'blocked' && blocked.has(t.id))).length;
 
   console.log(`Session:  ${sessionId}`);
   console.log(`Goal:     ${meta.goal}`);
@@ -79,18 +80,20 @@ function printOneSession(
   const usage = planUsage(allTasks);
   if (usage.attempts) console.log(`Tasks total: ${taskUsageText(usage)}`);
   for (const t of allTasks) {
-    const icon = iconFor(t.status);
+    const icon = iconFor(blocked.has(t.id) ? 'blocked' : t.status);
     const model = t.assignedModel ? ` (${t.assignedModel.modelLabel})` : '';
     const shortId = (t.id ?? '').slice(-8);
     console.log(`  ${taskOrderLabel(t).padStart(2)}. ${icon} [${shortId}] ${t.title}${model}`);
-    const row = taskRowView({ ...t, dependencies: t.dependencies ?? [] });
+    const row = taskRowView({ ...t, dependencies: t.dependencies ?? [] }, { tasks: allTasks });
+    if (row.blockedBy) console.log(`      ${blockedByLabel(row.blockedBy)}`);
     if (row.usage) console.log(`      ${taskUsageText(row.usage)}`);
     for (const sub of t.subtasks || []) {
-      const subIcon = iconFor(sub.status);
+      const subIcon = iconFor(blocked.has(sub.id) ? 'blocked' : sub.status);
       const subModel = sub.assignedModel ? ` (${sub.assignedModel.modelLabel})` : '';
       const subShortId = (sub.id ?? '').slice(-8);
       console.log(`    ${taskOrderLabel(sub, t)}. ${subIcon} [${subShortId}] ${sub.title}${subModel}`);
-      const subRow = taskRowView({ ...sub, dependencies: sub.dependencies ?? [] });
+      const subRow = taskRowView({ ...sub, dependencies: sub.dependencies ?? [] }, { parent: t, tasks: allTasks });
+      if (subRow.blockedBy) console.log(`        ${blockedByLabel(subRow.blockedBy)}`);
       if (subRow.usage) console.log(`        ${taskUsageText(subRow.usage)}`);
     }
   }

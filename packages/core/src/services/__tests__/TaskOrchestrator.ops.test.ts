@@ -106,6 +106,30 @@ describe('TaskOrchestrator: ops tasks and merge gates (ADR-0020)', () => {
       expect(env.isolation.calls.map((c) => c.op)).not.toContain('discard');
     });
 
+    it('keeps a run waiting at its gate when a failure elsewhere leaves nothing else runnable (ADR-0034)', async () => {
+      const env = setup();
+      const t1 = change('t1', 1);
+      const f = change('f', 3);
+      env.orchestrator.loadPlan([t1, ops('o2', 2, { dependencies: ['t1'] }), f, change('d', 4, { dependencies: ['f'] })]);
+      const complete = vi.fn();
+      env.orchestrator.subscribe({ onExecutionComplete: complete });
+      await env.orchestrator.approveReview();
+
+      env.latest('f').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
+      env.pass(t1);
+      await vi.waitFor(() => expect(env.status('f')).toBe('failed'));
+      await vi.waitFor(() => expect(env.status('t1')).toBe('completed'));
+      await flushMicrotasks();
+
+      expect(env.orchestrator.getMergeGate('o2')).toEqual(['t1']);
+      expect(env.orchestrator.isScheduling).toBe(true);
+      expect(complete).not.toHaveBeenCalled();
+
+      expect(await env.orchestrator.mergeRun()).toEqual({ outcome: 'merged' });
+      await vi.waitFor(() => expect(env.spawned('o2')).toHaveLength(1));
+      expect(env.spawned('d')).toHaveLength(0);
+    });
+
     it('opens on work merged by hand, found on the next tick', async () => {
       const env = await gated();
       env.isolation.mergedByHand.add('t1');

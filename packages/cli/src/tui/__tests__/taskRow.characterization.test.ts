@@ -107,6 +107,17 @@ describe('a plan row, pinned before its rules move to core', () => {
       .toContain('⏸ waits for Merge all — #1, ghost not merged into your branch yet');
   });
 
+  it('draws a task a failure blocks as blocked by the failed task, through its dependencies (ADR-0034)', () => {
+    const out = frame([
+      task({ status: 'failed' }),
+      task({ id: 't2', order: 2, title: 'Wire the parser', dependencies: ['t1'] }),
+      task({ id: 't3', order: 3, title: 'Test the parser', status: 'approved', dependencies: ['t2'] }),
+    ]);
+    expect(out).toContain('  !  2  AI Wire the parser');
+    expect(out).toContain('  !  3  AI Test the parser');
+    expect(out.match(/⊘ blocked by #1 — runs once it is retried and passes/g)).toHaveLength(2);
+  });
+
   it('warns about an ops task that changed tracked files', () => {
     expect(frame([deploy({ status: 'awaiting_user', awaitingReason: 'files-changed' })]))
       .toContain('⚠ an ops task changed tracked files — check them, then m done or /retry');

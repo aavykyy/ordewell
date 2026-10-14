@@ -100,6 +100,8 @@ export interface ExecutionHost {
   dependencyMet(depId: string): boolean;
   /** The dependencies a task waits on at its merge gate (ADR-0020). */
   mergeGate(taskId: string): string[];
+  /** The failed tasks a task not started waits on through its dependencies (ADR-0034). */
+  blockedBy(taskId: string): string[];
   /** The runner requests waiting on a task for an answer. */
   waitingRequests(taskId: string): readonly WaitingRequest[];
   /** A start is told who asked: whether a run it opens continues the last one depends on it (ADR-0029). */
@@ -330,7 +332,7 @@ export class ExecutionCommands {
         : 'Start a new attempt with retry_task.';
       return { refusal: `${capitalize(label)} ${statusWords(task)}. ${next}` };
     }
-    const failed = task.dependencies.flatMap((id) => this.located(id) ?? []).filter(({ task: dep }) => dep.status === 'failed');
+    const failed = this.host.blockedBy(task.id).flatMap((id) => this.located(id) ?? []);
     if (task.status === 'blocked' || failed.length > 0) {
       return { refusal: `${capitalize(label)} is blocked${failed.length > 0 ? `: ${named(failed)} failed. Retry ${failed.length === 1 ? 'it' : 'them'} first` : '. Ask the user to skip it or fix what blocks it'}.` };
     }
@@ -354,7 +356,7 @@ export class ExecutionCommands {
 
     return {
       act: async () => {
-        // The Retry button's own path: it restarts a run a failure halted, and hands the task to a scheduler that runs.
+        // The Retry button's own path: it continues a run that ended on a failure, and hands the task to a scheduler that runs.
         if (settled) await this.host.retryTask(task.id, actor);
         if (!this.host.running(task.id) && !(settled && this.host.scheduling())) await this.host.startTask(task.id, actor);
         if (this.host.runBlocked()) return { message: BLOCKED_RUN };

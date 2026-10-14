@@ -9,6 +9,7 @@ import { Supervisor, type RunEventInput, type SupervisorHost, type SupervisorOpt
 import { SupervisionMemory, type GuardTarget, type GuardTrip } from './LoopGuards';
 import { SUPERVISOR_LEVEL_LABEL } from './runSettingsText';
 import { executionSummary } from './SessionMessage';
+import { blockingFailures } from './blocking';
 
 /** Supervisor levels, lowest first: an automatic lowering only ever goes down. */
 const LEVEL_RANK: Record<SupervisorLevel, number> = { off: 0, watch: 1, act: 2 };
@@ -73,6 +74,7 @@ export class RunSupervision {
       pump: () => host.pump(),
       saveState: () => host.save(),
       describeTask: (taskId) => this.describeTask(taskId),
+      blockedBy: (failedId) => [...blockingFailures([...this.host.tasks()])].filter(([, failures]) => failures.includes(failedId)).map(([taskId]) => taskId),
       readBudget: () => this.settings()?.wakeUpReadBudget ?? host.userSettings().wakeUpReadBudget,
       retryLimit: () => this.retryLimit(),
       plannerRunner: () => host.plannerRunner(),
@@ -154,8 +156,8 @@ export class RunSupervision {
 
   /** The run finished; a handoff deferred to the supervisor is resent once its wake-up turn on it is over. */
   runFinished(): void {
-    const { total, completed, failed } = executionSummary(flattenTasks([...this.host.tasks()]));
-    this.supervisor.observe({ kind: 'run_finished', detail: `${completed} of ${total} tasks completed${failed > 0 ? `, ${failed} failed` : ''}` });
+    const { total, completed, failed, blocked } = executionSummary(flattenTasks([...this.host.tasks()]));
+    this.supervisor.observe({ kind: 'run_finished', detail: `${completed} of ${total} tasks completed${failed > 0 ? `, ${failed} failed` : ''}${blocked > 0 ? `, ${blocked} blocked` : ''}` });
     if (!this.supervisor.awaitsRunEnd) this.handOver();
   }
 

@@ -86,16 +86,19 @@ everything below applies per repo of the group.
   `nothing-to-land`, `repair-needed` or `awaiting_user` (`conflict`,
   `landing-failed`, `repair-failed`); it never marks a task, starts an attempt
   or emits — the orchestrator applies what it answers.
-- **A landing that does not go through waits on the user and never halts the
-  run.** A conflicting merge is aborted with the worktree and both refs kept; it
+- **A landing that does not go through waits on the user and never fails the
+  task.** A conflicting merge is aborted with the worktree and both refs kept; it
   first gets a bounded, evidenced conflict repair on the task's own attempt
   (ADR-0015), and only a conflict repair does not clear is left `awaiting_user`,
   dependents waiting. A landing git refuses (a hook, for instance) leaves the task
   `awaiting_user` with its verdict `pass`, its worktree and branch kept (the
   record is `failed`, which surfaces show as `kept`) and the error naming what
   git stopped on; Mark complete lands it once the cause is fixed. Other ready
-  tasks go on starting either way; only a failed *verdict* halts the run. The work is finished, its completion call the evidence, and it sits
-  intact in its worktree.
+  tasks go on starting either way; only a failed *verdict* fails a task, and
+  that blocks only its dependents
+  ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)). The work is
+  finished, its completion call the evidence, and it sits intact in its
+  worktree.
 - **What happens to a worktree.** `merged` removes the task's worktree and branch
   and keeps its record, which is what the handoff's `landed` list is read from.
   A failed verdict, a stop and a cancel keep the worktree (`keep: true`) — a
@@ -244,7 +247,7 @@ everything below applies per repo of the group.
   something only the user knows; Mark not done is how they say it was not.
 - **A run closes however its last attempt ends.** Cancel, Mark complete or a
   failed spawn close a run the scheduler is not driving — a manual task run, or
-  a halted plan's remaining attempts — as a verdict does; an idle `tick` closes
+  a run held on a usage limit with attempts left — as a verdict does; an idle `tick` closes
   it. Left open, the next run would inherit its mode. A run paused at a merge
   gate is not closed: it waits on the user, as one waiting on a user task does.
 - **The planner is told.** `PlannerModes.isolatedExecution` (one-shot and
@@ -387,3 +390,4 @@ everything below applies per repo of the group.
 - 2026-10-11 — a continue restores the previous attempt's preserved work (ADR-0018, K1).
 - 2026-10-12 — the merge consents become global user settings ([ADR-0030](0030-global-run-settings.md)).
 - 2026-10-12 — the end of a run is a handoff unless the user opted in to automatic merging, which now also merges at the end of a run, or the supervisor at Act merges ([ADR-0029](0029-the-supervisor.md), amendment of 2026-10-12).
+- 2026-10-14 — a failed verdict blocks only the task's dependents instead of halting the run ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)).
