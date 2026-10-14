@@ -681,7 +681,8 @@ and Codex's protocol (it names the call, not the delivery).
 the running turn, stopping the tool call in flight, and deliver a message as
 the turn that replaces it, ahead of everything still queued (ADR-0023,
 F1–F4). The task stays `in_progress` through the switch. With no turn running
-it is a plain send; a handed-over message cannot be force sent. On Codex the interrupt stops the agent waiting,
+it is a plain send. A queued or handed-over message can be force sent; a
+handed-over one is not sent twice — the interrupt makes it go first. On Codex the interrupt stops the agent waiting,
 not the command, which runs to its end. TUI `ctrl-s`, VS Code *Send now* /
 `Ctrl+Enter`.
 In the planner chat (`Session.forceSendPrompt`, F5) it is turn-scoped: it

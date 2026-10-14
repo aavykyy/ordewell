@@ -31,7 +31,8 @@ export type StructuredEvent =
   /**
    * Waiting in Ordewell's queue — again, for a message the runner was handed
    * and let go of (ADR-0023, D4). `forced` puts it ahead of the rest, behind
-   * earlier forced ones (F2); a message already listed moves there.
+   * earlier forced ones (F2); a message already listed moves there, still
+   * handed over if it was.
    */
   | { type: 'message_queued'; messageId: string; text: string; forced?: boolean; from?: TaskMessageFrom }
   | { type: 'message_removed'; messageId: string }
@@ -56,7 +57,7 @@ export interface QueuedTaskMessage {
   text: string;
   /** The runner has it and owes a delivery, so it cannot be taken back (ADR-0023, Q1). */
   handedOver?: boolean;
-  /** Force sent: it goes out as soon as the running turn is interrupted (ADR-0023, F1). */
+  /** Force sent: it goes first once the running turn is interrupted (ADR-0023, F1). Every listed message can be, handed over or not. */
   forced?: boolean;
   from?: TaskMessageFrom;
 }
@@ -87,7 +88,11 @@ export interface IRunnerSession {
    * input in between. With no turn running it is {@link sendMessage}.
    */
   forceSend(text: string): string;
-  /** Force send a message still queued, by id. False once it was handed over or delivered. */
+  /**
+   * Force send a message not yet delivered, by id — queued, or handed over,
+   * which is not sent twice: the interrupt makes it go first (ADR-0023, F1).
+   * False once it was delivered.
+   */
   forceSendQueued(id: string): boolean;
   /** Take a message back before the runner has it. False once it was handed over or delivered. */
   removeQueued(id: string): boolean;

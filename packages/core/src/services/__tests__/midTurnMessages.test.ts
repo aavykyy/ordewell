@@ -523,7 +523,7 @@ describe('force send', () => {
     expect(task.adapter.sent).toEqual(['Do the task', 'stop, use Postgres', 'one']);
   });
 
-  it('promotes a queued message by id; one the runner already has, or one gone, is refused', async () => {
+  it('promotes a queued message by id; one gone is refused', async () => {
     const task = await turnEnd();
     const one = task.session.sendMessage('one');
     const two = task.session.sendMessage('two');
@@ -536,12 +536,6 @@ describe('force send', () => {
     expect(of(task.events, 'turn_start').at(-1)).toEqual({ type: 'turn_start', text: 'two', messageId: two, forced: true });
     expect(task.session.queued()).toEqual([{ id: one, text: 'one' }]);
     expect(task.statesAtTurnEnd).toEqual(['working']);
-
-    const steered = await steering();
-    const handed = steered.session.sendMessage('handed');
-    await flushMicrotasks();
-    expect(steered.session.forceSendQueued(handed)).toBe(false);
-    expect(steered.turnEnds).toEqual([]);
   });
 
   it('leaves what the runner was handed to the runner, and re-sends one it drops after the forced message', async () => {
@@ -609,6 +603,121 @@ describe('force send', () => {
     task.adapter.exit(1);
     await flushMicrotasks();
     expect(task.events).toContainEqual({ type: 'message_undelivered', messageId: now, text: 'now' });
+  });
+});
+
+describe('force send of a message the runner already has (ADR-0023, F1)', () => {
+  it('on a runner that keeps it across the interrupt (Claude Code): interrupts, sends nothing twice, and the turn the runner opens for it is the forced one', async () => {
+    const task = await steering((adapter) => { adapter.answers = ['accept', 'refuse']; });
+    const handed = task.session.sendMessage('use Postgres');
+    const waiting = task.session.sendMessage('then add tests');
+    await flushMicrotasks();
+    expect(task.session.queued()).toEqual([{ id: handed, text: 'use Postgres', handedOver: true }, { id: waiting, text: 'then add tests' }]);
+
+    expect(task.session.forceSendQueued(handed)).toBe(true);
+    expect(task.session.queued()).toEqual([{ id: handed, text: 'use Postgres', handedOver: true, forced: true }, { id: waiting, text: 'then add tests' }]);
+    await flushMicrotasks();
+
+    expect(task.turnEnds).toEqual(['interrupted']);
+    expect(task.statesAtTurnEnd).toEqual(['working']);
+    // The runner still has it: neither it nor the one queued behind it overtakes that.
+    expect(task.adapter.sent).toEqual(['Do the task']);
+    expect(task.adapter.steers.map((s) => s.text)).toEqual(['use Postgres', 'then add tests']);
+
+    task.adapter.emitOutOfTurn({ type: 'message_delivered', id: handed });
+    await flushMicrotasks();
+    expect(of(task.events, 'turn_start').at(-1)).toEqual({ type: 'turn_start', text: 'use Postgres', messageId: handed, forced: true });
+    expect(task.adapter.steers.map((s) => s.text)).toEqual(['use Postgres', 'then add tests', 'then add tests']);
+  });
+
+  it('on a runner that lets go of it at the interrupt (Codex, OpenCode 1.x): sends it once more, as the next turn', async () => {
+    const task = await steering((adapter) => { adapter.interruptAnswer = 'hold'; });
+    const handed = task.session.sendMessage('use Postgres');
+    await flushMicrotasks();
+
+    expect(task.session.forceSendQueued(handed)).toBe(true);
+    task.adapter.drop(handed);
+    task.adapter.finishInterrupt();
+    await flushMicrotasks();
+
+    expect(task.turnEnds).toEqual(['interrupted']);
+    expect(task.statesAtTurnEnd).toEqual(['working']);
+    expect(task.adapter.sent).toEqual(['Do the task', 'use Postgres']);
+    expect(of(task.events, 'turn_start').at(-1)).toEqual({ type: 'turn_start', text: 'use Postgres', messageId: handed, forced: true });
+    expect(task.session.queued()).toEqual([]);
+  });
+
+  it('goes first, and every other message keeps the order it was sent in, handed over or queued', async () => {
+    const task = await steering((adapter) => { adapter.interruptAnswer = 'hold'; adapter.answers = ['accept', 'accept', 'refuse']; });
+    const one = task.session.sendMessage('one');
+    const two = task.session.sendMessage('two');
+    const three = task.session.sendMessage('three');
+    const four = task.session.sendMessage('four');
+    await flushMicrotasks();
+    expect(task.session.queued().map((m) => [m.id, Boolean(m.handedOver)])).toEqual([[one, true], [two, true], [three, false], [four, false]]);
+
+    expect(task.session.forceSendQueued(two)).toBe(true);
+    expect(task.session.queued().map((m) => m.id)).toEqual([two, one, three, four]);
+    task.adapter.drop(one);
+    task.adapter.drop(two);
+    task.adapter.finishInterrupt();
+    await flushMicrotasks();
+
+    expect(task.adapter.sent).toEqual(['Do the task', 'two']);
+    expect(task.adapter.steers.slice(3).map((s) => s.text)).toEqual(['one', 'three', 'four']);
+    expect(task.session.queued().map((m) => m.id)).toEqual([one, three, four]);
+  });
+
+  it('changes nothing when force sent again: one interrupt, one event, and its place kept', async () => {
+    const task = await steering((adapter) => { adapter.interruptAnswer = 'hold'; });
+    const handed = task.session.sendMessage('handed');
+    await flushMicrotasks();
+    const interrupt = vi.spyOn(task.adapter, 'interrupt');
+
+    expect(task.session.forceSendQueued(handed)).toBe(true);
+    const now = task.session.forceSend('now');
+    expect(task.session.forceSendQueued(handed)).toBe(true);
+    expect(task.session.forceSendQueued(now)).toBe(true);
+
+    expect(task.session.queued().map((m) => m.id)).toEqual([handed, now]);
+    expect(interrupt).toHaveBeenCalledTimes(1);
+    expect(task.events.filter((e) => e.type === 'message_queued' && e.forced).map((e) => e.type === 'message_queued' && e.messageId)).toEqual([handed, now]);
+  });
+
+  it('has nothing left to send once the runner reports it delivered, even with the interrupt on its way', async () => {
+    const task = await steering((adapter) => { adapter.interruptAnswer = 'hold'; });
+    const handed = task.session.sendMessage('use Postgres');
+    await flushMicrotasks();
+
+    expect(task.session.forceSendQueued(handed)).toBe(true);
+    task.adapter.deliver(handed);
+    expect(task.session.forceSendQueued(handed)).toBe(false);
+    task.adapter.finishInterrupt();
+    await flushMicrotasks();
+
+    expect(of(task.events, 'message_delivered')).toEqual([{ type: 'message_delivered', messageId: handed, text: 'use Postgres' }]);
+    expect(of(task.events, 'message_undelivered')).toEqual([]);
+    expect(task.adapter.sent).toEqual(['Do the task']);
+    // The model has it, and nothing is owed: the interrupt ends the turn as a plain one does.
+    expect(task.turnEnds).toEqual(['interrupted']);
+    expect(task.statesAtTurnEnd).toEqual(['idle']);
+  });
+
+  it('opens the next turn with one still being offered that the runner then refuses', async () => {
+    const task = await steering((adapter) => { adapter.interruptAnswer = 'hold'; adapter.answers = ['hold']; });
+    const offered = task.session.sendMessage('use Postgres');
+    await flushMicrotasks();
+    expect(task.session.queued()).toEqual([{ id: offered, text: 'use Postgres', handedOver: true }]);
+
+    expect(task.session.forceSendQueued(offered)).toBe(true);
+    task.adapter.finishInterrupt();
+    await flushMicrotasks();
+    expect(task.adapter.sent).toEqual(['Do the task']);
+
+    task.adapter.answer(offered, false);
+    await flushMicrotasks();
+    expect(task.adapter.sent).toEqual(['Do the task', 'use Postgres']);
+    expect(of(task.events, 'turn_start').at(-1)).toEqual({ type: 'turn_start', text: 'use Postgres', messageId: offered, forced: true });
   });
 });
 

@@ -283,14 +283,16 @@ function queueMessage(view: TaskLogView, { messageId, text, forced, from }: Even
   const sender = from ? { from } : {};
   if (forced) {
     // The session's own order (ADR-0023, F2): behind earlier forced messages, ahead of the rest.
+    // Forcing one the runner already has moves it without taking it back.
     const rest = view.queued.filter((m) => m !== listed);
     const at = rest.findIndex((m) => !m.forced);
     const placed = at < 0 ? rest.length : at;
-    return { ...view, queued: [...rest.slice(0, placed), { id: messageId, text, forced: true, ...sender }, ...rest.slice(placed)] };
+    const handedOver = listed?.handedOver ? { handedOver: true } : {};
+    return { ...view, queued: [...rest.slice(0, placed), { id: messageId, text, forced: true, ...handedOver, ...sender }, ...rest.slice(placed)] };
   }
   if (!listed) return { ...view, queued: [...view.queued, { id: messageId, text, ...sender }] };
   if (!listed.handedOver) return view;
-  return { ...view, queued: view.queued.map((m) => (m === listed ? { id: m.id, text: m.text, ...sender } : m)) };
+  return { ...view, queued: view.queued.map((m) => (m === listed ? { id: m.id, text: m.text, ...(m.forced ? { forced: true } : {}), ...sender } : m)) };
 }
 
 function handOver(view: TaskLogView, { messageId }: Event<'message_handed_over'>): TaskLogView {

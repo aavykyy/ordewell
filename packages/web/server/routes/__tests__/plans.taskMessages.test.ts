@@ -1,6 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { Hono } from 'hono';
-import { TaskControlError, SessionNotFoundError } from '@ordewell/core';
+import {
+  createSession, createTask, ModelResolver, RunnerRegistry, TaskControlError, SessionNotFoundError,
+  type IRunner, type LegacyPlanState, type Session,
+} from '@ordewell/core';
+import { fakeConfig, fakeFileSystem, FakeRunnerSession } from '@ordewell/core/testing';
 import type { OrchestratorPool } from '../../pool/orchestratorPool';
 import { plansRoute } from '../plans';
 
@@ -95,7 +99,7 @@ describe('talking to a structured task over the daemon (ADR-0018, M1)', () => {
     expect(forceSendTaskMessage).not.toHaveBeenCalled();
   });
 
-  it('force sends a queued message, saying whether it was still queued', async () => {
+  it('force sends a pending message by id, saying whether it was still pending', async () => {
     const forceSendQueuedTaskMessage = vi.fn(() => true);
     const res = await request(appFor({ forceSendQueuedTaskMessage }), 'POST', '/messages/msg-2/now');
 
@@ -141,6 +145,52 @@ describe('talking to a structured task over the daemon (ADR-0018, M1)', () => {
   it('answers 404 for a session the daemon does not have', async () => {
     const res = await request(appFor({}, false), 'POST', '/interrupt');
     expect(res.status).toBe(404);
+  });
+});
+
+describe('force sending a message the runner already has over the daemon (ADR-0023, F1)', () => {
+  let session: Session | undefined;
+  afterEach(() => { session?.destroy(); });
+
+  async function running() {
+    const task = new FakeRunnerSession('s1', 't1');
+    const runner = { spawn: vi.fn(async () => task), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } satisfies IRunner;
+    const config = fakeConfig();
+    const registry = new RunnerRegistry();
+    session = createSession({
+      config, registry, runner,
+      notifications: { info() {}, warn() {}, error() {}, async confirm() { return undefined; } },
+      workspaceRoot: () => process.cwd(),
+      fsAdapter: fakeFileSystem(),
+      broadcast: () => {},
+      modelResolver: new ModelResolver(registry, config, { execImpl: async () => ({ stdout: '' }) }),
+      settings: () => ({}),
+      saveSession: () => {},
+      openTaskLog: () => ({ attempt: 1, append() {} }),
+    });
+    const plan: LegacyPlanState = {
+      tasks: [createTask({ id: 't1', order: 1, title: 'Build', prompt: 'build it', assignedRunner: 'claude-code' })],
+      runners: ['claude-code'], status: 'approved', generatedAt: '2026-10-14T09:00:00Z', lastUpdated: '2026-10-14T09:00:00Z',
+    };
+    session.loadPlan(plan, 'build it', process.cwd());
+    await session.executePlan();
+    await vi.waitFor(() => expect(runner.spawn).toHaveBeenCalled());
+    const app = new Hono().route('/api/plans', plansRoute({ session: () => session } as unknown as OrchestratorPool));
+    return { app, task };
+  }
+
+  it('accepts the id of a handed-over message, interrupting the turn, and says when nothing is left to send', async () => {
+    const { app, task } = await running();
+    task.messages.push({ id: 'msg-7', text: 'use Postgres', handedOver: true });
+
+    const sent = await request(app, 'POST', '/messages/msg-7/now');
+    expect(sent.status).toBe(200);
+    expect(await sent.json()).toEqual({ sent: true });
+    expect(task.interrupts).toBe(1);
+    expect(task.delivered).toEqual(['use Postgres']);
+
+    const gone = await request(app, 'POST', '/messages/msg-7/now');
+    expect(await gone.json()).toEqual({ sent: false });
   });
 });
 

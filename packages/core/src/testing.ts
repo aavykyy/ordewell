@@ -162,7 +162,8 @@ export class FakeRunnerSession implements IRunnerSession {
   }
   forceSendQueued(id: string): boolean {
     const message = this.messages.find((m) => m.id === id);
-    if (!message || message.handedOver) return false;
+    if (!message) return false;
+    if (message.forced) return true;
     this.messages = this.messages.filter((m) => m !== message);
     this.putForced({ ...message, forced: true });
     if (this.state === 'working') void this.interrupt();

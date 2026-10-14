@@ -448,6 +448,26 @@ describe('OpenCodeAdapter task mode — messages into the running turn (ADR-0023
     expect(events).toContainEqual({ type: 'message_dropped', id: 'm-1' });
     adapter.dispose();
   });
+
+  it('lets go of a message still unread when an abort ends the turn, deleting the stored copy, so the force send that follows sends it once (ADR-0023, F1)', async () => {
+    const server = fakeServer();
+    const { adapter, events, turn, stream } = await turnWith(server, taskStart());
+    await until(() => promptBodies(server).length === 1);
+    expect(await adapter.steer('m-1', 'use Postgres')).toBe(true);
+    const messageID = promptBodies(server)[1].messageID!;
+    stream.push(userMessage(messageID));
+
+    const acknowledged = adapter.interrupt(2000);
+    await until(() => server.requests.some((r) => r.method === 'POST' && r.path === `/session/${SES}/abort`));
+    stream.push(status('idle'));
+    expect(await acknowledged).toBe(true);
+    await turn;
+
+    await until(() => server.requests.some((r) => r.method === 'DELETE' && r.path === `/session/${SES}/message/${messageID}`));
+    expect(events.filter((e) => e.type === 'message_dropped' || e.type === 'message_delivered')).toEqual([{ type: 'message_dropped', id: 'm-1' }]);
+    expect(events).toContainEqual({ type: 'turn_end', interrupted: true });
+    adapter.dispose();
+  });
 });
 
 describe('OpenCodeAdapter task mode — interrupt', () => {

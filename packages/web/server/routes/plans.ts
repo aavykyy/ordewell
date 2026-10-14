@@ -217,7 +217,8 @@ export function plansRoute(pool: OrchestratorPool) {
     }
   });
 
-  // Force send a message still queued; `sent` is false once the runner has it.
+  // Force send a message not yet delivered, queued or already handed over;
+  // `sent` is false once it was delivered.
   router.post('/:sessionId/tasks/:taskId/messages/:messageId/now', (c) => {
     try {
       const sent = pool.session(c.req.param('sessionId')).forceSendQueuedTaskMessage(c.req.param('taskId'), c.req.param('messageId'));
