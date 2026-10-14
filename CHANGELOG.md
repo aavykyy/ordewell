@@ -168,20 +168,31 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   resumes it too. A resume that hits the limit again at once waits for you.
   Skip is offered while the task is paused
   ([ADR-0018](docs/adr/0018-structured-runner-transport.md)).
-- **Send now in the planner chat.** `ctrl-s` in the terminal UI, and *Send now*
-  in VS Code, interrupts the planner turn in flight — one another client
-  started too — and answers the message alone in the turn that replaces it,
-  ahead of every prompt already queued, which stays held until that turn ends;
-  the run's tasks carry on untouched, and a queued prompt the planner already
-  has is marked handed over. A built-in command sent this way runs as it does
-  on enter, while a skill invocation (`/name …`) goes to the planner as a
-  prompt. A forced turn that fails puts your message back in the composer or
-  its place in the queue, and the stop of the turn it replaced is not shown as
-  an error. A supervisor wake-up it stops keeps its run update for the
+- **Send now in the planner chat and on pending messages.** `ctrl-s` in the
+  terminal UI, and `Ctrl+Enter` (`Cmd+Enter` on macOS) in VS Code, interrupts
+  the planner turn in flight — one another client started too — and answers
+  the message alone in the turn that replaces it, ahead of every prompt
+  already queued, which stays held until that turn ends; the run's tasks carry
+  on untouched. A built-in command sent this way runs as it does on enter,
+  while a skill invocation (`/name …`) goes to the planner as a prompt. A
+  forced turn that fails puts your message back in the composer or its place
+  in the queue, and the stop of the turn it replaced is not shown as an
+  error. A supervisor wake-up it stops keeps its run update for the
   supervisor's next turn. A message sent this way is marked as sent now, in
-  the chat and in a task's log, after a reload and when it wraps. A running or
-  waiting task's VS Code card also carries a message box with the same button
-  (`Ctrl+Enter`).
+  the chat and in a task's log, after a reload and when it wraps.
+- **Every pending message shows its state and can be sent now.** In a task's
+  log, and in the planner chat, a pending message reads *queued*, *waiting for
+  the current step* (the runner already has it) or *sending now…*. In the
+  terminal UI the targeted message, the newest until `ctrl-n`/`ctrl-p` picks
+  another, shows `ctrl-s sends now` and, while it is still queued,
+  `ctrl-r removes`. In VS Code there is one Send button: Enter queues while a
+  turn runs, `Ctrl+Enter` sends now, and each pending message has its own
+  *Send now*. A message the runner already has can be sent now too; it is
+  never written to the runner twice. Claude Code keeps it and runs it as the
+  next turn after the interrupt; Codex and OpenCode 1.x discard it at the
+  interrupt, so it is sent again first, ahead of the other queued messages;
+  OpenCode 2.x refuses messages mid-turn, so nothing changes there
+  ([ADR-0023](docs/adr/0023-messages-reach-a-running-task.md)).
 
 ### Changed
 
