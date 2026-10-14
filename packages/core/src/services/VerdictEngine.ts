@@ -362,6 +362,8 @@ function reportedVerdict(report: TaskCompleteArgs): Verdict {
   if (report.status === 'done') {
     return { outcome: 'pass', reason: 'Verified: the runner reported completion through task_complete. Task completed successfully.', checks, decidedAt };
   }
-  const why = report.reason?.trim() || 'no reason given';
+  // Runners often put the why in the summary and leave `reason` out; its
+  // first paragraph is their own words, where "no reason given" would not be.
+  const why = report.reason?.trim() || report.summary?.trim().split(/\n\s*\n/)[0].trim() || 'no reason given';
   return { outcome: 'fail', reason: `The runner reported the task ${report.status}: ${why}`, checks, decidedAt };
 }

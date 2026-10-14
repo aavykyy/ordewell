@@ -250,6 +250,14 @@ describe('VerdictEngine', () => {
       expect(verdicts.map((v) => v.verdict.outcome)).toEqual(['fail']);
     });
 
+    it('explains a failure reported without a reason by the summary\'s first paragraph', () => {
+      const { verdicts, session } = watched();
+
+      session.reportComplete({ status: 'failed', summary: 'FAILED: check.py needs a marker no task can create.\n\nFindings:\n- /proc is read-only.' });
+
+      expect(verdicts[0].verdict.reason).toBe('The runner reported the task failed: FAILED: check.py needs a marker no task can create.');
+    });
+
     it('fails an exit with no call, naming the missing call and the exit code', () => {
       const { verdicts, session } = watched();
 
