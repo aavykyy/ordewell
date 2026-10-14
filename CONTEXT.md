@@ -585,11 +585,23 @@ a message sent to it (after the reset notice), or `retry_task` from `session` �
 with every task waiting on that runner's reset. Surfaces show "Resumes at
 8:10pm" with *Resume now* and *Don't resume*.
 A runner change, whether a direct edit or a planner edit, cancels that task's
-resume and makes it ready for the next scheduler slot on its new runner.
+resume and makes it ready for the next scheduler slot on its new runner, as a
+*Carry-over*.
 Other tasks on the old runner keep their shared wait; changing only the model
 keeps the resume because the limit belongs to the runner's account.
 *Avoid:* "rate limit" for it — a provider's per-minute throttle is retried
 inside the runner and is not this; "paused" for any other wait.
+
+**Carry-over** (`carryOver` attempt kind, `Task.carriedFrom`; ADR-0018, U1) —
+the next attempt of a change task paused on a usage limit and then moved to
+another runner. A session cannot cross runners, so it is a fresh session given
+the task's prompt, but its worktree restores the paused attempt's work as a
+*Continue*'s does, and its prompt says the files come from a previous attempt
+on the old runner and may be unfinished. If that work conflicts with what
+landed meanwhile, it starts fresh from the integration tips, and its prompt and
+the task log name the preserved branches. `carriedFrom` is saved with the plan
+until the attempt runs; a retry clears it. An ops task carries nothing over.
+*Avoid:* "continue" or "resume" for it — no session is resumed.
 
 **Task log** (`TaskLogEvent`, `reduceTaskLog`, `TaskLogRecorder`) — what a
 structured task did, at full fidelity (ADR-0018, O1b/P1): normalized events —
@@ -942,8 +954,9 @@ stays at the top. Absent measures mean unknown, never zero or an estimate.
 breakdown; *Avoid:* mixing planner usage into task totals.
 
 **Attempt kind** (`AttemptKind`, `attemptKind.ts`) — what one attempt of a task
-is: `change`, `ops`, `repair` (a *conflict repair*, ADR-0015) or `continuation`
-(a *Continue*, ADR-0018, which carries whether its task is ops). Everything that
+is: `change`, `ops`, `repair` (a *conflict repair*, ADR-0015), `continuation`
+(a *Continue*, ADR-0018, which carries whether its task is ops) or `carryOver`
+(a *Carry-over*, which carries the runner it left). Everything that
 differs between attempts is read from it, never from loose flags: where the
 attempt runs (`attemptCwd`), the prompt (`attemptPrompt`), whether the run
 decides to isolate when it starts (`decidesIsolation` — not for work in the checkout),
@@ -989,8 +1002,8 @@ every repository of the repo group.
 Created when the task starts, removed when it integrates cleanly. A failed or
 conflicted task's worktree is kept so its work can be inspected; a retry
 discards it and starts a fresh one from the current integration tip. A
-continue restores its previous work on top of that tip, with the preserved
-branches named to the agent if a conflict prevents restoration. Ignored
+continue or a *Carry-over* restores its previous work on top of that tip, with
+the preserved branches named to the agent if a conflict prevents restoration. Ignored
 artifacts (`node_modules`, `.env*`, `.claude`, …) are linked in from the main
 worktree so it is runnable at once — never `.ordewell/`, which stays at the main
 root. `node_modules` (the root's and each workspace package's) is a real

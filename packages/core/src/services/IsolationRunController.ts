@@ -14,7 +14,9 @@ import type {
   IsolationView,
   IWorktreeIsolation,
   PlanIsolation,
+  PrepareIntent,
   PreservedWork,
+  PreviousWork,
   RepairEvidence,
   RepoGroupLayout,
   SetupFailure,
@@ -31,10 +33,14 @@ import type { SkillLayout } from './taskSkills';
 
 export type IsolationNoticeLevel = 'info' | 'warn' | 'error';
 
+/** How an attempt that may run in a worktree gets one: fresh, the kept one for a repair, or restoring the previous attempt's work. */
+export type AttemptIntent = 'fresh' | 'repair' | PrepareIntent;
+
 export interface AttemptWorkspace {
   cwd: string;
   worktree: boolean;
-  continuationMessage?: string;
+  /** Set for a `restore` in a worktree; absent in the checkout, where the previous attempt's edits remain. */
+  previousWork?: PreviousWork;
 }
 
 /**
@@ -343,10 +349,10 @@ export class IsolationRunController {
    * the attempt is committed as running, so a spawn abandoned or failed after
    * this settles is not misreported as a change that stuck.
    */
-  attemptCwd(task: Task, intent: 'fresh' | 'repair' | 'continuation'): Promise<AttemptWorkspace> {
+  attemptCwd(task: Task, intent: AttemptIntent): Promise<AttemptWorkspace> {
     if (intent === 'repair' && this.run) return this.reopenCwd(task, this.run);
     if (!this.isolating || !this.run) return this.workspaceCwd(task);
-    return this.prepareCwd(task, this.run, intent === 'continuation' ? intent : 'fresh');
+    return this.prepareCwd(task, this.run, intent === 'restore' ? intent : 'fresh');
   }
 
   /** The workspace root, for an attempt that runs outside any worktree. */
@@ -362,20 +368,14 @@ export class IsolationRunController {
     return { cwd, worktree: true };
   }
 
-  private async prepareCwd(task: Task, run: IsolationRun, intent: 'fresh' | 'continuation'): Promise<AttemptWorkspace> {
-    const { cwd, copied, setupFailed, preserved, continuation: outcome } = await this.isolation.prepare(task, run, intent);
+  private async prepareCwd(task: Task, run: IsolationRun, intent: PrepareIntent): Promise<AttemptWorkspace> {
+    const { cwd, copied, setupFailed, preserved, restoration } = await this.isolation.prepare(task, run, intent);
     this.reportCopies(copied);
     this.reportSetupFailures(setupFailed ?? []);
     if (preserved) this.report({ preserved, refused: [] });
-    const continuationMessage = outcome === 'fallback'
-      ? 'Your previous changes conflicted with the integration tip, so this working tree starts at the integration tip. '
-        + (preserved ?? []).map((kept) => {
-          const where = kept.repo === SELF_REPO ? 'Your' : `In repository \`${kept.repo}\`, your`;
-          return `${where} previous work is kept on branch \`${kept.branch}\`. `
-            + `Inspect it with \`git log ${kept.branch}\` and \`git diff HEAD...${kept.branch}\` before recovering it.`;
-        }).join('\n')
-      : 'Your previous changes are in the working tree.';
-    return { cwd, worktree: true, ...(intent === 'continuation' ? { continuationMessage } : {}) };
+    if (!restoration) return { cwd, worktree: true };
+    const previousWork: PreviousWork = restoration === 'fallback' ? { outcome: 'fallback', preserved: preserved ?? [] } : { outcome: 'restored' };
+    return { cwd, worktree: true, previousWork };
   }
 
   /**

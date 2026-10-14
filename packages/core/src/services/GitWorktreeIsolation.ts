@@ -20,6 +20,7 @@ import type {
   IntegrationDisposal,
   IWorktreeIsolation,
   PreparedTask,
+  PrepareIntent,
   PreservedWork,
   RepairEvidence,
   SetupFailure,
@@ -369,7 +370,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     return shared;
   }
 
-  prepare(task: Task, run: IsolationRun, intent: 'fresh' | 'continuation' = 'fresh'): Promise<PreparedTask> {
+  prepare(task: Task, run: IsolationRun, intent: PrepareIntent = 'fresh'): Promise<PreparedTask> {
     const prepare = () => this.admin(run.workspaceRoot, async () => {
       const previous = run.tasks[task.id];
       const replaced = previous ? await this.removeTask(run, previous, { dropRecord: true, intent }) : noRemoval();
@@ -377,7 +378,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       if (refused) {
         throw new Error(`The worktree of its last attempt (${refused.worktree}) holds work Ordewell could not keep (${refused.reason}). Save or remove it by hand, then start the task again`);
       }
-      const preserved = intent === 'continuation'
+      const preserved = intent === 'restore'
         ? [...replaced.preserved, ...(previous?.continuationWork ?? [])]
         : replaced.preserved;
 
@@ -387,7 +388,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       let cwd = dir;
       const copied: string[] = [];
       const setupFailed: SetupFailure[] = [];
-      let continuation: PreparedTask['continuation'];
+      let restoration: PreparedTask['restoration'];
       try {
         for (const repo of run.repos) {
           const worktree = path.join(dir, repo.path);
@@ -398,8 +399,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
           record.repos[repo.path] = { worktree, linked: [], baseRef: tip };
         }
 
-        if (intent === 'continuation') {
-          continuation = await this.restoreContinuation(record, preserved);
+        if (intent === 'restore') {
+          restoration = await this.restorePrevious(record, preserved);
         }
 
         // A group re-takes its loose paths for every task, so a file the user
@@ -460,14 +461,14 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
         cwd, branch, copied,
         ...(setupFailed.length > 0 ? { setupFailed } : {}),
         ...(preserved.length > 0 ? { preserved } : {}),
-        ...(continuation ? { continuation } : {}),
+        ...(restoration ? { restoration } : {}),
       };
     });
-    // A continuation must not take its group of integration tips halfway through a landing.
-    return intent === 'continuation' ? this.inTurn(prepare) : prepare();
+    // A restore must not take its group of integration tips halfway through a landing.
+    return intent === 'restore' ? this.inTurn(prepare) : prepare();
   }
 
-  private async restoreContinuation(record: IsolationTaskRecord, preserved: PreservedWork[]): Promise<'restored' | 'fallback'> {
+  private async restorePrevious(record: IsolationTaskRecord, preserved: PreservedWork[]): Promise<'restored' | 'fallback'> {
     for (const kept of preserved) {
       const { worktree } = record.repos[kept.repo];
       try {
@@ -476,7 +477,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
         const unmerged = await this.git(worktree, ['diff', '--name-only', '--diff-filter=U']);
         if (!unmerged.trim()) throw err;
         record.continuationWork = preserved;
-        // A continuation restores the whole task or none of it, as a landing does.
+        // A restore puts back the whole task or none of it, as a landing does.
         for (const entry of Object.values(record.repos)) {
           await this.tryGit(entry.worktree, ['merge', '--abort']);
           await this.git(entry.worktree, ['reset', '--hard', entry.baseRef!]);
@@ -1121,7 +1122,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
    * loses nothing, record included. `preserve: false` is only for what a
    * failed `prepare` made a moment ago, which holds no work yet.
    */
-  private async removeTask(run: IsolationRun, record: IsolationTaskRecord, opts: { dropRecord: boolean; preserve?: boolean; intent?: 'fresh' | 'continuation' }): Promise<IsolationRemoval> {
+  private async removeTask(run: IsolationRun, record: IsolationTaskRecord, opts: { dropRecord: boolean; preserve?: boolean; intent?: PrepareIntent }): Promise<IsolationRemoval> {
     const task = { taskId: record.taskId, order: record.order, title: record.title };
     const removal = noRemoval();
     for (const repo of opts.preserve === false ? [] : run.repos) {
@@ -1151,15 +1152,15 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
    * the worktree has checked out, and that tip gets a branch of its own under
    * `ordewell-preserved/<run-id>/`. With no worktree left, it is the task
    * branch's tip that is kept. Null when there is nothing to keep — the tip is
-   * on the integration branch, or, outside a continue, in what the user has
+   * on the integration branch, or, outside a restore, in what the user has
    * checked out. Throws when there is work git cannot keep, and the caller
    * then removes nothing.
    */
-  private async preserve(run: IsolationRun, repo: IsolationRepo, target: RemovalTarget, intent: 'fresh' | 'continuation' = 'fresh'): Promise<Omit<PreservedWork, 'task'> | null> {
+  private async preserve(run: IsolationRun, repo: IsolationRepo, target: RemovalTarget, intent: PrepareIntent = 'fresh'): Promise<Omit<PreservedWork, 'task'> | null> {
     const tip = await this.tipToKeep(repo, target);
     if (tip === null) return null;
-    // A continue starts from integration, even if the user's HEAD already contains this tip.
-    for (const into of intent === 'continuation' ? [repo.integrationBranch] : [repo.integrationBranch, 'HEAD']) {
+    // A restore starts from integration, even if the user's HEAD already contains this tip.
+    for (const into of intent === 'restore' ? [repo.integrationBranch] : [repo.integrationBranch, 'HEAD']) {
       if ((await this.tryGit(repo.root, ['merge-base', '--is-ancestor', tip, into])).ok) return null;
     }
     return { repo: repo.path, branch: await this.preservedBranch(run, repo, target.name, tip), commit: tip };

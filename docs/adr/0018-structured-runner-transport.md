@@ -183,7 +183,10 @@ and completion evidence.
   reminder; the preserved branches remain available for inspection.
   Fresh retries still start clean from the integration tips. Shared runs
   continue in the same checkout with their
-  uncommitted work already in place, and say so.
+  uncommitted work already in place, and say so. A carry-over (U1) — a
+  usage-limit-paused task moved to another runner — restores the paused
+  attempt's work the same way, files only: no session crosses runners, so
+  it is a fresh session given the task's prompt.
 - **Usage limits (U1, #84).** A runner that stops on its account's usage
   limit — its process exits with the limit as the last thing it printed, or a
   turn fails with it as its error — has not failed the task. The attempt ends
@@ -218,7 +221,16 @@ and completion evidence.
   both leave the task waiting for a manual retry, as one with no readable
   reset waits. Moving a task to another runner, through a direct edit or the
   planner, cancels its resume through `cancelScheduledResume` before changing
-  its assignment and makes it ready for the scheduler's next slot. Other
+  its assignment and makes it ready for the scheduler's next slot. Its next
+  attempt is a carry-over (attempt kind `carryOver`, owed through the task's
+  `carriedFrom`, saved with the plan until that attempt runs or a retry
+  clears it): a fresh session on the new runner, its worktree restored from
+  the paused attempt's work as K1 restores a continue's, and its prompt told
+  the files come from a previous attempt on the old runner and may be
+  unfinished. When that work conflicts with what landed meanwhile, the
+  attempt starts fresh from the integration tips, as before, and both its
+  prompt and the task log name the branches holding that work. A shared run's
+  carry-over finds the edits already in the checkout. Other
   tasks on the old runner keep their shared wait and pending work on that
   account stays held. A model change on the same runner keeps the resume:
   the limit belongs to that runner's account. The orchestrator's
@@ -346,6 +358,9 @@ transport is retained for take-over.
   Merging the previous work into the current tips preserves both when clean.
 - **A wait per task.** A limit belongs to the account a runner signs in with,
   and the runner is usable only once every limit it hit has reset.
+- **Starting a moved task fresh from the integration tip.** Previously
+  adopted; rejected because the new runner redid work already on disk, which
+  sat unseen on the paused attempt's kept branch.
 - **Reading Claude Code's `rate_limit_event`.** Its stream-json reports the
   reset as an epoch too, but the printed message covers both runners that give
   a time, and both ways a limit arrives, with one reader per runner.
@@ -372,3 +387,4 @@ transport is retained for take-over.
 - 2026-10-14 — C2: the completion contract moved from the first message into the runner's instructions, where its own compaction keeps it whole.
 - 2026-10-14 — R1: a task's chat speaks its runner's own slash commands; the task log records commands, compactions and what the runner loaded (#66; Claude Code, Codex, OpenCode and the TUI).
 - 2026-10-14 — R1: VS Code task cards and log tabs complete and invoke native runner commands and draw the runner’s command, compaction and loaded-configuration blocks.
+- 2026-10-14 — U1: a paused task moved to another runner carries the paused attempt's work over to a fresh session (#94).

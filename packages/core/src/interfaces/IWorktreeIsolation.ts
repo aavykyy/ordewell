@@ -323,8 +323,25 @@ export interface PreparedTask {
   setupFailed?: SetupFailure[];
   /** What the attempt this one replaces left unlanded, kept on a branch before its worktree went; absent when nothing was. */
   preserved?: PreservedWork[];
-  continuation?: 'restored' | 'fallback';
+  /** Set for a `restore` prepare: whether the previous attempt's work was put back, or every repo fell back to its tip. */
+  restoration?: 'restored' | 'fallback';
 }
+
+/**
+ * How a task workspace starts: `fresh` from the integration tips, `restore`
+ * with the previous attempt's preserved work merged on top of them — for a
+ * continue (ADR-0018, K1) and for a carry-over to another runner.
+ */
+export type PrepareIntent = 'fresh' | 'restore';
+
+/**
+ * What a restoring attempt is told became of the previous attempt's work: in
+ * its working tree, or kept on `preserved` branches because restoring it
+ * conflicted with the integration tips.
+ */
+export type PreviousWork =
+  | { outcome: 'restored' }
+  | { outcome: 'fallback'; preserved: readonly PreservedWork[] };
 
 /** A task as a removal names it. */
 export type IsolationTaskRef = Pick<IsolationTaskRecord, 'taskId' | 'order' | 'title'>;
@@ -403,11 +420,11 @@ export interface IWorktreeIsolation {
   /**
    * Create the task workspace — one worktree per isolated repo from its
    * integration tip, the shared paths linked in — and return the cwd to spawn
-   * the Runner into. Fresh attempts start clean from the tips. A continuation
-   * restores the previous attempt's preserved work on top of them, falling
-   * back to the tips in every repo when any restoration conflicts (ADR-0018).
+   * the Runner into. Fresh attempts start clean from the tips. A `restore`
+   * puts the previous attempt's preserved work on top of them, falling back
+   * to the tips in every repo when any restoration conflicts (ADR-0018).
    */
-  prepare(task: Task, run: IsolationRun, intent?: 'fresh' | 'continuation'): Promise<PreparedTask>;
+  prepare(task: Task, run: IsolationRun, intent?: PrepareIntent): Promise<PreparedTask>;
 
   /**
    * Hand a conflicted task's kept workspace to a conflict repair (ADR-0015)

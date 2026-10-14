@@ -108,7 +108,8 @@ everything below applies per repo of the group.
   current integration tip. A continue restores the previous attempt's work
   on top of that tip, with a conflict fallback naming its preserved branches
   ([ADR-0018, K1](0018-structured-runner-transport.md)), so the saved runner
-  session sees the edits it remembers.
+  session sees the edits it remembers. A carry-over to another runner after a
+  usage limit restores it the same way (ADR-0018, U1).
 - **Dirty trees.** Modified tracked files in any repo of the group make
   isolated execution unavailable for that run (`dirty`); untracked and ignored
   files do not, because the bootstrap accounts for them. `isActive` returns the
@@ -391,3 +392,4 @@ everything below applies per repo of the group.
 - 2026-10-12 — the merge consents become global user settings ([ADR-0030](0030-global-run-settings.md)).
 - 2026-10-12 — the end of a run is a handoff unless the user opted in to automatic merging, which now also merges at the end of a run, or the supervisor at Act merges ([ADR-0029](0029-the-supervisor.md), amendment of 2026-10-12).
 - 2026-10-14 — a failed verdict blocks only the task's dependents instead of halting the run ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)).
+- 2026-10-14 — a carry-over restores a usage-limit-paused attempt's work for its new runner (ADR-0018, U1).

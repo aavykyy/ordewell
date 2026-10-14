@@ -1,7 +1,8 @@
-import type { Task, TaskSkillSnapshot } from '../models/Task';
+import type { PreviousWork } from '../interfaces/IWorktreeIsolation';
+import type { RunnerId, Task, TaskSkillSnapshot } from '../models/Task';
 import type { AttemptWorkspace, IsolationRunController } from './IsolationRunController';
 import type { RepairAttempt } from './Landing';
-import { composeAugmentedPrompt, composeContinuationPrompt } from './promptAugment';
+import { composeAugmentedPrompt, composeContinuationPrompt, continuedWorkNote } from './promptAugment';
 
 /** A continue the user asked for: their message, and the runner session it resumes (ADR-0018, K1). */
 export interface Continuation {
@@ -19,27 +20,32 @@ export interface Continuation {
  * - `repair`: a conflict repair, in the worktree kept for it (ADR-0015).
  * - `continuation`: the task's saved runner session resumed with the user's
  *   message (ADR-0018), running where the task it continues runs.
+ * - `carryOver`: a change task paused on `from`'s usage limit and moved to
+ *   another runner (ADR-0018, U1). A fresh session — none can cross runners —
+ *   in a worktree that starts from the paused attempt's work.
  */
 export type AttemptKind =
   | { readonly kind: 'change' }
   | { readonly kind: 'ops' }
   | { readonly kind: 'repair'; readonly repair: RepairAttempt }
-  | ({ readonly kind: 'continuation'; readonly ops: boolean } & Readonly<Continuation>);
+  | ({ readonly kind: 'continuation'; readonly ops: boolean } & Readonly<Continuation>)
+  | { readonly kind: 'carryOver'; readonly from: RunnerId };
 
 /**
  * The kind of an attempt about to start, from whether its task is ops and
- * what it is owed. Without a repair or a continue it is the kind of a fresh
- * attempt — what the scheduler reasons about before any attempt exists. A
- * repair outranks the ops mark: its work already sits in a kept worktree,
- * waiting to land.
+ * what it is owed. Without a repair, a continue or a carry-over it is the
+ * kind of a fresh attempt. A repair outranks the ops mark: its work already
+ * sits in a kept worktree, waiting to land. An ops task carries nothing over,
+ * as its work is never in a worktree.
  */
 export function classifyAttempt(
   ops: boolean,
-  owed: { repair?: RepairAttempt | null; continuation?: Continuation | null } = {},
+  owed: { repair?: RepairAttempt | null; continuation?: Continuation | null; carriedFrom?: RunnerId | null } = {},
 ): AttemptKind {
   if (owed.continuation) return { kind: 'continuation', ops, ...owed.continuation };
   if (owed.repair) return { kind: 'repair', repair: owed.repair };
-  return ops ? { kind: 'ops' } : { kind: 'change' };
+  if (ops) return { kind: 'ops' };
+  return owed.carriedFrom ? { kind: 'carryOver', from: owed.carriedFrom } : { kind: 'change' };
 }
 
 /** An ops task's attempt, fresh or continued, acts from the user's checkout (ADR-0020). */
@@ -68,12 +74,12 @@ export function decidesIsolation(kind: AttemptKind): boolean {
 }
 
 /**
- * Whether the attempt is given its task's skills: a fresh attempt is. A
- * repair resolves a merge, not the task's work; a continue resumes a session
- * that already holds them.
+ * Whether the attempt is given its task's skills: one in a fresh session is.
+ * A repair resolves a merge, not the task's work; a continue resumes a
+ * session that already holds them.
  */
 export function takesSkills(kind: AttemptKind): boolean {
-  return kind.kind === 'change' || kind.kind === 'ops';
+  return kind.kind === 'change' || kind.kind === 'ops' || kind.kind === 'carryOver';
 }
 
 /**
@@ -87,7 +93,8 @@ export function checksTree(kind: AttemptKind): boolean {
 
 /**
  * Where an attempt runs: the workspace root for work in the checkout, the
- * worktree kept for a repair, else wherever the run puts a change. Returns
+ * worktree kept for a repair, else wherever the run puts a change — restoring
+ * the previous attempt's work for a continue and a carry-over. Returns
  * the controller's own promise, so deciding adds no turn of its own before
  * the spawn checks its attempt is still current.
  */
@@ -97,7 +104,8 @@ export function attemptCwd(
   runs: Pick<IsolationRunController, 'attemptCwd' | 'workspaceCwd'>,
 ): Promise<AttemptWorkspace> {
   if (inCheckout(kind)) return runs.workspaceCwd(task);
-  return runs.attemptCwd(task, kind.kind === 'repair' || kind.kind === 'continuation' ? kind.kind : 'fresh');
+  if (kind.kind === 'repair') return runs.attemptCwd(task, 'repair');
+  return runs.attemptCwd(task, kind.kind === 'continuation' || kind.kind === 'carryOver' ? 'restore' : 'fresh');
 }
 
 /** What an attempt's prompt is built from. The callbacks are read only for the kinds that need them. */
@@ -105,7 +113,8 @@ export interface AttemptPromptSources {
   task: Task;
   plan: readonly Task[];
   planMapEnabled?: boolean;
-  continuationMessage?: string;
+  /** What became of the previous attempt's work where this one runs; absent in the checkout. */
+  previousWork?: PreviousWork;
   /** The task's skills, resolved where the attempt runs; a repair and a continue are given none. */
   skills: readonly TaskSkillSnapshot[];
   /** What a repair is asked to do; read once its worktree has been reopened. */
@@ -124,7 +133,7 @@ export function attemptPrompt(kind: AttemptKind, src: AttemptPromptSources): str
   const { task, plan, planMapEnabled } = src;
   switch (kind.kind) {
     case 'continuation':
-      return composeContinuationPrompt(task, [kind.message, src.continuationMessage].filter(Boolean).join('\n\n'), { ops: kind.ops });
+      return composeContinuationPrompt(task, `${kind.message}\n\n${continuedWorkNote(src.previousWork)}`, { ops: kind.ops });
     case 'repair':
       // A merge to resolve is not the task's own work, so its skills do not apply.
       return composeAugmentedPrompt({ ...task, prompt: src.repairPrompt(task) }, plan, { planMapEnabled });
@@ -134,5 +143,7 @@ export function attemptPrompt(kind: AttemptKind, src: AttemptPromptSources): str
       return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, previousAttempt: src.previousAttempt(task.id) });
     case 'change':
       return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills });
+    case 'carryOver':
+      return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, carriedOver: { from: kind.from, work: src.previousWork } });
   }
 }

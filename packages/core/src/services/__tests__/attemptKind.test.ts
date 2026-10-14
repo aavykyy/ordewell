@@ -3,6 +3,7 @@ import {
   attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, mergeExcludes,
   type AttemptKind, type AttemptPromptSources,
 } from '../attemptKind';
+import type { AttemptIntent } from '../IsolationRunController';
 import { createTask, opsFlag, inheritedOps } from '../../models/Task';
 
 const repair = { n: 1, limit: 2 };
@@ -14,6 +15,7 @@ const KINDS: Record<string, AttemptKind> = {
   repair: classifyAttempt(false, { repair }),
   'continued change': classifyAttempt(false, { continuation: resume }),
   'continued ops': classifyAttempt(true, { continuation: resume }),
+  'carried-over change': classifyAttempt(false, { carriedFrom: 'codex' }),
 };
 
 describe('classifyAttempt', () => {
@@ -31,21 +33,32 @@ describe('classifyAttempt', () => {
     expect(classifyAttempt(true, { repair }).kind).toBe('repair');
     expect(classifyAttempt(false, { repair, continuation: resume }).kind).toBe('continuation');
   });
+
+  it('carries a paused change task\'s work over to its new runner, naming the runner it left', () => {
+    expect(classifyAttempt(false, { carriedFrom: 'codex' })).toEqual({ kind: 'carryOver', from: 'codex' });
+  });
+
+  it('carries nothing over for an ops task, whose work is never in a worktree, and lets a repair or a continue outrank it', () => {
+    expect(classifyAttempt(true, { carriedFrom: 'codex' })).toEqual({ kind: 'ops' });
+    expect(classifyAttempt(false, { repair, carriedFrom: 'codex' }).kind).toBe('repair');
+    expect(classifyAttempt(false, { continuation: resume, carriedFrom: 'codex' }).kind).toBe('continuation');
+  });
 });
 
 describe('what each kind decides', () => {
   const table: Array<[string, { mergeExcludes: boolean; decidesIsolation: boolean; checksTree: boolean; cwd: string }]> = [
-    ['change', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'run' }],
+    ['change', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'fresh' }],
     ['ops', { mergeExcludes: true, decidesIsolation: false, checksTree: true, cwd: 'workspace' }],
     ['repair', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'kept' }],
-    ['continued change', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'run' }],
+    ['continued change', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'restored' }],
     ['continued ops', { mergeExcludes: true, decidesIsolation: false, checksTree: true, cwd: 'workspace' }],
+    ['carried-over change', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'restored' }],
   ];
 
   it.each(table)('a %s attempt', async (name, expected) => {
     const kind = KINDS[name];
     const runs = {
-      attemptCwd: vi.fn(async (_t: unknown, intent: 'fresh' | 'repair' | 'continuation') => ({ cwd: intent === 'repair' ? 'kept' : 'run', worktree: true })),
+      attemptCwd: vi.fn(async (_t: unknown, intent: AttemptIntent) => ({ cwd: { fresh: 'fresh', repair: 'kept', restore: 'restored' }[intent], worktree: true })),
       workspaceCwd: vi.fn(async () => ({ cwd: 'workspace', worktree: false })),
     };
 
@@ -68,6 +81,7 @@ describe('mergeExcludes: the one rule Merge all and ops work share (ADR-0020)', 
     ['repair', false],
     ['continued change', false],
     ['continued ops', true],
+    ['carried-over change', false],
   ])('%s attempt — excluded: %s', (name, excluded) => {
     expect(mergeExcludes(KINDS[name])).toBe(excluded);
   });
@@ -98,6 +112,7 @@ describe('attemptPrompt', () => {
     ['repair', { has: ['MERGE THE INTEGRATION BRANCH'], lacks: ['ORIGINAL BODY', '### Skill: tdd', '## Previous attempt'], reads: ['repairPrompt'] }],
     ['continued change', { has: ['Check the working tree'], lacks: ['ORIGINAL BODY', '### Skill: tdd'], reads: [] }],
     ['continued ops', { has: ['in the same checkout', 'was not undone'], lacks: ['ORIGINAL BODY', '## Previous attempt'], reads: [] }],
+    ['carried-over change', { has: ['ORIGINAL BODY', '### Skill: tdd', 'previous attempt on codex', 'may be unfinished'], lacks: ['## Previous attempt'], reads: [] }],
   ];
 
   it.each(table)('a %s attempt', (name, expected) => {
@@ -113,6 +128,29 @@ describe('attemptPrompt', () => {
     for (const source of ['repairPrompt', 'previousAttempt'] as const) {
       expect(src[source].mock.calls.length > 0, source).toBe(expected.reads.includes(source));
     }
+  });
+
+  it('tells a carried-over attempt its files come from the runner it left, in a fresh session', () => {
+    const prompt = attemptPrompt(KINDS['carried-over change'], { ...sources(), previousWork: { outcome: 'restored' } });
+
+    expect(prompt).toContain('## Work carried over');
+    expect(prompt).toContain('The files in your working tree come from a previous attempt on codex');
+    expect(prompt).toContain('may be unfinished');
+    expect(prompt.indexOf('## Work carried over')).toBeLessThan(prompt.indexOf('ORIGINAL BODY'));
+  });
+
+  it('tells a carried-over attempt whose work could not be applied that it starts fresh, and where that work is', () => {
+    const branch = 'ordewell-preserved/run1/1-deploy';
+    const prompt = attemptPrompt(KINDS['carried-over change'], {
+      ...sources(),
+      previousWork: { outcome: 'fallback', preserved: [{ repo: '.', branch, commit: 'abc1234' }] },
+    });
+
+    expect(prompt).toContain('could not be applied');
+    expect(prompt).toContain('starts fresh at the integration tip');
+    expect(prompt).toContain(`git log ${branch}`);
+    expect(prompt).toContain(`git diff HEAD...${branch}`);
+    expect(prompt).not.toContain('The files in your working tree come from');
   });
 });
 

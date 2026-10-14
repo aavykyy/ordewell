@@ -43,6 +43,21 @@ describe('editing a task waiting on a usage-limit reset', () => {
     expect(env.run.runner.spawn.mock.calls[2][0]).toMatchObject({ taskId: 't1', runner: 'codex' });
   });
 
+  it('a moved task starts a fresh session told its files come from the runner it left', async () => {
+    const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'off' } });
+    hitLimit(env.run.of('t1'));
+    await until(() => taskOf(env.session, 't1')!.resumeAt === RESUME_AT);
+
+    await env.session.setTaskRunner('t1', 'codex');
+
+    await until(() => env.run.spawnedIds().length === 2);
+    const moved = env.run.runner.spawn.mock.calls[1][0];
+    expect(moved.resumeSessionId).toBeUndefined();
+    expect(moved.prompt).toContain('## Work carried over');
+    expect(moved.prompt).toContain('previous attempt on claude-code');
+    expect(taskOf(env.session, 't1')!.carriedFrom).toBeUndefined();
+  });
+
   it('a user model change on the same runner keeps its resume and uses the new model at reset', async () => {
     const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'off' } });
     hitLimit(env.run.of('t1'));
