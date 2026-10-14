@@ -123,6 +123,7 @@ const CONTROL_WORDS = {
   message: 'send a message to',
   interrupt: 'interrupt',
   force: 'send a message to',
+  command: 'run a command in',
 } as const;
 
 /** What Ordewell tells a runner whose turn ended without a `task_complete` call (ADR-0018, W1). */
@@ -509,10 +510,20 @@ export class TaskOrchestrator {
     return this.messageTask(taskId, text, 'force', (session, message) => session.forceSend(message));
   }
 
+  /**
+   * Run the task runner's own command `/name args` (#66) as a turn of its
+   * own, waiting behind a running turn as a message would. Ordewell carries
+   * it; what it does is the runner's business (#24).
+   */
+  invokeTaskCommand(taskId: string, name: string, args = ''): string {
+    const command = args.trim() ? `/${name} ${args.trim()}` : `/${name}`;
+    return this.messageTask(taskId, command, 'command', (session) => session.invokeCommand(name, args));
+  }
+
   private messageTask(
     taskId: string,
     text: string,
-    action: 'message' | 'force',
+    action: 'message' | 'force' | 'command',
     send: (session: IRunnerSession, message: string) => string,
   ): string {
     const message = text.trim();

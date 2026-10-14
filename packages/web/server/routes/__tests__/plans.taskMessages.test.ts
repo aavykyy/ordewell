@@ -42,6 +42,25 @@ describe('talking to a structured task over the daemon (ADR-0018, M1)', () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it('runs the runner\'s own command on the task, with its arguments, answering its queued id (#66)', async () => {
+    const invokeTaskCommand = vi.fn(() => 'msg-3');
+    const res = await request(appFor({ invokeTaskCommand }), 'POST', '/commands', { name: 'compact', args: 'keep the API notes' });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: 'msg-3' });
+    expect(invokeTaskCommand).toHaveBeenCalledWith('t1', 'compact', 'keep the API notes');
+  });
+
+  it('asks for the command\'s name, and refuses a task that cannot take one with the reason', async () => {
+    const invokeTaskCommand = vi.fn(() => { throw new TaskControlError('Task "Build" is not running, so there is no turn to run a command in.'); });
+    expect((await request(appFor({ invokeTaskCommand }), 'POST', '/commands', { name: ' ' })).status).toBe(400);
+
+    const refused = await request(appFor({ invokeTaskCommand }), 'POST', '/commands', { name: 'compact' });
+    expect(refused.status).toBeGreaterThanOrEqual(400);
+    expect(await refused.json()).toMatchObject({ error: expect.stringContaining('is not running') });
+    expect(invokeTaskCommand).toHaveBeenCalledWith('t1', 'compact', '');
+  });
+
   it('takes back a queued message, saying whether it was still there', async () => {
     const removeQueuedTaskMessage = vi.fn(() => false);
     const res = await request(appFor({ removeQueuedTaskMessage }), 'DELETE', '/messages/msg-2');

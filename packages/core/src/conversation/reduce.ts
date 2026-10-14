@@ -54,6 +54,8 @@ function finalSegmentIndex(blocks: readonly DisplayBlock[], turnId: string, past
   for (let i = blocks.length - 1; i >= 0; i--) {
     const block = blocks[i];
     if (block.type === 'usage' || block.type === 'thinking' || block.type === 'approval' || (pastPlan && block.type === 'plan')) continue;
+    // A task log's own blocks; a planner turn never has one.
+    if (block.type === 'command' || block.type === 'compaction' || block.type === 'runner_loaded') continue;
     if (block.turnId !== turnId) continue;
     return isUnsettledSegment(block, turnId) ? i : -1;
   }

@@ -4,10 +4,10 @@ import type { TaskLogEvent } from '../models/TaskLog';
 import { addPlannerUsage, isMeasured, usageLine, type PlannerUsage } from '../models/Usage';
 import { sameMessage } from '../utils/sameMessage';
 import { mapAgentTool, normalizeAgentArgs } from '../services/harness/agentTools';
-import type { ApprovalBlock, MessageBlock, SubagentChild, SubagentStatus, ThinkingDisplayBlock } from './blocks';
+import type { ApprovalBlock, CommandStatus, DisplayBlock, MessageBlock, SubagentChild, SubagentStatus, ThinkingDisplayBlock } from './blocks';
 import { toolHeadline } from './format';
 import {
-  append, appendOutput, replaceAt, closeOpenBlocks, findLastIndex, laneAppend, laneBlocks, laneOf, laneReplace, setUsageLine, updateSubagent, sealed,
+  append, appendOutput, replaceAt, closeOpenBlocks, findLastIndex, laneAppend, laneBlocks, laneOf, laneReplace, setUsageLine, updateSubagent, sealed, sealLane,
   type BlockList, type Lane,
 } from './lanes';
 import { finishedTool, pendingTool, settledMessage } from './records';
@@ -242,10 +242,39 @@ function sentMessage(id: string, text: string, from: TaskMessageFrom | undefined
   return from === 'ordewell' ? settledMessage(id, 'system', `Ordewell: ${text}`) : settledMessage(id, 'user', text);
 }
 
+/** A runner command opens its turn as a message would, shown as the command it runs (#66). */
+function startCommand(view: TaskLogView, { name, args, messageId }: Event<'command'>): TaskLogView {
+  const queued = messageId ? view.queued.filter((m) => m.id !== messageId) : view.queued;
+  return append({ ...view, queued, working: true, latestText: undefined }, (id) => ({
+    type: 'command', id, name, ...(args ? { args } : {}), status: 'running', output: '',
+  }));
+}
+
+function runningCommand(view: TaskLogView): number {
+  return findLastIndex(view.blocks, (b) => b.type === 'command' && b.status === 'running');
+}
+
+function commandOutput(view: TaskLogView, { text }: Event<'command_output'>): TaskLogView {
+  const i = runningCommand(view);
+  const block = view.blocks[i];
+  if (block?.type !== 'command') return append(view, (id) => settledMessage(id, 'system', text));
+  return { ...view, blocks: replaceAt(view.blocks, i, { ...block, output: block.output ? `${block.output}\n${text}` : text }) };
+}
+
+/** Among the turn's steps, as a tool call is: what streamed before it is settled. */
+function appendStep(view: TaskLogView, make: (id: string) => DisplayBlock): TaskLogView {
+  const next = append(view, make);
+  return sealLane(next, null, findLastIndex(next.blocks, (b) => b.type !== 'usage'));
+}
+
 const CUT: Record<StructuredTurnEnd, SubagentStatus | null> = { completed: null, interrupted: 'stopped', failed: 'failed' };
+const COMMAND_END: Record<StructuredTurnEnd, CommandStatus> = { completed: 'done', interrupted: 'stopped', failed: 'failed' };
 
 function endTurn(view: TaskLogView, { reason }: Event<'turn_end'>): TaskLogView {
-  const closed = closeOpenBlocks({ ...view, working: false, lastTurnEnd: reason, streams: {}, latestText: undefined }, CUT[reason]);
+  const i = runningCommand(view);
+  const command = view.blocks[i];
+  const settled = command?.type === 'command' ? { ...view, blocks: replaceAt(view.blocks, i, { ...command, status: COMMAND_END[reason] }) } : view;
+  const closed = closeOpenBlocks({ ...settled, working: false, lastTurnEnd: reason, streams: {}, latestText: undefined }, CUT[reason]);
   return reason === 'interrupted' ? append(closed, (id) => settledMessage(id, 'system', 'Interrupted.')) : closed;
 }
 
@@ -307,6 +336,13 @@ export function reduceTaskLog(view: TaskLogView, event: TaskLogEvent): TaskLogVi
   switch (event.type) {
     case 'task_skills': return append(view, (id) => settledMessage(id, 'system', `Skills: ${event.skills.map((s) => `${s.name} (${s.path})`).join(', ')}`));
     case 'turn_start': return startTurn(view, event);
+    case 'command': return startCommand(view, event);
+    case 'command_output': return commandOutput(view, event);
+    case 'compaction': return appendStep(view, (id) => ({
+      type: 'compaction', id, trigger: event.trigger,
+      ...(event.preTokens !== undefined ? { preTokens: event.preTokens } : {}), ...(event.postTokens !== undefined ? { postTokens: event.postTokens } : {}),
+    }));
+    case 'runner_loaded': return append(view, (id) => ({ type: 'runner_loaded', id, commands: event.commands, mcpServers: event.mcpServers }));
     case 'turn_end': return endTurn(view, event);
     case 'text_delta': return agentTextDelta(view, event.text);
     case 'text': return agentText(view, event.text);

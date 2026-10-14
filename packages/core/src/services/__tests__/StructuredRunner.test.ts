@@ -94,9 +94,9 @@ async function firstTurn(spawned: FakeSpawnResult): Promise<void> {
   await until(() => userTurns(spawned.processes[0]?.written ?? []).length > 0);
 }
 
-/** What the session wrote to the runner after the attach check every spawn opens with. */
+/** What the session wrote to the runner after the `initialize` and attach check every spawn opens with. */
 function afterAttachCheck(written: string[]): string[] {
-  return written.filter((line) => !line.includes('"subtype":"mcp_status"'));
+  return written.filter((line) => !line.includes('"subtype":"mcp_status"') && !line.includes('"subtype":"initialize"'));
 }
 
 describe('StructuredRunner out-of-turn output', () => {
@@ -515,6 +515,60 @@ describe('StructuredSession messages', () => {
     const turn = observe(await runner.spawn(options()));
     turn.session.write(' \r\n');
     expect(turn.session.queued()).toEqual([]);
+    turn.session.kill();
+  });
+});
+
+describe('StructuredSession runner commands (#66)', () => {
+  /** `/compact` recorded on a task in `default`, replayed under the `acceptEdits` these tasks ask for. */
+  const compact = fixture('claude-code', 'task-compact').split('"permissionMode":"default"').join('"permissionMode":"acceptEdits"');
+
+  it('reports the commands its runner offers', async () => {
+    const { runner } = harness([compact]);
+    const turn = observe(await runner.spawn(options()));
+    await turn.nextTurnEnd();
+    expect(turn.session.commands().map((c) => c.name)).toEqual(['tdd', 'pingskill', 'hellocmd', 'clear', 'compact', 'model', 'docs']);
+    turn.session.kill();
+  });
+
+  it('runs a command as a turn of its own, the turn saying which command opened it', async () => {
+    const { runner, spawned } = harness([fixture('claude-code', 'task-no-marker'), compact]);
+    const turn = observe(await runner.spawn(options()));
+    await turn.nextTurnEnd();
+
+    turn.session.invokeCommand('compact');
+    await turn.nextTurnEnd();
+    expect(userTurns(spawned.processes[0].written)).toEqual(['Do the task', '/compact']);
+    expect(turn.events.filter((e) => e.type === 'turn_start').at(-1)).toEqual({ type: 'turn_start', text: '/compact', command: { name: 'compact' } });
+    expect(turn.events.filter((e) => e.type === 'compaction' || e.type === 'command_output')).toEqual([
+      { type: 'compaction', trigger: 'manual', preTokens: 24939, postTokens: 3615 },
+      { type: 'command_output', text: 'Compacted' },
+    ]);
+    expect(turn.turnEnds).toEqual(['completed', 'completed']);
+    turn.session.kill();
+  });
+
+  it('queues a command sent while a turn runs without handing it to that turn, and runs it next', async () => {
+    const spawned = fakeSpawn([() => {}, compact]);
+    const runner = new StructuredRunner({
+      process: { spawn: spawned.spawn, resolvePath: async () => '/usr/bin', platform: 'linux', isDirectory: () => true, exists: () => true },
+      createAdapter: (_runner, deps) => new ClaudeCodeAdapter(deps),
+    });
+    const turn = observe(await runner.spawn(options()));
+    await firstTurn(spawned);
+
+    const id = turn.session.invokeCommand('compact', 'keep the API notes');
+    await tick();
+    expect(turn.session.queued()).toEqual([{ id, text: '/compact keep the API notes' }]);
+    expect(userTurns(spawned.processes[0].written)).toEqual(['Do the task']);
+
+    spawned.processes[0].emitStdout(fixture('claude-code', 'task-no-marker'));
+    await turn.nextTurnEnd();
+    await turn.nextTurnEnd();
+    expect(userTurns(spawned.processes[0].written)).toEqual(['Do the task', '/compact keep the API notes']);
+    expect(turn.events.filter((e) => e.type === 'turn_start').at(-1)).toEqual({
+      type: 'turn_start', text: '/compact keep the API notes', messageId: id, command: { name: 'compact', args: 'keep the API notes' },
+    });
     turn.session.kill();
   });
 });

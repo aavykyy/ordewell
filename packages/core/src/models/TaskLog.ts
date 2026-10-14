@@ -2,6 +2,7 @@ import type { ApprovalDecision } from '../interfaces/IApproval';
 import type { StructuredEvent, StructuredTurnEnd, TaskMessageFrom } from '../interfaces/IRunner';
 import type { SubagentOutcome, TaskSkillNotice, TaskSkillSnapshot } from './Task';
 import type { UsageRecord } from './Usage';
+import type { RunnerCommand, RunnerMcpServer } from './RunnerCommand';
 
 /**
  * One entry of a structured task's log (ADR-0018, P1): what a runner did,
@@ -25,6 +26,17 @@ export type TaskLogEvent =
    * message events marks one Ordewell sent rather than the user.
    */
   | { type: 'turn_start'; message: string; messageId?: string; forced?: boolean; from?: TaskMessageFrom }
+  /**
+   * A turn began by running the runner's own command `/name args` (#66): the
+   * `turn_start` of a command turn. `messageId` names it when it had been queued.
+   */
+  | { type: 'command'; name: string; args?: string; messageId?: string }
+  /** What the running command printed, for one that runs without the model. */
+  | { type: 'command_output'; text: string }
+  /** The runner compacted its own context, asked to or on its own. */
+  | { type: 'compaction'; trigger: 'manual' | 'auto'; preTokens?: number; postTokens?: number }
+  /** What the runner loaded from the user's and the project's setup, as its process started. */
+  | { type: 'runner_loaded'; commands: RunnerCommand[]; mcpServers: RunnerMcpServer[] }
   | { type: 'turn_end'; reason: StructuredTurnEnd }
   | { type: 'text_delta'; text: string }
   /** A complete run of the agent's reply, authoritative over the deltas streamed for it. */
@@ -117,6 +129,9 @@ function withSubagent<E extends TaskLogEvent>(event: E, subagentId: string | und
 export function toTaskLogEvent(event: StructuredEvent): TaskLogEvent | null {
   switch (event.type) {
     case 'turn_start':
+      if (event.command) {
+        return { type: 'command', name: event.command.name, ...(event.command.args ? { args: event.command.args } : {}), ...(event.messageId ? { messageId: event.messageId } : {}) };
+      }
       return {
         type: 'turn_start', message: event.text, ...(event.messageId ? { messageId: event.messageId } : {}), ...(event.forced ? { forced: true } : {}), ...sender(event),
       };
@@ -169,6 +184,15 @@ export function toTaskLogEvent(event: StructuredEvent): TaskLogEvent | null {
     }
     case 'permission_withdrawn':
       return { type: 'approval_withdrawn', approvalId: event.id };
+    case 'runner_loaded':
+      return { type: 'runner_loaded', commands: event.commands, mcpServers: event.mcpServers };
+    case 'compaction':
+      return {
+        type: 'compaction', trigger: event.trigger,
+        ...(event.preTokens !== undefined ? { preTokens: event.preTokens } : {}), ...(event.postTokens !== undefined ? { postTokens: event.postTokens } : {}),
+      };
+    case 'command_output':
+      return { type: 'command_output', text: event.text };
     case 'background_agent':
       return null;
   }

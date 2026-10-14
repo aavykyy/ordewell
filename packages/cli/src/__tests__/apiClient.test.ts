@@ -406,6 +406,24 @@ describe('ApiClient — adopting a saved session', () => {
     ]);
   });
 
+  it('runs a task runner\'s own command on its route (#66)', async () => {
+    const hits: string[] = [];
+    const srv = await startCustomServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => { body += String(chunk); });
+      req.on('end', () => {
+        hits.push(`${req.method} ${req.url} ${body}`.trim());
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ id: 'msg-4' }));
+      });
+    });
+    servers.push(srv);
+    const client = new ApiClient(srv.port);
+
+    expect(await client.invokeTaskCommand('s1', 't1', 'compact', 'keep the API notes')).toEqual({ id: 'msg-4' });
+    expect(hits).toEqual(['POST /api/plans/s1/tasks/t1/commands {"name":"compact","args":"keep the API notes"}']);
+  });
+
   it('force sends a new or a queued message on its own routes, and surfaces a refusal (ADR-0023, F1)', async () => {
     const hits: string[] = [];
     const srv = await startCustomServer((req, res) => {

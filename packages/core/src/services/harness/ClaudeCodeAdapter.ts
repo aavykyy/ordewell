@@ -5,6 +5,7 @@ import * as path from 'path';
 import type { SubagentOutcome } from '../../models/Task';
 import { partedPromptUsage, type UsageRecord } from '../../models/Usage';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
+import type { RunnerCommand, RunnerMcpServer } from '../../models/RunnerCommand';
 import { claudeThinkingArgs } from '../../plugins/resolveArgs';
 import type { AgentEvent, AgentStartOptions, PlannerAsk, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
 import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
@@ -203,15 +204,25 @@ interface ClaudeStreamEvent {
   delta?: { type?: string; text?: string; thinking?: string };
 }
 
+/** One command as `initialize` and `commands_changed` list it (2.1.299); `builtin` marks the CLI's own. */
+interface ClaudeCommand {
+  name?: string;
+  description?: string;
+  argumentHint?: string;
+  aliases?: string[];
+  builtin?: boolean;
+}
+
 interface ControlResponse {
   subtype?: string;
   request_id?: string;
   error?: string;
   /**
    * `mcp_status`: every MCP server the session has, and whether it connected.
-   * `initialize`: every model the CLI offers, and the id each value runs as.
+   * `initialize`: every model the CLI offers, and the id each value runs as;
+   * every command it offers.
    */
-  response?: { mcpServers?: { name?: string; status?: string }[]; models?: { value?: string; resolvedModel?: string }[] };
+  response?: { mcpServers?: { name?: string; status?: string }[]; models?: { value?: string; resolvedModel?: string }[]; commands?: ClaudeCommand[] };
 }
 
 interface ClaudeLine {
@@ -253,6 +264,18 @@ interface ClaudeLine {
   /** A `user` line the CLI echoes back from stdin under `--replay-user-messages`, with the `uuid` it was written under. */
   isReplay?: boolean;
   uuid?: string;
+  /** `init`: the skills among its commands, by name — a plugin's as `plugin:skill`, which its command lists as an alias. */
+  skills?: string[];
+  /** `init`: the names of every command it offers, without the descriptions `initialize` has. */
+  slash_commands?: string[];
+  /** `init`: commands that only work in its own TUI, which `-p` lists all the same. */
+  terminal_slash_commands?: string[];
+  /** `init`: the session's MCP servers and how far each got. */
+  mcp_servers?: { name?: string; status?: string }[];
+  /** `commands_changed`: the whole list again, as `initialize` gives it. */
+  commands?: ClaudeCommand[];
+  /** `compact_boundary`: what asked for the compaction, and the context before and after it. */
+  compact_metadata?: { trigger?: string; pre_tokens?: number; post_tokens?: number };
 }
 
 /** The tool Claude Code delegates to a subagent with — `Task` before it was renamed `Agent`. */
@@ -283,6 +306,17 @@ function notificationOutcome(status: string | undefined): SubagentOutcome {
   if (status === 'completed') return 'done';
   if (status === 'killed' || status === 'stopped') return 'stopped';
   return 'failed';
+}
+
+/**
+ * What a command that runs without the model printed: the CLI echoes it as a
+ * user line wrapped in `<local-command-stdout>` (or `-stderr`), as `/compact`'s
+ * "Compacted" is (2.1.299).
+ */
+function localCommandOutput(content: ClaudeBlock[] | string | undefined): string {
+  const text = typeof content === 'string' ? content : flattenContent(content);
+  const match = /^<local-command-(?:stdout|stderr)>([\s\S]*)<\/local-command-(?:stdout|stderr)>$/.exec(text.trim());
+  return match ? match[1].trim() : '';
 }
 
 function blocksOf(msg: ClaudeLine): ClaudeBlock[] {
@@ -380,6 +414,12 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private readonly steers = new Map<string, string>();
   /** The last turn's `result` ended it, so a steer's echo now opens a turn the CLI started for that message. */
   private turnClosed = false;
+  /** The task's commands as the CLI last listed them, and what its `init` said of them (#66). */
+  private listedCommands: ClaudeCommand[] = [];
+  private skillNames = new Set<string>();
+  private terminalOnly = new Set<string>();
+  /** Whether this process's `runner_loaded` went out: its first `init` sends it. */
+  private loadedReported = false;
 
   protected spawnSpec(opts: AgentStartOptions, workspace: Record<string, string>): SpawnSpec {
     if (opts.kind === 'task') return this.taskSpawnSpec(opts);
@@ -479,10 +519,34 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * the alias resolves to now; that id is pinned before the first turn.
    */
   protected override async handshake(opts: AgentStartOptions): Promise<void> {
-    if (opts.kind !== 'task' || opts.flags.permissionMode !== 'plan' || !opts.model) return;
-    const listed = (await this.control({ subtype: 'initialize' }, MODEL_PIN_TIMEOUT_MS))?.response?.models;
-    const resolved = listed?.find((m) => m.value === opts.model)?.resolvedModel;
+    if (opts.kind !== 'task') return;
+    // Before the first turn, `initialize` is the one place the CLI lists its
+    // commands with their descriptions and argument hints (checked on
+    // 2.1.299); `init` names them only.
+    const initialized = (await this.control({ subtype: 'initialize' }, MODEL_PIN_TIMEOUT_MS))?.response;
+    this.listedCommands = initialized?.commands ?? [];
+    if (opts.flags.permissionMode !== 'plan' || !opts.model) return;
+    const resolved = initialized?.models?.find((m) => m.value === opts.model)?.resolvedModel;
     if (resolved && resolved !== opts.model) await this.control({ subtype: 'set_model', model: resolved }, MODEL_PIN_TIMEOUT_MS);
+  }
+
+  /**
+   * What `-p` can run. The CLI lists commands only its TUI runs (`init`'s
+   * `terminal_slash_commands`) and internal ones named `__…` all the same.
+   */
+  commands(): RunnerCommand[] {
+    return this.listedCommands.flatMap((c): RunnerCommand[] => {
+      if (!c.name || c.name.startsWith('__') || this.terminalOnly.has(c.name)) return [];
+      const aliases = c.aliases?.filter(Boolean) ?? [];
+      const skill = this.skillNames.has(c.name) || aliases.some((a) => this.skillNames.has(a));
+      return [{
+        name: c.name,
+        description: c.description ?? '',
+        ...(c.argumentHint ? { argumentHint: c.argumentHint } : {}),
+        kind: c.builtin ? 'builtin' : skill ? 'skill' : 'command',
+        ...(aliases.length > 0 ? { aliases } : {}),
+      }];
+    });
   }
 
   /** Asks the CLI itself, which reports `pending` until its connection attempt settles. */
@@ -548,6 +612,16 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
 
   answerPermission(id: string, decision: ApprovalDecision): boolean {
     return this.process ? this.permissions.answer(id, decision) : false;
+  }
+
+  /**
+   * The CLI reads a slash command at the start of a user message, its own
+   * and the user's alike, and runs it as that turn (checked on 2.1.299:
+   * `/compact` compacts, a project skill runs). There is no control request
+   * for it.
+   */
+  invokeCommand(name: string, args: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal): Promise<void> {
+    return this.send(args ? `/${name} ${args}` : `/${name}`, onEvent, signal);
   }
 
   dispose(): void {
@@ -674,6 +748,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       case 'user':
         if (msg.isReplay) {
           this.steerDelivered(msg.uuid, emit);
+          const printed = localCommandOutput(msg.message?.content);
+          if (printed) emit({ type: 'command_output', text: printed });
           return;
         }
         // The transport echoes tool results back as a synthetic user message.
@@ -697,6 +773,17 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         if (msg.subtype === 'init') {
           this.clearFollowOnTimer();
           if (this.refuseOtherMode(msg, emit)) return;
+          this.readLoaded(msg, emit);
+        }
+        if (msg.subtype === 'commands_changed' && Array.isArray(msg.commands)) this.listedCommands = msg.commands;
+        if (msg.subtype === 'compact_boundary') {
+          const meta = msg.compact_metadata;
+          emit({
+            type: 'compaction',
+            trigger: meta?.trigger === 'manual' ? 'manual' : 'auto',
+            ...(typeof meta?.pre_tokens === 'number' ? { preTokens: meta.pre_tokens } : {}),
+            ...(typeof meta?.post_tokens === 'number' ? { postTokens: meta.post_tokens } : {}),
+          });
         }
         if (msg.subtype === 'background_tasks_changed' && Array.isArray(msg.tasks)) {
           this.backgroundTaskCount = msg.tasks.length;
@@ -750,6 +837,23 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     emit({ type: 'error', message: `Claude Code started in "${msg.permissionMode}" mode, not the "${asked}" mode the plan asked for. It does not report why; the model or the account may not offer it.` });
     this.dispose();
     return true;
+  }
+
+  /**
+   * `init` comes with every turn (2.1.299); the first says what the process
+   * loaded. A task's own Ordewell server is Ordewell's, not the user's setup.
+   */
+  private readLoaded(msg: ClaudeLine, emit: (event: AgentEvent) => void): void {
+    if (this.role !== 'task') return;
+    this.skillNames = new Set(msg.skills ?? []);
+    this.terminalOnly = new Set(msg.terminal_slash_commands ?? []);
+    if (this.listedCommands.length === 0) this.listedCommands = (msg.slash_commands ?? []).map((name) => ({ name }));
+    if (this.loadedReported) return;
+    this.loadedReported = true;
+    const mcpServers = (msg.mcp_servers ?? []).flatMap((server): RunnerMcpServer[] => (server.name && server.name !== ORDEWELL_MCP_SERVER_NAME
+      ? [{ name: server.name, ...(server.status ? { status: server.status } : {}) }]
+      : []));
+    emit({ type: 'runner_loaded', commands: this.commands(), mcpServers });
   }
 
   private awaitFollowOnTurn(emit: (event: AgentEvent) => void): void {

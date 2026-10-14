@@ -68,6 +68,8 @@ export type Effect =
   | { type: 'loadTaskAttempt'; sessionId: string; taskId: string; attempt: number }
   /** A user message to a structured task. */
   | { type: 'sendTaskMessage'; sessionId: string; taskId: string; text: string }
+  /** The task runner's own command (#66), never one of Ordewell's. */
+  | { type: 'invokeTaskCommand'; sessionId: string; taskId: string; name: string; args: string }
   /** Takes back one queued message before it is delivered. */
   | { type: 'removeTaskMessage'; sessionId: string; taskId: string; messageId: string }
   | { type: 'interruptTask'; sessionId: string; taskId: string }

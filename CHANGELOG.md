@@ -35,6 +35,19 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Added
 
+- **A task's chat speaks its runner's own slash commands.** With a task open
+  in the TUI, `/` completes the commands and skills the runner reported for
+  that task (its built-ins and your own and the project's skills and custom
+  commands), and `/name args` runs the runner's `name` as a turn of its own:
+  `/compact` is Claude Code's own compaction, not Ordewell's. Ordewell's run
+  and plan commands stay on the plan pane, its keys and the planner chat. A
+  name the runner did not report is refused with a note; a runner that
+  reported no list is sent what you typed. The task log shows each command
+  you ran and what it printed, marks every compaction the runner does, asked
+  for or on its own, and records what the runner loaded (skills, commands,
+  MCP servers) in one line that ctrl-o expands. Claude Code first; Codex,
+  OpenCode and VS Code follow
+  ([ADR-0018](docs/adr/0018-structured-runner-transport.md), #66).
 - **A supervisor that watches your run, and optionally acts.** The planner
   conversation that wrote the plan now takes turns while the run goes on, at
   one of three levels: **Off** (it speaks only when you write), **Watch** (the

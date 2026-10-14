@@ -9,6 +9,22 @@ describe('compact saved log reads', () => {
     expect(text).not.toContain('/workspace');
   });
 
+  it('reads a runner command\'s turn, what it printed, a compaction and what the runner loaded (#66)', () => {
+    const text = renderTaskLog([
+      { type: 'runner_loaded', commands: [{ name: 'pingskill', description: 'Reply', kind: 'skill' }, { name: 'compact', description: 'Free up context', kind: 'builtin' }], mcpServers: [{ name: 'docs-server', status: 'pending' }] },
+      { type: 'command', name: 'compact', args: 'keep the API notes', messageId: 'msg-2' },
+      { type: 'compaction', trigger: 'manual', preTokens: 24939, postTokens: 3615 },
+      { type: 'command_output', text: 'Compacted' },
+    ]);
+    expect(text).toBe([
+      '[1 runner_loaded] commands: /pingskill (skill), /compact (builtin); MCP servers: docs-server (pending)',
+      '[2 command] msg-2 /compact keep the API notes',
+      '[3 compaction] manual, 24939 → 3615 tokens',
+      '[4 command_output] Compacted',
+      '',
+    ].join('\n'));
+  });
+
   it('says which messages Ordewell sent rather than the user', () => {
     const text = renderTaskLog([
       { type: 'turn_start', message: 'Call task_complete.', from: 'ordewell' },

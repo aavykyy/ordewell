@@ -21,3 +21,10 @@ describe('hidden detail', () => {
     expect(hasHiddenDetail(play([input]).blocks)).toBe(true);
   });
 });
+
+describe('hidden detail in a task log', () => {
+  it('is there once the runner said what it loaded, which is listed only in detail (#66)', () => {
+    expect(hasHiddenDetail([{ type: 'runner_loaded', id: 'b1', commands: [], mcpServers: [] }])).toBe(true);
+    expect(hasHiddenDetail([{ type: 'compaction', id: 'b1', trigger: 'manual' }])).toBe(false);
+  });
+});

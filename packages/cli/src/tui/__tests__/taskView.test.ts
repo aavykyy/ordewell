@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, it, expect } from 'vitest';
-import { replayTaskLog, type AttemptUsage, type TaskLogEvent } from '@ordewell/core';
+import { describe, it, expect } from 'vitest';
+import { replayTaskLog, type AttemptUsage, type RunnerCommand, type TaskLogEvent } from '@ordewell/core';
 import { stripAnsi, width } from '../ansi';
 import { chatPaneWidth } from '../geometry';
 import { bodyRows, chatLayout } from '../layout';
@@ -361,39 +361,84 @@ describe('the task view draws as a runner, not the planner', () => {
   });
 });
 
-describe('an unknown /name in the task view', () => {
-  const unknown = (state: TuiState) => {
-    const result = run('/retyr', state);
+describe('a /command in the task view is the runner\'s own (#66)', () => {
+  const commands: RunnerCommand[] = [
+    { name: 'compact', description: 'Free up context by summarizing the conversation so far', argumentHint: '<optional custom summarization instructions>', kind: 'builtin' },
+    { name: 'clear', description: 'Start a new session with empty context', argumentHint: '[name]', kind: 'builtin', aliases: ['reset', 'new'] },
+    { name: 'pingskill', description: 'Reply with the word PONG-SKILL and nothing else. (project)', kind: 'skill' },
+  ];
+  const withRunner = (over: Partial<TuiState> = {}, taskOver: Partial<TaskView> = {}) => opened({
+    tasks: [task(taskOver)],
+    taskView: loaded({ view: replayTaskLog([events[0], { type: 'runner_loaded', commands, mcpServers: [] }, ...events.slice(1)]) }),
+    ...over,
+  });
+
+  it('runs the runner\'s command with what was typed after it, not Ordewell\'s', () => {
+    const { state, effects } = run('/compact keep the API notes', withRunner());
+    expect(effects).toEqual([{ type: 'invokeTaskCommand', sessionId: 's1', taskId: 't1', name: 'compact', args: 'keep the API notes' }]);
+    expect(state.condensing).toBe(false);
+    expect(state.editor.text).toBe('');
+  });
+
+  it('runs a skill the runner offers, and a command by one of its other names', () => {
+    expect(run('/pingskill', withRunner()).effects).toEqual([{ type: 'invokeTaskCommand', sessionId: 's1', taskId: 't1', name: 'pingskill', args: '' }]);
+    expect(run('/reset', withRunner()).effects).toEqual([{ type: 'invokeTaskCommand', sessionId: 's1', taskId: 't1', name: 'reset', args: '' }]);
+  });
+
+  it('says so in the task view for a name the runner did not report, sending nothing, until the next send', () => {
+    const result = run('/retyr now', withRunner({ cols: 200 }));
     expect(result.effects).toEqual([]);
-    expect(messagesOf(result.state).at(-1)?.text).toContain('Unknown command: /retyr');
-    return result;
-  };
+    expect(plain(result.state)).toContain('/retyr is not a command claude-code offers this task — type / to see them.');
 
-  it('does not continue a finished task', () => {
-    unknown(opened({ focus: 'chat', tasks: [task({ status: 'completed', continuable: true })] }));
+    const next = run('/compact', { ...result.state });
+    expect(next.effects).toHaveLength(1);
+    expect(plain(next.state)).not.toContain('/retyr is not a command');
   });
 
-  it('is not delivered to a running task', () => {
-    unknown(opened({ focus: 'chat' }));
+  it('neither offers nor runs Ordewell\'s run and plan commands from a task\'s chat', () => {
+    for (const text of ['/approve', '/help', '/retry 1', '/stop']) {
+      const result = run(text, withRunner({ cols: 200 }));
+      expect(result.effects).toEqual([]);
+      expect(result.state.overlay).toBeNull();
+      expect(plain(result.state)).toContain('is not a command claude-code offers this task');
+    }
   });
 
-  it('is still passed through in planner chat', () => {
-    const { effects } = run('/retyr', initialState({ sessionId: 's1', focus: 'chat' }));
-    expect(effects).toEqual([{ type: 'sendMessage', sessionId: 's1', message: '/retyr' }]);
+  it('sends a message that starts with a path as a message, not as a command', () => {
+    expect(run('/tmp/x.ts is broken', withRunner()).effects).toEqual([{ type: 'sendTaskMessage', sessionId: 's1', taskId: 't1', text: '/tmp/x.ts is broken' }]);
   });
-});
 
-describe('a skill name in the task view', () => {
-  beforeEach(() => registerSkillCommands([{ name: 'tdd', description: 'Test first', appliesTo: 'task', userInvocable: true }]));
-  afterEach(() => registerSkillCommands([]));
+  it('sends a /name as typed to a runner that reported no commands', () => {
+    expect(run('/retyr', opened()).effects).toEqual([{ type: 'sendTaskMessage', sessionId: 's1', taskId: 't1', text: '/retyr' }]);
+  });
 
-  it('is refused with where task skills are set, not as an unknown command', () => {
-    const result = run('/tdd', opened({ focus: 'chat' }));
-    const text = messagesOf(result.state).at(-1)?.text;
-    expect(result.effects).toEqual([]);
-    expect(text).toContain("skills aren't loaded in a task's chat");
-    expect(text).toContain('/task-skills <id> <name>');
-    expect(text).not.toContain('Unknown command');
+  it('continues a finished task with the command as typed, which its resumed runner reads first', () => {
+    const { effects } = run('/compact', withRunner({ status: 'executing' }, { status: 'completed', continuable: true }));
+    expect(effects).toEqual([{ type: 'continueTask', sessionId: 's1', taskId: 't1', text: '/compact' }]);
+  });
+
+  it('keeps Ordewell\'s commands and skills in the planner chat', () => {
+    registerSkillCommands([{ name: 'tdd', description: 'Test first', appliesTo: 'task', userInvocable: true }]);
+    try {
+      expect(run('/retyr', initialState({ sessionId: 's1', focus: 'chat' })).effects).toEqual([{ type: 'sendMessage', sessionId: 's1', message: '/retyr' }]);
+      expect(run('/help', initialState({ sessionId: 's1', focus: 'chat' })).state.overlay).toEqual({ kind: 'help', scroll: 0 });
+    } finally {
+      registerSkillCommands([]);
+    }
+  });
+
+  it('completes from the runner\'s list alone, and only at the start of the message', () => {
+    const typed = (text: string) => {
+      const base = withRunner();
+      return { ...base, editor: { ...base.editor, text, cursor: text.length } };
+    };
+    expect(reduce(typed('/pi'), { type: 'key', key: key('tab') }).state.editor.text).toBe('/pingskill ');
+    expect(reduce(typed('/app'), { type: 'key', key: key('tab') }).state.editor.text).toBe('/app');
+    expect(reduce(typed('then /pi'), { type: 'key', key: key('tab') }).state.editor.text).toBe('then /pi');
+
+    const hint = plain(typed('/c'));
+    expect(hint).toContain('compact clear');
+    expect(hint).not.toContain('cancel');
   });
 });
 
@@ -437,8 +482,8 @@ describe('continuing a finished task (ADR-0018, K1)', () => {
     ]);
   });
 
-  it('/continue without a message says how to use it', () => {
-    const { state, effects } = run('/continue 1', finished());
+  it('/continue without a message says how to use it, in the planner chat', () => {
+    const { state, effects } = run('/continue 1', initialState({ sessionId: 's1', focus: 'chat', tasks: [task({ status: 'completed', continuable: true })] }));
     expect(effects).toEqual([]);
     expect(messagesOf(state).at(-1)?.text).toBe('Usage: /continue <id> <message>');
   });

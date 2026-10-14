@@ -1,4 +1,4 @@
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type RunTask, type RunView, type SupervisorLevel, type TaskLogEvent, type TaskLogView, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type RunnerCommand, type RunTask, type RunView, type SupervisorLevel, type TaskLogEvent, type TaskLogView, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 import type { SaveSettingsEffect } from './reducers/settings';
 import type { StepperState } from './reducers/stepper';
@@ -336,6 +336,12 @@ export interface TaskLogState {
   followLatest: boolean;
   /** Which queued message the remove key targets. */
   queuedIndex: number;
+  /**
+   * Why the composer's last text was not sent, drawn in the view in place of
+   * its key hints until the next send: the planner chat, where other notices
+   * go, is not on screen.
+   */
+  notice?: string;
 }
 
 /** A prompt a force send took out of the composer, or out of the queue at `queueIndex`. */
@@ -547,6 +553,15 @@ export function planRows(state: TuiState): PlanRow[] {
 /** The row the plan pane's cursor points at, or null for an empty plan. */
 export function selectedPlanRow(state: TuiState): PlanRow | null {
   return planRows(state)[state.selectedTask] ?? null;
+}
+
+/** The commands the task's runner reported in the attempt on screen (#66): empty when it reported none. */
+export function runnerCommands(tv: TaskLogState): readonly RunnerCommand[] {
+  for (let i = tv.view.blocks.length - 1; i >= 0; i--) {
+    const block = tv.view.blocks[i];
+    if (block.type === 'runner_loaded') return block.commands;
+  }
+  return [];
 }
 
 /** The request the task view's approval keys answer: the oldest one still waiting in the attempt on screen. */

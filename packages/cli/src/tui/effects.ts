@@ -21,7 +21,7 @@ export type OrdewellApi = Pick<ApiClient,
   | 'startConversation' | 'sendConversationMessage' | 'forceSendPlannerMessage' | 'executePlan' | 'stopExecution' | 'cancelPlanning'
   | 'taskControl' | 'markTaskComplete' | 'markTaskIncomplete' | 'skipTask' | 'cancelResume' | 'resumeNow'
   | 'getTaskLogAttempts' | 'getTaskLog'
-  | 'sendTaskMessage' | 'removeQueuedTaskMessage' | 'forceSendTaskMessage' | 'forceSendQueuedTaskMessage'
+  | 'sendTaskMessage' | 'invokeTaskCommand' | 'removeQueuedTaskMessage' | 'forceSendTaskMessage' | 'forceSendQueuedTaskMessage'
   | 'interruptTask' | 'approveTaskCheckpoint' | 'rejectTaskCheckpoint' | 'continueTask'
   | 'addTask' | 'updateTask' | 'removeTask'
   | 'getSessions' | 'getSession' | 'adoptSession' | 'deleteSession' | 'closeSession'
@@ -333,6 +333,9 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     // broadcasts the `task_log` event that shows it; nothing to dispatch here.
     case 'sendTaskMessage':
       await api.sendTaskMessage(effect.sessionId, effect.taskId, effect.text);
+      return;
+    case 'invokeTaskCommand':
+      await api.invokeTaskCommand(effect.sessionId, effect.taskId, effect.name, effect.args);
       return;
 
     // The daemon starts the new attempt; its `task_log` and status arrive over

@@ -2,6 +2,7 @@ import type { ResearchStepOutcome, SkillLoadNotice, SubagentOutcome } from '../m
 import type { ModelUsage, UsageTotals } from '../models/Usage';
 import type { ApprovalKind } from '../interfaces/IApproval';
 import type { ApprovalSource } from '../services/ApprovalPolicy';
+import type { RunnerCommand, RunnerMcpServer } from '../models/RunnerCommand';
 
 /**
  * What a surface draws for one planner conversation (#51): an ordered list of
@@ -10,7 +11,9 @@ import type { ApprovalSource } from '../services/ApprovalPolicy';
  * the block exists, so a surface can key its own UI state on it — whether a
  * block is expanded is that UI state, and deliberately not part of a block.
  */
-export type DisplayBlock = MessageBlock | ThinkingDisplayBlock | ToolBlock | SubagentBlock | ApprovalBlock | PlanBlock | SkillLoadBlock | UsageBlock;
+export type DisplayBlock =
+  | MessageBlock | ThinkingDisplayBlock | ToolBlock | SubagentBlock | ApprovalBlock | PlanBlock | SkillLoadBlock | UsageBlock
+  | CommandBlock | CompactionBlock | RunnerLoadedBlock;
 
 /**
  * `agent` is a task runner speaking in a structured task's log (ADR-0018); the
@@ -155,6 +158,41 @@ export interface SkillLoadBlock extends SkillLoadNotice {
   type: 'skill_load';
   id: string;
   turnId?: string;
+}
+
+/** How the turn a runner command opened ended, or `running` while it runs. */
+export type CommandStatus = 'running' | 'done' | 'failed' | 'stopped';
+
+/** A runner's own command a user ran in a task (#66): `/name args`, and what it printed. */
+export interface CommandBlock {
+  type: 'command';
+  id: string;
+  name: string;
+  args?: string;
+  status: CommandStatus;
+  /** What a command that runs without the model printed; its other outcomes are the turn's own blocks. */
+  output: string;
+}
+
+/** The runner compacted its own context: asked to (`/compact`) or on its own. */
+export interface CompactionBlock {
+  type: 'compaction';
+  id: string;
+  trigger: 'manual' | 'auto';
+  preTokens?: number;
+  postTokens?: number;
+}
+
+/**
+ * What a task's runner loaded from the user's and the project's own setup, as
+ * its process started: its commands and skills, and its MCP servers. Drawn
+ * collapsed unless the surface shows detail.
+ */
+export interface RunnerLoadedBlock {
+  type: 'runner_loaded';
+  id: string;
+  commands: readonly RunnerCommand[];
+  mcpServers: readonly RunnerMcpServer[];
 }
 
 /** The token line. There is at most one, and it is always the last block. */

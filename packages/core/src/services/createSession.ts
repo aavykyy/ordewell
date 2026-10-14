@@ -1544,6 +1544,14 @@ export class Session {
     return this.saved(() => this.orchestrator.forceSendTaskMessage(taskId, text), { background: true });
   }
 
+  /**
+   * The task runner's own command `/name args` (#66), as a turn of its own.
+   * Throws `TaskControlError` where a plain message would.
+   */
+  invokeTaskCommand(taskId: string, name: string, args = ''): string {
+    return this.saved(() => this.orchestrator.invokeTaskCommand(taskId, name, args), { background: true });
+  }
+
   forceSendQueuedTaskMessage(taskId: string, id: string): boolean {
     return this.saved(() => this.orchestrator.forceSendQueuedTaskMessage(taskId, id), { background: true });
   }
