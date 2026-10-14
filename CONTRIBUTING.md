@@ -124,7 +124,11 @@ versions in lockstep.
 
 - Branch from `main`.
 - Keep the diff to one concern.
-- Make sure `npm run lint && npm run typecheck && npm test` passes.
+- While iterating, `npm run test:changed` runs only the tests affected by your
+  uncommitted changes (`npm run test:quick` skips the slow real-git e2e files).
+  Neither replaces the full suite: make sure
+  `npm run lint && npm run typecheck && npm test` passes before pushing. CI runs
+  the full suite.
 - Describe what you changed and why. If it changes behaviour a user can see, say
   what they'll notice.
 

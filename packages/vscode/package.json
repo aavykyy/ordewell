@@ -48,6 +48,8 @@
     "watch": "tsup --watch",
     "lint": "eslint src --ext .ts,.tsx",
     "test": "vitest run",
+    "test:quick": "vitest run",
+    "test:changed": "vitest run --changed --passWithNoTests",
     "test:coverage": "vitest run --coverage",
     "test:integration": "tsup --config tsup.integration.config.ts && node dist-test/runTest.js",
     "package": "vsce package --no-dependencies",
