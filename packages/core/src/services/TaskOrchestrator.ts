@@ -1193,7 +1193,7 @@ export class TaskOrchestrator {
 
   /** The kind a task's next attempt starts as, short of a repair or a continue: what is weighed before one exists. */
   private nextAttemptKind(taskId: string): AttemptKind {
-    return classifyAttempt(this.store.isOps(taskId));
+    return classifyAttempt(this.store.isOps(taskId), { carriedFrom: this.store.get(taskId)?.carriedFrom });
   }
 
   /**
@@ -1412,7 +1412,11 @@ export class TaskOrchestrator {
     return true;
   }
 
-  /** Run before writing assignments so cancellation sees the old runner's shared wait. */
+  /**
+   * Run before writing assignments so cancellation sees the old runner's
+   * shared wait. A session cannot cross runners, so the next attempt is a
+   * carry-over of the paused attempt's files (ADR-0018, U1).
+   */
   releaseMovedResume(taskId: string, changes: Partial<Task>): Partial<Task> {
     const task = this.store.get(taskId);
     if (!task || task.status !== 'awaiting_user' || task.awaitingReason !== 'usage-limit') return changes;
@@ -1427,7 +1431,7 @@ export class TaskOrchestrator {
       this.heldOnLimit = false;
       this.planStatus = 'running';
     }
-    return { ...changes, status: 'pending', awaitingReason: undefined, resumeAt: undefined };
+    return { ...changes, status: 'pending', awaitingReason: undefined, resumeAt: undefined, carriedFrom: this.store.resolveTaskRunner(task) };
   }
 
   /**
@@ -1790,7 +1794,7 @@ export class TaskOrchestrator {
       cwd: null,
       worktree: false,
       integration: null,
-      kind: classifyAttempt(this.store.isOps(task.id), { repair: this.landing.nextRepair(task.id), continuation }),
+      kind: classifyAttempt(this.store.isOps(task.id), { repair: this.landing.nextRepair(task.id), continuation, carriedFrom: task.carriedFrom }),
       snapshot: null,
       startedAt: new Date().toISOString(),
       decided: false,
@@ -1842,7 +1846,7 @@ export class TaskOrchestrator {
       const manifest = this.registry?.get(attempt.runner)?.manifest;
       const unavailable = manifest && unavailableTaskModeMessage(manifest, task.taskMode);
       if (unavailable) throw new Error(unavailable);
-      const { cwd, worktree, continuationMessage } = await attemptCwd(kind, task, this.runs);
+      const { cwd, worktree, previousWork } = await attemptCwd(kind, task, this.runs);
       attempt.cwd = cwd;
       attempt.worktree = worktree;
       if (checksTree(kind)) attempt.snapshot = await this.runs.snapshotWorkspace();
@@ -1863,7 +1867,7 @@ export class TaskOrchestrator {
         task,
         plan: this.store.planTasks,
         planMapEnabled: this.config.planMapEnabled,
-        continuationMessage: continuationMessage ?? (!worktree ? 'Your previous changes are in the working tree (shared workspace).' : undefined),
+        previousWork,
         skills: attempt.skills,
         repairPrompt: (t) => this.landing.repairPrompt(t),
         previousAttempt: (taskId) => this.opsPreviousAttempt(taskId),
@@ -1899,6 +1903,10 @@ export class TaskOrchestrator {
       attempt.phase = 'running';
       attempt.session = session;
       this.store.setTaskRunnerSessionId(task.id, undefined);
+      this.store.clearCarriedFrom(task.id);
+      if (kind.kind === 'carryOver' && previousWork?.outcome === 'fallback') {
+        this.tell('warn', `Task "${task.title}" starts fresh on ${attempt.runner}: the work its paused attempt on ${kind.from} left conflicts with the integration tip, so it was not carried over. It is kept on branch ${quotedList([...new Set(previousWork.preserved.map((kept) => kept.branch))])}.`);
+      }
       if (takesSkills(kind)) this.store.setTaskAttemptSkills(task.id, [...attempt.skills]);
 
       // Attached before the verifier, so the summary of the call that settles

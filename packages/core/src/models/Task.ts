@@ -86,6 +86,7 @@ export type RunnerId = string;
 export function migrateLoadedTasks(tasks: readonly Task[]): void {
   for (const task of tasks) {
     if (typeof task.runnerSessionId !== 'string') delete task.runnerSessionId;
+    if (typeof task.carriedFrom !== 'string') delete task.carriedFrom;
     const legacy = task as Task & { transport?: { kind?: unknown; nativeSessionId?: unknown } };
     if (!task.runnerSessionId && legacy.transport?.kind === 'structured' && typeof legacy.transport.nativeSessionId === 'string') {
       task.runnerSessionId = legacy.transport.nativeSessionId;
@@ -145,6 +146,12 @@ export interface Task {
    * waits for a manual retry. Set only with `awaitingReason` `usage-limit`.
    */
   resumeAt?: string;
+  /**
+   * The runner a task paused on its usage limit was moved off (ADR-0018, U1):
+   * its next attempt is a carry-over, a fresh session that starts from that
+   * attempt's files. Cleared once that attempt runs, and by a retry.
+   */
+  carriedFrom?: RunnerId;
   /** Why the task was skipped, as whoever skipped it put it; set only while `status` is `skipped`, and not always then. */
   skipReason?: string;
   /**
@@ -875,6 +882,7 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
         verdict: prior?.verdict,
         outputSummary: prior?.outputSummary,
         runnerSessionId: prior?.runnerSessionId,
+        carriedFrom: prior?.carriedFrom,
         attemptSkills: prior?.attemptSkills,
         attemptUsage: prior?.attemptUsage,
         // Where a task that has run ran is fixed, like its runner session (ADR-0020).

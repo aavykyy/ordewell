@@ -214,6 +214,7 @@ export class PlanStore {
       task.verdict = undefined;
       task.outputSummary = undefined;
       delete task.forcedPastGate;
+      delete task.carriedFrom;
     }
   }
 
@@ -262,6 +263,11 @@ export class PlanStore {
   setTaskRunnerSessionId(id: string, runnerSessionId: string | undefined): void {
     const task = this._taskMap.get(id);
     if (task) task.runnerSessionId = runnerSessionId;
+  }
+
+  clearCarriedFrom(id: string): void {
+    const task = this._taskMap.get(id);
+    if (task) delete task.carriedFrom;
   }
 
   startAttemptUsage(id: string, attempt: number, runner: string, startedAt: string): void {

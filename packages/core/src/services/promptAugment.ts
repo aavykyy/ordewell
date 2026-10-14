@@ -1,5 +1,7 @@
 import type { Task, TaskOutputSummary, TaskSkillSnapshot } from '../models/Task';
 import { flattenTasksWithParents } from '../models/Task';
+import type { PreservedWork, PreviousWork } from '../interfaces/IWorktreeIsolation';
+import { SELF_REPO } from './isolationRecord';
 import { renderTaskSkills } from './taskSkills';
 
 const MAX_TAIL_CHARS = 500;
@@ -178,6 +180,8 @@ export interface ComposeOptions {
   skills?: readonly TaskSkillSnapshot[];
   /** An ops task's last attempt, as its output ended (ADR-0020); absent on a first attempt. */
   previousAttempt?: string;
+  /** A carry-over: the runner whose usage-limit-paused attempt this one starts from, and what became of that work. */
+  carriedOver?: { from: string; work?: PreviousWork };
 }
 
 /**
@@ -195,6 +199,40 @@ function renderPreviousAttempt(output: string): string {
     'The end of its output:',
     tail,
   ].join('\n');
+}
+
+/** Where each repo's preserved work is, and how to look at it before recovering it. */
+function keptWorkLines(preserved: readonly PreservedWork[], whose: string): string {
+  return preserved.map((kept) => {
+    const where = kept.repo === SELF_REPO ? `${whose[0].toUpperCase()}${whose.slice(1)}` : `In repository \`${kept.repo}\`, ${whose}`;
+    return `${where} is kept on branch \`${kept.branch}\`. `
+      + `Inspect it with \`git log ${kept.branch}\` and \`git diff HEAD...${kept.branch}\` before recovering it.`;
+  }).join('\n');
+}
+
+/**
+ * What a continued session is told became of the edits it remembers
+ * (ADR-0018, K1). Absent work is in the checkout, where it was left.
+ */
+export function continuedWorkNote(work: PreviousWork | undefined): string {
+  if (!work) return 'Your previous changes are in the working tree (shared workspace).';
+  if (work.outcome === 'restored') return 'Your previous changes are in the working tree.';
+  return 'Your previous changes conflicted with the integration tip, so this working tree starts at the integration tip. '
+    + keptWorkLines(work.preserved, 'your previous work');
+}
+
+/**
+ * What a carry-over is told (ADR-0018, U1). A fresh session on another
+ * runner finds files it did not write, and nothing of the reasoning behind
+ * them, so it is told where they came from and not to trust them as done.
+ */
+function renderCarriedOver(from: string, work: PreviousWork | undefined): string {
+  const moved = `This task was paused on ${from}'s usage limit and moved to you.`;
+  const body = work?.outcome === 'fallback'
+    ? `${moved} The work its previous attempt on ${from} left could not be applied on top of the integration tip, so your working tree starts fresh at the integration tip. `
+      + `${keptWorkLines(work.preserved, "the previous attempt's work")} It may be unfinished.`
+    : `${moved} The files in your working tree come from a previous attempt on ${from} and may be unfinished: check what is already there before building on it. That attempt's session is not continued.`;
+  return ['## Work carried over', '', body].join('\n');
 }
 
 const CHECKPOINT_INSTRUCTION = [
@@ -230,6 +268,8 @@ export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], op
   if (outputs.length > 0) blocks.push(renderPriorOutputs(outputs));
 
   if (opts?.previousAttempt !== undefined) blocks.push(renderPreviousAttempt(opts.previousAttempt));
+
+  if (opts?.carriedOver) blocks.push(renderCarriedOver(opts.carriedOver.from, opts.carriedOver.work));
 
   if (opts?.skills?.length) blocks.push(renderTaskSkills(opts.skills));
 
