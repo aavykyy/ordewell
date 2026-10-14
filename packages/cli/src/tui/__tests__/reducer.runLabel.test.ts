@@ -39,3 +39,14 @@ describe('the status line during a run', () => {
     expect(state.busyLabel).toBe('1 task waits for you');
   });
 });
+
+describe('the status line across a plan refresh mid-run', () => {
+  it('keeps naming the running task when the plan arrives after the run snapshot, as a /load has it', () => {
+    let { state } = reduce(running(), { type: 'taskStarted', taskId: 't1', title: 'Add multiply', runner: 'claude-code', sessionId: 's1' });
+    const plan = { tasks: [task({ status: 'in_progress' }), task({ id: 't2', title: 'Add reverse', assignedRunner: 'opencode' })] };
+    ({ state } = reduce(state, { type: 'planUpdated', plan, sessionId: 's1' }));
+
+    expect(state.status).toBe('executing');
+    expect(state.busyLabel).toBe('Add multiply · claude-code');
+  });
+});

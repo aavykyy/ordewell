@@ -89,10 +89,11 @@ function reduceAction(state: TuiState, action: Action): Step {
       // as a top-level task's.
       const expandedTaskId =
         state.expandedTaskId && findTask(tasks, state.expandedTaskId) ? state.expandedTaskId : null;
+      const status = plannerInFlight(state) ? 'idle' : state.status;
       const next: TuiState = {
         ...folded,
-        status: plannerInFlight(state) ? 'idle' : state.status,
-        busyLabel: '',
+        status,
+        busyLabel: status === 'executing' ? runLabel(tasks, folded.runMerge) : '',
         expandedTaskId,
         taskEditor: expandedTaskId !== null ? state.taskEditor : null,
       };
