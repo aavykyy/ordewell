@@ -376,7 +376,7 @@ describe('a /command in the task view is the runner\'s own (#66)', () => {
   it('runs the runner\'s command with what was typed after it, not Ordewell\'s', () => {
     const { state, effects } = run('/compact keep the API notes', withRunner());
     expect(effects).toEqual([{ type: 'invokeTaskCommand', sessionId: 's1', taskId: 't1', name: 'compact', args: 'keep the API notes' }]);
-    expect(state.condensing).toBe(false);
+    expect(state.planner).toBe('idle');
     expect(state.editor.text).toBe('');
   });
 

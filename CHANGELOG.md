@@ -428,6 +428,13 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **The TUI follows the session it shows.** Runs started by autorun, the
   planner's run tools or the supervisor, and the supervisor's reports after a
   run's end, are drawn without waiting for you to act.
+- **An autorun plan's tasks show while the planner is still replying, and a
+  message sent mid-run shows "Planning…".** The TUI tracked the planner's turn
+  and the run in one status, so each could end the other: a run autorun
+  started inside the turn that landed its plan left the plan pane empty until
+  the turn ended, and a task update during a turn sent mid-run hid
+  "Planning…", Esc-to-stop and Send now, and broke the held-prompt queue. The
+  turn and the run now have separate states.
 - **A coding-agent planner's reply stays beside the plan or edit it submits.**
   The message used to vanish the moment the turn settled, live and on reload.
 - **A supervised run finishes after an edited retry.** A planner edit made after

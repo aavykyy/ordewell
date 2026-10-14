@@ -43,10 +43,10 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
         step({ ...state, planApproved: true }, [{ type: 'execute', sessionId }]),
       );
     case 'stop':
-      // Whichever is actually in flight — a planning turn and a task run never
-      // overlap, so this is never ambiguous about which one to halt. Stopping
-      // a turn brings the queue behind it back into the editor, the way the
-      // Esc route does.
+      // A planner turn first, as Esc does: a turn sent mid-run is the newer
+      // thing the user started, and the run outlives it for a second /stop.
+      // Stopping a turn brings the queue behind it back into the editor, the
+      // way the Esc route does.
       return withSession(state, (sessionId) =>
         plannerInFlight(state)
           ? stopPlanning(state, sessionId)
@@ -93,7 +93,7 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
       return rewind(state, args[0]);
     case 'compact':
       return withIdlePlanner(state, (sessionId) =>
-        step({ ...state, status: 'planning', condensing: true }, [{ type: 'compactConversation', sessionId }]),
+        step({ ...state, planner: 'condensing' }, [{ type: 'compactConversation', sessionId }]),
       );
     case 'new':
       return requestNewSession(state);
@@ -186,7 +186,7 @@ function resolveToggle(arg: string | undefined, current: boolean): boolean | nul
 // Only asks when there is something to lose; an empty/idle session resets
 // silently. Mirrors the VS Code extension's confirm-before-reset.
 function requestNewSession(state: TuiState): Step {
-  const hasContent = state.tasks.length > 0 || state.conversation.blocks.length > 0 || state.goal !== '' || state.status !== 'idle';
+  const hasContent = state.tasks.length > 0 || state.conversation.blocks.length > 0 || state.goal !== '' || state.status !== 'idle' || plannerInFlight(state);
   if (!state.sessionId || !hasContent) return newSession(state);
   return step({
     ...state,
@@ -217,7 +217,7 @@ export function newSession(state: TuiState): Step {
     scroll: 0,
     planScroll: null,
     status: 'idle',
-    condensing: false,
+    planner: 'idle',
     // Prompts belong to the session that raised them; the old planner is gone
     // and its pending requests deny on their own timeout.
     pendingApprovals: [],

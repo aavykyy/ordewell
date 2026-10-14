@@ -253,7 +253,7 @@ export function chatActivity(state: TuiState): ChatActivity | null {
   const tv = state.taskView;
   if (!tv) {
     if (!plannerInFlight(state)) return null;
-    return { label: state.condensing ? 'Condensing…' : 'Planning…', busy: true };
+    return { label: state.planner === 'condensing' ? 'Condensing…' : 'Planning…', busy: true };
   }
   const own = findTask(state.tasks, tv.taskId);
   const task = state.tasks.find((t) => t.subtasks?.some((s) => s.id === tv.taskId)) ?? own;

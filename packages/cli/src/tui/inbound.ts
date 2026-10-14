@@ -26,9 +26,9 @@ export type Dispatch = (action: Action) => void;
 
 /**
  * Whether a subscription is the planner's or a run's. It decides behaviour
- * (streamed prose has one voice, a run's `plan_generated` also refreshes the
- * pane), never identity: two run sockets are two subscriptions that each get
- * every broadcast, and counting by kind would show one broadcast twice.
+ * (streamed prose has one voice), never identity: two run sockets are two
+ * subscriptions that each get every broadcast, and counting by kind would
+ * show one broadcast twice.
  */
 type Kind = 'planning' | 'execution';
 
@@ -276,7 +276,7 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
     showReply(event);
   };
 
-  const deliverConversation = (kind: Kind, id: string, event: ConversationMessage): void => {
+  const deliverConversation = (id: string, event: ConversationMessage): void => {
     if (event.type === 'planner_message') {
       acceptReply(id, event);
       return;
@@ -284,13 +284,12 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
     if (!copies.first(id, identity(event))) return;
     if (event.type === 'plan_generated') {
       dispatch({ type: 'sessionMessage', message: event, sessionId });
-      // A run's stream and the follow take every plan a turn lands, one this
-      // surface did not send included (a supervisor's edit, an input replayed
-      // after a reload). On the planning stream the same broadcast is a turn
-      // still in flight: `converse` settles the plan it gets back, and ending
-      // the turn here would send the held prompts early — which is also why
-      // the reducer sets a broadcast plan aside while its own turn is out.
-      if (kind === 'execution') dispatch({ type: 'planBroadcast', plan: event.plan, sessionId });
+      // Every plan a turn lands, one this surface did not send included (a
+      // supervisor's edit, an input replayed after a reload), and whichever
+      // socket's copy came first. With this surface's own turn out, the
+      // reducer only draws it: `converse` settles the plan it gets back, and
+      // ending the turn here would send the held prompts early.
+      dispatch({ type: 'planBroadcast', plan: event.plan, sessionId });
       return;
     }
     dispatch({ type: 'sessionMessage', message: event, sessionId });
@@ -315,7 +314,7 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
     }
     flush();
     if (isConversation(event)) {
-      deliverConversation(kind, id, event);
+      deliverConversation(id, event);
       return;
     }
     if (!copies.first(id, identity(event))) return;

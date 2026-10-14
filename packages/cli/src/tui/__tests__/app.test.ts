@@ -143,7 +143,7 @@ describe('createApp', () => {
 
     it('pulses no faster than every 400ms while the selected chat is busy', () => {
       withColour(true, () => {
-        const h = harness({ status: 'planning' });
+        const h = harness({ planner: 'planning' });
         h.app.start();
 
         vi.advanceTimersByTime(399);
@@ -167,7 +167,7 @@ describe('createApp', () => {
 
     it('holds still with colour off, as on a pipe', () => {
       withColour(false, () => {
-        const h = harness({ status: 'planning' });
+        const h = harness({ planner: 'planning' });
         h.app.start();
 
         vi.advanceTimersByTime(2000);

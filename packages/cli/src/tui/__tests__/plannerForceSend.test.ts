@@ -17,7 +17,7 @@ const ctrlS = { type: 'key' as const, key: { name: 'ctrl-s' } };
 const key = (name: string, char?: string) => ({ type: 'key' as const, key: { name, char } });
 
 const planning = (over: Partial<TuiState> = {}): TuiState =>
-  initialState({ sessionId: 's1', status: 'planning', ...over });
+  initialState({ sessionId: 's1', planner: 'planning', ...over });
 
 const withDraft = (state: TuiState, text: string): TuiState => ({
   ...state,
@@ -62,7 +62,7 @@ describe('ctrl-s in the planner chat', () => {
   });
 
   it('force sends when the session reports a planner turn started by another client', () => {
-    const idle = initialState({ sessionId: 's1', status: 'idle' });
+    const idle = initialState({ sessionId: 's1', planner: 'idle' });
     const busy = reduce(idle, { type: 'sessionMessage', sessionId: 's1', message: { type: 'planner_turn_started', turnId: 'remote', prompt: 'Research the repository' } }).state;
     expect(reduce(withDraft(busy, 'Answer this first'), ctrlS).effects).toEqual([
       { type: 'forceSendPlannerMessage', sessionId: 's1', message: 'Answer this first' },
@@ -70,12 +70,12 @@ describe('ctrl-s in the planner chat', () => {
   });
 
   it('settles the force-send request for a turn started by another client', () => {
-    const idle = initialState({ sessionId: 's1', status: 'idle' });
+    const idle = initialState({ sessionId: 's1', planner: 'idle' });
     const busy = reduce(idle, { type: 'sessionMessage', sessionId: 's1', message: { type: 'planner_turn_started', turnId: 'remote', prompt: 'Research the repository' } }).state;
     const sent = reduce(withDraft(busy, 'Answer this first'), ctrlS).state;
     const settled = reduce(sent, { type: 'planUpdated', plan: {}, sessionId: 's1' }).state;
     expect(settled.forceSendPending).toBeNull();
-    expect(settled.status).toBe('idle');
+    expect(settled.planner).toBe('idle');
   });
 
   it('force sends the newest queued prompt when the composer is empty, keeping the rest in order', () => {
@@ -91,7 +91,7 @@ describe('ctrl-s in the planner chat', () => {
   });
 
   it('is a plain send when no turn is running', () => {
-    const { state, effects } = reduce(withDraft(planning({ status: 'idle' }), 'use bcrypt'), ctrlS);
+    const { state, effects } = reduce(withDraft(planning({ planner: 'idle' }), 'use bcrypt'), ctrlS);
     expect(effects).toEqual([{ type: 'sendMessage', sessionId: 's1', message: 'use bcrypt' }]);
     expect(state.editor.text).toBe('');
   });
@@ -120,7 +120,7 @@ describe('the queue across a stop', () => {
     const { state, effects } = reduce(sent, { type: 'failed', message: 'The planner turn was stopped.', code: 'planner_turn_stopped' });
 
     expect(state.queuedPrompts).toEqual(['one', 'two']);
-    expect(state.status).toBe('planning');
+    expect(state.planner).toBe('planning');
     expect(effects).toEqual([]);
   });
 
@@ -130,7 +130,7 @@ describe('the queue across a stop', () => {
 
     expect(stopped.effects).toEqual([]);
     expect(stopped.state.queuedPrompts).toEqual(['one', 'two']);
-    expect(stopped.state.status).toBe('planning');
+    expect(stopped.state.planner).toBe('planning');
 
     const forced = reduce(stopped.state, { type: 'planUpdated', plan: {}, sessionId: 's1' });
     expect(forced.effects).toEqual([{ type: 'sendMessage', sessionId: 's1', message: 'one' }]);
@@ -145,7 +145,7 @@ describe('the queue across a stop', () => {
 
     expect(state.editor.text).toBe('use Postgres');
     expect(lastSaid(state)).toMatchObject({ role: 'error', text: 'connect ECONNREFUSED' });
-    expect(state.status).toBe('idle');
+    expect(state.planner).toBe('idle');
     expect(effects).toEqual([]);
   });
 
@@ -201,7 +201,7 @@ describe('what the planner chat shows for force send', () => {
 
   it('names ctrl-s in the chat footer while a turn is in flight', () => {
     expect(footerHints(planning())).toContain('ctrl-s send now');
-    expect(footerHints(planning({ status: 'idle' }))).not.toContain('ctrl-s send now');
+    expect(footerHints(planning({ planner: 'idle' }))).not.toContain('ctrl-s send now');
   });
 
   it('documents ctrl-s for the planner in the help sheet', () => {

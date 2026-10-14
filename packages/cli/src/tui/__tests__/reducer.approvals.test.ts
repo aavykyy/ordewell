@@ -29,7 +29,7 @@ const settledElsewhere = (id: string, granted = true): Action => ({
 });
 
 function withPending(request = REQUEST): TuiState {
-  return reduce(initialState({ sessionId: 's1', status: 'planning' }), requested(request)).state;
+  return reduce(initialState({ sessionId: 's1', planner: 'planning' }), requested(request)).state;
 }
 
 describe('approval overlay', () => {
@@ -70,7 +70,7 @@ describe('approval overlay', () => {
   it('denies on escape once no turn is in flight, so dismissing is never consent', () => {
     // A prompt outliving its turn (answered elsewhere, or the turn already
     // settled) still gets the plain deny — there is nothing left to stop.
-    const { effects } = press({ ...withPending(), status: 'idle' }, 'escape');
+    const { effects } = press({ ...withPending(), planner: 'idle' }, 'escape');
 
     expect(effects).toContainEqual({ type: 'respondApproval', sessionId: 's1', approvalId: 'ap-1', granted: false });
   });

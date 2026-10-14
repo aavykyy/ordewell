@@ -8,7 +8,7 @@ const hear = (message: SessionMessage, sessionId?: string): Action => ({ type: '
 const send = (state: TuiState, action: Action) => reduce(state, action).state;
 const drive = (state: TuiState, messages: SessionMessage[]) => messages.map((m) => hear(m)).reduce(send, state);
 
-const planning = (): TuiState => ({ ...initialState(), status: 'planning' });
+const planning = (): TuiState => ({ ...initialState(), planner: 'planning' });
 
 const call = (path: string, toolCallId?: string): SessionMessage =>
   ({ type: 'research_step', tool: 'read_file', args: JSON.stringify({ path }), ...(toolCallId ? { toolCallId } : {}) });
@@ -37,7 +37,7 @@ describe('research calls during a planner turn', () => {
   });
 
   it('keeps the status at planning through research: the row has no separate verb for it', () => {
-    expect(drive(planning(), [call('a.ts', 't1')]).status).toBe('planning');
+    expect(drive(planning(), [call('a.ts', 't1')]).planner).toBe('planning');
   });
 
   it('leaves an executing run alone — research steps belong to the planner', () => {
@@ -83,6 +83,6 @@ describe('planner thinking', () => {
     ]);
 
     expect(s.conversation.blocks).toMatchObject([{ type: 'thinking', text: 'weighing the options', streaming: true }]);
-    expect(s.status).toBe('planning');
+    expect(s.planner).toBe('planning');
   });
 });

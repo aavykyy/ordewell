@@ -81,41 +81,16 @@ function reduceAction(state: TuiState, action: Action): Step {
 
     case 'planUpdated': {
       if (stale(state, action.sessionId)) return step(state);
-      // The plan folds into the run view, which keeps every status-only field
-      // the stream last reported — a checkpoint, continuable, a merge gate. A
-      // saved plan's isolation record is read on top, since a load had no live
-      // stream to tell it; a planner reply carries none and leaves it as it was.
-      const folded = applyIsolationRecord(foldRun(state, planSnapshot(action.plan)), action.plan);
-      const { tasks } = folded;
-      // A plan refresh can supersede the task whose prompt is open; the editor
-      // survives only while its task does. The cursor is clamped against the
-      // visible rows afterwards, so an expanded parent's subtasks count.
-      // `findTask` walks subtasks too — the expanded id is a subtask's as often
-      // as a top-level task's.
-      const expandedTaskId =
-        state.expandedTaskId && findTask(tasks, state.expandedTaskId) ? state.expandedTaskId : null;
-      const next: TuiState = {
-        ...folded,
-        status: plannerInFlight(state) ? 'idle' : state.status,
-        condensing: false,
-        expandedTaskId,
-        taskEditor: expandedTaskId !== null ? state.taskEditor : null,
-      };
-      const selectedTask = clampSelection(state.selectedTask, planRows(next).length);
+      const settled: TuiState = { ...showPlan(state, action.plan), planner: 'idle' };
       // A plan refresh mid-run (a run in flight) is not a turn ending — only
       // leaving the planning statuses is the moment the queue may drain.
-      const settled = settlePlan({
-        ...next,
-        selectedTask,
-        focus: tasks.length === 0 ? 'chat' : state.focus,
-      });
       if (!plannerInFlight(state)) {
         return step({ ...settled, forceSendPending: null });
       }
       // The turn a force send stopped can settle with what it had said rather
       // than fail as stopped (see `failed`); the forced turn is still running,
       // and the held prompts wait for it.
-      if (state.forceSendPending) return step({ ...settled, status: 'planning', forceSendPending: null });
+      if (state.forceSendPending) return step({ ...settled, planner: 'planning', forceSendPending: null });
       return drainQueue(state, settled);
     }
 
@@ -237,14 +212,16 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step({
         ...say(state, 'system', `Execution ${verb} — ${completed}/${total} tasks complete${failures}.`),
         status: 'idle',
-        condensing: false,
       });
     }
 
     // Its own turn's plan comes back on the call `converse` awaits; the copy
     // broadcast meanwhile would settle the turn before its reply is spoken.
+    // It still goes on the pane: autorun and the planner's run tools start
+    // its tasks inside that turn, and their updates need tasks to land on.
     case 'planBroadcast':
-      if (stale(state, action.sessionId) || plannerInFlight(state)) return step(state);
+      if (stale(state, action.sessionId)) return step(state);
+      if (plannerInFlight(state)) return step(showPlan(state, action.plan));
       return reduceAction(state, { type: 'planUpdated', plan: action.plan, sessionId: action.sessionId });
 
     // The follow is open while nothing runs, so its loss is news only with a run on screen.
@@ -260,7 +237,6 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step({
         ...say(state, 'error', 'Lost the connection to the daemon — this view is no longer following the run, but the daemon may still be running it. /load this session again to see where it stands.'),
         status: 'idle',
-        condensing: false,
       });
     }
 
@@ -301,7 +277,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         goal: action.goal,
         taskView: null,
         status: 'idle',
-        condensing: false,
+        planner: 'idle',
         planApproved: false,
         pendingApprovals: [],
         queuedPrompts: EMPTY_HOLD,
@@ -340,11 +316,11 @@ function reduceAction(state: TuiState, action: Action): Step {
       // stop is that: any other failure is the forced send's own, and its
       // prompt is already out of the composer or the queue, so it goes back.
       if (state.forceSendPending) {
-        if (action.code === 'planner_turn_stopped') return step({ ...state, forceSendPending: null, condensing: false });
+        if (action.code === 'planner_turn_stopped') return step({ ...state, forceSendPending: null, planner: plannerInFlight(state) ? 'planning' : 'idle' });
         state = restoreForced(state);
       }
       const quiet = plannerInFlight(state) && state.stopRequested;
-      const reported = { ...(quiet ? state : say(state, 'error', action.message)), status: 'idle' as const, condensing: false };
+      const reported = { ...(quiet ? state : say(state, 'error', action.message)), planner: 'idle' as const };
       // A planner turn dying IS a turn ending — the queue would otherwise wait
       // on a next one that never comes. An execution failure (or any failure
       // with no turn running) drains nothing.
@@ -355,8 +331,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     case 'workspaceNeedsInit':
       return step({
         ...state,
-        status: 'idle',
-        condensing: false,
+        planner: 'idle',
         overlay: {
           kind: 'confirm',
           title: 'Initialize new workspace?',
@@ -394,13 +369,40 @@ function reduceAction(state: TuiState, action: Action): Step {
   }
 }
 
+/** A plan onto the pane, whether or not it ends a planner turn. */
+function showPlan(state: TuiState, plan: unknown): TuiState {
+  // The plan folds into the run view, which keeps every status-only field
+  // the stream last reported — a checkpoint, continuable, a merge gate. A
+  // saved plan's isolation record is read on top, since a load had no live
+  // stream to tell it; a planner reply carries none and leaves it as it was.
+  const folded = applyIsolationRecord(foldRun(state, planSnapshot(plan)), plan);
+  const { tasks } = folded;
+  // A plan refresh can supersede the task whose prompt is open; the editor
+  // survives only while its task does. The cursor is clamped against the
+  // visible rows afterwards, so an expanded parent's subtasks count.
+  // `findTask` walks subtasks too — the expanded id is a subtask's as often
+  // as a top-level task's.
+  const expandedTaskId =
+    state.expandedTaskId && findTask(tasks, state.expandedTaskId) ? state.expandedTaskId : null;
+  const next: TuiState = {
+    ...folded,
+    expandedTaskId,
+    taskEditor: expandedTaskId !== null ? state.taskEditor : null,
+  };
+  return settlePlan({
+    ...next,
+    selectedTask: clampSelection(state.selectedTask, planRows(next).length),
+    focus: tasks.length === 0 ? 'chat' : state.focus,
+  });
+}
+
 function runStatus(state: TuiState, tasks: TaskView[]): RunStatus {
   if (tasks.some(isTaskRunning)) return 'executing';
   // A task waiting on the user is not executing, but the run is not over
   // either — the indicator says it waits rather than going idle. A run paused
   // at a merge gate waits on the user the same way.
   if (tasks.some((t) => t.status === 'awaiting_user') || state.runMerge?.paused) return 'executing';
-  return plannerInFlight(state) ? state.status : 'idle';
+  return 'idle';
 }
 
 /** Ctrl-C backs out one layer at a time; it only quits when there is nothing to back out of. */
@@ -552,7 +554,7 @@ function submit(state: TuiState): Step {
     ? { type: 'sendMessage', sessionId: state.sessionId, message: text }
     : { type: 'startConversation', goal: text };
 
-  return step({ ...spoken, status: 'planning', stopRequested: false, forceSendPending: null }, [effect]);
+  return step({ ...spoken, planner: 'planning', stopRequested: false, forceSendPending: null }, [effect]);
 }
 
 /** Close the task view onto the plan pane, the cursor on the task that was open. */

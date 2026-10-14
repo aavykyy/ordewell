@@ -56,7 +56,7 @@ describe('reduce — submitting a goal', () => {
 
   it('marks the session busy while the planner works', () => {
     const { state } = reduce(typing('a goal'), { type: 'key', key: { name: 'enter' } });
-    expect(state.status).toBe('planning');
+    expect(state.planner).toBe('planning');
   });
 
   it('ignores an empty submit', () => {
@@ -213,13 +213,13 @@ describe('reduce — a planner reply', () => {
   });
 
   it('settles the busy status on planUpdated, whatever the reply before it', () => {
-    const busy = { ...spoken('Which database?'), status: 'planning' as const, condensing: true };
+    const busy = { ...spoken('Which database?'), planner: 'condensing' as const };
     // `planUpdated` is the settle: the reply's text (this action) is dispatched
     // first, then the settle follows and ends the turn.
     const replied = reduce(busy, reply('Which database?', 's1')).state;
     const { state } = reduce(replied, { type: 'planUpdated', plan: { tasks: [] }, sessionId: 's1' });
-    expect(state.status).toBe('idle');
-    expect(state.condensing).toBe(false);
+    expect(state.planner).toBe('idle');
+    expect(state.planner).toBe('idle');
   });
 });
 

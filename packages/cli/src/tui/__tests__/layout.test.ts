@@ -248,7 +248,7 @@ describe('plan pane — conflict row', () => {
 
 describe('the armed stop cue', () => {
   const armed = (cols: number): TuiState =>
-    initialState({ sessionId: 's1', status: 'planning', stopArmed: true, rows: 24, cols });
+    initialState({ sessionId: 's1', planner: 'planning', stopArmed: true, rows: 24, cols });
 
   it('renders once, as the red status row, at narrow and wide widths', () => {
     style.enabled = true;
@@ -271,7 +271,7 @@ describe('the armed stop cue', () => {
   });
 
   it('keeps the footer height steady across arming, so the body does not move', () => {
-    const unarmed = initialState({ sessionId: 's1', status: 'planning', rows: 24, cols: 80 });
+    const unarmed = initialState({ sessionId: 's1', planner: 'planning', rows: 24, cols: 80 });
     expect(bodyRows(armed(80))).toBe(bodyRows(unarmed));
   });
 });

@@ -486,7 +486,7 @@ describe('status line', () => {
 
   it('says only Planning while the planner works, never what it is reading', () => {
     const out = text({
-      status: 'planning',
+      planner: 'planning',
       conversation: chatOf(['user', 'add auth']),
     });
     expect(out).toContain('● Planning…');
@@ -1635,7 +1635,7 @@ describe('queued prompts with the conversation', () => {
       bash('npm test'),
       { type: 'planner_usage', totals: { inputTokens: 900, outputTokens: 80 } },
     );
-    const state = { ...talking, status: 'planning' as const, queuedPrompts: ['Use SQLite'] };
+    const state = { ...talking, planner: 'planning' as const, queuedPrompts: ['Use SQLite'] };
     const rows = render(state).map((r) => stripAnsi(r).trimEnd());
     const bubble = rows.findIndex((r) => r.startsWith('◇ Use SQLite'));
 

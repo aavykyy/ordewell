@@ -51,7 +51,7 @@ describe('ctrl-o toggles full detail', () => {
   });
 
   it('works while a planner turn is running', () => {
-    const state = chatty({ status: 'planning', sessionId: 'session-1', goal: 'g' });
+    const state = chatty({ planner: 'planning', sessionId: 'session-1', goal: 'g' });
 
     expect(press(state, { name: 'ctrl-o' }).detailAll).toBe(true);
   });
@@ -107,7 +107,7 @@ describe('ctrl-o leaves the queued-prompt machinery alone', () => {
   });
 
   it('never arms the stop itself, and esc still arms after it', () => {
-    const state = chatty({ status: 'planning', sessionId: 'session-1' });
+    const state = chatty({ planner: 'planning', sessionId: 'session-1' });
 
     const after = press(state, { name: 'ctrl-o' });
     expect(after.stopArmed).toBe(false);
