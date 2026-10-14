@@ -144,8 +144,9 @@ export type HostAction =
  *   run's per-task badges are keyed by task id, so they must not outlive the
  *   plan they described).
  * - 'restore' and 'new' also: stop the running/planning flags and drop queued
- *   prompts. 'empty' leaves them: the host's own `state` says what runs next,
- *   and queued prompts survive an emptied plan.
+ *   prompts. 'empty' leaves them: the host's own `state` says whether a run
+ *   goes on and `plannerTurn` whether a turn does, and queued prompts survive
+ *   an emptied plan.
  * - 'restore' re-opens the gates (a restore always leaves the chat usable);
  *   'new' closes both, so the old session's late plan updates and errors
  *   are dropped until the user's next send or a planner turn.
@@ -223,7 +224,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'setState': {
       const base = action.state === 'empty' ? resetSession(state, 'empty') : state;
-      return { ...base, isResearchActive: action.state === 'researching', isExecuting: action.state === 'approved' };
+      return { ...base, isExecuting: action.state === 'approved' };
     }
 
     case 'planUpdated': {

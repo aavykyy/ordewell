@@ -117,8 +117,15 @@ export class ConversationViewHost {
     this.replace(fromTranscript(saved.conversationHistory, saved.researchLog, saved.plannerUsage, saved.pendingTurns));
   }
 
+  /**
+   * A new session or a cleared plan. A turn the webview asked for that never
+   * opened here belongs to the old session too, and stop() would not announce
+   * it, so the turn is said closed either way.
+   */
   reset(): void {
+    const wasOpen = this.gate.open !== null;
     this.replace(EMPTY_CONVERSATION);
+    if (!wasOpen) this.post({ type: 'plannerTurn', active: false });
   }
 
   /** A new webview holds nothing, so it is sent every block. */
@@ -126,6 +133,7 @@ export class ConversationViewHost {
     this.sent = [];
     this.flush();
     this.post({ type: 'heldPrompts', prompts: this.held });
+    this.post({ type: 'plannerTurn', active: this.gate.open !== null });
   }
 
   flush(): void {
