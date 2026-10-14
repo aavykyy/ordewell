@@ -84,6 +84,71 @@ bench/       Offline dev harnesses. Zero dependencies, pure Node.
 docs/adr/    Architecture decisions, including the ones that were rejected.
 ```
 
+## Adding a runner
+
+A built-in runner is declared in two places, and every surface — the runner
+and planner pickers, `ordewell runners`, help text, model discovery, the VS Code
+setting check — reads them. If a runner is missing from a surface, the fix is
+not an edit to that surface.
+
+1. **The manifest.** Add `packages/core/src/plugins/builtin/<id>.manifest.ts`
+   and list it in `BUILTIN_MANIFESTS` (`plugins/builtin/index.ts`). It names
+   the runner (`name` is its id, `displayName` is what every surface shows),
+   its command, its modes mapped onto the mode axis, and how its models are
+   discovered. List order is picker order. A parser too specific for the
+   shared ones is a function in its own file beside the manifest, referenced
+   from `modelDiscovery`, not a new name in a shared union.
+2. **The connector.** Add the runner's entry to `CONNECTORS`
+   (`services/harness/connectors.ts`): the adapter that drives it over its
+   programmatic protocol, how it is handed the Ordewell MCP server (ADR-0022),
+   and what it would load from a repository (ADR-0028). Having a connector is
+   what lets a runner run tasks (ADR-0018) and plan (ADR-0009). A usage-limit
+   reader is optional: add `usageLimitReset` only if the runner prints a time.
+3. **The tests.**
+   - Copy `plugins/__tests__/declaringABuiltinRunner.test.ts` to see the
+     contract: a fake runner declared at those two places must show up
+     everywhere with nothing else edited. If your runner needs an edit
+     elsewhere to appear, that is a bug in the seam; raise it in the issue.
+   - Run the connector contract tests
+     (`services/__tests__/runnerConnectors.contract.test.ts`) against your
+     adapter, and give the adapter its own tests with a fake binary.
+   - `npm run build && npm run lint && npm run typecheck && npm test`.
+
+There is no list to extend in `cli`, `vscode` or `web`. Two runner ids appear
+there on purpose and are not a place to add yours: the default runner
+(`DEFAULT_RUNNERS`, a product choice), and the legacy per-runner VS Code and
+environment toggles, which are migration code for three settings that were
+never extended. The `web_search:<provider>` names in the allowlist grammar are
+search providers, not runner ids.
+
+### Validate against the real binary first
+
+Before committing to a transport, run the agent's real binary and record what
+you saw in the issue. Documentation drifts from the program; ADR-0009's
+corrections (Codex's method names, `--verbose`, OpenCode's echo) are what this
+catches.
+
+- **Headless transport.** Which programmatic mode, its input and output
+  framing, and what happens with no TTY (is stdout dropped?).
+- **Empty success.** Whether a turn can report success with an empty response.
+- **Multi-turn.** Whether one session takes several turns of input.
+- **Interrupt.** Whether a turn can be stopped without ending the session.
+- **Approvals.** Whether permission requests arrive as structured events that
+  can be answered, since the approval cards depend on them.
+- **Usage.** Whether usage is reported, and in what units.
+- **Resume.** Whether a session id lets a later process resume it, including
+  whether a resumed session starts clean or reports a stale interruption.
+- **MCP.** Whether it accepts MCP server configuration on the command line or
+  in a per-session file, which is how it receives the Ordewell tools.
+- **Read-only.** That read-only is enforced at spawn for a planner, not
+  requested in the prompt (ADR-0009).
+- **Installation.** The version probe, and what a missing binary looks like.
+- **Models.** Whether it lists its own models; if not, the discovery source
+  and fallback list the manifest carries (ADR-0004).
+
+If the agent is closed source or auth-bundled, say so in the issue: the
+planner must fail before the goal is typed when the agent is unusable.
+
 ## Releasing
 
 Releases are driven by a version tag. Bump every package to the same version

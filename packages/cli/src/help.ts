@@ -1,3 +1,7 @@
+import { runnerIdList } from './runnerNames';
+
+// The `web_search:` provider names further down are search providers, named as
+// an approval names them, not runner ids.
 export function printHelp(): void {
   console.log(`
 Ordewell — task orchestration for coding agents
@@ -47,7 +51,7 @@ Planner, models and runners:
   ordewell model [set <id>]       Show or set the planner model (applies without a restart)
   ordewell planner-effort [lvl]   Thinking effort for a coding-agent planner
   ordewell key [set <p> <key>]    Show which providers have a key, or store one
-  ordewell runners [<id> on|off]  Enable or disable runners (claude-code, opencode, codex)
+  ordewell runners [<id> on|off]  Enable or disable runners (${runnerIdList()})
   ordewell allowlist set|clear|show       Limit which models a runner may use
   ordewell auto [full|guarded]    Autonomy level for new plans: Full or Guarded
   ordewell supervisor [off|watch|act]  Whether the planner watches or acts on your runs (default watch);
@@ -126,13 +130,13 @@ Quick Start:
   then run: ordewell plan --goal "Your task description"
 
   No API key? Plan with a coding agent you already pay for:
-    AI_PROVIDER=claude-code ordewell plan --goal "Your task description"
+    AI_PROVIDER=<runner> ordewell plan --goal "Your task description"
 
 Environment:
   OPENROUTER_API_KEY         OpenRouter API key (recommended)
   GEMINI_API_KEY             Google Gemini API key (alternative)
   AI_PROVIDER                openrouter, google — auto-detected from keys
-                             claude-code, codex, opencode — plan with that CLI,
+                             ${runnerIdList()} — plan with that CLI,
                              no API key (uses its own subscription)
   ORDEWELL_PLANNER_EFFORT    Thinking effort for a coding-agent planner
   ORCHESTRATOR_MODEL         Default: deepseek/deepseek-v4-flash

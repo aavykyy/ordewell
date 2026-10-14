@@ -341,7 +341,7 @@ describe('transcript', () => {
 
   it('says what is missing when nothing can plan yet', () => {
     const out = text();
-    expect(out).toMatch(/Claude Code, Codex, OpenCode/);
+    expect(out).toMatch(/Claude Code, Codex or OpenCode/);
     expect(out).toContain('/key');
   });
 

@@ -2,6 +2,7 @@ import { TaskCommandsBridge } from './components/RunnerCommands';
 import React, { useState, useEffect, useCallback, useMemo, useReducer, useRef } from 'react';
 import EmptyState from './components/EmptyState';
 import GetStarted from './components/GetStarted';
+import { orNames } from './runnerNames';
 import ChatInput from './components/ChatInput';
 import DockResizeHandle from './components/DockResizeHandle';
 import { ConversationBlocks } from './components/ChatMessage';
@@ -568,28 +569,23 @@ export default function App() {
     vscode.postMessage({ type: 'setPlanner', provider });
   }, [planner.provider]);
 
-  const displayRunners = runnerList.length > 0
-    ? runnerList
-    : [
-        { id: 'claude-code', displayName: 'Claude Code' },
-        { id: 'codex', displayName: 'Codex' },
-        { id: 'opencode', displayName: 'OpenCode' },
-      ];
-
-  const visibleRunners = displayRunners.filter((r) => enabledRunnerIds.includes(r.id));
+  const visibleRunners = runnerList.filter((r) => enabledRunnerIds.includes(r.id));
 
   // An API key is one of two ways in (ADR-0009): an installed coding agent
   // plans on its own subscription, so key-less is a working setup, not a
   // first-run wall.
   const canPlan = configuredProviders.length > 0 || planner.backends.some((b) => b.usable);
+  // The coding agents the host lists as planners are listed whether or not they
+  // are installed, which `runnerList` (installed runners only) cannot say.
+  const agentNames = planner.backends.filter((b) => b.kind === 'harness').map((b) => b.label);
 
   const plannerIsHarness = planner.backends.find((b) => b.id === planner.provider)?.kind === 'harness';
 
   const runnerLabelMap = useMemo<Record<string, string>>(() => {
     const m: Record<string, string> = {};
-    for (const r of displayRunners) m[r.id] = r.displayName;
+    for (const r of runnerList) m[r.id] = r.displayName;
     return m;
-  }, [displayRunners]);
+  }, [runnerList]);
 
   const runningCount = useMemo(() =>
     plan?.tasks.filter((t) => t.status === 'in_progress').length ?? 0,
@@ -841,7 +837,7 @@ export default function App() {
             })}
             {visibleRunners.length === 0 && (
               <span className="setup-block-empty">
-                No coding agent detected — install Claude Code, Codex or OpenCode, then run <code>/refresh</code>.
+                No coding agent detected — install {orNames(agentNames, 'a coding agent')}, then run <code>/refresh</code>.
               </span>
             )}
           </div>
@@ -920,7 +916,7 @@ export default function App() {
         )}
 
         {!hasContent && isReady && !canPlan && (
-          <GetStarted onConfigure={handleConfigureApiKey} />
+          <GetStarted runnerNames={agentNames} onConfigure={handleConfigureApiKey} />
         )}
 
         {!hasContent && isReady && canPlan && (

@@ -1,8 +1,11 @@
 import React from 'react';
+import { orNames } from '../runnerNames';
 
 type ApiProvider = 'openrouter' | 'google' | 'openai_compatible';
 
 interface GetStartedProps {
+  /** Display names of the runners the host knows, in picker order. */
+  runnerNames: string[];
   onConfigure: (provider: ApiProvider) => void;
 }
 
@@ -11,7 +14,7 @@ interface GetStartedProps {
  * no API key. Either one is enough (ADR-0009), so it offers both routes rather
  * than presenting a key as mandatory.
  */
-export default function GetStarted({ onConfigure }: GetStartedProps) {
+export default function GetStarted({ runnerNames, onConfigure }: GetStartedProps) {
   return (
     <div className="empty-state get-started">
       <div className="empty-state-icon">
@@ -21,8 +24,8 @@ export default function GetStarted({ onConfigure }: GetStartedProps) {
       </div>
       <h2>Ordewell needs something that can plan</h2>
       <p>
-        Install a coding agent — <strong>Claude Code</strong>, <strong>Codex</strong> or{' '}
-        <strong>OpenCode</strong> — and Ordewell plans on the subscription you already have.
+        Install a coding agent{runnerNames.length > 0 && <> — <strong>{orNames(runnerNames)}</strong> —</>}{' '}
+        and Ordewell plans on the subscription you already have.
         No API key needed.
       </p>
       <p className="get-started-alt">Or add an API key instead; it is stored in your OS keychain.</p>

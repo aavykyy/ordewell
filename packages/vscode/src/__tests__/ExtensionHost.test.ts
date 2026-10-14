@@ -98,6 +98,7 @@ function fakeConfig() {
   const listeners: Array<() => void> = [];
   const values: Record<string, unknown> = {
     aiProvider: 'openrouter',
+    rawAiProvider: '',
     apiKey: 'sk-test',
     planningModel: 'vendor/model',
     orchestratorModel: 'vendor/model',
@@ -112,6 +113,7 @@ function fakeConfig() {
   };
   const config = {
     get aiProvider() { return values.aiProvider as AiProvider; },
+    get rawAiProvider() { return values.rawAiProvider as string; },
     get apiKey() { return values.apiKey as string; },
     get planningModel() { return values.planningModel as string; },
     get orchestratorModel() { return values.orchestratorModel as string; },
@@ -356,6 +358,35 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
 
     const appendLine = h.services.outputChannel.appendLine as unknown as ReturnType<typeof vi.fn>;
     await vi.waitFor(() => expect(appendLine).toHaveBeenCalledWith(expect.stringContaining('Reschedule failed: tick exploded')));
+  });
+
+  describe('the planner setting has no static enum, so the host checks it', () => {
+    it('names an unknown value and the choices, once, at start and again only when the value changes', async () => {
+      await h.config.config.update('rawAiProvider', 'nonesuch');
+      await h.host.start();
+
+      expect(h.vscodeApi.showWarningMessage).toHaveBeenCalledTimes(1);
+      const message = h.vscodeApi.showWarningMessage.mock.calls[0][0] as string;
+      expect(message).toContain('"nonesuch"');
+      expect(message).toContain('ordewell.aiProvider');
+      for (const id of ['claude-code', 'codex', 'opencode', 'openrouter']) expect(message).toContain(id);
+
+      for (const listener of h.config.listeners) listener();
+      expect(h.vscodeApi.showWarningMessage).toHaveBeenCalledTimes(1);
+
+      await h.config.config.update('rawAiProvider', 'other');
+      for (const listener of h.config.listeners) listener();
+      expect(h.vscodeApi.showWarningMessage).toHaveBeenCalledTimes(2);
+      expect(h.vscodeApi.showWarningMessage.mock.calls[1][0]).toContain('"other"');
+    });
+
+    it('says nothing for a blank value, a vendor or a runner that can plan', async () => {
+      for (const value of ['', 'google', 'codex']) {
+        await h.config.config.update('rawAiProvider', value);
+        await h.host.start();
+      }
+      expect(h.vscodeApi.showWarningMessage).not.toHaveBeenCalled();
+    });
   });
 
   it('warns once when an installed runner discovers no models, and throttles repeats', async () => {

@@ -1,4 +1,5 @@
 import { findRunnerCommand, type RunnerCommand } from '@ordewell/core';
+import { runnerIdList } from '../runnerNames';
 
 export interface ParsedCommand {
   name: string;
@@ -55,7 +56,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'planner-effort', usage: '/planner-effort [<level>]', description: "Thinking effort for a coding-agent planner", category: 'models' },
   { name: 'key', usage: '/key [set <provider> <key>]', description: 'Configure API provider keys', category: 'models' },
   { name: 'allowlist', usage: '/allowlist [set <runner> <ids> | clear <runner>]', description: 'Limit which models a runner may use', category: 'models' },
-  { name: 'runners', usage: '/runners [<id> on|off]', description: 'Enable or disable runners (claude-code, opencode, codex)', category: 'models' },
+  { name: 'runners', usage: '/runners [<id> on|off]', description: `Enable or disable runners (${runnerIdList()})`, category: 'models' },
   { name: 'auto', usage: '/auto [full|guarded]', description: 'Autonomy level for new plans: Full or Guarded', category: 'models' },
   { name: 'supervisor', usage: '/supervisor [off|watch|act] · retries <n> · reads <n>', description: 'Whether the planner watches or acts on your runs, now and from then on', category: 'models' },
   { name: 'automerge', usage: '/automerge [on|off]', description: 'Merge into your branch by itself at merge gates and at the end of a run', category: 'models' },

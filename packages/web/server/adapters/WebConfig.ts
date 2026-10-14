@@ -94,6 +94,9 @@ export class WebConfig extends BaseConfig {
       if (parsed.length > 0) return parsed;
     }
 
+    // The per-runner toggles that predate ORDEWELL_ENABLED_RUNNERS: three fixed
+    // variables, named by runner id on purpose; a newer runner is enabled
+    // through the list above.
     const out: string[] = [];
     if (process.env.ORDEWELL_CLAUDE_CODE_ENABLED !== 'false' && process.env.ORDEWELL_CLAUDE_CODE_ENABLED !== '0') {
       out.push('claude-code');

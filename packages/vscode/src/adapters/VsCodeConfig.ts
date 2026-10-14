@@ -144,9 +144,12 @@ export class VsCodeConfig extends BaseConfig {
     this._provider = null;
   }
 
+  /** The setting as written, valid or not; `aiProvider` is what the extension acts on. */
+  get rawAiProvider(): string { return this.config.get<string>('aiProvider', '') || ''; }
+
   get aiProvider(): PlannerBackendId {
     if (this._provider) return this._provider;
-    const env = this.config.get<string>('aiProvider', '');
+    const env = this.rawAiProvider;
     if (env && isPlannerBackend(env)) {
       this._provider = env;
       return this._provider;
@@ -206,6 +209,9 @@ export class VsCodeConfig extends BaseConfig {
     const userValue = configured?.globalValue ?? configured?.workspaceValue;
     if (userValue !== undefined) return userValue;
 
+    // Migration from the per-runner toggles that predate `enabledRunners`: a
+    // fixed set of three settings that were never extended, so they name their
+    // runners by id on purpose and a runner added since has no toggle to read.
     const legacyCc = this.config.get<boolean>('claudeCode.enabled');
     const legacyCodex = this.config.get<boolean>('codex.enabled');
     const legacyOc = this.config.get<boolean>('opencode.enabled');
