@@ -27,8 +27,8 @@ export interface TaskLogSession {
   resolveApproval(id: string, answer: ApprovalAnswer): boolean;
 }
 
-/** Why a queued message could not be force sent: the runner took it in the meantime (ADR-0023, D3). */
-export const ALREADY_HANDED_OVER = 'The runner already has that message; it reads it after its current step.';
+/** Why a pending message could not be force sent: the runner read it in the meantime (ADR-0023, F1). */
+export const ALREADY_DELIVERED = 'The runner has already read that message.';
 
 export interface TaskLogPanelDeps {
   session: TaskLogSession;
@@ -133,7 +133,7 @@ export class TaskLogPanel {
         return;
       case 'sendQueuedTaskMessageNow':
         this.control(() => {
-          if (!this.deps.session.forceSendQueuedTaskMessage(this.taskId, msg.id)) throw new Error(ALREADY_HANDED_OVER);
+          if (!this.deps.session.forceSendQueuedTaskMessage(this.taskId, msg.id)) throw new Error(ALREADY_DELIVERED);
         });
         return;
       case 'interruptTask':

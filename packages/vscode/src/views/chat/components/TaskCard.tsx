@@ -4,6 +4,7 @@ import SubTaskCard from './SubTaskCard';
 import ModelSelector from './ModelSelector';
 import DependencyPicker from './DependencyPicker';
 import SkillChips from './SkillChips';
+import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
 import { lastLine } from '../taskOutput';
 import { checkLabel } from '../checkLabel';
 import { useFollowOutput } from '../followOutput';
@@ -211,15 +212,17 @@ export function TaskActions({ taskId, actions, labels, handlers }: {
 
 /**
  * A compact composer on a running or waiting task's card (ADR-0018, M1;
- * ADR-0023, F1). Send is the plain task message the log sends; Send now
+ * ADR-0023, F1). Send is the plain task message the log sends; Ctrl+Enter
  * interrupts the running turn and delivers this one next, as `ctrl-s` does in
- * the TUI and `Ctrl+Enter` in the log. A task paused on a usage limit has no
- * turn to interrupt: its message resumes it, after the reset notice.
+ * the TUI and in the log. A task paused on a usage limit has no turn to
+ * interrupt: its message resumes it, after the reset notice.
  */
-export function TaskMessageBox({ taskId, onSend, onSendNow, resumes = false }: {
+export function TaskMessageBox({ taskId, onSend, onSendNow, working = false, resumes = false }: {
   taskId: string;
   onSend: (taskId: string, text: string) => void;
   onSendNow: (taskId: string, text: string) => void;
+  /** A turn is live, so Enter queues and Ctrl+Enter sends now. */
+  working?: boolean;
   resumes?: boolean;
 }) {
   const [text, setText] = useState('');
@@ -240,27 +243,26 @@ export function TaskMessageBox({ taskId, onSend, onSendNow, resumes = false }: {
     }
   };
   const nativeSlash = text.trim().startsWith('/') && commands.length > 0;
+  const queues = working && canSend && !resumes && !nativeSlash;
   const sendNow = () => { if (nativeSlash) { send(); return; } if (canSend) { onSendNow(taskId, text.trim()); setText(''); } };
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing || completion.keyDown(e)) return;
     if (e.key !== 'Enter' || e.shiftKey) return;
     e.preventDefault();
-    if ((e.ctrlKey || e.metaKey) && !resumes) sendNow(); else send();
+    if (isSendNowKey(e) && !resumes) sendNow(); else send();
   };
   return (
     <div className="task-message-box" onClick={(e) => e.stopPropagation()}>
       {completion.palette}
       {error && <span className="task-command-error" role="alert">{error}</span>}
       <textarea className="task-message-input" value={text} rows={1}
-        placeholder={resumes ? 'The limit has reset? A message to resume it with… (Enter to resume)' : 'Message the task… (Enter to send, Ctrl+Enter to send now)'}
+        placeholder={resumes ? 'The limit has reset? A message to resume it with… (Enter to resume)' : 'Message the task… (Enter to send)'}
         onChange={(e) => completion.change(e.target.value)} onKeyDown={onKeyDown} />
-      <button type="button" className="task-message-send" disabled={!canSend} onClick={send}>{resumes ? 'Resume' : 'Send'}</button>
-      {!resumes && !nativeSlash && (
-        <button type="button" className="task-message-send-now" disabled={!canSend}
-          title="Interrupt the running step and send this next, ahead of anything queued (Ctrl+Enter)" onClick={sendNow}>
-          Send now
-        </button>
-      )}
+      <button type="button" className="task-message-send" disabled={!canSend} onClick={send}
+        title={queues ? QUEUE_TITLE : `${resumes ? 'Resume' : 'Send'} (Enter)`}>
+        {resumes ? 'Resume' : 'Send'}
+      </button>
+      {queues && <SendKeyHint />}
     </div>
   );
 }
@@ -703,7 +705,8 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
             </div>
           )}
 
-          {canMessage && <TaskMessageBox taskId={task.id} onSend={onSendMessage!} onSendNow={onSendMessageNow!} resumes={paused} />}
+          {canMessage && <TaskMessageBox taskId={task.id} onSend={onSendMessage!} onSendNow={onSendMessageNow!}
+            working={row.status === 'running' || row.status === 'quiet'} resumes={paused} />}
 
           {/* A usage-limit pause holds the run, which then reads as not executing. */}
           {(isExecuting || paused) && (

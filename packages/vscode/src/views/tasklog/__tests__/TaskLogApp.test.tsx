@@ -147,25 +147,31 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(screen.getByText('Ordewell: Call task_complete.')).toBeTruthy();
   });
 
-  it('lists queued messages and takes one back', () => {
+  it('stacks pending messages above the composer, with no heading, and takes one back', () => {
     render(<TaskLogApp />);
     init({ queued: [{ id: 'q1', text: 'then add tests' }] });
 
+    expect(screen.getByRole('list', { name: 'Pending messages' }).nextElementSibling?.classList.contains('task-log-composer')).toBe(true);
     expect(screen.getByText('then add tests')).toBeTruthy();
-    act(() => { fireEvent.click(screen.getByTitle('Remove this message')); });
+    expect(screen.queryByText(/^Queued/)).toBeNull();
+    act(() => { fireEvent.click(screen.getByLabelText('Remove pending message: then add tests')); });
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'removeQueuedTaskMessage', id: 'q1' });
   });
 
   describe('Send now (ADR-0023, F1)', () => {
-    it('sits next to Send while a turn is live and something is typed, and force sends it', () => {
+    it('is a key, not a second button: a hint and the Send tooltip name it while a turn is live and something is typed', () => {
       render(<TaskLogApp />);
       init({ working: true });
-      expect(screen.queryByLabelText('Send now')).toBeNull();
+      expect(document.querySelector('.send-key-hint')).toBeNull();
 
       const input = screen.getByPlaceholderText(/Message the task/);
       act(() => { fireEvent.change(input, { target: { value: 'stop, use Postgres' } }); });
-      act(() => { fireEvent.click(screen.getByLabelText('Send now')); });
 
+      expect(document.querySelectorAll('.task-log-composer button')).toHaveLength(1);
+      expect(document.querySelector('.send-key-hint')?.textContent).toBe('Enter queue · Ctrl+Enter send now');
+      expect(screen.getByLabelText('Send').getAttribute('title')).toBe('Queue (Enter) · Send now (Ctrl+Enter)');
+
+      act(() => { fireEvent.keyDown(input, { key: 'Enter', metaKey: true }); });
       expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendTaskMessageNow', text: 'stop, use Postgres' });
       expect((input as HTMLTextAreaElement).value).toBe('');
     });
@@ -182,26 +188,45 @@ describe('the task log tab (ADR-0018, V1)', () => {
       act(() => { fireEvent.change(input, { target: { value: 'later' } }); });
       act(() => { fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true }); });
       expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendTaskMessage', text: 'later' });
-      expect(screen.queryByLabelText('Send now')).toBeNull();
+      act(() => { fireEvent.change(input, { target: { value: 'later still' } }); });
+      expect(document.querySelector('.send-key-hint')).toBeNull();
     });
 
     it('is not offered on a finished task, whose box continues it', () => {
       render(<TaskLogApp />);
       init({ working: true, planStatus: 'completed', continuable: true });
       act(() => { fireEvent.change(screen.getByPlaceholderText(/Continue the task/), { target: { value: 'more' } }); });
-      expect(screen.queryByLabelText('Send now')).toBeNull();
+      expect(document.querySelector('.send-key-hint')).toBeNull();
+      expect(screen.getByLabelText('Continue').getAttribute('title')).toBe('Continue (Enter)');
     });
 
-    it('is on each queued message, and a forced one shows as sending now', () => {
+    it('is on each pending message the runner already has too, and each says where it stands', () => {
       render(<TaskLogApp />);
       init({ working: true, queued: [{ id: 'q0', text: 'stop now', forced: true }, { id: 'q1', text: 'then add tests' }, { id: 'q2', text: 'handed', handedOver: true }] });
 
-      const buttons = screen.getAllByText('Send now');
-      expect(buttons).toHaveLength(1);
-      act(() => { fireEvent.click(buttons[0]); });
+      const states = [...document.querySelectorAll('.pending-message-state')].map((el) => el.textContent);
+      expect(states).toEqual(['sending now…', 'queued', 'waiting for the current step']);
+      expect(screen.queryByLabelText('Send now: stop now')).toBeNull();
+      act(() => { fireEvent.click(screen.getByLabelText('Send now: then add tests')); });
+      act(() => { fireEvent.click(screen.getByLabelText('Send now: handed')); });
       expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendQueuedTaskMessageNow', id: 'q1' });
-      expect(screen.getByText('sending now')).toBeTruthy();
-      expect(screen.getByText('handed over')).toBeTruthy();
+      expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendQueuedTaskMessageNow', id: 'q2' });
+    });
+
+    it('offers × only on a message still in Ordewell\'s queue', () => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: [{ id: 'q0', text: 'stop now', forced: true }, { id: 'q1', text: 'then add tests' }, { id: 'q2', text: 'handed', handedOver: true }] });
+
+      expect([...document.querySelectorAll('.pending-message-remove')].map((el) => el.getAttribute('aria-label')))
+        .toEqual(['Remove pending message: then add tests']);
+    });
+
+    it('sends a pending message now on Ctrl+Enter while focus is on it', () => {
+      render(<TaskLogApp />);
+      init({ working: true, queued: [{ id: 'q2', text: 'handed', handedOver: true }] });
+
+      act(() => { fireEvent.keyDown(screen.getByLabelText('Send now: handed'), { key: 'Enter', ctrlKey: true }); });
+      expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendQueuedTaskMessageNow', id: 'q2' });
     });
   });
 
@@ -375,12 +400,13 @@ describe('a message the runner reads mid-turn (ADR-0023)', () => {
     { type: 'message_handed_over', messageId: 'm1' },
   ] as const;
 
-  it('marks a message the runner already has, with no way to take it back', () => {
+  it('marks a message the runner already has, with no way to take it back but a way to send it now', () => {
     render(<TaskLogApp />);
     const view = replayTaskLog([...before]);
     init({ working: true, queued: [...view.queued] }, [...view.blocks]);
 
-    expect(screen.getByText('handed over')).toBeTruthy();
+    expect(screen.getByText('waiting for the current step')).toBeTruthy();
+    expect(screen.getByLabelText('Send now: use Postgres')).toBeTruthy();
     const removes = screen.getAllByTitle('Remove this message');
     expect(removes).toHaveLength(1);
     act(() => { fireEvent.click(removes[0]); });

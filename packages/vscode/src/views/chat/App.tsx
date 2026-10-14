@@ -9,7 +9,7 @@ import { reduceHost, INITIAL_HOST_STATE, type HostState } from './hostState';
 import ModelSelector, { API_PROVIDER_LABELS } from './components/ModelSelector';
 import PlanCardGroup from './components/PlanCardGroup';
 import UsageLine from './components/UsageLine';
-import QueuedPrompts from './components/QueuedPrompts';
+import PendingMessages, { type PendingMessage } from './components/PendingMessages';
 import HandoffCard from './components/HandoffCard';
 import CheckpointPanel from './components/CheckpointPanel';
 import RunSettingsBlock from './components/RunSettingsBlock';
@@ -103,9 +103,9 @@ export default function App() {
     processingRef.current = isResearchActive || isExecuting;
   }, [isResearchActive, isExecuting]);
 
-  // Queued prompts and the working line are drawn below the conversation
-  // blocks: each must be followed too, or it renders past the fold with
-  // nothing to bring it into view.
+  // The working line is drawn below the conversation blocks, and the stack of
+  // queued prompts above the composer takes height from the list: each must
+  // be followed too, or the newest output ends up past the fold.
   const followRef = useFollowOutput<HTMLDivElement>(blocks, held, isResearchActive);
   const messageListCallbackRef = useCallback((el: HTMLDivElement | null) => {
     messageListRef.current = el;
@@ -392,9 +392,16 @@ export default function App() {
     vscode.postMessage({ type: 'sendMessageNow', text });
   }, [isResearchActive, handleSend]);
 
-  const handleHeldSendNow = useCallback((index: number) => {
-    vscode.postMessage({ type: 'sendHeldPromptNow', index });
-  }, []);
+  // Prompts held for the next planner turn. Only the newest carries the ×:
+  // unsend always takes the newest, as Esc does, so it never promises another.
+  const pending = useMemo((): PendingMessage[] => held.map((text, index) => ({
+    key: String(index),
+    text,
+    state: 'queued',
+    onSendNow: () => vscode.postMessage({ type: 'sendHeldPromptNow', index }),
+    onRemove: index === held.length - 1 ? handleUnsend : undefined,
+    removeTitle: 'Unsend (Esc)',
+  })), [held, handleUnsend]);
 
   const stopTurn = useCallback(() => {
     dispatch({ type: 'turnStopped' });
@@ -935,8 +942,6 @@ export default function App() {
           onResolveApproval={handleResolveApproval}
         />
 
-        <QueuedPrompts prompts={held} onUnsend={handleUnsend} onSendNow={handleHeldSendNow} />
-
         {isResearchActive && !streaming && (
           <div className="chat-msg-working">
             <span className="chat-msg-spinner" /> Working&hellip;
@@ -949,6 +954,8 @@ export default function App() {
       {usageBlock && <UsageLine block={usageBlock} />}
 
       {stopArmed && <div className="stop-hint" role="status">Press Esc again to stop</div>}
+
+      <PendingMessages messages={pending} />
 
       <ChatInput
         onSend={handleSend}
