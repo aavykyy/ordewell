@@ -1,5 +1,9 @@
 # Change Log
 
+## [0.10.1] — 2026-10-14
+
+No extension changes; released alongside the CLI's fixes.
+
 ## [0.10.0] — 2026-10-14
 
 ### Security
