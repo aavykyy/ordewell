@@ -251,6 +251,14 @@ describe('planner parallelism rules under worktree isolation (ADR-0013)', () => 
     }
   });
 
+  it('has task prompts name files from the workspace root, never by absolute path, when every task gets its own worktree', () => {
+    for (const p of [conversation(LONE_REPO), oneShot(LONE_REPO)]) {
+      expect(p).toMatch(/path from the workspace root, never by an absolute path/i);
+      expect(p).toMatch(/absolute path .*user's own checkout/i);
+    }
+    for (const p of [conversation(false), oneShot(false)]) expect(p).not.toMatch(/never by an absolute path/i);
+  });
+
   it('stops asking for different files or file-overlap dependencies when every task gets its own worktree', () => {
     for (const p of [conversation(LONE_REPO), oneShot(LONE_REPO)]) {
       expect(p).not.toContain(OVERLAP_RULE);
