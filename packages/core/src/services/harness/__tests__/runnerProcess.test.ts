@@ -67,6 +67,18 @@ describe('the environment a runner starts under', () => {
 
   afterEach(() => { vi.unstubAllEnvs(); });
 
+  it('starts OpenCode in its workspace when the host and workspace supply a different PWD', async () => {
+    vi.stubEnv('PWD', '/daemon');
+    const spawned = fakeSpawn([]);
+    const envs: NodeJS.ProcessEnv[] = [];
+    const adapter = await startOpenCode(spawned, deps(spawned, { PWD: '/stale-workspace' }, envs));
+    try {
+      expect(envs[0].PWD).toBe('/repo');
+    } finally {
+      adapter.dispose();
+    }
+  });
+
   function hostLaunchedFromClaudeCode(): void {
     vi.stubEnv('CLAUDECODE', '1');
     vi.stubEnv('NODE_OPTIONS', '--inspect');
