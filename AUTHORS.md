@@ -22,6 +22,8 @@ record of who built what, rather than `git log`.
 - [@directsol](https://github.com/directsol) — verified the Codex transcript
   reader against a live rollout store (#16) and made the VS Code chat panel
   follow light themes (#20).
+- **Mayuri** ([@mayuriphad](https://github.com/mayuriphad)) — diagnosed and fixed the
+  planner's duplicated usage-limit message (#79, #96).
 
 Thank you. Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
