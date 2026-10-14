@@ -47,6 +47,8 @@ export interface TaskLogStatus {
   attempt: number;
   /** The task finished and can be continued in its saved session (ADR-0018, K1): the message box continues it. */
   continuable: boolean;
+  /** Paused on a usage limit with a saved session: Resume now is offered, and the message box resumes it. */
+  resumable?: boolean;
 }
 
 export type HostToTaskLog =
@@ -69,6 +71,8 @@ export type TaskLogToHost =
   | { type: 'interruptTask' }
   /** Keep a task paused on a usage limit from resuming on its own (#84). */
   | { type: 'cancelResume' }
+  /** Resume a task paused on a usage limit now, once the user says the limit has reset. */
+  | { type: 'resumeNow' }
   /** Continue the finished task in its saved session, with `text` as its next turn. */
   | { type: 'continueTask'; text: string }
   /** Answer one of the runner's tool requests (ADR-0018, A1). */

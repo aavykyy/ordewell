@@ -546,8 +546,9 @@ completion evidence: if the next turn also ends without the call, the task
 waits for input.
 *Avoid:* "nudge" (the planner's corrective prompts), "auto-complete".
 
-**Continue** — a retry of a completed or failed structured task that resumes
-its saved runner session (Claude's `--resume`, Codex's `thread/resume`) with
+**Continue** — a retry of a completed, failed or skipped structured task, or
+of one paused on a usage limit (see *Usage-limit resume*), that resumes its
+saved runner session (Claude's `--resume`, Codex's `thread/resume`) with
 the user's message as the next turn.
 It is verified and landed like any attempt, is not offered on conflicts, and
 leaves dependents alone, as retry does. `continuability` is the one rule, and
@@ -578,7 +579,11 @@ one runner share one wait — the latest of their resets — and resume together
 the hold on the run is released once nothing waits on a reset and no task has
 failed. A plan loaded after its time resumes at once. Without a time, after a
 cancel or a stop, or when the resumed attempt hits the limit again at once, the
-task waits for a manual retry. Surfaces show "Resumes at 8:10pm" with a cancel.
+task waits for a manual retry. *Resume now* (`resumeNow`) resumes it early, in
+its saved session, once the user says the limit has reset — from the task row,
+a message sent to it (after the reset notice), or `retry_task` from `session` —
+with every task waiting on that runner's reset. Surfaces show "Resumes at
+8:10pm" with *Resume now* and *Don't resume*.
 A runner change, whether a direct edit or a planner edit, cancels that task's
 resume and makes it ready for the next scheduler slot on its new runner.
 Other tasks on the old runner keep their shared wait; changing only the model

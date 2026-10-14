@@ -335,6 +335,11 @@ export class ApiClient {
     return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/resume/cancel`, 'Cancel resume failed');
   }
 
+  /** Resume a task paused on a usage limit now, in its saved session, once the user says the limit has reset. */
+  resumeNow(sessionId: string, taskId: string): Promise<OkResponse> {
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/resume/now`, 'Resume failed');
+  }
+
   /** run | force-start | retry | cancel — real orchestrator work, not a status patch. */
   taskControl(
     sessionId: string,

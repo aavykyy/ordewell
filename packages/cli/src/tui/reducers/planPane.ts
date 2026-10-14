@@ -1,4 +1,4 @@
-import { markAction, resumeLabel } from '@ordewell/core';
+import { markAction, resumeLabel, taskRowActions } from '@ordewell/core';
 import { applyKey, emptyEditor, type EditorState } from '../editor';
 import { taskEditorRoom } from '../geometry';
 import { findTask, planRows, refFor, selectedPlanRow, type TaskView, type TuiState } from '../state';
@@ -18,7 +18,7 @@ const PLAN_SHORTCUTS: Record<string, TaskAction> = {
 };
 
 /** Task actions that spawn a runner, so the pane only learns their fate from the execution stream. */
-const SPAWNS_RUNNER: TaskAction[] = ['force-start', 'retry'];
+const SPAWNS_RUNNER: TaskAction[] = ['force-start', 'retry', 'resume-now'];
 
 /**
  * A spawn's progress reaches the TUI over the session's execution stream, and
@@ -99,6 +99,9 @@ export function handlePlanKey(state: TuiState, key: Key): Step {
 
   // A task paused on a usage limit has no runner to cancel; `c` cancels its resume instead.
   const shortcut = key.char === 'c' && resumeLabel(task) ? 'cancel-resume' : PLAN_SHORTCUTS[key.char ?? ''];
+  if (key.char === 'r') {
+    return taskRowActions(task).includes('resume-now') ? step(state, [taskActionEffect(state, state.sessionId, task.id, 'resume-now')]) : step(state);
+  }
   const action = key.char === 'm' ? markAction(task) : shortcut;
   if (action === 'force-start' && task.mergeGate?.length) return confirmForceStartPastGate(state, task);
   if (action) {

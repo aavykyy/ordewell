@@ -698,6 +698,7 @@ export class Session {
       retryTask: (taskId, actor) => this.restartTask(taskId, runOrigin(actor)),
       skipTask: (taskId, reason, actor) => this.withSave(() => this.orchestrator.skipTask(taskId, reason, runOrigin(actor))),
       continueTask: (taskId, message, actor) => this.resumeTask(taskId, message, runOrigin(actor)),
+      resumeNow: (taskId, message, actor) => this.withSave(() => this.orchestrator.resumeNow(taskId, runOrigin(actor), message)),
       messageTask: (taskId, text) => this.sendTaskMessage(taskId, text),
       denyRequest: (requestId, note) => this.resolveApproval(requestId, { decision: 'deny', ...(note ? { note } : {}) }),
       mergeAll: () => this.mergeRun(),
@@ -1495,6 +1496,11 @@ export class Session {
 
   async markTaskIncomplete(taskId: string): Promise<void> {
     await this.withSave(() => this.orchestrator.markTaskIncomplete(taskId));
+  }
+
+  /** Resume a task paused on a usage limit now, once the user says it has reset; see {@link TaskOrchestrator.resumeNow}. */
+  async resumeNow(taskId: string): Promise<void> {
+    await this.withSave(() => this.orchestrator.resumeNow(taskId, 'user'));
   }
 
   /** Keep a task paused on a usage limit from resuming on its own; see {@link TaskOrchestrator.cancelScheduledResume}. */

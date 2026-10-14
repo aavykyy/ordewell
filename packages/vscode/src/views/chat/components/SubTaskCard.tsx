@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import SkillChips from './SkillChips';
 import ModelSelector, { getModelClass, providerLabel } from './ModelSelector';
-import { taskRowView } from '@ordewell/core/plan-utils';
+import { pausedOnLimit, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction } from '@ordewell/core';
-import { TaskActions, TaskCheck, runnerOptionsFor, statusBadge } from './TaskCard';
+import { TaskActions, TaskCheck, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
 import type { RunnerMode, RunnerOption } from './TaskCard';
 import { checkLabel } from '../checkLabel';
 
@@ -32,6 +32,7 @@ interface SubTaskCardProps {
   onSkip?: (taskId: string) => void;
   onCancel?: (taskId: string) => void;
   onCancelResume?: (taskId: string) => void;
+  onResumeNow?: (taskId: string) => void;
   onForceStart?: (taskId: string) => void;
   onMarkComplete?: (taskId: string) => void;
   onMarkIncomplete?: (taskId: string) => void;
@@ -41,7 +42,7 @@ interface SubTaskCardProps {
 }
 
 const ACTION_LABELS: Record<TaskRowAction, string> = {
-  cancel: 'Cancel', 'cancel-resume': 'Cancel Resume', skip: 'Skip', 'force-start': 'Force Start', complete: 'Mark Complete', uncomplete: 'Mark Not Done',
+  cancel: 'Cancel', 'resume-now': 'Resume Now', 'cancel-resume': 'Don\'t Resume', skip: 'Skip', 'force-start': 'Force Start', complete: 'Mark Complete', uncomplete: 'Mark Not Done',
 };
 
 const DEFAULT_MODES: RunnerMode[] = [
@@ -54,7 +55,7 @@ const RUNNER_ABBREV: Record<string, string> = {
   'opencode': 'OC',
 };
 
-export default function SubTaskCard({ task, parentTask, tasks, models, modes, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry: _onRetry, onSkip, onCancel, onCancelResume, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog }: SubTaskCardProps) {
+export default function SubTaskCard({ task, parentTask, tasks, models, modes, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry: _onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog }: SubTaskCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
 
@@ -99,20 +100,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
           <span className={`task-status-badge ${status.cls}`}>{status.label}</span>
         )}
 
-        {row.resumes && (
-          <>
-            <span className="task-isolation-badge gate" title="Its runner hit its usage limit. The task resumes on its own once the limit resets.">
-              {row.resumes}
-            </span>
-            {onCancelResume && (
-              <button type="button" className="task-log-open-btn"
-                onClick={(e) => { e.stopPropagation(); onCancelResume(task.id); }}
-                title="Do not resume it on its own: retry it by hand once the limit resets">
-                Cancel resume
-              </button>
-            )}
-          </>
-        )}
+        <UsageLimitControls taskId={task.id} row={row} onResumeNow={onResumeNow} onCancelResume={onCancelResume} />
 
         {!isExecuting && task.assignedModel && (
           <span className={`task-model-badge ${modelClass}`}>
@@ -232,10 +220,11 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
             </div>
           )}
 
-          {isExecuting && (
+          {/* A usage-limit pause holds the run, which then reads as not executing. */}
+          {(isExecuting || pausedOnLimit(task)) && (
             <TaskActions taskId={task.id} actions={row.actions}
               labels={row.status === 'awaiting' ? { ...ACTION_LABELS, complete: 'Verify / Mark Complete' } : ACTION_LABELS}
-              handlers={{ cancel: onCancel, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart, complete: onMarkComplete, uncomplete: onMarkIncomplete }} />
+              handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart, complete: onMarkComplete, uncomplete: onMarkIncomplete }} />
           )}
         </div>
       )}

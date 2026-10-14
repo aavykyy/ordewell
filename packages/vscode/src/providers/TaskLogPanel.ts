@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { canContinue, resumeLabel, type ApprovalAnswer, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
+import { canContinue, pausedOnLimit, resumeLabel, type ApprovalAnswer, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { EMPTY_TASK_LOG, reduceTaskLog, replayTaskLog, type TaskLogView } from '@ordewell/core/plan-utils';
 import { diffConversation } from '../shared/conversationPatch';
 import { renderWebviewHtml } from './webviewHtml';
@@ -20,6 +20,7 @@ export interface TaskLogSession {
   forceSendQueuedTaskMessage(taskId: string, id: string): boolean;
   interruptTask(taskId: string): Promise<void>;
   cancelScheduledResume(taskId: string): boolean;
+  resumeNow(taskId: string): Promise<void>;
   outstandingApprovals(): PendingApproval[];
   resolveApproval(id: string, answer: ApprovalAnswer): boolean;
 }
@@ -138,6 +139,10 @@ export class TaskLogPanel {
           if (!this.deps.session.cancelScheduledResume(this.taskId)) throw new Error('This task has no resume scheduled.');
         });
         return;
+      case 'resumeNow':
+        this.followLive = true;
+        this.controlAsync(() => this.deps.session.resumeNow(this.taskId));
+        return;
       case 'continueTask':
         // The continue is a new attempt: show it, even from an earlier one.
         this.followLive = true;
@@ -233,6 +238,7 @@ export class TaskLogPanel {
       attempts: this.attempts,
       attempt: this.attempt,
       continuable: task ? canContinue(task) : false,
+      resumable: task ? pausedOnLimit(task) && canContinue(task) : false,
     };
   }
 

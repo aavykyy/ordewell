@@ -310,8 +310,13 @@ export default function App() {
   const handleCancelResume = useCallback((taskId: string) => {
     const taskTitle = planRef.current?.tasks.find((t) => t.id === taskId)?.title ?? taskId;
     vscode.postMessage({ type: 'sendSystemCommand', command: 'cancelResume', taskId });
-    pushSystem(`Task "${taskTitle}" will not resume on its own: retry it once the usage limit resets.`);
+    pushSystem(`Task "${taskTitle}" will not resume on its own: resume or retry it once the usage limit resets.`);
   }, [pushSystem]);
+
+  // No notice of its own, as a force start has none: the resume is announced by the host.
+  const handleResumeNow = useCallback((taskId: string) => {
+    vscode.postMessage({ type: 'sendSystemCommand', command: 'resumeNow', taskId });
+  }, []);
 
   // No notice of its own: the task's start comes back from the session and
   // is announced by the host, as every start is.
@@ -679,6 +684,7 @@ export default function App() {
             onSkip={handleSkip}
             onCancel={handleCancel}
             onCancelResume={handleCancelResume}
+            onResumeNow={handleResumeNow}
             onForceStart={handleForceStart}
             onMarkComplete={handleMarkComplete}
             onMarkIncomplete={handleMarkIncomplete}

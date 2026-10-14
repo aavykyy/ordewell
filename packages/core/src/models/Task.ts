@@ -814,9 +814,14 @@ export function renumberTasks(tasks: readonly Task[]): Task[] {
   }));
 }
 
+/** A task paused on its runner's usage limit, whether it resumes on its own or waits for the user (#84). */
+export function pausedOnLimit(task: Readonly<Task>): boolean {
+  return task.status === 'awaiting_user' && task.awaitingReason === 'usage-limit';
+}
+
 /** A task paused on a usage limit that resumes on its own when the limit resets (#84). */
 export function waitsForReset(task: Readonly<Task>): boolean {
-  return task.status === 'awaiting_user' && task.awaitingReason === 'usage-limit' && !!task.resumeAt;
+  return pausedOnLimit(task) && !!task.resumeAt;
 }
 
 /**

@@ -77,6 +77,19 @@ describe('which tasks can be continued (ADR-0018, K1)', () => {
     expect(continuability(plan({ status: 'failed', runnerSessionId: savedSessionId }))).toEqual({ ok: true, sessionId: 'sess-1' });
   });
 
+  it('a task paused on a usage limit that saved its session, with or without a resume time', () => {
+    expect(continuability(plan({ status: 'awaiting_user', awaitingReason: 'usage-limit', resumeAt: '2026-10-11T20:11:00.000Z', runnerSessionId: savedSessionId })))
+      .toEqual({ ok: true, sessionId: 'sess-1' });
+    expect(continuability(plan({ status: 'awaiting_user', awaitingReason: 'usage-limit', runnerSessionId: savedSessionId }))).toEqual({ ok: true, sessionId: 'sess-1' });
+    expect(continuability(plan({ status: 'awaiting_user', awaitingReason: 'usage-limit' }))).toEqual({ ok: false, reason: expect.stringContaining('no saved session') });
+  });
+
+  it('not a task waiting for input or at a checkpoint', () => {
+    for (const awaitingReason of ['input', 'checkpoint'] as const) {
+      expect(continuability(plan({ status: 'awaiting_user', awaitingReason, runnerSessionId: savedSessionId })).ok).toBe(false);
+    }
+  });
+
   it('not a conflict, which its repair resolves', () => {
     const verdict = continuability(plan({ status: 'awaiting_user', awaitingReason: 'conflict', runnerSessionId: savedSessionId }));
     expect(verdict).toEqual({ ok: false, reason: expect.stringContaining('merge conflict') });
