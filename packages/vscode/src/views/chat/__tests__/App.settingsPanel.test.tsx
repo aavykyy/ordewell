@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen, within, fireEvent } from '@testing-library/react';
+import { render, screen, within, fireEvent, cleanup } from '@testing-library/react';
 import { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings } from '@ordewell/core';
 import App from '../App';
 import { api, post as send } from './hostBridge';
@@ -11,6 +11,7 @@ const settings = (run: Partial<GlobalRunSettings> = {}, extra: { autonomous?: bo
   run: { ...RUN_SETTINGS_DEFAULTS, ...run },
   maxParallel: extra.maxParallel ?? 5,
 });
+const runToggle = () => screen.getByRole('button', { name: 'Run' });
 const row = (name: string) => within(screen.getByRole('group', { name }));
 
 /** The Run block of the Settings panel: each click saves one setting through the host (ADR-0030). */
@@ -18,7 +19,26 @@ describe('run settings in the Settings panel', () => {
   beforeEach(() => {
     render(<App />);
     settings();
+    fireEvent.click(runToggle());
     api.postMessage.mockClear();
+  });
+
+  it('starts collapsed with a summary of the current values and no rows', () => {
+    cleanup();
+    render(<App />);
+    settings({ supervisorLevel: 'act', mergeAtGatesAutomatically: true, autorun: false }, { maxParallel: 3 });
+    expect(runToggle()).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByText('Full · Supervisor: Act · Automerge on · Autorun off · 3 parallel')).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Autonomy' })).toBeNull();
+    fireEvent.click(runToggle());
+    expect(runToggle()).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('group', { name: 'Autonomy' })).toBeInTheDocument();
+    expect(screen.queryByText(/· 3 parallel/)).toBeNull();
+  });
+
+  it('keeps the Settings toggle outside the scrolling body', () => {
+    const toggle = screen.getByRole('button', { name: /^Settings/ });
+    expect(toggle.closest('.setup-panel-body')).toBeNull();
   });
 
   it.each([
@@ -86,7 +106,8 @@ describe('run settings in the Settings panel', () => {
     expect(screen.getByRole('spinbutton', { name: 'Parallel tasks' })).toBeInTheDocument();
   });
 
-  it('/settings opens a collapsed panel at the Run block', () => {
+  it('/settings opens a collapsed panel and a collapsed Run section, and focuses Run', () => {
+    fireEvent.click(runToggle());
     fireEvent.click(screen.getByRole('button', { name: /^Settings/ }));
     expect(document.querySelector('.setup-panel-body')).toHaveClass('collapsed');
 
@@ -94,5 +115,11 @@ describe('run settings in the Settings panel', () => {
 
     expect(document.querySelector('.setup-panel-body')).not.toHaveClass('collapsed');
     expect(screen.getByRole('region', { name: 'Run' })).toHaveFocus();
+    expect(runToggle()).toHaveAttribute('aria-expanded', 'true');
+
+    fireEvent.click(runToggle());
+    fireEvent.click(screen.getByRole('button', { name: /^Settings/ }));
+    send({ type: 'openSettings' });
+    expect(runToggle()).toHaveAttribute('aria-expanded', 'true');
   });
 });

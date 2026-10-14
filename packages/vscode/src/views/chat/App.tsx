@@ -86,6 +86,7 @@ export default function App() {
   const [slashOutput, setSlashOutput] = useState('');
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false);
   const [setupCollapsed, setSetupCollapsed] = useState(false);
+  const [runExpanded, setRunExpanded] = useState(false);
 
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const dockBodyRef = useRef<HTMLDivElement>(null);
@@ -131,9 +132,15 @@ export default function App() {
   useEffect(() => {
     if (settingsRequest === 0) return;
     setSetupCollapsed(false);
+    setRunExpanded(true);
+  }, [settingsRequest]);
+
+  // Focus after the section has rendered open, so the scroll lands on its full height.
+  useEffect(() => {
+    if (settingsRequest === 0) return;
     runSettingsRef.current?.focus();
     runSettingsRef.current?.scrollIntoView({ block: 'nearest' });
-  }, [settingsRequest]);
+  }, [settingsRequest, runExpanded]);
 
   const pushSystem = useCallback((text: string) => {
     vscode.postMessage({ type: 'addNote', text });
@@ -843,7 +850,7 @@ export default function App() {
           </div>
         </section>
 
-        {host.runSettings && <RunSettingsBlock ref={runSettingsRef} value={host.runSettings} onChange={handleSettingsChange} />}
+        {host.runSettings && <RunSettingsBlock ref={runSettingsRef} value={host.runSettings} expanded={runExpanded} onToggle={() => setRunExpanded((v) => !v)} onChange={handleSettingsChange} />}
         </div>
       </div>
 

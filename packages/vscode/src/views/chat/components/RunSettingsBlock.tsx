@@ -99,11 +99,35 @@ const AUTORUN: PillOption<boolean>[] = [
 ];
 
 /** The Settings panel's Run block (ADR-0030): every run setting one click away, each saved by the host as it changes. */
-const RunSettingsBlock = forwardRef<HTMLElement, { value: RunSettingsValue; onChange(change: SettingsChange): void }>(function RunSettingsBlock({ value, onChange }, ref) {
+const RunSettingsBlock = forwardRef<HTMLElement, { value: RunSettingsValue; expanded: boolean; onToggle(): void; onChange(change: SettingsChange): void }>(function RunSettingsBlock({ value, expanded, onToggle, onChange }, ref) {
   const { run } = value;
+  const summary = [
+    value.autonomous ? 'Full' : 'Guarded',
+    `Supervisor: ${SUPERVISOR_LEVEL_LABEL[run.supervisorLevel]}`,
+    `Automerge ${run.mergeAtGatesAutomatically ? 'on' : 'off'}`,
+    `Autorun ${run.autorun ? 'on' : 'off'}`,
+    `${value.maxParallel} parallel`,
+  ].join(' · ');
   return (
     <section ref={ref} tabIndex={-1} className="setup-block run-settings" aria-label="Run">
-      <div className="setup-block-title">Run</div>
+      <button type="button" className="run-settings-toggle" aria-expanded={expanded} onClick={onToggle}>
+        <span className="setup-block-title">Run</span>
+        <span className={`setup-panel-chevron${expanded ? '' : ' collapsed'}`}>
+          <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true">
+            <path d="M2 4L5.5 7.5L9 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </span>
+      </button>
+      {!expanded && <div className="setup-panel-summary run-settings-summary">{summary}</div>}
+      {expanded && <RunSettingsRows value={value} onChange={onChange} />}
+    </section>
+  );
+});
+
+function RunSettingsRows({ value, onChange }: { value: RunSettingsValue; onChange(change: SettingsChange): void }) {
+  const { run } = value;
+  return (
+    <>
       <div className="setup-block-hint">How much Ordewell does for you. Saved at once, for every session.</div>
       <PillRow label="Autonomy" options={AUTONOMY} current={value.autonomous} onPick={(autonomous) => onChange({ autonomous })} />
       <PillRow label="Supervisor" options={SUPERVISOR} current={run.supervisorLevel} onPick={(supervisorLevel) => onChange({ run: { supervisorLevel } })} />
@@ -128,8 +152,8 @@ const RunSettingsBlock = forwardRef<HTMLElement, { value: RunSettingsValue; onCh
         hint={(n) => `Up to ${plural(n, 'AI task', 'AI tasks')} at a time.`}
         onCommit={(maxParallel) => onChange({ maxParallel })}
       />
-    </section>
+    </>
   );
-});
+}
 
 export default RunSettingsBlock;
