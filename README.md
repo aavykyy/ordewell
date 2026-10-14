@@ -53,6 +53,13 @@ freely within one plan.
 - **Done means reported.** A task finishes when its agent reports it done through
   Ordewell's own tools, never because a model thinks the work looks finished. You
   see which tasks passed, failed or need you, and can read each one's log live.
+- **A supervisor for the run.** The planner keeps watching after you approve a
+  plan: at Watch it writes you a note when a task fails or gets stuck, and at Act
+  it may retry, stop or edit tasks itself, within limits. `/supervisor` sets the
+  level, and `/settings` the rest of your run settings, such as merging
+  automatically.
+- **Read-only tasks.** A review or an audit runs without write access, so it
+  cannot change your repository.
 - **A planner that cannot write.** It reads, asks, and plans. Commands that would
   change your repository are refused.
 - **No extra API key.** A coding agent you already pay for can be the planner. An API
@@ -140,8 +147,7 @@ sandbox cannot start on your machine, see [troubleshooting](docs/troubleshooting
 ## Where it's going
 
 - **Now:** take-over, opening a running task in its coding agent's own terminal UI ([#58](https://github.com/ordewell/ordewell/issues/58)).
-- **Next:** the planner keeps watching a run after you approve it, and suggests fixes when a task fails or gets stuck.
-- **Later:** the planner supervises a run on its own, within limits you set in advance.
+- **Shipped in 0.10:** the supervisor, which watches a run and, if you let it, acts within limits you set.
 
 The full roadmap, and where to help, is in [#21](https://github.com/ordewell/ordewell/issues/21).
 
