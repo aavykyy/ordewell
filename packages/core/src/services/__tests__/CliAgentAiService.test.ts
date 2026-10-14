@@ -1683,6 +1683,23 @@ describe('CliAgentAiService — one-shot plan generation', () => {
     expect(svc.hasActiveConversation()).toBe(false);
   });
 
+  // Live, Haiku backgrounded its Explore agents and ended the turn "waiting
+  // for results"; the session was then thrown away with the plan unsubmitted.
+  it('asks an agent that ended its turn with a subagent in the background to wait for it, in the same session', async () => {
+    const mcp = fakeMcpServer();
+    const { svc, spawned } = service('claude-code', [
+      fixture('claude-code', 'stream-async-agent'),
+      submitting(mcp, planTasks(), claudeSays('Submitted the plan.')),
+    ], {}, {}, mcp);
+    const result = await svc.researchAndPlan('Add the thing', ['claude-code'], { 'claude-code': [] }, fakeFileSystem(), () => {});
+
+    expect(result.tasks).toHaveLength(1);
+    expect(spawned.processes).toHaveLength(1);
+    expect(writes(spawned.processes[0])).toHaveLength(2);
+    expect(writes(spawned.processes[0])[1]).toContain('still running in the background');
+    expect(writes(spawned.processes[0])[1]).toContain('submit the plan with submit_plan');
+  });
+
   // The plan display a vendor planner's one-shot feeds token by token. The
   // agent's narration around an envelope is prose, which a one-shot does not
   // stream; the plan itself is the one submit_plan recorded.

@@ -53,13 +53,13 @@ import type { IApproval } from '../../interfaces/IApproval';
  */
 const MAX_AGENT_WAITS = 2;
 
-function waitForAgentsPrompt(running: number): string {
+function waitForAgentsPrompt(running: number, then = 'Then give the user your synthesis.'): string {
   return [
     `You ended your turn with ${running} subagent(s) still running in the background.`,
-    'Ordewell hands the conversation back to the user when your turn ends, so anything you say after it never reaches them —',
-    'the results you promised to report would be lost.',
+    'Ordewell takes the turn back when it ends, so anything you say after it is never read —',
+    'the results you were waiting for would be lost.',
     'Wait for those agents to finish NOW, in this reply, and do not end your turn until you have their results.',
-    'Then give the user your synthesis. In future replies, await your agents inside the turn rather than backgrounding them.',
+    `${then} In future replies, await your agents inside the turn rather than backgrounding them.`,
   ].join(' ');
 }
 
@@ -368,23 +368,13 @@ export class CliAgentAiService implements IAiService {
   ): Promise<ConversationTurn> {
     this.activeAbort = abortScope(signal);
     const combined = this.activeAbort.signal;
-    let agentWaits = 0;
     // Text from turns Ordewell continued past on the user's behalf. A wait is
     // not a new user message, so the reply they read is the whole answer.
     const carried: string[] = [];
 
+    const waits = { used: 0 };
     const send = async (text: string): Promise<ReplyAttempt> => {
-      let turn = await this.runTurn(session, text, onProgress, combined);
-      const researchLog: ResearchLogEntry[] = [...turn.researchLog];
-      // The agent ended its turn with subagents still running, so whatever
-      // they find is about to be said into a closed turn. Ask for it while a
-      // turn is still open — this is the whole recovery, and it is bounded.
-      while (turn.backgroundAgents > 0 && agentWaits < MAX_AGENT_WAITS && turn.text.trim() && !turn.error && !turn.aborted && !combined?.aborted) {
-        agentWaits++;
-        carried.push(turn.text);
-        turn = await this.runTurn(session, waitForAgentsPrompt(turn.backgroundAgents), onProgress, combined);
-        researchLog.push(...turn.researchLog);
-      }
+      const { turn, researchLog } = await this.runTurnAwaitingAgents(session, text, onProgress, combined, waits, (past) => carried.push(past));
       return {
         text: turn.text,
         researchLog,
@@ -423,6 +413,32 @@ export class CliAgentAiService implements IAiService {
    * one file's body on another file's row the moment an agent runs two reads
    * at once, which all three of these do routinely.
    */
+  /**
+   * A turn, and then — while the agent ended it with subagents still in the
+   * background — a turn asking it to wait for them: whatever they find would
+   * otherwise be said into a closed turn, or, in a one-shot, into a session
+   * already thrown away. Bounded by `waits`, shared across a reply's sends.
+   */
+  private async runTurnAwaitingAgents(
+    session: PlannerSession,
+    message: string,
+    onProgress: (progress: ResearchProgress) => void,
+    signal: AbortSignal | undefined,
+    waits: { used: number },
+    onWaitedPast?: (text: string) => void,
+    then?: string,
+  ): Promise<{ turn: HarnessTurn; researchLog: ResearchLogEntry[] }> {
+    let turn = await this.runTurn(session, message, onProgress, signal);
+    const researchLog: ResearchLogEntry[] = [...turn.researchLog];
+    while (turn.backgroundAgents > 0 && waits.used < MAX_AGENT_WAITS && turn.text.trim() && !turn.error && !turn.aborted && !signal?.aborted) {
+      waits.used++;
+      onWaitedPast?.(turn.text);
+      turn = await this.runTurn(session, waitForAgentsPrompt(turn.backgroundAgents, then), onProgress, signal);
+      researchLog.push(...turn.researchLog);
+    }
+    return { turn, researchLog };
+  }
+
   private async runTurn(
     session: PlannerSession,
     message: string,
@@ -797,7 +813,7 @@ export class CliAgentAiService implements IAiService {
       await this.startAdapter(startOptions, tools, session);
       session.start = { startOptions, tools };
       const splitter = new ReplySplitter();
-      const turn = await this.runTurn(
+      const { turn, researchLog } = await this.runTurnAwaitingAgents(
         session,
         'Follow the instructions in your system prompt and produce the plan now.',
         (p) => {
@@ -806,9 +822,12 @@ export class CliAgentAiService implements IAiService {
           if (routed?.route === 'plan') onProgress?.({ type: 'plan_token', planToken: routed.text, segmentId: p.segmentId });
         },
         signal,
+        { used: 0 },
+        undefined,
+        'Then submit the plan with submit_plan.',
       );
       if (turn.error) throw new Error(turn.error);
-      return { tasks: submitted, refused, text: turn.text, researchLog: turn.researchLog };
+      return { tasks: submitted, refused, text: turn.text, researchLog };
     } finally {
       ended = true;
       session.discard();
