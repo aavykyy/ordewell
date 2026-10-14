@@ -8,7 +8,7 @@ import {
   RunnerId,
   DEFAULT_RUNNERS,
 } from '../models/Task';
-import { IConfig } from '../interfaces/IConfig';
+import type { AiProvider, IConfig } from '../interfaces/IConfig';
 import { IFileSystem } from '../interfaces/IFileSystem';
 import { IWebFetcher } from '../interfaces/IWebFetcher';
 import {
@@ -25,7 +25,7 @@ import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
 import { IAiService, ConversationRequest, ConversationTurn } from './AiService';
 import { BaseAiService, ResearchChat, ResearchTurn, ToolResult, ConversationTurnContext } from './BaseAiService';
 import { toOpenAiTools, toOpenAiSubagentTools } from './researchTools';
-import { getProviderMeta, stripModelPrefix } from './ProviderRegistry';
+import { getProviderMeta, isApiProvider, stripModelPrefix } from './ProviderRegistry';
 import { compactToolMessages, type CompactableMessage } from './contextCompaction';
 import type { UsageRecord } from '../models/Usage';
 
@@ -196,7 +196,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
    * key the user had already replaced.
    */
   private getClient(): OpenAI {
-    const provider = this.config.aiProvider;
+    const provider = this.vendor();
     const baseURL = this.config.getProviderBaseUrl(provider);
     // Keyless local servers (ollama, LM Studio) are valid `openai_compatible`
     // targets, but the SDK refuses an empty key outright.
@@ -209,8 +209,15 @@ export class OpenAiService extends BaseAiService implements IAiService {
     return this.client;
   }
 
-  ensureInit(): void {
+  /** The vendor this service talks to; `createAiService` routes every other planner elsewhere. */
+  private vendor(): AiProvider {
     const provider = this.config.aiProvider;
+    if (!isApiProvider(provider)) throw new Error(`Unknown planner provider "${provider}".`);
+    return provider;
+  }
+
+  ensureInit(): void {
+    const provider = this.vendor();
     if (provider === 'openai_compatible') {
       if (!this.config.openaiCompatibleBaseUrl) {
         throw new Error('OpenAI-compatible base URL not configured. Set OPENAI_COMPATIBLE_BASE_URL.');
@@ -401,7 +408,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
     const { autonomousDefault } = modes;
     let ctx = '';
     if (fs) {
-      const collected = await new ContextCollector(fs).collect(runners[0] ?? 'claude-code');
+      const collected = await new ContextCollector(fs).collect(runners[0] ?? DEFAULT_RUNNERS[0]);
       if (collected.aiflowContext) ctx = `\n<aiflow_context>\n${collected.aiflowContext}\n</aiflow_context>\n`;
     }
     const prompt = buildPlanWithResults(userDescription, ctx, '', modelsByRunner, runners, runnerModes, modes);

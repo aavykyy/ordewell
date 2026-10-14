@@ -1,3 +1,5 @@
+import type { DiscoveredModel } from '../models/Task';
+
 export interface RunnerManifest {
   name: string;
   displayName: string;
@@ -14,7 +16,11 @@ export interface RunnerFeatures {
   modeSettings?: Record<string, Record<string, string>>;
 }
 
-export type ModelDiscoveryParser = 'claude-help' | 'opencode-models' | 'opencode-models-verbose' | 'anthropic-models' | 'line-by-line' | 'json' | 'json-table';
+/** A runner's own reader for its catalog's output, kept beside its manifest. */
+export type ModelOutputParser = (output: string, manifest: RunnerManifest) => DiscoveredModel[];
+
+/** How discovery output becomes models: one `id label` per line, or the runner's own reader. Absent means per line. */
+export type ModelDiscoveryParser = 'line-by-line' | ModelOutputParser;
 
 export interface DiscoveryCommand {
   command: string;
@@ -38,7 +44,6 @@ export interface RunnerModelDiscovery {
   command?: string;
   args?: string[];
   parser?: ModelDiscoveryParser;
-  jsonPath?: string;
   /**
    * Stdio JSON-RPC discovery (Codex `app-server`): spawn the command, send
    * `initialize` then `model/list`, and read the catalog from the response.

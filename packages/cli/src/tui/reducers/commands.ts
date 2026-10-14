@@ -1,5 +1,5 @@
 import {
-  ALL_PROVIDERS, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, PROVIDER_PRIORITY, autonomyLevelLabel, parseAutonomyLevel, parseMaxParallel, runnerForProvider, type AiProvider,
+  EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, PROVIDER_PRIORITY, autonomyLevelLabel, parseAutonomyLevel, parseMaxParallel, runnerForProvider, getProviderMeta, isApiProvider, isPlannerBackend, type AiProvider,
 } from '@ordewell/core';
 import { handoffCommand } from '../handoff';
 import { findCommand, type ParsedCommand } from '../slash';
@@ -19,8 +19,6 @@ import { withRun } from './incoming';
 import { automergeCommand, autorunCommand, supervisorCommand } from './runSettings';
 import { openSettings } from './settings';
 import { fail, step, withSession, type Effect, type Step, type TaskAction } from './shared';
-
-const KNOWN_PROVIDERS = Object.keys(ALL_PROVIDERS);
 
 export const unknownCommand = (state: TuiState, name: string): Step =>
   fail(state, `Unknown command: /${name} — type /help to see what's available.`);
@@ -234,7 +232,7 @@ function setModel(state: TuiState, args: string[]): Step {
   if (args[0] === 'set' && args[1]) {
     // A harness planner can only run its own agent's models (ADR-0009), so the
     // typed path gets the same scoping the picker does.
-    const runner = runnerForProvider(state.plannerProvider as AiProvider);
+    const runner = runnerForProvider(state.plannerProvider);
     const known = runner ? modelsForRunner(state.models, runner) : [];
     if (runner && known.length > 0 && !known.some((m) => m.id === args[1])) {
       return fail(state, `${args[1]} was not discovered for ${runner}.`);
@@ -259,7 +257,7 @@ function setModel(state: TuiState, args: string[]): Step {
 function setPlanner(state: TuiState, args: string[]): Step {
   if (args[0]) {
     const id = args[0].toLowerCase();
-    if (!KNOWN_PROVIDERS.includes(id)) {
+    if (!isPlannerBackend(id)) {
       return fail(state, `Unknown planner: ${id}. Run /planner with no arguments to see the list.`);
     }
     return step(state, [{ type: 'setPlanner', provider: id }]);
@@ -297,13 +295,13 @@ function setPlannerEffort(state: TuiState, args: string[]): Step {
 function setKey(state: TuiState, args: string[]): Step {
   if (args[0] === 'set' && args[1]) {
     const provider = args[1].toLowerCase();
-    if (!KNOWN_PROVIDERS.includes(provider)) {
+    if (!isApiProvider(provider)) {
       return fail(state, `Unknown provider: ${provider}. Run /key with no arguments to see the list.`);
     }
     if (!args[2]) {
       return step({
         ...state,
-        overlay: keyPrompt(provider as AiProvider),
+        overlay: keyPrompt(provider),
       });
     }
     return step(state, [{ type: 'setApiKey', provider, key: args.slice(2).join(' ') }]);
@@ -311,15 +309,15 @@ function setKey(state: TuiState, args: string[]): Step {
 
   const items: PickerItem[] = PROVIDER_PRIORITY.map((id) => ({
     id,
-    label: ALL_PROVIDERS[id].label,
-    detail: ALL_PROVIDERS[id].apiKeyEnvVar,
+    label: getProviderMeta(id).label,
+    detail: getProviderMeta(id).apiKeyEnvVar,
     selected: state.configuredProviders.includes(id),
   }));
   return step({ ...state, overlay: { kind: 'picker', picker: picker('API provider key', items, { kind: 'set-key' }) } });
 }
 
 export function keyPrompt(provider: AiProvider): TuiState['overlay'] {
-  const meta = ALL_PROVIDERS[provider];
+  const meta = getProviderMeta(provider);
   return {
     kind: 'prompt',
     title: `${meta.label} API key`,

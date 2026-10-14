@@ -184,16 +184,21 @@ model's behalf, which is precisely what a coding agent replaces.
 ## A runner in the provider axis
 
 The glossary is explicit that **provider** means the LLM vendor and **runner**
-means the coding-agent CLI, and this decision deliberately puts three runners
-into `AiProvider`. The alternative — a separate `plannerBackend` axis — types
-better and reads worse: it splits one user question ("what plans for me?")
-across two settings and needs new UI in four surfaces instead of three new
-entries in a dropdown that already exists.
+means the coding-agent CLI, and this decision deliberately puts runners into
+the planner setting beside the vendors. The alternative — a separate
+`plannerBackend` setting — types better and reads worse: it splits one user
+question ("what plans for me?") across two settings and needs new UI in four
+surfaces instead of new entries in a dropdown that already exists.
 
-The union stays exhaustive, so `PROVIDER_LABEL` and every switch over
-`AiProvider` are updated by the compiler rather than at runtime. One
-`isCliProvider()` guard covers key resolution, provider routing and the model
-picker (which reads `ModelDiscovery` instead of `ModelCatalog`).
+The setting holds a `PlannerBackendId`: an `AiProvider`, the closed union of
+API vendors, or a runner id. The runner half is open because every built-in
+runner with a connector can plan — its manifest and its `CONNECTORS` entry are
+the whole of declaring it — so the harness planners, their labels and the
+planner lists are derived from those two, and an id is checked against them at
+runtime rather than by the compiler. One `isCliProvider()` guard covers key
+resolution, provider routing and the model picker (which reads
+`ModelDiscovery` instead of `ModelCatalog`); `isApiProvider()` narrows an id to
+a vendor wherever a key or base URL is read.
 
 The term for the resulting arrangement is **harness planner**: a runner
 serving as the planner. Not "CLI provider" — the thing on the other end is not
@@ -237,6 +242,11 @@ this backend should understand they are trading speed for not holding a key.
   with one respawn before failing (ADR-0025).
 - **A separate `plannerBackend` setting.** See above — better typing, worse
   product, more UI.
+- **The harness planners as members of `AiProvider`.** Previously adopted, so
+  the compiler checked every switch over the union. Dropped because each new
+  runner then had to be added by hand to the union, the label tables and the
+  planner list, and a missed one failed quietly by leaving the runner off a
+  surface (#72).
 - **Implicit planner = the first selected runner.** A single "plan with my
   coding agent" toggle, no picker. Rejected: it silently couples planner choice
   to runner choice, making "Claude plans, OpenCode executes" impossible — which
@@ -281,3 +291,4 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-10-12 — the terminal UI's `/planner` saves each step on enter, with the later steps at their pre-selection, instead of applying nothing until the last step; esc closes and keeps what was saved. Users wanted to see a choice take effect and leave with esc. A harness is never saved without a model to go with it.
 - 2026-10-13 — a Codex planner on a host where no sandbox starts plans with its own shell off, through `run_command`, instead of being refused ([ADR-0033](0033-codex-planner-without-its-sandbox.md)).
 - 2026-10-14 — `skip_task` joins the execution tools ([ADR-0029](0029-the-supervisor.md)).
+- 2026-10-14 — harness planners are derived from the runner manifests and connectors; `AiProvider` names vendors only and the setting is a `PlannerBackendId` (#72).

@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { Task, RunnerId, TaskModelAssignment, createTask, flattenTasksWithParents, inheritedSkills, skillNames } from '../models/Task';
+import { Task, RunnerId, TaskModelAssignment, DEFAULT_RUNNERS, createTask, flattenTasksWithParents, inheritedSkills, skillNames } from '../models/Task';
 import { plannedMode, type RunnerModeInfo } from './ModeResolver';
 import { checkModelAndModeValidity, type EditCatalog } from './TaskEditValidator';
 
@@ -146,7 +146,7 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
 
   const type: Task['type'] = raw.type === 'user' || raw.type === 'ai' ? raw.type : base.type ?? 'ai';
   const ai = type === 'ai';
-  const assignedRunner = text(raw.assignedRunner) ?? base.assignedRunner ?? catalog.runners[0] ?? 'claude-code';
+  const assignedRunner = text(raw.assignedRunner) ?? base.assignedRunner ?? catalog.runners[0] ?? DEFAULT_RUNNERS[0];
   const description = text(raw.description) ?? base.description ?? title;
 
   // A manual task stores no ops flag, so this is the one place it can still be seen.

@@ -1,5 +1,6 @@
 import { BaseConfig } from './BaseConfig';
-import type { AiProvider } from './IConfig';
+import { isApiProvider } from '../services/ProviderRegistry';
+import type { PlannerBackendId } from './IConfig';
 
 /**
  * A fully `process.env`-backed IConfig for headless callers (e.g. the CLI's
@@ -8,12 +9,13 @@ import type { AiProvider } from './IConfig';
  * subclass only supplies the abstract members from the environment.
  */
 export class EnvConfig extends BaseConfig {
-  get aiProvider(): AiProvider {
+  get aiProvider(): PlannerBackendId {
     return BaseConfig.detectProvider('openrouter');
   }
 
   get apiKey(): string {
-    return this.getProviderApiKey(this.aiProvider) || this.openrouterKey || this.geminiKey || '';
+    const provider = this.aiProvider;
+    return (isApiProvider(provider) ? this.getProviderApiKey(provider) : '') || this.openrouterKey || this.geminiKey || '';
   }
 
   get planningModel(): string {

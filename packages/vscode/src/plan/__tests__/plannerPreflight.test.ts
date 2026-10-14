@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { plannerPreflightError } from '../PlanManager';
-import type { AiProvider } from '@ordewell/core';
+import type { PlannerBackendId } from '@ordewell/core';
 import type { VsCodeConfig } from '../../adapters/VsCodeConfig';
 
-function config(aiProvider: AiProvider, apiKey: string, planningModel: string): VsCodeConfig {
+function config(aiProvider: PlannerBackendId, apiKey: string, planningModel: string): VsCodeConfig {
   return { aiProvider, apiKey, planningModel } as unknown as VsCodeConfig;
 }
 
@@ -14,7 +14,7 @@ function config(aiProvider: AiProvider, apiKey: string, planningModel: string): 
  * answered "API key not configured" instead of planning.
  */
 describe('plannerPreflightError', () => {
-  for (const provider of ['claude-code', 'codex', 'opencode'] as AiProvider[]) {
+  for (const provider of ['claude-code', 'codex', 'opencode']) {
     it(`lets ${provider} plan with no API key`, () => {
       expect(plannerPreflightError(config(provider, '', 'sonnet'))).toBeNull();
     });

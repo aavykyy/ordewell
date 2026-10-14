@@ -1,8 +1,8 @@
-import { IConfig, AiProvider } from './IConfig';
+import type { IConfig, AiProvider, PlannerBackendId } from './IConfig';
 import { parseApprovalModeSetting, type ApprovalModeSetting } from '../services/ApprovalPolicy';
 import { DEFAULT_WEB_READ_BUDGET } from '../services/webReadPolicy';
 import type { ProviderModelLists } from '../services/ProviderRouting';
-import { ALL_PROVIDERS, getProviderMeta, PROVIDER_DETECT_PRIORITY } from '../services/ProviderRegistry';
+import { getProviderMeta, isPlannerBackend, PROVIDER_DETECT_PRIORITY } from '../services/ProviderRegistry';
 import { DEFAULT_MAX_PARALLEL, parseMaxParallel } from '../utils/maxParallel';
 import { SettingsService } from '../services/SettingsService';
 
@@ -20,7 +20,7 @@ function nonNegativeInt(raw: string | undefined, fallback: number): number {
 }
 
 export abstract class BaseConfig implements IConfig {
-  abstract aiProvider: AiProvider;
+  abstract aiProvider: PlannerBackendId;
   abstract apiKey: string;
   abstract planningModel: string;
   abstract enabledRunners: string[];
@@ -144,15 +144,14 @@ export abstract class BaseConfig implements IConfig {
       .filter(Boolean);
   }
 
-  protected static detectProvider(fallback: AiProvider): AiProvider {
+  protected static detectProvider(fallback: PlannerBackendId): PlannerBackendId {
     const env = process.env.AI_PROVIDER;
-    if (env && ALL_PROVIDERS[env as AiProvider]) return env as AiProvider;
+    if (env && isPlannerBackend(env)) return env;
 
     for (const provider of PROVIDER_DETECT_PRIORITY) {
-      const meta = ALL_PROVIDERS[provider];
-      if (!meta) continue;
-      if (meta.detectEnvVars.some((v) => process.env[v])) return provider as AiProvider;
-      if (meta.baseUrlEnvVar && process.env[meta.baseUrlEnvVar]) return provider as AiProvider;
+      const meta = getProviderMeta(provider);
+      if (meta.detectEnvVars.some((v) => process.env[v])) return provider;
+      if (meta.baseUrlEnvVar && process.env[meta.baseUrlEnvVar]) return provider;
     }
 
     return fallback;

@@ -1,5 +1,5 @@
 import type { ApprovalDecision } from './interfaces/IApproval';
-import type { AiProvider } from './interfaces/IConfig';
+import type { AiProvider, PlannerBackendId } from './interfaces/IConfig';
 import type { IsolationMergeResult } from './interfaces/IWorktreeIsolation';
 import type { SessionMeta } from './models/Session';
 import type { DiscoveredModel } from './models/Task';
@@ -200,8 +200,8 @@ export type SessionListResponse = SessionMeta[];
 
 export interface SettingsResponse {
   orchestratorModel: string;
-  /** Who plans (ADR-0009) — a vendor id, or one of the three harness planners. */
-  aiProvider: AiProvider;
+  /** Who plans (ADR-0009) — a vendor id, or a runner serving as a harness planner. */
+  aiProvider: PlannerBackendId;
   plannerThinkingEffort: string;
   maxParallel: number;
   modelAllowlist: UserSettings['modelAllowlist'];

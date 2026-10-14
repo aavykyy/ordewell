@@ -1,4 +1,4 @@
-import { ALL_PROVIDERS, type AiProvider } from '@ordewell/core';
+import { getProviderMeta } from '@ordewell/core';
 import type { PickerItem, TuiState } from '../state';
 import { DEFAULT_EFFORT, plannerEffortItems, plannerHarnessModel, plannerItems, plannerModelItems } from './pickers';
 import { step } from './shared';
@@ -73,7 +73,7 @@ export const plannerStepper: StepperDefinition = {
     const model = plannerModelItems(state, provider, '').find((m) => m.id === modelId);
     const level = plannerEffortItems(state, provider, modelId, '').find((e) => e.id === effort);
     const parts = [
-      ALL_PROVIDERS[provider as AiProvider]?.label ?? provider,
+      getProviderMeta(provider)?.label ?? provider,
       model?.label ?? modelId,
       ...(effort ? [effortLabel(level?.label ?? effort)] : []),
     ];

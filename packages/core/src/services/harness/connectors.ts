@@ -10,6 +10,8 @@ import type { RepoConfigReader } from './repoConfig';
 import { CLAUDE_REPO_CONFIG } from './claudeRepoConfig';
 import { CODEX_REPO_CONFIG } from './codexRepoConfig';
 import { OPENCODE_REPO_CONFIG } from './openCodeRepoConfig';
+import { claudeUsageLimitReset } from './claudeUsageLimit';
+import { codexUsageLimitReset } from './codexUsageLimit';
 
 /**
  * One runner's connector: the adapter that drives it over its programmatic
@@ -21,6 +23,13 @@ export interface RunnerConnector {
   ordewellTools: OrdewellToolBinding;
   /** What the runner would load from a repository, which Ordewell reads for its planner instead (ADR-0028). */
   repoConfig: RepoConfigReader;
+  /**
+   * When the runner's usage limit resets, read from the tail of what it
+   * printed as it stopped; null when the wording names no time. Absent for a
+   * runner that prints none of its own — OpenCode passes its provider's error
+   * text through. May throw on a time it cannot place.
+   */
+  usageLimitReset?(tail: string, now: Date): Date | null;
 }
 
 /**
@@ -29,8 +38,8 @@ export interface RunnerConnector {
  * runner that is not here cannot run tasks at all.
  */
 export const CONNECTORS: Readonly<Record<string, RunnerConnector>> = {
-  'claude-code': { create: (deps) => new ClaudeCodeAdapter(deps), ordewellTools: CLAUDE_ORDEWELL, repoConfig: CLAUDE_REPO_CONFIG },
-  codex: { create: (deps) => new CodexAdapter(deps), ordewellTools: CODEX_ORDEWELL, repoConfig: CODEX_REPO_CONFIG },
+  'claude-code': { create: (deps) => new ClaudeCodeAdapter(deps), ordewellTools: CLAUDE_ORDEWELL, repoConfig: CLAUDE_REPO_CONFIG, usageLimitReset: claudeUsageLimitReset },
+  codex: { create: (deps) => new CodexAdapter(deps), ordewellTools: CODEX_ORDEWELL, repoConfig: CODEX_REPO_CONFIG, usageLimitReset: codexUsageLimitReset },
   opencode: { create: (deps) => new OpenCodeAdapter(deps), ordewellTools: OPENCODE_ORDEWELL, repoConfig: OPENCODE_REPO_CONFIG },
 };
 

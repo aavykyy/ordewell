@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import {
   createSession, createSkillsService, createEmptyPlan, flattenTasks, parseMaxParallel, sessionRuntimeSettings,
-  type AiProvider, type GlobalRunSettings, type LegacyPlanState, type RunnerId, type Session, type SessionDeps,
+  type PlannerBackendId, type GlobalRunSettings, type LegacyPlanState, type RunnerId, type Session, type SessionDeps,
 } from '@ordewell/core';
 import { registerCommands, type CommandDeps } from './commands/CommandRegistry';
 import { handleSlashCommand, type SlashDeps } from './commands/SlashParser';
@@ -199,7 +199,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       ready: onWebviewReady,
       refreshModels: () => { void discovery.refresh().catch((err) => log(`Model dropdown refresh failed: ${err}`)); },
       runSlashCommand: (text) => handleSlashCommand(text, slashDeps()),
-      setPlanner: (provider) => planner.apply(provider as AiProvider),
+      setPlanner: (provider) => planner.apply(provider),
       setPlannerModel: (modelId, effort) => planner.setModel(modelId, effort),
       openTaskLog: (taskId) => taskLogs.open(taskId),
       setPlanDockHeight: (height) => { void services.context.globalState.update(PLAN_DOCK_HEIGHT_KEY, height); },
@@ -359,7 +359,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
 
     registerCommands(services.context, commandDeps);
     services.context.subscriptions.push(
-      vscodeApi.commands.registerCommand('ordewell.setPlanner', (provider: AiProvider) => planner.apply(provider)),
+      vscodeApi.commands.registerCommand('ordewell.setPlanner', (provider: PlannerBackendId) => planner.apply(provider)),
       vscodeApi.commands.registerCommand('ordewell.setMaxParallel', (value?: string) => setMaxParallel(value)),
     );
 

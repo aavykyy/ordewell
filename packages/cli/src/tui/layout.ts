@@ -9,7 +9,7 @@ import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
-import { ALL_PROVIDERS, approvalLabel, awaitingLabel, blockedByLabel, skippedLabel, hasHiddenDetail, resumeLabel, resumeTime, runnerForProvider, taskRowView, planUsage, type AiProvider, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
+import { approvalLabel, getProviderMeta, isApiProvider, awaitingLabel, blockedByLabel, skippedLabel, hasHiddenDetail, resumeLabel, resumeTime, runnerForProvider, taskRowView, planUsage, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -468,13 +468,13 @@ export function chatScrollMax(state: TuiState): number {
  * actually run: a coding agent needs its CLI installed, a vendor needs a key.
  */
 function plannerSetup(state: TuiState): { label: string; ready: boolean } {
-  const provider = state.plannerProvider as AiProvider;
-  const registration = ALL_PROVIDERS[provider];
+  const provider = state.plannerProvider;
+  const registration = getProviderMeta(provider);
   if (!registration) return { label: 'not set', ready: false };
   const runner = runnerForProvider(provider);
   const ready = runner
     ? state.runners.some((r) => r.id === runner)
-    : state.configuredProviders.includes(provider);
+    : isApiProvider(provider) && state.configuredProviders.includes(provider);
   return { label: registration.label, ready };
 }
 

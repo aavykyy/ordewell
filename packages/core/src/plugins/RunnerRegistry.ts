@@ -1,15 +1,6 @@
 import type { RunnerManifest, RunnerEntry } from './types';
-import { CLAUDE_CODE_MANIFEST } from './builtin/claude-code.manifest';
-import { CODEX_MANIFEST } from './builtin/codex.manifest';
-import { OPENCODE_MANIFEST } from './builtin/opencode.manifest';
+import { BUILTIN_MANIFESTS } from './builtin';
 import type { IConfig } from '../interfaces/IConfig';
-
-// Insertion order is picker order on every surface.
-const BUILTIN_MANIFESTS: RunnerManifest[] = [
-  CLAUDE_CODE_MANIFEST,
-  CODEX_MANIFEST,
-  OPENCODE_MANIFEST,
-];
 
 export class RunnerRegistry {
   private readonly runners = new Map<string, RunnerEntry>(

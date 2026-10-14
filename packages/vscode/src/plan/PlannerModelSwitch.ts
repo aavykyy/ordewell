@@ -1,4 +1,4 @@
-import type { PlannerModelMemory, PlannerModelCandidate, PlannerModelRecall, AiProvider, DiscoveredModel } from '@ordewell/core';
+import type { PlannerModelMemory, PlannerModelCandidate, PlannerModelRecall, PlannerBackendId, DiscoveredModel } from '@ordewell/core';
 
 export interface VendorModelOption {
   id: string;
@@ -12,7 +12,7 @@ export interface VendorModelOption {
  */
 export function recallPlannerModel(
   memory: PlannerModelMemory,
-  provider: AiProvider,
+  provider: PlannerBackendId,
   harnessModels: DiscoveredModel[] | undefined,
   vendorOptions: VendorModelOption[] | undefined,
 ): PlannerModelRecall {

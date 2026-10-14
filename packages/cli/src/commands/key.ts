@@ -1,4 +1,4 @@
-import { ALL_PROVIDERS, PROVIDER_PRIORITY, type AiProvider } from '@ordewell/core';
+import { PROVIDER_PRIORITY, getProviderMeta, isApiProvider } from '@ordewell/core';
 import type { ApiClient } from '../apiClient';
 import { positionals } from '../utils';
 import { connect, fail, fetchCatalog, persistEnv } from './shared';
@@ -18,7 +18,7 @@ export async function handleKey(subArgs: string[], injectedApi?: ApiClient): Pro
     const catalog = await fetchCatalog(api);
     console.log('\nAPI provider keys\n');
     for (const id of PROVIDER_PRIORITY) {
-      const meta = ALL_PROVIDERS[id];
+      const meta = getProviderMeta(id);
       const configured = catalog.providers.includes(id);
       console.log(`  ${configured ? '✓' : ' '} ${id.padEnd(14)} ${meta.apiKeyEnvVar.padEnd(28)} ${meta.label}`);
     }
@@ -27,11 +27,11 @@ export async function handleKey(subArgs: string[], injectedApi?: ApiClient): Pro
   }
 
   if (!provider) fail(USAGE);
-  const id = provider.toLowerCase() as AiProvider;
-  const meta = ALL_PROVIDERS[id];
-  if (!meta) {
+  const id = provider.toLowerCase();
+  if (!isApiProvider(id)) {
     fail(`Unknown provider: ${provider}`, 'Run `ordewell key` to see the list.');
   }
+  const meta = getProviderMeta(id);
 
   // Joined rather than taken as one token so an unquoted key with spaces still
   // arrives whole; a truncated key fails at the provider, not here.

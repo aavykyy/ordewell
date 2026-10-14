@@ -2,19 +2,23 @@ import type { RunnerId } from '../models/Task';
 import type { ApprovalModeSetting } from '../services/ApprovalPolicy';
 import type { ProviderModelLists } from '../services/ProviderRouting';
 
+/** An LLM vendor reached over HTTP. A closed set: each one has its own registration in `ProviderRegistry`. */
+export type AiProvider = 'google' | 'openrouter' | 'openai_compatible' | 'openai' | 'xai' | 'groq' | 'deepseek' | 'together' | 'mistral' | 'anthropic' | 'fireworks' | 'perplexity' | 'zhipu' | 'kimi' | 'cerebras' | 'deepinfra' | 'doubao' | 'qwen' | 'hunyuan' | 'baichuan' | 'minimax' | 'yi' | 'stepfun' | 'siliconflow' | 'cohere' | 'novita';
+
 /**
- * Who plans. Mostly LLM vendors reached over HTTP; the last three are *harness
- * planners* (ADR-0009) — a coding agent CLI already installed on the machine,
+ * Who plans: an API vendor, or the id of a runner serving as a *harness
+ * planner* (ADR-0009) — a coding agent CLI already installed on the machine,
  * driven as the planner over its own programmatic transport and authenticated
- * by the subscription the user already holds. They are runners in the provider
- * axis, deliberately: "what plans for me?" is one question, and it belongs in
- * one setting. `isCliProvider` is the single guard that tells the two kinds
- * apart.
+ * by the subscription the user already holds. Runners sit in the provider axis
+ * deliberately: "what plans for me?" is one question, and it belongs in one
+ * setting. The runner half is open — any built-in runner with a connector can
+ * plan — so it is checked against the registry, not by the type:
+ * `isApiProvider` narrows to a vendor, `isCliProvider` tells a harness planner.
  */
-export type AiProvider = 'google' | 'openrouter' | 'openai_compatible' | 'openai' | 'xai' | 'groq' | 'deepseek' | 'together' | 'mistral' | 'anthropic' | 'fireworks' | 'perplexity' | 'zhipu' | 'kimi' | 'cerebras' | 'deepinfra' | 'doubao' | 'qwen' | 'hunyuan' | 'baichuan' | 'minimax' | 'yi' | 'stepfun' | 'siliconflow' | 'cohere' | 'novita' | 'claude-code' | 'codex' | 'opencode';
+export type PlannerBackendId = AiProvider | RunnerId;
 
 export interface IConfig {
-  aiProvider: AiProvider;
+  aiProvider: PlannerBackendId;
   apiKey: string;
   planningModel: string;
   enabledRunners: string[];

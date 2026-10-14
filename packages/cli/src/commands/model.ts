@@ -1,4 +1,4 @@
-import { runnerForProvider, type AiProvider } from '@ordewell/core';
+import { runnerForProvider } from '@ordewell/core';
 import { findEnvFile, writeEnvVar } from '../utils/env';
 import type { ApiClient } from '../apiClient';
 import { positionals } from '../utils';
@@ -29,7 +29,7 @@ export async function handleModel(subArgs: string[], injectedApi?: ApiClient): P
   if (!modelId) fail(USAGE);
 
   const settings = await api.getSettings();
-  const provider = (typeof settings.aiProvider === 'string' ? settings.aiProvider : '') as AiProvider;
+  const provider = typeof settings.aiProvider === 'string' ? settings.aiProvider : '';
   // A harness planner can only run its own agent's models (ADR-0009), so the
   // typed path gets the same scoping the TUI picker does. A cold catalog says
   // nothing about the id, so it is only enforced once discovery has landed.
@@ -60,7 +60,7 @@ export async function handleModel(subArgs: string[], injectedApi?: ApiClient): P
 
 async function showModels(api: ApiClient): Promise<void> {
   const [settings, catalog] = await Promise.all([api.getSettings(), fetchCatalog(api)]);
-  const provider = (typeof settings.aiProvider === 'string' ? settings.aiProvider : '') as AiProvider;
+  const provider = typeof settings.aiProvider === 'string' ? settings.aiProvider : '';
   const current = typeof settings.orchestratorModel === 'string' ? settings.orchestratorModel : '';
   const runner = runnerForProvider(provider);
 

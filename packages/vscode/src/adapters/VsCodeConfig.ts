@@ -1,12 +1,12 @@
 import * as vscode from 'vscode';
-import { AiProvider, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, parseMaxParallel, normalizeGeminiModel, resolveProvider, ALL_PROVIDERS, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET } from '@ordewell/core';
+import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, parseMaxParallel, normalizeGeminiModel, resolveProvider, isApiProvider, isPlannerBackend, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET } from '@ordewell/core';
 import type { ProviderModelLists, SettingsService } from '@ordewell/core';
 import { SecretStore, type ApiProvider, type SecretKey } from './SecretStore';
 
 export class VsCodeConfig extends BaseConfig {
   private get config() { return vscode.workspace.getConfiguration('ordewell'); }
 
-  private _provider: AiProvider | null = null;
+  private _provider: PlannerBackendId | null = null;
   private _providerModelLists: ProviderModelLists | null = null;
 
   constructor(private readonly secretStore?: SecretStore) {
@@ -144,11 +144,11 @@ export class VsCodeConfig extends BaseConfig {
     this._provider = null;
   }
 
-  get aiProvider(): AiProvider {
+  get aiProvider(): PlannerBackendId {
     if (this._provider) return this._provider;
     const env = this.config.get<string>('aiProvider', '');
-    if (env && ALL_PROVIDERS[env as AiProvider]) {
-      this._provider = env as AiProvider;
+    if (env && isPlannerBackend(env)) {
+      this._provider = env;
       return this._provider;
     }
     const model = this.config.get<string>('orchestratorModel', '') || process.env.ORCHESTRATOR_MODEL;
@@ -164,7 +164,8 @@ export class VsCodeConfig extends BaseConfig {
   }
 
   get apiKey() {
-    return this.getProviderApiKey(this.aiProvider) || this.openrouterKey || this.geminiKey || '';
+    const provider = this.aiProvider;
+    return (isApiProvider(provider) ? this.getProviderApiKey(provider) : '') || this.openrouterKey || this.geminiKey || '';
   }
 
   private resolveConfigModel(...keys: string[]): string {
