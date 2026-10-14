@@ -22,6 +22,7 @@ function harness(attempts: Record<number, TaskLogEvent[]> = { 1: attemptOne }) {
   const session = {
     taskLogAttempts: vi.fn(() => Object.keys(attempts).map(Number).sort((a, b) => a - b)),
     taskLog: vi.fn((_taskId: string, attempt: number) => attempts[attempt] ?? []),
+    invokeTaskCommand: vi.fn(() => 'c1'),
     execute: vi.fn(async (_command: ExecutionCommand, _actor: ExecutionActor): Promise<CommandOutcome> => ({ ok: true, message: 'done' })),
     removeQueuedTaskMessage: vi.fn(() => true),
     forceSendTaskMessage: vi.fn(() => 'm2'),
@@ -53,6 +54,15 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     createWebviewPanel.mockClear();
   });
 
+  it('discovers commands from the latest attempt and invokes them through the Session', () => {
+    const h = harness({ 1: [{ type: 'runner_loaded', commands: [{ name: 'compact', description: 'Compact context', kind: 'builtin' }], mcpServers: [] }] });
+    h.registry.open('t1');
+    __panels[0].__receive({ type: 'ready' });
+    expect(posted(__panels[0])[0]).toMatchObject({ type: 'init', status: { commands: [{ name: 'compact', description: 'Compact context', kind: 'builtin' }] } });
+    __panels[0].__receive({ type: 'invokeTaskCommand', name: 'compact', args: 'retain tests' });
+    expect(h.session.invokeTaskCommand).toHaveBeenCalledWith('t1', 'compact', 'retain tests');
+  });
+
   it('never opens a tab by itself, and opens one titled for the task on demand', () => {
     const h = harness();
     expect(createWebviewPanel).not.toHaveBeenCalled();
@@ -76,7 +86,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     const registry = new TaskLogRegistry({
       extensionUri: vscode.Uri.file('/ext'),
       session: () => ({
-        taskLogAttempts: () => [], taskLog: () => [], execute: async () => ({ ok: true, message: '' }), removeQueuedTaskMessage: () => false, interruptTask: async () => {},
+        invokeTaskCommand: () => 'c', taskLogAttempts: () => [], taskLog: () => [], execute: async () => ({ ok: true, message: '' }), removeQueuedTaskMessage: () => false, interruptTask: async () => {},
         forceSendTaskMessage: () => 'm', forceSendQueuedTaskMessage: () => false,
         cancelScheduledResume: () => false, resumeNow: async () => {}, outstandingApprovals: () => [], resolveApproval: () => false,
       }),

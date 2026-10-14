@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { latestTaskCommands } from '../shared/taskCommands';
 import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
   saveState, clearState, ModelResolver, RunnerRegistry, isCliProvider, taskStartedNotice,
@@ -531,6 +532,7 @@ export function handleSessionMessage(
       deps.chatProvider.sendTaskOutput(msg.taskId, msg.text);
       break;
     case 'task_started':
+      deps.chatProvider.postMessage({ type: 'taskCommands', taskId: msg.taskId, commands: [] });
       deps.chatProvider.conversation.note('system', taskStartedNotice(msg.title, msg.runner));
       break;
     case 'status_update': {
@@ -604,7 +606,11 @@ export function handleSessionMessage(
     case 'approval_settled':
     case 'approval_decided':
     case 'execution_action':
+      break;
     case 'task_log':
+      if (msg.events.some((event) => event.type === 'runner_loaded')) {
+        deps.chatProvider.postMessage({ type: 'taskCommands', taskId: msg.taskId, commands: latestTaskCommands(deps.session, msg.taskId) });
+      }
       break;
     default: {
       const exhaustive: never = msg;

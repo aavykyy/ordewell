@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { latestTaskCommands } from '../shared/taskCommands';
 import { canContinue, pausedOnLimit, resumeLabel, type ApprovalAnswer, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { EMPTY_TASK_LOG, reduceTaskLog, replayTaskLog, type TaskLogView } from '@ordewell/core/plan-utils';
 import { diffConversation } from '../shared/conversationPatch';
@@ -15,6 +16,7 @@ export interface TaskLogSession {
   taskLog(taskId: string, attempt: number): TaskLogEvent[];
   /** A message and a continue are execution buttons: they go through the command seam as the user (ADR-0029). */
   execute(command: ExecutionCommand, actor: ExecutionActor): Promise<CommandOutcome>;
+  invokeTaskCommand(taskId: string, name: string, args: string): string;
   removeQueuedTaskMessage(taskId: string, id: string): boolean;
   forceSendTaskMessage(taskId: string, text: string): string;
   forceSendQueuedTaskMessage(taskId: string, id: string): boolean;
@@ -116,6 +118,9 @@ export class TaskLogPanel {
         return;
       case 'selectAttempt':
         this.selectAttempt(msg.attempt);
+        return;
+      case 'invokeTaskCommand':
+        this.control(() => { this.deps.session.invokeTaskCommand(this.taskId, msg.name, msg.args); });
         return;
       case 'sendTaskMessage':
         this.controlAsync(() => this.userCommand({ command: 'message_task', task: this.taskId, text: msg.text }));
@@ -223,6 +228,7 @@ export class TaskLogPanel {
     const task = this.deps.getTask(this.taskId);
     const resumes = task ? resumeLabel(task) : null;
     return {
+      commands: latestTaskCommands(this.deps.session, this.taskId),
       taskId: this.taskId,
       order: task?.order ?? 0,
       title: task?.title ?? '',

@@ -122,8 +122,11 @@ and completion evidence.
   `commands_changed` lists them again. A slash command runs when a user
   message starts with it (no control request does it), `/compact` emits
   `compact_boundary` with its trigger and token counts, and a local command's
-  printout comes back as a `<local-command-stdout>` echo. Codex, OpenCode and
-  the VS Code task log follow.
+  printout comes back as a `<local-command-stdout>` echo. VS Code task cards
+  and log tabs complete the same runner-reported list through the Session;
+  native commands use `invokeTaskCommand`, and log tabs draw command results,
+  compactions and the collapsed loaded configuration through the shared block
+  renderer. The planner chat keeps its own commands. Codex and OpenCode follow.
 - **Background work (B1).** Claude Code reports a turn's `result` when the
   model stops talking, even with a background shell or agent still running, and
   opens a turn of its own when the work finishes. The Claude connector therefore
@@ -352,3 +355,4 @@ transport is retained for take-over.
 - 2026-10-14 — U1: Resume now — the user, planner or supervisor resumes a task paused on a usage limit early, in its saved session.
 - 2026-10-14 — C2: the completion contract moved from the first message into the runner's instructions, where its own compaction keeps it whole.
 - 2026-10-14 — R1: a task's chat speaks its runner's own slash commands; the task log records commands, compactions and what the runner loaded (#66; Claude Code and the TUI first).
+- 2026-10-14 — R1: VS Code task cards and log tabs complete and invoke native runner commands and draw the runner’s command, compaction and loaded-configuration blocks.

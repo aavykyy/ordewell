@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { latestTaskCommands } from '../shared/taskCommands';
 import type { RunnerId } from '@ordewell/core';
 import type { SettingsChange, WebviewToHost } from '../shared/protocol';
 import { isKnownSlashCommand } from '../commands/SlashParser';
@@ -91,6 +92,12 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
       return;
     case 'answerCheckpoint':
       handleCheckpointAnswer(msg.taskId, msg.approved, msg.reason, deps);
+      return;
+    case 'getTaskCommands':
+      deps.chatProvider.postMessage({ type: 'taskCommands', taskId: msg.taskId, commands: latestTaskCommands(deps.session, msg.taskId) });
+      return;
+    case 'invokeTaskCommand':
+      deps.session.invokeTaskCommand(msg.taskId, msg.name, msg.args);
       return;
     case 'sendTaskMessage':
       await handleTaskControl({ kind: 'message', text: msg.text }, msg.taskId, deps);

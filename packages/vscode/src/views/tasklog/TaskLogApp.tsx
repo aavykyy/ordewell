@@ -4,6 +4,7 @@ import { useFollowOutput } from '../chat/followOutput';
 import { hasHiddenDetail } from '@ordewell/core/plan-utils';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type PatchedView } from '../../shared/conversationPatch';
 import type { HostToTaskLog, TaskLogStatus, TaskLogToHost } from '../../shared/taskLogProtocol';
+import { taskCommand, useRunnerCommands } from '../chat/components/RunnerCommands';
 import { taskLogState } from './taskLogState';
 
 declare function acquireVsCodeApi(): { postMessage(message: TaskLogToHost): void };
@@ -33,6 +34,8 @@ export default function TaskLogApp() {
   const followRef = useFollowOutput<HTMLDivElement>(blocks);
   const state = status ? taskLogState(status) : null;
   const hasDetail = useMemo(() => hasHiddenDetail(blocks), [blocks]);
+  const commands = status?.commands ?? [];
+  const completion = useRunnerCommands(text, setText, commands);
   const canSend = text.trim().length > 0;
 
   useEffect(() => {
@@ -76,13 +79,24 @@ export default function TaskLogApp() {
   const send = (): void => {
     const value = text.trim();
     if (!value) return;
+    try {
+      const command = taskCommand(value, commands);
+      if (command && !continues) {
+        vscode.postMessage({ type: 'invokeTaskCommand', ...command });
+        setText('');
+        return;
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return;
+    }
     vscode.postMessage(continues ? { type: 'continueTask', text: value } : { type: 'sendTaskMessage', text: value });
     setText('');
   };
 
   const working = status?.working === true;
   // Force send (ADR-0023, F1) needs a turn to interrupt; a finished task's box continues it instead.
-  const canSendNow = working && canSend && !continues;
+  const canSendNow = working && canSend && !continues && !(commands.length > 0 && text.trim().startsWith('/'));
 
   const sendNow = (): void => {
     const value = text.trim();
@@ -104,6 +118,7 @@ export default function TaskLogApp() {
   }, [stopArmed, working]);
 
   const onComposerKeyDown = (e: React.KeyboardEvent): void => {
+    if (e.nativeEvent.isComposing || completion.keyDown(e)) return;
     if (e.key === 'Escape' && working) {
       e.preventDefault();
       if (stopArmed) {
@@ -202,9 +217,10 @@ export default function TaskLogApp() {
       {stopArmed && <div className="stop-hint" role="status">Press Esc again to stop</div>}
 
       <div className="task-log-composer">
+        {completion.palette}
         <textarea className="task-log-input" value={text} rows={2}
           placeholder={`${resumes ? 'The limit has reset? A message to resume it with…' : continues ? 'Continue the task in its saved session…' : 'Message the task…'} (Enter to send, Shift+Enter for a new line)`}
-          onChange={(e) => setText(e.target.value)} onKeyDown={onComposerKeyDown} />
+          onChange={(e) => completion.change(e.target.value)} onKeyDown={onComposerKeyDown} />
         {canSendNow && (
           <button type="button" className="task-log-send-now" aria-label="Send now"
             title="Interrupt the running step and send this next, ahead of anything queued (Ctrl+Enter)" onClick={sendNow}>
