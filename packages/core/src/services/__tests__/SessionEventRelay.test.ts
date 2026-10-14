@@ -80,6 +80,15 @@ describe('SessionEventRelay', () => {
     expect(types()).toEqual(['status_update']);
   });
 
+  it('counts the tasks a failure blocks in the run\'s summary (ADR-0034)', () => {
+    const { relay, sent, store } = setup();
+    store.update('t3', { dependencies: ['t2'] });
+
+    relay.observer(() => plan()).onExecutionComplete();
+
+    expect(sent.at(-1)).toEqual({ type: 'execution_complete', summary: { total: 3, completed: 1, failed: 1, blocked: 1 } });
+  });
+
   it('translates the orchestrator\'s events', () => {
     const { relay, sent, notices, types } = setup();
     const observer = relay.observer(() => plan());
@@ -92,7 +101,7 @@ describe('SessionEventRelay', () => {
 
     expect(types()).toEqual(['review_approved', 'checkpoint', 'isolation_blocked', 'execution_complete']);
     expect(sent[2]).toMatchObject({ repos: ['api', 'web'], message: expect.stringContaining('in api, web') });
-    expect(sent[3]).toEqual({ type: 'execution_complete', summary: { total: 3, completed: 1, failed: 1 } });
+    expect(sent[3]).toEqual({ type: 'execution_complete', summary: { total: 3, completed: 1, failed: 1, blocked: 0 } });
     expect(notices).toEqual([{ type: 'notice', level: 'warn', message: 'shared paths' }]);
   });
 

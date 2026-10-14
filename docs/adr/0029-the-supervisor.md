@@ -110,8 +110,11 @@ into one wake-up; the run's end is delivered at once. The policy is code,
 not prompt text, so when the supervisor speaks is testable without a model.
 
 A due batch reaches the conversation as a **run update**: one line per event,
-naming its task and a short detail — the verdict's reason, the question, the
-request, the resume time — and the passes since the last one. Never a log: the
+naming its task and a short detail — the verdict's reason and the tasks the
+failure blocks as the update goes out
+([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)), the question,
+the request, the resume time — and the passes since the last one; the run's end
+counts what completed, failed and is blocked. Never a log: the
 supervisor reads more with `task_output` and `task_diff`. The run update is
 the supervisor's input (`kind: 'wake_up'`), and what it says in the turn is
 its note (`kind: 'supervisor'`). The rules of its level are told to it after
@@ -242,9 +245,11 @@ or `run_plan`, which would start every failed task again. What the guards
 remember lasts from the user's start of a run to their next: a run the
 supervisor restarts itself, or a usage-limit reset resumes, continues the one
 before, its level as lowered included, or each restart would wipe the count.
-A run a failure halted stays halted through an edit to the failed task, so the
-supervisor's retry after that edit resumes the run rather than starting the one
-task on its own.
+A failure blocks only the failed task's dependents; independent work goes on,
+and the run ends once nothing else can start (ADR-0034). An edit to the failed
+task is reconciled into that ended run, keeping the task failed, so the
+supervisor's retry after it continues the run and the tasks it blocked start
+once it passes, rather than the one task running on its own.
 
 A refusal is a plain note back to the model naming the guard and what would be
 accepted. Each tripped guard also posts a supervisor message to the user.
@@ -407,10 +412,7 @@ until #30 exists.
   the supervisor's — it flattens the structured merge result the Merge all card
   renders.
 - 2026-10-11 — final verification of the merged slices. A planner edit adopted
-  while a failure halts the run is reconciled into the run instead of reloading
-  the plan, and keeps the failed task failed, so the retry after it resumes the
-  run (before, the reload dropped the review approval and the retried task ran
-  alone, its dependents never starting). A start deferred behind a held edit
+  after a failure is reconciled into the run instead of reloading the plan. A start deferred behind a held edit
   that never lands is dropped with a notice. VS Code's task-log message and
   Continue, and its Retry and Cancel task commands, reach the seam as the user,
   as the other surfaces' buttons do. The defaults are stated in the body: retry
@@ -429,3 +431,4 @@ until #30 exists.
   else was in flight: the user's Execute while a supervisor's `merge_all` was
   still merging had continued the run before, its lowered level and the
   guards' memory included.
+- 2026-10-14 — a failure blocks only its dependents instead of halting the run; run updates name the tasks a failure blocks, and the run's end counts them ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)).

@@ -37,6 +37,18 @@ describe('the supervisor at Watch: what wakes it', () => {
     expect(env.planner.calls[0].message).toMatch(line);
   });
 
+  it('names the tasks a failure blocks, and counts them when the run finishes (ADR-0034)', async () => {
+    const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { dependencies: ['t2'] })]);
+
+    env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the tests fail' });
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+
+    await until(() => env.planner.calls.length === 1);
+    expect(env.planner.calls[0].message).toMatch(/- task #1 "Task t1" failed: .*the tests fail; it blocks tasks #2 "Task t2" and #3 "Task t3"/);
+    expect(env.planner.calls[0].message).toContain('- the run finished: 0 of 3 tasks completed, 1 failed, 2 blocked');
+  });
+
   it('wakes when a task goes quiet, and says since when', async () => {
     const env = await supervised([task('t1', 1)]);
 

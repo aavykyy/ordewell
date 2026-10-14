@@ -687,6 +687,7 @@ export class Session {
       runBlocked: () => this.runs.blocked,
       dependencyMet: (depId) => dependencyMet(depId, this.store, this.runs),
       mergeGate: (taskId) => this.mergeGate(taskId),
+      blockedBy: (taskId) => this.orchestrator.getBlockedBy(taskId),
       waitingRequests: (taskId) => this.approvals.outstanding()
         .filter(({ request }) => isRunnerApproval(request) && request.taskId === taskId)
         .map(({ id, request }) => ({ id, subject: request.subject })),
@@ -954,7 +955,7 @@ export class Session {
     // Before the stop, whose save would otherwise write the abandoned turn's
     // steps into the plan it saves.
     this.events.dropSubagentRuns();
-    if (this.isExecuting || this.orchestrator.isRunning || this.orchestrator.isHaltedByFailure) this.stopExecution();
+    if (this.isExecuting || this.orchestrator.isRunning || this.orchestrator.awaitsResume) this.stopExecution();
     this.conversation.abandonTurn();
     this.turns.abandon();
     this.supervision.reset();
@@ -1289,10 +1290,10 @@ export class Session {
   /**
    * Load planner-produced tasks, coerced to the allowlist read live — it may
    * have changed since planning started. Tasks adopted on an armed scheduler,
-   * or on a run a failure halted, are reconciled rather than reloaded:
-   * `loadPlan` clears the on-hold set and the review approval, so a task the
-   * user cancelled would be re-armed and re-spawned by the re-tick that
-   * follows, and a retry after the edit would no longer resume the run.
+   * or on a run that awaits a resume (ADR-0034), are reconciled rather than
+   * reloaded: `loadPlan` clears the on-hold set and the review approval, so a
+   * task the user cancelled would be re-armed and re-spawned by the re-tick
+   * that follows, and a retry after the edit would run the task alone.
    *
    * A whole-plan commit is the planner restating every task, so it is laid
    * over the plan's execution state rather than replacing it: a planner that
@@ -1316,7 +1317,9 @@ export class Session {
       this.approve(added);
       this.supervision.edited(before, coerced);
     }
-    if (this.orchestrator.isRunning || this.orchestrator.isHaltedByFailure) {
+    // A run that ended on a failure is still the one a retry continues: reloaded,
+    // the failed task would lose its failure and its retry would run it alone.
+    if (this.orchestrator.isRunning || this.orchestrator.awaitsResume) {
       this.orchestrator.reconcilePlan(coerced, runners);
     } else {
       this.orchestrator.loadPlan(coerced, runners);

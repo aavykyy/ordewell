@@ -91,6 +91,18 @@ describe('the command seam: run_task', () => {
     expect(env.timeline().at(-1)!.text).toBe(`The planner asked to start task #2 "Task t2"; refused: ${outcome.message}`);
   });
 
+  it('refuses a task a failure blocks through its dependencies, naming the failed task to retry (ADR-0034)', async () => {
+    const env = setup();
+    env.session.loadPlan(plan([task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { dependencies: ['t2'] })]), 'goal', testWorkspace, { persist: false });
+    await env.session.executePlan();
+    env.latest('t1').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('failed'));
+
+    const outcome = await env.run({ command: 'run_task', task: 't3' });
+
+    expect(outcome).toEqual({ ok: false, outcome: 'refused', message: 'Task #3 "Task t3" is blocked: task #1 "Task t1" failed. Retry it first.' });
+  });
+
   it('refuses a task waiting at its merge gate, and says the merge is the user\'s', async () => {
     const env = setup({ isolation: new FakeWorktreeIsolation() });
     env.session.loadPlan(plan([task('t1', 1), task('o2', 2, { ops: true, dependencies: ['t1'] })]), 'goal', testWorkspace, { persist: false });
@@ -645,7 +657,7 @@ describe('the command seam\'s extension points', () => {
     return {
       tasks: () => tasks, planApproved: () => true, taskApproved: () => true, approve: vi.fn(), autonomous: () => true, autorun: () => false,
       scheduling: () => false, startsHeld: () => false, hasLiveWork: () => true, running: () => true, maxParallel: () => 3, runBlocked: () => false,
-      dependencyMet: () => true, mergeGate: () => [], waitingRequests: () => [],
+      dependencyMet: () => true, mergeGate: () => [], blockedBy: () => [], waitingRequests: () => [],
       runPlan: vi.fn(), startTask: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), retryTask: vi.fn(), continueTask: vi.fn(),
       messageTask: vi.fn(), denyRequest: vi.fn(), mergeAll: vi.fn(), record: vi.fn(), guardTripped: vi.fn(), heldEdit: () => false, deferUntilLanded: vi.fn(),
     };

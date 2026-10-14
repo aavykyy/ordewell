@@ -120,7 +120,7 @@ export type Action =
   | { type: 'runCleared'; sessionId?: string }
   /** The scheduled expiry of an armed stop; the arm simply lapses. */
   | { type: 'stopDisarmed'; arm: number }
-  | { type: 'executionComplete'; summary?: { total: number; completed: number; failed: number }; stopped?: boolean; sessionId?: string }
+  | { type: 'executionComplete'; summary?: { total: number; completed: number; failed: number; blocked?: number }; stopped?: boolean; sessionId?: string }
   /** The execution socket dropped before the run reported an end; whatever the pane shows as running no longer has a feed. */
   | { type: 'executionLost'; sessionId?: string }
   /** The session's standing subscription went with the daemon (see `follow` in effects). */

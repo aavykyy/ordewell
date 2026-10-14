@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   taskRowView, taskStatusKind, isTaskRunning, awaitingLabel, approvalLabel, resumeLabel, resumeTime, taskRowActions, markAction, markRequestFor, opsEditable,
-  titledRefs, dependentsNotice, pastGateConfirmation, newTaskFields, type TaskRowSubject, type TaskRowAction,
+  titledRefs, dependentsNotice, pastGateConfirmation, newTaskFields, blockedByLabel, type TaskRowSubject, type TaskRowAction,
 } from '..';
 import { taskRef, titledTaskRef } from '../../services/TaskRefs';
 
@@ -245,6 +245,24 @@ describe('the row view, every status against every annotation', () => {
   it('shows a dependency by its id when there is no plan tree to label it against', () => {
     expect(taskRowView(subject({ dependencies: ['t1'] })).dependencies).toEqual(['t1']);
     expect(taskRowView(subject({ dependencies: ['t1'] }), { tasks: [] }).dependencies).toEqual(['t1']);
+  });
+
+  it('shows a task a failure blocks as blocked by the failed task, through its dependencies and in a subtask (ADR-0034)', () => {
+    const tree = [
+      { id: 't1', order: 1, title: 'Setup', status: 'failed', dependencies: [] },
+      { id: 't2', order: 2, title: 'Build', status: 'pending', dependencies: ['t1'], subtasks: [
+        { id: 's1', order: 1, title: 'Sibling', status: 'failed', dependencies: [] },
+        { id: 's2', order: 2, title: 'Other', status: 'approved', dependencies: ['s1'] },
+      ] },
+      { id: 't3', order: 3, title: 'Test', status: 'pending', dependencies: ['t2'] },
+      { id: 't4', order: 4, title: 'Docs', status: 'pending', dependencies: [] },
+    ];
+
+    expect(taskRowView(subject({ id: 't3', order: 3, dependencies: ['t2'] }), { tasks: tree })).toMatchObject({ status: 'blocked', blockedBy: ['#1'] });
+    expect(taskRowView(subject({ id: 's2', order: 2, status: 'approved', dependencies: ['s1'] }), { parent: { order: 2 }, tasks: tree })).toMatchObject({ status: 'blocked', blockedBy: ['#2.1'] });
+    expect(taskRowView(subject({ id: 't4', order: 4 }), { tasks: tree })).toMatchObject({ status: 'todo', blockedBy: null });
+    expect(taskRowView(subject({ id: 't3', order: 3, dependencies: ['t2'] }))).toMatchObject({ status: 'todo', blockedBy: null });
+    expect(blockedByLabel(['#1', '#2.1'])).toBe('Blocked by #1, #2.1');
   });
 
   it('marks a quiet task as still running', () => {

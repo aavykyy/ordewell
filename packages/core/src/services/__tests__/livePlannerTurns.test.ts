@@ -137,7 +137,7 @@ describe('live planner turns during a run', () => {
     await vi.waitFor(() => expect(spawnedIds()).toEqual(['t1', 't2']));
   });
 
-  it('keeps a run a failure halted through an edit to the failed task, so its retry resumes the run', async () => {
+  it('keeps a run that ended on a failure through an edit to the failed task, so its retry runs what it blocked', async () => {
     const { session, calls, runner, spawnedIds, finish } = await liveRun();
     runner.spawn.mock.results[0].value.then((s: FakeRunnerSession) => s.reportComplete({ status: 'failed', summary: '', reason: 'wrong import' }));
     await vi.waitFor(() => expect(taskOf(session, 't1')!.status).toBe('failed'));

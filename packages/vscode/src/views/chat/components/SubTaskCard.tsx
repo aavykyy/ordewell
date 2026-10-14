@@ -11,6 +11,8 @@ interface SubTaskCardProps {
   task: Task;
   /** The subtask's parent, used to build its dotted order label (e.g. "2.1"). */
   parentTask?: Task;
+  /** The plan tree, which tells what a failure blocks and labels it. */
+  tasks?: Task[];
   models: DiscoveredModel[];
   modes?: RunnerMode[];
   runners?: RunnerOption[];
@@ -52,7 +54,7 @@ const RUNNER_ABBREV: Record<string, string> = {
   'opencode': 'OC',
 };
 
-export default function SubTaskCard({ task, parentTask, models, modes, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry: _onRetry, onSkip, onCancel, onCancelResume, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog }: SubTaskCardProps) {
+export default function SubTaskCard({ task, parentTask, tasks, models, modes, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry: _onRetry, onSkip, onCancel, onCancelResume, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog }: SubTaskCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
 
@@ -60,7 +62,7 @@ export default function SubTaskCard({ task, parentTask, models, modes, runners, 
   const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;
   const runnerOptions = runnerOptionsFor(runners, task.assignedRunner);
   const runnerAbbrev = effectiveRunner ? (RUNNER_ABBREV[effectiveRunner] ?? effectiveRunner.slice(0, 2).toUpperCase()) : null;
-  const row = taskRowView(task, { parent: parentTask, placement: 'subtask' });
+  const row = taskRowView(task, { parent: parentTask, placement: 'subtask', tasks });
   const status = statusBadge(row);
 
   const handlePromptSave = () => {
@@ -93,7 +95,7 @@ export default function SubTaskCard({ task, parentTask, models, modes, runners, 
           </button>
         )}
 
-        {(isExecuting || row.status === 'failed' || row.status === 'awaiting') && (
+        {(isExecuting || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked') && (
           <span className={`task-status-badge ${status.cls}`}>{status.label}</span>
         )}
 

@@ -74,6 +74,23 @@ describe('a task card, pinned before its rules move to core', () => {
     expect(document.querySelector('.task-type-badge.ops')).toBeNull();
   });
 
+  it('badges a task a failure blocks with the failed task it waits on, in a subtask too (ADR-0034)', () => {
+    const failed = makeTask({ id: 't1', order: 1, title: 'Setup', status: 'failed' });
+    const parent = makeTask({ id: 't2', order: 2, title: 'Build', subtasks: [
+      makeTask({ id: 's1', order: 1, title: 'First', status: 'failed' }),
+      makeTask({ id: 's2', order: 2, title: 'Second', dependencies: ['s1'] }),
+    ] });
+    const plan = [failed, parent, makeTask({ id: 't3', order: 3, dependencies: ['t1'] })];
+
+    const { unmount } = render(<TaskCard task={plan[2]} models={[]} siblings={plan} />);
+    expect(badge()?.textContent).toBe('Blocked by #1');
+    expect(badge()?.className).toContain('status-blocked');
+    unmount();
+
+    render(<SubTaskCard task={parent.subtasks[1]} parentTask={parent} models={[]} tasks={plan} />);
+    expect(badge()?.textContent).toBe('Blocked by #2.1');
+  });
+
   it('names what a merge gate waits on', () => {
     render(<TaskCard task={makeTask({ id: 'o2', order: 2 })} models={[]} run={{ mergeGate: ['t1', 'ghost'] }} siblings={[makeTask({ id: 't1', order: 1, title: 'Setup' })]} />);
     const gate = document.querySelector('.task-isolation-badge.gate');

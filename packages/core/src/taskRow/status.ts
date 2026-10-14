@@ -39,6 +39,11 @@ export function awaitingLabel(task: { status: string; awaitingReason?: AwaitingR
   return task.status === 'awaiting_user' && task.awaitingReason ? AWAITING_LABELS[task.awaitingReason] : null;
 }
 
+/** "Blocked by #1, #2.1": the failed tasks a blocked task waits on, by reference (ADR-0034). */
+export function blockedByLabel(refs: readonly string[]): string {
+  return `Blocked by ${refs.join(', ')}`;
+}
+
 /** Runner requests a task waits on (ADR-0018, A1); null when none do. */
 export function approvalLabel(count: number | undefined): string | null {
   if (!count) return null;

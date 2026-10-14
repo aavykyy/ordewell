@@ -176,7 +176,8 @@ export type {
   RunView,
 } from './services/SessionMessage';
 export { EMPTY_RUN, reduceRun } from './services/runView';
-export { serializeTask, serializeTaskStatus, serializePlan, surfacePlan, surfacePlanState, executionSummary, truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH } from './services/SessionMessage';
+export { serializeTask, serializeTaskStatus, serializePlan, surfacePlan, surfacePlanState, executionSummary, truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH, type ExecutionSummary } from './services/SessionMessage';
+export { blockingFailures, type BlockingSubject } from './services/blocking';
 export { summarizeToolCall, classifyOutcome } from './services/researchStepSummary';
 export * from './conversation';
 export * from './taskRow';

@@ -8,7 +8,7 @@ describe('ordewell run when a task asks a checkpoint', () => {
   it('names the task, its question, and the command that answers it', async () => {
     const script: Event[] = [
       { type: 'checkpoint', taskId: 't1', taskTitle: 'Migrate the schema', summary: 'Drop the users table?\nIt holds 40k rows.' },
-      { type: 'execution_complete', summary: { total: 1, completed: 1, failed: 0 } },
+      { type: 'execution_complete', summary: { total: 1, completed: 1, failed: 0, blocked: 0 } },
     ];
     const api = {
       streamExecution: vi.fn((_id: string, onEvent: (e: Event) => void, onReady?: (error?: Error) => void) => new Promise<void>((resolve) => {

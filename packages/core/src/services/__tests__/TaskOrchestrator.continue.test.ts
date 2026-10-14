@@ -214,7 +214,7 @@ describe('TaskOrchestrator.continueTask', () => {
     expect(h.requests).toHaveLength(0);
   });
 
-  it('awaits the claimed start when restarting the halted run throws, instead of leaving it unhandled', async () => {
+  it('awaits the claimed start when continuing a run that ended on a failure throws, instead of leaving it unhandled', async () => {
     const sessions: FakeRunnerSession[] = [];
     let boom = false;
     const runner = {
@@ -240,7 +240,7 @@ describe('TaskOrchestrator.continueTask', () => {
         registry: new RunnerRegistry(),
         workspaceRoot: () => '/repo',
         workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
-        // Throws only once the halt is in place, so restarting it is what fails.
+        // Throws only once the run has ended, so continuing it is what fails.
         runSettings: () => { if (boom) throw new Error('settings boom'); return { mergeAtGatesAutomatically: false }; },
       });
       orchestrator.loadPlan([
@@ -251,12 +251,12 @@ describe('TaskOrchestrator.continueTask', () => {
       sessions[0].reportComplete({ status: 'done', summary: '' });
       await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
 
-      // A full-plan run that fails a task halts; continuing resumes it.
+      // A full-plan run that ends on a failure; continuing a task resumes it.
       await orchestrator.approveReview();
       await vi.waitFor(() => expect(orchestrator.storeInstance.get('t2')!.status).toBe('in_progress'));
       sessions.find((s) => s.taskId === 't2')!.emitExit(1);
       await vi.waitFor(() => expect(orchestrator.storeInstance.get('t2')!.status).toBe('failed'));
-      expect(orchestrator.isHaltedByFailure).toBe(true);
+      expect(orchestrator.awaitsResume).toBe(true);
 
       boom = true;
       await expect(orchestrator.continueTask('t1', 'go on')).rejects.toThrow();

@@ -56,12 +56,14 @@ request.
   `maxParallelSessions` to make room for one. Isolation properties are
   unchanged: one task, one worktree, one branch, still landed through the same
   serialized queue.
-- **Exhaustion never halts the run.** A repair that fails evidence, or a task
+- **Exhaustion never fails the task.** A repair that fails evidence, or a task
   that has used its cap, goes back to `awaiting_user` exactly as an unrepaired
   conflict does today: the conflicting files are named, the worktree and both
   refs are kept, and Mark complete (`m`), resolve-as-a-task (`x`), and retry all
-  still work. A failed or exhausted repair is not a failed *task* — ADR-0013's
-  "a failed task halts the run" is unchanged and untouched by this decision.
+  still work. A failed or exhausted repair is not a failed *task*, so it blocks
+  nothing: only a failed task blocks its dependents
+  ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)), and this
+  decision does not touch that.
 - **Control stays with the human, just later in the process.** Every repair —
   attempted, evidenced or exhausted — is logged as a notice, and the *Merge
   all* handoff adds a list of the tasks that landed through a repair together
@@ -134,10 +136,10 @@ request.
 - A merge that goes through cleanly — repaired or not — but breaks something
   only once combined with other landed work is not caught here; that is the
   plan's final verification task's job, unchanged.
-- "A failed task halts the run" is unchanged: a repair that runs out of
-  attempts is a conflict still waiting on a human, not a run-ending failure.
-  Making a conflict that a human declines to resolve eventually halt the run is
-  future work, not decided here.
+- A repair that runs out of attempts is a conflict still waiting on a human,
+  not a failed task, so its dependents wait rather than being blocked (ADR-0034).
+  Making a conflict that a human declines to resolve eventually fail the task
+  is future work, not decided here.
 - The persisted per-task attempt count is new state on the run record; a
   record saved before this ADR has none and is read as zero attempts spent,
   so an old run's first conflict after upgrading still gets its full
@@ -147,3 +149,4 @@ request.
 
 - 2026-09-26 — accepted and implemented.
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
+- 2026-10-14 — a failed task blocks only its dependents instead of halting the run ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)).

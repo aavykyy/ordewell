@@ -866,17 +866,23 @@ registry keyed by task let the old attempt's exit unregister the new one.
 field of the attempt. Do not add another per-task map to the orchestrator for
 state that ends with the run; put it on the attempt.
 
-**Halted run** (`TaskOrchestrator.isHaltedByFailure`) — a full-plan run a
-failed task stopped from starting more work: attempts already running finish,
-nothing new spawns, and the run waits for the user — or an Act supervisor — to
-retry the failed task, which resumes the run where it stopped. A planner edit
-made meanwhile is reconciled into the halted run rather than reloaded over it,
-and leaves the failed task failed: an edit is not a retry, and a reload would
-drop the review approval the resume needs. A usage-limit pause holds the run
-the same way until its reset. A stop is not a halt: a stopped run waits for the
-user to start it again.
-*Avoid:* "paused" for it — a paused task is one waiting on a usage-limit reset;
-*Avoid:* "stopped".
+**Blocked task** (`blockingFailures`, `TaskOrchestrator.getBlockedBy`,
+`TaskRowView.blockedBy`) — a task not started yet whose dependency failed or is
+itself blocked (ADR-0034). The scheduler never starts it, its own dependents are
+blocked with it, and every surface shows it "blocked by #N", naming the failed
+tasks it waits on. Independent work keeps starting: a failure stops only what
+depends on it. Nothing is stored — the rule reads statuses and dependencies —
+so a retry of the failed task that passes unblocks its dependents, which then
+start. A run with nothing running and only failed and blocked tasks left ends,
+counting completed, failed and blocked; a retry of a task in it continues that
+run (`TaskOrchestrator.awaitsResume`), and a planner edit made meanwhile is
+reconciled into it rather than reloaded over it, leaving the failed task failed:
+an edit is not a retry. A task at work — force-started, or waiting on the user —
+is never blocked. A usage-limit pause holds the whole run until its reset, and a
+merge gate keeps it waiting; neither is a block.
+*Avoid:* "halted run" — a failure no longer halts the run; "waiting" for it — a
+task waiting on its dependencies starts on its own once they complete, a blocked
+one only after a retry.
 
 **Attempt usage** (`AttemptUsage`, `Task.attemptUsage`) — the persisted ledger
 of one task attempt: its number, runner, start and end timestamps, wall time,
@@ -1032,8 +1038,8 @@ that one merge; a tip that has moved otherwise is left alone and the landing
 stays recorded, which blocks further landings and *Merge all* (`partial-landing`)
 rather than building on part of a task. `merged` always means the whole task
 landed, and a dependent starts only then. `conflictRepo` names the repo that
-stopped it. A landing that does not go through never fails the task and never
-halts the run: a conflict gets a *conflict repair* or waits on the user, and
+stopped it. A landing that does not go through never fails the task, so it
+blocks nothing: a conflict gets a *conflict repair* or waits on the user, and
 one git refuses (`failed`) leaves the task `awaiting_user` with its verdict,
 worktree and branch kept (ADR-0013).
 The `Landing` module (`services/Landing.ts`) owns it, and conflict repair,
@@ -1063,8 +1069,8 @@ so a restart cannot re-spend it; 0 turns repair off). While one runs the task
 is `in_progress` and its record `repairing`; each repair is counted when it
 starts, and the files every repair was started for gather in `repairedFiles`. A repair that fails
 evidence or exhausts its cap goes back to an unrepaired conflict — `awaiting_user`,
-worktree and refs kept, every existing way out still open — and never halts
-the run on its own. Every repair is logged as a notice, and a landed one is
+worktree and refs kept, every existing way out still open — and never fails
+the task on its own. Every repair is logged as a notice, and a landed one is
 named, with its files, in the *Isolation handoff*.
 *Avoid:* "auto-merge" (there is still a real merge conflict to resolve, not a
 fast-forward); "resolver" (that names `resolveConflictAsTask`, the explicit

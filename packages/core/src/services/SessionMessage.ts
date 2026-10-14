@@ -9,6 +9,7 @@ import type { IsolationHandoff, IsolationMergeResult, TaskIsolation } from '../i
 import type { QueuedTaskMessage } from '../interfaces/IRunner';
 import { canContinue } from './continuation';
 import { skillLoadNotice, surfaceStep } from '../conversation/records';
+import { blockingFailures } from './blocking';
 
 export type SerializedTaskStatus = {
   id: string;
@@ -227,7 +228,7 @@ export type SessionMessage =
   | { type: 'review_needed'; tasks: SerializedTask[] }
   | { type: 'review_approved' }
   | { type: 'checkpoint'; taskId: string; taskTitle: string; summary: string }
-  | { type: 'execution_complete'; summary: { total: number; completed: number; failed: number } }
+  | { type: 'execution_complete'; summary: ExecutionSummary }
   | { type: 'execution_stopped' }
   // A call at the command seam (ADR-0029), with who made it: `text` is the
   // line the transcript keeps for it, so a reload shows what was shown live.
@@ -437,11 +438,21 @@ export function serializePlan(plan: LegacyPlanState): SerializedPlan {
   };
 }
 
-export function executionSummary(tasks: readonly Task[]): { total: number; completed: number; failed: number } {
+/** What a finished run did, task by task: `blocked` are those a failure kept from starting (ADR-0034). */
+export interface ExecutionSummary {
+  total: number;
+  completed: number;
+  failed: number;
+  blocked: number;
+}
+
+export function executionSummary(tasks: readonly Task[]): ExecutionSummary {
+  const blocked = blockingFailures(tasks);
   return {
     total: tasks.length,
     completed: tasks.filter((t) => t.status === 'completed').length,
     failed: tasks.filter((t) => t.status === 'failed').length,
+    blocked: tasks.filter((t) => t.status === 'blocked' || blocked.has(t.id)).length,
   };
 }
 

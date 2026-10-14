@@ -6,7 +6,7 @@ import SkillChips from './SkillChips';
 import { lastLine } from '../taskOutput';
 import { checkLabel } from '../checkLabel';
 import { useFollowOutput } from '../followOutput';
-import { dependencyCandidates, capConflictFiles, taskRowView } from '@ordewell/core/plan-utils';
+import { blockedByLabel, dependencyCandidates, capConflictFiles, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, TaskRowAction, TaskRowView, TaskStatusKind } from '@ordewell/core';
 
 export interface RunnerMode {
@@ -92,10 +92,10 @@ const STATUS_BADGE: Record<TaskStatusKind, { label: string; cls: string }> = {
   awaiting: { label: 'Awaiting User', cls: 'status-blocked' },
 };
 
-/** The status badge: what an awaiting task waits on, where it was saved, outranks the generic word. */
-export function statusBadge(row: Pick<TaskRowView, 'status' | 'awaiting'>): { label: string; cls: string } {
+/** The status badge: what an awaiting task waits on, or the failure a blocked one waits on, outranks the generic word. */
+export function statusBadge(row: Pick<TaskRowView, 'status' | 'awaiting' | 'blockedBy'>): { label: string; cls: string } {
   const badge = STATUS_BADGE[row.status];
-  return { ...badge, label: row.awaiting ?? badge.label };
+  return { ...badge, label: row.awaiting ?? (row.blockedBy ? blockedByLabel(row.blockedBy) : badge.label) };
 }
 
 const CHECK_STATE: Record<TaskStatusKind, 'done' | 'running' | 'stalled' | 'todo'> = {
@@ -357,8 +357,8 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
 
         {/* The awaiting reason is a badge in its own right (ADR-0018, W1): a
             task held for the user must read as such whether or not a run is
-            still being drawn as active. */}
-        {(isExecuting || row.status === 'failed' || row.status === 'awaiting') && (
+            still being drawn as active — and so must one a failure blocks. */}
+        {(isExecuting || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked') && (
           <>
             <span className={`task-status-dot ${status.cls}`} title={status.label} />
             <span className={`task-status-badge ${status.cls}`}>{status.label}</span>
@@ -631,7 +631,7 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
                 const subModels = subRunnerModels && subRunnerModels.length > 0 ? subRunnerModels : models;
                 const subModes = subRunner ? (modesByRunner?.[subRunner] ?? []) : [];
                 return (
-                  <SubTaskCard key={sub.id} task={sub} parentTask={task} models={subModels}
+                  <SubTaskCard key={sub.id} task={sub} parentTask={task} tasks={siblings} models={subModels}
                     modes={subModes} runners={runners} effectiveRunner={subRunner}
                     configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
                     isExecuting={isExecuting}

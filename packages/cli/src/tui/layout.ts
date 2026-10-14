@@ -9,7 +9,7 @@ import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
-import { ALL_PROVIDERS, approvalLabel, awaitingLabel, hasHiddenDetail, resumeLabel, runnerForProvider, taskRowView, planUsage, type AiProvider, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
+import { ALL_PROVIDERS, approvalLabel, awaitingLabel, blockedByLabel, hasHiddenDetail, resumeLabel, runnerForProvider, taskRowView, planUsage, type AiProvider, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -811,6 +811,9 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   // A merge gate holds the task as plainly as a task that waits on the user (ADR-0020).
   if (row.mergeGate) {
     lines.push(style.yellow(truncate(`${bodyPad}⏸ waits for Merge all — ${row.mergeGate.join(', ')} not merged into your branch yet`, cols)));
+  }
+  if (row.blockedBy) {
+    lines.push(style.red(truncate(`${bodyPad}⊘ ${inRow(blockedByLabel(row.blockedBy))} — runs once ${row.blockedBy.length === 1 ? 'it is retried and passes' : 'they are retried and pass'}`, cols)));
   }
   if (row.resumes) {
     lines.push(style.yellow(truncate(`${bodyPad}⏸ ${inRow(row.resumes)}, once the usage limit resets — c cancels the resume`, cols)));

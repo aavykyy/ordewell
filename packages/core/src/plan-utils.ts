@@ -9,6 +9,7 @@ export type { TaskRef } from './services/TaskOps';
 export { summarizeToolCall } from './services/researchStepSummary';
 export { truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH } from './services/SessionMessage';
 export { capConflictFiles } from './services/conflictFiles';
+export { blockingFailures, type BlockingSubject } from './services/blocking';
 export { SUPERVISOR_LEVEL_LABEL, parseCount } from './services/runSettingsText';
 // The shared conversation view (#51) is pure too, so every surface — a webview
 // included — draws from the same reducer.

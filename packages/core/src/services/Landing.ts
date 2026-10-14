@@ -34,7 +34,7 @@ export interface LandingMessage {
  * - `awaiting_user`: the work did not land and waits on the user, worktree
  *   kept — a conflict with no repair left (`conflict`), a merge git refused
  *   (`landing-failed`), or a repair that did not land (`repair-failed`). None
- *   of them halts the run.
+ *   of them fails the task, so none blocks its dependents.
  */
 export type LandingOutcome =
   | { kind: 'landed'; messages: LandingMessage[] }
@@ -206,8 +206,8 @@ export class Landing {
       };
     }
     // The verdict passed; only the landing did not. A red X would contradict
-    // the runner's own report, and failing would halt the run over work that is
-    // finished and kept, so it waits on the user as a conflict does
+    // the runner's own report, and failing would block its dependents over work
+    // that is finished and kept, so it waits on the user as a conflict does
     // (ADR-0013).
     const why = record?.landingError ? ` (${record.landingError})` : '';
     return {

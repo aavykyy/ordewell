@@ -60,6 +60,8 @@ export interface SupervisorHost {
   saveState(): void;
   /** How a digest names a task: `#3 "Title"`. */
   describeTask(taskId: string): string;
+  /** The tasks a failed task blocks now, through their dependencies (ADR-0034). */
+  blockedBy(taskId: string): string[];
   /** Reads a wake-up turn may make, as the plan sets them. */
   readBudget(): number;
   /** Retries the supervisor may make of one task in a run, as the plan sets them. */
@@ -376,7 +378,7 @@ export class Supervisor {
   private deliver(batch: WakeBatch): void {
     const runEnd = batch.attention.some((e) => e.kind === 'run_finished');
     // A failure is the wake-up turn's to handle, in {@link turn}; the batch stays pending meanwhile.
-    void this.host.deliver(wakeUpDigest(batch, (taskId) => this.host.describeTask(taskId))).catch(() => {}).then(() => {
+    void this.host.deliver(wakeUpDigest(batch, (taskId) => this.host.describeTask(taskId), (taskId) => this.host.blockedBy(taskId))).catch(() => {}).then(() => {
       if (runEnd) this.runEndPending = false;
       this.host.wakeUpEnded();
     });
@@ -435,21 +437,26 @@ function readsLine(readBudget: number): string {
  * and a short detail, and the passes since the last one. A digest, never a
  * log — the supervisor reads more itself.
  */
-export function wakeUpDigest(batch: WakeBatch, describe: (taskId: string) => string): string {
+export function wakeUpDigest(batch: WakeBatch, describe: (taskId: string) => string, blockedBy: (taskId: string) => string[] = () => []): string {
   const passed = [...new Set(batch.sinceLast.flatMap((e) => e.taskId ?? []))];
   return [
     'Run update:',
-    ...batch.attention.map((e) => `- ${attentionLine(e, describe)}`),
+    ...batch.attention.map((e) => `- ${attentionLine(e, describe, blockedBy)}`),
     ...(passed.length > 0 ? [`Since the last update: ${passed.length === 1 ? 'task' : 'tasks'} ${listed(passed.map(describe))} passed.`] : []),
   ].join('\n');
 }
 
-function attentionLine(event: RunEvent, describe: (taskId: string) => string): string {
+function attentionLine(event: RunEvent, describe: (taskId: string) => string, blockedBy: (taskId: string) => string[]): string {
   const task = event.taskId === undefined ? 'a task' : `task ${describe(event.taskId)}`;
   const detail = event.detail ? brief(event.detail) : '';
   const colon = detail ? `: ${detail}` : '';
   switch (event.kind) {
-    case 'task_failed': return `${task} failed${colon}`;
+    case 'task_failed': {
+      // Read as the update goes out: a retry that passed since has lifted the block.
+      const blocked = event.taskId === undefined ? [] : blockedBy(event.taskId);
+      const blocks = blocked.length === 0 ? '' : `; it blocks ${blocked.length === 1 ? 'task' : 'tasks'} ${listed(blocked.map(describe))}`;
+      return `${task} failed${colon}${blocks}`;
+    }
     case 'waiting_input': return `${task} is waiting for input${colon}`;
     case 'waiting_approval': return `${task} is waiting for approval${colon}`;
     case 'task_idle': return `${task} has gone quiet${detail ? ` (${detail})` : ''}`;

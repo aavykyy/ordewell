@@ -3,7 +3,8 @@ import type { AwaitingReason } from '../models/Task';
 import type { TaskIsolationState } from '../interfaces/IWorktreeIsolation';
 import { taskOrderLabel, taskRefOf } from '../services/TaskRefs';
 import { capConflictFiles } from '../services/conflictFiles';
-import { approvalLabel, awaitingLabel, isTaskRunning, resumeLabel, taskStatusKind, type TaskStatusKind } from './status';
+import { blockingFailures, type BlockingSubject } from '../services/blocking';
+import { approvalLabel, awaitingLabel, isTaskRunning, NOT_STARTED, resumeLabel, taskStatusKind, type TaskStatusKind } from './status';
 import { markAction, opsEditable, taskRowActions, type TaskRowAction, type TaskRowPlacement } from './actions';
 
 /**
@@ -42,11 +43,14 @@ export interface TaskRowIsolation {
 /**
  * The plan a row labels its references against: the tree, so a subtask's
  * dependency reads dotted ("#2.1") rather than by its parent-scoped order.
+ * With statuses and dependencies it also tells which tasks a failure blocks.
  */
 interface PlanRefTask {
   id: string;
   order: number;
   title: string;
+  status?: string;
+  dependencies?: readonly string[];
   subtasks?: readonly PlanRefTask[];
 }
 
@@ -55,7 +59,7 @@ export interface TaskRowContext {
   parent?: { order: number } | null;
   /** Which action set the row offers; a row with a parent is a subtask's unless told otherwise. */
   placement?: TaskRowPlacement;
-  /** The plan tree a dependency or gate is labelled against; one it does not hold is shown by id. */
+  /** The plan tree a dependency, gate or block is labelled against; one it does not hold is shown by id. */
   tasks?: readonly PlanRefTask[];
   /** The modes the task's runner declares; autonomy is a tag on one of them (ADR-0001). */
   modes?: readonly { id: string; autonomous?: boolean }[];
@@ -97,6 +101,8 @@ export interface TaskRowView {
   repaired: { files: string; landed: boolean } | null;
   /** The dependencies, by reference, whose work is not merged into the user's branch yet. */
   mergeGate: string[] | null;
+  /** The failed tasks, by reference, a task not started waits on through its dependencies (ADR-0034); null when none. */
+  blockedBy: string[] | null;
   /** An ops task changed tracked files in the user's checkout and nothing was committed. */
   opsChangedFiles: boolean;
   /** The dependencies, by title, a force start went past the merge gate of. */
@@ -121,6 +127,15 @@ export const namedRepos = (repos: readonly string[] | undefined): string[] => (r
 
 const filesOf = (files: string[] | undefined): string | null => (files?.length ? capConflictFiles(files) : null);
 
+const asBlocking = (tasks: readonly PlanRefTask[]): BlockingSubject[] =>
+  tasks.map((t) => ({ id: t.id, status: t.status ?? '', dependencies: t.dependencies ?? [], subtasks: asBlocking(t.subtasks ?? []) }));
+
+/** What blocks a task not started, read off the plan tree; empty without one that carries statuses. */
+function blockedBy(task: TaskRowSubject, tasks: readonly PlanRefTask[] | undefined): string[] {
+  if (!tasks?.length || !NOT_STARTED.has(task.status)) return [];
+  return blockingFailures(asBlocking(tasks)).get(task.id) ?? [];
+}
+
 /**
  * Everything a plan row says about one task, decided once: each surface picks
  * its own words, glyphs and casing for these facts, and derives none of them.
@@ -129,11 +144,12 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
   const parent = context.parent ?? undefined;
   const isolation = task.isolation && task.isolation.state !== 'none' ? task.isolation : null;
   const latestUsage = task.attemptUsage?.at(-1);
+  const blocked = blockedBy(task, context.tasks);
   return {
     usage: latestUsage ? { ...usageLine(latestUsage), attempt: latestUsage.attempt, wallTimeMs: latestUsage.wallTimeMs, byModel: latestUsage.byModel } : task.type === 'ai' && ['completed', 'failed', 'in_progress', 'awaiting_user'].includes(task.status) ? { totals: {}, attempt: 0, byModel: [] } : null,
     orderLabel: taskOrderLabel(task, parent),
     kind: task.type === 'user' ? 'user' : task.ops ? 'ops' : 'ai',
-    status: taskStatusKind(task),
+    status: blocked.length > 0 ? 'blocked' : taskStatusKind(task),
     running: isTaskRunning(task),
     awaiting: awaitingLabel(task),
     resumes: resumeLabel(task, context.now),
@@ -150,6 +166,7 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
       ? { files: capConflictFiles(isolation.repairedFiles), landed: isolation.state === 'integrated' }
       : null,
     mergeGate: task.mergeGate?.length ? refsOf(task.mergeGate, context.tasks) : null,
+    blockedBy: blocked.length > 0 ? refsOf(blocked, context.tasks) : null,
     opsChangedFiles: task.status === 'awaiting_user' && task.awaitingReason === 'files-changed',
     forcedPastGate: task.forcedPastGate?.length ? task.forcedPastGate : null,
     dependencies: refsOf(task.dependencies, context.tasks),
