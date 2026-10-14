@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
-## [Unreleased]
+## [0.10.0] — 2026-10-14
 
 ### Security
 
@@ -368,6 +368,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   themes look as before and high-contrast themes keep plain outlines. In light
   themes the badges, task numbers and secondary text on a card now reach AA
   contrast.
+- **The terminal UI's task view names the key that stops a working runner.**
+  While a runner works, the footer and status row show `ctrl-x stop runner`
+  and the header leads with it, instead of listing `ctrl-x interrupt` in every
+  state. Stopping ends the running turn; the task then waits for your next
+  message.
 
 ### Documentation
 
@@ -614,6 +619,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   stayed on the deleted session, and every next action failed with a message
   that blamed a daemon restart; that message now names a deletion as well.
 - **The session list counts "1 task"** in the singular.
+- **Esc closes a task's prompt editor while the planner is running.** In the
+  terminal UI's plan pane, Esc armed and then stopped the planner's turn
+  before it reached an open task prompt editor or revealed subtask rows. It
+  now closes the editor or collapses the rows first.
 
 ## [0.9.1] — 2026-10-11
 
