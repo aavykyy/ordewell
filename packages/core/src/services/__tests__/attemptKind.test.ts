@@ -107,7 +107,8 @@ describe('attemptPrompt', () => {
 
     for (const text of expected.has) expect(prompt).toContain(text);
     for (const text of expected.lacks) expect(prompt).not.toContain(text);
-    expect(prompt).toContain('task_complete');
+    // The contract is the runner's instructions, the same for every kind.
+    expect(prompt).not.toContain('task_complete');
     if (KINDS[name].kind === 'continuation') expect(prompt.startsWith(`${resume.message}\n`)).toBe(true);
     for (const source of ['repairPrompt', 'previousAttempt'] as const) {
       expect(src[source].mock.calls.length > 0, source).toBe(expected.reads.includes(source));

@@ -1,6 +1,7 @@
 import { realpathSync } from 'fs';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { AgentEvent, PlannerStartOptions, TaskStartOptions } from './AgentAdapter';
+import { TASK_COMPLETION_CONTRACT } from '../mcp';
 import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION, OPENCODE_SEARCH_OFF, type OpenCodeSessionRule as SessionRule } from './openCodeOrdewell';
 import { hunksOf } from './fileDiff';
 import { heldServersNote } from './projectServers';
@@ -315,9 +316,18 @@ export class OpenCodeV2 {
     return this.opts.mcp ? OPENCODE_ORDEWELL.sessionRules(this.opts.mcp, this.role) : [];
   }
 
-  /** The planner's system prompt rides on the session as an instruction entry — a prompt has no system field. */
+  /**
+   * The planner's system prompt rides on the session as an instruction entry —
+   * a prompt has no system field — and so does a task's completion contract,
+   * which the server's own compaction leaves whole.
+   */
   private async applyInstructions(): Promise<void> {
-    if (this.opts.kind !== 'planner') return;
+    if (this.opts.kind === 'task') {
+      if (!this.opts.mcp) return;
+      const response = await this.host.request('PUT', `/api/experimental/session/${this.sessionId}/instructions/entries/ordewell-task`, { value: TASK_COMPLETION_CONTRACT });
+      if (!response.ok) throw new Error(`OpenCode did not take the task instructions: ${response.status} ${response.statusText}`);
+      return;
+    }
     const unusable = heldServersNote(this.unusable.map((server) => ({ server, reason: UNUSABLE })));
     const system = [plannerSystem(this.opts, this.ownSearch).system, unusable].filter(Boolean).join('\n\n');
     if (!system) return;

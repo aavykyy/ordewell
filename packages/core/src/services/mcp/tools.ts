@@ -262,6 +262,16 @@ function tool<H, S extends z.ZodObject>(
 /** The task tool whose call settles the attempt (ADR-0022, V1). */
 export const TASK_COMPLETE_TOOL = 'task_complete';
 
+/**
+ * How a task is told to end. It rides in the runner's instructions rather than
+ * in the first message: a runner compacts its own context and rewrites that
+ * message into a summary, while its instructions are re-applied whole.
+ */
+export const TASK_COMPLETION_CONTRACT = [
+  `When you have fully completed this task, call the \`${TASK_COMPLETE_TOOL}\` tool with status \`done\` and a summary of what you did. If you cannot complete it, call \`${TASK_COMPLETE_TOOL}\` with status \`blocked\` or \`failed\` and the reason instead.`,
+  `The \`${TASK_COMPLETE_TOOL}\` summary is this task's report: the planner and the tasks that depend on this one read it, and nothing else you write reaches them. Put the full result there — findings, decisions, anything a reader needs to act on it. A review or other read-only task especially: its findings are its result, so put them all in the summary, and do not write the report to a file.`,
+].join('\n\n');
+
 export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
   tool(TASK_COMPLETE_TOOL, 'Report that this task has ended, and how. Call it once, as your last action.',
     taskCompleteInput, (h) => h.taskComplete?.bind(h)),

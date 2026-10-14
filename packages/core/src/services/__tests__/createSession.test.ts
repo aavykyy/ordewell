@@ -295,7 +295,7 @@ describe('Session phase transitions', () => {
       ['executePlan', (s: Session) => s.executePlan()],
       ['runTask', (s: Session) => s.runTask('t1')],
       ['forceStartTask', (s: Session) => s.forceStartTask('t1')],
-    ])('%s carries the plan map and the completion tool', async (_name, start) => {
+    ])('%s carries the plan map, and leaves the completion contract to the runner\'s instructions', async (_name, start) => {
       const runner = spyRunner();
       const session = makeSession({ runner });
       session.loadPlan(threeTaskPlan(), 'Test', '/repo');
@@ -305,7 +305,7 @@ describe('Session phase transitions', () => {
       const prompt = runner.spawn.mock.calls.find((c) => c[0].taskId === 't1')![0].prompt as string;
       expect(prompt).toContain('← you are here');
       expect(prompt).toContain('1. [NOW    ] First');
-      expect(prompt).toContain('task_complete');
+      expect(prompt).not.toContain('task_complete');
       expect(prompt).not.toContain('## Task skills');
     });
 

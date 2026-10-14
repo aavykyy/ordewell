@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createTask, resolveTaskRef, type TaskSkillSnapshot } from '../../models/Task';
+import { TASK_COMPLETION_CONTRACT } from '../mcp';
 import { augmentPromptWithPriorOutputs, composeAugmentedPrompt, composeContinuationPrompt, renderPlanMap, summarizeOutput } from '../promptAugment';
 
 describe('summarizeOutput', () => {
@@ -297,23 +298,27 @@ describe('composeAugmentedPrompt', () => {
     const b = createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb' });
     // <3 tasks → no plan map. No deps → no prior outputs.
     const out = composeAugmentedPrompt(a, [a, b]);
-    expect(out.startsWith('solo\n\nWhen you')).toBe(true);
+    expect(out).toBe('solo');
   });
 
-  it('asks for a task_complete call, and teaches no text marker', () => {
+  // The runner summarises its first message when it compacts; its instructions it re-applies whole.
+  it('leaves how to end to the runner\'s instructions, and teaches no text marker', () => {
     const a = createTask({ id: 'a', order: 1, title: 'A', prompt: 'do work' });
     const b = createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb' });
     const c = createTask({ id: 'c', order: 3, title: 'C', prompt: 'pc' });
 
     const out = composeAugmentedPrompt(c, [a, b, c]);
-    expect(out).toContain('When you have fully completed this task, call the `task_complete` tool with status `done`');
-    expect(out).toContain('`blocked` or `failed`');
+    expect(out).not.toContain('task_complete');
     expect(out).not.toContain('ORDEWELL');
     expect(out).not.toContain('marker');
+    expect(TASK_COMPLETION_CONTRACT).toContain('call the `task_complete` tool with status `done`');
+    expect(TASK_COMPLETION_CONTRACT).toContain('`blocked` or `failed`');
+    expect(TASK_COMPLETION_CONTRACT).not.toContain('ORDEWELL');
+    expect(TASK_COMPLETION_CONTRACT).not.toContain('marker');
   });
 
   it('says the task_complete summary is the report the planner and dependents read, never a file', () => {
-    const out = composeAugmentedPrompt(createTask({ id: 'a', prompt: 'review it' }), []);
+    const out = TASK_COMPLETION_CONTRACT;
     expect(out).toContain('summary is this task\'s report');
     expect(out).toContain('the planner and the tasks that depend on this one');
     expect(out).toMatch(/findings, decisions/);
@@ -321,9 +326,9 @@ describe('composeAugmentedPrompt', () => {
     expect(out).toMatch(/do not write the report to a file/);
   });
 
-  it('reminds a continued task where its report goes', () => {
+  it('leaves a continued task\'s report rule to the instructions its resumed session is started with', () => {
     const out = composeContinuationPrompt(createTask({ id: 'a', prompt: 'review it' }), 'Look again');
-    expect(out).toContain('summary is this task\'s report');
+    expect(out).not.toContain('task_complete');
   });
   const TDD: TaskSkillSnapshot = { name: 'tdd', source: 'global', path: '/g/tdd/SKILL.md', content: 'RED then GREEN.\n' };
 
@@ -415,13 +420,13 @@ describe('composeAugmentedPrompt', () => {
 describe('composeContinuationPrompt (ADR-0018, K1)', () => {
   const task = createTask({ id: 't1', order: 1, title: 'Parse JSON', prompt: 'ORIGINAL PROMPT BODY' });
 
-  it('leads with the user\'s message and ends asking for a task_complete call', () => {
+  it('leads with the user\'s message and the protocol reminder', () => {
     const prompt = composeContinuationPrompt(task, '  also handle arrays \n');
 
     expect(prompt.startsWith('also handle arrays\n')).toBe(true);
     expect(prompt).toContain('continuing this task in the same session');
     expect(prompt).toContain('Check the working tree');
-    expect(prompt).toContain('call the `task_complete` tool with status `done`');
+    expect(prompt).not.toContain('task_complete');
     expect(prompt).not.toContain('ORDEWELL');
   });
   it('does not resend the original prompt, the plan map or the prior outputs the session already holds', () => {
