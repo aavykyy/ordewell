@@ -362,7 +362,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
 
     case 'forceSendQueuedTaskMessage': {
       const { sent } = await api.forceSendQueuedTaskMessage(effect.sessionId, effect.taskId, effect.messageId);
-      if (!sent) dispatch({ type: 'notice', message: 'The runner already has that message; it reads it after its current step.' });
+      if (!sent) dispatch({ type: 'notice', message: 'That message has already reached the runner.' });
       return;
     }
 

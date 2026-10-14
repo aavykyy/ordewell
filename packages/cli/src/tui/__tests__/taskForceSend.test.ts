@@ -2,8 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { replayTaskLog, type TaskLogEvent } from '@ordewell/core';
 import { initialState, reduce } from '../reducer';
 import { render } from '../render';
-import { helpLayout } from '../layout';
+import { footerHints, helpLayout } from '../layout';
 import { decodeKey } from '../keys';
+import { openTaskView } from '../reducers/taskView';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import type { Action } from '../reducer';
 import type { TaskLogState, TaskView, TuiState } from '../state';
@@ -19,7 +20,7 @@ const task = (over: Partial<TaskView> = {}): TaskView => ({
   ...over,
 });
 
-const log = (events: TaskLogEvent[], queuedIndex = 0): TaskLogState => ({
+const log = (events: TaskLogEvent[], queuedIndex: number | null = 0): TaskLogState => ({
   taskId: 't1',
   view: replayTaskLog([{ type: 'turn_start', message: 'Do the task' }, ...events]),
   attempts: [1],
@@ -65,10 +66,29 @@ describe('ctrl-s in the task view', () => {
     expect(effects).toEqual([{ type: 'forceSendTaskMessage', sessionId: 's1', taskId: 't1', text: 'this one' }]);
   });
 
-  it('leaves a handed-over message with the runner, saying so', () => {
-    const { state, effects } = reduce(opened(log([...queued, { type: 'message_handed_over', messageId: 'm1' }])), ctrlS);
-    expect(effects).toEqual([]);
-    expect(lastSaid(state)).toMatchObject({ text: expect.stringMatching(/runner already has that message/) });
+  it('force sends a handed-over message too, which the runner already has', () => {
+    const { effects } = reduce(opened(log([...queued, { type: 'message_handed_over', messageId: 'm1' }])), ctrlS);
+    expect(effects).toEqual([{ type: 'forceSendQueuedTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm1' }]);
+  });
+
+  it('force sends the newest pending message when none was picked', () => {
+    const { effects } = reduce(opened(log(queued, null)), ctrlS);
+    expect(effects).toEqual([{ type: 'forceSendQueuedTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm2' }]);
+  });
+
+  it('opens a task with no message picked', () => {
+    const state = initialState({ sessionId: 's1', focus: 'chat', rows: 30, cols: 160, tasks: [task()] });
+    expect(openTaskView(state, 's1', 't1').state.taskView?.queuedIndex).toBeNull();
+  });
+
+  it('moves the pick from the newest with ctrl-p', () => {
+    const picked = reduce(opened(log(queued, null)), { type: 'key', key: { name: 'ctrl-p' } }).state;
+    expect(reduce(picked, ctrlS).effects).toEqual([{ type: 'forceSendQueuedTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm1' }]);
+  });
+
+  it('goes back to the newest once the picked message is sent now', () => {
+    const sent = reduce(opened(log(queued, 0)), ctrlS).state;
+    expect(sent.taskView?.queuedIndex).toBeNull();
   });
 
   it('says what to do when there is nothing to send', () => {
@@ -97,16 +117,36 @@ describe('what the task view shows for force send', () => {
     expect(out).toContain('ctrl-x interrupt · ctrl-s send now');
   });
 
+  it('puts the send-now hint on the newest pending message only, when none was picked', () => {
+    const out = plain(opened(log(queued, null)));
+    expect(out).toContain('also tests · queued · ctrl-s sends now · ctrl-r removes');
+    expect(out).toMatch(/use Postgres · queued(?! ·)/);
+  });
+
+  it('says a handed-over message waits for the current step, and offers send now on it', () => {
+    const out = plain(opened(log([...queued, { type: 'message_handed_over', messageId: 'm1' }], 0)));
+    expect(out).toContain('use Postgres · waiting for the current step · ctrl-s sends now');
+    expect(out).not.toContain('handed over');
+    expect(out).not.toMatch(/use Postgres.*ctrl-r removes/);
+  });
+
+  it('keeps the send-now hint off the queue while the composer holds text, and names it in the footer', () => {
+    const out = plain(withDraft(opened(log(queued, null)), 'one more'));
+    expect(out).not.toContain('ctrl-s sends now');
+    expect(footerHints(withDraft(opened(log(queued, null)), 'one more'))).toContain('ctrl-s send now');
+    expect(footerHints(opened(log(queued, null)))).not.toContain('ctrl-s send now');
+  });
+
   it('shows a forced message first, as sending now', () => {
     const out = plain(opened(log([...queued, { type: 'message_queued', messageId: 'm3', text: 'stop now', forced: true }])));
-    expect(out).toContain('stop now · sending now');
+    expect(out).toMatch(/stop now · sending now…(?! ·)/);
     expect(out.indexOf('stop now')).toBeLessThan(out.indexOf('use Postgres'));
   });
 
   it('lists ctrl-s in the help sheet, each task-view line whole', () => {
     const sheet = helpLayout(200, 160).lines.map((l) => l.replace(/\x1b\[[0-9;]*m/g, '')); // eslint-disable-line no-control-regex
-    expect(sheet).toContain('  ctrl-s sends now: interrupts the running step, then delivers the composer text — or, with it empty, the selected queued message');
-    expect(sheet.some((l) => l.includes('ctrl-r removes it · ctrl-x interrupts'))).toBe(true);
+    expect(sheet).toContain('  ctrl-s sends now: interrupts the running step, then delivers the composer text — or, with it empty, the highlighted pending message');
+    expect(sheet.some((l) => l.includes('ctrl-r removes a queued one · ctrl-x interrupts'))).toBe(true);
   });
 });
 
@@ -125,11 +165,11 @@ describe('the force send effects', () => {
     expect(actions).toEqual([]);
   });
 
-  it('says so when the runner already had the queued message', async () => {
+  it('says so when the message was delivered before send now reached it', async () => {
     const forceSendQueuedTaskMessage = vi.fn().mockResolvedValue({ sent: false });
     const { effectDeps, actions } = deps({ forceSendQueuedTaskMessage });
     await runEffect({ type: 'forceSendQueuedTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm1' }, effectDeps);
     expect(forceSendQueuedTaskMessage).toHaveBeenCalledWith('s1', 't1', 'm1');
-    expect(actions).toEqual([{ type: 'notice', message: expect.stringMatching(/runner already has that message/) }]);
+    expect(actions).toEqual([{ type: 'notice', message: expect.stringMatching(/already reached the runner/) }]);
   });
 });

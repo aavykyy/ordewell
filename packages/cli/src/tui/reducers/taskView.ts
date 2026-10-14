@@ -1,7 +1,7 @@
 import { EMPTY_TASK_LOG, reduceTaskLog, replayTaskLog, resumeLabel, runnerToolSubject, truncateCheckpointSummary, type ApprovalDecision, type TaskLogEvent } from '@ordewell/core';
 import { commit } from '../editor';
 import type { Key } from '../keys';
-import { continuesTask, findTask, resumesTask, waitingApproval, waitingCheckpoint, type TaskLogState, type TuiState } from '../state';
+import { continuesTask, findTask, queuedTarget, resumesTask, waitingApproval, waitingCheckpoint, type TaskLogState, type TuiState } from '../state';
 import { say } from '../transcript';
 import { step, type Step, type Action } from './shared';
 
@@ -24,7 +24,7 @@ export function openTaskView(state: TuiState, sessionId: string, taskId: string)
     pending: [],
     loaded: false,
     followLatest: true,
-    queuedIndex: 0,
+    queuedIndex: null,
   };
   // Focus the composer: the task view's whole point is talking to the runner.
   return step({ ...state, taskView, focus: 'chat', scroll: 0 }, [{ type: 'openTaskLog', sessionId, taskId }]);
@@ -45,7 +45,9 @@ export function continueTaskStep(state: TuiState, sessionId: string, taskId: str
 }
 
 function clampQueueIndex(tv: TaskLogState): TaskLogState {
-  const max = Math.max(0, tv.view.queued.length - 1);
+  if (tv.queuedIndex === null) return tv;
+  if (tv.view.queued.length === 0) return { ...tv, queuedIndex: null };
+  const max = tv.view.queued.length - 1;
   return tv.queuedIndex <= max ? tv : { ...tv, queuedIndex: max };
 }
 
@@ -206,10 +208,13 @@ function sendNow(state: TuiState, tv: TaskLogState, sessionId: string): Step {
     }
     return step({ ...state, editor: commit(state.editor) }, [{ type: 'forceSendTaskMessage', sessionId, taskId: tv.taskId, text }]);
   }
-  const queued = tv.view.queued[tv.queuedIndex];
+  const queued = tv.view.queued[queuedTarget(tv)];
   if (!queued) return step(say(state, 'system', 'Nothing to send now: type a message, or pick a queued one with ctrl-n/ctrl-p.'));
-  if (queued.handedOver) return step(say(state, 'system', 'The runner already has that message; it reads it after its current step.'));
-  return step(state, [{ type: 'forceSendQueuedTaskMessage', sessionId, taskId: tv.taskId, messageId: queued.id }]);
+  // The forced message moves to the head of the queue, so a pick by index
+  // would land on another one; the default follows the newest instead.
+  return step({ ...state, taskView: { ...tv, queuedIndex: null } }, [
+    { type: 'forceSendQueuedTaskMessage', sessionId, taskId: tv.taskId, messageId: queued.id },
+  ]);
 }
 
 /**
@@ -236,7 +241,7 @@ export function handleTaskViewKey(state: TuiState, key: Key): Step | null {
   }
 
   if (key.name === 'ctrl-r') {
-    const queued = tv.view.queued[tv.queuedIndex];
+    const queued = tv.view.queued[queuedTarget(tv)];
     if (!queued) return step(say(state, 'system', 'No queued message to remove.'));
     if (queued.handedOver) return step(say(state, 'system', 'The runner already has that message; it can no longer be taken back.'));
     return step(state, [{ type: 'removeTaskMessage', sessionId: state.sessionId, taskId: tv.taskId, messageId: queued.id }]);
@@ -259,7 +264,8 @@ export function handleTaskViewKey(state: TuiState, key: Key): Step | null {
     const count = tv.view.queued.length;
     if (count === 0) return null;
     const delta = key.name === 'ctrl-n' ? 1 : -1;
-    const queuedIndex = Math.max(0, Math.min(count - 1, tv.queuedIndex + delta));
+    const from = queuedTarget(tv);
+    const queuedIndex = from < 0 ? count - 1 : Math.max(0, Math.min(count - 1, from + delta));
     return step({ ...state, taskView: { ...tv, queuedIndex } });
   }
 
