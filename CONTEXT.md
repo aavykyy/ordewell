@@ -461,8 +461,8 @@ one notice at host startup.
 **Runner connector** (`RunnerConnector`, in the `CONNECTORS` registry) — what
 Ordewell holds for a runner it drives over the runner's own protocol: the
 adapter that serves it as a harness planner (ADR-0009) and as a structured
-task's runner (ADR-0018), and its *Ordewell tool binding*. The registry is
-keyed by runner id; a runner without a connector cannot run. Adding a runner
+task's runner (ADR-0018), its *Ordewell tool binding*, and optionally how it
+words a usage-limit reset. The registry is keyed by runner id; a runner without a connector cannot run. Adding a runner
 to it is the one place a runner's planner, task connector and Ordewell tools are
 declared, so none of the three can drift apart.
 *Avoid:* conflating it with `RunnerRegistry`, which holds *manifests* (identity
@@ -572,8 +572,8 @@ for it — a retry starts a fresh attempt with no message.
 **Usage-limit resume** (`readUsageLimitReset`, `UsageLimitWaits`,
 `cancelScheduledResume`; ADR-0018, U1) — a task whose runner stopped on its
 account's usage limit is `awaiting_user` with reason `usage-limit`, and the run
-holds. When the runner's message names the reset (Claude Code and Codex do;
-OpenCode does not), the task carries a `resumeAt` saved with the plan, and at
+holds. When the runner's message names the reset (Claude Code and Codex do,
+read by their connectors' `usageLimitReset`; OpenCode does not), the task carries a `resumeAt` saved with the plan, and at
 that time it is retried as a *Continue* of its saved session. Tasks paused on
 one runner share one wait — the latest of their resets — and resume together;
 the hold on the run is released once nothing waits on a reset and no task has
@@ -1552,9 +1552,12 @@ resolver.
 `claude-code`, `codex`, or `opencode` in the provider dropdown runs the planner
 conversation through that coding agent's own programmatic transport, so no API
 key is requested and the user's existing subscription pays for planning. This
-deliberately puts three runners into the `AiProvider` axis, against the
-Provider/Runner split the rest of this glossary keeps: "what plans for me?" is
-one user question and belongs in one setting. `isCliProvider()` is the single
+deliberately puts runners into the planner setting beside the vendors, against
+the Provider/Runner split the rest of this glossary keeps: "what plans for me?"
+is one user question and belongs in one setting. The setting is a
+`PlannerBackendId` — an `AiProvider` (vendors only, a closed union) or a runner
+id — and every built-in runner with a connector is a harness planner, derived
+from its manifest and connector rather than listed anywhere else. `isCliProvider()` is the single
 predicate that tells the two kinds apart, and it guards exactly three things —
 API-key resolution (skipped), provider routing (skipped), and the planner-model
 picker (fed by per-runner discovery instead of the vendor catalog). The
@@ -1617,7 +1620,7 @@ what gives the surfaces' icon/label switches their exhaustiveness checking.
 
 **runnerId / runnerLabel** — the runner whose catalog listed a model, stamped once at `ModelDiscovery.discover` (the only place that knows both the output and the agent that produced it). Model pickers group on the pair — `OpenCode · openrouter`, `Claude Code · anthropic` — so the header names the agent that runs the model and the backend that serves it. `runnerProvider` alone answered neither question in a flat cross-runner list.
 
-**Planner model & effort** — the harness planner's own model and thinking effort (ADR-0009, stories 7–9), distinct from the per-task assignments the plan carries. Stored as `orchestratorModel` + `plannerThinkingEffort`; the candidates are the *runner's* `DiscoveredModel[]` and the selected model's own `variants`, never a fixed low/medium/high the agent may not declare. One stepped control per surface: `/planner` in the TUI and in VS Code walks Harness › Model › Effort (effort is skipped when the model declares no variants). The TUI saves each step on enter, with the later steps at their pre-selection, so the planner never holds one backend with another's model; VS Code saves once, at the last step, and cancelling there applies nothing. `/planner <provider>`, `/model` and `/planner-effort` remain as shortcuts, and VS Code's planner bar keeps its backend pills and model/effort selector. Each backend's last pick is remembered per AiProvider under the settings file's `plannerModels` key — the same file as `modelAllowlist`, so the TUI, CLI and VS Code extension share one memory. Switching back to a backend restores the model (and effort, when that model still declares the variant) it remembers; with nothing remembered it falls back to the first model in that backend's catalog, and only a catalog that discovers no models leaves the planner model unset. Clearing a model always clears its effort — an effort is a variant of a specific model, and one that outlives its model reaches the agent as a level it never offered.
+**Planner model & effort** — the harness planner's own model and thinking effort (ADR-0009, stories 7–9), distinct from the per-task assignments the plan carries. Stored as `orchestratorModel` + `plannerThinkingEffort`; the candidates are the *runner's* `DiscoveredModel[]` and the selected model's own `variants`, never a fixed low/medium/high the agent may not declare. One stepped control per surface: `/planner` in the TUI and in VS Code walks Harness › Model › Effort (effort is skipped when the model declares no variants). The TUI saves each step on enter, with the later steps at their pre-selection, so the planner never holds one backend with another's model; VS Code saves once, at the last step, and cancelling there applies nothing. `/planner <provider>`, `/model` and `/planner-effort` remain as shortcuts, and VS Code's planner bar keeps its backend pills and model/effort selector. Each backend's last pick is remembered per planner backend id under the settings file's `plannerModels` key — the same file as `modelAllowlist`, so the TUI, CLI and VS Code extension share one memory. Switching back to a backend restores the model (and effort, when that model still declares the variant) it remembers; with nothing remembered it falls back to the first model in that backend's catalog, and only a catalog that discovers no models leaves the planner model unset. Clearing a model always clears its effort — an effort is a variant of a specific model, and one that outlives its model reaches the agent as a level it never offered.
 *Avoid:* "orchestrator model" in user-facing text — it collides with the `TaskOrchestrator`; say *planner model*. The `orchestratorModel` setting key and the `ORCHESTRATOR_MODEL` env var keep their names.
 
 **Planner selection** (`selectPlanner`, core) — the one rule for any change of who plans, with which model and effort. It takes the current provider/model/effort, the change (any of the three), the memory and the catalog of the provider in effect afterwards, and returns the next state, the pick to remember, and — for a switch that filled in its own model — the recall the surface words its notice from. It stores nothing. Reselecting the backend already in use changes nothing. A switch with no model of its own (or the blank one legacy clients send) recalls; a switch with a model is a pick, and never inherits the old backend's effort. A new model within the same backend keeps the current effort unless the catalog lists that model with variants that lack the level, and an explicit effort is held to the same test; a cold catalog, a hand-typed id or a vendor model (which declares no variants) leaves the user's word standing. The daemon (`OrchestratorPool.updateSettings`) and VS Code (`PlannerSelection`) are its callers, each with only its storage — `process.env` and the extension's configuration, both remembering through `PlannerModelMemory`; the CLI and TUI send the change to the daemon and persist to `.env` what it answers.

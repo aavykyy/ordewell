@@ -1,4 +1,5 @@
 import type { RunnerManifest } from '../types';
+import { parseAnthropicModels, parseClaudeHelp } from './claudeModels';
 
 export const CLAUDE_CODE_MANIFEST: RunnerManifest = {
   name: 'claude-code',
@@ -45,10 +46,10 @@ export const CLAUDE_CODE_MANIFEST: RunnerManifest = {
         { type: 'env', varName: 'ANTHROPIC_API_KEY', header: 'X-Api-Key' },
         { type: 'file', path: '~/.claude/.credentials.json', jsonPath: 'claudeAiOauth.accessToken', header: 'Authorization', prefix: 'Bearer ' },
       ],
-      parser: 'anthropic-models',
+      parser: parseAnthropicModels,
     },
     discoveryCommands: [
-      { command: 'claude', args: ['--help'], parser: 'claude-help' },
+      { command: 'claude', args: ['--help'], parser: parseClaudeHelp },
     ],
     canonicalAliases: [
       { modelId: 'opus', modelLabel: 'Opus' },

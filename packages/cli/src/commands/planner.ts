@@ -1,18 +1,16 @@
 import {
-  ALL_PROVIDERS,
   CLI_PROVIDERS,
   PROVIDER_PRIORITY,
+  getProviderMeta,
+  isApiProvider,
   isCliProvider,
   runnerForProvider,
-  type AiProvider,
   type PlannerModelRecall,
 } from '@ordewell/core';
 import type { ApiClient } from '../apiClient';
 import { positionals } from '../utils';
 import { connect, fail, fetchCatalog, persistEnv, writeEnv } from './shared';
 import { plannerSwitchRecall } from '../plannerModelSwitch';
-
-const isAiProvider = (id: string): id is AiProvider => Object.hasOwn(ALL_PROVIDERS, id);
 
 /**
  * Everything that can plan, in one list (ADR-0009) — the `/planner` picker's
@@ -30,7 +28,8 @@ export async function handlePlanner(subArgs: string[], injectedApi?: ApiClient):
   }
 
   const provider = wanted.toLowerCase();
-  if (!isAiProvider(provider)) {
+  const meta = getProviderMeta(provider);
+  if (!meta) {
     fail(`Unknown planner: ${provider}`, 'Run `ordewell planner` with no arguments to see the list.');
   }
 
@@ -41,7 +40,6 @@ export async function handlePlanner(subArgs: string[], injectedApi?: ApiClient):
   const recall = plannerSwitchRecall(settings);
   writeEnv({ ORCHESTRATOR_MODEL: recall.model, ORDEWELL_PLANNER_EFFORT: recall.effort });
 
-  const meta = ALL_PROVIDERS[provider];
   const catalog = await fetchCatalog(api);
   console.log(
     isCliProvider(provider)
@@ -49,7 +47,7 @@ export async function handlePlanner(subArgs: string[], injectedApi?: ApiClient):
       : `Planner set to ${meta.label}.`,
   );
   console.log(plannerModelLine(recall));
-  if (!isCliProvider(provider) && !catalog.providers.includes(provider)) {
+  if (isApiProvider(provider) && !catalog.providers.includes(provider)) {
     console.log(`  No ${meta.apiKeyEnvVar} configured yet — set one with \`ordewell key set ${provider} <key>\`.`);
   }
 }
@@ -74,13 +72,13 @@ async function showPlanners(api: ApiClient): Promise<void> {
   for (const id of CLI_PROVIDERS) {
     const runner = runnerForProvider(id);
     const discovered = runner ? catalog.models.some((m) => m.runners?.includes(runner)) : false;
-    console.log(`  ${marker(id === current)} ${id.padEnd(14)} ${ALL_PROVIDERS[id].label}${discovered ? '' : '  (not detected)'}`);
+    console.log(`  ${marker(id === current)} ${id.padEnd(14)} ${getProviderMeta(id)?.label ?? id}${discovered ? '' : '  (not detected)'}`);
   }
 
   console.log('\nAPI providers');
   for (const id of PROVIDER_PRIORITY) {
     const configured = catalog.providers.includes(id);
-    const meta = ALL_PROVIDERS[id];
+    const meta = getProviderMeta(id);
     console.log(`  ${marker(id === current)} ${id.padEnd(14)} ${meta.label}${configured ? '' : `  (no ${meta.apiKeyEnvVar})`}`);
   }
 
@@ -107,7 +105,7 @@ export async function handlePlannerEffort(subArgs: string[], injectedApi?: ApiCl
   const modelId = typeof settings.orchestratorModel === 'string' ? settings.orchestratorModel : '';
   const currentEffort = typeof settings.plannerThinkingEffort === 'string' ? settings.plannerThinkingEffort : '';
 
-  const runner = isAiProvider(provider) ? runnerForProvider(provider) : null;
+  const runner = runnerForProvider(provider);
   if (!runner) {
     fail(
       'Thinking effort applies to a coding-agent planner.',

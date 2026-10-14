@@ -372,7 +372,7 @@ export class GeminiService extends BaseAiService implements IAiService {
     const { autonomousDefault } = modes;
     let ctx = '';
     if (fs) {
-      const collected = await new ContextCollector(fs).collect(runners[0] ?? 'claude-code');
+      const collected = await new ContextCollector(fs).collect(runners[0] ?? DEFAULT_RUNNERS[0]);
       if (collected.aiflowContext) ctx = `\n<aiflow_context>\n${collected.aiflowContext}\n</aiflow_context>\n`;
     }
     const prompt = buildPlanWithResults(userDescription, ctx, '', modelsByRunner, runners, runnerModes, modes);

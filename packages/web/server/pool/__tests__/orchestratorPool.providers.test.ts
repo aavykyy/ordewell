@@ -2,11 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { ALL_PROVIDERS, ModelResolver } from '@ordewell/core';
+import { PROVIDER_PRIORITY, getProviderMeta, ModelResolver } from '@ordewell/core';
 import { OrchestratorPool } from '../orchestratorPool';
 
 describe('OrchestratorPool.getProviderModels — configured providers', () => {
-  const providerEnv = [...new Set(Object.values(ALL_PROVIDERS).flatMap((p) => [p.apiKeyEnvVar, ...p.detectEnvVars]))]
+  const providerEnv = [...new Set(PROVIDER_PRIORITY.map((id) => getProviderMeta(id)).flatMap((p) => [p.apiKeyEnvVar, ...p.detectEnvVars]))]
     .filter((v): v is string => Boolean(v));
   const watched = [...providerEnv, 'OPENAI_API_KEY', 'OPENAI_COMPATIBLE_BASE_URL', 'ORDEWELL_SETTINGS_PATH'];
   const savedEnv: Record<string, string | undefined> = {};

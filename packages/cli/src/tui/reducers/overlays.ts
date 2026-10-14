@@ -1,4 +1,4 @@
-import { type AiProvider } from '@ordewell/core';
+import { isApiProvider } from '@ordewell/core';
 import { bodyRows, helpScrollMax } from '../layout';
 import { findTask, refFor, visibleItems, type PickerItem, type PickerState, type TuiState } from '../state';
 import type { Key } from '../keys';
@@ -231,7 +231,7 @@ function choose(state: TuiState, picker: PickerState, item: PickerItem | undefin
     case 'delete-session':
       return step(closed, [{ type: 'deleteSession', sessionId: item.id }]);
     case 'set-key':
-      return step({ ...state, overlay: keyPrompt(item.id as AiProvider) });
+      return isApiProvider(item.id) ? step({ ...state, overlay: keyPrompt(item.id) }) : step(closed);
     case 'choose-allowlist-runner': {
       const action = { kind: 'set-allowlist' as const, runner: item.id };
       const items = pickerItemsFor(state, action);

@@ -653,7 +653,7 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     outputSummary: overrides.outputSummary,
     ...(overrides.attemptUsage ? { attemptUsage: structuredClone(overrides.attemptUsage) } : {}),
     assignedModel: overrides.assignedModel,
-    assignedRunner: overrides.assignedRunner ?? 'claude-code',
+    assignedRunner: overrides.assignedRunner ?? DEFAULT_RUNNERS[0],
     taskMode: overrides.taskMode ?? 'build',
     autonomy: overrides.autonomy,
     sliceType: overrides.sliceType,
@@ -719,7 +719,11 @@ export function inheritedOps(from: readonly Pick<Task, 'ops'>[], chosen?: boolea
   return chosen ?? from.every((t) => opsFlag(t.ops) === true);
 }
 
-/** The runner set a plan has until one is chosen: the one runner every host ships. */
+/**
+ * The runner set a plan has until one is chosen. The one runner named outside
+ * its declaration on purpose: a default is a product choice that no manifest
+ * or connector implies.
+ */
 export const DEFAULT_RUNNERS: readonly RunnerId[] = ['claude-code'];
 
 export function createEmptyPlan(): LegacyPlanState {

@@ -1,4 +1,4 @@
-import { ALL_PROVIDERS, CLI_PROVIDERS, plannerBackendEntries, runnerForProvider, type AiProvider, type PlannerUsability } from '@ordewell/core';
+import { CLI_PROVIDERS, getProviderMeta, plannerBackendEntries, runnerForProvider, type PlannerUsability } from '@ordewell/core';
 import { dependencyCandidates } from '@ordewell/core/plan-utils';
 import { findTask, titledRefFor, type ModelView, type PickerItem, type PickerState, type TuiState } from '../state';
 import { effortsForTask, modelsForRunner, modelsForTask, modesForTask } from '../taskAssignment';
@@ -45,7 +45,7 @@ function modelDetail(m: ModelView): string | undefined {
 export function providerErrorHint(state: TuiState): string | undefined {
   const failed = Object.keys(state.providerErrors ?? {});
   if (failed.length === 0) return undefined;
-  const names = failed.map((p) => ALL_PROVIDERS[p as AiProvider]?.label ?? p);
+  const names = failed.map((p) => getProviderMeta(p)?.label ?? p);
   return `⚠ Unavailable (key or fetch failed): ${names.join(', ')} — showing working providers only.`;
 }
 
@@ -57,7 +57,7 @@ export function providerErrorHint(state: TuiState): string | undefined {
  * `isCliProvider` guards.
  */
 export function plannerModelItems(state: TuiState, provider: string, selectedId: string): PickerItem[] {
-  const runner = runnerForProvider(provider as AiProvider);
+  const runner = runnerForProvider(provider);
   if (!runner) {
     return state.orchestratorModels.map((m) => ({ id: m.id, label: m.label, detail: modelDetail(m), selected: m.id === selectedId }));
   }
@@ -82,13 +82,13 @@ export function plannerModelItems(state: TuiState, provider: string, selectedId:
 
 /** `provider`'s harness model `modelId`, when that agent lists it; a vendor planner has none. */
 export function plannerHarnessModel(state: TuiState, provider: string, modelId: string): ModelView | undefined {
-  const runner = runnerForProvider(provider as AiProvider);
+  const runner = runnerForProvider(provider);
   return runner ? state.models.find((m) => m.id === modelId && m.runners?.includes(runner)) : undefined;
 }
 
 /** The variants of a harness planner's model, plus the agent's own default, with `selectedEffort` marked. */
 export function plannerEffortItems(state: TuiState, provider: string, modelId: string, selectedEffort: string): PickerItem[] {
-  if (!runnerForProvider(provider as AiProvider)) {
+  if (!runnerForProvider(provider)) {
     return [{ id: '', label: 'Thinking effort applies to a coding-agent planner', detail: 'switch with /planner', disabled: true }];
   }
   const model = plannerHarnessModel(state, provider, modelId);

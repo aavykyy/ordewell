@@ -4,7 +4,7 @@ import {
   ORCHESTRATOR_SHORTCUTS, parseAutonomyLevel,
   automergeSummary, autorunSummary, parseCount, parseSwitch, supervisorSummary, type GlobalRunSettings,
 } from '@ordewell/core';
-import type { AiProvider, IConfig, RunnerRegistry, ModelResolver, SettingsService, RunnerModeInfo, DiscoveredModel, PlannerModelRecall, PlannerSelectionChange } from '@ordewell/core';
+import type { AiProvider, PlannerBackendId, IConfig, RunnerRegistry, ModelResolver, SettingsService, RunnerModeInfo, DiscoveredModel, PlannerModelRecall, PlannerSelectionChange } from '@ordewell/core';
 import type { ApiProvider } from '../adapters/SecretStore';
 import type { ChatViewProvider, PlannerBackend } from '../providers/ChatViewProvider';
 import type { VendorModelOption } from '../plan/PlannerModelSwitch';
@@ -23,7 +23,7 @@ export function isKnownSlashCommand(text: string): boolean {
 }
 
 export interface SlashDeps {
-  config: { orchestratorModel: string; planningModel: string; enabledRunners: string[]; autonomousMode: boolean; apiKey: string; openAiBaseUrl: string; configuredProviders: ApiProvider[]; aiProvider: AiProvider; plannerThinkingEffort?: string };
+  config: { orchestratorModel: string; planningModel: string; enabledRunners: string[]; autonomousMode: boolean; apiKey: string; openAiBaseUrl: string; configuredProviders: ApiProvider[]; aiProvider: PlannerBackendId; plannerThinkingEffort?: string };
   modelResolver: { pickerOptions(): Promise<{ id: string; label: string; provider: string; apiProvider?: AiProvider; description?: string; pricing?: string }[]>; refresh(): Promise<unknown>; invalidate(): void; refreshRunnerModels(): void; modelsForRunners(runners: string[]): Promise<Partial<Record<string, DiscoveredModel[]>>>; };
   /** Every planner the user could pick, with the reason an unusable one can't be (ADR-0009). */
   plannerBackends(): Promise<PlannerBackend[]>;
@@ -40,9 +40,9 @@ export interface SlashDeps {
   /** Change who plans through core's one rule (`selectPlanner`), saving, remembering and showing the result. */
   changePlanner(change: PlannerSelectionChange): Promise<void>;
   /** What the planner should land on for `provider`: its remembered model, else the catalog's first. */
-  recallPlannerModel(provider: AiProvider, harnessModels: DiscoveredModel[] | undefined, vendorOptions: VendorModelOption[] | undefined): PlannerModelRecall;
+  recallPlannerModel(provider: PlannerBackendId, harnessModels: DiscoveredModel[] | undefined, vendorOptions: VendorModelOption[] | undefined): PlannerModelRecall;
   /** Switch backend, model and effort in one change and remember the pick. */
-  applyPlannerChoice(provider: AiProvider, modelId: string, effort: string): Promise<void>;
+  applyPlannerChoice(provider: PlannerBackendId, modelId: string, effort: string): Promise<void>;
   /** Saves Full or Guarded in the user's settings file, which every surface shares (ADR-0030). */
   saveAutonomy(enabled: boolean): void;
   /** The user's run settings (ADR-0030): `change` saves them and applies them at once to this window's run. */

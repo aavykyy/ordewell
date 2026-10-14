@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { AiProvider, DiscoveredModel, PlannerModelRecall } from '@ordewell/core';
+import type { PlannerBackendId, DiscoveredModel, PlannerModelRecall } from '@ordewell/core';
 import type { PlannerBackend } from '../shared/protocol';
 import type { VendorModelOption } from '../plan/PlannerModelSwitch';
 
@@ -11,14 +11,14 @@ export interface PlannerVendorModel extends VendorModelOption {
 
 export interface PlannerWizardDeps {
   /** What plans right now, read at the start so the steps can mark and pre-select it. */
-  current(): { provider: AiProvider; model: string; effort: string };
+  current(): { provider: PlannerBackendId; model: string; effort: string };
   /** Every planner the user could pick, with the reason an unusable one can't be (ADR-0009). */
   plannerBackends(): Promise<PlannerBackend[]>;
   modelsForRunner(runner: string): Promise<DiscoveredModel[]>;
-  vendorModels(provider: AiProvider): Promise<PlannerVendorModel[]>;
-  recall(provider: AiProvider, harnessModels: DiscoveredModel[] | undefined, vendorOptions: VendorModelOption[] | undefined): PlannerModelRecall;
+  vendorModels(provider: PlannerBackendId): Promise<PlannerVendorModel[]>;
+  recall(provider: PlannerBackendId, harnessModels: DiscoveredModel[] | undefined, vendorOptions: VendorModelOption[] | undefined): PlannerModelRecall;
   /** Writes provider, model and effort together and tells the webview once. */
-  applyChoice(provider: AiProvider, modelId: string, effort: string): Promise<void>;
+  applyChoice(provider: PlannerBackendId, modelId: string, effort: string): Promise<void>;
 }
 
 type Item = vscode.QuickPickItem & { key: string };
@@ -175,10 +175,10 @@ async function loadCatalog(
           : 'runner default effort',
         variants: m.variants.map((v) => ({ id: v.id, label: v.label })),
       })),
-      recall: deps.recall(backend.id as AiProvider, models, undefined),
+      recall: deps.recall(backend.id, models, undefined),
     };
   }
-  const options = await deps.vendorModels(backend.id as AiProvider);
+  const options = await deps.vendorModels(backend.id);
   return {
     candidates: options.map((o) => ({
       id: o.id,
@@ -186,13 +186,13 @@ async function loadCatalog(
       detail: `${o.description ?? ''}${o.pricing ? ` · $${o.pricing}/MTok` : ''}`.trim() || undefined,
       variants: [],
     })),
-    recall: deps.recall(backend.id as AiProvider, undefined, options),
+    recall: deps.recall(backend.id, undefined, options),
   };
 }
 
 async function finish(deps: PlannerWizardDeps, backend: PlannerBackend, model: Candidate | undefined, effort: string): Promise<void> {
   if (!model) return;
-  await deps.applyChoice(backend.id as AiProvider, model.id, effort);
+  await deps.applyChoice(backend.id, model.id, effort);
   const level = model.variants.find((v) => v.id === effort);
   const parts = [backend.label, model.label];
   if (model.variants.length > 0) parts.push(level ? `${level.label} effort` : 'default effort');

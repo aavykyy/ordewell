@@ -98,8 +98,8 @@ describe('SETTINGS_ENV_ALLOWLIST', () => {
 
   it('covers every registered provider that has a credential', () => {
     for (const meta of Object.values(ALL_PROVIDERS)) {
-      if (meta.apiKeyEnvVar) expect(SETTINGS_ENV_ALLOWLIST.has(meta.apiKeyEnvVar)).toBe(true);
-      if (meta.baseUrlEnvVar) expect(SETTINGS_ENV_ALLOWLIST.has(meta.baseUrlEnvVar)).toBe(true);
+      if (meta?.apiKeyEnvVar) expect(SETTINGS_ENV_ALLOWLIST.has(meta.apiKeyEnvVar)).toBe(true);
+      if (meta?.baseUrlEnvVar) expect(SETTINGS_ENV_ALLOWLIST.has(meta.baseUrlEnvVar)).toBe(true);
     }
   });
 

@@ -62,7 +62,7 @@ const RUN_SETTING_KEYS = Object.keys(RUN_SETTING_CHECKS) as (keyof GlobalRunSett
 
 export interface UserSettings {
   modelAllowlist?: Record<string, string[]>;
-  /** Last model (and its thinking effort) the user chose for each planner backend, keyed by AiProvider id. */
+  /** Last model (and its thinking effort) the user chose for each planner backend, keyed by planner backend id. */
   plannerModels?: Record<string, { model: string; effort?: string }>;
   /**
    * Runners the user picked for planning. Absent — not empty — is what falls

@@ -1,4 +1,5 @@
 import type { RunnerManifest } from '../types';
+import { parseOpenCodeModels, parseOpenCodeModelsVerbose } from './openCodeModels';
 
 export const OPENCODE_MANIFEST: RunnerManifest = {
   name: 'opencode',
@@ -15,8 +16,8 @@ export const OPENCODE_MANIFEST: RunnerManifest = {
   modelDiscovery: {
     method: 'command',
     discoveryCommands: [
-      { command: 'opencode', args: ['models', '--verbose'], parser: 'opencode-models-verbose' },
-      { command: 'opencode', args: ['models'], parser: 'opencode-models' },
+      { command: 'opencode', args: ['models', '--verbose'], parser: parseOpenCodeModelsVerbose },
+      { command: 'opencode', args: ['models'], parser: parseOpenCodeModels },
     ],
     // No fallbackModels: the list must always reflect what `opencode models`
     // actually reports for THIS user (their configured providers only). A

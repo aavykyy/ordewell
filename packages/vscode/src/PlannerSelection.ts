@@ -1,6 +1,6 @@
 import {
   CLI_PROVIDERS, getProviderMeta, plannerBackendEntries, runnerForProvider, selectPlanner,
-  type AiProvider, type ModelResolver, type PlannerModelCandidate, type PlannerModelMemory,
+  type PlannerBackendId, type ModelResolver, type PlannerModelCandidate, type PlannerModelMemory,
   type PlannerSelectionChange, type PlannerSelectionResult, type PlannerUsability, type RunnerInstallation,
 } from '@ordewell/core';
 import type { VsCodeConfig } from './adapters/VsCodeConfig';
@@ -43,7 +43,7 @@ export class PlannerSelection {
   }
 
   /** Switch who plans, landing on what that backend remembers (ADR-0009). */
-  async apply(provider: AiProvider): Promise<void> {
+  async apply(provider: PlannerBackendId): Promise<void> {
     if (!getProviderMeta(provider)) return;
     await this.change({ provider });
     await this.publish(`Planner set to ${provider}`);
@@ -54,7 +54,7 @@ export class PlannerSelection {
    * last step. The pick is remembered, not recalled: it is what the user just
    * chose, so it has to win over whatever the memory held for the backend.
    */
-  async applyChoice(provider: AiProvider, modelId: string, effort: string): Promise<void> {
+  async applyChoice(provider: PlannerBackendId, modelId: string, effort: string): Promise<void> {
     if (!getProviderMeta(provider)) return;
     await this.change({ provider, model: modelId, effort });
     await this.publish(`Planner set to ${provider}, model ${modelId}`);
@@ -95,7 +95,7 @@ export class PlannerSelection {
     return result;
   }
 
-  private async catalogFor(provider: AiProvider): Promise<PlannerModelCandidate[]> {
+  private async catalogFor(provider: PlannerBackendId): Promise<PlannerModelCandidate[]> {
     const runner = runnerForProvider(provider);
     return runner
       ? plannerCatalog((await this.deps.modelResolver.modelsForRunners([runner]))[runner] ?? [], undefined)

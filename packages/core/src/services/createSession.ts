@@ -22,7 +22,7 @@ import { HttpWebFetcher } from './HttpWebFetcher';
 import { WebReadPolicy } from './webReadPolicy';
 import { sharedWebResponseCache } from './WebResponseCache';
 import { sharedSearchProvider } from './DuckDuckGoSearchProvider';
-import { ALL_PROVIDERS, runnerForProvider } from './ProviderRegistry';
+import { PROVIDER_PRIORITY, runnerForProvider } from './ProviderRegistry';
 import { ModelResolver } from './ModelResolver';
 import { coerceAssignments } from './ModelAllowlistResolver';
 import { plannerModesFrom } from './plannerModes';
@@ -42,7 +42,7 @@ import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
 import { flattenTasks, keepExecutionState, stampOrigin, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskSnapshot, type RunnerId } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
-import type { AiProvider, IConfig } from '../interfaces/IConfig';
+import type { IConfig, PlannerBackendId } from '../interfaces/IConfig';
 import type { IFileSystem } from '../interfaces/IFileSystem';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { INotification } from '../interfaces/INotification';
@@ -200,7 +200,7 @@ export interface SessionDeps {
  */
 function liveAiService(config: IConfig, workspaceRoot: () => string, mcpServer: OrdewellMcpServer): () => IAiService {
   let live: IAiService | null = null;
-  let liveProvider: AiProvider | null = null;
+  let liveProvider: PlannerBackendId | null = null;
   return () => {
     const provider = config.aiProvider;
     if (live && liveProvider === provider) return live;
@@ -366,10 +366,9 @@ export function createSession(deps: SessionDeps): Session {
 
 /** Every credential the config holds, read afresh so a key set mid-session is covered. */
 function configSecrets(config: IConfig): string[] {
-  const providers = Object.keys(ALL_PROVIDERS) as AiProvider[];
   return [
     config.apiKey, config.openAiApiKey, config.openrouterKey, config.geminiKey, config.openaiCompatibleApiKey,
-    ...providers.map((provider) => config.getProviderApiKey(provider)),
+    ...PROVIDER_PRIORITY.map((provider) => config.getProviderApiKey(provider)),
   ];
 }
 

@@ -1,6 +1,6 @@
 import { execSync } from 'child_process';
 import {
-  ALL_PROVIDERS, autonomyLevelLabel, clipboardCopyCommand, isCliProvider, isUserMessage, markRequestFor, newTaskFields, type AiProvider, type HasBinFn, type SurfacePlan,
+  autonomyLevelLabel, clipboardCopyCommand, getProviderMeta, isApiProvider, isCliProvider, isUserMessage, markRequestFor, newTaskFields, type HasBinFn, type SurfacePlan,
   type PlannerModelRecall,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
@@ -393,7 +393,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     }
 
     case 'setPlanner': {
-      const meta = ALL_PROVIDERS[effect.provider as AiProvider];
+      const meta = getProviderMeta(effect.provider);
       if (!meta) throw new Error(`Unknown planner: ${effect.provider}`);
       // Pushed to the live daemon and written to .env, like every other
       // provider setting. The daemon builds a fresh config per session, so the
@@ -407,11 +407,11 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       persistAfterDaemon(deps, { ...env, ORCHESTRATOR_MODEL: recall.model, ORDEWELL_PLANNER_EFFORT: recall.effort });
       dispatch({
         type: 'settingsLoaded',
-        settings: { aiProvider: effect.provider as AiProvider, orchestratorModel: recall.model, plannerThinkingEffort: recall.effort },
+        settings: { aiProvider: effect.provider, orchestratorModel: recall.model, plannerThinkingEffort: recall.effort },
       });
       dispatch({
         type: 'notice',
-        message: `${isCliProvider(effect.provider as AiProvider)
+        message: `${isCliProvider(effect.provider)
           ? `Planning with ${meta.label} — no API key needed.`
           : `Planner set to ${meta.label}.`} ${plannerModelNotice(recall)}`,
       });
@@ -431,7 +431,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
         type: 'settingsLoaded',
         settings: {
           ...settings,
-          aiProvider: effect.provider as AiProvider,
+          aiProvider: effect.provider,
           orchestratorModel: effect.modelId,
           plannerThinkingEffort: effect.effort,
         },
@@ -448,7 +448,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       return;
 
     case 'setApiKey': {
-      const meta = ALL_PROVIDERS[effect.provider as AiProvider];
+      const meta = isApiProvider(effect.provider) ? getProviderMeta(effect.provider) : undefined;
       if (!meta) throw new Error(`Unknown provider: ${effect.provider}`);
       await api.updateSettings({ env: { [meta.apiKeyEnvVar]: effect.key } });
       deps.setEnvVar(meta.apiKeyEnvVar, effect.key);

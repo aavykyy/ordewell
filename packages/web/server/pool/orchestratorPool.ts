@@ -40,7 +40,7 @@ import {
   selectPlanner,
   admitSettingsEnv,
   PROVIDER_CREDENTIAL_ENV,
-  type AiProvider,
+  type PlannerBackendId,
   type PlannerModelCandidate,
   type PlannerSelectionChange,
   type PlannerSelectionState,
@@ -264,7 +264,7 @@ export class OrchestratorPool {
    * has already cached so this stays synchronous; a cold cache degrades to an
    * empty catalog rather than kicking off discovery mid-settings-write.
    */
-  private plannerCatalogFor(provider: AiProvider): PlannerModelCandidate[] {
+  private plannerCatalogFor(provider: PlannerBackendId): PlannerModelCandidate[] {
     const runner = runnerForProvider(provider);
     if (runner) {
       return this.modelResolver.getCachedRunnerModels(runner).map((m) => ({ id: m.modelId, variants: m.variants }));
@@ -276,7 +276,7 @@ export class OrchestratorPool {
    * The provider planning right now. A vendor planner is resolved from its
    * model id, so this is read again after a write rather than carried over.
    */
-  private plannerProviderInEffect(): AiProvider {
+  private plannerProviderInEffect(): PlannerBackendId {
     return new WebConfig({
       enabledRunners: this.enabledRunnerOverride(),
       providerModelLists: this.cachedProviderLists,
@@ -309,7 +309,7 @@ export class OrchestratorPool {
     // provider is the name the client sent, never re-derived from the model: a
     // switch may have just cleared that model.
     const plannerChange: PlannerSelectionChange = {
-      provider: envChanges?.AI_PROVIDER as AiProvider | undefined,
+      provider: envChanges?.AI_PROVIDER,
       model: envChanges?.ORCHESTRATOR_MODEL ?? stringField(changes.orchestratorModel),
       effort: envChanges?.ORDEWELL_PLANNER_EFFORT ?? stringField(changes.plannerThinkingEffort),
     };

@@ -1,4 +1,4 @@
-import { AiProvider, BaseConfig, DEFAULT_RUNNERS, isCliProvider, normalizeGeminiModel, resolveProvider } from '@ordewell/core';
+import { type PlannerBackendId, BaseConfig, DEFAULT_RUNNERS, isApiProvider, isCliProvider, normalizeGeminiModel, resolveProvider } from '@ordewell/core';
 import type { ProviderModelLists } from '@ordewell/core';
 
 interface WebConfigOpts {
@@ -8,7 +8,7 @@ interface WebConfigOpts {
 }
 
 export class WebConfig extends BaseConfig {
-  private _provider: AiProvider | null = null;
+  private _provider: PlannerBackendId | null = null;
   private _providerCacheKey: string | null = null;
   private _providerCacheLists: ProviderModelLists | undefined = undefined;
   private _enabledRunnersOverride: string[] | undefined;
@@ -31,7 +31,7 @@ export class WebConfig extends BaseConfig {
     return this._modelOverride || process.env.ORCHESTRATOR_MODEL || '';
   }
 
-  get aiProvider(): AiProvider {
+  get aiProvider(): PlannerBackendId {
     // Memoized by cache key rather than forever: a session's WebConfig lives
     // for the whole session, but /model and /planner switches mutate process.env
     // mid-session, so a permanent cache would strand the transport on the old
@@ -51,9 +51,8 @@ export class WebConfig extends BaseConfig {
     // resolution: its model ids are the agent's own (`sonnet`, `gpt-5.6-sol`)
     // and can collide with a vendor catalog, which would silently route the
     // planner back to an API the user may not even have a key for.
-    const explicit = explicitEnv as AiProvider | undefined;
-    if (explicit && isCliProvider(explicit)) {
-      this._provider = explicit;
+    if (explicitEnv && isCliProvider(explicitEnv)) {
+      this._provider = explicitEnv;
       this._providerCacheKey = cacheKey;
       this._providerCacheLists = this._providerModelLists;
       return this._provider;
@@ -76,7 +75,8 @@ export class WebConfig extends BaseConfig {
   }
 
   get apiKey(): string {
-    return this.getProviderApiKey(this.aiProvider);
+    const provider = this.aiProvider;
+    return isApiProvider(provider) ? this.getProviderApiKey(provider) : '';
   }
 
   get planningModel(): string {

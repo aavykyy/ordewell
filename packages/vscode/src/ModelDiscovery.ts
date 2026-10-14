@@ -1,7 +1,7 @@
 import type * as vscode from 'vscode';
 import {
   codexSandboxNotice, getProviderMeta, ModelResolver, PROVIDER_LABEL, PROVIDER_PRIORITY, PROVIDER_SHORT_LABEL, runnerForProvider,
-  type AiProvider, type CodexSandboxAvailability, type DiscoveredModel, type RunnerInstallation, type RunnerRegistry,
+  type AiProvider, type PlannerBackendId, type CodexSandboxAvailability, type DiscoveredModel, type RunnerInstallation, type RunnerRegistry,
 } from '@ordewell/core';
 import type { ChatViewProvider } from './providers/ChatViewProvider';
 import type { VsCodeConfig } from './adapters/VsCodeConfig';
@@ -301,7 +301,7 @@ export function sendModelConfig(config: VsCodeConfig, chatProvider: ChatViewProv
  * discovered option says, never a guess from the id string.
  */
 export function plannerProviderLabel(
-  provider: AiProvider,
+  provider: PlannerBackendId,
   modelId: string,
   options: readonly { id: string; apiProvider?: AiProvider }[],
 ): string {

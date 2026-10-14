@@ -1,16 +1,16 @@
-import type { AiProvider } from '../interfaces/IConfig';
+import type { PlannerBackendId } from '../interfaces/IConfig';
 import type { PlannerModelCandidate, PlannerModelChoice, PlannerModelRecall, PlannerModelStore } from './PlannerModelMemory';
 
 /** Who plans, with which model and effort. Blank means unset. */
 export interface PlannerSelectionState {
-  provider: AiProvider;
+  provider: PlannerBackendId;
   model: string;
   effort: string;
 }
 
 /** What one user action asked for; an absent field leaves that part alone. */
 export interface PlannerSelectionChange {
-  provider?: AiProvider;
+  provider?: PlannerBackendId;
   model?: string;
   effort?: string;
 }

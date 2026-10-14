@@ -14,7 +14,7 @@
  * is refused and named back to the caller.
  */
 
-import { ALL_PROVIDERS } from './ProviderRegistry';
+import { PROVIDER_PRIORITY, VENDORS } from './apiProviders';
 
 /**
  * Ordewell's own settable configuration. Deliberately short: a variable earns a
@@ -80,10 +80,10 @@ export const SETTINGS_ENV_REFUSED: readonly string[] = [
 
 const REFUSED = new Set(SETTINGS_ENV_REFUSED);
 
-/** The provider credential and base-URL families, straight from the registry. */
+/** The provider credential and base-URL families, straight from the registry; only vendors have any. */
 function providerEnvKeys(): string[] {
   const keys: string[] = [];
-  for (const meta of Object.values(ALL_PROVIDERS)) {
+  for (const meta of PROVIDER_PRIORITY.map((provider) => VENDORS[provider])) {
     if (meta.apiKeyEnvVar) keys.push(meta.apiKeyEnvVar);
     if (meta.baseUrlEnvVar) keys.push(meta.baseUrlEnvVar);
     for (const detect of meta.detectEnvVars) keys.push(detect);
