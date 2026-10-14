@@ -187,7 +187,7 @@ export type CheckpointAnswer =
 /** The checkpoint call's result: the answer as the runner reads it (ADR-0022, V5). */
 export function checkpointReply(answer: CheckpointAnswer): McpToolReply {
   switch (answer.kind) {
-    case 'continue': return { text: 'continue' };
+    case 'continue': return { text: 'approved: the user said yes — continue' };
     case 'rejected': return { text: `rejected: ${answer.reason}` };
     case 'withdrawn': return { text: `The checkpoint was withdrawn: ${answer.why}`, isError: true };
   }
