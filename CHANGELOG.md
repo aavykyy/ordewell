@@ -139,6 +139,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **Esc from a task's chat returns to the plan pane on that task.** It used to
+  drop back to the planner chat; now the cursor lands on the task you opened,
+  revealing its parent if the task is a subtask.
+
 - **The terminal UI's status row speaks for the selected chat only.** It said
   `Executing…` or `Researching… Read(file) (+2 more)` whichever chat was on
   screen. It now reads `Planning…` in the planner's chat and `Working…` in a
