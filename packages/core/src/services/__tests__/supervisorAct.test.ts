@@ -182,6 +182,17 @@ async function failedOnce(over: Options['settings'] = {}): Promise<Env> {
   return env;
 }
 
+/** A two-task run that finished with task 2 failed, the supervisor woken to it at Act. */
+async function finishedWithAFailure(): Promise<Env> {
+  const env = await supervised([task('t1', 1), task('t2', 2)], ACT);
+  env.run.of('t1').reportComplete({ status: 'done', summary: '' });
+  await until(() => taskOf(env.session, 't1')!.status === 'completed');
+  env.run.of('t2').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
+  await until(() => env.planner.calls.length === 1);
+  expect(env.planner.calls[0].message).toMatch(/the run finished: 1 of 2 tasks completed, 1 failed/);
+  return env;
+}
+
 /** The next wake-up turn, on task 1 failing again. */
 async function failsAgain(env: Env, calls: number): Promise<void> {
   await until(() => env.run.spawnedIds().filter((id) => id === 't1').length === calls);
@@ -301,6 +312,55 @@ describe('the loop guards', () => {
 
     expect(env.run.spawnedIds()).toEqual(['t1']);
     expect(env.notices).toContainEqual(expect.objectContaining({ level: 'warn', message: 'Not done: retry task #1 "Task t1" waited for an edit that did not land.' }));
+  });
+
+  it('refuses at once, not after the turn, a retry behind an edit that could never run: the task was added after the user approved the plan', async () => {
+    const env = await finishedWithAFailure();
+    env.session.planState!.approvedTasks = ['t1'];
+
+    await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#2', changes: { prompt: 'do t2, importing from ./lib' } }] }, ctx);
+    const retry = await env.planner.tools().retryTask!({ task: '2', from: 'fresh' }, ctx);
+
+    expect(retry.isError).toBe(true);
+    expect(JSON.parse(retry.text).reason).toBe('Task #2 "Task t2" was added after the user approved the plan, so it is not approved to run. Ask the user to start it, or to execute the plan, which approves it.');
+  });
+
+  it('runs a retry queued behind an edit once the edit lands, on a run that had already finished', async () => {
+    const env = await finishedWithAFailure();
+
+    await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#2', changes: { prompt: 'do t2, importing from ./lib' } }] }, ctx);
+    const retry = await env.planner.tools().retryTask!({ task: '2', from: 'fresh' }, ctx);
+    expect(JSON.parse(retry.text).result).toMatch(/^Queued: retry task #2 "Task t2" happens once your edit lands/);
+    env.planner.calls[0].finish(prose('Fixed the import in task 2 and retried it.'));
+
+    await until(() => env.run.spawnedIds().length === 3);
+    expect(env.run.runner.spawn.mock.calls[2][0].prompt).toContain('do t2, importing from ./lib');
+  });
+
+  it('refuses at once a retry behind an edit that leaves the prompt and model as they failed', async () => {
+    const env = await failedOnce();
+
+    await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#1', changes: { title: 'Fix the import' } }] }, ctx);
+    const retry = await env.planner.tools().retryTask!({ task: '1', from: 'fresh' }, ctx);
+
+    expect(retry.isError).toBe(true);
+    expect(JSON.parse(retry.text).reason).toMatch(/^Refused: task #1 "Fix the import" failed with this same prompt and model/);
+  });
+
+  it('runs a retry queued behind an edit in the user\'s own turn once the edit lands, as edited', async () => {
+    const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'off' }, config: { autonomousMode: true } });
+    env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
+    await until(() => taskOf(env.session, 't1')!.status === 'failed');
+    void env.session.continueConversation('fix the import in task 1 and retry it');
+    await until(() => env.planner.calls.length === 1);
+
+    await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#1', changes: { prompt: 'do t1, importing from ./lib' } }] }, ctx);
+    const retry = await env.planner.tools().retryTask!({ task: '1', from: 'fresh' }, ctx);
+    expect(JSON.parse(retry.text).result).toMatch(/^Queued: retry task #1 "Task t1" happens once your edit lands/);
+    env.planner.calls[0].finish(prose('Fixed the import in task 1 and retried it.'));
+
+    await until(() => env.run.spawnedIds().length === 2);
+    expect(env.run.runner.spawn.mock.calls[1][0].prompt).toContain('do t1, importing from ./lib');
   });
 
   it('refuses re-adding a task it removed this run, and undoing its own edit', async () => {

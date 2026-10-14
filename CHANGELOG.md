@@ -344,6 +344,15 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **A start queued behind the same reply's edit is never lost silently.** A
+  supervisor that edited a task and retried it in one reply was told
+  "Queued", and the retry was then refused after the turn, with nobody told.
+  A queued start is now checked against the task as edited before it is
+  queued, so one that could never run is refused while the planner can still
+  say so. One refused after the edit lands is now shown to you as a system
+  line, "The queued retry of task #N … did not run", and passed to the
+  planner's next turn
+  ([ADR-0029](docs/adr/0029-the-supervisor.md)).
 - **Planners read line ranges without asking.** `sed -n '10,40p' FILE` and
   the other line-number prints run like `head` and `tail`, so a planner on
   Full is no longer denied the way models most often read part of a file.

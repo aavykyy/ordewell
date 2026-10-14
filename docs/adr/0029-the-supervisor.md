@@ -183,7 +183,12 @@ the same seam through its own tool definitions.
 
 A start the turn asks for after editing that task in the same reply — an edit
 held until the reply ends — waits for the edit to land and then goes through
-the seam again, so it runs as edited: the plan holds what runs. An edit that
+the seam again, so it runs as edited: the plan holds what runs. Before it
+waits, it is judged against the task as the held edit leaves it, with the edit
+counting as the change a retry after a failure needs: a start that could never
+run is refused while the caller still reads the answer. One refused when it
+goes through again is kept as refused, said to the user as a system line, and
+told to the planner's next turn as a run update. An edit that
 never lands — the turn stopped, or the edit refused as it landed — drops the
 start, and the user is told; run on the unedited plan, it would not be what was
 asked. In a wake-up
@@ -472,5 +477,6 @@ until #30 exists.
   still merging had continued the run before, its lowered level and the
   guards' memory included.
 - 2026-10-14 — a failure blocks only its dependents instead of halting the run; run updates name the tasks a failure blocks, and the run's end counts them ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)).
+- 2026-10-14 — a start deferred behind a held edit is judged before it waits, against the task as edited, and one refused once the edit lands is told to the user and to the planner's next turn. Seen live: an Act supervisor's retry of a task added after the user approved the plan was answered "Queued", then refused after the turn with nobody told.
 - 2026-10-14 — `skip_task`: a verdict-less `skipped` state that lands nothing and releases dependents, for the supervisor at Act with a required reason; the user's Skip goes through it as the user instead of marking the task complete. Skips count against the retry limit of a task the supervisor retried, and the supervisor never runs a skipped task again.
 - 2026-10-14 — a task paused on a usage limit is resumed early with `retry_task` from `session`, outside the identical-retry guard and inside the retry limit (ADR-0018, U1).

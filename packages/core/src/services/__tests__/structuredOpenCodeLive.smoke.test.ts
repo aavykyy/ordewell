@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { execFileSync } from 'child_process';
 import { describe, it, expect, vi } from 'vitest';
 import { StructuredRunner } from '../StructuredRunner';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
@@ -23,8 +24,14 @@ import { createTask, type Verdict } from '../../models/Task';
  */
 
 const live = (process.env.ORDEWELL_LIVE_AGENTS ?? '').split(',').map((s) => s.trim()).includes('opencode');
+const v2 = live && /(?:^|\s)v?2\./.test(execFileSync('opencode', ['--version'], { encoding: 'utf8' }));
 const model = process.env.ORDEWELL_LIVE_MODEL ?? 'opencode-go/deepseek-v4.1-flash';
 const TIMEOUT_MS = 180_000;
+const shellTool = v2 ? 'shell' : 'bash';
+
+function shellPrompt(command: string, next: string): string {
+  return `Use the native ${shellTool} tool directly, outside code mode, to run \`${command}\`. ${next}`;
+}
 
 const completionInstruction = 'Then call task_complete with status done and a short summary.';
 
@@ -115,7 +122,7 @@ describe.runIf(live)('structured transport — OpenCode live smoke', () => {
     }
   }, TIMEOUT_MS);
 
-  it('hands a message sent during a command to the running turn, which acts on it before the turn ends (ADR-0023)', async () => {
+  it.runIf(!v2)('hands a message sent during a command to the running turn, which acts on it before the turn ends (ADR-0023, 1.x)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-oc-'));
     const { runner, spawn } = harness();
     try {
@@ -147,12 +154,41 @@ describe.runIf(live)('structured transport — OpenCode live smoke', () => {
     }
   }, TIMEOUT_MS);
 
+  it.runIf(v2)('delivers a message queued during a command in the next turn without waiting for input (ADR-0023, 2.x)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-oc-'));
+    const { runner, spawn } = harness();
+    try {
+      const { session, turns, events } = await spawn('oc-queue', dir,
+        'Use the shell tool to run `sleep 20 && echo step1done`. Then reply with one short sentence saying what you ran.');
+      await vi.waitFor(() => expect(events.some((e) => e.type === 'tool_call')).toBe(true), { timeout: 60_000, interval: 250 });
+      await new Promise<void>((resolve) => setTimeout(resolve, 4000));
+
+      const id = session.sendMessage('Use the shell tool to run `touch queued.txt`. Then reply with the word PINEAPPLE.');
+      await vi.waitFor(() => expect(session.queued()).toContainEqual({ id, text: 'Use the shell tool to run `touch queued.txt`. Then reply with the word PINEAPPLE.' }));
+      const states: string[] = [];
+      session.onTurnEnd(() => states.push(session.turnState()));
+      while (turns.ends.length < 2) await turns.next();
+
+      expect(turns.ends, session.getOutput()).toEqual(['completed', 'completed']);
+      expect(states).toEqual(['working', 'idle']);
+      expect(events.filter((e) => e.type === 'turn_start')).toHaveLength(2);
+      expect(events.filter((e) => e.type === 'turn_start').at(-1)).toMatchObject({ messageId: id });
+      expect(events.filter((e) => e.type === 'message_handed_over')).toEqual([]);
+      expect(existsSync(join(dir, 'queued.txt'))).toBe(true);
+      expect(session.getOutput()).toContain('PINEAPPLE');
+      expect(session.queued()).toEqual([]);
+    } finally {
+      runner.stopAll();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
   it('interrupts a turn and keeps the task alive for the next message', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-oc-'));
     const { runner, spawn } = harness();
     try {
-      const { session, turns, events } = await spawn('oc-interrupt', dir, 'Use the bash tool to run `sleep 60 && echo finished`, then summarize the result.');
-      await vi.waitFor(() => expect(events.some((e) => e.type === 'tool_call')).toBe(true), { timeout: 60_000, interval: 250 });
+      const { session, turns, events } = await spawn('oc-interrupt', dir, shellPrompt('sleep 60 && echo finished', 'Then summarize the result.'));
+      await vi.waitFor(() => expect(events.some((e) => e.type === 'tool_call' && e.name === shellTool && JSON.stringify(e.args).includes('sleep 60')), session.getOutput()).toBe(true), { timeout: 60_000, interval: 250 });
 
       await session.interrupt();
       expect(turns.ends).toEqual(['interrupted']);
@@ -172,14 +208,14 @@ describe.runIf(live)('structured transport — OpenCode live smoke', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-oc-'));
     const { runner, spawn } = harness();
     try {
-      const { session, turns, events } = await spawn('oc-force', dir, 'Use the bash tool to run `sleep 60 && touch slept.txt`, then summarize the result.');
+      const { session, turns, events } = await spawn('oc-force', dir, shellPrompt('sleep 60 && touch slept.txt', 'Then summarize the result.'));
       const states: string[] = [];
       session.onTurnEnd(() => states.push(session.turnState()));
-      await vi.waitFor(() => expect(events.some((e) => e.type === 'tool_call')).toBe(true), { timeout: 60_000, interval: 250 });
+      await vi.waitFor(() => expect(events.some((e) => e.type === 'tool_call' && e.name === shellTool && JSON.stringify(e.args).includes('sleep 60')), session.getOutput()).toBe(true), { timeout: 60_000, interval: 250 });
       await new Promise<void>((resolve) => setTimeout(resolve, 3000));
 
       const forcedAt = Date.now();
-      const id = session.forceSend('Stop waiting on that command. Use the bash tool to run `touch forced.txt`, then reply with the word PINEAPPLE.');
+      const id = session.forceSend(shellPrompt('touch forced.txt', 'Then reply with the word PINEAPPLE.'));
       while (turns.ends.length < 2) await turns.next();
       const elapsed = Date.now() - forcedAt;
       console.error(`[live] opencode force send: ${elapsed}ms from the force to the end of the turn it opened`);
@@ -187,8 +223,8 @@ describe.runIf(live)('structured transport — OpenCode live smoke', () => {
       expect(turns.ends, session.getOutput()).toEqual(['interrupted', 'completed']);
       expect(states[0]).toBe('working');
       expect(events.filter((e) => e.type === 'turn_start').at(-1)).toMatchObject({ messageId: id, forced: true });
-      expect(existsSync(join(dir, 'forced.txt'))).toBe(true);
-      expect(existsSync(join(dir, 'slept.txt'))).toBe(false);
+      expect(existsSync(join(dir, 'forced.txt')), session.getOutput()).toBe(true);
+      expect(existsSync(join(dir, 'slept.txt')), session.getOutput()).toBe(false);
       expect(session.getOutput()).toContain('PINEAPPLE');
       expect(elapsed).toBeLessThan(50_000);
     } finally {
@@ -203,7 +239,7 @@ describe.runIf(live)('structured transport — OpenCode live smoke', () => {
     try {
       const started = Date.now();
       const { session, turns } = await spawn('oc-long', dir,
-        `Use the bash tool to run \`sleep 20\`. ${completionInstruction}`);
+        shellPrompt('sleep 20', completionInstruction));
       await turns.next();
 
       expect(turns.ends, session.getOutput()).toEqual(['completed']);

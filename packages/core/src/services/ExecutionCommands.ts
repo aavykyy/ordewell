@@ -134,8 +134,12 @@ export interface ExecutionHost {
    * named — that lands only when its reply ends.
    */
   heldEdit(taskId?: string): boolean;
+  /** The task as the open turn's held edit leaves it; undefined when that edit removes it. */
+  asEdited(taskId: string): Task | undefined;
   /** Run the command again, as the same actor, once the open turn's reply has landed its edit; `intent` names it if it never does. */
   deferUntilLanded(command: ExecutionCommand, actor: ExecutionActor, intent: string): void;
+  /** A command deferred behind an edit did not run once the edit landed: the user is told, and so is the planner's next turn. */
+  queuedNotRun(text: string): void;
 }
 
 export interface ExecutionCommandsDeps {
@@ -213,17 +217,14 @@ export class ExecutionCommands {
     const consent = this.consent(actor, command.command);
     if (consent.kind === 'refuse') return this.refuse(command, actor, located, consent.reason);
     // The plan holds what runs (ADR-0029): a start the turn's own held edit changes waits for that edit to land.
-    if (actor.kind !== 'user' && startsFromPrompt(command) && this.host.heldEdit(located?.task.id)) return this.defer(command, actor, located);
+    if (actor.kind !== 'user' && startsFromPrompt(command) && this.host.heldEdit(located?.task.id)) {
+      return (located && this.judgeAsEdited(command, actor, located)) ?? this.defer(command, actor, located);
+    }
 
     const first = this.prepare(command, actor, located);
     if ('refusal' in first) return this.refuse(command, actor, located, first.refusal);
-    for (const guard of this.guards) {
-      const trip = guard(actor, command, located);
-      if (!trip) continue;
-      const refused = this.refuse(command, actor, located, trip.refusal);
-      this.host.guardTripped(trip);
-      return refused;
-    }
+    const tripped = this.tripped(command, actor, located);
+    if (tripped) return tripped;
 
     let act = first.act;
     if (consent.kind === 'ask') {
@@ -251,6 +252,48 @@ export class ExecutionCommands {
     }
     this.keep(command, actor, located, 'done', doneDetail(command));
     return { ok: true, message: acted.message, ...(acted.id !== undefined ? { id: acted.id } : {}) };
+  }
+
+  /**
+   * A command deferred behind the turn's edit, run now that the edit landed.
+   * Nobody reads its answer, so one that does not run is kept as refused and
+   * said, to the user and to the planner's next turn.
+   */
+  async replay(command: ExecutionCommand, actor: ExecutionActor): Promise<void> {
+    const located = 'task' in command ? this.locate(command.task) : undefined;
+    let outcome: CommandOutcome;
+    try {
+      outcome = await this.run(command, actor);
+    } catch (err) {
+      outcome = this.refuse(command, actor, located, err instanceof Error ? err.message : String(err));
+    }
+    if (outcome.ok || outcome.outcome !== 'refused') return;
+    this.host.queuedNotRun(`The queued ${queued(command, located)} did not run: ${outcome.message}`);
+  }
+
+  /**
+   * A start that waits for the turn's edit is judged now, against its task as
+   * that edit leaves it — the edit counts as the change a retry needs — so one
+   * that could never run is refused while the caller still reads the answer.
+   */
+  private judgeAsEdited(command: ExecutionCommand, actor: ExecutionActor, located: Located): CommandOutcome | null {
+    const edited = this.host.asEdited(located.task.id);
+    if (!edited) return this.refuse(command, actor, located, `${capitalize(describe(located))} is removed by your edit, so it cannot start.`);
+    const asEdited = { task: edited, ref: located.ref, paused: pausedOnLimit(edited) };
+    const prepared = this.prepare(command, actor, asEdited);
+    if ('refusal' in prepared) return this.refuse(command, actor, located, prepared.refusal);
+    return this.tripped(command, actor, asEdited);
+  }
+
+  private tripped(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined): CommandOutcome | null {
+    for (const guard of this.guards) {
+      const trip = guard(actor, command, located);
+      if (!trip) continue;
+      const refused = this.refuse(command, actor, located, trip.refusal);
+      this.host.guardTripped(trip);
+      return refused;
+    }
+    return null;
   }
 
   private defer(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined): CommandOutcome {
@@ -624,6 +667,16 @@ export class ExecutionCommands {
 }
 
 const BLOCKED_RUN = 'Nothing started: the user\'s checkout has uncommitted changes, and the run waits for them to stash them or run without isolation. Tell them.';
+
+/** A deferred start as a noun: "retry of task #4 "Title"". */
+function queued(command: ExecutionCommand, located: Located | undefined): string {
+  const label = located ? describe(located) : 'task' in command ? `"${command.task}"` : '';
+  switch (command.command) {
+    case 'run_plan': return 'run of the plan';
+    case 'retry_task': return command.from === 'session' ? `continuation of ${label}` : `retry of ${label}`;
+    default: return `start of ${label}`;
+  }
+}
 
 /** A command that starts work from the task's prompt as the plan holds it. A continue starts from its message instead. */
 function startsFromPrompt(command: ExecutionCommand): boolean {

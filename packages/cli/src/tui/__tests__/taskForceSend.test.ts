@@ -86,6 +86,12 @@ describe('ctrl-s in the task view', () => {
 });
 
 describe('what the task view shows for force send', () => {
+  it('keeps the sent-now mark visible when the delivered message wraps', () => {
+    const out = plain(opened(log([{ type: 'turn_start', message: 'Interrupt that sleep; call task_complete done with summary TUI_FORCE_OK. Do not perform any other work.', forced: true }])));
+    expect(out).toContain('sent now');
+    expect(out).toContain('other work.');
+  });
+
   it('names ctrl-s in the header next to interrupt', () => {
     const out = plain(opened());
     expect(out).toContain('ctrl-x interrupt · ctrl-s send now');
