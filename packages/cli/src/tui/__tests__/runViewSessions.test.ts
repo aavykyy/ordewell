@@ -71,3 +71,19 @@ describe('a new session starts from an empty run', () => {
     expect(confirmed.tasks).toEqual([]);
   });
 });
+
+describe('deleting a session', () => {
+  it('leaves the deleted session the view was showing for a fresh one, as /new does', () => {
+    const { state, effects } = reduce({ ...oldRun(), status: 'executing' }, { type: 'sessionDeleted', sessionId: 'old' });
+    expect(state.sessionId).toBeNull();
+    expect(state.tasks).toEqual([]);
+    expect(state.status).toBe('idle');
+    expect(effects).toEqual([{ type: 'closeSession', sessionId: 'old' }]);
+  });
+
+  it('keeps the view when another session was deleted', () => {
+    const before = oldRun();
+    const { state } = reduce(before, { type: 'sessionDeleted', sessionId: 'other' });
+    expect(state).toBe(before);
+  });
+});
