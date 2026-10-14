@@ -59,7 +59,7 @@ export function buildSubagentSystemPrompt(): string {
 function readOnlyGuide(runnerModes: Record<RunnerId, RunnerModeInfo[]> | undefined, tools: boolean): string {
   const able = runnerModes ? readOnlyRunners(runnerModes) : [];
   return [
-    'Set "readOnly": true on an AI task that must not change any file: a review, an audit, an analysis whose result is a report. Leave it false or out on every other task. A read-only task\'s subtasks are read-only too unless one sets "readOnly": false.',
+    'Set "readOnly": true on an AI task that must not change any file: a review, an audit, an analysis whose result is a report. Never on an ops task: it runs commands, which a read-only mode refuses. Leave it false or out on every other task. A read-only task\'s subtasks are read-only too unless one sets "readOnly": false.',
     'You never choose a runner mode. Each task runs in its runner\'s mode for the user\'s autonomy level (Full or Guarded), or in the runner\'s read-only mode when "readOnly" is true.',
     ...(tools
       ? ['A read-only task must go to a runner list_runners marks "readOnly": true.']

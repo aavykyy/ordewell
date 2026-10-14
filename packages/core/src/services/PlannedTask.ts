@@ -61,6 +61,9 @@ export const MODE_NOT_THE_PLANNERS = '"taskMode" is the user\'s to choose — se
 /** A manual task runs in no mode, so it cannot be read-only. */
 export const MANUAL_NOT_READ_ONLY = '"readOnly" is for AI tasks — a manual task runs in no mode';
 
+/** An ops task acts — runs commands — in the session's mode (ADR-0020); a read-only mode refuses that. */
+export const OPS_NOT_READ_ONLY = '"readOnly" is not for an ops task — it runs commands, in the session\'s mode, and a read-only mode refuses them';
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -150,10 +153,12 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
   if (raw.ops === true && !ai) errors.push({ taskId: id, field: 'ops', message: `${where} ${opsPlacementRefusal(type, !!parent)}` });
   if (raw.taskMode !== undefined) ignored.push({ taskId: id, field: 'taskMode', message: `${where}: ${MODE_NOT_THE_PLANNERS}` });
   if (!ai && raw.readOnly === true) ignored.push({ taskId: id, field: 'readOnly', message: `${where}: ${MANUAL_NOT_READ_ONLY}` });
+  const ops = raw.ops !== undefined ? raw.ops === true : base.ops;
+  if (ai && ops && raw.readOnly === true) ignored.push({ taskId: id, field: 'readOnly', message: `${where}: ${OPS_NOT_READ_ONLY}` });
   // A read-only task's subtasks run as tasks of their own, so they would
   // otherwise get write access the planner said the work must not have.
   const asked = typeof raw.readOnly === 'boolean' ? raw.readOnly : undefined;
-  const readOnly = ai && (asked ?? from?.readOnly ?? parent?.readOnly ?? false);
+  const readOnly = ai && !ops && (asked ?? from?.readOnly ?? parent?.readOnly ?? false);
 
   let taskMode = base.taskMode;
   if (ai && catalog.runners.includes(assignedRunner)) {
@@ -205,7 +210,7 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
     autonomy,
     sliceType,
     userStoriesCovered: Array.isArray(raw.userStoriesCovered) ? raw.userStoriesCovered.map(String) : base.userStoriesCovered,
-    ops: raw.ops !== undefined ? raw.ops === true : base.ops,
+    ops,
     skills: from ? inheritedSkills(raw.skills, base.skills) : skillNames(raw.skills),
   });
   if (Array.isArray(raw.skills)) skillsAsked.set(task, raw.skills);
