@@ -5,6 +5,7 @@ import {
   bodyRows, chatInputWrap, chatLayout, footerHints, helpLayout, type HelpSheet, packHints, planLayout, planOffset,
   stopHint,
   chatActivity,
+  runnerStoppable,
   DOT_TICKS,
   runHint,
 } from './layout';
@@ -248,7 +249,8 @@ function statusText(state: TuiState, cols: number): string {
     const lit = Math.floor(state.spinnerFrame / DOT_TICKS) % 2 === 0;
     const dot = lit ? style.brand('●') : style.grey('●');
     const scrolled = mark ? style.grey(`${mark} · `) : '';
-    return truncate(`${scrolled}${dot} ${activity.label}`, cols);
+    const stop = runnerStoppable(state) ? ' · ctrl-x to stop' : '';
+    return truncate(`${scrolled}${dot} ${activity.label}${stop}`, cols);
   }
   return notes ? truncate(style.grey(notes), cols) : '';
 }
