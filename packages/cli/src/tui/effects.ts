@@ -78,11 +78,13 @@ export interface EffectDeps {
  * the daemon's first-turn registration race never comes up.
  */
 export async function runEffect(effect: Effect, deps: EffectDeps): Promise<void> {
+  const turn = isPlannerTurn(effect);
+  const fail = (action: Extract<Action, { type: 'failed' }>): void => deps.dispatch(turn ? { ...action, turn } : action);
   try {
     await perform(effect, deps);
   } catch (err) {
     if (!isConnectionRefused(err)) {
-      deps.dispatch(failedFrom(err));
+      fail(failedFrom(err));
       return;
     }
 
@@ -97,7 +99,7 @@ export async function runEffect(effect: Effect, deps: EffectDeps): Promise<void>
     }
 
     if (!revived) {
-      deps.dispatch({ type: 'failed', message: describeConnectionRefused(deps.port) });
+      fail({ type: 'failed', message: describeConnectionRefused(deps.port) });
       return;
     }
 
@@ -107,9 +109,15 @@ export async function runEffect(effect: Effect, deps: EffectDeps): Promise<void>
     } catch (retryErr) {
       // A fresh daemon holds no sessions, so the retry of anything
       // session-scoped legitimately 404s. Say which of the two happened.
-      deps.dispatch(isConnectionRefused(retryErr) ? { type: 'failed', message: describeConnectionRefused(deps.port) } : failedFrom(retryErr));
+      fail(isConnectionRefused(retryErr) ? { type: 'failed', message: describeConnectionRefused(deps.port) } : failedFrom(retryErr));
     }
   }
+}
+
+/** The effects that are a planner turn: their failure is the turn's, and ends it. */
+function isPlannerTurn(effect: Effect): boolean {
+  return effect.type === 'startConversation' || effect.type === 'sendMessage'
+    || effect.type === 'forceSendPlannerMessage' || effect.type === 'compactConversation';
 }
 
 /**

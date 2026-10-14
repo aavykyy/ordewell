@@ -309,7 +309,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     case 'failed': {
       // A failed call may have been the task view's log read; the view falls
       // back to whatever the live stream sent rather than waiting forever.
-      state = taskLogAbandoned(state);
+      if (!action.turn) return step(say(taskLogAbandoned(state), 'error', action.message));
       // A force send stopped the turn in flight; the forced turn is already on
       // its way, so the stop is not news and the prompts held behind it keep
       // their order rather than draining into the turn replacing it. Only the
@@ -322,8 +322,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       const quiet = plannerInFlight(state) && state.stopRequested;
       const reported = { ...(quiet ? state : say(state, 'error', action.message)), planner: 'idle' as const };
       // A planner turn dying IS a turn ending — the queue would otherwise wait
-      // on a next one that never comes. An execution failure (or any failure
-      // with no turn running) drains nothing.
+      // on a next one that never comes.
       if (!plannerInFlight(state)) return step(reported);
       return drainQueue(state, reported);
     }

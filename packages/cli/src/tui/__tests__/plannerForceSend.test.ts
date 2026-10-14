@@ -117,7 +117,7 @@ describe('ctrl-s in the planner chat', () => {
 describe('the queue across a stop', () => {
   it('keeps the held prompts when the stopped turn was a force send', () => {
     const sent = reduce(withDraft(planning({ queuedPrompts: ['one', 'two'] }), 'now'), ctrlS).state;
-    const { state, effects } = reduce(sent, { type: 'failed', message: 'The planner turn was stopped.', code: 'planner_turn_stopped' });
+    const { state, effects } = reduce(sent, { type: 'failed', message: 'The planner turn was stopped.', code: 'planner_turn_stopped', turn: true });
 
     expect(state.queuedPrompts).toEqual(['one', 'two']);
     expect(state.planner).toBe('planning');
@@ -141,7 +141,7 @@ describe('the queue across a stop', () => {
     const sent = reduce(withDraft(planning(), 'use Postgres'), ctrlS).state;
     expect(sent.editor.text).toBe('');
 
-    const { state, effects } = reduce(sent, { type: 'failed', message: 'connect ECONNREFUSED' });
+    const { state, effects } = reduce(sent, { type: 'failed', message: 'connect ECONNREFUSED', turn: true });
 
     expect(state.editor.text).toBe('use Postgres');
     expect(lastSaid(state)).toMatchObject({ role: 'error', text: 'connect ECONNREFUSED' });
@@ -151,7 +151,7 @@ describe('the queue across a stop', () => {
 
   it('keeps what was typed since above the restored composer text', () => {
     const sent = reduce(withDraft(planning(), 'use Postgres'), ctrlS).state;
-    const { state } = reduce(withDraft(sent, 'and also'), { type: 'failed', message: 'nope', code: 'refused' });
+    const { state } = reduce(withDraft(sent, 'and also'), { type: 'failed', message: 'nope', code: 'refused', turn: true });
 
     expect(state.editor.text).toBe('use Postgres\nand also');
   });
@@ -160,7 +160,7 @@ describe('the queue across a stop', () => {
     const sent = reduce(planning({ queuedPrompts: ['one', 'two', 'three'] }), ctrlS).state;
     expect(sent.queuedPrompts).toEqual(['one', 'two']);
 
-    const { state, effects } = reduce(sent, { type: 'failed', message: 'nope', code: 'session_not_found' });
+    const { state, effects } = reduce(sent, { type: 'failed', message: 'nope', code: 'session_not_found', turn: true });
 
     // The turn dying is a turn ending, so the oldest prompt goes out as it does after any failure.
     expect(effects).toEqual([{ type: 'sendMessage', sessionId: 's1', message: 'one' }]);

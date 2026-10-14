@@ -78,7 +78,7 @@ describe('the run and the turn end on their own', () => {
   });
 
   it('a failed turn does not mark a still-running run idle either', () => {
-    const { state } = reduce(sentMidRun(), { type: 'failed', message: 'rate limited' });
+    const { state } = reduce(sentMidRun(), { type: 'failed', message: 'rate limited', turn: true });
 
     expect(chatActivity(state)).toBeNull();
     expect(state.status).toBe('executing');
