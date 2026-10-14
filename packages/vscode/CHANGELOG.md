@@ -14,7 +14,6 @@
 ### Added
 
 - **Native runner commands in task chats.** Task cards and log tabs complete the runner’s commands and skills, and task logs show command results, compaction events and loaded commands, skills and MCP servers.
-
 - **A supervisor.** The planner keeps watching your run and writes you notes,
   labelled "Supervisor" in the chat. Off, **Watch** (default) or **Act**, set
   with `/supervisor [off|watch|act]`. At Act it may run, stop, retry and skip
@@ -22,9 +21,12 @@
   and merge without asking; guards stop it from looping, and
   `/supervisor retries <n>` and `/supervisor reads <n>` set its limits.
 - **Run settings in chat.** `/supervisor`, `/automerge [on|off]` and
-  `/autorun [on|off]` report the value bare and set it with an argument. The
-  empty chat's Setup block has **Autonomy** and **Run** rows, and the plan bar
-  shows the values. `/supervisor act` and `/autorun on` ask you to confirm.
+  `/autorun [on|off]` report the value bare and set it with an argument, and
+  the Settings panel's Run block sets each by a click or a typed number, saved
+  at once. They are saved on your machine, not on the plan, and apply at once
+  to the chat you change them in. The empty chat's Setup block has
+  **Autonomy** and **Run** rows, and the plan bar shows the values.
+  `/supervisor act` and `/autorun on` ask you to confirm.
 - **Autorun.** `/autorun on` starts each plan the planner submits, as if you
   had pressed Execute.
 - **Merge all at any time during a run.** A Merge all button and an "unmerged"
@@ -32,11 +34,14 @@
 - **`/automerge on`** also merges at the end of a run. The handoff card says
   the supervisor may merge it when one is on its way, and keeps its buttons.
 - **Read-only tasks.** A review or audit that must not change files runs in its
-  runner's read-only mode.
-- **Usage on each task.** The task card shows tokens, cost, context and time
-  for the latest attempt; hover for the per-model breakdown.
+  runner's read-only mode. An ops task is never read-only: it runs the
+  commands it exists for.
+- **Usage across tasks.** Each task attempt's usage is recorded, and the plan
+  card shows a *Tasks total* of tokens, cost and time; hover for the
+  per-model breakdown.
 - **A task paused on a usage limit resumes on its own.** The card reads
-  "Resumes at 8:10pm" with a **Don't resume** button.
+  "Resumes at 8:10pm" with a **Don't resume** button. A task moved to another
+  runner leaves the wait and is ready on the new one.
 - **Resume now.** When a usage limit resets early, **Resume now** on a paused
   task's card or in its log resumes it in its saved session, along with every
   other task waiting on that runner's reset. A message typed into its box
@@ -45,8 +50,12 @@
 - **Send now in the planner chat.** *Send now* (or `Ctrl+Enter` when there is no
   turn running) stops the planner turn in flight and answers your message in
   the turn that replaces it, ahead of anything queued; the run's tasks carry
-  on. A running or waiting task's card carries a message box with the same
-  button, as the task log does.
+  on. *Send now* on a skill invocation (`/name …`) goes to the planner as a
+  prompt, while a built-in command still runs as Send does, and a supervisor
+  wake-up it stops keeps its run update for the next turn. A running or
+  waiting task's card carries a message box with the same button, as the task
+  log does, and a message sent this way keeps its sent-now mark when the log
+  is reopened.
 
 ### Changed
 
@@ -73,8 +82,6 @@
 - **Guarded planners read the web without asking**, as Full does, behind the
   same guards. Set `ordewell.plannerApprovals` to `ask` to approve each new
   site and search provider.
-- **Run settings are saved on your machine, not on the plan**, and apply at
-  once to the chat you change them in. The supervisor starts at Watch.
 - **A message sent during a run is answered at once** instead of waiting for
   the current batch of tasks.
 - **The planner no longer names a mode**; it marks a task read-only or not, and
@@ -87,14 +94,20 @@
   use changes nothing; choosing a model keeps the current effort only where
   that model offers it and drops one it does not; clearing the model clears its
   effort.
-- **A subtask dependency reads by its dotted label** (`#2.1`) on a task card.
+- **A subtask is named by its dotted reference** (`#2.1`) everywhere: a
+  dependency on a task card, a handoff's landed list, the heading its report
+  gets in a dependent task's prompt (where subtask 1.1 read as "Task 1"), and
+  the prompts the planner is given, never by a bare order.
+- **`/planner` is one stepped flow**, Harness › Model › Effort, saved once at
+  the end; cancelling applies nothing.
+- **Task cards are slimmer**: model and mode show when a card is expanded.
 
 ### Removed
 
 - **`ordewell.autonomousMode`.** Your value is copied once; use `/auto full` or
   `/auto guarded`.
-- **The plan card's supervisor controls** and **the list of queued edits above
-  the input**.
+- **The list of queued edits above the input**: a message sent during a run is
+  a planner turn now.
 
 ### Fixed
 
@@ -104,10 +117,11 @@
   such as stock Ubuntu 24.04, instead of stopping with an error.
 - A planner reads back the long tool output its runner saved outside the
   workspace, without asking.
-- A usage limit shows once in the planner chat and in a task's log.
+- A usage limit shows once in the planner chat and in a task's log (#79; thanks
+  [@mayuriphad](https://github.com/mayuriphad), #96).
 - **Show full / Show less** reads a checkpoint's summary in full.
 - A resumed task keeps the paused attempt's uncommitted work in an isolated
-  run, and a task moved to another runner leaves its usage-limit wait.
+  run.
 - A coding-agent planner's reply stays beside the plan it submits.
 - A message is no longer shown twice after a reload.
 - A task's runner is never swapped for another: a plan or edit naming a runner
@@ -118,29 +132,15 @@
 - A plan replaced mid-turn keeps the old turn's saved research out of the new
   plan and stops the old plan's run with it.
 - Executing a plan whose tasks are all done announces the end once, not twice.
-- A run the supervisor opened keeps its own settings, and Execute pressed while
-  a supervisor's Merge all waits on git starts a run of its own.
 - An Ordewell-tool approval is logged as decided on Codex too, and Claude Code
   and Codex cancel a permission request still open when the turn ends.
 - A runner's final line is not lost when its pipe closes without a trailing
   newline, and a process that dies mid-turn reports its stderr instead of
   hanging.
-- Stopping a run goes before its runners are killed, a second Mark complete no
-  longer lands the task again, and a changed run setting merges an
-  already-reached gate now.
+- Stopping a run goes before its runners are killed, and a second Mark complete
+  no longer lands the task again.
 - **A webview message that fails says so**: the error is logged and shown
   instead of being dropped as an unhandled rejection.
-- **Send now treats a skill invocation as a planner prompt.** *Send now* on
-  `/name …` stops the turn and answers it as a planner message; a built-in
-  command still goes to the host as Send does.
-- **A checkpoint you answered is not reopened by a stale run update.** The
-  answer is remembered by task and question, so a view that still carries it —
-  before the status update clearing the task, or after another task's update —
-  does not ask again; a different question still opens.
-- **A chat that joins a finished run is handed the handoff that was sent**, not
-  the run record's, which could show one after a stop.
-- **A force send that stops a supervisor's wake-up turn keeps its run update**,
-  which reaches the supervisor in its next turn.
 - **Stopping a task while a repair reads its evidence no longer lands the
   repair's work anyway**; the conflict stays as it was and waits on you.
 - **A runner whose process exited but whose output pipe is still held open no
@@ -150,24 +150,17 @@
   recycled** to another process.
 - **An OpenCode event-stream error now fails the turn** instead of leaving it
   waiting on a permission request nobody would see.
-- **A handoff's landed list and the prompts a task is given name a subtask by
-  its dotted reference** (`#2.1`), not a bare order.
 - **A read-only Claude task runs the model its plan names**, not Sonnet, which
   the `claude` CLI ran for the `haiku` alias in plan mode.
 - **A planner sees nested files without `tree` installed**, instead of planning
   from a one-level listing.
 - **A continue whose saved Claude session is gone fails in Claude's own words**
   instead of being respawned as an MCP attach failure.
-- **A planner turn stopped by Send now before replying is shown as stopped**,
+- **A planner turn stopped before replying is shown as stopped**,
   not as an empty response.
 - **A finished task's log never shows a call as still running.**
-- **A subtask's report reaches its dependents under its dotted label**, not
-  as "Task 1".
-- **The sent-now mark stays on a task message after the log is reopened.**
 - **A task waiting at a checkpoint shows so at once**, with the controls to
   answer it.
-- **An ops task is never read-only**: a plan that marks one is warned and the
-  mark ignored, so it runs the commands it exists for.
 - **A planner under worktree isolation names files from the workspace root**,
   so a task reads its own worktree rather than your checkout.
 - **A failure reported without a reason shows the runner's own explanation**
