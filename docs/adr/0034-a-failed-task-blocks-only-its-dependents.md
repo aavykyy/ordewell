@@ -29,6 +29,12 @@ starting as usual.
   `packages/core/src/services/blocking.ts`) over task statuses and
   dependencies; nothing is stored, so whatever lifts a failure lifts its block.
   Subtasks follow the same rule.
+- **A skip releases them too.** A skipped dependency is as finished as a
+  completed one for the blocked rule and the scheduler: nothing of it lands,
+  so there is nothing to wait for. Skip ends the failed task as `skipped`, a
+  terminal state with no verdict, without landing its work; its dependents
+  start, told in their prompt that it was skipped and why (ADR-0029's
+  `skip_task`). Mark complete, by contrast, lands the work as vouched for.
 - **Every surface says what blocks a task.** The core task row view reads the
   plan tree and reports `status: 'blocked'` with `blockedBy`, the failed tasks
   by reference; the TUI, VS Code and `ordewell status` show "blocked by #N"
@@ -36,13 +42,15 @@ starting as usual.
   the same function.
 - **The run ends when nothing can start.** With nothing running and every task
   left failed or blocked, the run ends (`execution_complete`), saying how many
-  tasks completed, failed and are blocked; the summary carries all three.
+  tasks completed, failed and are blocked, and how many were skipped; the
+  summary carries all four. A run whose every task completed or was skipped
+  is finished.
   A task waiting on the user, on hold, at a merge gate or on a usage limit
   keeps the run open, as before.
-- **A retry continues the run.** Retrying a task of a run that ended on a
-  failure re-arms the scheduler, so the tasks the failed one blocked start
-  once its retry passes — by the user, or by an Act supervisor within its loop
-  guards. A planner edit made in between is reconciled into that run rather
+- **A retry or a skip continues the run.** Retrying or skipping a task of a
+  run that ended on a failure re-arms the scheduler, so the tasks the failed
+  one blocked start once its retry passes, or at once on a skip — by the user,
+  or by an Act supervisor within its loop guards. A planner edit made in between is reconciled into that run rather
   than reloaded over it, so the failed task stays failed: an edit is not a
   retry, and a reload would drop the review approval the retry continues.
   Loading another plan, starting a run or stopping one forgets it.
@@ -72,6 +80,10 @@ attempt. This decides what a failure stops, not how a verdict is reached.
   tasks the failure blocked would never start once it passed, so a retry
   would not undo the failure's effect — the bug the halt's resume was there to
   fix.
+- **Release the dependents only by a passing retry or Mark complete.** The
+  design until the skip landed. Rejected: when a failure cannot be fixed on
+  this host, the only way to let its dependents go on was Mark complete, which
+  lands the failed work as if someone had vouched for it.
 - **Keep the run open until every failure is retried.** Rejected: a run that
   never ends never hands its work over, and a surface treats the end of the
   execution stream as the run's end; the retry continues an ended run instead.
@@ -88,3 +100,4 @@ attempt. This decides what a failure stops, not how a verdict is reached.
 ## History
 
 - 2026-10-14 — accepted and implemented; replaces the halted run.
+- 2026-10-14 — a skipped task releases its dependents as a completed one does, without landing its work; a skip continues a run that ended on a failure; run summaries count skipped tasks.

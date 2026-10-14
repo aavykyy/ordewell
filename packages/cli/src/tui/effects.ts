@@ -19,7 +19,7 @@ import { inboundFor } from './inbound';
  */
 export type OrdewellApi = Pick<ApiClient,
   | 'startConversation' | 'sendConversationMessage' | 'forceSendPlannerMessage' | 'executePlan' | 'stopExecution' | 'cancelPlanning'
-  | 'taskControl' | 'markTaskComplete' | 'markTaskIncomplete' | 'cancelResume'
+  | 'taskControl' | 'markTaskComplete' | 'markTaskIncomplete' | 'skipTask' | 'cancelResume'
   | 'getTaskLogAttempts' | 'getTaskLog'
   | 'sendTaskMessage' | 'removeQueuedTaskMessage' | 'forceSendTaskMessage' | 'forceSendQueuedTaskMessage'
   | 'interruptTask' | 'approveTaskCheckpoint' | 'rejectTaskCheckpoint' | 'continueTask'
@@ -238,9 +238,11 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       const request =
         action === 'cancel' || action === 'retry' || action === 'force-start'
           ? () => api.taskControl(sessionId, taskId, action)
-          : markRequestFor(action) === 'uncomplete'
-            ? () => api.markTaskIncomplete(sessionId, taskId)
-            : () => api.markTaskComplete(sessionId, taskId);
+          : action === 'skip'
+            ? () => api.skipTask(sessionId, taskId)
+            : markRequestFor(action) === 'uncomplete'
+              ? () => api.markTaskIncomplete(sessionId, taskId)
+              : () => api.markTaskComplete(sessionId, taskId);
       // A spawning action (see `taskActionEffect`) reports its progress the same
       // way a whole run does, so it needs the same stream open around it.
       await (effect.watch ? withExecutionStream(deps, sessionId, request) : request());

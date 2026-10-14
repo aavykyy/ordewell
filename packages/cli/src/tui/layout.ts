@@ -9,7 +9,7 @@ import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
-import { ALL_PROVIDERS, approvalLabel, awaitingLabel, blockedByLabel, hasHiddenDetail, resumeLabel, runnerForProvider, taskRowView, planUsage, type AiProvider, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
+import { ALL_PROVIDERS, approvalLabel, awaitingLabel, blockedByLabel, skippedLabel, hasHiddenDetail, resumeLabel, runnerForProvider, taskRowView, planUsage, type AiProvider, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -569,6 +569,8 @@ const STATUS_PAINT: Record<TaskStatusKind, (text: string) => string> = {
   quiet: style.brand,
   failed: style.red,
   blocked: style.red,
+  // Grey, not green: nothing of a skipped task landed.
+  skipped: style.grey,
   awaiting: style.yellow,
   todo: (text) => text,
 };
@@ -578,6 +580,7 @@ const STATUS_ICON: Record<Exclude<TaskStatusKind, 'running'>, string> = {
   done: '✓',
   failed: '✗',
   blocked: '!',
+  skipped: '»',
   awaiting: '?',
   quiet: '~',
   todo: '·',
@@ -815,6 +818,9 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   }
   if (row.blockedBy) {
     lines.push(style.red(truncate(`${bodyPad}⊘ ${inRow(blockedByLabel(row.blockedBy))} — runs once ${row.blockedBy.length === 1 ? 'it is retried and passes' : 'they are retried and pass'}`, cols)));
+  }
+  if (row.status === 'skipped') {
+    lines.push(style.grey(truncate(`${bodyPad}» ${inRow(skippedLabel(row.skipReason))} — nothing of it landed; m done lands its kept work`, cols)));
   }
   if (row.resumes) {
     lines.push(style.yellow(truncate(`${bodyPad}⏸ ${inRow(row.resumes)}, once the usage limit resets — c cancels the resume`, cols)));

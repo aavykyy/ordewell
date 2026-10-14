@@ -15,8 +15,9 @@
 
 - **A supervisor.** The planner keeps watching your run and writes you notes,
   labelled "Supervisor" in the chat. Off, **Watch** (default) or **Act**, set
-  with `/supervisor [off|watch|act]`. At Act it may run, stop and retry tasks,
-  edit the plan and merge without asking; guards stop it from looping, and
+  with `/supervisor [off|watch|act]`. At Act it may run, stop, retry and skip
+  tasks (a skip needs a reason, and never marks work complete), edit the plan
+  and merge without asking; guards stop it from looping, and
   `/supervisor retries <n>` and `/supervisor reads <n>` set its limits.
 - **Run settings in chat.** `/supervisor`, `/automerge [on|off]` and
   `/autorun [on|off]` report the value bare and set it with an argument. The
@@ -42,6 +43,19 @@
 
 ### Changed
 
+- **Skip no longer lands a task's work.** It used to mark the task complete. A
+  skipped task now ends as **Skipped**, with no verdict and nothing of its work
+  landed; its worktree is kept, and you can retry it or Mark Complete it later.
+  Its dependents go ahead without it, told it was skipped and why. The card
+  shows a "Skipped" badge, never Done. Skip is offered on a failed, blocked or
+  waiting task. **Mark Complete is unchanged**: it vouches for the work and
+  lands it.
+- **A failed task blocks only its dependents.** Independent work keeps running;
+  a card a failure holds back reads "Blocked by #N", and a retry or a skip of
+  the failed task lets it start.
+- **Codex's read-only and Guarded modes are unavailable where its sandbox
+  cannot start**, shown with the reason and never assigned. Full access stays
+  available. See the repository's `docs/troubleshooting.md` for the fix.
 - **A task's report is its full `task_complete` summary**, shown ahead of any
   log tail and handed whole (up to a cut) to dependent tasks.
 - **A runner is reminded once when its turn ends without `task_complete`.** The

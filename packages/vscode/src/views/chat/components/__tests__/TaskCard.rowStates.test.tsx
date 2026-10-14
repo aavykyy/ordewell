@@ -61,6 +61,24 @@ describe('a task card, pinned before its rules move to core', () => {
       .toBe('This ops task changed tracked files in your checkout, and nothing was committed. Check the changes, then mark it complete or retry it.');
   });
 
+  it('badges a skipped task apart from a done one, with why, whether or not a run is drawn', () => {
+    const { unmount } = render(<TaskCard task={makeTask({ status: 'skipped', skipReason: 'the host has no GPU' })} models={[]} />);
+    expect(badge()?.textContent).toBe('Skipped: the host has no GPU');
+    expect(badge()?.className).toBe('task-status-badge status-skipped');
+    expect(document.querySelector('.task-check')?.getAttribute('title')).toBe('Skipped — nothing of it landed');
+    unmount();
+    render(<TaskCard task={makeTask({ status: 'skipped' })} models={[]} />);
+    expect(badge()?.textContent).toBe('Skipped');
+  });
+
+  it('offers Skip on a failed task, and Mark Complete on a skipped one', () => {
+    const { unmount } = render(<TaskCard task={makeTask({ status: 'failed' })} models={[]} isExecuting expanded onExpandedChange={noop} {...handlers} />);
+    expect(buttons()).toEqual(['Skip']);
+    unmount();
+    render(<TaskCard task={makeTask({ status: 'skipped' })} models={[]} isExecuting expanded onExpandedChange={noop} {...handlers} />);
+    expect(buttons()).toEqual(['Mark Complete']);
+  });
+
   it('counts approvals beyond one', () => {
     render(<TaskCard task={makeTask({ status: 'in_progress' })} models={[]} isExecuting run={{ awaitingApproval: 3 }} />);
     expect(document.querySelector('.task-approval-badge')?.textContent).toBe('Waiting for approval (3)');
@@ -143,9 +161,9 @@ describe('a task card, pinned before its rules move to core', () => {
     ['blocked', 'ai', ['Skip', 'Start']],
     ['pending', 'ai', ['Start']],
     ['approved', 'ai', ['Start']],
-    ['awaiting_user', 'ai', ['Mark Complete']],
+    ['awaiting_user', 'ai', ['Skip', 'Mark Complete']],
     ['completed', 'ai', ['Mark Not Done']],
-    ['failed', 'ai', []],
+    ['failed', 'ai', ['Skip']],
     ['pending', 'user', ['Mark Complete']],
     ['blocked', 'user', ['Skip', 'Mark Complete']],
     ['completed', 'user', ['Mark Complete', 'Mark Not Done']],
@@ -183,7 +201,7 @@ describe('a subtask card, pinned before its rules move to core', () => {
     ['awaiting_user', 'ai', ['Verify / Mark Complete']],
     ['completed', 'ai', ['Mark Not Done']],
     ['blocked', 'ai', []],
-    ['failed', 'ai', []],
+    ['failed', 'ai', ['Skip']],
   ] as const)('a running plan offers a %s %s subtask %j', (status, type, offered) => {
     open(makeTask({ id: 's1', status, type }));
     expect(buttons()).toEqual(offered);

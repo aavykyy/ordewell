@@ -220,13 +220,14 @@ function reduceAction(state: TuiState, action: Action): Step {
       // A stop sends no tally, and defaulting it to zero reported a run halted
       // after four of five tasks as "0/5 complete". The pane already holds the
       // per-task statuses the daemon streamed, so count them.
-      const { completed, total, failed, blocked } = action.summary ?? {
+      const { completed, total, failed, blocked, skipped } = action.summary ?? {
         completed: state.tasks.filter((t) => t.status === 'completed').length,
         total: state.tasks.length,
         failed: state.tasks.filter((t) => t.status === 'failed').length,
         blocked: blockingFailures(state.tasks).size,
+        skipped: state.tasks.filter((t) => t.status === 'skipped').length,
       };
-      const failures = `${failed > 0 ? ` · ${failed} failed` : ''}${blocked ? ` · ${blocked} blocked` : ''}`;
+      const failures = `${failed > 0 ? ` · ${failed} failed` : ''}${blocked ? ` · ${blocked} blocked` : ''}${skipped ? ` · ${skipped} skipped` : ''}`;
       const verb = action.stopped ? 'stopped' : 'finished';
       return step({
         ...say(state, 'system', `Execution ${verb} — ${completed}/${total} tasks complete${failures}.`),

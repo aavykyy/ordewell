@@ -20,6 +20,7 @@ function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {})
       stopExecution: vi.fn().mockResolvedValue({ status: 'stopped' }),
       cancelPlanning: vi.fn().mockResolvedValue({ cancelled: true }),
       taskControl: vi.fn().mockResolvedValue({ ok: true }),
+      skipTask: vi.fn().mockResolvedValue({ ok: true }),
       markTaskComplete: vi.fn().mockResolvedValue({ ok: true }),
       markTaskIncomplete: vi.fn().mockResolvedValue({ ok: true }),
       getTaskLogAttempts: vi.fn().mockResolvedValue([]),
@@ -779,10 +780,11 @@ describe('task control', () => {
     expect(h.api.markTaskComplete).not.toHaveBeenCalled();
   });
 
-  it('skipping a task marks it complete, as the VS Code extension does', async () => {
+  it('skipping a task skips it, and never marks it complete: only Mark complete vouches for work', async () => {
     const h = harness();
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'skip' }, h.deps);
-    expect(h.api.markTaskComplete).toHaveBeenCalledWith('s1', 't1');
+    expect(h.api.skipTask).toHaveBeenCalledWith('s1', 't1');
+    expect(h.api.markTaskComplete).not.toHaveBeenCalled();
   });
 
   it('refreshes the plan after a task action so the pane matches the server', async () => {

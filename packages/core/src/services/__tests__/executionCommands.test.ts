@@ -361,7 +361,7 @@ describe('the command seam: retry_task', () => {
     expect((await env.run({ command: 'retry_task', task: 't1', from: 'session' })).message)
       .toBe('Continuing task #1 "Task t1" in its saved session needs a message: what the runner should do next.');
     expect((await env.run({ command: 'retry_task', task: 't2', from: 'session', message: 'go on' })).message)
-      .toBe('Task "Task t2" cannot be continued: only a completed or failed task can be. A fresh retry (from "fresh") starts it over from its prompt.');
+      .toBe('Task "Task t2" cannot be continued: only a completed, failed or skipped task can be. A fresh retry (from "fresh") starts it over from its prompt.');
     expect(env.spawned('t1')).toHaveLength(1);
     expect(env.spawned('t2')).toHaveLength(0);
   });
@@ -606,6 +606,85 @@ describe('the command seam: a supervisor at Act', () => {
   });
 });
 
+describe('the command seam: skip_task', () => {
+  const ACT: ExecutionActor = { kind: 'supervisor', level: 'act' };
+
+  /** Task 1 failed, so task 2, which depends on it, is blocked. */
+  async function failed() {
+    const env = await running({ autonomous: false });
+    env.latest('t1').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('failed'));
+    return env;
+  }
+
+  it('skips a failed task for a supervisor at Act, without asking, and the dependents go ahead', async () => {
+    const env = await failed();
+
+    const outcome = await env.run({ command: 'skip_task', task: '1', reason: 'the host cannot run it' }, ACT);
+
+    expect(outcome).toEqual({ ok: true, message: 'Skipped task #1 "Task t1": none of its work lands, and the tasks that depend on it go ahead without it, told why.' });
+    expect(taskOf(env.session, 't1')!.status).toBe('skipped');
+    expect(env.cards()).toHaveLength(0);
+    await vi.waitFor(() => expect(env.spawned('t2')).toHaveLength(1));
+    expect(env.timeline().at(-1)).toMatchObject({
+      record: { command: 'skip_task', actor: 'supervisor', level: 'act', outcome: 'done', detail: 'the host cannot run it' },
+      text: 'Skipped task #1 "Task t1" — by supervisor: "the host cannot run it"',
+    });
+  });
+
+  it('skips a blocked task and one waiting for input for a supervisor at Act', async () => {
+    const env = setup();
+    env.session.loadPlan(plan([task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3)]), 'goal', testWorkspace, { persist: false });
+    await env.session.executePlan();
+    env.latest('t1').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
+    env.latest('t3').waitForInput();
+    await vi.waitFor(() => expect(taskOf(env.session, 't3')!.status).toBe('awaiting_user'));
+
+    expect(await env.run({ command: 'skip_task', task: '2', reason: 'not needed now' }, ACT)).toMatchObject({ ok: true });
+    expect(await env.run({ command: 'skip_task', task: '3', reason: 'it asks what nobody can answer' }, ACT)).toMatchObject({ ok: true });
+    expect(taskOf(env.session, 't2')!.status).toBe('skipped');
+    expect(taskOf(env.session, 't3')!.status).toBe('skipped');
+  });
+
+  it.each<[string, ExecutionActor, RegExp]>([
+    ['a supervisor at Watch', { kind: 'supervisor', level: 'watch' }, /at Watch.*Suggest it to the user instead/],
+    ['a supervisor that is off', { kind: 'supervisor', level: 'off' }, /supervisor is off for this run/],
+    ['a planner turn the user started', PLANNER, /^Skipping a task is the user's in their own turn/],
+  ])('is refused to %s, and skips nothing', async (_who, actor, reason) => {
+    const env = await failed();
+
+    expect(await env.run({ command: 'skip_task', task: '1', reason: 'not needed' }, actor)).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(reason) });
+    expect(taskOf(env.session, 't1')!.status).toBe('failed');
+  });
+
+  it('refuses the supervisor a skip without a reason: the dependents are told it', async () => {
+    const env = await failed();
+
+    const outcome = await env.run({ command: 'skip_task', task: '1', reason: '  ' }, ACT);
+
+    expect(outcome).toEqual({ ok: false, outcome: 'refused', message: 'Skipping task #1 "Task t1" needs a reason: it is shown to the user and told to the tasks that depend on it.' });
+    expect(taskOf(env.session, 't1')!.status).toBe('failed');
+  });
+
+  it('refuses the supervisor a running task, a completed one and one that waits on nothing', async () => {
+    const env = await running();
+
+    expect((await env.run({ command: 'skip_task', task: '1', reason: 'slow' }, ACT)).message).toBe('Task #1 "Task t1" is running: stop it first with stop_task, or let it finish.');
+    expect((await env.run({ command: 'skip_task', task: '2', reason: 'later' }, ACT)).message).toBe('Task #2 "Task t2" has not started and nothing blocks it: the supervisor skips only a task that failed, is blocked or is waiting for input.');
+    env.latest('t1').reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('completed'));
+    expect((await env.run({ command: 'skip_task', task: '1', reason: 'done' }, ACT)).message).toBe('Task #1 "Task t1" has completed: its work landed, so there is nothing to skip.');
+  });
+
+  it('skips for the user without a reason, as their Skip button does', async () => {
+    const env = await failed();
+
+    expect(await env.run({ command: 'skip_task', task: 't1' }, { kind: 'user' })).toMatchObject({ ok: true });
+    expect(taskOf(env.session, 't1')!.status).toBe('skipped');
+    expect(env.timeline().at(-1)!.text).toBe('You skipped task #1 "Task t1".');
+  });
+});
+
 describe('the command seam: merge_all', () => {
   /** A run whose change task landed, so its ops task waits for Merge all at its gate. */
   async function landed(mergeResult?: FakeWorktreeIsolation['mergeResult']) {
@@ -658,7 +737,7 @@ describe('the command seam\'s extension points', () => {
       tasks: () => tasks, planApproved: () => true, taskApproved: () => true, approve: vi.fn(), autonomous: () => true, autorun: () => false,
       scheduling: () => false, startsHeld: () => false, hasLiveWork: () => true, running: () => true, maxParallel: () => 3, runBlocked: () => false,
       dependencyMet: () => true, mergeGate: () => [], blockedBy: () => [], waitingRequests: () => [],
-      runPlan: vi.fn(), startTask: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), retryTask: vi.fn(), continueTask: vi.fn(),
+      runPlan: vi.fn(), startTask: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), retryTask: vi.fn(), skipTask: vi.fn(), continueTask: vi.fn(),
       messageTask: vi.fn(), denyRequest: vi.fn(), mergeAll: vi.fn(), record: vi.fn(), guardTripped: vi.fn(), heldEdit: () => false, deferUntilLanded: vi.fn(),
     };
   }

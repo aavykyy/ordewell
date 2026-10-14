@@ -154,10 +154,10 @@ describe('webview messages reach the session through one entry point each', () =
   });
 
   describe('task actions', () => {
-    it('skip completes the task through the scheduler, so its dependents can start', async () => {
+    it('skip ends the task as skipped through the scheduler, landing nothing, so its dependents can start', async () => {
       await h.route({ type: 'sendSystemCommand', command: 'skip', taskId: 't1' });
 
-      expect(taskOf(h.session, 't1')?.status).toBe('completed');
+      expect(taskOf(h.session, 't1')?.status).toBe('skipped');
     });
 
     // Execute re-adopts the plan into the Session; adopting it under an empty
@@ -168,7 +168,7 @@ describe('webview messages reach the session through one entry point each', () =
       await h.route({ type: 'sendSystemCommand', command: 'skip', taskId: 't1' });
 
       const saved = loadSession(h.session.sessionId, h.workspace);
-      expect(saved?.plan.tasks.find((t) => t.id === 't1')?.status).toBe('completed');
+      expect(saved?.plan.tasks.find((t) => t.id === 't1')?.status).toBe('skipped');
     });
 
     it('retry reaches the command seam as the user', async () => {

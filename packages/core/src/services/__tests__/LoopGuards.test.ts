@@ -102,6 +102,16 @@ describe('no oscillating edits', () => {
     const memory: EditMemory = noEdits();
     expect(oscillatingEdit(memory, [plan[0]], plan)).toBeNull();
   });
+
+  it('refuses re-arming a skipped task: whether it runs again is the user\'s', () => {
+    const skipped = [task('t1', { status: 'skipped' })];
+
+    const trip = oscillatingEdit(noEdits(), skipped, [task('t1', { status: 'pending' })]);
+
+    expect(trip!.key).toBe('un-skip:t1');
+    expect(trip!.refusal).toBe('Edit refused: it puts "Task t1" back to run, which was skipped. Whether a skipped task runs again is the user\'s to decide; nothing was changed. Tell them if it should.');
+    expect(oscillatingEdit(noEdits(), skipped, [task('t1', { status: 'skipped', prompt: 'do t1 better' })])).toBeNull();
+  });
 });
 
 describe('the memory round-trips through a snapshot', () => {
@@ -137,7 +147,7 @@ describe('the memory round-trips through a snapshot', () => {
 
     memory.restore(undefined);
 
-    expect(memory.snapshot()).toEqual({ retries: {}, failedWith: {}, edits: noEdits(), told: [] });
+    expect(memory.snapshot()).toEqual({ retries: {}, skips: {}, failedWith: {}, edits: noEdits(), told: [] });
   });
 });
 

@@ -31,6 +31,8 @@ export interface TaskView {
   awaitingReason?: AwaitingReason;
   /** When a task paused on a usage limit resumes on its own (ISO time); absent when it waits for a manual retry. */
   resumeAt?: string;
+  /** Why a `skipped` task was skipped; absent when no reason was given. */
+  skipReason?: string;
   /** The whole question of the checkpoint the task waits at, while it does. */
   checkpoint?: string;
   /** A finished structured task the daemon can continue in its saved session (ADR-0018, K1). */
@@ -567,7 +569,7 @@ export function waitingCheckpoint(task: TaskView | undefined): string | undefine
  * flag's end for yet is not continued twice.
  */
 export function continuesTask(task: TaskView | undefined): boolean {
-  return task?.continuable === true && (task.status === 'completed' || task.status === 'failed');
+  return task?.continuable === true && (task.status === 'completed' || task.status === 'failed' || task.status === 'skipped');
 }
 
 /**

@@ -22,7 +22,7 @@ export function hasFlag(args: string[], name: string): boolean {
 /** Flags that consume the following argument, so it isn't mistaken for a positional. */
 const VALUE_FLAGS = new Set([
   '--session-id', '--port', '--workspace', '--goal', '--runner', '--model',
-  '--title', '--description', '--prompt', '--depends-on', '--type', '--output',
+  '--title', '--description', '--prompt', '--depends-on', '--type', '--output', '--reason',
 ]);
 
 /**

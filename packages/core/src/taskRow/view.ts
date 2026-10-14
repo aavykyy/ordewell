@@ -22,6 +22,7 @@ export interface TaskRowSubject {
   ops?: boolean;
   idleSince?: string | null;
   awaitingReason?: AwaitingReason;
+  skipReason?: string;
   /** When a task paused on a usage limit resumes on its own (ISO time). */
   resumeAt?: string | null;
   awaitingApproval?: number;
@@ -103,6 +104,8 @@ export interface TaskRowView {
   mergeGate: string[] | null;
   /** The failed tasks, by reference, a task not started waits on through its dependencies (ADR-0034); null when none. */
   blockedBy: string[] | null;
+  /** Why a skipped task was skipped, as whoever skipped it put it; null for any other, or one skipped without a reason. */
+  skipReason: string | null;
   /** An ops task changed tracked files in the user's checkout and nothing was committed. */
   opsChangedFiles: boolean;
   /** The dependencies, by title, a force start went past the merge gate of. */
@@ -167,10 +170,12 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
       : null,
     mergeGate: task.mergeGate?.length ? refsOf(task.mergeGate, context.tasks) : null,
     blockedBy: blocked.length > 0 ? refsOf(blocked, context.tasks) : null,
+    skipReason: task.status === 'skipped' ? task.skipReason ?? null : null,
     opsChangedFiles: task.status === 'awaiting_user' && task.awaitingReason === 'files-changed',
     forcedPastGate: task.forcedPastGate?.length ? task.forcedPastGate : null,
     dependencies: refsOf(task.dependencies, context.tasks),
-    actions: taskRowActions(task, context.placement ?? (parent ? 'subtask' : 'task')),
+    // A block read off the plan offers what a stored one does: Skip among them.
+    actions: taskRowActions(blocked.length > 0 ? { ...task, status: 'blocked' } : task, context.placement ?? (parent ? 'subtask' : 'task')),
     mark: markAction(task),
     opsEditable: opsEditable(task),
   };

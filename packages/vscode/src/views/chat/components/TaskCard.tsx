@@ -6,7 +6,7 @@ import SkillChips from './SkillChips';
 import { lastLine } from '../taskOutput';
 import { checkLabel } from '../checkLabel';
 import { useFollowOutput } from '../followOutput';
-import { blockedByLabel, dependencyCandidates, capConflictFiles, taskRowView } from '@ordewell/core/plan-utils';
+import { blockedByLabel, dependencyCandidates, capConflictFiles, skippedLabel, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, TaskRowAction, TaskRowView, TaskStatusKind } from '@ordewell/core';
 
 export interface RunnerMode {
@@ -90,18 +90,20 @@ const STATUS_BADGE: Record<TaskStatusKind, { label: string; cls: string }> = {
   running: { label: 'Running', cls: 'status-running' },
   quiet: { label: 'Stalled', cls: 'status-stalled' },
   blocked: { label: 'Blocked', cls: 'status-blocked' },
+  skipped: { label: 'Skipped', cls: 'status-skipped' },
   todo: { label: 'To do', cls: 'status-pending' },
   awaiting: { label: 'Awaiting User', cls: 'status-blocked' },
 };
 
-/** The status badge: what an awaiting task waits on, or the failure a blocked one waits on, outranks the generic word. */
-export function statusBadge(row: Pick<TaskRowView, 'status' | 'awaiting' | 'blockedBy'>): { label: string; cls: string } {
+/** The status badge: what an awaiting task waits on, the failure a blocked one waits on, or why one was skipped, outranks the generic word. */
+export function statusBadge(row: Pick<TaskRowView, 'status' | 'awaiting' | 'blockedBy' | 'skipReason'>): { label: string; cls: string } {
   const badge = STATUS_BADGE[row.status];
+  if (row.status === 'skipped') return { ...badge, label: skippedLabel(row.skipReason) };
   return { ...badge, label: row.awaiting ?? (row.blockedBy ? blockedByLabel(row.blockedBy) : badge.label) };
 }
 
-const CHECK_STATE: Record<TaskStatusKind, 'done' | 'running' | 'stalled' | 'todo'> = {
-  done: 'done', running: 'running', quiet: 'stalled', todo: 'todo', awaiting: 'todo', blocked: 'todo', failed: 'todo',
+const CHECK_STATE: Record<TaskStatusKind, 'done' | 'running' | 'stalled' | 'skipped' | 'todo'> = {
+  done: 'done', running: 'running', quiet: 'stalled', todo: 'todo', awaiting: 'todo', blocked: 'todo', failed: 'todo', skipped: 'skipped',
 };
 
 /** Minimal to-do / done indicator: empty ring → pulsing ring → filled check.
@@ -117,7 +119,9 @@ export function TaskCheck({ row, taskId, onMarkComplete, onMarkIncomplete }: { r
       ? 'Running'
       : state === 'stalled'
         ? 'Stalled — no output recently'
-        : (clickable ? 'Click to mark executed' : 'To do');
+        : state === 'skipped'
+          ? (clickable ? 'Skipped — click to mark complete, which lands its kept work' : 'Skipped — nothing of it landed')
+          : (clickable ? 'Click to mark executed' : 'To do');
   return (
     <span
       className={`task-check ${state} ${clickable ? 'clickable' : ''}`}
@@ -360,7 +364,7 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
         {/* The awaiting reason is a badge in its own right (ADR-0018, W1): a
             task held for the user must read as such whether or not a run is
             still being drawn as active — and so must one a failure blocks. */}
-        {(isExecuting || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked') && (
+        {(isExecuting || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked' || row.status === 'skipped') && (
           <>
             <span className={`task-status-dot ${status.cls}`} title={status.label} />
             <span className={`task-status-badge ${status.cls}`}>{status.label}</span>

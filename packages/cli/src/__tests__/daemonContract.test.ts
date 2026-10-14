@@ -141,6 +141,23 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       expect(pool.hasSession('session-saved')).toBe(true);
     });
 
+    it('skips a failed task through the command seam as the user, and refuses one that completed', async () => {
+      const plan = savedPlan();
+      plan.tasks = [
+        { ...plan.tasks[0], status: 'failed' },
+        { ...plan.tasks[0], id: 't2', order: 2, title: 'Use the limiter', status: 'completed', dependencies: ['t1'] },
+      ];
+      saveSession(plan, 'Rate limiting', workspace, 'session-saved');
+
+      await expect(client.skipTask('session-saved', 't1', 'the limiter is not needed')).resolves.toEqual({ ok: true });
+      const err = await refusal(client.skipTask('session-saved', 't2'));
+
+      const skipped = pool.session('session-saved').planState!.tasks.find((t) => t.id === 't1')!;
+      expect(skipped).toMatchObject({ status: 'skipped', skipReason: 'the limiter is not needed' });
+      expect(err.status).toBe(400);
+      expect(err.message).toMatch(/has completed: its work landed/);
+    });
+
     it('says session_not_found for one that exists nowhere', async () => {
       const err = await refusal(client.executePlan('session-ghost'));
 

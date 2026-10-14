@@ -131,6 +131,11 @@ const retryTaskInput = z.object({
   message: z.string().optional().describe('What the runner should do next. Required with "session".'),
 });
 
+const skipTaskInput = z.object({
+  task: taskRef,
+  reason: z.string().describe('Why the run should go on without this task. Shown to the user, and told to the tasks that depend on it.'),
+});
+
 const messageTaskInput = z.object({
   task: taskRef,
   text: z.string().trim().min(1).describe('The message. A running task reads it at its next step; one waiting for input takes it as its answer.'),
@@ -160,6 +165,7 @@ export type RunPlanArgs = z.infer<typeof runPlanInput>;
 export type OneTaskArgs = z.infer<typeof oneTaskInput>;
 export type RetryTaskArgs = z.infer<typeof retryTaskInput>;
 export type MessageTaskArgs = z.infer<typeof messageTaskInput>;
+export type SkipTaskArgs = z.infer<typeof skipTaskInput>;
 export type AnswerApprovalArgs = z.infer<typeof answerApprovalInput>;
 
 /** What a handler answers with. `isError` marks a refusal the caller should act on. */
@@ -216,6 +222,7 @@ export interface PlannerToolHandler {
   stopTask?: Run<OneTaskArgs>;
   stopRun?: Run<RunPlanArgs>;
   retryTask?: Run<RetryTaskArgs>;
+  skipTask?: Run<SkipTaskArgs>;
   messageTask?: Run<MessageTaskArgs>;
   answerApproval?: Run<AnswerApprovalArgs>;
   mergeAll?: Run<RunPlanArgs>;
@@ -295,6 +302,8 @@ export const PLANNER_EXECUTION_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     runPlanInput, (h) => h.stopRun?.bind(h), PLANNER_EXECUTES),
   tool('retry_task', 'Start a new attempt of a failed, stopped or waiting task: fresh from its prompt, or continuing its saved session with a message. To change what it is told, edit its prompt with edit_plan first. In Guarded the user is asked first.',
     retryTaskInput, (h) => h.retryTask?.bind(h), PLANNER_EXECUTES),
+  tool('skip_task', 'Give up waiting for a task that failed, is blocked or is waiting for input: it ends as skipped, none of its work lands, and the tasks that depend on it go ahead without it, told your reason. It never marks work complete. Only the supervisor at Act may, in a wake-up turn; a reason is required.',
+    skipTaskInput, (h) => h.skipTask?.bind(h), PLANNER_EXECUTES),
   tool('message_task', 'Send a message to a running task, or answer one waiting for input.',
     messageTaskInput, (h) => h.messageTask?.bind(h), PLANNER_EXECUTES),
   tool('answer_approval', 'Answer a request a task\'s runner is waiting on: deny it with a note, or escalate it to the user. It never allows.',

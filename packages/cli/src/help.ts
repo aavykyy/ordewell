@@ -25,7 +25,7 @@ Tasks (<id> is an order number or a task ID):
   ordewell remove-task <id>       Remove a task from the current plan
   ordewell complete <id>          Mark a task complete (alias: mark-complete)
   ordewell uncomplete <id>        Mark a completed task not done
-  ordewell skip <id>              Skip a task (marks it complete so dependents can run)
+  ordewell skip <id>              Skip a task: nothing it did lands, dependents go ahead
   ordewell force-start <id>       Start a task now, ignoring dependencies (asks past a merge gate)
   ordewell run-task <id>          Run only one task
   ordewell retry <id>             Re-run a failed task

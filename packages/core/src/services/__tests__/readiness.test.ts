@@ -9,6 +9,7 @@ function storeOf(tasks: Task[]) {
     allTasks: tasks as ReadonlyArray<Readonly<Task>>,
     isCompleted: (id: string) => byId.get(id)?.status === 'completed',
     isFailed: (id: string) => byId.get(id)?.status === 'failed',
+    isSkipped: (id: string) => byId.get(id)?.status === 'skipped',
     isOps: (id: string) => byId.get(id)?.ops === true,
   };
 }

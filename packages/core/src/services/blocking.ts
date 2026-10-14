@@ -40,7 +40,8 @@ export function blockingFailures(tasks: readonly BlockingSubject[]): Map<string,
     const failed = new Set<string>();
     for (const depId of task.dependencies) {
       const dep = byId.get(depId);
-      if (!dep || dep.status === 'completed') continue;
+      // A skipped dependency releases its dependents: nobody waits for it.
+      if (!dep || dep.status === 'completed' || dep.status === 'skipped') continue;
       if (dep.status === 'failed') failed.add(depId);
       else for (const root of failuresOf(depId, visiting)) failed.add(root);
     }

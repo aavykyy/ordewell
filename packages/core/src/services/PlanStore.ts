@@ -50,6 +50,9 @@ export class PlanStore {
   isAllComplete(): boolean { return this._allTasks.every((t) => t.status === 'completed'); }
   isAnyFailed(): boolean { return this._allTasks.some((t) => t.status === 'failed'); }
   isCompleted(id: string): boolean { return this._taskMap.get(id)?.status === 'completed'; }
+  isSkipped(id: string): boolean { return this._taskMap.get(id)?.status === 'skipped'; }
+  /** Nothing is left to do: every task completed or was skipped. */
+  isFinished(): boolean { return this._allTasks.every((t) => t.status === 'completed' || t.status === 'skipped'); }
   isFailed(id: string): boolean { return this._taskMap.get(id)?.status === 'failed'; }
 
   get(taskId: string): Readonly<Task> | undefined { return this._taskMap.get(taskId); }
@@ -143,7 +146,8 @@ export class PlanStore {
   /**
    * Run preparation as one named op: flip every AI task to 'approved'. By
    * default completed tasks keep their status so a reloaded half-finished plan
-   * resumes the remainder instead of re-running work that already succeeded;
+   * resumes the remainder instead of re-running work that already succeeded,
+   * and skipped ones stay skipped: a new run is not a retry of them.
    * `preserveCompleted: false` is for a freshly committed plan, where
    * everything starts over. `keepScheduledResumes` leaves a task waiting on
    * its runner's usage-limit reset waiting: an edit adopted between runs is
@@ -153,11 +157,12 @@ export class PlanStore {
     const preserveCompleted = opts.preserveCompleted ?? true;
     for (const t of this._allTasks) {
       if (t.type !== 'ai') continue;
-      if (preserveCompleted && t.status === 'completed') continue;
+      if (preserveCompleted && (t.status === 'completed' || t.status === 'skipped')) continue;
       if (opts.keepScheduledResumes && waitsForReset(t)) continue;
       t.status = 'approved';
       delete t.awaitingReason;
       delete t.resumeAt;
+      delete t.skipReason;
     }
     this.notifyMutate();
   }
@@ -168,6 +173,12 @@ export class PlanStore {
 
   markFailed(id: string): void {
     this.setStatus(id, 'failed');
+  }
+
+  markSkipped(id: string, reason?: string): void {
+    this.setStatus(id, 'skipped');
+    const task = this._taskMap.get(id);
+    if (task && reason) task.skipReason = reason;
   }
 
   markInProgress(id: string): void {
@@ -181,6 +192,7 @@ export class PlanStore {
     if (reason) task.awaitingReason = reason;
     else delete task.awaitingReason;
     delete task.resumeAt;
+    delete task.skipReason;
   }
 
   /** When a task paused on a usage limit resumes on its own; undefined leaves it to a manual retry. */
@@ -211,13 +223,14 @@ export class PlanStore {
     if (task) task.forcedPastGate = dependencies;
   }
 
-  /** A reason outlives nothing: any status but `awaiting_user` drops it, and the resume time with it. */
+  /** A reason outlives nothing: any status but `awaiting_user` drops it, and the resume time with it; any status drops a skip's reason. */
   private setStatus(id: string, status: Exclude<TaskStatus, 'awaiting_user'>): void {
     const task = this._taskMap.get(id);
     if (!task) return;
     task.status = status;
     delete task.awaitingReason;
     delete task.resumeAt;
+    delete task.skipReason;
   }
 
   blockDependents(id: string): void {

@@ -55,9 +55,9 @@ prompt, and the run never depends on it.**
   everything, and writes to the user. Execution tools and plan edits are
   refused in its wake-up turns, with a note telling it to suggest the action
   to the user instead.
-- **Act** — Watch, and in wake-up turns it may also run, stop and retry tasks,
-  message runners, deny approvals, edit the plan and merge, inside the loop
-  guards below.
+- **Act** — Watch, and in wake-up turns it may also run, stop, retry and skip
+  tasks, message runners, deny approvals, edit the plan and merge, inside the
+  loop guards below.
 
 The level is a plan setting, Off by default. **It is saved on the plan at run
 start**: flipping it mid-run changes nothing until the next run, the rule
@@ -179,6 +179,7 @@ the same seam through its own tool definitions.
 | `message_task` | send a task message (ADR-0023) |
 | `answer_approval` | deny a runner approval with a note, or escalate it to the user — never allow |
 | `merge_all` | Merge all, in Act wake-up turns only |
+| `skip_task` | end a task that failed, is blocked or is waiting for input as *skipped*, with a required reason; nothing of it lands, and its dependents go ahead, told the reason. In Act wake-up turns only |
 
 A start the turn asks for after editing that task in the same reply — an edit
 held until the reply ends — waits for the edit to land and then goes through
@@ -188,6 +189,20 @@ start, and the user is told; run on the unedited plan, it would not be what was
 asked. In a wake-up
 turn at Act the supervisor edits task by task; a whole new plan is refused,
 since only edits let the user follow what changed.
+
+**`skip_task` never vouches for work.** Verdicts come from evidence, so the
+supervisor cannot Mark complete: that lands the work as if someone had checked
+it, and only the user does. What it may decide is that work will not be waited
+for. A skipped task gets no verdict and lands nothing; its worktree and branch
+are kept, as a failed task's are, so the user can still look at it, retry it
+or Mark complete it. A skip releases the task's dependents
+([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)), and each is
+told in its prompt that the dependency was skipped and why, so it does not
+count on that work. The reason is required of the supervisor and shown in the
+timeline; the user's own Skip goes through the same command, as the user,
+with the reason optional. The supervisor skips only a task that already needs
+someone — failed, blocked, or waiting for input — never one that is running,
+completed, or has not started with nothing blocking it.
 
 **`answer_approval` never allows.** A runner asks because its mode did not
 cover the request. Allowing it would widen the mode the plan gave that task,
@@ -203,8 +218,10 @@ narrow (deny), or hand the decision to a person.
   plan the planner submits is approved and started as the user's standing
   instruction; with autorun on and Full, the planner may also start a task it
   added after the plan was approved.
-  `merge_all` is refused: the user is in the conversation, and presses Merge
-  all themselves.
+  `merge_all` and `skip_task` are refused: the user is in the conversation,
+  and presses Merge all or skips the task themselves. A skip decides that
+  work will not be waited for, which only the user, or a supervisor they let
+  act, decides.
 - **A wake-up turn under Watch** refuses every execution tool with "suggest it
   to the user".
 - **A wake-up turn under Act** allows all of them without asking. Choosing Act
@@ -236,6 +253,14 @@ Checked at the seam, where the action executes:
   model as the failed attempt is refused. Something has to change.
 - **No oscillating edits**: re-adding a task it removed this run, or reverting
   its own edit, is refused.
+- **Skips count**: a skip of a task the supervisor retried this run counts
+  against that task's retry limit, so past the limit the supervisor can
+  neither retry nor skip it; the task is the user's. A skip of a task its own
+  edit adds in the same reply is refused, and is never held for the edit to
+  land as a start is.
+- **No un-skipping**: a skipped task is never run again by the supervisor —
+  not by `retry_task`, `run_task`, `run_plan` or an edit that re-arms it.
+  Whether it runs again is the user's to decide.
 - **Wake-up rate**: more than six wake-ups within 30 minutes with no pass in
   between drops the run to Watch, with a notice. A supervisor that keeps waking
   and nothing passes is spinning.
@@ -246,7 +271,8 @@ remember lasts from the user's start of a run to their next: a run the
 supervisor restarts itself, or a usage-limit reset resumes, continues the one
 before, its level as lowered included, or each restart would wipe the count.
 A failure blocks only the failed task's dependents; independent work goes on,
-and the run ends once nothing else can start (ADR-0034). An edit to the failed
+and the run ends once nothing else can start (ADR-0034). A skip of the failed
+task continues that ended run as a retry does, so what it blocked starts. An edit to the failed
 task is reconciled into that ended run, keeping the task failed, so the
 supervisor's retry after it continues the run and the tasks it blocked start
 once it passes, rather than the one task running on its own.
@@ -348,6 +374,15 @@ until #30 exists.
 - **Rejected: enforce the level in the prompt.** A prompt is advice. The model
   that wants to retry will try; the seam is where it learns it cannot (#29,
   ADR-0008's `refuse` tier).
+- **Rejected: let the supervisor Mark complete.** It would land work no
+  evidence vouched for, with the model as the tie-breaker on whether it was
+  done. A skip lets the run go on without the work instead, and lands none of
+  it.
+- **Rejected: a skip that marks the task complete.** The user's Skip did this
+  until 2026-10-14: it landed the work as if vouched for, so "skip this, it is
+  not needed" and "this is done" were one action with one effect.
+- **Rejected: let any planner turn skip.** A plain planner turn the user did
+  not let act would decide on its own that work need not be waited for.
 - **Rejected: let `answer_approval` allow.** It widens a task's mode after
   the plan set it (ADR-0001, #92). Deny or escalate keeps the plan the source
   of truth.
@@ -432,3 +467,4 @@ until #30 exists.
   still merging had continued the run before, its lowered level and the
   guards' memory included.
 - 2026-10-14 — a failure blocks only its dependents instead of halting the run; run updates name the tasks a failure blocks, and the run's end counts them ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)).
+- 2026-10-14 — `skip_task`: a verdict-less `skipped` state that lands nothing and releases dependents, for the supervisor at Act with a required reason; the user's Skip goes through it as the user instead of marking the task complete. Skips count against the retry limit of a task the supervisor retried, and the supervisor never runs a skipped task again.

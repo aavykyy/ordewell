@@ -27,7 +27,7 @@ export function classifyRunnerStop(output: string): RunnerStop {
 }
 
 /** Every way an attempt ends: a verdict, a usage limit, cancel, release, Mark complete, retry, a failed spawn, stop, plan load. */
-export type AttemptEnd = 'verdict' | 'usage-limit' | 'cancel' | 'release' | 'complete' | 'retry' | 'spawn-failed' | 'stop' | 'load';
+export type AttemptEnd = 'verdict' | 'usage-limit' | 'cancel' | 'release' | 'complete' | 'skip' | 'retry' | 'spawn-failed' | 'stop' | 'load';
 
 /**
  * Whether ending an attempt with this reason has to stop its own runner now.

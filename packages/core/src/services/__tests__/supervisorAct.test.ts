@@ -464,3 +464,69 @@ describe('changing the supervisor level mid-run', () => {
     expect(idle.planState!.runSettings).toBeUndefined();
   });
 });
+
+describe('skip_task at Act', () => {
+  /** Task 1 failed and blocks task 2; the supervisor is woken to it at Act. */
+  async function blockedChain(over: Options['settings'] = {}): Promise<Env> {
+    const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { settings: { supervisorLevel: 'act', ...over } });
+    env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the host has no GPU' });
+    await until(() => env.planner.calls.length === 1);
+    return env;
+  }
+
+  it('skips the failed task with its reason: the timeline shows it, and the dependent is told it', async () => {
+    const env = await blockedChain();
+
+    const skip = await env.planner.tools().skipTask!({ task: '1', reason: 'the host has no GPU, and task 2 does not need its output' }, ctx);
+    expect(skip.isError, skip.text).toBeFalsy();
+    env.planner.calls[0].finish(prose('Skipped task 1.'));
+
+    await until(() => env.run.spawnedIds().includes('t2'));
+    expect(taskOf(env.session, 't1')!.status).toBe('skipped');
+    expect(records(env).at(-1)).toMatchObject({ command: 'skip_task', actor: 'supervisor', outcome: 'done', detail: 'the host has no GPU, and task 2 does not need its output' });
+    expect(env.run.runner.spawn.mock.calls.at(-1)![0].prompt).toContain('- Skipped: the host has no GPU, and task 2 does not need its output. None of its work landed');
+  });
+
+  it('counts a skip of a task it retried against the retry limit: past it, the task is the user\'s', async () => {
+    const env = await blockedChain({ supervisorRetryLimit: 1 });
+    await env.planner.tools().retryTask!({ task: '1', from: 'session', message: 'use the CPU build' }, ctx);
+    env.planner.calls[0].finish(prose('Retried task 1.'));
+    await failsAgain(env, 2);
+
+    const skip = await env.planner.tools().skipTask!({ task: '1', reason: 'it cannot run here' }, ctx);
+
+    expect(skip.isError).toBe(true);
+    expect(JSON.parse(skip.text).reason).toBe('Refused by the retry limit: you have retried task #1 "Task t1" once this run, the most your settings allow, and a skip of a task you retried counts as one more. It is escalated to the user now: tell them what you tried, and leave skipping it to them.');
+    expect(taskOf(env.session, 't1')!.status).toBe('failed');
+  });
+
+  it('lets a skip of a task it retried through under the limit, and then counts it', async () => {
+    const env = await blockedChain({ supervisorRetryLimit: 2 });
+    await env.planner.tools().retryTask!({ task: '1', from: 'session', message: 'use the CPU build' }, ctx);
+    env.planner.calls[0].finish(prose('Retried task 1.'));
+    await failsAgain(env, 2);
+
+    expect((await env.planner.tools().skipTask!({ task: '1', reason: 'it cannot run here' }, ctx)).isError).toBeFalsy();
+    expect(env.session.planState!.supervision?.guards?.skips).toEqual({ t1: 1 });
+  });
+
+  it('refuses a skip of a task its own edit adds in the same reply', async () => {
+    const env = await blockedChain();
+
+    await env.planner.tools().editPlan!({ ops: [{ op: 'add', task: { title: 'Probe the GPU', prompt: 'probe it' } }] }, ctx);
+    const skip = await env.planner.tools().skipTask!({ task: 'Probe the GPU', reason: 'not needed' }, ctx);
+
+    expect(skip.isError).toBe(true);
+    expect(JSON.parse(skip.text).reason).toMatch(/a task you add in this reply cannot be skipped in it/);
+  });
+
+  it('never runs a skipped task again: that is the user\'s to decide', async () => {
+    const env = await blockedChain();
+    await env.planner.tools().skipTask!({ task: '1', reason: 'it cannot run here' }, ctx);
+
+    const retry = await env.planner.tools().retryTask!({ task: '1', from: 'fresh' }, ctx);
+
+    expect(retry.isError).toBe(true);
+    expect(JSON.parse(retry.text).reason).toBe('Task #1 "Task t1" was skipped: whether it runs again is the user\'s to decide. Tell them if it should.');
+  });
+});

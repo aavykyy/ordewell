@@ -6,7 +6,7 @@ import { blockingFailures } from './blocking';
 
 /** What the scheduler may read to decide what runs: read-only plan state, the holds, and the open isolated run. */
 export interface ReadinessInput {
-  store: Pick<PlanStore, 'allTasks' | 'isCompleted' | 'isOps'>;
+  store: Pick<PlanStore, 'allTasks' | 'isCompleted' | 'isSkipped' | 'isOps'>;
   /** Task ids pulled out of auto-scheduling (cancelled, or a spawn that failed). */
   onHold: ReadonlySet<string>;
   /**
@@ -93,13 +93,15 @@ const blockedIn = (task: Readonly<Task>, blocked: ReadonlyMap<string, string[]>)
  * In an isolated run a dependency is met once its work is on the integration
  * branch, not merely once it passed: the dependent's worktree is cut from that
  * branch, so starting earlier would hand it a tree without the work it depends
- * on.
+ * on. A skipped dependency is met at once: none of its work lands, so there
+ * is nothing to wait for.
  */
 export function dependencyMet(
   depId: string,
-  store: Pick<PlanStore, 'isCompleted'>,
+  store: Pick<PlanStore, 'isCompleted' | 'isSkipped'>,
   runs: Pick<IsolationRunController, 'openRecord'>,
 ): boolean {
+  if (store.isSkipped(depId)) return true;
   if (!store.isCompleted(depId)) return false;
   const record = runs.openRecord(depId);
   return !record || record.status === 'merged';

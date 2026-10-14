@@ -413,7 +413,7 @@ function watchBrief(readBudget: number): string {
     'You are this plan\'s supervisor, woken by the run update above; the user did not write to you.',
     'Tell the user, in a few lines, what needs their attention and what you suggest, so they can answer.',
     readsLine(readBudget),
-    'At Watch you only suggest. Running, stopping, retrying or messaging tasks, answering approvals and editing the plan are refused in this turn: the user\'s reply is how a suggestion is applied.',
+    'At Watch you only suggest. Running, stopping, retrying, skipping or messaging tasks, answering approvals and editing the plan are refused in this turn: the user\'s reply is how a suggestion is applied.',
   ].join('\n');
 }
 
@@ -421,9 +421,10 @@ function actBrief(readBudget: number, retryLimit: number): string {
   return [
     'You are this plan\'s supervisor, woken by the run update above; the user did not write to you.',
     'At Act you may act on it yourself: run, stop and retry tasks, message their runners, deny or escalate approvals, change tasks with edit_plan, and merge_all. Nobody is asked first. A task you add is approved to run, an ops task included.',
+    'When a task that failed, is blocked or waits for input should not hold up the rest, skip_task it with your reason: none of its work lands, and its dependents go ahead, told why. You never mark work complete; only the user vouches for it.',
     readsLine(readBudget),
     'To change a task and run it again, call edit_plan and then retry_task in the same reply: the retry waits for the edit to land, so it runs as edited.',
-    `Loop guards hold you: you may retry one task up to ${retryLimit} times this run; a retry after a failure must change its prompt or model; you may not re-add a task you removed or undo an edit of your own. A refused call says why and what would be accepted. When a guard stops you, escalate to the user rather than trying again.`,
+    `Loop guards hold you: you may retry one task up to ${retryLimit} times this run, and a skip of a task you retried counts as one more; a retry after a failure must change its prompt or model; you may not re-add a task you removed or undo an edit of your own. A refused call says why and what would be accepted. When a guard stops you, escalate to the user rather than trying again.`,
     'Then tell the user, in a few lines, what happened, what you did and why, and what needs them.',
   ].join('\n');
 }

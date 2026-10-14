@@ -212,7 +212,7 @@ const rules = (policy: Record<string, string>) => Object.entries(policy).map(([a
 /** Ordewell's tools, each allowed by its exact name: a pattern would cover a server named `ordewell_<anything>` too. */
 const ordewellAllow = [
   'list_runners', 'list_models', 'submit_plan', 'edit_plan', 'task_query', 'task_output', 'task_diff', 'run_command', 'fetch', 'web_search', 'load_skill',
-  'run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'message_task', 'answer_approval', 'merge_all',
+  'run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'skip_task', 'message_task', 'answer_approval', 'merge_all',
 ].map((tool) => ({ action: `ordewell_${tool}`, resource: '*', effect: 'allow' }));
 const taskAllow = ['task_complete', 'checkpoint'].map((tool) => ({ action: `ordewell_${tool}`, resource: '*', effect: 'allow' }));
 const document = (info: Record<string, unknown>) => ({ type: 'document', path: '/home/u/.config/opencode/opencode.jsonc', info });

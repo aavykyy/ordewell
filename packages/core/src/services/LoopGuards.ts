@@ -78,6 +78,8 @@ export function attemptShape(task: Readonly<Task>): AttemptShape {
 export interface SupervisionMemorySnapshot {
   /** Retries of one task this run, by task id. */
   retries: Record<string, number>;
+  /** Skips of a task the supervisor had retried, by task id: each counts against the retry limit. Absent on saves before skip. */
+  skips?: Record<string, number>;
   /** What each failed task's attempt ran with, by task id. */
   failedWith: Record<string, AttemptShape>;
   /** The supervisor's own edits this run. */
@@ -86,14 +88,22 @@ export interface SupervisionMemorySnapshot {
   told: string[];
 }
 
-/** Past `limit` retries of one task this run, a retry is refused and the task is the user's. */
-export function retryLimit(task: GuardedTask, retried: number, limit: number): GuardTrip | null {
-  if (retried < limit) return null;
-  const times = retried === 1 ? 'once' : `${retried} times`;
+/**
+ * Past `limit` retries of one task this run, a retry is refused and the task
+ * is the user's. A skip of a task the supervisor retried spends the same
+ * budget, so once the task is escalated the supervisor cannot skip it either:
+ * retrying and then giving up are both its attempts at that task.
+ */
+export function retryLimit(task: GuardedTask, retried: number, limit: number, asked: 'retry' | 'skip' = 'retry', skipped = 0): GuardTrip | null {
+  if (retried + skipped < limit) return null;
+  const times = (n: number): string => (n === 1 ? 'once' : `${n} times`);
+  const spent = `${times(retried)}${skipped > 0 ? ` and skipped it ${times(skipped)}` : ''}`;
   return {
     key: `retry-limit:${task.id}`,
-    refusal: `Refused by the retry limit: you have retried ${named(task)} ${times} this run, the most your settings allow. It is escalated to the user now: tell them what you tried, and do not retry it again.`,
-    escalation: `Loop guard, retry limit: I retried ${named(task)} ${times} this run, the most your settings allow, and stopped. It needs you: retry it, change it or skip it.`,
+    refusal: asked === 'skip'
+      ? `Refused by the retry limit: you have retried ${named(task)} ${spent} this run, the most your settings allow, and a skip of a task you retried counts as one more. It is escalated to the user now: tell them what you tried, and leave skipping it to them.`
+      : `Refused by the retry limit: you have retried ${named(task)} ${spent} this run, the most your settings allow. It is escalated to the user now: tell them what you tried, and do not retry it again.`,
+    escalation: `Loop guard, retry limit: I retried ${named(task)} ${spent} this run, the most your settings allow, and stopped. It needs you: retry it, change it or skip it.`,
   };
 }
 
@@ -130,8 +140,8 @@ export function recordEdit(memory: EditMemory, before: readonly Task[], after: r
 
 /**
  * An edit taking the plan from `before` to `after` that re-adds a task the
- * supervisor removed this run, or puts a field back to what it was before the
- * supervisor's own earlier edit of it, is refused.
+ * supervisor removed this run, puts a field back to what it was before the
+ * supervisor's own earlier edit of it, or re-arms a skipped task, is refused.
  */
 export function oscillatingEdit(memory: EditMemory, before: readonly Task[], after: readonly Task[]): GuardTrip | null {
   const was = new Map(flattenTasks([...before]).map((t) => [t.id, t]));
@@ -143,6 +153,7 @@ export function oscillatingEdit(memory: EditMemory, before: readonly Task[], aft
       if (removed) return reAdded(removed.title);
       continue;
     }
+    if (prior.status === 'skipped' && task.status !== 'skipped') return unSkipped(task);
     for (const field of editedFields(prior, task)) {
       const value = stable(task[field]);
       if (memory.changed.some((c) => c.taskId === task.id && c.field === field && c.from === value)) return reverted(task, field);
@@ -161,6 +172,15 @@ function reAdded(title: string): GuardTrip {
     key: `re-add:${title}`,
     refusal: `Edit refused: it re-adds "${title}", which you removed earlier this run. Re-adding what you removed is going round in circles; nothing was changed. Escalate to the user instead.`,
     escalation: `Loop guard, oscillating edits: I tried to re-add "${title}", which I removed earlier this run, and stopped. It needs you to decide whether that task belongs in the plan.`,
+  };
+}
+
+/** A skip is a decision not to wait for the task; re-arming it undoes that, and is the user's to do, as a retry of it is. */
+function unSkipped(task: Readonly<Task>): GuardTrip {
+  return {
+    key: `un-skip:${task.id}`,
+    refusal: `Edit refused: it puts "${task.title}" back to run, which was skipped. Whether a skipped task runs again is the user's to decide; nothing was changed. Tell them if it should.`,
+    escalation: `Loop guard: I tried to put "${task.title}" back to run after it was skipped, and stopped. Retry it yourself if it should run again.`,
   };
 }
 
@@ -186,6 +206,7 @@ export function wakeUpRateTripped(wakeUps: readonly number[], now: number, rate:
  */
 export class SupervisionMemory {
   private retries = new Map<string, number>();
+  private skips = new Map<string, number>();
   private failedWith = new Map<string, AttemptShape>();
   private edits = noEdits();
   private told = new Set<string>();
@@ -196,20 +217,29 @@ export class SupervisionMemory {
    * included, which would start every failed task again.
    */
   check(command: ExecutionCommand, target: GuardTarget | undefined, tasks: readonly Task[], limit: number): GuardTrip | null {
+    if (command.command === 'skip_task') {
+      const retried = target ? this.retries.get(target.task.id) ?? 0 : 0;
+      if (!target || retried === 0) return null;
+      return retryLimit({ id: target.task.id, ref: target.ref, title: target.task.title }, retried, limit, 'skip', this.skips.get(target.task.id) ?? 0);
+    }
     const from = command.command === 'retry_task' ? command.from : undefined;
     for (const { task, ref, unchangedCounts } of this.retried(command.command, from, target, tasks)) {
       const guarded = { id: task.id, ref, title: task.title };
-      const trip = retryLimit(guarded, this.retries.get(task.id) ?? 0, limit)
+      const trip = retryLimit(guarded, this.retries.get(task.id) ?? 0, limit, 'retry', this.skips.get(task.id) ?? 0)
         ?? (unchangedCounts ? identicalRetry(guarded, this.failedWith.get(task.id), attemptShape(task)) : null);
       if (trip) return trip;
     }
     return null;
   }
 
-  /** A call at the seam went through: a supervisor's retry is counted. */
+  /** A call at the seam went through: a supervisor's retry is counted, and its skip of a task it retried. */
   done(record: ExecutionRecord, tasks: readonly Task[]): void {
     if (record.actor !== 'supervisor' || record.outcome !== 'done') return;
     const { task: named } = record;
+    if (record.command === 'skip_task') {
+      if (named && this.retries.has(named.id)) this.skips.set(named.id, (this.skips.get(named.id) ?? 0) + 1);
+      return;
+    }
     const found = named ? flattenTasks([...tasks]).find((t) => t.id === named.id) : undefined;
     const target = found && named ? { task: found, ref: named.ref } : undefined;
     for (const { task } of this.retried(record.command, undefined, target, tasks)) {
@@ -243,6 +273,7 @@ export class SupervisionMemory {
   snapshot(): SupervisionMemorySnapshot {
     return {
       retries: Object.fromEntries(this.retries),
+      skips: Object.fromEntries(this.skips),
       failedWith: Object.fromEntries(this.failedWith),
       edits: { removed: [...this.edits.removed], changed: [...this.edits.changed] },
       told: [...this.told],
@@ -254,6 +285,7 @@ export class SupervisionMemory {
     this.forget();
     if (!snapshot) return;
     for (const [id, count] of Object.entries(snapshot.retries ?? {})) this.retries.set(id, count);
+    for (const [id, count] of Object.entries(snapshot.skips ?? {})) this.skips.set(id, count);
     for (const [id, shape] of Object.entries(snapshot.failedWith ?? {})) this.failedWith.set(id, shape);
     this.edits = {
       removed: [...(snapshot.edits?.removed ?? [])],
@@ -264,6 +296,7 @@ export class SupervisionMemory {
 
   forget(): void {
     this.retries.clear();
+    this.skips.clear();
     this.failedWith.clear();
     this.edits = noEdits();
     this.told.clear();
@@ -276,7 +309,7 @@ export class SupervisionMemory {
       case 'retry_task': return target ? [{ ...target, unchangedCounts: from !== 'session' }] : [];
       case 'run_task': return target && this.failedWith.has(target.task.id) ? [{ ...target, unchangedCounts: true }] : [];
       case 'run_plan': return flattenTasksWithParents([...tasks])
-        .filter(({ task }) => this.failedWith.has(task.id) && task.status !== 'completed')
+        .filter(({ task }) => this.failedWith.has(task.id) && task.status !== 'completed' && task.status !== 'skipped')
         .map(({ task, ref }) => ({ task, ref, unchangedCounts: true }));
       default: return [];
     }
