@@ -1374,6 +1374,33 @@ describe('a Codex task taking a message mid-turn on the structured transport', (
     expect(session.turnState()).toBe('working');
     session.kill();
   });
+
+  it('force sends a message Codex already accepted: interrupts, and re-sends the steer it discards as the next turn, forced (ADR-0023, F1)', async () => {
+    const { spawned, processDeps } = deps(handshake());
+    const runner = new StructuredRunner({ process: processDeps });
+    const session = await runner.spawn({ taskId: 'task-0012-steer', runner: 'codex', prompt: 'Fix sum', modelId: 'gpt-5.5', mode: 'fullAccess', cwd: '/repo', registry: new RunnerRegistry() });
+    const events: StructuredEvent[] = [];
+    session.onEvent((e) => events.push(e));
+
+    await until(() => sentNamed(spawned.processes[0].written, 'turn/start').length > 0);
+    const proc = spawned.processes[0];
+    proc.emitStdout(turnStarted('turn-a'));
+    const id = session.sendMessage('use Postgres');
+    await until(() => sentNamed(proc.written, 'turn/steer').length > 0);
+    proc.emitStdout(line({ id: sentNamed(proc.written, 'turn/steer')[0].id, result: { turnId: 'turn-a' } }));
+    await until(() => session.queued().some((m) => m.handedOver));
+
+    expect(session.forceSendQueued(id)).toBe(true);
+    await until(() => sentNamed(proc.written, 'turn/interrupt').length > 0);
+    proc.emitStdout(line({ id: sentNamed(proc.written, 'turn/interrupt')[0].id, result: {} }) + turnCompleted('turn-a', 'interrupted'));
+
+    await until(() => sentNamed(proc.written, 'turn/start').length > 1);
+    expect(sentNamed(proc.written, 'turn/start')[1].params?.input).toEqual([{ type: 'text', text: 'use Postgres' }]);
+    expect(sentNamed(proc.written, 'turn/steer')).toHaveLength(1);
+    expect(events.filter((e) => e.type === 'turn_start').at(-1)).toEqual({ type: 'turn_start', text: 'use Postgres', messageId: id, forced: true });
+    expect(session.turnState()).toBe('working');
+    session.kill();
+  });
 });
 
 

@@ -99,21 +99,30 @@ turn-scoped and never touches the run's tasks.**
   forced message as the turn that replaces it. The runners' interrupts are the
   ones ADR-0018 M1 already uses: Claude's `control_request` interrupt, Codex's
   `turn/interrupt`, OpenCode's abort, with kill-and-resume as the fallback.
-  With no turn running, force send is a plain send. A message still waiting in
-  Ordewell's queue can be force sent too; one already handed over cannot,
-  since the runner has it. The surfaces: `ctrl-s` in the TUI task view (the composer text, or
-  the selected queued message when the composer is empty), *Send now* and
+  With no turn running, force send is a plain send. Any message in the queue
+  can be force sent too, queued or handed over. One already handed over is
+  never sent a second time — the model would read it twice: the interrupt
+  alone makes it go first. Claude Code runs it in the turn that follows the
+  interrupt; Codex discards it and the OpenCode 1.x adapter lets go of it
+  (D4), so Ordewell sends it as that turn. It is marked forced either way.
+  One the runner reports delivered while the interrupt is on its way has
+  reached the model and is not sent again; with nothing else owed, that turn
+  ends as a plain interrupt does (M1). A delivered message has left the
+  queue, so there is nothing to send now; force sending one already forced
+  changes nothing. The surfaces: `ctrl-s` in the TUI task view (the composer
+  text, or the selected queued message when the composer is empty), *Send now* and
   `Ctrl+Enter` in the VS Code task log, and `POST …/tasks/:task/messages/now`
   and `…/messages/:id/now` on the daemon. The planner chat's force send is
   F5.
 - **The forced message goes first; the rest keep their order (F2).** Messages
   still in Ordewell's queue follow the forced one in the order they were sent.
   Messages already handed over to the runner are where the runners differ:
-  Claude Code and OpenCode keep them in the conversation and the model reads
-  them in the same turn as the forced message, ahead of it (they were sent
-  first); Codex discards a steered message it had not consumed, so Ordewell
-  re-sends it after the forced one (D4). Ordewell cannot reorder a runner's
-  own queue, and does not try.
+  Claude Code keeps them in the conversation and the model reads them in the
+  same turn as the forced message, ahead of it (they were sent first); Codex
+  discards a steered message it had not consumed, and the OpenCode 1.x
+  adapter deletes one still unread when the abort leaves the session idle,
+  so Ordewell re-sends it after the forced one (D4). Ordewell cannot reorder
+  a runner's own queue, and does not try.
 - **No waiting for input in between (F3).** The interrupted turn does not make
   the task `awaiting_user`: a forced message follows, and the task stays
   `in_progress` through the switch. A plain interrupt, with no message, still
@@ -225,6 +234,12 @@ two more commands, and sent a message about four seconds into the sleep.
   ran in that new turn together with the forced one, ahead of it; the
   interrupt's `control_response` reported `still_queued: []` even so, so that
   field is not a reliable account of the CLI's queue.
+- **Claude Code 2.1.299**, `haiku`, 2026-10-14, through the opt-in live test
+  (`structuredLive.smoke.test.ts`). A message handed over during a 60-second
+  foreground command and then force sent: the interrupt cut the command
+  short, and with nothing more written the CLI ran that message as a turn of
+  its own after the interrupted `result`, its echo opening that turn; the
+  task stayed working between the two turns.
 - **Codex 0.160.0**, `gpt-5.6-luna`, `danger-full-access` (the sandbox cannot
   start on this host). `turn/steer` returned `{turnId}` immediately; the
   `userMessage` item, carrying `clientId` = the `clientUserMessageId` sent,
@@ -300,7 +315,8 @@ interrupt (D4 covers it either way).
 - The structured capability's `sendMessage` means "handed over now,
   delivered at the next step" on a capable adapter, "queued until the turn
   ends" otherwise. `queued()` reports both states and marks forced messages;
-  `removeQueued` and `forceSendQueued` refuse a handed-over message.
+  `removeQueued` refuses a handed-over message; `forceSendQueued` takes one,
+  and is false only once the message was delivered.
   `forceSend` and `forceSendQueued` join the capability.
 - A task-mode adapter's `steer(id, text)` is optional and answers whether the
   runner accepted the message; delivery and a drop come back as adapter
@@ -328,3 +344,4 @@ interrupt (D4 covers it either way).
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
 - 2026-10-13 — force send extended to the planner chat, turn-scoped (F5); core and daemon route.
 - 2026-10-13 — F5: a force send keeps the run update of a wake-up turn it stops.
+- 2026-10-14 — F1: a handed-over message can be force sent, and is never sent twice; probed on Claude Code 2.1.299. F2 corrected for OpenCode 1.x, whose adapter lets go of an unread message at the abort. Removal of a handed-over message stays refused.

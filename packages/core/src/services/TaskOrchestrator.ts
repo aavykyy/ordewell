@@ -539,7 +539,7 @@ export class TaskOrchestrator {
     return id;
   }
 
-  /** Force send a message still queued behind the running turn; false once the runner has it. */
+  /** Force send a message not yet delivered, queued or handed over; false once it was delivered. */
   forceSendQueuedTaskMessage(taskId: string, id: string): boolean {
     const sent = this.runnerSession(taskId, 'force').forceSendQueued(id);
     if (sent) this.emit('onTaskChanged');

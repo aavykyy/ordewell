@@ -425,6 +425,22 @@ describe('reduceTaskLog with force send (ADR-0023, F1–F2)', () => {
     expect(view.queued[0]).toEqual({ id: 'msg-3', text: 'stop now', forced: true });
   });
 
+  it('moves a handed-over message forward when it is force sent, still handed over, and keeps it forced if the runner lets go of it', () => {
+    const promoted = replayTaskLog([
+      { type: 'message_queued', messageId: 'msg-3', text: 'stop now', forced: true },
+      { type: 'message_queued', messageId: 'msg-1', text: 'use Postgres', forced: true },
+    ], queued);
+    expect(promoted.queued).toEqual([
+      { id: 'msg-3', text: 'stop now', forced: true },
+      { id: 'msg-1', text: 'use Postgres', forced: true, handedOver: true },
+      { id: 'msg-2', text: 'and docs' },
+    ]);
+
+    const requeued = reduceTaskLog(promoted, { type: 'message_queued', messageId: 'msg-1', text: 'use Postgres' });
+    expect(requeued.queued.map((m) => m.id)).toEqual(['msg-3', 'msg-1', 'msg-2']);
+    expect(requeued.queued[1]).toEqual({ id: 'msg-1', text: 'use Postgres', forced: true });
+  });
+
   it('moves a queued message forward when it is force sent, and the turn it opens takes it off the queue', () => {
     const promoted = reduceTaskLog(queued, { type: 'message_queued', messageId: 'msg-2', text: 'and docs', forced: true });
     expect(promoted.queued).toEqual([{ id: 'msg-2', text: 'and docs', forced: true }, { id: 'msg-1', text: 'use Postgres', handedOver: true }]);

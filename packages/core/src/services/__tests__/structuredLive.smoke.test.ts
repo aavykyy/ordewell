@@ -303,6 +303,44 @@ describe.runIf(live)('structured transport — live smoke', () => {
     }
   }, TIMEOUT_MS);
 
+  it('force sends a message the CLI was already handed: the command is cut short and the CLI runs that message next, written once (ADR-0023, F1)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-'));
+    const runner = new StructuredRunner();
+    try {
+      const session = await runner.spawn({
+        taskId: 'live-force-handed',
+        runner: 'claude-code',
+        prompt: 'Use the Bash tool, in the foreground, to run `python3 -c "import time; time.sleep(60)" && touch slept.txt`, then summarize the result.',
+        modelId: model,
+        mode: 'acceptEdits',
+        cwd: dir,
+        registry: new RunnerRegistry(),
+      });
+      const turns = turnEnds(session);
+      const events: StructuredEvent[] = [];
+      const states: string[] = [];
+      turns.session.onEvent((e) => events.push(e));
+      turns.session.onTurnEnd(() => states.push(turns.session.turnState()));
+      await new Promise<void>((resolve) => turns.session.onEvent((e) => { if (e.type === 'tool_call') resolve(); }));
+      await new Promise<void>((resolve) => setTimeout(resolve, 3000));
+
+      const id = turns.session.sendMessage('Stop waiting on that command. Use the Bash tool to run `touch forced.txt`, then reply with the word PINEAPPLE.');
+      await vi.waitFor(() => expect(turns.session.queued()).toEqual([expect.objectContaining({ id, handedOver: true })]), { timeout: 10_000, interval: 100 });
+      expect(turns.session.forceSendQueued(id)).toBe(true);
+      while (turns.ends.length < 2) await turns.next();
+
+      expect(turns.ends, session.getOutput()).toEqual(['interrupted', 'completed']);
+      expect(states[0]).toBe('working');
+      expect(events.filter((e) => e.type === 'turn_start').at(-1)).toMatchObject({ messageId: id, forced: true });
+      expect(existsSync(join(dir, 'forced.txt'))).toBe(true);
+      expect(existsSync(join(dir, 'slept.txt'))).toBe(false);
+      expect(turns.session.queued()).toEqual([]);
+    } finally {
+      runner.stopAll();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
   it('completes a task through task_complete in default mode, with nothing asked of a person (ADR-0022)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-'));
     const runner = new StructuredRunner();

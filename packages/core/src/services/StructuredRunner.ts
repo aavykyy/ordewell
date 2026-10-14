@@ -395,10 +395,16 @@ export class StructuredSession extends AbstractRunnerSession {
     return message.id;
   }
 
-  /** Force send a message still waiting in the queue. False once the runner has it, or it is gone. */
+  /**
+   * Force send a message not yet delivered. One the runner already has is not
+   * sent again — the model would read it twice. The interrupt alone makes it
+   * go first: the runner reads it in the turn that follows, or lets go of it
+   * and it is sent as that turn from here (D4). False once delivered, or gone.
+   */
   forceSendQueued(id: string): boolean {
     const message = this.queue.find((m) => m.id === id);
-    if (message?.stage !== 'queued') return false;
+    if (!message) return false;
+    if (message.forced) return true;
     this.queue = this.queue.filter((m) => m !== message);
     this.force(message);
     return true;
@@ -415,7 +421,7 @@ export class StructuredSession extends AbstractRunnerSession {
     message.forced = true;
     const at = this.queue.findIndex((m) => !m.forced);
     this.queue.splice(at < 0 ? this.queue.length : at, 0, message);
-    this.emitEvent({ type: 'message_queued', messageId: message.id, text: message.text, forced: true });
+    this.emitEvent({ type: 'message_queued', messageId: message.id, text: message.text, forced: true, ...(message.from ? { from: message.from } : {}) });
     if (!this.runningTurn()) return;
     // Nobody awaits a force send's interrupt. Should it throw, the message
     // still opens the next turn — only later, when this one ends by itself.

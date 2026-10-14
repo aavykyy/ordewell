@@ -851,6 +851,36 @@ describe('ClaudeCodeAdapter steer', () => {
     adapter.dispose();
   });
 
+  it('keeps a message it was handed across an interrupt: never dropped, and its echo opens the CLI\'s next turn (ADR-0023, F1)', async () => {
+    const { spawned, processDeps } = deps([
+      fixture('claude-code', 'task-interrupt'),
+      () => {},
+      (written, proc) => {
+        const request = JSON.parse(written) as { request_id: string };
+        proc.emitStdout(fixture('claude-code', 'task-interrupt-ack', { REQUEST_ID: request.request_id }));
+      },
+    ]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskStart());
+    const outOfTurn: AgentEvent[] = [];
+    adapter.onOutOfTurn((e) => outOfTurn.push(e));
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('sleep a while', (e) => events.push(e));
+    await tick();
+
+    expect(await adapter.steer('msg-1', 'use Postgres')).toBe(true);
+    const { uuid } = steerLine(sent(spawned)[1]);
+    await expect(adapter.interrupt(1000)).resolves.toBe(true);
+    await turn;
+    expect(events.at(-1)).toEqual({ type: 'turn_end', interrupted: true });
+    expect(events.some((e) => e.type === 'message_dropped' || e.type === 'message_delivered')).toBe(false);
+
+    spawned.processes[0].emitStdout(`${JSON.stringify({ type: 'user', isReplay: true, uuid, session_id: 'sess-task-interrupt', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'text', text: 'use Postgres' }] } })}\n`);
+    expect(outOfTurn).toEqual([{ type: 'message_delivered', id: 'msg-1' }]);
+    expect(sent(spawned).filter((w) => w.includes('use Postgres'))).toHaveLength(1);
+    adapter.dispose();
+  });
+
   it('is refused, leaving the message for the turn\'s end, while an interrupt is in flight and before a resume is taken up', async () => {
     const { spawned, processDeps } = deps([]);
     const adapter = new ClaudeCodeAdapter(processDeps);
