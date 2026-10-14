@@ -5,6 +5,12 @@
   --bg-elevated: var(--vscode-quickInput-background, var(--bg-secondary));
   --bg-hover: var(--vscode-list-hoverBackground, var(--bg-secondary));
   --bg-input: var(--vscode-input-background, var(--bg-primary));
+  /* Task cards sit on the plan's --bg-secondary, which light themes paint the
+     same near-white as everything else; a little foreground lifts them in
+     either direction, so one formula serves dark and light alike. */
+  --bg-card: color-mix(in srgb, var(--text-primary) 4%, var(--bg-secondary));
+  --bg-card-raised: color-mix(in srgb, var(--text-primary) 7%, var(--bg-secondary));
+  --bg-card-row-hover: color-mix(in srgb, var(--text-primary) 4%, transparent);
   --border-color: var(--vscode-panel-border, #30363d);
   --border-muted: var(--vscode-widget-border, var(--border-color));
   --border-subtle: color-mix(in srgb, var(--border-color) 60%, transparent);
@@ -43,6 +49,16 @@
   --transition-normal: 180ms ease;
   --slash-token-bg: var(--vscode-textPreformat-background, color-mix(in srgb, var(--accent) 16%, transparent));
   --slash-token-fg: var(--vscode-textLink-foreground, #58a6ff);
+}
+
+/* The fixed hues above are tuned for dark backgrounds and fall well short of
+   AA as text on white, and a light theme's focusBorder is often too pale to
+   read; the theme's link colour is the accent it guarantees legible. */
+body.vscode-light {
+  --accent: var(--vscode-textLink-foreground, #005fb8);
+  --orange: #7d4e00;
+  --purple: #6639ba;
+  --cyan: #075e66;
 }
 
 *, *::before, *::after {
@@ -1688,7 +1704,7 @@ body {
 
 /* ---- Task Card ---- */
 .task-card {
-  background: var(--bg-secondary);
+  background: var(--bg-card);
   border: 1px solid var(--border-muted);
   border-radius: var(--radius-md);
   transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
@@ -1697,13 +1713,27 @@ body {
 
 .task-card:hover {
   border-color: color-mix(in srgb, var(--accent) 20%, transparent);
-  background: var(--bg-tertiary);
+  background: var(--bg-card-raised);
 }
 
 .task-card.expanded {
   border-color: var(--border-color);
-  background: var(--bg-tertiary);
+  background: var(--bg-card-raised);
   box-shadow: var(--shadow-sm);
+}
+
+/* High contrast themes draw edges, not tints. */
+body.vscode-high-contrast,
+body.vscode-high-contrast-light {
+  --bg-card: transparent;
+  --bg-card-raised: transparent;
+}
+
+body.vscode-high-contrast .task-card:hover,
+body.vscode-high-contrast-light .task-card:hover,
+body.vscode-high-contrast .task-card.expanded,
+body.vscode-high-contrast-light .task-card.expanded {
+  border-color: var(--vscode-contrastActiveBorder, var(--accent));
 }
 
 .task-card-header {
@@ -1718,13 +1748,13 @@ body {
 }
 
 .task-card-header:hover {
-  background: var(--bg-hover);
+  background: var(--bg-card-row-hover);
 }
 
 .task-order {
   font-size: 11px;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--vscode-textLink-foreground, var(--accent));
   background: var(--accent-subtle);
   border-radius: 4px;
   padding: 2px 7px;
@@ -1851,7 +1881,7 @@ body {
 }
 
 .task-description {
-  color: var(--text-secondary);
+  color: var(--text-hint);
   font-size: 12px;
   line-height: 1.6;
 }
@@ -2293,12 +2323,12 @@ body {
 }
 
 .subtask-card-header:hover {
-  background: var(--bg-hover);
+  background: var(--bg-card-row-hover);
 }
 
 .subtask-order {
   font-size: 10px;
-  color: var(--text-muted);
+  color: var(--text-hint);
   min-width: 18px;
 }
 
@@ -2321,7 +2351,7 @@ body {
 
 .subtask-prompt {
   font-size: 11px;
-  color: var(--text-secondary);
+  color: var(--text-hint);
   font-family: var(--font-mono);
   padding: 8px 10px;
   background: var(--bg-secondary);
@@ -2781,7 +2811,7 @@ body {
 
 .task-status-badge.status-failed {
   background: var(--red-subtle);
-  color: var(--red);
+  color: color-mix(in srgb, var(--red) 80%, var(--text-primary));
 }
 
 .task-status-badge.status-blocked {
@@ -3932,7 +3962,7 @@ body {
   padding: 12px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  background: var(--bg-secondary);
+  background: var(--bg-card);
 }
 
 .task-add-title {
@@ -5206,7 +5236,7 @@ body.vscode-high-contrast-light .pending-message {
   cursor: pointer;
   font-family: inherit;
   background: var(--purple-subtle);
-  color: var(--purple);
+  color: color-mix(in srgb, var(--purple) 80%, var(--text-primary));
   border: 1px solid color-mix(in srgb, var(--purple) 40%, transparent);
 }
 

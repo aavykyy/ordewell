@@ -236,3 +236,24 @@ export const TASK_LOG_PENDING = [
   { type: 'message_queued', messageId: 'm2', text: 'then add tests for empty input' },
   { type: 'message_queued', messageId: 'm3', text: 'stop — the schema is in docs/schema.json', forced: true },
 ];
+
+const sub = (id, order, title, status) => ({
+  id, order, title, description: title, type: 'ai', status, dependencies: [], subtasks: [], assignedRunner: 'claude-code', taskMode: 'acceptEdits', prompt: `${title}.`,
+});
+
+/** A plan mid-run with a card in each state and subtasks under the first, which the tour expands. */
+export const TASK_CARDS_PLAN = {
+  tasks: [
+    {
+      id: 'task-1', order: 1, title: 'Add the SQLite store', description: 'Wire up better-sqlite3 and a migrations table', type: 'ai', status: 'in_progress', dependencies: [], assignedRunner: 'claude-code', taskMode: 'acceptEdits', prompt: 'Add a SQLite-backed store behind the Store interface.',
+      subtasks: [sub('task-1a', 1, 'Open the database', 'completed'), sub('task-1b', 2, 'Create the migrations table', 'in_progress')],
+    },
+    { id: 'task-2', order: 2, title: 'Migrate existing data', description: 'Write the migration runner', type: 'ai', status: 'pending', dependencies: ['task-1'], subtasks: [], assignedRunner: 'claude-code', taskMode: 'acceptEdits' },
+    { id: 'task-3', order: 3, title: 'Document the store', description: 'Update the README', type: 'ai', status: 'completed', dependencies: [], subtasks: [], assignedRunner: 'codex', taskMode: 'acceptEdits' },
+    { id: 'task-4', order: 4, title: 'Check the backup path', description: 'Confirm backups still restore', type: 'user', status: 'failed', dependencies: [], subtasks: [], assignedRunner: 'claude-code', taskMode: 'acceptEdits' },
+  ],
+  generatedAt: '2026-09-27T10:03:20.000Z',
+  status: 'executing',
+  runners: ['claude-code', 'codex'],
+  lastUpdated: '2026-09-27T10:03:20.000Z',
+};

@@ -106,6 +106,12 @@
 - **`/planner` is one stepped flow**, Harness › Model › Effort, saved once at
   the end; cancelling applies nothing.
 - **Task cards are slimmer**: model and mode show when a card is expanded.
+- **Task cards stand out in light themes.** A card has its own fill, a step
+  toward the theme's text colour, instead of the plan's near-white, and hover
+  and the open card go a step further; dark themes look as before and
+  high-contrast themes keep plain outlines. Light themes also get darker
+  orange, purple and cyan and the theme's link colour as the accent, so badges,
+  task numbers and secondary text on a card reach AA contrast.
 
 ### Removed
 

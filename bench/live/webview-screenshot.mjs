@@ -20,6 +20,8 @@
  *     typed mid-turn the composer has one button and a key hint
  *   - the task log (/tasklog) stacks its pending messages the same way, one in
  *     each state, Send now on all but the forced one, × only on the queued one
+ *   - a plan's task cards carry their own fill, distinct from the plan behind
+ *     them, with the expanded card and its subtasks each a step apart
  *
  * Runs at 420px (the sidebar width) and 900px, under both a dark and a light
  * VS Code theme (bench/live/webview-harness.mjs's `?theme=`) — the full state
@@ -33,7 +35,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { chromium } from './load-playwright.mjs';
 import { createDriver } from './host-driver.mjs';
-import { MAIN_SCENARIO, RELOAD_FIXTURE, RELOAD_PLAN, TASK_LOG_PENDING } from './scenarios.mjs';
+import { MAIN_SCENARIO, RELOAD_FIXTURE, RELOAD_PLAN, TASK_CARDS_PLAN, TASK_LOG_PENDING } from './scenarios.mjs';
 import { replayTaskLog } from '../../packages/core/dist/plan-utils.mjs';
 
 function arg(name, fallback) {
@@ -95,14 +97,17 @@ async function contrastRatio(page, selector) {
     const el = document.querySelector(sel);
     if (!el) return null;
     const fg = toRgba(getComputedStyle(el).color);
+    // Badges and tints are translucent, so composite every background up to
+    // the first opaque one rather than reading the nearest as if it were solid.
+    const layers = [];
     let node = el;
-    let bg = null;
-    while (node && !bg) {
+    while (node && !(layers.length && layers[layers.length - 1][3] >= 1)) {
       const rgba = toRgba(getComputedStyle(node).backgroundColor);
-      if (rgba && rgba[3] > 0) bg = rgba;
+      if (rgba && rgba[3] > 0) layers.push(rgba);
       node = node.parentElement;
     }
-    if (!fg || !bg || fg[3] === 0) return null;
+    if (!fg || !layers.length || fg[3] === 0) return null;
+    const bg = layers.reverse().reduce((under, layer) => blend(layer, under), [255, 255, 255]);
     const blended = fg[3] < 1 ? blend(fg, bg) : fg;
     const [l1, l2] = [luminance(blended), luminance(bg)].sort((a, b) => b - a);
     return (l1 + 0.05) / (l2 + 0.05);
@@ -256,6 +261,53 @@ async function pendingTaskLog(width, theme) {
   await page.close();
 }
 
+const CARD_CONTRAST = [
+  '.task-card.expanded .task-description', '.task-card.expanded .task-order', '.task-card.expanded .task-type-badge',
+  '.task-card.expanded .task-status-badge', '.subtask-card .task-status-badge', '.subtask-title-text',
+  '.task-card:not(.expanded) .task-status-badge.status-pending', '.task-card:not(.expanded) .task-status-badge.status-completed',
+  '.task-card:not(.expanded) .task-status-badge.status-failed', '.task-message-box .send-key-hint',
+  '.task-card.expanded .task-deps', '.task-card.expanded .task-log-open-btn', '.task-card.expanded .task-dep-badge.dep-in',
+  '.task-card.expanded .task-dep-badge.dep-out', '.subtask-prompt', '.subtask-order', '.task-card.user .task-type-badge',
+];
+
+/** The fill an element actually shows, translucent layers composited as in contrastRatio. */
+function fillOf(page, selector) {
+  return page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    return el ? getComputedStyle(el).backgroundColor : null;
+  }, selector);
+}
+
+async function taskCards(width, theme) {
+  const label = `${width}/${theme}`;
+  const page = await browser.newPage({ viewport: { width, height: 1300 } });
+  await page.goto(`${BASE}/?theme=${theme}`);
+  await page.waitForSelector('.chat-container');
+  await sendAll(page, MAIN_SCENARIO.filter((s) => s.post?.type?.startsWith('set')).map((s) => s.post));
+  await send(page, { type: 'planUpdated', plan: TASK_CARDS_PLAN });
+  await page.locator('.setup-panel-toggle-label').click(); // the plan, not the settings, is the subject here
+  // As if dragged all the way up: the empty conversation above has nothing to show.
+  await page.evaluate(() => { const body = document.querySelector('.plan-dock-body'); if (body) body.style.maxHeight = 'none'; });
+  await page.locator('.plan-dock .task-card-header').first().click();
+  await page.locator('.subtask-card-header').first().click();
+  await page.hover('.plan-dock .task-card >> nth=2');
+  await page.evaluate(() => document.querySelector('.plan-dock-body')?.scrollTo(0, 0));
+  await page.waitForTimeout(250); // the card transitions settle
+  check(await page.locator('.plan-dock .task-card').count() === 4, `task-cards ${label}: all four cards shown`);
+  check(await page.locator('.task-card.expanded .subtask-card').count() === 2, `task-cards ${label}: the expanded card shows its subtasks`);
+  const [dock, rest, hover, expanded, subtask] = await Promise.all([
+    fillOf(page, '.plan-dock-body'), fillOf(page, '.task-card:not(.expanded):not(:hover)'),
+    fillOf(page, '.task-card:hover'), fillOf(page, '.task-card.expanded'), fillOf(page, '.subtask-card'),
+  ]);
+  console.log(`    fills: dock ${dock} · card ${rest} · hover ${hover} · expanded ${expanded} · subtask ${subtask}`);
+  check(rest !== dock, `task-cards ${label}: a resting card is filled apart from the plan behind it`);
+  check(expanded !== rest && hover !== rest, `task-cards ${label}: hover and expanded are a step beyond the resting card`);
+  check(subtask !== expanded, `task-cards ${label}: a subtask separates from its expanded parent`);
+  await checkContrast(page, `task-cards ${label}`, CARD_CONTRAST);
+  await page.screenshot({ path: path.join(OUT, `task-cards-${width}-${theme}.png`) });
+  await page.close();
+}
+
 async function queuedPromptAndEscape(page) {
   // Someone typing a follow-up while a turn streams is watching it, i.e. at
   // the bottom already — App's own scroll-pin only follows new content while
@@ -380,6 +432,11 @@ for (const combo of COMBOS) {
 for (const combo of COMBOS) {
   console.log(`\n== task log, ${combo.width}px, ${combo.theme} theme ==`);
   await pendingTaskLog(combo.width, combo.theme);
+}
+
+for (const combo of COMBOS) {
+  console.log(`\n== task cards, ${combo.width}px, ${combo.theme} theme ==`);
+  await taskCards(combo.width, combo.theme);
 }
 
 await browser.close();
