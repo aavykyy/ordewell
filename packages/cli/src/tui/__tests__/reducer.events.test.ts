@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { initialState, reduce } from '../reducer';
+import { pickerItemsFor } from '../reducers/pickers';
 import type { TuiState } from '../state';
 import { lastMessage } from './chat';
 
@@ -386,5 +387,15 @@ describe('messages from the runtime', () => {
     const s = send(dead, { type: 'sessionCleared' });
     expect(s.sessionId).toBeNull();
     expect(s.goal).toBe('');
+  });
+});
+
+describe('the session picker', () => {
+  it('counts one task in the singular', () => {
+    const state = send(initialState(), {
+      type: 'sessionsLoaded',
+      sessions: [{ id: 's1', goal: 'g', taskCount: 1, status: 'approved', createdAt: '' }, { id: 's2', goal: 'h', taskCount: 3, status: 'approved', createdAt: '' }],
+    });
+    expect(pickerItemsFor(state, { kind: 'load-session' }).map((i) => i.detail)).toEqual(['1 task · approved', '3 tasks · approved']);
   });
 });

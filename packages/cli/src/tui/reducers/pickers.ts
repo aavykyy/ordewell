@@ -123,7 +123,7 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
     return state.sessions.map((s) => ({
       id: s.id,
       label: s.goal || s.id,
-      detail: `${s.taskCount} tasks · ${s.status}`,
+      detail: `${s.taskCount} ${s.taskCount === 1 ? 'task' : 'tasks'} · ${s.status}`,
     }));
   }
   if (action.kind === 'set-allowlist') {
