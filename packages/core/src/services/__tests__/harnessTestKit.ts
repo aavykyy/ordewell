@@ -59,6 +59,7 @@ export interface FakeSpawnResult {
 
 export interface FakeSpawnOptions {
   autoMcpAttached?: boolean;
+  codexDiscovery?: (method: string) => Record<string, unknown>;
   /**
    * Answers the sandbox capability probe Codex runs before its handshake
    * (`codex sandbox … /bin/true`). Given the probe's argv, return the exit code
@@ -195,6 +196,12 @@ export function fakeSpawn(replies: ScriptedReply[], options: FakeSpawnOptions = 
   const queue = [...replies];
   return spawner((chunk, proc, args) => {
     if (answeredAttachCheck(chunk, proc, args) || answeredModelControl(chunk, proc)) return;
+    let rpc: { id?: number; method?: string } = {};
+    try { rpc = JSON.parse(chunk) as typeof rpc; } catch { /* another runner's input */ }
+    if (rpc.method === 'skills/list' || rpc.method === 'mcpServerStatus/list') {
+      proc.emitStdout(`${JSON.stringify({ id: rpc.id, result: options.codexDiscovery?.(rpc.method) ?? { data: [], nextCursor: null } })}\n`);
+      return;
+    }
     const reply = queue.shift();
     if (reply !== undefined) {
       if (typeof reply === 'function') reply(chunk, proc);

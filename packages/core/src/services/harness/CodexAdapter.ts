@@ -4,6 +4,7 @@ import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskModeAgentAdap
 import type { SubagentOutcome } from '../../models/Task';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { UsageRecord } from '../../models/Usage';
+import type { RunnerCommand, RunnerMcpServer } from '../../models/RunnerCommand';
 import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
 import { markedLines } from './fileDiff';
 import { probeCodexSandbox, codexSandboxUnavailableMessage, codexShellOffNote, type CodexSandboxDecision } from './codexSandbox';
@@ -342,6 +343,9 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   readonly agentId = 'codex';
 
   private threadId: string | null = null;
+  private readonly nativeSkills = new Map<string, { description: string; path: string }>();
+  private nativeCommands: RunnerCommand[] = [];
+  private command: string | null = null;
   /** The model Codex opened the thread with — usage records name it. */
   private threadModel: string | null = null;
   private readonly rpc = new CodexRpc((payload) => this.writeLine(payload));
@@ -451,6 +455,51 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     this.threadId = opened.id;
     this.sessionId = opened.id;
     this.threadModel = opened.model;
+    if (opts.kind === 'task') await this.loadCommands(opts.cwd);
+  }
+
+  commands(): RunnerCommand[] { return this.nativeCommands.map((command) => ({ ...command })); }
+
+  async invokeCommand(name: string, args: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal): Promise<void> {
+    if (!this.nativeCommands.some((command) => command.name === name)) {
+      onEvent({ type: 'error', message: `Codex did not report command /${name}.` });
+      return;
+    }
+    if (name === 'compact' && args.trim()) {
+      onEvent({ type: 'error', message: 'Codex native compaction does not accept arguments.' });
+      return;
+    }
+    this.command = name;
+    try { await this.send(args, onEvent, signal); }
+    finally { this.command = null; }
+  }
+
+  // codex-cli 0.162.1 exposes skills and compaction, but no custom-prompt or TUI-command discovery/invocation.
+  private async loadCommands(cwd: string): Promise<void> {
+    const skills = await this.rpc.call('skills/list', { cwds: [cwd] });
+    if (skills.ok && Array.isArray(skills.result.data)) {
+      for (const entry of skills.result.data as Array<{ cwd?: string; skills?: Array<{ name: string; description: string; path: string; enabled: boolean }> }>) {
+        if (entry.cwd !== cwd || !Array.isArray(entry.skills)) continue;
+        for (const skill of entry.skills) {
+          if (skill.enabled && skill.name !== 'compact') this.nativeSkills.set(skill.name, { description: skill.description, path: skill.path });
+        }
+      }
+    }
+    this.nativeCommands = [
+      { name: 'compact', description: 'Compact the conversation context', kind: 'builtin' },
+      ...Array.from(this.nativeSkills, ([name, skill]): RunnerCommand => ({ name, description: skill.description, kind: 'skill' })),
+    ];
+    const mcpServers: RunnerMcpServer[] = [];
+    let cursor: string | undefined;
+    do {
+      const response = await this.rpc.call('mcpServerStatus/list', { ...(cursor ? { cursor } : {}) });
+      if (!response.ok || !Array.isArray(response.result.data)) break;
+      for (const server of response.result.data as Array<{ name: string; runtimeStatus?: string | null }>) {
+        if (server.name !== ORDEWELL_MCP_SERVER_NAME) mcpServers.push({ name: server.name, ...(server.runtimeStatus ? { status: server.runtimeStatus } : {}) });
+      }
+      cursor = typeof response.result.nextCursor === 'string' ? response.result.nextCursor : undefined;
+    } while (cursor);
+    this.announce({ type: 'runner_loaded', commands: this.commands(), mcpServers });
   }
 
   private async requestThread(resumeSessionId?: string): Promise<{ id: string; model: string | null } | { reason: string }> {
@@ -639,9 +688,16 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     const turn: CodexTurn = { id: null, steers: new Map(), onNamed: [] };
     this.turn = turn;
     this.interruptRequested = false;
+    if (this.command === 'compact') {
+      return this.rpc.frame('thread/compact/start', { threadId: this.threadId }, (response, emit) => this.turnAnswered(turn, response, emit));
+    }
+    const skill = this.command ? this.nativeSkills.get(this.command) : undefined;
     return this.rpc.frame('turn/start', {
       threadId: this.threadId,
-      input: [{ type: 'text', text: message }],
+      input: [
+        ...(skill && this.command ? [{ type: 'skill', name: this.command, path: skill.path }] : []),
+        { type: 'text', text: message },
+      ],
       ...(this.effort() ? { effort: this.effort() } : {}),
     }, (response, emit) => this.turnAnswered(turn, response, emit));
   }
@@ -687,6 +743,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         this.emitItemStart(msg.params?.item as ThreadItem | undefined, emit, this.subagentOf(msg.params?.threadId));
         return;
       case 'item/completed':
+        if ((msg.params?.item as ThreadItem | undefined)?.type === 'contextCompaction' && msg.params?.threadId !== this.threadId) return;
         if (this.fromInterruptedTurn(msg.params)) return;
         this.emitItemDone(msg.params?.item as ThreadItem | undefined, emit, this.subagentOf(msg.params?.threadId));
         return;
@@ -1059,6 +1116,9 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       return;
     }
     switch (item.type) {
+      case 'contextCompaction':
+        if (!subagentId) emit({ type: 'compaction', trigger: this.command === 'compact' ? 'manual' : 'auto' });
+        return;
       // Codex announces the item started and completed; whichever lands first delivers.
       case 'userMessage':
         if (!subagentId) this.steerDelivered(item, emit);

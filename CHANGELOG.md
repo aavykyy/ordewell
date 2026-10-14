@@ -39,14 +39,17 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   in the TUI, `/` completes the commands and skills the runner reported for
   that task (its built-ins and your own and the project's skills and custom
   commands), and `/name args` runs the runner's `name` as a turn of its own:
-  `/compact` is Claude Code's own compaction, not Ordewell's. Ordewell's run
+  `/compact` is the runner's own compaction. Ordewell's run
   and plan commands stay on the plan pane, its keys and the planner chat. A
   name the runner did not report is refused with a note; a runner that
   reported no list is sent what you typed. The task log shows each command
   you ran and what it printed, marks every compaction the runner does, asked
   for or on its own, and records what the runner loaded (skills, commands,
-  MCP servers) in one line that ctrl-o expands. Claude Code first; Codex,
-  OpenCode and VS Code follow
+  MCP servers) in one line that ctrl-o expands. Claude Code, Codex and
+  OpenCode (1.x and 2.x) are supported; VS Code follows. Codex exposes
+  compaction and enabled skills; its app-server reports no custom slash
+  prompts. OpenCode exposes native commands and skills plus compaction
+  (`/summarize` is an alias). TUI-only runner commands are not offered
   ([ADR-0018](docs/adr/0018-structured-runner-transport.md), #66).
 - **A supervisor that watches your run, and optionally acts.** The planner
   conversation that wrote the plan now takes turns while the run goes on, at
