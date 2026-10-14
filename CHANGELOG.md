@@ -36,8 +36,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 ### Added
 
 - **A task's chat speaks its runner's own slash commands.** With a task open
-  in the TUI, `/` completes the commands and skills the runner reported for
-  that task (its built-ins and your own and the project's skills and custom
+  in the TUI or VS Code, `/` completes the commands and skills the runner
+  reported for that task (its built-ins and your own and the project's skills and custom
   commands), and `/name args` runs the runner's `name` as a turn of its own:
   `/compact` is the runner's own compaction. Ordewell's run
   and plan commands stay on the plan pane, its keys and the planner chat. A
@@ -45,8 +45,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   reported no list is sent what you typed. The task log shows each command
   you ran and what it printed, marks every compaction the runner does, asked
   for or on its own, and records what the runner loaded (skills, commands,
-  MCP servers) in one line that ctrl-o expands. Claude Code, Codex and
-  OpenCode (1.x and 2.x) are supported; VS Code follows. Codex exposes
+  MCP servers) in a collapsed entry (ctrl-o in the TUI). Claude Code, Codex and
+  OpenCode (1.x and 2.x) are supported. Codex exposes
   compaction and enabled skills; its app-server reports no custom slash
   prompts. OpenCode exposes native commands and skills plus compaction
   (`/summarize` is an alias). TUI-only runner commands are not offered

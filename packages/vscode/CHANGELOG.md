@@ -13,6 +13,8 @@
 
 ### Added
 
+- **Native runner commands in task chats.** Task cards and log tabs complete the runner’s commands and skills, and task logs show command results, compaction events and loaded commands, skills and MCP servers.
+
 - **A supervisor.** The planner keeps watching your run and writes you notes,
   labelled "Supervisor" in the chat. Off, **Watch** (default) or **Act**, set
   with `/supervisor [off|watch|act]`. At Act it may run, stop, retry and skip

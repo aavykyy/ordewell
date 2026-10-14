@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { taskCommand, useRunnerCommands, useTaskCommands } from './RunnerCommands';
 import SubTaskCard from './SubTaskCard';
 import ModelSelector from './ModelSelector';
 import DependencyPicker from './DependencyPicker';
@@ -222,21 +223,39 @@ export function TaskMessageBox({ taskId, onSend, onSendNow, resumes = false }: {
   resumes?: boolean;
 }) {
   const [text, setText] = useState('');
+  const [error, setError] = useState('');
+  const { commands, invoke } = useTaskCommands(taskId);
+  const completion = useRunnerCommands(text, setText, commands);
   const canSend = text.trim().length > 0;
-  const send = () => { if (canSend) { onSend(taskId, text.trim()); setText(''); } };
-  const sendNow = () => { if (canSend) { onSendNow(taskId, text.trim()); setText(''); } };
+  const send = () => {
+    if (!canSend) return;
+    try {
+      const command = taskCommand(text.trim(), commands);
+      if (command && !resumes) invoke(command.name, command.args);
+      else onSend(taskId, text.trim());
+      setError('');
+      setText('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  const nativeSlash = text.trim().startsWith('/') && commands.length > 0;
+  const sendNow = () => { if (nativeSlash) { send(); return; } if (canSend) { onSendNow(taskId, text.trim()); setText(''); } };
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing || completion.keyDown(e)) return;
     if (e.key !== 'Enter' || e.shiftKey) return;
     e.preventDefault();
     if ((e.ctrlKey || e.metaKey) && !resumes) sendNow(); else send();
   };
   return (
     <div className="task-message-box" onClick={(e) => e.stopPropagation()}>
+      {completion.palette}
+      {error && <span className="task-command-error" role="alert">{error}</span>}
       <textarea className="task-message-input" value={text} rows={1}
         placeholder={resumes ? 'The limit has reset? A message to resume it with… (Enter to resume)' : 'Message the task… (Enter to send, Ctrl+Enter to send now)'}
-        onChange={(e) => setText(e.target.value)} onKeyDown={onKeyDown} />
+        onChange={(e) => completion.change(e.target.value)} onKeyDown={onKeyDown} />
       <button type="button" className="task-message-send" disabled={!canSend} onClick={send}>{resumes ? 'Resume' : 'Send'}</button>
-      {!resumes && (
+      {!resumes && !nativeSlash && (
         <button type="button" className="task-message-send-now" disabled={!canSend}
           title="Interrupt the running step and send this next, ahead of anything queued (Ctrl+Enter)" onClick={sendNow}>
           Send now

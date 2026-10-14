@@ -32,6 +32,69 @@ describe('the task log tab (ADR-0018, V1)', () => {
     api.postMessage.mockClear();
   });
 
+  it('completes only the runner commands and sends a command with arguments', () => {
+    render(<TaskLogApp />);
+    init({ working: true, commands: [{ name: 'compact', description: 'Compact native context', argumentHint: '[focus]', kind: 'builtin' }] });
+    const input = screen.getByPlaceholderText(/Message the task/);
+    fireEvent.change(input, { target: { value: '/' } });
+    expect(screen.getByRole('listbox')).toHaveTextContent('/compact');
+    expect(screen.getByRole('listbox')).toHaveTextContent('Compact native context');
+    expect(screen.getByRole('listbox')).toHaveTextContent('[focus]');
+    expect(screen.queryByText('/approve')).toBeNull();
+    fireEvent.keyDown(input, { key: 'Tab' });
+    expect(input).toHaveValue('/compact ');
+    fireEvent.change(input, { target: { value: '/compact keep API details' } });
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'invokeTaskCommand', name: 'compact', args: 'keep API details' });
+  });
+
+  it('draws command results, automatic compaction and collapsed runner configuration', () => {
+    render(<TaskLogApp />);
+    const view = replayTaskLog([
+      { type: 'runner_loaded', commands: [{ name: 'review', kind: 'skill', description: 'Review code' }], mcpServers: [{ name: 'docs', status: 'connected' }] },
+      { type: 'command', name: 'compact', args: 'keep APIs' },
+      { type: 'command_output', text: 'Native context summary' },
+      { type: 'compaction', trigger: 'auto', preTokens: 12000, postTokens: 3000 },
+      { type: 'turn_end', reason: 'completed' },
+    ]);
+    init({}, [...view.blocks]);
+    expect(screen.getByText('/compact keep APIs')).toBeTruthy();
+    expect(screen.getByText('done')).toBeTruthy();
+    expect(screen.getByText('Native context summary')).toBeTruthy();
+    expect(screen.getByText('Context compacted by the runner on its own · 12000 → 3000 tokens')).toBeTruthy();
+    expect(screen.getByText(/Runner loaded 1 skill/)).toBeTruthy();
+    expect(screen.queryByText('docs (connected)')).toBeNull();
+    fireEvent.click(screen.getByText('Expand all'));
+    expect(screen.getByText('docs (connected)')).toBeTruthy();
+    expect(screen.getByText('/review')).toBeTruthy();
+  });
+
+  it('offers no palette when no commands are reported and sends slash text as typed', () => {
+    render(<TaskLogApp />);
+    init({ commands: [], working: true });
+    const input = screen.getByPlaceholderText(/Message the task/);
+    fireEvent.change(input, { target: { value: '/' } });
+    expect(screen.queryByRole('listbox')).toBeNull();
+    fireEvent.change(input, { target: { value: '/custom details' } });
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendTaskMessageNow', text: '/custom details' });
+  });
+
+  it('refuses Ordewell commands in a task and lets Escape close completion before interrupting', () => {
+    render(<TaskLogApp />);
+    init({ working: true, commands: [{ name: 'compact', kind: 'builtin', description: 'Native compaction' }] });
+    const input = screen.getByPlaceholderText(/Message the task/);
+    fireEvent.change(input, { target: { value: '/' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByRole('listbox')).toBeNull();
+    expect(screen.queryByText('Press Esc again to stop')).toBeNull();
+    fireEvent.change(input, { target: { value: '/run' } });
+    fireEvent.click(screen.getByLabelText('Send'));
+    expect(screen.getByRole('alert')).toHaveTextContent('The runner does not offer that command');
+    expect(api.postMessage).toHaveBeenCalledTimes(1);
+    expect(input).toHaveValue('/run');
+  });
+
   it('asks the host for the log when it mounts', () => {
     render(<TaskLogApp />);
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'ready' });

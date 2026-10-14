@@ -1,5 +1,5 @@
 import type { GlobalRunSettings,
-  AiProvider, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunView, SurfacePlan,
+  AiProvider, RunnerCommand, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunView, SurfacePlan,
   TaskModelAssignment,
 } from '@ordewell/core';
 
@@ -89,6 +89,8 @@ export interface ConversationPatch {
 }
 
 export type WebviewToHost =
+  | { type: 'getTaskCommands'; taskId: string }
+  | { type: 'invokeTaskCommand'; taskId: string; name: string; args: string }
   /** Chat input: a message for the planner, or a slash command. */
   | {
       type: 'sendMessage';
@@ -174,6 +176,7 @@ export interface SettingsChange {
 }
 
 export type HostToWebview =
+  | { type: 'taskCommands'; taskId: string; commands: readonly RunnerCommand[] }
   | { type: 'setState'; state: ChatState }
   | ConversationPatch
   /** A planner turn opened or closed: what turns a send into a hold, and Esc into unsend or stop. */

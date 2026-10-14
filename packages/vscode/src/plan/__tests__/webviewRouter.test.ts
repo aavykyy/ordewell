@@ -108,6 +108,11 @@ describe('webview messages reach the session through one entry point each', () =
     fs.rmSync(h.workspace, { recursive: true, force: true });
   });
 
+  it('answers a task command catalog request from the Session without planner commands', async () => {
+    await h.route({ type: 'getTaskCommands', taskId: 't1' });
+    expect(h.posts).toContainEqual({ type: 'taskCommands', taskId: 't1', commands: [] });
+  });
+
   describe('task edits', () => {
     it('a model picked on a card is a session edit, broadcast to every surface', async () => {
       const assignment = { modelId: 'claude-opus-4-1', modelLabel: 'Claude Opus 4.1' };

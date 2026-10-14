@@ -1,4 +1,4 @@
-import type { ApprovalDecision, AwaitingReason, DisplayBlock, StructuredTurnEnd, TaskStatus } from '@ordewell/core';
+import type { ApprovalDecision, AwaitingReason, DisplayBlock, RunnerCommand, StructuredTurnEnd, TaskStatus } from '@ordewell/core';
 
 /*
  * The messages between the extension host and a task-log panel (ADR-0018, V1).
@@ -25,6 +25,7 @@ export interface TaskLogQueuedMessage {
  * plan.
  */
 export interface TaskLogStatus {
+  commands?: readonly RunnerCommand[];
   taskId: string;
   order: number;
   title: string;
@@ -62,6 +63,7 @@ export type HostToTaskLog =
 
 export type TaskLogToHost =
   | { type: 'ready' }
+  | { type: 'invokeTaskCommand'; name: string; args: string }
   | { type: 'sendTaskMessage'; text: string }
   | { type: 'removeQueuedTaskMessage'; id: string }
   /** Force send (ADR-0023, F1): interrupt the running turn and deliver `text` next. */
