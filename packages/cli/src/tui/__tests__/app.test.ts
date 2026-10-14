@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createApp } from '../app';
+import { style } from '../ansi';
 import type { Effect } from '../reducer';
 import { lastMessage, messagesOf } from './chat';
 
@@ -124,6 +125,55 @@ describe('createApp', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe('the status dot', () => {
+    // Colour is what the dot pulses in, so these run with it on and restore it.
+    const withColour = (on: boolean, body: () => void): void => {
+      const before = style.enabled;
+      style.enabled = on;
+      vi.useFakeTimers();
+      try {
+        body();
+      } finally {
+        vi.useRealTimers();
+        style.enabled = before;
+      }
+    };
+
+    it('pulses no faster than every 400ms while the selected chat is busy', () => {
+      withColour(true, () => {
+        const h = harness({ status: 'planning' });
+        h.app.start();
+
+        vi.advanceTimersByTime(399);
+        expect(h.app.getState().spinnerFrame).toBe(0);
+        vi.advanceTimersByTime(600);
+        expect(h.app.getState().spinnerFrame).toBeGreaterThan(0);
+      });
+    });
+
+    it('holds still while the chat is idle', () => {
+      withColour(true, () => {
+        const h = harness({ tasks: [{ id: 't1', order: 1, title: 'Done', type: 'ai', status: 'completed', dependencies: [] }] });
+        h.app.start();
+        const drawn = h.frames.length;
+
+        vi.advanceTimersByTime(2000);
+        expect(h.app.getState().spinnerFrame).toBe(0);
+        expect(h.frames).toHaveLength(drawn);
+      });
+    });
+
+    it('holds still with colour off, as on a pipe', () => {
+      withColour(false, () => {
+        const h = harness({ status: 'planning' });
+        h.app.start();
+
+        vi.advanceTimersByTime(2000);
+        expect(h.app.getState().spinnerFrame).toBe(0);
+      });
+    });
   });
 
   it('keeps running when an effect rejects', async () => {

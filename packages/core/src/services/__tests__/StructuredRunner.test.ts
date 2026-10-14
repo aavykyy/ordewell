@@ -5,6 +5,7 @@ import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import type { IRunnerSession, StructuredEvent, StructuredTurnEnd } from '../../interfaces/IRunner';
 import type { AgentEvent, SpawnFn, AgentStartOptions, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
 import type { OrdewellMcpServer } from '../mcp/OrdewellMcpServer';
+import { TASK_COMPLETION_CONTRACT } from '../mcp';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
 import { claudeTurnEndQueue, fakeSpawn, fixture, type FakeSpawnResult, type ScriptedReply } from './harnessTestKit';
 
@@ -93,9 +94,9 @@ async function firstTurn(spawned: FakeSpawnResult): Promise<void> {
   await until(() => userTurns(spawned.processes[0]?.written ?? []).length > 0);
 }
 
-/** What the session wrote to the runner after the attach check every spawn opens with. */
+/** What the session wrote to the runner after the `initialize` and attach check every spawn opens with. */
 function afterAttachCheck(written: string[]): string[] {
-  return written.filter((line) => !line.includes('"subtype":"mcp_status"'));
+  return written.filter((line) => !line.includes('"subtype":"mcp_status"') && !line.includes('"subtype":"initialize"'));
 }
 
 describe('StructuredRunner out-of-turn output', () => {
@@ -158,7 +159,8 @@ describe('StructuredRunner spawn', () => {
     expect(args[args.indexOf('--permission-mode') + 1]).toBe(expected);
     // Only the question tool: a task keeps every other tool its mode allows.
     expect(args[args.indexOf('--disallowedTools') + 1]).toBe('AskUserQuestion');
-    expect(args).not.toContain('--append-system-prompt');
+    // The one system prompt a task has: how it ends, which the CLI's compaction cannot summarise away.
+    expect(args[args.indexOf('--append-system-prompt') + 1]).toContain('call the `task_complete` tool with status `done`');
     expect(args).not.toContain('--dangerously-skip-permissions');
     session.kill();
   });
@@ -179,6 +181,7 @@ describe('StructuredRunner spawn', () => {
       '--thinking', 'enabled', '--effort', 'high',
       '--model', 'sonnet',
       '--resume', 'sess-prev',
+      '--append-system-prompt', TASK_COMPLETION_CONTRACT,
       '--mcp-config', expect.stringMatching(/mcp\.json$/),
       '--allowedTools', 'mcp__ordewell__task_complete,mcp__ordewell__checkpoint',
     ]);
@@ -195,7 +198,7 @@ describe('StructuredRunner spawn', () => {
     const session = await runner.spawn(options({ thinkingEffort, modelId }));
     const args = spawned.lastArgs();
     const from = args.indexOf('--disallowedTools') + 2;
-    const to = args.indexOf(modelId ? '--model' : '--mcp-config');
+    const to = args.indexOf(modelId ? '--model' : '--append-system-prompt');
     expect(args.slice(from, to)).toEqual(expected);
     session.kill();
   });
@@ -512,6 +515,60 @@ describe('StructuredSession messages', () => {
     const turn = observe(await runner.spawn(options()));
     turn.session.write(' \r\n');
     expect(turn.session.queued()).toEqual([]);
+    turn.session.kill();
+  });
+});
+
+describe('StructuredSession runner commands (#66)', () => {
+  /** `/compact` recorded on a task in `default`, replayed under the `acceptEdits` these tasks ask for. */
+  const compact = fixture('claude-code', 'task-compact').split('"permissionMode":"default"').join('"permissionMode":"acceptEdits"');
+
+  it('reports the commands its runner offers', async () => {
+    const { runner } = harness([compact]);
+    const turn = observe(await runner.spawn(options()));
+    await turn.nextTurnEnd();
+    expect(turn.session.commands().map((c) => c.name)).toEqual(['tdd', 'pingskill', 'hellocmd', 'clear', 'compact', 'model', 'docs']);
+    turn.session.kill();
+  });
+
+  it('runs a command as a turn of its own, the turn saying which command opened it', async () => {
+    const { runner, spawned } = harness([fixture('claude-code', 'task-no-marker'), compact]);
+    const turn = observe(await runner.spawn(options()));
+    await turn.nextTurnEnd();
+
+    turn.session.invokeCommand('compact');
+    await turn.nextTurnEnd();
+    expect(userTurns(spawned.processes[0].written)).toEqual(['Do the task', '/compact']);
+    expect(turn.events.filter((e) => e.type === 'turn_start').at(-1)).toEqual({ type: 'turn_start', text: '/compact', command: { name: 'compact' } });
+    expect(turn.events.filter((e) => e.type === 'compaction' || e.type === 'command_output')).toEqual([
+      { type: 'compaction', trigger: 'manual', preTokens: 24939, postTokens: 3615 },
+      { type: 'command_output', text: 'Compacted' },
+    ]);
+    expect(turn.turnEnds).toEqual(['completed', 'completed']);
+    turn.session.kill();
+  });
+
+  it('queues a command sent while a turn runs without handing it to that turn, and runs it next', async () => {
+    const spawned = fakeSpawn([() => {}, compact]);
+    const runner = new StructuredRunner({
+      process: { spawn: spawned.spawn, resolvePath: async () => '/usr/bin', platform: 'linux', isDirectory: () => true, exists: () => true },
+      createAdapter: (_runner, deps) => new ClaudeCodeAdapter(deps),
+    });
+    const turn = observe(await runner.spawn(options()));
+    await firstTurn(spawned);
+
+    const id = turn.session.invokeCommand('compact', 'keep the API notes');
+    await tick();
+    expect(turn.session.queued()).toEqual([{ id, text: '/compact keep the API notes' }]);
+    expect(userTurns(spawned.processes[0].written)).toEqual(['Do the task']);
+
+    spawned.processes[0].emitStdout(fixture('claude-code', 'task-no-marker'));
+    await turn.nextTurnEnd();
+    await turn.nextTurnEnd();
+    expect(userTurns(spawned.processes[0].written)).toEqual(['Do the task', '/compact keep the API notes']);
+    expect(turn.events.filter((e) => e.type === 'turn_start').at(-1)).toEqual({
+      type: 'turn_start', text: '/compact keep the API notes', messageId: id, command: { name: 'compact', args: 'keep the API notes' },
+    });
     turn.session.kill();
   });
 });

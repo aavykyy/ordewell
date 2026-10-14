@@ -4,12 +4,14 @@ import { EventEmitter } from 'events';
 import { spawn as nodeSpawn } from 'child_process';
 import type {
   IRunnerSession,
+  InvokedCommand,
   QueuedTaskMessage,
   StructuredEvent,
   StructuredTurnEnd,
   TaskMessageFrom,
 } from '../interfaces/IRunner';
 import type { ApprovalDecision } from '../interfaces/IApproval';
+import type { RunnerCommand } from '../models/RunnerCommand';
 import { checkpointReply, type CheckpointAnswer, type TaskCompleteArgs } from './mcp/tools';
 import { sharedMcpServer, type OrdewellMcpServer, type TaskTokenScope } from './mcp/OrdewellMcpServer';
 import { mcpClientConfig } from './mcp/clientConfig';
@@ -171,7 +173,11 @@ interface PendingMessage {
   /** Force sent (ADR-0023, F1): it opens the turn that replaces the interrupted one. */
   forced?: boolean;
   from?: TaskMessageFrom;
+  /** The runner's own command this runs (#66): a turn of its own, never handed into a running one. */
+  command?: InvokedCommand;
 }
+
+type Opening = Partial<Pick<PendingMessage, 'id' | 'forced' | 'from' | 'command'>>;
 
 interface SessionLaunch {
   runner: string;
@@ -347,13 +353,28 @@ export class StructuredSession extends AbstractRunnerSession {
   }
 
   sendMessage(text: string, from?: TaskMessageFrom): string {
+    return this.enqueue(text, from ? { from } : {});
+  }
+
+  commands(): RunnerCommand[] {
+    return this.adapter?.commands?.() ?? [];
+  }
+
+  invokeCommand(name: string, args = ''): string {
+    const given = args.trim();
+    const text = given ? `/${name} ${given}` : `/${name}`;
+    if (!this.adapter?.invokeCommand) return this.sendMessage(text);
+    return this.enqueue(text, { command: { name, ...(given ? { args: given } : {}) } });
+  }
+
+  private enqueue(text: string, opening: Pick<Opening, 'from' | 'command'>): string {
     this.messageCount += 1;
     const id = `msg-${this.messageCount}`;
-    const sender = from ? { from } : {};
+    const sender = opening.from ? { from: opening.from } : {};
     if (this.exited) this.emitEvent({ type: 'message_undelivered', messageId: id, text, ...sender });
-    else if (this.state === 'idle' && this.adapterStarted) this.deliver(text, sender);
+    else if (this.state === 'idle' && this.adapterStarted) this.deliver(text, opening);
     else {
-      this.queue.push({ id, text, stage: 'queued', ...sender });
+      this.queue.push({ id, text, stage: 'queued', ...opening });
       this.emitEvent({ type: 'message_queued', messageId: id, text, ...sender });
       this.offerNext();
     }
@@ -524,7 +545,7 @@ export class StructuredSession extends AbstractRunnerSession {
   }
 
   /** `message` is what opened the turn: a queued one has an id, one delivered straight from idle only its sender. */
-  private openTurn(text: string, message?: Partial<Pick<PendingMessage, 'id' | 'forced' | 'from'>>): OpenTurn {
+  private openTurn(text: string, message?: Opening): OpenTurn {
     this.turnCount += 1;
     const turn: OpenTurn = { id: this.turnCount, abort: new AbortController(), ended: false, reason: 'completed', steerRefused: false };
     this.turn = turn;
@@ -532,20 +553,26 @@ export class StructuredSession extends AbstractRunnerSession {
     this.emitEvent({
       type: 'turn_start', text,
       ...(message?.id ? { messageId: message.id } : {}), ...(message?.forced ? { forced: true } : {}), ...(message?.from ? { from: message.from } : {}),
+      ...(message?.command ? { command: message.command } : {}),
     });
     return turn;
   }
 
-  private deliver(text: string, message?: Partial<Pick<PendingMessage, 'id' | 'forced' | 'from'>>): void {
+  private deliver(text: string, message?: Opening): void {
     const adapter = this.adapter;
     if (!adapter) return;
     const turn = this.openTurn(text, message);
     const generation = this.generation;
-
-    void adapter.send(text, (event) => {
+    const onEvent = (event: AgentEvent): void => {
       if (generation !== this.generation) return;
       this.route(adapter, turn, event);
-    }, turn.abort.signal).catch((err: unknown) => {
+    };
+    const command = message?.command;
+    const sent = command && adapter.invokeCommand
+      ? adapter.invokeCommand(command.name, command.args ?? '', onEvent, turn.abort.signal)
+      : adapter.send(text, onEvent, turn.abort.signal);
+
+    void sent.catch((err: unknown) => {
       if (generation !== this.generation || this.exited) return;
       turn.reason = 'failed';
       this.handleEvent({ type: 'error', message: err instanceof Error ? err.message : String(err) });
@@ -567,7 +594,9 @@ export class StructuredSession extends AbstractRunnerSession {
     if (!adapter?.steer || !turn || turn.ended || turn.steerRefused || this.interrupting || this.exited) return;
     if (this.queue.some((m) => m.stage === 'steering')) return;
     const next = this.queue.find((m) => m.stage === 'queued');
-    if (!next) return;
+    // A command handed into the turn would be read as text; it and whatever
+    // was sent after it wait for the turn's end.
+    if (!next || next.command) return;
     next.stage = 'steering';
     const generation = this.generation;
     adapter.steer(next.id, next.text).catch(() => false).then((accepted) => {

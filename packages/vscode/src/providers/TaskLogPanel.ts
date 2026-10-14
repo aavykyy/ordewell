@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import { canContinue, resumeLabel, type ApprovalAnswer, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
+import { latestTaskCommands } from '../shared/taskCommands';
+import { canContinue, pausedOnLimit, resumeLabel, type ApprovalAnswer, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { EMPTY_TASK_LOG, reduceTaskLog, replayTaskLog, type TaskLogView } from '@ordewell/core/plan-utils';
 import { diffConversation } from '../shared/conversationPatch';
 import { renderWebviewHtml } from './webviewHtml';
@@ -15,11 +16,13 @@ export interface TaskLogSession {
   taskLog(taskId: string, attempt: number): TaskLogEvent[];
   /** A message and a continue are execution buttons: they go through the command seam as the user (ADR-0029). */
   execute(command: ExecutionCommand, actor: ExecutionActor): Promise<CommandOutcome>;
+  invokeTaskCommand(taskId: string, name: string, args: string): string;
   removeQueuedTaskMessage(taskId: string, id: string): boolean;
   forceSendTaskMessage(taskId: string, text: string): string;
   forceSendQueuedTaskMessage(taskId: string, id: string): boolean;
   interruptTask(taskId: string): Promise<void>;
   cancelScheduledResume(taskId: string): boolean;
+  resumeNow(taskId: string): Promise<void>;
   outstandingApprovals(): PendingApproval[];
   resolveApproval(id: string, answer: ApprovalAnswer): boolean;
 }
@@ -116,6 +119,9 @@ export class TaskLogPanel {
       case 'selectAttempt':
         this.selectAttempt(msg.attempt);
         return;
+      case 'invokeTaskCommand':
+        this.control(() => { this.deps.session.invokeTaskCommand(this.taskId, msg.name, msg.args); });
+        return;
       case 'sendTaskMessage':
         this.controlAsync(() => this.userCommand({ command: 'message_task', task: this.taskId, text: msg.text }));
         return;
@@ -137,6 +143,10 @@ export class TaskLogPanel {
         this.control(() => {
           if (!this.deps.session.cancelScheduledResume(this.taskId)) throw new Error('This task has no resume scheduled.');
         });
+        return;
+      case 'resumeNow':
+        this.followLive = true;
+        this.controlAsync(() => this.deps.session.resumeNow(this.taskId));
         return;
       case 'continueTask':
         // The continue is a new attempt: show it, even from an earlier one.
@@ -218,6 +228,7 @@ export class TaskLogPanel {
     const task = this.deps.getTask(this.taskId);
     const resumes = task ? resumeLabel(task) : null;
     return {
+      commands: latestTaskCommands(this.deps.session, this.taskId),
       taskId: this.taskId,
       order: task?.order ?? 0,
       title: task?.title ?? '',
@@ -233,6 +244,7 @@ export class TaskLogPanel {
       attempts: this.attempts,
       attempt: this.attempt,
       continuable: task ? canContinue(task) : false,
+      resumable: task ? pausedOnLimit(task) && canContinue(task) : false,
     };
   }
 

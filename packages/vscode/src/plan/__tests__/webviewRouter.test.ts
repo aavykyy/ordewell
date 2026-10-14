@@ -108,6 +108,11 @@ describe('webview messages reach the session through one entry point each', () =
     fs.rmSync(h.workspace, { recursive: true, force: true });
   });
 
+  it('answers a task command catalog request from the Session without planner commands', async () => {
+    await h.route({ type: 'getTaskCommands', taskId: 't1' });
+    expect(h.posts).toContainEqual({ type: 'taskCommands', taskId: 't1', commands: [] });
+  });
+
   describe('task edits', () => {
     it('a model picked on a card is a session edit, broadcast to every surface', async () => {
       const assignment = { modelId: 'claude-opus-4-1', modelLabel: 'Claude Opus 4.1' };
@@ -169,6 +174,13 @@ describe('webview messages reach the session through one entry point each', () =
 
       const saved = loadSession(h.session.sessionId, h.workspace);
       expect(saved?.plan.tasks.find((t) => t.id === 't1')?.status).toBe('skipped');
+    });
+
+    it('resume now resumes the task in its saved session, as the user', async () => {
+      const resumeNow = vi.spyOn(h.session, 'resumeNow').mockResolvedValue(undefined);
+      await h.route({ type: 'sendSystemCommand', command: 'resumeNow', taskId: 't1' });
+
+      expect(resumeNow).toHaveBeenCalledWith('t1');
     });
 
     it('retry reaches the command seam as the user', async () => {

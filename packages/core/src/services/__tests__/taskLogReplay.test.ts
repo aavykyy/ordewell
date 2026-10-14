@@ -78,7 +78,8 @@ describe('a multi-turn attempt, saved and replayed', () => {
     ]);
     const session = await run.spawn();
     const both = turnEnds(session, 2);
-    await vi.waitFor(() => expect(run.spawned.processes[0].written).toHaveLength(2));
+    // `initialize`, the attach check, then the prompt.
+    await vi.waitFor(() => expect(run.spawned.processes[0].written).toHaveLength(3));
     const queued = session.sendMessage('Say only: ok');
     await session.interrupt();
     await both;
@@ -264,6 +265,6 @@ describe('a message read mid-turn in the saved task log (ADR-0023)', () => {
     expect(replayed).toEqual(live);
     expect(replayed.queued).toEqual([]);
     expect(replayed.blocks.map((b) => (b.type === 'message' ? `${b.role}:${b.text}` : b.type)))
-      .toEqual(['user:Do the task', 'tool', 'user:use Postgres', 'agent:Using Postgres.']);
+      .toEqual(['user:Do the task', 'runner_loaded', 'tool', 'user:use Postgres', 'agent:Using Postgres.']);
   });
 });

@@ -208,6 +208,8 @@ export interface PlannerConversationHost {
   catalog(): TaskQueryCatalog;
   /** Whether autorun is on now (ADR-0030); the planner is told in the turn after it changes. */
   autorun(): boolean;
+  /** Run updates no turn has carried yet, taken by the turn that asks: the next turn is told, whoever opens it. */
+  takeRunUpdates(): string[];
   tasks(): readonly Task[];
   /**
    * The orchestrator's live capture for a task's latest attempt, backing the
@@ -822,7 +824,7 @@ export class PlannerConversation {
     // The persisted transcript keeps the raw user message; the model gets the
     // live catalog (always) and the current plan (tasks, statuses, edit
     // protocol — once tasks exist) alongside it.
-    const contextBlock = [this.catalogBlock(), this.planContextBlock(), this.autorunBlock()].filter(Boolean).join('\n\n');
+    const contextBlock = [this.catalogBlock(), this.planContextBlock(), this.autorunBlock(), this.runUpdatesBlock()].filter(Boolean).join('\n\n');
     const said = fromUser ? plannerMessage(message.text, message.skills) : '';
     const outgoing = [contextBlock, ...wakeUps, userTurn.wakeUp?.brief, said].filter(Boolean).join('\n\n');
 
@@ -1273,6 +1275,11 @@ export class PlannerConversation {
     if (now === this.toldAutorun) return null;
     this.toldAutorun = now;
     return now ? AUTORUN_ON : AUTORUN_OFF;
+  }
+
+  private runUpdatesBlock(): string | null {
+    const updates = this.host.takeRunUpdates();
+    return updates.length > 0 ? ['Run update:', ...updates.map((update) => `- ${update}`)].join('\n') : null;
   }
 
   /**

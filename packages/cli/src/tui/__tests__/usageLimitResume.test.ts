@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { EMPTY_TASK_LOG } from '@ordewell/core';
 import { initialState, reduce, type Step } from '../reducer';
 import { chatLayout, footerHints, planLayout } from '../layout';
+import { chatPromptLabel } from '../geometry';
 import { style } from '../ansi';
 import { inboundFor } from '../inbound';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
@@ -10,14 +11,15 @@ import type { WsEvent } from '../../apiClient';
 
 /**
  * A task paused on its runner's usage limit that resumes on its own (#84):
- * the row and the task view say when, and `c` / `ctrl-x` cancel the resume.
+ * the row and the task view say when, `r` resumes it now, and `c` / `ctrl-x`
+ * keep it from resuming on its own.
  */
 
 const RESUME_AT = new Date(2026, 9, 11, 20, 10).toISOString();
 
 const task = (over: Partial<TaskView> = {}): TaskView => ({
   id: 't1', order: 1, title: 'Fix the parser', type: 'ai', status: 'awaiting_user', awaitingReason: 'usage-limit', resumeAt: RESUME_AT,
-  dependencies: [], assignedRunner: 'claude-code', ...over,
+  dependencies: [], assignedRunner: 'claude-code', continuable: true, ...over,
 });
 
 const state = (tasks: TaskView[], over: Partial<TuiState> = {}): TuiState =>
@@ -40,38 +42,60 @@ afterEach(() => {
 });
 
 describe('a task paused on a usage limit in the TUI', () => {
-  it('says on its row when it resumes, and how to cancel that', () => {
+  it('says on its row when it resumes, and how to resume it now or keep it from resuming', () => {
     const shown = frame([task()]);
     expect(shown).toContain('    paused on a usage limit · claude-code');
-    expect(shown).toContain('⏸ resumes at 8:10pm, once the usage limit resets — c cancels the resume');
+    expect(shown).toContain('⏸ resumes at 8:10pm, once the usage limit resets — r resume now · c don\'t resume');
   });
 
-  it('says nothing of a resume once it waits for a manual retry', () => {
+  it('says nothing of a resume once it waits for a manual retry, but still offers to resume it now', () => {
     const shown = frame([task({ resumeAt: undefined })]);
     expect(shown).toContain('    paused on a usage limit · claude-code');
     expect(shown).not.toContain('resumes at');
+    expect(shown).toContain('⏸ waits for the usage limit to reset — r resume now');
+    expect(frame([task({ resumeAt: undefined, continuable: false })])).not.toContain('r resume now');
   });
 
-  it('cancels the resume with c, and names that in the footer', () => {
+  it('resumes it now with r, with or without a resume time, and names that and skip in the footer', () => {
+    const paused = state([task()]);
+    expect(press(paused, 'r').effects).toEqual([{ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'resume-now', watch: true }]);
+    expect(press(state([task({ resumeAt: undefined })]), 'r').effects).toEqual([{ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'resume-now', watch: true }]);
+    expect(footerHints(paused)).toEqual(expect.arrayContaining(['r resume now', 's skip']));
+    expect(footerHints(state([task({ resumeAt: undefined })]))).toEqual(expect.arrayContaining(['r resume now', 's skip']));
+
+    expect(press(state([task({ continuable: false })]), 'r').effects).toEqual([]);
+    expect(press(state([task({ status: 'failed', awaitingReason: undefined, resumeAt: undefined })]), 'r').effects).toEqual([]);
+  });
+
+  it('keeps it from resuming on its own with c, and names that plainly in the footer', () => {
     const paused = state([task()]);
     expect(press(paused, 'c').effects).toEqual([{ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'cancel-resume' }]);
-    expect(footerHints(paused)).toContain('c cancel resume');
+    expect(footerHints(paused)).toContain('c don\'t resume');
 
     const running = state([task({ status: 'in_progress', awaitingReason: undefined, resumeAt: undefined })]);
     expect(press(running, 'c').effects).toEqual([{ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'cancel' }]);
     expect(footerHints(running)).toContain('c cancel');
   });
 
-  it('says when it resumes in the task view, where ctrl-x cancels the resume', () => {
+  it('says when it resumes in the task view, where ctrl-x keeps it from resuming', () => {
     const view = opened([task()]);
     const header = chatLayout(view, 30, 200).header;
     expect(header[0]).toContain('→ Task 1 · Fix the parser · claude-code · paused on a usage limit · resumes at 8:10pm');
-    expect(header[1]).toContain('ctrl-x cancel resume');
+    expect(header[1]).toContain('ctrl-x don\'t resume');
     expect(reduce(view, { type: 'key', key: { name: 'ctrl-x' } }).effects)
       .toEqual([{ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'cancel-resume' }]);
 
     const manual = opened([task({ resumeAt: undefined })]);
     expect(reduce(manual, { type: 'key', key: { name: 'ctrl-x' } }).effects).toEqual([{ type: 'interruptTask', sessionId: 's1', taskId: 't1' }]);
+  });
+
+  it('resumes it from the task view\'s composer with what is typed, which follows the reset notice', () => {
+    for (const paused of [task(), task({ resumeAt: undefined })]) {
+      const view = { ...opened([paused]), editor: { ...opened([paused]).editor, text: 'limits reset, go on', cursor: 19 } };
+      expect(chatLayout(view, 30, 200).lines.join('\n') + chatPromptLabel(view)).toContain('→ Resume task 1');
+      expect(reduce(view, { type: 'key', key: { name: 'enter' } }).effects)
+        .toEqual([{ type: 'continueTask', sessionId: 's1', taskId: 't1', text: 'limits reset, go on', watch: true }]);
+    }
   });
 
   it('takes the resume time from a status update, and drops it when the update does', () => {
@@ -87,6 +111,17 @@ describe('a task paused on a usage limit in the TUI', () => {
 
     receive(event());
     expect(current.tasks[0].resumeAt).toBeUndefined();
+  });
+
+  it('asks the daemon to resume it now', async () => {
+    const resumeNow = vi.fn().mockResolvedValue({ ok: true });
+    const deps: EffectDeps = {
+      api: { resumeNow } as unknown as OrdewellApi,
+      workspace: '/ws', port: 3742, dispatch: vi.fn(), newSessionId: () => 's2', setEnvVar: () => {}, saveAutonomy: () => ({ overridden: false }), hasBin: () => true, exit: vi.fn(),
+      reviveDaemon: vi.fn(), setMouseCapture: vi.fn(), writeTerminal: vi.fn(),
+    };
+    await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'resume-now' }, deps).catch(() => undefined);
+    expect(resumeNow).toHaveBeenCalledWith('s1', 't1');
   });
 
   it('asks the daemon to cancel the resume, and says what happened', async () => {

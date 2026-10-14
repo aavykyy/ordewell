@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, fireEvent } from '@testing-library/react';
+import { render, fireEvent, screen, act } from '@testing-library/react';
+import { TaskCommandsBridge } from '../RunnerCommands';
 import TaskCard from '../TaskCard';
 import type { Task } from '@ordewell/core';
 
@@ -31,6 +32,38 @@ const input = () => document.querySelector('.task-message-input') as HTMLTextAre
 const type = (text: string) => fireEvent.change(input(), { target: { value: text } });
 
 describe('messaging a running or waiting task from its card', () => {
+  it('requests the task runner catalog and invokes its skill from the card', () => {
+    const post = vi.fn();
+    render(<TaskCommandsBridge.Provider value={post}>
+      <TaskCard task={makeTask()} models={[]} isExecuting expanded onSendMessage={vi.fn()} onSendMessageNow={vi.fn()} />
+    </TaskCommandsBridge.Provider>);
+    expect(post).toHaveBeenCalledWith({ type: 'getTaskCommands', taskId: 't1' });
+    act(() => { window.dispatchEvent(new MessageEvent('message', { data: {
+      type: 'taskCommands', taskId: 't1', commands: [{ name: 'review', kind: 'skill', description: 'Native review', argumentHint: '<files>' }],
+    } })); });
+    type('/');
+    expect(screen.getByRole('listbox')).toHaveTextContent('Native review');
+    fireEvent.click(screen.getByRole('option'));
+    type('/review src');
+    fireEvent.click(document.querySelector('.task-message-send')!);
+    expect(post).toHaveBeenCalledWith({ type: 'invokeTaskCommand', taskId: 't1', name: 'review', args: 'src' });
+  });
+
+  it('resumes a task paused on a usage limit with the native slash text', () => {
+    const post = vi.fn();
+    const onSendMessage = vi.fn();
+    render(<TaskCommandsBridge.Provider value={post}>
+      <TaskCard task={makeTask({ status: 'awaiting_user', awaitingReason: 'usage-limit', runnerSessionId: 'session-1' })} run={{ continuable: true }} models={[]} isExecuting expanded onSendMessage={onSendMessage} onSendMessageNow={vi.fn()} />
+    </TaskCommandsBridge.Provider>);
+    act(() => { window.dispatchEvent(new MessageEvent('message', { data: {
+      type: 'taskCommands', taskId: 't1', commands: [{ name: 'compact', kind: 'builtin', description: 'Compact context' }],
+    } })); });
+    type('/compact keep tests');
+    fireEvent.click(document.querySelector('.task-message-send')!);
+    expect(onSendMessage).toHaveBeenCalledWith('t1', '/compact keep tests');
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'invokeTaskCommand' }));
+  });
+
   it.each(['in_progress', 'awaiting_user'] as const)('offers a message box on a %s task', (status) => {
     renderCard(makeTask({ status, awaitingReason: status === 'awaiting_user' ? 'input' : undefined }), { onSendMessage: vi.fn(), onSendMessageNow: vi.fn() });
     expect(box()).not.toBeNull();

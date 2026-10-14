@@ -59,6 +59,7 @@ export interface FakeSpawnResult {
 
 export interface FakeSpawnOptions {
   autoMcpAttached?: boolean;
+  codexDiscovery?: (method: string) => Record<string, unknown>;
   /**
    * Answers the sandbox capability probe Codex runs before its handshake
    * (`codex sandbox … /bin/true`). Given the probe's argv, return the exit code
@@ -195,6 +196,12 @@ export function fakeSpawn(replies: ScriptedReply[], options: FakeSpawnOptions = 
   const queue = [...replies];
   return spawner((chunk, proc, args) => {
     if (answeredAttachCheck(chunk, proc, args) || answeredModelControl(chunk, proc)) return;
+    let rpc: { id?: number; method?: string } = {};
+    try { rpc = JSON.parse(chunk) as typeof rpc; } catch { /* another runner's input */ }
+    if (rpc.method === 'skills/list' || rpc.method === 'mcpServerStatus/list') {
+      proc.emitStdout(`${JSON.stringify({ id: rpc.id, result: options.codexDiscovery?.(rpc.method) ?? { data: [], nextCursor: null } })}\n`);
+      return;
+    }
     const reply = queue.shift();
     if (reply !== undefined) {
       if (typeof reply === 'function') reply(chunk, proc);
@@ -222,7 +229,7 @@ function answeredAttachCheck(chunk: string, proc: FakeAgentProcess, args: string
 /**
  * Claude Code's `initialize` and `set_model` control requests, answered as
  * `claude` 2.1.296 does: `initialize` lists each model value with the id it
- * runs as. Control traffic, so neither takes a scripted reply.
+ * runs as, and (2.1.299) the commands it offers. Control traffic, so neither takes a scripted reply.
  */
 export const CLAUDE_INITIALIZE_MODELS = [
   { value: 'default', resolvedModel: 'claude-opus-5-5' },
@@ -232,13 +239,30 @@ export const CLAUDE_INITIALIZE_MODELS = [
   { value: 'claude-haiku-5-5', resolvedModel: 'claude-haiku-5-5' },
 ];
 
+/**
+ * The commands `initialize` lists, as `claude` 2.1.299 did in a repository
+ * with a project skill (`pingskill`) and command (`hellocmd`): a subset, the
+ * longer descriptions cut. `doctor` is one the CLI runs only in its own TUI.
+ */
+export const CLAUDE_INITIALIZE_COMMANDS = [
+  { name: 'tdd', description: 'Test-driven development. (user)', argumentHint: '' },
+  { name: 'pingskill', description: 'Reply with the word PONG-SKILL and nothing else. (project)', argumentHint: '' },
+  { name: 'hellocmd', description: 'Say hello-command (project)', argumentHint: 'name' },
+  { name: 'doctor', description: "Health-check the user's Claude Code setup and fix issues.", argumentHint: '[prompt-audit [<path>]]', aliases: ['checkup'], builtin: true },
+  { name: 'clear', description: 'Start a new session with empty context; previous session stays on disk (resumable with /resume)', argumentHint: '[name]', aliases: ['reset', 'new'], builtin: true },
+  { name: 'compact', description: 'Free up context by summarizing the conversation so far', argumentHint: '<optional custom summarization instructions>', builtin: true },
+  { name: 'model', description: 'Set the AI model for Claude Code', argumentHint: '<model>', builtin: true },
+  { name: 'docs', description: 'docs (editable docs people share and comment on). (claude.ai sync)', argumentHint: '', aliases: ['anthropic-skills:docs'] },
+  { name: '__remote-workflow', description: '', argumentHint: '', builtin: true },
+];
+
 function answeredModelControl(chunk: string, proc: FakeAgentProcess): boolean {
   let msg: { type?: string; request_id?: string; request?: { subtype?: string } };
   try { msg = JSON.parse(chunk) as typeof msg; } catch { return false; }
   if (msg.type !== 'control_request') return false;
   const subtype = msg.request?.subtype;
   if (subtype !== 'initialize' && subtype !== 'set_model') return false;
-  const response = subtype === 'initialize' ? { response: { models: CLAUDE_INITIALIZE_MODELS } } : {};
+  const response = subtype === 'initialize' ? { response: { commands: CLAUDE_INITIALIZE_COMMANDS, models: CLAUDE_INITIALIZE_MODELS } } : {};
   proc.emitStdout(`${JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id, ...response } })}\n`);
   return true;
 }

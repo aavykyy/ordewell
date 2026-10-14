@@ -1,12 +1,13 @@
-import type { Task } from '../models/Task';
+import { pausedOnLimit, type Task } from '../models/Task';
 
 /** Whether a task can be continued in its saved runner session (ADR-0018, K1), and in which. */
 export type Continuability = { ok: true; sessionId: string } | { ok: false; reason: string };
 
 /**
  * The rule every surface offers Continue by and the orchestrator enforces: a
- * completed, failed or skipped task whose last attempt left a session id behind. A
- * conflict is resolved by its repair, not a new turn — Retry covers it.
+ * completed, failed or skipped task, or one paused on a usage limit, whose last
+ * attempt left a session id behind. A conflict is resolved by its repair, not a
+ * new turn — Retry covers it.
  */
 export function continuability(task: Task): Continuability {
   const refuse = (reason: string): Continuability => ({ ok: false, reason: `Task "${task.title}" cannot be continued: ${reason}` });
@@ -14,7 +15,8 @@ export function continuability(task: Task): Continuability {
   if (task.status === 'awaiting_user' && task.awaitingReason === 'conflict') {
     return refuse('its work is waiting on a merge conflict. Resolve or repair the conflict instead.');
   }
-  if (task.status !== 'completed' && task.status !== 'failed' && task.status !== 'skipped') return refuse('only a completed, failed or skipped task can be.');
+  const finished = task.status === 'completed' || task.status === 'failed' || task.status === 'skipped';
+  if (!finished && !pausedOnLimit(task)) return refuse('only a completed, failed or skipped task, or one paused on a usage limit, can be.');
   if (!task.runnerSessionId) return refuse('its runner left no saved session to resume. Use Retry instead.');
   return { ok: true, sessionId: task.runnerSessionId };
 }

@@ -5618,3 +5618,56 @@ body {
   border-left: 3px solid var(--vscode-editorWarning-foreground);
   color: var(--vscode-descriptionForeground);
 }
+
+.task-log-composer,
+.task-message-box {
+  flex-wrap: wrap;
+}
+
+.runner-commands {
+  flex: 0 0 100%;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+}
+
+.runner-commands button {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: transparent;
+  cursor: pointer;
+}
+
+.runner-commands button:hover,
+.runner-commands button[aria-selected="true"] {
+  background: var(--accent-subtle);
+}
+
+.runner-commands span {
+  flex: 1 1 100%;
+  color: var(--text-secondary);
+}
+
+.task-command-error {
+  flex: 0 0 100%;
+  color: var(--red);
+}
+
+.runner-loaded {
+  display: block;
+}
+
+.runner-loaded-detail {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}

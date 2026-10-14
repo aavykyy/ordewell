@@ -35,6 +35,22 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Added
 
+- **A task's chat speaks its runner's own slash commands.** With a task open
+  in the TUI or VS Code, `/` completes the commands and skills the runner
+  reported for that task (its built-ins and your own and the project's skills and custom
+  commands), and `/name args` runs the runner's `name` as a turn of its own:
+  `/compact` is the runner's own compaction. Ordewell's run
+  and plan commands stay on the plan pane, its keys and the planner chat. A
+  name the runner did not report is refused with a note; a runner that
+  reported no list is sent what you typed. The task log shows each command
+  you ran and what it printed, marks every compaction the runner does, asked
+  for or on its own, and records what the runner loaded (skills, commands,
+  MCP servers) in a collapsed entry (ctrl-o in the TUI). Claude Code, Codex and
+  OpenCode (1.x and 2.x) are supported. Codex exposes
+  compaction and enabled skills; its app-server reports no custom slash
+  prompts. OpenCode exposes native commands and skills plus compaction
+  (`/summarize` is an alias). TUI-only runner commands are not offered
+  ([ADR-0018](docs/adr/0018-structured-runner-transport.md), #66).
 - **A supervisor that watches your run, and optionally acts.** The planner
   conversation that wrote the plan now takes turns while the run goes on, at
   one of three levels: **Off** (it speaks only when you write), **Watch** (the
@@ -120,6 +136,16 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   the time resumes at once. Without a time, after a cancel, or when the limit
   is hit again at once, the task waits for a manual retry
   ([ADR-0018](docs/adr/0018-structured-runner-transport.md)).
+- **Resume now, when the limit resets early.** A task paused on a usage limit
+  resumes in its saved session as soon as you say so, instead of waiting for
+  its reset or starting over: *Resume now* on its row (`r` in the terminal UI,
+  a button in VS Code), or a message typed into its box, which the runner gets
+  after the reset notice. Every other task waiting on that runner's reset
+  resumes with it. The planner and an Act supervisor resume it with
+  `retry_task` from `"session"`, and a message sent to it with `message_task`
+  resumes it too. A resume that hits the limit again at once waits for you.
+  The cancel is now labelled *Don't resume*, and Skip is offered while the
+  task is paused ([ADR-0018](docs/adr/0018-structured-runner-transport.md)).
 - **Send now in the planner chat.** `ctrl-s` in the terminal UI, and *Send now*
   in VS Code, interrupts the planner turn in flight and answers the message
   alone in the turn that replaces it, ahead of every prompt already queued; the
@@ -129,6 +155,18 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **Esc from a task's chat returns to the plan pane on that task.** It used to
+  drop back to the planner chat; now the cursor lands on the task you opened,
+  revealing its parent if the task is a subtask.
+
+- **The terminal UI's status row speaks for the selected chat only.** It said
+  `Executing…` or `Researching… Read(file) (+2 more)` whichever chat was on
+  screen. It now reads `Planning…` in the planner's chat and `Working…` in a
+  running task's, pulses its dot while that chat is busy, and is empty when it
+  is not; what the planner or runner is doing stays in the chat itself. A task
+  that paused on a usage limit shows when it resumes. What the run waits on —
+  tasks that wait for you, a pause for Merge all — moved to the plan pane's
+  title, where it shows whichever chat is selected.
 - **Skip no longer lands a task's work.** Skip used to mark the task complete,
   landing whatever it had done as if you had vouched for it. A skipped task now
   ends as **skipped**: no verdict, and nothing it produced lands. Its worktree
@@ -334,6 +372,21 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **A task's completion rule survives its runner compacting its own context.**
+  How a task ends — `task_complete` with its full report — was only in the
+  first message, which Claude Code, Codex and OpenCode may summarise or cut
+  when they compact. It is now in the runner's instructions (system prompt,
+  developer instructions, or OpenCode's instruction entry), which they keep
+  whole, and a resumed session gets it again.
+- **A start queued behind the same reply's edit is never lost silently.** A
+  supervisor that edited a task and retried it in one reply was told
+  "Queued", and the retry was then refused after the turn, with nobody told.
+  A queued start is now checked against the task as edited before it is
+  queued, so one that could never run is refused while the planner can still
+  say so. One refused after the edit lands is now shown to you as a system
+  line, "The queued retry of task #N … did not run", and passed to the
+  planner's next turn
+  ([ADR-0029](docs/adr/0029-the-supervisor.md)).
 - **Planners read line ranges without asking.** `sed -n '10,40p' FILE` and
   the other line-number prints run like `head` and `tail`, so a planner on
   Full is no longer denied the way models most often read part of a file.
@@ -575,9 +628,6 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   that launched Explore agents in the background and ended its turn waiting for
   them had its session thrown away with no plan submitted; it is now asked to
   wait for them in the same session, as the conversation planner already was.
-- **The terminal UI names the running task after a plan refresh mid-run.** The
-  status row read a bare "Executing…" until the next status update, as it did
-  on a second terminal that loaded a running session.
 - **Deleting the session the terminal UI shows starts a fresh one.** The view
   stayed on the deleted session, and every next action failed with a message
   that blamed a daemon restart; that message now names a deletion as well.

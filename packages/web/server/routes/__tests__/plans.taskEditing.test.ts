@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
-import { PlanEditError, SessionNotFoundError } from '@ordewell/core';
+import { PlanEditError, SessionNotFoundError, TaskControlError } from '@ordewell/core';
 import type { OrchestratorPool } from '../../pool/orchestratorPool';
 
 describe('task editing routes', () => {
@@ -13,6 +13,7 @@ describe('task editing routes', () => {
     removeTask: ReturnType<typeof vi.fn>;
     markTaskIncomplete: ReturnType<typeof vi.fn>;
     cancelScheduledResume: ReturnType<typeof vi.fn>;
+    resumeNow: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
@@ -24,6 +25,7 @@ describe('task editing routes', () => {
       removeTask: vi.fn().mockReturnValue({ tasks: [] }),
       markTaskIncomplete: vi.fn().mockResolvedValue(undefined),
       cancelScheduledResume: vi.fn().mockReturnValue(true),
+      resumeNow: vi.fn().mockResolvedValue(undefined),
     };
     const pool = { session: vi.fn().mockReturnValue(session) } as unknown as OrchestratorPool;
     const { plansRoute } = await import('../../routes/plans');
@@ -170,6 +172,25 @@ describe('task editing routes', () => {
       session.cancelScheduledResume.mockImplementation(() => { throw new SessionNotFoundError(); });
 
       expect((await app.request('/api/plans/s1/tasks/t1/resume/cancel', { method: 'POST' })).status).toBe(404);
+    });
+  });
+
+  describe('POST /tasks/:taskId/resume/now', () => {
+    it('resumes a task paused on a usage limit now', async () => {
+      const res = await app.request('/api/plans/s1/tasks/t1/resume/now', { method: 'POST' });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      expect(session.resumeNow).toHaveBeenCalledWith('t1');
+    });
+
+    it('refuses with the reason when the task cannot be resumed', async () => {
+      session.resumeNow.mockRejectedValue(new TaskControlError('Task "Fix" is not paused on a usage limit.'));
+
+      const res = await app.request('/api/plans/s1/tasks/t1/resume/now', { method: 'POST' });
+
+      expect(res.status).toBe(400);
+      expect((await res.json() as { error: string }).error).toBe('Task "Fix" is not paused on a usage limit.');
     });
   });
 

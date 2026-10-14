@@ -17,8 +17,9 @@ and completion evidence.
 - **Structured always; no transport setting (S1).** Every supported runner has
   a connector. There is no terminal fallback, setting, command or toggle.
 - **One session contract (S2).** `IRunner` spawns `IRunnerSession`; every session
-  supplies events, messages, interrupt, approvals, native session id and task
-  tools. These methods are mandatory, without a capability discriminator.
+  supplies events, messages, interrupt, approvals, native session id, task
+  tools and its runner's commands (R1). These methods are mandatory, without a
+  capability discriminator; a runner without commands reports none.
 - **Built-in connectors (S3).** Claude Code (`stream-json`), Codex
   (`app-server`) and OpenCode (`serve`) are the only supported runners. Plugin
   manifests are ignored with one notice at host startup.
@@ -64,6 +65,16 @@ and completion evidence.
   approval, so a long approval wait does not also read as idle. If a queued message is delivered as the
   turn ends, or the runner still owes one it was handed (M1), the task stays
   `in_progress` with no flicker.
+- **The completion contract lives in the runner's instructions (C2).** A
+  runner compacts its own context (Claude Code's auto-compact, Codex's
+  auto-compaction, OpenCode's summarize-on-overflow), and what it keeps of the
+  first message is its own summary or a truncated copy. How a task ends — call
+  `task_complete` with `done` and the full report, or `blocked`/`failed` and the
+  reason — is therefore not in that message: it is the system prompt
+  (`--append-system-prompt`), the thread's `developerInstructions`, or
+  OpenCode's `system` / instruction entry, applied again on every resume. The
+  first message is the task's prompt and its context only. The attempt's token
+  is not part of any of it; it travels in the MCP connection.
 - **Talking to a task (M1).** Ordewell owns the message queue. A message sent
   while a turn runs is handed to the runner at once and reaches the model at
   the runner's next step boundary — after the tool call in flight, inside the
@@ -83,6 +94,55 @@ and completion evidence.
   settle the open MCP call through `VerdictEngine`. Clarifying questions are plain text for now: a task starts
   with `AskUserQuestion` disallowed, so the agent asks in prose and ends its
   turn; a question card is a later option.
+- **Runner commands (R1, #66).** Runners stay fully native: the user's skills,
+  hooks, MCP servers, custom commands and the runner's own compaction keep
+  working in a task. A task's chat therefore speaks its runner's slash
+  commands, not Ordewell's. The connector reports what the runner offers
+  (`TaskModeAgentAdapter.commands`, optional: name, description, argument
+  hint, kind `builtin | skill | command`, aliases) and runs one
+  (`invokeCommand`) as a turn of its own; the session exposes both as
+  `commands()` and `invokeCommand(name, args)`. A command sent while a turn
+  runs is queued behind it and never handed into it, where a runner would read
+  it as text, and nothing sent after it overtakes it. A connector that cannot
+  invoke one gets `/name args` as a message. The task log records the command
+  turn (`command`, in place of its `turn_start`), what a command that runs
+  without the model printed (`command_output`), every compaction the runner
+  reports, asked for or automatic (`compaction`), and, once per process, what
+  it loaded: its commands and the MCP servers of the user's setup, without
+  Ordewell's own (`runner_loaded`, drawn collapsed). In the TUI task view `/`
+  completes the runner's list alone, at the start of the message, the one
+  place a runner reads a command; a reported `/name` runs as that command, an
+  unreported one is refused with a note, and with no list reported the text
+  goes as typed. Ordewell's run and plan commands are neither offered nor run
+  there; they stay on the plan pane, its keys and the planner chat, and Esc
+  still leaves the view. Claude Code (checked on 2.1.299): the `initialize`
+  control request lists every command with its description, argument hint,
+  aliases and a `builtin` flag before any turn; each turn's `init` names the
+  skills, the commands only its own TUI runs (left out) and the MCP servers;
+  `commands_changed` lists them again. A slash command runs when a user
+  message starts with it (no control request does it), `/compact` emits
+  `compact_boundary` with its trigger and token counts, and a local command's
+  printout comes back as a `<local-command-stdout>` echo. Codex (checked on
+  0.162.1) lists enabled skills with `skills/list`, invokes their native
+  `skill` input with its reported path, and maps `/compact` to
+  `thread/compact/start`; the acknowledgement opens the operation, while
+  `turn/*` notifications finish it and `contextCompaction` items mark the
+  boundary. Its app-server exposes no custom slash-prompt discovery or
+  invocation, so none are listed. OpenCode lists commands and skills with
+  `/command` and `/skill` (1.x, checked against 1.18.34), or `/api/command`
+  and `/api/skill` (2.x, checked on 2.0.28). 1.x invokes commands and skills
+  through `/session/:id/command` and compacts through `summarize` with the
+  assigned model; 2.x invokes commands through `/api/session/:id/command`,
+  attaches skill ids to a native prompt, and compacts through
+  `/api/session/:id/compact`. `/summarize` aliases `/compact` on OpenCode;
+  neither runner's compaction API accepts summarization instructions.
+  OpenCode reports completed compactions as `session.compacted` on 1.x
+  and `session.compaction.ended` on 2.x. Neither protocol exposes the rest
+  of its TUI-only command surface. VS Code task cards
+  and log tabs complete the same runner-reported list through the Session;
+  native commands use `invokeTaskCommand`, and log tabs draw command results,
+  compactions and the collapsed loaded configuration through the shared block
+  renderer. The planner chat keeps its own commands.
 - **Background work (B1).** Claude Code reports a turn's `result` when the
   model stops talking, even with a background shell or agent still running, and
   opens a turn of its own when the work finishes. The Claude connector therefore
@@ -141,7 +201,16 @@ and completion evidence.
   the previous work: restored in the working tree, or a conflict fallback to
   the integration tips with the preserved branches named. The saved session
   and its working files must agree for an unattended run to carry on after a
-  limit. A resumed attempt that hits the limit again within five minutes waits
+  limit. Nobody has to wait for the reset when the limit resets early: *Resume
+  now* (`resumeNow`) — on the task row, or a message sent to the paused task,
+  which follows the reset notice in the same continuation — resumes it in its
+  saved session at once, with or without a resume time, and with it every task
+  waiting on that runner's reset, as the reset itself would. The planner and
+  the supervisor ask for it with `retry_task` from `session`, or `message_task`;
+  a pause is not a failure, so the supervisor's identical-retry guard does not
+  apply, though it counts against its retry limit. A task with no saved session
+  is not resumed this way; a fresh retry starts it over. A resumed attempt,
+  automatic or asked for, that hits the limit again within five minutes waits
   for a manual retry, and says so. A plan loaded with a resume time still ahead
   waits for it again; one that
   passed while nothing ran — the daemon was down — resumes at once. Cancelling
@@ -173,7 +242,8 @@ and completion evidence.
   the same seam later; nothing assumes a human is the only answerer.
 - **Surfaces (V1, #57).** In the TUI, Enter on a task in the plan pane
   swaps the chat pane to the task view: a distinct accent colour, a state
-  header, a `→ Task N` composer label, and Esc to return. In VS Code each task
+  header, a `→ Task N` composer label whose `/` is the runner's (R1), and Esc
+  to return. In VS Code each task
   has an editor tab opened on demand ("Open log"); it never opens
   automatically, reopening focuses it, and closing it never affects the task.
   The card keeps its one-line peek and gains a waiting badge.
@@ -238,6 +308,13 @@ transport is retained for take-over.
 - **Structured as an opt-in, terminal the default or fallback.** Previously
   adopted while connectors matured; rejected because maintaining two transports
   duplicates runner behavior. Every supported runner now has a connector.
+- **A prefix or a menu that keeps Ordewell's commands in the task chat beside
+  the runner's.** Two namespaces in one composer, and Ordewell's `/compact`
+  shadowing the runner's; the run and plan commands already have the plan
+  pane, its keys and the planner chat (#66).
+- **Typing `/name` as a plain message, with no list.** It reaches a runner
+  only at a turn's start, offers no completion, cannot tell a typo from a
+  command, and leaves nothing in the log but text.
 - **A user-facing transport setting.** Previously adopted; rejected because
   it permits selecting an obsolete path and leaves ambiguous saved choices.
 - **A lingering process after pass.** Rejected: the
@@ -251,6 +328,10 @@ transport is retained for take-over.
   behaviour before #84, leaves a run started overnight idle from the first
   limit hit until someone retries it. Resuming continues what the user
   started; it is not new consent.
+- **Resuming early only by a fresh retry.** The behaviour before Resume now:
+  a continue refused a paused task and a message found no turn, so the only
+  way past a limit that reset early threw away a nearly finished attempt and
+  spent the quota just reset repeating it.
 - **Keeping the runner up across the wait and messaging it at the reset.**
   A process held for hours, or days for a weekly limit, is lost on any daemon
   restart, so the continue path is needed regardless; it is also the only one
@@ -287,3 +368,7 @@ transport is retained for take-over.
 - 2026-10-11 — K1 and U1 preserve a continued attempt's unlanded work, with an atomic conflict fallback naming the preserved branches.
 - 2026-10-13 — a runner's end is observed at `close` (after stdout drains) with its last unterminated line flushed, and a throwing event consumer ends the turn rather than crashing the host or passing as a bad frame.
 - 2026-10-13 — W1: one completion reminder per attempt before a turn without `task_complete` waits for input (#105).
+- 2026-10-14 — U1: Resume now — the user, planner or supervisor resumes a task paused on a usage limit early, in its saved session.
+- 2026-10-14 — C2: the completion contract moved from the first message into the runner's instructions, where its own compaction keeps it whole.
+- 2026-10-14 — R1: a task's chat speaks its runner's own slash commands; the task log records commands, compactions and what the runner loaded (#66; Claude Code, Codex, OpenCode and the TUI).
+- 2026-10-14 — R1: VS Code task cards and log tabs complete and invoke native runner commands and draw the runner’s command, compaction and loaded-configuration blocks.

@@ -1,3 +1,5 @@
+import { findRunnerCommand, type RunnerCommand } from '@ordewell/core';
+
 export interface ParsedCommand {
   name: string;
   args: string[];
@@ -194,6 +196,31 @@ export function skillMatchKind(name: string): 'exact' | 'prefix' | null {
     if (key.startsWith(name)) return 'prefix';
   }
   return null;
+}
+
+/**
+ * A task chat's `/name args`, for its runner (#66): the name as typed and
+ * the rest of the message whole, since the runner parses its own arguments.
+ * No command name has a `/` in it, so a message opening with a path is text.
+ */
+export function parseRunnerCommand(text: string): { name: string; args: string } | null {
+  const match = /^\/([^\s/]+)(?:\s+([\s\S]*))?$/.exec(text.trim());
+  return match ? { name: match[1], args: (match[2] ?? '').trim() } : null;
+}
+
+/** The runner's own command a task chat's `/name` names, by its name or another it answers to. */
+export function runnerCommandFor(commands: readonly RunnerCommand[], name: string): RunnerCommand | undefined {
+  return findRunnerCommand(commands, name) ?? findRunnerCommand(commands, name.toLowerCase());
+}
+
+/**
+ * What a token completes to: in a task chat, the runner's commands alone,
+ * and only at the start of the message, the one place a runner reads one
+ * (#66); in the planner chat, Ordewell's.
+ */
+export function composerCompletions(token: SlashToken, runner: readonly RunnerCommand[] | null): string[] {
+  if (runner) return token.start === 0 ? runner.filter((c) => c.name.toLowerCase().startsWith(token.name)).map((c) => c.name) : [];
+  return tokenCompletions(token).map((c) => c.name);
 }
 
 /**

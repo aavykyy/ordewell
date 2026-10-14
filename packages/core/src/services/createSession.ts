@@ -459,6 +459,8 @@ export class Session {
   private turnEffects: TurnEffects = this.newTurnEffects();
   /** Every turn's effects with starts still owed: a turn's may still be running its starts when the next opens. */
   private readonly owingEffects = new Set<TurnEffects>();
+  /** What the planner's next turn is told before anything else; see {@link PlannerConversationHost.takeRunUpdates}. */
+  private readonly untoldRunUpdates: string[] = [];
   private unlistenApprovals: (() => void) | null;
   private readonly plannerTools: PlannerToolHandler = plannerToolHandler({
     skills: () => this.workspaceSkills().listSkills(),
@@ -521,6 +523,7 @@ export class Session {
       opening: (runners) => this.conversationOpening(runners),
       catalog: () => this.catalog.queryCatalog(this.plan?.runners ?? []),
       autorun: () => this.userRunSettings().autorun,
+      takeRunUpdates: () => this.untoldRunUpdates.splice(0),
       tasks: () => this.store.planTasks,
       liveOutput: (taskId, opts) => this.orchestrator.getLiveOutput(taskId, opts),
       isExecuting: () => this.isExecuting,
@@ -573,10 +576,7 @@ export class Session {
       tasks: () => this.store.planTasks,
       checkpointQuestion: (taskId) => this.orchestrator.getCheckpointQuestion(taskId) ?? undefined,
       recentOutput: (taskId) => this.orchestrator.getLiveOutput(taskId, { maxLines: 3 })?.text.trim(),
-      systemNote: (text) => this.mutatePlan(() => {
-        this.conversation.append('assistant', text, { kind: 'system' });
-        return true;
-      }),
+      systemNote: (text) => this.systemNote(text),
       supervisorNote: (text) => this.supervisorNote(text),
       changed: () => this.mutatePlan(() => true),
       save: () => this.persist({ background: true }),
@@ -631,7 +631,7 @@ export class Session {
 
   private newTurnEffects(): TurnEffects {
     return new TurnEffects({
-      execute: (command, actor) => this.execute(command, actor),
+      replay: (command, actor) => this.commands.replay(command, actor),
       supervisorLevel: () => this.supervision.level,
       notice: (level, message) => this.notice(level, message),
     });
@@ -698,13 +698,19 @@ export class Session {
       retryTask: (taskId, actor) => this.restartTask(taskId, runOrigin(actor)),
       skipTask: (taskId, reason, actor) => this.withSave(() => this.orchestrator.skipTask(taskId, reason, runOrigin(actor))),
       continueTask: (taskId, message, actor) => this.resumeTask(taskId, message, runOrigin(actor)),
+      resumeNow: (taskId, message, actor) => this.withSave(() => this.orchestrator.resumeNow(taskId, runOrigin(actor), message)),
       messageTask: (taskId, text) => this.sendTaskMessage(taskId, text),
       denyRequest: (requestId, note) => this.resolveApproval(requestId, { decision: 'deny', ...(note ? { note } : {}) }),
       mergeAll: () => this.mergeRun(),
       record: (record, text) => this.recordExecution(record, text),
       guardTripped: (trip) => this.supervision.guardTripped(trip),
       heldEdit: (taskId) => this.heldEdit(taskId),
+      asEdited: (taskId) => this.asEdited(taskId),
       deferUntilLanded: (command, actor, intent) => this.turnEffects.defer(command, actor, intent),
+      queuedNotRun: (text) => {
+        this.systemNote(text);
+        this.untoldRunUpdates.push(text);
+      },
     };
   }
 
@@ -717,11 +723,19 @@ export class Session {
     const held = this.conversation.pendingOps();
     if (!held || held.length === 0 || !this.plan) return false;
     if (taskId === undefined) return true;
+    const before = this.store.get(taskId);
+    const after = this.asEdited(taskId);
+    return !!before && (!after || editedFields(before, after).length > 0);
+  }
+
+  /** The task as the open turn's held edit leaves it: as it is, when it holds none or one that would not apply. */
+  private asEdited(taskId: string): Task | undefined {
+    const held = this.conversation.pendingOps();
+    const before = this.store.get(taskId);
+    if (!held || held.length === 0 || !this.plan) return before;
     const runners = this.editRunners();
     const result = applyTaskOps(this.store.planTasks, held, runners, this.catalog.edit(runners));
-    const before = this.store.get(taskId);
-    const after = result.ok ? flattenTasks(result.tasks).find((t) => t.id === taskId) : before;
-    return !!before && (!after || editedFields(before, after).length > 0);
+    return result.ok ? flattenTasks(result.tasks).find((t) => t.id === taskId) : before;
   }
 
   /** The open planner turn is the supervisor's, acting at Act: its edits and added tasks are its own (ADR-0029). */
@@ -750,6 +764,14 @@ export class Session {
     const trip = this.supervision.checkEdit(this.store.planTasks, result.tasks);
     if (!trip) return result;
     return { ok: false, tasks: [...this.store.planTasks], errors: [trip.refusal], summary: [] };
+  }
+
+  /** A line from Ordewell itself, kept in the transcript where it happened. */
+  private systemNote(text: string): void {
+    this.mutatePlan(() => {
+      this.conversation.append('assistant', text, { kind: 'system' });
+      return true;
+    });
   }
 
   /** A message to the user in the supervisor's voice, kept in the transcript where it happened. */
@@ -963,6 +985,7 @@ export class Session {
     this.turnEffects.abandon();
     for (const effects of this.owingEffects) effects.abandon();
     this.owingEffects.clear();
+    this.untoldRunUpdates.length = 0;
     this.conversation.reset();
     // Totals belong to the plan they were recorded under; a fresh plan starts
     // its ledger from zero so the previous session's line never lingers.
@@ -1475,6 +1498,11 @@ export class Session {
     await this.withSave(() => this.orchestrator.markTaskIncomplete(taskId));
   }
 
+  /** Resume a task paused on a usage limit now, once the user says it has reset; see {@link TaskOrchestrator.resumeNow}. */
+  async resumeNow(taskId: string): Promise<void> {
+    await this.withSave(() => this.orchestrator.resumeNow(taskId, 'user'));
+  }
+
   /** Keep a task paused on a usage limit from resuming on its own; see {@link TaskOrchestrator.cancelScheduledResume}. */
   cancelScheduledResume(taskId: string): boolean {
     return this.saved(() => this.orchestrator.cancelScheduledResume(taskId));
@@ -1514,6 +1542,14 @@ export class Session {
    */
   forceSendTaskMessage(taskId: string, text: string): string {
     return this.saved(() => this.orchestrator.forceSendTaskMessage(taskId, text), { background: true });
+  }
+
+  /**
+   * The task runner's own command `/name args` (#66), as a turn of its own.
+   * Throws `TaskControlError` where a plain message would.
+   */
+  invokeTaskCommand(taskId: string, name: string, args = ''): string {
+    return this.saved(() => this.orchestrator.invokeTaskCommand(taskId, name, args), { background: true });
   }
 
   forceSendQueuedTaskMessage(taskId: string, id: string): boolean {

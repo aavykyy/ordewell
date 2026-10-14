@@ -4,7 +4,7 @@ import { bodyRows, chatBodyLines, helpLayout } from '../layout';
 import { stripAnsi, style, width } from '../ansi';
 import { initialState, type TaskView, type TuiState } from '../state';
 import { reduce, type Action } from '../reducer';
-import type { ResearchStepOutcome, SessionMessage } from '@ordewell/core';
+import { EMPTY_TASK_LOG, type ResearchStepOutcome, type SessionMessage } from '@ordewell/core';
 import { chatOf } from './chat';
 import { registerSkillCommands } from '../slash';
 import cliPackage from '../../../package.json';
@@ -479,12 +479,63 @@ describe('plan pane', () => {
 });
 
 describe('status line', () => {
-  it('shows what the planner is doing', () => {
-    expect(text({ status: 'planning', busyLabel: 'grep auth' })).toContain('grep auth');
+  const viewing = (taskId: string, over: Partial<TuiState> = {}): Partial<TuiState> => ({
+    taskView: { taskId, view: EMPTY_TASK_LOG, attempts: [1], attempt: 1, pending: [], loaded: true, followLatest: true, queuedIndex: 0 },
+    ...over,
   });
 
-  it('says when a run is in progress', () => {
-    expect(text({ status: 'executing', tasks })).toMatch(/executing/i);
+  it('says only Planning while the planner works, never what it is reading', () => {
+    const out = text({
+      status: 'planning',
+      conversation: chatOf(['user', 'add auth']),
+    });
+    expect(out).toContain('● Planning…');
+    expect(out).not.toMatch(/Researching|Executing|Grep\(/);
+  });
+
+  it('is quiet in the planner chat while tasks run', () => {
+    const out = text({ status: 'executing', tasks });
+    expect(out).not.toMatch(/Executing|Working…|Planning…|●\s+Write the tests/);
+  });
+
+  it('says Working in the chat of a task whose attempt is in progress', () => {
+    expect(text({ status: 'executing', tasks, ...viewing('b') })).toContain('● Working…');
+  });
+
+  it('is quiet in the chat of a task that is not running while another one is', () => {
+    expect(text({ status: 'executing', tasks, ...viewing('a') })).not.toContain('Working…');
+  });
+
+  it('states a usage-limit pause\'s resume time in that task\'s chat', () => {
+    const resumeAt = new Date(2026, 9, 14, 12, 12).toISOString();
+    const paused = [{ ...tasks[1], status: 'awaiting_user', awaitingReason: 'usage-limit' as const, resumeAt }];
+    expect(text({ tasks: paused, ...viewing('b') })).toMatch(/paused · resumes .*12:12/);
+  });
+});
+
+describe('plan pane run hints', () => {
+  const waiting = [{ ...tasks[0] }, { ...tasks[1], status: 'awaiting_user' }, { ...tasks[2] }];
+  const mergePaused = { waitingAtGate: true, paused: true, handoff: { repos: [], landed: [] } };
+  const taskChat: Partial<TuiState> = {
+    taskView: { taskId: 'a', view: EMPTY_TASK_LOG, attempts: [1], attempt: 1, pending: [], loaded: true, followLatest: true, queuedIndex: 0 },
+  };
+
+  it('carries the waiting-tasks hint in its title, in either chat', () => {
+    expect(text({ tasks: waiting })).toContain('Plan 1/3 · 1 task waits for you');
+    expect(text({ tasks: waiting, ...taskChat })).toContain('Plan 1/3 · 1 task waits for you');
+  });
+
+  it('carries the Merge all pause in its title, in either chat', () => {
+    expect(text({ cols: 140, tasks, status: 'executing', runMerge: mergePaused })).toContain('paused for Merge all — /handoff merge');
+    expect(text({ cols: 140, tasks, status: 'executing', runMerge: mergePaused, ...taskChat })).toContain('paused for Merge all — /handoff merge');
+  });
+
+  it('shortens the Merge all pause to what the pane is wide enough for, keeping the command', () => {
+    expect(text({ tasks, status: 'executing', runMerge: mergePaused })).toContain('Plan 1/3 · paused · /handoff merge');
+  });
+
+  it('falls back to the status row where a narrow terminal has no plan pane', () => {
+    expect(text({ cols: 60, tasks: waiting })).toContain('1 task waits for you');
   });
 });
 

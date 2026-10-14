@@ -1,15 +1,18 @@
 import { firstGrapheme, graphemes, pad, stripAnsi, style, truncate, width, wrap } from './ansi';
 import { cursorInLines } from './editor';
-import { activeToken, skillMatchKind, slashTokens, tokenCompletions } from './slash';
+import { activeToken, composerCompletions, runnerCommandFor, skillMatchKind, slashTokens } from './slash';
 import {
   bodyRows, chatInputWrap, chatLayout, footerHints, helpLayout, type HelpSheet, packHints, planLayout, planOffset,
   stopHint,
+  chatActivity,
+  DOT_TICKS,
+  runHint,
 } from './layout';
 import { chatEditorRoomFor, chatPaneWidth, chatPromptLabel, paneColumns, planPaneWidth } from './geometry';
 import { currentHandoff, diffRoom, handoffActions } from './handoff';
 import { handoffBase, handoffBranch, isRepoGroup, repoResultLines } from '../isolation';
-import { capConflictFiles, titledTaskRef, titledTaskRefOf } from '@ordewell/core';
-import { matchingItems, plannerInFlight, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
+import { capConflictFiles, titledTaskRef, titledTaskRefOf, type RunnerCommand } from '@ordewell/core';
+import { matchingItems, plannerInFlight, runnerCommands, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
 import type { StepperState } from './reducers/stepper';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
 
@@ -233,20 +236,21 @@ function renderStatus(state: TuiState, cols: number): string {
 
 function statusText(state: TuiState, cols: number): string {
   const mark = scrolledBackMark(state);
-  // A standing stop-arm outranks the busy label: with the arm up, the next key
+  // A standing stop-arm outranks the activity: with the arm up, the next key
   // decides the turn and that is what the row must say, in red, hard left.
   const armed = stopHint(state);
-  if (state.status === 'idle') {
-    const notes = [mark, state.toast].filter(Boolean).join(' · ');
-    return notes ? truncate(style.grey(notes), cols) : '';
-  }
   if (armed) return truncate(style.red(armed), cols);
-  const scrolled = mark ? style.grey(`${mark} · `) : '';
-  const label = state.busyLabel ? ` ${state.busyLabel}` : '';
-  const verb = state.status === 'executing' ? 'Executing'
-    : state.status === 'researching' ? 'Researching'
-    : 'Planning';
-  return truncate(`${scrolled}${style.brand('●')} ${verb}…${style.grey(label)}`, cols);
+  const activity = chatActivity(state);
+  // Without a plan pane the run has nowhere else to show what it waits on.
+  const hint = planPaneWidth(state) === 0 ? runHint(state) : '';
+  const notes = [mark, activity && !activity.busy ? activity.label : '', hint, state.toast].filter(Boolean).join(' · ');
+  if (activity?.busy) {
+    const lit = Math.floor(state.spinnerFrame / DOT_TICKS) % 2 === 0;
+    const dot = lit ? style.brand('●') : style.grey('●');
+    const scrolled = mark ? style.grey(`${mark} · `) : '';
+    return truncate(`${scrolled}${dot} ${activity.label}`, cols);
+  }
+  return notes ? truncate(style.grey(notes), cols) : '';
 }
 
 /**
@@ -260,8 +264,13 @@ function statusText(state: TuiState, cols: number): string {
  * the skill loads once, so nothing here should look "recognized" that
  * resolution then leaves as plain text.
  */
-function highlightSpans(text: string): Array<{ start: number; end: number }> {
+function highlightSpans(text: string, runner: readonly RunnerCommand[] | null): Array<{ start: number; end: number }> {
   const spans: Array<{ start: number; end: number }> = [];
+  // A task chat's `/name` is its runner's (#66), and only at the start.
+  if (runner) {
+    const lead = slashTokens(text)[0];
+    return lead?.start === 0 && runnerCommandFor(runner, lead.name) ? [{ start: lead.start, end: lead.nameEnd }] : [];
+  }
   const expandedExact = new Set<string>();
   for (const token of slashTokens(text)) {
     const kind = skillMatchKind(token.name);
@@ -319,7 +328,7 @@ function composerLines(state: TuiState): string[] {
   const room = chatEditorRoomFor(state, lines !== null);
   const { text, cursor } = state.editor;
   const continuation = ' '.repeat(width(prompt));
-  const spans = highlightSpans(text);
+  const spans = highlightSpans(text, state.taskView ? runnerCommands(state.taskView) : null);
 
   // A blurred editor never wraps — a literal \n here would push every
   // following row down one line, so newlines/tabs are squashed to one row.
@@ -356,9 +365,9 @@ function suggest(state: TuiState, room: number): string {
   if (state.focus === 'plan' || room <= 2) return '';
   const token = activeToken(state.editor.text, state.editor.cursor);
   if (!token) return '';
-  const matches = tokenCompletions(token);
+  const matches = composerCompletions(token, state.taskView ? runnerCommands(state.taskView) : null);
   if (matches.length === 0) return '';
-  const names = matches.map((c) => c.name).join(' ');
+  const names = matches.join(' ');
   return style.bandGrey(`  ${truncate(names, Math.max(0, room - 2))}`);
 }
 

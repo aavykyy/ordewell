@@ -7,6 +7,7 @@ export {
   flattenTasksWithParents,
   isAwaitingReason,
   isUserMessage,
+  pausedOnLimit,
   migratePlanState,
   resolveTaskRef,
   taskOrderLabel,
@@ -36,6 +37,7 @@ export type {
 export * from './models/Session';
 export * from './models/Usage';
 export * from './models/TaskLog';
+export * from './models/RunnerCommand';
 export * from './models/Execution';
 export * from './interfaces/IFileSystem';
 export { BaseFileSystem } from './services/BaseFileSystem';

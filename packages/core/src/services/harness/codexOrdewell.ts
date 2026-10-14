@@ -1,4 +1,4 @@
-import { ORDEWELL_MCP_SERVER_NAME, TASK_COMPLETE_TOOL, type McpClientConfig } from '../mcp';
+import { ORDEWELL_MCP_SERVER_NAME, TASK_COMPLETE_TOOL, TASK_COMPLETION_CONTRACT, type McpClientConfig } from '../mcp';
 import { MCP_CLIENT_TOOL_NAMES, listed, ordewellToolNames, type OrdewellToolBinding } from './ordewellBinding';
 import { MCP_TOKEN_VARIABLE_PREFIX } from './runnerEnv';
 
@@ -13,7 +13,7 @@ export interface CodexOrdewellBinding extends OrdewellToolBinding<CodexAsk> {
   env(mcp: McpClientConfig): Record<string, string>;
   /** The thread config's `mcp_servers`. */
   threadServers(mcp: McpClientConfig): Record<string, unknown>;
-  /** What a task thread's instructions say about the tools. */
+  /** What a task thread's instructions say about the tools, and how the task is to end. */
   taskInstructions(): string;
   /** What a planner thread's instructions add about the tools (ADR-0026), and where its web reads go (ADR-0027). */
   plannerInstructions(nativeSearch: boolean, hidden?: readonly string[], ownShell?: boolean): string;
@@ -84,11 +84,12 @@ export const CODEX_ORDEWELL: CodexOrdewellBinding = {
    */
   taskInstructions() {
     const tools = ordewellToolNames('task');
-    return [
+    const discovery = [
       `This task has ${countOf(tools)} tools from the \`${ORDEWELL_MCP_SERVER_NAME}\` MCP server: ${quoted(tools)}.`,
       `They are not in your tool list up front. Find them with the tool discovery you have (the \`exec\` tool's \`ALL_TOOLS\` list) and call them by their full names, ${quoted(this.toolNames('task'))}.`,
       `Look for them before you finish; the task is reported complete through \`${TASK_COMPLETE_TOOL}\`.`,
     ].join(' ');
+    return `${discovery}\n\n${TASK_COMPLETION_CONTRACT}`;
   },
 
   /**

@@ -1,6 +1,7 @@
 import { realpathSync } from 'fs';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { AgentEvent, PlannerStartOptions, TaskStartOptions } from './AgentAdapter';
+import { TASK_COMPLETION_CONTRACT } from '../mcp';
 import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION, OPENCODE_SEARCH_OFF, type OpenCodeSessionRule as SessionRule } from './openCodeOrdewell';
 import { hunksOf } from './fileDiff';
 import { heldServersNote } from './projectServers';
@@ -55,6 +56,7 @@ interface V2Frame {
   type?: string;
   data?: {
     sessionID?: string;
+    reason?: string;
     parentID?: string;
     assistantMessageID?: string;
     ordinal?: number;
@@ -315,9 +317,18 @@ export class OpenCodeV2 {
     return this.opts.mcp ? OPENCODE_ORDEWELL.sessionRules(this.opts.mcp, this.role) : [];
   }
 
-  /** The planner's system prompt rides on the session as an instruction entry — a prompt has no system field. */
+  /**
+   * The planner's system prompt rides on the session as an instruction entry —
+   * a prompt has no system field — and so does a task's completion contract,
+   * which the server's own compaction leaves whole.
+   */
   private async applyInstructions(): Promise<void> {
-    if (this.opts.kind !== 'planner') return;
+    if (this.opts.kind === 'task') {
+      if (!this.opts.mcp) return;
+      const response = await this.host.request('PUT', `/api/experimental/session/${this.sessionId}/instructions/entries/ordewell-task`, { value: TASK_COMPLETION_CONTRACT });
+      if (!response.ok) throw new Error(`OpenCode did not take the task instructions: ${response.status} ${response.statusText}`);
+      return;
+    }
     const unusable = heldServersNote(this.unusable.map((server) => ({ server, reason: UNUSABLE })));
     const system = [plannerSystem(this.opts, this.ownSearch).system, unusable].filter(Boolean).join('\n\n');
     if (!system) return;
@@ -326,6 +337,20 @@ export class OpenCodeV2 {
   }
 
   async send(message: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal, onActivity?: () => void): Promise<void> {
+    return this.runTurn(() => this.host.json('POST', `/api/session/${this.sessionId}/prompt`, { text: message }, signal), onEvent, signal, onActivity);
+  }
+
+  async invokeCommand(name: string, args: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal, skillId?: string): Promise<void> {
+    if (name === 'compact') {
+      if (args.trim()) { onEvent({ type: 'error', message: 'OpenCode native compaction does not accept arguments.' }); return; }
+      await this.runTurn(() => this.host.json('POST', `/api/session/${this.sessionId}/compact`, {}, signal), onEvent, signal);
+      return;
+    }
+    return this.runTurn(() => this.host.json('POST', `/api/session/${this.sessionId}/${skillId ? 'prompt' : 'command'}`,
+      skillId ? { text: args, skills: [{ id: skillId }] } : { name, text: args }, signal), onEvent, signal);
+  }
+
+  private async runTurn(post: () => Promise<unknown>, onEvent: (event: AgentEvent) => void, signal?: AbortSignal, onActivity?: () => void): Promise<void> {
     if (!this.sessionId) throw new Error(`OpenCode ${this.role} session is not started`);
     if (this.host.isExited()) {
       onEvent({ type: 'error', message: this.host.exitMessage() });
@@ -340,7 +365,7 @@ export class OpenCodeV2 {
 
     try {
       try {
-        await this.host.json('POST', `/api/session/${this.sessionId}/prompt`, { text: message }, signal);
+        await post();
       } catch (err) {
         if (signal?.aborted) return;
         onEvent({ type: 'error', message: `OpenCode did not take the message: ${err instanceof Error ? err.message : String(err)}` });
@@ -358,7 +383,7 @@ export class OpenCodeV2 {
         permissions: this.permissions,
         outcome: () => {
           if (turn.outcome === 'interrupted' || this.interruptRequested) return { type: 'turn_end', interrupted: true };
-          if (turn.outcome === 'failed') return { type: 'error', message: turn.failure ?? 'OpenCode reported that the turn failed.' };
+          if (turn.outcome === 'failed' || turn.failure) return { type: 'error', message: turn.failure ?? 'OpenCode reported that the turn failed.' };
           return { type: 'turn_end' };
         },
       }, onEvent);
@@ -467,6 +492,14 @@ export class OpenCodeV2 {
     if (isChild && !state.children.follows(session)) return;
 
     if (!isChild) {
+      if (frame.type === 'session.compaction.failed' && data.reason === 'manual') {
+        turn.failure = data.error?.message ?? data.error?.type ?? 'OpenCode did not compact the session.';
+        return;
+      }
+      if (frame.type === 'session.compaction.ended') {
+        onEvent({ type: 'compaction', trigger: data.reason === 'manual' ? 'manual' : 'auto' });
+        return;
+      }
       if (frame.type === 'session.execution.started') { turn.live = true; return; }
       if (frame.type === 'session.execution.succeeded' || frame.type === 'session.execution.failed' || frame.type === 'session.execution.interrupted') {
         if (!turn.live || turn.done) return;

@@ -1,7 +1,7 @@
 import { EMPTY_TASK_LOG, reduceTaskLog, replayTaskLog, resumeLabel, runnerToolSubject, truncateCheckpointSummary, type ApprovalDecision, type TaskLogEvent } from '@ordewell/core';
 import { commit } from '../editor';
 import type { Key } from '../keys';
-import { continuesTask, findTask, waitingApproval, waitingCheckpoint, type TaskLogState, type TuiState } from '../state';
+import { continuesTask, findTask, resumesTask, waitingApproval, waitingCheckpoint, type TaskLogState, type TuiState } from '../state';
 import { say } from '../transcript';
 import { step, type Step, type Action } from './shared';
 
@@ -198,7 +198,12 @@ function answerWaiting(state: TuiState, tv: TaskLogState, sessionId: string, dec
 function sendNow(state: TuiState, tv: TaskLogState, sessionId: string): Step {
   const text = state.editor.text.trim();
   if (text) {
-    if (continuesTask(findTask(state.tasks, tv.taskId))) return step(say(state, 'system', 'The task has finished, so there is no turn to interrupt — enter continues it.'));
+    const task = findTask(state.tasks, tv.taskId);
+    if (continuesTask(task)) {
+      return step(say(state, 'system', resumesTask(task)
+        ? 'The task is paused on a usage limit, so there is no turn to interrupt — enter resumes it.'
+        : 'The task has finished, so there is no turn to interrupt — enter continues it.'));
+    }
     return step({ ...state, editor: commit(state.editor) }, [{ type: 'forceSendTaskMessage', sessionId, taskId: tv.taskId, text }]);
   }
   const queued = tv.view.queued[tv.queuedIndex];

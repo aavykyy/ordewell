@@ -1,3 +1,4 @@
+import { TaskCommandsBridge } from './components/RunnerCommands';
 import React, { useState, useEffect, useCallback, useMemo, useReducer, useRef } from 'react';
 import EmptyState from './components/EmptyState';
 import GetStarted from './components/GetStarted';
@@ -30,6 +31,7 @@ declare function acquireVsCodeApi(): {
 };
 
 const vscode = acquireVsCodeApi();
+const postTaskCommand = (message: WebviewToHost): void => vscode.postMessage(message);
 
 const STOP_ARM_MS = 2_000;
 
@@ -310,8 +312,13 @@ export default function App() {
   const handleCancelResume = useCallback((taskId: string) => {
     const taskTitle = planRef.current?.tasks.find((t) => t.id === taskId)?.title ?? taskId;
     vscode.postMessage({ type: 'sendSystemCommand', command: 'cancelResume', taskId });
-    pushSystem(`Task "${taskTitle}" will not resume on its own: retry it once the usage limit resets.`);
+    pushSystem(`Task "${taskTitle}" will not resume on its own: resume or retry it once the usage limit resets.`);
   }, [pushSystem]);
+
+  // No notice of its own, as a force start has none: the resume is announced by the host.
+  const handleResumeNow = useCallback((taskId: string) => {
+    vscode.postMessage({ type: 'sendSystemCommand', command: 'resumeNow', taskId });
+  }, []);
 
   // No notice of its own: the task's start comes back from the session and
   // is announced by the host, as every start is.
@@ -654,44 +661,47 @@ export default function App() {
               {runnerNotice.line} — <a href={runnerNotice.docs}>how to fix it</a>
             </div>
           )}
-          <PlanCardGroup
-            tasks={plan.tasks}
-            run={run}
-            models={models}
-            modelsByRunner={modelsByRunner}
-            modesByRunner={modesByRunner}
-            isExecuting={isExecuting}
-            taskOutput={taskOutput}
-            runnerLabels={runnerLabelMap}
-            runners={runnerList}
-            onRunnerChange={handleRunnerChange}
-            onDependenciesChange={handleDependenciesChange}
-            onAddTask={handleAddTask}
-            onModelChange={handleModelChange}
-            onModelsRefreshNeeded={handleModelsRefreshNeeded}
-            onModeChange={handleModeChange}
-            onOpsChange={handleOpsChange}
-            taskSkills={taskSkills}
-            onSkillsChange={handleSkillsChange}
-            onRemoveTask={handleRemoveTask}
-            onPromptChange={handlePromptChange}
-            onRetry={handleRetry}
-            onSkip={handleSkip}
-            onCancel={handleCancel}
-            onCancelResume={handleCancelResume}
-            onForceStart={handleForceStart}
-            onMarkComplete={handleMarkComplete}
-            onMarkIncomplete={handleMarkIncomplete}
-            onMerge={handleMergeTasks}
-            onSplit={handleSplitTask}
-            onExecutePlan={handleExecutePlan}
-            onStopExecution={handleStopExecution}
-            onRunTask={handleRunTask}
-            onSendMessage={handleTaskMessage}
-            onSendMessageNow={handleTaskMessageNow}
-            onResolveConflict={handleResolveConflict}
-            onOpenLog={handleOpenTaskLog}
-          />
+          <TaskCommandsBridge.Provider value={postTaskCommand}>
+            <PlanCardGroup
+              tasks={plan.tasks}
+              run={run}
+              models={models}
+              modelsByRunner={modelsByRunner}
+              modesByRunner={modesByRunner}
+              isExecuting={isExecuting}
+              taskOutput={taskOutput}
+              runnerLabels={runnerLabelMap}
+              runners={runnerList}
+              onRunnerChange={handleRunnerChange}
+              onDependenciesChange={handleDependenciesChange}
+              onAddTask={handleAddTask}
+              onModelChange={handleModelChange}
+              onModelsRefreshNeeded={handleModelsRefreshNeeded}
+              onModeChange={handleModeChange}
+              onOpsChange={handleOpsChange}
+              taskSkills={taskSkills}
+              onSkillsChange={handleSkillsChange}
+              onRemoveTask={handleRemoveTask}
+              onPromptChange={handlePromptChange}
+              onRetry={handleRetry}
+              onSkip={handleSkip}
+              onCancel={handleCancel}
+              onCancelResume={handleCancelResume}
+              onResumeNow={handleResumeNow}
+              onForceStart={handleForceStart}
+              onMarkComplete={handleMarkComplete}
+              onMarkIncomplete={handleMarkIncomplete}
+              onMerge={handleMergeTasks}
+              onSplit={handleSplitTask}
+              onExecutePlan={handleExecutePlan}
+              onStopExecution={handleStopExecution}
+              onRunTask={handleRunTask}
+              onSendMessage={handleTaskMessage}
+              onSendMessageNow={handleTaskMessageNow}
+              onResolveConflict={handleResolveConflict}
+              onOpenLog={handleOpenTaskLog}
+            />
+          </TaskCommandsBridge.Provider>
           {run.handoff && !isExecuting && !run.runMerge?.waitingAtGate && (
             <HandoffCard
               repos={run.handoff.repos}

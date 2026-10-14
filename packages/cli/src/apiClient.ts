@@ -335,6 +335,11 @@ export class ApiClient {
     return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/resume/cancel`, 'Cancel resume failed');
   }
 
+  /** Resume a task paused on a usage limit now, in its saved session, once the user says the limit has reset. */
+  resumeNow(sessionId: string, taskId: string): Promise<OkResponse> {
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/resume/now`, 'Resume failed');
+  }
+
   /** run | force-start | retry | cancel — real orchestrator work, not a status patch. */
   taskControl(
     sessionId: string,
@@ -352,6 +357,11 @@ export class ApiClient {
   /** Force send: interrupt the task's running turn and deliver `text` next, ahead of anything queued (ADR-0023, F1). */
   forceSendTaskMessage(sessionId: string, taskId: string, text: string): Promise<TaskMessageResponse> {
     return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/messages/now`, 'Send now failed', { text });
+  }
+
+  /** Run the task runner's own command `/name args` as a turn of its own (#66). */
+  invokeTaskCommand(sessionId: string, taskId: string, name: string, args: string): Promise<TaskMessageResponse> {
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/commands`, 'Command failed', { name, args });
   }
 
   /** Force send a message still queued; `sent` is false once the runner already has it. */

@@ -1,4 +1,4 @@
-import type { ApprovalDecision, AwaitingReason, DisplayBlock, StructuredTurnEnd, TaskStatus } from '@ordewell/core';
+import type { ApprovalDecision, AwaitingReason, DisplayBlock, RunnerCommand, StructuredTurnEnd, TaskStatus } from '@ordewell/core';
 
 /*
  * The messages between the extension host and a task-log panel (ADR-0018, V1).
@@ -25,6 +25,7 @@ export interface TaskLogQueuedMessage {
  * plan.
  */
 export interface TaskLogStatus {
+  commands?: readonly RunnerCommand[];
   taskId: string;
   order: number;
   title: string;
@@ -47,6 +48,8 @@ export interface TaskLogStatus {
   attempt: number;
   /** The task finished and can be continued in its saved session (ADR-0018, K1): the message box continues it. */
   continuable: boolean;
+  /** Paused on a usage limit with a saved session: Resume now is offered, and the message box resumes it. */
+  resumable?: boolean;
 }
 
 export type HostToTaskLog =
@@ -60,6 +63,7 @@ export type HostToTaskLog =
 
 export type TaskLogToHost =
   | { type: 'ready' }
+  | { type: 'invokeTaskCommand'; name: string; args: string }
   | { type: 'sendTaskMessage'; text: string }
   | { type: 'removeQueuedTaskMessage'; id: string }
   /** Force send (ADR-0023, F1): interrupt the running turn and deliver `text` next. */
@@ -69,6 +73,8 @@ export type TaskLogToHost =
   | { type: 'interruptTask' }
   /** Keep a task paused on a usage limit from resuming on its own (#84). */
   | { type: 'cancelResume' }
+  /** Resume a task paused on a usage limit now, once the user says the limit has reset. */
+  | { type: 'resumeNow' }
   /** Continue the finished task in its saved session, with `text` as its next turn. */
   | { type: 'continueTask'; text: string }
   /** Answer one of the runner's tool requests (ADR-0018, A1). */

@@ -120,6 +120,11 @@ where it differs from the global one: `Act → Watch (loop guard)`.
 rather than on a row of its own, and is left off the bare welcome screen,
 whose Setup block already shows the same values.
 
+*2026-10-14:* the status row it shares with the badge now speaks only for the
+chat on screen: `Planning…` in the planner's chat, `Working…` in a running
+task's, nothing when that chat is idle. What the run waits on (tasks that wait
+for you, a pause for Merge all) moved to the plan pane's title.
+
 The two rows keep the glossary's line: *autonomy* names Full/Guarded only, and
 the other four are the **run settings**.
 

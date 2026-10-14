@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { taskCommand, useRunnerCommands, useTaskCommands } from './RunnerCommands';
 import SubTaskCard from './SubTaskCard';
 import ModelSelector from './ModelSelector';
 import DependencyPicker from './DependencyPicker';
@@ -6,7 +7,7 @@ import SkillChips from './SkillChips';
 import { lastLine } from '../taskOutput';
 import { checkLabel } from '../checkLabel';
 import { useFollowOutput } from '../followOutput';
-import { blockedByLabel, dependencyCandidates, capConflictFiles, skippedLabel, taskRowView } from '@ordewell/core/plan-utils';
+import { blockedByLabel, dependencyCandidates, capConflictFiles, pausedOnLimit, skippedLabel, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, TaskRowAction, TaskRowView, TaskStatusKind } from '@ordewell/core';
 
 export interface RunnerMode {
@@ -45,7 +46,7 @@ interface TaskCardProps {
    * runner approvals, isolation and merge gate. Absent before the host has
    * folded the run, in which case the plan's own fields are all there is.
    */
-  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate'>;
+  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable'>;
   /** Opt in to resolving this task's merge conflict as an AI task. */
   onResolveConflict?: (taskId: string) => void;
   dependentCount?: number;
@@ -68,6 +69,8 @@ interface TaskCardProps {
   onCancel?: (taskId: string) => void;
   /** Keep a task paused on a usage limit from resuming on its own (#84). */
   onCancelResume?: (taskId: string) => void;
+  /** Resume a task paused on a usage limit now, in its saved session, once the user says the limit has reset. */
+  onResumeNow?: (taskId: string) => void;
   onForceStart?: (taskId: string) => void;
   onMarkComplete?: (taskId: string) => void;
   onMarkIncomplete?: (taskId: string) => void;
@@ -142,12 +145,48 @@ export function TaskCheck({ row, taskId, onMarkComplete, onMarkIncomplete }: { r
 }
 
 const ACTION_CLASS: Record<TaskRowAction, string> = {
-  cancel: 'cancel', 'cancel-resume': 'cancel', skip: 'skip', 'force-start': 'start', complete: 'start', uncomplete: 'skip',
+  cancel: 'cancel', 'resume-now': 'start', 'cancel-resume': 'cancel', skip: 'skip', 'force-start': 'start', complete: 'start', uncomplete: 'skip',
 };
 
 const ACTION_LABELS: Record<TaskRowAction, string> = {
-  cancel: 'Cancel', 'cancel-resume': 'Cancel Resume', skip: 'Skip', 'force-start': 'Start', complete: 'Mark Complete', uncomplete: 'Mark Not Done',
+  cancel: 'Cancel', 'resume-now': 'Resume Now', 'cancel-resume': 'Don\'t Resume', skip: 'Skip', 'force-start': 'Start', complete: 'Mark Complete', uncomplete: 'Mark Not Done',
 };
+
+/**
+ * The header's controls for a task paused on a usage limit (#84), shown
+ * whether or not the plan reads as executing: the pause holds the run, so a
+ * held run's card would otherwise hide them.
+ */
+export function UsageLimitControls({ taskId, row, onResumeNow, onCancelResume }: {
+  taskId: string;
+  row: Pick<TaskRowView, 'resumes' | 'actions'>;
+  onResumeNow?: (taskId: string) => void;
+  onCancelResume?: (taskId: string) => void;
+}) {
+  return (
+    <>
+      {row.resumes && (
+        <span className="task-isolation-badge gate" title="Its runner hit its usage limit. The task resumes on its own once the limit resets.">
+          {row.resumes}
+        </span>
+      )}
+      {row.actions.includes('resume-now') && onResumeNow && (
+        <button type="button" className="task-log-open-btn"
+          onClick={(e) => { e.stopPropagation(); onResumeNow(taskId); }}
+          title="The limit has reset: resume it in its saved session now">
+          Resume now
+        </button>
+      )}
+      {row.resumes && onCancelResume && (
+        <button type="button" className="task-log-open-btn"
+          onClick={(e) => { e.stopPropagation(); onCancelResume(taskId); }}
+          title="Keep it from resuming on its own: resume or retry it yourself once the limit resets">
+          Don't resume
+        </button>
+      )}
+    </>
+  );
+}
 
 /** The buttons a running plan offers on a card, in the order core lays them out. */
 export function TaskActions({ taskId, actions, labels, handlers }: {
@@ -174,32 +213,54 @@ export function TaskActions({ taskId, actions, labels, handlers }: {
  * A compact composer on a running or waiting task's card (ADR-0018, M1;
  * ADR-0023, F1). Send is the plain task message the log sends; Send now
  * interrupts the running turn and delivers this one next, as `ctrl-s` does in
- * the TUI and `Ctrl+Enter` in the log.
+ * the TUI and `Ctrl+Enter` in the log. A task paused on a usage limit has no
+ * turn to interrupt: its message resumes it, after the reset notice.
  */
-export function TaskMessageBox({ taskId, onSend, onSendNow }: {
+export function TaskMessageBox({ taskId, onSend, onSendNow, resumes = false }: {
   taskId: string;
   onSend: (taskId: string, text: string) => void;
   onSendNow: (taskId: string, text: string) => void;
+  resumes?: boolean;
 }) {
   const [text, setText] = useState('');
+  const [error, setError] = useState('');
+  const { commands, invoke } = useTaskCommands(taskId);
+  const completion = useRunnerCommands(text, setText, commands);
   const canSend = text.trim().length > 0;
-  const send = () => { if (canSend) { onSend(taskId, text.trim()); setText(''); } };
-  const sendNow = () => { if (canSend) { onSendNow(taskId, text.trim()); setText(''); } };
+  const send = () => {
+    if (!canSend) return;
+    try {
+      const command = taskCommand(text.trim(), commands);
+      if (command && !resumes) invoke(command.name, command.args);
+      else onSend(taskId, text.trim());
+      setError('');
+      setText('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  const nativeSlash = text.trim().startsWith('/') && commands.length > 0;
+  const sendNow = () => { if (nativeSlash) { send(); return; } if (canSend) { onSendNow(taskId, text.trim()); setText(''); } };
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing || completion.keyDown(e)) return;
     if (e.key !== 'Enter' || e.shiftKey) return;
     e.preventDefault();
-    if (e.ctrlKey || e.metaKey) sendNow(); else send();
+    if ((e.ctrlKey || e.metaKey) && !resumes) sendNow(); else send();
   };
   return (
     <div className="task-message-box" onClick={(e) => e.stopPropagation()}>
+      {completion.palette}
+      {error && <span className="task-command-error" role="alert">{error}</span>}
       <textarea className="task-message-input" value={text} rows={1}
-        placeholder="Message the task… (Enter to send, Ctrl+Enter to send now)"
-        onChange={(e) => setText(e.target.value)} onKeyDown={onKeyDown} />
-      <button type="button" className="task-message-send" disabled={!canSend} onClick={send}>Send</button>
-      <button type="button" className="task-message-send-now" disabled={!canSend}
-        title="Interrupt the running step and send this next, ahead of anything queued (Ctrl+Enter)" onClick={sendNow}>
-        Send now
-      </button>
+        placeholder={resumes ? 'The limit has reset? A message to resume it with… (Enter to resume)' : 'Message the task… (Enter to send, Ctrl+Enter to send now)'}
+        onChange={(e) => completion.change(e.target.value)} onKeyDown={onKeyDown} />
+      <button type="button" className="task-message-send" disabled={!canSend} onClick={send}>{resumes ? 'Resume' : 'Send'}</button>
+      {!resumes && !nativeSlash && (
+        <button type="button" className="task-message-send-now" disabled={!canSend}
+          title="Interrupt the running step and send this next, ahead of anything queued (Ctrl+Enter)" onClick={sendNow}>
+          Send now
+        </button>
+      )}
     </div>
   );
 }
@@ -221,7 +282,7 @@ export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRu
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, run, models, modes, modelsByRunner, modesByRunner, runners, configuredProviders, modelApiMapping, isExecuting, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
+export default function TaskCard({ task, run, models, modes, modelsByRunner, modesByRunner, runners, configuredProviders, modelApiMapping, isExecuting, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const isControlled = expandedProp !== undefined;
   const expanded = isControlled ? expandedProp : internalExpanded;
@@ -244,7 +305,7 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
 
   const isolatedWork = isolation && isolation.state !== 'none' ? isolation : null;
   const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;
-  const row = taskRowView({ ...task, idleSince, awaitingApproval, isolation, mergeGate }, { tasks: siblings, modes: activeModes });
+  const row = taskRowView({ ...task, idleSince, awaitingApproval, isolation, mergeGate, continuable: run?.continuable === true }, { tasks: siblings, modes: activeModes });
   const conflictFiles = isolatedWork?.conflictFiles ?? [];
   const repair = isolatedWork?.repair ?? null;
 
@@ -280,9 +341,12 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
   const runnerOptions = runnerOptionsFor(runners, task.assignedRunner);
   const canEditDeps = !isExecuting && !!onDependenciesChange;
   // Only a running or waiting AI task has a runner turn to reach; a manual task
-  // or one not yet started has none.
+  // or one not yet started has none. One paused on a usage limit is reached
+  // by resuming it, which needs its saved session.
+  const paused = pausedOnLimit(task);
+  const resumable = row.actions.includes('resume-now');
   const canMessage = task.type === 'ai'
-    && (row.status === 'running' || row.status === 'quiet' || row.status === 'awaiting')
+    && (row.status === 'running' || row.status === 'quiet' || (row.status === 'awaiting' && (!paused || resumable)))
     && !!onSendMessage && !!onSendMessageNow;
 
   return (
@@ -302,22 +366,7 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
         )}
 
         {/* As plain as a task that waits on the user (ADR-0020). */}
-        {/* Shown whether or not the plan reads as executing: the pause holds the
-            run, so a held run's card would otherwise hide its only cancel (#84). */}
-        {row.resumes && (
-          <>
-            <span className="task-isolation-badge gate" title="Its runner hit its usage limit. The task resumes on its own once the limit resets.">
-              {row.resumes}
-            </span>
-            {onCancelResume && (
-              <button type="button" className="task-log-open-btn"
-                onClick={(e) => { e.stopPropagation(); onCancelResume(task.id); }}
-                title="Do not resume it on its own: retry it by hand once the limit resets">
-                Cancel resume
-              </button>
-            )}
-          </>
-        )}
+        <UsageLimitControls taskId={task.id} row={row} onResumeNow={onResumeNow} onCancelResume={onCancelResume} />
 
         {row.mergeGate && (
           <span className="task-isolation-badge gate"
@@ -645,7 +694,7 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
                     onModelChange={onModelChange} onModelsRefreshNeeded={onModelsRefreshNeeded} onModeChange={onModeChange}
                     taskSkills={taskSkills} onSkillsChange={onSkillsChange}
                     onRemoveTask={onRemoveTask} onPromptChange={onPromptChange}
-                    onRetry={onRetry} onSkip={onSkip} onCancel={onCancel} onCancelResume={onCancelResume}
+                    onRetry={onRetry} onSkip={onSkip} onCancel={onCancel} onCancelResume={onCancelResume} onResumeNow={onResumeNow}
                     onForceStart={onForceStart} onMarkComplete={onMarkComplete}
                     onMarkIncomplete={onMarkIncomplete}
                     onRunTask={onRunTask} onOpenLog={onOpenLog} />
@@ -654,11 +703,12 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
             </div>
           )}
 
-          {canMessage && <TaskMessageBox taskId={task.id} onSend={onSendMessage!} onSendNow={onSendMessageNow!} />}
+          {canMessage && <TaskMessageBox taskId={task.id} onSend={onSendMessage!} onSendNow={onSendMessageNow!} resumes={paused} />}
 
-          {isExecuting && (
+          {/* A usage-limit pause holds the run, which then reads as not executing. */}
+          {(isExecuting || paused) && (
             <TaskActions taskId={task.id} actions={row.actions} labels={ACTION_LABELS}
-              handlers={{ cancel: onCancel, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart, complete: onMarkComplete, uncomplete: onMarkIncomplete }} />
+              handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart, complete: onMarkComplete, uncomplete: onMarkIncomplete }} />
           )}
         </div>
       )}

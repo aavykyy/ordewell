@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import type {
+  CommandBlock, RunnerLoadedBlock,
   ApprovalBlock, ApprovalDecision, ApprovalKind, ApprovalSource, DisplayBlock, MessageBlock, PlanBlock, SkillLoadBlock, SubagentBlock, SubagentStatus,
   ThinkingDisplayBlock, ToolBlock, ToolStatus, DiffRow, DiffStat,
 } from '@ordewell/core';
@@ -198,6 +199,34 @@ export function CommandRow({ block, expanded }: { block: ToolBlock; expanded: bo
   );
 }
 
+function RunnerCommandRow({ block, expanded }: { block: CommandBlock; expanded: boolean }) {
+  const preview = outputPreview(block.output, PREVIEW_LINES);
+  return (
+    <div className="cmd-row" data-status={block.status}>
+      <div className="cmd-row-header">
+        <code>/{block.name}{block.args ? ` ${block.args}` : ''}</code>
+        <span className="cmd-row-outcome">{block.status}</span>
+      </div>
+      {block.output && <pre className="cmd-row-output">{expanded ? block.output : preview.lines.join('\n')}</pre>}
+      {!expanded && preview.hiddenLineCount > 0 && <span className="cmd-row-more">{moreLines(preview.hiddenLineCount)}</span>}
+    </div>
+  );
+}
+
+function RunnerLoaded({ block, expanded }: { block: RunnerLoadedBlock; expanded: boolean }) {
+  const count = (kind: RunnerLoadedBlock['commands'][number]['kind']) => block.commands.filter((command) => command.kind === kind).length;
+  const counted = (n: number, label: string) => `${n} ${label}${n === 1 ? '' : 's'}`;
+  return (
+    <div className="runner-loaded chat-msg chat-msg-system">
+      <span>Runner loaded {counted(count('skill'), 'skill')}, {counted(count('command'), 'command')}, {counted(count('builtin'), 'built-in command')}, {counted(block.mcpServers.length, 'MCP server')}</span>
+      {expanded && <div className="runner-loaded-detail">
+        {block.commands.map((command) => <div key={command.name}><code>/{command.name}</code> · {command.kind} {command.argumentHint} · {command.description}</div>)}
+        {block.mcpServers.map((server) => <div key={server.name}>{server.name}{server.status ? ` (${server.status})` : ''}</div>)}
+      </div>}
+    </div>
+  );
+}
+
 const SUBAGENT_STATUS: Record<SubagentStatus, string> = {
   running: 'running…',
   done: 'done',
@@ -354,6 +383,12 @@ function Block({
   onAnswerApproval: (id: string, decision: ApprovalDecision) => void;
 }) {
   switch (block.type) {
+    case 'command':
+      return <RunnerCommandRow block={block} expanded={expanded} />;
+    case 'runner_loaded':
+      return <RunnerLoaded block={block} expanded={expanded} />;
+    case 'compaction':
+      return <div className="chat-msg chat-msg-system">Context compacted{block.trigger === 'auto' ? ' by the runner on its own' : ''}{block.preTokens !== undefined && block.postTokens !== undefined ? ` · ${block.preTokens} → ${block.postTokens} tokens` : ''}</div>;
     case 'message':
       return <ChatMessage block={block} />;
     case 'thinking':

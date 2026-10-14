@@ -128,6 +128,17 @@ export function plansRoute(pool: OrchestratorPool) {
     }
   });
 
+  // The user says the limit has reset early: the task, and every other one
+  // waiting on its runner's reset, resumes in its saved session now.
+  router.post('/:sessionId/tasks/:taskId/resume/now', async (c) => {
+    try {
+      await pool.session(c.req.param('sessionId')).resumeNow(c.req.param('taskId'));
+      return c.json({ ok: true } satisfies OkResponse);
+    } catch (err) {
+      return failure(c, err, 'resume now', { fallback: 404, message: 'Not found' });
+    }
+  });
+
   // Orchestrator controls — these spawn or kill runner processes, so they are
   // deliberately separate from the generic `PUT tasks/:taskId` status patch.
   // Each is an execution button, so it goes through the command seam as the
@@ -190,6 +201,21 @@ export function plansRoute(pool: OrchestratorPool) {
   router.post('/:sessionId/tasks/:taskId/messages', messageHandler(async (session, taskId, text) =>
     (await runUserCommand(session, { command: 'message_task', task: taskId, text })).id ?? ''));
   router.post('/:sessionId/tasks/:taskId/messages/now', messageHandler((session, taskId, text) => session.forceSendTaskMessage(taskId, text)));
+
+  // The task runner's own slash command (#66): carried to the runner, never
+  // one of Ordewell's. A task that cannot take one is refused with the reason.
+  router.post('/:sessionId/tasks/:taskId/commands', async (c) => {
+    try {
+      const body: unknown = await c.req.json().catch(() => ({}));
+      const fields = typeof body === 'object' && body !== null ? body as { name?: unknown; args?: unknown } : {};
+      if (typeof fields.name !== 'string' || !fields.name.trim()) return c.json({ error: 'name is required' }, 400);
+      const args = typeof fields.args === 'string' ? fields.args : '';
+      const id = pool.session(c.req.param('sessionId')).invokeTaskCommand(c.req.param('taskId'), fields.name.trim(), args);
+      return c.json({ id } satisfies TaskMessageResponse);
+    } catch (err) {
+      return failure(c, err, 'task edit');
+    }
+  });
 
   // Force send a message still queued; `sent` is false once the runner has it.
   router.post('/:sessionId/tasks/:taskId/messages/:messageId/now', (c) => {

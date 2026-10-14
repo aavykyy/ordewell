@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { ResearchStepOutcome, SessionMessage, ToolBlock } from '@ordewell/core';
 import { initialState, reduce, type Action } from '../reducer';
 import type { TuiState } from '../state';
+import { chatActivity } from '../layout';
 
 const hear = (message: SessionMessage, sessionId?: string): Action => ({ type: 'sessionMessage', message, ...(sessionId ? { sessionId } : {}) });
 const send = (state: TuiState, action: Action) => reduce(state, action).state;
@@ -29,22 +30,22 @@ describe('research calls during a planner turn', () => {
     expect(tools(s).map((t) => t.headline)).toEqual([{ name: 'Read', keyArg: 'a.ts' }, { name: 'Read', keyArg: 'b.ts' }]);
   });
 
-  it('names the newest call on the spinner and counts the rest of a parallel round', () => {
+  it('lists no tool call on the status row, however many a parallel round has out', () => {
     const s = drive(planning(), [call('a.ts', 't1'), call('b.ts', 't2'), call('c.ts', 't3')]);
 
-    expect(s.busyLabel).toBe('Read(c.ts) (+2 more)');
+    expect(chatActivity(s)).toEqual({ label: 'Planning…', busy: true });
   });
 
-  it('flips the status to researching so the footer stops claiming it is planning', () => {
-    expect(drive(planning(), [call('a.ts', 't1')]).status).toBe('researching');
+  it('keeps the status at planning through research: the row has no separate verb for it', () => {
+    expect(drive(planning(), [call('a.ts', 't1')]).status).toBe('planning');
   });
 
   it('leaves an executing run alone — research steps belong to the planner', () => {
-    const executing: TuiState = { ...initialState(), status: 'executing', busyLabel: 'Write the tests' };
+    const executing: TuiState = { ...initialState(), status: 'executing' };
     const s = drive(executing, [call('a.ts', 't1')]);
 
     expect(s.status).toBe('executing');
-    expect(s.busyLabel).toBe('Write the tests');
+    expect(chatActivity(s)).toBeNull();
   });
 
   it('ignores messages from a session that /new has replaced', () => {
@@ -59,25 +60,18 @@ describe('research calls during a planner turn', () => {
     expect(tools(s).map((t) => [t.status, t.output])).toEqual([['pending', ''], ['ok', 'b body']]);
   });
 
-  it('keeps naming the call still out once the other settles', () => {
-    const s = drive(planning(), [call('a.ts', 't1'), call('b.ts', 't2'), done('a.ts', 't1')]);
+  it('still says Planning while a call is out and after the round is over', () => {
+    const open = drive(planning(), [call('a.ts', 't1'), call('b.ts', 't2'), done('a.ts', 't1')]);
+    const over = drive(planning(), [call('a.ts', 't1'), call('b.ts', 't2'), done('a.ts', 't1'), done('b.ts', 't2')]);
 
-    expect(s.busyLabel).toBe('Read(b.ts)');
-    expect(s.status).toBe('researching');
+    expect(chatActivity(open)?.label).toBe('Planning…');
+    expect(chatActivity(over)?.label).toBe('Planning…');
   });
 
-  it('hands the status back to planning, and clears the label, once the round is over', () => {
-    const s = drive(planning(), [call('a.ts', 't1'), call('b.ts', 't2'), done('a.ts', 't1'), done('b.ts', 't2')]);
-
-    expect(s.status).toBe('planning');
-    expect(s.busyLabel).toBe('');
-  });
-
-  it('counts a running subagent as work in flight, its brief flattened onto the one-row label', () => {
+  it('says only Planning while a subagent runs, its brief kept off the row', () => {
     const s = drive(planning(), [{ type: 'subagent_started', subagentId: 'sa1', brief: 'find the auth handlers\n\tin src/ only' }]);
 
-    expect(s.status).toBe('researching');
-    expect(s.busyLabel).toBe('Agent(find the auth handlers in src/ only)');
+    expect(chatActivity(s)).toEqual({ label: 'Planning…', busy: true });
   });
 });
 

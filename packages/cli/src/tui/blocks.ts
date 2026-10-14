@@ -2,6 +2,7 @@ import {
   diffRows, diffSummary, loadedSkillTokens, outputLines, outputPreview,
   type DiffRow, type DiffStat,
   type ApprovalBlock, type ApprovalKind, type ApprovalSource, type DisplayBlock, type MessageBlock, type MessageRole, type PlanBlock,
+  type CommandBlock, type CommandStatus, type CompactionBlock, type RunnerLoadedBlock,
   type UsageLine, type UsageTotals,
   type SkillLoadBlock, type SubagentBlock, type SubagentStatus, type ThinkingDisplayBlock, type ToolBlock,
 } from '@ordewell/core';
@@ -381,6 +382,56 @@ export function checkpointCardLines(order: number, question: string, cols: numbe
   ];
 }
 
+// ── A task's runner commands (#66) ───────────────────────────────────────────
+
+const COMMAND_PAINT: Record<CommandStatus, Paint> = {
+  running: style.yellow,
+  done: style.green,
+  failed: style.red,
+  stopped: style.grey,
+};
+
+/** `❯ /name args  status`, and what a command that runs without the model printed hanging off `⎿`. */
+function runnerCommandLines(block: CommandBlock, cols: number, detailAll: boolean): string[] {
+  const typed = sanitize(`/${block.name}${block.args ? ` ${block.args}` : ''}`);
+  const status = `  ${block.status}`;
+  const head = `${style.accent('❯')} ${truncate(typed, Math.max(1, cols - 2 - width(status)))}${COMMAND_PAINT[block.status](status)}`;
+  const room = Math.max(1, cols - OUTPUT_INDENT.length);
+  const printed = outputLines(block.output).map(sanitize);
+  const shown = detailAll ? printed.flatMap((line) => wrap(line, room)) : printed.slice(0, PREVIEW_LINES).map((line) => truncate(line, room));
+  return [head, ...underHeader(shown.map(style.grey))];
+}
+
+function compactionLine(block: CompactionBlock, cols: number): string {
+  const sizes = block.preTokens !== undefined && block.postTokens !== undefined
+    ? ` · ${compactCount(block.preTokens)} → ${compactCount(block.postTokens)} tokens`
+    : '';
+  const text = block.trigger === 'auto' && !sizes ? '≡ Context compacted by the runner on its own' : `≡ Context compacted${sizes}`;
+  return style.grey(truncate(text, cols));
+}
+
+/** One line unless the pane shows detail: what a user's own setup brought into the task is there to look up, not to read every time. */
+function runnerLoadedLines(block: RunnerLoadedBlock, cols: number, detailAll: boolean): string[] {
+  const of = (kind: RunnerLoadedBlock['commands'][number]['kind']) => block.commands.filter((c) => c.kind === kind).map((c) => `/${sanitize(c.name)}`);
+  const skills = of('skill');
+  const commands = of('command');
+  const builtins = of('builtin');
+  const counts = [
+    countOf(skills.length, 'skill'), countOf(commands.length, 'command'), countOf(builtins.length, 'built-in command'), countOf(block.mcpServers.length, 'MCP server'),
+  ];
+  const head = truncate(`● Runner loaded ${counts.join(', ')}`, cols);
+  const lines = [`${style.green('●')}${style.grey(head.slice(1))}`];
+  if (!detailAll) return lines;
+  const room = Math.max(1, cols - OUTPUT_INDENT.length);
+  const list = (label: string, names: string[]) => (names.length > 0 ? wrap(`${label}: ${names.join(' ')}`, room) : []);
+  const servers = block.mcpServers.map((m) => `${sanitize(m.name)}${m.status ? ` (${sanitize(m.status)})` : ''}`);
+  return [
+    ...lines,
+    ...[...list('skills', skills), ...list('commands', commands), ...list('built-in', builtins), ...(servers.length > 0 ? wrap(`MCP servers: ${servers.join(', ')}`, room) : [])]
+      .map((line) => OUTPUT_INDENT + style.grey(line)),
+  ];
+}
+
 function planLine(block: PlanBlock, cols: number): string {
   const count = block.taskCount === undefined ? '' : ` (${countOf(block.taskCount, 'task')})`;
   const text = block.status === 'building' ? 'Building plan…' : `Plan ${block.status}${count}`;
@@ -403,6 +454,12 @@ function blockLines(block: DisplayBlock, cols: number, detailAll: boolean): stri
       return [planLine(block, cols)];
     case 'skill_load':
       return [skillLoadLine(block, cols)];
+    case 'command':
+      return runnerCommandLines(block, cols, detailAll);
+    case 'compaction':
+      return [compactionLine(block, cols)];
+    case 'runner_loaded':
+      return runnerLoadedLines(block, cols, detailAll);
     // Pinned under the pane rather than drawn in it — see `tokenLine`.
     case 'usage':
       return [];

@@ -197,11 +197,6 @@ function renderPreviousAttempt(output: string): string {
   ].join('\n');
 }
 
-const COMPLETION_INSTRUCTION = [
-  '\n\nWhen you have fully completed this task, call the `task_complete` tool with status `done` and a summary of what you did. If you cannot complete it, call `task_complete` with status `blocked` or `failed` and the reason instead.',
-  '\n\nThe `task_complete` summary is this task\'s report: the planner and the tasks that depend on this one read it, and nothing else you write reaches them. Put the full result there — findings, decisions, anything a reader needs to act on it. A review or other read-only task especially: its findings are its result, so put them all in the summary, and do not write the report to a file.',
-].join('');
-
 const CHECKPOINT_INSTRUCTION = [
   '## Human-in-the-loop checkpoints',
   '',
@@ -218,6 +213,10 @@ function isHitlTask(task: Task): boolean {
   return task.autonomy === 'HITL' || task.sliceType === 'HITL';
 }
 
+/**
+ * A task's first message. How it ends — the `task_complete` call and its
+ * report — is in the runner's instructions, not here (`TASK_COMPLETION_CONTRACT`).
+ */
 export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], opts?: ComposeOptions): string {
   const basePrompt = task.prompt ?? '';
   const blocks: string[] = [];
@@ -236,8 +235,8 @@ export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], op
 
   if (isHitlTask(task)) blocks.push(CHECKPOINT_INSTRUCTION);
 
-  if (blocks.length === 0) return basePrompt + COMPLETION_INSTRUCTION;
-  return `${blocks.join('\n\n')}\n\n${basePrompt}${COMPLETION_INSTRUCTION}`;
+  if (blocks.length === 0) return basePrompt;
+  return `${blocks.join('\n\n')}\n\n${basePrompt}`;
 }
 
 /**
@@ -255,5 +254,5 @@ export function composeContinuationPrompt(task: Task, message: string, opts: { o
   if (isHitlTask(task)) {
     reminder.push('If you reach a decision that needs human judgment, call the `checkpoint` tool: its result is `continue` or `rejected: <why>`.');
   }
-  return `${message.trim()}\n\n---\n${reminder.join('\n\n')}${COMPLETION_INSTRUCTION}`;
+  return `${message.trim()}\n\n---\n${reminder.join('\n\n')}`;
 }

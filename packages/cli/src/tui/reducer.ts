@@ -1,18 +1,18 @@
 import { blockingFailures, EMPTY_HOLD, EMPTY_RUN, fromTranscript, holdPrompt, taskStartedNotice, type RunnerId } from '@ordewell/core';
 import { chatEditorRoomFor } from './geometry';
-import { chatScrollMax } from './layout';
-import { activeToken, findCommand, parseSlash, tokenCompletions, type ParsedCommand } from './slash';
+import { SPINNER_CYCLE, chatScrollMax } from './layout';
+import { activeToken, composerCompletions, findCommand, parseRunnerCommand, parseSlash, runnerCommandFor, type ParsedCommand } from './slash';
 import { applyKey, commit } from './editor';
 import { say, wiped } from './transcript';
 import { blockedPicker, handoffArrived, showDiff } from './handoff';
-import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, type RunStatus, type TaskView, type TuiState } from './state';
+import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, runnerCommands, type RunStatus, type TaskView, type TuiState } from './state';
 import type { Key } from './keys';
 import { handleOverlayKey } from './reducers/overlays';
 import { handlePlanKey } from './reducers/planPane';
 import { announceApprovals, announceCheckpoint, continueTaskStep, handleTaskViewKey, openTaskView, taskLogAbandoned, taskLogArrived, taskLogLoaded } from './reducers/taskView';
-import { newSession, pickRewindTarget, runCommand, skillInTaskView, unknownCommand } from './reducers/commands';
+import { newSession, pickRewindTarget, runCommand } from './reducers/commands';
 import { disarmStop, drainQueue, forceSendPlanner, plannerEscape, restoreForced } from './reducers/turnQueue';
-import { applyIsolationRecord, applySettings, clearRunIsolation, foldRun, followSession, planSnapshot, runLabel, withRun } from './reducers/incoming';
+import { applyIsolationRecord, applySettings, clearRunIsolation, foldRun, followSession, planSnapshot, withRun } from './reducers/incoming';
 import { refillPicker } from './reducers/pickers';
 import { refreshStepper } from './reducers/stepper';
 import {
@@ -94,11 +94,10 @@ function reduceAction(state: TuiState, action: Action): Step {
       // as a top-level task's.
       const expandedTaskId =
         state.expandedTaskId && findTask(tasks, state.expandedTaskId) ? state.expandedTaskId : null;
-      const status = plannerInFlight(state) ? 'idle' : state.status;
       const next: TuiState = {
         ...folded,
-        status,
-        busyLabel: status === 'executing' ? runLabel(tasks, folded.runMerge) : '',
+        status: plannerInFlight(state) ? 'idle' : state.status,
+        condensing: false,
         expandedTaskId,
         taskEditor: expandedTaskId !== null ? state.taskEditor : null,
       };
@@ -134,7 +133,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       if (stale(state, action.sessionId)) return step(state);
       const next = withRun(state, action.view);
       const status = runStatus(next, next.tasks);
-      return step({ ...next, status, busyLabel: status === 'executing' ? runLabel(next.tasks, next.runMerge) : state.busyLabel });
+      return step({ ...next, status });
     }
 
     case 'taskLog':
@@ -167,7 +166,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         runner: (action.runner ?? 'claude-code') as RunnerId,
       });
       const spoken = say(folded, 'system', taskStartedNotice(action.title, action.runner));
-      return step({ ...spoken, status: 'executing', busyLabel: runLabel(spoken.tasks, spoken.runMerge) });
+      return step({ ...spoken, status: 'executing' });
     }
 
     case 'taskCheckpoint':
@@ -191,7 +190,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       // The indicator follows the tasks, not the stream: once none is running
       // the run is over, whatever the daemon's scheduler still holds armed.
       const status = runStatus(next, next.tasks);
-      return step({ ...next, status, busyLabel: status === 'executing' ? runLabel(next.tasks, next.runMerge) : state.busyLabel });
+      return step({ ...next, status });
     }
 
     case 'isolationBlocked': {
@@ -238,7 +237,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step({
         ...say(state, 'system', `Execution ${verb} — ${completed}/${total} tasks complete${failures}.`),
         status: 'idle',
-        busyLabel: '',
+        condensing: false,
       });
     }
 
@@ -261,7 +260,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step({
         ...say(state, 'error', 'Lost the connection to the daemon — this view is no longer following the run, but the daemon may still be running it. /load this session again to see where it stands.'),
         status: 'idle',
-        busyLabel: '',
+        condensing: false,
       });
     }
 
@@ -302,7 +301,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         goal: action.goal,
         taskView: null,
         status: 'idle',
-        busyLabel: '',
+        condensing: false,
         planApproved: false,
         pendingApprovals: [],
         queuedPrompts: EMPTY_HOLD,
@@ -341,11 +340,11 @@ function reduceAction(state: TuiState, action: Action): Step {
       // stop is that: any other failure is the forced send's own, and its
       // prompt is already out of the composer or the queue, so it goes back.
       if (state.forceSendPending) {
-        if (action.code === 'planner_turn_stopped') return step({ ...state, forceSendPending: null, busyLabel: '' });
+        if (action.code === 'planner_turn_stopped') return step({ ...state, forceSendPending: null, condensing: false });
         state = restoreForced(state);
       }
       const quiet = plannerInFlight(state) && state.stopRequested;
-      const reported = { ...(quiet ? state : say(state, 'error', action.message)), status: 'idle' as const, busyLabel: '' };
+      const reported = { ...(quiet ? state : say(state, 'error', action.message)), status: 'idle' as const, condensing: false };
       // A planner turn dying IS a turn ending — the queue would otherwise wait
       // on a next one that never comes. An execution failure (or any failure
       // with no turn running) drains nothing.
@@ -357,7 +356,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step({
         ...state,
         status: 'idle',
-        busyLabel: '',
+        condensing: false,
         overlay: {
           kind: 'confirm',
           title: 'Initialize new workspace?',
@@ -384,7 +383,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     // Whether there is anything to animate is the app loop's call (it owns the
     // timer); a tick that arrives simply advances the frame.
     case 'spinnerTick':
-      return step({ ...state, spinnerFrame: (state.spinnerFrame + 1) % 10 });
+      return step({ ...state, spinnerFrame: (state.spinnerFrame + (action.by ?? 1)) % SPINNER_CYCLE });
 
     // The scheduled expiry of an armed stop; a token that is no longer the live
     // arm is a stale timer (the user disarmed and re-armed in between) and is
@@ -432,11 +431,11 @@ function handleKey(state: TuiState, key: Key): Step {
   if (key.name === 'ctrl-o' && state.focus === 'chat' && !state.overlay) return toggleDetail(state);
 
   // In the task view, Esc backs out the same way: a draft clears first, then
-  // the view closes and the planner chat returns. An open overlay still owns
-  // Esc ahead of it, so /help closes before the view does.
+  // the view closes and the plan pane takes focus on that task. An open
+  // overlay still owns Esc ahead of it, so /help closes before the view does.
   if (key.name === 'escape' && state.taskView && !state.overlay) {
     if (state.editor.text) return step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
-    return step({ ...state, taskView: null, scroll: 0 });
+    return step(returnToPlan(state, state.taskView.taskId));
   }
 
   // Esc during a planner turn is the turn queue's (take back a prompt, arm a
@@ -454,10 +453,10 @@ function handleKey(state: TuiState, key: Key): Step {
   if (key.name === 'wheelignored') return step(state);
   if (key.name === 'tab' && state.focus === 'chat') {
     const token = activeToken(state.editor.text, state.editor.cursor);
-    const matches = token ? tokenCompletions(token) : [];
+    const matches = token ? composerCompletions(token, state.taskView ? runnerCommands(state.taskView) : null) : [];
     if (token && matches.length > 0) {
       const { text: full } = state.editor;
-      const completed = `/${matches[0].name} `;
+      const completed = `/${matches[0]} `;
       const text = full.slice(0, token.start) + completed + full.slice(token.end);
       return step({ ...state, editor: { ...state.editor, text, cursor: token.start + completed.length } });
     }
@@ -516,25 +515,30 @@ function submit(state: TuiState): Step {
   if (!text) return step(state);
 
   const cleared: TuiState = { ...state, editor: commit(state.editor) };
-  const builtIn = builtInCommand(text);
-  if (builtIn) return runCommand(cleared, builtIn);
-  // The task view's composer has no skill resolution: a mistyped /retyr there
-  // would continue a finished task or reach a running agent, so it is refused.
-  const command = parseSlash(text);
-  if (command && state.taskView) {
-    const known = findCommand(command.name);
-    return known ? skillInTaskView(cleared, command.name) : unknownCommand(cleared, command.name);
-  }
 
   // The task view's composer talks to the runner, not the planner: the daemon
   // queues the message (or delivers it to a waiting task) and the log shows it.
   // A finished task has no turn to message; its composer continues it instead.
+  // Its slash namespace is the runner's alone (#66), ahead of Ordewell's.
   if (state.taskView) {
     if (!state.sessionId) return step(state);
     const taskId = state.taskView.taskId;
-    if (continuesTask(findTask(state.tasks, taskId))) return continueTaskStep(cleared, state.sessionId, taskId, text);
+    const task = findTask(state.tasks, taskId);
+    const command = parseRunnerCommand(text);
+    const offered = runnerCommands(state.taskView);
+    if (command && offered.length > 0 && !runnerCommandFor(offered, command.name)) {
+      const notice = `/${command.name} is not a command ${task?.assignedRunner ?? 'the runner'} offers this task — type / to see them.`;
+      return step({ ...cleared, taskView: { ...state.taskView, notice } });
+    }
+    if (state.taskView.notice) cleared.taskView = { ...state.taskView, notice: undefined };
+    // A resumed runner reads a command that opens its first turn as it would any.
+    if (continuesTask(task)) return continueTaskStep(cleared, state.sessionId, taskId, text);
+    if (command && offered.length > 0) return step(cleared, [{ type: 'invokeTaskCommand', sessionId: state.sessionId, taskId, ...command }]);
     return step(cleared, [{ type: 'sendTaskMessage', sessionId: state.sessionId, taskId, text }]);
   }
+
+  const builtIn = builtInCommand(text);
+  if (builtIn) return runCommand(cleared, builtIn);
 
   // A prompt while a turn answers is held, not sent: the transcript would
   // otherwise show a message the daemon has not even received yet, and the
@@ -549,4 +553,16 @@ function submit(state: TuiState): Step {
     : { type: 'startConversation', goal: text };
 
   return step({ ...spoken, status: 'planning', stopRequested: false, forceSendPending: null }, [effect]);
+}
+
+/** Close the task view onto the plan pane, the cursor on the task that was open. */
+function returnToPlan(state: TuiState, taskId: string): TuiState {
+  const closed: TuiState = { ...state, taskView: null, scroll: 0, focus: 'plan' };
+  // Revealing the parent mirrors the pane's own first right-arrow, so the
+  // subtask row exists to land on.
+  const parent = state.tasks.find((t) => t.subtasks?.some((s) => s.id === taskId));
+  const revealed = parent ? { ...closed, expandedTaskId: parent.id, taskEditor: null } : closed;
+  const index = planRows(revealed).findIndex((r) => r.task.id === taskId);
+  if (index < 0) return closed;
+  return settlePlan({ ...revealed, selectedTask: index });
 }

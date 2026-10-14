@@ -26,7 +26,7 @@ export const PLAN_KEYS = {
   scroll: { keys: 'pgup / pgdn', meaning: 'scroll the plan', group: 'Navigation' },
   expand: { keys: '→', meaning: "reveal a task's subtasks, then edit its prompt", group: 'Navigation', hint: '→ expand' },
   log: { keys: 'enter', meaning: "open the task's log and message its runner", group: 'Navigation', hint: 'enter log' },
-  back: { keys: 'esc', meaning: 'collapse the task, or return to the chat', group: 'Navigation' },
+  back: { keys: 'esc', meaning: "collapse the task, or leave a task's log for the plan", group: 'Navigation' },
 
   runner: { keys: 'R', meaning: "pick the task's runner", group: 'Assign' },
   model: { keys: 'o', meaning: "pick the task's model", group: 'Assign', hint: 'o model' },
@@ -41,11 +41,12 @@ export const PLAN_KEYS = {
   stop: { keys: 'S', meaning: 'stop the run', group: 'Run', hint: 'S stop' },
   cancel: {
     keys: 'c',
-    meaning: "cancel the task's runner, or its pending resume",
+    meaning: "cancel the task's runner, or keep a task paused on a usage limit from resuming on its own",
     group: 'Run',
     // `c` cancels the resume while the task has one; it has no runner to cancel then.
-    hint: (task) => (task && resumeLabel(task) ? 'c cancel resume' : 'c cancel'),
+    hint: (task) => (task && resumeLabel(task) ? 'c don\'t resume' : 'c cancel'),
   },
+  resume: { keys: 'r', meaning: 'resume a task paused on a usage limit now, once the limit has reset', group: 'Run', hint: 'r resume now' },
   resolve: { keys: 'x', meaning: 'resolve a merge conflict', group: 'Run', hint: 'x resolve conflict' },
   retry: { keys: '/retry', meaning: 'run a failed task again (type it in the chat)', group: 'Run', hint: '/retry' },
 
@@ -93,7 +94,9 @@ function taskKeyIds(task: TaskView | undefined, runActive: boolean): PlanKeyId[]
   if (!task) return ['add'];
   const row = taskRowView(task);
   if (row.conflict) return ['resolve', 'log'];
-  if (row.resumes) return ['cancel', 'log'];
+  if (row.actions.includes('resume-now') || row.resumes) {
+    return [...(row.actions.includes('resume-now') ? ['resume' as const] : []), ...(row.resumes ? ['cancel' as const] : []), 'skip', 'log'];
+  }
   switch (row.status) {
     case 'running':
     case 'quiet':

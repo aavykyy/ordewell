@@ -24,7 +24,7 @@ export function drainQueue(state: TuiState, settled: TuiState): Step {
     ? { type: 'sendMessage', sessionId: state.sessionId, message: next.text }
     : null;
   return step(
-    { ...spoken, queuedPrompts: next.rest, status: 'planning', busyLabel: '' },
+    { ...spoken, queuedPrompts: next.rest, status: 'planning', condensing: false },
     effect ? [effect] : [],
   );
 }

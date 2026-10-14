@@ -47,3 +47,42 @@ describe('the live thinking line keeps the end of a row too short for it', () =>
     expect(stripAnsi(row)).toMatch(new RegExp(`·\\s…${family}$`, 'u'));
   });
 });
+
+describe('a task\'s runner commands in its log (#66)', () => {
+  const plainRows = (blocks: Parameters<typeof conversationLines>[0], detailAll = false) =>
+    conversationLines(blocks, 80, detailAll).map(stripAnsi).filter((row) => row !== '');
+
+  it('draws a command the user ran, how its turn ended, and what it printed', () => {
+    expect(plainRows([{ type: 'command', id: 'b1', name: 'compact', args: 'keep the API notes', status: 'done', output: 'Compacted' }])).toEqual([
+      '❯ /compact keep the API notes  done',
+      '  ⎿  Compacted',
+    ]);
+    expect(plainRows([{ type: 'command', id: 'b1', name: 'pingskill', status: 'running', output: '' }])).toEqual(['❯ /pingskill  running']);
+  });
+
+  it('marks a compaction, with the context before and after it', () => {
+    expect(plainRows([{ type: 'compaction', id: 'b1', trigger: 'manual', preTokens: 24939, postTokens: 3615 }])).toEqual(['≡ Context compacted · 24.9k → 3.6k tokens']);
+    expect(plainRows([{ type: 'compaction', id: 'b1', trigger: 'auto' }])).toEqual(['≡ Context compacted by the runner on its own']);
+  });
+
+  it('collapses what the runner loaded to one line, and lists it in full detail', () => {
+    const loaded = {
+      type: 'runner_loaded' as const, id: 'b1',
+      commands: [
+        { name: 'pingskill', description: 'Reply', kind: 'skill' as const },
+        { name: 'hellocmd', description: 'Say hello', kind: 'command' as const },
+        { name: 'compact', description: 'Free up context', kind: 'builtin' as const },
+        { name: 'model', description: 'Set the model', kind: 'builtin' as const },
+      ],
+      mcpServers: [{ name: 'docs-server', status: 'pending' }],
+    };
+    expect(plainRows([loaded])).toEqual(['● Runner loaded 1 skill, 1 command, 2 built-in commands, 1 MCP server']);
+    expect(plainRows([loaded], true)).toEqual([
+      '● Runner loaded 1 skill, 1 command, 2 built-in commands, 1 MCP server',
+      '     skills: /pingskill',
+      '     commands: /hellocmd',
+      '     built-in: /compact /model',
+      '     MCP servers: docs-server (pending)',
+    ]);
+  });
+});

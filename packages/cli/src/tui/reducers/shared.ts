@@ -68,6 +68,8 @@ export type Effect =
   | { type: 'loadTaskAttempt'; sessionId: string; taskId: string; attempt: number }
   /** A user message to a structured task. */
   | { type: 'sendTaskMessage'; sessionId: string; taskId: string; text: string }
+  /** The task runner's own command (#66), never one of Ordewell's. */
+  | { type: 'invokeTaskCommand'; sessionId: string; taskId: string; name: string; args: string }
   /** Takes back one queued message before it is delivered. */
   | { type: 'removeTaskMessage'; sessionId: string; taskId: string; messageId: string }
   | { type: 'interruptTask'; sessionId: string; taskId: string }
@@ -86,7 +88,7 @@ export type Effect =
   | { type: 'refresh'; announce?: boolean }
   | { type: 'exit' };
 
-export type TaskAction = 'complete' | 'uncomplete' | 'skip' | 'retry' | 'cancel' | 'force-start' | 'cancel-resume';
+export type TaskAction = 'complete' | 'uncomplete' | 'skip' | 'retry' | 'cancel' | 'force-start' | 'cancel-resume' | 'resume-now';
 
 export type Action =
   | { type: 'key'; key: Key }
@@ -139,7 +141,7 @@ export type Action =
   | { type: 'workspaceNeedsInit'; goal: string; workspace: string }
   | { type: 'notice'; message: string; level?: 'info' | 'warn' | 'error' }
   | { type: 'resize'; rows: number; cols: number }
-  | { type: 'spinnerTick' };
+  | { type: 'spinnerTick'; by?: number };
 
 export interface Step {
   state: TuiState;

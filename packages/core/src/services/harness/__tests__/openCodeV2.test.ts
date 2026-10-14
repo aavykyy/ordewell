@@ -3,7 +3,7 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { OpenCodeAdapter } from '../OpenCodeAdapter';
-import type { AgentEvent, AgentProcessDeps, AgentStartOptions, SpawnFn, TaskStartOptions } from '../AgentAdapter';
+import type { AgentEvent, AgentProcessDeps, AgentStartOptions, SpawnFn, TaskStartOptions, TaskModeAgentAdapter } from '../AgentAdapter';
 import { fakeSpawn, sseResponse, type FakeEventStream } from '../../__tests__/harnessTestKit';
 import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION, OPENCODE_SEARCH_OFF } from '../openCodeOrdewell';
 import { mcpClientConfig } from '../../mcp';
@@ -194,6 +194,22 @@ describe('OpenCode 2.x — start', () => {
     expect(server.requests.find((r) => r.path === `/api/session/${SES}/model`)?.body).toEqual({ model: { providerID: 'opencode-go', id: 'deepseek-v4.1-flash' } });
     expect(server.requests.find((r) => r.path === `/api/session/${SES}/agent`)?.body).toEqual({ agent: 'build' });
     adapter.dispose();
+  });
+
+  it('keeps a task\'s completion contract on the session as an instruction entry, fresh or resumed', async () => {
+    const entry = `/api/experimental/session/${SES}/instructions/entries/ordewell-task`;
+    const ORDEWELL_SERVER = { name: 'ordewell' as const, url: 'http://127.0.0.1:1/mcp', headers: { authorization: 'Bearer tok-secret' } };
+
+    for (const resumeSessionId of [undefined, SES]) {
+      const server = fakeServer({ [`GET /api/session/${SES}`]: () => ({ data: { id: SES } }) });
+      const { adapter } = await start(server, taskStart({ mcp: ORDEWELL_SERVER, ...(resumeSessionId ? { resumeSessionId } : {}) }));
+
+      const value = (server.requests.find((r) => r.method === 'PUT' && r.path === entry)?.body as { value?: string } | undefined)?.value ?? '';
+      expect(value).toContain('call the `task_complete` tool with status `done` and a summary of what you did');
+      expect(value).toContain('The `task_complete` summary is this task\'s report');
+      expect(value).not.toContain('tok-secret');
+      adapter.dispose();
+    }
   });
 
   it('degrades a stale planner session to a fresh one, and fails a task that cannot resume', async () => {
@@ -933,4 +949,110 @@ describe('OpenCode 2.x — a planner\'s saved output (ADR-0032)', () => {
       rmSync(folder, { recursive: true, force: true });
     }
   });
+});
+
+
+it('lists OpenCode 2.x native commands and skills, plus compaction, for a task', async () => {
+  const server = fakeServer({
+    'GET /api/command': () => ({ data: [{ name: 'hello', description: 'Say hello' }] }),
+    'GET /api/skill': () => ({ data: [{ id: 'skill-greet', name: 'greet', description: 'Greet someone' }] }),
+    'GET /api/mcp': () => ({ data: [{ name: 'ordewell', status: { status: 'connected' } }, { name: 'docs', status: { status: 'connected' } }] }),
+  });
+  const { adapter: native } = await start(server);
+  const adapter: TaskModeAgentAdapter = native;
+  expect(adapter.commands?.()).toEqual([
+    { name: 'compact', description: 'Compact the conversation context', kind: 'builtin', aliases: ['summarize'] },
+    { name: 'hello', description: 'Say hello', kind: 'command' },
+    { name: 'greet', description: 'Greet someone', kind: 'skill' },
+  ]);
+  const events: AgentEvent[] = [];
+  const turn = adapter.send('hi', (e) => events.push(e));
+  const stream = await server.stream();
+  stream.push(started()); stream.push(succeeded());
+  await turn;
+  expect(events.find((e) => e.type === 'runner_loaded')).toEqual({ type: 'runner_loaded', commands: adapter.commands?.(), mcpServers: [{ name: 'docs', status: 'connected' }] });
+  adapter.dispose();
+});
+
+
+it('runs an OpenCode 2.x custom command through its native endpoint and waits for execution', async () => {
+  const server = fakeServer({ 'GET /api/command': () => ({ data: [{ name: 'hello', description: 'Say hello' }] }), 'POST /api/session/ses_v2/command': () => ({ status: 204 }) });
+  const { adapter: native } = await start(server);
+  const adapter: TaskModeAgentAdapter = native;
+  const events: AgentEvent[] = [];
+  let ended = false;
+  const turn = adapter.invokeCommand!('hello', 'Bob', (e) => events.push(e)).then(() => { ended = true; });
+  const stream = await server.stream();
+  await until(() => server.requests.some((r) => r.path === '/api/session/ses_v2/command'));
+  expect(server.requests.find((r) => r.path === '/api/session/ses_v2/command')?.body).toEqual({ name: 'hello', text: 'Bob' });
+  expect(ended).toBe(false);
+  stream.push(started()); stream.push(frame('session.text.ended', { assistantMessageID: MSG, ordinal: 0, text: 'Hello Bob' })); stream.push(succeeded());
+  await turn;
+  expect(events.filter((e) => e.type === 'assistant_text' || e.type === 'turn_end')).toEqual([{ type: 'assistant_text', text: 'Hello Bob' }, { type: 'turn_end' }]);
+  expect(server.requests.some((r) => r.path.endsWith('/prompt'))).toBe(false);
+  adapter.dispose();
+});
+
+
+it('activates a listed OpenCode 2.x skill by its native id with user arguments', async () => {
+  const server = fakeServer({ 'GET /api/skill': () => ({ data: [{ id: 'skill-greet', name: 'greet', description: 'Greet someone' }] }) });
+  const { adapter: native } = await start(server);
+  const adapter: TaskModeAgentAdapter = native;
+  const turn = adapter.invokeCommand!('greet', 'Bob', () => {});
+  const stream = await server.stream();
+  await until(() => server.requests.some((r) => r.method === 'POST' && (r.path.endsWith('/prompt') || r.path.endsWith('/command'))));
+  expect(server.requests.find((r) => r.path.endsWith('/prompt'))?.body).toEqual({ text: 'Bob', skills: [{ id: 'skill-greet' }] });
+  stream.push(started()); stream.push(succeeded());
+  await turn;
+  adapter.dispose();
+});
+
+
+it('compacts OpenCode 2.x natively and logs the completed boundary without affecting other sessions', async () => {
+  const server = fakeServer({ 'GET /api/command': () => ({ data: [] }), 'POST /api/session/ses_v2/compact': () => ({ data: { id: 'compact-input' } }) });
+  const { adapter: native } = await start(server);
+  const adapter: TaskModeAgentAdapter = native;
+  const events: AgentEvent[] = [];
+  const turn = adapter.invokeCommand!('summarize', '', (e) => events.push(e));
+  const stream = await server.stream();
+  await until(() => server.requests.some((r) => r.method === 'POST' && (r.path.endsWith('/compact') || r.path.endsWith('/command'))));
+  expect(server.requests.find((r) => r.path.endsWith('/compact'))?.body).toEqual({});
+  stream.push(frame('session.compaction.ended', { reason: 'manual' }, 'other-session'));
+  stream.push(started()); stream.push(frame('session.compaction.ended', { reason: 'manual' })); stream.push(succeeded());
+  await turn;
+  expect(events.filter((e) => e.type === 'compaction')).toEqual([{ type: 'compaction', trigger: 'manual' }]);
+  const next = adapter.send('continue', (e) => events.push(e));
+  const nextStream = await server.stream(1);
+  nextStream.push(started()); nextStream.push(frame('session.compaction.ended', { reason: 'auto' })); nextStream.push(succeeded());
+  await next;
+  expect(events.filter((e) => e.type === 'compaction')).toEqual([{ type: 'compaction', trigger: 'manual' }, { type: 'compaction', trigger: 'auto' }]);
+  adapter.dispose();
+});
+
+
+it('waits for OpenCode 2.x native plugin activation before discovering commands', async () => {
+  let ready = false;
+  const server = fakeServer({
+    'GET /api/model': () => { ready = true; return { data: [] }; },
+    'GET /api/command': () => ({ data: ready ? [{ name: 'hello', description: 'Say hello' }] : [] }),
+  });
+  const { adapter: native } = await start(server);
+  const adapter: TaskModeAgentAdapter = native;
+  expect(adapter.commands?.().map((c) => c.name)).toEqual(['compact', 'hello']);
+  adapter.dispose();
+});
+
+
+it('reports OpenCode 2.x manual compaction failure even when execution ends normally', async () => {
+  const server = fakeServer({ 'GET /api/command': () => ({ data: [] }) });
+  const { adapter: native } = await start(server);
+  const adapter: TaskModeAgentAdapter = native;
+  const events: AgentEvent[] = [];
+  const turn = adapter.invokeCommand!('compact', '', (e) => events.push(e));
+  const stream = await server.stream();
+  await until(() => server.requests.some((r) => r.path.endsWith('/compact')));
+  stream.push(started()); stream.push(frame('session.compaction.failed', { reason: 'manual', error: { type: 'compaction.unavailable', message: 'Nothing to compact yet' } })); stream.push(succeeded());
+  await turn;
+  expect(events.filter((e) => e.type === 'error' || e.type === 'turn_end' || e.type === 'compaction')).toEqual([{ type: 'error', message: 'Nothing to compact yet' }]);
+  adapter.dispose();
 });

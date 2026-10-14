@@ -25,9 +25,6 @@ const KNOWN_PROVIDERS = Object.keys(ALL_PROVIDERS);
 export const unknownCommand = (state: TuiState, name: string): Step =>
   fail(state, `Unknown command: /${name} — type /help to see what's available.`);
 
-export const skillInTaskView = (state: TuiState, name: string): Step =>
-  fail(state, `/${name} is a skill, and skills aren't loaded in a task's chat. To give a task a skill, use /task-skills <id> <name>.`);
-
 export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step {
   if (!findCommand(name)) return unknownCommand(state, name);
 
@@ -96,7 +93,7 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
       return rewind(state, args[0]);
     case 'compact':
       return withIdlePlanner(state, (sessionId) =>
-        step({ ...state, status: 'planning', busyLabel: 'Condensing the conversation…' }, [{ type: 'compactConversation', sessionId }]),
+        step({ ...state, status: 'planning', condensing: true }, [{ type: 'compactConversation', sessionId }]),
       );
     case 'new':
       return requestNewSession(state);
@@ -220,7 +217,7 @@ export function newSession(state: TuiState): Step {
     scroll: 0,
     planScroll: null,
     status: 'idle',
-    busyLabel: '',
+    condensing: false,
     // Prompts belong to the session that raised them; the old planner is gone
     // and its pending requests deny on their own timeout.
     pendingApprovals: [],

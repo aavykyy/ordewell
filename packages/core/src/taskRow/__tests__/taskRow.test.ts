@@ -92,6 +92,15 @@ describe('a task paused on a usage limit', () => {
     expect(taskRowView(subject(paused), { now }).resumes).toBeNull();
   });
 
+  it('offers to resume now when its session was saved, with or without a resume time, before not resuming', () => {
+    const resumeAt = new Date(2026, 9, 11, 20, 10).toISOString();
+    expect(taskRowActions({ ...paused, resumeAt, continuable: true })).toEqual(['resume-now', 'cancel-resume', 'skip', 'complete']);
+    expect(taskRowActions({ ...paused, continuable: true })).toEqual(['resume-now', 'skip', 'complete']);
+    expect(taskRowActions({ ...paused, resumeAt, continuable: true }, 'subtask')).toEqual(['resume-now', 'cancel-resume', 'complete']);
+    expect(taskRowActions({ status: 'failed', type: 'ai', continuable: true })).not.toContain('resume-now');
+    expect(taskRowActions({ status: 'awaiting_user', type: 'ai', awaitingReason: 'input', continuable: true })).not.toContain('resume-now');
+  });
+
   it('says nothing of a resume time left on a task in any other state', () => {
     const resumeAt = new Date(2026, 9, 11, 20, 10).toISOString();
     expect(resumeLabel({ status: 'awaiting_user', awaitingReason: 'input', resumeAt })).toBeNull();

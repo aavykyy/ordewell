@@ -36,7 +36,7 @@ describe('approval overlay rendering', () => {
   });
 
   it('says esc must be pressed twice while a turn is in flight', () => {
-    const out = screenWith(SHELL, { status: 'researching', sessionId: 's1' });
+    const out = screenWith(SHELL, { status: 'planning', sessionId: 's1' });
     expect(out).toMatch(/esc twice stops planning/i);
     expect(out).toMatch(/n den(y|ies)/i);
   });

@@ -95,6 +95,8 @@ function claudeCode(script: FakeRunnerScript): FakeRunner {
     if (msg.type === 'control_request' && msg.request?.subtype === 'mcp_status') {
       const mcpServers = args.includes('--mcp-config') ? [{ name: 'ordewell', status: script.attach }] : [];
       proc.emitStdout(line({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id, response: { mcpServers } } }));
+    } else if (msg.type === 'control_request' && msg.request?.subtype === 'initialize') {
+      proc.emitStdout(line({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id, response: { commands: [], models: [] } } }));
     } else if (msg.type === 'control_response' && msg.response?.request_id) {
       answers.set(msg.response.request_id, msg.response.response?.behavior ?? '');
     } else if (msg.type === 'user' && script.reply !== undefined) {
@@ -126,7 +128,10 @@ function claudeCode(script: FakeRunnerScript): FakeRunner {
       const at = args.indexOf('--allowedTools');
       return at >= 0 && args[at + 1].split(',').includes(name);
     },
-    instructions: () => '',
+    instructions: () => {
+      const args = spawned.lastArgs();
+      return args[args.indexOf('--append-system-prompt') + 1] ?? '';
+    },
     turnOpen: async () => { await answered(() => (proc().written.some((w) => w.includes('"type":"user"')) ? true : undefined)); },
     callOrdewellTool: (tool) => {
       proc().emitStdout(line({ type: 'assistant', session_id: 'sess-1', message: { id: `m-${tool}`, content: [{ type: 'tool_use', id: `tu-${tool}`, name: `mcp__ordewell__${tool}`, input: {} }] } }));
@@ -170,6 +175,8 @@ function codex(script: FakeRunnerScript): FakeRunner {
         const status = script.attach === 'connected' ? 'ready' : 'failed';
         proc.emitStdout(line({ jsonrpc: '2.0', method: 'mcpServer/startupStatus/updated', params: { name: 'ordewell', status } }));
       }
+    } else if (msg.method === 'skills/list' || msg.method === 'mcpServerStatus/list') {
+      proc.emitStdout(line({ jsonrpc: '2.0', id: msg.id, result: { data: [], nextCursor: null } }));
     } else if (msg.method === 'turn/start') {
       const turn = `turn-${++turns}`;
       proc.emitStdout(line({ jsonrpc: '2.0', id: msg.id, result: { turn: { id: turn, status: 'inProgress', items: [] } } }));
@@ -240,6 +247,8 @@ function openCode(script: FakeRunnerScript): FakeRunner {
   const replies = new Map<string, string>();
   let asks = 0;
   let turns = 0;
+  let system = '';
+  let prompted = false;
   const spawn: SpawnFn = (cmd, argv, options) => {
     envs.push(options.env ?? {});
     const proc = spawned.spawn(cmd, argv, options);
@@ -259,6 +268,8 @@ function openCode(script: FakeRunnerScript): FakeRunner {
     if (path === '/api/info') return respond(404);
     if (method === 'POST' && path === '/session') return respond(200, { id: SES });
     if (path === '/mcp') return respond(200, { ordewell: { status: script.attach } });
+    if (path.endsWith('/prompt_async') || path === `/session/${SES}/message`) prompted = true;
+    if (typeof body?.system === 'string') system = body.system;
     const permission = path.match(/^\/permission\/([^/]+)\/reply$/);
     if (permission) {
       replies.set(permission[1], String(body?.reply));
@@ -294,10 +305,10 @@ function openCode(script: FakeRunnerScript): FakeRunner {
     // OpenCode's permission rules, as it matches them: a trailing `*` is a prefix.
     preAllows: (name) => Object.entries(configOf()?.permission ?? {}).some(([rule, action]) =>
       action === 'allow' && (rule === name || (rule.endsWith('*') && name.startsWith(rule.slice(0, -1))))),
-    instructions: () => '',
+    instructions: () => system,
     turnOpen: async () => {
       // One `/event` connection per turn.
-      await answered(() => (streams.length > turns ? true : undefined));
+      await answered(() => (streams.length > turns && prompted ? true : undefined));
       turns = streams.length;
       frame('session.status', { status: { type: 'busy' } });
       frame('message.updated', { info: { id: 'msg_turn', role: 'assistant', sessionID: SES } });

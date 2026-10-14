@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { OpenCodeAdapter } from '../OpenCodeAdapter';
-import type { AgentEvent, AgentProcessDeps, AgentStartOptions, SpawnFn, TaskStartOptions } from '../AgentAdapter';
+import type { AgentEvent, AgentProcessDeps, AgentStartOptions, SpawnFn, TaskStartOptions, TaskModeAgentAdapter } from '../AgentAdapter';
 import { mcpClientConfig } from '../../mcp';
 import { OPENCODE_PLANNER_PERMISSION } from '../openCodeOrdewell';
 import { OPENCODE_MANIFEST } from '../../../plugins/builtin/opencode.manifest';
@@ -1065,4 +1065,51 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     expect(await failed.adapter.mcpAttached()).toBe(false);
     failed.adapter.dispose();
   });
+});
+
+
+it('runs an OpenCode 1.x listed command through the command endpoint with the task model and agent', async () => {
+  const server = fakeServer({
+    'GET /command': () => [{ name: 'hello', description: 'Say hello' }, { name: 'greet', description: 'Greet someone', source: 'skill' }],
+    'POST /session/ses_task/command': () => ({ info: { id: 'msg_command', role: 'assistant' }, parts: [{ id: 'text-command', type: 'text', messageID: 'msg_command', text: 'Hello Bob' }] }),
+  });
+  const { adapter: native } = await startTask(server);
+  const adapter: TaskModeAgentAdapter = native;
+  expect(adapter.commands?.().map((c) => [c.name, c.kind])).toEqual([['compact', 'builtin'], ['hello', 'command'], ['greet', 'skill']]);
+  const events: AgentEvent[] = [];
+  await adapter.invokeCommand!('hello', 'Bob', (e) => events.push(e));
+  expect(server.requests.find((r) => r.path === '/session/ses_task/command')?.body).toEqual({ command: 'hello', arguments: 'Bob', agent: 'build', model: 'anthropic/claude-sonnet-4' });
+  expect(events.filter((e) => e.type === 'assistant_text' || e.type === 'turn_end')).toEqual([{ type: 'assistant_text', text: 'Hello Bob' }, { type: 'turn_end' }]);
+  adapter.dispose();
+});
+
+
+it('compacts OpenCode 1.x through summarize using the assigned model and the runner boundary', async () => {
+  const server: ReturnType<typeof fakeServer> = fakeServer({
+    'GET /command': () => [],
+    'POST /session/ses_task/summarize': async () => {
+      const stream = await server.stream();
+      stream.push({ type: 'session.compacted', properties: { sessionID: 'other' } });
+      stream.push({ type: 'session.compacted', properties: { sessionID: 'ses_task' } });
+      return true;
+    },
+  });
+  const { adapter: native } = await startTask(server);
+  const adapter: TaskModeAgentAdapter = native;
+  const events: AgentEvent[] = [];
+  await adapter.invokeCommand!('compact', '', (e) => events.push(e));
+  expect(server.requests.find((r) => r.path.endsWith('/summarize'))?.body).toEqual({ providerID: 'anthropic', modelID: 'claude-sonnet-4', auto: false });
+  expect(events.filter((e) => e.type === 'compaction' || e.type === 'turn_end')).toEqual([{ type: 'compaction', trigger: 'manual' }, { type: 'turn_end' }]);
+  adapter.dispose();
+});
+
+
+it('reports a refused OpenCode 1.x summarize instead of a successful compaction turn', async () => {
+  const server = fakeServer({ 'GET /command': () => [], 'POST /session/ses_task/summarize': () => false });
+  const { adapter: native } = await startTask(server);
+  const adapter: TaskModeAgentAdapter = native;
+  const events: AgentEvent[] = [];
+  await adapter.invokeCommand!('compact', '', (e) => events.push(e));
+  expect(events.filter((e) => e.type === 'error' || e.type === 'turn_end' || e.type === 'compaction')).toEqual([{ type: 'error', message: 'OpenCode did not compact the session.' }]);
+  adapter.dispose();
 });

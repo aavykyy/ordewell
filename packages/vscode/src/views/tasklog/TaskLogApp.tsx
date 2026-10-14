@@ -4,6 +4,7 @@ import { useFollowOutput } from '../chat/followOutput';
 import { hasHiddenDetail } from '@ordewell/core/plan-utils';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type PatchedView } from '../../shared/conversationPatch';
 import type { HostToTaskLog, TaskLogStatus, TaskLogToHost } from '../../shared/taskLogProtocol';
+import { taskCommand, useRunnerCommands } from '../chat/components/RunnerCommands';
 import { taskLogState } from './taskLogState';
 
 declare function acquireVsCodeApi(): { postMessage(message: TaskLogToHost): void };
@@ -33,6 +34,8 @@ export default function TaskLogApp() {
   const followRef = useFollowOutput<HTMLDivElement>(blocks);
   const state = status ? taskLogState(status) : null;
   const hasDetail = useMemo(() => hasHiddenDetail(blocks), [blocks]);
+  const commands = status?.commands ?? [];
+  const completion = useRunnerCommands(text, setText, commands);
   const canSend = text.trim().length > 0;
 
   useEffect(() => {
@@ -68,19 +71,32 @@ export default function TaskLogApp() {
     return () => window.removeEventListener('message', handler);
   }, []);
 
-  // A finished task has no turn to message: its box continues it instead.
+  // A finished task has no turn to message: its box continues it instead, and
+  // one paused on a usage limit is resumed by it.
   const continues = status?.continuable === true;
+  const resumes = status?.resumable === true;
 
   const send = (): void => {
     const value = text.trim();
     if (!value) return;
+    try {
+      const command = taskCommand(value, commands);
+      if (command && !continues) {
+        vscode.postMessage({ type: 'invokeTaskCommand', ...command });
+        setText('');
+        return;
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return;
+    }
     vscode.postMessage(continues ? { type: 'continueTask', text: value } : { type: 'sendTaskMessage', text: value });
     setText('');
   };
 
   const working = status?.working === true;
   // Force send (ADR-0023, F1) needs a turn to interrupt; a finished task's box continues it instead.
-  const canSendNow = working && canSend && !continues;
+  const canSendNow = working && canSend && !continues && !(commands.length > 0 && text.trim().startsWith('/'));
 
   const sendNow = (): void => {
     const value = text.trim();
@@ -102,6 +118,7 @@ export default function TaskLogApp() {
   }, [stopArmed, working]);
 
   const onComposerKeyDown = (e: React.KeyboardEvent): void => {
+    if (e.nativeEvent.isComposing || completion.keyDown(e)) return;
     if (e.key === 'Escape' && working) {
       e.preventDefault();
       if (stopArmed) {
@@ -121,7 +138,7 @@ export default function TaskLogApp() {
   // One button, as in the planner's composer: Stop only while a turn is live
   // and nothing is typed, so typing a message always turns it back into Send.
   const stops = working && !canSend;
-  const sendLabel = continues ? 'Continue' : 'Send';
+  const sendLabel = resumes ? 'Resume' : continues ? 'Continue' : 'Send';
 
   return (
     <div className="task-log-container">
@@ -130,14 +147,18 @@ export default function TaskLogApp() {
           <span className="task-log-title">Task {status.order} · {status.title}</span>
           {status.runner && <span className="task-log-runner">{status.runner}</span>}
           {state && <span className={`task-log-state ${state.kind}`}>{state.label}</span>}
+          {status.resumes && <span className="task-log-runner">{status.resumes}</span>}
+          {resumes && (
+            <button type="button" className="task-log-detail" onClick={() => vscode.postMessage({ type: 'resumeNow' })}
+              title="The limit has reset: resume it in its saved session now">
+              Resume now
+            </button>
+          )}
           {status.resumes && (
-            <>
-              <span className="task-log-runner">{status.resumes}</span>
-              <button type="button" className="task-log-detail" onClick={() => vscode.postMessage({ type: 'cancelResume' })}
-                title="Do not resume it on its own: retry it by hand once the limit resets">
-                Cancel resume
-              </button>
-            </>
+            <button type="button" className="task-log-detail" onClick={() => vscode.postMessage({ type: 'cancelResume' })}
+              title="Keep it from resuming on its own: resume or retry it yourself once the limit resets">
+              Don't resume
+            </button>
           )}
           <span className="task-log-spacer" />
           {hasDetail && (
@@ -196,9 +217,10 @@ export default function TaskLogApp() {
       {stopArmed && <div className="stop-hint" role="status">Press Esc again to stop</div>}
 
       <div className="task-log-composer">
+        {completion.palette}
         <textarea className="task-log-input" value={text} rows={2}
-          placeholder={`${continues ? 'Continue the task in its saved session…' : 'Message the task…'} (Enter to send, Shift+Enter for a new line)`}
-          onChange={(e) => setText(e.target.value)} onKeyDown={onComposerKeyDown} />
+          placeholder={`${resumes ? 'The limit has reset? A message to resume it with…' : continues ? 'Continue the task in its saved session…' : 'Message the task…'} (Enter to send, Shift+Enter for a new line)`}
+          onChange={(e) => completion.change(e.target.value)} onKeyDown={onComposerKeyDown} />
         {canSendNow && (
           <button type="button" className="task-log-send-now" aria-label="Send now"
             title="Interrupt the running step and send this next, ahead of anything queued (Ctrl+Enter)" onClick={sendNow}>

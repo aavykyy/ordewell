@@ -1,7 +1,11 @@
 import { NOT_STARTED } from './status';
 
-/** What a user can do to one task from its row. `cancel-resume` keeps a task paused on a usage limit from resuming on its own. */
-export type TaskRowAction = 'cancel' | 'cancel-resume' | 'skip' | 'force-start' | 'complete' | 'uncomplete';
+/**
+ * What a user can do to one task from its row. For a task paused on a usage
+ * limit, `resume-now` resumes it in its saved session once the user says the
+ * limit has reset, and `cancel-resume` keeps it from resuming on its own.
+ */
+export type TaskRowAction = 'cancel' | 'resume-now' | 'cancel-resume' | 'skip' | 'force-start' | 'complete' | 'uncomplete';
 
 /** A subtask runs with its parent, so its row offers a different set than a top-level task's. */
 export type TaskRowPlacement = 'task' | 'subtask';
@@ -11,19 +15,24 @@ interface ActionSubject {
   type: 'ai' | 'user';
   awaitingReason?: string;
   resumeAt?: string | null;
+  /** Its last attempt left a runner session to continue (ADR-0018, K1). */
+  continuable?: boolean;
 }
 
 type Rule = readonly [TaskRowAction, (task: ActionSubject) => boolean];
 
 const UNSTARTED_AI = (t: ActionSubject): boolean => t.type === 'ai' && NOT_STARTED.has(t.status);
 const QUEUED = (t: ActionSubject): boolean => t.status === 'pending' || t.status === 'approved';
-const RESUMES = (t: ActionSubject): boolean => t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit' && !!t.resumeAt;
+const PAUSED = (t: ActionSubject): boolean => t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit';
+const RESUMES = (t: ActionSubject): boolean => PAUSED(t) && !!t.resumeAt;
+const RESUMABLE = (t: ActionSubject): boolean => PAUSED(t) && t.continuable === true;
 /** Work that holds up what depends on it until someone acts: Skip lets the run go on without it. */
 const HOLDS_UP = (t: ActionSubject): boolean => t.status === 'failed' || t.status === 'blocked' || t.status === 'awaiting_user';
 
 // Order is the order a surface lays the actions out in.
 const TASK_RULES: readonly Rule[] = [
   ['cancel', (t) => t.status === 'in_progress'],
+  ['resume-now', RESUMABLE],
   ['cancel-resume', RESUMES],
   ['skip', HOLDS_UP],
   ['force-start', UNSTARTED_AI],
@@ -35,6 +44,7 @@ const TASK_RULES: readonly Rule[] = [
 
 const SUBTASK_RULES: readonly Rule[] = [
   ['cancel', (t) => t.status === 'in_progress'],
+  ['resume-now', RESUMABLE],
   ['cancel-resume', RESUMES],
   ['complete', (t) => t.status === 'in_progress' && t.type === 'ai'],
   ['force-start', (t) => t.type === 'ai' && QUEUED(t)],

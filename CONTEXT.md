@@ -546,15 +546,16 @@ completion evidence: if the next turn also ends without the call, the task
 waits for input.
 *Avoid:* "nudge" (the planner's corrective prompts), "auto-complete".
 
-**Continue** — a retry of a completed or failed structured task that resumes
-its saved runner session (Claude's `--resume`, Codex's `thread/resume`) with
+**Continue** — a retry of a completed, failed or skipped structured task, or
+of one paused on a usage limit (see *Usage-limit resume*), that resumes its
+saved runner session (Claude's `--resume`, Codex's `thread/resume`) with
 the user's message as the next turn.
 It is verified and landed like any attempt, is not offered on conflicts, and
 leaves dependents alone, as retry does. `continuability` is the one rule, and
 a status carries only whether it holds (`continuable`), never the session id.
-The first turn is the message plus a short reminder of the done and checkpoint
-protocol — the required `task_complete`/`checkpoint` tools
-(`composeContinuationPrompt`) — not the original prompt.
+The first turn is the message plus a short reminder of the checkpoint
+protocol (`composeContinuationPrompt`), not the original prompt; how the task
+ends is the runner's instructions, applied again on the resumed session.
 In an isolated run its task workspace starts at the integration tips and
 restores the previous attempt's unlanded work, including uncommitted edits
 saved on `ordewell-preserved/` branches before the kept worktrees go. A conflict
@@ -578,7 +579,11 @@ one runner share one wait — the latest of their resets — and resume together
 the hold on the run is released once nothing waits on a reset and no task has
 failed. A plan loaded after its time resumes at once. Without a time, after a
 cancel or a stop, or when the resumed attempt hits the limit again at once, the
-task waits for a manual retry. Surfaces show "Resumes at 8:10pm" with a cancel.
+task waits for a manual retry. *Resume now* (`resumeNow`) resumes it early, in
+its saved session, once the user says the limit has reset — from the task row,
+a message sent to it (after the reset notice), or `retry_task` from `session` —
+with every task waiting on that runner's reset. Surfaces show "Resumes at
+8:10pm" with *Resume now* and *Don't resume*.
 A runner change, whether a direct edit or a planner edit, cancels that task's
 resume and makes it ready for the next scheduler slot on its new runner.
 Other tasks on the old runner keep their shared wait; changing only the model
@@ -589,8 +594,10 @@ inside the runner and is not this; "paused" for any other wait.
 **Task log** (`TaskLogEvent`, `reduceTaskLog`, `TaskLogRecorder`) — what a
 structured task did, at full fidelity (ADR-0018, O1b/P1): normalized events —
 text and thinking, tool calls with their results (long ones trimmed to head
-and tail), subagents, usage, turns, the message queue and runner approvals
-(requested, decided, withdrawn) — streamed live as
+and tail), subagents, usage, turns, the message queue, runner approvals
+(requested, decided, withdrawn), the **runner commands** a user ran and what
+they printed, the runner's own compactions, and what it loaded as it
+started — streamed live as
 `task_log` and appended to `.ordewell/sessions/<session>/tasks/<task>/<attempt>.jsonl`,
 one file per attempt, numbered from what is on disk. `reduceTaskLog` folds the
 same events into display blocks live and on reload, so the two draw alike. The
@@ -643,6 +650,20 @@ a message the runner reads voids it.
 *Avoid:* "queued prompt" (the planner conversation's hold); "sent" or
 "delivered" for a handed-over
 message — the write or POST succeeding is not delivery.
+
+**Runner command** (`RunnerCommand`, `commands()`, `invokeCommand`) — a slash
+command a task's runner offers that task, as the runner reported it (#66): one
+of its built-ins (`/compact`, `/model`), a skill, or another command — the
+user's or the project's own. With a task's chat open, its composer's slash
+namespace is that runner's alone: `/` completes the runner's list and
+`/name args` runs it as a turn of its own, queued behind a running turn and
+never handed into it. Ordewell carries it and logs it (`command`,
+`command_output`, `compaction`, `runner_loaded` in the **Task log**); what it
+does is the runner's business (#24). A runner that reports none has none, and
+a `/name` typed to it goes as text.
+*Avoid:* "slash command" alone (Ordewell's own TUI commands are slash
+commands too, and never run from a task's chat), and calling a runner's
+`/compact` a **Compaction** (that is the planner conversation's).
 
 **Mid-turn delivery** — a task message reaching the model at the runner's next
 step boundary, after the tool call in flight and inside the same turn
