@@ -18,7 +18,7 @@ function press(overrides: Partial<TuiState> = {}, editorText = '') {
 
 describe('ESC while planning', () => {
   it('arms on the first press and emits cancelPlanning on the second, keeping the draft throughout', () => {
-    const base = initialState({ status: 'planning', sessionId: 'session-1' });
+    const base = initialState({ planner: 'planning', sessionId: 'session-1' });
     const state = { ...base, editor: { ...base.editor, text: 'unsent draft', cursor: 12 } };
     const armed = reduce(state, { type: 'key', key: { name: 'escape' } });
 
@@ -32,7 +32,7 @@ describe('ESC while planning', () => {
   });
 
   it('also arms for a research turn (the other in-flight planner status)', () => {
-    const { state, effects } = press({ status: 'planning', sessionId: 'session-1' }, 'while it looks things up');
+    const { state, effects } = press({ planner: 'planning', sessionId: 'session-1' }, 'while it looks things up');
     expect(effects).toEqual([{ type: 'disarmStop', afterMs: 2000, arm: 1 }]);
     expect(state.stopArmed).toBe(true);
   });
@@ -40,13 +40,13 @@ describe('ESC while planning', () => {
   it('does nothing special without a session, even mid-status', () => {
     // Can't happen in practice (no session, no turn), but the guard is what
     // makes that true rather than an accident.
-    const { effects } = press({ status: 'planning', sessionId: null }, 'x');
+    const { effects } = press({ planner: 'planning', sessionId: null }, 'x');
     expect(effects).toEqual([]);
   });
 
   it('an open overlay still owns ESC — planning does not preempt it', () => {
     const { state, effects } = press({
-      status: 'planning',
+      planner: 'planning',
       sessionId: 'session-1',
       overlay: { kind: 'confirm', title: 'New session?', message: 'Discard the current plan?', action: { kind: 'new-session' } },
     }, undefined);
@@ -58,7 +58,7 @@ describe('ESC while planning', () => {
   it('esc from an open approval prompt arms instead of denying one call, and the second esc stops the whole turn', () => {
     const request = { id: 'ap-1', kind: 'shell_command' as const, subject: 'npm test', scope: 'npm test' };
     const base = initialState({
-      status: 'planning',
+      planner: 'planning',
       sessionId: 'session-1',
       overlay: { kind: 'approval', request },
       pendingApprovals: [{ id: 'ap-2', kind: 'shell_command' as const, subject: 'npm run build', scope: 'npm run build' }],
@@ -88,7 +88,7 @@ describe('ESC while planning', () => {
   });
 
   it('ctrl-c keeps quitting/backing-out meaning during an in-flight turn — it is not cancelPlanning', () => {
-    const base = initialState({ status: 'planning', sessionId: 'session-1' });
+    const base = initialState({ planner: 'planning', sessionId: 'session-1' });
     const state = { ...base, editor: { ...base.editor, text: 'unsent draft', cursor: 12 } };
     const { state: next, effects } = reduce(state, { type: 'key', key: { name: 'ctrl-c' } });
 
@@ -103,7 +103,7 @@ describe('a stopped turn on screen', () => {
   const escape = (state: TuiState) => reduce(state, { type: 'key', key: { name: 'escape' } }).state;
 
   function stoppedMidReply(): TuiState {
-    let state = initialState({ status: 'planning', sessionId: 'session-1' });
+    let state = initialState({ planner: 'planning', sessionId: 'session-1' });
     state = hear(state, { type: 'planner_turn_started', turnId: turn, prompt: 'add a parser' });
     state = hear(state, { type: 'planner_text_delta', turnId: turn, segmentId: 's1', text: 'Half a thou' });
     return escape(escape(state));
@@ -127,19 +127,19 @@ describe('the stopped turn\'s own failure', () => {
   const fail = (state: TuiState, message: string) => reduce(state, { type: 'failed', message }).state;
 
   it('is not reported as an error: the user asked for it, and the stop says so itself', () => {
-    const stopped = escape(escape(initialState({ status: 'planning', sessionId: 'session-1' })));
+    const stopped = escape(escape(initialState({ planner: 'planning', sessionId: 'session-1' })));
 
     const after = fail(stopped, 'Request was aborted.');
 
-    expect(after.status).toBe('idle');
+    expect(after.planner).toBe('idle');
     expect(messagesOf(after).filter((m) => m.role === 'error')).toEqual([]);
   });
 
   it('is only the stopped turn\'s: a later turn failing is still an error', () => {
-    const stopped = escape(escape(initialState({ status: 'planning', sessionId: 'session-1' })));
+    const stopped = escape(escape(initialState({ planner: 'planning', sessionId: 'session-1' })));
     const settled = fail(stopped, 'Request was aborted.');
 
-    const next = fail({ ...settled, status: 'planning' }, 'rate limited');
+    const next = fail({ ...settled, planner: 'planning' }, 'rate limited');
 
     expect(lastMessage(next)).toMatchObject({ role: 'error', text: 'rate limited' });
   });

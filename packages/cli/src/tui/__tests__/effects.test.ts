@@ -1670,15 +1670,15 @@ describe('conversation compact effect', () => {
 
   it('reports a refusal, and a busy planner goes back to idle', async () => {
     const h = harness({ compactConversation: vi.fn().mockRejectedValue(new Error('The conversation is too short to condense.')) });
-    let state: TuiState = initialState({ sessionId: 'session-1', status: 'planning', condensing: true });
+    let state: TuiState = initialState({ sessionId: 'session-1', planner: 'condensing' });
 
     await runEffect({ type: 'compactConversation', sessionId: 'session-1' }, h.deps);
     for (const action of h.actions) state = reduce(state, action).state;
 
     expect(types(h.actions)).toEqual(['failed']);
     expect(messageOf(h.actions, 'failed')).toMatch(/too short/);
-    expect(state.status).toBe('idle');
-    expect(state.condensing).toBe(false);
+    expect(state.planner).toBe('idle');
+    expect(state.planner).toBe('idle');
   });
 
   it('keeps the daemon\'s late copy of the summary from landing as a spoken turn too', async () => {

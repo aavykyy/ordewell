@@ -26,7 +26,7 @@ const task = (over: Partial<TaskView>): TaskView => ({
 });
 
 const planningState = (over: Partial<TuiState> = {}): TuiState =>
-  initialState({ sessionId: 'session-1', tasks: [task({})], status: 'planning', ...over });
+  initialState({ sessionId: 'session-1', tasks: [task({})], planner: 'planning', ...over });
 
 /** Type `text` into the editor of `state` and press enter. */
 const submitInto = (state: TuiState, text: string): TuiState =>
@@ -43,7 +43,7 @@ describe('submitting while a planner turn is in flight', () => {
   });
 
   it('queues for a research turn too, the other in-flight status', () => {
-    const { effects, state } = run('follow-up', planningState({ status: 'planning' }));
+    const { effects, state } = run('follow-up', planningState({ planner: 'planning' }));
     expect(effects).toEqual([]);
     expect(state.queuedPrompts).toEqual(['follow-up']);
   });
@@ -57,12 +57,12 @@ describe('submitting while a planner turn is in flight', () => {
   });
 
   it('still sends immediately when no turn is in flight', () => {
-    const { effects } = run('use bcrypt', planningState({ status: 'idle' }));
+    const { effects } = run('use bcrypt', planningState({ planner: 'idle' }));
     expect(effects).toEqual([{ type: 'sendMessage', sessionId: 'session-1', message: 'use bcrypt' }]);
   });
 
   it('the very first goal is never queued, even though it sets the status itself', () => {
-    const { effects } = run('build a login page', planningState({ status: 'idle', sessionId: null }));
+    const { effects } = run('build a login page', planningState({ planner: 'idle', sessionId: null }));
     expect(effects).toEqual([{ type: 'startConversation', goal: 'build a login page' }]);
   });
 
@@ -86,7 +86,7 @@ describe('the turn settling sends the next queued prompt', () => {
     });
 
     expect(lastMessage(after)).toMatchObject({ role: 'user', text: 'follow up' });
-    expect(after.status).toBe('planning');
+    expect(after.planner).toBe('planning');
     expect(after.queuedPrompts).toEqual([]);
     expect(effects).toEqual([{ type: 'sendMessage', sessionId: 'session-1', message: 'follow up' }]);
   });
@@ -98,7 +98,7 @@ describe('the turn settling sends the next queued prompt', () => {
     const first = reduce(state, { type: 'planUpdated', plan: {}, sessionId: 'session-1' });
     expect(first.state.queuedPrompts).toEqual(['two']);
     expect(lastMessage(first.state)).toMatchObject({ role: 'user', text: 'one' });
-    expect(first.state.status).toBe('planning');
+    expect(first.state.planner).toBe('planning');
 
     // The second settle's plan carries no tasks, so the turn it names ends
     // without starting another — the drain speaks the last prompt and the turn
@@ -111,7 +111,7 @@ describe('the turn settling sends the next queued prompt', () => {
     expect(second.state.queuedPrompts).toEqual([]);
     expect(messagesOf(second.state).filter((m) => m.role === 'user').map((m) => m.text)).toEqual(['one', 'two']);
     // The drain that sent the last prompt started the next turn.
-    expect(second.state.status).toBe('planning');
+    expect(second.state.planner).toBe('planning');
   });
 
   it('a failing turn sends the queued prompt too', () => {
@@ -119,18 +119,18 @@ describe('the turn settling sends the next queued prompt', () => {
     const { state: after, effects } = reduce(state, { type: 'failed', message: 'the planner timed out' });
 
     expect(effects).toEqual([{ type: 'sendMessage', sessionId: 'session-1', message: 'follow up' }]);
-    expect(after.status).toBe('planning');
+    expect(after.planner).toBe('planning');
     expect(messagesOf(after).some((m) => m.role === 'error')).toBe(true);
   });
 
   it('an idle failure does not drain the queue — only a turn ending does', () => {
-    const state = { ...queued(), status: 'executing' as const };
+    const state = { ...queued(), status: 'executing' as const, planner: 'idle' as const };
     const { effects } = reduce(state, { type: 'failed', message: 'boom' });
     expect(effects).toEqual([]);
   });
 
   it('a plan refresh during execution never drains the queue', () => {
-    const state = { ...queued(), status: 'executing' as const };
+    const state = { ...queued(), status: 'executing' as const, planner: 'idle' as const };
     const { effects } = reduce(state, { type: 'planUpdated', plan: {}, sessionId: 'session-1' });
     expect(effects).toEqual([]);
   });
@@ -163,7 +163,7 @@ describe('esc takes the latest queued prompt back', () => {
     expect(after.queuedPrompts).toEqual(['first']);
     expect(after.editor.text).toBe('second\na draft');
     expect(after.editor.cursor).toBe('second'.length);
-    expect(after.status).toBe('planning');
+    expect(after.planner).toBe('planning');
   });
 
   it('keeps the planner running — the first esc is not a stop while something is queued', () => {
@@ -172,7 +172,7 @@ describe('esc takes the latest queued prompt back', () => {
     const { state: after, effects } = press(state, 'escape');
 
     expect(effects).toEqual([]);
-    expect(after.status).toBe('planning');
+    expect(after.planner).toBe('planning');
   });
 
   it('replacing the editor keeps the history and caret sane when there is no draft', () => {
@@ -191,7 +191,7 @@ describe('double esc stops the turn', () => {
 
     expect(effects).toEqual([{ type: 'disarmStop', afterMs: 2000, arm: 1 }]);
     expect(state.stopArmed).toBe(true);
-    expect(state.status).toBe('planning');
+    expect(state.planner).toBe('planning');
     expect(state.editor.text).toBe('');
   });
 
@@ -209,7 +209,7 @@ describe('double esc stops the turn', () => {
 
     expect(state.stopArmed).toBe(false);
     expect(effects).toEqual([]);
-    expect(state.status).toBe('planning');
+    expect(state.planner).toBe('planning');
   });
 
   it('a stale expiry cannot cut a newer arm short', () => {
@@ -246,7 +246,7 @@ describe('double esc stops the turn', () => {
     let state = planningState();
     state = submitInto(state, 'one');
     state = submitInto(state, 'two');
-    const { state: stopped, effects } = run('/stop', { ...state, status: 'planning' });
+    const { state: stopped, effects } = run('/stop', { ...state, planner: 'planning' });
 
     expect(effects).toEqual([{ type: 'cancelPlanning', sessionId: 'session-1' }]);
     expect(stopped.queuedPrompts).toEqual([]);
@@ -278,7 +278,7 @@ describe('the approval overlay with double esc', () => {
   });
 
   it('esc still denies when the turn has settled, as before', () => {
-    const { state, effects } = press(approvalState({ status: 'idle' }), 'escape');
+    const { state, effects } = press(approvalState({ planner: 'idle' }), 'escape');
 
     expect(effects).toEqual([{ type: 'respondApproval', sessionId: 'session-1', approvalId: 'ap-1', granted: false }]);
     expect(state.overlay).toBeNull();
@@ -287,14 +287,14 @@ describe('the approval overlay with double esc', () => {
 
 describe('esc when idle is unchanged', () => {
   it('clears the chat draft', () => {
-    const { state, effects } = press(planningState({ status: 'idle', editor: { ...initialState().editor, text: 'left in the box', cursor: 14 } }), 'escape');
+    const { state, effects } = press(planningState({ planner: 'idle', editor: { ...initialState().editor, text: 'left in the box', cursor: 14 } }), 'escape');
 
     expect(effects).toEqual([]);
     expect(state.editor.text).toBe('');
   });
 
   it('returns plan-pane focus to chat', () => {
-    const { state, effects } = press(planningState({ status: 'idle', focus: 'plan' }), 'escape');
+    const { state, effects } = press(planningState({ planner: 'idle', focus: 'plan' }), 'escape');
     expect(effects).toEqual([]);
     expect(state.focus).toBe('chat');
   });
@@ -392,7 +392,7 @@ describe('a plan broadcast during the surface\'s own turn', () => {
       sessionId: 'session-1',
     });
 
-    expect(after.status).toBe('planning');
+    expect(after.planner).toBe('planning');
     expect(after.queuedPrompts).toEqual(['follow up']);
     expect(effects).toEqual([]);
   });

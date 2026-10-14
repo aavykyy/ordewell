@@ -24,9 +24,9 @@ describe('planUpdated', () => {
   };
 
   it('replaces the task list and stops the planning spinner', () => {
-    const s = send({ ...initialState(), status: 'planning' }, { type: 'planUpdated', plan });
+    const s = send({ ...initialState(), planner: 'planning' }, { type: 'planUpdated', plan });
     expect(s.tasks.map((t) => t.id)).toEqual(['a', 'b']);
-    expect(s.status).toBe('idle');
+    expect(s.planner).toBe('idle');
   });
 
   it('reads tasks from pendingTasks when that is where the planner put them', () => {
@@ -131,7 +131,7 @@ describe('planUpdated', () => {
 
 describe('planner conversation', () => {
   it('shows the planner question as an assistant turn; planUpdated settles the spinner', () => {
-    const asked = send({ ...initialState(), status: 'planning' }, {
+    const asked = send({ ...initialState(), planner: 'planning' }, {
       type: 'sessionMessage', message: { type: 'planner_message', content: 'Which DB?', timestamp: '2026-09-27T10:00:00.000Z' },
     });
     expect(lastMessage(asked)).toMatchObject({ role: 'planner', text: 'Which DB?' });
@@ -140,11 +140,11 @@ describe('planner conversation', () => {
     // dispatches the turn's text first and this settle after it, so a queued
     // prompt can drain onto the settled state without this clobbering it.
     const settled = send(asked, { type: 'planUpdated', plan: { tasks: [] } });
-    expect(settled.status).toBe('idle');
+    expect(settled.planner).toBe('idle');
   });
 
   it('shows research progress in the transcript, with the status row at Planning', () => {
-    const s = send({ ...initialState(), status: 'planning' }, {
+    const s = send({ ...initialState(), planner: 'planning' }, {
       type: 'sessionMessage', message: { type: 'research_step', tool: 'grep', args: '{"pattern":"auth"}' },
     });
     expect(chatActivity(s)?.label).toBe('Planning…');
@@ -245,11 +245,11 @@ describe('execution', () => {
   });
 
   it('does not let a run status clobber a planner turn in flight', () => {
-    const s = send(initialState({ ...withTasks, status: 'planning' }), {
+    const s = send(initialState({ ...withTasks, planner: 'planning' }), {
       type: 'statusUpdate',
       tasks: [{ id: 'a', status: 'pending', verdict: null }, { id: 'b', status: 'pending', verdict: null }],
     });
-    expect(s.status).toBe('planning');
+    expect(s.planner).toBe('planning');
   });
 
   it('counts the pane when a stop arrives without a tally', () => {
@@ -361,9 +361,9 @@ describe('loaded data', () => {
 
 describe('messages from the runtime', () => {
   it('shows a failure as an error turn and clears any spinner', () => {
-    const s = send({ ...initialState(), status: 'planning' }, { type: 'failed', message: 'boom' });
+    const s = send({ ...initialState(), planner: 'planning' }, { type: 'failed', message: 'boom' });
     expect(lastMessage(s)).toMatchObject({ role: 'error', text: 'boom' });
-    expect(s.status).toBe('idle');
+    expect(s.planner).toBe('idle');
   });
 
   it('shows a notice as a system turn', () => {
@@ -382,7 +382,7 @@ describe('messages from the runtime', () => {
   });
 
   it('forgets a session the daemon never registered', () => {
-    const dead = { ...initialState(), sessionId: 'session-dead', goal: 'x', status: 'planning' as const };
+    const dead = { ...initialState(), sessionId: 'session-dead', goal: 'x', planner: 'planning' as const };
     const s = send(dead, { type: 'sessionCleared' });
     expect(s.sessionId).toBeNull();
     expect(s.goal).toBe('');

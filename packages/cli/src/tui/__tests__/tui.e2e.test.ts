@@ -443,7 +443,7 @@ describe('TUI end to end', () => {
     h.type('Build the login flow');
     h.type('\r');
     await vi.waitFor(() => expect(h.app.getState().sessionId).toBe('session-1'));
-    expect(h.app.getState().status).toBe('planning');
+    expect(h.app.getState().planner).toBe('planning');
 
     h.type('\x1b');
     await vi.waitFor(() => expect(h.app.getState().stopArmed).toBe(true));
@@ -473,9 +473,39 @@ describe('TUI end to end', () => {
     expect(h.app.getState().tasks.map((t) => t.status)).toEqual(['completed', 'completed']);
   });
 
-  // Autorun starts the plan as the turn ends, after the planning socket closed;
-  // the supervisor speaks after the run's end closed the run's own. Only the
-  // follow is open for either.
+  // Autorun starts the run inside the turn that landed the plan, so its tasks
+  // start while `converse` still awaits that turn's answer.
+  it('draws an autorun plan\'s tasks while the turn that landed it is still out', async () => {
+    const h = harness();
+    let releaseTurn: () => void = () => {};
+    h.daemon.mocks.startConversation.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { releaseTurn = resolve; });
+      return planPayload(PLAN_TASKS.map((t) => (t.id === 't1' ? { ...t, status: 'in_progress' } : t)));
+    });
+    h.type('Build the login flow');
+    h.type('\r');
+    await vi.waitFor(() => expect(h.app.getState().sessionId).toBe('session-1'));
+
+    h.daemon.emitPlanning({ type: 'plan_generated', plan: { tasks: PLAN_TASKS }, goal: 'Build the login flow', runners: ['claude-code'] });
+    h.daemon.emitPlanning({
+      type: 'execution_action',
+      record: { command: 'run_plan', actor: 'autorun', outcome: 'done', at: '2026-10-14T10:00:00.000Z' },
+      text: 'Started the plan — by autorun.',
+    });
+    h.daemon.emitPlanning({ type: 'task_started', taskId: 't1', order: 1, title: 'Add the login route', runner: 'claude-code' });
+
+    await vi.waitFor(() => expect(h.screen()).toContain('Write the tests'));
+    expect(h.app.getState().tasks.map((t) => t.status)).toEqual(['in_progress', 'pending']);
+    expect(h.app.getState().planner).toBe('planning');
+
+    releaseTurn();
+    await vi.waitFor(() => expect(h.app.getState().planner).toBe('idle'));
+    expect(h.app.getState().tasks.map((t) => t.status)).toEqual(['in_progress', 'pending']);
+    expect(h.app.getState().status).toBe('executing');
+  });
+
+  // The supervisor speaks after the run's end closed the run's own socket, so
+  // only the follow is open for it.
   it('draws a run nobody on this surface started, and the supervisor\'s note after it ends', async () => {
     const h = harness();
     h.type('Build the login flow');
@@ -995,7 +1025,7 @@ describe('TUI end to end', () => {
     h.type('Use email based auth');
     h.type('\r');
     await vi.waitFor(() => expect(messagesOf(h.app.getState()).map((m) => m.text)).toContain('Use email based auth'));
-    await vi.waitFor(() => expect(h.app.getState().status).toBe('idle'));
+    await vi.waitFor(() => expect(h.app.getState().planner).toBe('idle'));
 
     // D/E: `/rewind` picks that follow-up message and, through the popup,
     // forks into a new session — the fork keeps the task, prefills the input

@@ -84,7 +84,7 @@ function runConfirm(
     return confirmedHandoff(state, overlay.action.kind);
   }
   if (overlay.action.kind === 'init-workspace') {
-    return step({ ...closed, status: 'planning' }, [{ type: 'startConversation', goal: overlay.action.goal, allowInit: true }]);
+    return step({ ...closed, planner: 'planning' }, [{ type: 'startConversation', goal: overlay.action.goal, allowInit: true }]);
   }
   // The planner may have started answering while the popup was open.
   const { index } = overlay.action;

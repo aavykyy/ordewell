@@ -66,7 +66,7 @@ describe('plan footer — the keys that fit the selected task', () => {
   });
 
   it('keeps the esc hint first while a planning turn is in flight', () => {
-    const hints = footerHints(plan([task()], { status: 'planning' }));
+    const hints = footerHints(plan([task()], { planner: 'planning' }));
     expect(hints[0]).toBe('esc ×2 stop planning');
     expect(hints[1]).toBe('f start');
   });
@@ -92,7 +92,7 @@ describe('plan footer — the keys that fit the selected task', () => {
   });
 
   it('fits one row at 100 columns even with the planning esc hint', () => {
-    expect(packHints(footerHints(plan([task()], { status: 'planning', queuedPrompts: ['next'] })), 100)).toHaveLength(1);
+    expect(packHints(footerHints(plan([task()], { planner: 'planning', queuedPrompts: ['next'] })), 100)).toHaveLength(1);
   });
 
 });

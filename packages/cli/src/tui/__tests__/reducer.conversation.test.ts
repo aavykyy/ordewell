@@ -35,8 +35,8 @@ describe('/fork', () => {
   });
 
   it('waits for the planner while it is planning', () => {
-    const status = 'planning' as const;
-    const { effects, state } = run('/fork', { ...planned, status });
+    const planner = 'planning' as const;
+    const { effects, state } = run('/fork', { ...planned, planner });
     expect(effects).toEqual([]);
     expect(lastError(state)).toMatch(/planner is still answering/);
   });
@@ -48,7 +48,7 @@ describe('/fork', () => {
 
 describe('switching to a fork', () => {
   it('adopts the fork as the current session, not running and not yet approved', () => {
-    const from = initialState({ ...planned, status: 'executing', planApproved: true, condensing: true });
+    const from = initialState({ ...planned, status: 'executing', planApproved: true, planner: 'condensing' });
 
     const { state } = reduce(from, { type: 'sessionForked', sessionId: 'session-2', goal: 'build me a parser' });
 
@@ -56,7 +56,7 @@ describe('switching to a fork', () => {
     expect(state.goal).toBe('build me a parser');
     expect(state.status).toBe('idle');
     expect(state.planApproved).toBe(false);
-    expect(state.condensing).toBe(false);
+    expect(state.planner).toBe('idle');
   });
 
   it('then ignores the original session\'s events', () => {
@@ -159,16 +159,16 @@ describe('/rewind', () => {
   it('/rewind <n> drops the answer when the planner got busy in the meantime', () => {
     const { state } = run('/rewind 4', planned);
 
-    const loaded = reduce({ ...state, status: 'planning' }, { type: 'rewindTargetsLoaded', targets, sessionId: 'session-1', pick: 4 }).state;
+    const loaded = reduce({ ...state, planner: 'planning' }, { type: 'rewindTargetsLoaded', targets, sessionId: 'session-1', pick: 4 }).state;
 
     expect(loaded.overlay).toBeNull();
     expect(lastError(loaded)).toMatch(/planner is still answering/);
   });
 
   it('gives a busy planner no popup, planning', () => {
-    const status = 'planning' as const;
+    const planner = 'planning' as const;
     for (const text of ['/rewind', '/rewind 4']) {
-      const { effects, state } = run(text, { ...planned, status });
+      const { effects, state } = run(text, { ...planned, planner });
       expect(effects).toEqual([]);
       expect(state.overlay).toBeNull();
       expect(lastError(state)).toMatch(/planner is still answering/);
@@ -182,7 +182,7 @@ describe('/rewind', () => {
   });
 
   it('waits for the planner while it is answering', () => {
-    const { effects, state } = run('/rewind', { ...planned, status: 'planning' });
+    const { effects, state } = run('/rewind', { ...planned, planner: 'planning' });
     expect(effects).toEqual([]);
     expect(state.overlay).toBeNull();
     expect(lastError(state)).toMatch(/planner is still answering/);
@@ -248,7 +248,7 @@ describe('the rewind confirmation', () => {
   });
 
   it('will not restore once the planner has started answering', () => {
-    const { state, effects } = press({ ...asked(), status: 'planning' }, key('enter'));
+    const { state, effects } = press({ ...asked(), planner: 'planning' }, key('enter'));
 
     expect(effects).toEqual([]);
     expect(state.overlay).toBeNull();
@@ -286,8 +286,7 @@ describe('/compact', () => {
     const { state, effects } = run('/compact', planned);
 
     expect(effects).toEqual([{ type: 'compactConversation', sessionId: 'session-1' }]);
-    expect(state.status).toBe('planning');
-    expect(state.condensing).toBe(true);
+    expect(state.planner).toBe('condensing');
     expect(chatActivity(state)?.label).toBe('Condensing…');
   });
 
@@ -298,8 +297,8 @@ describe('/compact', () => {
   });
 
   it('waits for the planner while it is planning', () => {
-    const status = 'planning' as const;
-    const { effects, state } = run('/compact', { ...planned, status });
+    const planner = 'planning' as const;
+    const { effects, state } = run('/compact', { ...planned, planner });
     expect(effects).toEqual([]);
     expect(lastError(state)).toMatch(/planner is still answering/);
   });

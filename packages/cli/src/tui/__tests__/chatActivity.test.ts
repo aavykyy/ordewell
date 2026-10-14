@@ -19,11 +19,11 @@ describe('chatActivity: the planner chat', () => {
   });
 
   it('says Planning while a planner turn is in flight', () => {
-    expect(chatActivity(state({ status: 'planning' }))).toEqual({ label: 'Planning…', busy: true });
+    expect(chatActivity(state({ planner: 'planning' }))).toEqual({ label: 'Planning…', busy: true });
   });
 
   it('says Condensing while /compact runs', () => {
-    expect(chatActivity(state({ status: 'planning', condensing: true }))).toEqual({ label: 'Condensing…', busy: true });
+    expect(chatActivity(state({ planner: 'condensing' }))).toEqual({ label: 'Condensing…', busy: true });
   });
 });
 
@@ -39,7 +39,7 @@ describe('chatActivity: a task chat', () => {
   });
 
   it('is empty during a planner turn, which is not that task\'s', () => {
-    expect(chatActivity(state({ status: 'planning', tasks: [task({ status: 'completed' })], taskView: viewing('t1') }))).toBeNull();
+    expect(chatActivity(state({ planner: 'planning', tasks: [task({ status: 'completed' })], taskView: viewing('t1') }))).toBeNull();
   });
 
   it('follows the parent\'s attempt from a subtask view', () => {

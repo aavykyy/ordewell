@@ -36,14 +36,14 @@ describe('approval overlay rendering', () => {
   });
 
   it('says esc must be pressed twice while a turn is in flight', () => {
-    const out = screenWith(SHELL, { status: 'planning', sessionId: 's1' });
+    const out = screenWith(SHELL, { planner: 'planning', sessionId: 's1' });
     expect(out).toMatch(/esc twice stops planning/i);
     expect(out).toMatch(/n den(y|ies)/i);
   });
 
   it('names the take-back instead once a prompt is queued, when the first esc unsends it', () => {
     const out = screenWith(SHELL, {
-      status: 'planning',
+      planner: 'planning',
       sessionId: 's1',
       queuedPrompts: ['a parked thought'],
     });
@@ -53,7 +53,7 @@ describe('approval overlay rendering', () => {
 
   it('keeps the take-back hint legible at narrow and wide widths', () => {
     for (const cols of [40, 120]) {
-      const out = screenWith(SHELL, { status: 'planning', sessionId: 's1', queuedPrompts: ['held'], cols });
+      const out = screenWith(SHELL, { planner: 'planning', sessionId: 's1', queuedPrompts: ['held'], cols });
       expect(out.replace(/\s+/g, ' ')).toMatch(/esc takes back the queued prompt/i);
     }
   });

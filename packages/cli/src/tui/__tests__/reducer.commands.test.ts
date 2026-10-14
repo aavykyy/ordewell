@@ -239,7 +239,7 @@ describe('execution', () => {
   });
 
   it('/stop cancels the planner instead, while a planning turn is in flight', () => {
-    expect(run('/stop', { ...planned, status: 'planning' }).effects).toEqual([
+    expect(run('/stop', { ...planned, planner: 'planning' }).effects).toEqual([
       { type: 'cancelPlanning', sessionId: 'session-1' },
     ]);
   });

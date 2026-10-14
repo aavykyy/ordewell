@@ -3,7 +3,14 @@ import { emptyEditor, type EditorState } from './editor';
 import type { SaveSettingsEffect } from './reducers/settings';
 import type { StepperState } from './reducers/stepper';
 
-export type RunStatus = 'idle' | 'planning' | 'executing';
+export type RunStatus = 'idle' | 'executing';
+
+/**
+ * This surface's own planner call: a turn, a /compact, or none. Apart from
+ * `status` because the two overlap — a prompt sent mid-run, a run autorun
+ * starts inside the turn that landed its plan — and neither may end the other.
+ */
+export type PlannerStatus = 'idle' | 'planning' | 'condensing';
 
 export interface TaskView {
   attemptUsage?: AttemptUsage[];
@@ -369,8 +376,7 @@ export interface TuiState {
    */
   detailAll: boolean;
   status: RunStatus;
-  /** A /compact is out: the planner is busy, but condensing rather than planning. */
-  condensing: boolean;
+  planner: PlannerStatus;
   sessionId: string | null;
   goal: string;
   /**
@@ -519,7 +525,7 @@ export const anyTaskRunning = (state: TuiState): boolean => state.tasks.some(isT
  * another.
  */
 export const plannerInFlight = (state: TuiState): boolean =>
-  state.status === 'planning';
+  state.planner !== 'idle';
 
 /** One navigable row of the plan pane — a top-level task, or a subtask shown under an open parent. */
 export interface PlanRow {
@@ -653,7 +659,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     turnGate: NO_TURN,
     detailAll: false,
     status: 'idle',
-    condensing: false,
+    planner: 'idle',
     sessionId: null,
     goal: '',
     tasks: [],
