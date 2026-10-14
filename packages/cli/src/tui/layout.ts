@@ -207,7 +207,7 @@ function taskHeaderLines(state: TuiState, tv: NonNullable<TuiState['taskView']>,
     : waitingCheckpoint(task)
       ? ['ctrl-y approve', 'ctrl-g reject (composer text is the reason)', 'ctrl-x interrupt']
       : task && resumeLabel(task)
-        ? ['ctrl-x cancel resume']
+        ? ['ctrl-x don\'t resume']
         : ['ctrl-r remove queued', 'ctrl-x interrupt', 'ctrl-s send now'];
   if (approval && waitingCheckpoint(task)) hint.push('then the checkpoint');
   const index = tv.attempts.indexOf(tv.attempt);
@@ -822,8 +822,11 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   if (row.status === 'skipped') {
     lines.push(style.grey(truncate(`${bodyPad}» ${inRow(skippedLabel(row.skipReason))} — nothing of it landed; m done lands its kept work`, cols)));
   }
+  const resumable = row.actions.includes('resume-now');
   if (row.resumes) {
-    lines.push(style.yellow(truncate(`${bodyPad}⏸ ${inRow(row.resumes)}, once the usage limit resets — c cancels the resume`, cols)));
+    lines.push(style.yellow(truncate(`${bodyPad}⏸ ${inRow(row.resumes)}, once the usage limit resets — ${resumable ? 'r resume now · ' : ''}c don't resume`, cols)));
+  } else if (resumable) {
+    lines.push(style.yellow(truncate(`${bodyPad}⏸ waits for the usage limit to reset — r resume now`, cols)));
   }
   if (row.opsChangedFiles) {
     lines.push(style.yellow(truncate(`${bodyPad}⚠ an ops task changed tracked files — check them, then m done or /retry`, cols)));

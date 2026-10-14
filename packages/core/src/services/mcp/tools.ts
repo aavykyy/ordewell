@@ -127,8 +127,8 @@ const oneTaskInput = z.object({ task: taskRef });
 const retryTaskInput = z.object({
   task: taskRef,
   from: z.enum(['fresh', 'session'])
-    .describe('"fresh": a new attempt from the task\'s prompt as the plan holds it now (change the prompt with edit_plan first). "session": continue the runner\'s saved session with "message"; for a completed or failed task.'),
-  message: z.string().optional().describe('What the runner should do next. Required with "session".'),
+    .describe('"fresh": a new attempt from the task\'s prompt as the plan holds it now (change the prompt with edit_plan first). "session": continue the runner\'s saved session with "message"; for a completed or failed task, or one paused on a usage limit.'),
+  message: z.string().optional().describe('What the runner should do next. Required with "session", except to resume a task paused on a usage limit.'),
 });
 
 const skipTaskInput = z.object({
@@ -300,11 +300,11 @@ export const PLANNER_EXECUTION_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     oneTaskInput, (h) => h.stopTask?.bind(h), PLANNER_EXECUTES),
   tool('stop_run', 'Stop every running task and the run. The plan is kept.',
     runPlanInput, (h) => h.stopRun?.bind(h), PLANNER_EXECUTES),
-  tool('retry_task', 'Start a new attempt of a failed, stopped or waiting task: fresh from its prompt, or continuing its saved session with a message. To change what it is told, edit its prompt with edit_plan first. In Guarded the user is asked first.',
+  tool('retry_task', 'Start a new attempt of a failed, stopped or waiting task: fresh from its prompt, or continuing its saved session with a message. To change what it is told, edit its prompt with edit_plan first. A task paused on a usage limit can be resumed early with from "session" once the user says the limit has been reset. In Guarded the user is asked first.',
     retryTaskInput, (h) => h.retryTask?.bind(h), PLANNER_EXECUTES),
   tool('skip_task', 'Give up waiting for a task that failed, is blocked or is waiting for input: it ends as skipped, none of its work lands, and the tasks that depend on it go ahead without it, told your reason. It never marks work complete. Only the supervisor at Act may, in a wake-up turn; a reason is required.',
     skipTaskInput, (h) => h.skipTask?.bind(h), PLANNER_EXECUTES),
-  tool('message_task', 'Send a message to a running task, or answer one waiting for input.',
+  tool('message_task', 'Send a message to a running task, or answer one waiting for input. A message to a task paused on a usage limit resumes it in its saved session.',
     messageTaskInput, (h) => h.messageTask?.bind(h), PLANNER_EXECUTES),
   tool('answer_approval', 'Answer a request a task\'s runner is waiting on: deny it with a note, or escalate it to the user. It never allows.',
     answerApprovalInput, (h) => h.answerApproval?.bind(h), PLANNER_EXECUTES),

@@ -7,6 +7,7 @@ export {
   flattenTasksWithParents,
   isAwaitingReason,
   isUserMessage,
+  pausedOnLimit,
   migratePlanState,
   resolveTaskRef,
   taskOrderLabel,

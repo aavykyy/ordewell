@@ -34,7 +34,12 @@
 - **Usage on each task.** The task card shows tokens, cost, context and time
   for the latest attempt; hover for the per-model breakdown.
 - **A task paused on a usage limit resumes on its own.** The card reads
-  "Resumes at 8:10pm" with a **Cancel resume** button.
+  "Resumes at 8:10pm" with a **Don't resume** button.
+- **Resume now.** When a usage limit resets early, **Resume now** on a paused
+  task's card or in its log resumes it in its saved session, along with every
+  other task waiting on that runner's reset. A message typed into its box
+  resumes it too, and Skip is offered while it is paused, even with the run
+  held on the limit.
 - **Send now in the planner chat.** *Send now* (or `Ctrl+Enter` when there is no
   turn running) stops the planner turn in flight and answers your message in
   the turn that replaces it, ahead of anything queued; the run's tasks carry

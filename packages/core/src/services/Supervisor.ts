@@ -424,6 +424,7 @@ function actBrief(readBudget: number, retryLimit: number): string {
     'When a task that failed, is blocked or waits for input should not hold up the rest, skip_task it with your reason: none of its work lands, and its dependents go ahead, told why. You never mark work complete; only the user vouches for it.',
     readsLine(readBudget),
     'To change a task and run it again, call edit_plan and then retry_task in the same reply: the retry waits for the edit to land, so it runs as edited.',
+    'A task paused on a usage limit can be resumed early with from "session" once the user says the limit has been reset.',
     `Loop guards hold you: you may retry one task up to ${retryLimit} times this run, and a skip of a task you retried counts as one more; a retry after a failure must change its prompt or model; you may not re-add a task you removed or undo an edit of your own. A refused call says why and what would be accepted. When a guard stops you, escalate to the user rather than trying again.`,
     'Then tell the user, in a few lines, what happened, what you did and why, and what needs them.',
   ].join('\n');

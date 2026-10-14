@@ -32,7 +32,19 @@ describe('plan footer — the keys that fit the selected task', () => {
       'a task paused on a usage limit',
       { status: 'awaiting_user', awaitingReason: 'usage-limit', resumeAt: '2999-01-01T00:00:00.000Z' },
       {},
-      ['c cancel resume', 'enter log'],
+      ['c don\'t resume', 's skip', 'enter log'],
+    ],
+    [
+      'a task paused on a usage limit with a saved session',
+      { status: 'awaiting_user', awaitingReason: 'usage-limit', resumeAt: '2999-01-01T00:00:00.000Z', continuable: true },
+      {},
+      ['r resume now', 'c don\'t resume', 's skip', 'enter log'],
+    ],
+    [
+      'a task waiting for the user after a usage limit',
+      { status: 'awaiting_user', awaitingReason: 'usage-limit', continuable: true },
+      {},
+      ['r resume now', 's skip', 'enter log'],
     ],
     ['a failed task', { status: 'failed' }, {}, ['/retry', 's skip', 'enter log']],
     ['a skipped task', { status: 'skipped' }, {}, ['m done', 'enter log']],
@@ -72,7 +84,7 @@ describe('plan footer — the keys that fit the selected task', () => {
     ['running', { status: 'in_progress' }, { status: 'executing' as const }],
     ['failed', { status: 'failed' }, {}],
     ['completed', { status: 'completed' }, {}],
-    ['paused on a usage limit', { status: 'awaiting_user', awaitingReason: 'usage-limit', resumeAt: '2999-01-01T00:00:00.000Z' }, {}],
+    ['paused on a usage limit', { status: 'awaiting_user', awaitingReason: 'usage-limit', resumeAt: '2999-01-01T00:00:00.000Z', continuable: true }, {}],
     ['conflicted', { status: 'awaiting_user', awaitingReason: 'conflict', isolation: { state: 'conflict', branch: 'b', worktree: '/w' } }, {}],
   ] as const)('fits one row at 100 columns for a %s task', (_name, over, stateOver) => {
     const state = plan([task({ ...over } as Partial<TaskView>)], { ...stateOver });

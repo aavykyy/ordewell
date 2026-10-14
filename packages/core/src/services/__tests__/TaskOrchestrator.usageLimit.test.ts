@@ -337,3 +337,110 @@ describe('a plan loaded with a task still waiting on a usage limit', () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 });
+
+describe('resuming a task paused on a usage limit now', () => {
+  it('resumes every task waiting on that runner\'s reset in its saved session, disarms the wait and releases the held run', async () => {
+    const { orchestrator, sessions, spawn, task } = setup({ maxParallelSessions: 2 });
+    orchestrator.loadPlan([
+      createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' }),
+      createTask({ id: 't2', order: 2, title: 'Second', prompt: 'do second' }),
+      createTask({ id: 't3', order: 3, title: 'Third', prompt: 'do third' }),
+    ]);
+    await orchestrator.approveReview();
+    hitLimitInTurn(sessions[0]);
+    await until(() => task('t1').status === 'awaiting_user');
+    hitLimitInTurn(sessions[1]);
+    await until(() => task('t2').status === 'awaiting_user');
+    expect(orchestrator.status).toBe('approved');
+
+    await orchestrator.resumeNow('t1', 'user');
+
+    await until(() => spawn.mock.calls.length === 4);
+    expect(spawn.mock.calls.slice(2).map(([o]) => [o.taskId, o.resumeSessionId])).toEqual([['t1', 'native-1'], ['t2', 'native-2']]);
+    expect(spawn.mock.calls[2][0].prompt).toContain('Your usage limit has reset.');
+    expect(task('t1').status).toBe('in_progress');
+    expect(task('t2').resumeAt).toBeUndefined();
+    expect(orchestrator.status).toBe('running');
+
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
+    expect(spawn).toHaveBeenCalledTimes(4);
+
+    sessions[2].reportComplete({ status: 'done', summary: '' });
+    await until(() => spawn.mock.calls.length === 5);
+    expect(spawn.mock.calls[4][0].taskId).toBe('t3');
+  });
+
+  it('sends a message after the reset notice in the same continuation', async () => {
+    const { orchestrator, sessions, spawn, task } = setup();
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
+    await orchestrator.forceStartTask('t1');
+    hitLimitInTurn(sessions[0]);
+    await until(() => task('t1').status === 'awaiting_user');
+
+    await orchestrator.resumeNow('t1', 'user', 'Also run the tests.');
+
+    expect(spawn).toHaveBeenCalledTimes(2);
+    const { prompt, resumeSessionId } = spawn.mock.calls[1][0];
+    expect(resumeSessionId).toBe('native-1');
+    expect(prompt.indexOf('Your usage limit has reset.')).toBeGreaterThanOrEqual(0);
+    expect(prompt.indexOf('Also run the tests.')).toBeGreaterThan(prompt.indexOf('Your usage limit has reset.'));
+  });
+
+  it('resumes a task waiting for the user, whose reset could not be read', async () => {
+    const { orchestrator, sessions, spawn, task } = setup();
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
+    await orchestrator.approveReview();
+    hitLimitInTurn(sessions[0], 'Rate limit exceeded. Please try again later.');
+    await until(() => task('t1').status === 'awaiting_user');
+    expect(task('t1').resumeAt).toBeUndefined();
+
+    await orchestrator.resumeNow('t1', 'user');
+
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(spawn.mock.calls[1][0]).toMatchObject({ taskId: 't1', resumeSessionId: 'native-1' });
+    expect(orchestrator.status).toBe('running');
+  });
+
+  it('counts a retry', async () => {
+    const { orchestrator, sessions, task } = setup();
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
+    await orchestrator.forceStartTask('t1');
+    hitLimitInTurn(sessions[0]);
+    await until(() => task('t1').status === 'awaiting_user');
+
+    await orchestrator.resumeNow('t1', 'user');
+    sessions[1].reportComplete({ status: 'done', summary: '' });
+    await until(() => task('t1').status === 'completed');
+
+    expect(orchestrator.storeInstance.getExecutionLog().find((s) => s.id === 't1')?.retryCount).toBe(1);
+  });
+
+  it('waits for the user when the resumed attempt hits the limit again at once', async () => {
+    const { orchestrator, sessions, spawn, notifications, task } = setup();
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
+    await orchestrator.forceStartTask('t1');
+    hitLimitInTurn(sessions[0]);
+    await until(() => task('t1').status === 'awaiting_user');
+    await orchestrator.resumeNow('t1', 'user');
+
+    hitLimitInTurn(sessions[1]);
+    await until(() => task('t1').status === 'awaiting_user');
+
+    expect(task('t1').resumeAt).toBeUndefined();
+    expect(notifications.warn).toHaveBeenCalledWith(expect.stringContaining('hit its usage limit again right after it was resumed'));
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
+    expect(spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses a task with no saved session, and one not paused on a limit', async () => {
+    const { orchestrator, spawn } = setup();
+    orchestrator.loadPlan([
+      { ...createTask({ id: 't1', order: 1, title: 'Unsaved', prompt: 'do it' }), status: 'awaiting_user', awaitingReason: 'usage-limit' },
+      { ...createTask({ id: 't2', order: 2, title: 'Asks', prompt: 'do it' }), status: 'awaiting_user', awaitingReason: 'input', runnerSessionId: 'native-2' },
+    ]);
+
+    await expect(orchestrator.resumeNow('t1', 'user')).rejects.toThrow('no saved session');
+    await expect(orchestrator.resumeNow('t2', 'user')).rejects.toThrow('not paused on a usage limit');
+    expect(spawn).not.toHaveBeenCalled();
+  });
+});

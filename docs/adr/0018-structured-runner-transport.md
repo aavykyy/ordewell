@@ -141,7 +141,16 @@ and completion evidence.
   the previous work: restored in the working tree, or a conflict fallback to
   the integration tips with the preserved branches named. The saved session
   and its working files must agree for an unattended run to carry on after a
-  limit. A resumed attempt that hits the limit again within five minutes waits
+  limit. Nobody has to wait for the reset when the limit resets early: *Resume
+  now* (`resumeNow`) — on the task row, or a message sent to the paused task,
+  which follows the reset notice in the same continuation — resumes it in its
+  saved session at once, with or without a resume time, and with it every task
+  waiting on that runner's reset, as the reset itself would. The planner and
+  the supervisor ask for it with `retry_task` from `session`, or `message_task`;
+  a pause is not a failure, so the supervisor's identical-retry guard does not
+  apply, though it counts against its retry limit. A task with no saved session
+  is not resumed this way; a fresh retry starts it over. A resumed attempt,
+  automatic or asked for, that hits the limit again within five minutes waits
   for a manual retry, and says so. A plan loaded with a resume time still ahead
   waits for it again; one that
   passed while nothing ran — the daemon was down — resumes at once. Cancelling
@@ -251,6 +260,10 @@ transport is retained for take-over.
   behaviour before #84, leaves a run started overnight idle from the first
   limit hit until someone retries it. Resuming continues what the user
   started; it is not new consent.
+- **Resuming early only by a fresh retry.** The behaviour before Resume now:
+  a continue refused a paused task and a message found no turn, so the only
+  way past a limit that reset early threw away a nearly finished attempt and
+  spent the quota just reset repeating it.
 - **Keeping the runner up across the wait and messaging it at the reset.**
   A process held for hours, or days for a weekly limit, is lost on any daemon
   restart, so the continue path is needed regardless; it is also the only one
@@ -287,3 +300,4 @@ transport is retained for take-over.
 - 2026-10-11 — K1 and U1 preserve a continued attempt's unlanded work, with an atomic conflict fallback naming the preserved branches.
 - 2026-10-13 — a runner's end is observed at `close` (after stdout drains) with its last unterminated line flushed, and a throwing event consumer ends the turn rather than crashing the host or passing as a bad frame.
 - 2026-10-13 — W1: one completion reminder per attempt before a turn without `task_complete` waits for input (#105).
+- 2026-10-14 — U1: Resume now — the user, planner or supervisor resumes a task paused on a usage limit early, in its saved session.

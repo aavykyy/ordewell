@@ -171,6 +171,13 @@ describe('webview messages reach the session through one entry point each', () =
       expect(saved?.plan.tasks.find((t) => t.id === 't1')?.status).toBe('skipped');
     });
 
+    it('resume now resumes the task in its saved session, as the user', async () => {
+      const resumeNow = vi.spyOn(h.session, 'resumeNow').mockResolvedValue(undefined);
+      await h.route({ type: 'sendSystemCommand', command: 'resumeNow', taskId: 't1' });
+
+      expect(resumeNow).toHaveBeenCalledWith('t1');
+    });
+
     it('retry reaches the command seam as the user', async () => {
       const execute = vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'Retrying task #2 "Stream it".' });
       await h.route({ type: 'sendSystemCommand', command: 'retry', taskId: 't2' });

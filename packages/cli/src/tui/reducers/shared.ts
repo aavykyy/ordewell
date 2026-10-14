@@ -86,7 +86,7 @@ export type Effect =
   | { type: 'refresh'; announce?: boolean }
   | { type: 'exit' };
 
-export type TaskAction = 'complete' | 'uncomplete' | 'skip' | 'retry' | 'cancel' | 'force-start' | 'cancel-resume';
+export type TaskAction = 'complete' | 'uncomplete' | 'skip' | 'retry' | 'cancel' | 'force-start' | 'cancel-resume' | 'resume-now';
 
 export type Action =
   | { type: 'key'; key: Key }

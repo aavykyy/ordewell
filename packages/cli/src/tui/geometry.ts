@@ -1,5 +1,5 @@
 import { width } from './ansi';
-import { continuesTask, findTask, type Focus, type TuiState } from './state';
+import { continuesTask, findTask, resumesTask, type Focus, type TuiState } from './state';
 
 /**
  * Where the TUI's panes are and how wide the things inside them are.
@@ -79,12 +79,14 @@ export function chatEditorRoom(cols: number, active: boolean): number {
 
 /**
  * The composer's prompt: `→ Task N` in the task view — `→ Continue task N`
- * once the task finished and can be continued — and the bare caret otherwise.
+ * once the task finished and can be continued, `→ Resume task N` while it is
+ * paused on a usage limit — and the bare caret otherwise.
  */
 export function chatPromptLabel(state: TuiState): string {
   if (!state.taskView) return '❯';
   const task = findTask(state.tasks, state.taskView.taskId);
-  return `→ ${continuesTask(task) ? 'Continue task' : 'Task'} ${task?.order ?? '?'}`;
+  const verb = !continuesTask(task) ? 'Task' : resumesTask(task) ? 'Resume task' : 'Continue task';
+  return `→ ${verb} ${task?.order ?? '?'}`;
 }
 
 /**

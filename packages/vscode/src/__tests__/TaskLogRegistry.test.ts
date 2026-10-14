@@ -28,6 +28,7 @@ function harness(attempts: Record<number, TaskLogEvent[]> = { 1: attemptOne }) {
     forceSendQueuedTaskMessage: vi.fn(() => true),
     interruptTask: vi.fn(async () => {}),
     cancelScheduledResume: vi.fn(() => true),
+    resumeNow: vi.fn(async () => {}),
     pending: [] as PendingApproval[],
     outstandingApprovals: vi.fn((): PendingApproval[] => session.pending),
     resolveApproval: vi.fn(() => true),
@@ -77,7 +78,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
       session: () => ({
         taskLogAttempts: () => [], taskLog: () => [], execute: async () => ({ ok: true, message: '' }), removeQueuedTaskMessage: () => false, interruptTask: async () => {},
         forceSendTaskMessage: () => 'm', forceSendQueuedTaskMessage: () => false,
-        cancelScheduledResume: () => false, outstandingApprovals: () => [], resolveApproval: () => false,
+        cancelScheduledResume: () => false, resumeNow: async () => {}, outstandingApprovals: () => [], resolveApproval: () => false,
       }),
       getTask: () => undefined,
       log: vi.fn(),
@@ -391,6 +392,17 @@ describe('task-log tabs over a whole run (ADR-0018, V1)', () => {
     h.session.cancelScheduledResume.mockReturnValue(false);
     __panels[0].__receive({ type: 'cancelResume' });
     expect(posted(__panels[0])).toContainEqual({ type: 'showError', error: 'This task has no resume scheduled.' });
+  });
+
+  it('routes resume now for a task paused on a usage limit', async () => {
+    const h = harness();
+    Object.assign(h.task, { status: 'awaiting_user', awaitingReason: 'usage-limit', runnerSessionId: 'native-1' });
+    h.registry.open('t1');
+    __panels[0].__receive({ type: 'ready' });
+
+    expect(posted(__panels[0])[0]).toMatchObject({ type: 'init', status: { continuable: true, resumable: true } });
+    __panels[0].__receive({ type: 'resumeNow' });
+    await vi.waitFor(() => expect(h.session.resumeNow).toHaveBeenCalledWith('t1'));
   });
 
   it('shows the Session\'s refusal of an interrupt', async () => {

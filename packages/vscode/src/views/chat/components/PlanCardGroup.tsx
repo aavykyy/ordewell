@@ -40,6 +40,7 @@ interface PlanCardGroupProps {
   onSkip?: (taskId: string) => void;
   onCancel?: (taskId: string) => void;
   onCancelResume?: (taskId: string) => void;
+  onResumeNow?: (taskId: string) => void;
   onForceStart?: (taskId: string) => void;
   onMarkComplete?: (taskId: string) => void;
   onMarkIncomplete?: (taskId: string) => void;
@@ -81,6 +82,7 @@ export default function PlanCardGroup({
   onSkip,
   onCancel,
   onCancelResume,
+  onResumeNow,
   onForceStart,
   onMarkComplete,
   onMarkIncomplete,
@@ -268,6 +270,7 @@ export default function PlanCardGroup({
                 onSkip={onSkip}
                 onCancel={onCancel}
                 onCancelResume={onCancelResume}
+                onResumeNow={onResumeNow}
                 onForceStart={onForceStart}
                 onMarkComplete={onMarkComplete}
                 onMarkIncomplete={onMarkIncomplete}

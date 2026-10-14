@@ -25,6 +25,8 @@ export interface TaskRowSubject {
   skipReason?: string;
   /** When a task paused on a usage limit resumes on its own (ISO time). */
   resumeAt?: string | null;
+  /** Its last attempt left a runner session to continue (ADR-0018, K1). */
+  continuable?: boolean;
   awaitingApproval?: number;
   isolation?: TaskRowIsolation | null;
   mergeGate?: readonly string[];

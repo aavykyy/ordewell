@@ -306,6 +306,11 @@ ready for the next scheduler slot. Direct user edits follow the same rule.
 Other tasks on the old runner keep their shared wait. Changing only the model
 on the same runner keeps the resume because the limit belongs to that runner's
 account. Moving a running task is refused like any edit to a running task.
+Once the user says the limit has reset early, it may resume the task in its
+saved session with `retry_task` from `session` (ADR-0018, U1). A pause is not
+a failure, so no prompt or model change is asked of it, but the resume counts
+against the task's retry limit; one that hits the limit again at once waits
+for the user.
 
 ### Merge at gates automatically
 
@@ -468,3 +473,4 @@ until #30 exists.
   guards' memory included.
 - 2026-10-14 — a failure blocks only its dependents instead of halting the run; run updates name the tasks a failure blocks, and the run's end counts them ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)).
 - 2026-10-14 — `skip_task`: a verdict-less `skipped` state that lands nothing and releases dependents, for the supervisor at Act with a required reason; the user's Skip goes through it as the user instead of marking the task complete. Skips count against the retry limit of a task the supervisor retried, and the supervisor never runs a skipped task again.
+- 2026-10-14 — a task paused on a usage limit is resumed early with `retry_task` from `session`, outside the identical-retry guard and inside the retry limit (ADR-0018, U1).

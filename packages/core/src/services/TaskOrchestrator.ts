@@ -1,7 +1,7 @@
 import { unavailableTaskModeMessage } from './ModeResolver';
 import { McpAttachError, RunnerStartupExit } from './harness/ordewellBinding';
 import * as path from 'path';
-import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasks, flattenTasksWithParents, waitsForReset, type RunSettings } from '../models/Task';
+import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasks, flattenTasksWithParents, pausedOnLimit, waitsForReset, type RunSettings } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
 import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
@@ -166,7 +166,7 @@ interface TaskAttempt {
   decided: boolean;
   /** The task skills put in this attempt's prompt, as read from where it runs. */
   skills: readonly TaskSkillSnapshot[];
-  /** Started by a usage limit's reset rather than by the user or the scheduler; see {@link RELAPSE_MS}. */
+  /** Resumed after a usage limit, at its reset or by {@link TaskOrchestrator.resumeNow}, rather than started; see {@link RELAPSE_MS}. */
   readonly autoResumed: boolean;
   /** The runner's own words for why the running turn failed, if it did. */
   turnError: string | null;
@@ -175,6 +175,13 @@ interface TaskAttempt {
 }
 
 type AttemptPhase = 'starting' | 'running' | 'integrating';
+
+/** A resume the user, planner or supervisor asked for before the reset; see {@link TaskOrchestrator.resumeNow}. */
+interface ResumeNow {
+  taskId: string;
+  origin: RunOrigin;
+  message?: string;
+}
 
 /** Read-only view of a task's live attempt. */
 export interface TaskAttemptSnapshot {
@@ -1358,6 +1365,7 @@ export class TaskOrchestrator {
     if (!task) throw new TaskControlError(`No task ${taskId} in this plan.`);
     const eligible = continuability(task);
     if (!eligible.ok) throw new TaskControlError(eligible.reason);
+    if (pausedOnLimit(task)) return this.resumeNow(taskId, origin, text);
     if (!(await this.openFor(taskId, origin, () => this.continueTask(taskId, message, origin)))) return;
     // The run may have started it while opening; the claim below must be the only one.
     if (this.attempts.has(taskId) || !continuability(task).ok) return;
@@ -1486,11 +1494,32 @@ export class TaskOrchestrator {
     for (const runner of runners) this.armLimitWait(runner);
   }
 
-  private async resumeAfterLimit(runner: string): Promise<void> {
-    const due = this.waitingOn(runner);
+  /**
+   * Resume a task paused on its runner's usage limit now, in its saved
+   * session, once the user says the limit has reset early. The limit is the
+   * runner's account's, so every task waiting on that runner's reset resumes
+   * with it, as at the reset itself. `message` follows the reset notice in the
+   * same continuation. A resumed attempt that hits the limit again at once
+   * waits for the user, as an automatic resume's does: that is what keeps a
+   * caller from resuming it round and round.
+   */
+  async resumeNow(taskId: string, origin: RunOrigin = 'user', message?: string): Promise<void> {
+    const task = this.store.get(taskId);
+    if (!task) throw new TaskControlError(`No task ${taskId} in this plan.`);
+    if (!pausedOnLimit(task)) throw new TaskControlError(`Task "${task.title}" is not paused on a usage limit.`);
+    const eligible = continuability(task);
+    if (!eligible.ok) throw new TaskControlError(eligible.reason);
+    const runner = this.store.resolveTaskRunner(task);
+    this.limitWaits.disarm(runner);
+    await this.resumeAfterLimit(runner, { taskId, origin, message: message?.trim() || undefined });
+  }
+
+  private async resumeAfterLimit(runner: string, now?: ResumeNow): Promise<void> {
+    const asked = now ? this.store.get(now.taskId) : undefined;
+    const due = [...(asked ? [asked] : []), ...this.waitingOn(runner).filter((t) => t.id !== asked?.id)];
     if (due.length === 0) return;
     this.tell('info', `The usage limit of ${runner} has reset: resuming ${quotedList(due.map((t) => t.title))}.`);
-    await Promise.all(due.map((t) => this.resumeTask(t.id)));
+    await Promise.all(due.map((t) => this.resumeTask(t.id, t.id === asked?.id ? now : undefined)));
   }
 
   /**
@@ -1498,17 +1527,20 @@ export class TaskOrchestrator {
    * it left one (ADR-0018, K1), then release the hold the pause put on the
    * run once nothing else waits on a reset.
    */
-  private async resumeTask(taskId: string): Promise<void> {
-    if (!(await this.openFor(taskId, 'limit-reset', () => this.resumeTask(taskId)))) return;
+  private async resumeTask(taskId: string, now?: ResumeNow): Promise<void> {
+    const origin = now?.origin ?? 'limit-reset';
+    if (!(await this.openFor(taskId, origin, () => this.resumeTask(taskId, now)))) return;
     const task = this.store.get(taskId);
-    if (!task || !waitsForReset(task) || this.attempts.has(taskId)) return;
+    // One asked for now resumes without a resume time; at the reset, one cancelled meanwhile stays put.
+    if (!task || !(now ? pausedOnLimit(task) : waitsForReset(task)) || this.attempts.has(taskId)) return;
     const resumeSessionId = task.runnerSessionId;
     this.retryCounts.set(taskId, (this.retryCounts.get(taskId) ?? 0) + 1);
     this.store.retry(taskId);
     this.onHold.delete(taskId);
-    const continuation = resumeSessionId ? { message: LIMIT_RESET_MESSAGE, resumeSessionId } : null;
+    const message = now?.message ? `${LIMIT_RESET_MESSAGE}\n\n${now.message}` : LIMIT_RESET_MESSAGE;
+    const continuation = resumeSessionId ? { message, resumeSessionId } : null;
     const started = this.startTask(task, continuation, { autoResumed: true });
-    const resumed = this.heldOnLimit && !this.running && !this.store.allTasks.some(waitsForReset) ? this.start('limit-reset') : Promise.resolve();
+    const resumed = this.heldOnLimit && !this.running && !this.store.allTasks.some(waitsForReset) ? this.start(origin) : Promise.resolve();
     // Both are awaited even if one fails: the claimed attempt's start must not
     // be left unhandled because restarting the run threw.
     await Promise.all([resumed, started]);

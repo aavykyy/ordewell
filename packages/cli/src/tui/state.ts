@@ -564,12 +564,18 @@ export function waitingCheckpoint(task: TaskView | undefined): string | undefine
 
 /**
  * A finished structured task the daemon can continue in its saved session
- * (ADR-0018, K1): the composer continues it rather than messaging a turn.
- * The status is checked too, so a start the daemon has not reported the
- * flag's end for yet is not continued twice.
+ * (ADR-0018, K1), or one paused on a usage limit it can resume there: the
+ * composer continues it rather than messaging a turn. The status is checked
+ * too, so a start the daemon has not reported the flag's end for yet is not
+ * continued twice.
  */
 export function continuesTask(task: TaskView | undefined): boolean {
-  return task?.continuable === true && (task.status === 'completed' || task.status === 'failed' || task.status === 'skipped');
+  return task?.continuable === true && (task.status === 'completed' || task.status === 'failed' || task.status === 'skipped' || resumesTask(task));
+}
+
+/** A task paused on a usage limit, whose composer resumes it now with what is typed. */
+export function resumesTask(task: TaskView | undefined): boolean {
+  return task?.status === 'awaiting_user' && task.awaitingReason === 'usage-limit';
 }
 
 /**

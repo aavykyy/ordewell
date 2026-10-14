@@ -120,6 +120,16 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   the time resumes at once. Without a time, after a cancel, or when the limit
   is hit again at once, the task waits for a manual retry
   ([ADR-0018](docs/adr/0018-structured-runner-transport.md)).
+- **Resume now, when the limit resets early.** A task paused on a usage limit
+  resumes in its saved session as soon as you say so, instead of waiting for
+  its reset or starting over: *Resume now* on its row (`r` in the terminal UI,
+  a button in VS Code), or a message typed into its box, which the runner gets
+  after the reset notice. Every other task waiting on that runner's reset
+  resumes with it. The planner and an Act supervisor resume it with
+  `retry_task` from `"session"`, and a message sent to it with `message_task`
+  resumes it too. A resume that hits the limit again at once waits for you.
+  The cancel is now labelled *Don't resume*, and Skip is offered while the
+  task is paused ([ADR-0018](docs/adr/0018-structured-runner-transport.md)).
 - **Send now in the planner chat.** `ctrl-s` in the terminal UI, and *Send now*
   in VS Code, interrupts the planner turn in flight and answers the message
   alone in the turn that replaces it, ahead of every prompt already queued; the

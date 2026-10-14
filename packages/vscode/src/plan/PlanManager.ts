@@ -461,6 +461,9 @@ export async function handleSystemCommand(
       case 'cancelResume':
         deps.session.cancelScheduledResume(taskId);
         break;
+      case 'resumeNow':
+        await deps.session.resumeNow(taskId);
+        break;
       case 'retry':
         await executeUserCommand(deps.session, { command: 'retry_task', task: taskId, from: 'fresh' });
         break;

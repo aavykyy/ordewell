@@ -361,7 +361,7 @@ describe('the command seam: retry_task', () => {
     expect((await env.run({ command: 'retry_task', task: 't1', from: 'session' })).message)
       .toBe('Continuing task #1 "Task t1" in its saved session needs a message: what the runner should do next.');
     expect((await env.run({ command: 'retry_task', task: 't2', from: 'session', message: 'go on' })).message)
-      .toBe('Task "Task t2" cannot be continued: only a completed, failed or skipped task can be. A fresh retry (from "fresh") starts it over from its prompt.');
+      .toBe('Task "Task t2" cannot be continued: only a completed, failed or skipped task, or one paused on a usage limit, can be. A fresh retry (from "fresh") starts it over from its prompt.');
     expect(env.spawned('t1')).toHaveLength(1);
     expect(env.spawned('t2')).toHaveLength(0);
   });
@@ -387,6 +387,97 @@ describe('the command seam: retry_task', () => {
     env.session.resolveApproval(env.cards()[0].id, true);
 
     expect(await pending).toMatchObject({ ok: true });
+  });
+});
+
+describe('the command seam: a task paused on a usage limit', () => {
+  const ACT: ExecutionActor = { kind: 'supervisor', level: 'act' };
+  const LIMIT = "You've hit your session limit · resets 8:10pm (UTC)";
+
+  function hitLimit(session: FakeRunnerSession): void {
+    session.emitEvent({ type: 'error', message: LIMIT });
+    session.emitOutput(`${LIMIT}\n`);
+    session.emitTurnEnd('failed');
+  }
+
+  /** Task 1 paused on its runner's usage limit after the user's Execute plan, task 2 waiting on it. */
+  async function paused(opts: Parameters<typeof setup>[0] = {}) {
+    const env = await running(opts);
+    hitLimit(env.latest('t1'));
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')!.awaitingReason).toBe('usage-limit'));
+    return env;
+  }
+
+  it('resumes it in its saved session from "session", with no message needed', async () => {
+    const env = await paused();
+
+    const outcome = await env.run({ command: 'retry_task', task: 't1', from: 'session' });
+
+    expect(outcome).toEqual({ ok: true, message: 'Resumed task #1 "Task t1" in its saved session.' });
+    expect(env.spawned('t1')).toHaveLength(2);
+    expect(env.spawned('t1')[1]).toMatchObject({ resumeSessionId: 'native-1', prompt: expect.stringContaining('Your usage limit has reset.') });
+    expect(taskOf(env.session, 't1')!.status).toBe('in_progress');
+    expect(env.timeline().at(-1)!.text).toBe('The planner resumed task #1 "Task t1" in its saved session.');
+  });
+
+  it('sends a message after the reset notice in the same continuation', async () => {
+    const env = await paused();
+
+    const outcome = await env.run({ command: 'retry_task', task: 't1', from: 'session', message: 'limits reset, go on' });
+
+    expect(outcome).toEqual({ ok: true, message: 'Resumed task #1 "Task t1" in its saved session with your message.' });
+    const { prompt } = env.spawned('t1')[1];
+    expect(prompt.indexOf('limits reset, go on')).toBeGreaterThan(prompt.indexOf('Your usage limit has reset.'));
+    expect(env.timeline().at(-1)!.text).toBe('The planner resumed task #1 "Task t1" in its saved session: "limits reset, go on"');
+  });
+
+  it('resumes it on a message sent to it, as the user types one into its box', async () => {
+    const env = await paused();
+
+    const outcome = await env.run({ command: 'message_task', task: 't1', text: 'limits reset, go on' }, { kind: 'user' });
+
+    expect(outcome).toEqual({ ok: true, message: 'Resumed task #1 "Task t1" in its saved session with your message.' });
+    expect(env.spawned('t1')).toHaveLength(2);
+    expect(env.spawned('t1')[1]).toMatchObject({ resumeSessionId: 'native-1', prompt: expect.stringContaining('limits reset, go on') });
+    expect(env.timeline().at(-1)!.text).toBe('You resumed task #1 "Task t1" in its saved session: "limits reset, go on"');
+  });
+
+  it('refuses one with no saved session', async () => {
+    const env = await running();
+    env.latest('t1').sessionId = null;
+    hitLimit(env.latest('t1'));
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')!.awaitingReason).toBe('usage-limit'));
+
+    expect((await env.run({ command: 'retry_task', task: 't1', from: 'session' })).message)
+      .toBe('Task "Task t1" cannot be continued: its runner left no saved session to resume. Use Retry instead. A fresh retry (from "fresh") starts it over from its prompt.');
+    expect(env.spawned('t1')).toHaveLength(1);
+  });
+
+  it('refuses run_task, pointing at the resume', async () => {
+    const env = await paused();
+
+    expect((await env.run({ command: 'run_task', task: 't1' })).message)
+      .toBe('Task #1 "Task t1" is paused on its runner\'s usage limit. Resume it in its saved session with retry_task from "session".');
+  });
+
+  it('lets a supervisor at Act resume it unchanged after an earlier failure, counting each resume against the retry limit', async () => {
+    const env = await running({ autonomous: false });
+    env.latest('t1').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('failed'));
+    await env.session.retryTask('t1');
+    await vi.waitFor(() => expect(env.spawned('t1')).toHaveLength(2));
+
+    for (const n of [3, 4]) {
+      hitLimit(env.latest('t1'));
+      await vi.waitFor(() => expect(taskOf(env.session, 't1')!.awaitingReason).toBe('usage-limit'));
+      expect(await env.run({ command: 'retry_task', task: 't1', from: 'session' }, ACT)).toMatchObject({ ok: true });
+      await vi.waitFor(() => expect(env.spawned('t1')).toHaveLength(n));
+    }
+    hitLimit(env.latest('t1'));
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')!.awaitingReason).toBe('usage-limit'));
+
+    expect(await env.run({ command: 'message_task', task: 't1', text: 'go on' }, ACT)).toMatchObject({ ok: false, message: expect.stringMatching(/^Refused by the retry limit/) });
+    expect(env.spawned('t1')).toHaveLength(4);
   });
 });
 
@@ -737,7 +828,7 @@ describe('the command seam\'s extension points', () => {
       tasks: () => tasks, planApproved: () => true, taskApproved: () => true, approve: vi.fn(), autonomous: () => true, autorun: () => false,
       scheduling: () => false, startsHeld: () => false, hasLiveWork: () => true, running: () => true, maxParallel: () => 3, runBlocked: () => false,
       dependencyMet: () => true, mergeGate: () => [], blockedBy: () => [], waitingRequests: () => [],
-      runPlan: vi.fn(), startTask: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), retryTask: vi.fn(), skipTask: vi.fn(), continueTask: vi.fn(),
+      runPlan: vi.fn(), startTask: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), retryTask: vi.fn(), skipTask: vi.fn(), continueTask: vi.fn(), resumeNow: vi.fn(),
       messageTask: vi.fn(), denyRequest: vi.fn(), mergeAll: vi.fn(), record: vi.fn(), guardTripped: vi.fn(), heldEdit: () => false, deferUntilLanded: vi.fn(),
     };
   }
@@ -761,7 +852,7 @@ describe('the command seam\'s extension points', () => {
     expect(await commands.run({ command: 'stop_task', task: 't1' }, PLANNER)).toEqual({
       ok: false, outcome: 'refused', message: 'Retried twice already: change the prompt or the model first.',
     });
-    expect(guard).toHaveBeenCalledWith(PLANNER, { command: 'stop_task', task: 't1' }, { task: expect.objectContaining({ id: 't1' }), ref: '#1' });
+    expect(guard).toHaveBeenCalledWith(PLANNER, { command: 'stop_task', task: 't1' }, { task: expect.objectContaining({ id: 't1' }), ref: '#1', paused: false });
     expect(host.guardTripped).toHaveBeenCalledWith(trip);
     expect(host.stopTask).not.toHaveBeenCalled();
   });

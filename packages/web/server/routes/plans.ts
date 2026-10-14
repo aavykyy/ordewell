@@ -128,6 +128,17 @@ export function plansRoute(pool: OrchestratorPool) {
     }
   });
 
+  // The user says the limit has reset early: the task, and every other one
+  // waiting on its runner's reset, resumes in its saved session now.
+  router.post('/:sessionId/tasks/:taskId/resume/now', async (c) => {
+    try {
+      await pool.session(c.req.param('sessionId')).resumeNow(c.req.param('taskId'));
+      return c.json({ ok: true } satisfies OkResponse);
+    } catch (err) {
+      return failure(c, err, 'resume now', { fallback: 404, message: 'Not found' });
+    }
+  });
+
   // Orchestrator controls — these spawn or kill runner processes, so they are
   // deliberately separate from the generic `PUT tasks/:taskId` status patch.
   // Each is an execution button, so it goes through the command seam as the
