@@ -888,6 +888,21 @@ describe('CliAgentAiService — a usage limit the agent says twice (#79)', () =>
 
     expect(turn.text).toBe(`I stopped early: ${limit}\n\n${limit}`);
   });
+
+  it('keeps an unrelated reply that came before the failure, beside it', async () => {
+    const svc = scripted([
+      { type: 'assistant_text', text: 'Which store should the cache use?' },
+      { type: 'error', message: `${limit}.` },
+    ]);
+
+    const turn = await svc.startConversation(request());
+
+    expect(turn).toMatchObject({
+      kind: 'message',
+      failed: true,
+      text: `Which store should the cache use?\n\n${limit}.`,
+    });
+  });
 });
 
 describe('CliAgentAiService — Codex', () => {
