@@ -47,15 +47,20 @@
   other task waiting on that runner's reset. A message typed into its box
   resumes it too, and Skip is offered while it is paused, even with the run
   held on the limit.
-- **Send now in the planner chat.** *Send now* (or `Ctrl+Enter` when there is no
-  turn running) stops the planner turn in flight and answers your message in
-  the turn that replaces it, ahead of anything queued; the run's tasks carry
-  on. *Send now* on a skill invocation (`/name …`) goes to the planner as a
-  prompt, while a built-in command still runs as Send does, and a supervisor
-  wake-up it stops keeps its run update for the next turn. A running or
-  waiting task's card carries a message box with the same button, as the task
-  log does, and a message sent this way keeps its sent-now mark when the log
-  is reopened.
+- **Send now in the planner chat and on pending messages.** There is one Send
+  button. While a turn runs, Enter queues your message and `Ctrl+Enter`
+  (`Cmd+Enter` on macOS) stops the turn in flight and answers it in the turn
+  that replaces it, ahead of anything queued; a hint under the input names
+  both keys, and the run's tasks carry on. A skill invocation (`/name …`) sent
+  this way goes to the planner as a prompt, while a built-in command still
+  runs as Send does, and a supervisor wake-up it stops keeps its run update
+  for the next turn. Pending messages sit above the input in the planner chat,
+  a task's log and a running or waiting task's card, each marked *queued*,
+  *waiting for the current step* or *sending now…* with its own *Send now*,
+  and a message sent this way keeps its sent-now mark when the log is
+  reopened. A message the runner already has can be sent now as well: Claude
+  Code runs it as the next turn after the interrupt, while Codex and OpenCode
+  1.x take it back and send it again first.
 
 ### Changed
 

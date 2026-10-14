@@ -75,8 +75,9 @@ TUI planner chat keys (in the composer):
 
 TUI task view keys (t on a structured task; /help in the TUI lists them all):
   ctrl-s              Send now: interrupt the running step and deliver the composer text next
-                      (with the composer empty, the selected queued message)
-  ctrl-n / ctrl-p     Select a queued message; ctrl-r removes it
+                      (with the composer empty, the highlighted pending message,
+                      one the runner already has included)
+  ctrl-n / ctrl-p     Pick a pending message (the newest until you do); ctrl-r removes a queued one
   ctrl-x              Interrupt the running turn
 
 Plan options:
