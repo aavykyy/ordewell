@@ -196,6 +196,22 @@ describe('OpenCode 2.x — start', () => {
     adapter.dispose();
   });
 
+  it('keeps a task\'s completion contract on the session as an instruction entry, fresh or resumed', async () => {
+    const entry = `/api/experimental/session/${SES}/instructions/entries/ordewell-task`;
+    const ORDEWELL_SERVER = { name: 'ordewell' as const, url: 'http://127.0.0.1:1/mcp', headers: { authorization: 'Bearer tok-secret' } };
+
+    for (const resumeSessionId of [undefined, SES]) {
+      const server = fakeServer({ [`GET /api/session/${SES}`]: () => ({ data: { id: SES } }) });
+      const { adapter } = await start(server, taskStart({ mcp: ORDEWELL_SERVER, ...(resumeSessionId ? { resumeSessionId } : {}) }));
+
+      const value = (server.requests.find((r) => r.method === 'PUT' && r.path === entry)?.body as { value?: string } | undefined)?.value ?? '';
+      expect(value).toContain('call the `task_complete` tool with status `done` and a summary of what you did');
+      expect(value).toContain('The `task_complete` summary is this task\'s report');
+      expect(value).not.toContain('tok-secret');
+      adapter.dispose();
+    }
+  });
+
   it('degrades a stale planner session to a fresh one, and fails a task that cannot resume', async () => {
     const gone = () => ({ status: 404 });
     const planner = await start(fakeServer({ [`GET /api/session/${SES}`]: gone }), plannerStart({ resumeSessionId: SES }));

@@ -116,7 +116,8 @@ export interface AttemptPromptSources {
 
 /**
  * The prompt an attempt is spawned with. Every kind goes through the same
- * augmenting, so every one is told to report through `task_complete` and the
+ * augmenting; how it ends, through `task_complete`, is the runner's
+ * instructions (`TASK_COMPLETION_CONTRACT`) for every kind alike, so the
  * verdict is watched for unchanged.
  */
 export function attemptPrompt(kind: AttemptKind, src: AttemptPromptSources): string {

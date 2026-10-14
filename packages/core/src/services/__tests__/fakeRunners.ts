@@ -126,7 +126,10 @@ function claudeCode(script: FakeRunnerScript): FakeRunner {
       const at = args.indexOf('--allowedTools');
       return at >= 0 && args[at + 1].split(',').includes(name);
     },
-    instructions: () => '',
+    instructions: () => {
+      const args = spawned.lastArgs();
+      return args[args.indexOf('--append-system-prompt') + 1] ?? '';
+    },
     turnOpen: async () => { await answered(() => (proc().written.some((w) => w.includes('"type":"user"')) ? true : undefined)); },
     callOrdewellTool: (tool) => {
       proc().emitStdout(line({ type: 'assistant', session_id: 'sess-1', message: { id: `m-${tool}`, content: [{ type: 'tool_use', id: `tu-${tool}`, name: `mcp__ordewell__${tool}`, input: {} }] } }));
@@ -240,6 +243,8 @@ function openCode(script: FakeRunnerScript): FakeRunner {
   const replies = new Map<string, string>();
   let asks = 0;
   let turns = 0;
+  let system = '';
+  let prompted = false;
   const spawn: SpawnFn = (cmd, argv, options) => {
     envs.push(options.env ?? {});
     const proc = spawned.spawn(cmd, argv, options);
@@ -259,6 +264,8 @@ function openCode(script: FakeRunnerScript): FakeRunner {
     if (path === '/api/info') return respond(404);
     if (method === 'POST' && path === '/session') return respond(200, { id: SES });
     if (path === '/mcp') return respond(200, { ordewell: { status: script.attach } });
+    if (path.endsWith('/prompt_async') || path === `/session/${SES}/message`) prompted = true;
+    if (typeof body?.system === 'string') system = body.system;
     const permission = path.match(/^\/permission\/([^/]+)\/reply$/);
     if (permission) {
       replies.set(permission[1], String(body?.reply));
@@ -294,10 +301,10 @@ function openCode(script: FakeRunnerScript): FakeRunner {
     // OpenCode's permission rules, as it matches them: a trailing `*` is a prefix.
     preAllows: (name) => Object.entries(configOf()?.permission ?? {}).some(([rule, action]) =>
       action === 'allow' && (rule === name || (rule.endsWith('*') && name.startsWith(rule.slice(0, -1))))),
-    instructions: () => '',
+    instructions: () => system,
     turnOpen: async () => {
       // One `/event` connection per turn.
-      await answered(() => (streams.length > turns ? true : undefined));
+      await answered(() => (streams.length > turns && prompted ? true : undefined));
       turns = streams.length;
       frame('session.status', { status: { type: 'busy' } });
       frame('message.updated', { info: { id: 'msg_turn', role: 'assistant', sessionID: SES } });

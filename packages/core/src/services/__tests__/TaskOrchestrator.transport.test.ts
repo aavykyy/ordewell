@@ -178,7 +178,7 @@ describe('ending a structured attempt', () => {
 });
 
 describe('completing through task_complete (ADR-0022)', () => {
-  it('teaches the tool to every runner it is given to', async () => {
+  it('leaves the completion contract to every runner\'s instructions, not its first message', async () => {
     const { runner, requests } = routingRunner();
     const orchestrator = orchestratorWith(runner);
     orchestrator.loadPlan([
@@ -190,7 +190,7 @@ describe('completing through task_complete (ADR-0022)', () => {
     await orchestrator.forceStartTask('t2');
     await orchestrator.forceStartTask('t3');
 
-    expect(requests.map((r) => r.prompt.includes('`task_complete`'))).toEqual([true, true, true]);
+    expect(requests.map((r) => r.prompt.includes('task_complete'))).toEqual([false, false, false]);
   });
 
   it('numbers each attempt it spawns', async () => {

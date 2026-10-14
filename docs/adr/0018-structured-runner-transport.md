@@ -64,6 +64,16 @@ and completion evidence.
   approval, so a long approval wait does not also read as idle. If a queued message is delivered as the
   turn ends, or the runner still owes one it was handed (M1), the task stays
   `in_progress` with no flicker.
+- **The completion contract lives in the runner's instructions (C2).** A
+  runner compacts its own context (Claude Code's auto-compact, Codex's
+  auto-compaction, OpenCode's summarize-on-overflow), and what it keeps of the
+  first message is its own summary or a truncated copy. How a task ends — call
+  `task_complete` with `done` and the full report, or `blocked`/`failed` and the
+  reason — is therefore not in that message: it is the system prompt
+  (`--append-system-prompt`), the thread's `developerInstructions`, or
+  OpenCode's `system` / instruction entry, applied again on every resume. The
+  first message is the task's prompt and its context only. The attempt's token
+  is not part of any of it; it travels in the MCP connection.
 - **Talking to a task (M1).** Ordewell owns the message queue. A message sent
   while a turn runs is handed to the runner at once and reaches the model at
   the runner's next step boundary — after the tool call in flight, inside the
@@ -301,3 +311,4 @@ transport is retained for take-over.
 - 2026-10-13 — a runner's end is observed at `close` (after stdout drains) with its last unterminated line flushed, and a throwing event consumer ends the turn rather than crashing the host or passing as a bad frame.
 - 2026-10-13 — W1: one completion reminder per attempt before a turn without `task_complete` waits for input (#105).
 - 2026-10-14 — U1: Resume now — the user, planner or supervisor resumes a task paused on a usage limit early, in its saved session.
+- 2026-10-14 — C2: the completion contract moved from the first message into the runner's instructions, where its own compaction keeps it whole.

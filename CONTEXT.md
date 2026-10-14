@@ -553,9 +553,9 @@ the user's message as the next turn.
 It is verified and landed like any attempt, is not offered on conflicts, and
 leaves dependents alone, as retry does. `continuability` is the one rule, and
 a status carries only whether it holds (`continuable`), never the session id.
-The first turn is the message plus a short reminder of the done and checkpoint
-protocol — the required `task_complete`/`checkpoint` tools
-(`composeContinuationPrompt`) — not the original prompt.
+The first turn is the message plus a short reminder of the checkpoint
+protocol (`composeContinuationPrompt`), not the original prompt; how the task
+ends is the runner's instructions, applied again on the resumed session.
 In an isolated run its task workspace starts at the integration tips and
 restores the previous attempt's unlanded work, including uncommitted edits
 saved on `ordewell-preserved/` branches before the kept worktrees go. A conflict
