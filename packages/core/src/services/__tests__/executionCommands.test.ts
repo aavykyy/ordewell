@@ -738,7 +738,7 @@ describe('the command seam\'s extension points', () => {
       scheduling: () => false, startsHeld: () => false, hasLiveWork: () => true, running: () => true, maxParallel: () => 3, runBlocked: () => false,
       dependencyMet: () => true, mergeGate: () => [], blockedBy: () => [], waitingRequests: () => [],
       runPlan: vi.fn(), startTask: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), retryTask: vi.fn(), skipTask: vi.fn(), continueTask: vi.fn(),
-      messageTask: vi.fn(), denyRequest: vi.fn(), mergeAll: vi.fn(), record: vi.fn(), guardTripped: vi.fn(), heldEdit: () => false, deferUntilLanded: vi.fn(),
+      messageTask: vi.fn(), denyRequest: vi.fn(), mergeAll: vi.fn(), record: vi.fn(), guardTripped: vi.fn(), heldEdit: () => false, asEdited: (taskId: string) => tasks.find((t) => t.id === taskId), deferUntilLanded: vi.fn(), queuedNotRun: vi.fn(),
     };
   }
 
@@ -816,6 +816,37 @@ describe('the command seam\'s extension points', () => {
 
     expect(await commands.run({ command: 'run_task', task: 't1' }, { kind: 'supervisor', level: 'act' })).toMatchObject({ ok: false, outcome: 'refused' });
     expect(host.startTask).not.toHaveBeenCalled();
+  });
+
+  it('refuses at once a start of a task the turn\'s own edit removes, rather than queueing it', async () => {
+    const host = { ...stubHost(), running: () => false, hasLiveWork: () => false, heldEdit: () => true, asEdited: () => undefined };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    expect(await commands.run({ command: 'run_task', task: 't1' }, PLANNER)).toEqual({
+      ok: false, outcome: 'refused', message: 'Task #1 "Task t1" is removed by your edit, so it cannot start.',
+    });
+    expect(host.deferUntilLanded).not.toHaveBeenCalled();
+  });
+
+  it('keeps a replayed start that throws as refused, and says it did not run', async () => {
+    const host = { ...stubHost(), autonomous: () => false, running: () => false, hasLiveWork: () => false };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn(async () => { throw new Error('the approval card was closed'); }) } });
+
+    await commands.replay({ command: 'run_task', task: 't1' }, PLANNER);
+
+    expect(host.record).toHaveBeenCalledWith(expect.objectContaining({ command: 'run_task', outcome: 'refused', detail: 'the approval card was closed' }), expect.any(String));
+    expect(host.queuedNotRun).toHaveBeenCalledWith('The queued start of task #1 "Task t1" did not run: the approval card was closed');
+    expect(host.startTask).not.toHaveBeenCalled();
+  });
+
+  it('says nothing more of a replayed start that ran', async () => {
+    const host = { ...stubHost(), running: () => false, hasLiveWork: () => false };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    await commands.replay({ command: 'retry_task', task: 't1', from: 'fresh' }, PLANNER);
+
+    expect(host.startTask).toHaveBeenCalledWith('t1', PLANNER);
+    expect(host.queuedNotRun).not.toHaveBeenCalled();
   });
 
   it('names no held edit when there is none', async () => {

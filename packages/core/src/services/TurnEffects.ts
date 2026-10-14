@@ -1,10 +1,10 @@
-import type { CommandOutcome, ExecutionCommand } from './ExecutionCommands';
+import type { ExecutionCommand } from './ExecutionCommands';
 import type { ExecutionActor, SupervisorLevel } from '../models/Execution';
 
 /** What settling a turn's effects calls on the Session. */
 export interface TurnEffectsHost {
-  /** The command seam: each deferred start is checked there again, against the plan as edited. */
-  execute(command: ExecutionCommand, actor: ExecutionActor): Promise<CommandOutcome>;
+  /** The command seam: each deferred start is checked there again, against the plan as edited, and said if it does not run. */
+  replay(command: ExecutionCommand, actor: ExecutionActor): Promise<void>;
   supervisorLevel(): SupervisorLevel;
   notice(level: 'warn' | 'error', message: string): void;
 }
@@ -69,7 +69,7 @@ export class TurnEffects {
       for (let next = this.deferred.shift(); next; next = this.deferred.shift()) {
         const { command, actor } = next;
         const now: ExecutionActor = actor.kind === 'supervisor' ? { kind: 'supervisor', level: this.host.supervisorLevel() } : actor;
-        await this.host.execute(command, now).catch((err: unknown) => this.host.notice('error', `Could not run what the planner queued: ${err instanceof Error ? err.message : String(err)}`));
+        await this.host.replay(command, now).catch((err: unknown) => this.host.notice('error', `Could not run what the planner queued: ${err instanceof Error ? err.message : String(err)}`));
       }
     })();
   }

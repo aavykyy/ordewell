@@ -71,6 +71,30 @@ describe('a task the planner adds after approval, with autorun on and Full', () 
     await until(() => env.run.spawnedIds().includes(added(env)!.id));
   });
 
+  it('says a start queued behind the edit that is refused once it lands, to the user and to the next turn', async () => {
+    const env = await supervised([task('t1', 1)], AUTORUN_FULL);
+    void env.session.continueConversation('add a cache after task 1 and run it');
+    await until(() => env.planner.calls.length === 1);
+    await env.planner.tools().editPlan!({ ops: [{ op: 'add', task: { title: 'Add a cache', prompt: 'add a cache', dependencies: ['#1'] } }] }, ctx);
+    const queued = await env.planner.tools().runTask!({ task: 'Add a cache' }, ctx);
+    expect(JSON.parse(queued.text).result).toMatch(/^Queued: start "Add a cache"/);
+
+    await landEdit(env);
+    await settled();
+
+    const refusal = 'Task #2 "Add a cache" depends on task #1 "Task t1" (running), which has not finished. It can start once it has.';
+    const history = env.session.planState!.conversationHistory!;
+    expect(history.filter((e) => e.execution?.outcome === 'refused').map((e) => e.execution!.detail)).toEqual([refusal]);
+    expect(history.at(-1)).toMatchObject({ kind: 'system', content: `The queued start of task #2 "Add a cache" did not run: ${refusal}` });
+    void env.session.continueConversation('is it running?');
+    await until(() => env.planner.calls.length === 2);
+    expect(env.planner.calls[1].message).toContain(`Run update:\n- The queued start of task #2 "Add a cache" did not run: ${refusal}`);
+    env.planner.calls[1].finish(prose('No.'));
+    void env.session.continueConversation('and now?');
+    await until(() => env.planner.calls.length === 3);
+    expect(env.planner.calls[2].message).not.toContain('The queued start');
+  });
+
   it('starts an added ops task too', async () => {
     const env = await finishedRun();
     await addCache(env, true);
