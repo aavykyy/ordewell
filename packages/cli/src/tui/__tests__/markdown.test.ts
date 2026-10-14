@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { renderMarkdown } from '../markdown';
-import { style, width } from '../ansi';
+import { stripAnsi, style, width } from '../ansi';
 
 beforeAll(() => {
   // Deterministic frames: colour codes would only make the assertions noisy.
@@ -106,8 +106,132 @@ describe('renderMarkdown — tables', () => {
     for (const line of out) expect(width(line)).toBeLessThanOrEqual(8);
   });
 
-  it('stops the table at the first row with a different cell count', () => {
-    const out = md('| a | b |\n| --- | --- |\n| 1 | 2 |\nplain text after');
+  // markdown-it follows GFM: a line after the table's rows with no blank line
+  // between is one more row, where the hand-written parser ended the table.
+  it('ends the table at a blank line', () => {
+    const out = md('| a | b |\n| --- | --- |\n| 1 | 2 |\n\nplain text after');
     expect(out[out.length - 1]).toBe('plain text after');
+    expect(out).toContain('');
+  });
+
+  it('keeps a table of narrow columns as a grid when it fits', () => {
+    const out = md('| a | b |\n| --- | --- |\n| 1 | 2 |');
+    expect(out[0]).toMatch(/^a\s+│ b/);
+    expect(out[2]).toMatch(/^1\s+│ 2/);
+  });
+});
+
+describe('renderMarkdown — a table too wide for the pane', () => {
+  const wide = [
+    '| What\'s needed | Effort |',
+    '| --- | --- |',
+    '| Wire the parser in | Small |',
+    '| Drop the old one | Medium |',
+    '| Prune dead fixtures | Tiny |',
+  ].join('\n');
+
+  it('is one record per row, a rule between records', () => {
+    const out = md(wide, 8);
+    const rule = '─'.repeat(8);
+    expect(out.filter((line) => line === rule)).toHaveLength(2);
+    const records = out.join('\n').split(`\n${rule}\n`).map((record) => record.replace(/\n/g, ' '));
+    expect(records).toEqual([
+      "What's needed: Wire the parser in Effort: Small",
+      "What's needed: Drop the old one Effort: Medium",
+      "What's needed: Prune dead fixtures Effort: Tiny",
+    ]);
+    expect(out[0]).not.toBe(rule);
+    expect(out[out.length - 1]).not.toBe(rule);
+    for (const line of out) expect(width(line)).toBeLessThanOrEqual(8);
+  });
+
+  it('is not a grid', () => {
+    expect(md(wide, 8).join('\n')).not.toContain('│');
+  });
+});
+
+describe('renderMarkdown — what the hand-written parser had to be taught', () => {
+  it('keeps an escaped pipe in its cell', () => {
+    const out = md('| Name | Note |\n| --- | --- |\n| a\\|b | plain |');
+    expect(out[2]).toMatch(/^a\|b\s+│ plain/);
+  });
+
+  it('keeps an escaped pipe inside a code span in its cell', () => {
+    const out = md('| Command | Does |\n| --- | --- |\n| `a \\| b` | pipes |');
+    expect(out).toHaveLength(3);
+    expect(out[2]).toMatch(/^a \| b\s+│ pipes/);
+  });
+
+  it('indents a nested list under its parent and numbers an ordered one', () => {
+    expect(md('- top\n  1. first\n  2. second\n- next')).toEqual([
+      '• top',
+      '  1. first',
+      '  2. second',
+      '• next',
+    ]);
+  });
+
+  it('keeps a code block inside a list item under the item', () => {
+    expect(md('- step\n\n  ```sh\n  npm test\n  ```\n\n- done')).toEqual([
+      '• step',
+      '',
+      '    npm test',
+      '',
+      '• done',
+    ]);
+  });
+
+  it('keeps a loose list loose and a tight one tight', () => {
+    expect(md('- a\n- b')).toEqual(['• a', '• b']);
+    expect(md('- a\n\n- b')).toEqual(['• a', '', '• b']);
+  });
+
+  it('separates blocks only where the source did', () => {
+    expect(md('Intro:\n- a\n\nafter')).toEqual(['Intro:', '• a', '', 'after']);
+  });
+
+  it('keeps a code block\'s pipes and angle brackets as written', () => {
+    expect(md('```\n| a | b |\n<tag>\n```')).toEqual(['  | a | b |', '  <tag>']);
+  });
+});
+
+describe('renderMarkdown — links', () => {
+  it('prints the URL of a web link after its text', () => {
+    expect(md('see [the docs](https://example.com/a?b=1) now')).toEqual(['see the docs (https://example.com/a?b=1) now']);
+  });
+
+  it('prints a bare URL once', () => {
+    expect(md('open https://example.com/x today')).toEqual(['open https://example.com/x today']);
+  });
+
+  it.each([
+    '[x](javascript:alert(1))',
+    '[x](file:///etc/passwd)',
+    '[x](vscode://file/a)',
+    '[x](/relative/path)',
+  ])('leaves %s as the text typed', (source) => {
+    expect(md(source)).toEqual([source]);
+  });
+
+  it('shows an image as its alt text', () => {
+    expect(md('![diagram](https://example.com/x.png)')).toEqual(['diagram']);
+  });
+});
+
+describe('renderMarkdown — streaming and nesting', () => {
+  it('paints a table whose delimiter row has not arrived as text', () => {
+    expect(md('| a | b |\n| --')).toEqual(['| a | b |', '| --']);
+  });
+
+  it('keeps emphasis and code readable inside a heading, with colour on', () => {
+    style.enabled = true;
+    try {
+      const [line] = md('# Use `npm` **now**');
+      expect(stripAnsi(line)).toBe('Use npm now');
+      // The code word keeps the heading's bold: nothing resets it early.
+      expect(line.slice(0, line.indexOf('npm'))).toContain('\x1b[1m');
+    } finally {
+      style.enabled = false;
+    }
   });
 });

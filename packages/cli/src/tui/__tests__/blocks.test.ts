@@ -36,6 +36,38 @@ describe('a wrapped line keeps the colour it started in', () => {
   });
 });
 
+describe('model Markdown is sanitized before it is parsed (#83)', () => {
+  // Only the TUI's own colour may remain: any other escape would act on the terminal.
+  const strayEscapes = (lines: string[]): string[] =>
+    // eslint-disable-next-line no-control-regex
+    lines.join('\n').replace(/\x1b\[[0-9;]*m/g, '').match(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g) ?? [];
+
+  it('drops control sequences in a paragraph, heading, table cell, code block and link', () => {
+    const text = [
+      '# Head\x1b]0;owned\x07ing',
+      'text \x1b[2Kwith \x1b[31mred\x1b[0m and a bell\x07',
+      '',
+      '| a | b |',
+      '| --- | --- |',
+      '| x\x1b[10Cy | z |',
+      '',
+      '```',
+      'code\x1b[Hline',
+      '```',
+      '',
+      '[docs\x1b[2J](https://example.com/\x1b[31m)',
+    ].join('\n');
+    const lines = conversationLines([message('planner', text)], 60, false);
+    expect(strayEscapes(lines)).toEqual([]);
+    const plain = stripAnsi(lines.join('\n'));
+    expect(plain).toContain('Heading');
+    expect(plain).toContain('text with red and a bell');
+    expect(plain).toContain('xy');
+    expect(plain).toContain('codeline');
+    expect(plain).toContain('docs');
+  });
+});
+
 describe('the live thinking line keeps the end of a row too short for it', () => {
   it('never cuts a joined emoji in half', () => {
     const family = '👨‍👩‍👧';
