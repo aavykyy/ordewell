@@ -426,11 +426,11 @@ function handleKey(state: TuiState, key: Key): Step {
   if (key.name === 'ctrl-o' && state.focus === 'chat' && !state.overlay) return toggleDetail(state);
 
   // In the task view, Esc backs out the same way: a draft clears first, then
-  // the view closes and the planner chat returns. An open overlay still owns
-  // Esc ahead of it, so /help closes before the view does.
+  // the view closes and the plan pane takes focus on that task. An open
+  // overlay still owns Esc ahead of it, so /help closes before the view does.
   if (key.name === 'escape' && state.taskView && !state.overlay) {
     if (state.editor.text) return step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
-    return step({ ...state, taskView: null, scroll: 0 });
+    return step(returnToPlan(state, state.taskView.taskId));
   }
 
   // Esc during a planner turn is the turn queue's (take back a prompt, arm a
@@ -543,4 +543,16 @@ function submit(state: TuiState): Step {
     : { type: 'startConversation', goal: text };
 
   return step({ ...spoken, status: 'planning', stopRequested: false, forceSendPending: null }, [effect]);
+}
+
+/** Close the task view onto the plan pane, the cursor on the task that was open. */
+function returnToPlan(state: TuiState, taskId: string): TuiState {
+  const closed: TuiState = { ...state, taskView: null, scroll: 0, focus: 'plan' };
+  // Revealing the parent mirrors the pane's own first right-arrow, so the
+  // subtask row exists to land on.
+  const parent = state.tasks.find((t) => t.subtasks?.some((s) => s.id === taskId));
+  const revealed = parent ? { ...closed, expandedTaskId: parent.id, taskEditor: null } : closed;
+  const index = planRows(revealed).findIndex((r) => r.task.id === taskId);
+  if (index < 0) return closed;
+  return settlePlan({ ...revealed, selectedTask: index });
 }

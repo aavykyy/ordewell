@@ -26,7 +26,7 @@ export const PLAN_KEYS = {
   scroll: { keys: 'pgup / pgdn', meaning: 'scroll the plan', group: 'Navigation' },
   expand: { keys: '→', meaning: "reveal a task's subtasks, then edit its prompt", group: 'Navigation', hint: '→ expand' },
   log: { keys: 'enter', meaning: "open the task's log and message its runner", group: 'Navigation', hint: 'enter log' },
-  back: { keys: 'esc', meaning: 'collapse the task, or return to the chat', group: 'Navigation' },
+  back: { keys: 'esc', meaning: "collapse the task, or leave a task's log for the plan", group: 'Navigation' },
 
   runner: { keys: 'R', meaning: "pick the task's runner", group: 'Assign' },
   model: { keys: 'o', meaning: "pick the task's model", group: 'Assign', hint: 'o model' },
