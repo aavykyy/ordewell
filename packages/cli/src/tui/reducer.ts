@@ -1,16 +1,16 @@
 import { blockingFailures, EMPTY_HOLD, EMPTY_RUN, fromTranscript, holdPrompt, taskStartedNotice, type RunnerId } from '@ordewell/core';
 import { chatEditorRoomFor } from './geometry';
 import { SPINNER_CYCLE, chatScrollMax } from './layout';
-import { activeToken, findCommand, parseSlash, tokenCompletions, type ParsedCommand } from './slash';
+import { activeToken, composerCompletions, findCommand, parseRunnerCommand, parseSlash, runnerCommandFor, type ParsedCommand } from './slash';
 import { applyKey, commit } from './editor';
 import { say, wiped } from './transcript';
 import { blockedPicker, handoffArrived, showDiff } from './handoff';
-import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, type RunStatus, type TaskView, type TuiState } from './state';
+import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, runnerCommands, type RunStatus, type TaskView, type TuiState } from './state';
 import type { Key } from './keys';
 import { handleOverlayKey } from './reducers/overlays';
 import { handlePlanKey } from './reducers/planPane';
 import { announceApprovals, announceCheckpoint, continueTaskStep, handleTaskViewKey, openTaskView, taskLogAbandoned, taskLogArrived, taskLogLoaded } from './reducers/taskView';
-import { pickRewindTarget, runCommand, skillInTaskView, unknownCommand } from './reducers/commands';
+import { pickRewindTarget, runCommand } from './reducers/commands';
 import { disarmStop, drainQueue, forceSendPlanner, plannerEscape, restoreForced } from './reducers/turnQueue';
 import { applyIsolationRecord, applySettings, clearRunIsolation, foldRun, followSession, planSnapshot, withRun } from './reducers/incoming';
 import { refillPicker } from './reducers/pickers';
@@ -448,10 +448,10 @@ function handleKey(state: TuiState, key: Key): Step {
   if (key.name === 'wheelignored') return step(state);
   if (key.name === 'tab' && state.focus === 'chat') {
     const token = activeToken(state.editor.text, state.editor.cursor);
-    const matches = token ? tokenCompletions(token) : [];
+    const matches = token ? composerCompletions(token, state.taskView ? runnerCommands(state.taskView) : null) : [];
     if (token && matches.length > 0) {
       const { text: full } = state.editor;
-      const completed = `/${matches[0].name} `;
+      const completed = `/${matches[0]} `;
       const text = full.slice(0, token.start) + completed + full.slice(token.end);
       return step({ ...state, editor: { ...state.editor, text, cursor: token.start + completed.length } });
     }
@@ -510,25 +510,30 @@ function submit(state: TuiState): Step {
   if (!text) return step(state);
 
   const cleared: TuiState = { ...state, editor: commit(state.editor) };
-  const builtIn = builtInCommand(text);
-  if (builtIn) return runCommand(cleared, builtIn);
-  // The task view's composer has no skill resolution: a mistyped /retyr there
-  // would continue a finished task or reach a running agent, so it is refused.
-  const command = parseSlash(text);
-  if (command && state.taskView) {
-    const known = findCommand(command.name);
-    return known ? skillInTaskView(cleared, command.name) : unknownCommand(cleared, command.name);
-  }
 
   // The task view's composer talks to the runner, not the planner: the daemon
   // queues the message (or delivers it to a waiting task) and the log shows it.
   // A finished task has no turn to message; its composer continues it instead.
+  // Its slash namespace is the runner's alone (#66), ahead of Ordewell's.
   if (state.taskView) {
     if (!state.sessionId) return step(state);
     const taskId = state.taskView.taskId;
-    if (continuesTask(findTask(state.tasks, taskId))) return continueTaskStep(cleared, state.sessionId, taskId, text);
+    const task = findTask(state.tasks, taskId);
+    const command = parseRunnerCommand(text);
+    const offered = runnerCommands(state.taskView);
+    if (command && offered.length > 0 && !runnerCommandFor(offered, command.name)) {
+      const notice = `/${command.name} is not a command ${task?.assignedRunner ?? 'the runner'} offers this task — type / to see them.`;
+      return step({ ...cleared, taskView: { ...state.taskView, notice } });
+    }
+    if (state.taskView.notice) cleared.taskView = { ...state.taskView, notice: undefined };
+    // A resumed runner reads a command that opens its first turn as it would any.
+    if (continuesTask(task)) return continueTaskStep(cleared, state.sessionId, taskId, text);
+    if (command && offered.length > 0) return step(cleared, [{ type: 'invokeTaskCommand', sessionId: state.sessionId, taskId, ...command }]);
     return step(cleared, [{ type: 'sendTaskMessage', sessionId: state.sessionId, taskId, text }]);
   }
+
+  const builtIn = builtInCommand(text);
+  if (builtIn) return runCommand(cleared, builtIn);
 
   // A prompt while a turn answers is held, not sent: the transcript would
   // otherwise show a message the daemon has not even received yet, and the

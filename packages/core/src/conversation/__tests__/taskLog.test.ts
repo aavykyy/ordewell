@@ -439,3 +439,44 @@ describe('reduceTaskLog with force send (ADR-0023, F1–F2)', () => {
     expect(shown.slice(-2)).toEqual(['system:Interrupted.', 'user:and docs']);
   });
 });
+
+describe('reduceTaskLog with the runner\'s own commands (#66)', () => {
+  it('opens a turn with the command it runs, settled by how the turn ends, with what it printed', () => {
+    const view = replayTaskLog([
+      start, { type: 'turn_end', reason: 'completed' },
+      { type: 'message_queued', messageId: 'msg-2', text: '/compact keep the API notes' },
+      { type: 'command', name: 'compact', args: 'keep the API notes', messageId: 'msg-2' },
+    ]);
+    expect(view.working).toBe(true);
+    expect(view.queued).toEqual([]);
+    expect(unkeyed(view.blocks).at(-1)).toEqual({ type: 'command', name: 'compact', args: 'keep the API notes', status: 'running', output: '' });
+
+    const settled = replayTaskLog([
+      { type: 'compaction', trigger: 'manual', preTokens: 24939, postTokens: 3615 },
+      { type: 'command_output', text: 'Compacted' },
+      { type: 'turn_end', reason: 'completed' },
+    ], view);
+    expect(unkeyed(settled.blocks).slice(-2)).toEqual([
+      { type: 'command', name: 'compact', args: 'keep the API notes', status: 'done', output: 'Compacted' },
+      { type: 'compaction', trigger: 'manual', preTokens: 24939, postTokens: 3615 },
+    ]);
+  });
+
+  it('marks a command whose turn failed or was interrupted', () => {
+    const failed = replayTaskLog([{ type: 'command', name: 'pingskill' }, { type: 'turn_end', reason: 'failed' }]);
+    expect(unkeyed(failed.blocks)[0]).toMatchObject({ type: 'command', status: 'failed' });
+    const stopped = replayTaskLog([{ type: 'command', name: 'pingskill' }, { type: 'turn_end', reason: 'interrupted' }]);
+    expect(unkeyed(stopped.blocks)[0]).toMatchObject({ type: 'command', status: 'stopped' });
+  });
+
+  it('marks a compaction the runner did on its own mid-turn, among the turn\'s steps', () => {
+    const view = replayTaskLog([start, { type: 'text', text: 'Reading.' }, { type: 'compaction', trigger: 'auto' }]);
+    expect(unkeyed(view.blocks).at(-1)).toEqual({ type: 'compaction', trigger: 'auto' });
+  });
+
+  it('shows what the runner loaded as one block', () => {
+    const commands = [{ name: 'pingskill', description: 'Reply', kind: 'skill' as const }];
+    const view = replayTaskLog([start, { type: 'runner_loaded', commands, mcpServers: [{ name: 'docs-server', status: 'pending' }] }]);
+    expect(unkeyed(view.blocks).at(-1)).toEqual({ type: 'runner_loaded', commands, mcpServers: [{ name: 'docs-server', status: 'pending' }] });
+  });
+});

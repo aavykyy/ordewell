@@ -215,7 +215,7 @@ function taskHeaderLines(state: TuiState, tv: NonNullable<TuiState['taskView']>,
   hint.push('esc back');
   return [
     style.accent(truncate(parts.join(' · '), cols)),
-    style.grey(truncate(hint.join(' · '), cols)),
+    tv.notice ? style.red(truncate(tv.notice, cols)) : style.grey(truncate(hint.join(' · '), cols)),
   ];
 }
 

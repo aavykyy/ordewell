@@ -1,6 +1,7 @@
 export type {
   DisplayBlock, DiffStat, MessageBlock, MessageRole, ThinkingDisplayBlock, ToolBlock, ToolHeadline, ToolStatus, SubagentBlock, SubagentChild,
   SubagentStatus, ApprovalBlock, ApprovalStatus, PlanBlock, PlanMarkerStatus, SkillLoadBlock, UsageBlock,
+  CommandBlock, CommandStatus, CompactionBlock, RunnerLoadedBlock,
 } from './blocks';
 export { EMPTY_CONVERSATION, reduceConversation } from './reduce';
 export type { ConversationInput, ConversationView, LocalEntry } from './reduce';

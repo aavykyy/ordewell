@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredEvent, StructuredTurnEnd, TaskMessageFrom } from '../interfaces/IRunner';
 import type { ApprovalDecision } from '../interfaces/IApproval';
+import type { RunnerCommand } from '../models/RunnerCommand';
 import type { CheckpointAnswer, TaskCompleteArgs } from './mcp/tools';
 
 /** One source for the spawn options, so a runner built on this base cannot drift from the interface. */
@@ -45,6 +46,8 @@ export abstract class AbstractRunnerSession implements IRunnerSession {
   abstract queued(): QueuedTaskMessage[];
   abstract interrupt(): Promise<void>;
   abstract nativeSessionId(): string | null;
+  abstract commands(): RunnerCommand[];
+  abstract invokeCommand(name: string, args?: string): string;
   abstract answerPermission(id: string, decision: ApprovalDecision): boolean;
   abstract onTaskComplete(listener: (report: TaskCompleteArgs) => void): void;
   abstract onToolCheckpoint(handler: (question: string, signal: AbortSignal) => Promise<CheckpointAnswer>): void;

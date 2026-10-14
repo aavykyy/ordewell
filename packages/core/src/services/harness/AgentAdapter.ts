@@ -4,6 +4,7 @@ import type { UsageRecord } from '../../models/Usage';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { McpClientConfig } from '../mcp';
 import type { ProjectMcpServer } from './repoConfig';
+import type { RunnerCommand, RunnerMcpServer } from '../../models/RunnerCommand';
 
 
 /**
@@ -94,7 +95,17 @@ export type AgentEvent =
    */
   | { type: 'message_dropped'; id: string }
   /** The turn failed. Carries the agent's own words — never a Ordewell paraphrase. */
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  /**
+   * What the runner loaded for this process from the user's and the
+   * project's own setup (#66): its commands and skills, and its MCP servers.
+   * Once per process, as it starts its first turn.
+   */
+  | { type: 'runner_loaded'; commands: RunnerCommand[]; mcpServers: RunnerMcpServer[] }
+  /** The runner compacted its own context: asked to (`manual`) or on its own (`auto`). */
+  | { type: 'compaction'; trigger: 'manual' | 'auto'; preTokens?: number; postTokens?: number }
+  /** What a runner command that runs without the model printed, as the runner reported it. */
+  | { type: 'command_output'; text: string };
 
 /**
  * What a planner's permission request is for, read from the runner's own
@@ -286,6 +297,18 @@ export interface TaskModeAgentAdapter extends AgentAdapter {
    */
   steer?(id: string, text: string): Promise<boolean>;
   answerPermission(id: string, decision: ApprovalDecision): boolean;
+  /**
+   * The slash commands the runner offers this session — its built-ins, the
+   * user's and the project's skills and custom commands (#66) — as it
+   * reported them. Empty until it has; absent on a runner that reports none.
+   */
+  commands?(): RunnerCommand[];
+  /**
+   * Run the runner's own command `name` as a turn, the way {@link send} runs
+   * a message: resolves when the turn ends. Absent on a runner whose
+   * commands cannot be invoked over its protocol.
+   */
+  invokeCommand?(name: string, args: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal): Promise<void>;
 }
 
 export type SpawnFn = (

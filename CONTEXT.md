@@ -594,8 +594,10 @@ inside the runner and is not this; "paused" for any other wait.
 **Task log** (`TaskLogEvent`, `reduceTaskLog`, `TaskLogRecorder`) — what a
 structured task did, at full fidelity (ADR-0018, O1b/P1): normalized events —
 text and thinking, tool calls with their results (long ones trimmed to head
-and tail), subagents, usage, turns, the message queue and runner approvals
-(requested, decided, withdrawn) — streamed live as
+and tail), subagents, usage, turns, the message queue, runner approvals
+(requested, decided, withdrawn), the **runner commands** a user ran and what
+they printed, the runner's own compactions, and what it loaded as it
+started — streamed live as
 `task_log` and appended to `.ordewell/sessions/<session>/tasks/<task>/<attempt>.jsonl`,
 one file per attempt, numbered from what is on disk. `reduceTaskLog` folds the
 same events into display blocks live and on reload, so the two draw alike. The
@@ -648,6 +650,20 @@ a message the runner reads voids it.
 *Avoid:* "queued prompt" (the planner conversation's hold); "sent" or
 "delivered" for a handed-over
 message — the write or POST succeeding is not delivery.
+
+**Runner command** (`RunnerCommand`, `commands()`, `invokeCommand`) — a slash
+command a task's runner offers that task, as the runner reported it (#66): one
+of its built-ins (`/compact`, `/model`), a skill, or another command — the
+user's or the project's own. With a task's chat open, its composer's slash
+namespace is that runner's alone: `/` completes the runner's list and
+`/name args` runs it as a turn of its own, queued behind a running turn and
+never handed into it. Ordewell carries it and logs it (`command`,
+`command_output`, `compaction`, `runner_loaded` in the **Task log**); what it
+does is the runner's business (#24). A runner that reports none has none, and
+a `/name` typed to it goes as text.
+*Avoid:* "slash command" alone (Ordewell's own TUI commands are slash
+commands too, and never run from a task's chat), and calling a runner's
+`/compact` a **Compaction** (that is the planner conversation's).
 
 **Mid-turn delivery** — a task message reaching the model at the runner's next
 step boundary, after the tool call in flight and inside the same turn

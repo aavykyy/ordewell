@@ -3,6 +3,10 @@ import type { TaskLogEvent } from '../models/TaskLog';
 const LOG_KINDS = {
   task_skills: true,
   turn_start: true,
+  command: true,
+  command_output: true,
+  compaction: true,
+  runner_loaded: true,
   turn_end: true,
   text_delta: true,
   text: true,
@@ -31,6 +35,13 @@ function eventText(event: TaskLogEvent): string {
   switch (event.type) {
     case 'task_skills': return event.skills.map((s) => `${s.name} (${s.source})${'content' in s ? `\n${s.content}` : ''}`).join('\n');
     case 'turn_start': return `${event.messageId ? `${event.messageId} ` : ''}${event.forced ? '(forced) ' : ''}${event.from ? '(from Ordewell) ' : ''}${event.message}`;
+    case 'command': return `${event.messageId ? `${event.messageId} ` : ''}/${event.name}${event.args ? ` ${event.args}` : ''}`;
+    case 'command_output': return event.text;
+    case 'compaction': return `${event.trigger}${event.preTokens !== undefined && event.postTokens !== undefined ? `, ${event.preTokens} → ${event.postTokens} tokens` : ''}`;
+    case 'runner_loaded': return [
+      `commands: ${event.commands.map((c) => `/${c.name} (${c.kind})`).join(', ') || 'none'}`,
+      `MCP servers: ${event.mcpServers.map((m) => `${m.name}${m.status ? ` (${m.status})` : ''}`).join(', ') || 'none'}`,
+    ].join('; ');
     case 'turn_end': return event.reason;
     case 'text_delta':
     case 'text':

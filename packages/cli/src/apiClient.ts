@@ -359,6 +359,11 @@ export class ApiClient {
     return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/messages/now`, 'Send now failed', { text });
   }
 
+  /** Run the task runner's own command `/name args` as a turn of its own (#66). */
+  invokeTaskCommand(sessionId: string, taskId: string, name: string, args: string): Promise<TaskMessageResponse> {
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/commands`, 'Command failed', { name, args });
+  }
+
   /** Force send a message still queued; `sent` is false once the runner already has it. */
   forceSendQueuedTaskMessage(sessionId: string, taskId: string, messageId: string): Promise<ForceSendResponse> {
     return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/messages/${encodeURIComponent(messageId)}/now`, 'Send now failed');

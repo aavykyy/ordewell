@@ -48,6 +48,11 @@ function taskIn(permissionMode: string, overrides: Partial<TaskStartOptions> = {
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+/** What the adapter wrote to the CLI, past the `initialize` every task opens with. */
+function sent(spawned: ReturnType<typeof deps>['spawned']): string[] {
+  return spawned.processes[0].written.filter((w) => !w.includes('"subtype":"initialize"'));
+}
+
 async function until(condition: () => boolean): Promise<void> {
   for (let i = 0; i < 200 && !condition(); i++) await tick();
   if (!condition()) throw new Error('condition never held');
@@ -368,7 +373,7 @@ describe('ClaudeCodeAdapter in task mode', () => {
       toolUseId: 'toolu_01TxT55eyjF5qKKGmJHwiDbe',
     });
     await tick();
-    expect(spawned.processes[0].written).toHaveLength(1);
+    expect(sent(spawned)).toHaveLength(1);
     expect(events.some((e) => e.type === 'turn_end')).toBe(false);
     adapter.dispose();
   });
@@ -387,7 +392,7 @@ describe('ClaudeCodeAdapter in task mode', () => {
 
     await until(() => requests().length === 1);
     expect(adapter.answerPermission('9a948184-6792-4049-85b1-3e837387f618', { decision: 'allow' })).toBe(true);
-    expect(JSON.parse(spawned.processes[0].written[1])).toEqual({
+    expect(JSON.parse(sent(spawned)[1])).toEqual({
       type: 'control_response',
       response: {
         subtype: 'success',
@@ -398,7 +403,7 @@ describe('ClaudeCodeAdapter in task mode', () => {
 
     await until(() => requests().length === 2);
     expect(adapter.answerPermission('5ab6f7de-9bb1-4e03-9e80-8c3aa64c0506', { decision: 'allowForTask' })).toBe(true);
-    expect(JSON.parse(spawned.processes[0].written[2])).toEqual({
+    expect(JSON.parse(sent(spawned)[2])).toEqual({
       type: 'control_response',
       response: {
         subtype: 'success',
@@ -458,7 +463,7 @@ describe('ClaudeCodeAdapter in task mode', () => {
     await until(() => events.some((e) => e.type === 'permission_request'));
 
     expect(adapter.answerPermission('160adb6f-1e51-4d65-a12f-911f10dd46ae', { decision: 'deny', note: 'Not this one — write it to notes/c.txt instead.' })).toBe(true);
-    expect(JSON.parse(spawned.processes[0].written[1])).toEqual({
+    expect(JSON.parse(sent(spawned)[1])).toEqual({
       type: 'control_response',
       response: {
         subtype: 'success',
@@ -479,7 +484,7 @@ describe('ClaudeCodeAdapter in task mode', () => {
     void adapter.send('Write d.txt', (e) => events.push(e));
     await until(() => events.some((e) => e.type === 'permission_request'));
     adapter.answerPermission('160adb6f-1e51-4d65-a12f-911f10dd46ae', { decision: 'deny', note: '   ' });
-    const answer = JSON.parse(spawned.processes[0].written[1]) as { response: { response: { behavior: string; message: string } } };
+    const answer = JSON.parse(sent(spawned)[1]) as { response: { response: { behavior: string; message: string } } };
     expect(answer.response.response.behavior).toBe('deny');
     expect(answer.response.response.message).toMatch(/\S/);
     adapter.dispose();
@@ -495,7 +500,7 @@ describe('ClaudeCodeAdapter in task mode', () => {
     await until(() => events.some((e) => e.type === 'permission_request'));
     expect(events.find((e) => e.type === 'permission_request')).toMatchObject({ suggestions: [] });
     adapter.answerPermission('9a948184-6792-4049-85b1-3e837387f618', { decision: 'allowForTask' });
-    const answer = JSON.parse(spawned.processes[0].written[1]) as { response: { response: Record<string, unknown> } };
+    const answer = JSON.parse(sent(spawned)[1]) as { response: { response: Record<string, unknown> } };
     expect(answer.response.response).toEqual({ behavior: 'allow', updatedInput: { file_path: '/repo/a.txt', content: 'a' } });
     adapter.dispose();
   });
@@ -510,7 +515,7 @@ describe('ClaudeCodeAdapter in task mode', () => {
     expect(adapter.answerPermission('not-asked', { decision: 'allow' })).toBe(false);
     expect(adapter.answerPermission('9a948184-6792-4049-85b1-3e837387f618', { decision: 'allow' })).toBe(true);
     expect(adapter.answerPermission('9a948184-6792-4049-85b1-3e837387f618', { decision: 'deny' })).toBe(false);
-    expect(spawned.processes[0].written).toHaveLength(2);
+    expect(sent(spawned)).toHaveLength(2);
     adapter.dispose();
   });
 
@@ -536,7 +541,7 @@ describe('ClaudeCodeAdapter in task mode', () => {
     expect(events).toContainEqual({ type: 'permission_cancelled', id: '04436c5a-8682-477d-a23f-34bbb9f814f3' });
     expect(adapter.answerPermission('04436c5a-8682-477d-a23f-34bbb9f814f3', { decision: 'allow' })).toBe(false);
     expect(events.at(-1)).toEqual({ type: 'turn_end', interrupted: true });
-    expect(spawned.processes[0].written).toHaveLength(3);
+    expect(sent(spawned)).toHaveLength(3);
     adapter.dispose();
   });
 
@@ -547,7 +552,7 @@ describe('ClaudeCodeAdapter in task mode', () => {
     const events: AgentEvent[] = [];
     void adapter.send('Plan it', (e) => events.push(e));
     await until(() => events.some((e) => e.type === 'permission_request'));
-    expect(spawned.processes[0].written).toHaveLength(1);
+    expect(sent(spawned)).toHaveLength(1);
     expect(events.find((e) => e.type === 'permission_request')).toEqual({
       type: 'permission_request',
       id: '9a948184-6792-4049-85b1-3e837387f618',
@@ -558,7 +563,7 @@ describe('ClaudeCodeAdapter in task mode', () => {
       ask: { kind: 'other' },
     });
     expect(adapter.answerPermission('9a948184-6792-4049-85b1-3e837387f618', { decision: 'deny', note: 'no' })).toBe(true);
-    const answer = JSON.parse(spawned.processes[0].written[1]) as { response: { response: { behavior: string; message: string } } };
+    const answer = JSON.parse(sent(spawned)[1]) as { response: { response: { behavior: string; message: string } } };
     expect(answer.response.response).toEqual({ behavior: 'deny', message: 'no' });
     adapter.dispose();
   });
@@ -573,7 +578,7 @@ describe('ClaudeCodeAdapter in task mode', () => {
 
     expect(events.slice(-2)).toEqual([{ type: 'permission_cancelled', id: '9a948184-6792-4049-85b1-3e837387f618' }, { type: 'turn_end' }]);
     expect(adapter.answerPermission('9a948184-6792-4049-85b1-3e837387f618', { decision: 'allow' })).toBe(false);
-    expect(spawned.processes[0].written).toHaveLength(1);
+    expect(sent(spawned)).toHaveLength(1);
     adapter.dispose();
   });
 
@@ -608,9 +613,9 @@ describe('ClaudeCodeAdapter in task mode', () => {
 
     await expect(adapter.interrupt(1000)).resolves.toBe(true);
     await turn;
-    expect(JSON.parse(spawned.processes[0].written[1])).toEqual({
+    expect(JSON.parse(sent(spawned)[1])).toEqual({
       type: 'control_request',
-      request_id: 'ordewell-interrupt-1',
+      request_id: 'ordewell-interrupt-2',
       request: { subtype: 'interrupt' },
     });
     expect(events.some((e) => e.type === 'error')).toBe(false);
@@ -676,12 +681,12 @@ describe('ClaudeCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     await adapter.start(taskIn(mode, { mcp }));
     const events: AgentEvent[] = [];
     void adapter.send('Do it', (e) => events.push(e));
-    await until(() => spawned.processes[0].written.length === 2);
+    await until(() => sent(spawned).length === 2);
     const args = spawned.lastArgs();
 
     expect(args.flatMap((arg, i) => (arg === '--allowedTools' ? [args[i + 1]] : []))).toEqual(['mcp__ordewell__task_complete,mcp__ordewell__checkpoint']);
     expect(args.some((arg) => arg.includes('tok-secret'))).toBe(false);
-    expect(JSON.parse(spawned.processes[0].written[1]).response.response.behavior).toBe('allow');
+    expect(JSON.parse(sent(spawned)[1]).response.response.behavior).toBe('allow');
     expect(events.find((e) => e.type === 'permission_request')).toMatchObject({ decided: { decision: 'allow' } });
     adapter.dispose();
   });
@@ -720,9 +725,9 @@ describe('ClaudeCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     await adapter.start(taskStart({ mcp, flags: { permissionMode: 'default', modeSettings: {} }, mode: 'default' }));
     const events: AgentEvent[] = [];
     void adapter.send('Do it', (e) => events.push(e));
-    await until(() => spawned.processes[0].written.length === 2);
+    await until(() => sent(spawned).length === 2);
 
-    expect(JSON.parse(spawned.processes[0].written[1])).toEqual({
+    expect(JSON.parse(sent(spawned)[1])).toEqual({
       type: 'control_response',
       response: { subtype: 'success', request_id: 'req-1', response: { behavior: 'allow', updatedInput: { status: 'done', summary: 'ok' } } },
     });
@@ -754,7 +759,7 @@ describe('ClaudeCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     await until(() => events.some((e) => e.type === 'permission_request'));
 
     expect(events.find((e) => e.type === 'permission_request')).not.toHaveProperty('decided');
-    expect(spawned.processes[0].written).toHaveLength(1);
+    expect(sent(spawned)).toHaveLength(1);
     adapter.dispose();
   });
 });
@@ -783,7 +788,7 @@ describe('ClaudeCodeAdapter steer', () => {
     await until(() => events.some((e) => e.type === 'tool_call'));
 
     expect(await adapter.steer('msg-1', 'Also include the word PINEAPPLE in your final reply.')).toBe(true);
-    const line = steerLine(spawned.processes[0].written[1]);
+    const line = steerLine(sent(spawned)[1]);
     expect(line).toEqual({ type: 'user', uuid: expect.stringMatching(UUID), message: { role: 'user', content: [{ type: 'text', text: 'Also include the word PINEAPPLE in your final reply.' }] } });
     await turn;
 
@@ -818,7 +823,7 @@ describe('ClaudeCodeAdapter steer', () => {
     // A turn of its own: its text opens no paragraph after the last turn's.
     expect(outOfTurn.filter((e) => e.type === 'assistant_text')).toEqual([{ type: 'assistant_text', text: 'PINEAPPLE' }]);
     expect(outOfTurn.filter((e) => e.type === 'message_delivered' || e.type === 'message_dropped')).toHaveLength(1);
-    expect(spawned.processes[0].written.filter((w) => w.includes('PINEAPPLE'))).toHaveLength(1);
+    expect(sent(spawned).filter((w) => w.includes('PINEAPPLE'))).toHaveLength(1);
     adapter.dispose();
   });
 
@@ -830,7 +835,7 @@ describe('ClaudeCodeAdapter steer', () => {
     void adapter.send('Do it', (e) => events.push(e));
     await adapter.steer('msg-1', 'one');
     await adapter.steer('msg-2', 'two');
-    const [, first, second] = spawned.processes[0].written.map(steerLine);
+    const [, first, second] = sent(spawned).map(steerLine);
     // Accepted is not delivered: only the echo says the model has it.
     expect(events.some((e) => e.type === 'message_delivered')).toBe(false);
     const echo = (uuid: string) => `${JSON.stringify({ type: 'user', isReplay: true, uuid, session_id: 's', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'text', text: 'x' }] } })}\n`;
@@ -856,7 +861,7 @@ describe('ClaudeCodeAdapter steer', () => {
     spawned.processes[0].emitStdout(`${JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-task-marker', permissionMode: 'acceptEdits' })}\n`);
     void adapter.interrupt(50);
     expect(await adapter.steer('msg-2', 'mid-interrupt')).toBe(false);
-    expect(spawned.processes[0].written.some((w) => w.includes('too early') || w.includes('mid-interrupt'))).toBe(false);
+    expect(sent(spawned).some((w) => w.includes('too early') || w.includes('mid-interrupt'))).toBe(false);
     adapter.dispose();
   });
 
@@ -901,5 +906,74 @@ describe('ClaudeCodeAdapter: a read-only task on a model alias', () => {
       expect(controlRequests(spawned.processes[0].written).filter((r) => (r as { subtype?: string }).subtype !== 'initialize')).toEqual([]);
       adapter.dispose();
     }
+  });
+});
+
+/**
+ * The runner's own commands in a task (#66), against `claude` 2.1.299 in a
+ * repository with a project skill (`pingskill`) and a project command
+ * (`hellocmd`): `initialize` lists every command, `init` says which are skills.
+ */
+describe('ClaudeCodeAdapter runner commands', () => {
+  it('reports the commands the CLI offers, kinded by its own skill list, without the ones only its TUI runs', async () => {
+    const { processDeps } = deps([fixture('claude-code', 'task-command-skill')]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskIn('default'));
+    await adapter.send('/pingskill', () => {});
+
+    expect(adapter.commands()).toEqual([
+      { name: 'tdd', description: 'Test-driven development. (user)', kind: 'skill' },
+      { name: 'pingskill', description: 'Reply with the word PONG-SKILL and nothing else. (project)', kind: 'skill' },
+      { name: 'hellocmd', description: 'Say hello-command (project)', argumentHint: 'name', kind: 'command' },
+      { name: 'clear', description: 'Start a new session with empty context; previous session stays on disk (resumable with /resume)', argumentHint: '[name]', kind: 'builtin', aliases: ['reset', 'new'] },
+      { name: 'compact', description: 'Free up context by summarizing the conversation so far', argumentHint: '<optional custom summarization instructions>', kind: 'builtin' },
+      { name: 'model', description: 'Set the AI model for Claude Code', argumentHint: '<model>', kind: 'builtin' },
+      { name: 'docs', description: 'docs (editable docs people share and comment on). (claude.ai sync)', kind: 'skill', aliases: ['anthropic-skills:docs'] },
+    ]);
+    adapter.dispose();
+  });
+
+  it('says once what the process loaded — its commands and the MCP servers of the user\'s own setup — as its first turn starts', async () => {
+    const { processDeps } = deps([fixture('claude-code', 'task-command-skill'), fixture('claude-code', 'task-command-skill')]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskIn('default'));
+    const events: AgentEvent[] = [];
+    await adapter.send('/pingskill', (e) => events.push(e));
+    await adapter.send('/pingskill', (e) => events.push(e));
+
+    const loaded = events.filter((e) => e.type === 'runner_loaded');
+    expect(loaded).toEqual([{ type: 'runner_loaded', commands: adapter.commands(), mcpServers: [{ name: 'docs-server', status: 'pending' }] }]);
+    expect(events.find((e) => e.type === 'assistant_text')).toEqual({ type: 'assistant_text', text: 'PONG-SKILL' });
+    adapter.dispose();
+  });
+
+  // The CLI reads a slash command at the start of a user message, so that is
+  // how one is invoked over the protocol; its echo comes back as `<command-name>`.
+  it('invokes a command as a user message that starts with it, as a turn of its own', async () => {
+    const { spawned, processDeps } = deps([fixture('claude-code', 'task-command-skill')]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskIn('default'));
+    const events: AgentEvent[] = [];
+    await adapter.invokeCommand('hellocmd', 'Bob', (e) => events.push(e));
+
+    expect(JSON.parse(sent(spawned)[0])).toEqual({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '/hellocmd Bob' }] } });
+    expect(events.at(-1)).toEqual({ type: 'turn_end' });
+    adapter.dispose();
+  });
+
+  it('reports /compact as the runner\'s own compaction, with what the command printed', async () => {
+    const { spawned, processDeps } = deps([fixture('claude-code', 'task-compact')]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskIn('default'));
+    const events: AgentEvent[] = [];
+    await adapter.invokeCommand('compact', '', (e) => events.push(e));
+
+    expect(JSON.parse(sent(spawned)[0]).message.content[0].text).toBe('/compact');
+    expect(events.filter((e) => e.type !== 'usage' && e.type !== 'runner_loaded')).toEqual([
+      { type: 'compaction', trigger: 'manual', preTokens: 24939, postTokens: 3615 },
+      { type: 'command_output', text: 'Compacted' },
+      { type: 'turn_end' },
+    ]);
+    adapter.dispose();
   });
 });

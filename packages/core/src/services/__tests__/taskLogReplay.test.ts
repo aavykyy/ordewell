@@ -78,7 +78,8 @@ describe('a multi-turn attempt, saved and replayed', () => {
     ]);
     const session = await run.spawn();
     const both = turnEnds(session, 2);
-    await vi.waitFor(() => expect(run.spawned.processes[0].written).toHaveLength(2));
+    // `initialize`, the attach check, then the prompt.
+    await vi.waitFor(() => expect(run.spawned.processes[0].written).toHaveLength(3));
     const queued = session.sendMessage('Say only: ok');
     await session.interrupt();
     await both;

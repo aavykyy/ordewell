@@ -27,6 +27,24 @@ describe('trimToolOutput', () => {
 });
 
 describe('toTaskLogEvent', () => {
+  it('logs a turn a runner command opened as that command, with what it was given (#66)', () => {
+    expect(toTaskLogEvent({ type: 'turn_start', text: '/compact keep the API notes', messageId: 'msg-2', command: { name: 'compact', args: 'keep the API notes' } }))
+      .toEqual({ type: 'command', name: 'compact', args: 'keep the API notes', messageId: 'msg-2' });
+    expect(toTaskLogEvent({ type: 'turn_start', text: '/pingskill', command: { name: 'pingskill' } })).toEqual({ type: 'command', name: 'pingskill' });
+  });
+
+  it('keeps what the runner loaded, its compactions and what its commands printed', () => {
+    const loaded = {
+      type: 'runner_loaded' as const,
+      commands: [{ name: 'pingskill', description: 'Reply with PONG-SKILL', kind: 'skill' as const }],
+      mcpServers: [{ name: 'docs-server', status: 'pending' }],
+    };
+    expect(toTaskLogEvent(loaded)).toEqual(loaded);
+    expect(toTaskLogEvent({ type: 'compaction', trigger: 'auto', preTokens: 180000, postTokens: 9000 }))
+      .toEqual({ type: 'compaction', trigger: 'auto', preTokens: 180000, postTokens: 9000 });
+    expect(toTaskLogEvent({ type: 'command_output', text: 'Compacted' })).toEqual({ type: 'command_output', text: 'Compacted' });
+  });
+
   it('keeps a call’s arguments as JSON and its subagent', () => {
     expect(toTaskLogEvent({ type: 'tool_call', id: 'c1', name: 'Read', args: { file_path: 'a.ts' }, subagentId: 'sa' }))
       .toEqual({ type: 'tool_call', id: 'c1', name: 'Read', args: '{"file_path":"a.ts"}', subagentId: 'sa' });

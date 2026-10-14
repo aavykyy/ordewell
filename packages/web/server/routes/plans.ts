@@ -202,6 +202,21 @@ export function plansRoute(pool: OrchestratorPool) {
     (await runUserCommand(session, { command: 'message_task', task: taskId, text })).id ?? ''));
   router.post('/:sessionId/tasks/:taskId/messages/now', messageHandler((session, taskId, text) => session.forceSendTaskMessage(taskId, text)));
 
+  // The task runner's own slash command (#66): carried to the runner, never
+  // one of Ordewell's. A task that cannot take one is refused with the reason.
+  router.post('/:sessionId/tasks/:taskId/commands', async (c) => {
+    try {
+      const body: unknown = await c.req.json().catch(() => ({}));
+      const fields = typeof body === 'object' && body !== null ? body as { name?: unknown; args?: unknown } : {};
+      if (typeof fields.name !== 'string' || !fields.name.trim()) return c.json({ error: 'name is required' }, 400);
+      const args = typeof fields.args === 'string' ? fields.args : '';
+      const id = pool.session(c.req.param('sessionId')).invokeTaskCommand(c.req.param('taskId'), fields.name.trim(), args);
+      return c.json({ id } satisfies TaskMessageResponse);
+    } catch (err) {
+      return failure(c, err, 'task edit');
+    }
+  });
+
   // Force send a message still queued; `sent` is false once the runner has it.
   router.post('/:sessionId/tasks/:taskId/messages/:messageId/now', (c) => {
     try {

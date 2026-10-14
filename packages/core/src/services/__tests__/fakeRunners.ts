@@ -95,6 +95,8 @@ function claudeCode(script: FakeRunnerScript): FakeRunner {
     if (msg.type === 'control_request' && msg.request?.subtype === 'mcp_status') {
       const mcpServers = args.includes('--mcp-config') ? [{ name: 'ordewell', status: script.attach }] : [];
       proc.emitStdout(line({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id, response: { mcpServers } } }));
+    } else if (msg.type === 'control_request' && msg.request?.subtype === 'initialize') {
+      proc.emitStdout(line({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id, response: { commands: [], models: [] } } }));
     } else if (msg.type === 'control_response' && msg.response?.request_id) {
       answers.set(msg.response.request_id, msg.response.response?.behavior ?? '');
     } else if (msg.type === 'user' && script.reply !== undefined) {

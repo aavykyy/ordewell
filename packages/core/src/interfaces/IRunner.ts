@@ -3,6 +3,7 @@ import type { CheckpointAnswer, TaskCompleteArgs } from '../services/mcp/tools';
 import type { ApprovalDecision } from './IApproval';
 import type { TaskSkillSnapshot } from '../models/Task';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
+import type { RunnerCommand } from '../models/RunnerCommand';
 /** How a structured turn ended. `failed` carries the agent's own words in the preceding `error` event. */
 export type StructuredTurnEnd = 'completed' | 'interrupted' | 'failed';
 /**
@@ -22,9 +23,10 @@ export type StructuredEvent =
   /**
    * `text` is the user message the turn answers; `messageId` is set when it had
    * waited in the queue, `forced` when it was force sent (ADR-0023, Q2), `from`
-   * when Ordewell sent it.
+   * when Ordewell sent it. `command` is set on a turn that runs the runner's
+   * own command (#66); `text` is then that command as the runner read it.
    */
-  | { type: 'turn_start'; text: string; messageId?: string; forced?: boolean; from?: TaskMessageFrom }
+  | { type: 'turn_start'; text: string; messageId?: string; forced?: boolean; from?: TaskMessageFrom; command?: InvokedCommand }
   | { type: 'turn_end'; reason: StructuredTurnEnd }
   /**
    * Waiting in Ordewell's queue — again, for a message the runner was handed
@@ -42,6 +44,12 @@ export type StructuredEvent =
   | { type: 'permission_decided'; id: string; decision: ApprovalDecision }
   /** An open `permission_request` can no longer be answered: the runner withdrew it, or its process is gone. */
   | { type: 'permission_withdrawn'; id: string };
+
+/** A runner command a user invoked, with its arguments as typed. */
+export interface InvokedCommand {
+  name: string;
+  args?: string;
+}
 
 export interface QueuedTaskMessage {
   id: string;
@@ -93,6 +101,20 @@ export interface IRunnerSession {
   interrupt(): Promise<void>;
   /** The runner's own session id once announced — what a continue resumes (ADR-0018, K1). */
   nativeSessionId(): string | null;
+  /**
+   * The slash commands the runner offers this task (#66): its built-ins and
+   * the user's and the project's skills and custom commands. Empty for a
+   * runner that reports none.
+   */
+  commands(): RunnerCommand[];
+  /**
+   * Run the runner's own command `name` as a turn of its own: at once when
+   * idle, otherwise queued behind the running turn — never handed into it,
+   * where a runner reads it as text. A runner whose commands cannot be invoked
+   * over its protocol is sent `/name args` as a message. Returns its id, as
+   * {@link sendMessage} does.
+   */
+  invokeCommand(name: string, args?: string): string;
   /**
    * Answer a `permission_request` this session emitted, by its event id. False
    * when it is no longer open — answered, withdrawn, or never asked.
