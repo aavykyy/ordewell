@@ -3,7 +3,7 @@ import { emptyEditor, type EditorState } from './editor';
 import type { SaveSettingsEffect } from './reducers/settings';
 import type { StepperState } from './reducers/stepper';
 
-export type RunStatus = 'idle' | 'planning' | 'researching' | 'executing';
+export type RunStatus = 'idle' | 'planning' | 'executing';
 
 export interface TaskView {
   attemptUsage?: AttemptUsage[];
@@ -363,8 +363,8 @@ export interface TuiState {
    */
   detailAll: boolean;
   status: RunStatus;
-  /** Short label shown next to the spinner, e.g. the current research step. */
-  busyLabel: string;
+  /** A /compact is out: the planner is busy, but condensing rather than planning. */
+  condensing: boolean;
   sessionId: string | null;
   goal: string;
   /**
@@ -506,13 +506,14 @@ export { isTaskRunning };
 export const anyTaskRunning = (state: TuiState): boolean => state.tasks.some(isTaskRunning);
 
 /**
- * A planner turn the user can still call off — research rounds included.
+ * A planner turn the user can still call off — research rounds included, which
+ * are part of planning and carry no status of their own.
  * Every in-flight question and hint is asked through here, so a new status
  * that counts as planning cannot be missed in one place and honoured in
  * another.
  */
 export const plannerInFlight = (state: TuiState): boolean =>
-  state.status === 'planning' || state.status === 'researching';
+  state.status === 'planning';
 
 /** One navigable row of the plan pane — a top-level task, or a subtask shown under an open parent. */
 export interface PlanRow {
@@ -637,7 +638,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     turnGate: NO_TURN,
     detailAll: false,
     status: 'idle',
-    busyLabel: '',
+    condensing: false,
     sessionId: null,
     goal: '',
     tasks: [],

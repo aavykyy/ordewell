@@ -3,13 +3,13 @@ import { cursorInLines, type CursorPosition } from './editor';
 import { checkpointCardLines, conversationLines, taskUsageText, usageMeasures, tokenLine } from './blocks';
 import { chatEditorRoomFor, chatPaneWidth, planPaneWidth } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
-import { findTask, planRows, plannerInFlight, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
+import { findTask, isTaskRunning, planRows, plannerInFlight, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
-import { ALL_PROVIDERS, approvalLabel, awaitingLabel, blockedByLabel, skippedLabel, hasHiddenDetail, resumeLabel, runnerForProvider, taskRowView, planUsage, type AiProvider, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
+import { ALL_PROVIDERS, approvalLabel, awaitingLabel, blockedByLabel, skippedLabel, hasHiddenDetail, resumeLabel, resumeTime, runnerForProvider, taskRowView, planUsage, type AiProvider, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -227,6 +227,56 @@ function taskHeaderLines(state: TuiState, tv: NonNullable<TuiState['taskView']>,
 export function stopHint(state: TuiState): string {
   return plannerInFlight(state) && state.stopArmed ? 'Press Esc again to stop' : '';
 }
+
+/**
+ * 120ms spinner ticks one colour of the status dot lasts: ~480ms, slow enough
+ * to read as a pulse and well under the repaint rate the plan spinner already
+ * sets. The frame counter wraps at a multiple of this and of the spinner's ten
+ * frames, so neither animation skips a beat at the wrap.
+ */
+export const DOT_TICKS = 4;
+export const SPINNER_CYCLE = 40;
+
+/** What the status row says about the selected chat: `busy` is the one that animates. */
+export interface ChatActivity {
+  label: string;
+  busy: boolean;
+}
+
+/**
+ * The status row relates to the chat on screen and to nothing else. What the
+ * planner or a runner is doing is already in that chat, so this names only the
+ * state of the chat itself — never a tool, never the run. A subtask has no
+ * attempt of its own: it runs inside its parent's, so its view follows it.
+ */
+export function chatActivity(state: TuiState): ChatActivity | null {
+  const tv = state.taskView;
+  if (!tv) {
+    if (!plannerInFlight(state)) return null;
+    return { label: state.condensing ? 'Condensing…' : 'Planning…', busy: true };
+  }
+  const own = findTask(state.tasks, tv.taskId);
+  const task = state.tasks.find((t) => t.subtasks?.some((s) => s.id === tv.taskId)) ?? own;
+  if (!task) return null;
+  if (isTaskRunning(task) || (own && isTaskRunning(own))) return { label: 'Working…', busy: true };
+  const at = task.status === 'awaiting_user' && task.awaitingReason === 'usage-limit' && task.resumeAt ? new Date(task.resumeAt) : null;
+  if (at && !Number.isNaN(at.getTime())) return { label: `paused · resumes ${resumeTime(at)}`, busy: false };
+  return null;
+}
+
+/**
+ * What the run as a whole is waiting on, longest wording first: the run is not
+ * the selected chat's business, but it must stay visible whichever chat is. The
+ * plan pane's title takes the longest one that fits its width.
+ */
+export function runHints(state: TuiState): string[] {
+  const waiting = state.tasks.filter((t) => t.status === 'awaiting_user').length;
+  if (waiting > 0) return [waiting === 1 ? '1 task waits for you' : `${waiting} tasks wait for you`, `${waiting} waiting`];
+  // As plain as a task that waits on the user: the run waits on a merge (ADR-0020).
+  return state.runMerge?.paused ? ['paused for Merge all — /handoff merge', 'paused · /handoff merge', 'merge paused'] : [];
+}
+
+export const runHint = (state: TuiState): string => runHints(state)[0] ?? '';
 
 export function packHints(hints: string[], cols: number): string[] {
   const lines: string[] = [];
@@ -615,14 +665,17 @@ export function planLayout(state: TuiState, rows: number, cols: number): PlanLay
   const done = state.tasks.filter((t) => t.status === 'completed').length;
   const totalUsage = planUsage(state.tasks);
   const unmerged = state.runMerge?.handoff.landed.length ?? 0;
+  const count = `${done}/${state.tasks.length}`;
+  const hints = runHints(state);
+  const hint = hints.find((h) => width(`Plan ${count} · ${h}`) <= cols) ?? hints.at(-1);
   const lines = [
-    truncate(`${style.bold(style.brand('Plan'))} ${style.grey(`${done}/${state.tasks.length}`)}`, cols),
+    truncate(`${style.bold(style.brand('Plan'))} ${style.grey(`${count}${hint ? ` · ${hint}` : ''}`)}`, cols),
     totalUsage.attempts ? style.grey(truncate(`Tasks total: ${taskUsageText(totalUsage)}`, cols)) : '',
   ];
   if (unmerged > 0) {
-    const hint = style.dim(truncate(`${unmerged} landed task${unmerged === 1 ? '' : 's'} not merged — /handoff merge`, cols));
-    if (totalUsage.attempts) lines.push(hint);
-    else lines[1] = hint;
+    const landed = style.dim(truncate(`${unmerged} landed task${unmerged === 1 ? '' : 's'} not merged — /handoff merge`, cols));
+    if (totalUsage.attempts) lines.push(landed);
+    else lines[1] = landed;
   }
   const firstRowLine = lines.length;
 

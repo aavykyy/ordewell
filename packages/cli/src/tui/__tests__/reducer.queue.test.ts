@@ -43,7 +43,7 @@ describe('submitting while a planner turn is in flight', () => {
   });
 
   it('queues for a research turn too, the other in-flight status', () => {
-    const { effects, state } = run('follow-up', planningState({ status: 'researching' }));
+    const { effects, state } = run('follow-up', planningState({ status: 'planning' }));
     expect(effects).toEqual([]);
     expect(state.queuedPrompts).toEqual(['follow-up']);
   });

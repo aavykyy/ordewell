@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { initialState, reduce, type Action, type Step } from '../reducer';
 import { render } from '../render';
 import { style } from '../ansi';
+import { runHint } from '../layout';
 import type { RunMergeView, HandoffView, TaskView, TuiState } from '../state';
 
 beforeAll(() => { style.enabled = false; });
@@ -45,7 +46,7 @@ describe('ops tasks and merge gates in the TUI (ADR-0020)', () => {
     expect(next.runMerge).toEqual(runMerge);
     expect(next.tasks[1].mergeGate).toEqual(['t1']);
     expect(next.status).toBe('executing');
-    expect(next.busyLabel).toBe('paused for Merge all — /handoff merge');
+    expect(runHint(next)).toBe('paused for Merge all — /handoff merge');
 
     const cleared = apply(next, { type: 'statusUpdate', sessionId: 's1', tasks: [{ id: 'o2', status: 'in_progress', verdict: null, idleSince: null }] }).state;
     expect(cleared.runMerge).toBeNull();

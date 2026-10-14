@@ -32,7 +32,7 @@ describe('ESC while planning', () => {
   });
 
   it('also arms for a research turn (the other in-flight planner status)', () => {
-    const { state, effects } = press({ status: 'researching', sessionId: 'session-1' }, 'while it looks things up');
+    const { state, effects } = press({ status: 'planning', sessionId: 'session-1' }, 'while it looks things up');
     expect(effects).toEqual([{ type: 'disarmStop', afterMs: 2000, arm: 1 }]);
     expect(state.stopArmed).toBe(true);
   });

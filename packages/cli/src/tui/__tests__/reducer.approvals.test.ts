@@ -29,7 +29,7 @@ const settledElsewhere = (id: string, granted = true): Action => ({
 });
 
 function withPending(request = REQUEST): TuiState {
-  return reduce(initialState({ sessionId: 's1', status: 'researching' }), requested(request)).state;
+  return reduce(initialState({ sessionId: 's1', status: 'planning' }), requested(request)).state;
 }
 
 describe('approval overlay', () => {

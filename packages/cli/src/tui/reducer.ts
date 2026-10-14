@@ -1,6 +1,6 @@
 import { blockingFailures, EMPTY_HOLD, EMPTY_RUN, fromTranscript, holdPrompt, taskStartedNotice, type RunnerId } from '@ordewell/core';
 import { chatEditorRoomFor } from './geometry';
-import { chatScrollMax } from './layout';
+import { SPINNER_CYCLE, chatScrollMax } from './layout';
 import { activeToken, findCommand, parseSlash, tokenCompletions, type ParsedCommand } from './slash';
 import { applyKey, commit } from './editor';
 import { say, wiped } from './transcript';
@@ -12,7 +12,7 @@ import { handlePlanKey } from './reducers/planPane';
 import { announceApprovals, announceCheckpoint, continueTaskStep, handleTaskViewKey, openTaskView, taskLogAbandoned, taskLogArrived, taskLogLoaded } from './reducers/taskView';
 import { pickRewindTarget, runCommand, skillInTaskView, unknownCommand } from './reducers/commands';
 import { disarmStop, drainQueue, forceSendPlanner, plannerEscape, restoreForced } from './reducers/turnQueue';
-import { applyIsolationRecord, applySettings, clearRunIsolation, foldRun, followSession, planSnapshot, runLabel, withRun } from './reducers/incoming';
+import { applyIsolationRecord, applySettings, clearRunIsolation, foldRun, followSession, planSnapshot, withRun } from './reducers/incoming';
 import { refillPicker } from './reducers/pickers';
 import { refreshStepper } from './reducers/stepper';
 import {
@@ -92,7 +92,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       const next: TuiState = {
         ...folded,
         status: plannerInFlight(state) ? 'idle' : state.status,
-        busyLabel: '',
+        condensing: false,
         expandedTaskId,
         taskEditor: expandedTaskId !== null ? state.taskEditor : null,
       };
@@ -128,7 +128,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       if (stale(state, action.sessionId)) return step(state);
       const next = withRun(state, action.view);
       const status = runStatus(next, next.tasks);
-      return step({ ...next, status, busyLabel: status === 'executing' ? runLabel(next.tasks, next.runMerge) : state.busyLabel });
+      return step({ ...next, status });
     }
 
     case 'taskLog':
@@ -161,7 +161,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         runner: (action.runner ?? 'claude-code') as RunnerId,
       });
       const spoken = say(folded, 'system', taskStartedNotice(action.title, action.runner));
-      return step({ ...spoken, status: 'executing', busyLabel: runLabel(spoken.tasks, spoken.runMerge) });
+      return step({ ...spoken, status: 'executing' });
     }
 
     case 'taskCheckpoint':
@@ -185,7 +185,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       // The indicator follows the tasks, not the stream: once none is running
       // the run is over, whatever the daemon's scheduler still holds armed.
       const status = runStatus(next, next.tasks);
-      return step({ ...next, status, busyLabel: status === 'executing' ? runLabel(next.tasks, next.runMerge) : state.busyLabel });
+      return step({ ...next, status });
     }
 
     case 'isolationBlocked': {
@@ -232,7 +232,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step({
         ...say(state, 'system', `Execution ${verb} — ${completed}/${total} tasks complete${failures}.`),
         status: 'idle',
-        busyLabel: '',
+        condensing: false,
       });
     }
 
@@ -255,7 +255,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step({
         ...say(state, 'error', 'Lost the connection to the daemon — this view is no longer following the run, but the daemon may still be running it. /load this session again to see where it stands.'),
         status: 'idle',
-        busyLabel: '',
+        condensing: false,
       });
     }
 
@@ -296,7 +296,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         goal: action.goal,
         taskView: null,
         status: 'idle',
-        busyLabel: '',
+        condensing: false,
         planApproved: false,
         pendingApprovals: [],
         queuedPrompts: EMPTY_HOLD,
@@ -335,11 +335,11 @@ function reduceAction(state: TuiState, action: Action): Step {
       // stop is that: any other failure is the forced send's own, and its
       // prompt is already out of the composer or the queue, so it goes back.
       if (state.forceSendPending) {
-        if (action.code === 'planner_turn_stopped') return step({ ...state, forceSendPending: null, busyLabel: '' });
+        if (action.code === 'planner_turn_stopped') return step({ ...state, forceSendPending: null, condensing: false });
         state = restoreForced(state);
       }
       const quiet = plannerInFlight(state) && state.stopRequested;
-      const reported = { ...(quiet ? state : say(state, 'error', action.message)), status: 'idle' as const, busyLabel: '' };
+      const reported = { ...(quiet ? state : say(state, 'error', action.message)), status: 'idle' as const, condensing: false };
       // A planner turn dying IS a turn ending — the queue would otherwise wait
       // on a next one that never comes. An execution failure (or any failure
       // with no turn running) drains nothing.
@@ -351,7 +351,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step({
         ...state,
         status: 'idle',
-        busyLabel: '',
+        condensing: false,
         overlay: {
           kind: 'confirm',
           title: 'Initialize new workspace?',
@@ -378,7 +378,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     // Whether there is anything to animate is the app loop's call (it owns the
     // timer); a tick that arrives simply advances the frame.
     case 'spinnerTick':
-      return step({ ...state, spinnerFrame: (state.spinnerFrame + 1) % 10 });
+      return step({ ...state, spinnerFrame: (state.spinnerFrame + (action.by ?? 1)) % SPINNER_CYCLE });
 
     // The scheduled expiry of an armed stop; a token that is no longer the live
     // arm is a stale timer (the user disarmed and re-armed in between) and is

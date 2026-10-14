@@ -1,0 +1,58 @@
+import { describe, it, expect } from 'vitest';
+import { EMPTY_TASK_LOG } from '@ordewell/core';
+import { chatActivity } from '../layout';
+import { initialState, type TaskLogState, type TaskView, type TuiState } from '../state';
+
+function task(over: Partial<TaskView> = {}): TaskView {
+  return { id: 't1', order: 1, title: 'Add multiply', type: 'ai', status: 'pending', dependencies: [], assignedRunner: 'claude-code', ...over };
+}
+
+function viewing(taskId: string): TaskLogState {
+  return { taskId, view: EMPTY_TASK_LOG, attempts: [1], attempt: 1, pending: [], loaded: true, followLatest: true, queuedIndex: 0 };
+}
+
+const state = (over: Partial<TuiState>): TuiState => initialState({ sessionId: 's1', ...over });
+
+describe('chatActivity: the planner chat', () => {
+  it('is empty while the planner is idle, even with tasks running', () => {
+    expect(chatActivity(state({ status: 'executing', tasks: [task({ status: 'in_progress' })] }))).toBeNull();
+  });
+
+  it('says Planning while a planner turn is in flight', () => {
+    expect(chatActivity(state({ status: 'planning' }))).toEqual({ label: 'Planning…', busy: true });
+  });
+
+  it('says Condensing while /compact runs', () => {
+    expect(chatActivity(state({ status: 'planning', condensing: true }))).toEqual({ label: 'Condensing…', busy: true });
+  });
+});
+
+describe('chatActivity: a task chat', () => {
+  it('says Working while that task\'s attempt is in progress', () => {
+    const tasks = [task({ status: 'in_progress' })];
+    expect(chatActivity(state({ tasks, taskView: viewing('t1') }))).toEqual({ label: 'Working…', busy: true });
+  });
+
+  it('is empty when another task is running and the selected one is not', () => {
+    const tasks = [task({ status: 'in_progress' }), task({ id: 't2', order: 2, status: 'completed' })];
+    expect(chatActivity(state({ status: 'executing', tasks, taskView: viewing('t2') }))).toBeNull();
+  });
+
+  it('is empty during a planner turn, which is not that task\'s', () => {
+    expect(chatActivity(state({ status: 'planning', tasks: [task({ status: 'completed' })], taskView: viewing('t1') }))).toBeNull();
+  });
+
+  it('follows the parent\'s attempt from a subtask view', () => {
+    const subtask = task({ id: 't1.1', order: 1, status: 'pending' });
+    const tasks = [task({ status: 'in_progress', subtasks: [subtask] })];
+    expect(chatActivity(state({ tasks, taskView: viewing('t1.1') }))).toEqual({ label: 'Working…', busy: true });
+  });
+
+  it('shows when a usage-limit pause resumes, without claiming the task is busy', () => {
+    const resumeAt = new Date(2026, 9, 14, 12, 12).toISOString();
+    const tasks = [task({ status: 'awaiting_user', awaitingReason: 'usage-limit', resumeAt })];
+    const activity = chatActivity(state({ tasks, taskView: viewing('t1') }));
+    expect(activity?.label).toMatch(/^paused · resumes .*12:12/);
+    expect(activity?.busy).toBe(false);
+  });
+});
