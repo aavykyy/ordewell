@@ -218,8 +218,8 @@ describe.runIf(live)('structured transport — OpenCode live smoke', () => {
       expect(turns.ends, session.getOutput()).toEqual(['interrupted', 'completed']);
       expect(states[0]).toBe('working');
       expect(events.filter((e) => e.type === 'turn_start').at(-1)).toMatchObject({ messageId: id, forced: true });
-      expect(existsSync(join(dir, 'forced.txt'))).toBe(true);
-      expect(existsSync(join(dir, 'slept.txt'))).toBe(false);
+      expect(existsSync(join(dir, 'forced.txt')), session.getOutput()).toBe(true);
+      expect(existsSync(join(dir, 'slept.txt')), session.getOutput()).toBe(false);
       expect(session.getOutput()).toContain('PINEAPPLE');
       expect(elapsed).toBeLessThan(50_000);
     } finally {
