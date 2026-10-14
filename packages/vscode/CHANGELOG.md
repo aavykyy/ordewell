@@ -145,6 +145,30 @@
   waiting on a permission request nobody would see.
 - **A handoff's landed list and the prompts a task is given name a subtask by
   its dotted reference** (`#2.1`), not a bare order.
+- **A read-only Claude task runs the model its plan names**, not Sonnet, which
+  the `claude` CLI ran for the `haiku` alias in plan mode.
+- **A planner sees nested files without `tree` installed**, instead of planning
+  from a one-level listing.
+- **A continue whose saved Claude session is gone fails in Claude's own words**
+  instead of being respawned as an MCP attach failure.
+- **A planner turn stopped by Send now before replying is shown as stopped**,
+  not as an empty response.
+- **A finished task's log never shows a call as still running.**
+- **A subtask's report reaches its dependents under its dotted label**, not
+  as "Task 1".
+- **The sent-now mark stays on a task message after the log is reopened.**
+- **A task waiting at a checkpoint shows so at once**, with the controls to
+  answer it.
+- **An ops task is never read-only**: a plan that marks one is warned and the
+  mark ignored, so it runs the commands it exists for.
+- **A planner under worktree isolation names files from the workspace root**,
+  so a task reads its own worktree rather than your checkout.
+- **A failure reported without a reason shows the runner's own explanation**
+  instead of "no reason given".
+- **An approved checkpoint reads as approved to the runner**, not as a bare
+  "continue" it could take as no answer.
+- **A one-shot planner's backgrounded subagents are waited for** before its
+  plan is given up on.
 
 ## [0.9.1] — 2026-10-11
 
