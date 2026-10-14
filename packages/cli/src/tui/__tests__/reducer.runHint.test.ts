@@ -43,3 +43,14 @@ describe('what the plan pane says the run waits on', () => {
     expect(runHint(state)).toBe('2 tasks wait for you');
   });
 });
+
+describe('the run across a plan refresh mid-run', () => {
+  it('stays executing when the plan arrives after the run snapshot, as a /load has it', () => {
+    let { state } = reduce(running(), { type: 'taskStarted', taskId: 't1', title: 'Add multiply', runner: 'claude-code', sessionId: 's1' });
+    const plan = { tasks: [task({ status: 'in_progress' }), task({ id: 't2', title: 'Add reverse', assignedRunner: 'opencode' })] };
+    ({ state } = reduce(state, { type: 'planUpdated', plan, sessionId: 's1' }));
+
+    expect(state.status).toBe('executing');
+    expect(runHint(state)).toBe('');
+  });
+});

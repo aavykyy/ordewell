@@ -197,3 +197,36 @@ describe('the ops flag of a task merged or split from others (ADR-0020)', () => 
     });
   });
 });
+
+describe('an ops task is never read-only (ADR-0020, ADR-0031)', () => {
+  const modes = {
+    'claude-code': [
+      { id: 'bypassPermissions', label: 'Bypass', description: 'no prompts', autonomous: true },
+      { id: 'plan', label: 'Plan', description: 'read-only', readOnly: true },
+    ],
+  };
+  const catalog = { modelsByRunner: {}, runnerModes: modes, autonomousDefault: true };
+
+  it('runs a submitted ops task marked readOnly in the level\'s mode, and says the mark was ignored', () => {
+    const result = validatePlanTasks(
+      { tasks: [{ ...slice, id: 'o', order: 1, title: 'Run the tests', description: 'd', prompt: 'p', ops: true, readOnly: true }] },
+      ['claude-code'], modes, true,
+    );
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.tasks[0].taskMode).toBe('bypassPermissions');
+    expect(result.ok && result.warnings).toEqual([expect.stringMatching(/"Run the tests".*"readOnly".*ops task.*ignored/)]);
+  });
+
+  it('refuses an edit that would make an ops task read-only', () => {
+    const tasks = [createTask({ id: 'o', order: 1, title: 'Deploy', prompt: 'deploy', ops: true, taskMode: 'bypassPermissions' })];
+    const update = applyTaskOps(tasks, [{ op: 'update', taskId: 'o', changes: { readOnly: true } }], ['claude-code'], catalog);
+    expect(update.ok).toBe(false);
+    expect(update.errors[0]).toContain('ops task');
+    const add = applyTaskOps(plan(), [{ op: 'add', task: { title: 'Tag', prompt: 'tag', ops: true, readOnly: true } }], ['claude-code'], catalog);
+    expect(add.ok).toBe(false);
+    const review = [createTask({ id: 'r', order: 1, title: 'Review', prompt: 'review', taskMode: 'plan' })];
+    const flipped = applyTaskOps(review, [{ op: 'update', taskId: 'r', changes: { ops: true } }], ['claude-code'], catalog);
+    expect(flipped.ok).toBe(false);
+    expect(flipped.errors[0]).toContain('ops task');
+  });
+});

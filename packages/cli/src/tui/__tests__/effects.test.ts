@@ -1199,6 +1199,7 @@ describe('catalogs and sessions', () => {
     await runEffect({ type: 'deleteSession', sessionId: 's9' }, h.deps);
     expect(h.api.deleteSession).toHaveBeenCalledWith('s9', '/ws');
     expect(types(h.actions)).toContain('sessionsLoaded');
+    expect(h.actions).toContainEqual({ type: 'sessionDeleted', sessionId: 's9' });
   });
 
   it('reports a delete the daemon refused instead of announcing it', async () => {
@@ -1238,6 +1239,8 @@ describe('failures', () => {
     const failure = h.actions.find((a) => a.type === 'failed') as Extract<Action, { type: 'failed' }>;
     expect(failure.message).toContain('/sessions');
     expect(failure.message).not.toMatch(/re-?plan/i);
+    // Another surface may have deleted it: a restart is not the only way a session goes.
+    expect(failure.message).toMatch(/deleted/);
   });
 
   it('leaves an unrelated error message alone', async () => {

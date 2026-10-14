@@ -6,7 +6,7 @@ import {
 import { resolveTaskRef } from './TaskRefs';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
 import { validateTaskEdit, lockedTaskRefusal, type EditCatalog, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
-import { plannedTask, checkPlanInvariants, detectCycle, taskWhere, MODE_NOT_THE_PLANNERS, MANUAL_NOT_READ_ONLY, type IntakeCatalog, type PlannedTask, type PlanTaskError } from './PlannedTask';
+import { plannedTask, checkPlanInvariants, detectCycle, taskWhere, MODE_NOT_THE_PLANNERS, MANUAL_NOT_READ_ONLY, OPS_NOT_READ_ONLY, type IntakeCatalog, type PlannedTask, type PlanTaskError } from './PlannedTask';
 import { plannedMode, taggedReadOnlyMode, type PlannedMode } from './ModeResolver';
 
 /**
@@ -60,7 +60,7 @@ export function taskOpsProtocol(executionNote = '', tools = false): string[] {
     'Every "<id or #order>" ref in a batch resolves against the plan shown above, before any op in the batch runs — an earlier remove/merge/split never shifts what a later "#N" means. "#N" is top-level task N; a subtask is named by its dotted label ("#2.1"), as the plan lists it.',
     'Give "add", "merge", or "split" a "handle" (any name you choose, unused elsewhere in this batch) to let a LATER op in the same batch reference the task it produces — for "split", the handle names its last part. A handle used before its defining op is rejected.',
     `When creating or changing tasks, set "assignedRunner" and "assignedModel" ({"modelId","modelLabel","thinkingEffort"?}) using only the runners and models ${tools ? 'list_runners and list_models return' : 'listed in <available_models>'}.`,
-    'Set "readOnly": true on a task that must not change any file, and "readOnly": false to lift it; you never set "taskMode". A task you move, split or edit keeps being read-only or not unless you say otherwise, and so do the subtasks of a read-only task you add.',
+    'Set "readOnly": true on a task that must not change any file, never on one that must run commands (tests, scripts, builds) or an ops task, and "readOnly": false to lift it; you never set "taskMode". A task you move, split or edit keeps being read-only or not unless you say otherwise, and so do the subtasks of a read-only task you add.',
     'Keep dependencies consistent: no cycles, no references to removed tasks, and never touch running or completed tasks — "rearm" is the one exception, below.',
     ...(tools ? ['edit_plan checks the batch when you call it and answers with what it will change, or with the error to fix — call it again in the same reply. The edit is applied when your reply ends; edits you make in one reply join one batch.'] : []),
     'Just declare the dependencies you want — display order is repaired for you afterwards, so a rewire or a newly added prerequisite never needs a "reorder" op. Only a task that is running or completed cannot be shifted, so an edit that would need one to move is rejected.' + executionNote,
@@ -495,6 +495,7 @@ export function applyTaskOps(
     Object.assign(changes, check.set);
     const readOnly = askedReadOnly(op.changes);
     if (readOnly === true && (changes.type ?? target.type) === 'user') return { error: `${label}: ${MANUAL_NOT_READ_ONLY}` };
+    if ((changes.ops ?? target.ops) && (readOnly ?? isReadOnly(target, catalog))) return { error: `${label}: ${OPS_NOT_READ_ONLY}` };
     const moved = changes.assignedRunner !== undefined && changes.assignedRunner !== target.assignedRunner;
     const becomesAi = changes.type === 'ai' && target.type === 'user';
     // A runner not allowed has no mode to land on; the plan's rules refuse it once the op is applied.

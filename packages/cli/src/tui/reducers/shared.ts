@@ -94,6 +94,7 @@ export type Action =
   | { type: 'key'; key: Key }
   | { type: 'sessionStarted'; sessionId: string; goal: string }
   | { type: 'sessionCleared' }
+  | { type: 'sessionDeleted'; sessionId: string }
   /** A saved session's records, which the conversation is rebuilt from as a reload would show it. */
   | { type: 'chatRestored'; history: SerializedConversationMessage[]; researchLog?: ResearchLogEntry[]; plannerUsage?: PlannerUsage; pendingTurns?: SerializedPendingTurn[]; sessionId?: string }
   | { type: 'planUpdated'; plan: unknown; sessionId?: string }

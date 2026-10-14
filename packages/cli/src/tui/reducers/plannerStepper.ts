@@ -36,6 +36,9 @@ const hasEfforts = (state: TuiState, choices: StepChoices): boolean =>
  * pre-selection — a harness goes with the model and effort it opens on — so
  * the planner is never left holding one backend with another's model.
  */
+// Claude's catalog labels its rungs "Low effort"; other runners' say "Low".
+const effortLabel = (label: string): string => (/\beffort$/i.test(label) ? label : `${label} effort`);
+
 export const plannerStepper: StepperDefinition = {
   title: 'Planner',
   advanceOnEnter: true,
@@ -72,7 +75,7 @@ export const plannerStepper: StepperDefinition = {
     const parts = [
       ALL_PROVIDERS[provider as AiProvider]?.label ?? provider,
       model?.label ?? modelId,
-      ...(effort ? [`${level?.label ?? effort} effort`] : []),
+      ...(effort ? [effortLabel(level?.label ?? effort)] : []),
     ];
     // Taken ahead of the daemon's answer so the rows mark it at once; the
     // answer carries the same values, the daemon remembering the pick per

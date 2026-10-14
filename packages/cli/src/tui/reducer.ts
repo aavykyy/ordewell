@@ -10,7 +10,7 @@ import type { Key } from './keys';
 import { handleOverlayKey } from './reducers/overlays';
 import { handlePlanKey } from './reducers/planPane';
 import { announceApprovals, announceCheckpoint, continueTaskStep, handleTaskViewKey, openTaskView, taskLogAbandoned, taskLogArrived, taskLogLoaded } from './reducers/taskView';
-import { pickRewindTarget, runCommand } from './reducers/commands';
+import { newSession, pickRewindTarget, runCommand } from './reducers/commands';
 import { disarmStop, drainQueue, forceSendPlanner, plannerEscape, restoreForced } from './reducers/turnQueue';
 import { applyIsolationRecord, applySettings, clearRunIsolation, foldRun, followSession, planSnapshot, withRun } from './reducers/incoming';
 import { refillPicker } from './reducers/pickers';
@@ -69,6 +69,11 @@ function reduceAction(state: TuiState, action: Action): Step {
         forceSendPending: null,
         overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
       }, EMPTY_RUN));
+
+    // Deleting the session on screen stops it in the daemon; a view left on it
+    // would answer every next message with a session-not-found.
+    case 'sessionDeleted':
+      return action.sessionId === state.sessionId ? newSession(state) : step(state);
 
     case 'chatRestored':
       if (stale(state, action.sessionId)) return step(state);

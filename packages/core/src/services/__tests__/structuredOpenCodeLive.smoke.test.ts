@@ -174,7 +174,7 @@ describe.runIf(live)('structured transport — OpenCode live smoke', () => {
       expect(events.filter((e) => e.type === 'turn_start')).toHaveLength(2);
       expect(events.filter((e) => e.type === 'turn_start').at(-1)).toMatchObject({ messageId: id });
       expect(events.filter((e) => e.type === 'message_handed_over')).toEqual([]);
-      expect(existsSync(join(dir, 'queued.txt'))).toBe(true);
+      expect(existsSync(join(dir, 'queued.txt')), session.getOutput()).toBe(true);
       expect(session.getOutput()).toContain('PINEAPPLE');
       expect(session.queued()).toEqual([]);
     } finally {

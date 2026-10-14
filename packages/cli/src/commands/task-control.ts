@@ -122,7 +122,7 @@ export async function handleContinue(subArgs: string[], injectedApi?: ApiClient)
 
 /**
  * Answer the checkpoint a task waits at. Approving carries no note — what the
- * runner is told is just "continue" — so one given is refused rather than
+ * runner is told is only that it was approved — so one given is refused rather than
  * dropped; a rejection's reason is the rest of the line.
  */
 export async function handleCheckpoint(subArgs: string[], injectedApi?: ApiClient): Promise<void> {

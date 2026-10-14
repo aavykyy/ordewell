@@ -225,6 +225,14 @@ function oneShot(isolatedExecution: false | RepoGroupLayout) {
   return buildResearchPrompt('goal', '', {}, ['claude-code'], undefined, modes({ isolatedExecution }));
 }
 
+describe('read-only guidance (ADR-0031)', () => {
+  it('keeps read-only off a task that must run commands, an ops task included', () => {
+    for (const p of [conversation(false), oneShot(LONE_REPO)]) {
+      expect(p).toMatch(/"readOnly".*never on a task that must run commands.*tests, scripts, builds.*ops task/i);
+    }
+  });
+});
+
 describe('planner parallelism rules under worktree isolation (ADR-0013)', () => {
   const OVERLAP_RULE = '- For parallel tasks, specify different target files to avoid merge conflicts.';
 
@@ -249,6 +257,14 @@ describe('planner parallelism rules under worktree isolation (ADR-0013)', () => 
     for (const p of [conversation(false), conversation(LONE_REPO), oneShot(false), oneShot(LONE_REPO)]) {
       expect(p).toContain(SHARED_APPEND_FILE_RULE);
     }
+  });
+
+  it('has task prompts name files from the workspace root, never by absolute path, when every task gets its own worktree', () => {
+    for (const p of [conversation(LONE_REPO), oneShot(LONE_REPO)]) {
+      expect(p).toMatch(/path from the workspace root, never by an absolute path/i);
+      expect(p).toMatch(/absolute path .*user's own checkout/i);
+    }
+    for (const p of [conversation(false), oneShot(false)]) expect(p).not.toMatch(/never by an absolute path/i);
   });
 
   it('stops asking for different files or file-overlap dependencies when every task gets its own worktree', () => {

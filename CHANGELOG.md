@@ -563,6 +563,76 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **Send now treats a skill invocation as a planner prompt.** *Send now* on
   `/name …` in VS Code now stops the turn and answers it as a planner message,
   while a built-in command still goes to the host as Send does.
+- **A read-only Claude task runs the model its plan names.** Under
+  `--permission-mode plan` the `claude` CLI ran Sonnet for the `haiku` alias,
+  so a read-only task on Haiku ran, and was billed, as Sonnet. The alias is
+  now resolved and pinned before the first turn.
+- **A planner sees nested files without `tree` installed.** Its workspace
+  listing fell back to one level where the `tree` binary was missing (Windows
+  by default), so it planned blind to nested files and reported real ones as
+  missing.
+- **A runner that exits while starting fails in its own words.** A `claude
+  --resume` of a session it cannot find was reported as an MCP attach failure
+  and respawned with the same arguments; a continue now says the saved session
+  was not found, and a fresh start fails with the runner's own message.
+- **A planner turn stopped before any reply is recorded as stopped**, not as
+  "The planner returned an empty response".
+- **Send now in the terminal UI keeps held prompts behind the forced turn.** A
+  stopped turn that settled with a partial reply drained the next queued prompt
+  while the forced turn was still running. Send now also reaches a planner turn
+  another client started, and clears its pending mark when that turn ends.
+- **A planner turn's stream stops at its close**, so the next turn no longer
+  draws the same text twice.
+- **The terminal UI keeps the last column of a full-width row.** The plan pane
+  lost it on every row, so an effort of `low` read `lo` and truncated lines lost
+  their ellipsis.
+- **A finished task's log never shows a call as still running.** About half of
+  the finished tasks showed `task_complete` as running for good, because the
+  runner is ended before it reports that call's result; such calls now close as
+  interrupted.
+- **`ordewell status` shows each finished subtask once**, under its parent,
+  and an id such as `2` no longer resolves to subtask 1.2 when that finished
+  first.
+- **A subtask is named by its dotted label everywhere a task is referenced**:
+  in a dependent's prior-output heading, where subtask 1.1 read as "Task 1",
+  and in the terminal UI's task-log header.
+- **The sent-now mark survives a reload and a wrap.** A task message sent with
+  Send now lost its mark when the log was replayed, and a wrapped one in the
+  terminal UI dropped it when the first row was full.
+- **A task log's header shows the task's settled status**, not "working", when
+  its runner was ended before closing its last turn.
+- **A daemon publishes its token only once its port is bound.** Two daemons
+  starting on one port could leave the listening one's clients refused with
+  401.
+- **A task waiting at a checkpoint shows so on every surface.** Its row stayed
+  "running", without the controls to answer it, until another update arrived.
+- **OpenCode starts with `PWD` set to its workspace**, not to the directory the
+  daemon or a previous workspace left in the environment.
+- **An ops task is never read-only.** The planner could mark one `readOnly`,
+  which put it in a read-only mode that refused the commands it existed to run.
+  A submitted plan now ignores the mark on an ops task, with a warning, and an
+  edit that asks for it is refused; the planner is also told that a task which
+  must run tests, scripts or builds is not read-only
+  ([ADR-0031](docs/adr/0031-the-planner-says-read-only-not-a-mode.md)).
+- **A planner under worktree isolation names files from the workspace root.**
+  An absolute path in a task's prompt pointed at your checkout instead of the
+  task's own worktree, so a read-only task reported files without the earlier
+  tasks' work in them.
+- **A failure the runner reports without a `reason` says why.** Its verdict, and
+  the supervisor's run update, read "no reason given" even when the runner's
+  summary explained the failure; the summary's first paragraph is now used.
+- **An approved checkpoint reads as approved to the runner.** The answer was the
+  bare word "continue", which a runner could take as no answer to a yes/no
+  question and ask again, or stop the task as unapproved.
+- **A one-shot planner's backgrounded subagents are waited for.** A planner
+  that launched Explore agents in the background and ended its turn waiting for
+  them had its session thrown away with no plan submitted; it is now asked to
+  wait for them in the same session, as the conversation planner already was.
+- **Deleting the session the terminal UI shows starts a fresh one.** The view
+  stayed on the deleted session, and every next action failed with a message
+  that blamed a daemon restart; that message now names a deletion as well.
+- **The planner picker names an effort once** ("Low effort", not "Low effort
+  effort"), and **the session list counts "1 task"** in the singular.
 
 ## [0.9.1] — 2026-10-11
 

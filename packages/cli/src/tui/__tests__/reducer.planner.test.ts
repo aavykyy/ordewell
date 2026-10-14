@@ -124,6 +124,12 @@ describe('/planner', () => {
     expect(done.effects).toEqual([saved('claude-code', 'opus', 'high', 'Planner: Claude Code · Claude Opus 5.5 · High effort')]);
   });
 
+  it('names an effort whose catalog label already says "effort" once', () => {
+    const catalog = [{ ...models[0], variants: [{ id: 'low', label: 'Low effort' }] }];
+    const out = choose(choose(choose(run('/planner', { ...ready, models: catalog }).state, 'claude-code').state, 'opus').state, 'low');
+    expect(out.effects).toEqual([saved('claude-code', 'opus', 'low', 'Planner: Claude Code · Claude Opus 5.5 · Low effort')]);
+  });
+
   it('saves nothing and prints nothing for a step entered unchanged', () => {
     const opened = run('/planner', ready).state;
     const { state, effects } = choose(opened, 'codex');

@@ -113,13 +113,13 @@ export async function runEffect(effect: Effect, deps: EffectDeps): Promise<void>
 }
 
 /**
- * Loading a session adopts it, so a 404 here means the daemon dropped it —
- * almost always a restart. Reloading re-adopts it; say so rather than passing
- * the daemon's bare wording through.
+ * Loading a session adopts it, so a 404 here means the daemon dropped it — a
+ * restart, or another surface deleted it. Reloading re-adopts one that is still
+ * saved; say so rather than passing the daemon's bare wording through.
  */
 function explain(err: unknown): string {
   if (err instanceof DaemonError && err.code === 'session_not_found') {
-    return 'This server is no longer holding that session — it was probably restarted. Reload it with /sessions.';
+    return 'This server is no longer holding that session — it was deleted, or the server restarted. Reload it with /sessions if it is still listed.';
   }
   return err instanceof Error ? err.message : String(err);
 }
@@ -658,6 +658,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     case 'deleteSession': {
       const { ok } = await api.deleteSession(effect.sessionId, workspace);
       await loadSessions(deps);
+      if (ok) dispatch({ type: 'sessionDeleted', sessionId: effect.sessionId });
       dispatch(ok
         ? { type: 'notice', message: `Deleted ${effect.sessionId}.` }
         : { type: 'failed', message: `Could not delete ${effect.sessionId}: no saved session was removed.` });

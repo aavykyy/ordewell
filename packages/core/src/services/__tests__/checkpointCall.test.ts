@@ -118,7 +118,7 @@ describe('an interrupt while a checkpoint call waits', () => {
     await vi.waitFor(() => expect(get().awaitingReason).toBe('checkpoint'));
     expect(await settledAs(next)).toBe('pending');
     orchestrator.approveCheckpoint('t1');
-    expect(await next).toBe('continue');
+    expect(await next).toBe('approved: the user said yes — continue');
   });
 
   it('withdraws it for a force send of a message queued earlier, which interrupts too', async () => {
@@ -218,7 +218,7 @@ describe('the question a checkpoint asks', () => {
 
 describe('an answer sent from outside the task view settles the open call', () => {
   it.each<[string, (o: Awaited<ReturnType<typeof asking>>['orchestrator']) => void, string]>([
-    ['approve', (o) => o.approveCheckpoint('t1'), 'continue'],
+    ['approve', (o) => o.approveCheckpoint('t1'), 'approved: the user said yes — continue'],
     ['reject with a reason', (o) => o.rejectCheckpoint('t1', 'not on production'), 'rejected: not on production'],
     ['reject with no reason', (o) => o.rejectCheckpoint('t1'), 'rejected: Checkpoint rejected by user'],
   ])('%s', async (_name, answer, text) => {

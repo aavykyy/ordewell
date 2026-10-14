@@ -59,7 +59,7 @@ export function buildSubagentSystemPrompt(): string {
 function readOnlyGuide(runnerModes: Record<RunnerId, RunnerModeInfo[]> | undefined, tools: boolean): string {
   const able = runnerModes ? readOnlyRunners(runnerModes) : [];
   return [
-    'Set "readOnly": true on an AI task that must not change any file: a review, an audit, an analysis whose result is a report. Leave it false or out on every other task. A read-only task\'s subtasks are read-only too unless one sets "readOnly": false.',
+    'Set "readOnly": true on an AI task that must not change any file: a review, an audit, an analysis whose result is a report. Never on a task that must run commands — tests, scripts, builds — nor on an ops task: a read-only mode refuses them, even when they change no file. Leave it false or out on every other task. A read-only task\'s subtasks are read-only too unless one sets "readOnly": false.',
     'You never choose a runner mode. Each task runs in its runner\'s mode for the user\'s autonomy level (Full or Guarded), or in the runner\'s read-only mode when "readOnly" is true.',
     ...(tools
       ? ['A read-only task must go to a runner list_runners marks "readOnly": true.']
@@ -165,6 +165,10 @@ const EXECUTION_TOOLS_SECTION = [
  */
 const ISOLATED_PARALLELISM_RULE =
   '- Each change task runs in its own git worktree, and its work is merged in afterwards, so tasks that edit the same files can still run in parallel. Never add a dependency just because two tasks touch the same file — keep dependencies for genuine logical ordering.';
+
+/** A task's copy of the workspace sits elsewhere, so an absolute path the planner researched points past it. */
+const ISOLATED_PATHS_RULE =
+  '- In a task\'s prompt, name every file by its path from the workspace root, never by an absolute path: each task works in its own copy of the workspace, and an absolute path into the workspace reaches the user\'s own checkout instead, where the earlier tasks\' work is not merged yet.';
 
 const OVERLAP_AVOIDANCE_RULE = '- For parallel tasks, specify different target files to avoid merge conflicts.';
 
@@ -340,7 +344,7 @@ function buildConversationBody(
     '- Independent slices should have NO dependencies — they run in parallel.',
     '- Only add dependencies when a slice truly depends on artifacts another slice creates.',
     SHARED_APPEND_FILE_RULE,
-    ...(variant.isolatedExecution ? [ISOLATED_PARALLELISM_RULE] : []),
+    ...(variant.isolatedExecution ? [ISOLATED_PARALLELISM_RULE, ISOLATED_PATHS_RULE] : []),
     ...repoGroupSection(variant.isolatedExecution),
     ...opsTaskSection(true),
     '',
@@ -495,6 +499,7 @@ function corePlannerPrompt(isolatedExecution: IsolatedExecution, tools = false):
   '- Prefer parallelism over serial chains. A plan with 3 independent slices running in parallel is better than 3 sequential tasks.',
   SHARED_APPEND_FILE_RULE,
   isolatedExecution ? ISOLATED_PARALLELISM_RULE : '- Slices that touch different areas of the codebase are naturally parallel.',
+  ...(isolatedExecution ? [ISOLATED_PATHS_RULE] : []),
   ...repoGroupSection(isolatedExecution),
   ...opsTaskSection(false),
   '',
