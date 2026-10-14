@@ -372,13 +372,29 @@ function approvalKeysLine(block: ApprovalBlock, cols: number): string {
  */
 export function checkpointCardLines(order: number, question: string, cols: number, approvalFirst: boolean): string[] {
   const room = Math.max(1, cols - 2);
-  const keys = approvalFirst
-    ? 'answer the tool request above first (ctrl-y / ctrl-g), then ctrl-y approves · ctrl-g rejects (composer text is the reason)'
-    : 'ctrl-y approve · ctrl-g reject (composer text is the reason)';
+  const first = approvalFirst ? wrap('answer the tool request above first (ctrl-y / ctrl-g), then:', room) : [];
   return [
     truncate(`${style.accent('◆')} ${style.bold(`Task ${order} asks`)}`, cols),
     ...wrap(sanitize(question).trim(), room).map((line) => `  ${line}`),
-    ...wrap(keys, room).map((line) => style.grey(`  ${line}`)),
+    ...first.map((line) => style.grey(`  ${line}`)),
+    ...CHECKPOINT_CHOICES.flatMap(([key, text]) => choiceLines(key, text, room)),
+  ];
+}
+
+const CHECKPOINT_CHOICES: ReadonlyArray<readonly [string, string]> = [
+  ['enter', 'reply: the task goes on with what you typed'],
+  ['ctrl-y', 'approve as is'],
+  ['ctrl-g', 'reject (with nothing typed, a plain no)'],
+];
+const CHOICE_KEY_WIDTH = 6;
+
+/** The key in the accent, then its meaning wrapped under itself, so a narrow pane never cuts either. */
+function choiceLines(key: string, text: string, room: number): string[] {
+  const hang = CHOICE_KEY_WIDTH + 2;
+  const [head = '', ...rest] = wrap(text, Math.max(1, room - hang));
+  return [
+    `  ${style.accent(style.bold(pad(key, CHOICE_KEY_WIDTH)))}  ${style.grey(head)}`,
+    ...rest.map((line) => `  ${' '.repeat(hang)}${style.grey(line)}`),
   ];
 }
 

@@ -712,8 +712,9 @@ queue, not out of it; and "lost".
 goes on: the `checkpoint` tool call. The task is `awaiting_user` with reason
 `checkpoint`, and its status carries the whole question (`checkpoint`).
 Answered with approve — which carries no note — or reject with a reason: the
-TUI task view's *checkpoint card* (`ctrl-y` / `ctrl-g`, composer text as the
-reason), `/checkpoint <id> approve|reject [reason]`, `ordewell checkpoint`,
+TUI task view's *checkpoint card* (`enter` replies with the composer text as
+the reason and the task goes on in the same session following it; `ctrl-y`
+approves; `ctrl-g` rejects, with nothing typed a plain no), `/checkpoint <id> approve|reject [reason]`, `ordewell checkpoint`,
 or the VS Code card. A runner approval waiting in the same task is answered
 first. The turn that asked it ending — an interrupt, a force send — withdraws
 it, and the task goes back to in progress.

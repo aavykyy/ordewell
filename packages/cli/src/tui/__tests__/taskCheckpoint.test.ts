@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { replayTaskLog, type TaskLogEvent } from '@ordewell/core';
 import { initialState, reduce, type Action } from '../reducer';
 import { render } from '../render';
-import { chatLayout, helpLayout } from '../layout';
+import { chatLayout, footerHints, helpLayout } from '../layout';
 import { inboundFor } from '../inbound';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { lastMessage } from './chat';
@@ -49,12 +49,22 @@ describe('the checkpoint card', () => {
     const lines = bodyAt(opened(), 80);
     const at = lines.indexOf('◆ Task 2 asks');
     expect(at).toBeGreaterThanOrEqual(0);
-    expect(lines.slice(at, at + 4)).toEqual([
+    expect(lines.slice(at, at + 6)).toEqual([
       '◆ Task 2 asks',
       '  Drop the users table?',
       '  It holds 40k rows and no backup exists, so this cannot be undone.',
-      '  ctrl-y approve · ctrl-g reject (composer text is the reason)',
+      '  enter   reply: the task goes on with what you typed',
+      '  ctrl-y  approve as is',
+      '  ctrl-g  reject (with nothing typed, a plain no)',
     ]);
+  });
+
+  it('paints the keys as the choices, in the accent and bold, ahead of grey text', () => {
+    const raw = chatLayout(opened(), 60, 80).lines;
+    const enter = raw.find((l) => strip(l).startsWith('  enter'));
+    expect(enter).toContain('\x1b[1m');
+    expect(enter).toMatch(/\x1b\[[0-9;]*menter/);
+    expect(raw.findIndex((l) => strip(l).startsWith('  enter'))).toBeLessThan(raw.findIndex((l) => strip(l).startsWith('  ctrl-y')));
   });
 
   it('wraps a long question at a narrow pane and never cuts a word of it', () => {
@@ -63,13 +73,13 @@ describe('the checkpoint card', () => {
     const text = lines.slice(lines.indexOf('◆ Task 2 asks')).replace(/\n\s*/g, ' ');
     for (const word of QUESTION.split(/\s+/)) expect(text).toContain(word);
     expect(text).not.toContain('…');
-    expect(text).toContain('ctrl-y approve');
+    for (const choice of ['enter', 'ctrl-y', 'ctrl-g', 'what you typed']) expect(text).toContain(choice);
   });
 
   it('keeps its keys in the pinned header, where a long question cannot push them out', () => {
     const header = chatLayout(opened(), 60, 200).header.map(strip);
     expect(header[0]).toContain('→ Task 2 · Migrate the schema · claude-code ·');
-    expect(header[1]).toContain('ctrl-y approve · ctrl-g reject (composer text is the reason) · ctrl-x stop runner');
+    expect(header[1]).toContain('enter reply · ctrl-y approve · ctrl-g reject · ctrl-x stop runner');
     expect(header[1]).not.toContain('ctrl-s send now');
   });
 
@@ -95,7 +105,7 @@ describe('the checkpoint card', () => {
 
   it('lists the keys in the help sheet', () => {
     const sheet = helpLayout(200, 160).lines.map(strip);
-    expect(sheet.some((l) => l.includes('at a checkpoint, ctrl-y approves and ctrl-g rejects'))).toBe(true);
+    expect(sheet.some((l) => l.includes('at a checkpoint, enter replies with what you typed, ctrl-y approves, ctrl-g rejects'))).toBe(true);
     expect(sheet.some((l) => l.includes('/checkpoint <id> approve|reject [reason]'))).toBe(true);
   });
 });
@@ -117,6 +127,33 @@ describe('answering from the task view', () => {
     expect(reduce(opened(), key('ctrl-g')).effects).toEqual([{ type: 'answerTaskCheckpoint', sessionId: 's1', taskId: 't1', answer: 'reject' }]);
   });
 
+  it('enter with text answers the checkpoint with it, and empties the composer', () => {
+    const { state, effects } = run('  keep the table, add a column  ', opened());
+    expect(effects).toEqual([{ type: 'answerTaskCheckpoint', sessionId: 's1', taskId: 't1', answer: 'reject', reason: 'keep the table, add a column' }]);
+    expect(state.editor.text).toBe('');
+    expect(state.editor.history.at(-1)).toBe('keep the table, add a column');
+  });
+
+  it('enter with an empty composer does nothing: no silent approval', () => {
+    for (const text of ['', '   ']) {
+      const { state, effects } = run(text, opened());
+      expect(effects).toEqual([]);
+      expect(state.conversation.blocks).toEqual(opened().conversation.blocks);
+    }
+  });
+
+  it('enter does not skip a tool request waiting ahead of the checkpoint', () => {
+    const { state, effects } = run('use Postgres', opened({}, log(asked('ap-1'))));
+    expect(effects).toEqual([]);
+    expect(state.editor.text).toBe('use Postgres');
+    expect(lastMessage(state)).toMatchObject({ role: 'system', text: expect.stringContaining('tool request') });
+  });
+
+  it('enter still sends a message to a task that only waits for input', () => {
+    const waiting = opened({ tasks: [task({ awaitingReason: 'input', checkpoint: undefined })] });
+    expect(run('go on', waiting).effects).toEqual([{ type: 'sendTaskMessage', sessionId: 's1', taskId: 't1', text: 'go on' }]);
+  });
+
   it('answers a waiting tool request first, and says so; then the checkpoint', () => {
     const both = opened({}, log(asked('ap-1')));
     expect(reduce(both, key('ctrl-y')).effects).toEqual([
@@ -127,7 +164,9 @@ describe('answering from the task view', () => {
     ]);
     const layout = chatLayout(both, 60, 200);
     expect(layout.header.map(strip)[1]).toContain('ctrl-y allow · ctrl-t allow for task · ctrl-g deny (composer text is the note) · then the checkpoint');
-    expect(layout.lines.map(strip).join('\n')).toContain('answer the tool request above first');
+    const card = layout.lines.map(strip).join('\n');
+    expect(card).toContain('answer the tool request above first');
+    expect(card).toContain('enter   reply');
 
     const settled = opened({}, log(asked('ap-1'), { type: 'approval_decided', approvalId: 'ap-1', decision: 'allow' }));
     expect(reduce(settled, key('ctrl-y')).effects).toEqual([{ type: 'answerTaskCheckpoint', sessionId: 's1', taskId: 't1', answer: 'approve' }]);
@@ -189,7 +228,7 @@ describe('the notice in the chat pane', () => {
 
   it('names the task and the first line of its question, and points at the view', () => {
     const state = reduce(initialState({ sessionId: 's1', tasks: [task()] }), asks()).state;
-    expect(lastMessage(state)).toMatchObject({ role: 'system', text: 'Task 2 asks: Drop the users table? — enter on it to answer' });
+    expect(lastMessage(state)).toMatchObject({ role: 'system', text: 'Task 2 asks: Drop the users table? — tab to the plan, select task 2 and press enter (or /open 2) to answer' });
   });
 
   it('arrives from the daemon\'s checkpoint message', () => {
@@ -198,6 +237,36 @@ describe('the notice in the chat pane', () => {
     const wire: unknown = { type: 'checkpoint', taskId: 't1', taskTitle: 'Migrate the schema', summary: QUESTION };
     receive(wire as WsEvent);
     expect(actions).toEqual([{ type: 'taskCheckpoint', taskId: 't1', title: 'Migrate the schema', summary: QUESTION, sessionId: 's1' }]);
+  });
+});
+
+describe('/open', () => {
+  const planned = (): TuiState => initialState({ sessionId: 's1', tasks: [task()] });
+
+  it('opens the waiting task\'s view from the planner chat, by number', () => {
+    const { state, effects } = run('/open 2', planned());
+    expect(effects).toEqual([{ type: 'openTaskLog', sessionId: 's1', taskId: 't1' }]);
+    expect(state.taskView?.taskId).toBe('t1');
+    expect(state.focus).toBe('chat');
+  });
+
+  it('asks which task, and says when there is none', () => {
+    expect(lastMessage(run('/open', planned()).state)?.text).toMatch(/Which task\?/);
+    expect(lastMessage(run('/open 9', planned()).state)?.text).toMatch(/No task matching "9"/);
+  });
+});
+
+describe('the composer at a checkpoint', () => {
+  it('leaves a runner command to the runner, not to the checkpoint', () => {
+    const commands = [{ name: 'compact', description: 'Free up context', kind: 'builtin' as const }];
+    const state = opened({}, { ...log(), view: replayTaskLog([{ type: 'turn_start', message: 'Do the task' }, { type: 'runner_loaded', commands, mcpServers: [] }]) });
+    expect(run('/compact', state).effects).toEqual([{ type: 'invokeTaskCommand', sessionId: 's1', taskId: 't1', name: 'compact', args: '' }]);
+  });
+
+  it('names the choices in the footer, with enter first', () => {
+    const hints = footerHints(opened());
+    expect(hints.slice(0, 4)).toEqual(['/help', 'enter reply', 'ctrl-y approve', 'ctrl-g reject']);
+    expect(footerHints(opened({}, log(asked('ap-1'))))).not.toContain('enter reply');
   });
 });
 

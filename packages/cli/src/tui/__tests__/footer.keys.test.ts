@@ -27,7 +27,7 @@ describe('plan footer — the keys that fit the selected task', () => {
     ['a running task during a run', { status: 'in_progress' }, { status: 'executing' }, ['enter log', 'c cancel', 'S stop']],
     ['a task waiting on an approval', { status: 'in_progress', awaitingApproval: 1 }, {}, ['enter log', 'c cancel']],
     ['a task waiting on input', { status: 'awaiting_user', awaitingReason: 'input' }, {}, ['enter log', 'm done', 's skip']],
-    ['a task at a checkpoint', { status: 'awaiting_user', awaitingReason: 'checkpoint' }, {}, ['enter log', 'm done', 's skip']],
+    ['a task at a checkpoint', { status: 'awaiting_user', awaitingReason: 'checkpoint' }, {}, ['enter answer', 'm done', 's skip']],
     [
       'a task paused on a usage limit',
       { status: 'awaiting_user', awaitingReason: 'usage-limit', resumeAt: '2999-01-01T00:00:00.000Z' },

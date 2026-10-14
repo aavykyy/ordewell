@@ -84,6 +84,11 @@ export function footerHints(state: TuiState): string[] {
   const taskSends = !!tv && tv.view.working && !!state.editor.text.trim() && !continuesTask(findTask(state.tasks, tv.taskId));
   const sendNowHint = planning || taskSends ? 'ctrl-s send now' : null;
   const stopRunnerHint = runnerStoppable(state) ? 'ctrl-x stop runner' : null;
+  // The same choices the card lists, kept in reach while the question scrolls
+  // away. A tool request waiting ahead answers first, and its card says how.
+  const checkpointHints = tv && waitingCheckpoint(findTask(state.tasks, tv.taskId)) && !waitingApproval(tv)
+    ? ['enter reply', 'ctrl-y approve', 'ctrl-g reject']
+    : [];
 
   if (state.focus === 'plan') {
     // `expandedTaskId` alone only means subtask rows are revealed — the editor
@@ -103,6 +108,7 @@ export function footerHints(state: TuiState): string[] {
     : [];
   return [
     '/help',
+    ...checkpointHints,
     ...(stopRunnerHint ? [stopRunnerHint] : []),
     'tab plan',
     ...detailHint,
@@ -232,7 +238,7 @@ function taskHeaderLines(state: TuiState, tv: NonNullable<TuiState['taskView']>,
   const hint = approval
     ? ['ctrl-y allow', ...(approval.allowForTask ? ['ctrl-t allow for task'] : []), 'ctrl-g deny (composer text is the note)']
     : waitingCheckpoint(task)
-      ? ['ctrl-y approve', 'ctrl-g reject (composer text is the reason)', 'ctrl-x stop runner']
+      ? ['enter reply', 'ctrl-y approve', 'ctrl-g reject', 'ctrl-x stop runner']
       : task && resumeLabel(task)
         ? ['ctrl-x don\'t resume']
         : [...(runnerStoppable(state) ? ['ctrl-x stop runner'] : []), 'ctrl-r remove queued', 'ctrl-s send now'];
@@ -1068,7 +1074,7 @@ function commandSheetBody(cols: number): string[] {
     style.grey('  ctrl-n/ctrl-p pick a pending message (the newest until you do) · ctrl-r removes a queued one'),
     style.grey('  ctrl-x stops the runner\'s running turn, and it then waits for your next message — on a task paused on a usage limit, it keeps it from resuming'),
     style.grey('  ctrl-y allows a tool request (its keys sit under it) · ctrl-t allows it for the task · ctrl-g denies it, with the composer text as the note'),
-    style.grey('  at a checkpoint, ctrl-y approves and ctrl-g rejects, with the composer text as the reason · /checkpoint <id> approve|reject [reason] from anywhere'),
+    style.grey('  at a checkpoint, enter replies with what you typed, ctrl-y approves, ctrl-g rejects (the text is its reason) · /checkpoint <id> approve|reject [reason] from anywhere'),
     style.grey('  alt←/→ changes attempt · esc returns'),
   );
   return body;

@@ -10,7 +10,7 @@ import { DEFAULT_EFFORT, picker, pickerItemsFor, plannerEffortItems, providerErr
 import { plannerStepper } from './plannerStepper';
 import { openStepper } from './stepper';
 import { taskActionEffect } from './planPane';
-import { answerCheckpoint, continueTaskStep } from './taskView';
+import { answerCheckpoint, continueTaskStep, openTaskView } from './taskView';
 import {
   addTask, confirmForceStartPastGate, openTaskDepsPicker, taskCommand, taskOpsCommand, taskEffortCommand, taskModeCommand, taskModelCommand, taskRunnerCommand, taskSkillsCommand,
 } from './taskEdits';
@@ -121,6 +121,8 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
         // The daemon owns the rule and says why it refuses, so nothing is pre-judged here.
         return continueTaskStep(state, sessionId, taskId, text);
       });
+    case 'open':
+      return taskCommand(state, args[0], (sessionId, taskId) => openTaskView(state, sessionId, taskId));
     case 'checkpoint':
       return taskCommand(state, args[0], (sessionId, taskId) => {
         const answer = args[1]?.toLowerCase();

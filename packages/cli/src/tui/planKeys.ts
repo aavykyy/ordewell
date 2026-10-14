@@ -25,7 +25,12 @@ export const PLAN_KEYS = {
   move: { keys: 'up / down', meaning: 'move between tasks', group: 'Navigation' },
   scroll: { keys: 'pgup / pgdn', meaning: 'scroll the plan', group: 'Navigation' },
   expand: { keys: '→', meaning: "reveal a task's subtasks, then edit its prompt", group: 'Navigation', hint: '→ expand' },
-  log: { keys: 'enter', meaning: "open the task's log and message its runner", group: 'Navigation', hint: 'enter log' },
+  log: {
+    keys: 'enter',
+    meaning: "open the task's log and message its runner — or, at a checkpoint, answer it",
+    group: 'Navigation',
+    hint: (task) => (task?.status === 'awaiting_user' && task.awaitingReason === 'checkpoint' ? 'enter answer' : 'enter log'),
+  },
   back: { keys: 'esc', meaning: "collapse the task, or leave a task's log for the plan", group: 'Navigation' },
 
   runner: { keys: 'R', meaning: "pick the task's runner", group: 'Assign' },

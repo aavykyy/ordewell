@@ -142,7 +142,7 @@ describe('the notice a request raises', () => {
   it('speaks in the planner chat, where the task view is not open', () => {
     const state = initialState({ sessionId: 's1', tasks: [task()] });
     const next = reduce(state, arrived([asked('ap-1')])).state;
-    expect(next.conversation.blocks.at(-1)).toMatchObject({ text: 'Task 2 waits for approval: Bash(npm test) — enter on it, then ctrl-y to allow or ctrl-g to deny' });
+    expect(next.conversation.blocks.at(-1)).toMatchObject({ text: 'Task 2 waits for approval: Bash(npm test) — tab to the plan, select task 2 and press enter (or /open 2), then ctrl-y allows or ctrl-g denies' });
   });
 
   it('says nothing about a request the runner already answered itself', () => {

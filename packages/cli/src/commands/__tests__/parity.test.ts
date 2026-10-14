@@ -18,6 +18,7 @@ const TUI_ONLY: Record<string, string> = {
   load: '`ordewell sessions load <id>`',
   delete: '`ordewell sessions delete <id>`',
   settings: 'a stepped panel over `ordewell auto`, `supervisor`, `automerge`, `autorun` and `parallel`, each a subcommand already',
+  open: 'it opens a task\'s view in the full-screen terminal; a shell has no view to switch to, and `ordewell checkpoint` answers from one',
   mouse: 'it configures the full-screen terminal, which only the TUI holds (ORDEWELL_TUI_MOUSE persists it)',
 };
 
