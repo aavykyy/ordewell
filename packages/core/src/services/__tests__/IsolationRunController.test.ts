@@ -121,6 +121,21 @@ describe('IsolationRunController', () => {
 
       expect(vi.mocked(listener.notice).mock.calls.filter(([, m]) => m.includes('.env'))).toHaveLength(1);
     });
+
+    it('warns once per run for each repository whose setup command failed, naming it and the cause', async () => {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.setupFailed = [{ repo: 'site', detail: 'Command failed: npm ci\nnpm error code EUSAGE\nnpm error more' }];
+      const { runs, listener } = setup(isolation);
+      await runs.decide(async () => undefined);
+
+      await runs.attemptCwd(task('t1', 1), 'fresh');
+      await runs.attemptCwd(task('t2', 2), 'fresh');
+
+      const warnings = vi.mocked(listener.notice).mock.calls.filter(([, m]) => m.includes('setup command'));
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0][0]).toBe('warn');
+      expect(warnings[0][1]).toMatch(/failed in repository `site`, .*default links instead: npm error code EUSAGE$/);
+    });
   });
 
   describe('blocked run', () => {

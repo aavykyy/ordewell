@@ -998,7 +998,8 @@ recreated, so a workspace package resolves to the worktree's code rather than
 the main checkout's (ADR-0013). Under ADR-0014 a task has one worktree per repo of the group, gathered in
 its *task workspace*; each is bootstrapped from its own repo, with the
 `worktreeLinks` matches linked beside the defaults, and `worktreeSetupCommand`
-runs once per repo with `ORDEWELL_REPO` and `ORDEWELL_MAIN_REPO` set.
+runs once per repo with `ORDEWELL_REPO` and `ORDEWELL_MAIN_REPO` set; a repo
+where it fails gets the default links instead, with a warning.
 *Avoid:* "workspace" for a worktree — the workspace is the user's checkout.
 
 **Repo group** — the git repositories isolated together for one workspace

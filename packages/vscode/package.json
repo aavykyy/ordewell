@@ -308,7 +308,7 @@
         "ordewell.worktreeSetupCommand": {
           "type": "string",
           "default": "",
-          "description": "Command run in each new task worktree instead of symlinking node_modules, .env files and agent config from the main worktree."
+          "description": "Command run in each new task worktree instead of symlinking node_modules, .env files and agent config from the main worktree. It runs in every repository of a multi-repo folder; where it fails, that repository gets the default links instead, with a warning."
         },
         "ordewell.workspaceRepos": {
           "type": "array",

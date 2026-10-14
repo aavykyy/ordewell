@@ -16,6 +16,7 @@ import type {
   PreparedTask,
   IWorktreeIsolation,
   RepairEvidence,
+  SetupFailure,
   TreeSnapshot,
 } from './interfaces/IWorktreeIsolation';
 import { DEFAULT_RUNNERS, type Task } from './models/Task';
@@ -292,6 +293,7 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
   shared: string[] = [];
   sharedRepos: string[] = [];
   copied: string[] = [];
+  setupFailed: SetupFailure[] = [];
   /** Set to make `startRun` throw, as git does when no repo of the group can be isolated. */
   startRunError: Error | null = null;
   /** Set to make `discard` / `sweep` throw after logging the call. */
@@ -370,7 +372,7 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
       taskId: task.id, order: task.order, title: task.title, branch, workspace: cwd, status: 'active',
       repos: Object.fromEntries(run.repos.map((r) => [r.path, { worktree: r.path === SELF_REPO ? cwd : `${cwd}/${r.path}`, linked: [] }])),
     };
-    return { cwd, branch, copied: [...this.copied] };
+    return { cwd, branch, copied: [...this.copied], ...(this.setupFailed.length > 0 ? { setupFailed: [...this.setupFailed] } : {}) };
   }
 
   /** Like git: the same cwd, each changed repo's tip recorded, the repair counted. */

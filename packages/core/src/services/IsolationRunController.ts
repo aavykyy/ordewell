@@ -17,6 +17,7 @@ import type {
   PreservedWork,
   RepairEvidence,
   RepoGroupLayout,
+  SetupFailure,
   TaskIsolation,
   TreeSnapshot,
 } from '../interfaces/IWorktreeIsolation';
@@ -153,6 +154,7 @@ export class IsolationRunController {
   private run: IsolationRun | null = null;
   /** Copied paths already reported for the current run: every task gets the same copies. */
   private reportedCopies = new Set<string>();
+  private reportedSetupFailures = new Set<string>();
   /**
    * How the open run executes; null while no run is open, `undecided` until
    * its first change task asks. A run is one Execute-Plan or one manual task
@@ -361,8 +363,9 @@ export class IsolationRunController {
   }
 
   private async prepareCwd(task: Task, run: IsolationRun, intent: 'fresh' | 'continuation'): Promise<AttemptWorkspace> {
-    const { cwd, copied, preserved, continuation: outcome } = await this.isolation.prepare(task, run, intent);
+    const { cwd, copied, setupFailed, preserved, continuation: outcome } = await this.isolation.prepare(task, run, intent);
     this.reportCopies(copied);
+    this.reportSetupFailures(setupFailed ?? []);
     if (preserved) this.report({ preserved, refused: [] });
     const continuationMessage = outcome === 'fallback'
       ? 'Your previous changes conflicted with the integration tip, so this working tree starts at the integration tip. '
@@ -740,6 +743,7 @@ export class IsolationRunController {
     this.run = run;
     this.resolvers = {};
     this.reportedCopies.clear();
+    this.reportedSetupFailures.clear();
     this.listener.changed();
     const shared = sharedPathsNotice(run);
     if (shared) this.tell('info', shared);
@@ -755,6 +759,20 @@ export class IsolationRunController {
       'warn',
       `${fresh.join(', ')} could not be linked into task workspaces (a hard link is impossible there), so each task gets ${one ? 'a copy' : 'copies'}: edits to ${one ? 'it' : 'them'} stay in the task.`,
     );
+  }
+
+  private reportSetupFailures(failures: SetupFailure[]): void {
+    for (const { repo, detail } of failures) {
+      if (this.reportedSetupFailures.has(repo)) continue;
+      this.reportedSetupFailures.add(repo);
+      const where = repo === SELF_REPO ? 'this repository' : `repository \`${repo}\``;
+      // exec's message opens with "Command failed: <the command>"; the line after it is the cause.
+      const cause = detail.split('\n').map((line) => line.trim()).filter((line) => line && !line.startsWith('Command failed:'))[0];
+      this.tell(
+        'warn',
+        `The worktree setup command (ordewell.worktreeSetupCommand or ORDEWELL_WORKTREE_SETUP) failed in ${where}, so its task worktrees use the default links instead${cause ? `: ${cause}` : ''}`,
+      );
+    }
   }
 
   private tell(level: IsolationNoticeLevel, message: string): void {

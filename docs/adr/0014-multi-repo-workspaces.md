@@ -143,6 +143,14 @@ to that repo's worktree and `ORDEWELL_REPO=<relative path>`,
 artifacts: `worktreeLinks` still applies, linked before the command runs so the
 command can rely on it.
 
+The setting is not scoped to a repo: a User-level VS Code setting or an
+exported variable follows the user into every workspace, and here it runs in
+every repo of the group, including ones it was never written for. So a command
+that fails does not fail the task. That repo's worktree is reset and cleaned of
+whatever the command left half-done, gets the default artifacts instead, and
+the user is warned once per run, naming the repo and the first line of the
+error. A per-repo setup command would be the structural fix.
+
 ### Dirty trees
 
 If any repo in the group has uncommitted changes to tracked files, the run's

@@ -396,6 +396,13 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **A setup command that doesn't fit a repository no longer stops every task.**
+  `worktreeSetupCommand` (or `ORDEWELL_WORKTREE_SETUP`) set in your User
+  settings or shell follows you into every workspace, and in a multi-repo
+  folder it runs in each repository. When it fails in one, that repository's
+  task worktrees now get the default links instead, from a clean checkout, and
+  Ordewell warns once per run naming the repository and the error. Before, no
+  task could start.
 - **A task's completion rule survives its runner compacting its own context.**
   How a task ends — `task_complete` with its full report — was only in the
   first message, which Claude Code, Codex and OpenCode may summarise or cut

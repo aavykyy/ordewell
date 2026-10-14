@@ -22,6 +22,7 @@ import type {
   PreparedTask,
   PreservedWork,
   RepairEvidence,
+  SetupFailure,
   TreeSnapshot,
 } from '../interfaces/IWorktreeIsolation';
 import type { Task } from '../models/Task';
@@ -31,7 +32,7 @@ import { sanitizeSlug } from '../utils/prdStore';
 import { absorbRemoval, handoffOf, integrationBranchFor, noRemoval, repoRootOf, SELF_REPO } from './isolationRecord';
 import { defaultExecFile, git, tryGit, type GitExecFn, type GitInvoker, type GitResult } from './gitExec';
 import { IsolationLocks } from './isolationLocks';
-import { bootstrap, installDirs, isEnvFile, lexists, LINKED_ARTIFACTS, listDir } from './worktreeBootstrap';
+import { bootstrap, installDirs, isEnvFile, lexists, LINKED_ARTIFACTS, listDir, SetupCommandError } from './worktreeBootstrap';
 import { linkPath } from './worktreeLink';
 import { childDirs, groupPaths, hasGitEntry } from './repoGroup';
 
@@ -385,6 +386,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const record: IsolationTaskRecord = { taskId: task.id, order: task.order, title: task.title, branch, workspace: dir, status: 'active', repos: {} };
       let cwd = dir;
       const copied: string[] = [];
+      const setupFailed: SetupFailure[] = [];
       let continuation: PreparedTask['continuation'];
       try {
         for (const repo of run.repos) {
@@ -410,12 +412,23 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
           const entry = record.repos[repo.path];
           const inRepo = await this.inWorkspacePlace(repo, entry.worktree);
           if (repo.path === SELF_REPO) cwd = inRepo;
-          const boot = await bootstrap(repo, inRepo, {
-            setupCommand: this.deps.config.worktreeSetupCommand,
-            links: this.deps.config.worktreeLinks,
-            platform: this.platform,
-            resolvePath: this.resolvePath,
-          });
+          const options = { links: this.deps.config.worktreeLinks, platform: this.platform, resolvePath: this.resolvePath };
+          let boot;
+          try {
+            boot = await bootstrap(repo, inRepo, { ...options, setupCommand: this.deps.config.worktreeSetupCommand });
+          } catch (err) {
+            if (!(err instanceof SetupCommandError)) throw err;
+            // The setting is not scoped to one repository: a user-level VS Code
+            // setting or an exported variable follows the user into every
+            // workspace, and a group runs it in every repo. A command that does
+            // not fit this repo must not stop the run, so the repo gets the
+            // default links instead, from a checkout wiped of whatever the
+            // command left half-done.
+            await this.git(entry.worktree, ['reset', '-q', '--hard']);
+            await this.git(entry.worktree, ['clean', '-ffdxq']);
+            boot = await bootstrap(repo, inRepo, options);
+            setupFailed.push({ repo: repo.path, detail: err.detail });
+          }
           entry.linked = boot.linked;
           copied.push(...boot.copied.map((name) => path.posix.join(repo.path, name)));
         }
@@ -443,7 +456,12 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
         throw err;
       }
       run.tasks[task.id] = record;
-      return { cwd, branch, copied, ...(preserved.length > 0 ? { preserved } : {}), ...(continuation ? { continuation } : {}) };
+      return {
+        cwd, branch, copied,
+        ...(setupFailed.length > 0 ? { setupFailed } : {}),
+        ...(preserved.length > 0 ? { preserved } : {}),
+        ...(continuation ? { continuation } : {}),
+      };
     });
     // A continuation must not take its group of integration tips halfway through a landing.
     return intent === 'continuation' ? this.inTurn(prepare) : prepare();

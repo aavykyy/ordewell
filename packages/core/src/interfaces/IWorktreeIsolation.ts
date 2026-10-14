@@ -304,6 +304,12 @@ export type RepairEvidence =
   | { ok: true }
   | { ok: false; reason: 'not-merged' | 'conflict-markers' | 'failed'; repo: string; files?: string[] };
 
+export interface SetupFailure {
+  /** Relative to the task workspace; `.` for a lone repository. */
+  repo: string;
+  detail: string;
+}
+
 export interface PreparedTask {
   cwd: string;
   branch: string;
@@ -313,6 +319,8 @@ export interface PreparedTask {
    * stay in the task, so the user is told.
    */
   copied: string[];
+  /** Repos whose setup command failed, so they got the default links instead; absent when none did. */
+  setupFailed?: SetupFailure[];
   /** What the attempt this one replaces left unlanded, kept on a branch before its worktree went; absent when nothing was. */
   preserved?: PreservedWork[];
   continuation?: 'restored' | 'fallback';
