@@ -82,6 +82,7 @@ export function footerHints(state: TuiState): string[] {
   const tv = state.taskView;
   const taskSends = !!tv && tv.view.working && !!state.editor.text.trim() && !continuesTask(findTask(state.tasks, tv.taskId));
   const sendNowHint = planning || taskSends ? 'ctrl-s send now' : null;
+  const stopRunnerHint = runnerStoppable(state) ? 'ctrl-x stop runner' : null;
 
   if (state.focus === 'plan') {
     // `expandedTaskId` alone only means subtask rows are revealed — the editor
@@ -100,7 +101,9 @@ export function footerHints(state: TuiState): string[] {
     ? [state.detailAll ? 'ctrl-o collapse all' : 'ctrl-o expand all']
     : [];
   return [
-    '/help', 'tab plan',
+    '/help',
+    ...(stopRunnerHint ? [stopRunnerHint] : []),
+    'tab plan',
     ...detailHint,
     ...(escHint ? [escHint] : []),
     ...(sendNowHint ? [sendNowHint] : []),
@@ -228,10 +231,10 @@ function taskHeaderLines(state: TuiState, tv: NonNullable<TuiState['taskView']>,
   const hint = approval
     ? ['ctrl-y allow', ...(approval.allowForTask ? ['ctrl-t allow for task'] : []), 'ctrl-g deny (composer text is the note)']
     : waitingCheckpoint(task)
-      ? ['ctrl-y approve', 'ctrl-g reject (composer text is the reason)', 'ctrl-x interrupt']
+      ? ['ctrl-y approve', 'ctrl-g reject (composer text is the reason)', 'ctrl-x stop runner']
       : task && resumeLabel(task)
         ? ['ctrl-x don\'t resume']
-        : ['ctrl-r remove queued', 'ctrl-x interrupt', 'ctrl-s send now'];
+        : [...(runnerStoppable(state) ? ['ctrl-x stop runner'] : []), 'ctrl-r remove queued', 'ctrl-s send now'];
   if (approval && waitingCheckpoint(task)) hint.push('then the checkpoint');
   const index = tv.attempts.indexOf(tv.attempt);
   if (tv.attempts.length > 1) hint.push(`alt←/→ attempt ${index >= 0 ? index + 1 : 1}/${tv.attempts.length}`);
@@ -259,6 +262,18 @@ export function stopHint(state: TuiState): string {
  */
 export const DOT_TICKS = 4;
 export const SPINNER_CYCLE = 40;
+
+/**
+ * Whether ctrl-x in the open task view stops a runner that is working: the
+ * `Working…` condition, minus a runner request waiting for an answer, which
+ * has its own keys. A paused or finished task has no turn to stop.
+ */
+export function runnerStoppable(state: TuiState): boolean {
+  const tv = state.taskView;
+  if (!tv || !chatActivity(state)?.busy) return false;
+  const task = findTask(state.tasks, tv.taskId);
+  return !task?.awaitingApproval && !waitingApproval(tv);
+}
 
 /** What the status row says about the selected chat: `busy` is the one that animates. */
 export interface ChatActivity {
@@ -1049,7 +1064,8 @@ function commandSheetBody(cols: number): string[] {
     '',
     style.bold('In a task view (enter on a task)'),
     style.grey('  ctrl-s sends now: interrupts the running step, then delivers the composer text — or, with it empty, the highlighted pending message'),
-    style.grey('  ctrl-n/ctrl-p pick a pending message (the newest until you do) · ctrl-r removes a queued one · ctrl-x interrupts'),
+    style.grey('  ctrl-n/ctrl-p pick a pending message (the newest until you do) · ctrl-r removes a queued one'),
+    style.grey('  ctrl-x stops the runner\'s running turn, and it then waits for your next message — on a task paused on a usage limit, it keeps it from resuming'),
     style.grey('  ctrl-y allows a tool request (its keys sit under it) · ctrl-t allows it for the task · ctrl-g denies it, with the composer text as the note'),
     style.grey('  at a checkpoint, ctrl-y approves and ctrl-g rejects, with the composer text as the reason · /checkpoint <id> approve|reject [reason] from anywhere'),
     style.grey('  alt←/→ changes attempt · esc returns'),

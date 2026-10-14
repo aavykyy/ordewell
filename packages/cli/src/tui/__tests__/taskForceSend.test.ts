@@ -114,7 +114,7 @@ describe('what the task view shows for force send', () => {
 
   it('names ctrl-s in the header next to interrupt', () => {
     const out = plain(opened());
-    expect(out).toContain('ctrl-x interrupt · ctrl-s send now');
+    expect(out).toContain('ctrl-x stop runner · ctrl-r remove queued · ctrl-s send now');
   });
 
   it('puts the send-now hint on the newest pending message only, when none was picked', () => {
@@ -146,7 +146,8 @@ describe('what the task view shows for force send', () => {
   it('lists ctrl-s in the help sheet, each task-view line whole', () => {
     const sheet = helpLayout(200, 160).lines.map((l) => l.replace(/\x1b\[[0-9;]*m/g, '')); // eslint-disable-line no-control-regex
     expect(sheet).toContain('  ctrl-s sends now: interrupts the running step, then delivers the composer text — or, with it empty, the highlighted pending message');
-    expect(sheet.some((l) => l.includes('ctrl-r removes a queued one · ctrl-x interrupts'))).toBe(true);
+    expect(sheet.some((l) => l.includes('ctrl-r removes a queued one'))).toBe(true);
+    expect(sheet.some((l) => l.includes('ctrl-x stops the runner\'s running turn, and it then waits for your next message'))).toBe(true);
   });
 });
 

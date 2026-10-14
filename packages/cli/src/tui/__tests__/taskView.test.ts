@@ -252,7 +252,7 @@ describe('the task view draws as a runner, not the planner', () => {
     // "working" is the header's word only while a turn is live.
     expect(out).toContain('claude-code · in_progress');
     expect(out).toContain('ctrl-r remove queued');
-    expect(out).toContain('ctrl-x interrupt');
+    expect(out).toContain('ctrl-x stop runner');
   });
 
   it('says what an awaiting task waits on', () => {

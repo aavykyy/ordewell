@@ -69,15 +69,18 @@ describe('the checkpoint card', () => {
   it('keeps its keys in the pinned header, where a long question cannot push them out', () => {
     const header = chatLayout(opened(), 60, 200).header.map(strip);
     expect(header[0]).toContain('→ Task 2 · Migrate the schema · claude-code ·');
-    expect(header[1]).toContain('ctrl-y approve · ctrl-g reject (composer text is the reason) · ctrl-x interrupt');
+    expect(header[1]).toContain('ctrl-y approve · ctrl-g reject (composer text is the reason) · ctrl-x stop runner');
     expect(header[1]).not.toContain('ctrl-s send now');
   });
 
   it('shows nothing for a task that waits for input, or has left the checkpoint', () => {
-    for (const task_ of [task({ awaitingReason: 'input', checkpoint: undefined }), task({ status: 'in_progress', awaitingReason: undefined, checkpoint: undefined })]) {
+    for (const [task_, keys] of [
+      [task({ awaitingReason: 'input', checkpoint: undefined }), 'ctrl-r remove queued · ctrl-s send now'],
+      [task({ status: 'in_progress', awaitingReason: undefined, checkpoint: undefined }), 'ctrl-x stop runner · ctrl-r remove queued · ctrl-s send now'],
+    ] as const) {
       const layout = chatLayout(opened({ tasks: [task_] }), 60, 200);
       expect(layout.lines.join('\n')).not.toContain('asks');
-      expect(layout.header[1]).toContain('ctrl-x interrupt · ctrl-s send now');
+      expect(layout.header[1]).toContain(keys);
     }
   });
 
