@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { execFileSync } from 'child_process';
 import { describe, it, expect, vi } from 'vitest';
 import { StructuredRunner } from '../StructuredRunner';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
@@ -23,6 +24,7 @@ import { createTask, type Verdict } from '../../models/Task';
  */
 
 const live = (process.env.ORDEWELL_LIVE_AGENTS ?? '').split(',').map((s) => s.trim()).includes('opencode');
+const v2 = live && /(?:^|\s)v?2\./.test(execFileSync('opencode', ['--version'], { encoding: 'utf8' }));
 const model = process.env.ORDEWELL_LIVE_MODEL ?? 'opencode-go/deepseek-v4.1-flash';
 const TIMEOUT_MS = 180_000;
 
@@ -115,7 +117,7 @@ describe.runIf(live)('structured transport — OpenCode live smoke', () => {
     }
   }, TIMEOUT_MS);
 
-  it('hands a message sent during a command to the running turn, which acts on it before the turn ends (ADR-0023)', async () => {
+  it.runIf(!v2)('hands a message sent during a command to the running turn, which acts on it before the turn ends (ADR-0023, 1.x)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-oc-'));
     const { runner, spawn } = harness();
     try {
@@ -139,6 +141,35 @@ describe.runIf(live)('structured transport — OpenCode live smoke', () => {
       expect(touched, session.getOutput()).toBeGreaterThan(delivered);
       expect(touched).toBeLessThan(at((e) => e.type === 'turn_end'));
       expect(existsSync(join(dir, 'steered.txt'))).toBe(true);
+      expect(session.getOutput()).toContain('PINEAPPLE');
+      expect(session.queued()).toEqual([]);
+    } finally {
+      runner.stopAll();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
+  it.runIf(v2)('delivers a message queued during a command in the next turn without waiting for input (ADR-0023, 2.x)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-oc-'));
+    const { runner, spawn } = harness();
+    try {
+      const { session, turns, events } = await spawn('oc-queue', dir,
+        'Use the shell tool to run `sleep 20 && echo step1done`. Then reply with one short sentence saying what you ran.');
+      await vi.waitFor(() => expect(events.some((e) => e.type === 'tool_call')).toBe(true), { timeout: 60_000, interval: 250 });
+      await new Promise<void>((resolve) => setTimeout(resolve, 4000));
+
+      const id = session.sendMessage('Use the shell tool to run `touch queued.txt`. Then reply with the word PINEAPPLE.');
+      await vi.waitFor(() => expect(session.queued()).toContainEqual({ id, text: 'Use the shell tool to run `touch queued.txt`. Then reply with the word PINEAPPLE.' }));
+      const states: string[] = [];
+      session.onTurnEnd(() => states.push(session.turnState()));
+      while (turns.ends.length < 2) await turns.next();
+
+      expect(turns.ends, session.getOutput()).toEqual(['completed', 'completed']);
+      expect(states).toEqual(['working', 'idle']);
+      expect(events.filter((e) => e.type === 'turn_start')).toHaveLength(2);
+      expect(events.filter((e) => e.type === 'turn_start').at(-1)).toMatchObject({ messageId: id });
+      expect(events.filter((e) => e.type === 'message_handed_over')).toEqual([]);
+      expect(existsSync(join(dir, 'queued.txt'))).toBe(true);
       expect(session.getOutput()).toContain('PINEAPPLE');
       expect(session.queued()).toEqual([]);
     } finally {
