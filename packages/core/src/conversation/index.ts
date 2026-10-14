@@ -19,3 +19,5 @@ export { hasHiddenDetail } from './detail';
 export { taskStartedNotice } from './notices';
 export { skillTokens, loadedSkillTokens } from './skillTokens';
 export type { SkillToken } from './skillTokens';
+export { markdownHtml, markdownTokens } from './markdown';
+export type { MarkdownToken } from './markdown';

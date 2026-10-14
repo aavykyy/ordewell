@@ -218,8 +218,100 @@ body {
   border: 1px solid var(--border-subtle);
 }
 
+/* The content is markdown-it's HTML (#82): the newline it writes between
+   blocks must not draw as a blank line, so only a <pre> keeps whitespace. */
 .chat-msg-planner .chat-msg-content {
   color: var(--text-primary);
+  white-space: normal;
+}
+
+.chat-msg-planner .chat-msg-content :is(p, ul, ol, pre, blockquote, .md-table) {
+  margin: 0 0 6px;
+}
+
+.chat-msg-planner .chat-msg-content > :first-child {
+  margin-top: 0;
+}
+
+.chat-msg-planner .chat-msg-content > :last-child,
+.chat-msg-planner .chat-msg-content :is(li, blockquote) > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-msg-planner .chat-msg-content :is(h1, h2, h3, h4, h5, h6) {
+  margin: 12px 0 4px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.chat-msg-planner .chat-msg-content h1 { font-size: 16px; }
+.chat-msg-planner .chat-msg-content h2 { font-size: 15px; }
+.chat-msg-planner .chat-msg-content h3 { font-size: 14px; }
+.chat-msg-planner .chat-msg-content :is(h4, h5, h6) { font-size: 13px; }
+.chat-msg-planner .chat-msg-content :is(h5, h6) { color: var(--text-secondary); }
+
+.chat-msg-planner .chat-msg-content :is(ul, ol) {
+  padding-left: 20px;
+}
+
+.chat-msg-planner .chat-msg-content li > :is(ul, ol) {
+  margin: 2px 0 0;
+}
+
+.chat-msg-planner .chat-msg-content li + li {
+  margin-top: 2px;
+}
+
+.chat-msg-planner .chat-msg-content pre {
+  padding: 6px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  white-space: pre;
+  word-break: normal;
+}
+
+.chat-msg-planner .chat-msg-content pre code {
+  padding: 0;
+  background: none;
+  border-radius: 0;
+}
+
+.chat-msg-planner .chat-msg-content blockquote {
+  padding-left: 10px;
+  border-left: 3px solid var(--border-color);
+  color: var(--text-secondary);
+}
+
+.chat-msg-planner .chat-msg-content hr {
+  margin: 10px 0;
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* A wide table scrolls sideways in core's .md-table box at its natural width;
+   only a long cell wraps, at a cap that keeps a row readable. */
+.chat-msg-planner .chat-msg-content .md-table {
+  overflow-x: auto;
+}
+
+.chat-msg-planner .chat-msg-content table {
+  width: max-content;
+  border-collapse: collapse;
+}
+
+.chat-msg-planner .chat-msg-content :is(th, td) {
+  max-width: 32ch;
+  padding: 3px 8px;
+  border: 1px solid var(--border-subtle);
+  text-align: left;
+  vertical-align: top;
+}
+
+.chat-msg-planner .chat-msg-content th {
+  background: var(--bg-tertiary);
+  font-weight: 600;
 }
 
 .chat-msg-planner .chat-msg-content code {
