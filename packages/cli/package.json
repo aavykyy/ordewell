@@ -45,6 +45,8 @@
     "lint": "eslint src --ext .ts",
     "watch": "tsup src/main.ts --watch",
     "test": "vitest run",
+    "test:quick": "vitest run --exclude '**/*.e2e.test.ts' --exclude '**/node_modules/**'",
+    "test:changed": "vitest run --changed --passWithNoTests --exclude '**/*.e2e.test.ts' --exclude '**/node_modules/**'",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit"
   },

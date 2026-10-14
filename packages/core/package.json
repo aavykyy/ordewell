@@ -77,6 +77,8 @@
     "prepublishOnly": "npm run build",
     "watch": "tsup src/index.ts --watch --sourcemap",
     "test": "vitest run",
+    "test:quick": "vitest run --exclude '**/*.e2e.test.ts' --exclude '**/GitWorktreeIsolation.test.ts' --exclude '**/node_modules/**'",
+    "test:changed": "vitest run --changed --passWithNoTests --exclude '**/*.e2e.test.ts' --exclude '**/GitWorktreeIsolation.test.ts' --exclude '**/node_modules/**'",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit"
