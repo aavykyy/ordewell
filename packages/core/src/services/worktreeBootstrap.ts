@@ -127,6 +127,13 @@ export async function bootstrap(repo: IsolationRepo, cwd: string, opts: Bootstra
   return { linked, copied };
 }
 
+/** The setup command failed; the worktree may hold whatever it left half-done. */
+export class SetupCommandError extends Error {
+  constructor(readonly detail: string) {
+    super(`Worktree setup command failed: ${detail}`);
+  }
+}
+
 async function runSetup(command: string, repo: IsolationRepo, cwd: string, resolvePath: () => Promise<string>): Promise<void> {
   const env = withPath(cleanEnv(), await resolvePath(), {
     ORDEWELL_REPO: repo.path,
@@ -136,7 +143,6 @@ async function runSetup(command: string, repo: IsolationRepo, cwd: string, resol
   try {
     await execAsync(command, { cwd, env, timeout: SETUP_TIMEOUT_MS, maxBuffer: MAX_BUFFER, windowsHide: true });
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    throw new Error(`Worktree setup command failed: ${detail}`);
+    throw new SetupCommandError(err instanceof Error ? err.message : String(err));
   }
 }

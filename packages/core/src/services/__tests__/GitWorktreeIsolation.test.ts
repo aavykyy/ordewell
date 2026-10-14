@@ -1066,15 +1066,18 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
     expect(existsSync(join(cwd, '.env'))).toBe(false);
   });
 
-  it('a failing setup command fails prepare and leaves nothing behind', async () => {
+  it('a failing setup command falls back to the default links, wiping what it left half-done', async () => {
     const root = repoWithLocalState();
-    const iso = create({ config: fakeConfig({ worktreeSetupCommand: 'exit 3' }) });
+    const iso = create({ config: fakeConfig({ worktreeSetupCommand: 'mkdir -p node_modules/half && echo x >> README.md && exit 3' }) });
     const run = await iso.startRun(root);
+    const { cwd, setupFailed } = await iso.prepare(task(1, 'Broken setup'), run);
 
-    await expect(iso.prepare(task(1, 'Broken setup'), run)).rejects.toThrow(/setup command failed/i);
-    expect(worktreePaths(root)).toEqual([root]);
-    expect(branches(root)).toEqual([run.repos[0].integrationBranch]);
-    expect(run.tasks['task-1']).toBeUndefined();
+    expect(setupFailed).toEqual([{ repo: '.', detail: expect.stringContaining('Command failed') }]);
+    expect(existsSync(join(cwd, 'node_modules', 'half'))).toBe(false);
+    expect(existsSync(join(cwd, 'node_modules', 'left-pad', 'index.js'))).toBe(true);
+    expect(existsSync(join(cwd, '.env'))).toBe(true);
+    expect(readFileSync(join(cwd, 'README.md'), 'utf8')).toBe('hi\n');
+    expect(run.tasks['task-1'].status).toBe('active');
   });
 });
 
@@ -1995,6 +1998,19 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       const lines = readFileSync(log, 'utf8').trim().split('\n').sort();
       expect(lines).toEqual(GROUP.map((repo) => `${repo}|${join(dir, repo)}|${join(cwd, repo)}`));
       expect(existsSync(join(cwd, 'api', '.env'))).toBe(false);
+    });
+
+    it('a setup command that fails in some repositories gives just those the default links', async () => {
+      const dir = group();
+      const iso = create({
+        config: fakeConfig({ worktreeIsolation: true, worktreeSetupCommand: '[ "$ORDEWELL_REPO" = infra ] || exit 3' }),
+      });
+      const run = await iso.startRun(dir);
+      const { cwd, setupFailed } = await iso.prepare(task(1, 'Setup'), run);
+
+      expect(setupFailed?.map((f) => f.repo)).toEqual(['api', 'web']);
+      expect(existsSync(join(cwd, 'api', '.env'))).toBe(true);
+      expect(run.tasks['task-1'].repos.infra.linked).toEqual([]);
     });
   });
 

@@ -122,6 +122,10 @@
 
 ### Fixed
 
+- **A setup command that doesn't fit a repository no longer stops every task.**
+  When `ordewell.worktreeSetupCommand` fails in a repository, its task
+  worktrees get the default links instead, with one warning per run naming the
+  repository and the error.
 - **Running, stopping or a plan update during a planner turn no longer makes
   the chat think the planner has finished.** The working indicator,
   Esc-to-stop, queueing a message and Send now keep working until the turn
