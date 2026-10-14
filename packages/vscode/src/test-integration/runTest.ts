@@ -11,6 +11,8 @@ async function main(): Promise<void> {
     launchArgs: [workspace, '--disable-workspace-trust', '--skip-welcome', '--skip-release-notes'],
     extensionTestsEnv: {
       ORDEWELL_TEST_WORKSPACE: workspace,
+      // Desktop shell resolution would overwrite the synthetic runner's PATH.
+      VSCODE_CLI: '1',
       // In the host's environment from launch: the PATH Ordewell spawns runners
       // under is resolved once per process, so setting it later can be too late.
       PATH: [path.resolve(__dirname, '../../../bench/pipeline/fake-claude'), process.env.PATH].filter(Boolean).join(path.delimiter),
