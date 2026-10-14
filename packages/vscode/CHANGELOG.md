@@ -116,6 +116,10 @@
 
 ### Fixed
 
+- **Running, stopping or a plan update during a planner turn no longer makes
+  the chat think the planner has finished.** The working indicator,
+  Esc-to-stop, queueing a message and Send now keep working until the turn
+  ends, and a chat panel reloaded mid-turn shows the planner as working.
 - A planner reads a file's line range with `sed -n '10,40p'` without asking,
   as it does with `head` and `tail`, and a denied command says how to rewrite it.
 - Codex works as the planner on machines where its sandbox cannot start,
