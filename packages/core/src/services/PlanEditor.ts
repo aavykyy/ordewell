@@ -1,5 +1,6 @@
 import { canMergeTasks, canSplitTask } from './TaskOps';
 import { validateTaskEdit } from './TaskEditValidator';
+import { unavailableModeReason, type RunnerModeInfo } from './ModeResolver';
 import { retargetTaskRunner, runnerAssignment, type RunnerCatalog } from './TaskRetarget';
 import { effectiveAllowlist } from './ModelAllowlistResolver';
 import { buildMergePrompt, buildSplitPrompt } from './PlanPrompts';
@@ -157,6 +158,7 @@ export class PlanEditor {
     const from = this.catalog.edit([task.assignedRunner]).runnerModes[task.assignedRunner];
     const changes = retargetTaskRunner(task, runner, this.allowedCatalog(catalog, runner), from);
     if (Object.keys(changes).length === 0) return this.plan();
+    this.refuseUnavailableMode(runner, changes.taskMode, catalog.modes);
 
     return this.commit(() => {
       if (!this.store.update(taskId, this.scheduler.releaseMovedResume(taskId, changes))) return false;
@@ -184,12 +186,24 @@ export class PlanEditor {
     const runner = draft.assignedRunner ?? plan.runners[0];
     const dependencies = (draft.dependencies ?? []).filter((id) => this.store.get(id));
     const catalog = draft.type === 'user' ? null : await this.catalog.runner(runner);
+    const assignment = catalog ? runnerAssignment(this.allowedCatalog(catalog, runner), draft) : {};
+    if (catalog) this.refuseUnavailableMode(runner, assignment.taskMode, catalog.modes);
 
     return this.commit(() => {
-      this.store.add({ ...draft, ...(catalog ? runnerAssignment(this.allowedCatalog(catalog, runner), draft) : {}), assignedRunner: runner, dependencies });
+      this.store.add({ ...draft, ...assignment, assignedRunner: runner, dependencies });
       if (catalog) this.admitRunner(runner, catalog.models);
       return true;
     });
+  }
+
+  /**
+   * A mode the host cannot run is refused, with its reason, not swapped for
+   * another: the plan is the source of truth for what runs (ADR-0001), and a
+   * task meant to be sandboxed must not quietly get more access.
+   */
+  private refuseUnavailableMode(runner: RunnerId, mode: string | undefined, modes: readonly RunnerModeInfo[]): void {
+    const reason = unavailableModeReason(modes, mode);
+    if (reason) throw new PlanEditError(`Mode "${mode}" of runner "${runner}" is unavailable on this host: ${reason}`);
   }
 
   /**

@@ -62,7 +62,7 @@ export default function App() {
   const [host, dispatch] = useReducer(reduceHost, INITIAL_HOST_STATE);
   const {
     conversation, plan, isExecuting, isResearchActive, conversationBusy, error, models, modelsByRunner,
-    runnerList, enabledRunnerIds, runners, held, unsent, modesByRunner, modelConfig,
+    runnerList, enabledRunnerIds, runners, held, unsent, modesByRunner, runnerNotice, modelConfig,
     modelOptions, configuredProviders, planner, isReady, modelDiscoveryErrors,
     skills, taskSkills, checkpoint, taskOutput, run, dockExpanded, dockHeight, settingsRequest,
   } = host;
@@ -647,6 +647,11 @@ export default function App() {
             <div className="plan-merge-actions">
               <span>{run.runMerge.landed.length} landed task{run.runMerge.landed.length === 1 ? '' : 's'} not merged</span>
               <button className="task-action-btn run" onClick={() => handleIsolationAction('merge')}>Merge all</button>
+            </div>
+          )}
+          {runnerNotice && (
+            <div className="runner-notice" role="note">
+              {runnerNotice.line} — <a href={runnerNotice.docs}>how to fix it</a>
             </div>
           )}
           <PlanCardGroup

@@ -1,5 +1,5 @@
 import type { GlobalRunSettings, SupervisorLevel } from '@ordewell/core';
-import { ACT_RISK, AUTORUN_RISK, SUPERVISOR_LEVEL_LABEL, autonomyLevelLabel } from '@ordewell/core';
+import { ACT_RISK, AUTORUN_RISK, SUPERVISOR_LEVEL_LABEL, autonomyLevelLabel, codexSandboxNotice } from '@ordewell/core';
 import type { ConfirmAction, PickerItem, TuiState } from '../state';
 import { openStepper, reopenStepper, type StepChoices, type StepperDefinition } from './stepper';
 import { step, type Effect, type Step } from './shared';
@@ -41,7 +41,12 @@ export const SETTINGS: StepperDefinition = {
       label: 'Autonomy',
       items: (state) => [
         { id: 'full', label: 'Full', detail: "New plans run tasks in each runner's autonomous mode", selected: state.autonomous },
-        { id: 'guarded', label: 'Guarded', detail: "New plans run tasks in each runner's safer mode", selected: !state.autonomous },
+        {
+          id: 'guarded',
+          label: 'Guarded',
+          detail: [`New plans run tasks in each runner's safer mode`, codexSandboxNotice(state.modesByRunner)?.line].filter(Boolean).join(' · '),
+          selected: !state.autonomous,
+        },
       ],
     },
     {

@@ -7,6 +7,9 @@ export interface RunnerModeInfo {
   autonomous?: boolean;
   safe?: boolean;
   readOnly?: boolean;
+  sandboxed?: boolean;
+  /** Why this mode cannot be used on this host (a failed probe); such a mode is shown, never assigned. */
+  unavailable?: string;
 }
 
 /** The slice of RunnerRegistry this module needs — structural, so nothing here depends on the manifest layer. */
@@ -61,9 +64,38 @@ export function parseAutonomyLevel(arg: string | undefined): boolean | null {
   }
 }
 
-/** The mode a manifest tags `readOnly` — never found by id, so a runner with no tag has none. */
-export function readOnlyMode(modes: readonly RunnerModeInfo[] | undefined): string | undefined {
+/**
+ * The mode a manifest tags `readOnly` — never found by id, so a runner with no
+ * tag has none. A mode this host cannot run is still the runner's read-only
+ * mode: it is how a task already on it is recognized, and why a move of that
+ * task is refused rather than made writable.
+ */
+export function taggedReadOnlyMode(modes: readonly RunnerModeInfo[] | undefined): string | undefined {
   return modes?.find((m) => m.readOnly)?.id;
+}
+
+/** The read-only mode a task can be given on this host: the tagged one, unless it is unavailable here. */
+export function readOnlyMode(modes: readonly RunnerModeInfo[] | undefined): string | undefined {
+  const mode = modes?.find((m) => m.readOnly);
+  return mode && !mode.unavailable ? mode.id : undefined;
+}
+
+/** Why a mode cannot be used on this host, when it cannot. */
+export function unavailableModeReason(modes: readonly RunnerModeInfo[] | undefined, id: string | undefined): string | undefined {
+  return id === undefined ? undefined : modes?.find((m) => m.id === id)?.unavailable;
+}
+
+function unavailableModeError(runner: RunnerId, id: string, reason: string): string {
+  return `Mode "${id}" of runner "${runner}" is unavailable on this host: ${reason}`;
+}
+
+/** What a task fails with at spawn when its planned mode is one this host cannot run; undefined when it can. */
+export function unavailableTaskModeMessage(
+  manifest: { displayName: string; modes?: readonly RunnerModeInfo[] },
+  mode: string | undefined,
+): string | undefined {
+  const reason = unavailableModeReason(manifest.modes, mode);
+  return reason ? `Mode "${mode}" of ${manifest.displayName} is unavailable on this host: ${reason}` : undefined;
 }
 
 /** What the planner says about a task's mode (ADR-0031): read-only or not, and the mode the task has now, if any. */
@@ -94,13 +126,19 @@ export function plannedMode(
   if (readOnly === true) {
     if (readOnlyId) return { ok: true, mode: readOnlyId };
     const able = readOnlyRunners(runnerModes);
+    const reason = unavailableModeReason(modes, taggedReadOnlyMode(modes));
     return {
       ok: false,
-      error: `Runner "${runner}" has no read-only mode — assign a read-only task to ${able.length > 0 ? `one of: ${able.join(', ')}` : 'no runner: none of the enabled runners has one'}, or drop "readOnly"`,
+      error: `Runner "${runner}" has no read-only mode${reason ? ' available on this host' : ''} — assign a read-only task to ${able.length > 0 ? `one of: ${able.join(', ')}` : 'no runner: none of the enabled runners has one'}, or drop "readOnly"${reason ? `. ${reason}` : ''}`,
     };
   }
-  const keep = current !== undefined && modes.some((m) => m.id === current) && !(readOnly === false && current === readOnlyId);
-  return { ok: true, mode: keep ? current : resolveDefaultMode(modes, autonomousDefault) };
+  const keep = current !== undefined && modes.some((m) => m.id === current) && !(readOnly === false && current === taggedReadOnlyMode(modes));
+  const mode = keep ? current : resolveDefaultMode(modes, autonomousDefault);
+  // Refused, never swapped for another mode: that would hand a task the
+  // planner or user meant to be sandboxed a level of access nobody chose (ADR-0001).
+  const reason = unavailableModeReason(modes, mode);
+  if (mode !== undefined && reason) return { ok: false, error: unavailableModeError(runner, mode, reason) };
+  return { ok: true, mode };
 }
 
 /**
@@ -119,7 +157,7 @@ export function carryPlannedModes(
   const carry = (t: Task): Task => {
     const subtasks = (t.subtasks ?? []).map(carry);
     const was = prior.get(t.id);
-    if (t.type === 'user' || !was || was.type === 'user' || t.taskMode === readOnlyMode(catalog.runnerModes[t.assignedRunner])) return { ...t, subtasks };
+    if (t.type === 'user' || !was || was.type === 'user' || t.taskMode === taggedReadOnlyMode(catalog.runnerModes[t.assignedRunner])) return { ...t, subtasks };
     const mode = plannedMode(t.assignedRunner, catalog.runnerModes, { readOnly: false, current: was.taskMode }, catalog.autonomousDefault ?? true);
     return { ...t, subtasks, ...(mode.ok && mode.mode !== undefined ? { taskMode: mode.mode } : {}) };
   };

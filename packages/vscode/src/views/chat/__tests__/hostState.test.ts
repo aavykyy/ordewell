@@ -134,3 +134,13 @@ describe('reduceHost runView isolation', () => {
     expect(next.run.handoff).toEqual({ repos, landed });
   });
 });
+
+describe('setModesByRunner', () => {
+  it('keeps the host\'s one-line notice for a runner whose modes are off, and drops it once they are back', () => {
+    const notice = { line: 'Codex sandbox unavailable on this host: read-only and Guarded modes are off', docs: 'https://example.test/docs' };
+    const off = reduceHost(INITIAL_HOST_STATE, msg({ type: 'setModesByRunner', modesByRunner: {}, notice }));
+    expect(off.runnerNotice).toEqual(notice);
+
+    expect(reduceHost(off, msg({ type: 'setModesByRunner', modesByRunner: {} })).runnerNotice).toBeNull();
+  });
+});

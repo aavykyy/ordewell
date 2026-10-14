@@ -3,6 +3,9 @@ import { createTask, type LegacyPlanState } from '../../models/Task';
 import { makeSession, testWorkspace, saves, FakeRunnerSession } from './sessionTestKit';
 import type { ModelResolver } from '../ModelResolver';
 import type { IRunner } from '../../interfaces/IRunner';
+import { RunnerRegistry } from '../../plugins/RunnerRegistry';
+import { CODEX_SANDBOX_MODE_REASON } from '../harness/codexSandbox';
+import { fakeConfig } from '../../testing';
 
 function planWith(runners: string[] = ['claude-code']): LegacyPlanState {
   return {
@@ -28,6 +31,34 @@ function resolverFor(models: Record<string, { modelId: string; modelLabel: strin
 const CODEX_CATALOG = {
   codex: [{ modelId: 'gpt-5-codex', modelLabel: 'GPT-5 Codex', variants: [{ id: 'low', label: 'Low' }, { id: 'high', label: 'High' }] }],
 };
+
+describe('Session.setTaskRunner onto a Codex whose sandbox cannot start', () => {
+  const registry = () => {
+    const r = new RunnerRegistry();
+    r.setUnavailableModes('codex', { agent: CODEX_SANDBOX_MODE_REASON, plan: CODEX_SANDBOX_MODE_REASON });
+    return r;
+  };
+
+  it('refuses a read-only task with the reason, rather than landing it on a writable mode', async () => {
+    const session = makeSession({ modelResolver: resolverFor(CODEX_CATALOG), registry: registry() });
+    const plan = planWith();
+    plan.tasks[0].taskMode = 'plan';
+    session.loadPlan(plan, 'goal', testWorkspace, { persist: false });
+
+    await expect(session.setTaskRunner('t1', 'codex')).rejects.toThrow(CODEX_SANDBOX_MODE_REASON);
+    expect(session.planTasks[0]).toMatchObject({ assignedRunner: 'claude-code', taskMode: 'plan' });
+  });
+
+  it('refuses under Guarded, where Codex\'s level mode is the sandboxed one, and lands on Full access under Full', async () => {
+    const guarded = makeSession({ modelResolver: resolverFor(CODEX_CATALOG), registry: registry(), config: fakeConfig({ autonomousMode: false }) });
+    guarded.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
+    await expect(guarded.setTaskRunner('t1', 'codex')).rejects.toThrow(CODEX_SANDBOX_MODE_REASON);
+
+    const full = makeSession({ modelResolver: resolverFor(CODEX_CATALOG), registry: registry() });
+    full.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
+    expect((await full.setTaskRunner('t1', 'codex'))!.tasks[0]).toMatchObject({ assignedRunner: 'codex', taskMode: 'fullAccess' });
+  });
+});
 
 describe('Session.setTaskRunner', () => {
   it('reassigns the model and mode to the new runner catalog', async () => {

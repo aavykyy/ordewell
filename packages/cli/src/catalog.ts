@@ -69,6 +69,7 @@ export function normalizeCatalog(result: RawCatalog): Catalog {
           label: String(m.label ?? m.id),
           description: m.description ? String(m.description) : undefined,
           autonomous: m.autonomous ? true : undefined,
+          unavailable: m.unavailable ? String(m.unavailable) : undefined,
         })),
       ]),
     ),

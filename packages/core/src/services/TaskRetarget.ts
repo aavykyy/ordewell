@@ -1,6 +1,6 @@
 import type { DiscoveredModel, RunnerId, Task } from '../models/Task';
 import { clampThinkingEffort } from './ModelAllowlistResolver';
-import { readOnlyMode, type RunnerModeInfo } from './ModeResolver';
+import { taggedReadOnlyMode, type RunnerModeInfo } from './ModeResolver';
 
 /** What a runner offers a task: the models discovered for it and the modes its manifest declares. */
 export interface RunnerCatalog {
@@ -70,6 +70,6 @@ export function runnerAssignment(
 export function retargetTaskRunner(task: Task, runner: RunnerId, catalog: RunnerCatalog, from?: readonly RunnerModeInfo[]): Partial<Task> {
   if (task.type === 'user') return {};
   if (task.assignedRunner === runner) return {};
-  const readOnly = task.taskMode !== undefined && task.taskMode === readOnlyMode(from) ? readOnlyMode(catalog.modes) : undefined;
+  const readOnly = task.taskMode !== undefined && task.taskMode === taggedReadOnlyMode(from) ? taggedReadOnlyMode(catalog.modes) : undefined;
   return { assignedRunner: runner, ...runnerAssignment(catalog, readOnly ? { ...task, taskMode: readOnly } : task) };
 }

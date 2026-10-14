@@ -19,6 +19,8 @@ import type { IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { FakeRunnerSession, makeSession, saves } from './sessionTestKit';
 import type { IRunner } from '../../interfaces/IRunner';
+import { RunnerRegistry } from '../../plugins/RunnerRegistry';
+import { CODEX_SANDBOX_MODE_REASON } from '../harness/codexSandbox';
 import { fakeConfig, fakeFileSystem } from '../../testing';
 import { respondingSpawn, planJson, type FakeAgentProcess, type FakeSpawnResult } from './harnessTestKit';
 import { plannerToolHandler, PLANNER_TURN_ENDED, type PlannerToolsHost } from '../plannerTools';
@@ -223,7 +225,7 @@ describe('a planner the server did not reach', () => {
   });
 });
 /** A planning session on a real harness planner, whose settings the test rewrites the way a settings write would. */
-function plannerSession(claude: FakeSpawnResult, initial: Partial<SessionRuntimeSettings> = {}, { runner, isolation, skills = [], skillsService, onNotice }: { runner?: IRunner; isolation?: IWorktreeIsolation; skills?: SkillInfo[]; skillsService?: Pick<SkillsService, 'findSkill' | 'listSkills'>; onNotice?: (notice: SessionNotice) => void } = {}) {
+function plannerSession(claude: FakeSpawnResult, initial: Partial<SessionRuntimeSettings> = {}, { runner, registry, isolation, skills = [], skillsService, onNotice }: { runner?: IRunner; registry?: RunnerRegistry; isolation?: IWorktreeIsolation; skills?: SkillInfo[]; skillsService?: Pick<SkillsService, 'findSkill' | 'listSkills'>; onNotice?: (notice: SessionNotice) => void } = {}) {
   const server = newServer();
   let settings: SessionRuntimeSettings = { enabledRunners: ['claude-code'], ...initial };
   const ai = service(claude, server);
@@ -232,6 +234,7 @@ function plannerSession(claude: FakeSpawnResult, initial: Partial<SessionRuntime
     aiService: ai,
     mcpServer: server,
     runner,
+    registry,
     isolation,
     skillsService: skillsService ?? { findSkill: (name: string) => skills.find((sk) => sk.name === name) },
     modelResolver: {
@@ -480,6 +483,71 @@ describe('list_runners and list_models', () => {
     await session.startPlanning('add a cache', ['claude-code', 'codex']);
 
     expect(answer).toEqual({ autonomy: 'Full', runners: [{ id: 'claude-code', readOnly: true }, { id: 'codex', readOnly: true }] });
+  });
+});
+
+/** A host where Codex's sandbox cannot start: its read-only and Guarded modes are off (ADR-0033). */
+function codexWithoutSandbox(): RunnerRegistry {
+  const registry = new RunnerRegistry();
+  registry.setUnavailableModes('codex', { agent: CODEX_SANDBOX_MODE_REASON, plan: CODEX_SANDBOX_MODE_REASON });
+  return registry;
+}
+
+describe('a Codex whose sandbox cannot start', () => {
+  const bothRunners = { enabledRunners: ['claude-code', 'codex'] };
+
+  it('is listed without a read-only mode, so a read-only task is not offered to it', async () => {
+    let answer: unknown;
+    const { session } = plannerSession(fakeClaude({
+      turn: async (mcp) => {
+        answer = (await call(mcp!, 'list_runners')).body;
+        return 'What should it do?';
+      },
+    }), bothRunners, { registry: codexWithoutSandbox() });
+
+    await session.startPlanning('add a cache', ['claude-code', 'codex']);
+
+    expect(answer).toEqual({ autonomy: 'Full', runners: [{ id: 'claude-code', readOnly: true }, { id: 'codex', readOnly: false }] });
+  });
+
+  it('refuses a submitted read-only task on Codex, naming the other runner and the reason', async () => {
+    let submitted: { isError: boolean; body: unknown } | undefined;
+    const { session } = plannerSession(fakeClaude({
+      turn: async (mcp) => {
+        submitted = await call(mcp!, 'submit_plan', { tasks: [planTask('a', 1, 'codex', 'gpt-5', { readOnly: true })] });
+        return 'Submitted.';
+      },
+    }), bothRunners, { registry: codexWithoutSandbox() });
+
+    await session.startPlanning('add a cache', ['claude-code', 'codex']);
+
+    expect(submitted?.isError).toBe(true);
+    const message = JSON.stringify(submitted?.body);
+    expect(message).toContain('one of: claude-code');
+    expect(message).toContain('sandbox cannot start on this host');
+    expect(session.planTasks).toEqual([]);
+  });
+
+  it('refuses a planner edit that moves a read-only task onto it, and leaves the plan as it was', async () => {
+    let edited: { isError: boolean; body: unknown } | undefined;
+    let planned = false;
+    const { session } = plannerSession(fakeClaude({
+      turn: async (mcp) => {
+        if (planned) {
+          edited = await call(mcp!, 'edit_plan', { ops: [{ op: 'update', taskId: 'a', changes: { assignedRunner: 'codex' } }] });
+          return 'Done.';
+        }
+        planned = true;
+        return submitted(mcp, [planTask('a', 1, 'claude-code', 'claude-sonnet-4', { readOnly: true })]);
+      },
+    }), bothRunners, { registry: codexWithoutSandbox() });
+    await session.startPlanning('review it', ['claude-code', 'codex']);
+
+    await session.continueConversation('EDIT NOW');
+
+    expect(edited?.isError).toBe(true);
+    expect(JSON.stringify(edited?.body)).toContain('sandbox cannot start on this host');
+    expect(session.planTasks[0]).toMatchObject({ assignedRunner: 'claude-code', taskMode: 'plan' });
   });
 });
 

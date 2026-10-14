@@ -1,7 +1,7 @@
 import type * as vscode from 'vscode';
 import {
-  getProviderMeta, ModelResolver, PROVIDER_LABEL, PROVIDER_PRIORITY, PROVIDER_SHORT_LABEL, runnerForProvider,
-  type AiProvider, type DiscoveredModel, type RunnerInstallation, type RunnerRegistry,
+  codexSandboxNotice, getProviderMeta, ModelResolver, PROVIDER_LABEL, PROVIDER_PRIORITY, PROVIDER_SHORT_LABEL, runnerForProvider,
+  type AiProvider, type CodexSandboxAvailability, type DiscoveredModel, type RunnerInstallation, type RunnerRegistry,
 } from '@ordewell/core';
 import type { ChatViewProvider } from './providers/ChatViewProvider';
 import type { VsCodeConfig } from './adapters/VsCodeConfig';
@@ -12,6 +12,8 @@ export interface ModelDiscoveryDeps {
   config: VsCodeConfig;
   runnerRegistry: RunnerRegistry;
   runnerInstallation: RunnerInstallation;
+  /** Asked again on each refresh; absent in a host that does not probe. */
+  codexSandbox?: Pick<CodexSandboxAvailability, 'refresh'>;
   modelResolver: ModelResolver;
   chatProvider: ChatViewProvider;
   secretStore: SecretStore;
@@ -54,6 +56,9 @@ export class ModelDiscovery {
   private async push(): Promise<void> {
     const d = this.deps;
     d.modelResolver.refreshRunnerModels();
+    // The runner list is being refreshed, so the host is asked again: a user
+    // who fixed it while the window was open sees the modes come back.
+    await d.codexSandbox?.refresh();
     const enabled = d.config.enabledRunners;
     // Resolve installed runners up front so a discovery that returns nothing for
     // an *installed* runner can be surfaced as a real failure (see below).
@@ -106,13 +111,13 @@ export class ModelDiscovery {
     d.chatProvider.setRunnerList(runnerList);
     d.chatProvider.setEnabledRunnerIds(enabled.filter((r) => installedIds.has(r)));
 
-    const modesByRunner: Record<string, { id: string; label: string; description: string; cliValue?: string; autonomous?: boolean }[]> = {};
+    const modesByRunner: Record<string, { id: string; label: string; description: string; cliValue?: string; autonomous?: boolean; unavailable?: string }[]> = {};
     for (const entry of installedRunners) {
       modesByRunner[entry.manifest.name] = (entry.manifest.modes ?? []).map((m) => ({
-        id: m.id, label: m.label, description: m.description, cliValue: m.cliValue, autonomous: m.autonomous,
+        id: m.id, label: m.label, description: m.description, cliValue: m.cliValue, autonomous: m.autonomous, unavailable: m.unavailable,
       }));
     }
-    d.chatProvider.setModesByRunner(modesByRunner);
+    d.chatProvider.setModesByRunner(modesByRunner, codexSandboxNotice(modesByRunner));
     d.chatProvider.sendConfiguredProviders(d.config.configuredProviders);
     this.sendModelConfig();
     void d.refreshPlannerState().catch((err) => d.log(`Planner state refresh failed: ${err}`));

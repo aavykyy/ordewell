@@ -15,6 +15,8 @@ export interface RunnerMode {
   description: string;
   /** Tagged `autonomous: true` on the manifest — runs without permission prompts. */
   autonomous?: boolean;
+  /** Why this host cannot run the mode; the option is listed, not selectable. */
+  unavailable?: string;
 }
 
 export interface RunnerOption {
@@ -593,7 +595,7 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
               <select id={`task-mode-${task.id}`} value={task.taskMode ?? activeModes[0]?.id ?? 'build'}
                 onChange={(e) => onModeChange(task.id, e.target.value)}>
                 {activeModes.map((m) => (
-                  <option key={m.id} value={m.id}>{m.label} — {m.description}</option>
+                  <option key={m.id} value={m.id} disabled={!!m.unavailable}>{m.label} — {m.unavailable ?? m.description}</option>
                 ))}
               </select>
             </div>

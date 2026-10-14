@@ -88,6 +88,14 @@ export interface RunnerMode {
   safe?: boolean;
   /** Marks this mode as the runner's read-only mode — what a task the planner marks read-only runs in (ADR-0031). */
   readOnly?: boolean;
+  /** The mode runs under an OS sandbox, so a host where the runner's sandbox cannot start cannot offer it. */
+  sandboxed?: boolean;
+  /**
+   * Why this mode cannot be used on this host. Set by the registry from a host
+   * probe, never by a manifest: a mode with a reason is listed, so the user is
+   * told, but never assigned, kept or run.
+   */
+  unavailable?: string;
 }
 
 export interface RunnerEntry {

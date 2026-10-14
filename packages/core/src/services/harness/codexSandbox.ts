@@ -1,6 +1,10 @@
 import type { ChildProcess } from 'child_process';
 import type { AgentProcessDeps } from './AgentAdapter';
 import { killTree, spawnInOwnGroup } from '../../utils/processTree';
+import type { RunnerRegistry } from '../../plugins/RunnerRegistry';
+import { augmentedPath, withPath } from '../../utils/shellPath';
+
+const CODEX_RUNNER = 'codex';
 
 /** A probe that hangs must not hold up session start; an unclear answer means "change nothing". */
 const PROBE_TIMEOUT_MS = 10000;
@@ -116,6 +120,88 @@ export function codexShellOffNote(): string {
     '',
     'or install an AppArmor profile for bwrap, then start a new planning session.',
   ].join('\n');
+}
+
+export const CODEX_SANDBOX_DOCS = 'https://github.com/ordewell/ordewell/blob/main/docs/troubleshooting.md#codex-sandbox-unavailable-on-this-host';
+
+/** The one line a surface shows next to the runner list while Codex's sandboxed modes are off. */
+export const CODEX_SANDBOX_OFF_LINE = 'Codex sandbox unavailable on this host: read-only and Guarded modes are off';
+
+/**
+ * Why each sandboxed Codex mode is off. It is a whole sentence with both ways
+ * out, because the planner's refusal, a hand edit's refusal and a task's
+ * failure at spawn all show it as it is.
+ */
+export const CODEX_SANDBOX_MODE_REASON =
+  `Codex's sandbox cannot start on this host (its kernel restricts unprivileged user namespaces), so Codex's read-only and Guarded modes are off. Use Full access or another runner, or fix the host: ${CODEX_SANDBOX_DOCS}`;
+
+/**
+ * The line a runner or mode list shows, and the page that explains it, when
+ * the catalog says Codex's sandboxed modes are off. Null when nothing is.
+ * Surfaces read the catalog, not the probe, so a daemon they reach over HTTP
+ * and an in-process one answer alike.
+ */
+export function codexSandboxNotice(
+  modesByRunner: Partial<Record<string, ReadonlyArray<{ unavailable?: string }>>> | undefined,
+): { line: string; docs: string } | null {
+  if (!modesByRunner?.[CODEX_RUNNER]?.some((m) => m.unavailable)) return null;
+  return { line: CODEX_SANDBOX_OFF_LINE, docs: CODEX_SANDBOX_DOCS };
+}
+
+/**
+ * What Ordewell knows about Codex's sandbox on this host, applied to the
+ * runner catalog so the planner, the surfaces and the spawn all read the same
+ * answer (ADR-0033).
+ *
+ * The probe runs once per daemon and its answer is kept; {@link refresh}
+ * asks again, for when the runner list is refreshed, so a host fixed while the
+ * daemon runs is noticed without a restart. Concurrent callers share one probe.
+ */
+export class CodexSandboxAvailability {
+  private pending: Promise<void> | null = null;
+  private known = false;
+
+  constructor(
+    private readonly registry: RunnerRegistry,
+    private readonly deps: AgentProcessDeps,
+    private readonly host: { cwd: string; env: NodeJS.ProcessEnv },
+  ) {}
+
+  /** The cached answer; probes only the first time. */
+  ensure(): Promise<void> {
+    if (this.known) return Promise.resolve();
+    return this.refresh();
+  }
+
+  /** Probe again and update the catalog with the answer. */
+  refresh(): Promise<void> {
+    this.pending ??= this.probe().finally(() => { this.pending = null; });
+    return this.pending;
+  }
+
+  private async decide(): Promise<CodexSandboxDecision> {
+    try {
+      // The PATH a runner is started under, so a `codex` a GUI-launched host
+      // cannot see is not mistaken for one with a working sandbox.
+      const env = withPath(this.host.env, await (this.deps.resolvePath ?? augmentedPath)());
+      return await probeCodexSandbox(this.deps, this.host.cwd, env);
+    } catch {
+      return 'default';
+    }
+  }
+
+  private async probe(): Promise<void> {
+    const manifest = this.registry.getManifest(CODEX_RUNNER);
+    if (!manifest) return;
+    // A probe that cannot be run says nothing, so it clears the marks rather than guessing.
+    const decision = await this.decide();
+    const sandboxed = (manifest.modes ?? []).filter((m) => m.sandboxed);
+    this.registry.setUnavailableModes(
+      CODEX_RUNNER,
+      decision === 'unavailable' ? Object.fromEntries(sandboxed.map((m) => [m.id, CODEX_SANDBOX_MODE_REASON])) : {},
+    );
+    this.known = true;
+  }
 }
 
 function runProbe(

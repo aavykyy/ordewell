@@ -137,4 +137,22 @@ describe('NewTaskCard', () => {
     act(() => { fireEvent.click(screen.getByText('+ Add task')); });
     expect((screen.getByPlaceholderText('Task title') as HTMLInputElement).value).toBe('');
   });
+
+  it('lists a mode the host cannot run as disabled, with its reason', () => {
+    const reason = "Codex's sandbox cannot start on this host.";
+    render(
+      <NewTaskCard tasks={TASKS} runners={RUNNERS} models={[]} modelsByRunner={MODELS_BY_RUNNER}
+        modesByRunner={{ ...MODES_BY_RUNNER, codex: [
+          { id: 'agent', label: 'Agent', description: 'Edits files', unavailable: reason },
+          { id: 'fullAccess', label: 'Full access', description: 'No sandbox' },
+        ] }}
+        onAdd={vi.fn()} />,
+    );
+    act(() => { fireEvent.click(screen.getByText('+ Add task')); });
+    act(() => { fireEvent.change(screen.getByLabelText('Runner'), { target: { value: 'codex' } }); });
+
+    const options = [...(screen.getByLabelText('Mode') as HTMLSelectElement).options];
+    expect(options.find((o) => o.value === 'agent')).toMatchObject({ disabled: true, textContent: expect.stringContaining(reason) });
+    expect(options.find((o) => o.value === 'fullAccess')?.disabled).toBe(false);
+  });
 });

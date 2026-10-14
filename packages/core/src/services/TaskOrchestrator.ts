@@ -1,3 +1,4 @@
+import { unavailableTaskModeMessage } from './ModeResolver';
 import { McpAttachError, RunnerStartupExit } from './harness/ordewellBinding';
 import * as path from 'path';
 import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasks, flattenTasksWithParents, waitsForReset, type RunSettings } from '../models/Task';
@@ -1759,6 +1760,12 @@ export class TaskOrchestrator {
         const name = this.registry?.get(attempt.runner)?.manifest.displayName ?? attempt.runner;
         throw new Error(`${name} has no structured connector, so Ordewell cannot run its tasks. Assign the task to Claude Code, Codex or OpenCode.`);
       }
+      // The plan fixed this mode when it was made and ADR-0001 forbids
+      // swapping it here, so a host that cannot run it ends the attempt
+      // before a worktree is made for it.
+      const manifest = this.registry?.get(attempt.runner)?.manifest;
+      const unavailable = manifest && unavailableTaskModeMessage(manifest, task.taskMode);
+      if (unavailable) throw new Error(unavailable);
       const { cwd, worktree, continuationMessage } = await attemptCwd(kind, task, this.runs);
       attempt.cwd = cwd;
       attempt.worktree = worktree;

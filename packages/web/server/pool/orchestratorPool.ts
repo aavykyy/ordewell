@@ -1,3 +1,4 @@
+import { spawn as nodeSpawn } from 'child_process';
 import { WebSocket } from 'ws';
 import {
   Session,
@@ -44,6 +45,7 @@ import {
   type PlannerSelectionChange,
   type PlannerSelectionState,
   StructuredRunner,
+  CodexSandboxAvailability,
 } from '@ordewell/core';
 import { WebConfig } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
@@ -70,6 +72,8 @@ export interface OrchestratorPoolDeps {
    * planner-switch catalog lookup can be seeded without spawning real CLIs.
    */
   modelResolver?: ModelResolver;
+  /** Overrides the pool's Codex sandbox probe; tests inject one so no real `codex` is started. */
+  codexSandbox?: Pick<CodexSandboxAvailability, 'ensure' | 'refresh'>;
 }
 
 export class OrchestratorPool {
@@ -82,12 +86,25 @@ export class OrchestratorPool {
   private settingsService = new SettingsService();
   private plannerModelMemory = new PlannerModelMemory(this.settingsService);
   private runner: IRunner;
+  /** One probe per daemon, asked again whenever the runner list is refreshed (ADR-0033). */
+  private codexSandbox: Pick<CodexSandboxAvailability, 'ensure' | 'refresh'>;
 
   constructor(deps: OrchestratorPoolDeps = {}) {
     const pluginNotice = removedPluginNotice();
     if (pluginNotice) console.warn(pluginNotice);
     this.runner = deps.runner ?? new StructuredRunner();
     this.modelResolver = deps.modelResolver ?? new ModelResolver(this.registry, new WebConfig());
+    this.codexSandbox = deps.codexSandbox
+      ?? new CodexSandboxAvailability(this.registry, { spawn: nodeSpawn, fetch: globalThis.fetch }, { cwd: process.cwd(), env: process.env });
+  }
+
+  /**
+   * Not awaited: planning must start at once, and the daemon already warms the
+   * probe at startup through the catalog. This only covers a daemon that was
+   * asked to plan before that finished.
+   */
+  private warmCodexSandbox(): void {
+    this.codexSandbox.ensure().catch((err) => console.error(`[web] codex sandbox probe failed: ${err instanceof Error ? err.message : err}`));
   }
 
   subscribe(sessionId: string, ws: WebSocket): void {
@@ -377,6 +394,7 @@ export class OrchestratorPool {
     const [runnerModels, providerLists] = await Promise.all([
       this.modelResolver.modelsForRunners(runnerIds),
       this.modelResolver.refresh(),
+      this.codexSandbox.ensure(),
     ]);
 
     // `refresh()` populates the picker cache, so this is the same fetch — no
@@ -426,6 +444,9 @@ export class OrchestratorPool {
   async getInstalledRunners(): Promise<RunnersResponse['runners']> {
     const config = new WebConfig({ enabledRunners: this.enabledRunnerOverride() });
     const enabled = new Set(config.enabledRunners);
+    // The runner list is the one place a user who just fixed their host looks
+    // again, so it is where the cached answer is asked afresh.
+    await this.codexSandbox.refresh();
     const runners = this.registry.list();
     const installedIds = new Set(
       await this.runnerInstallation.filterInstalled(runners.map((p) => p.manifest.name)),
@@ -450,6 +471,7 @@ export class OrchestratorPool {
     // the session is in this map. Registering only on return made the first
     // approval of every session unanswerable until its 5-minute timeout.
     this.sessions.set(sessionId, session);
+    this.warmCodexSandbox();
     return migratePlanState(await session.generatePlan(goal, runners));
   }
 
@@ -465,6 +487,7 @@ export class OrchestratorPool {
     // See generatePlan: must be registered before the blocking call so a
     // mid-research approval is answerable rather than 404ing until timeout.
     this.sessions.set(sessionId, session);
+    this.warmCodexSandbox();
     return session.startPlanning(goal, runners);
   }
 

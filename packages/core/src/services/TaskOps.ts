@@ -7,7 +7,7 @@ import { resolveTaskRef } from './TaskRefs';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
 import { validateTaskEdit, lockedTaskRefusal, type EditCatalog, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
 import { plannedTask, checkPlanInvariants, detectCycle, taskWhere, MODE_NOT_THE_PLANNERS, MANUAL_NOT_READ_ONLY, type IntakeCatalog, type PlannedTask, type PlanTaskError } from './PlannedTask';
-import { plannedMode, readOnlyMode, type PlannedMode } from './ModeResolver';
+import { plannedMode, taggedReadOnlyMode, type PlannedMode } from './ModeResolver';
 
 /**
  * Targeted task edits emitted by the planner conversation (the 'task_ops'
@@ -346,7 +346,7 @@ function askedReadOnly(spec: PlannerTaskSpec | undefined): boolean | undefined {
 }
 
 function isReadOnly(task: Task, catalog: EditCatalog | undefined): boolean {
-  return task.taskMode !== undefined && task.taskMode === readOnlyMode(catalog?.runnerModes[task.assignedRunner]);
+  return task.taskMode !== undefined && task.taskMode === taggedReadOnlyMode(catalog?.runnerModes[task.assignedRunner]);
 }
 
 /**

@@ -170,8 +170,9 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
     return modesForTask(state.modesByRunner, task).map((mode) => ({
       id: mode.id,
       label: mode.label,
-      detail: mode.description,
+      detail: mode.unavailable ?? mode.description,
       selected: mode.id === task.taskMode,
+      ...(mode.unavailable ? { disabled: true } : {}),
     }));
   }
   if (action.kind === 'set-task-model') {

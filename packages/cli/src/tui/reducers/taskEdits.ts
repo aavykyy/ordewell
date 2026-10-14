@@ -1,3 +1,4 @@
+import { codexSandboxNotice } from '@ordewell/core';
 import { dependentsNotice, dependentsOf, pastGateConfirmation, titledRefs } from '@ordewell/core/plan-utils';
 import { findTask, refFor, titledRefFor, type ModelView, type TaskView, type TuiState } from '../state';
 import { assignedModelFor, effortsForTask, modesForTask, runnerAccepts } from '../taskAssignment';
@@ -132,7 +133,7 @@ export function openTaskModePicker(state: TuiState, task: TaskView): Step {
       overlay: {
         kind: 'picker',
         picker: picker(`Mode · ${refFor(state, task)}`, pickerItemsFor(state, action), action, {
-          hint: `Modes declared by ${task.assignedRunner}.`,
+          hint: [`Modes declared by ${task.assignedRunner}.`, codexSandboxNotice(state.modesByRunner)?.line].filter(Boolean).join(' '),
         }),
       },
     },
@@ -282,6 +283,7 @@ export function taskModeCommand(state: TuiState, args: string[]): Step {
     if (!args[1]) return openTaskModePicker(state, task);
     const mode = modesForTask(state.modesByRunner, task).find((candidate) => candidate.id === args[1]);
     if (!mode) return fail(state, `Unsupported mode "${args[1]}" for ${task.assignedRunner}.`);
+    if (mode.unavailable) return fail(state, `Mode "${mode.id}" of ${task.assignedRunner} is unavailable on this host: ${mode.unavailable}`);
     return assignTaskMode(state, sessionId, task, mode.id, mode.label);
   });
 }
