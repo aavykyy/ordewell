@@ -1,6 +1,6 @@
 import { aheadOfDraft, drainNext, unsendAll, unsendLatest as unsendNewest } from '@ordewell/core';
 import { commit } from '../editor';
-import { plannerInFlight, type TuiState } from '../state';
+import { plannerInFlight, planPaneOpen, type TuiState } from '../state';
 import { cutTurn, say } from '../transcript';
 import { step, type Effect, type Step } from './shared';
 
@@ -130,12 +130,14 @@ export function forceSendPlanner(state: TuiState): Step {
  * Returns null when this is not one of those cases, so the key goes on to
  * whatever else owns it. An approval prompt is included: ESC there would
  * otherwise deny one tool call, which the planner answers by issuing the next
- * one. Every other overlay (help, pickers, confirm, task editor) keeps its own
- * ESC — those are things the user opened and can close.
+ * one. Every other overlay (help, pickers, confirm) keeps its own ESC, and so
+ * does the plan pane while it has a task's prompt editor or revealed subtask
+ * rows open — those are things the user opened and can close.
  */
 export function plannerEscape(state: TuiState): Step | null {
   if (!plannerInFlight(state) || !state.sessionId
-      || (state.overlay && state.overlay.kind !== 'approval')) return null;
+      || (state.overlay && state.overlay.kind !== 'approval')
+      || planPaneOpen(state)) return null;
   if (state.queuedPrompts.length > 0) return unsendLatest(state);
   if (state.stopArmed) return stopPlanning(state, state.sessionId);
   const arm = state.stopArmToken + 1;

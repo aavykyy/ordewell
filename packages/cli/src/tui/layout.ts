@@ -3,7 +3,7 @@ import { cursorInLines, type CursorPosition } from './editor';
 import { checkpointCardLines, conversationLines, taskUsageText, usageMeasures, tokenLine } from './blocks';
 import { chatEditorRoomFor, chatPaneWidth, planPaneWidth } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
-import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, queuedTarget, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
+import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
@@ -72,7 +72,8 @@ export function footerHints(state: TuiState): string[] {
   // The task view owns Esc while it is open, so the planner's turn-queue hint
   // would name a key behaviour that is not in force.
   const planning = plannerInFlight(state) && !state.taskView;
-  const escHint = !planning ? null
+  // Revealed subtask rows keep Esc for themselves, so the planner's hint would be untrue.
+  const escHint = !planning || planPaneOpen(state) ? null
     : state.queuedPrompts.length > 0 ? 'esc unsend'
     : 'esc ×2 stop planning';
   // Send now is the composer's key, so it is named only where the composer
