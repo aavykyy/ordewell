@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { initialState, reduce } from '../reducer';
+import { footerHints } from '../layout';
 import type { SessionMessage } from '@ordewell/core';
-import type { TuiState } from '../state';
+import type { TaskView, TuiState } from '../state';
 import { lastMessage, messagesOf } from './chat';
 
 /**
@@ -94,6 +95,64 @@ describe('ESC while planning', () => {
 
     expect(effects).toEqual([]);
     expect(next.editor.text).toBe('');
+  });
+});
+
+describe('ESC in the plan pane while planning', () => {
+  const task = (over: Partial<TaskView>): TaskView => ({
+    id: 't', order: 1, title: 'Task', type: 'ai', status: 'pending', dependencies: [], ...over,
+  });
+  const parent = task({
+    id: 'p1', title: 'Parent', subtasks: [task({ id: 's1', order: 1, title: 'Child' })],
+  });
+  const planning = (): TuiState => initialState({
+    planner: 'planning', sessionId: 'session-1', focus: 'plan', rows: 20, cols: 100, tasks: [parent, task({ id: 't2', order: 2 })],
+  });
+  const key = (state: TuiState, name: string) => reduce(state, { type: 'key', key: { name } });
+
+  it('closes an open prompt editor without arming a stop', () => {
+    const editing = key(planning(), 'right');
+    const open = key(editing.state, 'right').state;
+    expect(open.taskEditor).not.toBeNull();
+
+    const { state, effects } = key(open, 'escape');
+    expect(effects).toEqual([]);
+    expect(state.taskEditor).toBeNull();
+    expect(state.expandedTaskId).toBeNull();
+    expect(state.stopArmed).toBe(false);
+    expect(state.focus).toBe('plan');
+  });
+
+  it('collapses revealed subtask rows without arming a stop, and the footer does not advertise one', () => {
+    const revealed = key(planning(), 'right').state;
+    expect(revealed.expandedTaskId).toBe('p1');
+    expect(footerHints(revealed)).not.toContain('esc ×2 stop planning');
+
+    const { state, effects } = key(revealed, 'escape');
+    expect(effects).toEqual([]);
+    expect(state.expandedTaskId).toBeNull();
+    expect(state.stopArmed).toBe(false);
+  });
+
+  it('arms with nothing open, and the second esc stops the turn', () => {
+    const idle = planning();
+    expect(footerHints(idle)[0]).toBe('esc ×2 stop planning');
+
+    const armed = key(idle, 'escape');
+    expect(armed.effects).toEqual([{ type: 'disarmStop', afterMs: 2000, arm: 1 }]);
+    expect(armed.state.stopArmed).toBe(true);
+
+    const stopped = key(armed.state, 'escape');
+    expect(stopped.effects).toEqual([{ type: 'cancelPlanning', sessionId: 'session-1' }]);
+  });
+
+  it('backs out of the pane first even with a prompt queued, then unsends on the next esc', () => {
+    const queued = { ...key(planning(), 'right').state, queuedPrompts: ['next'] };
+    const closed = key(queued, 'escape').state;
+    expect(closed.expandedTaskId).toBeNull();
+    expect(closed.queuedPrompts).toEqual(['next']);
+
+    expect(key(closed, 'escape').state.queuedPrompts).toEqual([]);
   });
 });
 

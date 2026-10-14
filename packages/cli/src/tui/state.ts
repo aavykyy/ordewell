@@ -542,6 +542,14 @@ export const anyTaskRunning = (state: TuiState): boolean => state.tasks.some(isT
 export const plannerInFlight = (state: TuiState): boolean =>
   state.planner !== 'idle';
 
+/**
+ * The plan pane has something of its own open — a task's prompt editor, or a
+ * parent's revealed subtask rows — that Esc backs out of before it means
+ * anything else. An overlay on top still owns the key, so this is false then.
+ */
+export const planPaneOpen = (state: TuiState): boolean =>
+  state.focus === 'plan' && !state.overlay && (!!state.taskEditor || !!state.expandedTaskId);
+
 /** One navigable row of the plan pane — a top-level task, or a subtask shown under an open parent. */
 export interface PlanRow {
   task: TaskView;
