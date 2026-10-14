@@ -250,6 +250,22 @@ describe('ConversationViewHost', () => {
     });
   });
 
+  it('tells a fresh webview a turn is still open', () => {
+    host.receive(started);
+    vi.runAllTimers();
+    screen.posts.length = 0;
+
+    host.resync();
+
+    expect(screen.posts.filter((m) => m.type === 'plannerTurn')).toEqual([{ type: 'plannerTurn', active: true }]);
+  });
+
+  it('closes a turn the webview asked for but never opened here, when the conversation is reset', () => {
+    host.reset();
+
+    expect(screen.posts.filter((m) => m.type === 'plannerTurn')).toEqual([{ type: 'plannerTurn', active: false }]);
+  });
+
   it('posts nothing for a message the conversation does not draw', () => {
     host.receive({ type: 'task_output', taskId: 'x', text: 'compiling' });
     vi.runAllTimers();

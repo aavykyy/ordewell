@@ -45,7 +45,11 @@ export interface ModelOption {
   pricing?: string;
 }
 
-export type ChatState = 'empty' | 'researching' | 'planDraft' | 'approved' | 'error';
+/**
+ * The plan and its run only. Whether a planner turn is out is not here: that
+ * is `plannerTurn`, so a run started or stopped inside a turn leaves it open.
+ */
+export type ChatState = 'empty' | 'planDraft' | 'approved';
 
 export type SystemCommand = 'cancel' | 'cancelResume' | 'resumeNow' | 'skip' | 'retry' | 'forceStart' | 'runTask' | 'markComplete' | 'markIncomplete' | 'stopExecution' | 'executePlan';
 
