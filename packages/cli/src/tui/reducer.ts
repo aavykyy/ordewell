@@ -5,11 +5,11 @@ import { activeToken, composerCompletions, findCommand, parseRunnerCommand, pars
 import { applyKey, commit } from './editor';
 import { say, wiped } from './transcript';
 import { blockedPicker, handoffArrived, showDiff } from './handoff';
-import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, runnerCommands, type RunStatus, type TaskView, type TuiState } from './state';
+import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, runnerCommands, waitingApproval, waitingCheckpoint, type RunStatus, type TaskView, type TuiState } from './state';
 import type { Key } from './keys';
 import { handleOverlayKey } from './reducers/overlays';
 import { handlePlanKey } from './reducers/planPane';
-import { announceApprovals, announceCheckpoint, continueTaskStep, handleTaskViewKey, openTaskView, taskLogAbandoned, taskLogArrived, taskLogLoaded } from './reducers/taskView';
+import { announceApprovals, announceCheckpoint, answerCheckpoint, continueTaskStep, handleTaskViewKey, openTaskView, taskLogAbandoned, taskLogArrived, taskLogLoaded } from './reducers/taskView';
 import { newSession, pickRewindTarget, runCommand } from './reducers/commands';
 import { disarmStop, drainQueue, forceSendPlanner, plannerEscape, restoreForced } from './reducers/turnQueue';
 import { applyIsolationRecord, applySettings, clearRunIsolation, foldRun, followSession, planSnapshot, withRun } from './reducers/incoming';
@@ -532,6 +532,16 @@ function submit(state: TuiState): Step {
       return step({ ...cleared, taskView: { ...state.taskView, notice } });
     }
     if (state.taskView.notice) cleared.taskView = { ...state.taskView, notice: undefined };
+    // At a checkpoint a plain message is refused by the daemon, so enter is the
+    // answer: the text is the reason a rejection carries, and the runner goes
+    // on in the same session following it. A tool request ahead of it is
+    // answered first, and the draft stays for after.
+    if (!command && waitingCheckpoint(task)) {
+      if (waitingApproval(state.taskView)) {
+        return step(say(state, 'system', 'A tool request is waiting ahead of the checkpoint — answer it first (ctrl-y to allow, ctrl-g to deny), then enter replies to the checkpoint.'));
+      }
+      return answerCheckpoint(cleared, state.sessionId, taskId, 'reject', text);
+    }
     // A resumed runner reads a command that opens its first turn as it would any.
     if (continuesTask(task)) return continueTaskStep(cleared, state.sessionId, taskId, text);
     if (command && offered.length > 0) return step(cleared, [{ type: 'invokeTaskCommand', sessionId: state.sessionId, taskId, ...command }]);

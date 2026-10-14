@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
+## [Unreleased]
+
+### Changed
+
+- **A task at a checkpoint is answered by typing and pressing Enter.** In the
+  task view, what you type and send goes to the task as its next directions
+  and it carries on in the same session; `ctrl-y` approves as is. The card
+  lists the choices with their keys, and the planner chat's notice for a
+  checkpoint or a tool request says how to get to it: select the task in the
+  plan and press enter, or `/open <id>`.
+
 ## [0.10.0] — 2026-10-14
 
 ### Security
