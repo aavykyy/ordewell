@@ -55,6 +55,11 @@ describe('ChatMessage', () => {
     expect(container.querySelector('.chat-msg-cursor')).toBeTruthy();
   });
 
+  it('draws a fence still streaming as a code block, not as stray backticks', () => {
+    const { container } = render(<ChatMessage block={message({ text: 'Try:\n\n```sh\nnpm test', streaming: true })} />);
+    expect(container.querySelector('.chat-msg-content pre > code')?.textContent).toBe('npm test');
+  });
+
   it('shows a notice as a muted system line and an error as an error line', () => {
     const { container } = render(<>
       <ChatMessage block={message({ id: 'a', role: 'system', text: 'Approved: npm test' })} />
@@ -371,5 +376,62 @@ describe('renderMarkdown on planner text', () => {
   it('links only web URLs; anything else stays text', () => {
     expect(linkOf(renderMarkdown('[run](javascript:alert(1))'))).toBeNull();
     expect(linkOf(renderMarkdown('[docs](https://example.com/a)'))?.getAttribute('href')).toBe('https://example.com/a');
+  });
+});
+
+describe('renderMarkdown on planner structure (#82)', () => {
+  const parsed = (text: string) => {
+    const host = document.createElement('div');
+    host.innerHTML = renderMarkdown(text);
+    return host;
+  };
+
+  it('draws headings', () => {
+    const html = parsed('# Plan\n\n### Risks');
+
+    expect(html.querySelector('h1')?.textContent).toBe('Plan');
+    expect(html.querySelector('h3')?.textContent).toBe('Risks');
+  });
+
+  it('draws a table with its header and cells', () => {
+    const html = parsed('| Task | Runner |\n| --- | --- |\n| parser | codex |');
+
+    expect([...html.querySelectorAll('th')].map((th) => th.textContent)).toEqual(['Task', 'Runner']);
+    expect([...html.querySelectorAll('td')].map((td) => td.textContent)).toEqual(['parser', 'codex']);
+  });
+
+  it('nests a list inside a list item', () => {
+    const html = parsed('- one\n  1. first\n  2. second\n- two');
+
+    expect(html.querySelectorAll('ul > li')).toHaveLength(2);
+    expect([...html.querySelectorAll('ul > li > ol > li')].map((li) => li.textContent)).toEqual(['first', 'second']);
+  });
+
+  it('keeps a code block verbatim, | and < included', () => {
+    const html = parsed('```\nif (a | b < c) {}\n```');
+
+    expect(html.querySelector('table')).toBeNull();
+    expect(html.querySelector('pre > code')?.textContent).toBe('if (a | b < c) {}\n');
+  });
+
+  it.each(['javascript:alert(1)', 'data:text/html,hi'])('leaves a %s link as text', (url) => {
+    const html = parsed(`[click](${url})`);
+
+    expect(html.querySelector('a')).toBeNull();
+    expect(html.textContent).toContain('click');
+  });
+
+  it('draws no image, only its alt text', () => {
+    const html = parsed('![diagram](https://x.test/d.png)');
+
+    expect(html.querySelector('img')).toBeNull();
+    expect(html.textContent).toBe('diagram');
+  });
+
+  it('escapes a raw <script>', () => {
+    const html = parsed('<script>alert(1)</script>');
+
+    expect(html.querySelector('script')).toBeNull();
+    expect(html.textContent).toBe('<script>alert(1)</script>');
   });
 });

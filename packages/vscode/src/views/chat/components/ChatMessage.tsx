@@ -4,7 +4,7 @@ import type {
   ApprovalBlock, ApprovalDecision, ApprovalKind, ApprovalSource, DisplayBlock, MessageBlock, PlanBlock, SkillLoadBlock, SubagentBlock, SubagentStatus,
   ThinkingDisplayBlock, ToolBlock, ToolStatus, DiffRow, DiffStat,
 } from '@ordewell/core';
-import { diffRows, diffSummary, loadedSkillTokens, outputLines, outputPreview } from '@ordewell/core/plan-utils';
+import { diffRows, diffSummary, loadedSkillTokens, markdownHtml, outputLines, outputPreview } from '@ordewell/core/plan-utils';
 
 /*
  * The planner conversation (#51 display blocks) as the webview draws it.
@@ -21,19 +21,11 @@ const DIFF_PREVIEW_ROWS = 10;
 // worth keeping when the row is too narrow. A URL keeps its host instead.
 const PATH_LIKE = /^(?![a-z][a-z0-9+.-]*:\/\/)\S*\/\S*$/i;
 
-// The text is a model's, and can be steered by what it read: quotes are
-// escaped so nothing leaves the href, and only a web URL becomes a link.
+// Core's one parser settles what a model's text may become, so the webview
+// cannot loosen it. The newline it ends its last block with would be a stray
+// text node after the reply.
 export function renderMarkdown(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  return markdownHtml(text).trimEnd();
 }
 
 export default function ChatMessage({ block }: { block: MessageBlock }) {
