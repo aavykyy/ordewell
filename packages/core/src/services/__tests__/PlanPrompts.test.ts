@@ -225,6 +225,14 @@ function oneShot(isolatedExecution: false | RepoGroupLayout) {
   return buildResearchPrompt('goal', '', {}, ['claude-code'], undefined, modes({ isolatedExecution }));
 }
 
+describe('read-only guidance (ADR-0031)', () => {
+  it('keeps read-only off a task that must run commands, an ops task included', () => {
+    for (const p of [conversation(false), oneShot(LONE_REPO)]) {
+      expect(p).toMatch(/"readOnly".*never on a task that must run commands.*tests, scripts, builds.*ops task/i);
+    }
+  });
+});
+
 describe('planner parallelism rules under worktree isolation (ADR-0013)', () => {
   const OVERLAP_RULE = '- For parallel tasks, specify different target files to avoid merge conflicts.';
 

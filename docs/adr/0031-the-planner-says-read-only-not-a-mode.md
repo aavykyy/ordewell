@@ -40,7 +40,9 @@ user still picks any mode per task by hand.**
 ### What the planner says
 
 - **`readOnly: true`** on a task that must not change any file. Absent or
-  `false` otherwise. It is the only mode-related field in the plan JSON,
+  `false` otherwise. A task that must run commands — tests, scripts, builds —
+  is not read-only even when it changes no file: the read-only modes refuse
+  them, and the planner is told so. It is the only mode-related field in the plan JSON,
   `submit_plan` and `edit_plan`.
 - **`taskMode` is not the planner's.** In a submitted plan it is ignored, and
   `submit_plan` says so in its warnings. In an edit it is refused, with
@@ -163,4 +165,5 @@ guess that keeps it from writing.
 - 2026-10-13 — the modify-plan prompt left the list of what shows `read-only`
   (the one-shot modify path is gone); `submit_plan` reports `readOnly` on a
   manual task as ignored, as it does `taskMode`.
-- 2026-10-14 — an ops task cannot be read-only, found in a live run.
+- 2026-10-14 — an ops task cannot be read-only, and the planner is told a task
+  that runs commands is not read-only; both found in a live run.
