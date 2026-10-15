@@ -5,6 +5,8 @@
 and [ADR-0022](0022-ordewell-mcp-server.md); amended by [ADR-0030](0030-global-run-settings.md)
 (the settings are global, saved and live; autorun)
 
+*Pending:* [ADR-0035](0035-effects-are-consented-and-recorded.md) — `run_script`, its consent, and the scheduler starting only approved tasks (#95); [ADR-0037](0037-research-tasks-wake-the-planner.md) — a research task's report wakes the planner at every level.
+
 **Amends:** ADR-0009 and ADR-0022 — the planner gains execution tools, a further
 explicit exception to harness planners being read-only; ADR-0013 — "never
 merged for the user" now has two exits the user opts into; ADR-0020 — the

@@ -2,6 +2,8 @@
 
 **Status:** accepted
 
+*Pending:* [ADR-0035](0035-effects-are-consented-and-recorded.md) — the planner performs exact effects as script tasks, and its refusals point there; [ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md) — where a sandbox holds it, a command the envelope would refuse without asking runs sealed.
+
 See also [ADR-0011](0011-sandboxing-the-planners-shell.md): the classifier
 below is a denylist over a real shell, not an OS-level sandbox for it. That
 ADR runs the planner's shell under the same kind of OS sandbox Codex already

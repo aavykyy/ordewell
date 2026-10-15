@@ -4,6 +4,8 @@
 [ADR-0013](0013-worktree-isolation.md), [ADR-0020](0020-ops-tasks-and-merge-gates.md)
 and [ADR-0029](0029-the-supervisor.md)
 
+*Pending:* [ADR-0035](0035-effects-are-consented-and-recorded.md) — with autorun on in Full, the planner's script tasks run without asking.
+
 **Amends:** ADR-0029 — the supervisor level, merge at gates automatically, the
 retry limit and the wake-up read budget stop being per-plan settings saved at
 run start; the default level becomes Watch; "an unapproved task never starts"
