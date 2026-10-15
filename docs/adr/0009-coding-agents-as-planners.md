@@ -2,6 +2,8 @@
 
 **Status:** accepted
 
+*Pending:* [ADR-0035](0035-effects-are-consented-and-recorded.md) — effects are consented to and recorded whoever performs them, and the planner runs script tasks; [ADR-0037](0037-research-tasks-wake-the-planner.md) — research that outlives a turn is a research task, which is why harness subagents are still awaited within it.
+
 Every path into Ordewell's planner runs through an LLM vendor the user must sign
 up for separately. `createAiService` branches on `aiProvider` across 26
 vendor entries, and every one of them resolves an API key. Meanwhile the same

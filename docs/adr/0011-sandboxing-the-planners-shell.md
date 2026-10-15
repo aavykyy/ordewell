@@ -2,6 +2,8 @@
 
 **Status:** accepted (2026-10-01; first proposed as a tracked deferral)
 
+*Pending:* [ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md) — B7 relaxed: a verified sandbox turns a refusal into a sealed run, with no home directory and no network.
+
 `commandPolicy.ts` decides which commands the planner's `bash` tool may run,
 lexing the string and classifying it per segment as `auto` (runs silently),
 `ask` (needs approval) or `refuse` (never runs). [ADR-0008](0008-planner-exploration-envelope.md)

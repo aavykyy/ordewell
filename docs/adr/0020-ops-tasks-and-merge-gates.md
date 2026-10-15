@@ -2,6 +2,8 @@
 
 **Status:** accepted — amends [ADR-0013](0013-worktree-isolation.md) and [ADR-0014](0014-multi-repo-workspaces.md); amended by [ADR-0030](0030-global-run-settings.md)
 
+*Pending:* [ADR-0035](0035-effects-are-consented-and-recorded.md) — script tasks: ops tasks Ordewell runs itself from a literal script, which the planner may add and start.
+
 **Amends:** ADR-0013 (worktree isolation) — what Merge all does to a run still
 going, and when a run decides whether it isolates; ADR-0014 (multi-repo
 workspaces) — which tasks are isolated, where it had rejected the task marker
