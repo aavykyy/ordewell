@@ -4,7 +4,7 @@ import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
   saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS, taskStartedNotice,
   createEmptyPlan, markRequestFor, pastGateConfirmation, titledRefs, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner, type TaskRowAction,
-  type ExecutionCommand, installedPlannerDetected,
+  type ExecutionCommand,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit } from '../shared/protocol';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
@@ -114,50 +114,14 @@ export function plannerPreflightError(config: PlanManagerDeps['config']): string
 }
 
 /**
- * Which starts waiting on the activation probe are still wanted. Stop, a new
- * session and a newer goal land in that wait with no planner turn yet for the
- * session to abort, so the wait itself is what they cancel: a start whose
- * epoch has moved on is dropped once the probe answers. Only the probe wait
- * is a gap an event can land in; after it the start runs on without yielding.
- */
-const startEpochs = new WeakMap<Session, number>();
-
-function startEpoch(session: Session): number {
-  return startEpochs.get(session) ?? 0;
-}
-
-/** Drop every planner start of this session still waiting for the probe. */
-export function cancelPendingPlannerStarts(session: Session): void {
-  startEpochs.set(session, startEpoch(session) + 1);
-}
-
-/**
- * Reports the preflight failure to the chat and returns false when not ready
- * or when the start was cancelled while it waited: a fast path ahead of the
- * session's gate, so a goal is refused before the chat moves into planning.
- * Judged once the activation probe has answered (ADR-0009): before that, the
- * planner in effect is the openrouter fallback an installed agent replaces,
- * and a goal typed that early would be refused for want of a key.
- */
-async function plannerReady(deps: PlanManagerDeps, epoch: number): Promise<boolean> {
-  await installedPlannerDetected();
-  if (epoch !== startEpoch(deps.session)) return false;
-  const error = plannerPreflightError(deps.config);
-  if (!error) return true;
-  deps.chatProvider.showError(error);
-  return false;
-}
-
-/**
  * The session owns the turn — its busy state, its stop, and its planner gate,
- * which judges readiness; a failure is all that is left to report. The probe
- * wait here is only so a Stop or a new session that lands in it cancels the
- * start, which the session cannot see before it has a turn to abort.
+ * which waits for the activation probe and judges readiness (ADR-0009); a
+ * failure is all that is left to report. Nothing waits here: a wait the
+ * session could not see read as idle, and a prompt typed during it started
+ * over as a new goal.
  */
-async function inPlannerTurn(deps: PlanManagerDeps, run: () => Promise<void>, epoch = startEpoch(deps.session)): Promise<void> {
+async function inPlannerTurn(deps: PlanManagerDeps, run: () => Promise<void>): Promise<void> {
   try {
-    await installedPlannerDetected();
-    if (epoch !== startEpoch(deps.session)) return;
     await run();
   } catch (err) {
     reportPlannerError(err, deps);
@@ -178,20 +142,17 @@ export async function handleStartPlanning(
   deps: PlanManagerDeps,
   pendingRunners?: RunnerId[],
 ): Promise<void> {
-  // A newer goal replaces one still waiting for the probe: the latest intent wins.
-  cancelPendingPlannerStarts(deps.session);
-  const epoch = startEpoch(deps.session);
-  if (!(await plannerReady(deps, epoch))) return;
   const runners = resolveRunnerSet(deps, pendingRunners, deps.getCurrentPlan().runners);
   if (!runners) {
     return;
   }
+  // A goal still waiting for the probe is replaced by this one in the session.
   await inPlannerTurn(deps, async () => {
     const plan = await deps.session.startPlanning(userDescription, runners);
     deps.setCurrentGoal(userDescription);
     deps.setCurrentPlan(plan);
     finishPlannerTurn(plan, deps);
-  }, epoch);
+  });
 }
 
 export async function handleContinueConversation(
@@ -318,8 +279,6 @@ export async function handleSendMessage(
   pendingRunners: RunnerId[] | undefined,
   setPendingRunners: (r: RunnerId[] | undefined) => void,
 ): Promise<void> {
-  if (!(await plannerReady(deps, startEpoch(deps.session)))) return;
-
   setPendingRunners(pendingRunners);
 
   const plan = deps.getCurrentPlan();
@@ -435,7 +394,6 @@ export async function handleTaskControl(
  * turn has unwound, so a prompt sent meanwhile is held, not raced against it.
  */
 export function handleStopPlanning(deps: PlanManagerDeps): void {
-  cancelPendingPlannerStarts(deps.session);
   deps.session.abortPlannerTurn();
   deps.session.aiServiceInstance.reset();
   deps.chatProvider.conversation.stop();
@@ -450,9 +408,8 @@ export function handleStopPlanning(deps: PlanManagerDeps): void {
  */
 export function handleNewSession(deps: Pick<PlanManagerDeps,
   'session' | 'chatProvider' | 'fsAdapter' | 'setCurrentPlan' | 'setCurrentGoal' | 'log'>): void {
-  cancelPendingPlannerStarts(deps.session);
-  // Abandons the planner turn in flight: it settles as discarded, which is
-  // not reported into the new session.
+  // Abandons the planner turn in flight, or one still waiting for the probe:
+  // it settles as discarded, which is not reported into the new session.
   deps.session.reset();
   deps.setCurrentPlan(createEmptyPlan());
   deps.setCurrentGoal('');

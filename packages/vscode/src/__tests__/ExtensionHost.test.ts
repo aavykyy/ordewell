@@ -148,6 +148,7 @@ function fakeSession() {
     isolationView: vi.fn(() => null),
     removeQueuedMessage: vi.fn(),
     reset: vi.fn(),
+    abortPlannerTurn: vi.fn(() => false),
     loadPlan: vi.fn(),
     execute: vi.fn(async () => ({ ok: true, message: 'done' })),
     executePlan: vi.fn(async () => {}),
@@ -436,6 +437,8 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     h.host.dispose();
 
     expect(stopAll).toHaveBeenCalled();
+    // A goal still waiting for the probe is stopped with the host's runners.
+    expect(h.session.spies.abortPlannerTurn).toHaveBeenCalled();
   });
 
   it('opens a task log tab on request, through the one registry', async () => {
@@ -456,7 +459,9 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
 describe('the planner with no planner chosen and no API key (ADR-0009)', () => {
   afterEach(() => resetInstalledPlanner());
 
-  it('a goal typed before the activation probe answers waits for it, then plans', async () => {
+  // The wait itself is the session's planner gate, so a prompt typed during it
+  // is held as one typed during the turn (plannerStartWait.test.ts).
+  it('a goal typed before the activation probe answers goes to the session at once, unrefused, and plans with the agent found', async () => {
     let answer!: (value: PlannerUsability) => void;
     const gate = new Promise<PlannerUsability>((resolve) => { answer = resolve; });
     const installation = fakeRunnerInstallation(['claude-code']);
@@ -468,13 +473,12 @@ describe('the planner with no planner chosen and no API key (ADR-0009)', () => {
       const starting = h.host.start();
 
       h.chat.messages.fire({ type: 'sendMessage', text: 'build a parser', typed: true });
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      expect(h.session.spies.startPlanning).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(h.session.spies.startPlanning).toHaveBeenCalledWith('build a parser', ['claude-code']));
       expect(h.chat.provider.showError.mock.calls).toEqual([]);
 
       answer({ usable: true });
-      await vi.waitFor(() => expect(h.session.spies.startPlanning).toHaveBeenCalledWith('build a parser', ['claude-code']));
-      expect(recordedInstalledPlanner()).toBe('claude-code');
+      await vi.waitFor(() => expect(recordedInstalledPlanner()).toBe('claude-code'));
+      expect(h.chat.provider.showError.mock.calls).toEqual([]);
       await starting;
     } finally {
       fs.rmSync(h.workspace, { recursive: true, force: true });

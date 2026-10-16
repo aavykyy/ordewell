@@ -325,3 +325,174 @@ describe('Stop while a turn waits at the gate', () => {
   });
 });
 
+
+describe('a first goal waiting at the gate', () => {
+  /** A planner that records every message it is sent, the opening's goal first. */
+  function conversing() {
+    const config = keylessConfig();
+    const asked: string[] = [];
+    const aiService = {
+      startConversation: vi.fn(async ({ goal }: { goal: string }) => {
+        asked.push(goal);
+        return prose('Which database?');
+      }),
+      hasActiveConversation: () => true,
+      continueConversation: vi.fn(async (message: string) => {
+        asked.push(message);
+        return prose('Noted.');
+      }),
+      reset: vi.fn(),
+    };
+    const session = makeSession({ config, aiService });
+    const userSaid = () => (session.planState?.conversationHistory ?? []).filter((m) => m.role === 'user').map((m) => m.content);
+    return { session, asked, aiService, userSaid };
+  }
+
+  it('is busy planner work, and a follow-up sent meanwhile is answered after it, in order, without replacing the goal', async () => {
+    const env = conversing();
+    const probe = heldProbe();
+
+    const opening = env.session.startPlanning('Build an inventory service', ['claude-code']);
+    expect(env.session.isPlannerBusy).toBe(true);
+    const followUp = env.session.continueConversation('Use Postgres');
+    await settle();
+    expect(env.asked).toEqual([]);
+
+    probe.answer(true);
+    await opening;
+    await followUp;
+
+    expect(env.asked[0]).toBe('Build an inventory service');
+    expect(env.asked).toHaveLength(2);
+    expect(env.asked[1]).toContain('Use Postgres');
+    expect(env.userSaid()).toEqual(['Build an inventory service', 'Use Postgres']);
+    expect(env.session.currentGoal).toBe('Build an inventory service');
+  });
+
+  it('is discarded by a reset meanwhile: no planner call, and the reset session holds no transcript', async () => {
+    const env = conversing();
+    const probe = heldProbe();
+
+    const opening = env.session.startPlanning('old goal', ['claude-code']);
+    const settled = expect(opening).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
+    env.session.reset();
+    await settled;
+    probe.answer(true);
+    await settle();
+    await settle();
+
+    expect(env.aiService.startConversation).not.toHaveBeenCalled();
+    expect(env.session.planState).toBeNull();
+    expect(env.session.currentGoal).toBe('');
+    expect(env.session.isPlannerBusy).toBe(false);
+  });
+
+  it('is discarded by a session adopted meanwhile, which keeps its own transcript', async () => {
+    const env = conversing();
+    const probe = heldProbe();
+
+    const opening = env.session.startPlanning('old goal', ['claude-code']);
+    const settled = expect(opening).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
+    env.session.loadPlan(savedPlan(), 'build it', testWorkspace);
+    await settled;
+    probe.answer(true);
+    await settle();
+    await settle();
+
+    expect(env.aiService.startConversation).not.toHaveBeenCalled();
+    expect(env.session.currentGoal).toBe('build it');
+    expect(env.userSaid()).toEqual(['build it', 'keep it small', 'and typed']);
+  });
+
+  it('is discarded by the session closing meanwhile, with what was sent behind it', async () => {
+    const env = conversing();
+    const probe = heldProbe();
+
+    const opening = env.session.startPlanning('old goal', ['claude-code']);
+    const followUp = env.session.continueConversation('Use Postgres');
+    env.session.destroy();
+    await expect(opening).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
+    await expect(followUp).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
+    probe.answer(true);
+    await settle();
+
+    expect(env.asked).toEqual([]);
+  });
+
+  it('rejects at once when its caller aborts, without waiting for the probe', async () => {
+    const env = conversing();
+    heldProbe();
+    const caller = new AbortController();
+
+    const opening = env.session.startPlanning('ship it', ['claude-code'], { signal: caller.signal });
+    caller.abort();
+
+    await expect(opening).rejects.toBeInstanceOf(PlannerTurnStoppedError);
+    expect(env.session.isPlannerBusy).toBe(false);
+    expect(env.aiService.startConversation).not.toHaveBeenCalled();
+  });
+
+  it('is stopped by Stop with the follow-up sent behind it: neither is answered, and a goal sent after the Stop is', async () => {
+    const env = conversing();
+    const probe = heldProbe();
+
+    const opening = env.session.startPlanning('Build an inventory service', ['claude-code']);
+    const followUp = env.session.continueConversation('Use Postgres');
+    expect(env.session.abortPlannerTurn()).toBe(true);
+    await expect(opening).rejects.toBeInstanceOf(PlannerTurnStoppedError);
+    await expect(followUp).rejects.toBeInstanceOf(PlannerTurnStoppedError);
+
+    const after = env.session.startPlanning('Build a ledger', ['claude-code']);
+    probe.answer(true);
+    await after;
+    await settle();
+
+    expect(env.asked).toEqual(['Build a ledger']);
+    expect(env.userSaid()).toEqual(['Build a ledger']);
+  });
+
+  it('is replaced by an explicit new goal sent meanwhile', async () => {
+    const env = conversing();
+    const probe = heldProbe();
+
+    const first = env.session.startPlanning('first goal', ['claude-code']);
+    const firstSettled = expect(first).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
+    const second = env.session.startPlanning('second goal', ['claude-code']);
+    probe.answer(true);
+    await firstSettled;
+    await second;
+
+    expect(env.asked).toEqual(['second goal']);
+    expect(env.session.currentGoal).toBe('second goal');
+  });
+
+  it('a force send meanwhile goes first behind it rather than replacing it', async () => {
+    const env = conversing();
+    const probe = heldProbe();
+
+    const opening = env.session.startPlanning('Build an inventory service', ['claude-code']);
+    const reply = env.session.continueConversation('Use Postgres');
+    const forced = env.session.forceSendPrompt('Make it multi-tenant');
+    probe.answer(true);
+    await Promise.all([opening, reply, forced]);
+
+    expect(env.asked[0]).toBe('Build an inventory service');
+    expect(env.asked[1]).toContain('Make it multi-tenant');
+    expect(env.asked[1]).not.toContain('Use Postgres');
+    expect(env.asked[2]).toContain('Use Postgres');
+    expect(env.session.currentGoal).toBe('Build an inventory service');
+  });
+
+  it('a follow-up the planner is not ready for is refused with the opening', async () => {
+    const env = conversing();
+    const probe = heldProbe();
+
+    const opening = env.session.startPlanning('ship it', ['claude-code']);
+    const followUp = env.session.continueConversation('Use Postgres');
+    probe.answer(false);
+
+    await expect(opening).rejects.toBeInstanceOf(PlannerNotReadyError);
+    await expect(followUp).rejects.toBeInstanceOf(PlannerNotReadyError);
+    expect(env.asked).toEqual([]);
+  });
+});

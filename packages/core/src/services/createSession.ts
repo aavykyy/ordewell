@@ -7,7 +7,7 @@ import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome
 import { sharedMcpServer, type OrdewellMcpServer, type PlannerToolHandler } from './mcp';
 import { ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type PlannerSubmission, type RewindTarget, type WakeUpTurn } from './PlannerConversation';
 import { forkPlanState, type ForkedDialogue } from './conversationFork';
-import { PlanTurns } from './PlanTurns';
+import { PlanTurns, type PlanTurnInput } from './PlanTurns';
 import { RunSupervision, runOrigin } from './RunSupervision';
 import { editedFields } from './LoopGuards';
 import { Planner } from './Planner';
@@ -68,6 +68,19 @@ import { TurnEffects } from './TurnEffects';
  */
 export interface GeneratePlanOptions {
   signal?: AbortSignal;
+}
+
+/** A message sent behind the conversation's opening while it waits at the planner gate. */
+interface HeldFollowUp {
+  input: PlanTurnInput;
+  forced: boolean;
+  resolve(plan: LegacyPlanState): void;
+  reject(err: unknown): void;
+}
+
+/** The conversation's opening: `held` until its turn holds the conversation, null after. */
+interface PendingOpening {
+  held: HeldFollowUp[] | null;
 }
 
 /** The slice of Planner the Session drives — the injection seam for tests. */
@@ -457,8 +470,13 @@ export class Session {
   private readonly turns: PlanTurns;
   /** Destroyed: a turn that waited for the planner to be found must not open on it. */
   private closed = false;
-  /** Turns PlanTurns does not open, waiting at the planner gate: a Stop ends each before it opens. */
-  private readonly openingsWaiting = new Set<() => void>();
+  /**
+   * Turns PlanTurns does not open, waiting at the planner gate, each ended
+   * with why it must not open: a Stop, a newer goal, or its plan scope ending.
+   */
+  private readonly openingsWaiting = new Set<(err: Error) => void>();
+  /** The conversation's opening, from admission until its turn settles; see {@link behindOpening}. */
+  private opening: PendingOpening | null = null;
   private readonly editor: PlanEditor;
   private readonly commands: ExecutionCommands;
   private readonly supervision: RunSupervision;
@@ -994,6 +1012,9 @@ export class Session {
     // Before the stop, whose save would otherwise write the abandoned turn's
     // steps into the plan it saves.
     this.events.dropSubagentRuns();
+    // A turn waiting at the planner gate belongs to this scope too: let open
+    // later, it would plan the old goal in whatever scope is held by then.
+    this.endWaiting(() => new PlannerTurnDiscardedError());
     if (this.isExecuting || this.orchestrator.isRunning || this.orchestrator.awaitsResume) this.stopExecution();
     this.conversation.abandonTurn();
     this.turns.abandon();
@@ -1110,8 +1131,10 @@ export class Session {
   /**
    * The planner gate for a turn {@link PlanTurns} does not open — an opening,
    * plan generation, a compaction — the same one its turns pass: wait for the
-   * installed-planner probe, give up a turn whose plan or session went or
-   * whose caller stopped it meanwhile, then judge the planner in use now.
+   * installed-planner probe, then judge the planner in use now. A wait is
+   * ended at once, not when the probe answers, by its caller's abort, a Stop,
+   * a newer goal or its plan scope ending ({@link endWaiting}): a turn that
+   * only learnt of these afterwards would open on a session that moved on.
    *
    * Null when the turn may open at once: awaited regardless, the turn would
    * take the conversation a tick late, and a message sent alongside it would
@@ -1122,37 +1145,57 @@ export class Session {
       this.assertPlannerReady();
       return null;
     }
-    const plan = this.plan;
+    if (signal?.aborted) return Promise.reject(new PlannerTurnStoppedError());
     return new Promise<void>((resolve, reject) => {
-      const stop = () => reject(new PlannerTurnStoppedError());
-      this.openingsWaiting.add(stop);
+      const onAbort = () => {
+        if (this.openingsWaiting.delete(end)) end(new PlannerTurnStoppedError());
+      };
+      const end = (err: Error) => {
+        signal?.removeEventListener('abort', onAbort);
+        reject(err);
+      };
+      this.openingsWaiting.add(end);
+      signal?.addEventListener('abort', onAbort, { once: true });
       installedPlannerDetected().then(() => {
-        // Stopped meanwhile: its caller has heard, and the probe's answer must not open it after all.
-        if (!this.openingsWaiting.delete(stop)) return;
-        if (this.closed || this.plan !== plan) throw new PlannerTurnDiscardedError();
-        if (signal?.aborted) throw new PlannerTurnStoppedError();
+        // Ended meanwhile: its caller has heard, and the probe's answer must not open it after all.
+        if (!this.openingsWaiting.delete(end)) return;
+        signal?.removeEventListener('abort', onAbort);
         this.assertPlannerReady();
       }).then(resolve, reject);
     });
   }
 
-  /** Whether a planner turn — a reply, a compaction, plan generation — holds the conversation. */
-  get isPlannerBusy(): boolean { return this.conversation.isTurnInFlight; }
+  /** End every turn waiting at the planner gate before it opens; false when none was. */
+  private endWaiting(why: () => Error): boolean {
+    const waiting = [...this.openingsWaiting];
+    this.openingsWaiting.clear();
+    for (const end of waiting) end(why());
+    return waiting.length > 0;
+  }
+
+  /**
+   * Whether a planner turn — a reply, a compaction, plan generation — holds
+   * the conversation, or one admitted waits at the planner gate to: a host
+   * that read the wait as idle sent a follow-up as a new goal.
+   */
+  get isPlannerBusy(): boolean { return this.conversation.isTurnInFlight || this.openingsWaiting.size > 0; }
 
   /**
    * Stop the planner turn in flight. It still settles — a backend hands back
    * what it had — and ends as stopped. A turn still waiting at the planner
-   * gate is stopped too, before it opens. False when there was neither.
+   * gate is stopped too, before it opens, with what was sent behind it. False
+   * when there was neither.
    */
   abortPlannerTurn(): boolean {
     const inFlight = this.conversation.stopTurn();
-    const waiting = this.turns.stopWaiting() || this.openingsWaiting.size > 0;
-    for (const stop of this.openingsWaiting) stop();
-    this.openingsWaiting.clear();
-    return inFlight || waiting;
+    const queued = this.turns.stopWaiting();
+    const waiting = this.endWaiting(() => new PlannerTurnStoppedError());
+    return inFlight || queued || waiting;
   }
 
   async generatePlan(goal: string, runners: RunnerId[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {
+    // A new goal replaces whatever still waits to open: the latest intent wins.
+    this.endWaiting(() => new PlannerTurnDiscardedError());
     // Before the plan scope is dropped, so a refusal leaves the plan held now as it was.
     const opening = this.plannerTurnMayOpen(options?.signal);
     if (opening) await opening;
@@ -1202,22 +1245,60 @@ export class Session {
    * settlement — is {@link PlannerConversation}'s; the Session hosts it.
    */
   async startPlanning(goal: string, runners: RunnerId[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {
-    const opening = this.plannerTurnMayOpen(options?.signal);
-    if (opening) await opening;
-    this.plan = null;
-    this.goal = goal;
-    this.remintSessionId();
-    this.beginFreshPlan({ keepGrants: true });
-    const enabled = this.catalog.enabledRunners();
-    const chosenRunners = runners.filter((r) => enabled.includes(r));
-    if (chosenRunners.length === 0) throw new Error('None of the requested runners are enabled');
+    // A new goal replaces whatever still waits to open: the latest intent wins.
+    this.endWaiting(() => new PlannerTurnDiscardedError());
+    const pending: PendingOpening = { held: [] };
+    this.opening = pending;
+    let opened: Promise<{ landed: LegacyPlanState; effects: TurnEffects }>;
+    try {
+      const gate = this.plannerTurnMayOpen(options?.signal);
+      if (gate) await gate;
+      this.plan = null;
+      this.goal = goal;
+      this.remintSessionId();
+      this.beginFreshPlan({ keepGrants: true });
+      const enabled = this.catalog.enabledRunners();
+      const chosenRunners = runners.filter((r) => enabled.includes(r));
+      if (chosenRunners.length === 0) throw new Error('None of the requested runners are enabled');
 
-    const now = new Date().toISOString();
-    this.plan = { tasks: [], generatedAt: now, status: 'draft', runners: chosenRunners, lastUpdated: now };
+      const now = new Date().toISOString();
+      this.plan = { tasks: [], generatedAt: now, status: 'draft', runners: chosenRunners, lastUpdated: now };
+      opened = this.openTurn(() => this.conversation.start(this.resolveSkillInvocation(goal), () => this.conversationOpening(chosenRunners), options?.signal));
+    } catch (err) {
+      // What was sent behind an opening that never opened shares its end: a
+      // stop, a newer goal, a refusal its sender must hear as the goal's.
+      if (this.opening === pending) this.opening = null;
+      for (const held of pending.held ?? []) held.reject(err);
+      throw err;
+    }
+    // The opening holds the conversation now, so what waited for it queues behind it, in order.
+    const held = pending.held ?? [];
+    pending.held = null;
+    for (const h of held) this.turns.follow(h.input, h.forced).then(h.resolve, h.reject);
+    try {
+      const { landed, effects } = await opened;
+      this.autorunSubmitted(effects);
+      return landed;
+    } finally {
+      if (this.opening === pending) this.opening = null;
+    }
+  }
 
-    const { landed, effects } = await this.openTurn(() => this.conversation.start(this.resolveSkillInvocation(goal), () => this.conversationOpening(chosenRunners), options?.signal));
-    this.autorunSubmitted(effects);
-    return landed;
+  /**
+   * A message sent while the conversation's opening is pending answers it, so
+   * it goes after it rather than replacing the goal or being refused: held
+   * while the opening waits at the planner gate — there is no conversation
+   * yet to queue it on — and queued behind it once it holds the conversation.
+   * Null with no opening pending.
+   */
+  private behindOpening(input: PlanTurnInput, forced = false): Promise<LegacyPlanState> | null {
+    const pending = this.opening;
+    if (!pending) return null;
+    const held = pending.held;
+    if (!held) return this.turns.follow(input, forced);
+    return new Promise((resolve, reject) => {
+      held.push({ input, forced, resolve, reject });
+    });
   }
 
   /**
@@ -1227,8 +1308,11 @@ export class Session {
    * whatever else arrives during the turn in flight by the next one.
    */
   async continueConversation(userMessage: string, options?: GeneratePlanOptions): Promise<LegacyPlanState> {
+    const input: PlanTurnInput = { source: 'user', ...this.resolveSkillInvocation(userMessage), signal: options?.signal };
+    const behind = this.behindOpening(input);
+    if (behind) return behind;
     if (!this.plan) throw new Error('No planning conversation to continue');
-    return this.turns.enqueue({ source: 'user', ...this.resolveSkillInvocation(userMessage), signal: options?.signal });
+    return this.turns.enqueue(input);
   }
 
   /**
@@ -1239,8 +1323,11 @@ export class Session {
    * plain {@link continueConversation}.
    */
   async forceSendPrompt(text: string, options?: GeneratePlanOptions): Promise<LegacyPlanState> {
+    const input: PlanTurnInput = { source: 'user', ...this.resolveSkillInvocation(text), signal: options?.signal };
+    // Before the opening opens there is no turn to stop: it goes first behind it.
+    if (this.opening?.held) return this.behindOpening(input, true)!;
     if (!this.plan) throw new Error('No planning conversation to continue');
-    return this.turns.forceSend({ source: 'user', ...this.resolveSkillInvocation(text), signal: options?.signal });
+    return this.turns.forceSend(input);
   }
 
   /**

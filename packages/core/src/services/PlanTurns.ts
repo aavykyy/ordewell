@@ -155,6 +155,16 @@ export class PlanTurns {
     return settled;
   }
 
+  /**
+   * An input that waits behind the conversation's opening rather than being
+   * refused by it: the opening is the turn its sender was answering, so it
+   * goes in the next turn once the opening lets the conversation go. A forced
+   * one stops nothing — the opening has the goal — and only goes first.
+   */
+  follow(input: PlanTurnInput, forced = false): Promise<LegacyPlanState> {
+    return this.admit(input, forced);
+  }
+
   private admit(input: PlanTurnInput, forced: boolean): Promise<LegacyPlanState> {
     const plan = this.host.plan();
     if (!plan) return Promise.reject(new Error('No planning conversation to continue'));

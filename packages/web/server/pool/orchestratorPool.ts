@@ -48,8 +48,9 @@ import {
   CodexSandboxAvailability,
   detectInstalledPlanner,
   installedPlannerAnswered,
-  installedPlannerDetected,
+  PlannerNotReadyError,
   PlannerTurnDiscardedError,
+  PlannerTurnStoppedError,
 } from '@ordewell/core';
 import { WebConfig } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
@@ -82,12 +83,8 @@ export interface OrchestratorPoolDeps {
   runnerInstallation?: Pick<RunnerInstallation, 'filterInstalled' | 'plannerUsability'>;
 }
 
-interface PendingStart { stopped: boolean }
-
 export class OrchestratorPool {
   private sessions = new Map<string, Session>();
-  /** Starts waiting on the installed-planner probe, by the session they would run in. */
-  private pendingStarts = new WeakMap<Session, Set<PendingStart>>();
   private clients = new Map<string, Set<WebSocket>>();
   private registry: CoreRunnerRegistry = new RunnerRegistry();
   private modelResolver: ModelResolver;
@@ -129,25 +126,22 @@ export class OrchestratorPool {
   }
 
   /**
-   * Wait for that probe before a new session's first planner turn, which is
-   * judged here, ahead of the session it replaces going. A session closed or
-   * replaced meanwhile must not start one: no client would hear it, and
-   * nothing is left to stop it. Every later turn passes the session's own gate.
+   * A new session's first planner turn. It waits for that probe at the
+   * session's own planner gate, where a reply sent meanwhile queues behind
+   * it, and a Stop or the session closing or being replaced ends the wait.
    */
-  private async plannerTurnMayStart(sessionId: string, session: Session): Promise<void> {
-    // Stop has no turn to abort while the probe is out, so the wait itself is
-    // what it cancels: otherwise the goal the user stopped starts anyway.
-    const wait: PendingStart = { stopped: false };
-    let waits = this.pendingStarts.get(session);
-    if (!waits) this.pendingStarts.set(session, (waits = new Set()));
-    waits.add(wait);
+  private async firstTurn<T>(sessionId: string, session: Session, turn: () => Promise<T>): Promise<T> {
     try {
-      await installedPlannerDetected();
-    } finally {
-      waits.delete(wait);
-      if (waits.size === 0) this.pendingStarts.delete(session);
+      return await turn();
+    } catch (err) {
+      // Judged once the probe answered: a refused session is never left
+      // addressable, as when it is judged before it is registered.
+      if (err instanceof PlannerNotReadyError && this.sessions.get(sessionId) === session) this.destroy(sessionId);
+      // Stopped before it opened, the session holds no conversation for a
+      // reply to continue: for the client its goal was discarded.
+      if (err instanceof PlannerTurnStoppedError && !session.planState) throw new PlannerTurnDiscardedError();
+      throw err;
     }
-    if (wait.stopped || this.sessions.get(sessionId) !== session) throw new PlannerTurnDiscardedError();
   }
 
   subscribe(sessionId: string, ws: WebSocket): void {
@@ -532,23 +526,23 @@ export class OrchestratorPool {
   }
 
   async generatePlan(sessionId: string, goal: string, runners: RunnerId[], workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<PlanState> {
-    const session = await this.openPlanningSession(sessionId, workspace, modelOverride, options);
-    return migratePlanState(await session.generatePlan(goal, runners));
+    const session = this.openPlanningSession(sessionId, workspace, modelOverride, options);
+    return migratePlanState(await this.firstTurn(sessionId, session, () => session.generatePlan(goal, runners)));
   }
 
   /**
-   * Build the session a new planning conversation runs in, register it in
-   * place of any live one, and return once its first planner turn may start.
+   * Build the session a new planning conversation runs in and register it in
+   * place of any live one, for {@link firstTurn} to run its first turn on.
    */
-  private async openPlanningSession(sessionId: string, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<Session> {
+  private openPlanningSession(sessionId: string, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Session {
     const session = this.createSessionFor(sessionId, workspace, modelOverride, options);
     // Judged on the new session's config (which carries the request's model)
     // and before the old session is destroyed, so a refusal leaves it alone.
     // Not while the installed-planner probe is out: its answer can be the
     // planner, and judging the openrouter fallback now would refuse the very
-    // keyless first run the probe exists for, so that judgement waits below.
-    const judgedNow = installedPlannerAnswered();
-    if (judgedNow) session.assertPlannerReady();
+    // keyless first run the probe exists for, so that judgement is the first
+    // turn's own gate.
+    if (installedPlannerAnswered()) session.assertPlannerReady();
     // After the new session is built, so a refusal above leaves the live one
     // alone; before the set, so its runners and planner turn stop broadcasting.
     this.destroy(sessionId);
@@ -559,16 +553,6 @@ export class OrchestratorPool {
     // first approval of every session unanswerable until its 5-minute timeout.
     this.sessions.set(sessionId, session);
     this.warmCodexSandbox();
-    await this.plannerTurnMayStart(sessionId, session);
-    if (!judgedNow) {
-      try {
-        session.assertPlannerReady();
-      } catch (err) {
-        // A refused session is never left addressable, as when judged above.
-        this.destroy(sessionId);
-        throw err;
-      }
-    }
     return session;
   }
 
@@ -579,14 +563,16 @@ export class OrchestratorPool {
    * assistant message lives in conversationHistory).
    */
   async startPlanning(sessionId: string, goal: string, runners: RunnerId[], workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<LegacyPlanState> {
-    const session = await this.openPlanningSession(sessionId, workspace, modelOverride, options);
-    return session.startPlanning(goal, runners);
+    const session = this.openPlanningSession(sessionId, workspace, modelOverride, options);
+    return this.firstTurn(sessionId, session, () => session.startPlanning(goal, runners));
   }
 
   /**
-   * Continue the planner dialogue with the user's reply; refused while a
-   * planner turn is in flight. The session's own planner gate waits for the
-   * installed-planner probe and judges the planner, as it does for every turn.
+   * Continue the planner dialogue with the user's reply: queued behind the
+   * first turn, even while it waits for the installed-planner probe, and
+   * refused only while a turn of another kind holds the conversation. The
+   * session's own planner gate waits for the probe and judges the planner, as
+   * it does for every turn.
    */
   async continuePlanning(sessionId: string, message: string): Promise<LegacyPlanState> {
     return this.session(sessionId).continueConversation(message);
@@ -605,18 +591,8 @@ export class OrchestratorPool {
    * session that simply is not planning right now.
    */
   cancelPlanning(sessionId: string): boolean {
-    const session = this.sessions.get(sessionId);
-    if (!session) return false;
-    // Keyed by session, not id: a goal sent after the Stop replaces the
-    // session under the same id and its own wait must not be cancelled.
-    let cancelledWait = false;
-    for (const wait of this.pendingStarts.get(session) ?? []) {
-      if (!wait.stopped) cancelledWait = true;
-      wait.stopped = true;
-    }
-    // Both run: a turn can be in flight while a later one is still waiting.
-    const aborted = session.abortPlannerTurn();
-    return aborted || cancelledWait;
+    // A first turn still waiting for the probe is the session's to stop too.
+    return this.sessions.get(sessionId)?.abortPlannerTurn() ?? false;
   }
 
   /**
