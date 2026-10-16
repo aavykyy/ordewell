@@ -85,13 +85,14 @@ export async function liveDaemon() {
   const dir = mkdtempSync(join(tmpdir(), 'ordewell-live-'));
   const workspace = join(dir, 'ws');
   mkdirSync(join(workspace, '.git'), { recursive: true });
-  const keys = ['HOME', 'ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT', 'OPENROUTER_API_KEY', 'ORDEWELL_AUTONOMOUS_MODE'];
+  const keys = ['HOME', 'ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT', 'OPENROUTER_API_KEY', 'ORDEWELL_AUTONOMOUS_MODE', 'ORDEWELL_ENABLED_RUNNERS'];
   const savedEnv = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   process.env.HOME = dir;
   process.env.ORDEWELL_SETTINGS_PATH = join(dir, 'settings.json');
   process.env.AI_PROVIDER = 'openrouter';
   process.env.ORCHESTRATOR_MODEL = 'openrouter/auto';
   process.env.OPENROUTER_API_KEY = 'sk-or-test';
+  process.env.ORDEWELL_ENABLED_RUNNERS = 'claude-code';
   delete process.env.ORDEWELL_PLANNER_EFFORT;
   // Guarded, where a planner's start of a task the user has not approved asks on its card.
   process.env.ORDEWELL_AUTONOMOUS_MODE = 'false';
@@ -106,7 +107,16 @@ export async function liveDaemon() {
   vi.spyOn(OpenAiService.prototype, 'startConversation').mockImplementation(open);
   vi.spyOn(GeminiService.prototype, 'startConversation').mockImplementation(open);
 
-  const pool = new OrchestratorPool({ modelResolver: inertResolver(), runner: holdingRunner() });
+  const pool = new OrchestratorPool({
+    modelResolver: inertResolver(),
+    runner: holdingRunner(),
+    // Installation must agree with the fake runner even on a host with no agents.
+    runnerInstallation: {
+      filterInstalled: async (runners) => runners.filter((id) => id === 'claude-code'),
+      plannerUsability: async (id) => ({ usable: id === 'claude-code' }),
+    },
+    codexSandbox: { ensure: async () => {}, refresh: async () => {} },
+  });
   const server = http.createServer();
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = (server.address() as AddressInfo).port;

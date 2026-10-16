@@ -8,9 +8,13 @@ import { withReadyPlanner } from '../../__tests__/readyPlanner';
 
 withReadyPlanner();
 
-/** A planner whose first turn never answers, so it is still in flight when the session goes. */
+/** Keeps the turn in flight until teardown aborts it, as a real planner would. */
 function hangingPlanner() {
-  return vi.spyOn(OpenAiService.prototype, 'startConversation').mockReturnValue(new Promise<ConversationTurn>(() => {}));
+  return vi.spyOn(OpenAiService.prototype, 'startConversation').mockImplementation((request) => new Promise<ConversationTurn>((resolve) => {
+    const stopped = () => resolve({ kind: 'message', text: '', researchLog: [], aborted: true });
+    if (request.signal?.aborted) stopped();
+    else request.signal?.addEventListener('abort', stopped, { once: true });
+  }));
 }
 
 describe('closing a session', () => {
@@ -57,7 +61,8 @@ describe('re-planning under a live session id', () => {
       const firstTurn = pool.startPlanning('s1', 'first', ['claude-code'], workspace);
       const first = pool.session('s1');
 
-      void pool.startPlanning('s1', 'second', ['claude-code'], workspace);
+      const secondTurn = pool.startPlanning('s1', 'second', ['claude-code'], workspace);
+      const secondDiscarded = expect(secondTurn).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
 
       expect(destroySpy.mock.contexts).toContain(first);
       expect(pool.session('s1')).not.toBe(first);
@@ -65,6 +70,9 @@ describe('re-planning under a live session id', () => {
       await expect(firstTurn).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
       expect(first.isPlannerBusy).toBe(false);
       expect(pool.session('s1').isPlannerBusy).toBe(true);
+
+      pool.destroyAll();
+      await secondDiscarded;
     } finally {
       planner.mockRestore();
       destroySpy.mockRestore();

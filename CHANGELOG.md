@@ -89,6 +89,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **Skipping a task no longer lets what depends on it start ahead of the work
   that task was waiting on**: its dependents start once that work is done,
   and a refused `run_task` names it.
+- **Offline regression tests work without coding agents installed.** The
+  daemon fixture supplies its fake runner's installation state, and the
+  session-replacement tests await discarded turns during cleanup.
 
 ## [0.10.2] — 2026-10-14
 
