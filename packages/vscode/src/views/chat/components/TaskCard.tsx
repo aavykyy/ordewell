@@ -47,7 +47,7 @@ interface TaskCardProps {
    * runner approvals, isolation and merge gate. Absent before the host has
    * folded the run, in which case the plan's own fields are all there is.
    */
-  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable'>;
+  run?: Pick<RunTask, 'idleSince' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval'>;
   /** Opt in to resolving this task's merge conflict as an AI task. */
   onResolveConflict?: (taskId: string) => void;
   dependentCount?: number;
@@ -307,7 +307,7 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
 
   const isolatedWork = isolation && isolation.state !== 'none' ? isolation : null;
   const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;
-  const row = taskRowView({ ...task, idleSince, awaitingApproval, isolation, mergeGate, continuable: run?.continuable === true }, { tasks: siblings, modes: activeModes });
+  const row = taskRowView({ ...task, idleSince, awaitingApproval, isolation, mergeGate, continuable: run?.continuable === true, waitsForApproval: run?.waitsForApproval === true }, { tasks: siblings, modes: activeModes });
   const conflictFiles = isolatedWork?.conflictFiles ?? [];
   const repair = isolatedWork?.repair ?? null;
 
@@ -372,6 +372,14 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
 
         {/* As plain as a task that waits on the user (ADR-0020). */}
         <UsageLimitControls taskId={task.id} row={row} onResumeNow={onResumeNow} onCancelResume={onCancelResume} />
+
+        {/* The scheduler leaves it for the user (ADR-0035): it must read as waiting on them, not as next in line. */}
+        {row.waitsForApproval && (
+          <span className="task-isolation-badge approval"
+            title="Added after you approved the plan, so it does not start on its own. Start it, or Execute plan, to approve it.">
+            {row.waitsForApproval}
+          </span>
+        )}
 
         {row.mergeGate && (
           <span className="task-isolation-badge gate"

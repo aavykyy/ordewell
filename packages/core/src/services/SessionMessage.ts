@@ -45,6 +45,11 @@ export type SerializedTaskStatus = {
   mergeGate?: string[];
   /** The dependencies, by title, a force start went past the merge gate of (ADR-0020). */
   forcedPastGate?: string[];
+  /**
+   * Added after the user approved the plan and not approved since, so the
+   * scheduler leaves it for them (ADR-0035). Absent for any other task.
+   */
+  waitsForApproval?: true;
   attemptUsage?: AttemptUsage[];
 };
 
@@ -330,7 +335,7 @@ export type PlanSnapshot = { type: 'plan_snapshot'; plan: SurfacePlan | SurfaceP
 /** What only the status stream says about a task; a plan refresh keeps these as they were. */
 export type RunTaskStatus = Partial<Pick<
   SerializedTaskStatus,
-  'verdict' | 'idleSince' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate'
+  'verdict' | 'idleSince' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval'
 >>;
 
 /** A task in the run view: the plan's fields, then the status stream's. */
@@ -401,6 +406,7 @@ export function serializeTaskStatus(
   awaitingApproval = 0,
   mergeGate: readonly string[] = [],
   checkpoint = '',
+  waitsForApproval = false,
 ): SerializedTaskStatus {
   return {
     id: t.id,
@@ -420,6 +426,7 @@ export function serializeTaskStatus(
     ...(awaitingApproval > 0 ? { awaitingApproval } : {}),
     ...(mergeGate.length > 0 ? { mergeGate: [...mergeGate] } : {}),
     ...(t.forcedPastGate?.length ? { forcedPastGate: [...t.forcedPastGate] } : {}),
+    ...(waitsForApproval ? { waitsForApproval: true as const } : {}),
   };
 }
 

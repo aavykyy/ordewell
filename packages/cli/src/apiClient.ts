@@ -100,6 +100,8 @@ export interface TaskStatus {
   id: string;
   status: string;
   verdict: { outcome: string; reason: string; checks: unknown[] } | null;
+  /** Added after the user approved the plan, so the scheduler leaves it for them (ADR-0035). */
+  waitsForApproval?: boolean;
 }
 
 export interface StatusUpdate {

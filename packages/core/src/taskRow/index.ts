@@ -1,4 +1,4 @@
-export { isTaskRunning, taskStatusKind, awaitingLabel, approvalLabel, resumeLabel, resumeTime, blockedByLabel, skippedLabel, NOT_STARTED } from './status';
+export { isTaskRunning, taskStatusKind, awaitingLabel, approvalLabel, resumeLabel, resumeTime, blockedByLabel, skippedLabel, NOT_STARTED, WAITS_FOR_APPROVAL_LABEL } from './status';
 export type { TaskStatusKind } from './status';
 export { taskRowActions, markAction, markRequestFor, opsEditable } from './actions';
 export type { TaskRowAction, TaskRowPlacement } from './actions';

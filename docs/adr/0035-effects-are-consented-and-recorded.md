@@ -1,6 +1,6 @@
 # 0035 — Every effect is consented to and recorded, whoever performs it
 
-**Status:** accepted, not yet implemented — amends [ADR-0008](0008-planner-exploration-envelope.md), [ADR-0009](0009-coding-agents-as-planners.md), [ADR-0020](0020-ops-tasks-and-merge-gates.md), [ADR-0022](0022-ordewell-mcp-server.md), [ADR-0026](0026-one-envelope-for-every-planner.md), [ADR-0029](0029-the-supervisor.md) and [ADR-0030](0030-global-run-settings.md); settles #95
+**Status:** accepted; the scheduler starting only approved tasks (#95) is implemented, script tasks and the effect allowlist are not yet — amends [ADR-0008](0008-planner-exploration-envelope.md), [ADR-0009](0009-coding-agents-as-planners.md), [ADR-0020](0020-ops-tasks-and-merge-gates.md), [ADR-0022](0022-ordewell-mcp-server.md), [ADR-0026](0026-one-envelope-for-every-planner.md), [ADR-0029](0029-the-supervisor.md) and [ADR-0030](0030-global-run-settings.md); settles #95
 
 ## Problem
 
@@ -273,3 +273,4 @@ its body.
 ## History
 
 - 2026-10-15 — accepted; settles #95 with its first option. Not yet implemented.
+- 2026-10-16 — #95 implemented: the scheduler starts only tasks in the approval record, checked at the one claim every start passes, and a task the user adds by hand is approved as it lands. A task added after approval waits, shown as waiting for the user's approval to start in VS Code, the TUI, `ordewell status` and `ordewell run`; the user approves it by starting it or executing the plan. Seen live: in Guarded with autorun on, a task the planner added in the user's turn during a run started on its own, with no card. Script tasks and the effect allowlist are not yet implemented.

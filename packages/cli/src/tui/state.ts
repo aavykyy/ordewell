@@ -46,6 +46,8 @@ export interface TaskView {
   continuable?: boolean;
   /** How many of its runner's tool requests wait for an answer (ADR-0018, A1); absent when none do. */
   awaitingApproval?: number;
+  /** Added after the user approved the plan, so the scheduler leaves it for them (ADR-0035). */
+  waitsForApproval?: boolean;
   /** An ops task (ADR-0020): it runs in the user's checkout, never a worktree. */
   ops?: boolean;
   /** Task skills attached by name, put in the runner's prompt at spawn. */

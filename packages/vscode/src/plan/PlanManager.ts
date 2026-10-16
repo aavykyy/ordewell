@@ -490,12 +490,15 @@ export async function handleSystemCommand(
       case 'executePlan':
         await handleApprovePlan(deps);
         break;
-      case 'stopExecution':
+      case 'stopExecution': {
         // A stop with nothing running is a no-op, not a refusal: the button already said stopped.
-        await deps.session.execute({ command: 'stop_run' }, { kind: 'user' });
+        // That holds only while nothing can still start, or "stopped" would be untrue (ADR-0029).
+        const outcome = await deps.session.execute({ command: 'stop_run' }, { kind: 'user' });
+        if (!outcome.ok && (deps.session.isExecuting || deps.session.startsPending)) throw new Error(outcome.message);
         deps.runner.stopAll();
         deps.chatProvider.setState('planDraft');
         break;
+      }
     }
   } catch (err) {
     void vscode.window.showWarningMessage(err instanceof Error ? err.message : String(err));

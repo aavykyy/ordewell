@@ -161,7 +161,7 @@ describe('the row view, every status against every annotation', () => {
   const isolated = { branch: 'b', worktree: 'w', repos: ['.'] };
   const annotations: [string, Partial<TaskRowSubject>, (view: ReturnType<typeof taskRowView>, status: string) => void][] = [
     ['nothing', {}, (v) => {
-      expect(v).toMatchObject({ conflict: null, repairing: null, repaired: null, mergeGate: null, opsChangedFiles: false, forcedPastGate: null, approvals: null, autonomous: false });
+      expect(v).toMatchObject({ conflict: null, repairing: null, repaired: null, mergeGate: null, opsChangedFiles: false, forcedPastGate: null, approvals: null, autonomous: false, waitsForApproval: null });
     }],
     ['a conflict in a named repo', { isolation: { ...isolated, state: 'conflict', conflictRepo: 'api', conflictFiles: ['a', 'b', 'c', 'd', 'e', 'f'] } }, (v) => {
       expect(v.conflict).toEqual({ repo: 'api', files: 'a, b, c, d, e, +1 more' });
@@ -204,6 +204,11 @@ describe('the row view, every status against every annotation', () => {
     }],
     ['approvals', { awaitingApproval: 3 }, (v) => {
       expect(v.approvals).toBe('Waiting for approval (3)');
+    }],
+    // A task added after the user approved the plan waits for them until it starts; once at work, it was approved (ADR-0035).
+    ['a start that waits for the user\'s approval', { waitsForApproval: true }, (v, status) => {
+      expect(v.waitsForApproval).toBe(status === 'pending' || status === 'approved' || status === 'blocked' ? 'Waiting for your approval to start' : null);
+      expect(v.approvals).toBeNull();
     }],
     ['dependencies', { dependencies: ['t1', 'ghost'] }, (v) => {
       expect(v.dependencies).toEqual(['#1', 'ghost']);

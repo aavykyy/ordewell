@@ -107,6 +107,11 @@ describe('a plan row, pinned before its rules move to core', () => {
       .toContain('⏸ waits for Merge all — #1, ghost not merged into your branch yet');
   });
 
+  it('says a task added after the plan was approved waits for the user, and how to approve it (ADR-0035)', () => {
+    expect(frame([task({ waitsForApproval: true })])).toContain('⏸ waiting for your approval to start — added after you approved the plan; f starts it, or /run runs the plan');
+    expect(frame([task({ waitsForApproval: true, status: 'in_progress' })])).not.toContain('waiting for your approval');
+  });
+
   it('draws a task a failure blocks as blocked by the failed task, through its dependencies (ADR-0034)', () => {
     const out = frame([
       task({ status: 'failed' }),

@@ -2,7 +2,7 @@ import { taskUsageText } from '../tui/blocks';
 import { writeFileSync } from 'fs';
 import { flag, hasFlag, readLastSession } from '../utils';
 import { iconFor } from '../utils/output';
-import { blockedByLabel, blockingFailures, skippedLabel, flattenTasks, taskOrderLabel, taskRowView, planUsage } from '@ordewell/core';
+import { blockedByLabel, blockingFailures, skippedLabel, flattenTasks, taskOrderLabel, taskRowView, planUsage, waitsForApproval, type ApprovalRecord } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, type SessionMeta } from '../apiClient';
@@ -79,12 +79,18 @@ function printOneSession(
 
   const usage = planUsage(allTasks);
   if (usage.attempts) console.log(`Tasks total: ${taskUsageText(usage)}`);
+  const record = servedApprovalRecord(plan);
+  const approval = (row: { waitsForApproval: string | null }, ref: string) => (row.waitsForApproval
+    ? `${row.waitsForApproval} — \`ordewell run-task ${ref}\` starts it, or \`ordewell run\` runs the plan`
+    : null);
   for (const t of allTasks) {
     const icon = iconFor(blocked.has(t.id) ? 'blocked' : t.status);
     const model = t.assignedModel ? ` (${t.assignedModel.modelLabel})` : '';
     const shortId = (t.id ?? '').slice(-8);
     console.log(`  ${taskOrderLabel(t).padStart(2)}. ${icon} [${shortId}] ${t.title}${model}`);
-    const row = taskRowView({ ...t, dependencies: t.dependencies ?? [] }, { tasks: allTasks });
+    const row = taskRowView({ ...t, dependencies: t.dependencies ?? [], waitsForApproval: waitsForApproval(t, record) }, { tasks: allTasks });
+    const waiting = approval(row, taskOrderLabel(t));
+    if (waiting) console.log(`      ${waiting}`);
     if (row.blockedBy) console.log(`      ${blockedByLabel(row.blockedBy)}`);
     if (row.status === 'skipped') console.log(`      ${skippedLabel(row.skipReason)}`);
     if (row.usage) console.log(`      ${taskUsageText(row.usage)}`);
@@ -93,10 +99,18 @@ function printOneSession(
       const subModel = sub.assignedModel ? ` (${sub.assignedModel.modelLabel})` : '';
       const subShortId = (sub.id ?? '').slice(-8);
       console.log(`    ${taskOrderLabel(sub, t)}. ${subIcon} [${subShortId}] ${sub.title}${subModel}`);
-      const subRow = taskRowView({ ...sub, dependencies: sub.dependencies ?? [] }, { parent: t, tasks: allTasks });
+      const subRow = taskRowView({ ...sub, dependencies: sub.dependencies ?? [], waitsForApproval: waitsForApproval(sub, record) }, { parent: t, tasks: allTasks });
+      const subWaiting = approval(subRow, taskOrderLabel(sub, t));
+      if (subWaiting) console.log(`        ${subWaiting}`);
       if (subRow.blockedBy) console.log(`        ${blockedByLabel(subRow.blockedBy)}`);
       if (subRow.status === 'skipped') console.log(`        ${skippedLabel(subRow.skipReason)}`);
       if (subRow.usage) console.log(`        ${taskUsageText(subRow.usage)}`);
     }
   }
+}
+
+/** The approval record the daemon serves with the plan; one it lacks reads as no approval, which singles nothing out. */
+function servedApprovalRecord(plan: Record<string, unknown>): ApprovalRecord {
+  const approvedTasks = Array.isArray(plan?.approvedTasks) ? plan.approvedTasks.filter((id): id is string => typeof id === 'string') : undefined;
+  return { approved: plan?.approved === true, ...(approvedTasks ? { approvedTasks } : {}) };
 }

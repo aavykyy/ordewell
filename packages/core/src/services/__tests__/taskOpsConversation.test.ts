@@ -381,7 +381,10 @@ describe('task_ops conversation turns', () => {
     expect(added.taskMode).toBeTruthy();
   });
 
-  it('re-ticks an armed-but-idle scheduler so an added task with satisfied deps fans out', async () => {
+  // The user asked for a change, not for every task the planner then adds:
+  // an added task waits for their approval however ready it is (ADR-0035).
+  // An Act supervisor's added task fans out instead (supervisorAct.test.ts).
+  it('leaves a task the planner adds under an armed-but-idle scheduler waiting for the user\'s approval', async () => {
     const spawned: string[] = [];
     const session = makeSession({
       runner: recordingRunner(spawned),
@@ -403,7 +406,8 @@ describe('task_ops conversation turns', () => {
     await session.continueConversation('add a docs task after setup');
 
     const added = session.planTasks.find((t) => t.title === 'Docs')!;
-    expect(spawned).toContain(added.id);
+    expect(spawned).not.toContain(added.id);
+    expect(added.status).toBe('pending');
   });
 
   // Only Retry / Force Start / Run release a hold. An edit landing under an

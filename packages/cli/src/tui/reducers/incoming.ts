@@ -82,6 +82,7 @@ function runTaskToView(t: RunTask): TaskView {
     checkpoint: typeof t.checkpoint === 'string' ? sanitize(t.checkpoint) : undefined,
     continuable: t.continuable === true,
     awaitingApproval: t.awaitingApproval,
+    ...(t.waitsForApproval === true ? { waitsForApproval: true } : {}),
     ...(t.ops === true ? { ops: true } : {}),
     ...(Array.isArray(t.skills) && t.skills.length > 0 ? { skills: t.skills.map((name) => planLabel(name)) } : {}),
     ...(t.addedBy ? { addedBy: t.addedBy } : {}),

@@ -5,6 +5,7 @@ import type { ApprovalRequest, IApproval } from '../interfaces/IApproval';
 import type { IsolationMergeResult } from '../interfaces/IWorktreeIsolation';
 import { continuability } from './continuation';
 import type { GuardTarget, GuardTrip } from './LoopGuards';
+import { STOPPED_BEFORE_START, type StartAdmission } from './TaskOrchestrator';
 
 /** One call at the command seam, as every route words it (ADR-0029). Task references are resolved here. */
 export type ExecutionCommand =
@@ -97,6 +98,10 @@ export interface ExecutionHost {
   startsHeld(): boolean;
   /** Work is running right now. */
   hasLiveWork(): boolean;
+  /** Something will start without being asked again: a start admitted and not yet claimed, or a scheduled resume. */
+  startsPending(): boolean;
+  /** Admit a start that waits before it claims; see {@link StartAdmission}. */
+  admitStart(): StartAdmission;
   /** The task's attempt is live: starting, running or landing. */
   running(taskId: string): boolean;
   maxParallel(): number;
@@ -136,8 +141,12 @@ export interface ExecutionHost {
   heldEdit(taskId?: string): boolean;
   /** The plan's task tree as the open turn's held edit leaves it: as it is, when it holds none or one that would not apply. */
   editedTasks(): readonly Task[];
-  /** Run the command again, as the same actor, once the open turn's reply has landed its edit; `intent` names it if it never does. */
-  deferUntilLanded(command: ExecutionCommand, actor: ExecutionActor, intent: string): void;
+  /**
+   * Run the command again, as the same actor, once the open turn's reply has
+   * landed its edit; `intent` names it if it never does. `admission` is
+   * released once it has run or been dropped.
+   */
+  deferUntilLanded(command: ExecutionCommand, actor: ExecutionActor, intent: string, admission: StartAdmission): void;
   /** A command deferred behind an edit did not run once the edit landed: the user is told, and so is the planner's next turn. */
   queuedNotRun(text: string): void;
 }
@@ -175,9 +184,10 @@ interface Acted {
 /**
  * `approves`: the tasks the start runs that the user has not approved, which
  * a Guarded planner start in their turn asks them to approve rather than
- * being refused for.
+ * being refused for. `act` is told whether a Stop came since the call was
+ * admitted, for a start that goes on after an await of its own.
  */
-type Prepared = { refusal: string } | { act: () => Promise<Acted>; approves?: Located[] };
+type Prepared = { refusal: string } | { act: (stopped: () => boolean) => Promise<Acted>; approves?: Located[] };
 
 /**
  * The command seam (ADR-0029, #91): the one place an execution action from
@@ -200,9 +210,15 @@ export class ExecutionCommands {
     this.now = deps.now ?? (() => new Date().toISOString());
   }
 
-  async run(asked: ExecutionCommand, actor: ExecutionActor): Promise<CommandOutcome> {
+  /**
+   * `admitted`: a deferred start's admission, taken as it was queued, which
+   * its owner releases; a start asked for now takes its own.
+   */
+  async run(asked: ExecutionCommand, actor: ExecutionActor, admitted?: StartAdmission): Promise<CommandOutcome> {
     if (!this.host.tasks()) return { ok: false, outcome: 'refused', message: 'There is no plan yet, so there is nothing to run or stop.' };
     const located = 'task' in asked ? this.locate(asked.task) : undefined;
+    // A start queued before the user's Stop is what the Stop withdrew, whatever else has changed since.
+    if (admitted && !admitted.current()) return this.refuse(asked, actor, located, STOPPED_BEFORE_START);
     // A paused task has no turn to message: what is sent to it resumes it, and is consented to, guarded and recorded as that resume.
     const command: ExecutionCommand = asked.command === 'message_task' && located?.paused
       ? { command: 'retry_task', task: asked.task, from: 'session', message: asked.text }
@@ -235,10 +251,25 @@ export class ExecutionCommands {
     const tripped = this.tripped(command, actor, located);
     if (tripped) return tripped;
 
+    // A start counts as live work for Stop until it has acted — on the card, and while it starts (ADR-0029).
+    const admission = admitted ?? (STARTS.has(command.command) ? this.host.admitStart() : null);
+    try {
+      return await this.carryOut(command, actor, located, consent, first, admission);
+    } finally {
+      if (!admitted) admission?.release();
+    }
+  }
+
+  /** A valid, consented call, from the user's answer where one is needed to the act and its record. */
+  private async carryOut(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined, consent: Consent, first: Extract<Prepared, { act: unknown }>, admission: StartAdmission | null): Promise<CommandOutcome> {
+    const stopped = () => admission !== null && !admission.current();
     let prepared = first;
     if (consent.kind === 'ask') {
       const plan = this.host.tasks();
-      if (!(await this.deps.consent.request(this.question(command, actor, located, first.approves)))) {
+      const allowed = await this.deps.consent.request(this.question(command, actor, located, first.approves));
+      // A Stop clears the card as it withdraws the start: a no it answered for the user is not theirs.
+      if (stopped()) return this.refuse(command, actor, located, STOPPED_BEFORE_START);
+      if (!allowed) {
         this.keep(command, actor, located, 'declined');
         return { ok: false, outcome: 'declined', message: `The user did not approve: ${this.intent(command, located)}. Do not ask again unless they say so.` };
       }
@@ -251,10 +282,12 @@ export class ExecutionCommands {
 
     // Taken at the last check, before the start awaits anything: a planner edit landing while the spawn is
     // under way changes the plan, and the user consented to the plan as it was checked, not as it becomes.
+    // Recorded before it acts too because the scheduler starts only approved tasks (ADR-0035), and a retry
+    // or run it hands over is started by the scheduler.
     this.host.approve(this.consented(command, actor, located, prepared.approves));
     let acted: Acted;
     try {
-      acted = await prepared.act();
+      acted = await prepared.act(stopped);
     } catch (err) {
       return this.refuse(command, actor, located, err instanceof Error ? err.message : String(err));
     }
@@ -267,16 +300,18 @@ export class ExecutionCommands {
    * Nobody reads its answer, so one that does not run is kept as refused and
    * said, to the user and to the planner's next turn.
    */
-  async replay(command: ExecutionCommand, actor: ExecutionActor): Promise<void> {
+  async replay(command: ExecutionCommand, actor: ExecutionActor, admission: StartAdmission): Promise<void> {
     const located = 'task' in command ? this.locate(command.task) : undefined;
     let outcome: CommandOutcome;
     try {
-      outcome = await this.run(command, actor);
+      outcome = await this.run(command, actor, admission);
     } catch (err) {
       outcome = this.refuse(command, actor, located, err instanceof Error ? err.message : String(err));
     }
     if (outcome.ok || outcome.outcome !== 'refused') return;
-    this.host.queuedNotRun(`The queued ${queued(command, located)} did not run: ${outcome.message}`);
+    this.host.queuedNotRun(admission.current()
+      ? `The queued ${queued(command, located)} did not run: ${outcome.message}`
+      : `Not done: the queued ${queued(command, located)} was stopped before it could start.`);
   }
 
   /**
@@ -309,7 +344,7 @@ export class ExecutionCommands {
   /** `approves` is null for a start that runs without asking, else what the user's yes would approve. */
   private defer(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined, approves: readonly Located[] | null): CommandOutcome {
     const intent = this.intent(command, located);
-    this.host.deferUntilLanded(command, actor, intent);
+    this.host.deferUntilLanded(command, actor, intent, this.host.admitStart());
     return {
       ok: true,
       message: approves
@@ -472,9 +507,11 @@ export class ExecutionCommands {
 
     return {
       ...approval,
-      act: async () => {
+      act: async (stopped) => {
         // The Retry button's own path: it continues a run that ended on a failure, and hands the task to a scheduler that runs.
         if (settled) await this.host.retryTask(task.id, actor);
+        // A Stop while the retry let go of the old worktree withdrew the start that would follow it.
+        if (stopped()) throw new Error(STOPPED_BEFORE_START);
         if (!this.host.running(task.id) && !(settled && this.host.scheduling())) await this.host.startTask(task.id, actor);
         if (this.host.runBlocked()) return { message: BLOCKED_RUN };
         const verb = how === 'run' ? 'Started' : 'Retrying';
@@ -549,14 +586,18 @@ export class ExecutionCommands {
 
   private prepareStopRun(): Prepared {
     const live = this.all().filter(({ task }) => this.host.running(task.id));
-    if (!this.host.hasLiveWork() && !this.host.scheduling()) return { refusal: 'Nothing is running: there is no run to stop.' };
+    // A start admitted but not yet claimed would begin after a refused Stop, so it is a run to stop too.
+    const pending = this.host.startsPending();
+    if (!this.host.hasLiveWork() && !this.host.scheduling() && !pending) return { refusal: 'Nothing is running: there is no run to stop.' };
     return {
       act: async () => {
         this.host.stopRun();
         return {
           message: live.length > 0
             ? `Stopped the run: ${named(live)} ${live.length === 1 ? 'is' : 'are'} back to not started, and the plan is kept. Start again with run_plan or run_task.`
-            : 'Stopped the run; nothing was running. The plan is kept.',
+            : pending
+              ? 'Stopped the run before anything more started: nothing was running, and what was about to start will not. The plan is kept.'
+              : 'Stopped the run; nothing was running. The plan is kept.',
         };
       },
     };

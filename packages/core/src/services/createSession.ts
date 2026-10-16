@@ -40,7 +40,7 @@ import { TaskLogRecorder } from './TaskLogRecorder';
 import { PlannerUsageLedger } from './PlannerUsage';
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
-import { flattenTasks, keepExecutionState, stampOrigin, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskSnapshot, type RunnerId } from '../models/Task';
+import { approvalRecordOf, flattenTasks, keepExecutionState, stampOrigin, waitsForApproval, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskSnapshot, type RunnerId } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
 import { PlannerNotReadyError, plannerNotReadyFor } from './plannerReadiness';
 import { installedPlannerAnswered, installedPlannerDetected } from './InstalledPlanner';
@@ -298,12 +298,14 @@ export function createSession(deps: SessionDeps): Session {
     skillsAt: (roots) => (deps.skillsService ?? new SkillsService(roots)).forRoot(roots),
     previousAttemptFromLog: (taskId) => lastAttemptDigest(session.taskLogLocation, taskId),
     runSettings: () => session.planState?.runSettings,
+    isApproved: (taskId) => session.isApproved(taskId),
   });
   const usage = new PlannerUsageLedger();
   const events = new SessionEventRelay({
     broadcast: deps.broadcast, onNotice: deps.onNotice, store, orchestrator, runs: orchestrator.runs, usage,
     awaitingApproval: (taskId) => runnerApprovals.waiting(taskId),
     checkpointQuestion: (taskId) => orchestrator.getCheckpointQuestion(taskId),
+    waitsForApproval: (taskId): boolean => session.waitsForApproval(taskId),
   });
 
   const approvalPolicy = new ApprovalPolicy({
@@ -637,6 +639,7 @@ export class Session {
       plannerTools: () => this.aiService().plannerToolsAttached?.() ?? false,
       taskSkills: () => this.workspaceSkills(),
       notice: (level, message) => this.notice(level, message),
+      approve: (taskIds) => this.approve(taskIds),
     });
 
     this.commands = new ExecutionCommands({
@@ -660,7 +663,7 @@ export class Session {
 
   private newTurnEffects(): TurnEffects {
     return new TurnEffects({
-      replay: (command, actor) => this.commands.replay(command, actor),
+      replay: (command, actor, admission) => this.commands.replay(command, actor, admission),
       supervisorLevel: () => this.supervision.level,
       notice: (level, message) => this.notice(level, message),
     });
@@ -711,6 +714,8 @@ export class Session {
       scheduling: () => this.orchestrator.isScheduling,
       startsHeld: () => this.orchestrator.startsHeld,
       hasLiveWork: () => this.orchestrator.hasLiveWork,
+      startsPending: () => this.orchestrator.startsPending,
+      admitStart: () => this.orchestrator.admitStart(),
       running: (taskId) => this.orchestrator.getAttempt(taskId) !== undefined,
       maxParallel: () => this.config.maxParallelSessions,
       runBlocked: () => this.runs.blocked,
@@ -735,7 +740,7 @@ export class Session {
       guardTripped: (trip) => this.supervision.guardTripped(trip),
       heldEdit: (taskId) => this.heldEdit(taskId),
       editedTasks: () => this.editedTasks(),
-      deferUntilLanded: (command, actor, intent) => this.turnEffects.defer(command, actor, intent),
+      deferUntilLanded: (command, actor, intent, admission) => this.turnEffects.defer(command, actor, intent, admission),
       queuedNotRun: (text) => {
         this.systemNote(text);
         this.untoldRunUpdates.push(text);
@@ -843,11 +848,19 @@ export class Session {
   }
 
   /**
-   * The user approved this task to run (ADR-0029), and it has been in the plan
-   * ever since: the one check every start reads, the scheduler's included.
+   * Whether the user approved this task to run (ADR-0029, ADR-0035): it was in
+   * the plan they executed, or they started it, added it or let it start since,
+   * and it has been in the plan ever since. The one reading of the approval
+   * record — the seam and the scheduler both ask it.
    */
   isApproved(taskId: string): boolean {
     return !!this.store.get(taskId) && (this.plan?.approvedTasks?.includes(taskId) ?? false);
+  }
+
+  /** A task the scheduler leaves for the user to approve; see {@link waitsForApproval}. */
+  waitsForApproval(taskId: string): boolean {
+    const task = this.store.get(taskId);
+    return !!this.plan && !!task && waitsForApproval(task, this.plan);
   }
 
   /** What the user approved to run (ADR-0029): a start of their own approves the task and its subtasks. */
@@ -1043,7 +1056,8 @@ export class Session {
     // A turn waiting at the planner gate belongs to this scope too: let open
     // later, it would plan the old goal in whatever scope is held by then.
     this.endWaiting(() => new PlannerTurnDiscardedError());
-    if (this.isExecuting || this.orchestrator.isRunning || this.orchestrator.awaitsResume) this.stopExecution();
+    // A start still opening its run belongs to this plan: let through, it would claim a task of the next one that shares its id.
+    if (this.isExecuting || this.orchestrator.isRunning || this.orchestrator.awaitsResume || this.orchestrator.startsPending) this.stopExecution();
     this.conversation.abandonTurn();
     this.turns.abandon();
     this.supervision.reset();
@@ -1118,8 +1132,9 @@ export class Session {
     const executionLog = this.store.getExecutionLog();
     const logged = new Set(executionLog.map((s) => s.id));
     const pendingTasks = this.store.planTasks.filter((t) => !logged.has(t.id));
+    const record = approvalRecordOf(this.plan);
     if (executionLog.length === 0 && !this.orchestrator.isRunning) {
-      return { phase: 'planning', history: [], message: '', pendingTasks };
+      return { phase: 'planning', history: [], message: '', pendingTasks, ...record };
     }
     return {
       phase: 'executing',
@@ -1130,6 +1145,7 @@ export class Session {
       goal: this.goal,
       runners: this.plan.runners,
       status: this.plan.status,
+      ...record,
     };
   }
 
@@ -1602,7 +1618,7 @@ export class Session {
       // hold, a user task, or a cancellation — would ignore the restart: `start`
       // no-ops while armed and `loadPlan` keeps the run mode. Disarm it so this
       // run starts cleanly; with nothing live, stopping has nothing to interrupt.
-      this.orchestrator.stop();
+      this.orchestrator.stop('restart');
 
       plan.approved = true;
       plan.status = 'approved';
@@ -1850,10 +1866,20 @@ export class Session {
     return this.editor.addConflictResolver(taskId);
   }
 
+  /**
+   * The user's Stop (ADR-0029): the run, and every start admitted before it —
+   * one queued behind a planner turn's edit, one waiting on its card, one
+   * still opening its run. A card still asking is cleared, so its start
+   * answers as stopped rather than waiting on a question that no longer stands.
+   */
   stopExecution(): void {
     this.saved(() => this.orchestrator.stop());
+    this.approvals.clear((request) => request.kind === 'task_start');
     this.broadcast({ type: 'execution_stopped' });
   }
+
+  /** Something will start without being asked again; see {@link TaskOrchestrator.startsPending}. */
+  get startsPending(): boolean { return this.orchestrator.startsPending; }
 
   /**
    * Run a user control and save what it changed before any surface hears of

@@ -69,6 +69,7 @@ function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Recor
   const runs = { current: opts.run ?? null, linkResolver: vi.fn() };
   const plannerTools = vi.fn(() => false);
   const notice = vi.fn();
+  const approve = vi.fn<(ids: readonly string[]) => void>();
   const editor = new PlanEditor({
     store,
     plan: () => plan,
@@ -80,9 +81,10 @@ function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Recor
     plannerTools,
     taskSkills: () => ({ findSkill: (name) => opts.skills?.find((s) => s.name === name), searchedDirs: () => [], uncommitted: opts.uncommitted }),
     notice,
+    approve,
   });
   const task = (id: string) => store.get(id);
-  return { editor, store, plan, events, sent, catalog, mutate, scheduler, runs, plannerTools, notice, task };
+  return { editor, store, plan, events, sent, catalog, mutate, scheduler, runs, plannerTools, notice, approve, task };
 }
 
 describe('PlanEditor.updateTask', () => {
@@ -295,6 +297,15 @@ describe('PlanEditor.setTaskRunner', () => {
 });
 
 describe('PlanEditor.addTask', () => {
+  it('approves a task the user adds, before the reschedule that may start it (ADR-0035)', async () => {
+    const { editor, store, approve, scheduler } = setup();
+
+    await editor.addTask({ title: 'Docs', prompt: 'write docs' });
+
+    expect(approve).toHaveBeenCalledWith([store.planTasks.at(-1)!.id]);
+    expect(approve.mock.invocationCallOrder[0]).toBeLessThan(scheduler.tick.mock.invocationCallOrder.at(-1)!);
+  });
+
   it('fills in a runnable assignment on the plan\'s first runner', async () => {
     const { editor, store } = setup();
 

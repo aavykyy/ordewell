@@ -54,6 +54,7 @@ function editor(tasks = plan()) {
     plannerTools: () => false,
     taskSkills: () => ({ findSkill: () => undefined, searchedDirs: () => [] }),
     notice: () => undefined,
+    approve: () => undefined,
   });
   return { store, edit };
 }
