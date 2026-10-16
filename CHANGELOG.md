@@ -28,9 +28,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   looking waits for the answer. A vendor model left over from an earlier
   setup no longer overrides the agent unless that vendor's key is set, and a
   model left over from an earlier vendor setup no longer breaks planning with
-  an installed agent. A
-  message restored from before a reload is never lost when the planner cannot
-  run: it waits and goes with your next message. Stop works while the first
+  an installed agent.
+  A message restored from before a reload is never lost when the planner
+  cannot run: it waits and goes with your next message. Stop works while the first
   turn is still waiting on that look. Adding or removing a key takes effect at
   once, an explicit `AI_PROVIDER` or `/planner` choice always wins, and the
   check looks at the selected provider's own key.
