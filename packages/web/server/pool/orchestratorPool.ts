@@ -52,7 +52,7 @@ import {
   PlannerTurnDiscardedError,
   PlannerTurnStoppedError,
 } from '@ordewell/core';
-import { WebConfig } from '../adapters/WebConfig';
+import { WebConfig, type PlannerPick } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
 import { PoolFileSystem } from '../adapters/PoolFileSystem';
 import { PoolAwareRunner } from '../adapters/PoolAwareRunner';
@@ -97,7 +97,7 @@ export class OrchestratorPool {
    * is otherwise inherited, and an agent planning only because detection
    * found it does not plan with an inherited model it cannot be shown to run.
    */
-  private pickedModel: string | undefined;
+  private pickedModel: PlannerPick | undefined;
   private runner: IRunner;
   /** One probe per daemon, asked again whenever the runner list is refreshed (ADR-0033). */
   private codexSandbox: Pick<CodexSandboxAvailability, 'ensure' | 'refresh'>;
@@ -409,7 +409,9 @@ export class OrchestratorPool {
       // key added later must not find written over the configured model.
       if (plannerChange.provider !== undefined || plannerChange.model !== undefined) process.env.ORCHESTRATOR_MODEL = selection.next.model;
       process.env.ORDEWELL_PLANNER_EFFORT = selection.next.effort;
-      if (plannerChange.model !== undefined) this.pickedModel = selection.next.model;
+      // Read once the env above is written: the pick is for whoever that
+      // routes to, which a switch or the model's own catalog may have changed.
+      if (plannerChange.model !== undefined) this.pickedModel = { model: selection.next.model, provider: this.plannerProviderInEffect() };
     }
 
     if (changes.modelAllowlist && typeof changes.modelAllowlist === 'object') {
@@ -506,7 +508,7 @@ export class OrchestratorPool {
   }
 
   getRunnerState(): { enabledRunners: RunnerId[]; orchestratorModel: string } {
-    const config = new WebConfig({ enabledRunners: this.enabledRunnerOverride() });
+    const config = this.plannerConfig();
     return { enabledRunners: config.enabledRunners, orchestratorModel: config.orchestratorModel };
   }
 

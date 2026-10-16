@@ -7,7 +7,7 @@ export class VsCodeConfig extends BaseConfig {
   private get config() { return vscode.workspace.getConfiguration('ordewell'); }
 
   private _providerModelLists: ProviderModelLists | null = null;
-  private _pickedModel: string | undefined;
+  private _pick: { model: string; provider: PlannerBackendId } | undefined;
 
   constructor(private readonly secretStore?: SecretStore) {
     super();
@@ -151,11 +151,12 @@ export class VsCodeConfig extends BaseConfig {
   }
 
   /**
-   * A planner pick in this window set `model`. Held here, not in the settings:
-   * the setting outlives the window, and the next one reads it as inherited.
+   * A planner pick in this window set `model` for `provider`. Held here, not
+   * in the settings: the setting outlives the window, and the next one reads
+   * it as inherited.
    */
-  notePlannerPick(model: string): void {
-    this._pickedModel = model;
+  notePlannerPick(model: string, provider: PlannerBackendId): void {
+    this._pick = { model, provider };
   }
 
   private configuredPlanner(model: string): ConfiguredPlanner {
@@ -164,7 +165,7 @@ export class VsCodeConfig extends BaseConfig {
       model: configured,
       effort: this.config.get<string>('plannerThinkingEffort', '') || process.env.ORDEWELL_PLANNER_EFFORT || '',
       setting: this.rawAiProvider,
-      picked: this._pickedModel === configured,
+      pickedFor: this._pick?.model === configured ? this._pick.provider : undefined,
     };
   }
 

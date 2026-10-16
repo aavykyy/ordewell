@@ -1,6 +1,11 @@
 import { type PlannerBackendId, BaseConfig, DEFAULT_RUNNERS, isApiProvider, normalizeGeminiModel } from '@ordewell/core';
 import type { ConfiguredPlanner, ProviderModelLists, ResolvedPlanner } from '@ordewell/core';
 
+export interface PlannerPick {
+  model: string;
+  provider: PlannerBackendId;
+}
+
 interface WebConfigOpts {
   enabledRunners?: string[];
   /**
@@ -10,15 +15,15 @@ interface WebConfigOpts {
    */
   providerModelLists?: ProviderModelLists | (() => ProviderModelLists | undefined);
   modelOverride?: string;
-  /** The model a settings write picked in this daemon, read live; absent when none has. */
-  pickedModel?: () => string | undefined;
+  /** The model a settings write picked in this daemon and the planner it was for, read live; absent when none has. */
+  pickedModel?: () => PlannerPick | undefined;
 }
 
 export class WebConfig extends BaseConfig {
   private _enabledRunnersOverride: string[] | undefined;
   private _providerModelLists: () => ProviderModelLists | undefined;
   private _modelOverride: string | undefined;
-  private _pickedModel: () => string | undefined;
+  private _pickedModel: () => PlannerPick | undefined;
 
   constructor(opts?: WebConfigOpts) {
     super();
@@ -48,7 +53,8 @@ export class WebConfig extends BaseConfig {
    */
   private configuredPlanner(): ConfiguredPlanner {
     const model = process.env.ORCHESTRATOR_MODEL || '';
-    return { model, effort: process.env.ORDEWELL_PLANNER_EFFORT || '', picked: this._pickedModel() === model };
+    const pick = this._pickedModel();
+    return { model, effort: process.env.ORDEWELL_PLANNER_EFFORT || '', pickedFor: pick?.model === model ? pick.provider : undefined };
   }
 
   get orchestratorModel(): string {

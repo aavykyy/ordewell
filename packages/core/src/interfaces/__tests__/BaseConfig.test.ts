@@ -147,13 +147,13 @@ describe('BaseConfig', () => {
       expect(detect()).toBe('codex');
     });
 
-    it('a key the host keeps outside the environment also keeps the installed agent out', () => {
-      // VS Code's secret store, say: a vendor key all the same, which planned with openrouter before.
+    it('a key the host keeps outside the environment keeps the installed agent out and selects its own vendor', () => {
+      // VS Code's secret store, say: a vendor key all the same.
       class StoredKeyConfig extends TestConfig {
         getProviderApiKey(provider: AiProvider): string { return provider === 'anthropic' ? 'sk-ant-stored' : ''; }
       }
       recordInstalledPlanner('claude-code');
-      expect(detect(new StoredKeyConfig())).toBe('openrouter');
+      expect(detect(new StoredKeyConfig())).toBe('anthropic');
     });
 
     it('falls back to openrouter only when no coding agent is installed', () => {

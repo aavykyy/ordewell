@@ -18,12 +18,17 @@ function commaList(raw: string | undefined): string[] {
   return (raw || '').split(',').map((s) => s.trim()).filter(Boolean);
 }
 
-/** The first vendor whose key or base URL is in the environment, in detection order. */
+/**
+ * The first vendor whose credential is in the environment, in detection
+ * order. An endpoint alone names only a vendor that needs no credential (a
+ * local openai_compatible server): a base URL left behind by a removed key
+ * would otherwise route a keyless first run to a vendor that refuses to plan.
+ */
 function envDetectedProvider(): AiProvider | null {
   for (const provider of PROVIDER_DETECT_PRIORITY) {
     const meta = getProviderMeta(provider);
-    if (meta.detectEnvVars.some((v) => process.env[v])) return provider;
-    if (meta.baseUrlEnvVar && process.env[meta.baseUrlEnvVar]) return provider;
+    if (meta.detectEnvVars.some((v) => process.env[v]?.trim())) return provider;
+    if (meta.detectEnvVars.length === 0 && meta.baseUrlEnvVar && process.env[meta.baseUrlEnvVar]?.trim()) return provider;
   }
   return null;
 }
@@ -60,8 +65,13 @@ export interface ResolvedPlanner extends ResolvedChoice {
  */
 export interface ConfiguredPlanner extends PlannerChoice {
   setting?: string;
-  /** The model is one a `/model` or `/planner` pick set in this session. */
-  picked?: boolean;
+  /**
+   * The planner a `/model` or `/planner` pick in this session made the model
+   * for. A pick belongs to that planner alone: once routing moves (its key
+   * removed), the model is configuration left for when it comes back, not a
+   * choice the planner now in effect made.
+   */
+  pickedFor?: PlannerBackendId;
   /** One request's own model: it wins for that request and is never saved. */
   override?: string;
 }
@@ -200,7 +210,7 @@ export abstract class BaseConfig implements IConfig {
 
   /**
    * Who plans when no surface setting names a planner: an explicit
-   * AI_PROVIDER, then a vendor whose key or base URL is in the environment,
+   * AI_PROVIDER, then a vendor whose key is in the environment,
    * then an installed coding agent (ADR-0009), and openrouter only when there
    * is none of those. One answer for every host, so they cannot drift apart.
    */
@@ -212,9 +222,12 @@ export abstract class BaseConfig implements IConfig {
     if (fromEnv) return fromEnv;
 
     // A key a host keeps outside the environment (VS Code's secret store) is a
-    // vendor key all the same; its holder planned with openrouter before an
-    // installed agent could, and still does.
-    if (configuredProviders(this).length > 0) return 'openrouter';
+    // vendor key all the same, and wins over an installed agent as one in the
+    // environment does. It names its own vendor: any other would be refused
+    // for a key nobody set.
+    const configured = configuredProviders(this);
+    const keyed = PROVIDER_DETECT_PRIORITY.find((provider) => configured.includes(provider));
+    if (keyed) return keyed;
     return recordedInstalledPlanner() ?? 'openrouter';
   }
 
@@ -284,7 +297,7 @@ export abstract class BaseConfig implements IConfig {
   protected plannerChoiceFor(provider: PlannerBackendId, configured: ConfiguredPlanner): ResolvedChoice {
     const { model, effort, override = '' } = configured;
     const named = isPlannerBackend(configured.setting ?? '') || isPlannerBackend(process.env.AI_PROVIDER ?? '');
-    if (named || configured.picked || isApiProvider(provider)) return { model: override || model, effort, source: override ? 'request' : 'configured' };
+    if (named || configured.pickedFor === provider || isApiProvider(provider)) return { model: override || model, effort, source: override ? 'request' : 'configured' };
     const own = detectedAgentChoice(provider, configured);
     // No effort was chosen for a model only this request names.
     return !override || override === own.model ? own : { model: override, effort: '', source: 'request' };

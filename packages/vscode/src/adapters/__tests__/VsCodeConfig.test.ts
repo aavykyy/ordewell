@@ -286,12 +286,20 @@ describe('VsCodeConfig.apiKey', () => {
   afterEach(() => resetInstalledPlanner());
 
   it('uses the OpenRouter key when the active provider is openrouter', async () => {
-    const store = await makeStore({ openrouterKey: 'sk-or', geminiKey: 'g' });
+    const store = await makeStore({ openrouterKey: 'sk-or' });
     // A stored key is a vendor key, so even with an agent installed nothing moves the planner off openrouter.
     recordInstalledPlanner('claude-code');
     const config = new VsCodeConfig(store);
     expect(config.aiProvider).toBe('openrouter');
     expect(config.apiKey).toBe('sk-or');
+  });
+
+  it('with several stored keys, picks the vendor first in detection order, as the environment does', async () => {
+    const store = await makeStore({ openrouterKey: 'sk-or', geminiKey: 'g' });
+    recordInstalledPlanner('claude-code');
+    const config = new VsCodeConfig(store);
+    expect(config.aiProvider).toBe('google');
+    expect(config.apiKey).toBe('g');
   });
 
   it('resolves the Gemini key from the orchestrator model provider', async () => {

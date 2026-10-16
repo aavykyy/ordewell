@@ -328,10 +328,10 @@ describe('WebConfig', () => {
       const config = new WebConfig();
       expect(config.aiProvider).toBe('claude-code');
 
-      setEnv('OPENROUTER_BASE_URL', 'http://localhost:9999/v1');
+      setEnv('OPENAI_COMPATIBLE_BASE_URL', 'http://localhost:9999/v1');
 
       expect(config.aiProvider).toBe(new WebConfig().aiProvider);
-      expect(config.aiProvider).toBe('openrouter');
+      expect(config.aiProvider).toBe('openai_compatible');
     });
   });
 });
