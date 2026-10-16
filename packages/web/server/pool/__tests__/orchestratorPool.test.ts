@@ -429,7 +429,8 @@ describe('OrchestratorPool isolation messages', () => {
     broadcast('s1', blocked);
     broadcast('s1', handoff);
 
-    expect(sent.map((s) => JSON.parse(s))).toEqual([blocked, handoff]);
+    const frames = sent.map((s) => JSON.parse(s) as { stream: string; seq: number });
+    expect(frames).toEqual([{ ...blocked, stream: expect.any(String), seq: 1 }, { ...handoff, stream: frames[0].stream, seq: 2 }]);
   });
 });
 
@@ -454,7 +455,7 @@ describe('OrchestratorPool run notices', () => {
     await pool.session(meta.id).runTask('t2').catch(() => undefined);
 
     const frames = sent.map((s) => JSON.parse(s) as { type: string; level?: string; message?: string });
-    expect(frames).toContainEqual({ type: 'notice', level: 'info', message: expect.stringMatching(/workspace root|isolation/i) });
+    expect(frames).toContainEqual(expect.objectContaining({ type: 'notice', level: 'info', message: expect.stringMatching(/workspace root|isolation/i) }));
     pool.destroyAll();
   });
 });

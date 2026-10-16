@@ -542,7 +542,9 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       const shown = follows.get(deps.api)?.sessionId;
       // The daemon greets a live session's socket with its run before this
       // session is the one on screen, where the reducer would drop it as stale;
-      // it is held until `sessionStarted` has made it the one.
+      // it is held, with every broadcast after it, until the session is on
+      // screen and drawn from its transcript — which holds no approval card,
+      // so the requests the snapshot says are waiting go on after it.
       const inbound = inboundFor(deps.api, deps.dispatch, effect.sessionId);
       inbound.holdSnapshot();
       try {
@@ -565,8 +567,8 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       }
       const { plan, goal } = adopted;
       dispatch({ type: 'sessionStarted', sessionId: effect.sessionId, goal });
-      inbound.releaseSnapshot(true);
       dispatch(restoredChat(plan, effect.sessionId));
+      inbound.releaseSnapshot(true);
       dispatch({ type: 'planUpdated', plan, sessionId: effect.sessionId });
       dispatch({ type: 'notice', message: `Loaded "${goal || effect.sessionId}".` });
       return;

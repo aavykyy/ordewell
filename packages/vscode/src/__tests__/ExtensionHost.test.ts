@@ -8,7 +8,9 @@ import { RUN_SETTINGS_DEFAULTS,
   type AiProvider, type DiscoveredModel, type IRunner, type LegacyPlanState, type PlannerUsability,
   type ModelResolver, type PlannerModelMemory, type RunnerInstallation,
   type RunView, type Session, type SessionDeps, type SettingsService,
+  PendingApprovals, approvalScopes, type ApprovalRequestMessage,
 } from '@ordewell/core';
+import { ChatViewProvider as RealChatViewProvider } from '../providers/ChatViewProvider';
 import { createExtension, type ExtensionServices } from '../ExtensionHost';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 import type { SecretStore, ApiProvider } from '../adapters/SecretStore';
@@ -39,7 +41,7 @@ function fakeChat() {
     onMessage: messages.event,
     conversation: {
       receive: vi.fn(), note: vi.fn(), holdPrompt: vi.fn(), unsendPrompt: vi.fn(),
-      nextPrompt: vi.fn(() => undefined), stop: vi.fn(), reset: vi.fn(), reload: vi.fn(), resync: vi.fn(),
+      nextPrompt: vi.fn(() => undefined), stop: vi.fn(), reset: vi.fn(), reload: vi.fn(), resync: vi.fn(), waiting: vi.fn(),
     },
     run: { receive: vi.fn(), adopt: vi.fn(), reset: vi.fn(), clearIsolation: vi.fn() },
     resendAllState: vi.fn(),
@@ -161,6 +163,7 @@ function fakeSession() {
     markTaskIncomplete: vi.fn(async () => {}),
     forceStartTask: vi.fn(async () => {}),
     runTask: vi.fn(async () => {}),
+    announcedApprovals: vi.fn((): ApprovalRequestMessage[] => []),
   };
   return { session: spies as unknown as Session, spies };
 }
@@ -203,6 +206,7 @@ function fakeSettings() {
 function harness(overrides: {
   modelResolver?: ReturnType<typeof fakeResolver>;
   runnerInstallation?: ReturnType<typeof fakeRunnerInstallation>;
+  chatProvider?: ChatViewProvider;
 } = {}) {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-host-'));
   const vscodeApi = fakeVscodeApi();
@@ -233,7 +237,7 @@ function harness(overrides: {
     settingsService: settings as unknown as SettingsService,
     plannerModelMemory: { remember: vi.fn(), recall: vi.fn(() => ({ model: '', effort: '', source: 'default' })) } as unknown as PlannerModelMemory,
     modelResolver: resolver as unknown as ModelResolver,
-    chatProvider: chat.provider as unknown as ChatViewProvider,
+    chatProvider: overrides.chatProvider ?? chat.provider as unknown as ChatViewProvider,
     sessionFactory: (deps) => { sessionDeps.current = deps; return session.session; },
   };
 
@@ -577,5 +581,109 @@ describe('the task skill chips in a repo group', () => {
     expect(h.chat.provider.setTaskSkills).toHaveBeenLastCalledWith(
       expect.arrayContaining([{ name: 'api-check', description: 'Checks the API' }]),
     );
+  });
+});
+
+/** The chat as VS Code hosts it, on a webview that can be reloaded: what it was sent, and a way to talk back. */
+function liveChat() {
+  const provider = new RealChatViewProvider({ toString: () => 'file:///ext' } as unknown as vscode.Uri);
+  let receive: (msg: WebviewToHost) => void = () => {};
+  const open = (): void => {
+    provider.resolveWebviewView({
+      show: vi.fn(),
+      onDidDispose: () => ({ dispose() {} }),
+      webview: {
+        options: {}, html: '', cspSource: 'vscode-resource:', asWebviewUri: (u: unknown) => u,
+        onDidReceiveMessage: (fn: (msg: WebviewToHost) => void) => { receive = fn; return { dispose() {} }; },
+        postMessage: () => Promise.resolve(true),
+      },
+    } as unknown as vscode.WebviewView, {} as never, {} as never);
+  };
+  open();
+  return {
+    provider,
+    /** The webview is torn down and comes back, as on a window reload: it says `ready`. */
+    reload: () => { open(); receive({ type: 'ready' }); },
+    send: (msg: WebviewToHost) => receive(msg),
+    cards: () => provider.conversation.blocks.flatMap((b) => (b.type === 'approval' ? [[b.approvalId, b.status]] : [])),
+  };
+}
+
+describe('a chat webview reloaded while the planner waits for an answer', () => {
+  let h: ReturnType<typeof harness>;
+  let chat: ReturnType<typeof liveChat>;
+  let approvals: PendingApprovals;
+  let announced: Map<string, ApprovalRequestMessage>;
+  let resolveApproval: ReturnType<typeof vi.fn<(id: string, granted: boolean) => boolean>>;
+
+  beforeEach(async () => {
+    chat = liveChat();
+    h = harness({ chatProvider: chat.provider });
+    await h.host.start();
+    // The Session's own approval record, announcing on the broadcast seam the host listens to.
+    announced = new Map();
+    approvals = new PendingApprovals({
+      onRequest: ({ id, request }) => {
+        const message: ApprovalRequestMessage = { type: 'approval_request', id, kind: request.kind, subject: request.subject, scope: approvalScopes(request).join(', ') };
+        announced.set(id, message);
+        h.sessionDeps.current!.broadcast(message);
+      },
+      onSettled: (id, granted) => {
+        announced.delete(id);
+        h.sessionDeps.current!.broadcast({ type: 'approval_settled', id, granted });
+      },
+    });
+    resolveApproval = vi.fn((id: string, granted: boolean) => approvals.resolve(id, granted));
+    Object.assign(h.session.spies, {
+      outstandingApprovals: () => approvals.outstanding(),
+      resolveApproval,
+      announcedApprovals: () => [...announced.values()],
+    });
+  });
+  afterEach(() => {
+    fs.rmSync(h.workspace, { recursive: true, force: true });
+  });
+
+  const startAsked = () => approvals.ask({ kind: 'task_start', subject: 'Start #3 "Add a cache"', scope: 'task_start', detail: 'Approves #3' } as never, { noTimeout: true });
+
+  it('keeps the card of a request still waiting, answerable from the new webview', async () => {
+    const answer = startAsked();
+    const [{ id }] = approvals.outstanding();
+    expect(chat.cards()).toEqual([[id, 'pending']]);
+
+    chat.reload();
+
+    expect(chat.cards()).toEqual([[id, 'pending']]);
+    chat.send({ type: 'resolveApproval', id, granted: true });
+    await expect(answer).resolves.toBe(true);
+  });
+
+  it('keeps the preview of an edit the planner holds, outside a turn this window started', async () => {
+    chat.send({ type: 'sendMessage', text: 'build a parser', typed: true });
+    await vi.waitFor(() => expect(h.session.spies.startPlanning).toHaveBeenCalled());
+    // A supervisor's wake-up turn holds an edit: this window has no turn of its own out.
+    const task = createTask({ id: 't9', order: 2, title: 'Add a cache', prompt: 'add a cache', assignedRunner: 'claude-code' });
+    const heldEdit = { turnId: 'wake-1', tasks: [{ label: '2', mark: 'added' as const, task: { ...task, subtasks: [] } }] };
+    (h.session.spies as unknown as { planState: unknown }).planState = {};
+    h.session.spies.runSnapshot = vi.fn(() => ({ tasks: [], runMerge: null, handoff: null, mergeResult: null, heldEdit } as unknown as RunView));
+
+    chat.reload();
+
+    await vi.waitFor(() => expect(chat.provider.run.current.heldEdit?.tasks.map((t) => t.task.title)).toEqual(['Add a cache']));
+  });
+
+  it('drops the card of a request answered elsewhere while the webview was away, and does not answer it again', async () => {
+    const answer = startAsked();
+    const [{ id }] = approvals.outstanding();
+    approvals.resolve(id, false);
+
+    chat.reload();
+    expect(chat.cards()).toEqual([]);
+    // A click the old webview still sent arrives late: the request is already settled.
+    chat.send({ type: 'resolveApproval', id, granted: true });
+
+    await expect(answer).resolves.toBe(false);
+    expect(resolveApproval).toHaveReturnedWith(false);
+    expect(chat.cards()).toEqual([]);
   });
 });

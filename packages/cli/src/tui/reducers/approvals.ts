@@ -1,3 +1,4 @@
+import { reconcileApprovals, type ApprovalRequestMessage } from '@ordewell/core';
 import type { Key } from '../keys';
 import type { ApprovalRequestView, TuiState } from '../state';
 import { step, type Step } from './shared';
@@ -21,6 +22,23 @@ export function dropApproval(state: TuiState, approvalId: string): TuiState {
   const open = state.overlay?.kind === 'approval' ? state.overlay.request : null;
   if (open?.id !== approvalId) return { ...state, pendingApprovals: pending };
   return showNextApproval({ ...state, pendingApprovals: pending, overlay: null });
+}
+
+/**
+ * The planner's requests the session says are still waiting, for a TUI that
+ * was not listening the whole time: each one gets its card and its turn in the
+ * modal, and one answered meanwhile — on another surface, or by its timeout —
+ * leaves both, so it cannot be answered again from here.
+ */
+export function syncApprovals(state: TuiState, waiting: readonly ApprovalRequestMessage[]): TuiState {
+  const ids = new Set(waiting.map((request) => request.id));
+  const open = state.overlay?.kind === 'approval' ? [state.overlay.request] : [];
+  const answered = [...open, ...state.pendingApprovals].filter((request) => !ids.has(request.id));
+  const dropped = answered.reduce((current, request) => dropApproval(current, request.id), { ...state, conversation: reconcileApprovals(state.conversation, waiting) });
+  // A task runner's request is answered in its task view, never in the planner's modal.
+  return waiting.reduce((current, { id, kind, subject, scope, detail }) => (kind === 'runner_tool'
+    ? current
+    : enqueueApproval(current, { id, kind, subject, scope, ...(detail ? { detail } : {}) })), dropped);
 }
 
 function showNextApproval(state: TuiState): TuiState {

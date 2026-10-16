@@ -41,7 +41,7 @@ export interface PlannerTurn {
   finish(text: string): void;
 }
 
-export const toolContext = { signal: new AbortController().signal };
+export const toolContext: { signal: AbortSignal } = { signal: new AbortController().signal };
 
 /** A plan nobody has run yet, as a saved session. */
 export function draftPlan(): LegacyPlanState {
@@ -76,6 +76,8 @@ export interface Tui {
   state(): TuiState;
   actions: Action[];
   run(effect: Effect): Promise<void>;
+  /** An action as the TUI's own loop takes it: reduced, and its effects run. */
+  act(action: Action): Promise<void>;
   api: ApiClient;
 }
 
@@ -83,7 +85,7 @@ export async function liveDaemon() {
   const dir = mkdtempSync(join(tmpdir(), 'ordewell-live-'));
   const workspace = join(dir, 'ws');
   mkdirSync(join(workspace, '.git'), { recursive: true });
-  const keys = ['HOME', 'ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT', 'OPENROUTER_API_KEY'];
+  const keys = ['HOME', 'ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT', 'OPENROUTER_API_KEY', 'ORDEWELL_AUTONOMOUS_MODE'];
   const savedEnv = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   process.env.HOME = dir;
   process.env.ORDEWELL_SETTINGS_PATH = join(dir, 'settings.json');
@@ -91,6 +93,8 @@ export async function liveDaemon() {
   process.env.ORCHESTRATOR_MODEL = 'openrouter/auto';
   process.env.OPENROUTER_API_KEY = 'sk-or-test';
   delete process.env.ORDEWELL_PLANNER_EFFORT;
+  // Guarded, where a planner's start of a task the user has not approved asks on its card.
+  process.env.ORDEWELL_AUTONOMOUS_MODE = 'false';
 
   // A turn on a session the daemon adopted is a replay, so every turn opens
   // through `startConversation`; each waits for the test to finish it.
@@ -138,7 +142,13 @@ export async function liveDaemon() {
       reviveDaemon: async () => true,
       exit: () => {},
     };
-    return { state: () => state, actions, run: (effect) => runEffect(effect, deps), api };
+    const act = async (action: Action): Promise<void> => {
+      actions.push(action);
+      const next = reduce(state, action);
+      state = next.state;
+      for (const effect of next.effects) await runEffect(effect, deps);
+    };
+    return { state: () => state, actions, run: (effect) => runEffect(effect, deps), act, api };
   };
 
   return {
