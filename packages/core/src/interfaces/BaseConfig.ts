@@ -2,7 +2,10 @@ import type { IConfig, AiProvider, PlannerBackendId } from './IConfig';
 import { parseApprovalModeSetting, type ApprovalModeSetting } from '../services/ApprovalPolicy';
 import { DEFAULT_WEB_READ_BUDGET } from '../services/webReadPolicy';
 import { resolveProvider, type ProviderModelLists } from '../services/ProviderRouting';
-import { configuredProviders, getProviderMeta, isApiProvider, isPlannerBackend, PROVIDER_DETECT_PRIORITY } from '../services/ProviderRegistry';
+import { configuredProviders, getProviderMeta, isApiProvider, isPlannerBackend, PROVIDER_DETECT_PRIORITY, resolveProviderFromPrefix, runnerForProvider } from '../services/ProviderRegistry';
+import { BUILTIN_MANIFESTS } from '../plugins/builtin';
+import type { RunnerModelDiscovery } from '../plugins/types';
+import type { PlannerModelChoice } from '../services/PlannerModelMemory';
 import { DEFAULT_MAX_PARALLEL, parseMaxParallel } from '../utils/maxParallel';
 import { SettingsService } from '../services/SettingsService';
 import { recordedInstalledPlanner } from '../services/InstalledPlanner';
@@ -25,10 +28,42 @@ function envDetectedProvider(): AiProvider | null {
   return null;
 }
 
-/** Who plans, and the model it is spawned with; a blank model is the planner's own default. */
-export interface ResolvedPlanner {
-  provider: PlannerBackendId;
+/** A model and the effort it was chosen with; blank is the planner's own default. */
+export interface PlannerChoice {
   model: string;
+  effort: string;
+}
+
+/**
+ * Where a resolved model and effort came from. `configured` is a planner the
+ * user named, or a vendor, as configured; for an agent detection found,
+ * `inherited` is a configured model it can run, `remembered` its last pick
+ * and `none` its own default; `request` is one request's model. Only
+ * `configured` and `remembered` are the user's own choice for that planner.
+ */
+export type PlannerModelSource = 'configured' | 'inherited' | 'remembered' | 'request' | 'none';
+
+export interface ResolvedChoice extends PlannerChoice {
+  source: PlannerModelSource;
+}
+
+/** Who plans, and the model and effort it is spawned with. */
+export interface ResolvedPlanner extends ResolvedChoice {
+  provider: PlannerBackendId;
+}
+
+/**
+ * What a host is configured to plan with. The model and effort are inherited
+ * (the environment or `.env` at startup, an editor setting) unless the planner
+ * was named — `setting` (VS Code's `aiProvider`) or AI_PROVIDER — or the
+ * model was picked in this session.
+ */
+export interface ConfiguredPlanner extends PlannerChoice {
+  setting?: string;
+  /** The model is one a `/model` or `/planner` pick set in this session. */
+  picked?: boolean;
+  /** One request's own model: it wins for that request and is never saved. */
+  override?: string;
 }
 
 function nonNegativeInt(raw: string | undefined, fallback: number): number {
@@ -227,33 +262,74 @@ export abstract class BaseConfig implements IConfig {
   }
 
   /**
-   * Who plans and with which model, from the model a host has configured and
-   * the planner its own setting names (VS Code's `aiProvider`); the one rule
-   * every host's provider and model getters read, so the model a settings
-   * response shows is the one spawned. A planner the user named and a vendor
-   * keep the model as configured. An agent that plans only because detection
-   * found it (ADR-0009) never chose that model: the TUI and `ordewell planner`
-   * persist ORCHESTRATOR_MODEL, so a slug left from an old OpenRouter setup
-   * would otherwise reach `--model` and fail the turn. The only evidence a
-   * model is that agent's, without spawning it for a catalog, is its own
-   * remembered pick — every pick is remembered (PlannerModelMemory) — so it
-   * gets that, or nothing and its own default. Resolved on each read and
-   * never saved: a key or a `/planner` pick added later must find the
-   * configured model as it was.
+   * Who plans, with which model and effort: the one rule every host's
+   * provider, model and effort getters read, so what a settings response
+   * shows is what is spawned. Resolved on each read and never saved: a key or
+   * a `/planner` pick added later must find the configured values as they were.
    */
-  protected resolvePlanner(model: string, lists: ProviderModelLists | null | undefined, setting = ''): ResolvedPlanner {
-    const provider = isPlannerBackend(setting) ? setting : this.routedProvider(model, lists);
-    return { provider, model: this.plannerModelFor(provider, model, setting) };
+  protected resolvePlanner(configured: ConfiguredPlanner, lists: ProviderModelLists | null | undefined): ResolvedPlanner {
+    const setting = configured.setting ?? '';
+    const provider = isPlannerBackend(setting) ? setting : this.routedProvider(configured.override || configured.model, lists);
+    return { provider, ...this.plannerChoiceFor(provider, configured) };
   }
 
   /**
-   * `resolvePlanner`'s model half, for a getter that reads its model from
-   * other settings than the one `provider` was routed on (`planningModel`):
-   * judged against the planner in effect rather than routed again.
+   * `resolvePlanner`'s model and effort, for a getter that reads its model
+   * from other settings than the one `provider` was routed on
+   * (`planningModel`): judged against the planner in effect rather than
+   * routed again. A planner the user named, a model picked in this session
+   * and a vendor keep what is configured, and a request's own model wins
+   * over it.
    */
-  protected plannerModelFor(provider: PlannerBackendId, model: string, setting = ''): string {
-    const named = isPlannerBackend(setting) || isPlannerBackend(process.env.AI_PROVIDER ?? '');
-    if (!model || named || isApiProvider(provider)) return model;
-    return new SettingsService().getPlannerModel(provider)?.model ?? '';
+  protected plannerChoiceFor(provider: PlannerBackendId, configured: ConfiguredPlanner): ResolvedChoice {
+    const { model, effort, override = '' } = configured;
+    const named = isPlannerBackend(configured.setting ?? '') || isPlannerBackend(process.env.AI_PROVIDER ?? '');
+    if (named || configured.picked || isApiProvider(provider)) return { model: override || model, effort, source: override ? 'request' : 'configured' };
+    const own = detectedAgentChoice(provider, configured);
+    // No effort was chosen for a model only this request names.
+    return !override || override === own.model ? own : { model: override, effort: '', source: 'request' };
   }
+}
+
+/**
+ * What an agent that plans only because detection found it (ADR-0009) is
+ * spawned with. It never chose the configured model: the TUI and `ordewell
+ * planner` persist ORCHESTRATOR_MODEL, so a slug left from an old OpenRouter
+ * setup would otherwise reach `--model` and fail the turn. That model is kept,
+ * with the effort configured beside it, only when it is one of the agent's
+ * stable aliases: the one evidence it is the agent's own found without
+ * spawning the agent for a catalog. Otherwise the agent gets its remembered
+ * pick (every pick is remembered, PlannerModelMemory) with the effort it was
+ * picked with, the same model configured included; with neither, its own
+ * default. An effort is a level of one model, so it never moves to another.
+ */
+function detectedAgentChoice(provider: PlannerBackendId, configured: PlannerChoice): ResolvedChoice {
+  const remembered = rememberedChoice(provider);
+  if (configured.model !== remembered?.model && isStableAlias(provider, configured.model)) {
+    return { model: configured.model, effort: configured.effort, source: 'inherited' };
+  }
+  if (remembered) return { model: remembered.model, effort: remembered.effort ?? '', source: 'remembered' };
+  return { model: '', effort: '', source: 'none' };
+}
+
+function discoveryOf(provider: PlannerBackendId): RunnerModelDiscovery | undefined {
+  return BUILTIN_MANIFESTS.find((m) => m.name === runnerForProvider(provider))?.modelDiscovery;
+}
+
+function isStableAlias(provider: PlannerBackendId, model: string): boolean {
+  return discoveryOf(provider)?.canonicalAliases?.some((alias) => alias.modelId === model) ?? false;
+}
+
+/**
+ * The agent's remembered pick, unless it is plainly a vendor's model: before
+ * the planner's inherited settings were told apart from picks, `ordewell plan`
+ * saved a leftover OpenRouter slug as the detected agent's own. Read past,
+ * never deleted, since the settings file is the user's. Every vendor catalog
+ * id carries Ordewell's prefix (`openai:`) or is an OpenRouter `org/model`
+ * slug, a shape an agent that names its own models that way cannot rule out.
+ */
+function rememberedChoice(provider: PlannerBackendId): PlannerModelChoice | undefined {
+  const entry = new SettingsService().getPlannerModel(provider);
+  if (!entry || resolveProviderFromPrefix(entry.model)) return undefined;
+  return !discoveryOf(provider)?.providerQualifiedIds && /^[\w.-]+\//.test(entry.model) ? undefined : entry;
 }

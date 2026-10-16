@@ -23,6 +23,7 @@ export const OPENCODE_MANIFEST: RunnerManifest = {
     // actually reports for THIS user (their configured providers only). A
     // hardcoded fallback previously leaked models the user didn't have.
     // No static variants — per-model variants are fetched from opencode models --verbose
+    providerQualifiedIds: true,
   },
 
   contextFile: 'AGENTS.md',

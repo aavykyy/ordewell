@@ -50,6 +50,11 @@ describe('OrchestratorPool settings for a detected coding agent', () => {
 
   /** The `--model` Claude Code is spawned with from a fresh config, blank when none is passed. */
   async function spawnedModel(): Promise<string> {
+    return (await spawned()).model;
+  }
+
+  /** The `--model` and `--effort` Claude Code is spawned with from a fresh config, each blank when not passed. */
+  async function spawned(): Promise<{ model: string; effort: string }> {
     let argv: string[] = [];
     const spawn: SpawnFn = (_command, args) => {
       argv = args;
@@ -71,8 +76,11 @@ describe('OrchestratorPool settings for a detected coding agent', () => {
       plannerTools: { sessionId: 's1', handler: {} },
       goal: 'Add a cache', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem(), onProgress: () => {},
     }).catch(() => {});
-    const at = argv.indexOf('--model');
-    return at < 0 ? '' : argv[at + 1];
+    const flag = (name: string) => {
+      const at = argv.indexOf(name);
+      return at < 0 ? '' : argv[at + 1];
+    };
+    return { model: flag('--model'), effort: flag('--effort') };
   }
 
   it('reports no model when the agent will be spawned with its own default', async () => {
@@ -98,5 +106,90 @@ describe('OrchestratorPool settings for a detected coding agent', () => {
 
     expect(new SettingsService().getPlannerModel('claude-code')?.model).not.toBe('openai/gpt-4o');
     expect(response.orchestratorModel).toBe('');
+  });
+
+  it('reports the remembered model and effort the agent will be spawned with', async () => {
+    process.env.ORDEWELL_PLANNER_EFFORT = 'low';
+    new SettingsService().setPlannerModel('claude-code', { model: 'sonnet', effort: 'high' });
+
+    const settings = pool().getSettings();
+
+    expect({ model: settings.orchestratorModel, effort: settings.plannerThinkingEffort }).toEqual({ model: 'sonnet', effort: 'high' });
+    expect(await spawned()).toEqual({ model: 'sonnet', effort: 'high' });
+  });
+
+  it('an effort change for the remembered model is remembered, and leaves the configured model for a later key', async () => {
+    new SettingsService().setPlannerModel('claude-code', { model: 'sonnet' });
+
+    const response = pool().updateSettings({ env: { ORDEWELL_PLANNER_EFFORT: 'high' } });
+
+    expect({ model: response.orchestratorModel, effort: response.plannerThinkingEffort }).toEqual({ model: 'sonnet', effort: 'high' });
+    expect(await spawned()).toEqual({ model: 'sonnet', effort: 'high' });
+    expect(new SettingsService().getPlannerModel('claude-code')).toEqual({ model: 'sonnet', effort: 'high' });
+    expect(process.env.ORCHESTRATOR_MODEL).toBe('openai/gpt-4o');
+  });
+
+  it('an effort change for an inherited model of the agent\'s own applies without saving that model', async () => {
+    process.env.ORCHESTRATOR_MODEL = 'opus';
+
+    const response = pool().updateSettings({ env: { ORDEWELL_PLANNER_EFFORT: 'high' } });
+
+    expect({ model: response.orchestratorModel, effort: response.plannerThinkingEffort }).toEqual({ model: 'opus', effort: 'high' });
+    expect(await spawned()).toEqual({ model: 'opus', effort: 'high' });
+    expect(new SettingsService().getAll().plannerModels).toBeUndefined();
+  });
+
+  it('an effort change does not forget a saved model the read set aside', () => {
+    new SettingsService().setPlannerModel('claude-code', { model: 'openai/gpt-4o' });
+
+    pool().updateSettings({ env: { ORDEWELL_PLANNER_EFFORT: 'high' } });
+
+    expect(new SettingsService().getPlannerModel('claude-code')).toEqual({ model: 'openai/gpt-4o' });
+  });
+
+  it('an inherited environment is applied as it stands and nothing in it is remembered', async () => {
+    const response = pool().updateSettings({ env: { ORCHESTRATOR_MODEL: 'opus', ORDEWELL_PLANNER_EFFORT: 'high' }, inherited: true });
+
+    expect({ model: response.orchestratorModel, effort: response.plannerThinkingEffort }).toEqual({ model: 'opus', effort: 'high' });
+    expect(await spawned()).toEqual({ model: 'opus', effort: 'high' });
+    expect(new SettingsService().getAll().plannerModels).toBeUndefined();
+  });
+
+  it('a planner switch with its own model still remembers that pick', () => {
+    pool().updateSettings({ env: { AI_PROVIDER: 'claude-code', ORCHESTRATOR_MODEL: 'opus', ORDEWELL_PLANNER_EFFORT: 'high' } });
+
+    expect(new SettingsService().getPlannerModel('claude-code')).toEqual({ model: 'opus', effort: 'high' });
+  });
+
+  it('a model picked in this daemon stays the planner\'s model when another surface remembers a different one', () => {
+    const daemon = pool();
+    daemon.updateSettings({ orchestratorModel: 'claude-opus-5-5' });
+    new SettingsService().setPlannerModel('claude-code', { model: 'sonnet', effort: 'low' });
+
+    expect(daemon.getSettings()).toMatchObject({ orchestratorModel: 'claude-opus-5-5', plannerThinkingEffort: '' });
+  });
+
+  it('reports a model typed for the detected agent as typed, so the turn fails on it rather than ignoring it', () => {
+    const daemon = pool();
+    daemon.updateSettings({ orchestratorModel: 'gemini:gemini-2.5-pro' });
+
+    expect(daemon.getSettings().orchestratorModel).toBe('gemini:gemini-2.5-pro');
+  });
+
+  it('an inherited model that later replaces a pick is judged as inherited', () => {
+    const daemon = pool();
+    daemon.updateSettings({ orchestratorModel: 'claude-opus-5-5' });
+    daemon.updateSettings({ env: { ORCHESTRATOR_MODEL: 'openai/gpt-4o' }, inherited: true });
+
+    expect(daemon.getSettings().orchestratorModel).toBe('claude-opus-5-5');
+    expect(process.env.ORCHESTRATOR_MODEL).toBe('openai/gpt-4o');
+  });
+
+  it('a model picked for the detected agent is remembered and spawned', async () => {
+    const response = pool().updateSettings({ orchestratorModel: 'claude-opus-5-5', plannerThinkingEffort: 'max' });
+
+    expect(response.orchestratorModel).toBe('claude-opus-5-5');
+    expect(await spawned()).toEqual({ model: 'claude-opus-5-5', effort: 'max' });
+    expect(new SettingsService().getPlannerModel('claude-code')).toEqual({ model: 'claude-opus-5-5', effort: 'max' });
   });
 });

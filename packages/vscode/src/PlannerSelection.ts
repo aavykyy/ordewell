@@ -78,7 +78,8 @@ export class PlannerSelection {
    */
   private async change(change: PlannerSelectionChange): Promise<PlannerSelectionResult> {
     const { config, plannerModelMemory } = this.deps;
-    const current = { provider: config.aiProvider, model: config.orchestratorModel, effort: config.plannerThinkingEffort ?? '' };
+    // The model as the extension reads it, a Gemini id normalized.
+    const current = { ...config.planner, model: config.orchestratorModel };
     const catalog = await this.catalogFor(change.provider ?? current.provider);
     const result = selectPlanner(current, change, plannerModelMemory, catalog);
     const { next } = result;
@@ -86,9 +87,14 @@ export class PlannerSelection {
     // provider the user named is a choice, so it is saved even when it equals
     // the default, or the next detection could move the planner off it.
     const saveProvider = next.provider !== current.provider || (change.provider !== undefined && config.rawAiProvider !== next.provider);
-    if (!result.remember && !result.recall && !saveProvider) return result;
+    // An effort on its own leaves the configured model as it was: a detected
+    // agent's model in effect can be its remembered one, which a key added
+    // later must not find written over `orchestratorModel`.
+    const saveModel = saveProvider || change.model !== undefined;
+    if (!result.remember && !result.recall && !saveModel && change.effort === undefined) return result;
     if (saveProvider) await config.update('aiProvider', next.provider);
-    await config.update('orchestratorModel', next.model);
+    if (saveModel) await config.update('orchestratorModel', next.model);
+    if (change.model !== undefined) config.notePlannerPick(next.model);
     await config.update('plannerThinkingEffort', next.effort);
     if (result.remember) {
       const { provider, model, effort } = result.remember;

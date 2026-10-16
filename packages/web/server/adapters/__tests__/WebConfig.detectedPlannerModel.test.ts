@@ -67,9 +67,13 @@ describe('a detected coding agent is never handed a stale vendor model', () => {
     return argv;
   }
 
-  function modelArg(argv: string[]): string | undefined {
-    const at = argv.indexOf('--model');
+  function flagArg(argv: string[], flag: string): string | undefined {
+    const at = argv.indexOf(flag);
     return at < 0 ? undefined : argv[at + 1];
+  }
+
+  function modelArg(argv: string[]): string | undefined {
+    return flagArg(argv, '--model');
   }
 
   it('spawns Claude Code without the leftover OpenRouter model', async () => {
@@ -94,6 +98,80 @@ describe('a detected coding agent is never handed a stale vendor model', () => {
     expect(modelArg(argv)).toBe('sonnet');
   });
 
+  it('spawns Claude Code with its remembered model and effort when no model is configured', async () => {
+    recordInstalledPlanner('claude-code');
+    new SettingsService().setPlannerModel('claude-code', { model: 'sonnet', effort: 'high' });
+
+    const argv = await plannerArgv(new WebConfig());
+
+    expect(modelArg(argv)).toBe('sonnet');
+    expect(flagArg(argv, '--effort')).toBe('high');
+  });
+
+  it('never pairs the inherited effort with the remembered model that replaced the inherited one', async () => {
+    recordInstalledPlanner('claude-code');
+    process.env.ORCHESTRATOR_MODEL = 'openai/gpt-4o';
+    process.env.ORDEWELL_PLANNER_EFFORT = 'low';
+    new SettingsService().setPlannerModel('claude-code', { model: 'sonnet' });
+
+    const argv = await plannerArgv(new WebConfig());
+
+    expect(modelArg(argv)).toBe('sonnet');
+    expect(flagArg(argv, '--effort')).toBeUndefined();
+  });
+
+  it('restores the remembered effort with the remembered model, over the inherited one', async () => {
+    recordInstalledPlanner('claude-code');
+    process.env.ORCHESTRATOR_MODEL = 'openai/gpt-4o';
+    process.env.ORDEWELL_PLANNER_EFFORT = 'low';
+    new SettingsService().setPlannerModel('claude-code', { model: 'sonnet', effort: 'high' });
+
+    const argv = await plannerArgv(new WebConfig());
+
+    expect(modelArg(argv)).toBe('sonnet');
+    expect(flagArg(argv, '--effort')).toBe('high');
+  });
+
+  it('keeps an inherited model that is the agent\'s own, with the effort inherited alongside it', async () => {
+    recordInstalledPlanner('claude-code');
+    process.env.ORCHESTRATOR_MODEL = 'opus';
+    process.env.ORDEWELL_PLANNER_EFFORT = 'high';
+    new SettingsService().setPlannerModel('claude-code', { model: 'sonnet', effort: 'low' });
+
+    const argv = await plannerArgv(new WebConfig());
+
+    expect(modelArg(argv)).toBe('opus');
+    expect(flagArg(argv, '--effort')).toBe('high');
+  });
+
+  it('reads past a vendor slug an earlier version saved as the agent\'s pick, and leaves it saved', async () => {
+    recordInstalledPlanner('claude-code');
+    process.env.ORCHESTRATOR_MODEL = 'openai/gpt-4o';
+    new SettingsService().setPlannerModel('claude-code', { model: 'openai/gpt-4o', effort: 'high' });
+
+    const argv = await plannerArgv(new WebConfig());
+
+    expect(argv).not.toContain('openai/gpt-4o');
+    expect(modelArg(argv)).toBeUndefined();
+    expect(flagArg(argv, '--effort')).toBeUndefined();
+    expect(new SettingsService().getPlannerModel('claude-code')).toEqual({ model: 'openai/gpt-4o', effort: 'high' });
+  });
+
+  it('reads past a direct vendor\'s model saved for Codex', () => {
+    recordInstalledPlanner('codex');
+    new SettingsService().setPlannerModel('codex', { model: 'openai:gpt-4o' });
+
+    expect(new WebConfig().orchestratorModel).toBe('');
+  });
+
+  it('keeps an OpenCode pick that names its provider, as OpenCode\'s own models do', () => {
+    recordInstalledPlanner('opencode');
+    process.env.ORCHESTRATOR_MODEL = 'openai/gpt-4o';
+    new SettingsService().setPlannerModel('opencode', { model: 'anthropic/claude-sonnet-4-5' });
+
+    expect(new WebConfig().orchestratorModel).toBe('anthropic/claude-sonnet-4-5');
+  });
+
   it('keeps an explicit Claude Code choice\'s own model', async () => {
     recordInstalledPlanner('claude-code');
     process.env.AI_PROVIDER = 'claude-code';
@@ -102,6 +180,19 @@ describe('a detected coding agent is never handed a stale vendor model', () => {
     const argv = await plannerArgv(new WebConfig());
 
     expect(modelArg(argv)).toBe('opus');
+  });
+
+  it('keeps the model and effort AI_PROVIDER=claude-code is configured with, over what it remembers', async () => {
+    recordInstalledPlanner('claude-code');
+    process.env.AI_PROVIDER = 'claude-code';
+    process.env.ORCHESTRATOR_MODEL = 'sonnet';
+    process.env.ORDEWELL_PLANNER_EFFORT = 'low';
+    new SettingsService().setPlannerModel('claude-code', { model: 'opus', effort: 'high' });
+
+    const argv = await plannerArgv(new WebConfig());
+
+    expect(modelArg(argv)).toBe('sonnet');
+    expect(flagArg(argv, '--effort')).toBe('low');
   });
 
   it('keeps a model an explicit agent was given even when the agent did not remember it', async () => {

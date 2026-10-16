@@ -43,7 +43,7 @@ import {
   type PlannerBackendId,
   type PlannerModelCandidate,
   type PlannerSelectionChange,
-  type PlannerSelectionState,
+  type PlannerSelectionCurrent,
   StructuredRunner,
   CodexSandboxAvailability,
   detectInstalledPlanner,
@@ -92,6 +92,12 @@ export class OrchestratorPool {
   private cachedProviderLists: Record<string, string[]> | undefined;
   private settingsService = new SettingsService();
   private plannerModelMemory = new PlannerModelMemory(this.settingsService);
+  /**
+   * The model a settings write picked in this daemon. The environment's model
+   * is otherwise inherited, and an agent planning only because detection
+   * found it does not plan with an inherited model it cannot be shown to run.
+   */
+  private pickedModel: string | undefined;
   private runner: IRunner;
   /** One probe per daemon, asked again whenever the runner list is refreshed (ADR-0033). */
   private codexSandbox: Pick<CodexSandboxAvailability, 'ensure' | 'refresh'>;
@@ -244,6 +250,7 @@ export class OrchestratorPool {
       enabledRunners: this.enabledRunnerOverride(),
       modelOverride,
       providerModelLists: () => this.cachedProviderLists,
+      pickedModel: () => this.pickedModel,
     });
   }
 
@@ -330,16 +337,11 @@ export class OrchestratorPool {
 
   updateSettings(changes: Record<string, unknown>): SettingsUpdateResponse {
     // Read before any of this call's changes land, so a switch is judged
-    // against what was actually in effect a moment ago. The model too: a
-    // detected agent does not plan with a vendor model left in the
-    // environment, and judging against it would remember that model as the
-    // agent's own pick.
-    const inEffect = this.plannerConfig();
-    const current: PlannerSelectionState = {
-      provider: inEffect.aiProvider,
-      model: inEffect.orchestratorModel,
-      effort: process.env.ORDEWELL_PLANNER_EFFORT ?? '',
-    };
+    // against what was actually in effect a moment ago. The model and effort
+    // too, with where they came from: a detected agent does not plan with a
+    // vendor model left in the environment, and judging against it would
+    // remember that model as the agent's own pick.
+    const current: PlannerSelectionCurrent = this.plannerConfig().planner;
 
     // Only allowlisted keys reach `process.env`, and everything else comes back
     // to the caller by name — the daemon's environment is inherited by every
@@ -356,8 +358,11 @@ export class OrchestratorPool {
     // model set`) or through env (`ordewell planner-effort`, the TUI's
     // pickers); env wins, as it did when both were written in that order. The
     // provider is the name the client sent, never re-derived from the model: a
-    // switch may have just cleared that model.
-    const plannerChange: PlannerSelectionChange = {
+    // switch may have just cleared that model. An `inherited` write is no
+    // pick at all: it is the environment a client was started under, which
+    // the daemon would have inherited had the client spawned it, so it is
+    // written as it stands and nothing in it is remembered.
+    const plannerChange: PlannerSelectionChange = changes.inherited === true ? {} : {
       provider: envChanges?.AI_PROVIDER,
       model: envChanges?.ORCHESTRATOR_MODEL ?? stringField(changes.orchestratorModel),
       effort: envChanges?.ORDEWELL_PLANNER_EFFORT ?? stringField(changes.plannerThinkingEffort),
@@ -399,8 +404,12 @@ export class OrchestratorPool {
     }
 
     if (selection) {
-      process.env.ORCHESTRATOR_MODEL = selection.next.model;
+      // An effort on its own leaves the configured model as it was: a
+      // detected agent's model in effect can be its remembered one, which a
+      // key added later must not find written over the configured model.
+      if (plannerChange.provider !== undefined || plannerChange.model !== undefined) process.env.ORCHESTRATOR_MODEL = selection.next.model;
       process.env.ORDEWELL_PLANNER_EFFORT = selection.next.effort;
+      if (plannerChange.model !== undefined) this.pickedModel = selection.next.model;
     }
 
     if (changes.modelAllowlist && typeof changes.modelAllowlist === 'object') {
