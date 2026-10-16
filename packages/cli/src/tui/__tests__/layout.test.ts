@@ -106,6 +106,12 @@ describe('welcome — plan approval', () => {
     const text = plain(welcome(true, { cols: 40, rows: 40 })).replace(/\s+/g, ' ');
     expect(text).toContain('a plan starts as soon as the planner submits it');
   });
+
+  it.each([false, true])('keeps a short, narrow welcome inside the terminal with autorun %s', (autorun) => {
+    const lines = render(welcome(autorun, { rows: 8, cols: 32 }));
+    expect(lines).toHaveLength(8);
+    expect(lines.every((line) => stripAnsi(line).length <= 32)).toBe(true);
+  });
 });
 
 describe('plan pane — an absolute offset that follows the selection by default', () => {

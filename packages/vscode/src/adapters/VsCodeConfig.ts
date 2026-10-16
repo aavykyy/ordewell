@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, parseMaxParallel, normalizeGeminiModel, resolveProvider, isApiProvider, isPlannerBackend, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET, recordedInstalledPlanner } from '@ordewell/core';
+import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, parseMaxParallel, normalizeGeminiModel, isApiProvider, isPlannerBackend, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET, recordedInstalledPlanner } from '@ordewell/core';
 import type { ProviderModelLists, SettingsService } from '@ordewell/core';
 import { SecretStore, type ApiProvider, type SecretKey } from './SecretStore';
 
@@ -7,9 +7,11 @@ export class VsCodeConfig extends BaseConfig {
   private get config() { return vscode.workspace.getConfiguration('ordewell'); }
 
   private _provider: PlannerBackendId | null = null;
-  // The installed agent `_provider` was resolved against: the activation probe
-  // can answer after a read has already settled on the openrouter fallback.
-  private _providerDefault: PlannerBackendId | null = null;
+  // The installed agent and keyed vendors `_provider` was resolved against:
+  // the activation probe can answer after a read has already settled on the
+  // openrouter fallback, and a model's vendor only beats the agent once it
+  // holds a key.
+  private _providerBasis = '';
   private _providerModelLists: ProviderModelLists | null = null;
 
   constructor(private readonly secretStore?: SecretStore) {
@@ -151,22 +153,16 @@ export class VsCodeConfig extends BaseConfig {
   get rawAiProvider(): string { return this.config.get<string>('aiProvider', '') || ''; }
 
   get aiProvider(): PlannerBackendId {
-    if (this._provider && this._providerDefault === recordedInstalledPlanner()) return this._provider;
-    this._providerDefault = recordedInstalledPlanner();
+    const basis = `${recordedInstalledPlanner() ?? ''}|${configuredProviders(this).join(',')}`;
+    if (this._provider && this._providerBasis === basis) return this._provider;
+    this._providerBasis = basis;
     const env = this.rawAiProvider;
     if (env && isPlannerBackend(env)) {
       this._provider = env;
       return this._provider;
     }
     const model = this.config.get<string>('orchestratorModel', '') || process.env.ORCHESTRATOR_MODEL;
-    if (model && this._providerModelLists) {
-      const resolved = resolveProvider(model, this._providerModelLists);
-      if (resolved) {
-        this._provider = resolved;
-        return this._provider;
-      }
-    }
-    this._provider = this.detectProvider();
+    this._provider = this.providerForModel(model, this._providerModelLists);
     return this._provider;
   }
 

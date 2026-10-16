@@ -52,7 +52,9 @@ describe('GET /api/settings', () => {
     expect(pool.getSettings).not.toHaveBeenCalled();
 
     answer({ usable: true });
-    expect((await response).status).toBe(200);
+    const result = await response;
+    expect(result.status).toBe(200);
+    expect(await result.json()).toMatchObject({ aiProvider: 'claude-code' });
     expect(pool.getSettings).toHaveBeenCalled();
   });
 
