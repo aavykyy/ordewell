@@ -1,7 +1,7 @@
-import type { LegacyPlanState, SessionMessage } from '@ordewell/core';
+import type { ApprovalRequestMessage, LegacyPlanState, SessionMessage } from '@ordewell/core';
 // The browser-safe entry, so the webview's tests can run the host's view too.
 import {
-  drainNext, EMPTY_CONVERSATION, EMPTY_HOLD, followTurn, fromTranscript, holdPrompt, NO_TURN, stopTurn, takeAt, unsendAll, unsendLatest,
+  drainNext, EMPTY_CONVERSATION, EMPTY_HOLD, followTurn, fromTranscript, holdPrompt, NO_TURN, reconcileApprovals, stopTurn, takeAt, unsendAll, unsendLatest,
   type ConversationInput, type ConversationView, type DisplayBlock, type GatedConversation, type LocalEntry, type PromptHold,
   type TurnGate,
 } from '@ordewell/core/plan-utils';
@@ -115,6 +115,16 @@ export class ConversationViewHost {
   /** The view a saved session reopens with, built from its records alone (#51). */
   reload(saved: SavedConversation): void {
     this.replace(fromTranscript(saved.conversationHistory, saved.researchLog, saved.plannerUsage, saved.pendingTurns));
+  }
+
+  /**
+   * The planner's requests the Session says are still waiting. A reload is
+   * drawn from the transcript, which keeps no approval card, and a request is
+   * announced once — so without this a card still waiting was gone, and
+   * nothing was left to answer it with.
+   */
+  waiting(requests: readonly ApprovalRequestMessage[]): void {
+    this.show(reconcileApprovals(this.view, requests));
   }
 
   /**

@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import WebSocket from 'ws';
-import { DAEMON_SUBPROTOCOL, saveSession, type LegacyPlanState, type RunSnapshotFrame } from '@ordewell/core';
+import { DAEMON_SUBPROTOCOL, saveSession, type LegacyPlanState, type RunSnapshotFrame, type SessionFrame } from '@ordewell/core';
 import { createWsHandler } from '../stream';
 import { OrchestratorPool } from '../../pool/orchestratorPool';
 
@@ -73,5 +73,22 @@ describe('the session socket', () => {
     expect(frame.type).toBe('run_snapshot');
     expect(frame.sessionId).toBe(meta.id);
     expect(frame.view.tasks.map((t) => [t.id, t.title, t.status])).toEqual([['t1', 'Add the limiter', 'completed'], ['t2', 'Wire it up', 'pending']]);
+    expect(frame.approvals).toEqual([]);
+  });
+
+  it('numbers every broadcast of a session, and greets with the number the snapshot accounts for', async () => {
+    const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
+    pool.adoptSavedSession(meta.id, workspace);
+    await pool.session(meta.id).markTaskComplete('t2');
+
+    const [, snapshot] = await firstFrames(port, meta.id, 2) as [unknown, RunSnapshotFrame];
+    const later = firstFrames(port, meta.id, 3);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await pool.session(meta.id).markTaskIncomplete('t2');
+    const [, again, next] = await later as [unknown, RunSnapshotFrame, SessionFrame];
+
+    expect(snapshot.seq).toBeGreaterThan(0);
+    expect(again.seq).toBe(snapshot.seq);
+    expect(next).toMatchObject({ stream: snapshot.stream, seq: snapshot.seq! + 1 });
   });
 });

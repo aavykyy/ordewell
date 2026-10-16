@@ -30,7 +30,7 @@ import { RUN_SETTINGS_DEFAULTS, runSettingsOf, type GlobalRunSettings, type User
 import { SkillsService } from './SkillsService';
 import { resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
 import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
-import { surfacePlan, type HeldEdit, type RunMergeView, type RunView, type SessionBroadcaster, type SessionNotice } from './SessionMessage';
+import { surfacePlan, type HeldEdit, type RunMergeView, type RunView, type SessionBroadcaster, type SessionMessage, type SessionNotice } from './SessionMessage';
 import { EMPTY_RUN, reduceRun } from './runView';
 import { SessionEventRelay } from './SessionEventRelay';
 import { saveSession } from '../utils/sessionStore';
@@ -270,7 +270,7 @@ export function createSession(deps: SessionDeps): Session {
         events.status(session.planState);
         return;
       }
-      deps.broadcast({
+      events.approvalRequested({
         type: 'approval_request',
         id,
         kind: request.kind,
@@ -282,7 +282,7 @@ export function createSession(deps: SessionDeps): Session {
     },
     onSettled: (id, granted, { request }) => {
       if (isRunnerApproval(request)) events.status(session.planState);
-      else deps.broadcast({ type: 'approval_settled', id, granted });
+      else events.approvalSettled(id, granted);
     },
   });
   const runnerApprovals = new RunnerApprovals(approvals);
@@ -887,6 +887,11 @@ export class Session {
   /** Requests still waiting for an answer, replayed to a surface that connects mid-prompt. */
   outstandingApprovals(): PendingApproval[] {
     return this.approvals.outstanding();
+  }
+
+  /** The planner's requests still waiting, as their cards were announced — what a surface (re)joining replays. */
+  announcedApprovals(): Extract<SessionMessage, { type: 'approval_request' }>[] {
+    return this.events.announcedApprovals();
   }
 
   /** Scopes the user granted this session — surfaced so a UI can show what is already allowed. */

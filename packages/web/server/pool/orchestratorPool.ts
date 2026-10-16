@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn } from 'child_process';
+import { randomUUID } from 'crypto';
 import { WebSocket } from 'ws';
 import {
   Session,
@@ -9,6 +10,9 @@ import {
   type SessionMessage,
   type SessionNotice,
   type SessionRuntimeSettings,
+  type SessionFrame,
+  type ApprovalRequestMessage,
+  type StreamStamp,
   ModelResolver,
   RunnerRegistry,
   removedPluginNotice,
@@ -86,6 +90,14 @@ export interface OrchestratorPoolDeps {
 export class OrchestratorPool {
   private sessions = new Map<string, Session>();
   private clients = new Map<string, Set<WebSocket>>();
+  /**
+   * This process's broadcast numbering (see `StreamStamp`), per session id
+   * rather than per Session object: a session replaced under the same id
+   * keeps counting up, so a client never mistakes its first broadcast for one
+   * of the old session's it already showed.
+   */
+  private readonly stream = randomUUID();
+  private sequence = new Map<string, number>();
   private registry: CoreRunnerRegistry = new RunnerRegistry();
   private modelResolver: ModelResolver;
   private runnerInstallation: Pick<RunnerInstallation, 'filterInstalled' | 'plannerUsability'>;
@@ -161,7 +173,9 @@ export class OrchestratorPool {
   }
 
   private broadcast(sessionId: string, msg: SessionMessage | SessionNotice): void {
-    const payload = JSON.stringify(msg);
+    const seq = (this.sequence.get(sessionId) ?? 0) + 1;
+    this.sequence.set(sessionId, seq);
+    const payload = JSON.stringify({ ...msg, stream: this.stream, seq } satisfies SessionFrame);
     for (const ws of this.clients.get(sessionId) ?? []) {
       if (ws.readyState === ws.OPEN) ws.send(payload);
     }
@@ -194,6 +208,10 @@ export class OrchestratorPool {
   getGoal(sessionId: string): string { return this.sessions.get(sessionId)?.currentGoal ?? ''; }
   /** Null for a session this process is not holding: there is no run to describe. */
   runSnapshot(sessionId: string): RunView | null { return this.sessions.get(sessionId)?.runSnapshot() ?? null; }
+  /** The planner's approval requests still waiting, as they were announced. */
+  announcedApprovals(sessionId: string): ApprovalRequestMessage[] { return this.sessions.get(sessionId)?.announcedApprovals() ?? []; }
+  /** The last broadcast of the session so far: a snapshot taken now accounts for it and everything before. */
+  streamPosition(sessionId: string): StreamStamp { return { stream: this.stream, seq: this.sequence.get(sessionId) ?? 0 }; }
 
   private runtimeSettings(): SessionRuntimeSettings {
     return sessionRuntimeSettings(this.settingsService.getAll());

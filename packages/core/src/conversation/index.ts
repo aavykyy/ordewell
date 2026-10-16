@@ -3,7 +3,7 @@ export type {
   SubagentStatus, ApprovalBlock, ApprovalStatus, PlanBlock, PlanMarkerStatus, SkillLoadBlock, UsageBlock,
   CommandBlock, CommandStatus, CompactionBlock, RunnerLoadedBlock,
 } from './blocks';
-export { EMPTY_CONVERSATION, reduceConversation } from './reduce';
+export { EMPTY_CONVERSATION, reconcileApprovals, reduceConversation } from './reduce';
 export type { ConversationInput, ConversationView, LocalEntry } from './reduce';
 export { fromTranscript } from './transcript';
 export { EMPTY_TASK_LOG, reduceTaskLog, replayTaskLog, runnerToolSubject } from './taskLog';

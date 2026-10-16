@@ -41,6 +41,22 @@ function commitNotes(plan: PlanBody): string[] {
   return marker < 0 ? [] : history.slice(marker + 1).filter((e) => e.kind === 'system').map((e) => e.content);
 }
 
+/**
+ * What the user does with the plan now. Autorun (ADR-0030) starts a plan the
+ * planner submits as the reply ends, and its start approves the plan before
+ * the reply reaches this command — so "run it" is said only of a plan nobody
+ * has approved or started, and a running one is pointed at, not run again.
+ */
+async function nextStep(api: ApiClient, plan: PlanBody): Promise<string> {
+  const approved = 'approved' in plan && plan.approved === true;
+  // A submitted task reads `approved` before anything has run it.
+  const moving = planTasks(plan).some((t) => t.status !== undefined && t.status !== 'pending' && t.status !== 'approved');
+  if (!approved && !moving) return `Run 'ordewell run' to execute, 'ordewell status' to inspect, or 'ordewell tui' for the full UI.`;
+  const follow = `Follow it with 'ordewell status', or 'ordewell tui' for the full UI.`;
+  const autorun = await api.getSettings().then((settings) => settings.run?.autorun === true, () => false);
+  return autorun ? `Autorun started the plan. ${follow}` : `The plan is running. ${follow}`;
+}
+
 /** Answers for planner questions. `null` means stdin is exhausted — no answer is coming. */
 export interface Reader {
   ask(question: string): Promise<string | null>;
@@ -324,7 +340,7 @@ export async function handlePlan(
     printPlan(plan, sessionId, runners, models);
     for (const note of notes) console.log(`\n${note}`);
     saveLastSession(sessionId, goal, runnersOf(plan, runners), workspace);
-    console.log(`\n  Run 'ordewell run' to execute, 'ordewell status' to inspect, or 'ordewell tui' for the full UI.`);
+    console.log(`\n  ${await nextStep(api, plan)}`);
   } catch (err) {
     reader?.close();
     closeStream();
