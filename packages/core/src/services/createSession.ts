@@ -531,6 +531,7 @@ export class Session {
     this.aiService = parts.aiService;
     this.planner = parts.planner;
     this.store = parts.store;
+    this.store.onTree = (ids) => this.keepApprovals(ids);
     this.orchestrator = parts.orchestrator;
     this.runs = parts.runs;
     this.events = parts.events;
@@ -703,7 +704,7 @@ export class Session {
     return {
       tasks: () => (this.plan ? this.store.planTasks : null),
       planApproved: () => this.plan?.approved === true,
-      taskApproved: (taskId) => this.plan?.approvedTasks?.includes(taskId) ?? false,
+      taskApproved: (taskId) => this.isApproved(taskId),
       approve: (taskIds) => this.approve(taskIds),
       autonomous: () => this.config.autonomousMode,
       autorun: () => this.userRunSettings().autorun,
@@ -841,10 +842,32 @@ export class Session {
     }, () => this.broadcast({ type: 'execution_action', record, text }));
   }
 
+  /**
+   * The user approved this task to run (ADR-0029), and it has been in the plan
+   * ever since: the one check every start reads, the scheduler's included.
+   */
+  isApproved(taskId: string): boolean {
+    return !!this.store.get(taskId) && (this.plan?.approvedTasks?.includes(taskId) ?? false);
+  }
+
   /** What the user approved to run (ADR-0029): a start of their own approves the task and its subtasks. */
   private approve(taskIds: readonly string[]): void {
-    if (!this.plan || taskIds.length === 0) return;
-    this.plan.approvedTasks = [...new Set([...(this.plan.approvedTasks ?? []), ...taskIds])];
+    // Only tasks in the plan now: an id approved while absent would approve whatever task later comes to carry it.
+    const present = taskIds.filter((id) => this.store.get(id));
+    if (!this.plan || present.length === 0) return;
+    this.plan.approvedTasks = [...new Set([...(this.plan.approvedTasks ?? []), ...present])];
+  }
+
+  /**
+   * A task that leaves the plan takes its approval with it, whichever route
+   * removed it: an edit, a merge or split, a whole plan that leaves it out.
+   * Approval is of the task the user saw, and a planner may later write a new
+   * task under the same id (ADR-0029).
+   */
+  private keepApprovals(ids: ReadonlySet<string>): void {
+    const approved = this.plan?.approvedTasks;
+    if (!approved || approved.every((id) => ids.has(id))) return;
+    this.plan!.approvedTasks = approved.filter((id) => ids.has(id));
   }
 
   private approveTask(taskId: string): void {
@@ -1496,10 +1519,7 @@ export class Session {
     const bySupervisor = this.supervisorEditing();
     const { tasks: stamped, added } = stampOrigin(before, coerced, bySupervisor);
     coerced = this.preparePlannerTaskUpdates(stamped);
-    if (bySupervisor) {
-      this.approve(added);
-      this.supervision.edited(before, coerced);
-    }
+    if (bySupervisor) this.supervision.edited(before, coerced);
     // A run that ended on a failure is still the one a retry continues: reloaded,
     // the failed task would lose its failure and its retry would run it alone.
     if (this.orchestrator.isRunning || this.orchestrator.awaitsResume) {
@@ -1508,6 +1528,8 @@ export class Session {
       this.orchestrator.loadPlan(coerced, runners);
       this.store.resetForRun({ keepScheduledResumes: true });
     }
+    // Once they are in the plan: approval is only ever of a task the plan holds.
+    if (bySupervisor) this.approve(added);
     return coerced.length;
   }
 

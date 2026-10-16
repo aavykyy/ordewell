@@ -36,10 +36,18 @@ export class PlanStore {
   private _rootMap = new Map<string, Task>();
   private _planRunners: RunnerId[] = [...DEFAULT_RUNNERS];
   private _onMutate: (() => void) | null = null;
+  private _onTree: ((ids: ReadonlySet<string>) => void) | null = null;
   private _executionLog: TaskSnapshot[] = [];
 
   /** Hook called after every structural mutation (add/remove/update/resetForRun). */
   set onMutate(cb: (() => void) | null) { this._onMutate = cb; }
+
+  /**
+   * Called with every task id, subtasks included, each time the tree is
+   * rebuilt — on every route a task enters or leaves the plan, loads and
+   * reconciled edits included, which `onMutate` does not hear.
+   */
+  set onTree(cb: ((ids: ReadonlySet<string>) => void) | null) { this._onTree = cb; }
 
   get planTasks(): ReadonlyArray<Readonly<Task>> { return this._planTasks; }
   get allTasks(): ReadonlyArray<Readonly<Task>> { return this._allTasks; }
@@ -325,6 +333,7 @@ export class PlanStore {
     for (const root of this._planTasks) {
       for (const task of flattenTasks([root])) this._rootMap.set(task.id, root);
     }
+    this._onTree?.(new Set(this._taskMap.keys()));
   }
 
   private validateAssignedRunners(): void {
