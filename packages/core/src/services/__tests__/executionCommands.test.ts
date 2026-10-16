@@ -873,7 +873,7 @@ describe('the command seam\'s extension points', () => {
       running: () => true, maxParallel: () => 3, runBlocked: () => false,
       dependencyMet: () => true, mergeGate: () => [], blockedBy: () => [], waitingRequests: () => [],
       runPlan: vi.fn(), startTask: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), retryTask: vi.fn(), skipTask: vi.fn(), continueTask: vi.fn(), resumeNow: vi.fn(),
-      messageTask: vi.fn(), denyRequest: vi.fn(), mergeAll: vi.fn(), record: vi.fn(), guardTripped: vi.fn(), heldEdit: () => false, editedTasks: () => tasks, deferUntilLanded: vi.fn(), queuedNotRun: vi.fn(),
+      messageTask: vi.fn(), denyRequest: vi.fn(), mergeAll: vi.fn(), record: vi.fn(), guardTripped: vi.fn(), heldEdit: () => false, editedTasks: () => tasks, heldHandle: () => undefined, deferUntilLanded: vi.fn(), queuedNotRun: vi.fn(),
     };
   }
 
@@ -933,7 +933,8 @@ describe('the command seam\'s extension points', () => {
     const start: ExecutionCommand = { command: 'run_task', task: 'Add divide' };
 
     expect(await commands.run(start, PLANNER)).toMatchObject({ ok: true, message: expect.stringMatching(/^Queued: start task #2 "Add divide" happens once your edit lands/) });
-    expect(host.deferUntilLanded).toHaveBeenCalledWith(start, PLANNER, 'start task #2 "Add divide"', expect.objectContaining({ current: expect.any(Function) }));
+    // Queued by id: the title is the edit's, and may be what a later edit in the reply changes.
+    expect(host.deferUntilLanded).toHaveBeenCalledWith({ command: 'run_task', task: 't2' }, PLANNER, 'start task #2 "Add divide"', expect.objectContaining({ current: expect.any(Function) }));
     expect(host.record).not.toHaveBeenCalled();
   });
 

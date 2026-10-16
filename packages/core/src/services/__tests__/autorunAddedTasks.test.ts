@@ -72,6 +72,44 @@ describe('a task the planner adds after approval, with autorun on and Full', () 
     await until(() => env.run.spawnedIds().includes(added(env)!.id));
   });
 
+  it('starts a task named by the handle the same reply\'s edit gave it, once the edit lands', async () => {
+    const env = await finishedRun();
+    const edit = await env.planner.tools().editPlan!({ ops: [{ op: 'add', task: { title: 'Add a cache', prompt: 'add a cache' }, handle: 'cache' }] }, ctx);
+    expect(edit.isError).toBeFalsy();
+
+    const queued = await env.planner.tools().runTask!({ task: 'cache' }, ctx);
+    expect(JSON.parse(queued.text).result).toMatch(/^Queued: start task #2 "Add a cache" happens once your edit lands/);
+    await landEdit(env);
+
+    await until(() => env.run.spawnedIds().includes(added(env)!.id));
+    expect(executionLines(env).at(-1)).toBe(`The planner started task #2 "Add a cache".`);
+  });
+
+  it('refuses at once, rather than queueing, a start naming no task the plan has or the edit adds', async () => {
+    const env = await finishedRun();
+    await addCache(env);
+
+    const start = await env.planner.tools().runTask!({ task: 'no-such-task' }, ctx);
+
+    expect(start.isError).toBe(true);
+    expect(JSON.parse(start.text).reason).toBe('No task matches "no-such-task" in the current plan. Your edit does not add it either. Name it by id, "#order" (a subtask "#order.sub") or exact title.');
+  });
+
+  it('refuses at once a start of a task the same reply\'s edit removes', async () => {
+    const env = await finishedRun();
+    await addCache(env);
+    const removed = await env.planner.tools().editPlan!({ ops: [{ op: 'add', task: { title: 'Warm the cache', prompt: 'warm it' }, handle: 'warm' }, { op: 'remove', taskId: 'warm' }] }, ctx);
+    expect(removed.isError).toBeFalsy();
+
+    const start = await env.planner.tools().runTask!({ task: 'warm' }, ctx);
+
+    expect(start.isError).toBe(true);
+    expect(JSON.parse(start.text).reason).toMatch(/^No task matches "warm" in the current plan\. Your edit does not add it either\./);
+    await landEdit(env);
+    await settled();
+    expect(env.run.spawnedIds()).toEqual(['t1']);
+  });
+
   it('refuses at once a start behind the edit that could not run as edited, rather than queueing it', async () => {
     const env = await supervised([task('t1', 1)], AUTORUN_FULL);
     void env.session.continueConversation('add a cache after task 1 and run it');

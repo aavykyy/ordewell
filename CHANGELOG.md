@@ -66,6 +66,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   your branch**, including work its dependencies depend on — so an ops task
   after a verification no longer acts on your checkout before the fix that
   verification checked is merged.
+- **The planner can start a task it adds in the same reply by the handle or
+  title its edit gave it**: the start runs once the edit lands instead of
+  failing then with "No task matches", and a name that matches nothing is
+  refused at once.
 
 ## [0.10.2] — 2026-10-14
 

@@ -141,6 +141,8 @@ export interface ExecutionHost {
   heldEdit(taskId?: string): boolean;
   /** The plan's task tree as the open turn's held edit leaves it: as it is, when it holds none or one that would not apply. */
   editedTasks(): readonly Task[];
+  /** The id of the task the open turn's held edit makes under this batch handle; undefined when it names none. */
+  heldHandle(name: string): string | undefined;
   /**
    * Run the command again, as the same actor, once the open turn's reply has
    * landed its edit; `intent` names it if it never does. `admission` is
@@ -230,7 +232,7 @@ export class ExecutionCommands {
       if (actor.kind === 'user' || !this.host.heldEdit()) return this.refuse(command, actor, undefined, `${missing} ${naming}`);
       // The turn's own edit may be adding it: a start the user is asked for, or one under the autorun exception, waits for it, as a start of an edited task does.
       if (startsFromPrompt(command) && (this.addedMayStart(actor) || this.asksToApprove(actor))) {
-        return this.locate(command.task, this.host.editedTasks())
+        return this.locateAsEdited(command.task)
           ? this.judgeAsEdited(command, actor, undefined, consent)
           : this.refuse(command, actor, undefined, `${missing} Your edit does not add it either. ${naming}`);
       }
@@ -323,11 +325,13 @@ export class ExecutionCommands {
    */
   private judgeAsEdited(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined, consent: Consent): CommandOutcome {
     const tasks = this.host.editedTasks();
-    const asEdited = located ? this.located(located.task.id, tasks) : 'task' in command ? this.locate(command.task, tasks) : undefined;
+    const asEdited = located ? this.located(located.task.id, tasks) : 'task' in command ? this.locateAsEdited(command.task, tasks) : undefined;
     if (located && !asEdited) return this.refuse(command, actor, located, `${capitalize(describe(located))} is removed by your edit, so it cannot start.`);
     const prepared = this.prepare(command, actor, asEdited, tasks);
     if ('refusal' in prepared) return this.refuse(command, actor, located, prepared.refusal);
-    return this.tripped(command, actor, asEdited) ?? this.defer(command, actor, asEdited, consent.kind === 'ask' ? prepared.approves ?? [] : null);
+    // Named by id once the edit lands: a handle is the edit's alone, and an order or title may be what the edit changes.
+    const pinned = 'task' in command && asEdited ? { ...command, task: asEdited.task.id } : command;
+    return this.tripped(command, actor, asEdited) ?? this.defer(pinned, actor, asEdited, consent.kind === 'ask' ? prepared.approves ?? [] : null);
   }
 
   private tripped(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined): CommandOutcome | null {
@@ -761,6 +765,12 @@ export class ExecutionCommands {
 
   private located(id: string, tasks?: readonly Task[]): Located | undefined {
     return this.all(tasks).find(({ task }) => task.id === id);
+  }
+
+  /** A reference read against the plan as the held edit leaves it, where the handles its batch gives come first. */
+  private locateAsEdited(ref: string, tasks: readonly Task[] = this.host.editedTasks()): Located | undefined {
+    const id = this.host.heldHandle(ref.trim());
+    return id ? this.located(id, tasks) : this.locate(ref, tasks);
   }
 
   /** A reference as a caller writes one — see {@link resolveTaskRef}. */

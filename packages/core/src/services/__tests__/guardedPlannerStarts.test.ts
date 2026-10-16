@@ -112,6 +112,27 @@ describe('a Guarded planner start in the user\'s turn, of tasks the user has not
     expect(env.session.planState!.approvedTasks).not.toContain(titled(env, 'Add a log')!.id);
   });
 
+  it('retry_task naming a handle the same reply\'s edit gave asks for that task once the edit lands', async () => {
+    const env = await finishedRun();
+    const edit = await env.planner.tools().editPlan!({ ops: [
+      { op: 'add', task: { title: 'Add a cache', prompt: 'add a cache' } },
+      { op: 'add', task: { title: 'Add a log', prompt: 'add a log' }, handle: 'log' },
+    ] }, ctx);
+    expect(edit.isError).toBeFalsy();
+
+    const queued = await env.planner.tools().retryTask!({ task: 'log', from: 'fresh' }, ctx);
+
+    expect(answer(queued).result).toBe('Queued: once your edit lands, as this reply ends, the user is asked on the approval card to retry task #3 "Add a log", which approves it. Say so in your reply; you are not told what they answer.');
+    env.planner.calls[0].finish(prose('Added both.'));
+    await until(() => cards(env).length === 1);
+    expect(cards(env)[0]).toMatchObject({ subject: 'Retry task #3 "Add a log"' });
+    env.session.resolveApproval(cards(env)[0].id, true);
+
+    const log = titled(env, 'Add a log')!.id;
+    await until(() => env.run.spawnedIds().includes(log));
+    expect(env.session.planState!.approvedTasks).toContain(log);
+  });
+
   it('run_task of a task added in an earlier reply asks on the card at once', async () => {
     const env = await finishedRun();
     await addTwo(env);
