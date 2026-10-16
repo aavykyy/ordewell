@@ -48,10 +48,10 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'task-mode', usage: '/task-mode <id> [mode]', description: "Choose or set a task's runner mode", category: 'tasks' },
   { name: 'task-deps', usage: '/task-deps <id>', description: "Edit which earlier tasks a task waits for", category: 'tasks' },
   { name: 'task-skills', usage: '/task-skills <id> [a,b|none]', description: 'Choose or set the skills attached to a task; none clears them', category: 'tasks' },
-  { name: 'task-ops', usage: '/task-ops <id> [on|off]', description: 'Make a task an ops task — run in your checkout once its dependencies are merged — or a change task', category: 'tasks' },
+  { name: 'task-ops', usage: '/task-ops <id> [on|off]', description: 'Choose between an ops task (runs in your checkout once its dependencies are merged) and a change task', category: 'tasks' },
 
   // Models & providers
-  { name: 'planner', usage: '/planner [<provider>]', description: 'Pick the planner — harness, model and effort in one go', category: 'models' },
+  { name: 'planner', usage: '/planner [<provider>]', description: 'Pick the planner: harness, model and effort in one go', category: 'models' },
   { name: 'model', usage: '/model [set <id>]', description: 'Show or set the planner model', category: 'models' },
   { name: 'planner-effort', usage: '/planner-effort [<level>]', description: "Thinking effort for a coding-agent planner", category: 'models' },
   { name: 'key', usage: '/key [set <provider> <key>]', description: 'Configure API provider keys', category: 'models' },

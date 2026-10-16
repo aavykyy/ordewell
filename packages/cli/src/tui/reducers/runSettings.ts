@@ -17,7 +17,7 @@ export function runSettingsEffect(state: TuiState, changes: Partial<GlobalRunSet
 export function supervisorCommand(state: TuiState, args: string[]): Step {
   const [arg, value] = args;
   if (arg === undefined) {
-    return step(say(state, 'system', `${supervisorSummary(state.runSettings)} — /supervisor off|watch|act, /supervisor retries <n>, /supervisor reads <n>.`));
+    return step(say(state, 'system', `${supervisorSummary(state.runSettings)}: /supervisor off|watch|act, /supervisor retries <n>, /supervisor reads <n>.`));
   }
   if (arg === 'retries') {
     const n = parseCount(value, 0);
@@ -34,7 +34,7 @@ export function supervisorCommand(state: TuiState, args: string[]): Step {
 
 export function automergeCommand(state: TuiState, arg: string | undefined): Step {
   if (arg === undefined) {
-    return step(say(state, 'system', `${automergeSummary(state.runSettings)} — /automerge on|off.`));
+    return step(say(state, 'system', `${automergeSummary(state.runSettings)}: /automerge on|off.`));
   }
   const enabled = parseSwitch(arg);
   if (enabled === null) return fail(state, 'Usage: /automerge [on|off]');
@@ -43,7 +43,7 @@ export function automergeCommand(state: TuiState, arg: string | undefined): Step
 
 export function autorunCommand(state: TuiState, arg: string | undefined): Step {
   if (arg === undefined) {
-    return step(say(state, 'system', `${autorunSummary(state.runSettings)} — /autorun on starts each plan the planner submits, without review.`));
+    return step(say(state, 'system', `${autorunSummary(state.runSettings)}: /autorun on starts each plan the planner submits, without review.`));
   }
   const enabled = parseSwitch(arg);
   if (enabled === null) return fail(state, 'Usage: /autorun [on|off]');

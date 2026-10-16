@@ -2,12 +2,10 @@ import React from 'react';
 import { orNames } from '../runnerNames';
 import PlanApprovalNote, { type HostRunSettings } from './PlanApprovalNote';
 
-type ApiProvider = 'openrouter' | 'google' | 'openai_compatible';
-
 interface GetStartedProps {
   /** Display names of the runners the host knows, in picker order. */
   runnerNames: string[];
-  onConfigure: (provider: ApiProvider) => void;
+  onConfigure: () => void;
   /** The user's run settings; absent until the host sends them. */
   runSettings?: HostRunSettings | null;
 }
@@ -27,18 +25,15 @@ export default function GetStarted({ runnerNames, onConfigure, runSettings }: Ge
       </div>
       <h2>Ordewell needs something that can plan</h2>
       <p>
-        Install a coding agent{runnerNames.length > 0 && <> — <strong>{orNames(runnerNames)}</strong> —</>}{' '}
+        Install a coding agent{runnerNames.length > 0 && <> (<strong>{orNames(runnerNames)}</strong>)</>}{' '}
         and Ordewell plans on the subscription you already have.
         No API key needed.
       </p>
       <p className="get-started-alt">Or add an API key instead; it is stored in your OS keychain.</p>
       <PlanApprovalNote runSettings={runSettings} />
       <div className="get-started-actions">
-        <button className="get-started-btn" onClick={() => onConfigure('openrouter')}>
-          Set up OpenRouter
-        </button>
-        <button className="get-started-btn" onClick={() => onConfigure('google')}>
-          Set up Gemini
+        <button className="get-started-btn" onClick={onConfigure}>
+          Add API key
         </button>
       </div>
     </div>

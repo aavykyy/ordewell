@@ -134,11 +134,11 @@ describe('what Merge all says', () => {
     expect(mergeOutcome({ outcome: 'merged' }, branch, false)).toEqual({ ok: true, message: `Merged ${branch} into your checked-out branch.` });
     expect(mergeOutcome({ outcome: 'conflict', repo: '.', files: ['a.txt'] }, branch, false)).toEqual({
       ok: false,
-      message: `Merging ${branch} conflicted, so it was aborted — your tree is as it was. Merge it with git and resolve the conflict there.`,
+      message: `Merging ${branch} conflicted, so it was aborted: your tree is as it was. Merge it with git and resolve the conflict there.`,
     });
     expect(mergeOutcome({ outcome: 'failed', repo: '.' }, branch, false)).toEqual({
       ok: false,
-      message: `Could not merge ${branch} — finish or abort the merge already in progress, then try again.`,
+      message: `Could not merge ${branch}: finish or abort the merge already in progress, then try again.`,
     });
   });
 

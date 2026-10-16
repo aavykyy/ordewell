@@ -34,7 +34,7 @@ describe('isolation_handoff', () => {
 
     expect(state.handoff).toEqual(handoff);
     expect(state.overlay).toEqual({ kind: 'handoff', index: 0, diff: null });
-    expect(lastMessage(state)?.text).toMatch(/ordewell\/r1\/integration — 2 tasks landed/);
+    expect(lastMessage(state)?.text).toMatch(/ordewell\/r1\/integration: 2 tasks landed/);
   });
 
   it('does not take over a screen that already has an overlay', () => {
@@ -53,7 +53,7 @@ describe('isolation_handoff', () => {
     expect(state.handoff).toEqual(deferred);
     expect(state.overlay).toBeNull();
     expect(lastMessage(state)?.text).toBe(
-      'Run finished on ordewell/r1/integration — 2 tasks landed. The supervisor may merge it; /handoff to review it yourself.',
+      'Run finished on ordewell/r1/integration: 2 tasks landed. The supervisor may merge it; /handoff to review it yourself.',
     );
   });
 
@@ -72,7 +72,7 @@ describe('isolation_handoff', () => {
     expect(state.handoff).toEqual(handoff);
     expect(state.overlay).toEqual({ kind: 'handoff', index: 0, diff: null });
     expect(lastMessage(state)?.text).toBe(
-      'The supervisor left ordewell/r1/integration to you — 2 tasks landed. /handoff to review and land it.',
+      'The supervisor left ordewell/r1/integration to you: 2 tasks landed. /handoff to review and land it.',
     );
   });
 
@@ -168,7 +168,7 @@ describe('the handoff overlay', () => {
     expect(asked.effects).toEqual([]);
     expect(asked.state.overlay).toMatchObject({ kind: 'confirm', title: 'Merge into your branch?', action: { kind: 'merge-run' } });
     expect((asked.state.overlay as { message: string }).message).toContain('ordewell/r1/integration');
-    expect((asked.state.overlay as { message: string }).message).toContain("Once it has merged, the run's worktrees and branches are removed — unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.");
+    expect((asked.state.overlay as { message: string }).message).toContain("Once it has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.");
 
     const confirmed = press(asked.state, 'enter');
     expect(confirmed.effects).toEqual([{ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration' }]);
@@ -481,7 +481,7 @@ describe('a run over a repo group', () => {
   it('says which repos the run finished in when it arrives', () => {
     const { state } = apply(session(), { type: 'isolationHandoff', handoff: group, sessionId: 's1' });
 
-    expect(lastMessage(state)?.text).toBe(`Run finished on ${branch} in api, web, infra — 2 tasks landed. /handoff to review and land it.`);
+    expect(lastMessage(state)?.text).toBe(`Run finished on ${branch} in api, web, infra: 2 tasks landed. /handoff to review and land it.`);
   });
 
   it('asks before Merge all, naming the repos it will merge and that it merges none unless all can', () => {
@@ -493,7 +493,7 @@ describe('a run over a repo group', () => {
     expect(overlay.message).toContain('api, web');
     expect(overlay.message).not.toContain('infra');
     expect(overlay.message).toMatch(/unless every repository can take it/);
-    expect(overlay.message).toContain("Once every repository has merged, the run's worktrees and branches are removed — unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.");
+    expect(overlay.message).toContain("Once every repository has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.");
     expect(overlay.action).toEqual({ kind: 'merge-run' });
   });
 

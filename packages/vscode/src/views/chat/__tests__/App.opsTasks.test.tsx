@@ -82,7 +82,7 @@ describe('App — ops tasks and merge gates (ADR-0020)', () => {
     send({ type: 'planUpdated', plan });
     fireEvent.click(screen.getByText('Redeploy on dev'));
 
-    fireEvent.click(screen.getByLabelText(/Ops task — runs in your checkout/));
+    fireEvent.click(screen.getByLabelText(/Ops task: runs in your checkout/));
 
     expect(api.postMessage).toHaveBeenCalledWith({ type: 'editTask', taskId: 'o2', edit: { kind: 'ops', ops: false } });
   });

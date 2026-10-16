@@ -14,7 +14,7 @@ export default function ProposedTasks({ held }: { held: HeldEdit }) {
   if (touched.length === 0) return null;
   return (
     <section className="proposed-tasks" aria-labelledby="proposed-tasks-title">
-      <div className="proposed-tasks-title" id="proposed-tasks-title">Proposed — lands when this reply ends</div>
+      <div className="proposed-tasks-title" id="proposed-tasks-title">Proposed: lands when this reply ends</div>
       <ul>
         {touched.map(({ label, mark, task }) => (
           <li key={task.id} className="proposed-task" data-mark={mark}>

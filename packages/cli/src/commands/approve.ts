@@ -19,6 +19,6 @@ export async function handleApprove(subArgs: string[], injectedApi?: ApiClient):
       console.error(`Failed to approve: ${(err as Error).message}`);
       process.exit(1);
     }
-    console.error('Plan approved — continuing execution.');
+    console.error('Plan approved: continuing execution.');
   });
 }

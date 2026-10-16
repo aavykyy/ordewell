@@ -8,8 +8,17 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-10-16
+
 ### Changed
 
+- **First-start API-key setup offers every supported provider.** A single
+  **Add API key** button opens the provider picker instead of offering only
+  OpenRouter and Gemini. Terminal startup help points to the same choice
+  through `/key`.
+- **Application text uses sentences and colons instead of em dashes.** This
+  includes startup guidance, autorun notices, task cards and command output
+  in VS Code and the terminal.
 - **Task cards show the runner, model and thinking effort beneath the title.**
   VS Code keeps the assignment visible during execution and uses the same
   compact layout for subtasks, without an expand chevron. Both VS Code and the
@@ -70,7 +79,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   attached surface, and the terminal no longer shows a stale preview of a
   plan edit. `ordewell plan` says when autorun has already started the plan.
 - **An ops or user task waits for all the work it builds on to be merged into
-  your branch**, including work its dependencies depend on — so an ops task
+  your branch**, including work its dependencies depend on, so an ops task
   after a verification no longer acts on your checkout before the fix that
   verification checked is merged.
 - **The planner can start a task it adds in the same reply by the handle or

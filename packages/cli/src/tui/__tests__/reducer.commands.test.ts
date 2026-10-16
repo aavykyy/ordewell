@@ -99,7 +99,7 @@ describe('runners and autonomy', () => {
   it('/parallel <n> sets how many tasks run at once; bare /parallel says what it is', () => {
     expect(run('/parallel 8').effects).toEqual([{ type: 'setMaxParallel', limit: 8 }]);
     expect(run('/parallel 8').state.maxParallel).toBe(8);
-    expect(lastMessage(run('/parallel', { maxParallel: 2 }).state)?.text).toBe('Up to 2 AI tasks run at once — /parallel <n> changes it.');
+    expect(lastMessage(run('/parallel', { maxParallel: 2 }).state)?.text).toBe('Up to 2 AI tasks run at once: /parallel <n> changes it.');
     expect(run('/parallel 0').effects).toEqual([]);
     expect(run('/parallel many').effects).toEqual([]);
   });

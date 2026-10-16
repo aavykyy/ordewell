@@ -94,13 +94,13 @@ function harnessPlannerNames(): string {
  * preflight, and cannot know which surface is calling, so it uses the
  * terminal UI's spelling.
  */
-export const PLANNER_ESCAPE_HINT = `or pick a coding agent with ${TERMINAL_UI_COMMANDS.pickPlanner} — it plans with no API key`;
+export const PLANNER_ESCAPE_HINT = `or pick a coding agent with ${TERMINAL_UI_COMMANDS.pickPlanner}: it plans with no API key`;
 
 export function describePlannerNotReady(reason: PlannerNotReady, commands: PlannerCommandSyntax): string {
   if (reason.code === 'no_model') {
     return `No planner model selected for ${reason.label}. Pick one with ${commands.setModel}, or switch planner with ${commands.pickPlanner}.`;
   }
-  const lead = `No planner is ready. Pick one with ${commands.pickPlanner} — ${harnessPlannerNames()} plan with no API key.`;
+  const lead = `No planner is ready. Pick one with ${commands.pickPlanner}: ${harnessPlannerNames()} plan with no API key.`;
   if (reason.code === 'no_base_url') {
     return `${lead} To plan with ${reason.label} instead, set ${reason.baseUrlEnvVar}.`;
   }

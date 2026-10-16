@@ -41,7 +41,7 @@ describe('autorun', () => {
 
     await until(() => env.runner.spawnedIds().includes('t1'));
     expect(env.session.planState!.approvedTasks).toContain('t1');
-    expect(notes(env)).toContainEqual(expect.stringMatching(/Started the plan — by autorun/));
+    expect(notes(env)).toContainEqual(expect.stringMatching(/Started the plan: by autorun/));
   });
 
   it('leaves a submitted plan for the user\'s review when it is off', async () => {

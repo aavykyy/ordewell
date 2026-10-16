@@ -181,7 +181,7 @@ export function clampSelection(index: number, rows: number): number {
 /** Commands that only make sense once a plan exists. */
 export function withSession(state: TuiState, run: (sessionId: string) => Step): Step {
   if (!state.sessionId) {
-    return fail(state, 'No active plan — describe a goal first, or load a session with /sessions.');
+    return fail(state, 'No active plan: describe a goal first, or load a session with /sessions.');
   }
   return run(state.sessionId);
 }

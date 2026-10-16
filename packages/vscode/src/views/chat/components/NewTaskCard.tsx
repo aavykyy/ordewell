@@ -128,7 +128,7 @@ export default function NewTaskCard({
           <label htmlFor="new-task-mode">Mode</label>
           <select id="new-task-mode" value={effectiveMode} onChange={(e) => setMode(e.target.value)}>
             <option value="">Runner default</option>
-            {modes.map((m) => <option key={m.id} value={m.id} disabled={!!m.unavailable}>{m.label} — {m.unavailable ?? m.description}</option>)}
+            {modes.map((m) => <option key={m.id} value={m.id} disabled={!!m.unavailable}>{m.label}: {m.unavailable ?? m.description}</option>)}
           </select>
         </div>
       )}

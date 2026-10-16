@@ -60,7 +60,7 @@ describe('a built-in runner declared by manifest and connector only, on the CLI'
   it('is named in help and in the /runners command', async () => {
     const help = await printed(() => printHelp());
     expect(help).toContain('Enable or disable runners (claude-code, codex, opencode, acme)');
-    expect(help).toContain('claude-code, codex, opencode, acme — plan with that CLI');
+    expect(help).toContain('claude-code, codex, opencode, acme: plan with that CLI');
     expect(SLASH_COMMANDS.find((c) => c.name === 'runners')?.description).toContain('claude-code, codex, opencode, acme');
   });
 

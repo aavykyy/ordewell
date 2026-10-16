@@ -319,7 +319,7 @@ export function runHints(state: TuiState): string[] {
   const waiting = state.tasks.filter((t) => t.status === 'awaiting_user').length;
   if (waiting > 0) return [waiting === 1 ? '1 task waits for you' : `${waiting} tasks wait for you`, `${waiting} waiting`];
   // As plain as a task that waits on the user: the run waits on a merge (ADR-0020).
-  return state.runMerge?.paused ? ['paused for Merge all — /handoff merge', 'paused · /handoff merge', 'merge paused'] : [];
+  return state.runMerge?.paused ? ['paused for Merge all: /handoff merge', 'paused · /handoff merge', 'merge paused'] : [];
 }
 
 export const runHint = (state: TuiState): string => runHints(state)[0] ?? '';
@@ -637,7 +637,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
   const approvalText = !state.runSettingsKnown
     ? ''
     : state.runSettings.autorun
-      ? style.yellow('Autorun is on — a plan starts as soon as the planner submits it. Change it in /settings.')
+      ? style.yellow('Autorun is on. A plan starts as soon as the planner submits it. Change it in /settings.')
       : style.grey('Nothing runs until you approve the plan.');
   const approval = approvalText ? wrap(approvalText, Math.max(1, cols - 1)) : [];
   const setup = [
@@ -658,7 +658,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     ? []
     : [
       ...wrap(
-        style.yellow(`Ordewell needs one coding agent installed (${runnerNamesOr()}), picked with /planner — no API key needed. Or add a provider's API key, such as OpenRouter's, with /key.`),
+        style.yellow(`Install a coding agent (${runnerNamesOr()}) and pick it with /planner. No API key needed. Or add an API key with /key and choose your provider.`),
         Math.max(1, cols - 1),
       ),
       '',
@@ -734,7 +734,7 @@ export function planLayout(state: TuiState, rows: number, cols: number): PlanLay
     totalUsage.attempts ? style.grey(truncate(`Tasks total: ${taskUsageText(totalUsage)}`, cols)) : '',
   ];
   if (unmerged > 0) {
-    const landed = style.dim(truncate(`${unmerged} landed task${unmerged === 1 ? '' : 's'} not merged — /handoff merge`, cols));
+    const landed = style.dim(truncate(`${unmerged} landed task${unmerged === 1 ? '' : 's'} not merged: /handoff merge`, cols));
     if (totalUsage.attempts) lines.push(landed);
     else lines[1] = landed;
   }
@@ -780,7 +780,7 @@ function heldEditLines(state: TuiState, cols: number): string[] {
     return [truncate(`  ${heldMark(mark)} ${style.grey(label.padStart(2))}  ${title}`, cols)];
   });
   if (rows.length === 0) return [];
-  return ['', style.dim(truncate('Proposed — lands when this reply ends', cols)), ...rows];
+  return ['', style.dim(truncate('Proposed: lands when this reply ends', cols)), ...rows];
 }
 
 const clampOffset = (layout: PlanLayout, offset: number): number =>
@@ -917,7 +917,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   // status glyph's job — the spinner and the static '~' — so a running row
   // reads `runner · model` and nothing is repeated above it.
   const activity = row.approvals
-    ? `${inRow(row.approvals)} — enter opens it`
+    ? `${inRow(row.approvals)}: enter opens it`
     : row.awaiting ? inRow(row.awaiting) : '';
   const skills = (task.skills ?? []).join(' · ');
   const meta = [activity, runner, model];
@@ -937,7 +937,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   if (row.conflict) {
     const where = row.conflict.repo ? ` in ${row.conflict.repo}` : '';
     const files = row.conflict.files ? ` (${row.conflict.files})` : '';
-    lines.push(style.red(truncate(`${bodyPad}⚠ merge conflict${where}${files} — its work is kept on its own branch`, cols)));
+    lines.push(style.red(truncate(`${bodyPad}⚠ merge conflict${where}${files}: its work is kept on its own branch`, cols)));
   }
   // `attempt` is absent only for a task shown straight from a reloaded plan,
   // before the live stream has caught up.
@@ -948,25 +948,25 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   }
   // A merge gate holds the task as plainly as a task that waits on the user (ADR-0020).
   if (row.mergeGate) {
-    lines.push(style.yellow(truncate(`${bodyPad}⏸ waits for Merge all — ${row.mergeGate.join(', ')} not merged into your branch yet`, cols)));
+    lines.push(style.yellow(truncate(`${bodyPad}⏸ waits for Merge all: ${row.mergeGate.join(', ')} not merged into your branch yet`, cols)));
   }
   if (row.waitsForApproval) {
-    lines.push(style.yellow(truncate(`${bodyPad}⏸ ${inRow(row.waitsForApproval)} — added after you approved the plan; f starts it, or /run runs the plan`, cols)));
+    lines.push(style.yellow(truncate(`${bodyPad}⏸ ${inRow(row.waitsForApproval)}: added after you approved the plan; f starts it, or /run runs the plan`, cols)));
   }
   if (row.blockedBy) {
-    lines.push(style.red(truncate(`${bodyPad}⊘ ${inRow(blockedByLabel(row.blockedBy))} — runs once ${row.blockedBy.length === 1 ? 'it is retried and passes' : 'they are retried and pass'}`, cols)));
+    lines.push(style.red(truncate(`${bodyPad}⊘ ${inRow(blockedByLabel(row.blockedBy))}: runs once ${row.blockedBy.length === 1 ? 'it is retried and passes' : 'they are retried and pass'}`, cols)));
   }
   if (row.status === 'skipped') {
-    lines.push(style.grey(truncate(`${bodyPad}» ${inRow(skippedLabel(row.skipReason))} — nothing of it landed; m done lands its kept work`, cols)));
+    lines.push(style.grey(truncate(`${bodyPad}» ${inRow(skippedLabel(row.skipReason))}: nothing of it landed; m done lands its kept work`, cols)));
   }
   const resumable = row.actions.includes('resume-now');
   if (row.resumes) {
-    lines.push(style.yellow(truncate(`${bodyPad}⏸ ${inRow(row.resumes)}, once the usage limit resets — ${resumable ? 'r resume now · ' : ''}c don't resume`, cols)));
+    lines.push(style.yellow(truncate(`${bodyPad}⏸ ${inRow(row.resumes)}, once the usage limit resets: ${resumable ? 'r resume now · ' : ''}c don't resume`, cols)));
   } else if (resumable) {
-    lines.push(style.yellow(truncate(`${bodyPad}⏸ waits for the usage limit to reset — r resume now`, cols)));
+    lines.push(style.yellow(truncate(`${bodyPad}⏸ waits for the usage limit to reset: r resume now`, cols)));
   }
   if (row.opsChangedFiles) {
-    lines.push(style.yellow(truncate(`${bodyPad}⚠ an ops task changed tracked files — check them, then m done or /retry`, cols)));
+    lines.push(style.yellow(truncate(`${bodyPad}⚠ an ops task changed tracked files: check them, then m done or /retry`, cols)));
   }
   if (row.repaired?.landed) {
     lines.push(style.grey(truncate(`${bodyPad}↻ landed after repairing conflict in ${row.repaired.files}`, cols)));
@@ -1102,16 +1102,16 @@ function commandSheetBody(cols: number): string[] {
   body.push(
     style.grey('tab switches panes · pgup/pgdn scroll · ctrl-o toggles full detail · esc takes back a queued prompt, otherwise esc twice stops · ctrl-l clears · ctrl-c quits'),
     style.grey('alt-enter inserts a newline · ? lists the plan pane\'s keys, once tab has put you there'),
-    style.grey('  in the planner chat, ctrl-s sends now: stops the running planner turn and sends the composer text next — or, with it empty, the newest queued prompt'),
+    style.grey('  in the planner chat, ctrl-s sends now: stops the running planner turn and sends the composer text next: or, with it empty, the newest queued prompt'),
   );
   // One line each: the sheet clips every line to the frame, and the task
   // view's keys run far past any width on a single one.
   body.push(
     '',
     style.bold('In a task view (enter on a task)'),
-    style.grey('  ctrl-s sends now: interrupts the running step, then delivers the composer text — or, with it empty, the highlighted pending message'),
+    style.grey('  ctrl-s sends now: interrupts the running step, then delivers the composer text or, with it empty, the highlighted pending message'),
     style.grey('  ctrl-n/ctrl-p pick a pending message (the newest until you do) · ctrl-r removes a queued one'),
-    style.grey('  ctrl-x stops the runner\'s running turn, and it then waits for your next message — on a task paused on a usage limit, it keeps it from resuming'),
+    style.grey('  ctrl-x stops the runner\'s running turn, and it then waits for your next message: on a task paused on a usage limit, it keeps it from resuming'),
     style.grey('  ctrl-y allows a tool request (its keys sit under it) · ctrl-t allows it for the task · ctrl-g denies it, with the composer text as the note'),
     style.grey('  at a checkpoint, enter replies with what you typed, ctrl-y approves, ctrl-g rejects (the text is its reason) · /checkpoint <id> approve|reject [reason] from anywhere'),
     style.grey('  alt←/→ changes attempt · esc returns'),

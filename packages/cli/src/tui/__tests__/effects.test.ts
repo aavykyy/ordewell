@@ -1083,7 +1083,7 @@ describe('settings', () => {
     await runEffect({ type: 'saveSettings', run: {}, autonomous: true, message: 'Settings: Autonomy Full' }, h.deps);
     expect(h.api.updateRunSettings).not.toHaveBeenCalled();
     expect(h.api.updateSettings).not.toHaveBeenCalled();
-    expect(h.actions).toContainEqual({ type: 'notice', message: expect.stringMatching(/^Settings: Autonomy Full — ORDEWELL_AUTONOMOUS_MODE in the environment decides/) });
+    expect(h.actions).toContainEqual({ type: 'notice', message: expect.stringMatching(/^Settings: Autonomy Full: ORDEWELL_AUTONOMOUS_MODE in the environment decides/) });
   });
 });
 
@@ -1909,7 +1909,7 @@ describe('worktree isolation', () => {
   });
 
   it.each([
-    ['conflict', /conflicted, so it was aborted — your tree is as it was/],
+    ['conflict', /conflicted, so it was aborted: your tree is as it was/],
     ['failed', /merge already in progress/],
   ] as const)('a %s merge is reported as a failure that changed nothing', async (outcome, pattern) => {
     const h = harness({ mergeRun: vi.fn().mockResolvedValue({ outcome, repo: '.' }) } as Partial<OrdewellApi>);
@@ -1969,11 +1969,11 @@ describe('worktree isolation', () => {
   });
 
   it('a refused action surfaces the daemon\'s reason', async () => {
-    const h = harness({ discardRun: vi.fn().mockRejectedValue(new Error('The run is still running — stop it first')) } as Partial<OrdewellApi>);
+    const h = harness({ discardRun: vi.fn().mockRejectedValue(new Error('The run is still running: stop it first')) } as Partial<OrdewellApi>);
 
     await runEffect({ type: 'isolationDiscard', sessionId: 's1', branch: 'b' }, h.deps);
 
-    expect(messageOf(h.actions, 'failed')).toBe('The run is still running — stop it first');
+    expect(messageOf(h.actions, 'failed')).toBe('The run is still running: stop it first');
   });
 });
 

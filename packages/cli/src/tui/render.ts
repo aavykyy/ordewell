@@ -533,21 +533,21 @@ function renderHandoff(
     // line would push the end of the diff and the footer out of the frame.
     const shown = lines.slice(scroll, scroll + room).map((line) => paintDiffLine(truncate(line, Math.max(1, cols - 2))));
     const more = scroll + room < lines.length ? '↑↓ pgup/pgdn scroll · ' : '';
-    return frame(`Diff — ${handoffBranch(handoff)}`, [...shown, '', style.grey(`${more}enter or esc goes back`)], rows, cols);
+    return frame(`Diff: ${handoffBranch(handoff)}`, [...shown, '', style.grey(`${more}enter or esc goes back`)], rows, cols);
   }
 
   const landed = handoff.landed.length === 0
     ? [style.grey('Nothing landed on it.')]
     : handoff.landed.map((task) => {
       const repaired = task.repairedFiles?.length
-        ? style.yellow(` — repaired (${capConflictFiles(task.repairedFiles)})`)
+        ? style.yellow(`: repaired (${capConflictFiles(task.repairedFiles)})`)
         : '';
       return `  ${style.green('✓')} ${titledTaskRefOf(state.tasks, task.taskId) ?? titledTaskRef(task)}${repaired}`;
     });
   const actions = handoffActions(handoff).map((action, index) => {
     const active = index === overlay.index;
     const caret = active ? style.brand('❯') : ' ';
-    return `${caret} ${active ? style.bold(action.label) : action.label}${style.grey(` — ${action.hint}`)}`;
+    return `${caret} ${active ? style.bold(action.label) : action.label}${style.grey(`: ${action.hint}`)}`;
   });
   // A group answers per repo first: Merge all is one step over all of them, so
   // the user needs to see which have work before taking it.

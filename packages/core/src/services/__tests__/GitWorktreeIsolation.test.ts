@@ -2479,8 +2479,8 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
 
       const sections = diff.split(/^(?=# )/m);
       expect(sections.map((section) => section.split('\n', 1)[0])).toEqual([
-        `# api — ${integrationOf(run)} against ${base('api')}`,
-        `# web — ${integrationOf(run)} against ${base('web')}`,
+        `# api: ${integrationOf(run)} against ${base('api')}`,
+        `# web: ${integrationOf(run)} against ${base('web')}`,
       ]);
       expect(sections[0]).toContain('diff --git a/api/api.txt b/api/api.txt');
       expect(sections[0]).toContain('+run api');

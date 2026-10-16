@@ -71,8 +71,8 @@ describe('plan pane — isolation', () => {
     const named = frame(plan([task({ status: 'awaiting_user', isolation: { ...conflict, repos: ['api', 'web'], conflictRepo: 'web' } })]));
     const lone = frame(plan([task({ status: 'awaiting_user', isolation: { ...conflict, repos: ['.'], conflictRepo: '.' } })]));
 
-    expect(named).toContain('⚠ merge conflict in web —');
-    expect(lone).toContain('⚠ merge conflict —');
+    expect(named).toContain('⚠ merge conflict in web: ');
+    expect(lone).toContain('⚠ merge conflict: ');
   });
 
   it('offers the resolve key only on a conflicted task', () => {

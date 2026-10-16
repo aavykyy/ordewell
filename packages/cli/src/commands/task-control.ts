@@ -73,7 +73,7 @@ async function confirmPastGate(subArgs: string[], api: ApiClient, sessionId: str
   const unmerged = await api.getMergeGate(sessionId, taskId).catch(() => []);
   if (unmerged.length === 0) return;
   const question = `${pastGateConfirmation(unmerged.map((d) => titledTaskRef(d)))} Start it anyway?`;
-  if (!(await confirm(question))) fail('Not started — nothing was changed. Pass --yes to start it without a prompt.');
+  if (!(await confirm(question))) fail('Not started: nothing was changed. Pass --yes to start it without a prompt.');
 }
 
 function makeHandler(action: Action, command: string = action) {
@@ -134,7 +134,7 @@ export async function handleCheckpoint(subArgs: string[], injectedApi?: ApiClien
     process.exit(1);
   }
   if (answer === 'approve' && reason) {
-    console.error(`Approving takes no note — reject with a reason to tell the task something.\n${usage}`);
+    console.error(`Approving takes no note: reject with a reason to tell the task something.\n${usage}`);
     process.exit(1);
   }
   await withResolvedTask(subArgs, usage, injectedApi, async (api, sessionId, taskId) => {

@@ -377,7 +377,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
 
     it('names the repositories of a folder when none of them has a commit', async () => {
       expect(await noticesFor({ active: false, reason: 'no-commits', repos: ['api', 'web'] })).toContain(
-        'No repository in this folder has commits yet (api, web) — tasks run in the workspace root without worktree isolation.',
+        'No repository in this folder has commits yet (api, web): tasks run in the workspace root without worktree isolation.',
       );
     });
 
@@ -388,13 +388,13 @@ describe('TaskOrchestrator with worktree isolation', () => {
       orchestrator.loadPlan([task('t1', 1)]);
       await orchestrator.approveReview();
       expect(vi.mocked(notifications.info).mock.calls.map((c) => String(c[0]))).toContain(
-        'services/billing, tools/cli are repositories nested inside this one — linked live into every task, so edits there are not isolated.',
+        'services/billing, tools/cli are repositories nested inside this one: linked live into every task, so edits there are not isolated.',
       );
     });
 
     it('keeps the plain wording when there is nothing to name', async () => {
       expect(await noticesFor({ active: false, reason: 'not-git' })).toContain(
-        'Not a git repository — tasks run in the workspace root without worktree isolation.',
+        'Not a git repository: tasks run in the workspace root without worktree isolation.',
       );
     });
   });
@@ -492,7 +492,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
         state: 'conflict', branch: 'ordewell/run1/1-t1', worktree: '/fake-worktrees/run1/1-t1', repos: ['api', 'web'], conflictRepo: 'web', conflictFiles: ['web.txt'],
       });
       expect(vi.mocked(notifications.warn).mock.calls.map((c) => String(c[0]))).toContain(
-        'Task "Task t1" passed, but landing it on ordewell/run1/integration conflicted in web (web.txt), so none of it landed. Its worktrees are kept — resolve it by hand and mark it complete, retry it, or resolve it as a task.',
+        'Task "Task t1" passed, but landing it on ordewell/run1/integration conflicted in web (web.txt), so none of it landed. Its worktrees are kept: resolve it by hand and mark it complete, retry it, or resolve it as a task.',
       );
     });
 
@@ -511,7 +511,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
       await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('awaiting_user'));
 
       expect(vi.mocked(notifications.warn).mock.calls.map((c) => String(c[0]))).toContain(
-        'Task "Task t1" passed, but landing it on ordewell/run1/integration conflicted in web (a.ts, b.ts, c.ts, d.ts, e.ts, +1 more), so none of it landed. Its worktrees are kept — resolve it by hand and mark it complete, retry it, or resolve it as a task.',
+        'Task "Task t1" passed, but landing it on ordewell/run1/integration conflicted in web (a.ts, b.ts, c.ts, d.ts, e.ts, +1 more), so none of it landed. Its worktrees are kept: resolve it by hand and mark it complete, retry it, or resolve it as a task.',
       );
     });
 
@@ -591,7 +591,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
         const { notifications } = await settled({ outcome: 'failed', repo: 'api' });
 
         expect(said(notifications.error)).toContain(
-          'Could not merge ordewell/run1/integration in api — finish or abort any merge in progress there, then try again. Nothing was merged.',
+          'Could not merge ordewell/run1/integration in api: finish or abort any merge in progress there, then try again. Nothing was merged.',
         );
       });
 
@@ -635,7 +635,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
 
       expect(spawnedCwd('t1')).toBe('/group');
       expect(vi.mocked(notifications.info).mock.calls.map((c) => String(c[0]))).toContain(
-        'No repository could be isolated: api, web — tasks run in the workspace root without worktree isolation.',
+        'No repository could be isolated: api, web: tasks run in the workspace root without worktree isolation.',
       );
       expect(orchestrator.runs.taskIsolation('t1')).toBeNull();
     });
@@ -727,7 +727,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
 
       expect(notices).toEqual([{
         level: 'info',
-        message: 'Not a git repository — tasks run in the workspace root without worktree isolation.',
+        message: 'Not a git repository: tasks run in the workspace root without worktree isolation.',
       }]);
     });
 
@@ -759,7 +759,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
 
       expect(notices).toContainEqual({
         level: 'info',
-        message: 'Stashed your uncommitted changes in api, web — `git stash pop` in each brings them back.',
+        message: 'Stashed your uncommitted changes in api, web: `git stash pop` in each brings them back.',
       });
     });
 
@@ -772,7 +772,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
 
       await orchestrator.continueBlockedRun('stash');
 
-      expect(vi.mocked(notifications.info)).toHaveBeenCalledWith('Stashed your uncommitted changes — `git stash pop` brings them back.');
+      expect(vi.mocked(notifications.info)).toHaveBeenCalledWith('Stashed your uncommitted changes: `git stash pop` brings them back.');
     });
 
     it('hands over a task that could not spawn, which the notification channel may drop', async () => {
@@ -821,10 +821,10 @@ describe('TaskOrchestrator with worktree isolation', () => {
     await orchestrator.mergeRun();
 
     const warned = vi.mocked(notifications.warn).mock.calls.map((c) => String(c[0]));
-    expect(warned).toContain('Task "Task t1" passed, but merging it into ordewell/run1/integration conflicted. Its worktree is kept — resolve it by hand and mark it complete, retry it, or resolve it as a task.');
-    expect(warned).toContain('Merging ordewell/run1/integration conflicted, so it was aborted — your tree is as it was.');
+    expect(warned).toContain('Task "Task t1" passed, but merging it into ordewell/run1/integration conflicted. Its worktree is kept: resolve it by hand and mark it complete, retry it, or resolve it as a task.');
+    expect(warned).toContain('Merging ordewell/run1/integration conflicted, so it was aborted: your tree is as it was.');
     expect(vi.mocked(notifications.error).mock.calls.map((c) => String(c[0]))).toContain(
-      'Could not merge ordewell/run1/integration — finish or abort the merge already in progress, then try again.',
+      'Could not merge ordewell/run1/integration: finish or abort the merge already in progress, then try again.',
     );
   });
 
@@ -1009,7 +1009,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
       expect(isolation.taskIdsFor('reopen')).toEqual(['t1', 't1']);
       expect(orchestrator.runs.taskIsolation('t1')).toMatchObject({ state: 'conflict', conflictFiles: ['b.ts'], repair: { attempt: 2, limit: 2 }, repairedFiles: ['a.ts', 'b.ts'] });
       expect(isolation.taskIdsFor('release')).toEqual([]);
-      expect(messages(notifications.warn)).toContain('Task "Task t1" passed, but merging it into ordewell/run1/integration conflicted (b.ts). Its worktree is kept — resolve it by hand and mark it complete, retry it, or resolve it as a task.');
+      expect(messages(notifications.warn)).toContain('Task "Task t1" passed, but merging it into ordewell/run1/integration conflicted (b.ts). Its worktree is kept: resolve it by hand and mark it complete, retry it, or resolve it as a task.');
       expect(messages(notifications.info)).toContain('Task "Task t1" has had 2 of its 2 conflict repairs, so its conflict waits for you.');
       expect(orchestrator.storeInstance.get('t1')!.verdict?.outcome).toBe('pass');
     });
@@ -1029,7 +1029,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
       expect(orchestrator.runs.taskIsolation('t1')).toEqual({
         state: 'conflict', branch: 'ordewell/run1/1-t1', worktree: '/fake-worktrees/run1/1-t1', repos: ['.'], conflictRepo: '.', conflictFiles: ['a.ts'],
       });
-      expect(messages(notifications.warn)).toContain('Task "Task t1" passed, but merging it into ordewell/run1/integration conflicted (a.ts). Its worktree is kept — resolve it by hand and mark it complete, retry it, or resolve it as a task.');
+      expect(messages(notifications.warn)).toContain('Task "Task t1" passed, but merging it into ordewell/run1/integration conflicted (a.ts). Its worktree is kept: resolve it by hand and mark it complete, retry it, or resolve it as a task.');
       expect(messages(notifications.info)).toContain('Conflict repair is off (conflictRepairAttempts is 0), so task "Task t1" waits for you.');
     });
 
@@ -1133,7 +1133,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
       expect(isolation.taskIdsFor('integrate')).toEqual(['t1']);
       expect(spawn).toHaveBeenCalledTimes(2);
       expect(orchestrator.runs.taskIsolation('t1')).toMatchObject({ state: 'conflict', conflictRepo: 'web', conflictFiles: ['a.ts'] });
-      expect(messages(notifications.warn)).toContain(`The conflict repair of task "Task t1" ${why}, so it did not land. Its worktrees are kept — resolve it by hand and mark it complete, retry it, or resolve it as a task.`);
+      expect(messages(notifications.warn)).toContain(`The conflict repair of task "Task t1" ${why}, so it did not land. Its worktrees are kept: resolve it by hand and mark it complete, retry it, or resolve it as a task.`);
     });
 
     it('keeps every way out of a conflict open after a failed repair: mark complete, or a resolver task', async () => {
@@ -1173,7 +1173,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
       pass(t1);
 
       await vi.waitFor(() => expect(messages(notifications.warn)).toContain(
-        'The conflict repair of task "Task t1" could not start: runner vanished, so it did not land. Its worktree is kept — resolve it by hand and mark it complete, retry it, or resolve it as a task.',
+        'The conflict repair of task "Task t1" could not start: runner vanished, so it did not land. Its worktree is kept: resolve it by hand and mark it complete, retry it, or resolve it as a task.',
       ));
       expect(orchestrator.storeInstance.get('t1')!.status).toBe('awaiting_user');
       expect(orchestrator.runs.taskIsolation('t1')).toMatchObject({ state: 'conflict', repair: { attempt: 1, limit: 2 } });

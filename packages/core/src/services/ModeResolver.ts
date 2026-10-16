@@ -129,7 +129,7 @@ export function plannedMode(
     const reason = unavailableModeReason(modes, taggedReadOnlyMode(modes));
     return {
       ok: false,
-      error: `Runner "${runner}" has no read-only mode${reason ? ' available on this host' : ''} — assign a read-only task to ${able.length > 0 ? `one of: ${able.join(', ')}` : 'no runner: none of the enabled runners has one'}, or drop "readOnly"${reason ? `. ${reason}` : ''}`,
+      error: `Runner "${runner}" has no read-only mode${reason ? ' available on this host' : ''}: assign a read-only task to ${able.length > 0 ? `one of: ${able.join(', ')}` : 'no runner: none of the enabled runners has one'}, or drop "readOnly"${reason ? `. ${reason}` : ''}`,
     };
   }
   const keep = current !== undefined && modes.some((m) => m.id === current) && !(readOnly === false && current === taggedReadOnlyMode(modes));

@@ -50,12 +50,12 @@ export async function handlePlanner(subArgs: string[], injectedApi?: ApiClient):
   const catalog = await fetchCatalog(api);
   console.log(
     isCliProvider(provider)
-      ? `Planning with ${meta.label} — no API key needed, it uses that agent's own subscription.`
+      ? `Planning with ${meta.label}: no API key needed, it uses that agent's own subscription.`
       : `Planner set to ${meta.label}.`,
   );
   console.log(plannerModelLine(recall));
   if (isApiProvider(provider) && !catalog.providers.includes(provider)) {
-    console.log(`  No ${meta.apiKeyEnvVar} configured yet — set one with \`ordewell key set ${provider} <key>\`.`);
+    console.log(`  No ${meta.apiKeyEnvVar} configured yet: set one with \`ordewell key set ${provider} <key>\`.`);
   }
 }
 
@@ -65,7 +65,7 @@ function plannerModelLine(recall: PlannerModelRecall): string {
     case 'remembered':
       return `  Restored its planner model: ${recall.model}.`;
     case 'catalog-default':
-      return `  Using ${recall.model}, its default model — pick another with \`ordewell model set <id>\`.`;
+      return `  Using ${recall.model}, its default model: pick another with \`ordewell model set <id>\`.`;
     case 'none':
       return '  Pick a model with `ordewell model set <id>`, or leave it on the default.';
   }
@@ -75,7 +75,7 @@ async function showPlanners(api: ApiClient): Promise<void> {
   const [settings, catalog] = await Promise.all([api.getSettings(), fetchCatalog(api)]);
   const current = typeof settings.aiProvider === 'string' ? settings.aiProvider : '';
 
-  console.log('\nCoding agents (no API key — they use their own subscription)');
+  console.log('\nCoding agents (no API key; they use their own subscription)');
   for (const id of CLI_PROVIDERS) {
     const runner = runnerForProvider(id);
     const discovered = runner ? catalog.models.some((m) => m.runners?.includes(runner)) : false;
@@ -126,7 +126,7 @@ export async function handlePlannerEffort(subArgs: string[], injectedApi?: ApiCl
   if (!wanted || wanted === 'show') {
     console.log(`Planner effort: ${currentEffort || 'runner default'}`);
     if (!model) {
-      console.log(`  No planner model selected for ${runner} — pick one with \`ordewell model set <id>\`.`);
+      console.log(`  No planner model selected for ${runner}: pick one with \`ordewell model set <id>\`.`);
     } else if (variants.length === 0) {
       console.log(`  ${model.label} exposes no effort levels; it always runs at the agent's default.`);
     } else {

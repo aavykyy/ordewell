@@ -148,7 +148,7 @@ describe('Session with worktree isolation', () => {
 
     await session.executePlan();
 
-    expect(notices).toEqual([{ type: 'notice', level: 'info', message: 'Not a git repository — tasks run in the workspace root without worktree isolation.' }]);
+    expect(notices).toEqual([{ type: 'notice', level: 'info', message: 'Not a git repository: tasks run in the workspace root without worktree isolation.' }]);
     expect(messages.map((m) => m.type)).not.toContain('notice');
   });
 

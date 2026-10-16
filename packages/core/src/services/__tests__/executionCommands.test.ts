@@ -720,14 +720,14 @@ describe('the command seam: a supervisor at Act', () => {
   }
 
   it.each([
-    ['run_plan', idle, { command: 'run_plan' }, 'Started the plan — by supervisor.'],
-    ['run_task', idle, { command: 'run_task', task: 't2' }, 'Started task #2 "Task t2" — by supervisor.'],
-    ['stop_task', guarded, { command: 'stop_task', task: 't1' }, 'Stopped task #1 "Task t1" — by supervisor.'],
-    ['stop_run', guarded, { command: 'stop_run' }, 'Stopped the run — by supervisor.'],
-    ['retry_task', failed, { command: 'retry_task', task: 't1', from: 'session', message: 'fix the import' }, 'Continued task #1 "Task t1" in its saved session — by supervisor: "fix the import"'],
-    ['message_task', guarded, { command: 'message_task', task: 't1', text: 'use the cache' }, 'Sent task #1 "Task t1" a message — by supervisor: "use the cache"'],
-    ['answer_approval (deny)', asking, { command: 'answer_approval', task: 't1', answer: 'deny', note: 'push without --force' }, 'Denied a request of task #1 "Task t1" — by supervisor, with the note "push without --force".'],
-    ['answer_approval (escalate)', asking, { command: 'answer_approval', task: 't1', answer: 'escalate' }, 'Left a request of task #1 "Task t1" for you to answer — by supervisor.'],
+    ['run_plan', idle, { command: 'run_plan' }, 'Started the plan: by supervisor.'],
+    ['run_task', idle, { command: 'run_task', task: 't2' }, 'Started task #2 "Task t2": by supervisor.'],
+    ['stop_task', guarded, { command: 'stop_task', task: 't1' }, 'Stopped task #1 "Task t1": by supervisor.'],
+    ['stop_run', guarded, { command: 'stop_run' }, 'Stopped the run: by supervisor.'],
+    ['retry_task', failed, { command: 'retry_task', task: 't1', from: 'session', message: 'fix the import' }, 'Continued task #1 "Task t1" in its saved session: by supervisor: "fix the import"'],
+    ['message_task', guarded, { command: 'message_task', task: 't1', text: 'use the cache' }, 'Sent task #1 "Task t1" a message: by supervisor: "use the cache"'],
+    ['answer_approval (deny)', asking, { command: 'answer_approval', task: 't1', answer: 'deny', note: 'push without --force' }, 'Denied a request of task #1 "Task t1": by supervisor, with the note "push without --force".'],
+    ['answer_approval (escalate)', asking, { command: 'answer_approval', task: 't1', answer: 'escalate' }, 'Left a request of task #1 "Task t1" for you to answer: by supervisor.'],
   ] as const)('runs %s without asking anyone, even in Guarded, and the timeline reads like the button press, by supervisor', async (_name, arrange, command, line) => {
     const env = await arrange();
 
@@ -776,7 +776,7 @@ describe('the command seam: skip_task', () => {
     await vi.waitFor(() => expect(env.spawned('t2')).toHaveLength(1));
     expect(env.timeline().at(-1)).toMatchObject({
       record: { command: 'skip_task', actor: 'supervisor', level: 'act', outcome: 'done', detail: 'the host cannot run it' },
-      text: 'Skipped task #1 "Task t1" — by supervisor: "the host cannot run it"',
+      text: 'Skipped task #1 "Task t1": by supervisor: "the host cannot run it"',
     });
   });
 
@@ -864,7 +864,7 @@ describe('the command seam: merge_all', () => {
     expect(await env.run({ command: 'merge_all' }, { kind: 'supervisor', level: 'act' })).toEqual({ ok: true, message: 'Merged the run\'s landed work into the user\'s branch. Tasks waiting at a merge gate for it can start.' });
     expect(env.merges()).toBe(1);
     expect(env.session.mergeGate('o2')).toEqual([]);
-    expect(env.timeline().at(-1)!.text).toBe('Merged the run\'s work into your branch — by supervisor.');
+    expect(env.timeline().at(-1)!.text).toBe('Merged the run\'s work into your branch: by supervisor.');
   });
 
   it('refuses with the reason when the merge stops, and the gate keeps waiting', async () => {

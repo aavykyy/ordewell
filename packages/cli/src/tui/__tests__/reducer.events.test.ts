@@ -266,7 +266,7 @@ describe('execution', () => {
     });
 
     expect(s.status).toBe('idle');
-    expect(lastMessage(s)?.text).toBe('Execution stopped — 1/2 tasks complete · 1 failed.');
+    expect(lastMessage(s)?.text).toBe('Execution stopped: 1/2 tasks complete · 1 failed.');
   });
 
   it('says how many tasks a failure blocked when the run finishes (ADR-0034)', () => {
@@ -275,7 +275,7 @@ describe('execution', () => {
       summary: { total: 5, completed: 2, failed: 1, blocked: 2 },
     });
 
-    expect(lastMessage(s)?.text).toBe('Execution finished — 2/5 tasks complete · 1 failed · 2 blocked.');
+    expect(lastMessage(s)?.text).toBe('Execution finished: 2/5 tasks complete · 1 failed · 2 blocked.');
   });
 });
 
@@ -331,7 +331,7 @@ describe('loaded data', () => {
     expect(s.overlay).toMatchObject({ kind: 'picker', picker: { items: [{ id: 'deepseek/v4' }] } });
     const hint = (s.overlay as { picker: { hint?: string } }).picker.hint ?? '';
     expect(hint).toContain('OpenAI');
-    expect(hint).toContain('showing working providers only');
+    expect(hint).toContain('Showing working providers only');
   });
 
   it('remembers which providers have keys, and keeps them when a later load omits the list', () => {

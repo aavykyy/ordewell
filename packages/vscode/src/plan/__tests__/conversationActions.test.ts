@@ -272,7 +272,7 @@ describe('while a planner turn is generating', () => {
       const { deps, session, chatProvider } = setup({ generating: true });
       await run(deps);
 
-      expect(showWarningMessage).toHaveBeenCalledWith('The planner is still answering — wait for its reply, or stop it first.');
+      expect(showWarningMessage).toHaveBeenCalledWith('The planner is still answering: wait for its reply, or stop it first.');
       expect(touched(session)).not.toHaveBeenCalled();
       expect(showQuickPick).not.toHaveBeenCalled();
       expect(withProgress).not.toHaveBeenCalled();

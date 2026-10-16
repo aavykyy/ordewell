@@ -226,7 +226,7 @@ export function isConnectionRefused(err: unknown): boolean {
  */
 export function describeConnectionRefused(port: number): string {
   return `No Ordewell server is listening on port ${port}. `
-    + `It may have been stopped, or it may have crashed — check ${join(CONFIG_DIR, 'server.log')}. `
+    + `It may have been stopped, or it may have crashed: check ${join(CONFIG_DIR, 'server.log')}. `
     + `Start one with \`ordewell web --daemon\`.`;
 }
 

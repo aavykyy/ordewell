@@ -111,7 +111,7 @@ describe('what the task view shows', () => {
       asked('ap-3'), { type: 'approval_withdrawn', approvalId: 'ap-3' },
     )));
     expect(out).toContain('✓ Approved for this task · Use a tool: Bash(npm test)');
-    expect(out).toContain('⊘ Denied · Use a tool: Bash(npm test) — “use notes/”');
+    expect(out).toContain('⊘ Denied · Use a tool: Bash(npm test): “use notes/”');
     expect(out).toContain('· Withdrawn · Use a tool: Bash(npm test)');
     expect(out).toContain('ctrl-r remove queued');
   });
@@ -129,7 +129,7 @@ describe('waiting for approval, from the daemon', () => {
     const base = initialState({ sessionId: 's1', focus: 'plan', rows: 20, cols: 180, tasks: [task()] });
     const waiting = reduce(base, update!).state;
     expect(waiting.tasks[0]).toMatchObject({ status: 'in_progress', awaitingApproval: 2 });
-    expect(plain(waiting)).toContain('waiting for approval (2) — enter opens it');
+    expect(plain(waiting)).toContain('waiting for approval (2): enter opens it');
 
     const answered = reduce(waiting, { type: 'statusUpdate', tasks: [{ id: 't1', status: 'in_progress', verdict: null }], sessionId: 's1' }).state;
     expect(answered.tasks[0].awaitingApproval).toBeUndefined();
@@ -142,7 +142,7 @@ describe('the notice a request raises', () => {
   it('speaks in the planner chat, where the task view is not open', () => {
     const state = initialState({ sessionId: 's1', tasks: [task()] });
     const next = reduce(state, arrived([asked('ap-1')])).state;
-    expect(next.conversation.blocks.at(-1)).toMatchObject({ text: 'Task 2 waits for approval: Bash(npm test) — tab to the plan, select task 2 and press enter (or /open 2), then ctrl-y allows or ctrl-g denies' });
+    expect(next.conversation.blocks.at(-1)).toMatchObject({ text: 'Task 2 waits for approval: Bash(npm test): tab to the plan, select task 2 and press enter (or /open 2), then ctrl-y allows or ctrl-g denies' });
   });
 
   it('says nothing about a request the runner already answered itself', () => {

@@ -467,7 +467,7 @@ describe('TUI end to end', () => {
     h.type('\r');
 
     await vi.waitFor(() => {
-      expect(h.screen()).toContain('Execution finished — 2/2 tasks complete.');
+      expect(h.screen()).toContain('Execution finished: 2/2 tasks complete.');
     });
     expect(h.daemon.log.indexOf('streamExecution')).toBeLessThan(h.daemon.log.indexOf('executePlan'));
     expect(h.app.getState().tasks.map((t) => t.status)).toEqual(['completed', 'completed']);
@@ -490,7 +490,7 @@ describe('TUI end to end', () => {
     h.daemon.emitPlanning({
       type: 'execution_action',
       record: { command: 'run_plan', actor: 'autorun', outcome: 'done', at: '2026-10-14T10:00:00.000Z' },
-      text: 'Started the plan — by autorun.',
+      text: 'Started the plan: by autorun.',
     });
     h.daemon.emitPlanning({ type: 'task_started', taskId: 't1', order: 1, title: 'Add the login route', runner: 'claude-code' });
 
@@ -516,7 +516,7 @@ describe('TUI end to end', () => {
     h.daemon.emitFollow({
       type: 'execution_action',
       record: { command: 'run_plan', actor: 'autorun', outcome: 'done', at: '2026-10-12T10:00:00.000Z' },
-      text: 'Started the plan — by autorun.',
+      text: 'Started the plan: by autorun.',
     });
     h.daemon.emitFollow({ type: 'task_started', taskId: 't1', order: 1, title: 'Add the login route', runner: 'opencode' });
     await vi.waitFor(() => expect(h.app.getState().status).toBe('executing'));
@@ -527,8 +527,8 @@ describe('TUI end to end', () => {
     h.daemon.emitFollow({ type: 'planner_turn_ended', turnId: 'w1', outcome: 'message' });
 
     await vi.waitFor(() => {
-      expect(h.screen()).toContain('Started the plan — by autorun.');
-      expect(h.screen()).toContain('Execution finished — 0/2 tasks complete');
+      expect(h.screen()).toContain('Started the plan: by autorun.');
+      expect(h.screen()).toContain('Execution finished: 0/2 tasks complete');
       expect(h.screen()).toContain('Task 1 failed on a missing env var.');
     });
     expect(h.app.getState().tasks.map((t) => t.status)).toEqual(['failed', 'pending']);
@@ -544,7 +544,7 @@ describe('TUI end to end', () => {
     h.type('\t');
     h.type('E');
 
-    await vi.waitFor(() => expect(h.screen()).toContain('Execution finished — 2/2 tasks complete.'));
+    await vi.waitFor(() => expect(h.screen()).toContain('Execution finished: 2/2 tasks complete.'));
     expect(h.daemon.mocks.executePlan).toHaveBeenCalledWith('session-1');
   });
 
@@ -626,7 +626,7 @@ describe('TUI end to end', () => {
     h.type('\r');
     await vi.waitFor(() => {
       expect(h.transcript()).toContain('Task 1 asks: Route added');
-      expect(h.transcript()).toContain('Plan needs your sign-off — /approve to continue.');
+      expect(h.transcript()).toContain('Plan needs your sign-off: /approve to continue.');
       expect(h.transcript()).toContain('Added a hardening task.');
       expect(h.transcript()).toContain('Plan approved.');
     });
@@ -636,7 +636,7 @@ describe('TUI end to end', () => {
     h.type('/approve');
     h.type('\r');
     await vi.waitFor(() => {
-      expect(h.screen()).toContain('Execution finished — 2/2 tasks complete.');
+      expect(h.screen()).toContain('Execution finished: 2/2 tasks complete.');
     });
     expect(h.daemon.mocks.executePlan).toHaveBeenCalledTimes(2);
     expect(h.app.getState().planApproved).toBe(true);

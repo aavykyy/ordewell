@@ -129,7 +129,7 @@ function printPlan(plan: PlanBody, sessionId: string, runners: string[], models:
       : ` (${task.assignedModel.modelLabel})`;
   };
 
-  console.log(`\nPlan: ${tasks.length} task${tasks.length === 1 ? '' : 's'} (${aiCount} AI, ${manCount} Manual) — ${runnersOf(plan, runners).join(', ')}`);
+  console.log(`\nPlan: ${tasks.length} task${tasks.length === 1 ? '' : 's'} (${aiCount} AI, ${manCount} Manual): ${runnersOf(plan, runners).join(', ')}`);
   console.log(`Session: ${sessionId}\n`);
 
   for (const t of tasks) {
@@ -144,10 +144,10 @@ function printPlan(plan: PlanBody, sessionId: string, runners: string[], models:
   }
 
   if (manCount > 0) {
-    console.log('\n  [MAN] = manual step — run `ordewell tui` to work through it');
+    console.log('\n  [MAN] = manual step: run `ordewell tui` to work through it');
   }
   if (tasks.some((t) => t.ops)) {
-    console.log('  [OPS] = ops task — runs in your checkout once the work it depends on is merged (`ordewell handoff merge`)');
+    console.log('  [OPS] = ops task: runs in your checkout once the work it depends on is merged (`ordewell handoff merge`)');
   }
 }
 

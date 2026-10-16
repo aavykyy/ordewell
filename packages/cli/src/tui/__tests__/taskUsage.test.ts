@@ -73,7 +73,7 @@ describe('task row accounting', () => {
     expect(updated.tasks[0].subtasks?.[0].attemptUsage).toEqual([usage]);
     expect(updated.runMerge?.handoff.landed).toEqual([{ taskId: 't', order: 1, title: 'Work' }]);
     expect(text).toContain('Tasks total: 12.4k in · 3.1k out · $0.42 · 5s');
-    expect(text).toContain('1 landed task not merged — /handoff merge');
+    expect(text).toContain('1 landed task not merged: /handoff merge');
     expect(layout.rowSpans[0].start).toBe(3);
     const at = revealOffset(layout, layout.maxScroll, layout.rowSpans[0]);
     expect(layout.rowSpans[0].start).toBeGreaterThan(at);

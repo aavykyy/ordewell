@@ -46,7 +46,7 @@ export function providerErrorHint(state: TuiState): string | undefined {
   const failed = Object.keys(state.providerErrors ?? {});
   if (failed.length === 0) return undefined;
   const names = failed.map((p) => getProviderMeta(p)?.label ?? p);
-  return `⚠ Unavailable (key or fetch failed): ${names.join(', ')} — showing working providers only.`;
+  return `⚠ Unavailable (key or fetch failed): ${names.join(', ')}. Showing working providers only.`;
 }
 
 /**

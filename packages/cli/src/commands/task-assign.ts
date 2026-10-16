@@ -67,7 +67,7 @@ export async function handleTaskRunner(subArgs: string[], injectedApi?: ApiClien
     // new runner's catalog. Naming a model here would race that derive and
     // could persist one the runner cannot spawn.
     await api.updateTask(sessionId, task.id, { assignedRunner: runner });
-    console.log(`Task ${refOf(tasks, task)} runner set to ${runner} — its model, effort and mode were re-picked for it.`);
+    console.log(`Task ${refOf(tasks, task)} runner set to ${runner}: its model, effort and mode were re-picked for it.`);
   });
 }
 
@@ -80,12 +80,12 @@ export async function handleTaskModel(subArgs: string[], injectedApi?: ApiClient
 
     if (!modelId) {
       console.log(`\nModel · ${namedOf(tasks, task)}${task.assignedRunner ? ` (${task.assignedRunner})` : ''}\n`);
-      if (options.length === 0) console.log('  No models discovered for this runner — try `ordewell refresh`.');
+      if (options.length === 0) console.log('  No models discovered for this runner: try `ordewell refresh`.');
       for (const m of options) {
         const detail = [m.provider, m.variants?.length ? `${m.variants.length} effort levels` : 'runner default effort']
           .filter(Boolean).join(' · ');
         console.log(`  ${m.id === task.assignedModel?.modelId ? '*' : ' '} ${m.id}`);
-        console.log(`      ${m.label} — ${detail}`);
+        console.log(`      ${m.label}: ${detail}`);
       }
       console.log(`\n  ${MODEL_USAGE}`);
       return;
@@ -159,7 +159,7 @@ export async function handleTaskMode(subArgs: string[], injectedApi?: ApiClient)
         console.log('  This task has no runner, or its runner declares no modes.');
       }
       for (const m of modes) {
-        console.log(`  ${m.id === task.taskMode ? '*' : ' '} ${m.id.padEnd(14)} ${m.label}${m.unavailable ? ' — unavailable on this host' : m.description ? ` — ${m.description}` : ''}`);
+        console.log(`  ${m.id === task.taskMode ? '*' : ' '} ${m.id.padEnd(14)} ${m.label}${m.unavailable ? ': unavailable on this host' : m.description ? `: ${m.description}` : ''}`);
       }
       const notice = codexSandboxNotice(catalog.modesByRunner);
       if (notice) console.log(`\n  ${notice.line}\n  ${notice.docs}`);
@@ -274,7 +274,7 @@ export async function handleTaskOps(subArgs: string[], injectedApi?: ApiClient):
     }
     const to = value.toLowerCase();
     if (to !== 'on' && to !== 'off') fail(OPS_USAGE);
-    if (task.type !== 'ai') fail('Only an AI task can be an ops task — a manual task already runs outside any worktree.');
+    if (task.type !== 'ai') fail('Only an AI task can be an ops task: a manual task already runs outside any worktree.');
     if (!tasks.some((t) => t.id === task.id)) fail('A subtask runs with its parent; make the parent an ops task instead.');
 
     await api.updateTask(sessionId, task.id, { ops: to === 'on' });

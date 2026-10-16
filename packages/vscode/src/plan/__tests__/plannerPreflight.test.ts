@@ -28,7 +28,7 @@ describe('plannerPreflightError', () => {
 
   it('sends a vendor planner with no key to /planner first, then offers /key', () => {
     expect(plannerPreflightError(config('openrouter', '', 'openai/gpt-5'))).toBe(
-      'No planner is ready. Pick one with /planner — Claude Code, Codex and OpenCode plan with no API key. ' +
+      'No planner is ready. Pick one with /planner: Claude Code, Codex and OpenCode plan with no API key. ' +
       'To plan with OpenRouter instead, add OPENROUTER_API_KEY with /key.',
     );
   });
@@ -82,7 +82,7 @@ describe('plannerPreflightError on the extension\'s own config', () => {
     const config = new VsCodeConfig(await store({ openrouterKey: 'sk-or-secret' }));
 
     expect(plannerPreflightError(config)).toBe(
-      'No planner is ready. Pick one with /planner — Claude Code, Codex and OpenCode plan with no API key. ' +
+      'No planner is ready. Pick one with /planner: Claude Code, Codex and OpenCode plan with no API key. ' +
       'To plan with OpenAI instead, add OPENAI_API_KEY with /key.',
     );
   });

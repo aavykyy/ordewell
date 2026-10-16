@@ -354,7 +354,7 @@ function approvalLine(block: ApprovalBlock, cols: number): string {
       : block.status === 'withdrawn'
         ? ['·', 'Withdrawn', style.grey]
         : ['⊘', policy ? `Auto-denied (${policy})` : 'Denied', style.yellow];
-  const note = block.note ? ` — “${firstLine(block.note)}”` : '';
+  const note = block.note ? `: “${firstLine(block.note)}”` : '';
   const line = `${mark} ${status} · ${APPROVAL_KIND[block.kind]}: ${firstLine(block.subject)}${note}`;
   return `${paint(mark)}${truncate(line, cols).slice(mark.length)}`;
 }

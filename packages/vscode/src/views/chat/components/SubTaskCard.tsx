@@ -148,7 +148,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
                 <select id={`subtask-mode-${task.id}`} value={task.taskMode ?? activeModes[0]?.id ?? 'build'}
                   onChange={(e) => onModeChange(task.id, e.target.value)}>
                   {activeModes.map((m) => (
-                    <option key={m.id} value={m.id}>{m.label} — {m.description}</option>
+                    <option key={m.id} value={m.id}>{m.label}: {m.description}</option>
                   ))}
                 </select>
               </div>
@@ -170,7 +170,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
             {task.verdict && (
               <div className={`task-review ${task.verdict.outcome === 'pass' ? 'review-pass' : 'review-neutral'}`}>
                 <div className="task-review-summary">
-                  {task.verdict.outcome === 'pass' ? 'Verified' : 'Failed verification'} — {task.verdict.reason}
+                  {task.verdict.outcome === 'pass' ? 'Verified' : 'Failed verification'}: {task.verdict.reason}
                 </div>
                 {task.verdict.checks.length > 0 && (
                   <div className="task-review-checks">

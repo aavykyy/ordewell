@@ -85,7 +85,7 @@ describe('Landing', () => {
         kind: 'awaiting_user',
         reason: 'conflict',
         messages: [
-          { level: 'warn', text: 'Task "Task t1" passed, but merging it into ordewell/run1/integration conflicted (a.ts). Its worktree is kept — resolve it by hand and mark it complete, retry it, or resolve it as a task.' },
+          { level: 'warn', text: 'Task "Task t1" passed, but merging it into ordewell/run1/integration conflicted (a.ts). Its worktree is kept: resolve it by hand and mark it complete, retry it, or resolve it as a task.' },
           { level: 'info', text: 'Conflict repair is off (conflictRepairAttempts is 0), so task "Task t1" waits for you.', repairLog: true },
         ],
       });
@@ -200,7 +200,7 @@ describe('Landing', () => {
         reason: 'repair-failed',
         messages: [{
           level: 'warn',
-          text: 'The conflict repair of task "Task t1" did not finish (exited without its completion marker), so it did not land. Its worktree is kept — resolve it by hand and mark it complete, retry it, or resolve it as a task.',
+          text: 'The conflict repair of task "Task t1" did not finish (exited without its completion marker), so it did not land. Its worktree is kept: resolve it by hand and mark it complete, retry it, or resolve it as a task.',
           repairLog: true,
         }],
       });

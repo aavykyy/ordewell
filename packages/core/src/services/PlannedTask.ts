@@ -58,13 +58,13 @@ export interface PlannedTask {
 }
 
 /** The planner names no mode (ADR-0031): it says read-only, and the mode follows. */
-export const MODE_NOT_THE_PLANNERS = '"taskMode" is the user\'s to choose — set "readOnly": true on a task that must not change files, and leave it out otherwise';
+export const MODE_NOT_THE_PLANNERS = '"taskMode" is the user\'s to choose: set "readOnly": true on a task that must not change files, and leave it out otherwise';
 
 /** A manual task runs in no mode, so it cannot be read-only. */
-export const MANUAL_NOT_READ_ONLY = '"readOnly" is for AI tasks — a manual task runs in no mode';
+export const MANUAL_NOT_READ_ONLY = '"readOnly" is for AI tasks: a manual task runs in no mode';
 
 /** An ops task acts — runs commands — in the session's mode (ADR-0020); a read-only mode refuses that. */
-export const OPS_NOT_READ_ONLY = '"readOnly" is not for an ops task — it runs commands, in the session\'s mode, and a read-only mode refuses them';
+export const OPS_NOT_READ_ONLY = '"readOnly" is not for an ops task: it runs commands, in the session\'s mode, and a read-only mode refuses them';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -80,8 +80,8 @@ function text(value: unknown): string | undefined {
  * where its parent does.
  */
 export function opsPlacementRefusal(type: Task['type'], isSubtask: boolean): string | null {
-  if (type !== 'ai') return 'is a manual task — only an AI task can be an ops task';
-  if (isSubtask) return 'is a subtask, which runs with its parent — only a top-level task can be an ops task';
+  if (type !== 'ai') return 'is a manual task: only an AI task can be an ops task';
+  if (isSubtask) return 'is a subtask, which runs with its parent: only a top-level task can be an ops task';
   return null;
 }
 

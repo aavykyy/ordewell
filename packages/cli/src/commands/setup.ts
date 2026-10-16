@@ -47,7 +47,7 @@ export function handleSetup(subArgs: string[]): void {
 # OPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1
 # OPENAI_COMPATIBLE_API_KEY=your-key-here
 
-# Or plan with a coding agent you already have installed — no API key needed,
+# Or plan with a coding agent you already have installed: no API key needed,
 # it uses that agent's own subscription. Set the model to one of its own.
 # AI_PROVIDER=${runnerIdChoice()}
 # ORCHESTRATOR_MODEL=haiku

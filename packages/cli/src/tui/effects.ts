@@ -127,7 +127,7 @@ function isPlannerTurn(effect: Effect): boolean {
  */
 function explain(err: unknown): string {
   if (err instanceof DaemonError && err.code === 'session_not_found') {
-    return 'This server is no longer holding that session — it was deleted, or the server restarted. Reload it with /sessions if it is still listed.';
+    return 'This server is no longer holding that session: it was deleted, or the server restarted. Reload it with /sessions if it is still listed.';
   }
   return err instanceof Error ? err.message : String(err);
 }
@@ -159,7 +159,7 @@ function plannerModelNotice(recall: PlannerModelRecall): string {
     case 'remembered':
       return `Restored ${recall.model}.`;
     case 'catalog-default':
-      return `Using its default model, ${recall.model} — pick another with /model.`;
+      return `Using its default model, ${recall.model}. Pick another with /model.`;
     case 'none':
       return 'Pick a model with /model.';
   }
@@ -292,7 +292,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       } catch {
         // The planner's own timeout denies an unanswered request, so a lost
         // answer degrades to a denial rather than a stuck session.
-        dispatch({ type: 'failed', message: 'Could not deliver the approval answer — the planner will treat it as denied.' });
+        dispatch({ type: 'failed', message: 'Could not deliver the approval answer: the planner will treat it as denied.' });
       }
       return;
     }
@@ -304,7 +304,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       } catch {
         // A runner's request never times out, so a lost answer leaves it
         // waiting rather than denied.
-        dispatch({ type: 'failed', message: 'Could not deliver the answer — the task is still waiting for approval.' });
+        dispatch({ type: 'failed', message: 'Could not deliver the answer: the task is still waiting for approval.' });
       }
       return;
     }
@@ -419,7 +419,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       dispatch({
         type: 'notice',
         message: `${isCliProvider(effect.provider)
-          ? `Planning with ${meta.label} — no API key needed.`
+          ? `Planning with ${meta.label}: no API key needed.`
           : `Planner set to ${meta.label}.`} ${plannerModelNotice(recall)}`,
       });
       await loadModels(deps);
@@ -511,7 +511,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       if (effect.maxParallel !== undefined) await saveMaxParallel(deps, effect.maxParallel);
       const overridden = effect.autonomous !== undefined && deps.saveAutonomy(effect.autonomous).overridden;
       dispatch({ type: 'notice', message: overridden
-        ? `${effect.message} — ORDEWELL_AUTONOMOUS_MODE in the environment decides the autonomy level until it is unset.`
+        ? `${effect.message}: ORDEWELL_AUTONOMOUS_MODE in the environment decides the autonomy level until it is unset.`
         : effect.message });
       return;
     }
@@ -589,7 +589,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       dispatch({ type: 'sessionForked', sessionId: fork.sessionId, goal: fork.goal });
       dispatch(restoredChat(fork.plan, fork.sessionId));
       dispatch({ type: 'planUpdated', plan: fork.plan, sessionId: fork.sessionId });
-      dispatch({ type: 'notice', message: `Forked ${effect.sessionId} into ${fork.sessionId} — you are in the fork now. /sessions to go back.` });
+      dispatch({ type: 'notice', message: `Forked ${effect.sessionId} into ${fork.sessionId}: you are in the fork now. /sessions to go back.` });
       return;
     }
 
@@ -612,7 +612,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       dispatch(restoredChat(fork.plan, fork.sessionId));
       dispatch({ type: 'planUpdated', plan: fork.plan, sessionId: fork.sessionId });
       dispatch({ type: 'inputPrefilled', text: fork.rewoundMessage, sessionId: fork.sessionId });
-      dispatch({ type: 'notice', message: `Forked ${effect.sessionId} into ${fork.sessionId} from before that message — the original is kept (/sessions to go back). The message is ready to edit and resend.` });
+      dispatch({ type: 'notice', message: `Forked ${effect.sessionId} into ${fork.sessionId} from before that message: the original is kept (/sessions to go back). The message is ready to edit and resend.` });
       return;
     }
 
@@ -753,7 +753,7 @@ function copySelection(deps: EffectDeps, text: string): void {
   deps.writeTerminal(osc52(text));
   deps.dispatch({
     type: 'notice',
-    message: `Copied ${lines} ${lines === 1 ? 'line' : 'lines'} through the terminal — no clipboard tool here (pbcopy, xclip, xsel or wl-copy), so it only lands if your terminal supports OSC 52.`,
+    message: `Copied ${lines} ${lines === 1 ? 'line' : 'lines'} through the terminal: no clipboard tool here (pbcopy, xclip, xsel or wl-copy), so it only lands if your terminal supports OSC 52.`,
   });
 }
 

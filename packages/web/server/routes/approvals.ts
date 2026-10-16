@@ -59,7 +59,7 @@ export function approvalsRoute(pool: OrchestratorPool) {
       );
       if (!outcome.ok) return refuse(c, 400, outcome.message, 'refused');
     } else if (!pool.resolveApproval(sessionId, approvalId, answer)) {
-      return refuse(c, 409, 'Approval is no longer outstanding — it timed out or was already answered.', 'approval_not_outstanding');
+      return refuse(c, 409, 'Approval is no longer outstanding: it timed out or was already answered.', 'approval_not_outstanding');
     }
     return c.json({ ok: true, granted: isGranted(decided), decision: decided.decision } satisfies ApprovalAnswerResponse);
   });

@@ -4,7 +4,7 @@ import { runnerIdList } from './runnerNames';
 // an approval names them, not runner ids.
 export function printHelp(): void {
   console.log(`
-Ordewell — task orchestration for coding agents
+Ordewell: task orchestration for coding agents
 
 Run "ordewell" with no arguments for the TUI. Every command below has a TUI
 slash command of the same name, where each one opens a picker instead of taking
@@ -12,7 +12,7 @@ an id.
 
 Planning:
   ordewell                        Full-screen terminal UI (everything the VS Code extension does)
-  ordewell tui                    The same thing, named — for scripts and aliases
+  ordewell tui                    Explicit TUI command for scripts and aliases
   ordewell plan --goal "text"     Plan a goal conversationally
   ordewell run                    Execute the last generated plan (streams status)
   ordewell approve                Sign off a plan paused for review, and continue it
@@ -47,7 +47,7 @@ Per-task assignment (omit the value to list the options):
   ordewell task-ops <id> [on|off]      Make a task an ops task (runs in your checkout once its dependencies are merged) or a change task
 
 Planner, models and runners:
-  ordewell planner [<provider>]   Choose who plans — an API provider or a coding agent (no API key)
+  ordewell planner [<provider>]   Choose who plans: an API provider or a coding agent (no API key)
   ordewell model [set <id>]       Show or set the planner model (applies without a restart)
   ordewell planner-effort [lvl]   Thinking effort for a coding-agent planner
   ordewell key [set <p> <key>]    Show which providers have a key, or store one
@@ -126,17 +126,20 @@ Global options:
   --session-id <id>   Session to act on (default: last planned session)
 
 Quick Start:
-  Set OPENROUTER_API_KEY or GEMINI_API_KEY in your environment,
-  then run: ordewell plan --goal "Your task description"
+  Run "ordewell", then use /planner to choose a coding agent,
+  or /key to choose an API provider and add its key.
+
+  To plan from the command line after setup:
+    ordewell plan --goal "Your task description"
 
   No API key? Plan with a coding agent you already pay for:
     AI_PROVIDER=<runner> ordewell plan --goal "Your task description"
 
 Environment:
-  OPENROUTER_API_KEY         OpenRouter API key (recommended)
-  GEMINI_API_KEY             Google Gemini API key (alternative)
-  AI_PROVIDER                openrouter, google — auto-detected from keys
-                             ${runnerIdList()} — plan with that CLI,
+  OPENROUTER_API_KEY         OpenRouter API key
+  GEMINI_API_KEY             Google Gemini API key
+  AI_PROVIDER                Provider ID (auto-detected from keys); list with "ordewell planner"
+                             ${runnerIdList()}: plan with that CLI,
                              no API key (uses its own subscription)
   ORDEWELL_PLANNER_EFFORT    Thinking effort for a coding-agent planner
   ORCHESTRATOR_MODEL         Default: deepseek/deepseek-v4-flash

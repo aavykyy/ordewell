@@ -109,7 +109,7 @@ export function announceApprovals(state: TuiState, action: Extract<Action, { typ
   const task = findTask(state.tasks, action.taskId);
   const way = task ? `tab to the plan, select task ${task.order} and press enter (or /open ${task.order})` : 'tab to the plan, select it and press enter';
   const spoken = action.events.reduce((s, event) => (event.type === 'approval_requested' && !event.decided
-    ? say(s, 'system', `Task ${task?.order ?? '?'} waits for approval: ${runnerToolSubject(event.tool, event.args)} — ${way}, then ctrl-y allows or ctrl-g denies`)
+    ? say(s, 'system', `Task ${task?.order ?? '?'} waits for approval: ${runnerToolSubject(event.tool, event.args)}: ${way}, then ctrl-y allows or ctrl-g denies`)
     : s), state);
   return spoken !== state ? { ...spoken, scroll: state.scroll } : spoken;
 }
@@ -122,7 +122,7 @@ export function announceCheckpoint(state: TuiState, action: Extract<Action, { ty
   const task = findTask(state.tasks, action.taskId) ?? state.tasks.find((t) => t.title === action.title);
   const label = task ? `Task ${task.order}` : action.title;
   const where = task ? `tab to the plan, select task ${task.order} and press enter (or /open ${task.order}) to answer` : 'tab to the plan, select it and press enter to answer';
-  const spoken = say(state, 'system', `${label} asks: ${truncateCheckpointSummary(action.summary)} — ${where}`);
+  const spoken = say(state, 'system', `${label} asks: ${truncateCheckpointSummary(action.summary)}: ${where}`);
   return { ...spoken, scroll: state.scroll };
 }
 
@@ -160,7 +160,7 @@ function answerApproval(state: TuiState, tv: TaskLogState, sessionId: string, de
   const approval = waitingApproval(tv);
   if (!approval?.approvalId) return step(say(state, 'system', 'Nothing is waiting for approval.'));
   if (decision === 'allowForTask' && !approval.allowForTask) {
-    return step(say(state, 'system', 'The runner offered no grant for the rest of this task — ctrl-y allows this call.'));
+    return step(say(state, 'system', 'The runner offered no grant for the rest of this task: ctrl-y allows this call.'));
   }
   const note = decision === 'deny' ? state.editor.text.trim() : '';
   const answer: ApprovalDecision = decision === 'deny' ? { decision, ...(note ? { note } : {}) } : { decision };
@@ -204,8 +204,8 @@ function sendNow(state: TuiState, tv: TaskLogState, sessionId: string): Step {
     const task = findTask(state.tasks, tv.taskId);
     if (continuesTask(task)) {
       return step(say(state, 'system', resumesTask(task)
-        ? 'The task is paused on a usage limit, so there is no turn to interrupt — enter resumes it.'
-        : 'The task has finished, so there is no turn to interrupt — enter continues it.'));
+        ? 'The task is paused on a usage limit, so there is no turn to interrupt: enter resumes it.'
+        : 'The task has finished, so there is no turn to interrupt: enter continues it.'));
     }
     return step({ ...state, editor: commit(state.editor) }, [{ type: 'forceSendTaskMessage', sessionId, taskId: tv.taskId, text }]);
   }

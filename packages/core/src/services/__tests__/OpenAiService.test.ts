@@ -262,7 +262,7 @@ describe('OpenAiService credentials', () => {
   it('names the configured provider and its variable when the key is missing, and points at /planner', () => {
     const service = new OpenAiService(cfg({ aiProvider: 'openrouter', getProviderApiKey: () => '' } as Partial<IConfig>));
     expect(() => service.ensureInit()).toThrow(
-      'OpenRouter API key not configured. Set OPENROUTER_API_KEY, or pick a coding agent with /planner — it plans with no API key.',
+      'OpenRouter API key not configured. Set OPENROUTER_API_KEY, or pick a coding agent with /planner: it plans with no API key.',
     );
   });
 

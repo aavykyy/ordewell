@@ -1,8 +1,8 @@
 import React from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { render } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import App from '../App';
-import { hostBridge, post } from './hostBridge';
+import { api, hostBridge, post } from './hostBridge';
 import type { PlannerBackend } from '../../../shared/protocol';
 
 const backends = (usable: string[]): PlannerBackend[] => [
@@ -52,6 +52,18 @@ describe('the first screen while the coding agents are detected', () => {
     expect(document.querySelector('.get-started')).not.toBeNull();
     expect(page()).not.toContain('Detecting coding agents…');
     expect(runnersBlock()).toContain('No coding agent detected');
+  });
+
+  it('opens the API key wizard without preselecting a provider', () => {
+    post({ type: 'setConfiguredProviders', providers: [] });
+    post({ type: 'setRunners', runners: [] });
+    post({ type: 'setPlannerBackends', backends: backends([]), provider: 'openrouter' });
+    api.postMessage.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add API key' }));
+
+    expect(api.postMessage).toHaveBeenCalledTimes(1);
+    expect(api.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'sendMessage', text: '/key' }));
   });
 
   it('a configured key is enough to plan while the agents are still detected', () => {

@@ -147,7 +147,7 @@ async function pickPlannerEffort(arg: string | undefined, deps: SlashDeps): Prom
   if (variants.length === 0) {
     vscode.window.showWarningMessage(
       current
-        ? `${current.modelLabel} exposes no effort levels — it always runs at the agent's default.`
+        ? `${current.modelLabel} exposes no effort levels: it always runs at the agent's default.`
         : 'Pick a planner model first with /model set.',
     );
     return;

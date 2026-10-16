@@ -22,7 +22,7 @@ import { openSettings } from './settings';
 import { fail, step, withSession, type Effect, type Step, type TaskAction } from './shared';
 
 export const unknownCommand = (state: TuiState, name: string): Step =>
-  fail(state, `Unknown command: /${name} — type /help to see what's available.`);
+  fail(state, `Unknown command: /${name}. Type /help to see what's available.`);
 
 export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step {
   if (!findCommand(name)) return unknownCommand(state, name);
@@ -101,7 +101,7 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
     case 'load':
       return args[0]
         ? step(state, [{ type: 'loadSession', sessionId: args[0] }])
-        : fail(state, 'Usage: /load <session-id> — or run /sessions to pick one.');
+        : fail(state, 'Usage: /load <session-id>: or run /sessions to pick one.');
     case 'delete':
       return args[0]
         ? step(state, [{ type: 'deleteSession', sessionId: args[0] }])
@@ -127,7 +127,7 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
         const answer = args[1]?.toLowerCase();
         const reason = args.slice(2).join(' ').trim();
         if (answer !== 'approve' && answer !== 'reject') return fail(state, 'Usage: /checkpoint <id> approve|reject [reason]');
-        if (answer === 'approve' && reason) return fail(state, 'Approving takes no note — reject with a reason to tell the task something.');
+        if (answer === 'approve' && reason) return fail(state, 'Approving takes no note: reject with a reason to tell the task something.');
         return answerCheckpoint(state, sessionId, taskId, answer, reason);
       });
     case 'task-runner':
@@ -170,7 +170,7 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
 export function withIdlePlanner(state: TuiState, run: (sessionId: string) => Step): Step {
   return withSession(state, (sessionId) =>
     plannerInFlight(state)
-      ? fail(state, 'The planner is still answering — wait for its reply, or /stop it first.')
+      ? fail(state, 'The planner is still answering: wait for its reply, or /stop it first.')
       : run(sessionId),
   );
 }
@@ -410,14 +410,14 @@ function runners(state: TuiState, args: string[]): Step {
 }
 
 function setMaxParallel(state: TuiState, arg: string | undefined): Step {
-  if (!arg) return step(say(state, 'system', `Up to ${state.maxParallel} AI task${state.maxParallel === 1 ? '' : 's'} run at once — /parallel <n> changes it.`));
+  if (!arg) return step(say(state, 'system', `Up to ${state.maxParallel} AI task${state.maxParallel === 1 ? '' : 's'} run at once: /parallel <n> changes it.`));
   const limit = parseMaxParallel(arg);
   if (limit === null) return fail(state, 'Usage: /parallel [<number of tasks, 1 or more>]');
   return step({ ...state, maxParallel: limit }, [{ type: 'setMaxParallel', limit }]);
 }
 
 function setAutonomous(state: TuiState, arg: string | undefined): Step {
-  if (arg === undefined) return step(say(state, 'system', `Autonomy level: ${autonomyLevelLabel(state.autonomous)} — /auto full or /auto guarded changes it for new plans.`));
+  if (arg === undefined) return step(say(state, 'system', `Autonomy level: ${autonomyLevelLabel(state.autonomous)}. /auto full or /auto guarded changes it for new plans.`));
   const enabled = parseAutonomyLevel(arg);
   if (enabled === null) return fail(state, 'Usage: /auto [full|guarded]');
   // Updated here, not from the effect: the daemon never answers this setting
@@ -444,8 +444,8 @@ function setMouseCapture(state: TuiState, arg: string | undefined): Step {
     { ...state, mouseCapture: enabled, selection: null },
     'system',
     enabled
-      ? 'Mouse capture on — the wheel scrolls, and dragging selects within one pane and copies on release.'
-      : "Mouse capture off — the terminal's own drag-select is back, across both panes; scroll with pgup/pgdn.",
+      ? 'Mouse capture on: the wheel scrolls, and dragging selects within one pane and copies on release.'
+      : "Mouse capture off: the terminal's own drag-select is back, across both panes; scroll with pgup/pgdn.",
   );
   return step(noted, [{ type: 'setMouseCapture', enabled }]);
 }
@@ -458,7 +458,7 @@ function rewind(state: TuiState, arg: string | undefined): Step {
         [{ type: 'loadRewindTargets', sessionId }],
       );
     }
-    if (!/^\d+$/.test(arg)) return fail(state, 'Usage: /rewind [<message>] — or /rewind alone to pick one.');
+    if (!/^\d+$/.test(arg)) return fail(state, 'Usage: /rewind [<message>]: or /rewind alone to pick one.');
     return step(state, [{ type: 'loadRewindTargets', sessionId, pick: Number(arg) }]);
   });
 }
@@ -472,7 +472,7 @@ const REWIND_OPTIONS = [
 export function pickRewindTarget(state: TuiState, index: number): Step {
   return withIdlePlanner({ ...state, overlay: null }, () => {
     const target = state.rewindTargets?.find((t) => t.index === index);
-    if (!target) return fail({ ...state, overlay: null }, `No message ${index} to rewind to — /rewind alone lists them.`);
+    if (!target) return fail({ ...state, overlay: null }, `No message ${index} to rewind to: /rewind alone lists them.`);
     return step({
       ...state,
       overlay: {

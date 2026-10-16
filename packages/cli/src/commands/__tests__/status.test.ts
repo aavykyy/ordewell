@@ -166,7 +166,7 @@ describe('handleStatus --output', () => {
 
     const lines = stripAnsi(stdout).split('\n');
     const waiting = lines.filter((l) => l.includes('Waiting for your approval to start'));
-    expect(waiting).toEqual(['      Waiting for your approval to start — `ordewell run-task 2` starts it, or `ordewell run` runs the plan']);
+    expect(waiting).toEqual(['      Waiting for your approval to start: `ordewell run-task 2` starts it, or `ordewell run` runs the plan']);
     expect(lines[lines.indexOf(waiting[0]) - 1]).toContain('Two');
     srv.close();
   });

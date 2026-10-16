@@ -128,6 +128,6 @@ export async function handleApprovalEvent(
   } catch {
     // The planner's own timeout will deny this request; failing the whole
     // planning run because one answer could not be delivered would be worse.
-    deps.write('  (could not deliver the answer — the planner will treat it as denied)\n');
+    deps.write('  (could not deliver the answer: the planner will treat it as denied)\n');
   }
 }

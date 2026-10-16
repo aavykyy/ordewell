@@ -59,7 +59,7 @@ describe('a plan row, pinned before its rules move to core', () => {
 
   it('keeps the word that opens an approval and the one that names an awaiting task', () => {
     expect(frame([task({ status: 'in_progress', awaitingApproval: 1 })]))
-      .toMatch(/^\s+waiting for approval — enter opens it · claude-code · default model$/m);
+      .toMatch(/^\s+waiting for approval: enter opens it · claude-code · default model$/m);
     expect(frame([task({ status: 'awaiting_user', awaitingReason: 'input' })]))
       .toMatch(/^\s+waiting for your input · claude-code · default model$/m);
   });
@@ -79,14 +79,14 @@ describe('a plan row, pinned before its rules move to core', () => {
   });
 
   it('counts approvals beyond one, and puts them ahead of the status', () => {
-    expect(frame([task({ status: 'in_progress', awaitingApproval: 1 })])).toContain('waiting for approval — enter opens it · claude-code');
-    expect(frame([task({ status: 'in_progress', awaitingApproval: 3 })])).toContain('waiting for approval (3) — enter opens it · claude-code');
+    expect(frame([task({ status: 'in_progress', awaitingApproval: 1 })])).toContain('waiting for approval: enter opens it · claude-code');
+    expect(frame([task({ status: 'in_progress', awaitingApproval: 3 })])).toContain('waiting for approval (3): enter opens it · claude-code');
   });
 
   it('marks a conflict, naming the repo and files but not a lone root repo', () => {
     const conflict = (conflictRepo: string) => task({ status: 'awaiting_user', isolation: { ...isolated, state: 'conflict', conflictRepo, conflictFiles: ['a.ts', 'b.ts'] } });
-    expect(frame([conflict('api')])).toContain('⚠ merge conflict in api (a.ts, b.ts) — its work is kept on its own branch');
-    expect(frame([conflict('.')])).toContain('⚠ merge conflict (a.ts, b.ts) — its work is kept on its own branch');
+    expect(frame([conflict('api')])).toContain('⚠ merge conflict in api (a.ts, b.ts): its work is kept on its own branch');
+    expect(frame([conflict('.')])).toContain('⚠ merge conflict (a.ts, b.ts): its work is kept on its own branch');
   });
 
   it('marks a repair in flight, with its attempt once the stream has one', () => {
@@ -104,11 +104,11 @@ describe('a plan row, pinned before its rules move to core', () => {
 
   it('names what a merge gate waits on, by order, and an unknown id as is', () => {
     expect(frame([task({ status: 'completed' }), deploy({ mergeGate: ['t1', 'ghost'] })]))
-      .toContain('⏸ waits for Merge all — #1, ghost not merged into your branch yet');
+      .toContain('⏸ waits for Merge all: #1, ghost not merged into your branch yet');
   });
 
   it('says a task added after the plan was approved waits for the user, and how to approve it (ADR-0035)', () => {
-    expect(frame([task({ waitsForApproval: true })])).toContain('⏸ waiting for your approval to start — added after you approved the plan; f starts it, or /run runs the plan');
+    expect(frame([task({ waitsForApproval: true })])).toContain('⏸ waiting for your approval to start: added after you approved the plan; f starts it, or /run runs the plan');
     expect(frame([task({ waitsForApproval: true, status: 'in_progress' })])).not.toContain('waiting for your approval');
   });
 
@@ -120,7 +120,7 @@ describe('a plan row, pinned before its rules move to core', () => {
     ]);
     expect(out).toContain('  !  2  AI Wire the parser');
     expect(out).toContain('  !  3  AI Test the parser');
-    expect(out.match(/⊘ blocked by #1 — runs once it is retried and passes/g)).toHaveLength(2);
+    expect(out.match(/⊘ blocked by #1: runs once it is retried and passes/g)).toHaveLength(2);
   });
 
   it('draws a skipped task apart from a done one, with why, and lets what depends on it go ahead', () => {
@@ -129,14 +129,14 @@ describe('a plan row, pinned before its rules move to core', () => {
       task({ id: 't2', order: 2, title: 'Wire the parser', dependencies: ['t1'] }),
     ]);
     expect(out).toContain('  »  1  AI Fix the parser');
-    expect(out).toContain('» skipped: the host has no GPU — nothing of it landed; m done lands its kept work');
+    expect(out).toContain('» skipped: the host has no GPU: nothing of it landed; m done lands its kept work');
     expect(out).toContain('  ·  2  AI Wire the parser');
     expect(out).not.toContain('blocked by');
   });
 
   it('warns about an ops task that changed tracked files', () => {
     expect(frame([deploy({ status: 'awaiting_user', awaitingReason: 'files-changed' })]))
-      .toContain('⚠ an ops task changed tracked files — check them, then m done or /retry');
+      .toContain('⚠ an ops task changed tracked files: check them, then m done or /retry');
   });
 
   it('shows the expanded detail: status, ops, forced start, autonomy and dependencies', () => {

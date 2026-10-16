@@ -21,7 +21,7 @@ const message = (err: unknown): string => (err instanceof Error ? err.message : 
  */
 function plannerIsAnswering(deps: ConversationDeps): boolean {
   if (!deps.isGeneratingPlan()) return false;
-  void vscode.window.showWarningMessage('The planner is still answering — wait for its reply, or stop it first.');
+  void vscode.window.showWarningMessage('The planner is still answering: wait for its reply, or stop it first.');
   return true;
 }
 
@@ -48,7 +48,7 @@ export async function forkConversation(deps: ConversationDeps): Promise<void> {
     const fork = deps.session.forkConversation();
     await vscode.commands.executeCommand('ordewell.loadSessionById', fork.sessionId);
     void vscode.window.showInformationMessage(
-      `Forked ${originalId} into ${fork.sessionId} — you are in the fork now, and the original is kept. Use /sessions to go back.`,
+      `Forked ${originalId} into ${fork.sessionId}: you are in the fork now, and the original is kept. Use /sessions to go back.`,
     );
   } catch (err) {
     deps.chatProvider.showError(`Could not fork the conversation: ${message(err)}`);
@@ -73,7 +73,7 @@ function showConversation(plan: NonNullable<Session['planState']>, deps: Convers
 export async function rewindConversation(deps: ConversationDeps, arg?: string): Promise<void> {
   if (plannerIsAnswering(deps)) return;
   if (arg !== undefined && !/^\d+$/.test(arg)) {
-    void vscode.window.showWarningMessage('Usage: /rewind [<message>] — or /rewind alone to pick one.');
+    void vscode.window.showWarningMessage('Usage: /rewind [<message>]: or /rewind alone to pick one.');
     return;
   }
   try {
@@ -83,7 +83,7 @@ export async function rewindConversation(deps: ConversationDeps, arg?: string): 
     } else {
       const targets = deps.session.rewindTargets();
       if (targets.length === 0) {
-        void vscode.window.showInformationMessage('Nothing to rewind to yet — the only message so far is the goal.');
+        void vscode.window.showInformationMessage('Nothing to rewind to yet: the only message so far is the goal.');
         return;
       }
       const picked = await vscode.window.showQuickPick(
@@ -98,7 +98,7 @@ export async function rewindConversation(deps: ConversationDeps, arg?: string): 
     const fork = deps.session.rewindConversation(index);
     await vscode.commands.executeCommand('ordewell.loadSessionById', fork.sessionId);
     void vscode.window.showInformationMessage(
-      `Rewound ${originalId} into a fork, ${fork.sessionId} — you are in the fork now, and the original is kept. Use /sessions to go back.`,
+      `Rewound ${originalId} into a fork, ${fork.sessionId}: you are in the fork now, and the original is kept. Use /sessions to go back.`,
     );
   } catch (err) {
     deps.chatProvider.showError(`Could not rewind the conversation: ${message(err)}`);
@@ -130,12 +130,12 @@ export async function compactConversation(deps: ConversationDeps): Promise<void>
     );
   } catch (err) {
     if (abort.signal.aborted) {
-      void vscode.window.showInformationMessage('Condensing cancelled — nothing was changed.');
+      void vscode.window.showInformationMessage('Condensing cancelled: nothing was changed.');
     } else if (err instanceof PlannerNotReadyError) {
       // The refusal ends in its own full stop, and its commands are the core's spelling, not the chat's.
       deps.chatProvider.showError(`Could not condense the conversation: ${describePlannerNotReady(err.reason, CHAT_COMMANDS)} Nothing was changed.`);
     } else {
-      deps.chatProvider.showError(`Could not condense the conversation: ${message(err)} — nothing was changed.`);
+      deps.chatProvider.showError(`Could not condense the conversation: ${message(err)}: nothing was changed.`);
     }
   } finally {
     deps.chatProvider.setConversationBusy(false);

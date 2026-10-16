@@ -33,7 +33,7 @@ export function parsePlanJson(
   // text: the plan was almost certainly cut off mid-stream.
   if (matches.length === 0 && sawUnbalanced) {
     throw new PlanParseError(
-      'Plan response appears truncated — the model likely hit its output length limit before finishing the JSON.',
+      'Plan response appears truncated: the model likely hit its output length limit before finishing the JSON.',
       raw,
       { truncated: true },
     );
@@ -106,7 +106,7 @@ export function validatePlanTasks(
     ...(ignored.some((i) => i.field === 'taskMode')
       ? ['"taskMode" is not yours to set and was ignored: each task runs in its runner\'s mode for the user\'s autonomy level, or its read-only mode when you set "readOnly": true.']
       : []),
-    ...ignored.filter((i) => i.field === 'readOnly').map((i) => `${i.message} — it was ignored.`),
+    ...ignored.filter((i) => i.field === 'readOnly').map((i) => `${i.message}: it was ignored.`),
   ];
   return warnings.length > 0 ? { ok: true, tasks, warnings } : { ok: true, tasks };
 }

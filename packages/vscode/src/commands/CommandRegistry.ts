@@ -126,7 +126,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
 
       await deps.config.update('enabledRunners', newEnabled);
       await deps.sendRunnerAndModels();
-      vscode.window.showInformationMessage(`Enabled runners: ${newEnabled.length === 0 ? '(none — enable at least one)' : newEnabled.join(', ')}`);
+      vscode.window.showInformationMessage(`Enabled runners: ${newEnabled.length === 0 ? '(none: enable at least one)' : newEnabled.join(', ')}`);
     }),
   );
   context.subscriptions.push(
@@ -329,7 +329,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
       }
       const items = sessions.map((s) => ({
         label: s.goal,
-        description: `${new Date(s.createdAt).toLocaleDateString()} — ${s.taskCount} tasks — ${s.runners.join(', ')}`,
+        description: `${new Date(s.createdAt).toLocaleDateString()}: ${s.taskCount} tasks: ${s.runners.join(', ')}`,
         detail: `Status: ${s.status} | Updated: ${new Date(s.updatedAt).toLocaleString()}`,
         sessionId: s.id,
       }));
@@ -345,7 +345,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         return;
       }
       if (!applyLoadedSession(loaded, deps)) return;
-      deps.log(`Loaded session: ${loaded.meta.id} — "${loaded.meta.goal}"`);
+      deps.log(`Loaded session: ${loaded.meta.id}: "${loaded.meta.goal}"`);
       vscode.window.showInformationMessage(`Loaded session: "${loaded.meta.goal}" (${loaded.meta.taskCount} tasks)`);
     }),
   );

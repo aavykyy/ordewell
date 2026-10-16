@@ -54,7 +54,7 @@ export async function handleSessions(subArgs: string[], injectedApi?: ApiClient)
     }
     const { meta } = session;
     saveLastSession(meta.id, meta.goal, meta.runners || [], workspace);
-    console.log(`Loaded session ${meta.id} ("${meta.goal}") — ${meta.taskCount} tasks, status ${meta.status}.`);
+    console.log(`Loaded session ${meta.id} ("${meta.goal}"): ${meta.taskCount} tasks, status ${meta.status}.`);
     console.log("  `ordewell status` for detail, `ordewell run` to execute.");
     return;
   }

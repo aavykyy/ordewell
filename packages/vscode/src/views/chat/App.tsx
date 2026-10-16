@@ -162,7 +162,7 @@ export default function App() {
     const timer = setInterval(() => {
       if (Date.now() - lastActivityRef.current < WATCHDOG_MS) return;
       setIsResearchActive(false);
-      pushSystem('The planner stopped responding, so the input was re-enabled. Your last message may not have been processed — try sending it again.');
+      pushSystem('The planner stopped responding, so the input was re-enabled. Your last message may not have been processed: try sending it again.');
     }, 5_000);
     return () => clearInterval(timer);
   }, [isResearchActive, pushSystem]);
@@ -226,8 +226,8 @@ export default function App() {
     });
   }, []);
 
-  const handleConfigureApiKey = useCallback((provider: 'openrouter' | 'google' | 'openai_compatible') => {
-    vscode.postMessage({ type: 'sendMessage', text: `/key ${provider}`, runners });
+  const handleConfigureApiKey = useCallback(() => {
+    vscode.postMessage({ type: 'sendMessage', text: '/key', runners });
   }, [runners]);
 
   const handleLoadSession = useCallback(() => {
@@ -689,7 +689,7 @@ export default function App() {
           )}
           {runnerNotice && (
             <div className="runner-notice" role="note">
-              {runnerNotice.line} — <a href={runnerNotice.docs}>how to fix it</a>
+              {runnerNotice.line}: <a href={runnerNotice.docs}>how to fix it</a>
             </div>
           )}
           <TaskCommandsBridge.Provider value={postTaskCommand}>
@@ -763,7 +763,7 @@ export default function App() {
                   <span className="queue-dot running" /> {runningCount} running
                 </div>
               )}
-              <div className="executing-status">Tasks active &mdash; messages reach the planner now; new tasks wait while it replies</div>
+              <div className="executing-status">Tasks active: messages reach the planner now; new tasks wait while it replies</div>
             </div>
           )}
         </div>
@@ -807,7 +807,7 @@ export default function App() {
             <div className="setup-block-title">Planner</div>
             <div className="setup-block-hint">
               Researches your codebase and writes the plan. A coding agent plans on its own
-              subscription — no API key needed.
+              subscription. No API key needed.
             </div>
             <div className="planner-backends">
               {planner.backends.map((b) => (
@@ -837,8 +837,8 @@ export default function App() {
             {orchestratorModels.length === 0 && (
               <div className="model-discovery-error" role="alert">
                 {planner.runner
-                  ? <>No models discovered for this agent yet — run <code>/refresh</code>.</>
-                  : <>No models available — add an API key with <code>/key set</code>, or pick a coding agent above.</>}
+                  ? <>No models discovered for this agent yet: run <code>/refresh</code>.</>
+                  : <>No models available. Add an API key with <code>/key</code>, or pick a coding agent above.</>}
               </div>
             )}
             {Object.keys(modelDiscoveryErrors).length > 0 && !planner.runner && (
@@ -847,7 +847,7 @@ export default function App() {
                 {Object.entries(modelDiscoveryErrors)
                   .map(([p, msg]) => `${API_PROVIDER_LABELS[p as keyof typeof API_PROVIDER_LABELS] ?? p} (${msg})`)
                   .join('; ')}
-                . Check the API key / base URL — those models are omitted.
+                . Check the API key / base URL: those models are omitted.
               </div>
             )}
           </section>
@@ -874,7 +874,7 @@ export default function App() {
             )}
             {visibleRunners.length === 0 && runnersKnown && (
               <span className="setup-block-empty">
-                No coding agent detected — install {orNames(agentNames, 'a coding agent')}, then run <code>/refresh</code>.
+                No coding agent detected: install {orNames(agentNames, 'a coding agent')}, then run <code>/refresh</code>.
               </span>
             )}
           </div>

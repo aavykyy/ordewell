@@ -42,7 +42,7 @@ const effortLabel = (label: string): string => (/\beffort$/i.test(label) ? label
 export const plannerStepper: StepperDefinition = {
   title: 'Planner',
   advanceOnEnter: true,
-  hint: 'Who researches your goal and writes the plan. Coding agents use their own subscription — no API key.',
+  hint: 'Who researches your goal and writes the plan. Coding agents use their own subscription. No API key.',
   steps: [
     {
       id: 'harness',

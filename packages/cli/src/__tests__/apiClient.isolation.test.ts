@@ -68,8 +68,8 @@ describe('ApiClient isolation endpoints', () => {
   });
 
   it("surfaces the daemon's refusal", async () => {
-    const { api } = await client(400, { error: 'The run is still running — stop it first' });
-    await expect(api.mergeRun('s1')).rejects.toThrow('The run is still running — stop it first');
+    const { api } = await client(400, { error: 'The run is still running: stop it first' });
+    await expect(api.mergeRun('s1')).rejects.toThrow('The run is still running: stop it first');
   });
 });
 

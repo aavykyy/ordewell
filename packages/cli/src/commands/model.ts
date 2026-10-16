@@ -73,11 +73,11 @@ async function showModels(api: ApiClient): Promise<void> {
     : catalog.orchestratorModels;
 
   console.log(`\nPlanner model: ${current || '(backend default)'}`);
-  console.log(`Planner backend: ${provider || '(default)'}${runner ? ` — showing ${runner} models only` : ''}\n`);
+  console.log(`Planner backend: ${provider || '(default)'}${runner ? `: showing ${runner} models only` : ''}\n`);
 
   if (options.length === 0) {
     console.log(runner
-      ? `  No ${runner} models discovered yet — try \`ordewell refresh\`.`
+      ? `  No ${runner} models discovered yet: try \`ordewell refresh\`.`
       : '  No models discovered. Configure a provider key with `ordewell key set <provider> <key>`.');
   }
 
@@ -88,7 +88,7 @@ async function showModels(api: ApiClient): Promise<void> {
       m.variants?.length ? `${m.variants.length} effort level${m.variants.length === 1 ? '' : 's'}` : undefined,
     ].filter(Boolean).join(' · ');
     console.log(`  ${m.id === current ? '*' : ' '} ${m.id}`);
-    if (detail) console.log(`      ${m.label} — ${detail}`);
+    if (detail) console.log(`      ${m.label}: ${detail}`);
   }
 
   const failed = Object.entries(catalog.providerErrors);

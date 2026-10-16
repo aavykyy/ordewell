@@ -124,7 +124,7 @@ function handlePromptKey(
     if (overlay.action.kind === 'api-key') {
       return step(closed, [{ type: 'setApiKey', provider: overlay.action.provider, key: value }]);
     }
-    if (!state.sessionId) return fail(closed, 'No active plan to add a task to — describe a goal first, then /add-task <title>.');
+    if (!state.sessionId) return fail(closed, 'No active plan to add a task to: describe a goal first, then /add-task <title>.');
     return step(closed, [{ type: 'addTask', sessionId: state.sessionId, title: value }]);
   }
 
@@ -187,7 +187,7 @@ function choose(state: TuiState, picker: PickerState, item: PickerItem | undefin
       changes,
       message: names.length > 0
         ? `Runners enabled: ${names.join(', ')}.`
-        : 'No runners enabled — the planner has nothing to assign work to.',
+        : 'No runners enabled: the planner has nothing to assign work to.',
     }]);
   }
   if (picker.action.kind === 'set-task-deps') {
@@ -214,7 +214,7 @@ function choose(state: TuiState, picker: PickerState, item: PickerItem | undefin
   // Placeholder and unavailable rows are on screen to explain themselves, not
   // to be chosen. Keep the picker open so the reason stays readable.
   if (item.disabled) {
-    return step(say(state, 'error', item.detail ? `${item.label} — ${item.detail}` : `${item.label} is not available.`));
+    return step(say(state, 'error', item.detail ? `${item.label}: ${item.detail}` : `${item.label} is not available.`));
   }
 
   switch (picker.action.kind) {

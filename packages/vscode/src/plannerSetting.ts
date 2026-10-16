@@ -9,5 +9,5 @@ import { CLI_PROVIDERS, PROVIDER_PRIORITY, isPlannerBackend } from '@ordewell/co
 export function plannerSettingProblem(value: string): string | undefined {
   if (value === '' || isPlannerBackend(value)) return undefined;
   const choices = [...CLI_PROVIDERS, ...PROVIDER_PRIORITY].join(', ');
-  return `"ordewell.aiProvider" is "${value}", which is not a planner Ordewell knows, so the planner is detected from your API keys instead. Use one of: ${choices} — or leave it blank.`;
+  return `"ordewell.aiProvider" is "${value}", which is not a planner Ordewell knows, so the planner is detected from your API keys instead. Use one of: ${choices}: or leave it blank.`;
 }

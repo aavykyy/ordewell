@@ -98,7 +98,7 @@ describe('welcome — plan approval', () => {
 
   it('warns instead that a plan starts at once while autorun is on', () => {
     const text = plain(welcome(true));
-    expect(text).toContain('Autorun is on — a plan starts as soon as the planner submits it. Change it in /settings.');
+    expect(text).toContain('Autorun is on. A plan starts as soon as the planner submits it. Change it in /settings.');
     expect(text).not.toContain('Nothing runs until');
   });
 
@@ -110,7 +110,7 @@ describe('welcome — plan approval', () => {
 
   it('wraps in a narrow pane without losing the words', () => {
     const text = plain(welcome(true, { cols: 40, rows: 40 })).replace(/\s+/g, ' ');
-    expect(text).toContain('a plan starts as soon as the planner submits it');
+    expect(text).toContain('A plan starts as soon as the planner submits it');
   });
 
   it.each([false, true])('keeps a short, narrow welcome inside the terminal with autorun %s', (autorun) => {
@@ -278,7 +278,7 @@ describe('plan pane — conflict row', () => {
   it('names no files when the record has none', () => {
     const state = initialState({ sessionId: 's1', rows: 20, cols: 200, tasks: [conflictTask({})], focus: 'plan' });
 
-    expect(plain(state)).toContain('⚠ merge conflict — its work is kept on its own branch');
+    expect(plain(state)).toContain('⚠ merge conflict: its work is kept on its own branch');
   });
 });
 

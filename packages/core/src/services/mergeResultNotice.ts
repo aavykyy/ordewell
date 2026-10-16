@@ -52,15 +52,15 @@ export function describeMergeResult(
       return {
         level: 'warn',
         message: result.repo === SELF_REPO
-          ? `Merging ${branch} conflicted, so it was aborted — your tree is as it was.`
+          ? `Merging ${branch} conflicted, so it was aborted: your tree is as it was.`
           : `Merging ${branch} conflicted in ${result.repo}${result.files?.length ? ` (${result.files.join(', ')})` : ''}, so it was aborted there. ${landedNotice(result.landed ?? [])}`,
       };
     case 'failed':
       return {
         level: 'error',
         message: result.repo === SELF_REPO
-          ? `Could not merge ${branch} — finish or abort the merge already in progress, then try again.`
-          : `Could not merge ${branch} in ${result.repo} — finish or abort any merge in progress there, then try again. ${landedNotice(result.landed ?? [])}`,
+          ? `Could not merge ${branch}: finish or abort the merge already in progress, then try again.`
+          : `Could not merge ${branch} in ${result.repo}: finish or abort any merge in progress there, then try again. ${landedNotice(result.landed ?? [])}`,
       };
   }
 }

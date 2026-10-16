@@ -49,7 +49,7 @@ export default function ChatMessage({ block }: { block: MessageBlock }) {
     return (
       <div className="chat-msg chat-msg-user">
         <div className="chat-msg-bubble">
-          {block.forced && <span className="chat-msg-forced" title="Sent now — it stopped the planner turn in flight">sent now</span>}
+          {block.forced && <span className="chat-msg-forced" title="Sent now: it stopped the planner turn in flight">sent now</span>}
           <div className="chat-msg-content">{block.skills ? <SkillMarkedText text={block.text} skills={block.skills} /> : block.text}</div>
         </div>
       </div>

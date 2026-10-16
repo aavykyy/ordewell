@@ -50,7 +50,7 @@ describe('the plan pane while the planner turn holds an edit', () => {
     session.send({ type: 'plan_edit_held', held });
 
     const text = screen(session.state());
-    expect(text).toContain('Proposed — lands when this reply ends');
+    expect(text).toContain('Proposed: lands when this reply ends');
     expect(text).toMatch(/~ +2 +Wire the parser into the CLI/);
     expect(text).toMatch(/- +3 +Delete the old lexer/);
     expect(text).toMatch(/\+ +4 +Add a cache for parsed files/);

@@ -3,7 +3,7 @@ import type { ApiClient } from '../apiClient';
 import { connect, fail, headlessPlannerRefusal } from './shared';
 import { resolveSessionId } from './run';
 
-const REWIND_USAGE = 'Usage: ordewell rewind [<n>] [--session-id <id>] [--workspace /path] — with no <n>, lists the messages you can rewind to.';
+const REWIND_USAGE = 'Usage: ordewell rewind [<n>] [--session-id <id>] [--workspace /path]: with no <n>, lists the messages you can rewind to.';
 
 /**
  * Both act on a session the daemon holds; adopting first is a no-op for a live
@@ -38,7 +38,7 @@ export async function handleFork(subArgs: string[], injectedApi?: ApiClient): Pr
     fail(`Failed to fork: ${(err as Error).message}`);
   }
   saveLastSession(fork.sessionId, fork.goal, fork.plan.runners ?? [], workspace);
-  console.log(`Forked ${sessionId} into ${fork.sessionId} — the fork is now the current session.`);
+  console.log(`Forked ${sessionId} into ${fork.sessionId}: the fork is now the current session.`);
   console.log(`  \`ordewell sessions load ${sessionId}\` to go back to the original.`);
 }
 
@@ -80,7 +80,7 @@ export async function handleRewind(subArgs: string[], injectedApi?: ApiClient): 
       fail(`Failed to list messages: ${(err as Error).message}`);
     }
     if (targets.length === 0) {
-      console.log('Nothing to rewind to yet — the only message so far is the goal.');
+      console.log('Nothing to rewind to yet: the only message so far is the goal.');
       return;
     }
     console.log('Your messages, most recent first:\n');
@@ -96,7 +96,7 @@ export async function handleRewind(subArgs: string[], injectedApi?: ApiClient): 
     fail(`Failed to rewind: ${(err as Error).message}`);
   }
   saveLastSession(fork.sessionId, fork.goal, fork.plan.runners ?? [], workspace);
-  console.log(`Forked ${sessionId} into ${fork.sessionId} from just before message ${arg} — the fork is now the current session.`);
+  console.log(`Forked ${sessionId} into ${fork.sessionId} from just before message ${arg}. The fork is now the current session.`);
   console.log(`  \`ordewell sessions load ${sessionId}\` to go back to the original.`);
   console.log('\nThe message you rewound to, to resend or edit:\n');
   console.log(fork.rewoundMessage);

@@ -726,7 +726,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const prefixes = repo.path === SELF_REPO ? [] : [`--src-prefix=a/${repo.path}/`, `--dst-prefix=b/${repo.path}/`];
       const section = await this.git(repo.root, ['diff', ...prefixes, repo.baseRef, repo.integrationBranch]);
       if (section === '') continue;
-      if (repo.path !== SELF_REPO) diff += `# ${repo.path} — ${repo.integrationBranch} against ${repo.baseRef.slice(0, 12)}\n`;
+      if (repo.path !== SELF_REPO) diff += `# ${repo.path}: ${repo.integrationBranch} against ${repo.baseRef.slice(0, 12)}\n`;
       diff += section;
     }
     return diff;

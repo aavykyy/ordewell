@@ -55,10 +55,10 @@ export async function followExecution(
     for (const t of entries) {
       const icon = iconFor(t.status);
       const verdict = t.verdict
-        ? ` — ${t.verdict.outcome.toUpperCase()}: ${t.verdict.reason.slice(0, 60)}`
+        ? `: ${t.verdict.outcome.toUpperCase()}: ${t.verdict.reason.slice(0, 60)}`
         : '';
       // Nothing starts it on its own (ADR-0035), so a line that only said "pending" would read as next in line.
-      const waits = t.waitsForApproval ? ` — ${inLine(WAITS_FOR_APPROVAL_LABEL)}: \`ordewell run-task <id>\` starts it` : '';
+      const waits = t.waitsForApproval ? `: ${inLine(WAITS_FOR_APPROVAL_LABEL)}: \`ordewell run-task <id>\` starts it` : '';
       lines.push(`  ${icon} #${t.id.slice(-4)} ${t.status}${verdict}${waits}`);
     }
     const output = lines.join('\n');
@@ -84,17 +84,17 @@ export async function followExecution(
       process.stderr.write(`· ${taskStartedNotice(event.title, event.runner)}\n`);
     }
     if (event.type === 'checkpoint') {
-      process.stderr.write(`· Checkpoint — ${event.taskTitle}: ${truncateCheckpointSummary(event.summary)} — \`ordewell checkpoint <id> approve|reject [reason]\` answers it\n`);
+      process.stderr.write(`· Checkpoint: ${event.taskTitle}: ${truncateCheckpointSummary(event.summary)}: \`ordewell checkpoint <id> approve|reject [reason]\` answers it\n`);
     }
     if (event.type === 'status_update' && event.tasks) {
       printStatus(event.tasks as TaskStatus[]);
       // Said once per pause: the run waits on a merge only the user makes (ADR-0020).
       const paused = event.runMerge?.paused === true;
-      if (paused && !pausedAtGate) process.stderr.write('· Paused for Merge all — `ordewell handoff merge` merges what has landed, and the waiting tasks start.\n');
+      if (paused && !pausedAtGate) process.stderr.write('· Paused for Merge all: `ordewell handoff merge` merges what has landed, and the waiting tasks start.\n');
       pausedAtGate = paused;
     }
     if (event.type === 'review_needed') {
-      console.log('\nPlan needs your sign-off — run `ordewell approve` to continue.');
+      console.log('\nPlan needs your sign-off: run `ordewell approve` to continue.');
     }
     if (event.type === 'execution_complete') {
       const s = event as { summary?: { completed?: number; failed?: number; blocked?: number; skipped?: number; total: number } };
@@ -116,7 +116,7 @@ export async function followExecution(
     if (event.type === 'isolation_handoff') {
       const n = event.landed.length;
       const where = isRepoGroup(event) ? ` in ${event.repos.map((r) => r.path).join(', ')}` : '';
-      console.log(`\nRun finished on ${handoffBranch(event)}${where} — ${n} task${n === 1 ? '' : 's'} landed.`);
+      console.log(`\nRun finished on ${handoffBranch(event)}${where}: ${n} task${n === 1 ? '' : 's'} landed.`);
       if (isRepoGroup(event)) for (const line of repoResultLines(event)) console.log(`  ${line}`);
       if (event.deferredTo === 'supervisor') console.log('  The supervisor may merge it.');
       console.log('  `ordewell handoff review|merge|discard|cleanup` to land it.');
@@ -137,7 +137,7 @@ export async function followExecution(
   // below opens the next one, and that ends this.
   const outcome = await Promise.race([stream, blockedSeen]).catch(streamFailed);
   if (outcome === 'lost') {
-    console.error('Lost the connection to the daemon — the run is no longer being followed, but the daemon may still be running it. `ordewell status` shows where it stands.');
+    console.error('Lost the connection to the daemon: the run is no longer being followed, but the daemon may still be running it. `ordewell status` shows where it stands.');
     process.exit(1);
   }
 

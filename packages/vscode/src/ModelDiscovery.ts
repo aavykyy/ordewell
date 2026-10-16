@@ -211,7 +211,7 @@ export class ModelDiscovery {
       };
 
       const showModelStep = (provider: ApiProvider, withExtras = false) => {
-        qp.title = `Select a model — ${PROVIDER_SHORT_LABEL[provider] ?? provider}`;
+        qp.title = `Select a model: ${PROVIDER_SHORT_LABEL[provider] ?? provider}`;
         qp.placeholder = placeHolder;
         qp.buttons = configuredProviders.length >= 2 ? [vscodeApi.QuickInputButtons.Back] : [];
         qp.items = [
@@ -277,7 +277,7 @@ export class ModelDiscovery {
         continue;
       }
       if (validation.status === 'network') {
-        vscodeApi.window.showWarningMessage('Could not reach the API — saved the key anyway.');
+        vscodeApi.window.showWarningMessage('Could not reach the API: saved the key anyway.');
       }
 
       await this.deps.secretStore.set(secretKey, key);

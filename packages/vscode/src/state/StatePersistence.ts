@@ -18,7 +18,7 @@ export function saveCurrentSession(deps: PersistenceDeps): void {
   const goal = deps.getCurrentGoal() || plan.tasks[0]?.title || '(untitled)';
   try {
     const meta = saveSession(plan, goal, deps.workspaceRoot(), deps.session.sessionId);
-    deps.log(`Session saved: ${meta.id} — "${goal}" (${meta.taskCount} tasks)`);
+    deps.log(`Session saved: ${meta.id}: "${goal}" (${meta.taskCount} tasks)`);
   } catch (err) {
     deps.log(`Session save error: ${err}`);
   }

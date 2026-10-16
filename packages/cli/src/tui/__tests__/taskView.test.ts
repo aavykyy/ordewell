@@ -389,7 +389,7 @@ describe('a /command in the task view is the runner\'s own (#66)', () => {
   it('says so in the task view for a name the runner did not report, sending nothing, until the next send', () => {
     const result = run('/retyr now', withRunner({ cols: 200 }));
     expect(result.effects).toEqual([]);
-    expect(plain(result.state)).toContain('/retyr is not a command claude-code offers this task — type / to see them.');
+    expect(plain(result.state)).toContain('/retyr is not a command claude-code offers this task: type / to see them.');
 
     const next = run('/compact', { ...result.state });
     expect(next.effects).toHaveLength(1);

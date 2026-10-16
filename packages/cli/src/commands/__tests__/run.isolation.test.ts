@@ -103,7 +103,7 @@ describe('ordewell run at the end of an isolated run', () => {
 
     const { stdout } = await capture(() => handleRun(['--session-id', 's1'], client));
 
-    expect(stdout).toContain('Run finished on ordewell/r1/integration — 1 task landed.');
+    expect(stdout).toContain('Run finished on ordewell/r1/integration: 1 task landed.');
     expect(stdout).toContain('ordewell handoff');
   });
 
@@ -113,7 +113,7 @@ describe('ordewell run at the end of an isolated run', () => {
 
     const { stdout } = await capture(() => handleRun(['--session-id', 's1'], client));
 
-    expect(stdout).toContain('Run finished on ordewell/r1/integration — 1 task landed.');
+    expect(stdout).toContain('Run finished on ordewell/r1/integration: 1 task landed.');
     expect(stdout).toContain('  The supervisor may merge it.');
     expect(stdout).toContain('ordewell handoff');
   });
@@ -142,7 +142,7 @@ describe('ordewell run over a repo group', () => {
 
     const { stdout } = await capture(() => handleRun(['--session-id', 's1'], client));
 
-    expect(stdout).toContain('Run finished on ordewell/r1/integration in api, infra — 3 tasks landed.');
+    expect(stdout).toContain('Run finished on ordewell/r1/integration in api, infra: 3 tasks landed.');
     expect(stdout).toContain('  api: 3 tasks landed');
     expect(stdout).toContain('  infra: nothing to merge');
     expect(stdout).toContain('ordewell handoff');

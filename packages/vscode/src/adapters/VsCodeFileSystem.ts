@@ -155,7 +155,7 @@ export class VsCodeFileSystem extends BaseFileSystem {
       // Actionable hint so the model knows how to continue
       if (truncated) {
         const nextOffset = startLine + maxLines;
-        output += `\n\n(File has more lines — use offset=${nextOffset} to read beyond line ${nextOffset})\n`;
+        output += `\n\n(File has more lines: use offset=${nextOffset} to read beyond line ${nextOffset})\n`;
       }
 
       return { success: true, output, truncated };

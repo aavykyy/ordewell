@@ -129,7 +129,7 @@ export class Landing {
       reason: 'repair-failed',
       messages: [{
         level: 'warn',
-        text: `The conflict repair of task "${task.title}" ${why}, so it did not land. Its ${this.isGroup() ? 'worktrees are' : 'worktree is'} kept — resolve it by hand and mark it complete, retry it, or resolve it as a task.`,
+        text: `The conflict repair of task "${task.title}" ${why}, so it did not land. Its ${this.isGroup() ? 'worktrees are' : 'worktree is'} kept: resolve it by hand and mark it complete, retry it, or resolve it as a task.`,
         repairLog: true,
       }],
     };
@@ -200,7 +200,7 @@ export class Landing {
         kind: 'awaiting_user',
         reason: 'conflict',
         messages: [
-          { level: 'warn', text: `${conflicted} ${inRepo ? 'Its worktrees are' : 'Its worktree is'} kept — resolve it by hand and mark it complete, retry it, or resolve it as a task.` },
+          { level: 'warn', text: `${conflicted} ${inRepo ? 'Its worktrees are' : 'Its worktree is'} kept: resolve it by hand and mark it complete, retry it, or resolve it as a task.` },
           ...(whyNot ? [{ level: 'info' as const, text: whyNot, repairLog: true as const }] : []),
         ],
       };

@@ -1870,7 +1870,7 @@ export class Session {
 
   private requireSettledRun(): void {
     this.runs.requireRun();
-    if (this.orchestrator.isRunning) throw new PlanEditError('The run is still running — stop it first');
+    if (this.orchestrator.isRunning) throw new PlanEditError('The run is still running: stop it first');
   }
 
   /** Add the task that merges a conflicted task's branch by hand; see {@link PlanEditor.addConflictResolver}. */

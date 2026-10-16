@@ -266,7 +266,7 @@ describe('the loop guards', () => {
 
     await until(() => env.run.spawnedIds().length === 2);
     expect(env.run.runner.spawn.mock.calls[1][0].prompt).toContain('do t1, importing from ./lib');
-    expect(env.session.planState!.conversationHistory!.at(-1)).toMatchObject({ kind: 'execution', content: 'Retried task #1 "Task t1" — by supervisor.' });
+    expect(env.session.planState!.conversationHistory!.at(-1)).toMatchObject({ kind: 'execution', content: 'Retried task #1 "Task t1": by supervisor.' });
   });
 
   it('drops a start queued behind an edit that never landed, and says so', async () => {

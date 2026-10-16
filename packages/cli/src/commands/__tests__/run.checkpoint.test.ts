@@ -28,7 +28,7 @@ describe('ordewell run when a task asks a checkpoint', () => {
       log.mockRestore();
     }
 
-    expect(written.join('')).toContain('· Checkpoint — Migrate the schema: Drop the users table? — `ordewell checkpoint <id> approve|reject [reason]` answers it');
+    expect(written.join('')).toContain('· Checkpoint: Migrate the schema: Drop the users table?: `ordewell checkpoint <id> approve|reject [reason]` answers it');
   });
 });
 

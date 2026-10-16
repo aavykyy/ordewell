@@ -693,8 +693,8 @@ export default function ChatInput({
         <div className="slash-suggestions" ref={suggestionsRef}>
           <div className="slash-suggestions-header">
             {isModelCommand
-              ? 'Select a model — type to filter, Enter to pick'
-              : midToken ? 'Skills — type / to filter' : 'Commands — type / to filter'}
+              ? 'Select a model: type to filter, Enter to pick'
+              : midToken ? 'Skills: type / to filter' : 'Commands: type / to filter'}
           </div>
           {renderedSuggestions()}
           <div className="slash-suggestions-footer">

@@ -161,7 +161,7 @@ describe('a merge never deletes a live task\'s worktree', () => {
 
       expect(status('t1')).toBe('pending');
       expect(status('t2')).toBe('completed');
-      expect(notices).toEqual(['Task "Task t1" was shown as running, but nothing was running it — back to not started. Retry or force-start it; a worktree it had is kept.']);
+      expect(notices).toEqual(['Task "Task t1" was shown as running, but nothing was running it: back to not started. Retry or force-start it; a worktree it had is kept.']);
     });
 
     it('is found on the next tick, however it was left, and can be started again', async () => {

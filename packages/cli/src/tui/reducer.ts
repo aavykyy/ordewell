@@ -216,7 +216,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       const failures = `${failed > 0 ? ` · ${failed} failed` : ''}${blocked ? ` · ${blocked} blocked` : ''}${skipped ? ` · ${skipped} skipped` : ''}`;
       const verb = action.stopped ? 'stopped' : 'finished';
       return step({
-        ...say(state, 'system', `Execution ${verb} — ${completed}/${total} tasks complete${failures}.`),
+        ...say(state, 'system', `Execution ${verb}: ${completed}/${total} tasks complete${failures}.`),
         status: 'idle',
       });
     }
@@ -241,7 +241,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       // and may be running these, so 'pending' would be a guess against a run
       // that is still going.
       return step({
-        ...say(state, 'error', 'Lost the connection to the daemon — this view is no longer following the run, but the daemon may still be running it. /load this session again to see where it stands.'),
+        ...say(state, 'error', 'Lost the connection to the daemon: this view is no longer following the run, but the daemon may still be running it. /load this session again to see where it stands.'),
         status: 'idle',
       });
     }
@@ -536,7 +536,7 @@ function submit(state: TuiState): Step {
     const command = parseRunnerCommand(text);
     const offered = runnerCommands(state.taskView);
     if (command && offered.length > 0 && !runnerCommandFor(offered, command.name)) {
-      const notice = `/${command.name} is not a command ${task?.assignedRunner ?? 'the runner'} offers this task — type / to see them.`;
+      const notice = `/${command.name} is not a command ${task?.assignedRunner ?? 'the runner'} offers this task: type / to see them.`;
       return step({ ...cleared, taskView: { ...state.taskView, notice } });
     }
     if (state.taskView.notice) cleared.taskView = { ...state.taskView, notice: undefined };
@@ -546,7 +546,7 @@ function submit(state: TuiState): Step {
     // answered first, and the draft stays for after.
     if (!command && waitingCheckpoint(task)) {
       if (waitingApproval(state.taskView)) {
-        return step(say(state, 'system', 'A tool request is waiting ahead of the checkpoint — answer it first (ctrl-y to allow, ctrl-g to deny), then enter replies to the checkpoint.'));
+        return step(say(state, 'system', 'A tool request is waiting ahead of the checkpoint: answer it first (ctrl-y to allow, ctrl-g to deny), then enter replies to the checkpoint.'));
       }
       return answerCheckpoint(cleared, state.sessionId, taskId, 'reject', text);
     }

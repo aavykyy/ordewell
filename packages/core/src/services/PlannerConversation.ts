@@ -261,7 +261,7 @@ export class ConversationEditError extends Error {
  */
 export class ConversationBusyError extends ConversationEditError {
   constructor(operation: string) {
-    super(`Cannot ${operation} while the planner is answering — wait for the reply, or stop it first.`);
+    super(`Cannot ${operation} while the planner is answering: wait for the reply, or stop it first.`);
     this.name = 'ConversationBusyError';
   }
 }
@@ -676,7 +676,7 @@ export class PlannerConversation {
     const plan = this.host.plan();
     if (!plan) throw new ConversationEditError('No planning conversation to condense');
     if (!keptTail(this.transcript)) {
-      throw new ConversationEditError('The conversation is too short to condense — it takes more than two exchanges before a summary saves anything.');
+      throw new ConversationEditError('The conversation is too short to condense: it takes more than two exchanges before a summary saves anything.');
     }
     // A planner turn, so a message sent while it runs is refused: the reply
     // would share the summary turn's live context, which the compaction resets
@@ -685,7 +685,7 @@ export class PlannerConversation {
     try {
       const summary = await this.summarize(turn.signal);
       const tail = keptTail(this.transcript);
-      if (this.host.plan() !== plan || !tail) throw new ConversationEditError('The conversation changed while it was being condensed — nothing was replaced.');
+      if (this.host.plan() !== plan || !tail) throw new ConversationEditError('The conversation changed while it was being condensed: nothing was replaced.');
       const now = new Date().toISOString();
       const content = condensedNotice(summary);
       this.host.mutate(() => {
@@ -719,7 +719,7 @@ export class PlannerConversation {
     } else {
       turn = await this.resume(request, [...this.transcript], signal, onProgress);
     }
-    if (signal.aborted) throw new ConversationEditError('Condensing was stopped — the conversation is unchanged.');
+    if (signal.aborted) throw new ConversationEditError('Condensing was stopped: the conversation is unchanged.');
     const summary = extractSummary(turn.text);
     if (!summary) throw new ConversationEditError('The planner returned no summary, so the conversation is unchanged. Try again.');
     return summary;
@@ -752,8 +752,8 @@ export class PlannerConversation {
     if (!this.rewindTargets().some((t) => t.index === index)) {
       if (index > 0) throw new ConversationEditError(`No user message at position ${index} to rewind to.`);
       throw new ConversationEditError(this.transcript[0]?.kind === 'compaction'
-        ? 'The conversation was condensed there — a rewind cannot reach back past the summary.'
-        : 'The first message is the goal — start a new session to change it.');
+        ? 'The conversation was condensed there: a rewind cannot reach back past the summary.'
+        : 'The first message is the goal: start a new session to change it.');
     }
     const { content: rewoundMessage, timestamp: cutoff } = this.transcript[index];
     return {
@@ -1084,7 +1084,7 @@ export class PlannerConversation {
       if (spent === 'refused') {
         return {
           kind: 'message',
-          text: 'The planner kept asking to read tasks instead of answering. Nothing was changed — ask again, or be more specific about the edit you want.',
+          text: 'The planner kept asking to read tasks instead of answering. Nothing was changed: ask again, or be more specific about the edit you want.',
           researchLog: carried,
         };
       }

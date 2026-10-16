@@ -228,7 +228,7 @@ describe('the notice in the chat pane', () => {
 
   it('names the task and the first line of its question, and points at the view', () => {
     const state = reduce(initialState({ sessionId: 's1', tasks: [task()] }), asks()).state;
-    expect(lastMessage(state)).toMatchObject({ role: 'system', text: 'Task 2 asks: Drop the users table? — tab to the plan, select task 2 and press enter (or /open 2) to answer' });
+    expect(lastMessage(state)).toMatchObject({ role: 'system', text: 'Task 2 asks: Drop the users table?: tab to the plan, select task 2 and press enter (or /open 2) to answer' });
   });
 
   it('arrives from the daemon\'s checkpoint message', () => {

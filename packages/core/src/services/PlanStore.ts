@@ -314,7 +314,7 @@ export class PlanStore {
     if (task.assignedRunner) {
       console.warn(
         `[PlanStore] Task "${task.title}" is assigned to "${task.assignedRunner}", which is not in this plan's ` +
-        `runner set [${this._planRunners.join(', ')}] — spawning "${fallback}" instead.`,
+        `runner set [${this._planRunners.join(', ')}]: spawning "${fallback}" instead.`,
       );
     }
     return fallback;

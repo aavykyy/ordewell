@@ -40,6 +40,6 @@ export function uninstalledPlannerRefusal(provider: string, installed: readonly 
   const agents = CLI_PROVIDERS.filter((id) => installed.includes(runnerForProvider(id) ?? ''));
   const label = getProviderMeta(provider)?.label ?? provider;
   return agents.length > 0
-    ? `${label} is not installed or not on PATH. Installed coding agents: ${agents.join(', ')} — switch with ${pickPlanner}.`
+    ? `${label} is not installed or not on PATH. Installed coding agents: ${agents.join(', ')}. Switch with ${pickPlanner}.`
     : `${label} is not installed or not on PATH, and no other coding agent is. Install one, or plan with an API provider through ${pickPlanner}.`;
 }

@@ -21,7 +21,7 @@ export async function handleHandoff(
 
   if (action === undefined) {
     console.log(`${USAGE}\n`);
-    for (const a of HANDOFF_ACTIONS) console.log(`  ${a.id.padEnd(8)} ${a.label} — ${a.hint}`);
+    for (const a of HANDOFF_ACTIONS) console.log(`  ${a.id.padEnd(8)} ${a.label}: ${a.hint}`);
     return;
   }
   if (!HANDOFF_ACTIONS.some((a) => a.id === action)) fail(`Unknown handoff action "${action}".`, USAGE);
@@ -36,7 +36,7 @@ export async function handleHandoff(
   const asked = hasFlag(subArgs, '--yes');
   const confirmed = async (question: string): Promise<void> => {
     if (asked || (await confirm(question))) return;
-    fail('Not confirmed — nothing was changed. Pass --yes to confirm without a prompt.');
+    fail('Not confirmed: nothing was changed. Pass --yes to confirm without a prompt.');
   };
 
   // Wraps only the daemon calls, so a refusal the user caused (declining a

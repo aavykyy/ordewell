@@ -35,7 +35,7 @@ describe('ops tasks and merge gates in the TUI (ADR-0020)', () => {
     const out = frame(plan([change(), deploy({ mergeGate: ['t1'] })]));
 
     expect(out).toContain('OPS Redeploy on dev');
-    expect(out).toContain('⏸ waits for Merge all — #1');
+    expect(out).toContain('⏸ waits for Merge all: #1');
   });
 
   it('takes the gate from a status update, and says the run is paused for Merge all', () => {
@@ -46,7 +46,7 @@ describe('ops tasks and merge gates in the TUI (ADR-0020)', () => {
     expect(next.runMerge).toEqual(runMerge);
     expect(next.tasks[1].mergeGate).toEqual(['t1']);
     expect(next.status).toBe('executing');
-    expect(runHint(next)).toBe('paused for Merge all — /handoff merge');
+    expect(runHint(next)).toBe('paused for Merge all: /handoff merge');
 
     const cleared = apply(next, { type: 'statusUpdate', sessionId: 's1', tasks: [{ id: 'o2', status: 'in_progress', verdict: null, idleSince: null }] }).state;
     expect(cleared.runMerge).toBeNull();

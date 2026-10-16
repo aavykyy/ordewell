@@ -49,7 +49,7 @@ describe('the plan view while the planner turn holds an edit', () => {
     plan({ ...EMPTY_RUN, heldEdit: held });
 
     const proposed = screen.getByRole('region', { name: /Proposed/ });
-    expect(within(proposed).getByText('Proposed — lands when this reply ends')).toBeTruthy();
+    expect(within(proposed).getByText('Proposed: lands when this reply ends')).toBeTruthy();
     expect(within(proposed).getByText('Add a cache').closest('li')?.getAttribute('data-mark')).toBe('added');
     expect(within(proposed).getByText('Wire the parser into the CLI').closest('li')?.getAttribute('data-mark')).toBe('changed');
     // Struck through, not hidden: the user sees what is going away.

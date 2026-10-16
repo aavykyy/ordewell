@@ -12,7 +12,7 @@ export interface HandoffLandedTask {
 
 /** So the reviewer knows where to look (ADR-0015). */
 function RepairedNote({ files }: { files: string[] }) {
-  return <span className="isolation-handoff-repaired"> — repaired ({capConflictFiles(files)})</span>;
+  return <span className="isolation-handoff-repaired">: repaired ({capConflictFiles(files)})</span>;
 }
 
 export interface HandoffRepo {
@@ -112,8 +112,8 @@ export default function HandoffCard({ repos, landed, deferredTo, mergeResult, mi
       <div className="isolation-handoff-header">
         <span className="isolation-handoff-title">
           {midRun
-            ? midRun.paused ? 'Paused for Merge all — tasks wait for this work in your branch' : 'Tasks wait for Merge all — merge what has landed so far'
-            : <>Run complete &mdash; review the integration branch</>}
+            ? midRun.paused ? 'Paused for Merge all: tasks wait for this work in your branch' : 'Tasks wait for Merge all: merge what has landed so far'
+            : <>Run complete: review the integration branch</>}
         </span>
         <code className="isolation-handoff-branch">{branch}</code>
       </div>

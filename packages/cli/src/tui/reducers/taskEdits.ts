@@ -39,7 +39,7 @@ export function confirmRemoveTask(state: TuiState, task: TaskView): Step {
  */
 export function toggleTaskOps(state: TuiState, task: TaskView, subtask: boolean, to: boolean = !task.ops): Step {
   if (!state.sessionId) return fail(state, 'No active plan.');
-  if (task.type !== 'ai') return fail(state, 'Only an AI task can be an ops task — a manual task already runs outside any worktree.');
+  if (task.type !== 'ai') return fail(state, 'Only an AI task can be an ops task: a manual task already runs outside any worktree.');
   if (subtask) return fail(state, 'A subtask runs with its parent; make the parent an ops task instead.');
   if (!!task.ops === to) return fail(state, `${refFor(state, task)} is already ${to ? 'an ops' : 'a change'} task.`);
   return step(state, [{
@@ -330,7 +330,7 @@ export function taskOpsCommand(state: TuiState, args: string[]): Step {
 
 export function addTask(state: TuiState, title: string): Step {
   if (!state.sessionId) {
-    return fail(state, 'No active plan to add a task to — describe a goal first, then /add-task <title>.');
+    return fail(state, 'No active plan to add a task to: describe a goal first, then /add-task <title>.');
   }
   if (!title) {
     return step({

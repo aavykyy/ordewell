@@ -45,14 +45,14 @@ describe('a task paused on a usage limit in the TUI', () => {
   it('says on its row when it resumes, and how to resume it now or keep it from resuming', () => {
     const shown = frame([task()]);
     expect(shown).toContain('    paused on a usage limit · claude-code');
-    expect(shown).toContain('⏸ resumes at 8:10pm, once the usage limit resets — r resume now · c don\'t resume');
+    expect(shown).toContain('⏸ resumes at 8:10pm, once the usage limit resets: r resume now · c don\'t resume');
   });
 
   it('says nothing of a resume once it waits for a manual retry, but still offers to resume it now', () => {
     const shown = frame([task({ resumeAt: undefined })]);
     expect(shown).toContain('    paused on a usage limit · claude-code');
     expect(shown).not.toContain('resumes at');
-    expect(shown).toContain('⏸ waits for the usage limit to reset — r resume now');
+    expect(shown).toContain('⏸ waits for the usage limit to reset: r resume now');
     expect(frame([task({ resumeAt: undefined, continuable: false })])).not.toContain('r resume now');
   });
 

@@ -1052,10 +1052,10 @@ describe('applyTaskOps — the mode a planner edit lands a task on (ADR-0031)', 
     const edit = applyTaskOps(samplePlan(), [{ op: 'add', task: { title: 'Review', readOnly: true, subtasks: [child] as never } }], runners, catalog(true));
 
     expect(plan.ok ? [] : plan.errors.map((e) => e.message)).toEqual([
-      'subtask "Child" of "Review": Runner "custom" has no read-only mode — assign a read-only task to one of: claude-code, opencode, or drop "readOnly"',
+      'subtask "Child" of "Review": Runner "custom" has no read-only mode: assign a read-only task to one of: claude-code, opencode, or drop "readOnly"',
     ]);
     expect(edit.errors).toEqual([
-      'op 1 (add): subtask "Child" of "Review": Runner "custom" has no read-only mode — assign a read-only task to one of: claude-code, opencode, or drop "readOnly"',
+      'op 1 (add): subtask "Child" of "Review": Runner "custom" has no read-only mode: assign a read-only task to one of: claude-code, opencode, or drop "readOnly"',
     ]);
   });
 

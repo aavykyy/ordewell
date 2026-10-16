@@ -98,7 +98,7 @@ export function checkModelAndModeValidity(
   if (taskMode !== undefined) {
     const modes = catalog.runnerModes[runner];
     if (modes && modes.length > 0 && !modes.some((m) => m.id === taskMode)) {
-      return { ok: false, error: `Runner "${runner}" has no task mode "${taskMode}" — valid modes: ${modes.map((m) => m.id).join(', ')}` };
+      return { ok: false, error: `Runner "${runner}" has no task mode "${taskMode}": valid modes: ${modes.map((m) => m.id).join(', ')}` };
     }
     const unavailable = unavailableModeReason(modes, taskMode);
     if (unavailable) return { ok: false, error: `Mode "${taskMode}" of runner "${runner}" is unavailable on this host: ${unavailable}` };
@@ -121,7 +121,7 @@ function typeCoherenceCheck(target: Task, changes: Partial<Task>): TaskEditCheck
 
   if (changes.type === 'user') {
     if (!Array.isArray(changes.userSteps) || changes.userSteps.length === 0) {
-      return { ok: false, error: `"${target.title}" cannot become a manual task without user steps — include "userSteps" in this edit` };
+      return { ok: false, error: `"${target.title}" cannot become a manual task without user steps: include "userSteps" in this edit` };
     }
     return {
       ok: true,
@@ -133,7 +133,7 @@ function typeCoherenceCheck(target: Task, changes: Partial<Task>): TaskEditCheck
 
   // changes.type === 'ai'
   if (!changes.prompt || !changes.prompt.trim()) {
-    return { ok: false, error: `"${target.title}" cannot become an AI task without a prompt — include "prompt" in this edit` };
+    return { ok: false, error: `"${target.title}" cannot become an AI task without a prompt: include "prompt" in this edit` };
   }
   return { ok: true, clear: target.userSteps && target.userSteps.length > 0 ? ['userSteps'] : [] };
 }

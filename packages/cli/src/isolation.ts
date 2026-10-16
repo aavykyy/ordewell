@@ -182,7 +182,7 @@ export function mergeOutcome(
 ): { ok: boolean; message: string } {
   const ok = result.outcome === 'merged';
   if (!group && result.outcome === 'conflict') {
-    return { ok, message: `Merging ${branch} conflicted, so it was aborted — your tree is as it was. Merge it with git and resolve the conflict there.` };
+    return { ok, message: `Merging ${branch} conflicted, so it was aborted: your tree is as it was. Merge it with git and resolve the conflict there.` };
   }
   const { message } = describeMergeResult(result, branch, group, repaired);
   return { ok, message: ok || !group ? message : `${message} Each repository's ${branch} is a plain branch you can merge by hand.` };

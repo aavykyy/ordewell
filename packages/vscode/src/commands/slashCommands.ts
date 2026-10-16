@@ -27,7 +27,7 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   { label: '/supervisor', detail: 'Whether the planner watches or acts on your runs: off, watch, act · retries <n> · reads <n>', insertText: '/supervisor ' },
   { label: '/automerge', detail: 'Merge into your branch by itself at merge gates and at the end of a run: on or off', insertText: '/automerge ' },
   { label: '/autorun', detail: 'Start each plan the planner submits, without review: on or off', insertText: '/autorun ' },
-  { label: '/parallel', detail: 'How many AI tasks run at once — applies to a run already going', insertText: '/parallel ' },
+  { label: '/parallel', detail: 'How many AI tasks run at once: applies to a run already going', insertText: '/parallel ' },
   { label: '/help', detail: 'Show all available commands', insertText: '/help' },
 ];
 
@@ -47,5 +47,5 @@ export function isBuiltinSlashCommand(text: string): boolean {
 }
 
 export function slashHelp(): string {
-  return SLASH_COMMANDS.map((c) => `${c.label.trim()} — ${c.detail}`).join('\n');
+  return SLASH_COMMANDS.map((c) => `${c.label.trim()}: ${c.detail}`).join('\n');
 }

@@ -68,7 +68,7 @@ export async function handleAutorun(subArgs: string[], injectedApi?: ApiClient):
     return;
   }
   await save(api, { autorun: enabled });
-  console.log(`Autorun: ${enabled ? 'on — each plan the planner submits starts at once' : 'off — plans wait for your review'}.`);
+  console.log(`Autorun: ${enabled ? 'on: each plan the planner submits starts at once' : 'off: plans wait for your review'}.`);
   if (enabled) console.log(AUTORUN_RISK);
 }
 

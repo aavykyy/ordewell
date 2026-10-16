@@ -487,7 +487,7 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
       return;
 
     case 'review_needed':
-      dispatch({ type: 'notice', message: 'Plan needs your sign-off — /approve to continue.' });
+      dispatch({ type: 'notice', message: 'Plan needs your sign-off: /approve to continue.' });
       return;
 
     case 'review_approved':

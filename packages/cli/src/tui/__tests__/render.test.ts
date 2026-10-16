@@ -347,7 +347,7 @@ describe('transcript', () => {
   it('says what is missing when nothing can plan yet', () => {
     const out = text(DETECTED);
     // Same order as the not-ready error: the no-key way in first, the vendor key second.
-    expect(out).toMatch(/Claude Code, Codex or OpenCode.*\/planner.*no API key.*\/key/s);
+    expect(out).toMatch(/Claude Code, Codex or OpenCode.*\/planner.*No API key.*\/key/s);
   });
 
   it('treats a configured API provider as enough to plan', () => {
@@ -539,8 +539,8 @@ describe('plan pane run hints', () => {
   });
 
   it('carries the Merge all pause in its title, in either chat', () => {
-    expect(text({ cols: 140, tasks, status: 'executing', runMerge: mergePaused })).toContain('paused for Merge all — /handoff merge');
-    expect(text({ cols: 140, tasks, status: 'executing', runMerge: mergePaused, ...taskChat })).toContain('paused for Merge all — /handoff merge');
+    expect(text({ cols: 140, tasks, status: 'executing', runMerge: mergePaused })).toContain('paused for Merge all: /handoff merge');
+    expect(text({ cols: 140, tasks, status: 'executing', runMerge: mergePaused, ...taskChat })).toContain('paused for Merge all: /handoff merge');
   });
 
   it('shortens the Merge all pause to what the pane is wide enough for, keeping the command', () => {

@@ -89,13 +89,13 @@ const SHARED_ROOT_TAIL = 'tasks run in the workspace root without worktree isola
 /** Why a run fell back to the shared workspace root, as the one line the user is told. */
 function sharedRootNotice(reason: SharedRootReason, repos: string[]): string {
   switch (reason) {
-    case 'disabled': return 'Worktree isolation is off — tasks run in the workspace root.';
-    case 'git-missing': return `git was not found — ${SHARED_ROOT_TAIL}`;
+    case 'disabled': return 'Worktree isolation is off: tasks run in the workspace root.';
+    case 'git-missing': return `git was not found: ${SHARED_ROOT_TAIL}`;
     case 'no-commits':
       return repos.length > 0
-        ? `No repository in this folder has commits yet (${repos.join(', ')}) — ${SHARED_ROOT_TAIL}`
-        : `The repository has no commits yet — ${SHARED_ROOT_TAIL}`;
-    case 'not-git': return `Not a git repository — ${SHARED_ROOT_TAIL}`;
+        ? `No repository in this folder has commits yet (${repos.join(', ')}): ${SHARED_ROOT_TAIL}`
+        : `The repository has no commits yet: ${SHARED_ROOT_TAIL}`;
+    case 'not-git': return `Not a git repository: ${SHARED_ROOT_TAIL}`;
   }
 }
 
@@ -126,7 +126,7 @@ function sharedPathsNotice(run: IsolationRun): string | null {
   if (run.repos.some((r) => r.path === SELF_REPO)) {
     if (run.shared.length === 0) return null;
     const one = run.shared.length === 1;
-    return `${run.shared.join(', ')} ${one ? 'is a repository nested inside this one' : 'are repositories nested inside this one'} — linked live into every task, so edits there are not isolated.`;
+    return `${run.shared.join(', ')} ${one ? 'is a repository nested inside this one' : 'are repositories nested inside this one'}: linked live into every task, so edits there are not isolated.`;
   }
   const loose = run.shared.filter((p) => !run.sharedRepos.includes(p));
   if (run.sharedRepos.length === 0) {
@@ -328,14 +328,14 @@ export class IsolationRunController {
       await this.isolation.stash(this.workspaceRoot());
       // Said even when an interrupt came meanwhile: the changes are stashed either way.
       this.tell('info', repos.length > 0
-        ? `Stashed your uncommitted changes in ${repos.join(', ')} — \`git stash pop\` in each brings them back.`
-        : 'Stashed your uncommitted changes — `git stash pop` brings them back.');
+        ? `Stashed your uncommitted changes in ${repos.join(', ')}: \`git stash pop\` in each brings them back.`
+        : 'Stashed your uncommitted changes: `git stash pop` brings them back.');
       if (this.blockedStart !== resume) return null;
       this.blockedStart = null;
     } else {
       this.blockedStart = null;
       this.begin('shared');
-      this.tell('info', 'Running without worktree isolation — tasks share the workspace root for this run.');
+      this.tell('info', 'Running without worktree isolation: tasks share the workspace root for this run.');
     }
     return resume;
   }
@@ -675,7 +675,7 @@ export class IsolationRunController {
       } catch (err) {
         if (interrupted()) return false;
         // Git can still refuse every repo of the group once a run is minted — the one check `isActive` cannot make.
-        this.tell('info', `${err instanceof Error ? err.message : String(err)} — ${SHARED_ROOT_TAIL}`);
+        this.tell('info', `${err instanceof Error ? err.message : String(err)}: ${SHARED_ROOT_TAIL}`);
         this.listener.changed();
         this.begin('shared');
         return true;

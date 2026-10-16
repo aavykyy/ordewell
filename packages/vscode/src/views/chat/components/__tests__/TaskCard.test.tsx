@@ -142,7 +142,7 @@ describe('TaskCard — Run Task button', () => {
         onMarkIncomplete={onMarkIncomplete}
       />,
     );
-    fireEvent.click(screen.getByTitle('Executed — click to mark not done'));
+    fireEvent.click(screen.getByTitle('Executed: click to mark not done'));
     expect(onMarkIncomplete).toHaveBeenCalledWith('t1');
     expect(onMarkComplete).not.toHaveBeenCalled();
   });

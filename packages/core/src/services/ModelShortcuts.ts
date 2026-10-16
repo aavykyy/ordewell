@@ -24,12 +24,12 @@ export function groupByProvider<T extends { id: string }>(items: T[], extract?: 
 }
 
 export const ORCHESTRATOR_SHORTCUTS: ModelShortcut[] = [
-  { label: 'DeepSeek V4 Flash', id: 'deepseek/deepseek-v4-flash', provider: 'OpenRouter', description: 'Best all-around — strong coding, cheap', pricing: '0.09/0.18' },
-  { label: 'DeepSeek R1', id: 'deepseek/deepseek-r1', provider: 'OpenRouter', description: 'Reasoning model — complex logic, zero-cost thinking tokens', pricing: '0.55/2.19' },
+  { label: 'DeepSeek V4 Flash', id: 'deepseek/deepseek-v4-flash', provider: 'OpenRouter', description: 'Best all-around: strong coding, cheap', pricing: '0.09/0.18' },
+  { label: 'DeepSeek R1', id: 'deepseek/deepseek-r1', provider: 'OpenRouter', description: 'Reasoning model: complex logic, zero-cost thinking tokens', pricing: '0.55/2.19' },
   { label: 'Claude Sonnet 4', id: 'anthropic/claude-sonnet-4', provider: 'OpenRouter', description: 'Top-tier reasoning, careful editing', pricing: '3/15' },
-  { label: 'Claude Opus 4', id: 'anthropic/claude-opus-4.7', provider: 'OpenRouter', description: 'Strongest overall — complex refactoring, architecture', pricing: '15/75' },
+  { label: 'Claude Opus 4', id: 'anthropic/claude-opus-4.7', provider: 'OpenRouter', description: 'Strongest overall: complex refactoring, architecture', pricing: '15/75' },
   { label: 'GPT-4o', id: 'openai/gpt-4o', provider: 'OpenRouter', description: 'General purpose, strong multimodal', pricing: '2.50/10' },
-  { label: 'GPT-4.1', id: 'openai/gpt-4.1', provider: 'OpenRouter', description: 'Latest GPT — strong coding, 1M context', pricing: '2/8' },
+  { label: 'GPT-4.1', id: 'openai/gpt-4.1', provider: 'OpenRouter', description: 'Latest GPT: strong coding, 1M context', pricing: '2/8' },
   { label: 'Kimi K2.6', id: 'moonshot/kimi-k2.6', provider: 'OpenRouter', description: 'Strong coding, cheap', pricing: '0.60/2.40' },
   { label: 'Qwen 3 Max', id: 'qwen/qwen3-max', provider: 'OpenRouter', description: 'Strong open model', pricing: '0.80/3.20' },
 ];

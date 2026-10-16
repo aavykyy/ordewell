@@ -887,7 +887,7 @@ function describeExecution(record: ExecutionRecord, command?: ExecutionCommand, 
   const { action, tail } = doneWords(record, label, continued, escalated);
   // The supervisor and autorun act unattended, so their line reads as the action itself — the button press — and then who pressed it.
   return record.actor === 'supervisor' || record.actor === 'autorun'
-    ? `${capitalize(action)} — by ${record.actor}${tail.startsWith(' ') ? `,${tail}` : tail}`
+    ? `${capitalize(action)}: by ${record.actor}${tail.startsWith(' ') ? `,${tail}` : tail}`
     : `${who} ${action}${tail}`;
 }
 

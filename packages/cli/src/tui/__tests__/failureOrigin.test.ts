@@ -69,7 +69,7 @@ describe('a failure that is not the planner turn\'s', () => {
     expect(chatActivity(state)?.label).toBe('Planning…');
     expect(state.queuedPrompts).toEqual(['and a README']);
     expect(effects).toEqual([]);
-    expect(messagesOf(state).at(-1)).toMatchObject({ role: 'error', text: 'Could not deliver the approval answer — the planner will treat it as denied.' });
+    expect(messagesOf(state).at(-1)).toMatchObject({ role: 'error', text: 'Could not deliver the approval answer: the planner will treat it as denied.' });
   });
 
   // The turn's own calls go to the same daemon: if it is really gone, the

@@ -778,7 +778,7 @@ export class TaskOrchestrator {
     const excluded = [...this.attempts.values()].find((a) => mergeExcludes(a.kind));
     if (excluded) {
       const title = this.store.get(excluded.taskId)?.title ?? excluded.taskId;
-      throw new TaskControlError(`Ops task "${title}" is running in your checkout — Merge all once it has finished.`);
+      throw new TaskControlError(`Ops task "${title}" is running in your checkout: Merge all once it has finished.`);
     }
     this.mergesInFlight++;
     this.merging = true;
@@ -909,11 +909,11 @@ export class TaskOrchestrator {
   async start(origin: RunOrigin = 'user'): Promise<void> {
     if (this.runs.blocked) return;
     if (this.running) {
-      console.error('[TaskOrchestrator] start() called but already running — no-op');
+      console.error('[TaskOrchestrator] start() called but already running: no-op');
       return;
     }
     if (!this.reviewApproved) {
-      console.log('[TaskOrchestrator] start() blocked — plan review not yet approved. Emitting onReviewNeeded.');
+      console.log('[TaskOrchestrator] start() blocked: plan review not yet approved. Emitting onReviewNeeded.');
       this.emit('onReviewNeeded', { tasks: this.store.planTasks, planRunners: this.store.planRunners });
       return;
     }
@@ -983,7 +983,7 @@ export class TaskOrchestrator {
     const kept = stopped.some((a) => a.worktree)
       ? ` What ${one ? 'it' : 'they'} did is kept in ${one ? 'its worktree' : 'their worktrees'}: Mark complete lands it; Retry starts over and keeps it on a branch.`
       : '';
-    this.tell('info', `Stopped ${named} — back to not started.${kept}`);
+    this.tell('info', `Stopped ${named}: back to not started.${kept}`);
   }
 
   /**
@@ -998,7 +998,7 @@ export class TaskOrchestrator {
     for (const t of orphans) this.store.markPending(t.id);
     const one = orphans.length === 1;
     const titles = quotedList(orphans.map((t) => t.title));
-    this.tell('warn', `${one ? 'Task' : 'Tasks'} ${titles} ${one ? 'was' : 'were'} shown as running, but nothing was running ${one ? 'it' : 'them'} — back to not started. Retry or force-start ${one ? 'it' : 'them'}; a worktree ${one ? 'it' : 'they'} had is kept.`);
+    this.tell('warn', `${one ? 'Task' : 'Tasks'} ${titles} ${one ? 'was' : 'were'} shown as running, but nothing was running ${one ? 'it' : 'them'}: back to not started. Retry or force-start ${one ? 'it' : 'them'}; a worktree ${one ? 'it' : 'they'} had is kept.`);
     this.emit('onTaskChanged');
   }
 
@@ -1098,12 +1098,12 @@ export class TaskOrchestrator {
     if (this.attempts.get(taskId) !== attempt) return;
     this.endAttempt(taskId, 'verdict');
     this.store.setTaskVerdict(taskId, verdict);
-    console.error(`[TaskOrchestrator] Output summary:\n${summary || '(empty — no output captured)'}`);
+    console.error(`[TaskOrchestrator] Output summary:\n${summary || '(empty: no output captured)'}`);
     if (changedFiles.length > 0) {
       // The evidence the ops rule rests on: a runner cannot be kept from
       // writing, only caught. Nothing is committed, and nothing fails.
       this.store.markAwaitingUser(taskId, 'files-changed');
-      this.tell('warn', `Ops task "${task.title}" finished, but changed tracked files in your checkout: ${capConflictFiles(changedFiles)}. An ops task must not change repository files, so nothing was committed — look at the changes, then mark it complete or retry it.`);
+      this.tell('warn', `Ops task "${task.title}" finished, but changed tracked files in your checkout: ${capConflictFiles(changedFiles)}. An ops task must not change repository files, so nothing was committed: look at the changes, then mark it complete or retry it.`);
     } else if (landing) {
       await this.applyLanding(task, landing, () => this.notifications.info(`Task "${task.title}" completed.`));
     } else if (classifyRunnerStop(attempt.session?.getOutput() ?? '') === 'usage-limit') {
@@ -1234,7 +1234,7 @@ export class TaskOrchestrator {
     });
 
     for (const { task, reasons } of readiness.excluded) {
-      console.log(`[TaskOrchestrator] excluded: ${taskRefOf(this.store.planTasks, task.id) ?? `#${task.order}`} "${task.title}" — ${reasons.join(', ')}`);
+      console.log(`[TaskOrchestrator] excluded: ${taskRefOf(this.store.planTasks, task.id) ?? `#${task.order}`} "${task.title}": ${reasons.join(', ')}`);
     }
     console.log(`[TaskOrchestrator] getReadyTasks: ${readiness.candidateCount} candidates, ${Math.max(0, maxParallel - active)} slots, maxParallel=${maxParallel}`);
     return readiness;
@@ -1551,7 +1551,7 @@ export class TaskOrchestrator {
   private pauseOnLimit(task: Readonly<Task>, attempt: TaskAttempt, said: string): void {
     this.store.markAwaitingUser(task.id, 'usage-limit');
     this.holdOnLimit();
-    const kept = attempt.worktree ? ' — its worktree is kept' : '';
+    const kept = attempt.worktree ? ': its worktree is kept' : '';
     const reset = readUsageLimitReset(attempt.runner, said);
     const relapsed = attempt.autoResumed && Date.now() - Date.parse(attempt.startedAt) < RELAPSE_MS;
     if (!reset || relapsed) {
@@ -1718,7 +1718,7 @@ export class TaskOrchestrator {
 
   private refuseOpsDuringMerge(task: Readonly<Task>): void {
     if (this.merging && mergeExcludes(this.nextAttemptKind(task.id))) {
-      throw new TaskControlError(`A Merge all is under way — ops task "${task.title}" can start once it has finished.`);
+      throw new TaskControlError(`A Merge all is under way: ops task "${task.title}" can start once it has finished.`);
     }
   }
 
@@ -1764,7 +1764,7 @@ export class TaskOrchestrator {
 
   async approveReview(origin: RunOrigin = 'user'): Promise<void> {
     if (this.reviewApproved) {
-      console.log('[TaskOrchestrator] approveReview() called but already approved — no-op');
+      console.log('[TaskOrchestrator] approveReview() called but already approved: no-op');
       return;
     }
     this.reviewApproved = true;

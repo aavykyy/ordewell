@@ -81,7 +81,7 @@ function printOneSession(
   if (usage.attempts) console.log(`Tasks total: ${taskUsageText(usage)}`);
   const record = servedApprovalRecord(plan);
   const approval = (row: { waitsForApproval: string | null }, ref: string) => (row.waitsForApproval
-    ? `${row.waitsForApproval} — \`ordewell run-task ${ref}\` starts it, or \`ordewell run\` runs the plan`
+    ? `${row.waitsForApproval}: \`ordewell run-task ${ref}\` starts it, or \`ordewell run\` runs the plan`
     : null);
   for (const t of allTasks) {
     const icon = iconFor(blocked.has(t.id) ? 'blocked' : t.status);

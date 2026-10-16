@@ -31,7 +31,7 @@ import {
 import { OrchestratorPool } from '../pool/orchestratorPool';
 import { failure, refuse } from './errors';
 
-const NO_CHECKPOINT = 'The task is not waiting at a checkpoint — it was answered already, withdrawn, or has no runner left to hear it.';
+const NO_CHECKPOINT = 'The task is not waiting at a checkpoint: it was answered already, withdrawn, or has no runner left to hear it.';
 
 /** One execution button's command, run as the user (ADR-0029): a refusal becomes the 400 the surface already shows. */
 async function runUserCommand(session: ReturnType<OrchestratorPool['session']>, command: ExecutionCommand): Promise<Extract<CommandOutcome, { ok: true }>> {

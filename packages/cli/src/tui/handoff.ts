@@ -13,8 +13,8 @@ import type { HandoffView, Overlay, PickerItem, TuiState } from './state';
  */
 export const HANDOFF_ACTIONS = [
   { id: 'review', label: 'Review diff', hint: 'the branch against the commit it forked from' },
-  { id: 'merge', label: 'Merge', hint: 'into the branch you have checked out — asks first' },
-  { id: 'discard', label: 'Discard', hint: 'the run, its worktrees and this branch — asks first' },
+  { id: 'merge', label: 'Merge', hint: 'into the branch you have checked out (asks first)' },
+  { id: 'discard', label: 'Discard', hint: 'the run, its worktrees and this branch (asks first)' },
   { id: 'cleanup', label: 'Clean up', hint: 'remove worktrees and task branches, keep this branch' },
 ] as const;
 
@@ -25,8 +25,8 @@ export function handoffActions(handoff: HandoffView): ReadonlyArray<{ id: Handof
   if (!isRepoGroup(handoff)) return HANDOFF_ACTIONS;
   return [
     { id: 'review', label: 'Review diff', hint: "each repository's branch against the commit it forked from" },
-    { id: 'merge', label: 'Merge all', hint: "every repository's branch into what you have checked out there — asks first" },
-    { id: 'discard', label: 'Discard', hint: "the run, its worktrees and every repository's branch — asks first" },
+    { id: 'merge', label: 'Merge all', hint: "every repository's branch into what you have checked out there (asks first)" },
+    { id: 'discard', label: 'Discard', hint: "the run, its worktrees and every repository's branch (asks first)" },
     { id: 'cleanup', label: 'Clean up', hint: 'remove worktrees and task branches everywhere, keep the integration branches' },
   ];
 }
@@ -53,7 +53,7 @@ const midRun = (state: TuiState): boolean => state.status === 'executing';
 
 /** `/handoff` alone opens the overlay; `/handoff <action>` takes that action without the detour. */
 export function handoffCommand(state: TuiState, arg: string | undefined): Step {
-  if (!state.sessionId || !currentHandoff(state)) return fail(state, 'No isolated run to hand off — a plan that ran in worktrees leaves one here.');
+  if (!state.sessionId || !currentHandoff(state)) return fail(state, 'No isolated run to hand off: a plan that ran in worktrees leaves one here.');
   if (arg === undefined) return { state: { ...state, overlay: { kind: 'handoff', index: 0, diff: null } }, effects: [] };
   const action = HANDOFF_ACTIONS.find((a) => a.id === arg.toLowerCase());
   if (!action) return fail(state, `Usage: ${HANDOFF_USAGE}`);
@@ -73,15 +73,15 @@ export function handoffArrived(state: TuiState, handoff: HandoffView): TuiState 
   const received = { ...state, handoff };
 
   if (handoff.deferredTo === 'supervisor') {
-    return say(received, 'system', `Run finished on ${branch}${where} — ${tasks}. The supervisor may merge it; /handoff to review it yourself.`);
+    return say(received, 'system', `Run finished on ${branch}${where}: ${tasks}. The supervisor may merge it; /handoff to review it yourself.`);
   }
   const returned = state.handoff?.deferredTo === 'supervisor' && handoffBranch(state.handoff) === branch;
   const told = say(
     received,
     'system',
     returned
-      ? `The supervisor left ${branch}${where} to you — ${tasks}. /handoff to review and land it.`
-      : `Run finished on ${branch}${where} — ${tasks}. /handoff to review and land it.`,
+      ? `The supervisor left ${branch}${where} to you: ${tasks}. /handoff to review and land it.`
+      : `Run finished on ${branch}${where}: ${tasks}. /handoff to review and land it.`,
   );
   return state.overlay ? told : { ...told, overlay: { kind: 'handoff', index: 0, diff: null } };
 }
@@ -124,13 +124,13 @@ export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
             ? {
               kind: 'confirm',
               title: 'Merge all into your branches?',
-              message: `Merge ${handoffBranch(handoff)} into whatever each of ${reposWithWork(handoff).join(', ')} has checked out. It checks every repository first and merges none unless every repository can take it; on git older than 2.38 it goes repository by repository and stops at the first that fails. A merge that conflicts is aborted, and your trees stay as they were. Once every repository has merged, the run's worktrees and branches are removed — unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.${repairedNotice(handoff)}`,
+              message: `Merge ${handoffBranch(handoff)} into whatever each of ${reposWithWork(handoff).join(', ')} has checked out. It checks every repository first and merges none unless every repository can take it; on git older than 2.38 it goes repository by repository and stops at the first that fails. A merge that conflicts is aborted, and your trees stay as they were. Once every repository has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.${repairedNotice(handoff)}`,
               action: { kind: 'merge-run' },
             }
             : {
               kind: 'confirm',
               title: 'Merge into your branch?',
-              message: `Merge ${handoffBranch(handoff)} into whatever you have checked out. If it conflicts the merge is aborted and your tree stays as it was. Once it has merged, the run's worktrees and branches are removed — unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.${repairedNotice(handoff)}`,
+              message: `Merge ${handoffBranch(handoff)} into whatever you have checked out. If it conflicts the merge is aborted and your tree stays as it was. Once it has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.${repairedNotice(handoff)}`,
               action: { kind: 'merge-run' },
             },
         },
@@ -143,7 +143,7 @@ export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
           overlay: {
             kind: 'confirm',
             title: 'Discard this run?',
-            message: `Removes the run's worktrees and task branches and deletes ${handoffBranch(handoff)}${isRepoGroup(handoff) ? ` in ${reposOf(handoff)}` : ''}. Tasks keep their status — mark one not done if you did not keep its work.`,
+            message: `Removes the run's worktrees and task branches and deletes ${handoffBranch(handoff)}${isRepoGroup(handoff) ? ` in ${reposOf(handoff)}` : ''}. Tasks keep their status: mark one not done if you did not keep its work.`,
             action: { kind: 'discard-run' },
           },
         },

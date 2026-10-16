@@ -149,8 +149,8 @@ export class CommandLineTooLongError extends Error {
       limit === CMD_EXE_MAX_COMMAND_LINE
         ? `Cannot start "${command}" on Windows: its arguments are ${length} characters, over cmd.exe's ${limit}-character limit.\n\n` +
           `Only a batch shim (${command}.cmd) was found on PATH, and a shim has to be started through cmd.exe. ` +
-          `Install the native executable — the coding agent's own Windows installer or release binary provides one — ` +
-          `and Ordewell will launch it directly, with no buffer in the way.`
+          `Install the native executable from the coding agent's own Windows installer or release binary. ` +
+          `Ordewell will launch it directly, with no buffer in the way.`
         : `Cannot start "${command}" on Windows: its arguments are ${length} characters, over the ${limit}-character limit Windows places on any command line.\n\n` +
           `This is the OS ceiling rather than a shim's, so no reinstall avoids it. ` +
           `Shorten the task prompt or detach some task skills to reduce the prompt the runner is started with.`,
@@ -169,8 +169,8 @@ export class EmbeddedNewlineError extends Error {
   constructor(readonly command: string) {
     super(
       `Cannot start "${command}" on Windows: its prompt spans multiple lines, and the only launcher found on PATH was a batch shim (${command}.cmd).\n\n` +
-      `cmd.exe stops reading a command line at the first line break and silently discards the rest, so the agent would be handed a prompt cut off at its first blank line — no plan map, no prior task output, and no instruction to report back when it is done.\n\n` +
-      `Install the native executable — the coding agent's own Windows installer or release binary provides one — and Ordewell will launch it directly, with no interpreter in the way. A PowerShell shim (${command}.ps1) beside the batch one is also enough.`,
+      `cmd.exe stops reading a command line at the first line break and silently discards the rest, so the agent would be handed a prompt cut off at its first blank line: no plan map, no prior task output, and no instruction to report back when it is done.\n\n` +
+      `Install the native executable from the coding agent's own Windows installer or release binary. Ordewell will launch it directly, with no interpreter in the way. A PowerShell shim (${command}.ps1) beside the batch one is also enough.`,
     );
     this.name = 'EmbeddedNewlineError';
   }

@@ -1301,10 +1301,10 @@ describe('one intake for submit_plan and edit_plan', () => {
     const editSub = await viaEdit([{ op: 'add', task: { title: 'Docs', subtasks: [sub('Child', { ops: true })] } }]);
     const editManual = await viaEdit([{ op: 'add', task: manual }]);
 
-    expect(errorsOf(submitSub.answer).map((e) => e.message)).toEqual(['subtask "Child" of "Task a" is a subtask, which runs with its parent — only a top-level task can be an ops task']);
-    expect(errorsOf(submitManual.answer).map((e) => e.message)).toEqual(['Task "Sign" is a manual task — only an AI task can be an ops task']);
-    expect(errorsOf(editSub.answer)).toEqual([{ op: 1, kind: 'add', message: 'subtask "Child" of "Docs" is a subtask, which runs with its parent — only a top-level task can be an ops task' }]);
-    expect(errorsOf(editManual.answer)).toEqual([{ op: 1, kind: 'add', message: 'Task "Sign" is a manual task — only an AI task can be an ops task' }]);
+    expect(errorsOf(submitSub.answer).map((e) => e.message)).toEqual(['subtask "Child" of "Task a" is a subtask, which runs with its parent: only a top-level task can be an ops task']);
+    expect(errorsOf(submitManual.answer).map((e) => e.message)).toEqual(['Task "Sign" is a manual task: only an AI task can be an ops task']);
+    expect(errorsOf(editSub.answer)).toEqual([{ op: 1, kind: 'add', message: 'subtask "Child" of "Docs" is a subtask, which runs with its parent: only a top-level task can be an ops task' }]);
+    expect(errorsOf(editManual.answer)).toEqual([{ op: 1, kind: 'add', message: 'Task "Sign" is a manual task: only an AI task can be an ops task' }]);
   });
 
   it('clamps a subtask\'s thinking effort to its model\'s variants, and says so', async () => {

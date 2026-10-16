@@ -41,7 +41,7 @@ describe('a task card, pinned before its rules move to core', () => {
     render(<TaskCard task={makeTask({ status: 'in_progress' })} models={[]} isExecuting run={{ idleSince: '2026-01-01T00:00:00Z' }} />);
     expect(badge()?.textContent).toBe('Stalled');
     expect(badge()?.className).toBe('task-status-badge status-stalled');
-    expect(document.querySelector('.task-check')?.getAttribute('title')).toBe('Stalled — no output recently');
+    expect(document.querySelector('.task-check')?.getAttribute('title')).toBe('Stalled: no output recently');
   });
 
   it.each([
@@ -65,7 +65,7 @@ describe('a task card, pinned before its rules move to core', () => {
     const { unmount } = render(<TaskCard task={makeTask({ status: 'skipped', skipReason: 'the host has no GPU' })} models={[]} />);
     expect(badge()?.textContent).toBe('Skipped: the host has no GPU');
     expect(badge()?.className).toBe('task-status-badge status-skipped');
-    expect(document.querySelector('.task-check')?.getAttribute('title')).toBe('Skipped — nothing of it landed');
+    expect(document.querySelector('.task-check')?.getAttribute('title')).toBe('Skipped: nothing of it landed');
     unmount();
     render(<TaskCard task={makeTask({ status: 'skipped' })} models={[]} />);
     expect(badge()?.textContent).toBe('Skipped');

@@ -409,7 +409,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
 
     await discovery.refresh();
     sendSkills();
-    log('Ordewell extension activated — caches populated, models discovered');
+    log('Ordewell extension activated: caches populated, models discovered');
     log('Ordewell extension activated successfully');
   }
 

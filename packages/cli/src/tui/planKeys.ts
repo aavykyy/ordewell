@@ -27,7 +27,7 @@ export const PLAN_KEYS = {
   expand: { keys: '→', meaning: "reveal a task's subtasks, then edit its prompt", group: 'Navigation', hint: '→ expand' },
   log: {
     keys: 'enter',
-    meaning: "open the task's log and message its runner — or, at a checkpoint, answer it",
+    meaning: "open the task's log and message its runner or, at a checkpoint, answer it",
     group: 'Navigation',
     hint: (task) => (task?.status === 'awaiting_user' && task.awaitingReason === 'checkpoint' ? 'enter answer' : 'enter log'),
   },

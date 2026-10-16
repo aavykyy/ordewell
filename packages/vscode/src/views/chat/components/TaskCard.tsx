@@ -120,13 +120,13 @@ export function TaskCheck({ row, taskId, onMarkComplete, onMarkIncomplete }: { r
   const toggle = row.mark === 'uncomplete' ? onMarkIncomplete : onMarkComplete;
   const clickable = !!toggle && !!taskId;
   const title = state === 'done'
-    ? (clickable ? 'Executed — click to mark not done' : 'Executed')
+    ? (clickable ? 'Executed: click to mark not done' : 'Executed')
     : state === 'running'
       ? 'Running'
       : state === 'stalled'
-        ? 'Stalled — no output recently'
+        ? 'Stalled: no output recently'
         : state === 'skipped'
-          ? (clickable ? 'Skipped — click to mark complete, which lands its kept work' : 'Skipped — nothing of it landed')
+          ? (clickable ? 'Skipped: click to mark complete, which lands its kept work' : 'Skipped: nothing of it landed')
           : (clickable ? 'Click to mark executed' : 'To do');
   return (
     <span
@@ -465,7 +465,7 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
             {task.verdict && (
               <div className={`task-review ${task.verdict.outcome === 'pass' ? 'review-pass' : 'review-neutral'}`}>
                 <div className="task-review-summary">
-                  {task.verdict.outcome === 'pass' ? 'Verified' : 'Failed verification'} — {task.verdict.reason}
+                  {task.verdict.outcome === 'pass' ? 'Verified' : 'Failed verification'}: {task.verdict.reason}
                 </div>
                 {task.verdict.checks.length > 0 && (
                   <div className="task-review-checks">
@@ -566,13 +566,13 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
             {!isExecuting && task.type === 'ai' && onModeChange && (
               <div className="model-selector" style={{ marginTop: '8px' }}>
                 <label htmlFor={`task-mode-${task.id}`}
-                  title={row.autonomous ? 'Full: runs without permission prompts — /auto changes the level' : undefined}>
+                  title={row.autonomous ? 'Full: runs without permission prompts. /auto changes the level' : undefined}>
                   Mode{row.autonomous && ' ⚡'}
                 </label>
                 <select id={`task-mode-${task.id}`} value={task.taskMode ?? activeModes[0]?.id ?? 'build'}
                   onChange={(e) => onModeChange(task.id, e.target.value)}>
                   {activeModes.map((m) => (
-                    <option key={m.id} value={m.id} disabled={!!m.unavailable}>{m.label} — {m.unavailable ?? m.description}</option>
+                    <option key={m.id} value={m.id} disabled={!!m.unavailable}>{m.label}: {m.unavailable ?? m.description}</option>
                   ))}
                 </select>
               </div>
@@ -586,7 +586,7 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
             {!isExecuting && onOpsChange && row.opsEditable && (
               <label className="task-ops-toggle" title="An ops task changes no repository files: it acts on outside systems or on your branch's refs, from your checkout, once the work it depends on is merged.">
                 <input type="checkbox" checked={!!task.ops} onChange={(e) => onOpsChange(task.id, e.target.checked)} />
-                Ops task — runs in your checkout, not a worktree
+                Ops task: runs in your checkout, not a worktree
               </label>
             )}
 
@@ -679,7 +679,7 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
         {row.approvals && (
           <button type="button" className="task-approval-badge"
             onClick={(e) => { e.stopPropagation(); onOpenLog?.(task.id); }}
-            title="The runner is waiting for you to allow or deny a tool call — open the log to answer">
+            title="The runner is waiting for you to allow or deny a tool call: open the log to answer">
             {row.approvals}
           </button>
         )}
@@ -705,7 +705,7 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
         {canEditDeps ? (
           <button className="task-dep-badge dep-in task-dep-badge-btn"
             title={task.dependencies.length > 0
-              ? `Depends on: ${row.dependencies.join(', ')} — click to edit`
+              ? `Depends on: ${row.dependencies.join(', ')}. Click to edit`
               : 'Click to set dependencies'}
             onClick={(e) => { e.stopPropagation(); setExpanded(true); setEditingDeps(true); }}>
             &#8593;{task.dependencies.length}
