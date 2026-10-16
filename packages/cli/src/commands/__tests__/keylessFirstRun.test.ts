@@ -447,4 +447,59 @@ describe('keyless first-run entry points at the process boundary', () => {
     expect(vendorRequests[1].body).toContain('Keep the ledger append-only');
   });
 
+  it('a vendor model picked while its key was set never reaches the detected agent, and returns with the key', async () => {
+    process.env.ORCHESTRATOR_MODEL = '';
+    await client.updateSettings({ env: { OPENROUTER_API_KEY: 'test-key' } });
+    await client.updateSettings({ orchestratorModel: 'openai/gpt-4o' });
+    await client.updateSettings({ env: { OPENROUTER_API_KEY: '' } });
+    expect(await client.getSettings()).toMatchObject({ aiProvider: 'claude-code', orchestratorModel: '' });
+
+    await client.startConversation('picked', 'Build a cache', ['claude-code'], workspace);
+    expect(argvs).toHaveLength(1);
+    expect(argvs[0]).not.toContain('--model');
+    expect(vendorRequests).toEqual([]);
+
+    await client.updateSettings({ plannerThinkingEffort: 'high' });
+    expect(new SettingsService().getPlannerModel('claude-code')).toBeUndefined();
+
+    await client.updateSettings({ env: { OPENROUTER_API_KEY: 'test-key', OPENROUTER_BASE_URL: vendorBase } });
+    expect(await client.getSettings()).toMatchObject({ aiProvider: 'openrouter', orchestratorModel: 'openai/gpt-4o' });
+    await client.sendConversationMessage('picked', 'Use Postgres');
+    expect(vendorRequests).toHaveLength(1);
+    expect(JSON.parse(vendorRequests[0].body)).toMatchObject({ model: 'openai/gpt-4o' });
+    expect(vendorRequests[0].body).toContain('Use Postgres');
+  });
+
+  for (const leftover of ['OPENROUTER_BASE_URL', 'GEMINI_BASE_URL']) {
+    it(`a leftover ${leftover} without its key does not take planning from the detected agent`, async () => {
+      process.env[leftover] = vendorBase;
+      expect(await client.getSettings()).toMatchObject({ aiProvider: 'claude-code' });
+      await client.startConversation('endpoint', 'Build a cache', ['claude-code'], workspace);
+      expect(argvs).toHaveLength(1);
+      expect(prompts[0]).toContain('Build a cache');
+      expect(vendorRequests).toEqual([]);
+    });
+  }
+
+  it('GET /api/runners reports the planner model that settings report and the spawn uses', async () => {
+    process.env.ORCHESTRATOR_MODEL = '';
+    await client.updateSettings({ orchestratorModel: 'claude-opus-5-5' });
+    // Another surface sharing the settings file remembers a different pick.
+    new SettingsService().setPlannerModel('claude-code', { model: 'sonnet', effort: '' });
+    expect(await client.getSettings()).toMatchObject({ aiProvider: 'claude-code', orchestratorModel: 'claude-opus-5-5' });
+    expect((await client.getRunners()).orchestratorModel).toBe('claude-opus-5-5');
+    await client.startConversation('runners', 'Build a cache', ['claude-code'], workspace);
+    expect(argvs[0][argvs[0].indexOf('--model') + 1]).toBe('claude-opus-5-5');
+  });
+
+  it('an openai_compatible endpoint with no key still plans through that endpoint', async () => {
+    process.env.ORCHESTRATOR_MODEL = 'local-model';
+    process.env.OPENAI_COMPATIBLE_BASE_URL = vendorBase;
+    expect(await client.getSettings()).toMatchObject({ aiProvider: 'openai_compatible', orchestratorModel: 'local-model' });
+    await client.startConversation('local', 'Build a cache', ['claude-code'], workspace);
+    expect(argvs).toEqual([]);
+    expect(vendorRequests).toHaveLength(1);
+    expect(JSON.parse(vendorRequests[0].body)).toMatchObject({ model: 'local-model' });
+  });
+
 });

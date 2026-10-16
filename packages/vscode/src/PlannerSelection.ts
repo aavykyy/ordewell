@@ -94,7 +94,8 @@ export class PlannerSelection {
     if (!result.remember && !result.recall && !saveModel && change.effort === undefined) return result;
     if (saveProvider) await config.update('aiProvider', next.provider);
     if (saveModel) await config.update('orchestratorModel', next.model);
-    if (change.model !== undefined) config.notePlannerPick(next.model);
+    // Read after the writes above: the pick is for whoever they route to.
+    if (change.model !== undefined) config.notePlannerPick(next.model, config.aiProvider);
     await config.update('plannerThinkingEffort', next.effort);
     if (result.remember) {
       const { provider, model, effort } = result.remember;

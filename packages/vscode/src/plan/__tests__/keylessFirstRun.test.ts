@@ -309,4 +309,75 @@ describe('VS Code keyless first-run process boundary', () => {
     expect(vendorRequests).toEqual([]);
   });
 
+  function selectionFor(h: ReturnType<typeof harness>) {
+    const modelResolver = { modelsForRunners: async () => ({}), pickerOptions: async () => [] } as unknown as ModelResolver;
+    return new PlannerSelection({
+      config: h.config, modelResolver,
+      plannerModelMemory: new PlannerModelMemory(new SettingsService()),
+      runnerInstallation: { plannerUsability: async () => ({ usable: true }) } as never,
+      chatProvider: h.deps.chatProvider, sendModelConfig: () => {}, log: () => {},
+    });
+  }
+
+  it('a vendor model picked while its key was set never reaches the detected agent, and returns with the key', async () => {
+    recordInstalledPlanner('claude-code');
+    process.env.OPENROUTER_API_KEY = 'test-key';
+    const h = harness();
+    const selection = selectionFor(h);
+    await selection.setModel('openai/gpt-4o');
+    delete process.env.OPENROUTER_API_KEY;
+    expect(h.config.aiProvider).toBe('claude-code');
+    expect(h.config.orchestratorModel).toBe('');
+
+    await handleStartPlanning('Build a ledger', h.deps);
+    expect(h.messages.filter((m) => m.type === 'showError')).toEqual([]);
+    expect(argvs).toHaveLength(1);
+    expect(argvs[0]).not.toContain('--model');
+
+    await selection.pick({ effort: 'high' });
+    expect(new SettingsService().getPlannerModel('claude-code')).toBeUndefined();
+
+    process.env.OPENROUTER_API_KEY = 'test-key';
+    await handleContinueConversation('Use Postgres', h.deps);
+    expect(vendorRequests).toHaveLength(1);
+    expect(JSON.parse(vendorRequests[0].body)).toMatchObject({ model: 'openai/gpt-4o' });
+    expect(vendorRequests[0].body).toContain('Use Postgres');
+  });
+
+  for (const leftover of ['OPENROUTER_BASE_URL', 'GEMINI_BASE_URL']) {
+    it(`a leftover ${leftover} without its key does not take planning from the detected agent`, async () => {
+      recordInstalledPlanner('claude-code');
+      process.env[leftover] = providerBase;
+      const h = harness();
+      await handleStartPlanning('Build a ledger', h.deps);
+      expect(h.messages.filter((m) => m.type === 'showError')).toEqual([]);
+      expect(argvs).toHaveLength(1);
+      expect(prompts[0]).toContain('Build a ledger');
+      expect(vendorRequests).toEqual([]);
+    });
+  }
+
+  for (const held of ['secret store', 'settings'] as const) {
+    it(`a Google key kept only in the VS Code ${held} plans with Google, not OpenRouter`, async () => {
+      recordInstalledPlanner('claude-code');
+      setConfig({ orchestratorModel: 'gemini-2.5-pro', ...(held === 'settings' ? { apiKey: 'gemini-key' } : {}) });
+      const secrets = new SecretStore({
+        get: async (key: string) => held === 'secret store' && key === 'geminiKey' ? 'gemini-key' : undefined,
+        store: async () => {}, delete: async () => {}, onDidChange: () => ({ dispose() {} }),
+      } as never);
+      await secrets.load();
+      const h = harness(new VsCodeConfig(secrets));
+      expect(h.config.configuredProviders).toEqual(['google']);
+      expect(h.config.aiProvider).toBe('google');
+      await handleStartPlanning('Build a ledger', h.deps);
+      expect(h.messages).not.toContainEqual({ type: 'showError', error: expect.stringContaining('OPENROUTER_API_KEY') });
+      expect(argvs).toEqual([]);
+      // The Gemini SDK has no endpoint override, so its call is read where it leaves.
+      const [url, init] = networks.mock.calls[0] as [string, RequestInit];
+      expect(String(url)).toContain('generativelanguage.googleapis.com');
+      expect(new Headers(init.headers).get('x-goog-api-key')).toBe('gemini-key');
+      expect(String(init.body)).toContain('Build a ledger');
+    });
+  }
+
 });
