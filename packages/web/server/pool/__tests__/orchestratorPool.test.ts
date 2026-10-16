@@ -5,6 +5,9 @@ import { join } from 'path';
 import { existsSync } from 'fs';
 import { listSessions, saveSession, Session, WorkspaceNotFoundError, WorkspaceNotAProjectError, type LegacyPlanState } from '@ordewell/core';
 import { OrchestratorPool } from '../orchestratorPool';
+import { withReadyPlanner } from '../../__tests__/readyPlanner';
+
+withReadyPlanner();
 
 function savedPlan(over: Partial<LegacyPlanState> = {}): LegacyPlanState {
   return {

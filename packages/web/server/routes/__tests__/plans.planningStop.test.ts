@@ -5,6 +5,9 @@ import { join } from 'path';
 import { Hono } from 'hono';
 import { Session, type LegacyPlanState } from '@ordewell/core';
 import { OrchestratorPool } from '../../pool/orchestratorPool';
+import { withReadyPlanner } from '../../__tests__/readyPlanner';
+
+withReadyPlanner();
 
 /**
  * Distinct from POST /:sessionId/stop (execution). This aborts a planning

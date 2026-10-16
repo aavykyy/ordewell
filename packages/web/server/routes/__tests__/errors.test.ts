@@ -6,6 +6,7 @@ import {
   ConversationEditError,
   NoPlanError,
   PlanEditError,
+  PlannerNotReadyError,
   PlannerTurnDiscardedError,
   PlannerTurnStoppedError,
   SessionNotFoundError,
@@ -40,6 +41,16 @@ describe('failure', () => {
 
     expect(res.status).toBe(status);
     expect(res.body).toEqual({ error: err.message, code });
+  });
+
+  it('carries the planner_not_ready reason as data, so a client can word it in its own commands', async () => {
+    const reason = { code: 'no_key', provider: 'openrouter', label: 'OpenRouter', keyEnvVar: 'OPENROUTER_API_KEY' } as const;
+    const err = new PlannerNotReadyError(reason);
+
+    const res = await answer(err);
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: err.message, code: 'planner_not_ready', plannerNotReady: reason });
   });
 
   it('carries the refused directory with workspace_not_a_project', async () => {

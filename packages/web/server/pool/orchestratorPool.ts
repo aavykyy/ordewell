@@ -462,6 +462,9 @@ export class OrchestratorPool {
 
   async generatePlan(sessionId: string, goal: string, runners: RunnerId[], workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<PlanState> {
     const session = this.createSessionFor(sessionId, workspace, modelOverride, options);
+    // Judged on the new session's config (which carries the request's model)
+    // and before the old session is destroyed, so a refusal leaves it alone.
+    session.assertPlannerReady();
     // After the new session is built, so a refusal above leaves the live one
     // alone; before the set, so its runners and planner turn stop broadcasting.
     this.destroy(sessionId);
@@ -483,6 +486,7 @@ export class OrchestratorPool {
    */
   async startPlanning(sessionId: string, goal: string, runners: RunnerId[], workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<LegacyPlanState> {
     const session = this.createSessionFor(sessionId, workspace, modelOverride, options);
+    session.assertPlannerReady();
     this.destroy(sessionId);
     // See generatePlan: must be registered before the blocking call so a
     // mid-research approval is answerable rather than 404ing until timeout.
@@ -493,7 +497,9 @@ export class OrchestratorPool {
 
   /** Continue the planner dialogue with the user's reply; refused while a planner turn is in flight. */
   async continuePlanning(sessionId: string, message: string): Promise<LegacyPlanState> {
-    return this.session(sessionId).continueConversation(message);
+    const session = this.session(sessionId);
+    session.assertPlannerReady();
+    return session.continueConversation(message);
   }
 
   /** Condense a session's conversation. The summary turn is a planner turn, so `cancelPlanning` stops it. */

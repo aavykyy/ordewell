@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { latestTaskCommands } from '../shared/taskCommands';
 import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
-  saveState, clearState, ModelResolver, RunnerRegistry, isCliProvider, taskStartedNotice,
+  saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReady, describePlannerNotReady, CHAT_COMMANDS, taskStartedNotice,
   createEmptyPlan, markRequestFor, pastGateConfirmation, titledRefs, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner, type TaskRowAction,
   type ExecutionCommand,
 } from '@ordewell/core';
@@ -96,26 +96,17 @@ export function reportPlannerError(err: unknown, deps: PlanManagerDeps): void {
   deps.chatProvider.showError(`Planner failed: ${message}`);
 }
 
-/**
- * What the selected planner still needs before it can plan, or null when it is
- * ready. There are two ways in (ADR-0009), and only one of them involves a
- * credential: a harness planner drives a coding agent already installed on the
- * machine, authenticated by the user's own subscription, so demanding an API
- * key of it turns a working setup into a wall — the exact failure reported when
- * Claude Code was the selected planner. Its model is optional too: an unset id
- * means "the agent's own default" (`CliAgentAiService.plannerModel`), which is
- * what `applyPlanner` deliberately leaves behind when it clears a model id the
- * new backend cannot serve.
- */
+/** The core rule (a harness planner needs no key, ADR-0009), worded with the chat's own commands. */
 export function plannerPreflightError(config: PlanManagerDeps['config']): string | null {
-  if (isCliProvider(config.aiProvider)) return null;
-  if (!config.apiKey) {
-    return 'API key not configured. Run "Ordewell: Configure API Key" to set it.';
-  }
-  if (!config.planningModel) {
-    return 'No planner model selected. Type /model set to pick one first.';
-  }
-  return null;
+  // `apiKey` is this host's own answer to "is a key set", legacy fallbacks
+  // included, so the rule stays what it was before it moved into core.
+  const reason = plannerNotReady({
+    aiProvider: config.aiProvider,
+    planningModel: config.planningModel,
+    openaiCompatibleBaseUrl: config.openaiCompatibleBaseUrl,
+    getProviderApiKey: () => config.apiKey,
+  });
+  return reason ? describePlannerNotReady(reason, CHAT_COMMANDS) : null;
 }
 
 /** Reports the preflight failure to the chat and returns false when not ready. */

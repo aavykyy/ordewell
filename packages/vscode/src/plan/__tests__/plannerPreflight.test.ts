@@ -3,8 +3,8 @@ import { plannerPreflightError } from '../PlanManager';
 import type { PlannerBackendId } from '@ordewell/core';
 import type { VsCodeConfig } from '../../adapters/VsCodeConfig';
 
-function config(aiProvider: PlannerBackendId, apiKey: string, planningModel: string): VsCodeConfig {
-  return { aiProvider, apiKey, planningModel } as unknown as VsCodeConfig;
+function config(aiProvider: PlannerBackendId, apiKey: string, planningModel: string, openaiCompatibleBaseUrl = ''): VsCodeConfig {
+  return { aiProvider, apiKey, planningModel, openaiCompatibleBaseUrl } as unknown as VsCodeConfig;
 }
 
 /**
@@ -24,14 +24,20 @@ describe('plannerPreflightError', () => {
     });
   }
 
-  it('still demands a key from a vendor planner', () => {
-    expect(plannerPreflightError(config('openrouter', '', 'openai/gpt-5')))
-      .toContain('API key not configured');
+  it('sends a vendor planner with no key to /planner first, then offers /key', () => {
+    expect(plannerPreflightError(config('openrouter', '', 'openai/gpt-5'))).toBe(
+      'No planner is ready. Pick one with /planner — Claude Code, Codex and OpenCode plan with no API key. ' +
+      'To plan with OpenRouter instead, add OPENROUTER_API_KEY with /key.',
+    );
   });
 
-  it('still demands a model from a keyed vendor planner', () => {
+  it('asks an openai_compatible planner for its base URL, not a key', () => {
+    expect(plannerPreflightError(config('openai_compatible', '', 'llama3'))).toContain('OPENAI_COMPATIBLE_BASE_URL');
+  });
+
+  it('still demands a model from a keyed vendor planner, in the chat\'s /model set spelling', () => {
     expect(plannerPreflightError(config('openrouter', 'sk-or', '')))
-      .toContain('No planner model selected');
+      .toBe('No planner model selected for OpenRouter. Pick one with /model set, or switch planner with /planner.');
   });
 
   it('passes a fully configured vendor planner', () => {

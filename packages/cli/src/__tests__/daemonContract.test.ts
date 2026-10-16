@@ -74,13 +74,14 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
     dir = mkdtempSync(join(tmpdir(), 'ordewell-contract-'));
     workspace = join(dir, 'ws');
     mkdirSync(join(workspace, '.git'), { recursive: true });
-    for (const key of ['HOME', 'ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT']) {
+    for (const key of ['HOME', 'ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT', 'OPENROUTER_API_KEY']) {
       savedEnv[key] = process.env[key];
     }
     process.env.HOME = dir;
     process.env.ORDEWELL_SETTINGS_PATH = join(dir, 'settings.json');
     process.env.AI_PROVIDER = 'openrouter';
     process.env.ORCHESTRATOR_MODEL = 'openrouter/auto';
+    process.env.OPENROUTER_API_KEY = 'sk-or-test';
     vi.spyOn(OpenAiService.prototype, 'startConversation').mockResolvedValue(TEXT);
     vi.spyOn(GeminiService.prototype, 'startConversation').mockResolvedValue(TEXT);
 
@@ -181,6 +182,18 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       expect(plan.tasks).toEqual([]);
       expect(plan.conversationHistory?.at(-1)?.content).toBe(TEXT.kind === 'message' ? TEXT.text : '');
       expect(pool.hasSession('session-plan')).toBe(true);
+    });
+
+    it('refuses a keyless vendor planner with a code and the reason as data, ahead of any transport call', async () => {
+      delete process.env.OPENROUTER_API_KEY;
+
+      const err = await refusal(client.startConversation('session-plan', 'Add a limiter', ['claude-code'], workspace));
+
+      expect(err.status).toBe(409);
+      expect(err.code).toBe('planner_not_ready');
+      expect(err.message).toContain('Pick one with /planner');
+      expect(err.plannerNotReady).toMatchObject({ code: 'no_key', provider: 'openrouter', keyEnvVar: 'OPENROUTER_API_KEY' });
+      expect(OpenAiService.prototype.startConversation).not.toHaveBeenCalled();
     });
 
     it('commits a plan from the planner\'s reply and reads it back from the session', async () => {

@@ -6,6 +6,7 @@ import {
   ConversationEditError,
   NoPlanError,
   PlanEditError,
+  PlannerNotReadyError,
   PlannerTurnDiscardedError,
   PlannerTurnStoppedError,
   SessionNotFoundError,
@@ -36,6 +37,8 @@ function classify(err: unknown): Classified | undefined {
   if (err instanceof AlreadyExecutingError) return { status: 409, code: 'already_executing' };
   if (err instanceof WorkspaceNotAProjectError) return { status: 400, code: 'workspace_not_a_project' };
   if (err instanceof WorkspaceNotFoundError) return { status: 400, code: 'workspace_not_found' };
+  // 409: the request is fine; the machine is not set up to serve it yet.
+  if (err instanceof PlannerNotReadyError) return { status: 409, code: 'planner_not_ready' };
   // 409, not 5xx: the turn ending is what the user asked for (or a plan they
   // dropped), and a 5xx would log a stack for every Stop.
   if (err instanceof PlannerTurnStoppedError) return { status: 409, code: 'planner_turn_stopped' };
@@ -74,6 +77,7 @@ export function failure(
     error: (err instanceof Error && err.message) || message,
     ...(classified ? { code: classified.code } : {}),
     ...(err instanceof WorkspaceNotAProjectError ? { workspace: err.workspace } : {}),
+    ...(err instanceof PlannerNotReadyError ? { plannerNotReady: err.reason } : {}),
   };
   return c.json(body, status);
 }

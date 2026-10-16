@@ -4,6 +4,9 @@ import * as os from 'os';
 import * as path from 'path';
 import { ModelResolver, Session, type LegacyPlanState } from '@ordewell/core';
 import { OrchestratorPool } from '../orchestratorPool';
+import { withReadyPlanner } from '../../__tests__/readyPlanner';
+
+withReadyPlanner();
 
 /**
  * The pool holds no runner state of its own, so "reopening Ordewell" is just a
