@@ -13,8 +13,19 @@ import type { RunnerInstallation } from './RunnerInstallation';
  * startup and every config it builds reads the answer here.
  */
 let recorded: PlannerBackendId | null = null;
-let pending: Promise<unknown> = Promise.resolve();
 let answered = true;
+/**
+ * Callers of {@link installedPlannerDetected} parked until the state next
+ * settles. They wait on the state, not on the probe that was out when they
+ * called, so a newer probe answering frees them while an older one is still held.
+ */
+let waiters: Array<() => void> = [];
+
+function wakeWaiters(): void {
+  const parked = waiters;
+  waiters = [];
+  for (const wake of parked) wake();
+}
 /**
  * Which probe may still write the state above. A reset or a newer probe moves
  * it on, so an older probe finishing late — leftover work of a disposed host or
@@ -57,19 +68,19 @@ export function detectInstalledPlanner(installation: Pick<RunnerInstallation, 'p
     if (mine === generation) {
       recordInstalledPlanner(id);
       answered = true;
+      wakeWaiters();
     }
     return id;
   });
-  pending = probe;
   answered = false;
   return probe;
 }
 
 /** Settles once the latest probe has recorded its answer; at once when none was started. */
 export async function installedPlannerDetected(): Promise<void> {
-  // A newer probe may start while this waits on an older one, whose finish
-  // is then not the answer: follow the latest until one has answered.
-  while (!answered) await pending;
+  // A wake-up is not an answer: a reset can be followed at once by a new
+  // probe, so re-check and park again until the current generation answered.
+  while (!answered) await new Promise<void>((resolve) => { waiters.push(resolve); });
 }
 
 /**
@@ -93,6 +104,6 @@ export function recordedInstalledPlanner(): PlannerBackendId | null {
 export function resetInstalledPlanner(): void {
   generation++;
   recorded = null;
-  pending = Promise.resolve();
   answered = true;
+  wakeWaiters();
 }

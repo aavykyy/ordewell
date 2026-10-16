@@ -170,6 +170,60 @@ describe('detectInstalledPlanner', () => {
     expect(recordedInstalledPlanner()).toBe('codex');
   });
 
+  it('wakes a waiter as soon as a newer probe answers, while the older one is still held', async () => {
+    const a = gatedProbe('claude-code');
+    const b = gatedProbe('codex');
+    const probeA = detectInstalledPlanner(a.installation);
+    let settled = false;
+    const waiting = installedPlannerDetected().then(() => { settled = true; });
+    const probeB = detectInstalledPlanner(b.installation);
+
+    b.open();
+    await probeB;
+    await waiting;
+    expect(settled).toBe(true);
+    expect(installedPlannerAnswered()).toBe(true);
+    expect(recordedInstalledPlanner()).toBe('codex');
+
+    a.open();
+    await probeA;
+    expect(recordedInstalledPlanner()).toBe('codex');
+  });
+
+  it('keeps a waiter that spans a reset waiting for the probe started after it', async () => {
+    const a = gatedProbe('claude-code');
+    const c = gatedProbe('opencode');
+    void detectInstalledPlanner(a.installation);
+    let settled = false;
+    const waiting = installedPlannerDetected().then(() => { settled = true; });
+
+    resetInstalledPlanner();
+    const probeC = detectInstalledPlanner(c.installation);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(installedPlannerAnswered()).toBe(false);
+    expect(settled).toBe(false);
+
+    c.open();
+    await probeC;
+    await waiting;
+    expect(settled).toBe(true);
+    expect(recordedInstalledPlanner()).toBe('opencode');
+  });
+
+  it('resolves every waiter, however many, when the latest probe answers', async () => {
+    const a = gatedProbe('claude-code');
+    const b = gatedProbe(null);
+    void detectInstalledPlanner(a.installation);
+    const first = installedPlannerDetected();
+    const probeB = detectInstalledPlanner(b.installation);
+    const second = installedPlannerDetected();
+
+    b.open();
+    await probeB;
+    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+    expect(recordedInstalledPlanner()).toBeNull();
+  });
+
   it('ignores a probe outstanding across a reset, so a disposed host cannot refill the state', async () => {
     const stale = gatedProbe('claude-code');
     const probe = detectInstalledPlanner(stale.installation);
