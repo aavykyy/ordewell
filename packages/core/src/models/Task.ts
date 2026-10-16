@@ -529,7 +529,8 @@ export interface TaskSnapshot extends Task {
   finalized: boolean;
 }
 
-export type PlanState =
+/** The plan a surface reads whole carries the approval record, so it can tell which tasks wait for the user (ADR-0035). */
+export type PlanState = (
   | {
       phase: 'planning';
       history: Message[];
@@ -545,7 +546,8 @@ export type PlanState =
       goal: string;
       runners: string[];
       status: PlanStatus;
-    };
+    }
+) & ApprovalRecord;
 
 function hasPhase(raw: unknown): raw is PlanState {
   return typeof raw === 'object' && raw !== null && 'phase' in raw;
@@ -605,6 +607,7 @@ export function migratePlanState(raw: unknown): PlanState {
   );
 
   const messages = migrateHistory(raw);
+  const record = approvalRecordOf(raw);
 
   if (hasExecution) {
     const executionLog: TaskSnapshot[] = raw.tasks
@@ -630,6 +633,7 @@ export function migratePlanState(raw: unknown): PlanState {
       goal: '',
       runners: raw.runners,
       status: raw.status,
+      ...record,
     };
   }
 
@@ -638,6 +642,7 @@ export function migratePlanState(raw: unknown): PlanState {
     history: messages,
     message: '',
     pendingTasks: raw.tasks,
+    ...record,
   };
 }
 
@@ -840,6 +845,30 @@ export function pausedOnLimit(task: Readonly<Task>): boolean {
 /** A task paused on a usage limit that resumes on its own when the limit resets (#84). */
 export function waitsForReset(task: Readonly<Task>): boolean {
   return pausedOnLimit(task) && !!task.resumeAt;
+}
+
+/** The user's approval record, as a plan carries it (ADR-0029). */
+export type ApprovalRecord = Pick<LegacyPlanState, 'approved' | 'approvedTasks'>;
+
+/** A copy of the plan's approval record, for a plan read whole; a field the plan lacks stays absent. */
+export function approvalRecordOf(plan: ApprovalRecord): ApprovalRecord {
+  return {
+    ...(plan.approved !== undefined ? { approved: plan.approved } : {}),
+    ...(plan.approvedTasks ? { approvedTasks: [...plan.approvedTasks] } : {}),
+  };
+}
+
+/**
+ * A task the scheduler leaves for the user (ADR-0035): an AI task not started
+ * yet, in a plan they approved, outside their approval record — the planner
+ * added it since. It starts once they start it or execute the plan. In a plan
+ * they never approved nothing is theirs yet, so nothing is singled out.
+ */
+export function waitsForApproval(task: Pick<Task, 'id' | 'type' | 'status'>, record: ApprovalRecord): boolean {
+  return record.approved === true
+    && task.type === 'ai'
+    && (task.status === 'pending' || task.status === 'approved' || task.status === 'blocked')
+    && !(record.approvedTasks ?? []).includes(task.id);
 }
 
 /**

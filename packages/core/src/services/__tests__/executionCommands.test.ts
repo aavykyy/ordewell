@@ -7,6 +7,7 @@ import type { SessionMessage } from '../SessionMessage';
 import type { ExecutionActor } from '../../models/Execution';
 import type { ConversationRequest, ConversationTurn } from '../AiService';
 import { ExecutionCommands, type ExecutionCommand, type ExecutionHost } from '../ExecutionCommands';
+import { STOPPED_BEFORE_START } from '../TaskOrchestrator';
 import { EMPTY_CONVERSATION, fromTranscript, reduceConversation } from '../../conversation';
 
 const PLANNER: ExecutionActor = { kind: 'planner-turn' };
@@ -822,11 +823,14 @@ describe('the command seam: merge_all', () => {
 });
 
 describe('the command seam\'s extension points', () => {
+  const admission = () => ({ current: () => true, release: vi.fn() });
+
   function stubHost(): ExecutionHost {
     const tasks = [task('t1', 1)];
     return {
       tasks: () => tasks, planApproved: () => true, taskApproved: () => true, approve: vi.fn(), autonomous: () => true, autorun: () => false,
-      scheduling: () => false, startsHeld: () => false, hasLiveWork: () => true, running: () => true, maxParallel: () => 3, runBlocked: () => false,
+      scheduling: () => false, startsHeld: () => false, hasLiveWork: () => true, startsPending: () => false, admitStart: admission,
+      running: () => true, maxParallel: () => 3, runBlocked: () => false,
       dependencyMet: () => true, mergeGate: () => [], blockedBy: () => [], waitingRequests: () => [],
       runPlan: vi.fn(), startTask: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), retryTask: vi.fn(), skipTask: vi.fn(), continueTask: vi.fn(), resumeNow: vi.fn(),
       messageTask: vi.fn(), denyRequest: vi.fn(), mergeAll: vi.fn(), record: vi.fn(), guardTripped: vi.fn(), heldEdit: () => false, editedTasks: () => tasks, deferUntilLanded: vi.fn(), queuedNotRun: vi.fn(),
@@ -864,7 +868,7 @@ describe('the command seam\'s extension points', () => {
 
     expect(await commands.run(retry, PLANNER)).toMatchObject({ ok: true, message: expect.stringMatching(/^Queued: retry task #1 "Task t1" happens once your edit lands/) });
     expect(host.heldEdit).toHaveBeenCalledWith('t1');
-    expect(host.deferUntilLanded).toHaveBeenCalledWith(retry, PLANNER, 'retry task #1 "Task t1"');
+    expect(host.deferUntilLanded).toHaveBeenCalledWith(retry, PLANNER, 'retry task #1 "Task t1"', expect.objectContaining({ current: expect.any(Function) }));
     expect(host.startTask).not.toHaveBeenCalled();
     expect(host.retryTask).not.toHaveBeenCalled();
   });
@@ -889,7 +893,7 @@ describe('the command seam\'s extension points', () => {
     const start: ExecutionCommand = { command: 'run_task', task: 'Add divide' };
 
     expect(await commands.run(start, PLANNER)).toMatchObject({ ok: true, message: expect.stringMatching(/^Queued: start task #2 "Add divide" happens once your edit lands/) });
-    expect(host.deferUntilLanded).toHaveBeenCalledWith(start, PLANNER, 'start task #2 "Add divide"');
+    expect(host.deferUntilLanded).toHaveBeenCalledWith(start, PLANNER, 'start task #2 "Add divide"', expect.objectContaining({ current: expect.any(Function) }));
     expect(host.record).not.toHaveBeenCalled();
   });
 
@@ -947,7 +951,7 @@ describe('the command seam\'s extension points', () => {
     const host = { ...stubHost(), autonomous: () => false, running: () => false, hasLiveWork: () => false };
     const commands = new ExecutionCommands({ host, consent: { request: vi.fn(async () => { throw new Error('the approval card was closed'); }) } });
 
-    await commands.replay({ command: 'run_task', task: 't1' }, PLANNER);
+    await commands.replay({ command: 'run_task', task: 't1' }, PLANNER, admission());
 
     expect(host.record).toHaveBeenCalledWith(expect.objectContaining({ command: 'run_task', outcome: 'refused', detail: 'the approval card was closed' }), expect.any(String));
     expect(host.queuedNotRun).toHaveBeenCalledWith('The queued start of task #1 "Task t1" did not run: the approval card was closed');
@@ -958,10 +962,21 @@ describe('the command seam\'s extension points', () => {
     const host = { ...stubHost(), running: () => false, hasLiveWork: () => false };
     const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
 
-    await commands.replay({ command: 'retry_task', task: 't1', from: 'fresh' }, PLANNER);
+    await commands.replay({ command: 'retry_task', task: 't1', from: 'fresh' }, PLANNER, admission());
 
     expect(host.startTask).toHaveBeenCalledWith('t1', PLANNER);
     expect(host.queuedNotRun).not.toHaveBeenCalled();
+  });
+
+  it('refuses a replayed start a Stop withdrew while it was queued, before judging it again, and says it was stopped', async () => {
+    const host = { ...stubHost(), running: () => false, hasLiveWork: () => false };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    await commands.replay({ command: 'run_task', task: 't1' }, PLANNER, { current: () => false, release: vi.fn() });
+
+    expect(host.record).toHaveBeenCalledWith(expect.objectContaining({ command: 'run_task', outcome: 'refused', detail: STOPPED_BEFORE_START }), expect.any(String));
+    expect(host.queuedNotRun).toHaveBeenCalledWith('Not done: the queued start of task #1 "Task t1" was stopped before it could start.');
+    expect(host.startTask).not.toHaveBeenCalled();
   });
 
   it('names no held edit when there is none', async () => {

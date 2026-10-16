@@ -29,6 +29,7 @@ function input(tasks: Task[], overrides: Partial<ReadinessInput> = {}): Readines
   return {
     store: storeOf(tasks),
     onHold: new Set(),
+    approved: () => true,
     runs: runsOf(),
     active: 0,
     maxParallel: 3,
@@ -71,6 +72,16 @@ describe('selectReadyTasks', () => {
     expect(excluded.find((e) => e.task.id === 'h1')!.reasons).toEqual(['on-hold']);
     expect(excluded.find((e) => e.task.id === 'b1')!.reasons).toEqual(['status=blocked', 'blocked']);
     expect(excluded.find((e) => e.task.id === 'd1')!.reasons).toEqual(['deps']);
+  });
+
+  it('holds back a task outside the user\'s approval record, however ready it is (ADR-0035)', () => {
+    const approved = createTask({ id: 't1', order: 1, title: 'Approved', prompt: 'x' });
+    const added = createTask({ id: 't2', order: 2, title: 'Added since', prompt: 'x' });
+
+    const { ready, excluded } = selectReadyTasks(input([approved, added], { approved: (id) => id === 't1' }));
+
+    expect(ready.map((t) => t.id)).toEqual(['t1']);
+    expect(excluded.find((e) => e.task.id === 't2')!.reasons).toEqual(['unapproved']);
   });
 
   it('does not start a dependent until its dependency has completed', () => {

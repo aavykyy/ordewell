@@ -60,6 +60,17 @@ describe('a plan refresh keeps what the status stream reported', () => {
     expect(a.mergeGate).toEqual(['t0']);
   });
 
+  it('keeps that a task waits for the user\'s approval to start across a plan refresh (ADR-0035)', () => {
+    const waiting = status(loaded([task(), task({ id: 'b', order: 2, title: 'B' })]), [
+      { id: 'b', status: 'pending', verdict: null, waitsForApproval: true },
+    ]);
+
+    const refreshed = reduce(waiting, { type: 'planUpdated', sessionId: 's1', plan: plan([task(), task({ id: 'b', order: 2, title: 'B' })]) }).state;
+
+    expect(findTask(refreshed.tasks, 'b')!.waitsForApproval).toBe(true);
+    expect(findTask(refreshed.tasks, 'a')!.waitsForApproval).toBeUndefined();
+  });
+
   it('drops the checkpoint once the plan says the task no longer waits at it', () => {
     const waiting = status(loaded([task()]), [
       { id: 'a', status: 'awaiting_user', verdict: null, awaitingReason: 'checkpoint', checkpoint: 'Keep the old API?' },

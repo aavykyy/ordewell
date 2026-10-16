@@ -15,8 +15,10 @@ export {
   taskRefOf,
   titledTaskRef,
   titledTaskRefOf,
+  waitsForApproval,
 } from './models/Task';
 export type {
+  ApprovalRecord,
   AwaitingReason,
   ConversationMessage,
   DiscoveredModel,
@@ -85,8 +87,8 @@ export { BaseAiService } from './services/BaseAiService';
 export type { ResearchChat, ResearchTurn, ToolCall, ToolResult } from './services/BaseAiService';
 export { GeminiService } from './services/GeminiService';
 export { OpenAiService } from './services/OpenAiService';
-export { TaskOrchestrator, TaskControlError } from './services/TaskOrchestrator';
-export type { AutoMergeTrigger, OrchestratorObserver, TaskAttemptSnapshot, TaskOrchestratorDeps, TaskOrchestratorOptions } from './services/TaskOrchestrator';
+export { TaskOrchestrator, TaskControlError, STOPPED_BEFORE_START } from './services/TaskOrchestrator';
+export type { AutoMergeTrigger, OrchestratorObserver, StartAdmission, TaskAttemptSnapshot, TaskOrchestratorDeps, TaskOrchestratorOptions } from './services/TaskOrchestrator';
 export { PlanStore } from './services/PlanStore';
 export { Planner } from './services/Planner';
 export type { PlanRequest } from './services/Planner';

@@ -50,6 +50,13 @@ export function skippedLabel(reason: string | null): string {
   return reason ? `Skipped: ${reason}` : 'Skipped';
 }
 
+/**
+ * A task added after the user approved the plan, which the scheduler leaves
+ * for them (ADR-0035). Not a runner approval: nothing has started, so no
+ * runner is asking anything.
+ */
+export const WAITS_FOR_APPROVAL_LABEL = 'Waiting for your approval to start';
+
 /** Runner requests a task waits on (ADR-0018, A1); null when none do. */
 export function approvalLabel(count: number | undefined): string | null {
   if (!count) return null;

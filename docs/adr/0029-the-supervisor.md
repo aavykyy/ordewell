@@ -5,7 +5,7 @@
 and [ADR-0022](0022-ordewell-mcp-server.md); amended by [ADR-0030](0030-global-run-settings.md)
 (the settings are global, saved and live; autorun)
 
-*Pending:* [ADR-0035](0035-effects-are-consented-and-recorded.md) — `run_script`, its consent, and the scheduler starting only approved tasks (#95); [ADR-0037](0037-research-tasks-wake-the-planner.md) — a research task's report wakes the planner at every level.
+*Pending:* [ADR-0035](0035-effects-are-consented-and-recorded.md) — `run_script` and its consent; [ADR-0037](0037-research-tasks-wake-the-planner.md) — a research task's report wakes the planner at every level.
 
 **Amends:** ADR-0009 and ADR-0022 — the planner gains execution tools, a further
 explicit exception to harness planners being read-only; ADR-0013 — "never
@@ -196,6 +196,19 @@ start, and the user is told; run on the unedited plan, it would not be what was
 asked. In a wake-up
 turn at Act the supervisor edits task by task; a whole new plan is refused,
 since only edits let the user follow what changed.
+
+**A Stop withdraws every start asked for before it.** A start is admitted
+when it is asked for, and counts as live work until it claims its task:
+queued behind a held edit, waiting on its approval card, or still opening its
+run. The user's Stop — `stop_run` from any surface, or the Session's own stop —
+stops these too, so it is never refused, or answered "stopped", while one of
+them could still start. None of them starts afterwards: each is kept in the
+timeline as refused, and said as not done, "stopped before it could start";
+a card still asking is cleared. A start asked for after the Stop is a new one,
+and runs. Every start — the scheduler's, `run_task`, a retry, a continue, a
+resume, a force start, a replayed one — claims its task at one point, which
+checks in one step that the user approved the task, that no Stop came since
+the start was admitted, and that a slot is free, before anything is awaited.
 
 **`skip_task` never vouches for work.** Verdicts come from evidence, so the
 supervisor cannot Mark complete: that lands the work as if someone had checked
@@ -485,3 +498,4 @@ until #30 exists.
 - 2026-10-16 — plan approval is read only from the approval record, never from the plan's display status. The plan keeps its own `approved` mark, set by Execute plan, signing off a review and autorun's start, beside `approvedTasks`; a user's start of one task approves that task, not the plan. A plan saved before the mark existed is read from its status once, as it is adopted. Seen live: VS Code wrote its dock status (`draft`) onto the Session's plan after a run that ended with failures, after a stop and on reload, and every planner and supervisor start was then refused as unapproved. Surfaces keep their display status to themselves.
 - 2026-10-16 — in Guarded, a planner start in a user-started turn of tasks the user has not approved asks instead of being refused: the approval card names the tasks a yes approves, a yes approves them as Execute plan does and starts the work, and a no is declined. Every other refusal still comes before the question, a plan the user never executed is still theirs to execute, and the supervisor's starts stay within what the user approved. A start deferred behind a held edit — `run_plan`, and a start of a task the edit adds — is judged against the plan as the edit leaves it, and one that will ask says so in its answer. Seen live: `run_plan` after `edit_plan` added tasks answered "Queued", and was refused once the reply ended.
 - 2026-10-16 — the user's Stop of planner work cancels every user message waiting for it, at any stage — at the planner gate, behind a live opening or a live reply — each caller told it was stopped; before, it did so only at the gate, and the stopped turn's release opened the next one. Wake-ups waiting behind a stopped live turn are not what the user answered, so they stay undelivered and go with the next turn something else opens (the user's next message or the supervisor's next wake-up), never off the stopped turn's release; at the gate they are the stopped turn's and go with it. A force send still keeps the queue (ADR-0023). Seen live: a message sent while the opening ran was answered after Stop, its `submit_plan` landed, and autorun started a task.
+- 2026-10-16 — the Stop generation: the user's Stop withdraws every start admitted before it and not yet claimed — one queued behind a held edit, one waiting on its card, one still opening its run — each kept as refused and said as not done, and counts them as work to stop. Every start claims its task at one point that checks approval, the Stop generation and a free slot together. Seen live: a `run_plan` queued behind an edit started the plan after the user's Execute and Stop; a Run sent beside Stop left the task running after Stop answered "stopped"; with one slot, two Runs sent at once both spawned.

@@ -944,6 +944,9 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   if (row.mergeGate) {
     lines.push(style.yellow(truncate(`${bodyPad}⏸ waits for Merge all — ${row.mergeGate.join(', ')} not merged into your branch yet`, cols)));
   }
+  if (row.waitsForApproval) {
+    lines.push(style.yellow(truncate(`${bodyPad}⏸ ${inRow(row.waitsForApproval)} — added after you approved the plan; f starts it, or /run runs the plan`, cols)));
+  }
   if (row.blockedBy) {
     lines.push(style.red(truncate(`${bodyPad}⊘ ${inRow(blockedByLabel(row.blockedBy))} — runs once ${row.blockedBy.length === 1 ? 'it is retried and passes' : 'they are retried and pass'}`, cols)));
   }

@@ -5645,7 +5645,8 @@ body.vscode-high-contrast-light .pending-message {
   gap: 4px;
 }
 
-.task-isolation-badge.gate {
+.task-isolation-badge.gate,
+.task-isolation-badge.approval {
   background: var(--orange-subtle);
   color: var(--orange);
 }

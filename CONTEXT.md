@@ -880,11 +880,16 @@ complete. A verdict obeys the same identity rule: the attempt stays live while
 its summary is read, and the verdict lands only if that attempt is still the
 task's current one, so a cancel, retry, mark complete, stop or plan load in that
 window is never overwritten by a stale verdict. A verdict whose settling throws
-fails its attempt and says why; nothing it raises goes unhandled. The scheduler
-judges each task again right before claiming it — every readiness gate and a
-free slot — because a start it awaited, a user control or a concurrent tick may
-have changed either, so it never starts held, finished or newly blocked work,
-nor more than `maxParallelSessions` at once.
+fails its attempt and says why; nothing it raises goes unhandled. Every start —
+the scheduler's, a run or force start, a retry's, a continue, a resume, a
+repair — takes its claim at one point (`TaskOrchestrator.claim`), which checks
+in the same synchronous step that the task is in the user's approval record,
+that no Stop came since the start was admitted (see *Start admission*), and
+that a slot is free, and marks the attempt claimed before anything is awaited.
+The scheduler also judges each task again right before claiming it — every
+readiness gate — because a start it awaited, a user control or a concurrent
+tick may have changed it, so it never starts held, finished or newly blocked
+work, nor more than `maxParallelSessions` at once.
 The working directory is decided in one place (`attemptKind.attemptCwd`): the
 workspace root for an attempt that acts from the checkout, else what the
 `IsolationRunController` gives it — the workspace root when the run does not
@@ -2074,9 +2079,11 @@ plan approval and the loop guards, refuses with an actionable note, and records
 each action in the timeline with who asked. No planner tool reaches into
 `TaskOrchestrator` directly, and the mandate (#23) plugs in here. Plan approval
 is the user's: executing the plan approves every task in it, and a task the
-user starts or retries themselves is approved too (`approvedTasks` on the
-plan); a start from anyone else is refused for a task outside that set, so a
-task the planner added since waits for the user.
+user starts, retries or adds by hand is approved too (`approvedTasks` on the
+plan, read through `Session.isApproved`); a start from anyone else is refused
+for a task outside that set, and the scheduler starts nothing outside it
+either (ADR-0035), so a task the planner added since *waits for approval to
+start*. A start the seam lets through is approved before it acts.
 A task an Act supervisor adds is approved as its edit lands. A start a planner
 turn asks for after editing that task in the same reply waits for the held
 edit to land, then goes through the seam again; an edit that never lands — the
@@ -2089,6 +2096,26 @@ user. The user's Skip reaches the seam as the user.
 mode the plan gave the task.
 *Avoid:* "command surface" — that is the set of user commands by name (slash
 commands and `ordewell` subcommands); *Avoid:* "action API".
+
+**Start admission** (`StartAdmission`, `TaskOrchestrator.admitStart`) — a start
+asked for and not yet claimed: one queued behind a planner turn's held edit,
+one waiting on its approval card, one still opening its run. Stop counts it as
+live work, so `stop_run` is never refused, or answered "stopped", while one
+could still start. The user's Stop bumps the *Stop generation*, and a start
+admitted under an older one never takes its claim: it is kept as refused and
+said as "Not done: stopped before it could start", and a card still asking is
+cleared. A restart of an idle scheduler by Execute does not bump it.
+*Avoid:* "pending start" for a task — a task waiting on its dependencies is
+not admitted until someone or the scheduler asks to start it.
+
+**Waiting for approval to start** (`waitsForApproval`) — an AI task not started
+yet, in a plan the user approved, outside their approval record: the planner
+added it since (ADR-0035). The scheduler leaves it, and every surface says so
+— VS Code's card, the TUI row, `ordewell status` and `ordewell run`; the user
+approves it by starting it or executing the plan. Derived from the plan and
+its record, never stored as a status.
+*Avoid:* "awaiting approval" — that is a *Runner approval* a running task
+waits on.
 
 **Loop guard** — a check that stops an Act supervisor spinning, made where the
 action executes (`services/LoopGuards.ts`): a retry limit per task

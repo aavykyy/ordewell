@@ -28,6 +28,8 @@ export interface SessionEventRelayDeps {
   awaitingApproval?: (taskId: string) => number;
   /** What a task's waiting checkpoint asks, whole. */
   checkpointQuestion?: (taskId: string) => string | undefined;
+  /** The task waits for the user's approval to start (ADR-0035). */
+  waitsForApproval?: (taskId: string) => boolean;
 }
 
 /**
@@ -62,6 +64,7 @@ export class SessionEventRelay {
   private readonly usage: PlannerUsageLedger;
   private readonly awaitingApproval: (taskId: string) => number;
   private readonly checkpointQuestion: (taskId: string) => string | undefined;
+  private readonly waitsForApproval: (taskId: string) => boolean;
   /**
    * The in-flight turn's subagent activity, grouped one run per subagent so a
    * replay nests each step under its own brief/result. Folded into the plan's
@@ -80,6 +83,7 @@ export class SessionEventRelay {
     this.usage = deps.usage;
     this.awaitingApproval = deps.awaitingApproval ?? (() => 0);
     this.checkpointQuestion = deps.checkpointQuestion ?? (() => undefined);
+    this.waitsForApproval = deps.waitsForApproval ?? (() => false);
   }
 
   /** `plan` is read per event: a Session with no plan (or mid-reset) announces nothing about tasks. */
@@ -134,6 +138,7 @@ export class SessionEventRelay {
         this.awaitingApproval(t.id),
         this.orchestrator.getMergeGate(t.id),
         this.checkpointQuestion(t.id),
+        this.waitsForApproval(t.id),
       )),
       ...(runMerge ? { runMerge } : {}),
     };

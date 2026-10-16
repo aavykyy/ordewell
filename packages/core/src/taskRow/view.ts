@@ -4,7 +4,7 @@ import type { TaskIsolationState } from '../interfaces/IWorktreeIsolation';
 import { taskOrderLabel, taskRefOf } from '../services/TaskRefs';
 import { capConflictFiles } from '../services/conflictFiles';
 import { blockingFailures, type BlockingSubject } from '../services/blocking';
-import { approvalLabel, awaitingLabel, isTaskRunning, NOT_STARTED, resumeLabel, taskStatusKind, type TaskStatusKind } from './status';
+import { approvalLabel, awaitingLabel, isTaskRunning, NOT_STARTED, resumeLabel, taskStatusKind, WAITS_FOR_APPROVAL_LABEL, type TaskStatusKind } from './status';
 import { markAction, opsEditable, taskRowActions, type TaskRowAction, type TaskRowPlacement } from './actions';
 
 /**
@@ -28,6 +28,8 @@ export interface TaskRowSubject {
   /** Its last attempt left a runner session to continue (ADR-0018, K1). */
   continuable?: boolean;
   awaitingApproval?: number;
+  /** Added after the user approved the plan, and not approved since (ADR-0035). */
+  waitsForApproval?: boolean;
   isolation?: TaskRowIsolation | null;
   mergeGate?: readonly string[];
   forcedPastGate?: readonly string[];
@@ -92,6 +94,8 @@ export interface TaskRowView {
   resumes: string | null;
   /** Runner requests waiting on the user, in sentence case; null when none do. */
   approvals: string | null;
+  /** That it waits for the user's approval to start, in sentence case; null once it started, or when it needs none. */
+  waitsForApproval: string | null;
   /** The task's mode is tagged autonomous: it runs without permission prompts. */
   autonomous: boolean;
   /** The repos its isolated work changed, by path; empty for a group of one. */
@@ -159,6 +163,7 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
     awaiting: awaitingLabel(task),
     resumes: resumeLabel(task, context.now),
     approvals: approvalLabel(task.awaitingApproval),
+    waitsForApproval: task.waitsForApproval && NOT_STARTED.has(task.status) ? WAITS_FOR_APPROVAL_LABEL : null,
     autonomous: task.type === 'ai' && context.modes?.find((m) => m.id === task.taskMode)?.autonomous === true,
     repos: namedRepos(isolation?.repos),
     conflict: isolation?.state === 'conflict'

@@ -144,4 +144,30 @@ describe('handleStatus --output', () => {
     expect(stripAnsi(stdout).match(/Blocked by #1/g)).toHaveLength(2);
     srv.close();
   });
+
+  it('names a task added after the user approved the plan as waiting for them, from the plan\'s approval record (ADR-0035)', async () => {
+    const session = {
+      meta: { ...SESSION.meta, status: 'approved' },
+      plan: {
+        approved: true,
+        approvedTasks: ['t1'],
+        pendingTasks: [
+          { id: 't1', order: 1, title: 'One', type: 'ai', status: 'in_progress', dependencies: [] },
+          { id: 't2', order: 2, title: 'Two', type: 'ai', status: 'pending', dependencies: [] },
+        ],
+      },
+    };
+    const srv = await startServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(session));
+    });
+    const { handleStatus } = await import('../status');
+    const { stdout } = await capture(() => handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)));
+
+    const lines = stripAnsi(stdout).split('\n');
+    const waiting = lines.filter((l) => l.includes('Waiting for your approval to start'));
+    expect(waiting).toEqual(['      Waiting for your approval to start — `ordewell run-task 2` starts it, or `ordewell run` runs the plan']);
+    expect(lines[lines.indexOf(waiting[0]) - 1]).toContain('Two');
+    srv.close();
+  });
 });

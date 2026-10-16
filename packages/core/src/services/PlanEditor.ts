@@ -36,6 +36,8 @@ export interface PlanEditorDeps {
   /** The workspace's skill catalog under its repo group's layout, which a hand-set skill list is checked against. */
   taskSkills: () => SkillLookup;
   notice: (level: SessionNotice['level'], message: string) => void;
+  /** A task the user adds themselves is theirs to run, as one they start is (ADR-0035). */
+  approve: (taskIds: readonly string[]) => void;
 }
 
 /**
@@ -58,6 +60,7 @@ export class PlanEditor {
   private readonly plannerTools: () => boolean;
   private readonly taskSkills: () => SkillLookup;
   private readonly notice: PlanEditorDeps['notice'];
+  private readonly approve: PlanEditorDeps['approve'];
   /** Each task's latest {@link updateTask}, which the next edit to that task waits behind. */
   private readonly taskEdits = new Map<string, Promise<unknown>>();
 
@@ -72,6 +75,7 @@ export class PlanEditor {
     this.plannerTools = deps.plannerTools;
     this.taskSkills = deps.taskSkills;
     this.notice = deps.notice;
+    this.approve = deps.approve;
   }
 
   /**
@@ -190,7 +194,7 @@ export class PlanEditor {
     if (catalog) this.refuseUnavailableMode(runner, assignment.taskMode, catalog.modes);
 
     return this.commit(() => {
-      this.store.add({ ...draft, ...assignment, assignedRunner: runner, dependencies });
+      this.approve([this.store.add({ ...draft, ...assignment, assignedRunner: runner, dependencies }).id]);
       if (catalog) this.admitRunner(runner, catalog.models);
       return true;
     });
@@ -234,6 +238,7 @@ export class PlanEditor {
     if (!draft) throw new PlanEditError('Only a task whose merge conflicted can be resolved as a task');
     return this.commit(() => {
       const resolver = this.store.add(draft);
+      this.approve([resolver.id]);
       this.runs.linkResolver(resolver.id, taskId);
       return true;
     });

@@ -2,8 +2,10 @@ import { flag, hasFlag, readLastSession } from '../utils';
 import { handoffBranch, isRepoGroup, repoResultLines } from '../isolation';
 import { iconFor } from '../utils/output';
 import type { ApiClient, TaskStatus } from '../apiClient';
-import { taskStartedNotice, truncateCheckpointSummary } from '@ordewell/core';
+import { taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL } from '@ordewell/core';
 import { connect } from './shared';
+
+const inLine = (label: string): string => label.charAt(0).toLowerCase() + label.slice(1);
 
 /**
  * Resolve the session every execution command acts on: `--session-id`, else the
@@ -55,7 +57,9 @@ export async function followExecution(
       const verdict = t.verdict
         ? ` — ${t.verdict.outcome.toUpperCase()}: ${t.verdict.reason.slice(0, 60)}`
         : '';
-      lines.push(`  ${icon} #${t.id.slice(-4)} ${t.status}${verdict}`);
+      // Nothing starts it on its own (ADR-0035), so a line that only said "pending" would read as next in line.
+      const waits = t.waitsForApproval ? ` — ${inLine(WAITS_FOR_APPROVAL_LABEL)}: \`ordewell run-task <id>\` starts it` : '';
+      lines.push(`  ${icon} #${t.id.slice(-4)} ${t.status}${verdict}${waits}`);
     }
     const output = lines.join('\n');
     if (output !== lastPrinted && output.trim()) {

@@ -82,8 +82,11 @@ export function plansRoute(pool: OrchestratorPool) {
   router.post('/:sessionId/stop', async (c) => {
     try {
       if (pool.hasSession(c.req.param('sessionId'))) {
+        const session = pool.session(c.req.param('sessionId'));
+        const outcome = await session.execute({ command: 'stop_run' }, { kind: 'user' });
         // A stop with nothing running is a no-op, not a refusal: the surface already said stopped.
-        await pool.session(c.req.param('sessionId')).execute({ command: 'stop_run' }, { kind: 'user' });
+        // That holds only while nothing can still start, or "stopped" would be untrue (ADR-0029).
+        if (!outcome.ok && (session.isExecuting || session.startsPending)) throw new TaskControlError(outcome.message);
       }
       return c.json({ status: 'stopped' } satisfies StopResponse);
     } catch (err) {

@@ -109,6 +109,18 @@ describe('a task card, pinned before its rules move to core', () => {
     expect(badge()?.textContent).toBe('Blocked by #2.1');
   });
 
+  it('badges a task added after the plan was approved as waiting for the user, saying how to approve it (ADR-0035)', () => {
+    render(<TaskCard task={makeTask()} models={[]} isExecuting run={{ waitsForApproval: true }} />);
+    const badge = document.querySelector('.task-isolation-badge.approval');
+    expect(badge?.textContent).toBe('Waiting for your approval to start');
+    expect(badge?.getAttribute('title')).toBe('Added after you approved the plan, so it does not start on its own. Start it, or Execute plan, to approve it.');
+  });
+
+  it('drops that badge once the task has started', () => {
+    render(<TaskCard task={makeTask({ status: 'in_progress' })} models={[]} isExecuting run={{ waitsForApproval: true }} />);
+    expect(document.querySelector('.task-isolation-badge.approval')).toBeNull();
+  });
+
   it('names what a merge gate waits on', () => {
     render(<TaskCard task={makeTask({ id: 'o2', order: 2 })} models={[]} run={{ mergeGate: ['t1', 'ghost'] }} siblings={[makeTask({ id: 't1', order: 1, title: 'Setup' })]} />);
     const gate = document.querySelector('.task-isolation-badge.gate');
