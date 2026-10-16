@@ -44,11 +44,10 @@ export function restoreState(deps: PersistenceDeps): void {
       if (firstUserMessage) deps.setCurrentGoal(firstUserMessage);
     }
 
-    if (saved.status === 'running' || saved.status === 'approved') {
-      for (const task of flattenTasks(saved.tasks)) {
-        if (task.status === 'in_progress') { task.status = 'pending'; }
-      }
-      saved.status = 'draft';
+    // Nothing runs after a reload. The plan's own status stays as saved: an
+    // older plan's approval is read from it once, as the Session adopts it.
+    for (const task of flattenTasks(saved.tasks)) {
+      if (task.status === 'in_progress') { task.status = 'pending'; }
     }
     // Adopt the plan into the Session so its tasks are executable and the
     // conversation can resume — a planner turn input no turn answered is
@@ -62,9 +61,9 @@ export function restoreState(deps: PersistenceDeps): void {
     deps.chatProvider.conversation.reload(saved);
     if (saved.tasks.length > 0) {
       deps.chatProvider.setState('planDraft');
-      deps.chatProvider.showPlan(saved);
+      deps.chatProvider.showPlan(saved, 'draft');
     }
-    deps.log(`Restored plan with ${saved.tasks.length} tasks in draft state (was ${saved.status})`);
+    deps.log(`Restored plan with ${saved.tasks.length} tasks, not running (saved as ${saved.status})`);
   } else {
     deps.log('No saved state found');
   }
@@ -74,7 +73,5 @@ export function persistState(deps: PersistenceDeps): void {
   const plan = deps.getCurrentPlan();
   if (plan.tasks.length === 0 && !(plan.conversationHistory && plan.conversationHistory.length > 0)) return;
   plan.lastUpdated = new Date().toISOString();
-  if (deps.session.isExecuting) plan.status = 'running';
-  else if (deps.session.status === 'completed') plan.status = 'completed';
   saveState(plan, deps.workspaceRoot());
 }

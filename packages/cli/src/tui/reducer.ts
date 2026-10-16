@@ -111,6 +111,10 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step({ ...next, status });
     }
 
+    case 'heldEdit':
+      if (stale(state, action.sessionId)) return step(state);
+      return step(foldRun(state, { type: 'plan_edit_held', held: action.held }));
+
     case 'taskLog':
       if (stale(state, action.sessionId)) return step(state);
       return step(announceApprovals(taskLogArrived(state, action), action));

@@ -328,6 +328,7 @@ export const style = {
   dim: colour('2'),
   italic: colour('3'),
   underline: colour('4'),
+  strike: colour('9'),
   inverse: colour('7'),
   red: colour('31'),
   green: colour('32'),

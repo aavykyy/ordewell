@@ -273,8 +273,7 @@ export async function handleApprovePlan(deps: PlanManagerDeps): Promise<void> {
     deps.runner.stopAll();
   }
   const plan = deps.getCurrentPlan();
-  plan.status = 'approved';
-  // New task objects, not edits in place: the plan's tasks are the Session's
+  // The run_plan below is the approval, and the Session records it. New task objects, not edits in place: the plan's tasks are the Session's
   // snapshot of its store, and the plan object itself must stay the same one
   // so `loadPlan` keeps the live planner conversation. Saved once, after the
   // approval is complete — an earlier write would persist approved status over
@@ -570,15 +569,13 @@ export function handleSessionMessage(
       deps.chatProvider.conversation.note('system', taskStartedNotice(msg.title, msg.runner));
       break;
     case 'status_update': {
-      // The run view already holds each task's status; the host's plan only
-      // carries the plan-level status the dock reads.
-      const plan = deps.getCurrentPlan();
-      plan.status = deps.session.isExecuting
+      // The run view already holds each task's status; the dock reads a
+      // plan-level one, the provider's to keep, never the Session's plan's.
+      deps.chatProvider.showPlan(deps.getCurrentPlan(), deps.session.isExecuting
         ? 'running'
         : deps.session.status === 'completed'
           ? 'completed'
-          : 'draft';
-      deps.chatProvider.showPlan(plan);
+          : 'draft');
       break;
     }
     // The Session changes the plan itself (a live turn's edits, a run setting)
@@ -593,9 +590,7 @@ export function handleSessionMessage(
       break;
     }
     case 'execution_stopped': {
-      const plan = deps.getCurrentPlan();
-      plan.status = 'draft';
-      deps.chatProvider.showPlan(plan);
+      deps.chatProvider.showPlan(deps.getCurrentPlan(), 'draft');
       deps.persistState();
       break;
     }
@@ -632,6 +627,7 @@ export function handleSessionMessage(
     case 'task_updated':
     case 'planner_turn_started':
     case 'planner_skill_loaded':
+    case 'plan_edit_held':
     case 'planner_turn_ended':
     case 'planner_text_retracted':
     case 'planner_usage':

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { type GlobalRunSettings, surfacePlan, type AiProvider, type LegacyPlanState, type DiscoveredModel, type RunnerId, type RunView } from '@ordewell/core';
+import { type GlobalRunSettings, surfacePlan, type AiProvider, type LegacyPlanState, type DiscoveredModel, type PlanStatus, type RunnerId, type RunView } from '@ordewell/core';
 import { ConversationViewHost, type SavedConversation } from '../ConversationViewHost';
 import { RunViewHost } from '../RunViewHost';
 import { renderWebviewHtml } from './webviewHtml';
@@ -20,6 +20,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   readonly conversation = new ConversationViewHost((msg) => this.postMessage(msg));
   /** The run as the webview draws it; every session event and adopted snapshot goes through here (#S8c). */
   readonly run = new RunViewHost((msg) => this.postMessage(msg));
+  /**
+   * What the dock shows as each plan's status, kept here rather than written
+   * onto the plan: the plan object is the Session's own, and its status once
+   * decided whether the user had approved it (ADR-0029).
+   */
+  private readonly dockStatus = new WeakMap<LegacyPlanState, PlanStatus>();
 
   constructor(private readonly _extensionUri: vscode.Uri) {}
 
@@ -60,9 +66,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * The session's own plan stays with the extension host (it persists and
    * resumes from there); the webview is sent it without skill bodies. The plan
    * is plan-level state only — every task's status lives on the run view.
+   * A status given is the dock's from now on for this plan, until another.
    */
-  showPlan(plan: LegacyPlanState): void {
-    this.postMessage({ type: 'planUpdated', plan: surfacePlan(plan) });
+  showPlan(plan: LegacyPlanState, status?: PlanStatus): void {
+    if (status) this.dockStatus.set(plan, status);
+    this.postMessage({ type: 'planUpdated', plan: { ...surfacePlan(plan), status: this.dockStatus.get(plan) ?? plan.status } });
   }
   /** What a webview that joined mid-run is owed: the run as folding every message would show it. */
   adoptRun(view: RunView): void { this.run.adopt(view); }

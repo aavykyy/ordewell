@@ -1781,6 +1781,39 @@ body {
   gap: 4px;
 }
 
+/* The held edit: dashed and quiet, so it reads as not yet part of the plan. */
+.proposed-tasks {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px dashed var(--border-color);
+  border-radius: 4px;
+}
+.proposed-tasks-title {
+  color: var(--text-secondary);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.proposed-tasks ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.proposed-task {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 2px 0;
+}
+.proposed-task-mark {
+  min-width: 56px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.proposed-task[data-mark='added'] .proposed-task-mark { color: var(--green); }
+.proposed-task[data-mark='changed'] .proposed-task-mark { color: var(--orange); }
+.proposed-task[data-mark='removed'] .proposed-task-mark { color: var(--red); }
+.proposed-task-order { color: var(--text-muted); }
+
 /* ---- Plan Research Log ---- */
 .plan-research-log {
   border-top: 1px solid var(--border-subtle);

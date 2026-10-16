@@ -30,7 +30,7 @@ import { RUN_SETTINGS_DEFAULTS, runSettingsOf, type GlobalRunSettings, type User
 import { SkillsService } from './SkillsService';
 import { resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
 import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
-import { surfacePlan, type RunMergeView, type RunView, type SessionBroadcaster, type SessionNotice } from './SessionMessage';
+import { surfacePlan, type HeldEdit, type RunMergeView, type RunView, type SessionBroadcaster, type SessionNotice } from './SessionMessage';
 import { EMPTY_RUN, reduceRun } from './runView';
 import { SessionEventRelay } from './SessionEventRelay';
 import { saveSession } from '../utils/sessionStore';
@@ -436,6 +436,8 @@ export class Session {
    * supervisor has first.
    */
   private sentHandoff: IsolationHandoff | null = null;
+  /** The edit the open planner turn holds, as last announced: a surface that joins mid-turn is shown it. */
+  private sentHeld: HeldEdit | null = null;
   private readonly notifications: INotification;
   private readonly onNotice?: (notice: SessionNotice) => void;
   private readonly modelResolver: ModelResolver;
@@ -499,6 +501,7 @@ export class Session {
       if (msg.type === 'isolation_handoff' || msg.type === 'isolation_merge') {
         this.sentHandoff = reduceRun({ ...EMPTY_RUN, handoff: this.sentHandoff }, msg).handoff;
       }
+      if (msg.type === 'plan_edit_held') this.sentHeld = msg.held;
       parts.broadcast(msg);
     };
     this.notifications = parts.notifications;
@@ -681,7 +684,7 @@ export class Session {
   private executionHost(): ExecutionHost {
     return {
       tasks: () => (this.plan ? this.store.planTasks : null),
-      planApproved: () => this.plan !== null && this.plan.status !== 'draft' && this.plan.status !== 'rejected',
+      planApproved: () => this.plan?.approved === true,
       taskApproved: (taskId) => this.plan?.approvedTasks?.includes(taskId) ?? false,
       approve: (taskIds) => this.approve(taskIds),
       autonomous: () => this.config.autonomousMode,
@@ -1009,6 +1012,7 @@ export class Session {
     if (!keepGrants) this.approvalPolicy.reset();
     this.store.clearLog();
     this.sentHandoff = null;
+    this.sentHeld = null;
   }
 
   /** The handoff a settled run with landed work owes the user, unmarked; null while a run is open or nothing landed. */
@@ -1476,6 +1480,7 @@ export class Session {
       // run starts cleanly; with nothing live, stopping has nothing to interrupt.
       this.orchestrator.stop();
 
+      plan.approved = true;
       plan.status = 'approved';
       this.store.clearLog();
       this.store.resetForRun();
@@ -1492,6 +1497,7 @@ export class Session {
     // Signing off a review is the user's approval of every task in the plan, as
     // executing it is (ADR-0029): without it the planner's starts refuse the
     // tasks as added since approval.
+    plan.approved = true;
     this.approve(flattenTasks(this.store.planTasks).map((t) => t.id));
     await this.withSave(() => this.orchestrator.approveReview('user'));
     return plan;
@@ -1658,7 +1664,8 @@ export class Session {
     if (!this.plan) return EMPTY_RUN;
     const planned = reduceRun(EMPTY_RUN, { type: 'plan_snapshot', plan: surfacePlan({ ...this.plan, tasks: this.store.snapshot() }) });
     const view = reduceRun(planned, this.events.statusMessage());
-    return this.sentHandoff ? reduceRun(view, { type: 'isolation_handoff', ...this.sentHandoff }) : view;
+    const held = this.sentHeld ? reduceRun(view, { type: 'plan_edit_held', held: this.sentHeld }) : view;
+    return this.sentHandoff ? reduceRun(held, { type: 'isolation_handoff', ...this.sentHandoff }) : held;
   }
 
   /** The dependencies a task waits on at its merge gate (ADR-0020); empty when it waits for no Merge all. */
@@ -1839,8 +1846,11 @@ export class Session {
     if (adopting) this.supervision.restore(plan.supervision);
     this.goal = goal;
     this.workspace = workspace;
-    // Saved before tasks carried the user's approval: executing a plan approved every task it held.
-    if (!plan.approvedTasks && plan.status !== 'draft' && plan.status !== 'rejected') {
+    // Saved before approval had its own record: the status said it, and
+    // executing a plan approved every task it held. Read once, here, and never
+    // again — a surface rewrites the status for display.
+    plan.approved ??= plan.status !== 'draft' && plan.status !== 'rejected';
+    if (!plan.approvedTasks && plan.approved) {
       plan.approvedTasks = flattenTasks(plan.tasks).map((t) => t.id);
     }
     // The saved ledger is the session's own history: adopt it before the
