@@ -3,6 +3,7 @@ import type { AiProvider, PlannerBackendId } from './interfaces/IConfig';
 import type { IsolationMergeResult } from './interfaces/IWorktreeIsolation';
 import type { SessionMeta } from './models/Session';
 import type { DiscoveredModel } from './models/Task';
+import type { PlannerNotReady } from './services/plannerReadiness';
 import type { PendingApproval } from './services/PendingApprovals';
 import type { RunView, SurfacePlan, SurfacePlanState } from './services/SessionMessage';
 import type { ConversationCompaction, RewindTarget } from './services/PlannerConversation';
@@ -43,6 +44,8 @@ export type DaemonErrorCode =
   | 'planner_turn_stopped'
   /** The planner turn settled after its plan was dropped; nothing it produced was kept. */
   | 'planner_turn_discarded'
+  /** The selected planner cannot plan yet (no key, no base URL, no model); `plannerNotReady` says which. */
+  | 'planner_not_ready'
   /** The request asked for something the plan, task or conversation does not allow. */
   | 'refused'
   | 'checkpoint_not_waiting'
@@ -54,6 +57,8 @@ export interface ErrorBody {
   code?: DaemonErrorCode;
   /** Set with `workspace_not_a_project`: the directory the daemon refused, so a client can offer to initialize it. */
   workspace?: string;
+  /** Set with `planner_not_ready`: the reason as data, so a client can word it in its own commands. */
+  plannerNotReady?: PlannerNotReady;
 }
 
 export interface OkResponse {

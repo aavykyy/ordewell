@@ -650,7 +650,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     ? []
     : [
       ...wrap(
-        style.yellow(`Ordewell needs one coding agent installed (${runnerNamesOr()}) — or an API key from a provider such as OpenRouter, added with /key.`),
+        style.yellow(`Ordewell needs one coding agent installed (${runnerNamesOr()}), picked with /planner — no API key needed. Or add a provider's API key, such as OpenRouter's, with /key.`),
         Math.max(1, cols - 1),
       ),
       '',

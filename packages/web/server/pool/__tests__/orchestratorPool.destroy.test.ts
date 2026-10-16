@@ -4,6 +4,9 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { Session, type LegacyPlanState } from '@ordewell/core';
 import { OrchestratorPool } from '../orchestratorPool';
+import { withReadyPlanner } from '../../__tests__/readyPlanner';
+
+withReadyPlanner();
 
 describe('closing a session', () => {
   it('closes the session it is still planning in, which abandons its planner turn', async () => {

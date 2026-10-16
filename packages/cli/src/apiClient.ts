@@ -23,6 +23,7 @@ import type {
   OkResponse,
   GlobalRunSettings,
   PlanResponse,
+  PlannerNotReady,
   SurfacePlan,
   SurfacePlanState,
   RemoveMessageResponse,
@@ -69,7 +70,7 @@ export type ConversationRewindResult = ConversationRewindResponse;
  * switches on. The message is for display only: nothing may branch on its text.
  */
 export class DaemonError extends Error {
-  constructor(message: string, readonly status: number, readonly code?: DaemonErrorCode) {
+  constructor(message: string, readonly status: number, readonly code?: DaemonErrorCode, readonly plannerNotReady?: PlannerNotReady) {
     super(message);
     this.name = 'DaemonError';
   }
@@ -135,9 +136,9 @@ const SESSION_PATH = /^\/api\/(?:plans|sessions)\/([^/?]+)/;
 
 /** A non-200 answer as an error. The body is not trusted to be JSON: an HTML error page arrives as a string. */
 function daemonError(status: number, data: unknown, fallback: string): DaemonError {
-  const { error, code, workspace } = (typeof data === 'object' && data !== null ? data : {}) as Partial<ErrorBody>;
+  const { error, code, workspace, plannerNotReady } = (typeof data === 'object' && data !== null ? data : {}) as Partial<ErrorBody>;
   if (code === 'workspace_not_a_project') return new WorkspaceInitNeededError(error || 'Not a project directory', workspace ?? '');
-  return new DaemonError(error || fallback, status, code);
+  return new DaemonError(error || fallback, status, code, plannerNotReady);
 }
 
 export class ApiClient {
