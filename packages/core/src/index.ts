@@ -180,6 +180,8 @@ export type {
   RunTask,
   RunTaskStatus,
   RunView,
+  HeldEdit,
+  HeldEditMark,
 } from './services/SessionMessage';
 export { EMPTY_RUN, reduceRun } from './services/runView';
 export { serializeTask, serializeTaskStatus, serializePlan, surfacePlan, surfacePlanState, executionSummary, truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH, type ExecutionSummary } from './services/SessionMessage';

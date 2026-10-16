@@ -413,6 +413,11 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
       dispatch({ type: 'notice', message: event.message, level: event.level });
       return;
 
+    // The pane draws it apart from the plan's rows; the reducer folds it into the run view.
+    case 'plan_edit_held':
+      dispatch({ type: 'heldEdit', held: event.held, sessionId });
+      return;
+
     case 'isolation_handoff':
       dispatch({ type: 'isolationHandoff', handoff: { repos: event.repos, landed: event.landed, ...(event.deferredTo ? { deferredTo: event.deferredTo } : {}) }, sessionId });
       return;

@@ -632,6 +632,7 @@ export function handleSessionMessage(
     case 'task_updated':
     case 'planner_turn_started':
     case 'planner_skill_loaded':
+    case 'plan_edit_held':
     case 'planner_turn_ended':
     case 'planner_text_retracted':
     case 'planner_usage':

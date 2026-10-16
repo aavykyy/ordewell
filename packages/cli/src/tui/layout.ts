@@ -4,7 +4,7 @@ import { checkpointCardLines, conversationLines, taskUsageText, usageMeasures, t
 import { chatEditorRoomFor, chatPaneWidth, planPaneWidth } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
 import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
-import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
+import { SUPERVISOR_LEVEL_LABEL, type HeldEditMark } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
@@ -750,9 +750,30 @@ export function planLayout(state: TuiState, rows: number, cols: number): PlanLay
     rowSpans.push({ start: taskStart, end: lines.length - 1 });
   });
 
+  lines.push(...heldEditLines(state, cols));
+
   const selected = rowSpans[state.selectedTask] ?? { start: firstRowLine, end: firstRowLine };
   const anchor = editorLine === undefined ? selected : { start: editorLine, end: editorLine };
   return { lines, rowSpans, anchor, rows, maxScroll: Math.max(0, lines.length - rows) };
+}
+
+/** Painted when drawn, not at load, so it follows whether colour is on. */
+const heldMark = (mark: HeldEditMark): string => (mark === 'added' ? style.green('+') : mark === 'changed' ? style.yellow('~') : style.red('-'));
+
+/**
+ * What the open planner turn's edit would change, below the plan's own rows
+ * and outside their spans: nothing here is selected, run or edited. Only the
+ * tasks the edit touches, since the rest are already above. They are proposed,
+ * not approved, so it says when they land and nothing about running.
+ */
+function heldEditLines(state: TuiState, cols: number): string[] {
+  const rows = (state.run.heldEdit?.tasks ?? []).flatMap(({ label, mark, task }) => {
+    if (!mark) return [];
+    const title = mark === 'removed' ? style.strike(task.title) : task.title;
+    return [truncate(`  ${heldMark(mark)} ${style.grey(label.padStart(2))}  ${title}`, cols)];
+  });
+  if (rows.length === 0) return [];
+  return ['', style.dim(truncate('Proposed — lands when this reply ends', cols)), ...rows];
 }
 
 const clampOffset = (layout: PlanLayout, offset: number): number =>
