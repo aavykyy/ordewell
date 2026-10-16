@@ -65,7 +65,7 @@ function harness(aiService: Partial<IAiService> = { hasActiveConversation: () =>
     chatProvider,
     modelResolver: {} as unknown as WebviewRouterDeps['modelResolver'],
     runnerRegistry: new RunnerRegistry(),
-    config: { aiProvider: 'openrouter', apiKey: 'sk-test', planningModel: 'some/model', enabledRunners: ['claude-code'] } as unknown as WebviewRouterDeps['config'],
+    config: { aiProvider: 'openrouter', apiKey: 'sk-test', getProviderApiKey: () => 'sk-test', planningModel: 'some/model', enabledRunners: ['claude-code'] } as unknown as WebviewRouterDeps['config'],
     fsAdapter: { getWorkspaceRoot: () => workspace } as unknown as WebviewRouterDeps['fsAdapter'],
     runner: { stopAll: vi.fn() } as unknown as WebviewRouterDeps['runner'],
     notifications: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), confirm: vi.fn() },

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { latestTaskCommands } from '../shared/taskCommands';
 import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
-  saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReady, describePlannerNotReady, CHAT_COMMANDS, taskStartedNotice,
+  saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS, taskStartedNotice,
   createEmptyPlan, markRequestFor, pastGateConfirmation, titledRefs, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner, type TaskRowAction,
   type ExecutionCommand, installedPlannerDetected,
 } from '@ordewell/core';
@@ -98,14 +98,7 @@ export function reportPlannerError(err: unknown, deps: PlanManagerDeps): void {
 
 /** The core rule (a harness planner needs no key, ADR-0009), worded with the chat's own commands. */
 export function plannerPreflightError(config: PlanManagerDeps['config']): string | null {
-  // `apiKey` is this host's own answer to "is a key set", legacy fallbacks
-  // included, so the rule stays what it was before it moved into core.
-  const reason = plannerNotReady({
-    aiProvider: config.aiProvider,
-    planningModel: config.planningModel,
-    openaiCompatibleBaseUrl: config.openaiCompatibleBaseUrl,
-    getProviderApiKey: () => config.apiKey,
-  });
+  const reason = plannerNotReadyFor(config);
   return reason ? describePlannerNotReady(reason, CHAT_COMMANDS) : null;
 }
 

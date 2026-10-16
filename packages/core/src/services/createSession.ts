@@ -42,7 +42,7 @@ import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
 import { flattenTasks, keepExecutionState, stampOrigin, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskSnapshot, type RunnerId } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
-import { PlannerNotReadyError, plannerNotReady } from './plannerReadiness';
+import { PlannerNotReadyError, plannerNotReadyFor } from './plannerReadiness';
 import type { IConfig, PlannerBackendId } from '../interfaces/IConfig';
 import type { IFileSystem } from '../interfaces/IFileSystem';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
@@ -1084,16 +1084,7 @@ export class Session {
    * own config, so a model override sent with the request is the one judged.
    */
   assertPlannerReady(): void {
-    const { config } = this;
-    const reason = plannerNotReady({
-      aiProvider: config.aiProvider,
-      // The vendor transports read different fields (OpenAI-style the
-      // orchestrator model, Gemini the planning model, which has a default),
-      // so either one set means a model will be found.
-      planningModel: config.orchestratorModel || config.planningModel,
-      openaiCompatibleBaseUrl: config.openaiCompatibleBaseUrl,
-      getProviderApiKey: (provider) => config.getProviderApiKey(provider),
-    });
+    const reason = plannerNotReadyFor(this.config);
     if (reason) throw new PlannerNotReadyError(reason);
   }
 

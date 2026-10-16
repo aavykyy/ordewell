@@ -1637,7 +1637,11 @@ what gives the surfaces' icon/label switches their exhaustiveness checking.
 ModelResolver is the **sole producer**: native Gemini ids are always minted with
 the `gemini:` qualifier (`geminiOptionId`) so a stored `gemini:<id>` routes to
 the Gemini API, never to OpenRouter's `google/<id>` namespace. Built in one place to
-keep the two surfaces from diverging.
+keep the two surfaces from diverging. The lists only route when nobody named a
+planner: an explicit `AI_PROVIDER` or VS Code `aiProvider` always wins over them.
+The daemon drops a vendor's list when its credential is removed, and every config
+it builds reads the current lists, so a session never routes to a vendor the
+settings response no longer names.
 
 ---
 

@@ -38,6 +38,26 @@ export function plannerNotReady(config: PlannerReadinessConfig): PlannerNotReady
   return null;
 }
 
+/**
+ * `plannerNotReady` judged on a host's own config — the one way every host
+ * builds the preflight's input, so none can hand it a key the selected
+ * planner's transport will not read (a stored OpenRouter key passing for an
+ * OpenAI planner, which then failed inside the transport).
+ */
+export function plannerNotReadyFor(
+  config: Pick<IConfig, 'aiProvider' | 'orchestratorModel' | 'planningModel' | 'openaiCompatibleBaseUrl' | 'getProviderApiKey'>,
+): PlannerNotReady | null {
+  return plannerNotReady({
+    aiProvider: config.aiProvider,
+    // The vendor transports read different fields (OpenAI-style the
+    // orchestrator model, Gemini the planning model, which has a default),
+    // so either one set means a model will be found.
+    planningModel: config.orchestratorModel || config.planningModel,
+    openaiCompatibleBaseUrl: config.openaiCompatibleBaseUrl,
+    getProviderApiKey: (provider) => config.getProviderApiKey(provider),
+  });
+}
+
 /** How one surface spells the commands a not-ready message points at. */
 export interface PlannerCommandSyntax {
   pickPlanner: string;

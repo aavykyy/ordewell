@@ -202,11 +202,7 @@ export class OrchestratorPool {
       ensureStateDirIgnored(workspace);
       assertWorkspaceIsProject(workspace);
     }
-    const config = new WebConfig({
-      enabledRunners: this.enabledRunnerOverride(),
-      modelOverride,
-      providerModelLists: this.cachedProviderLists,
-    });
+    const config = this.plannerConfig(modelOverride);
     const fsAdapter = new PoolFileSystem(workspace);
     const broadcast = (msg: SessionMessage) => this.broadcast(sessionId, msg);
     const runner = new PoolAwareRunner(sessionId, broadcast, this.runner);
@@ -223,6 +219,21 @@ export class OrchestratorPool {
       modelResolver: this.modelResolver,
       settings: () => this.runtimeSettings(),
       sessionId,
+    });
+  }
+
+  /**
+   * The one way the pool builds a config that answers "who plans": sessions,
+   * the settings response and the switch judgement all route through it, so
+   * what the settings route reports is what the next turn plans with. The
+   * lists are handed over as a reader, not a snapshot, so a credential change
+   * reaches a session that is already open.
+   */
+  private plannerConfig(modelOverride?: string): WebConfig {
+    return new WebConfig({
+      enabledRunners: this.enabledRunnerOverride(),
+      modelOverride,
+      providerModelLists: () => this.cachedProviderLists,
     });
   }
 
@@ -250,7 +261,7 @@ export class OrchestratorPool {
   }
 
   getSettings(): SettingsResponse {
-    const config = new WebConfig({ enabledRunners: this.enabledRunnerOverride() });
+    const config = this.plannerConfig();
     const userSettings = this.settingsService.getAll();
     return {
       orchestratorModel: config.orchestratorModel,
@@ -304,10 +315,7 @@ export class OrchestratorPool {
    * model id, so this is read again after a write rather than carried over.
    */
   private plannerProviderInEffect(): PlannerBackendId {
-    return new WebConfig({
-      enabledRunners: this.enabledRunnerOverride(),
-      providerModelLists: this.cachedProviderLists,
-    }).aiProvider;
+    return this.plannerConfig().aiProvider;
   }
 
   updateSettings(changes: Record<string, unknown>): SettingsUpdateResponse {
@@ -372,6 +380,7 @@ export class OrchestratorPool {
       if (touched) {
         this.modelResolver.invalidate();
         this.modelResolver.refreshRunnerModels();
+        this.dropUnkeyedProviderLists();
       }
     }
 
@@ -407,6 +416,21 @@ export class OrchestratorPool {
     if (rejectedEnvKeys.length > 0) settings.rejectedEnvKeys = rejectedEnvKeys;
     if (selection?.recall) settings.switchRecall = selection.recall;
     return settings;
+  }
+
+  /**
+   * A vendor whose credential is gone keeps no list to route a model to it,
+   * or the next turn would be sent to a planner the settings response no
+   * longer names. Pruned rather than cleared: the vendors that still hold a
+   * key keep routing their models until the catalog is discovered again, so
+   * adding a second key does not move the planner off the first.
+   */
+  private dropUnkeyedProviderLists(): void {
+    if (!this.cachedProviderLists) return;
+    const keyed = new Set<string>(configuredProviders(new WebConfig()));
+    this.cachedProviderLists = Object.fromEntries(
+      Object.entries(this.cachedProviderLists).filter(([provider]) => keyed.has(provider)),
+    );
   }
 
   setOrchestratorModel(model: string): string {
