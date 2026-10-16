@@ -1,4 +1,5 @@
 import type { PlannerBackendId } from '../interfaces/IConfig';
+import { DEFAULT_RUNNERS, type RunnerId } from '../models/Task';
 import { CLI_PROVIDERS, runnerForProvider } from './ProviderRegistry';
 import type { RunnerInstallation } from './RunnerInstallation';
 
@@ -13,6 +14,8 @@ import type { RunnerInstallation } from './RunnerInstallation';
  * startup and every config it builds reads the answer here.
  */
 let recorded: PlannerBackendId | null = null;
+/** Every usable agent the latest probe found, in registry order; empty until one answers. */
+let installedAgents: RunnerId[] = [];
 let answered = true;
 /**
  * Callers of {@link installedPlannerDetected} parked until the state next
@@ -34,12 +37,11 @@ function wakeWaiters(): void {
 let generation = 0;
 
 /**
- * The first harness planner, in the order every planner picker lists them,
- * whose agent `plannerUsability` calls usable; null when none is. The agents
- * are asked together, so a start waits for the slowest of them rather than for
- * each in turn.
+ * Every harness planner, in the order every planner picker lists them, whose
+ * agent `plannerUsability` calls usable. The agents are asked together, so a
+ * start waits for the slowest of them rather than for each in turn.
  */
-export async function findInstalledPlanner(installation: Pick<RunnerInstallation, 'plannerUsability'>): Promise<PlannerBackendId | null> {
+async function findInstalledAgents(installation: Pick<RunnerInstallation, 'plannerUsability'>): Promise<RunnerId[]> {
   const usable = await Promise.all(CLI_PROVIDERS.map(async (id) => {
     const runner = runnerForProvider(id);
     if (runner === null) return false;
@@ -51,7 +53,12 @@ export async function findInstalledPlanner(installation: Pick<RunnerInstallation
       return false;
     }
   }));
-  return CLI_PROVIDERS[usable.indexOf(true)] ?? null;
+  return CLI_PROVIDERS.filter((_, i) => usable[i]);
+}
+
+/** The first of {@link findInstalledAgents}; null when none is usable. */
+export async function findInstalledPlanner(installation: Pick<RunnerInstallation, 'plannerUsability'>): Promise<PlannerBackendId | null> {
+  return (await findInstalledAgents(installation))[0] ?? null;
 }
 
 /**
@@ -63,10 +70,12 @@ export function detectInstalledPlanner(installation: Pick<RunnerInstallation, 'p
   // A probe that throws is no agent found: the turn waiting on it must still
   // start, and say what the openrouter fallback is missing.
   const mine = ++generation;
-  const probe: Promise<PlannerBackendId | null> = findInstalledPlanner(installation).catch(() => null).then((id) => {
+  const probe: Promise<PlannerBackendId | null> = findInstalledAgents(installation).catch((): RunnerId[] => []).then((agents) => {
+    const id = agents[0] ?? null;
     // Only the latest probe speaks for the recorded answer.
     if (mine === generation) {
       recordInstalledPlanner(id);
+      installedAgents = agents;
       answered = true;
       wakeWaiters();
     }
@@ -100,10 +109,23 @@ export function recordedInstalledPlanner(): PlannerBackendId | null {
   return recorded;
 }
 
+/**
+ * The runners enabled while the user has never saved a choice: the agents the
+ * latest probe found installed, so a Codex-only or OpenCode-only host can plan
+ * and run on its first start; DEFAULT_RUNNERS while none was found or no probe
+ * has answered. Read on each call and never saved, so an agent installed later
+ * joins on the next probe and a saved choice — even an empty one — still wins.
+ * Every host's config reads it here, so the daemon, CLI, TUI and VS Code agree.
+ */
+export function defaultEnabledRunners(): RunnerId[] {
+  return installedAgents.length > 0 ? [...installedAgents] : [...DEFAULT_RUNNERS];
+}
+
 /** For tests: the recorded default is process-wide, so one case's must not decide the next's. */
 export function resetInstalledPlanner(): void {
   generation++;
   recorded = null;
+  installedAgents = [];
   answered = true;
   wakeWaiters();
 }

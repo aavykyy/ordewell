@@ -6,7 +6,7 @@ import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest
 import { CODEX_MANIFEST } from '../../plugins/builtin/codex.manifest';
 import { OPENCODE_MANIFEST } from '../../plugins/builtin/opencode.manifest';
 import {
-  detectInstalledPlanner, findInstalledPlanner, installedPlannerAnswered, installedPlannerDetected, recordedInstalledPlanner, resetInstalledPlanner,
+  defaultEnabledRunners, detectInstalledPlanner, findInstalledPlanner, installedPlannerAnswered, installedPlannerDetected, recordedInstalledPlanner, resetInstalledPlanner,
 } from '../InstalledPlanner';
 
 const ALL = [CLAUDE_CODE_MANIFEST, CODEX_MANIFEST, OPENCODE_MANIFEST];
@@ -257,5 +257,42 @@ describe('detectInstalledPlanner', () => {
     expect(recordedInstalledPlanner()).toBeNull();
     await detectInstalledPlanner({ plannerUsability: async (runner) => ({ usable: runner === 'opencode' }) });
     expect(recordedInstalledPlanner()).toBe('opencode');
+  });
+});
+
+describe('defaultEnabledRunners', () => {
+  afterEach(() => resetInstalledPlanner());
+
+  it('is claude-code alone before any probe has answered, as it was before detection existed', () => {
+    expect(defaultEnabledRunners()).toEqual(['claude-code']);
+  });
+
+  it('is every agent the probe found usable, in the order the registry lists them', async () => {
+    await detectInstalledPlanner({ plannerUsability: async (runner) => ({ usable: runner !== 'claude-code' }) });
+    expect(defaultEnabledRunners()).toEqual(['codex', 'opencode']);
+  });
+
+  it('is the only installed agent on a Codex-only or OpenCode-only host', async () => {
+    await detectInstalledPlanner({ plannerUsability: async (runner) => ({ usable: runner === 'codex' }) });
+    expect(defaultEnabledRunners()).toEqual(['codex']);
+    await detectInstalledPlanner({ plannerUsability: async (runner) => ({ usable: runner === 'opencode' }) });
+    expect(defaultEnabledRunners()).toEqual(['opencode']);
+  });
+
+  it('falls back to claude-code when nothing is installed', async () => {
+    await detectInstalledPlanner({ plannerUsability: async () => ({ usable: false }) });
+    expect(defaultEnabledRunners()).toEqual(['claude-code']);
+  });
+
+  it('follows a reset back to the fallback', async () => {
+    await detectInstalledPlanner({ plannerUsability: async (runner) => ({ usable: runner === 'codex' }) });
+    resetInstalledPlanner();
+    expect(defaultEnabledRunners()).toEqual(['claude-code']);
+  });
+
+  it('hands out a copy, so a caller editing its list cannot change the next answer', async () => {
+    await detectInstalledPlanner({ plannerUsability: async (runner) => ({ usable: runner === 'codex' }) });
+    defaultEnabledRunners().push('opencode');
+    expect(defaultEnabledRunners()).toEqual(['codex']);
   });
 });

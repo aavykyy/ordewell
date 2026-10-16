@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { RUN_SETTINGS_DEFAULTS,
-  createTask, RunnerRegistry, recordedInstalledPlanner, resetInstalledPlanner,
+  createTask, defaultEnabledRunners, RunnerRegistry, recordedInstalledPlanner, resetInstalledPlanner,
   type AiProvider, type DiscoveredModel, type IRunner, type LegacyPlanState, type PlannerUsability,
   type ModelResolver, type PlannerModelMemory, type RunnerInstallation,
   type RunView, type Session, type SessionDeps, type SettingsService,
@@ -186,7 +186,7 @@ function fakeResolver(modelsByRunner: Partial<Record<string, DiscoveredModel[]>>
 function fakeRunnerInstallation(installed: string[]) {
   return {
     filterInstalled: vi.fn(async (runners: string[]) => runners.filter((r) => installed.includes(r))),
-    plannerUsability: vi.fn(async (): Promise<PlannerUsability> => ({ usable: true, reason: undefined })),
+    plannerUsability: vi.fn(async (_runner?: string): Promise<PlannerUsability> => ({ usable: true, reason: undefined })),
   };
 }
 
@@ -473,13 +473,41 @@ describe('the planner with no planner chosen and no API key (ADR-0009)', () => {
       const starting = h.host.start();
 
       h.chat.messages.fire({ type: 'sendMessage', text: 'build a parser', typed: true });
-      await vi.waitFor(() => expect(h.session.spies.startPlanning).toHaveBeenCalledWith('build a parser', ['claude-code']));
+      // No runners yet: which are enabled by default is the probe's answer, so
+      // the session reads them once its gate opens.
+      await vi.waitFor(() => expect(h.session.spies.startPlanning).toHaveBeenCalledWith('build a parser', undefined));
       expect(h.chat.provider.showError.mock.calls).toEqual([]);
 
       answer({ usable: true });
       await vi.waitFor(() => expect(recordedInstalledPlanner()).toBe('claude-code'));
       expect(h.chat.provider.showError.mock.calls).toEqual([]);
       await starting;
+    } finally {
+      fs.rmSync(h.workspace, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the runner header with no saved runner choice', () => {
+  afterEach(() => resetInstalledPlanner());
+
+  it('waits for the activation probe, then shows the installed agent enabled', async () => {
+    let answer!: () => void;
+    const gate = new Promise<void>((resolve) => { answer = resolve; });
+    const installation = fakeRunnerInstallation(['codex']);
+    installation.plannerUsability.mockImplementation(async (runner?: string) => { await gate; return { usable: runner === 'codex' }; });
+    const h = harness({ runnerInstallation: installation });
+    // As VsCodeConfig answers when nothing is saved.
+    Object.defineProperty(h.config.config, 'enabledRunners', { get: () => defaultEnabledRunners() });
+    try {
+      const starting = h.host.start();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(h.chat.provider.setEnabledRunnerIds).not.toHaveBeenCalled();
+
+      answer();
+      await starting;
+      await vi.waitFor(() => expect(h.chat.provider.setEnabledRunnerIds).toHaveBeenCalled());
+      expect(h.chat.provider.setEnabledRunnerIds.mock.calls).toEqual([[['codex']]]);
     } finally {
       fs.rmSync(h.workspace, { recursive: true, force: true });
     }
