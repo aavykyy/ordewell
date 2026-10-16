@@ -472,7 +472,7 @@ describe('the planner gate', () => {
 
     const delivered = runner.enqueue(wakeUp);
     await flushMicrotasks();
-    expect(runner.stopWaiting()).toBe(true);
+    expect(runner.stopQueued()).toBe(true);
     await expect(delivered).rejects.toBeInstanceOf(PlannerTurnStoppedError);
     expect(current.plan!.pendingTurns).toEqual([]);
 
@@ -480,18 +480,57 @@ describe('the planner gate', () => {
     found();
     await flushMicrotasks();
     expect(turns).toHaveLength(0);
-    expect(runner.stopWaiting()).toBe(false);
+    expect(runner.stopQueued()).toBe(false);
   });
 
-  it('a Stop leaves a turn already open to the conversation: nothing waits at the gate', async () => {
-    const { host, turns } = fakeHost();
+  it('a Stop of a live turn cancels the user\'s inputs waiting behind it, and its release opens nothing', async () => {
+    const { host, turns, current } = fakeHost();
     const runner = new PlanTurns(host);
 
-    void runner.enqueue({ source: 'user', text: 'one' });
-    void runner.enqueue({ source: 'user', text: 'two' });
+    const live = runner.enqueue({ source: 'user', text: 'one' });
+    const behind = runner.enqueue({ source: 'user', text: 'two' });
+    expect(turns).toHaveLength(1);
+
+    expect(runner.stopQueued()).toBe(true);
+    await expect(behind).rejects.toBeInstanceOf(PlannerTurnStoppedError);
+    expect(current.plan!.pendingTurns!.map((t) => t.text)).toEqual(['one']);
+    turns[0].fail(new PlannerTurnStoppedError());
+    await expect(live).rejects.toBeInstanceOf(PlannerTurnStoppedError);
+    await flushMicrotasks();
 
     expect(turns).toHaveLength(1);
-    expect(runner.stopWaiting()).toBe(false);
+    expect(current.plan!.pendingTurns).toEqual([]);
+  });
+
+  it('a Stop of a live turn keeps the wake-ups behind it for the next input, not for its release', async () => {
+    const { host, turns, current } = fakeHost();
+    const runner = new PlanTurns(host);
+
+    void runner.enqueue({ source: 'user', text: 'one' }).catch(() => {});
+    const kept = runner.enqueue(wakeUp);
+    expect(runner.stopQueued()).toBe(false);
+    turns[0].fail(new PlannerTurnStoppedError());
+    await flushMicrotasks();
+    expect(turns).toHaveLength(1);
+    expect(current.plan!.pendingTurns!.map((t) => t.text)).toEqual([wakeUp.text]);
+
+    // Nor does a later pump, from a turn of another kind letting the conversation go.
+    runner.pump();
+    expect(turns).toHaveLength(1);
+
+    const next = runner.enqueue({ source: 'user', text: 'go on' });
+    await flushMicrotasks();
+    expect(turns[1].prompt).toMatchObject({ source: 'user', text: 'go on', wakeUps: [wakeUp.text] });
+    turns[1].land();
+    await expect(Promise.all([next, kept])).resolves.toHaveLength(2);
+  });
+
+  it('a Stop with no turn live or waiting leaves a message kept from a reload alone', () => {
+    const { host, current } = fakeHost();
+    current.plan!.pendingTurns = [{ id: 'kept', source: 'user', text: 'Postgres', timestamp: '2026-10-11T00:00:00Z' }];
+    const runner = new PlanTurns(host);
+
+    expect(runner.stopQueued()).toBe(false);
+    expect(current.plan!.pendingTurns.map((t) => t.text)).toEqual(['Postgres']);
   });
 });
-

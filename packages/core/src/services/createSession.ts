@@ -1183,12 +1183,14 @@ export class Session {
   /**
    * Stop the planner turn in flight. It still settles — a backend hands back
    * what it had — and ends as stopped. A turn still waiting at the planner
-   * gate is stopped too, before it opens, with what was sent behind it. False
-   * when there was neither.
+   * gate is stopped too, before it opens, and so is every message sent behind
+   * either: the user stopped the planner, not one turn of it. False when
+   * there was neither.
    */
   abortPlannerTurn(): boolean {
+    // The queue first, while the stopped turn still holds the conversation: its release must find nothing of the user's to open.
+    const queued = this.turns.stopQueued();
     const inFlight = this.conversation.stopTurn();
-    const queued = this.turns.stopWaiting();
     const waiting = this.endWaiting(() => new PlannerTurnStoppedError());
     return inFlight || queued || waiting;
   }
