@@ -3,8 +3,8 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
-  CliAgentAiService, OpenAiService, Session, getProviderMeta, PlannerNotReadyError, PlannerTurnDiscardedError, PROVIDER_DETECT_PRIORITY,
-  createTask, resetInstalledPlanner, saveSession, type ConversationTurn, type IRunner, type LegacyPlanState, type PlannerBackendId,
+  CliAgentAiService, OpenAiService, Session, getProviderMeta, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, PROVIDER_DETECT_PRIORITY,
+  createTask, resetInstalledPlanner, saveSession, type ConversationTurn, type IRunner, type LegacyPlanState,
   type PlannerUsability, type RunnerSpawnOptions,
 } from '@ordewell/core';
 import { FakeRunnerSession } from '@ordewell/core/testing';
@@ -50,26 +50,41 @@ describe('OrchestratorPool default planner', () => {
     };
   }
 
+  const reply: ConversationTurn = { kind: 'message', text: 'Noted.', researchLog: [] };
+
+  /** The detected agent's transport, answering every turn and recording what it was sent. */
+  function agentTransport() {
+    const asked: string[] = [];
+    vi.spyOn(CliAgentAiService.prototype, 'startConversation').mockImplementation(async (req) => {
+      asked.push(req.goal);
+      return { kind: 'message', text: 'Which database?', researchLog: [] };
+    });
+    vi.spyOn(CliAgentAiService.prototype, 'continueConversation').mockImplementation(async (message: string) => {
+      asked.push(message);
+      return { kind: 'message', text: 'Noted.', researchLog: [] };
+    });
+    vi.spyOn(CliAgentAiService.prototype, 'hasActiveConversation').mockReturnValue(true);
+    return asked;
+  }
+
   it('a goal typed before the startup probe answers waits for it, and plans with the agent', async () => {
     const { installation, answer } = gatedInstallation();
     const pool = new OrchestratorPool({ runnerInstallation: installation });
     void pool.detectInstalledPlanner();
 
-    const planners: PlannerBackendId[] = [];
-    const startSpy = vi.spyOn(Session.prototype, 'startPlanning').mockImplementation(async () => {
-      planners.push(pool.getSettings().aiProvider);
-      return {} as LegacyPlanState;
-    });
+    const vendor = vi.spyOn(OpenAiService.prototype, 'startConversation').mockResolvedValue(reply);
+    const asked = agentTransport();
 
     const planning = pool.startPlanning('s1', 'ship it', ['claude-code'], workspace);
     // Registered at once all the same, so a mid-research approval is answerable.
     expect(pool.hasSession('s1')).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(startSpy).not.toHaveBeenCalled();
+    expect(asked).toEqual([]);
 
     answer();
     await planning;
-    expect(planners).toEqual(['claude-code']);
+    expect(asked).toEqual(['ship it']);
+    expect(vendor).not.toHaveBeenCalled();
     pool.destroyAll();
   });
 
@@ -77,14 +92,16 @@ describe('OrchestratorPool default planner', () => {
     const { installation, answer } = gatedInstallation(false);
     const pool = new OrchestratorPool({ runnerInstallation: installation });
     void pool.detectInstalledPlanner();
-    const startSpy = vi.spyOn(Session.prototype, 'startPlanning').mockResolvedValue({} as LegacyPlanState);
+    const vendor = vi.spyOn(OpenAiService.prototype, 'startConversation').mockResolvedValue(reply);
+    const asked = agentTransport();
 
     const planning = pool.startPlanning('s1', 'ship it', ['claude-code'], workspace);
     answer();
 
     await expect(planning).rejects.toBeInstanceOf(PlannerNotReadyError);
     await expect(planning).rejects.toThrow('No planner is ready. Pick one with /planner');
-    expect(startSpy).not.toHaveBeenCalled();
+    expect(asked).toEqual([]);
+    expect(vendor).not.toHaveBeenCalled();
     expect(pool.hasSession('s1')).toBe(false);
   });
 
@@ -92,14 +109,15 @@ describe('OrchestratorPool default planner', () => {
     const { installation, answer } = gatedInstallation();
     const pool = new OrchestratorPool({ runnerInstallation: installation });
     void pool.detectInstalledPlanner();
-    const startSpy = vi.spyOn(Session.prototype, 'startPlanning').mockResolvedValue({} as LegacyPlanState);
+    const asked = agentTransport();
 
     const planning = pool.startPlanning('s1', 'ship it', ['claude-code'], workspace);
     pool.destroy('s1');
     answer();
 
     await expect(planning).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
-    expect(startSpy).not.toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(asked).toEqual([]);
   });
 
   /** A saved session holding a message no planner turn answered before the daemon stopped. */
@@ -120,7 +138,6 @@ describe('OrchestratorPool default planner', () => {
     saveSession(plan, 'ship it', workspace, id);
   }
 
-  const reply: ConversationTurn = { kind: 'message', text: 'Noted.', researchLog: [] };
 
   it('a restored message adopted before the probe answers waits for it, then is answered by the agent', async () => {
     const { installation, answer } = gatedInstallation();
@@ -160,7 +177,7 @@ describe('OrchestratorPool default planner', () => {
     const { installation, answer } = gatedInstallation();
     const pool = new OrchestratorPool({ runnerInstallation: installation });
     void pool.detectInstalledPlanner();
-    const startSpy = vi.spyOn(Session.prototype, 'startPlanning').mockResolvedValue({} as LegacyPlanState);
+    const asked = agentTransport();
 
     const planning = pool.startPlanning('s1', 'ship it', ['claude-code'], workspace);
     const settled = expect(planning).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
@@ -168,7 +185,8 @@ describe('OrchestratorPool default planner', () => {
     answer();
 
     await settled;
-    expect(startSpy).not.toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(asked).toEqual([]);
     // Nothing is left to stop, so a second Stop has nothing to report.
     expect(pool.cancelPlanning('s1')).toBe(false);
     pool.destroyAll();
@@ -178,7 +196,7 @@ describe('OrchestratorPool default planner', () => {
     const { installation, answer } = gatedInstallation();
     const pool = new OrchestratorPool({ runnerInstallation: installation });
     void pool.detectInstalledPlanner();
-    const startSpy = vi.spyOn(Session.prototype, 'startPlanning').mockResolvedValue({} as LegacyPlanState);
+    const asked = agentTransport();
 
     const first = pool.startPlanning('s1', 'ship it', ['claude-code'], workspace);
     const firstSettled = expect(first).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
@@ -188,8 +206,7 @@ describe('OrchestratorPool default planner', () => {
 
     await firstSettled;
     await second;
-    expect(startSpy).toHaveBeenCalledTimes(1);
-    expect(startSpy).toHaveBeenCalledWith('ship it differently', ['claude-code']);
+    expect(asked).toEqual(['ship it differently']);
     pool.destroyAll();
   });
 
@@ -212,6 +229,48 @@ describe('OrchestratorPool default planner', () => {
     expect(agent).not.toHaveBeenCalled();
     expect(runner.spawn).not.toHaveBeenCalled();
     expect(pool.cancelPlanning('stopped')).toBe(false);
+    pool.destroyAll();
+  });
+
+  it('a reply sent during the first turn\'s wait for the probe is answered after the goal, which it does not replace', async () => {
+    const { installation, answer } = gatedInstallation();
+    const pool = new OrchestratorPool({ runnerInstallation: installation });
+    void pool.detectInstalledPlanner();
+    const asked = agentTransport();
+
+    const planning = pool.startPlanning('s1', 'Build an inventory service', ['claude-code'], workspace);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const reply = pool.continuePlanning('s1', 'Use Postgres');
+    answer();
+    await planning;
+    const plan = await reply;
+
+    expect(asked[0]).toBe('Build an inventory service');
+    expect(asked).toHaveLength(2);
+    expect(asked[1]).toContain('Use Postgres');
+    expect((plan.conversationHistory ?? []).filter((m) => m.role === 'user').map((m) => m.content)).toEqual(['Build an inventory service', 'Use Postgres']);
+    expect(pool.session('s1').currentGoal).toBe('Build an inventory service');
+    pool.destroyAll();
+  });
+
+  it('Stop during the first turn\'s wait cancels the goal and the reply sent behind it', async () => {
+    const { installation, answer } = gatedInstallation();
+    const pool = new OrchestratorPool({ runnerInstallation: installation });
+    void pool.detectInstalledPlanner();
+    const asked = agentTransport();
+
+    const planning = pool.startPlanning('s1', 'Build an inventory service', ['claude-code'], workspace);
+    const planningSettled = expect(planning).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const reply = pool.continuePlanning('s1', 'Use Postgres');
+    const replySettled = expect(reply).rejects.toBeInstanceOf(PlannerTurnStoppedError);
+    expect(pool.cancelPlanning('s1')).toBe(true);
+    await planningSettled;
+    await replySettled;
+    answer();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(asked).toEqual([]);
     pool.destroyAll();
   });
 

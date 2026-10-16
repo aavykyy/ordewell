@@ -2,23 +2,31 @@ import { describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { PlannerTurnDiscardedError, Session, type LegacyPlanState } from '@ordewell/core';
+import { OpenAiService, PlannerTurnDiscardedError, Session, type ConversationTurn, type LegacyPlanState } from '@ordewell/core';
 import { OrchestratorPool } from '../orchestratorPool';
 import { withReadyPlanner } from '../../__tests__/readyPlanner';
 
 withReadyPlanner();
 
+/** A planner whose first turn never answers, so it is still in flight when the session goes. */
+function hangingPlanner() {
+  return vi.spyOn(OpenAiService.prototype, 'startConversation').mockReturnValue(new Promise<ConversationTurn>(() => {}));
+}
+
 describe('closing a session', () => {
   it('closes the session it is still planning in, which abandons its planner turn', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'ordewell-destroy-'));
     mkdirSync(join(workspace, '.git'));
+    // The session's runners are the user's settings: not the developer's own.
+    vi.stubEnv('ORDEWELL_SETTINGS_PATH', join(workspace, 'settings.json'));
     const pool = new OrchestratorPool();
-    const startSpy = vi.spyOn(Session.prototype, 'startPlanning').mockReturnValue(new Promise<LegacyPlanState>(() => {}));
+    const planner = hangingPlanner();
     const destroySpy = vi.spyOn(Session.prototype, 'destroy');
 
     try {
       const turn = pool.startPlanning('s1', 'ship it', ['claude-code'], workspace);
       const session = pool.session('s1');
+      expect(session.isPlannerBusy).toBe(true);
 
       pool.destroy('s1');
 
@@ -27,7 +35,7 @@ describe('closing a session', () => {
       expect(pool.cancelPlanning('s1')).toBe(false);
       await expect(turn).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
     } finally {
-      startSpy.mockRestore();
+      planner.mockRestore();
       destroySpy.mockRestore();
       pool.destroyAll();
       rmSync(workspace, { recursive: true, force: true });
@@ -39,9 +47,11 @@ describe('re-planning under a live session id', () => {
   it('destroys the previous session rather than orphaning its turn', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'ordewell-replan-'));
     mkdirSync(join(workspace, '.git'));
+    // The session's runners are the user's settings: not the developer's own.
+    vi.stubEnv('ORDEWELL_SETTINGS_PATH', join(workspace, 'settings.json'));
     const pool = new OrchestratorPool();
     const destroySpy = vi.spyOn(Session.prototype, 'destroy');
-    const spy = vi.spyOn(Session.prototype, 'startPlanning').mockReturnValue(new Promise<LegacyPlanState>(() => {}));
+    const planner = hangingPlanner();
 
     try {
       const firstTurn = pool.startPlanning('s1', 'first', ['claude-code'], workspace);
@@ -51,13 +61,12 @@ describe('re-planning under a live session id', () => {
 
       expect(destroySpy.mock.contexts).toContain(first);
       expect(pool.session('s1')).not.toBe(first);
-      // Replaced before its turn began (it waits on the installed-planner
-      // probe), so the first session's turn never starts at all.
+      // The first session's turn is abandoned with it, not left running unheard.
       await expect(firstTurn).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
-      expect(spy).toHaveBeenCalledTimes(1);
-      expect(spy.mock.contexts).toEqual([pool.session('s1')]);
+      expect(first.isPlannerBusy).toBe(false);
+      expect(pool.session('s1').isPlannerBusy).toBe(true);
     } finally {
-      spy.mockRestore();
+      planner.mockRestore();
       destroySpy.mockRestore();
       pool.destroyAll();
       rmSync(workspace, { recursive: true, force: true });

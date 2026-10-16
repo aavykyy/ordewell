@@ -6,7 +6,6 @@ import {
   DEFAULT_RUNNERS, ModelResolver, RunnerRegistry, saveState, clearState,
   listSessions, loadSession,
   SettingsService,
-  installedPlannerDetected,
   type AiProvider,
   type ExecutionCommand,
 } from '@ordewell/core';
@@ -16,7 +15,7 @@ import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import { SecretStore, type ApiProvider } from '../adapters/SecretStore';
 import { configureModelAllowlist } from './configureModelAllowlist';
-import { confirmPastGate, executeUserCommand, handleNewSession, plannerPreflightError } from '../plan/PlanManager';
+import { confirmPastGate, executeUserCommand, handleNewSession } from '../plan/PlanManager';
 
 export interface CommandDeps {
   session: Session;
@@ -416,12 +415,8 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         vscode.window.showInformationMessage('No goal to regenerate from. Describe a goal first.');
         return;
       }
-      await installedPlannerDetected();
-      const notReady = plannerPreflightError(deps.config);
-      if (notReady) {
-        deps.chatProvider.showError(notReady);
-        return;
-      }
+      // The session's planner gate waits for the probe and refuses an
+      // unready planner in the chat's own words; a wait here read as idle.
       await deps.handleStartPlanning(goal);
     }),
   );
