@@ -416,8 +416,9 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
 
     h.chat.messages.fire({ type: 'sendSystemCommand', command: 'executePlan' });
     await vi.waitFor(() => expect(h.session.spies.execute).toHaveBeenCalledWith({ command: 'run_plan' }, { kind: 'user' }));
+    // The plan's own status is not the host's to set: the run_plan above is the approval, and the Session keeps it.
     expect(h.session.spies.loadPlan).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'approved' }),
+      expect.objectContaining({ tasks: [expect.objectContaining({ id: 't1', status: 'approved' })] }),
       'build a parser',
       h.services.fsAdapter.getWorkspaceRoot(),
     );

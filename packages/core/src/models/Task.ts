@@ -506,6 +506,13 @@ export interface LegacyPlanState {
    * after the approval waits for the user's.
    */
   approvedTasks?: string[];
+  /**
+   * The user approved the plan to run: Execute plan, signing off a review, or
+   * autorun's start (ADR-0029, ADR-0030). Kept apart from {@link status},
+   * which surfaces rewrite for display; a user's start of one task approves
+   * that task, not the plan.
+   */
+  approved?: boolean;
 }
 
 export interface Message {
