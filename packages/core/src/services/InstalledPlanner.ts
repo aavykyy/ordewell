@@ -15,6 +15,12 @@ import type { RunnerInstallation } from './RunnerInstallation';
 let recorded: PlannerBackendId | null = null;
 let pending: Promise<unknown> = Promise.resolve();
 let answered = true;
+/**
+ * Which probe may still write the state above. A reset or a newer probe moves
+ * it on, so an older probe finishing late — leftover work of a disposed host or
+ * test — answers its own caller but cannot refill or overwrite the global.
+ */
+let generation = 0;
 
 /**
  * The first harness planner, in the order every planner picker lists them,
@@ -25,7 +31,14 @@ let answered = true;
 export async function findInstalledPlanner(installation: Pick<RunnerInstallation, 'plannerUsability'>): Promise<PlannerBackendId | null> {
   const usable = await Promise.all(CLI_PROVIDERS.map(async (id) => {
     const runner = runnerForProvider(id);
-    return runner !== null && (await installation.plannerUsability(runner)).usable;
+    if (runner === null) return false;
+    // One agent's failing check is that agent not usable, not the end of the
+    // search: another may be installed and must still be found.
+    try {
+      return (await installation.plannerUsability(runner)).usable;
+    } catch {
+      return false;
+    }
   }));
   return CLI_PROVIDERS[usable.indexOf(true)] ?? null;
 }
@@ -38,10 +51,13 @@ export async function findInstalledPlanner(installation: Pick<RunnerInstallation
 export function detectInstalledPlanner(installation: Pick<RunnerInstallation, 'plannerUsability'>): Promise<PlannerBackendId | null> {
   // A probe that throws is no agent found: the turn waiting on it must still
   // start, and say what the openrouter fallback is missing.
+  const mine = ++generation;
   const probe: Promise<PlannerBackendId | null> = findInstalledPlanner(installation).catch(() => null).then((id) => {
-    recordInstalledPlanner(id);
     // Only the latest probe speaks for the recorded answer.
-    if (pending === probe) answered = true;
+    if (mine === generation) {
+      recordInstalledPlanner(id);
+      answered = true;
+    }
     return id;
   });
   pending = probe;
@@ -51,7 +67,9 @@ export function detectInstalledPlanner(installation: Pick<RunnerInstallation, 'p
 
 /** Settles once the latest probe has recorded its answer; at once when none was started. */
 export async function installedPlannerDetected(): Promise<void> {
-  await pending;
+  // A newer probe may start while this waits on an older one, whose finish
+  // is then not the answer: follow the latest until one has answered.
+  while (!answered) await pending;
 }
 
 /**
@@ -73,6 +91,7 @@ export function recordedInstalledPlanner(): PlannerBackendId | null {
 
 /** For tests: the recorded default is process-wide, so one case's must not decide the next's. */
 export function resetInstalledPlanner(): void {
+  generation++;
   recorded = null;
   pending = Promise.resolve();
   answered = true;

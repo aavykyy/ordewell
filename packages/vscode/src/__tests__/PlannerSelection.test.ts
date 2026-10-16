@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { PlannerModelMemory, type PlannerModelStore } from '@ordewell/core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PlannerModelMemory, recordInstalledPlanner, resetInstalledPlanner, type PlannerModelStore } from '@ordewell/core';
 import { __resetConfig, __setConfig, configUpdates } from '../test/vscode.mock';
 import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { PlannerSelection } from '../PlannerSelection';
@@ -95,5 +95,53 @@ describe('PlannerSelection.apply', () => {
     await selection.apply('claude-code');
 
     expect(configUpdates).toEqual([]);
+  });
+});
+
+describe('PlannerSelection with a detected default planner', () => {
+  beforeEach(() => {
+    __resetConfig();
+    // Nothing chosen: Codex is the effective planner only because it is the one installed agent.
+    __setConfig({ aiProvider: '', orchestratorModel: '', plannerThinkingEffort: '' });
+    recordInstalledPlanner('codex');
+  });
+  afterEach(() => resetInstalledPlanner());
+
+  it('saves the provider when the user explicitly picks the detected agent', async () => {
+    const { selection } = setup({ codex: [{ modelId: 'gpt-5-codex', variants: [] }] });
+
+    await selection.applyChoice('codex', 'gpt-5-codex', '');
+
+    expect(configUpdates).toContainEqual({ key: 'aiProvider', value: 'codex' });
+  });
+
+  it('keeps the explicit pick when a later activation detects another agent', async () => {
+    const { selection } = setup({ codex: [{ modelId: 'gpt-5-codex', variants: [] }] });
+    await selection.applyChoice('codex', 'gpt-5-codex', '');
+
+    // Claude Code is installed afterwards, so the next activation detects it.
+    resetInstalledPlanner();
+    recordInstalledPlanner('claude-code');
+
+    const next = new VsCodeConfig();
+    expect(next.aiProvider).toBe('codex');
+    expect(next.orchestratorModel).toBe('gpt-5-codex');
+  });
+
+  it('saves the provider for a bare pick of the detected agent', async () => {
+    const { selection, memory } = setup({ codex: [{ modelId: 'gpt-5-codex', variants: [] }] });
+    memory.remember('codex', 'gpt-5-codex');
+
+    await selection.apply('codex');
+
+    expect(configUpdates).toContainEqual({ key: 'aiProvider', value: 'codex' });
+  });
+
+  it('leaves the provider unsaved when only the model changes', async () => {
+    const { selection } = setup();
+
+    await selection.setModel('gpt-5-codex');
+
+    expect(configUpdates.map((u) => u.key)).not.toContain('aiProvider');
   });
 });
