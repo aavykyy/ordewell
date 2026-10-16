@@ -2,7 +2,7 @@ import type { IConfig, AiProvider, PlannerBackendId } from './IConfig';
 import { parseApprovalModeSetting, type ApprovalModeSetting } from '../services/ApprovalPolicy';
 import { DEFAULT_WEB_READ_BUDGET } from '../services/webReadPolicy';
 import { resolveProvider, type ProviderModelLists } from '../services/ProviderRouting';
-import { configuredProviders, getProviderMeta, isPlannerBackend, PROVIDER_DETECT_PRIORITY } from '../services/ProviderRegistry';
+import { configuredProviders, getProviderMeta, isApiProvider, isPlannerBackend, PROVIDER_DETECT_PRIORITY } from '../services/ProviderRegistry';
 import { DEFAULT_MAX_PARALLEL, parseMaxParallel } from '../utils/maxParallel';
 import { SettingsService } from '../services/SettingsService';
 import { recordedInstalledPlanner } from '../services/InstalledPlanner';
@@ -23,6 +23,12 @@ function envDetectedProvider(): AiProvider | null {
     if (meta.baseUrlEnvVar && process.env[meta.baseUrlEnvVar]) return provider;
   }
   return null;
+}
+
+/** Who plans, and the model it is spawned with; a blank model is the planner's own default. */
+export interface ResolvedPlanner {
+  provider: PlannerBackendId;
+  model: string;
 }
 
 function nonNegativeInt(raw: string | undefined, fallback: number): number {
@@ -218,5 +224,36 @@ export abstract class BaseConfig implements IConfig {
     const provider = this.providerForModel(model, lists);
     this._routed = { basis, lists, provider };
     return provider;
+  }
+
+  /**
+   * Who plans and with which model, from the model a host has configured and
+   * the planner its own setting names (VS Code's `aiProvider`); the one rule
+   * every host's provider and model getters read, so the model a settings
+   * response shows is the one spawned. A planner the user named and a vendor
+   * keep the model as configured. An agent that plans only because detection
+   * found it (ADR-0009) never chose that model: the TUI and `ordewell planner`
+   * persist ORCHESTRATOR_MODEL, so a slug left from an old OpenRouter setup
+   * would otherwise reach `--model` and fail the turn. The only evidence a
+   * model is that agent's, without spawning it for a catalog, is its own
+   * remembered pick — every pick is remembered (PlannerModelMemory) — so it
+   * gets that, or nothing and its own default. Resolved on each read and
+   * never saved: a key or a `/planner` pick added later must find the
+   * configured model as it was.
+   */
+  protected resolvePlanner(model: string, lists: ProviderModelLists | null | undefined, setting = ''): ResolvedPlanner {
+    const provider = isPlannerBackend(setting) ? setting : this.routedProvider(model, lists);
+    return { provider, model: this.plannerModelFor(provider, model, setting) };
+  }
+
+  /**
+   * `resolvePlanner`'s model half, for a getter that reads its model from
+   * other settings than the one `provider` was routed on (`planningModel`):
+   * judged against the planner in effect rather than routed again.
+   */
+  protected plannerModelFor(provider: PlannerBackendId, model: string, setting = ''): string {
+    const named = isPlannerBackend(setting) || isPlannerBackend(process.env.AI_PROVIDER ?? '');
+    if (!model || named || isApiProvider(provider)) return model;
+    return new SettingsService().getPlannerModel(provider)?.model ?? '';
   }
 }

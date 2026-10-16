@@ -1,5 +1,5 @@
 import { type PlannerBackendId, BaseConfig, DEFAULT_RUNNERS, isApiProvider, normalizeGeminiModel } from '@ordewell/core';
-import type { ProviderModelLists } from '@ordewell/core';
+import type { ProviderModelLists, ResolvedPlanner } from '@ordewell/core';
 
 interface WebConfigOpts {
   enabledRunners?: string[];
@@ -29,15 +29,21 @@ export class WebConfig extends BaseConfig {
     this._providerModelLists = () => lists;
   }
 
+  /**
+   * Read live, not fixed at construction: a session's WebConfig lives for the
+   * whole session while /model, /planner and /key mutate process.env under
+   * it. `routedProvider` keeps that cheap.
+   */
+  private get planner(): ResolvedPlanner {
+    return this.resolvePlanner(this._modelOverride || process.env.ORCHESTRATOR_MODEL || '', this._providerModelLists());
+  }
+
   get orchestratorModel(): string {
-    return this._modelOverride || process.env.ORCHESTRATOR_MODEL || '';
+    return this.planner.model;
   }
 
   get aiProvider(): PlannerBackendId {
-    // Read live, not fixed at construction: a session's WebConfig lives for the
-    // whole session while /model, /planner and /key mutate process.env under
-    // it (mirrors `orchestratorModel` above). `routedProvider` keeps that cheap.
-    return this.routedProvider(this._modelOverride || process.env.ORCHESTRATOR_MODEL, this._providerModelLists());
+    return this.planner.provider;
   }
 
   get apiKey(): string {
@@ -48,7 +54,7 @@ export class WebConfig extends BaseConfig {
   get planningModel(): string {
     if (this.aiProvider === 'google')
       return normalizeGeminiModel(process.env.GEMINI_MODEL || process.env.ORCHESTRATOR_MODEL || super.geminiModel);
-    return process.env.ORCHESTRATOR_MODEL || '';
+    return this.plannerModelFor(this.aiProvider, process.env.ORCHESTRATOR_MODEL || '');
   }
 
   get enabledRunners(): string[] {
