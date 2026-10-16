@@ -1,17 +1,11 @@
 import * as vscode from 'vscode';
-import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, parseMaxParallel, normalizeGeminiModel, isApiProvider, isPlannerBackend, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET, recordedInstalledPlanner } from '@ordewell/core';
+import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, parseMaxParallel, normalizeGeminiModel, isApiProvider, isPlannerBackend, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET } from '@ordewell/core';
 import type { ProviderModelLists, SettingsService } from '@ordewell/core';
 import { SecretStore, type ApiProvider, type SecretKey } from './SecretStore';
 
 export class VsCodeConfig extends BaseConfig {
   private get config() { return vscode.workspace.getConfiguration('ordewell'); }
 
-  private _provider: PlannerBackendId | null = null;
-  // The installed agent and keyed vendors `_provider` was resolved against:
-  // the activation probe can answer after a read has already settled on the
-  // openrouter fallback, and a model's vendor only beats the agent once it
-  // holds a key.
-  private _providerBasis = '';
   private _providerModelLists: ProviderModelLists | null = null;
 
   constructor(private readonly secretStore?: SecretStore) {
@@ -146,29 +140,25 @@ export class VsCodeConfig extends BaseConfig {
 
   setProviderModelLists(lists: ProviderModelLists): void {
     this._providerModelLists = lists;
-    this._provider = null;
   }
 
   /** The setting as written, valid or not; `aiProvider` is what the extension acts on. */
   get rawAiProvider(): string { return this.config.get<string>('aiProvider', '') || ''; }
 
   get aiProvider(): PlannerBackendId {
-    const basis = `${recordedInstalledPlanner() ?? ''}|${configuredProviders(this).join(',')}`;
-    if (this._provider && this._providerBasis === basis) return this._provider;
-    this._providerBasis = basis;
-    const env = this.rawAiProvider;
-    if (env && isPlannerBackend(env)) {
-      this._provider = env;
-      return this._provider;
-    }
+    const setting = this.rawAiProvider;
+    if (setting && isPlannerBackend(setting)) return setting;
     const model = this.config.get<string>('orchestratorModel', '') || process.env.ORCHESTRATOR_MODEL;
-    this._provider = this.providerForModel(model, this._providerModelLists);
-    return this._provider;
+    return this.routedProvider(model, this._providerModelLists);
   }
 
   get apiKey() {
     const provider = this.aiProvider;
-    return (isApiProvider(provider) ? this.getProviderApiKey(provider) : '') || this.openrouterKey || this.geminiKey || '';
+    // A vendor planner gets its own key or none: the Gemini transport reads
+    // this, and an OpenRouter key handed to Google fails as a bad credential
+    // rather than as the missing key the preflight would have named.
+    if (isApiProvider(provider)) return this.getProviderApiKey(provider);
+    return this.openrouterKey || this.geminiKey || '';
   }
 
   private resolveConfigModel(...keys: string[]): string {
@@ -268,11 +258,6 @@ export class VsCodeConfig extends BaseConfig {
 
   async update(key: string, value: unknown): Promise<void> {
     await this.config.update(key, value, true);
-    // `aiProvider` is memoized, and `orchestratorModel` is what resolves it
-    // when no provider is set explicitly. Writing either without dropping the
-    // memo leaves every later read on the pre-change answer until reload —
-    // which is how a switched planner keeps planning on the old backend.
-    if (key === 'aiProvider' || key === 'orchestratorModel') this._provider = null;
   }
 
   onDidChange(listener: () => void): vscode.Disposable {

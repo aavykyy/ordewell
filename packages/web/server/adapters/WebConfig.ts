@@ -1,30 +1,32 @@
-import { type PlannerBackendId, BaseConfig, configuredProviders, DEFAULT_RUNNERS, isApiProvider, isCliProvider, normalizeGeminiModel, recordedInstalledPlanner } from '@ordewell/core';
+import { type PlannerBackendId, BaseConfig, DEFAULT_RUNNERS, isApiProvider, normalizeGeminiModel } from '@ordewell/core';
 import type { ProviderModelLists } from '@ordewell/core';
 
 interface WebConfigOpts {
   enabledRunners?: string[];
-  providerModelLists?: ProviderModelLists;
+  /**
+   * The lists that route a model id to its vendor. A function is read on every
+   * resolution, so a long-lived config (a session's) never routes on lists its
+   * owner has since dropped for a removed key.
+   */
+  providerModelLists?: ProviderModelLists | (() => ProviderModelLists | undefined);
   modelOverride?: string;
 }
 
 export class WebConfig extends BaseConfig {
-  private _provider: PlannerBackendId | null = null;
-  private _providerCacheKey: string | null = null;
-  private _providerCacheLists: ProviderModelLists | undefined = undefined;
   private _enabledRunnersOverride: string[] | undefined;
-  private _providerModelLists: ProviderModelLists | undefined;
+  private _providerModelLists: () => ProviderModelLists | undefined;
   private _modelOverride: string | undefined;
 
   constructor(opts?: WebConfigOpts) {
     super();
     this._enabledRunnersOverride = opts?.enabledRunners;
-    this._providerModelLists = opts?.providerModelLists;
+    const lists = opts?.providerModelLists;
+    this._providerModelLists = typeof lists === 'function' ? lists : () => lists;
     this._modelOverride = opts?.modelOverride;
   }
 
   setProviderModelLists(lists: ProviderModelLists): void {
-    this._providerModelLists = lists;
-    this._provider = null;
+    this._providerModelLists = () => lists;
   }
 
   get orchestratorModel(): string {
@@ -32,40 +34,10 @@ export class WebConfig extends BaseConfig {
   }
 
   get aiProvider(): PlannerBackendId {
-    // Memoized by cache key rather than forever: a session's WebConfig lives
-    // for the whole session, but /model and /planner switches mutate process.env
-    // mid-session, so a permanent cache would strand the transport on the old
-    // provider (mirrors the live-read behavior of `orchestratorModel` above).
-    // The installed agent is in the key too: the daemon's startup probe can
-    // answer after a config has already settled on the openrouter fallback.
-    // So are the configured vendors, since whether a model's vendor has a key
-    // decides between it and the agent, and a key can arrive mid-session.
-    const explicitEnv = process.env.AI_PROVIDER;
-    const model = this._modelOverride || process.env.ORCHESTRATOR_MODEL;
-    const cacheKey = `${explicitEnv ?? ''}|${model ?? ''}|${recordedInstalledPlanner() ?? ''}|${configuredProviders(this).join(',')}`;
-    if (
-      this._provider &&
-      this._providerCacheKey === cacheKey &&
-      this._providerCacheLists === this._providerModelLists
-    ) {
-      return this._provider;
-    }
-
-    // An explicitly chosen harness planner (ADR-0009) wins over model-based
-    // resolution: its model ids are the agent's own (`sonnet`, `gpt-5.6-sol`)
-    // and can collide with a vendor catalog, which would silently route the
-    // planner back to an API the user may not even have a key for.
-    if (explicitEnv && isCliProvider(explicitEnv)) {
-      this._provider = explicitEnv;
-      this._providerCacheKey = cacheKey;
-      this._providerCacheLists = this._providerModelLists;
-      return this._provider;
-    }
-
-    this._provider = this.providerForModel(model, this._providerModelLists);
-    this._providerCacheKey = cacheKey;
-    this._providerCacheLists = this._providerModelLists;
-    return this._provider;
+    // Read live, not fixed at construction: a session's WebConfig lives for the
+    // whole session while /model, /planner and /key mutate process.env under
+    // it (mirrors `orchestratorModel` above). `routedProvider` keeps that cheap.
+    return this.routedProvider(this._modelOverride || process.env.ORCHESTRATOR_MODEL, this._providerModelLists());
   }
 
   get apiKey(): string {
