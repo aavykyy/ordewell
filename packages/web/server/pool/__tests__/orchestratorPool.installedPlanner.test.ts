@@ -81,6 +81,7 @@ describe('OrchestratorPool default planner', () => {
     answer();
 
     await expect(planning).rejects.toBeInstanceOf(PlannerNotReadyError);
+    await expect(planning).rejects.toThrow('No planner is ready. Pick one with /planner');
     expect(startSpy).not.toHaveBeenCalled();
     expect(pool.hasSession('s1')).toBe(false);
   });
@@ -111,6 +112,25 @@ describe('OrchestratorPool default planner', () => {
     // Derived on each start, so a key installed later still wins.
     const settingsFile = join(dir, 'settings.json');
     expect(existsSync(settingsFile) ? readFileSync(settingsFile, 'utf8') : '').not.toContain('claude-code');
+  });
+
+  it('probes once at startup, not once for each planning turn', async () => {
+    const installation = {
+      plannerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({ usable: runner === 'codex' })),
+      filterInstalled: vi.fn(async () => []),
+    };
+    const pool = new OrchestratorPool({ runnerInstallation: installation });
+    await pool.detectInstalledPlanner();
+    expect(pool.getSettings().aiProvider).toBe('codex');
+    const callsAfterProbe = installation.plannerUsability.mock.calls.length;
+    const startSpy = vi.spyOn(Session.prototype, 'startPlanning').mockResolvedValue({} as LegacyPlanState);
+
+    await pool.startPlanning('s1', 'first', ['codex'], workspace);
+    await pool.startPlanning('s2', 'second', ['codex'], workspace);
+
+    expect(startSpy).toHaveBeenCalledTimes(2);
+    expect(installation.plannerUsability).toHaveBeenCalledTimes(callsAfterProbe);
+    pool.destroyAll();
   });
 
   it('a /planner pick wins over the detected agent', async () => {

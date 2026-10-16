@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import type { Key } from '../keys';
 
 const daemon = vi.hoisted(() => ({
@@ -169,6 +172,42 @@ describe('handleTui', () => {
     expect(frame.replace(/\x1b\[[0-9;]*m/g, '')).toMatch(/Autonomy\s+Guarded/);
     expect(frame).not.toContain('Full');
     vi.unstubAllEnvs();
+  });
+
+  describe('plan approval line on the first frame', () => {
+    let home: string;
+    beforeEach(() => {
+      home = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-tui-home-'));
+      fs.mkdirSync(path.join(home, '.ordewell'), { recursive: true });
+      vi.stubEnv('HOME', home);
+      vi.stubEnv('USERPROFILE', home);
+      vi.stubEnv('NO_COLOR', '1');
+    });
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      fs.rmSync(home, { recursive: true, force: true });
+    });
+
+    const firstFrame = (): string =>
+      // eslint-disable-next-line no-control-regex
+      (fakeTerminal.draw.mock.calls[0][0] as string[]).join('\n').replace(/\x1b\[[0-9;]*m/g, '');
+
+    it('warns, and does not promise approval, when the saved settings have autorun on', async () => {
+      fs.writeFileSync(path.join(home, '.ordewell', 'settings.json'), JSON.stringify({ autorun: true }));
+      void handleTui([]);
+
+      await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
+      expect(firstFrame()).toContain('Autorun is on');
+      expect(firstFrame()).not.toContain('Nothing runs until');
+    });
+
+    it('promises approval when the saved settings have autorun off', async () => {
+      fs.writeFileSync(path.join(home, '.ordewell', 'settings.json'), JSON.stringify({ autorun: false }));
+      void handleTui([]);
+
+      await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
+      expect(firstFrame()).toContain('Nothing runs until you approve the plan.');
+    });
   });
 
   it('captures the mouse by default, so the wheel works without anyone opting in', async () => {

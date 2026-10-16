@@ -1,7 +1,7 @@
 import type { IConfig, AiProvider, PlannerBackendId } from './IConfig';
 import { parseApprovalModeSetting, type ApprovalModeSetting } from '../services/ApprovalPolicy';
 import { DEFAULT_WEB_READ_BUDGET } from '../services/webReadPolicy';
-import type { ProviderModelLists } from '../services/ProviderRouting';
+import { resolveProvider, type ProviderModelLists } from '../services/ProviderRouting';
 import { configuredProviders, getProviderMeta, isPlannerBackend, PROVIDER_DETECT_PRIORITY } from '../services/ProviderRegistry';
 import { DEFAULT_MAX_PARALLEL, parseMaxParallel } from '../utils/maxParallel';
 import { SettingsService } from '../services/SettingsService';
@@ -166,5 +166,19 @@ export abstract class BaseConfig implements IConfig {
     // installed agent could, and still does.
     if (configuredProviders(this).length > 0) return 'openrouter';
     return recordedInstalledPlanner() ?? 'openrouter';
+  }
+
+  /**
+   * Who plans when the only hint is a model id: the vendor whose catalog lists
+   * it, else `detectProvider`. A vendor without a credential yields to an
+   * installed coding agent, because the TUI and `ordewell planner` persist
+   * ORCHESTRATOR_MODEL, and a model left over from a removed key would
+   * otherwise route a keyless first run to a planner that cannot plan.
+   * Without an agent the vendor still answers, so the preflight names it.
+   */
+  protected providerForModel(model: string | undefined, lists: ProviderModelLists | null | undefined): PlannerBackendId {
+    const inferred = model && lists ? resolveProvider(model, lists) : null;
+    if (inferred && (configuredProviders(this).includes(inferred) || !recordedInstalledPlanner())) return inferred;
+    return this.detectProvider();
   }
 }

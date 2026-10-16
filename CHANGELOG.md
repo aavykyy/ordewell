@@ -22,7 +22,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   key. A key in the environment or kept by the host still wins, and so does a
   planner you pick with `/planner`. The choice is detected on each start and
   never written to your settings. A goal typed while the daemon is still
-  looking waits for the answer.
+  looking waits for the answer. A vendor model left over from an earlier
+  setup no longer overrides the agent unless that vendor's key is set.
 - **A planner that cannot plan points to `/planner`, not to an OpenRouter
   key.** The refusal comes before the planner turn starts, in the terminal, in
   VS Code and from `ordewell plan` (which names `ordewell planner`), and it

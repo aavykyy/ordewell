@@ -87,7 +87,7 @@ describe('chat pane — no dead notches', () => {
 describe('welcome — plan approval', () => {
   const welcome = (autorun: boolean, over: Partial<TuiState> = {}): TuiState => {
     const base = chatState(0, { rows: 40, cols: 100, ...over });
-    return { ...base, runSettings: { ...base.runSettings, autorun } };
+    return { ...base, runSettingsKnown: true, runSettings: { ...base.runSettings, autorun } };
   };
 
   it('says nothing runs until the plan is approved while autorun is off', () => {
@@ -102,9 +102,21 @@ describe('welcome — plan approval', () => {
     expect(text).not.toContain('Nothing runs until');
   });
 
+  it('says neither before the run settings are known, since autorun may be on', () => {
+    const text = plain(chatState(0, { rows: 40, cols: 100 }));
+    expect(text).not.toContain('Nothing runs until');
+    expect(text).not.toContain('Autorun is on');
+  });
+
   it('wraps in a narrow pane without losing the words', () => {
     const text = plain(welcome(true, { cols: 40, rows: 40 })).replace(/\s+/g, ' ');
     expect(text).toContain('a plan starts as soon as the planner submits it');
+  });
+
+  it.each([false, true])('keeps a short, narrow welcome inside the terminal with autorun %s', (autorun) => {
+    const lines = render(welcome(autorun, { rows: 8, cols: 32 }));
+    expect(lines).toHaveLength(8);
+    expect(lines.every((line) => stripAnsi(line).length <= 32)).toBe(true);
   });
 });
 

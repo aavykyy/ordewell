@@ -459,6 +459,13 @@ export interface TuiState {
   autonomous: boolean;
   /** The user's run settings (ADR-0030), as the daemon last answered them. */
   runSettings: GlobalRunSettings;
+  /**
+   * Whether `runSettings` came from the user's saved settings rather than the
+   * defaults it starts with. The welcome only makes a claim about autorun once
+   * this is true: a saved `autorun: true` would otherwise be contradicted by a
+   * first frame painted before the daemon answers.
+   */
+  runSettingsKnown: boolean;
   runAutoMerge: boolean | null;
   /** The current run's own level, and why its supervisor stopped if it did; null before any run. */
   runSupervisor: { level: SupervisorLevel; unsupervised?: string } | null;
@@ -710,6 +717,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     allowlist: {},
     autonomous: true,
     runSettings: { ...RUN_SETTINGS_DEFAULTS },
+    runSettingsKnown: false,
     runAutoMerge: null,
     runSupervisor: null,
     mouseCapture: true,

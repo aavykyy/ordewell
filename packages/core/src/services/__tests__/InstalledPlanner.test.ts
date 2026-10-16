@@ -35,6 +35,17 @@ describe('findInstalledPlanner', () => {
     expect(await findInstalledPlanner(inst)).toBe('opencode');
   });
 
+  it('chooses the second agent when only Codex is installed', async () => {
+    const inst = new RunnerInstallation(registryWith(...ALL), installedOnly('codex'));
+    expect(await findInstalledPlanner(inst)).toBe('codex');
+  });
+
+  it('skips a first agent whose version answers but whose planner is unusable', async () => {
+    const installation = { plannerUsability: vi.fn(async (runner: string) => ({ usable: runner === 'codex' })) };
+    expect(await findInstalledPlanner(installation)).toBe('codex');
+    expect(installation.plannerUsability.mock.calls.map(([runner]) => runner)).toEqual(['claude-code', 'codex', 'opencode']);
+  });
+
   it('skips an agent with no manifest registered', async () => {
     const inst = new RunnerInstallation(registryWith(CODEX_MANIFEST), installedOnly('claude', 'codex'));
     expect(await findInstalledPlanner(inst)).toBe('codex');
@@ -182,6 +193,15 @@ describe('detectInstalledPlanner', () => {
       return { usable: runner === 'opencode' };
     }) };
     await expect(detectInstalledPlanner(flaky)).resolves.toBe('opencode');
+    expect(recordedInstalledPlanner()).toBe('opencode');
+  });
+
+  it('a reset removes the prior process answer before another test probes', async () => {
+    await detectInstalledPlanner({ plannerUsability: async (runner) => ({ usable: runner === 'claude-code' }) });
+    expect(recordedInstalledPlanner()).toBe('claude-code');
+    resetInstalledPlanner();
+    expect(recordedInstalledPlanner()).toBeNull();
+    await detectInstalledPlanner({ plannerUsability: async (runner) => ({ usable: runner === 'opencode' }) });
     expect(recordedInstalledPlanner()).toBe('opencode');
   });
 });

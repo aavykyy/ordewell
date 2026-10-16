@@ -1,4 +1,4 @@
-import { type PlannerBackendId, BaseConfig, DEFAULT_RUNNERS, isApiProvider, isCliProvider, normalizeGeminiModel, recordedInstalledPlanner, resolveProvider } from '@ordewell/core';
+import { type PlannerBackendId, BaseConfig, configuredProviders, DEFAULT_RUNNERS, isApiProvider, isCliProvider, normalizeGeminiModel, recordedInstalledPlanner } from '@ordewell/core';
 import type { ProviderModelLists } from '@ordewell/core';
 
 interface WebConfigOpts {
@@ -38,9 +38,11 @@ export class WebConfig extends BaseConfig {
     // provider (mirrors the live-read behavior of `orchestratorModel` above).
     // The installed agent is in the key too: the daemon's startup probe can
     // answer after a config has already settled on the openrouter fallback.
+    // So are the configured vendors, since whether a model's vendor has a key
+    // decides between it and the agent, and a key can arrive mid-session.
     const explicitEnv = process.env.AI_PROVIDER;
     const model = this._modelOverride || process.env.ORCHESTRATOR_MODEL;
-    const cacheKey = `${explicitEnv ?? ''}|${model ?? ''}|${recordedInstalledPlanner() ?? ''}`;
+    const cacheKey = `${explicitEnv ?? ''}|${model ?? ''}|${recordedInstalledPlanner() ?? ''}|${configuredProviders(this).join(',')}`;
     if (
       this._provider &&
       this._providerCacheKey === cacheKey &&
@@ -60,17 +62,7 @@ export class WebConfig extends BaseConfig {
       return this._provider;
     }
 
-    if (model && this._providerModelLists) {
-      const resolved = resolveProvider(model, this._providerModelLists);
-      if (resolved) {
-        this._provider = resolved;
-        this._providerCacheKey = cacheKey;
-        this._providerCacheLists = this._providerModelLists;
-        return this._provider;
-      }
-    }
-
-    this._provider = this.detectProvider();
+    this._provider = this.providerForModel(model, this._providerModelLists);
     this._providerCacheKey = cacheKey;
     this._providerCacheLists = this._providerModelLists;
     return this._provider;
