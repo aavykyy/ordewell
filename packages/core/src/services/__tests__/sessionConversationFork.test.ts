@@ -219,6 +219,13 @@ describe('Session.forkConversation', () => {
     expect(() => session.forkConversation()).not.toThrow();
   });
 
+  it('carries the approval of the tasks it carries, and of no task it leaves behind', () => {
+    const plan = { ...runningPlan(), approved: true, approvedTasks: ['done', 'later', 'removed-since'] };
+    const fork = forkPlanState(plan, plan.tasks, { conversationHistory: [], researchLog: [] }, '2026-01-02T00:00:00Z');
+    expect(fork.approvedTasks).toEqual(['done', 'later']);
+    expect(fork.approved).toBe(true);
+  });
+
   it('refuses with no conversation to fork', () => {
     expect(() => makeSession().forkConversation()).toThrow(ConversationEditError);
   });
