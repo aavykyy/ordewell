@@ -224,5 +224,26 @@ describe('WebConfig', () => {
       setEnv('OPENROUTER_API_KEY', 'sk-or-test');
       expect(new WebConfig().aiProvider).toBe('openrouter');
     });
+
+    it('keeps an explicit keyless OpenRouter choice instead of replacing it with the agent', () => {
+      recordInstalledPlanner('claude-code');
+      setEnv('AI_PROVIDER', 'openrouter');
+      const config = new WebConfig();
+      expect(config.aiProvider).toBe('openrouter');
+      expect(config.apiKey).toBe('');
+    });
+
+    it('keeps an explicit Codex choice when Claude Code is installed', () => {
+      recordInstalledPlanner('claude-code');
+      setEnv('AI_PROVIDER', 'codex');
+      expect(new WebConfig().aiProvider).toBe('codex');
+    });
+
+    it('updates a memoized fallback when the probe records a later agent', () => {
+      const config = new WebConfig();
+      expect(config.aiProvider).toBe('openrouter');
+      recordInstalledPlanner('opencode');
+      expect(config.aiProvider).toBe('opencode');
+    });
   });
 });

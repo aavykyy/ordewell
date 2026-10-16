@@ -390,4 +390,19 @@ describe('VsCodeConfig.aiProvider with an installed coding agent (ADR-0009)', ()
     __setConfig({ aiProvider: 'codex' });
     expect(new VsCodeConfig(await makeStore({})).aiProvider).toBe('codex');
   });
+
+  it('keeps an explicit OpenRouter choice even without its key', async () => {
+    recordInstalledPlanner('claude-code');
+    __setConfig({ aiProvider: 'openrouter' });
+    const config = new VsCodeConfig(await makeStore({}));
+    expect(config.aiProvider).toBe('openrouter');
+    expect(config.apiKey).toBe('');
+  });
+
+  it('uses a vendor environment key before the detected agent', async () => {
+    recordInstalledPlanner('claude-code');
+    process.env.GEMINI_API_KEY = 'g-test';
+    expect(new VsCodeConfig(await makeStore({})).aiProvider).toBe('google');
+  });
+
 });
