@@ -298,9 +298,10 @@ describe('TaskCard — Stalled state', () => {
 });
 
 describe('TaskCard — origin', () => {
-  it('marks a task the supervisor added, so the user can tell it from their own', () => {
+  it('leaves the supervisor origin in the planner conversation', () => {
     render(<TaskCard task={makeTask({ addedBy: 'supervisor' })} models={emptyModels} isExecuting={false} />);
-    expect(screen.getByText('Added by supervisor').getAttribute('title')).toMatch(/approved to run/);
+    expect(screen.queryByText('Added by supervisor')).toBeNull();
+    expect(screen.getByRole('button', { name: /Test task/ }).getAttribute('aria-expanded')).toBe('false');
   });
 
   it('marks no task the user planned', () => {

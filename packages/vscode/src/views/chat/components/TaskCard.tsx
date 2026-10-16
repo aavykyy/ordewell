@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { taskCommand, useRunnerCommands, useTaskCommands } from './RunnerCommands';
 import SubTaskCard from './SubTaskCard';
+import TaskAssignment from './TaskAssignment';
 import ModelSelector from './ModelSelector';
 import DependencyPicker from './DependencyPicker';
 import SkillChips from './SkillChips';
@@ -82,6 +83,7 @@ interface TaskCardProps {
   onSendMessageNow?: (taskId: string, text: string) => void;
   /** Open (or focus) this task's log tab (ADR-0018, V1). */
   onOpenLog?: (taskId: string) => void;
+  planActions?: React.ReactNode;
   /** Controlled expansion. When both are supplied the parent owns which card is
    *  open (an accordion); omitted, the card keeps its own state. */
   expanded?: boolean;
@@ -284,7 +286,7 @@ export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRu
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, run, models, modes, modelsByRunner, modesByRunner, runners, configuredProviders, modelApiMapping, isExecuting, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
+export default function TaskCard({ task, run, models, modes, modelsByRunner, modesByRunner, runners, configuredProviders, modelApiMapping, isExecuting, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, planActions, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const isControlled = expandedProp !== undefined;
   const expanded = isControlled ? expandedProp : internalExpanded;
@@ -355,21 +357,288 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
     && !!onSendMessage && !!onSendMessageNow;
 
   return (
-    <div className={`task-card task-${task.type} ${expanded ? 'expanded' : ''}`}>
-      <div className="task-card-header" onClick={() => setExpanded(!expanded)}>
-        <TaskCheck row={row} taskId={task.id} onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
-        <span className="task-order">{row.orderLabel}</span>
-        <span className={`task-type-badge ${task.type}`}>
-          {isUserTask ? 'Manual' : 'AI'}
-        </span>
-        {row.kind === 'ops' && (
-          <span className="task-type-badge ops" title="An ops task: it changes no repository files and runs in your checkout, once the work it depends on is merged">Ops</span>
-        )}
-        <span className="task-title-text">{task.title}</span>
-        {task.addedBy === 'supervisor' && (
-          <span className="task-type-badge supervisor" title="The supervisor added this task during the run, at Act: it is approved to run without asking you">Added by supervisor</span>
+    <div className="task-with-controls">
+      <div className={`task-card task-${task.type} ${expanded ? 'expanded' : ''}`}>
+        <div className="task-card-header" onClick={() => setExpanded(!expanded)}>
+          <TaskCheck row={row} taskId={task.id} onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
+          <span className="task-order">{row.orderLabel}</span>
+          <span className={`task-type-badge ${task.type}`}>
+            {isUserTask ? 'Manual' : 'AI'}
+          </span>
+          {row.kind === 'ops' && (
+            <span className="task-type-badge ops" title="An ops task: it changes no repository files and runs in your checkout, once the work it depends on is merged">Ops</span>
+          )}
+          <button type="button" className="task-heading" aria-expanded={expanded}
+            title={expanded ? 'Collapse task details' : 'Expand task details'}
+            onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}>
+            <span className="task-title-text">{task.title}</span>
+            <TaskAssignment task={task} />
+          </button>
+
+          {/* The host confirms removal with a real modal. A `confirm()` here would
+              never fire — VS Code sandboxes the webview without `allow-modals`. */}
+          {!isExecuting && onRemoveTask && (
+            <button className="task-remove-btn" onClick={(e) => { e.stopPropagation(); onRemoveTask(task.id); }} title="Remove task">&#10005;</button>
+          )}
+        </div>
+
+        {/* Collapsed, the newest line is the whole signal — "which test is it on"
+            without having to open the card. */}
+        {!expanded && output && (
+          <div className="task-output-peek" onClick={() => setExpanded(true)} title="Show the full tail">
+            {lastLine(output)}
+          </div>
         )}
 
+        {expanded && (
+          <div className="task-card-body">
+            <p className="task-description">{task.description}</p>
+
+            {/* Worktrees are an implementation detail unless something needs the
+                user's attention (US34) — so the branch and path live in the
+                details, and only a conflict earns a header badge. */}
+            {isolatedWork && (
+              <div className="task-isolation">
+                <div className="task-isolation-row"><span className="task-isolation-label">Branch</span><code>{isolatedWork.branch}</code></div>
+                <div className="task-isolation-row"><span className="task-isolation-label">Worktree</span><code>{isolatedWork.worktree}</code></div>
+                {row.repos.length > 0 && (
+                  <div className="task-isolation-row task-isolation-repos"><span className="task-isolation-label">Repos</span><code>{row.repos.join(', ')}</code></div>
+                )}
+                {row.conflict?.repo && (
+                  <div className="task-isolation-row task-isolation-conflict-repo"><span className="task-isolation-label">Conflict</span><code>{row.conflict.repo}</code></div>
+                )}
+                {conflictFiles.length > 0 && (
+                  <div className="task-isolation-row task-isolation-conflict-files"><span className="task-isolation-label">Files</span><code>{capConflictFiles(conflictFiles)}</code></div>
+                )}
+                {repair && (
+                  <div className="task-isolation-row task-isolation-repair"><span className="task-isolation-label">Repair</span><code>{repair.attempt} of {repair.limit}</code></div>
+                )}
+                {row.repaired && (
+                  <div className="task-isolation-row task-isolation-repaired-note">Landed after repairing a conflict in {row.repaired.files}.</div>
+                )}
+                {row.conflict && onResolveConflict && (
+                  offeringResolve ? (
+                    <div className="task-isolation-resolve">
+                      <span>Resolve this conflict as a new AI task?</span>
+                      <button className="task-action-btn run" onClick={(e) => { e.stopPropagation(); onResolveConflict(task.id); setOfferingResolve(false); }}>Resolve as a task</button>
+                      <button className="task-action-btn" onClick={(e) => { e.stopPropagation(); setOfferingResolve(false); }}>Cancel</button>
+                    </div>
+                  ) : (
+                    <button className="task-action-btn run" onClick={(e) => { e.stopPropagation(); setOfferingResolve(true); }}>Resolve</button>
+                  )
+                )}
+              </div>
+            )}
+
+            {row.opsChangedFiles && (
+              <div className="task-ops-note warn">This ops task changed tracked files in your checkout, and nothing was committed. Check the changes, then mark it complete or retry it.</div>
+            )}
+            {row.forcedPastGate && (
+              <div className="task-ops-note">Force-started before the work of {row.forcedPastGate.join(', ')} was merged into your branch.</div>
+            )}
+
+            {output && (
+              <div className="task-output">
+                <div className="task-output-header">Runner output (tail)</div>
+                <pre className="task-output-pre" ref={outputRef}>{output}</pre>
+              </div>
+            )}
+
+            {canEditDeps ? (
+              <div className="task-deps">
+                <span className="task-deps-label" onClick={(e) => { e.stopPropagation(); setEditingDeps(!editingDeps); }}
+                  title="Edit dependencies">
+                  Depends on: {row.dependencies.length > 0 ? row.dependencies.join(', ') : 'nothing'}
+                  <span className="task-prompt-edit-icon">&#9998;</span>
+                </span>
+                {editingDeps && (
+                  <DependencyPicker candidates={dependencyCandidates(siblings ?? [], task.id)}
+                    selected={task.dependencies}
+                    onChange={(ids) => onDependenciesChange!(task.id, ids)}
+                    onDone={() => setEditingDeps(false)} />
+                )}
+              </div>
+            ) : task.dependencies.length > 0 && (
+              <div className="task-deps">Depends on: {row.dependencies.join(', ')}</div>
+            )}
+
+            {task.verdict && (
+              <div className={`task-review ${task.verdict.outcome === 'pass' ? 'review-pass' : 'review-neutral'}`}>
+                <div className="task-review-summary">
+                  {task.verdict.outcome === 'pass' ? 'Verified' : 'Failed verification'} — {task.verdict.reason}
+                </div>
+                {task.verdict.checks.length > 0 && (
+                  <div className="task-review-checks">
+                    {task.verdict.checks.map((check) => (
+                      <div key={check.name} className={`check-item ${check.skipped ? 'check-skipped' : check.passed ? 'check-passed' : 'check-failed'}`}>
+                        <span className="check-icon">{check.skipped ? '×' : check.passed ? '✓' : '✗'}</span>
+                        <span className="check-name">{checkLabel(check.name)}</span>
+                        <span className="check-status">{check.skipped ? 'skipped' : check.passed ? 'passed' : 'failed'}</span>
+                        {check.detail && <span className="check-detail">{check.detail}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!isExecuting && isUserTask && task.userSteps && task.userSteps.length > 0 && (
+              <div className="user-step-guide">
+                <div className="user-step-guide-header">Step-by-Step Guide</div>
+                {task.userSteps.map((step) => (
+                  <div key={step.order} className="user-step-item">
+                    <span className="user-step-number">{step.order}</span>
+                    <span className="user-step-text">{step.instruction}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {isExecuting && isUserTask && task.userSteps && task.userSteps.length > 0 && (
+              <div className="steps-section">
+                <div className="steps-section-header">Steps</div>
+                <ol className="steps-list">
+                  {task.userSteps.sort((a, b) => a.order - b.order).map((step) => (
+                    <li key={step.order} className={`step-item ${completedSteps.has(step.order) ? 'completed' : ''}`}
+                      onClick={(e) => { e.stopPropagation(); toggleStep(step.order); }}>
+                      <span className="step-checkbox">{completedSteps.has(step.order) ? '✓' : '○'}</span>
+                      <span className="step-text">{step.instruction}</span>
+                    </li>
+                  ))}
+                </ol>
+                {onMarkComplete && (
+                  <div className="step-actions">
+                    <button className="step-complete-btn" disabled={!allStepsComplete && task.userSteps!.length > 0}
+                      onClick={(e) => { e.stopPropagation(); onMarkComplete(task.id); }}>
+                      Mark Complete
+                    </button>
+                    {!allStepsComplete && task.userSteps!.length > 0 && (
+                      <span className="step-hint">Complete all steps above first</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!isExecuting && task.type === 'ai' && task.prompt && (
+              editingPrompt === null ? (
+                <div className="task-prompt task-prompt-editable" onClick={(e) => { e.stopPropagation(); setEditingPrompt(task.prompt ?? ''); }} title="Click to edit prompt">
+                  {task.prompt}
+                  <span className="task-prompt-edit-icon">&#9998;</span>
+                </div>
+              ) : (
+                <div className="task-prompt-edit-wrapper">
+                  <textarea className="task-prompt-textarea" value={editingPrompt} onChange={(e) => setEditingPrompt(e.target.value)}
+                    onBlur={handlePromptSave} onKeyDown={handlePromptKeyDown} onClick={(e) => e.stopPropagation()}
+                    rows={Math.min(editingPrompt.split('\n').length, 20)} autoFocus />
+                  <div className="task-prompt-edit-actions">
+                    <span className="task-prompt-edit-hint">Ctrl+Enter to save &middot; Esc to cancel</span>
+                    <button className="task-prompt-save-btn" onMouseDown={(e) => { e.preventDefault(); handlePromptSave(); }}>Save</button>
+                  </div>
+                </div>
+              )
+            )}
+
+            {isExecuting && task.type === 'ai' && task.prompt && (
+              <div className="task-prompt task-prompt-readonly">{task.prompt}</div>
+            )}
+
+            {/* Runner first: it decides which models, efforts and modes exist below it. */}
+            {!isExecuting && task.type === 'ai' && runnerOptions.length > 0 && onRunnerChange && (
+              <div className="model-selector" style={{ marginTop: '8px' }}>
+                <label htmlFor={`task-runner-${task.id}`}>Runner</label>
+                <select id={`task-runner-${task.id}`} value={task.assignedRunner}
+                  onChange={(e) => onRunnerChange(task.id, e.target.value)}>
+                  {runnerOptions.map((r) => (
+                    <option key={r.id} value={r.id}>{r.displayName}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {!isExecuting && task.type === 'ai' && models.length > 0 && onModelChange && (
+              <ModelSelector models={models} currentModel={task.assignedModel}
+                configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
+                onChange={(assignment) => onModelChange(task.id, assignment)}
+                onOpen={onModelsRefreshNeeded} />
+            )}
+
+            {!isExecuting && task.type === 'ai' && onModeChange && (
+              <div className="model-selector" style={{ marginTop: '8px' }}>
+                <label htmlFor={`task-mode-${task.id}`}
+                  title={row.autonomous ? 'Full: runs without permission prompts — /auto changes the level' : undefined}>
+                  Mode{row.autonomous && ' ⚡'}
+                </label>
+                <select id={`task-mode-${task.id}`} value={task.taskMode ?? activeModes[0]?.id ?? 'build'}
+                  onChange={(e) => onModeChange(task.id, e.target.value)}>
+                  {activeModes.map((m) => (
+                    <option key={m.id} value={m.id} disabled={!!m.unavailable}>{m.label} — {m.unavailable ?? m.description}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {task.type === 'ai' && (
+              <SkillChips idPrefix="task" taskId={task.id} skills={task.skills} catalog={taskSkills}
+                onChange={!isExecuting ? onSkillsChange : undefined} />
+            )}
+
+            {!isExecuting && onOpsChange && row.opsEditable && (
+              <label className="task-ops-toggle" title="An ops task changes no repository files: it acts on outside systems or on your branch's refs, from your checkout, once the work it depends on is merged.">
+                <input type="checkbox" checked={!!task.ops} onChange={(e) => onOpsChange(task.id, e.target.checked)} />
+                Ops task — runs in your checkout, not a worktree
+              </label>
+            )}
+
+            {!isExecuting && task.type === 'ai' && onRunTask && (
+              <div className="task-run-btn-wrapper">
+                <button className="task-action-btn run" onClick={(e) => { e.stopPropagation(); onRunTask(task.id); }}>
+                  Run Task
+                </button>
+              </div>
+            )}
+
+            {sortedSubtasks.length > 0 && (
+              <div className="subtasks">
+                {sortedSubtasks.map((sub) => {
+                  // A subtask can run on a different runner than its parent, so its
+                  // pickers must be scoped to ITS OWN assignedRunner, not the
+                  // parent's — reusing the parent's `models`/`modes` here would
+                  // show the wrong runner's catalog (or none at all).
+                  const subRunner = sub.assignedRunner;
+                  const subRunnerModels = subRunner ? modelsByRunner?.[subRunner] : undefined;
+                  const subModels = subRunnerModels && subRunnerModels.length > 0 ? subRunnerModels : models;
+                  const subModes = subRunner ? (modesByRunner?.[subRunner] ?? []) : [];
+                  return (
+                    <SubTaskCard key={sub.id} task={sub} parentTask={task} tasks={siblings} models={subModels}
+                      modes={subModes} runners={runners} effectiveRunner={subRunner}
+                      configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
+                      isExecuting={isExecuting}
+                      onRunnerChange={onRunnerChange}
+                      onModelChange={onModelChange} onModelsRefreshNeeded={onModelsRefreshNeeded} onModeChange={onModeChange}
+                      taskSkills={taskSkills} onSkillsChange={onSkillsChange}
+                      onRemoveTask={onRemoveTask} onPromptChange={onPromptChange}
+                      onRetry={onRetry} onSkip={onSkip} onCancel={onCancel} onCancelResume={onCancelResume} onResumeNow={onResumeNow}
+                      onForceStart={onForceStart} onMarkComplete={onMarkComplete}
+                      onMarkIncomplete={onMarkIncomplete}
+                      onRunTask={onRunTask} onOpenLog={onOpenLog} />
+                  );
+                })}
+              </div>
+            )}
+
+            {canMessage && <TaskMessageBox taskId={task.id} onSend={onSendMessage!} onSendNow={onSendMessageNow!}
+              working={row.status === 'running' || row.status === 'quiet'} resumes={paused} />}
+
+            {/* A usage-limit pause holds the run, which then reads as not executing. */}
+            {(isExecuting || paused) && (
+              <TaskActions taskId={task.id} actions={row.actions} labels={ACTION_LABELS}
+                handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart, complete: onMarkComplete, uncomplete: onMarkIncomplete }} />
+            )}
+          </div>
+        )}
+      </div>
+      <div className="task-footer-controls">
         {/* As plain as a task that waits on the user (ADR-0020). */}
         <UsageLimitControls taskId={task.id} row={row} onResumeNow={onResumeNow} onCancelResume={onCancelResume} />
 
@@ -451,281 +720,8 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
             &#8595;{dependentCount}
           </span>
         )}
-        {/* The host confirms removal with a real modal. A `confirm()` here would
-            never fire — VS Code sandboxes the webview without `allow-modals`. */}
-        {!isExecuting && onRemoveTask && (
-          <button className="task-remove-btn" onClick={(e) => { e.stopPropagation(); onRemoveTask(task.id); }} title="Remove task">&#10005;</button>
-        )}
-
-        <span className={`task-expand-icon ${expanded ? 'open' : ''}`}>&#9654;</span>
+        {planActions}
       </div>
-
-      {/* Collapsed, the newest line is the whole signal — "which test is it on"
-          without having to open the card. */}
-      {!expanded && output && (
-        <div className="task-output-peek" onClick={() => setExpanded(true)} title="Show the full tail">
-          {lastLine(output)}
-        </div>
-      )}
-
-      {expanded && (
-        <div className="task-card-body">
-          <p className="task-description">{task.description}</p>
-
-          {/* Worktrees are an implementation detail unless something needs the
-              user's attention (US34) — so the branch and path live in the
-              details, and only a conflict earns a header badge. */}
-          {isolatedWork && (
-            <div className="task-isolation">
-              <div className="task-isolation-row"><span className="task-isolation-label">Branch</span><code>{isolatedWork.branch}</code></div>
-              <div className="task-isolation-row"><span className="task-isolation-label">Worktree</span><code>{isolatedWork.worktree}</code></div>
-              {row.repos.length > 0 && (
-                <div className="task-isolation-row task-isolation-repos"><span className="task-isolation-label">Repos</span><code>{row.repos.join(', ')}</code></div>
-              )}
-              {row.conflict?.repo && (
-                <div className="task-isolation-row task-isolation-conflict-repo"><span className="task-isolation-label">Conflict</span><code>{row.conflict.repo}</code></div>
-              )}
-              {conflictFiles.length > 0 && (
-                <div className="task-isolation-row task-isolation-conflict-files"><span className="task-isolation-label">Files</span><code>{capConflictFiles(conflictFiles)}</code></div>
-              )}
-              {repair && (
-                <div className="task-isolation-row task-isolation-repair"><span className="task-isolation-label">Repair</span><code>{repair.attempt} of {repair.limit}</code></div>
-              )}
-              {row.repaired && (
-                <div className="task-isolation-row task-isolation-repaired-note">Landed after repairing a conflict in {row.repaired.files}.</div>
-              )}
-              {row.conflict && onResolveConflict && (
-                offeringResolve ? (
-                  <div className="task-isolation-resolve">
-                    <span>Resolve this conflict as a new AI task?</span>
-                    <button className="task-action-btn run" onClick={(e) => { e.stopPropagation(); onResolveConflict(task.id); setOfferingResolve(false); }}>Resolve as a task</button>
-                    <button className="task-action-btn" onClick={(e) => { e.stopPropagation(); setOfferingResolve(false); }}>Cancel</button>
-                  </div>
-                ) : (
-                  <button className="task-action-btn run" onClick={(e) => { e.stopPropagation(); setOfferingResolve(true); }}>Resolve</button>
-                )
-              )}
-            </div>
-          )}
-
-          {row.opsChangedFiles && (
-            <div className="task-ops-note warn">This ops task changed tracked files in your checkout, and nothing was committed. Check the changes, then mark it complete or retry it.</div>
-          )}
-          {row.forcedPastGate && (
-            <div className="task-ops-note">Force-started before the work of {row.forcedPastGate.join(', ')} was merged into your branch.</div>
-          )}
-
-          {output && (
-            <div className="task-output">
-              <div className="task-output-header">Runner output (tail)</div>
-              <pre className="task-output-pre" ref={outputRef}>{output}</pre>
-            </div>
-          )}
-
-          {canEditDeps ? (
-            <div className="task-deps">
-              <span className="task-deps-label" onClick={(e) => { e.stopPropagation(); setEditingDeps(!editingDeps); }}
-                title="Edit dependencies">
-                Depends on: {row.dependencies.length > 0 ? row.dependencies.join(', ') : 'nothing'}
-                <span className="task-prompt-edit-icon">&#9998;</span>
-              </span>
-              {editingDeps && (
-                <DependencyPicker candidates={dependencyCandidates(siblings ?? [], task.id)}
-                  selected={task.dependencies}
-                  onChange={(ids) => onDependenciesChange!(task.id, ids)}
-                  onDone={() => setEditingDeps(false)} />
-              )}
-            </div>
-          ) : task.dependencies.length > 0 && (
-            <div className="task-deps">Depends on: {row.dependencies.join(', ')}</div>
-          )}
-
-          {task.verdict && (
-            <div className={`task-review ${task.verdict.outcome === 'pass' ? 'review-pass' : 'review-neutral'}`}>
-              <div className="task-review-summary">
-                {task.verdict.outcome === 'pass' ? 'Verified' : 'Failed verification'} — {task.verdict.reason}
-              </div>
-              {task.verdict.checks.length > 0 && (
-                <div className="task-review-checks">
-                  {task.verdict.checks.map((check) => (
-                    <div key={check.name} className={`check-item ${check.skipped ? 'check-skipped' : check.passed ? 'check-passed' : 'check-failed'}`}>
-                      <span className="check-icon">{check.skipped ? '×' : check.passed ? '✓' : '✗'}</span>
-                      <span className="check-name">{checkLabel(check.name)}</span>
-                      <span className="check-status">{check.skipped ? 'skipped' : check.passed ? 'passed' : 'failed'}</span>
-                      {check.detail && <span className="check-detail">{check.detail}</span>}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {!isExecuting && isUserTask && task.userSteps && task.userSteps.length > 0 && (
-            <div className="user-step-guide">
-              <div className="user-step-guide-header">Step-by-Step Guide</div>
-              {task.userSteps.map((step) => (
-                <div key={step.order} className="user-step-item">
-                  <span className="user-step-number">{step.order}</span>
-                  <span className="user-step-text">{step.instruction}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {isExecuting && isUserTask && task.userSteps && task.userSteps.length > 0 && (
-            <div className="steps-section">
-              <div className="steps-section-header">Steps</div>
-              <ol className="steps-list">
-                {task.userSteps.sort((a, b) => a.order - b.order).map((step) => (
-                  <li key={step.order} className={`step-item ${completedSteps.has(step.order) ? 'completed' : ''}`}
-                    onClick={(e) => { e.stopPropagation(); toggleStep(step.order); }}>
-                    <span className="step-checkbox">{completedSteps.has(step.order) ? '✓' : '○'}</span>
-                    <span className="step-text">{step.instruction}</span>
-                  </li>
-                ))}
-              </ol>
-              {onMarkComplete && (
-                <div className="step-actions">
-                  <button className="step-complete-btn" disabled={!allStepsComplete && task.userSteps!.length > 0}
-                    onClick={(e) => { e.stopPropagation(); onMarkComplete(task.id); }}>
-                    Mark Complete
-                  </button>
-                  {!allStepsComplete && task.userSteps!.length > 0 && (
-                    <span className="step-hint">Complete all steps above first</span>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {!isExecuting && task.type === 'ai' && task.prompt && (
-            editingPrompt === null ? (
-              <div className="task-prompt task-prompt-editable" onClick={(e) => { e.stopPropagation(); setEditingPrompt(task.prompt ?? ''); }} title="Click to edit prompt">
-                {task.prompt}
-                <span className="task-prompt-edit-icon">&#9998;</span>
-              </div>
-            ) : (
-              <div className="task-prompt-edit-wrapper">
-                <textarea className="task-prompt-textarea" value={editingPrompt} onChange={(e) => setEditingPrompt(e.target.value)}
-                  onBlur={handlePromptSave} onKeyDown={handlePromptKeyDown} onClick={(e) => e.stopPropagation()}
-                  rows={Math.min(editingPrompt.split('\n').length, 20)} autoFocus />
-                <div className="task-prompt-edit-actions">
-                  <span className="task-prompt-edit-hint">Ctrl+Enter to save &middot; Esc to cancel</span>
-                  <button className="task-prompt-save-btn" onMouseDown={(e) => { e.preventDefault(); handlePromptSave(); }}>Save</button>
-                </div>
-              </div>
-            )
-          )}
-
-          {isExecuting && task.type === 'ai' && task.prompt && (
-            <div className="task-prompt task-prompt-readonly">{task.prompt}</div>
-          )}
-
-          {/* Runner first: it decides which models, efforts and modes exist below it. */}
-          {!isExecuting && task.type === 'ai' && runnerOptions.length > 0 && onRunnerChange && (
-            <div className="model-selector" style={{ marginTop: '8px' }}>
-              <label htmlFor={`task-runner-${task.id}`}>Runner</label>
-              <select id={`task-runner-${task.id}`} value={task.assignedRunner}
-                onChange={(e) => onRunnerChange(task.id, e.target.value)}>
-                {runnerOptions.map((r) => (
-                  <option key={r.id} value={r.id}>{r.displayName}</option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {!isExecuting && task.type === 'ai' && models.length > 0 && onModelChange && (
-            <ModelSelector models={models} currentModel={task.assignedModel}
-              configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
-              onChange={(assignment) => onModelChange(task.id, assignment)}
-              onOpen={onModelsRefreshNeeded} />
-          )}
-
-          {/* The header no longer carries the model, so a card with no catalog to pick from still has to say which model it holds. */}
-          {!isExecuting && task.type === 'ai' && task.assignedModel && !(models.length > 0 && onModelChange) && (
-            <div className="model-selector" style={{ marginTop: '8px' }}>
-              <label>Model</label>
-              <span>
-                {task.assignedModel.modelLabel}
-                {task.assignedModel.thinkingEffort && <> &middot; {task.assignedModel.thinkingEffort}</>}
-              </span>
-            </div>
-          )}
-
-          {!isExecuting && task.type === 'ai' && onModeChange && (
-            <div className="model-selector" style={{ marginTop: '8px' }}>
-              <label htmlFor={`task-mode-${task.id}`}
-                title={row.autonomous ? 'Full: runs without permission prompts — /auto changes the level' : undefined}>
-                Mode{row.autonomous && ' ⚡'}
-              </label>
-              <select id={`task-mode-${task.id}`} value={task.taskMode ?? activeModes[0]?.id ?? 'build'}
-                onChange={(e) => onModeChange(task.id, e.target.value)}>
-                {activeModes.map((m) => (
-                  <option key={m.id} value={m.id} disabled={!!m.unavailable}>{m.label} — {m.unavailable ?? m.description}</option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {task.type === 'ai' && (
-            <SkillChips idPrefix="task" taskId={task.id} skills={task.skills} catalog={taskSkills}
-              onChange={!isExecuting ? onSkillsChange : undefined} />
-          )}
-
-          {!isExecuting && onOpsChange && row.opsEditable && (
-            <label className="task-ops-toggle" title="An ops task changes no repository files: it acts on outside systems or on your branch's refs, from your checkout, once the work it depends on is merged.">
-              <input type="checkbox" checked={!!task.ops} onChange={(e) => onOpsChange(task.id, e.target.checked)} />
-              Ops task — runs in your checkout, not a worktree
-            </label>
-          )}
-
-          {!isExecuting && task.type === 'ai' && onRunTask && (
-            <div className="task-run-btn-wrapper">
-              <button className="task-action-btn run" onClick={(e) => { e.stopPropagation(); onRunTask(task.id); }}>
-                Run Task
-              </button>
-            </div>
-          )}
-
-          {sortedSubtasks.length > 0 && (
-            <div className="subtasks">
-              {sortedSubtasks.map((sub) => {
-                // A subtask can run on a different runner than its parent, so its
-                // pickers must be scoped to ITS OWN assignedRunner, not the
-                // parent's — reusing the parent's `models`/`modes` here would
-                // show the wrong runner's catalog (or none at all).
-                const subRunner = sub.assignedRunner;
-                const subRunnerModels = subRunner ? modelsByRunner?.[subRunner] : undefined;
-                const subModels = subRunnerModels && subRunnerModels.length > 0 ? subRunnerModels : models;
-                const subModes = subRunner ? (modesByRunner?.[subRunner] ?? []) : [];
-                return (
-                  <SubTaskCard key={sub.id} task={sub} parentTask={task} tasks={siblings} models={subModels}
-                    modes={subModes} runners={runners} effectiveRunner={subRunner}
-                    configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
-                    isExecuting={isExecuting}
-                    onRunnerChange={onRunnerChange}
-                    onModelChange={onModelChange} onModelsRefreshNeeded={onModelsRefreshNeeded} onModeChange={onModeChange}
-                    taskSkills={taskSkills} onSkillsChange={onSkillsChange}
-                    onRemoveTask={onRemoveTask} onPromptChange={onPromptChange}
-                    onRetry={onRetry} onSkip={onSkip} onCancel={onCancel} onCancelResume={onCancelResume} onResumeNow={onResumeNow}
-                    onForceStart={onForceStart} onMarkComplete={onMarkComplete}
-                    onMarkIncomplete={onMarkIncomplete}
-                    onRunTask={onRunTask} onOpenLog={onOpenLog} />
-                );
-              })}
-            </div>
-          )}
-
-          {canMessage && <TaskMessageBox taskId={task.id} onSend={onSendMessage!} onSendNow={onSendMessageNow!}
-            working={row.status === 'running' || row.status === 'quiet'} resumes={paused} />}
-
-          {/* A usage-limit pause holds the run, which then reads as not executing. */}
-          {(isExecuting || paused) && (
-            <TaskActions taskId={task.id} actions={row.actions} labels={ACTION_LABELS}
-              handlers={{ cancel: onCancel, 'resume-now': onResumeNow, 'cancel-resume': onCancelResume, skip: onSkip, 'force-start': onForceStart, complete: onMarkComplete, uncomplete: onMarkIncomplete }} />
-          )}
-        </div>
-      )}
     </div>
   );
 }

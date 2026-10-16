@@ -1957,7 +1957,8 @@ tasks (`skip_task`, with a reason; never Mark complete), message runners, deny
 approvals, edit the plan task by task (a whole new plan is refused) and merge
 (`merge_all`), without asking, inside the **Loop
 guards**; a task it adds is approved to run, ops tasks included
-(`addedBy: 'supervisor'`, shown on the task). A run holds its own copy,
+(`addedBy: 'supervisor'`, with its origin recorded in the planner
+conversation). A run holds its own copy,
 `runSettings.supervisorLevel`, which the Command seam reads at each call. A
 tripped wake-up-rate guard or a failed supervisor lowers it for the rest of the
 run; the user's `/supervisor` sets it, up or down, at once in the session it is

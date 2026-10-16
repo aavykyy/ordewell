@@ -920,8 +920,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
     ? `${inRow(row.approvals)} — enter opens it`
     : row.awaiting ? inRow(row.awaiting) : '';
   const skills = (task.skills ?? []).join(' · ');
-  const origin = task.addedBy === 'supervisor' ? 'added by supervisor' : '';
-  const meta = [activity, origin, runner, model];
+  const meta = [activity, runner, model];
   // The variant rides on the meta line only when the whole line still fits;
   // when it does not, the effort gives way rather than truncating the model.
   const variant = task.type === 'ai' ? sanitize(task.assignedModel?.thinkingEffort ?? '') : '';

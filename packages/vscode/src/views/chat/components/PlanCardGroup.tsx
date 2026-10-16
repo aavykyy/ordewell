@@ -287,27 +287,25 @@ export default function PlanCardGroup({
                 onSendMessage={onSendMessage}
                 onSendMessageNow={onSendMessageNow}
                 onOpenLog={onOpenLog}
+                planActions={!isExecuting && (canMerge || canSplit) ? (
+                  <div className="task-inline-actions">
+                    {canMerge && (
+                      <button
+                        className={`task-merge-btn ${isMergeSelected ? 'active' : ''}`}
+                        onClick={(e) => { e.stopPropagation(); handleMergeClick(task.id); }}
+                        title={isMergeSelected ? 'Deselect task' : mergeMode ? 'Select task to merge' : 'Select tasks to merge'}
+                      >
+                        {isMergeSelected ? 'Selected' : 'Merge'}
+                      </button>
+                    )}
+                    {canSplit && !mergeMode && (
+                      <button className="task-split-btn" onClick={(e) => { e.stopPropagation(); handleSplitClick(task.id); }} title="Split this task into multiple parts (the planner generates the breakdown)">Split</button>
+                    )}
+                  </div>
+                ) : null}
                 expanded={expandedTaskId === task.id}
                 onExpandedChange={(next) => setExpandedTaskId(next ? task.id : null)}
               />
-              {/* Gated on having a button to show: an empty action row is still a
-                  bordered strip under every card. */}
-              {!isExecuting && (canMerge || canSplit) && (
-                <div className="task-inline-actions">
-                  {canMerge && (
-                    <button
-                      className={`task-merge-btn ${isMergeSelected ? 'active' : ''}`}
-                      onClick={() => handleMergeClick(task.id)}
-                      title={isMergeSelected ? 'Deselect task' : mergeMode ? 'Select task to merge' : 'Select tasks to merge'}
-                    >
-                      {isMergeSelected ? 'Selected' : 'Merge'}
-                    </button>
-                  )}
-                  {canSplit && !mergeMode && (
-                    <button className="task-split-btn" onClick={() => handleSplitClick(task.id)} title="Split this task into multiple parts (the planner generates the breakdown)">Split</button>
-                  )}
-                </div>
-              )}
             </div>
           );
         })}

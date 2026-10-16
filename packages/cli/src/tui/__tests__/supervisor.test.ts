@@ -95,7 +95,7 @@ describe('run settings in the TUI (ADR-0030)', () => {
     expect(frame({ ...stopped, status: 'executing' })).toContain('supervisor Act → unsupervised');
   });
 
-  it('marks a task the supervisor added', () => {
+  it('keeps task origins out of the plan pane', () => {
     const added = apply(plan(), {
       type: 'planUpdated',
       sessionId: 's1',
@@ -106,7 +106,8 @@ describe('run settings in the TUI (ADR-0030)', () => {
         ],
       },
     }).state;
-    expect(frame(added)).toMatch(/added by supervisor/);
+    expect(frame(added)).not.toMatch(/added by supervisor/);
+    expect(frame(added)).toContain('Add a cache');
     expect(frame(plan())).not.toMatch(/added by supervisor/);
   });
 

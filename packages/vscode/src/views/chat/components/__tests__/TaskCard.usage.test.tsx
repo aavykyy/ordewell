@@ -11,10 +11,10 @@ const usage: AttemptUsage = { attempt: 1, runner: 'codex', startedAt: '', wallTi
 const task = (over: Partial<Task> = {}): Task => ({ id: 't', order: 1, title: 'Work', description: '', type: 'ai', status: 'completed', dependencies: [], subtasks: [], assignedRunner: 'codex', ...over });
 
 describe('task card usage', () => {
-  it('renders no usage and no model badge in a collapsed card header', () => {
+  it('shows the assigned runner and model without usage in a collapsed card header', () => {
     const { container } = render(<TaskCard task={task({ attemptUsage: [usage], assignedModel: { modelId: 'anthropic/claude-sonnet', modelLabel: 'Sonnet' } })} models={[]} />);
     expect(screen.queryByText(/12,400 in/)).toBeNull();
-    expect(container.querySelector('.task-model-badge')).toBeNull();
+    expect(container.querySelector('.task-assignment')?.textContent).toBe('codex · Sonnet');
   });
 
   it('renders no usage on a subtask card', () => {

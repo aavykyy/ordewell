@@ -10,6 +10,13 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **Task cards show the runner, model and thinking effort beneath the title.**
+  VS Code keeps the assignment visible during execution and uses the same
+  compact layout for subtasks, without an expand chevron. Both VS Code and the
+  terminal leave supervisor attribution in the planner conversation instead
+  of repeating it on tasks. Open log and dependency controls sit on the left
+  of a single row below each VS Code task box, with Merge and Split on the right.
+
 - **The first screen says nothing runs until you approve the plan.** The
   terminal welcome and VS Code's empty chat state it, and warn instead when
   autorun is on, since a plan then starts as soon as the planner submits it. The line
