@@ -11,6 +11,7 @@ function storeOf(tasks: Task[]) {
     isFailed: (id: string) => byId.get(id)?.status === 'failed',
     isSkipped: (id: string) => byId.get(id)?.status === 'skipped',
     isOps: (id: string) => byId.get(id)?.ops === true,
+    get: (id: string) => byId.get(id),
   };
 }
 
@@ -213,5 +214,60 @@ describe('the merge gate (ADR-0020)', () => {
 
   it('has nothing to wait for without an isolation run', () => {
     expect(mergeGate(opsTask, storeOf(tasks), runsOf())).toEqual([]);
+  });
+
+  describe('over the whole dependency closure', () => {
+    // The real case: an ops task depends on a verification that landed no
+    // commits, which depends on the fix whose commit is still only on the
+    // integration branch.
+    const fix = createTask({ id: 'f1', order: 1, title: 'Fix', prompt: 'x', status: 'completed' });
+    const verify = createTask({ id: 'v2', order: 2, title: 'Verify', prompt: 'x', status: 'completed', dependencies: ['f1'] });
+    const pack = createTask({ id: 'o3', order: 3, title: 'Pack', prompt: 'x', ops: true, dependencies: ['v2'] });
+    const fixLanded = (inHead: boolean) => runsOf({ f1: { ...record('f1', 'merged'), ...(inHead ? { inHead: true as const } : {}) } });
+
+    it('holds an ops task whose dependency\'s own dependency has landed but is not merged, naming it', () => {
+      const chain = [fix, verify, pack];
+      expect(mergeGate(pack, storeOf(chain), fixLanded(false))).toEqual(['f1']);
+      const { ready, gated } = selectReadyTasks(input(chain, { runs: fixLanded(false) }));
+      expect(ready).toEqual([]);
+      expect(gated.map((t) => t.id)).toEqual(['o3']);
+    });
+
+    it('lets it go once Merge all brought that work into the user\'s branch', () => {
+      const { ready, gated } = selectReadyTasks(input([fix, verify, pack], { runs: fixLanded(true) }));
+      expect(ready.map((t) => t.id)).toEqual(['o3']);
+      expect(gated).toEqual([]);
+    });
+
+    it('holds a user task the same way', () => {
+      const check = createTask({ id: 'u3', order: 3, title: 'Check', type: 'user', dependencies: ['v2'] });
+      expect(mergeGate(check, storeOf([fix, verify, check]), fixLanded(false))).toEqual(['f1']);
+      expect(mergeGate(check, storeOf([fix, verify, check]), fixLanded(true))).toEqual([]);
+    });
+
+    it('is not held by a skipped ancestor, though one before it still counts', () => {
+      // Its record says landed, unmerged work: only the skip keeps it out.
+      const skipped = createTask({ id: 'v2', order: 2, title: 'Verify', prompt: 'x', status: 'skipped', dependencies: ['f1'] });
+      const runs = runsOf({ v2: record('v2', 'merged'), f1: record('f1', 'merged') });
+      expect(mergeGate(pack, storeOf([fix, skipped, pack]), runs)).toEqual(['f1']);
+      const merged = runsOf({ v2: record('v2', 'merged'), f1: { ...record('f1', 'merged'), inHead: true } });
+      expect(mergeGate(pack, storeOf([fix, skipped, pack]), merged)).toEqual([]);
+    });
+
+    it('names an ancestor reached by two paths once', () => {
+      const left = createTask({ id: 'l2', order: 2, title: 'Left', prompt: 'x', status: 'completed', dependencies: ['f1'] });
+      const right = createTask({ id: 'r3', order: 3, title: 'Right', prompt: 'x', status: 'completed', dependencies: ['f1'] });
+      const deploy = createTask({ id: 'o4', order: 4, title: 'Deploy', prompt: 'x', ops: true, dependencies: ['l2', 'r3'] });
+      const runs = runsOf({ f1: record('f1', 'merged'), r3: record('r3', 'merged') });
+      expect(mergeGate(deploy, storeOf([fix, left, right, deploy]), runs)).toEqual(['r3', 'f1']);
+    });
+
+    it('walks a dependency cycle once', () => {
+      const a = createTask({ id: 'a1', order: 1, title: 'A', prompt: 'x', status: 'completed', dependencies: ['b2'] });
+      const b = createTask({ id: 'b2', order: 2, title: 'B', prompt: 'x', status: 'completed', dependencies: ['a1'] });
+      const ops = createTask({ id: 'o3', order: 3, title: 'Ops', prompt: 'x', ops: true, dependencies: ['b2'] });
+      const runs = runsOf({ a1: record('a1', 'merged') });
+      expect(mergeGate(ops, storeOf([a, b, ops]), runs)).toEqual(['a1']);
+    });
   });
 });

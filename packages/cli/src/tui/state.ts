@@ -54,9 +54,9 @@ export interface TaskView {
   skills?: string[];
   /** Set on a task an Act supervisor added during a run (ADR-0029). */
   addedBy?: 'supervisor';
-  /** The dependencies whose work must be merged into the user's branch before this task can go on (ADR-0020). */
+  /** The ancestors whose work must be merged into the user's branch before this task can go on (ADR-0020). */
   mergeGate?: string[];
-  /** The dependencies, by title, a force start went past the merge gate of. */
+  /** The ancestors, by title, a force start went past the merge gate of. */
   forcedPastGate?: string[];
   /** Child tasks, recursively shaped the same way; absent until populated by `toTaskView`. */
   subtasks?: TaskView[];
