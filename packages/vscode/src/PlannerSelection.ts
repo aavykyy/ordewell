@@ -82,8 +82,12 @@ export class PlannerSelection {
     const catalog = await this.catalogFor(change.provider ?? current.provider);
     const result = selectPlanner(current, change, plannerModelMemory, catalog);
     const { next } = result;
-    if (!result.remember && !result.recall) return result;
-    if (next.provider !== current.provider) await config.update('aiProvider', next.provider);
+    // The effective provider can be a detected default, which is never saved; a
+    // provider the user named is a choice, so it is saved even when it equals
+    // the default, or the next detection could move the planner off it.
+    const saveProvider = next.provider !== current.provider || (change.provider !== undefined && config.rawAiProvider !== next.provider);
+    if (!result.remember && !result.recall && !saveProvider) return result;
+    if (saveProvider) await config.update('aiProvider', next.provider);
     await config.update('orchestratorModel', next.model);
     await config.update('plannerThinkingEffort', next.effort);
     if (result.remember) {

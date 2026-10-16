@@ -626,13 +626,14 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     : style.yellow(planner.label === 'not set' ? 'not set' : `${planner.label} (unavailable)`);
 
   const prompt = wrap(style.bold('Describe a goal to start planning.'), Math.max(1, cols - 1));
-  // Only true while autorun is off (ADR-0030); with it on, the same spot warns instead.
-  const approval = wrap(
-    state.runSettings.autorun
+  // Only true while autorun is off (ADR-0030); with it on, the same spot warns
+  // instead, and until the saved setting is known it says nothing rather than guess.
+  const approvalText = !state.runSettingsKnown
+    ? ''
+    : state.runSettings.autorun
       ? style.yellow('Autorun is on — a plan starts as soon as the planner submits it. Change it in /settings.')
-      : style.grey('Nothing runs until you approve the plan.'),
-    Math.max(1, cols - 1),
-  );
+      : style.grey('Nothing runs until you approve the plan.');
+  const approval = approvalText ? wrap(approvalText, Math.max(1, cols - 1)) : [];
   const setup = [
     style.bold('Setup'),
     setupRow('Planner', plannerValue, '/planner', cols),

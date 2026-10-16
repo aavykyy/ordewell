@@ -303,14 +303,14 @@ describe('VsCodeConfig.apiKey', () => {
     expect(config.apiKey).toBe('g-key');
   });
 
-  it('falls back to the other provider key when the active provider has none', async () => {
-    // active provider resolves to google, but only an OpenRouter key is set
+  it('never hands a vendor planner another vendor\'s key', async () => {
+    // Google is chosen, but only an OpenRouter key is set: Google would reject
+    // it as a bad credential, where no key lets the preflight name the gap.
     const store = await makeStore({ openrouterKey: 'sk-or' });
-    __setConfig({ orchestratorModel: 'gemini-2.5-pro' });
+    __setConfig({ aiProvider: 'google', orchestratorModel: 'gemini-2.5-pro' });
     const config = new VsCodeConfig(store);
-    config.setProviderModelLists({ openrouter: [], google: ['gemini-2.5-pro'], openai_compatible: [] });
 
-    expect(config.apiKey).toBe('sk-or');
+    expect(config.apiKey).toBe('');
   });
 });
 
@@ -390,4 +390,114 @@ describe('VsCodeConfig.aiProvider with an installed coding agent (ADR-0009)', ()
     __setConfig({ aiProvider: 'codex' });
     expect(new VsCodeConfig(await makeStore({})).aiProvider).toBe('codex');
   });
+
+  it('keeps an explicit OpenRouter choice even without its key', async () => {
+    recordInstalledPlanner('claude-code');
+    __setConfig({ aiProvider: 'openrouter' });
+    const config = new VsCodeConfig(await makeStore({}));
+    expect(config.aiProvider).toBe('openrouter');
+    expect(config.apiKey).toBe('');
+  });
+
+  it('uses a vendor environment key before the detected agent', async () => {
+    recordInstalledPlanner('claude-code');
+    process.env.GEMINI_API_KEY = 'g-test';
+    expect(new VsCodeConfig(await makeStore({})).aiProvider).toBe('google');
+  });
+
+  it('keeps the detected agent with a stale vendor model and no key', async () => {
+    recordInstalledPlanner('claude-code');
+    __setConfig({ orchestratorModel: 'openai/gpt-4o' });
+    const config = new VsCodeConfig(await makeStore({}));
+    config.setProviderModelLists({ openrouter: ['openai/gpt-4o'], google: [], openai_compatible: [] });
+    expect(config.aiProvider).toBe('claude-code');
+  });
+
+  it('a stale vendor model with that vendor\'s stored key still picks the vendor', async () => {
+    recordInstalledPlanner('claude-code');
+    __setConfig({ orchestratorModel: 'gemini-2.5-pro' });
+    const config = new VsCodeConfig(await makeStore({ geminiKey: 'g-secret' }));
+    config.setProviderModelLists({ openrouter: ['openai/gpt-4o'], google: ['gemini-2.5-pro'], openai_compatible: [] });
+    expect(config.aiProvider).toBe('google');
+  });
+
+  it('the aiProvider setting wins over a stale vendor model and the installed agent', async () => {
+    recordInstalledPlanner('claude-code');
+    __setConfig({ aiProvider: 'codex', orchestratorModel: 'openai/gpt-4o' });
+    const config = new VsCodeConfig(await makeStore({}));
+    config.setProviderModelLists({ openrouter: ['openai/gpt-4o'], google: [], openai_compatible: [] });
+    expect(config.aiProvider).toBe('codex');
+  });
+
+  it('a stored vendor key with no model still wins over the installed agent', async () => {
+    recordInstalledPlanner('claude-code');
+    const config = new VsCodeConfig(await makeStore({ openrouterKey: 'sk-secret' }));
+    config.setProviderModelLists({ openrouter: ['openai/gpt-4o'], google: [], openai_compatible: [] });
+    expect(config.aiProvider).toBe('openrouter');
+  });
+
+  it('with no installed agent a keyless vendor model still names its vendor', async () => {
+    __setConfig({ orchestratorModel: 'gemini-2.5-pro' });
+    const config = new VsCodeConfig(await makeStore({}));
+    config.setProviderModelLists({ openrouter: ['openai/gpt-4o'], google: ['gemini-2.5-pro'], openai_compatible: [] });
+    expect(config.aiProvider).toBe('google');
+  });
+
+  it('moves to the model\'s vendor when its key is stored after a read', async () => {
+    recordInstalledPlanner('claude-code');
+    __setConfig({ orchestratorModel: 'openai/gpt-4o' });
+    const store = await makeStore({});
+    const config = new VsCodeConfig(store);
+    config.setProviderModelLists({ openrouter: ['openai/gpt-4o'], google: [], openai_compatible: [] });
+    expect(config.aiProvider).toBe('claude-code');
+
+    await store.set('openrouterKey', 'sk-secret');
+
+    expect(config.aiProvider).toBe('openrouter');
+  });
+
+  it('an explicit AI_PROVIDER in the environment wins over a keyed vendor list that holds the model', async () => {
+    process.env.AI_PROVIDER = 'google';
+    __setConfig({ orchestratorModel: 'openai/gpt-4o' });
+    const config = new VsCodeConfig(await makeStore({ openrouterKey: 'sk-secret', geminiKey: 'g-secret' }));
+    config.setProviderModelLists({ openrouter: ['openai/gpt-4o'], google: [], openai_compatible: [] });
+    expect(config.aiProvider).toBe('google');
+  });
+
+  // The same instance must answer what a fresh one would: the extension keeps
+  // one config for its whole life, so a stale memo outlives the change.
+  it('the same instance follows an AI_PROVIDER set in the environment after a read', async () => {
+    recordInstalledPlanner('claude-code');
+    const config = new VsCodeConfig(await makeStore({}));
+    expect(config.aiProvider).toBe('claude-code');
+
+    process.env.AI_PROVIDER = 'codex';
+
+    expect(config.aiProvider).toBe('codex');
+  });
+
+  it('the same instance goes back to the agent when the last stored key is removed', async () => {
+    recordInstalledPlanner('claude-code');
+    __setConfig({ orchestratorModel: 'openai/gpt-4o' });
+    const store = await makeStore({ openrouterKey: 'sk-secret' });
+    const config = new VsCodeConfig(store);
+    config.setProviderModelLists({ openrouter: ['openai/gpt-4o'], google: [], openai_compatible: [] });
+    expect(config.aiProvider).toBe('openrouter');
+
+    await store.set('openrouterKey', '');
+
+    expect(config.aiProvider).toBe('claude-code');
+  });
+
+  it('the same instance follows an orchestratorModel edited outside update()', async () => {
+    const config = new VsCodeConfig(await makeStore({ openrouterKey: 'sk-secret', geminiKey: 'g-secret' }));
+    config.setProviderModelLists({ openrouter: ['openai/gpt-4o'], google: ['gemini-2.5-pro'], openai_compatible: [] });
+    __setConfig({ orchestratorModel: 'openai/gpt-4o' });
+    expect(config.aiProvider).toBe('openrouter');
+
+    __setConfig({ orchestratorModel: 'gemini-2.5-pro' });
+
+    expect(config.aiProvider).toBe('google');
+  });
+
 });

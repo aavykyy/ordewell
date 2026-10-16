@@ -1,7 +1,7 @@
 import type { IConfig, AiProvider, PlannerBackendId } from './IConfig';
 import { parseApprovalModeSetting, type ApprovalModeSetting } from '../services/ApprovalPolicy';
 import { DEFAULT_WEB_READ_BUDGET } from '../services/webReadPolicy';
-import type { ProviderModelLists } from '../services/ProviderRouting';
+import { resolveProvider, type ProviderModelLists } from '../services/ProviderRouting';
 import { configuredProviders, getProviderMeta, isPlannerBackend, PROVIDER_DETECT_PRIORITY } from '../services/ProviderRegistry';
 import { DEFAULT_MAX_PARALLEL, parseMaxParallel } from '../utils/maxParallel';
 import { SettingsService } from '../services/SettingsService';
@@ -15,12 +15,24 @@ function commaList(raw: string | undefined): string[] {
   return (raw || '').split(',').map((s) => s.trim()).filter(Boolean);
 }
 
+/** The first vendor whose key or base URL is in the environment, in detection order. */
+function envDetectedProvider(): AiProvider | null {
+  for (const provider of PROVIDER_DETECT_PRIORITY) {
+    const meta = getProviderMeta(provider);
+    if (meta.detectEnvVars.some((v) => process.env[v])) return provider;
+    if (meta.baseUrlEnvVar && process.env[meta.baseUrlEnvVar]) return provider;
+  }
+  return null;
+}
+
 function nonNegativeInt(raw: string | undefined, fallback: number): number {
   const trimmed = (raw ?? '').trim();
   return /^\d+$/.test(trimmed) ? Number(trimmed) : fallback;
 }
 
 export abstract class BaseConfig implements IConfig {
+  private _routed: { basis: string; lists: ProviderModelLists | null | undefined; provider: PlannerBackendId } | null = null;
+
   abstract aiProvider: PlannerBackendId;
   abstract apiKey: string;
   abstract planningModel: string;
@@ -155,16 +167,56 @@ export abstract class BaseConfig implements IConfig {
     const env = process.env.AI_PROVIDER;
     if (env && isPlannerBackend(env)) return env;
 
-    for (const provider of PROVIDER_DETECT_PRIORITY) {
-      const meta = getProviderMeta(provider);
-      if (meta.detectEnvVars.some((v) => process.env[v])) return provider;
-      if (meta.baseUrlEnvVar && process.env[meta.baseUrlEnvVar]) return provider;
-    }
+    const fromEnv = envDetectedProvider();
+    if (fromEnv) return fromEnv;
 
     // A key a host keeps outside the environment (VS Code's secret store) is a
     // vendor key all the same; its holder planned with openrouter before an
     // installed agent could, and still does.
     if (configuredProviders(this).length > 0) return 'openrouter';
     return recordedInstalledPlanner() ?? 'openrouter';
+  }
+
+  /**
+   * Who plans when no surface setting names a planner: an explicit
+   * AI_PROVIDER, then the vendor whose catalog lists the model, else
+   * `detectProvider`. The explicit choice comes first because a model id can
+   * sit in another vendor's catalog (`openai/gpt-4o` is on OpenRouter too),
+   * and the user named the planner, not the catalog. A vendor without a
+   * credential yields to an installed coding agent, because the TUI and
+   * `ordewell planner` persist ORCHESTRATOR_MODEL, and a model left over from
+   * a removed key would otherwise route a keyless first run to a planner that
+   * cannot plan. Without an agent the vendor still answers, so the preflight
+   * names it.
+   */
+  protected providerForModel(model: string | undefined, lists: ProviderModelLists | null | undefined): PlannerBackendId {
+    const explicit = process.env.AI_PROVIDER;
+    if (explicit && isPlannerBackend(explicit)) return explicit;
+    const inferred = model && lists ? resolveProvider(model, lists) : null;
+    if (inferred && (configuredProviders(this).includes(inferred) || !recordedInstalledPlanner())) return inferred;
+    return this.detectProvider();
+  }
+
+  /**
+   * `providerForModel`, memoized against everything it reads rather than a
+   * flag each writer must remember to reset. A host keeps one config for a
+   * whole session or extension lifetime while keys, AI_PROVIDER, the model and
+   * the installed agent all change underneath it, from writers (a secret-store
+   * event, a settings route, the startup probe) that never see this instance;
+   * the memo must answer what a fresh config would. The lists are compared by
+   * identity because a host swaps the whole object on discovery.
+   */
+  protected routedProvider(model: string | undefined, lists: ProviderModelLists | null | undefined): PlannerBackendId {
+    const basis = [
+      process.env.AI_PROVIDER ?? '',
+      model ?? '',
+      recordedInstalledPlanner() ?? '',
+      envDetectedProvider() ?? '',
+      configuredProviders(this).join(','),
+    ].join('|');
+    if (this._routed && this._routed.basis === basis && this._routed.lists === lists) return this._routed.provider;
+    const provider = this.providerForModel(model, lists);
+    this._routed = { basis, lists, provider };
+    return provider;
   }
 }

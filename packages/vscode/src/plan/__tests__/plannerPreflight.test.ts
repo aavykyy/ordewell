@@ -1,7 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { plannerPreflightError } from '../PlanManager';
-import type { PlannerBackendId } from '@ordewell/core';
-import type { VsCodeConfig } from '../../adapters/VsCodeConfig';
+import { getProviderMeta, PROVIDER_DETECT_PRIORITY, type PlannerBackendId } from '@ordewell/core';
+import { VsCodeConfig } from '../../adapters/VsCodeConfig';
+import { SecretStore } from '../../adapters/SecretStore';
+import { __setConfig, __resetConfig } from '../../test/vscode.mock';
 
 function config(aiProvider: PlannerBackendId, apiKey: string, planningModel: string, openaiCompatibleBaseUrl = ''): VsCodeConfig {
   return { aiProvider, getProviderApiKey: () => apiKey, planningModel, orchestratorModel: '', openaiCompatibleBaseUrl } as unknown as VsCodeConfig;
@@ -42,5 +44,62 @@ describe('plannerPreflightError', () => {
 
   it('passes a fully configured vendor planner', () => {
     expect(plannerPreflightError(config('openrouter', 'sk-or', 'openai/gpt-5'))).toBeNull();
+  });
+});
+
+/**
+ * The preflight must check the key the selected planner's transport will
+ * read. A key held for another vendor passed it, and the turn then failed deep
+ * in the transport with "OpenAI API key not configured" instead of the
+ * /planner-first refusal.
+ */
+describe('plannerPreflightError on the extension\'s own config', () => {
+  const vars = PROVIDER_DETECT_PRIORITY.flatMap((p) => {
+    const meta = getProviderMeta(p);
+    return [meta.apiKeyEnvVar, ...meta.detectEnvVars, ...(meta.baseUrlEnvVar ? [meta.baseUrlEnvVar] : [])];
+  });
+  const saved: Record<string, string | undefined> = {};
+  beforeEach(() => { for (const k of vars) { saved[k] = process.env[k]; delete process.env[k]; } });
+  afterEach(() => {
+    for (const k of vars) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+    __resetConfig();
+  });
+
+  async function store(initial: Record<string, string>): Promise<SecretStore> {
+    const map = new Map(Object.entries(initial));
+    const s = new SecretStore({
+      async get(k: string) { return map.get(k); },
+      async store(k: string, v: string) { map.set(k, v); },
+      async delete(k: string) { map.delete(k); },
+      onDidChange() { return { dispose() {} }; },
+    } as never);
+    await s.load();
+    return s;
+  }
+
+  it('refuses an OpenAI planner with no OpenAI key even when an OpenRouter key is stored', async () => {
+    __setConfig({ aiProvider: 'openai', orchestratorModel: 'gpt-4o' });
+    const config = new VsCodeConfig(await store({ openrouterKey: 'sk-or-secret' }));
+
+    expect(plannerPreflightError(config)).toBe(
+      'No planner is ready. Pick one with /planner — Claude Code, Codex and OpenCode plan with no API key. ' +
+      'To plan with OpenAI instead, add OPENAI_API_KEY with /key.',
+    );
+  });
+
+  it('refuses a Gemini planner with no Gemini key even when an OpenRouter key is stored', async () => {
+    __setConfig({ aiProvider: 'google', orchestratorModel: 'gemini-2.5-pro' });
+    const config = new VsCodeConfig(await store({ openrouterKey: 'sk-or-secret' }));
+
+    expect(plannerPreflightError(config)).toContain('GEMINI_API_KEY');
+    expect(config.apiKey).toBe('');
+  });
+
+  it('passes a planner whose own key is in the legacy setting', async () => {
+    __setConfig({ aiProvider: 'google', orchestratorModel: 'gemini-2.5-pro', apiKey: 'g-legacy' });
+    const config = new VsCodeConfig(await store({}));
+
+    expect(plannerPreflightError(config)).toBeNull();
+    expect(config.apiKey).toBe('g-legacy');
   });
 });

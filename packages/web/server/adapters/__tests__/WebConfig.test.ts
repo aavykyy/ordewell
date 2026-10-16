@@ -224,5 +224,114 @@ describe('WebConfig', () => {
       setEnv('OPENROUTER_API_KEY', 'sk-or-test');
       expect(new WebConfig().aiProvider).toBe('openrouter');
     });
+
+    it('keeps an explicit keyless OpenRouter choice instead of replacing it with the agent', () => {
+      recordInstalledPlanner('claude-code');
+      setEnv('AI_PROVIDER', 'openrouter');
+      const config = new WebConfig();
+      expect(config.aiProvider).toBe('openrouter');
+      expect(config.apiKey).toBe('');
+    });
+
+    it('keeps an explicit Codex choice when Claude Code is installed', () => {
+      recordInstalledPlanner('claude-code');
+      setEnv('AI_PROVIDER', 'codex');
+      expect(new WebConfig().aiProvider).toBe('codex');
+    });
+
+    it('updates a memoized fallback when the probe records a later agent', () => {
+      const config = new WebConfig();
+      expect(config.aiProvider).toBe('openrouter');
+      recordInstalledPlanner('opencode');
+      expect(config.aiProvider).toBe('opencode');
+    });
+
+    it('keeps the detected agent when a stale vendor model is set without a key', () => {
+      recordInstalledPlanner('claude-code');
+      setEnv('ORCHESTRATOR_MODEL', 'openai/gpt-4o');
+      const config = new WebConfig({ providerModelLists: { openrouter: ['openai/gpt-4o'], google: [], openai_compatible: [] } });
+      expect(config.aiProvider).toBe('claude-code');
+    });
+
+    it('a stale vendor model with that vendor\'s key still picks the vendor', () => {
+      recordInstalledPlanner('claude-code');
+      setEnv('ORCHESTRATOR_MODEL', 'gemini-2.5-pro');
+      setEnv('GEMINI_API_KEY', 'sk-gem-test');
+      const config = new WebConfig({ providerModelLists: { openrouter: ['openai/gpt-4o'], google: ['gemini-2.5-pro'], openai_compatible: [] } });
+      expect(config.aiProvider).toBe('google');
+    });
+
+    it('an explicit AI_PROVIDER wins over a stale vendor model and the installed agent', () => {
+      recordInstalledPlanner('claude-code');
+      setEnv('ORCHESTRATOR_MODEL', 'openai/gpt-4o');
+      const lists = { openrouter: ['openai/gpt-4o'], google: [], openai_compatible: [] };
+      setEnv('AI_PROVIDER', 'codex');
+      expect(new WebConfig({ providerModelLists: lists }).aiProvider).toBe('codex');
+      setEnv('AI_PROVIDER', 'openrouter');
+      expect(new WebConfig({ providerModelLists: lists }).aiProvider).toBe('openrouter');
+    });
+
+    it('a vendor key with no model still wins over the installed agent', () => {
+      recordInstalledPlanner('claude-code');
+      setEnv('GEMINI_API_KEY', 'sk-gem-test');
+      const config = new WebConfig({ providerModelLists: { openrouter: ['openai/gpt-4o'], google: ['gemini-2.5-pro'], openai_compatible: [] } });
+      expect(config.aiProvider).toBe('google');
+    });
+
+    it('with no installed agent a keyless vendor model still names its vendor', () => {
+      setEnv('ORCHESTRATOR_MODEL', 'gemini-2.5-pro');
+      const config = new WebConfig({ providerModelLists: { openrouter: ['openai/gpt-4o'], google: ['gemini-2.5-pro'], openai_compatible: [] } });
+      expect(config.aiProvider).toBe('google');
+    });
+
+    it('moves to the model\'s vendor when its key arrives mid-session', () => {
+      recordInstalledPlanner('claude-code');
+      setEnv('ORCHESTRATOR_MODEL', 'openai/gpt-4o');
+      const config = new WebConfig({ providerModelLists: { openrouter: ['openai/gpt-4o'], google: [], openai_compatible: [] } });
+      expect(config.aiProvider).toBe('claude-code');
+
+      setEnv('OPENROUTER_API_KEY', 'sk-or-test');
+
+      expect(config.aiProvider).toBe('openrouter');
+    });
+  });
+
+  describe('aiProvider follows explicit choices and credential changes', () => {
+    afterEach(() => resetInstalledPlanner());
+
+    it('an explicit vendor AI_PROVIDER wins over a keyed vendor list that holds the model', () => {
+      setEnv('AI_PROVIDER', 'google');
+      setEnv('OPENROUTER_API_KEY', 'sk-or-test');
+      setEnv('GEMINI_API_KEY', 'sk-gem-test');
+      setEnv('ORCHESTRATOR_MODEL', 'openai/gpt-4o');
+      const config = new WebConfig({ providerModelLists: { openrouter: ['openai/gpt-4o'], google: [], openai_compatible: [] } });
+      expect(config.aiProvider).toBe('google');
+    });
+
+    // A session keeps one config while the settings route rewrites keys under
+    // it: the same instance must answer what a fresh one would.
+    it('the same instance goes back to the agent when the last key is removed', () => {
+      recordInstalledPlanner('claude-code');
+      setEnv('OPENROUTER_API_KEY', 'sk-or-test');
+      setEnv('ORCHESTRATOR_MODEL', 'openai/gpt-4o');
+      const config = new WebConfig({ providerModelLists: { openrouter: ['openai/gpt-4o'], google: [], openai_compatible: [] } });
+      expect(config.aiProvider).toBe('openrouter');
+
+      setEnv('OPENROUTER_API_KEY', '');
+
+      expect(config.aiProvider).toBe('claude-code');
+      expect(config.aiProvider).toBe(new WebConfig().aiProvider);
+    });
+
+    it('the same instance follows an endpoint set after a read, as a fresh one does', () => {
+      recordInstalledPlanner('claude-code');
+      const config = new WebConfig();
+      expect(config.aiProvider).toBe('claude-code');
+
+      setEnv('OPENROUTER_BASE_URL', 'http://localhost:9999/v1');
+
+      expect(config.aiProvider).toBe(new WebConfig().aiProvider);
+      expect(config.aiProvider).toBe('openrouter');
+    });
   });
 });

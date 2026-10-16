@@ -82,8 +82,12 @@ export interface OrchestratorPoolDeps {
   runnerInstallation?: Pick<RunnerInstallation, 'filterInstalled' | 'plannerUsability'>;
 }
 
+interface PendingStart { stopped: boolean }
+
 export class OrchestratorPool {
   private sessions = new Map<string, Session>();
+  /** Starts waiting on the installed-planner probe, by the session they would run in. */
+  private pendingStarts = new WeakMap<Session, Set<PendingStart>>();
   private clients = new Map<string, Set<WebSocket>>();
   private registry: CoreRunnerRegistry = new RunnerRegistry();
   private modelResolver: ModelResolver;
@@ -131,8 +135,19 @@ export class OrchestratorPool {
    * nothing is left to stop it. Every later turn passes the session's own gate.
    */
   private async plannerTurnMayStart(sessionId: string, session: Session): Promise<void> {
-    await installedPlannerDetected();
-    if (this.sessions.get(sessionId) !== session) throw new PlannerTurnDiscardedError();
+    // Stop has no turn to abort while the probe is out, so the wait itself is
+    // what it cancels: otherwise the goal the user stopped starts anyway.
+    const wait: PendingStart = { stopped: false };
+    let waits = this.pendingStarts.get(session);
+    if (!waits) this.pendingStarts.set(session, (waits = new Set()));
+    waits.add(wait);
+    try {
+      await installedPlannerDetected();
+    } finally {
+      waits.delete(wait);
+      if (waits.size === 0) this.pendingStarts.delete(session);
+    }
+    if (wait.stopped || this.sessions.get(sessionId) !== session) throw new PlannerTurnDiscardedError();
   }
 
   subscribe(sessionId: string, ws: WebSocket): void {
@@ -203,11 +218,7 @@ export class OrchestratorPool {
       ensureStateDirIgnored(workspace);
       assertWorkspaceIsProject(workspace);
     }
-    const config = new WebConfig({
-      enabledRunners: this.enabledRunnerOverride(),
-      modelOverride,
-      providerModelLists: this.cachedProviderLists,
-    });
+    const config = this.plannerConfig(modelOverride);
     const fsAdapter = new PoolFileSystem(workspace);
     const broadcast = (msg: SessionMessage) => this.broadcast(sessionId, msg);
     const runner = new PoolAwareRunner(sessionId, broadcast, this.runner);
@@ -224,6 +235,21 @@ export class OrchestratorPool {
       modelResolver: this.modelResolver,
       settings: () => this.runtimeSettings(),
       sessionId,
+    });
+  }
+
+  /**
+   * The one way the pool builds a config that answers "who plans": sessions,
+   * the settings response and the switch judgement all route through it, so
+   * what the settings route reports is what the next turn plans with. The
+   * lists are handed over as a reader, not a snapshot, so a credential change
+   * reaches a session that is already open.
+   */
+  private plannerConfig(modelOverride?: string): WebConfig {
+    return new WebConfig({
+      enabledRunners: this.enabledRunnerOverride(),
+      modelOverride,
+      providerModelLists: () => this.cachedProviderLists,
     });
   }
 
@@ -251,7 +277,7 @@ export class OrchestratorPool {
   }
 
   getSettings(): SettingsResponse {
-    const config = new WebConfig({ enabledRunners: this.enabledRunnerOverride() });
+    const config = this.plannerConfig();
     const userSettings = this.settingsService.getAll();
     return {
       orchestratorModel: config.orchestratorModel,
@@ -305,10 +331,7 @@ export class OrchestratorPool {
    * model id, so this is read again after a write rather than carried over.
    */
   private plannerProviderInEffect(): PlannerBackendId {
-    return new WebConfig({
-      enabledRunners: this.enabledRunnerOverride(),
-      providerModelLists: this.cachedProviderLists,
-    }).aiProvider;
+    return this.plannerConfig().aiProvider;
   }
 
   updateSettings(changes: Record<string, unknown>): SettingsUpdateResponse {
@@ -373,6 +396,7 @@ export class OrchestratorPool {
       if (touched) {
         this.modelResolver.invalidate();
         this.modelResolver.refreshRunnerModels();
+        this.dropUnkeyedProviderLists();
       }
     }
 
@@ -408,6 +432,21 @@ export class OrchestratorPool {
     if (rejectedEnvKeys.length > 0) settings.rejectedEnvKeys = rejectedEnvKeys;
     if (selection?.recall) settings.switchRecall = selection.recall;
     return settings;
+  }
+
+  /**
+   * A vendor whose credential is gone keeps no list to route a model to it,
+   * or the next turn would be sent to a planner the settings response no
+   * longer names. Pruned rather than cleared: the vendors that still hold a
+   * key keep routing their models until the catalog is discovered again, so
+   * adding a second key does not move the planner off the first.
+   */
+  private dropUnkeyedProviderLists(): void {
+    if (!this.cachedProviderLists) return;
+    const keyed = new Set<string>(configuredProviders(new WebConfig()));
+    this.cachedProviderLists = Object.fromEntries(
+      Object.entries(this.cachedProviderLists).filter(([provider]) => keyed.has(provider)),
+    );
   }
 
   setOrchestratorModel(model: string): string {
@@ -562,7 +601,18 @@ export class OrchestratorPool {
    * session that simply is not planning right now.
    */
   cancelPlanning(sessionId: string): boolean {
-    return this.sessions.get(sessionId)?.abortPlannerTurn() ?? false;
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    // Keyed by session, not id: a goal sent after the Stop replaces the
+    // session under the same id and its own wait must not be cancelled.
+    let cancelledWait = false;
+    for (const wait of this.pendingStarts.get(session) ?? []) {
+      if (!wait.stopped) cancelledWait = true;
+      wait.stopped = true;
+    }
+    // Both run: a turn can be in flight while a later one is still waiting.
+    const aborted = session.abortPlannerTurn();
+    return aborted || cancelledWait;
   }
 
   /**

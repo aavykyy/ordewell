@@ -1,11 +1,12 @@
 import React from 'react';
 import type { GlobalRunSettings } from '@ordewell/core';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
+import PlanApprovalNote, { type HostRunSettings } from './PlanApprovalNote';
 
 interface EmptyStateProps {
   onLoadSession?: () => void;
   /** The user's autonomy level and run settings (ADR-0030); absent until the host sends them. */
-  runSettings?: { autonomous: boolean; run: GlobalRunSettings } | null;
+  runSettings?: HostRunSettings | null;
 }
 
 /** One Setup row: what is set, and the command that changes it. */
@@ -80,10 +81,7 @@ export default function EmptyState({ onLoadSession, runSettings }: EmptyStatePro
         Describe your goal and Ordewell will research your codebase,
         generate a structured task plan, and execute it.
       </p>
-      {/* Autorun defaults off, so the approve line stands until the host says otherwise. */}
-      {runSettings?.run.autorun
-        ? <p className="warn">Autorun is on — a plan starts as soon as the planner submits it. Change it in /autorun.</p>
-        : <p>Nothing runs until you approve the plan.</p>}
+      <PlanApprovalNote runSettings={runSettings} />
       {runSettings && (
         <div className="empty-state-setup">
           <SetupRow label="Autonomy" value={runSettings.autonomous ? 'Full' : 'Guarded'} warn={runSettings.autonomous} command="/auto" />

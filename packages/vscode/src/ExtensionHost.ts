@@ -6,7 +6,7 @@ import {
 import { registerCommands, type CommandDeps } from './commands/CommandRegistry';
 import { handleSlashCommand, type SlashDeps } from './commands/SlashParser';
 import { confirmRisks } from './commands/runSettings';
-import { handleApprovePlan, handleSessionMessage, handleStartPlanning, type PlanManagerDeps } from './plan/PlanManager';
+import { cancelPendingPlannerStarts, handleApprovePlan, handleSessionMessage, handleStartPlanning, type PlanManagerDeps } from './plan/PlanManager';
 import { routeWebviewMessage, type WebviewRouterDeps } from './plan/webviewRouter';
 import { saveCurrentSession, restoreState, persistState, type PersistenceDeps } from './state/StatePersistence';
 import { ModelDiscovery, sendModelConfig } from './ModelDiscovery';
@@ -414,6 +414,9 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
 
   function dispose(): void {
     log('Ordewell deactivating...');
+    // A goal still waiting for the activation probe must not start planner
+    // turns once the host has stopped its runners.
+    if (sessionCell.current) cancelPendingPlannerStarts(sessionCell.current);
     taskLogs.dispose();
     persistState(persistenceDeps());
     services.runner.stopAll();

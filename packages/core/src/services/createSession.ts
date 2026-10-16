@@ -42,7 +42,7 @@ import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
 import { flattenTasks, keepExecutionState, stampOrigin, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskSnapshot, type RunnerId } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
-import { PlannerNotReadyError, configuredPlannerNotReady } from './plannerReadiness';
+import { PlannerNotReadyError, plannerNotReadyFor } from './plannerReadiness';
 import { installedPlannerAnswered, installedPlannerDetected } from './InstalledPlanner';
 import type { IConfig, PlannerBackendId } from '../interfaces/IConfig';
 import type { IFileSystem } from '../interfaces/IFileSystem';
@@ -1091,7 +1091,7 @@ export class Session {
    * the session.
    */
   assertPlannerReady(): void {
-    const reason = configuredPlannerNotReady(this.config);
+    const reason = plannerNotReadyFor(this.config);
     if (reason) throw new PlannerNotReadyError(reason);
   }
 
