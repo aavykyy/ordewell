@@ -3,9 +3,11 @@ import { createTask, type LegacyPlanState } from '../../models/Task';
 import type { ConversationTurn } from '../AiService';
 import type { IConfig } from '../../interfaces/IConfig';
 import { detectInstalledPlanner, recordInstalledPlanner, recordedInstalledPlanner, resetInstalledPlanner } from '../InstalledPlanner';
-import { PlannerTurnStoppedError } from '../PlannerConversation';
+import { PlannerTurnDiscardedError, PlannerTurnStoppedError } from '../PlannerConversation';
 import { PlannerNotReadyError } from '../plannerReadiness';
+import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { fakeConfig, makeSession, testWorkspace } from './sessionTestKit';
+import { recordingRunner } from './supervisorTestKit';
 
 /**
  * The one gate every planner turn passes before it opens (ADR-0009): it waits
@@ -228,3 +230,98 @@ describe('after the selected vendor\'s key is taken away', () => {
     });
   }
 });
+
+describe('Stop while a turn waits at the gate', () => {
+  /** A draft saved mid-conversation, with the user's answer no turn took before the reload. */
+  function draftWithPending(text: string): LegacyPlanState {
+    return { ...savedPlan([text]), tasks: [], status: 'draft' };
+  }
+
+  /** Autorun on, and a planner that submits a plan for whatever it is asked: the run would start on its own. */
+  function autorunning() {
+    const config = keylessConfig();
+    const runner = recordingRunner();
+    const asked: string[] = [];
+    const submitted = (): ConversationTurn => ({ kind: 'plan', tasks: [createTask({ id: 'p1', order: 1, title: 'Do it', prompt: 'do it', assignedRunner: 'claude-code' })], text: '1. Do it', researchLog: [] });
+    const aiService = {
+      startConversation: vi.fn(async () => submitted()),
+      hasActiveConversation: () => true,
+      continueConversation: vi.fn(async (message: string) => {
+        asked.push(message);
+        return message.includes('<conversation_summary>') ? prose('<conversation_summary>Built it.</conversation_summary>') : submitted();
+      }),
+      reset: vi.fn(),
+    };
+    const session = makeSession({ config, aiService, runner: runner.runner, settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', autorun: true } }) });
+    return { session, runner, asked, aiService };
+  }
+
+  it('cancels a restored message, so the probe answering later opens no turn and autorun starts nothing', async () => {
+    const env = autorunning();
+    const probe = heldProbe();
+    env.session.loadPlan(draftWithPending('Postgres'), 'build it', testWorkspace);
+    await settle();
+
+    const stopped = env.session.abortPlannerTurn();
+    probe.answer(true);
+    await settle();
+    await settle();
+
+    expect(env.asked).toEqual([]);
+    expect(env.runner.spawnedIds()).toEqual([]);
+    // Dropped as a stopped turn's message is: it does not come back after another reload.
+    expect(pendingTexts(env.session.planState)).toEqual([]);
+    expect(stopped).toBe(true);
+  });
+
+  it('tells a caller waiting there that its message was stopped, and a message sent after the Stop goes once the probe answers', async () => {
+    const env = autorunning();
+    const probe = heldProbe();
+    env.session.loadPlan(draftWithPending('Postgres'), 'build it', testWorkspace);
+    const before = env.session.continueConversation('and Redis');
+    await settle();
+
+    expect(env.session.abortPlannerTurn()).toBe(true);
+    await expect(before).rejects.toBeInstanceOf(PlannerTurnStoppedError);
+    const after = env.session.continueConversation('use SQLite instead');
+    await settle();
+    expect(env.asked).toEqual([]);
+
+    probe.answer(true);
+    await after;
+    expect(env.asked).toHaveLength(1);
+    expect(env.asked[0]).toContain('use SQLite instead');
+    expect(env.asked[0]).not.toMatch(/Postgres|Redis/);
+  });
+
+  it('stops a compaction waiting there at once, and the probe answering later summarises nothing', async () => {
+    const env = autorunning();
+    const probe = heldProbe();
+    env.session.loadPlan(savedPlan(), 'build it', testWorkspace);
+    const compaction = env.session.compactConversation();
+    await settle();
+
+    expect(env.session.abortPlannerTurn()).toBe(true);
+    await expect(compaction).rejects.toBeInstanceOf(PlannerTurnStoppedError);
+    probe.answer(true);
+    await settle();
+    await settle();
+
+    expect(env.asked).toEqual([]);
+    expect(env.session.abortPlannerTurn()).toBe(false);
+  });
+
+  it('leaves a session destroyed while a compaction waits there to discard it, as before', async () => {
+    const env = autorunning();
+    const probe = heldProbe();
+    env.session.loadPlan(savedPlan(), 'build it', testWorkspace);
+    const compaction = env.session.compactConversation();
+
+    env.session.destroy();
+    probe.answer(true);
+
+    await expect(compaction).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
+    expect(env.asked).toEqual([]);
+  });
+});
+

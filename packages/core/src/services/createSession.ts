@@ -455,6 +455,8 @@ export class Session {
   private readonly turns: PlanTurns;
   /** Destroyed: a turn that waited for the planner to be found must not open on it. */
   private closed = false;
+  /** Turns PlanTurns does not open, waiting at the planner gate: a Stop ends each before it opens. */
+  private readonly openingsWaiting = new Set<() => void>();
   private readonly editor: PlanEditor;
   private readonly commands: ExecutionCommands;
   private readonly supervision: RunSupervision;
@@ -1111,10 +1113,16 @@ export class Session {
       return null;
     }
     const plan = this.plan;
-    return installedPlannerDetected().then(() => {
-      if (this.closed || this.plan !== plan) throw new PlannerTurnDiscardedError();
-      if (signal?.aborted) throw new PlannerTurnStoppedError();
-      this.assertPlannerReady();
+    return new Promise<void>((resolve, reject) => {
+      const stop = () => reject(new PlannerTurnStoppedError());
+      this.openingsWaiting.add(stop);
+      installedPlannerDetected().then(() => {
+        // Stopped meanwhile: its caller has heard, and the probe's answer must not open it after all.
+        if (!this.openingsWaiting.delete(stop)) return;
+        if (this.closed || this.plan !== plan) throw new PlannerTurnDiscardedError();
+        if (signal?.aborted) throw new PlannerTurnStoppedError();
+        this.assertPlannerReady();
+      }).then(resolve, reject);
     });
   }
 
@@ -1123,10 +1131,15 @@ export class Session {
 
   /**
    * Stop the planner turn in flight. It still settles — a backend hands back
-   * what it had — and ends as stopped. False when no turn is in flight.
+   * what it had — and ends as stopped. A turn still waiting at the planner
+   * gate is stopped too, before it opens. False when there was neither.
    */
   abortPlannerTurn(): boolean {
-    return this.conversation.stopTurn();
+    const inFlight = this.conversation.stopTurn();
+    const waiting = this.turns.stopWaiting() || this.openingsWaiting.size > 0;
+    for (const stop of this.openingsWaiting) stop();
+    this.openingsWaiting.clear();
+    return inFlight || waiting;
   }
 
   async generatePlan(goal: string, runners: RunnerId[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {

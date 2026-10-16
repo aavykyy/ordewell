@@ -463,4 +463,35 @@ describe('the planner gate', () => {
     await expect(forced).rejects.toBe(refusal);
     await expect(second).rejects.toBe(refusal);
   });
+
+  it('a Stop while a wake-up waits for the planner ends it as a stopped turn\'s: dropped, its caller told, and never opened', async () => {
+    const { host, turns, current } = fakeHost();
+    let found!: () => void;
+    host.plannerDetecting.mockReturnValue(new Promise<void>((resolve) => { found = resolve; }));
+    const runner = new PlanTurns(host);
+
+    const delivered = runner.enqueue(wakeUp);
+    await flushMicrotasks();
+    expect(runner.stopWaiting()).toBe(true);
+    await expect(delivered).rejects.toBeInstanceOf(PlannerTurnStoppedError);
+    expect(current.plan!.pendingTurns).toEqual([]);
+
+    host.plannerDetecting.mockReturnValue(null);
+    found();
+    await flushMicrotasks();
+    expect(turns).toHaveLength(0);
+    expect(runner.stopWaiting()).toBe(false);
+  });
+
+  it('a Stop leaves a turn already open to the conversation: nothing waits at the gate', async () => {
+    const { host, turns } = fakeHost();
+    const runner = new PlanTurns(host);
+
+    void runner.enqueue({ source: 'user', text: 'one' });
+    void runner.enqueue({ source: 'user', text: 'two' });
+
+    expect(turns).toHaveLength(1);
+    expect(runner.stopWaiting()).toBe(false);
+  });
 });
+
