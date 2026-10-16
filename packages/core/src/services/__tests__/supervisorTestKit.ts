@@ -97,6 +97,8 @@ export interface Options {
   settings?: Partial<GlobalRunSettings>;
   config?: Partial<IConfig>;
   isolation?: IWorktreeIsolation;
+  /** False leaves the plan as loaded, never executed by the user. */
+  execute?: boolean;
 }
 
 /** A session running `tasks` under the user's supervisor level, Watch unless the options say otherwise. */
@@ -118,7 +120,7 @@ export async function supervised(tasks: Task[] = [task('t1', 1), task('t2', 2)],
     ...(options.isolation ? { workspaceRoot: () => '/repo' } : {}),
   });
   session.loadPlan(plan(tasks, options.plan), 'build it', options.isolation ? '/repo' : testWorkspace);
-  await session.executePlan();
+  if (options.execute !== false) await session.executePlan();
   return { session, planner, run, messages, notices, settings };
 }
 

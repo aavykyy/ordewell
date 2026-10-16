@@ -132,6 +132,15 @@ describe('handleApprovalEvent', () => {
     expect(vi.mocked(d.write).mock.calls.join('')).toMatch(/ORDEWELL_APPROVAL_ALLOW|--yes/);
   });
 
+  it('refuses a start it cannot ask about, and says how the user starts it themselves', async () => {
+    const d = deps({ interactive: false });
+    await handleApprovalEvent('s1', { type: 'approval_request', id: 'ap-3', kind: 'task_start', subject: 'Run the plan', scope: 'Run the plan' }, d);
+
+    expect(d.ask).not.toHaveBeenCalled();
+    expect(d.respond).toHaveBeenCalledWith('s1', 'ap-3', false);
+    expect(vi.mocked(d.write).mock.calls.join('')).toContain('  Not started: there is no terminal here to ask you. Start it yourself with `ordewell run`, or Execute plan in the TUI or VS Code.\n');
+  });
+
   it('does not fail the planning run when the answer cannot be delivered', async () => {
     const d = deps({ respond: vi.fn().mockRejectedValue(new Error('connection reset')) });
 
