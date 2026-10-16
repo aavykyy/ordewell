@@ -24,7 +24,7 @@ export type ExecutionCommand =
   | { command: 'answer_approval'; task: string; approval?: string; answer: string; note?: string }
   /** Merge all: the run's landed work into the user's branch (ADR-0013). */
   | { command: 'merge_all' }
-  /** End a task as skipped: nothing it did lands, and its dependents go ahead without it. `reason` is required of anyone but the user. */
+  /** End a task as skipped: nothing it did lands, and its dependents go ahead without it once the work it waited on is done. `reason` is required of anyone but the user. */
   | { command: 'skip_task'; task: string; reason?: string };
 
 /**
@@ -107,8 +107,8 @@ export interface ExecutionHost {
   maxParallel(): number;
   /** The run waits on the user to stash or skip isolation before anything starts. */
   runBlocked(): boolean;
-  /** A dependency is met once its work is where the dependent will run. */
-  dependencyMet(depId: string): boolean;
+  /** The tasks a task's dependencies still hold it back for: unmet dependencies, or the unfinished work behind a skipped one. */
+  unmetDependencies(task: Readonly<Task>): string[];
   /** The ancestors a task would wait on at its merge gate if it started now, whatever its status (ADR-0020). */
   mergeGate(taskId: string): string[];
   /** The failed tasks a task not started waits on through its dependencies (ADR-0034). */
@@ -490,10 +490,12 @@ export class ExecutionCommands {
     const approval = this.unapproved(located, actor);
     if (approval && 'refusal' in approval) return approval;
 
-    const unmet = task.dependencies.filter((id) => !this.host.dependencyMet(id)).flatMap((id) => this.located(id, tasks) ?? []);
+    const unmet = this.host.unmetDependencies(task).flatMap((id) => this.located(id, tasks) ?? []);
     if (unmet.length > 0) {
       const one = unmet.length === 1;
-      return { refusal: `${capitalize(label)} depends on ${unmet.map((dep) => `${describe(dep)} (${depState(dep.task)})`).join(', ')}, which ${one ? 'has' : 'have'} not finished. It can start once ${one ? 'it has' : 'they have'}.` };
+      // Work reached through a skip is not a dependency the caller can see on the task.
+      const behindSkip = unmet.some((dep) => !task.dependencies.includes(dep.task.id)) ? ': skipping a task does not skip the work behind it' : '';
+      return { refusal: `${capitalize(label)} depends on ${unmet.map((dep) => `${describe(dep)} (${depState(dep.task)})`).join(', ')}, which ${one ? 'has' : 'have'} not finished${behindSkip}. It can start once ${one ? 'it has' : 'they have'}.` };
     }
     const gate = this.host.mergeGate(task.id).flatMap((id) => this.located(id, tasks) ?? []);
     if (gate.length > 0) {
@@ -679,7 +681,7 @@ export class ExecutionCommands {
     return {
       act: async () => {
         await this.host.skipTask(task.id, why, actor);
-        return { message: `Skipped ${label}: none of its work lands, and the tasks that depend on it go ahead without it, told why.` };
+        return { message: `Skipped ${label}: none of its work lands, and the tasks that depend on it go ahead without it once the work it waited on is done, told why.` };
       },
     };
   }

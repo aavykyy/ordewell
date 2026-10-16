@@ -92,6 +92,22 @@ describe('the command seam: run_task', () => {
     expect(env.timeline().at(-1)!.text).toBe(`The planner asked to start task #2 "Task t2"; refused: ${outcome.message}`);
   });
 
+  it('refuses a task whose skipped dependency waits on unfinished work, naming that work, and starts it once that work is done', async () => {
+    const env = setup();
+    env.session.loadPlan(plan([task('t1', 1), task('t2', 2, { status: 'skipped', dependencies: ['t1'] }), task('t3', 3, { dependencies: ['t2'] })]), 'goal', testWorkspace, { persist: false });
+
+    const outcome = await env.run({ command: 'run_task', task: 't3' });
+
+    expect(outcome).toEqual({ ok: false, outcome: 'refused', message: 'Task #3 "Task t3" depends on task #1 "Task t1" (not started), which has not finished: skipping a task does not skip the work behind it. It can start once it has.' });
+    expect(env.spawn).not.toHaveBeenCalled();
+
+    await env.run({ command: 'run_task', task: 't1' });
+    env.latest('t1').reportComplete({ status: 'done', summary: 'did t1' });
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('completed'));
+    expect(await env.run({ command: 'run_task', task: 't3' })).toEqual({ ok: true, message: 'Started task #3 "Task t3".' });
+    expect(env.spawned('t3')).toHaveLength(1);
+  });
+
   it('refuses a task a failure blocks through its dependencies, naming the failed task to retry (ADR-0034)', async () => {
     const env = setup();
     env.session.loadPlan(plan([task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { dependencies: ['t2'] })]), 'goal', testWorkspace, { persist: false });
@@ -754,7 +770,7 @@ describe('the command seam: skip_task', () => {
 
     const outcome = await env.run({ command: 'skip_task', task: '1', reason: 'the host cannot run it' }, ACT);
 
-    expect(outcome).toEqual({ ok: true, message: 'Skipped task #1 "Task t1": none of its work lands, and the tasks that depend on it go ahead without it, told why.' });
+    expect(outcome).toEqual({ ok: true, message: 'Skipped task #1 "Task t1": none of its work lands, and the tasks that depend on it go ahead without it once the work it waited on is done, told why.' });
     expect(taskOf(env.session, 't1')!.status).toBe('skipped');
     expect(env.cards()).toHaveLength(0);
     await vi.waitFor(() => expect(env.spawned('t2')).toHaveLength(1));
@@ -871,7 +887,7 @@ describe('the command seam\'s extension points', () => {
       tasks: () => tasks, planApproved: () => true, taskApproved: () => true, approve: vi.fn(), autonomous: () => true, autorun: () => false,
       scheduling: () => false, startsHeld: () => false, hasLiveWork: () => true, startsPending: () => false, admitStart: admission,
       running: () => true, maxParallel: () => 3, runBlocked: () => false,
-      dependencyMet: () => true, mergeGate: () => [], blockedBy: () => [], waitingRequests: () => [],
+      unmetDependencies: () => [], mergeGate: () => [], blockedBy: () => [], waitingRequests: () => [],
       runPlan: vi.fn(), startTask: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), retryTask: vi.fn(), skipTask: vi.fn(), continueTask: vi.fn(), resumeNow: vi.fn(),
       messageTask: vi.fn(), denyRequest: vi.fn(), mergeAll: vi.fn(), record: vi.fn(), guardTripped: vi.fn(), heldEdit: () => false, editedTasks: () => tasks, deferUntilLanded: vi.fn(), queuedNotRun: vi.fn(),
     };

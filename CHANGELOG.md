@@ -66,6 +66,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   your branch**, including work its dependencies depend on — so an ops task
   after a verification no longer acts on your checkout before the fix that
   verification checked is merged.
+- **Skipping a task no longer lets what depends on it start ahead of the work
+  that task was waiting on**: its dependents start once that work is done,
+  and a refused `run_task` names it.
 
 ## [0.10.2] — 2026-10-14
 

@@ -48,7 +48,7 @@ export async function handleSkip(subArgs: string[], api?: ApiClient): Promise<vo
     async (client, sessionId, taskId) => {
       try {
         await client.skipTask(sessionId, taskId, flag(subArgs, '--reason'));
-        console.log('Task skipped: none of its work lands, and the tasks that depend on it go ahead without it.');
+        console.log('Task skipped: none of its work lands, and the tasks that depend on it go ahead without it once the work it waited on is done.');
       } catch (err) {
         console.error(`Failed to skip task: ${(err as Error).message}`);
         process.exit(1);

@@ -25,7 +25,7 @@ import { IsolationRunController } from './IsolationRunController';
 import { completesTask, Landing, type LandingMessage, type LandingOutcome, type UnlandedOutcome } from './Landing';
 import { classifyRunnerStop, readUsageLimitReset, stopsRunner, type AttemptEnd } from './runnerExit';
 import { UsageLimitWaits } from './UsageLimitWaits';
-import { mergeGate, selectReadyTasks, type Readiness } from './readiness';
+import { dependencyMet, mergeGate, selectReadyTasks, type Readiness } from './readiness';
 import { blockingFailures } from './blocking';
 import {
   attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, mergeExcludes, takesSkills,
@@ -1406,8 +1406,8 @@ export class TaskOrchestrator {
    * Skip: end a task as `skipped`, with no verdict and nothing of its work
    * landed. Its worktree is kept, as a failed attempt's is, so the user can
    * still look at it or Mark complete it later. Its dependents go ahead
-   * without it, and a run that ended on a failure continues for them, as a
-   * retry would continue it. A running task is stopped before it is skipped.
+   * without it once the work it waited on is done, and a run that ended on a
+   * failure continues for them, as a retry would continue it. A running task is stopped before it is skipped.
    */
   async skipTask(taskId: string, reason?: string, origin: RunOrigin = 'user'): Promise<void> {
     const task = this.store.get(taskId);
@@ -1420,7 +1420,7 @@ export class TaskOrchestrator {
       this.verifier.clear(task);
       this.store.markSkipped(taskId, reason?.trim() || undefined);
       this.onHold.delete(taskId);
-      this.notifications.info(`Task "${task.title}" skipped: none of its work lands, and the tasks that depend on it go ahead without it.`);
+      this.notifications.info(`Task "${task.title}" skipped: none of its work lands, and the tasks that depend on it go ahead without it once the work it waited on is done.`);
       this.emit('onTaskChanged');
       await this.runs.release(taskId, { keep: true }, ended?.integration);
       // A Stop while the worktree was kept leaves the run stopped: the skip stands, and nothing it released starts.
@@ -1802,9 +1802,9 @@ export class TaskOrchestrator {
     if (!this.running) return;
     if (this.mergesAutomatically() && !this.autoMergeBlocked && !this.merging
       && ![...this.attempts.values()].some((a) => mergeExcludes(a.kind))) {
-      // A skipped dependency waits on nothing, but the work behind it still gates (see mergeGate).
+      // A skipped dependency holds nothing back once the work behind it is done, and that work still gates (see mergeGate).
       const gate = this.store.allTasks.find((t) => this.getMergeGate(t.id).length > 0
-        && !this.onHold.has(t.id) && t.dependencies.every((id) => this.store.isCompleted(id) || this.store.isSkipped(id)));
+        && !this.onHold.has(t.id) && t.dependencies.every((id) => this.store.isCompleted(id) || (this.store.isSkipped(id) && dependencyMet(id, this.store, this.runs))));
       if (gate) {
         // Another landing must not repeatedly attempt a merge the user now
         // needs to resolve. A user merge or a new run releases this hold.

@@ -58,7 +58,7 @@ import { PlanEditError } from './PlanEditError';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { ExecutionCommands, mergeStopped, type CommandOutcome, type ExecutionCommand, type ExecutionHost } from './ExecutionCommands';
 import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
-import { dependencyMet, mergeGate } from './readiness';
+import { mergeGate, unmetDependencies } from './readiness';
 import { TurnEffects } from './TurnEffects';
 
 /**
@@ -719,7 +719,8 @@ export class Session {
       running: (taskId) => this.orchestrator.getAttempt(taskId) !== undefined,
       maxParallel: () => this.config.maxParallelSessions,
       runBlocked: () => this.runs.blocked,
-      dependencyMet: (depId) => dependencyMet(depId, this.store, this.runs),
+      // Takes the task, not its id: one added by a held edit is not in the store yet.
+      unmetDependencies: (task) => unmetDependencies(task, this.store, this.runs),
       // Judged whatever the task's status: a retry of a failed ops task acts on the checkout as a first start does.
       mergeGate: (taskId) => {
         const task = this.store.get(taskId);

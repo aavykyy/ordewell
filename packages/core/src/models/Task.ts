@@ -43,7 +43,8 @@ export interface TaskOutputSummary {
 export type TaskType = 'ai' | 'user';
 /**
  * `skipped` is terminal and verdict-less: the task will not be waited for, and
- * nothing it did lands. Its dependents go ahead without it.
+ * nothing it did lands. Its dependents go ahead without it once the work it
+ * waited on is done.
  */
 export type TaskStatus = 'pending' | 'approved' | 'in_progress' | 'completed' | 'failed' | 'blocked' | 'awaiting_user' | 'skipped';
 export type TaskMode = string;
