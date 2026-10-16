@@ -44,6 +44,22 @@ describe('findInstalledPlanner', () => {
     const inst = new RunnerInstallation(registryWith(...ALL), installedOnly());
     expect(await findInstalledPlanner(inst)).toBeNull();
   });
+
+  it('counts one agent\'s failing check as not usable for that agent only', async () => {
+    const throwsForClaude = { plannerUsability: vi.fn(async (runner: string) => {
+      if (runner === 'claude-code') throw new Error('boom');
+      return { usable: runner === 'codex' };
+    }) };
+    expect(await findInstalledPlanner(throwsForClaude)).toBe('codex');
+  });
+
+  it('keeps the display order when a higher-priority check fails', async () => {
+    const allUsableButClaudeThrows = { plannerUsability: vi.fn(async (runner: string) => {
+      if (runner === 'claude-code') throw new Error('boom');
+      return { usable: true };
+    }) };
+    expect(await findInstalledPlanner(allUsableButClaudeThrows)).toBe('codex');
+  });
 });
 
 describe('detectInstalledPlanner', () => {
@@ -83,5 +99,89 @@ describe('detectInstalledPlanner', () => {
     await expect(detectInstalledPlanner(broken)).resolves.toBeNull();
     await expect(installedPlannerDetected()).resolves.toBeUndefined();
     expect(recordedInstalledPlanner()).toBeNull();
+  });
+
+  /** A probe whose every agent check waits on one gate, usable only for `usableRunner` (none: null). */
+  function gatedProbe(usableRunner: string | null) {
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    const installation = { plannerUsability: vi.fn(async (runner: string) => { await gate; return { usable: runner === usableRunner }; }) };
+    return { installation, open };
+  }
+
+  it('keeps a newer probe\'s answer when an older probe finishes after it', async () => {
+    const a = gatedProbe('claude-code');
+    const b = gatedProbe('codex');
+    const probeA = detectInstalledPlanner(a.installation);
+    const probeB = detectInstalledPlanner(b.installation);
+
+    b.open();
+    await probeB;
+    a.open();
+    await probeA;
+
+    expect(recordedInstalledPlanner()).toBe('codex');
+  });
+
+  it('does not let an older probe that finds nothing wipe a newer probe\'s answer', async () => {
+    const a = gatedProbe(null);
+    const b = gatedProbe('codex');
+    const probeA = detectInstalledPlanner(a.installation);
+    const probeB = detectInstalledPlanner(b.installation);
+
+    b.open();
+    await probeB;
+    a.open();
+    await probeA;
+
+    expect(recordedInstalledPlanner()).toBe('codex');
+    expect(installedPlannerAnswered()).toBe(true);
+  });
+
+  it('keeps a waiter waiting through an older probe until the latest one answers', async () => {
+    const a = gatedProbe('claude-code');
+    const b = gatedProbe('codex');
+    const probeA = detectInstalledPlanner(a.installation);
+    let settled = false;
+    const waiting = installedPlannerDetected().then(() => { settled = true; });
+    const probeB = detectInstalledPlanner(b.installation);
+
+    a.open();
+    await probeA;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(installedPlannerAnswered()).toBe(false);
+    expect(settled).toBe(false);
+
+    b.open();
+    await probeB;
+    await waiting;
+    expect(installedPlannerAnswered()).toBe(true);
+    expect(recordedInstalledPlanner()).toBe('codex');
+  });
+
+  it('ignores a probe outstanding across a reset, so a disposed host cannot refill the state', async () => {
+    const stale = gatedProbe('claude-code');
+    const probe = detectInstalledPlanner(stale.installation);
+    let settled = false;
+    const waiting = installedPlannerDetected().then(() => { settled = true; });
+
+    resetInstalledPlanner();
+    expect(installedPlannerAnswered()).toBe(true);
+
+    stale.open();
+    await probe;
+    await waiting;
+    expect(settled).toBe(true);
+    expect(recordedInstalledPlanner()).toBeNull();
+    expect(installedPlannerAnswered()).toBe(true);
+  });
+
+  it('records an agent that is usable even though another agent\'s check throws', async () => {
+    const flaky = { plannerUsability: vi.fn(async (runner: string) => {
+      if (runner === 'claude-code') throw new Error('boom');
+      return { usable: runner === 'opencode' };
+    }) };
+    await expect(detectInstalledPlanner(flaky)).resolves.toBe('opencode');
+    expect(recordedInstalledPlanner()).toBe('opencode');
   });
 });
