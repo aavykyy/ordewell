@@ -58,7 +58,7 @@ import { PlanEditError } from './PlanEditError';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { ExecutionCommands, mergeStopped, type CommandOutcome, type ExecutionCommand, type ExecutionHost } from './ExecutionCommands';
 import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
-import { dependencyMet } from './readiness';
+import { dependencyMet, mergeGate } from './readiness';
 import { TurnEffects } from './TurnEffects';
 
 /**
@@ -720,7 +720,11 @@ export class Session {
       maxParallel: () => this.config.maxParallelSessions,
       runBlocked: () => this.runs.blocked,
       dependencyMet: (depId) => dependencyMet(depId, this.store, this.runs),
-      mergeGate: (taskId) => this.mergeGate(taskId),
+      // Judged whatever the task's status: a retry of a failed ops task acts on the checkout as a first start does.
+      mergeGate: (taskId) => {
+        const task = this.store.get(taskId);
+        return task ? mergeGate(task, this.store, this.runs) : [];
+      },
       blockedBy: (taskId) => this.orchestrator.getBlockedBy(taskId),
       waitingRequests: (taskId) => this.approvals.outstanding()
         .filter(({ request }) => isRunnerApproval(request) && request.taskId === taskId)
@@ -1808,7 +1812,7 @@ export class Session {
     return this.sentHandoff ? reduceRun(held, { type: 'isolation_handoff', ...this.sentHandoff }) : held;
   }
 
-  /** The dependencies a task waits on at its merge gate (ADR-0020); empty when it waits for no Merge all. */
+  /** The ancestors a task waits on at its merge gate (ADR-0020); empty when it waits for no Merge all. */
   mergeGate(taskId: string): string[] {
     return this.orchestrator.getMergeGate(taskId);
   }

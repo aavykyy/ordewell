@@ -118,6 +118,46 @@ describe('the command seam: run_task', () => {
     expect(env.spawned('o2')).toHaveLength(0);
   });
 
+  it('refuses a start or a retry of an ops task whose work waits behind a dependency\'s own dependency', async () => {
+    const isolation = new FakeWorktreeIsolation();
+    // The verification landed nothing of its own, so git finds it in the user's branch already; the fix it verified is not.
+    isolation.mergedByHand.add('v2');
+    const env = setup({ isolation });
+    env.session.loadPlan(plan([task('t1', 1), task('v2', 2, { dependencies: ['t1'] }), task('o3', 3, { ops: true, dependencies: ['v2'] })]), 'goal', testWorkspace, { persist: false });
+    await env.session.executePlan();
+    env.latest('t1').reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(env.spawned('v2')).toHaveLength(1));
+    env.latest('v2').reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(isolation.taskIdsFor('integrate')).toEqual(['t1', 'v2']));
+    await vi.waitFor(() => expect(taskOf(env.session, 'v2')!.status).toBe('completed'));
+    expect(env.session.mergeGate('o3')).toEqual(['t1']);
+
+    const reason = 'waits for Merge all: the work of task #1 "Task t1" is not merged into the user\'s branch yet. Ask the user to merge (Merge all), or to force start it.';
+    expect(await env.run({ command: 'run_task', task: 'o3' })).toEqual({ ok: false, outcome: 'refused', message: `Task #3 "Task o3" ${reason}` });
+    expect(await env.run({ command: 'retry_task', task: 'o3', from: 'fresh' })).toEqual({ ok: false, outcome: 'refused', message: `Task #3 "Task o3" ${reason}` });
+    expect(env.spawned('o3')).toHaveLength(0);
+
+    expect(await env.run({ command: 'merge_all' }, { kind: 'supervisor', level: 'act' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(env.spawned('o3')).toHaveLength(1));
+  });
+
+  it('refuses a retry of a failed ops task whose ancestors\' work is still not merged', async () => {
+    const env = setup({ isolation: new FakeWorktreeIsolation() });
+    env.session.loadPlan(plan([task('t1', 1), task('o2', 2, { ops: true, dependencies: ['t1'] })]), 'goal', testWorkspace, { persist: false });
+    await env.session.executePlan();
+    env.latest('t1').reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(env.session.mergeGate('o2')).toEqual(['t1']));
+    await env.session.forceStartTask('o2');
+    env.latest('o2').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
+    await vi.waitFor(() => expect(taskOf(env.session, 'o2')!.status).toBe('failed'));
+
+    expect(await env.run({ command: 'retry_task', task: 'o2', from: 'fresh' })).toEqual({
+      ok: false, outcome: 'refused',
+      message: 'Task #2 "Task o2" waits for Merge all: the work of task #1 "Task t1" is not merged into the user\'s branch yet. Ask the user to merge (Merge all), or to force start it.',
+    });
+    expect(env.spawned('o2')).toHaveLength(1);
+  });
+
   it('refuses a user task, a running task, and a failed one with what to do instead', async () => {
     const env = await running();
     env.session.loadPlan(plan([task('t1', 1), task('u2', 2, { type: 'user', prompt: undefined })]), 'goal', testWorkspace, { persist: false });

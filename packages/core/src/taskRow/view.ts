@@ -106,7 +106,7 @@ export interface TaskRowView {
   repairing: { files: string | null; attempt: { attempt: number; limit: number } | null } | null;
   /** The files a conflict repair was started for; `landed` once the task is integrated. */
   repaired: { files: string; landed: boolean } | null;
-  /** The dependencies, by reference, whose work is not merged into the user's branch yet. */
+  /** The ancestors, by reference, whose work is not merged into the user's branch yet. */
   mergeGate: string[] | null;
   /** The failed tasks, by reference, a task not started waits on through its dependencies (ADR-0034); null when none. */
   blockedBy: string[] | null;
@@ -114,7 +114,7 @@ export interface TaskRowView {
   skipReason: string | null;
   /** An ops task changed tracked files in the user's checkout and nothing was committed. */
   opsChangedFiles: boolean;
-  /** The dependencies, by title, a force start went past the merge gate of. */
+  /** The ancestors, by title, a force start went past the merge gate of. */
   forcedPastGate: readonly string[] | null;
   /** The task's dependencies, by reference. */
   dependencies: string[];

@@ -62,6 +62,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   messages. Approval cards survive a reconnect or reload and appear on every
   attached surface, and the terminal no longer shows a stale preview of a
   plan edit. `ordewell plan` says when autorun has already started the plan.
+- **An ops or user task waits for all the work it builds on to be merged into
+  your branch**, including work its dependencies depend on — so an ops task
+  after a verification no longer acts on your checkout before the fix that
+  verification checked is merged.
 
 ## [0.10.2] — 2026-10-14
 

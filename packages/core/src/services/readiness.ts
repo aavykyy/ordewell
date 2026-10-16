@@ -6,7 +6,7 @@ import { blockingFailures } from './blocking';
 
 /** What the scheduler may read to decide what runs: read-only plan state, the holds, and the open isolated run. */
 export interface ReadinessInput {
-  store: Pick<PlanStore, 'allTasks' | 'isCompleted' | 'isSkipped' | 'isOps'>;
+  store: Pick<PlanStore, 'allTasks' | 'get' | 'isCompleted' | 'isSkipped' | 'isOps'>;
   /** Task ids pulled out of auto-scheduling (cancelled, or a spawn that failed). */
   onHold: ReadonlySet<string>;
   /** The user's approval record (ADR-0035): a task outside it waits for them, however ready it is. */
@@ -111,19 +111,35 @@ export function dependencyMet(
 }
 
 /**
- * The merge gate (ADR-0020): the completed dependencies of a task that runs
+ * The merge gate (ADR-0020): the completed ancestors of a task that runs
  * outside a worktree — an ops task or a user task — whose landed work is not
  * in the user's branch yet. What it acts on, or what the user checks by hand,
- * is their checkout, which does not hold that work until it is merged. Empty
+ * is their checkout, which does not hold that work until it is merged. Every
+ * ancestor counts, not only the direct dependencies: a dependency on a
+ * verification that landed nothing still means the work it verified. Empty
  * for a change task, and for any task of a run that never isolated.
  */
 export function mergeGate(
   task: Readonly<Task>,
-  store: Pick<PlanStore, 'isCompleted' | 'isOps'>,
+  store: Pick<PlanStore, 'get' | 'isCompleted' | 'isOps'>,
   runs: Pick<IsolationRunController, 'awaitsMerge'>,
 ): string[] {
   if (task.type !== 'user' && !store.isOps(task.id)) return [];
-  return task.dependencies.filter((depId) => store.isCompleted(depId) && runs.awaitsMerge(depId));
+  return ancestors(task, store).filter((id) => store.isCompleted(id) && runs.awaitsMerge(id));
+}
+
+/** Every task a task depends on, directly or through others, nearest first; a cycle is walked once. */
+function ancestors(task: Readonly<Task>, store: Pick<PlanStore, 'get'>): string[] {
+  const seen = new Set<string>([task.id]);
+  const queue = [...task.dependencies];
+  const found: string[] = [];
+  for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    found.push(id);
+    queue.push(...(store.get(id)?.dependencies ?? []));
+  }
+  return found;
 }
 
 function exclusionReasons(task: Readonly<Task>, input: ReadinessInput, blocked: ReadonlyMap<string, string[]>): string[] {

@@ -38,12 +38,12 @@ export type SerializedTaskStatus = {
    */
   awaitingApproval?: number;
   /**
-   * The dependencies an ops or user task waits on at its merge gate: their
+   * The ancestors an ops or user task waits on at its merge gate: their
    * work has landed but is not merged into the user's branch (ADR-0020).
    * Absent when it waits for no Merge all.
    */
   mergeGate?: string[];
-  /** The dependencies, by title, a force start went past the merge gate of (ADR-0020). */
+  /** The ancestors, by title, a force start went past the merge gate of (ADR-0020). */
   forcedPastGate?: string[];
   /**
    * Added after the user approved the plan and not approved since, so the

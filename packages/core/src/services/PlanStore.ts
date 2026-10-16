@@ -226,7 +226,7 @@ export class PlanStore {
     }
   }
 
-  /** Kept on the task: it was force-started past its merge gate, before these dependencies' work was merged (ADR-0020). */
+  /** Kept on the task: it was force-started past its merge gate, before these ancestors' work was merged (ADR-0020). */
   setForcedPastGate(id: string, dependencies: string[]): void {
     const task = this._taskMap.get(id);
     if (task) task.forcedPastGate = dependencies;

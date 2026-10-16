@@ -67,8 +67,8 @@ that depends on.**
 ### The merge gate
 
 - **A task that does not run in a worktree — an ops task or a user task — and
-  depends on change tasks waits until their work is merged into the user's
-  branch.** "Merged" is the same ancestry check the integration branch's clean-up
+  depends on change tasks, directly or through other tasks, waits until their
+  work is merged into the user's branch.** "Merged" is the same ancestry check the integration branch's clean-up
   already uses: each landing records the integration tip it produced in each repo
   it changed, and the task's work is merged once the checked-out HEAD contains
   those tips. A merge made by hand with git counts as Merge all does, and is
@@ -221,3 +221,4 @@ it.
 - 2026-10-11 — wording: automatic merging resumes after any Merge all that goes through, an Act supervisor's `merge_all` included, as the code always did.
 - 2026-10-12 — merge at gates automatically becomes a global user setting, live in the session it is changed in ([ADR-0030](0030-global-run-settings.md)).
 - 2026-10-12 — the automatic merge setting also merges at the end of a run, by the same route as a gate merge ([ADR-0029](0029-the-supervisor.md), amendment of 2026-10-12).
+- 2026-10-16 — the gate covers the task's whole dependency closure, not just its direct dependencies: a dependency on a verification task implies the work it verified, and a verification lands nothing of its own, so a direct-only gate let an ops task act on the user's checkout before that work was merged. A skipped task adds nothing of its own, but the work behind it still counts.

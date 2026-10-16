@@ -109,7 +109,7 @@ export interface ExecutionHost {
   runBlocked(): boolean;
   /** A dependency is met once its work is where the dependent will run. */
   dependencyMet(depId: string): boolean;
-  /** The dependencies a task waits on at its merge gate (ADR-0020). */
+  /** The ancestors a task would wait on at its merge gate if it started now, whatever its status (ADR-0020). */
   mergeGate(taskId: string): string[];
   /** The failed tasks a task not started waits on through its dependencies (ADR-0034). */
   blockedBy(taskId: string): string[];

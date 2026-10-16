@@ -834,9 +834,9 @@ export class TaskOrchestrator {
   }
 
   /**
-   * The dependencies an ops or user task waits on at its merge gate: those
-   * whose landed work is not in the user's branch yet (ADR-0020). Empty once
-   * the task has started, and for every other task.
+   * The ancestors an ops or user task waits on at its merge gate: those whose
+   * landed work is not in the user's branch yet (ADR-0020). Empty once the
+   * task has started, and for every other task.
    */
   getMergeGate(taskId: string): string[] {
     const task = this.store.get(taskId);
@@ -1802,8 +1802,9 @@ export class TaskOrchestrator {
     if (!this.running) return;
     if (this.mergesAutomatically() && !this.autoMergeBlocked && !this.merging
       && ![...this.attempts.values()].some((a) => mergeExcludes(a.kind))) {
+      // A skipped dependency waits on nothing, but the work behind it still gates (see mergeGate).
       const gate = this.store.allTasks.find((t) => this.getMergeGate(t.id).length > 0
-        && !this.onHold.has(t.id) && t.dependencies.every((id) => this.store.isCompleted(id)));
+        && !this.onHold.has(t.id) && t.dependencies.every((id) => this.store.isCompleted(id) || this.store.isSkipped(id)));
       if (gate) {
         // Another landing must not repeatedly attempt a merge the user now
         // needs to resolve. A user merge or a new run releases this hold.

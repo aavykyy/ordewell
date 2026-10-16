@@ -452,7 +452,7 @@ export class ApiClient {
     return this.call('POST', `/api/plans/${sessionId}/conversation/compact`, 'Compaction failed');
   }
 
-  /** The dependencies a task waits on at its merge gate (ADR-0020); empty when nothing gates it. */
+  /** The ancestors a task waits on at its merge gate (ADR-0020); empty when nothing gates it. */
   async getMergeGate(sessionId: string, taskId: string): Promise<MergeGateEntry[]> {
     const res = await this.call<MergeGateResponse>('GET', `/api/plans/${sessionId}/tasks/${taskId}/merge-gate`, 'Could not read the merge gate');
     return res.mergeGate ?? [];

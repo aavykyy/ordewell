@@ -67,6 +67,29 @@ describe('Merge at gates automatically', () => {
     expect(messages).toContainEqual({ type: 'isolation_merge', result: { outcome: 'merged' }, trigger: { kind: 'gate', taskId: gated.id } });
   });
 
+  it('merges for a gate that waits on work behind a skipped dependency', async () => {
+    const iso = new FakeWorktreeIsolation();
+    const { session, sessions, pass, messages } = harness(iso);
+    mergesAtGates(true);
+    const verify = createTask({ id: 'v2', order: 2, title: 'Verify', prompt: 'verify', dependencies: ['c1'] });
+    const pack = createTask({ id: 'o3', order: 3, title: 'Pack', prompt: 'pack', ops: true, dependencies: ['v2'] });
+    // Still running, so the failure below does not end the run and merge at its end.
+    const other = createTask({ id: 'x4', order: 4, title: 'Other', prompt: 'other' });
+    session.loadPlan(plans([change, verify, pack, other]), 'goal', '/repo');
+    await session.executePlan();
+    pass();
+    await vi.waitFor(() => expect(sessions.map((s) => s.taskId)).toContain('v2'));
+    sessions.find((s) => s.taskId === 'v2')!.reportComplete({ status: 'failed', summary: '', reason: 'flaky' });
+    await vi.waitFor(() => expect(session.planState!.tasks.find((t) => t.id === 'v2')!.status).toBe('failed'));
+    expect(merged(iso)).toEqual([]);
+
+    await session.execute({ command: 'skip_task', task: 'v2' }, { kind: 'user' });
+
+    await vi.waitFor(() => expect(merged(iso)).toHaveLength(1));
+    expect(messages).toContainEqual({ type: 'isolation_merge', result: { outcome: 'merged' }, trigger: { kind: 'gate', taskId: 'o3' } });
+    await vi.waitFor(() => expect(sessions.map((s) => s.taskId)).toContain('o3'));
+  });
+
   it.each([undefined, false])('waits with the user\'s setting %s: off by default', async (enabled) => {
     const iso = new FakeWorktreeIsolation();
     const { session, pass } = harness(iso);
