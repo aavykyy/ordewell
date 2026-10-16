@@ -142,17 +142,25 @@ function printPlan(plan: PlanBody, sessionId: string, runners: string[], models:
  * did nothing at all against a daemon that was already running: the variable
  * was set on a client process that only speaks HTTP. Forwarding them is what
  * makes the documented form mean what it says.
+ *
+ * AI_PROVIDER names a planner, so it goes as a switch. The model and effort
+ * are only what this process inherited — the shell, or `.env` — so they go
+ * marked as that: sent as a pick, a model left from an old OpenRouter setup
+ * was saved as the detected agent's own and then spawned with it.
  */
-const PLANNER_ENV = ['AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT'] as const;
+const INHERITED_PLANNER_ENV = ['ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT'] as const;
 
 async function forwardPlannerEnv(api: ApiClient): Promise<void> {
+  const provider = process.env.AI_PROVIDER;
+  if (provider) await api.updateSettings({ env: { AI_PROVIDER: provider } });
   const env: Record<string, string> = {};
-  for (const key of PLANNER_ENV) {
+  for (const key of INHERITED_PLANNER_ENV) {
     const value = process.env[key];
     if (value) env[key] = value;
   }
-  if (Object.keys(env).length === 0) return;
-  await api.updateSettings({ env });
+  // After the switch, as one write did before: the command line's model
+  // still outranks the one the switch recalled.
+  if (Object.keys(env).length > 0) await api.updateSettings({ env, inherited: true });
 }
 
 export async function handlePlan(

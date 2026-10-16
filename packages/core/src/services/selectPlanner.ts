@@ -1,4 +1,5 @@
 import type { PlannerBackendId } from '../interfaces/IConfig';
+import type { PlannerModelSource } from '../interfaces/BaseConfig';
 import type { PlannerModelCandidate, PlannerModelChoice, PlannerModelRecall, PlannerModelStore } from './PlannerModelMemory';
 
 /** Who plans, with which model and effort. Blank means unset. */
@@ -6,6 +7,11 @@ export interface PlannerSelectionState {
   provider: PlannerBackendId;
   model: string;
   effort: string;
+}
+
+/** The state a change is judged against, and where its model came from; absent means the user's own. */
+export interface PlannerSelectionCurrent extends PlannerSelectionState {
+  source?: PlannerModelSource;
 }
 
 /** What one user action asked for; an absent field leaves that part alone. */
@@ -65,7 +71,7 @@ function offers(catalog: PlannerModelCandidate[], model: string, effort: string)
  * stores anything itself, so each surface keeps only its storage adapter.
  */
 export function selectPlanner(
-  current: PlannerSelectionState,
+  current: PlannerSelectionCurrent,
   change: PlannerSelectionChange,
   memory: PlannerModelLookup,
   catalog: PlannerModelCandidate[],
@@ -83,7 +89,7 @@ export function selectPlanner(
     return { next: { provider, model: recall.model, effort: recall.effort }, recall };
   }
   if (!switched && model === undefined && change.effort === undefined) {
-    return { next: current };
+    return { next: { provider, model: current.model, effort: current.effort } };
   }
 
   const nextModel = model ?? current.model;
@@ -94,5 +100,10 @@ export function selectPlanner(
   const wanted = nextModel ? asked ?? inherited : '';
   const effort = wanted && offers(catalog, nextModel, wanted) ? wanted : '';
   const next = { provider, model: nextModel, effort };
+  // An effort alone is saved with the model in effect, so that model has to
+  // be the user's own: a detected agent's inherited model is never saved,
+  // and a blank one would forget a pick the read only set aside (ADR-0009).
+  const ownModel = current.source === undefined || current.source === 'configured' || current.source === 'remembered';
+  if (!switched && model === undefined && !ownModel) return { next };
   return { next, remember: next };
 }

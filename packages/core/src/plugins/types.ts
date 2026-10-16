@@ -69,6 +69,12 @@ export interface RunnerModelDiscovery {
    */
   canonicalAliases?: { modelId: string; modelLabel: string }[];
   /**
+   * The runner names its models `provider/model` (OpenCode), so an id of that
+   * shape can be its own rather than an OpenRouter slug left from a vendor
+   * planner.
+   */
+  providerQualifiedIds?: boolean;
+  /**
    * HTTP API discovery — tried BEFORE command discovery. When the runner's CLI
    * has no model-listing subcommand (Claude Code), an API endpoint can serve as
    * the authoritative source. Auth methods are tried in order; the first that

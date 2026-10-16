@@ -1,12 +1,13 @@
 import * as vscode from 'vscode';
 import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, parseMaxParallel, normalizeGeminiModel, isApiProvider, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET } from '@ordewell/core';
-import type { ProviderModelLists, ResolvedPlanner, SettingsService } from '@ordewell/core';
+import type { ConfiguredPlanner, ProviderModelLists, ResolvedPlanner, SettingsService } from '@ordewell/core';
 import { SecretStore, type ApiProvider, type SecretKey } from './SecretStore';
 
 export class VsCodeConfig extends BaseConfig {
   private get config() { return vscode.workspace.getConfiguration('ordewell'); }
 
   private _providerModelLists: ProviderModelLists | null = null;
+  private _pickedModel: string | undefined;
 
   constructor(private readonly secretStore?: SecretStore) {
     super();
@@ -145,9 +146,26 @@ export class VsCodeConfig extends BaseConfig {
   /** The setting as written, valid or not; `aiProvider` is what the extension acts on. */
   get rawAiProvider(): string { return this.config.get<string>('aiProvider', '') || ''; }
 
-  private get planner(): ResolvedPlanner {
-    const model = this.config.get<string>('orchestratorModel', '') || process.env.ORCHESTRATOR_MODEL || '';
-    return this.resolvePlanner(model, this._providerModelLists, this.rawAiProvider);
+  get planner(): ResolvedPlanner {
+    return this.resolvePlanner(this.configuredPlanner(this.config.get<string>('orchestratorModel', '')), this._providerModelLists);
+  }
+
+  /**
+   * A planner pick in this window set `model`. Held here, not in the settings:
+   * the setting outlives the window, and the next one reads it as inherited.
+   */
+  notePlannerPick(model: string): void {
+    this._pickedModel = model;
+  }
+
+  private configuredPlanner(model: string): ConfiguredPlanner {
+    const configured = model || process.env.ORCHESTRATOR_MODEL || '';
+    return {
+      model: configured,
+      effort: this.config.get<string>('plannerThinkingEffort', '') || process.env.ORDEWELL_PLANNER_EFFORT || '',
+      setting: this.rawAiProvider,
+      picked: this._pickedModel === configured,
+    };
   }
 
   get aiProvider(): PlannerBackendId {
@@ -176,14 +194,14 @@ export class VsCodeConfig extends BaseConfig {
       const raw = this.resolveConfigModel('planningModel', 'geminiModel', 'orchestratorModel');
       return raw ? normalizeGeminiModel(raw) : super.geminiModel;
     }
-    const raw = this.config.get<string>('planningModel', '') || this.config.get<string>('orchestratorModel', '') || process.env.ORCHESTRATOR_MODEL || '';
-    return this.plannerModelFor(this.aiProvider, raw, this.rawAiProvider);
+    const raw = this.config.get<string>('planningModel', '') || this.config.get<string>('orchestratorModel', '');
+    return this.plannerChoiceFor(this.aiProvider, this.configuredPlanner(raw)).model;
   }
 
   get rawOrchestratorModel() { return this.config.get<string>('orchestratorModel', '') || ''; }
 
   get plannerThinkingEffort(): string | undefined {
-    return this.config.get<string>('plannerThinkingEffort', '') || super.plannerThinkingEffort;
+    return this.planner.effort || undefined;
   }
 
 

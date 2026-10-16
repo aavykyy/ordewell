@@ -68,7 +68,7 @@ export { buildGrepArgs, buildGlobArgs, buildFallbackGrepArgs, GREP_PCRE_PROBE_AR
 export type { GrepInvocation, CappedRows, GrepRegex } from './services/ripgrepArgs';
 export * from './interfaces/IConfig';
 export { BaseConfig, normalizeGeminiModel } from './interfaces/BaseConfig';
-export type { ResolvedPlanner } from './interfaces/BaseConfig';
+export type { ConfiguredPlanner, PlannerChoice, PlannerModelSource, ResolvedChoice, ResolvedPlanner } from './interfaces/BaseConfig';
 export { EnvConfig } from './interfaces/EnvConfig';
 export * from './interfaces/INotification';
 export * from './interfaces/IRunner';
@@ -267,6 +267,7 @@ export {
   selectPlanner,
   type PlannerModelLookup,
   type PlannerSelectionChange,
+  type PlannerSelectionCurrent,
   type PlannerSelectionResult,
   type PlannerSelectionState,
 } from './services/selectPlanner';

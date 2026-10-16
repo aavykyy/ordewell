@@ -295,3 +295,4 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-10-14 — `skip_task` joins the execution tools ([ADR-0029](0029-the-supervisor.md)).
 - 2026-10-14 — harness planners are derived from the runner manifests and connectors; `AiProvider` names vendors only and the setting is a `PlannerBackendId` (#72).
 - 2026-10-16 — with no planner chosen and no vendor key, the first usable installed coding agent, in the planner list's order, plans; it is derived on each start and not saved, so a key added later or a `/planner` pick still wins.
+- 2026-10-16 — that derived agent plans with an inherited model only when it is one of its stable aliases, else with its remembered model and effort; inherited settings are never saved as picks.

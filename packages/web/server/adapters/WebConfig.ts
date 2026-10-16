@@ -1,5 +1,5 @@
 import { type PlannerBackendId, BaseConfig, DEFAULT_RUNNERS, isApiProvider, normalizeGeminiModel } from '@ordewell/core';
-import type { ProviderModelLists, ResolvedPlanner } from '@ordewell/core';
+import type { ConfiguredPlanner, ProviderModelLists, ResolvedPlanner } from '@ordewell/core';
 
 interface WebConfigOpts {
   enabledRunners?: string[];
@@ -10,12 +10,15 @@ interface WebConfigOpts {
    */
   providerModelLists?: ProviderModelLists | (() => ProviderModelLists | undefined);
   modelOverride?: string;
+  /** The model a settings write picked in this daemon, read live; absent when none has. */
+  pickedModel?: () => string | undefined;
 }
 
 export class WebConfig extends BaseConfig {
   private _enabledRunnersOverride: string[] | undefined;
   private _providerModelLists: () => ProviderModelLists | undefined;
   private _modelOverride: string | undefined;
+  private _pickedModel: () => string | undefined;
 
   constructor(opts?: WebConfigOpts) {
     super();
@@ -23,6 +26,7 @@ export class WebConfig extends BaseConfig {
     const lists = opts?.providerModelLists;
     this._providerModelLists = typeof lists === 'function' ? lists : () => lists;
     this._modelOverride = opts?.modelOverride;
+    this._pickedModel = opts?.pickedModel ?? (() => undefined);
   }
 
   setProviderModelLists(lists: ProviderModelLists): void {
@@ -34,8 +38,17 @@ export class WebConfig extends BaseConfig {
    * whole session while /model, /planner and /key mutate process.env under
    * it. `routedProvider` keeps that cheap.
    */
-  private get planner(): ResolvedPlanner {
-    return this.resolvePlanner(this._modelOverride || process.env.ORCHESTRATOR_MODEL || '', this._providerModelLists());
+  get planner(): ResolvedPlanner {
+    return this.resolvePlanner({ ...this.configuredPlanner(), override: this._modelOverride }, this._providerModelLists());
+  }
+
+  /**
+   * What the daemon inherited at startup, or what a settings write has set
+   * since; the model counts as picked only while it is the one a write picked.
+   */
+  private configuredPlanner(): ConfiguredPlanner {
+    const model = process.env.ORCHESTRATOR_MODEL || '';
+    return { model, effort: process.env.ORDEWELL_PLANNER_EFFORT || '', picked: this._pickedModel() === model };
   }
 
   get orchestratorModel(): string {
@@ -46,6 +59,10 @@ export class WebConfig extends BaseConfig {
     return this.planner.provider;
   }
 
+  get plannerThinkingEffort(): string | undefined {
+    return this.planner.effort || undefined;
+  }
+
   get apiKey(): string {
     const provider = this.aiProvider;
     return isApiProvider(provider) ? this.getProviderApiKey(provider) : '';
@@ -54,7 +71,7 @@ export class WebConfig extends BaseConfig {
   get planningModel(): string {
     if (this.aiProvider === 'google')
       return normalizeGeminiModel(process.env.GEMINI_MODEL || process.env.ORCHESTRATOR_MODEL || super.geminiModel);
-    return this.plannerModelFor(this.aiProvider, process.env.ORCHESTRATOR_MODEL || '');
+    return this.plannerChoiceFor(this.aiProvider, this.configuredPlanner()).model;
   }
 
   get enabledRunners(): string[] {
