@@ -71,6 +71,7 @@ describe('handleTui', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    fakeTerminal.draw.mockReset();
     apiClient.getSettings.mockImplementation(async () => ({}));
     daemon.ensureDaemonOwned.mockImplementation(async () => ({ port: 4000, owned: true }));
     fakeTerminal.onKey = undefined;
@@ -225,26 +226,41 @@ describe('handleTui', () => {
         fs.writeFileSync(path.join(home, '.ordewell', 'settings.json'), JSON.stringify({ autorun: false }));
         daemon.ensureDaemonOwned.mockImplementation(async () => ({ port: 4000, owned: false }));
         let reply!: (settings: Record<string, unknown>) => void;
-        apiClient.getSettings.mockImplementation(() => new Promise((resolve) => { reply = resolve; }));
+        let settingsAsked!: () => void;
+        const asked = new Promise<void>((resolve) => { settingsAsked = resolve; });
+        apiClient.getSettings.mockImplementation(() => {
+          settingsAsked();
+          return new Promise((resolve) => { reply = resolve; });
+        });
+        let warned!: () => void;
+        const warning = new Promise<void>((resolve) => { warned = resolve; });
+        fakeTerminal.draw.mockImplementation(() => {
+          if (lastFrame().includes('Autorun is on')) warned();
+        });
         void handleTui(['--port', '4000']);
 
-        await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
-        await vi.waitFor(() => expect(apiClient.getSettings).toHaveBeenCalled());
+        await asked;
         expect(firstFrame()).not.toContain('Nothing runs until');
         expect(firstFrame()).not.toContain('Autorun is on');
         expect(lastFrame()).not.toContain('Nothing runs until');
 
         reply({ run: { autorun: true } });
-        await vi.waitFor(() => expect(lastFrame()).toContain('Autorun is on'));
+        await warning;
         expect(lastFrame()).not.toContain('Nothing runs until');
       });
 
       it('promises approval once the daemon reports autorun off', async () => {
         daemon.ensureDaemonOwned.mockImplementation(async () => ({ port: 4000, owned: false }));
+        let painted!: () => void;
+        const approval = new Promise<void>((resolve) => { painted = resolve; });
+        fakeTerminal.draw.mockImplementation(() => {
+          if (lastFrame().includes('Nothing runs until you approve the plan.')) painted();
+        });
         apiClient.getSettings.mockImplementation(async () => ({ run: { autorun: false } }));
         void handleTui(['--port', '4000']);
 
-        await vi.waitFor(() => expect(lastFrame()).toContain('Nothing runs until you approve the plan.'));
+        await approval;
+        expect(lastFrame()).toContain('Nothing runs until you approve the plan.');
       });
     });
   });

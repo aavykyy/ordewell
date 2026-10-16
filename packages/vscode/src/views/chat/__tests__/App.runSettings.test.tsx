@@ -51,4 +51,21 @@ describe('run settings in the chat', () => {
     expect(screen.queryByRole('combobox', { name: /Supervisor/ })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Drop to Watch' })).toBeNull();
   });
+
+  for (const autorun of [false, true]) {
+    it(`waits for host settings on GetStarted and preserves autorun=${autorun} when planning becomes available`, () => {
+      send({ type: 'setConfiguredProviders', providers: [] });
+      expect(document.querySelector('.get-started')).not.toBeNull();
+      expect(document.body.textContent).not.toContain('Nothing runs until');
+      expect(document.body.textContent).not.toContain('Autorun is on');
+
+      send({ type: 'setRunSettings', autonomous: false, run: { ...RUN_SETTINGS_DEFAULTS, autorun } });
+      const note = autorun ? 'Autorun is on' : 'Nothing runs until you approve the plan.';
+      expect(document.querySelector('.get-started')?.textContent).toContain(note);
+      send({ type: 'setConfiguredProviders', providers: ['openrouter'] });
+      expect(document.querySelector('.get-started')).toBeNull();
+      expect(document.querySelector('.empty-state')?.textContent).toContain(note);
+      if (autorun) expect(document.body.textContent).not.toContain('Nothing runs until');
+    });
+  }
 });
