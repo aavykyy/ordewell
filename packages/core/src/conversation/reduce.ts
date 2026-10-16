@@ -294,6 +294,23 @@ function syncTranscript(view: ConversationView, { plan, turnId }: Message<'plan_
 }
 
 /**
+ * Bring the view's approval cards in line with the planner's requests the
+ * session says are still waiting — for a surface that was not listening the
+ * whole time: one that reconnected, reloaded, or just attached. A pending card
+ * the session no longer has was answered or expired meanwhile; this surface
+ * never heard how, so the card goes rather than guessing an answer. A waiting
+ * request with no card gets one, answerable as the live one would have been.
+ */
+export function reconcileApprovals(view: ConversationView, waiting: readonly Message<'approval_request'>[]): ConversationView {
+  const ids = new Set(waiting.map((request) => request.id));
+  const answered = (block: DisplayBlock): boolean =>
+    block.type === 'approval' && block.status === 'pending' && block.approvalId !== undefined && !ids.has(block.approvalId);
+  const kept = view.blocks.some(answered) ? { ...view, blocks: view.blocks.filter((block) => !answered(block)) } : view;
+  const carded = new Set(kept.blocks.flatMap((block) => (block.type === 'approval' && block.approvalId ? [block.approvalId] : [])));
+  return waiting.filter((request) => !carded.has(request.id)).reduce(requestApproval, kept);
+}
+
+/**
  * Fold one input into the view. Pure and incremental: blocks the input does
  * not touch keep their identity, and an input that changes nothing returns
  * `view` itself — surfaces memoize their drawing on that, and text deltas

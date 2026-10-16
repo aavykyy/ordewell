@@ -86,7 +86,7 @@ export interface ExecutionHost {
   planApproved(): boolean;
   /** The user approved this task: it was in the plan they executed, or they started it themselves. */
   taskApproved(taskId: string): boolean;
-  /** A command of the user's own approves what it starts. */
+  /** A start the user consented to approves these tasks, before it acts. */
   approve(taskIds: readonly string[]): void;
   /** Full autonomy: starts follow plan approval without a question. */
   autonomous(): boolean;
@@ -263,7 +263,7 @@ export class ExecutionCommands {
   /** A valid, consented call, from the user's answer where one is needed to the act and its record. */
   private async carryOut(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined, consent: Consent, first: Extract<Prepared, { act: unknown }>, admission: StartAdmission | null): Promise<CommandOutcome> {
     const stopped = () => admission !== null && !admission.current();
-    let act = first.act;
+    let prepared = first;
     if (consent.kind === 'ask') {
       const plan = this.host.tasks();
       const allowed = await this.deps.consent.request(this.question(command, actor, located, first.approves));
@@ -277,19 +277,17 @@ export class ExecutionCommands {
       if (this.host.tasks() !== plan) return this.refuse(command, actor, located, 'The plan changed while the user was asked, so nothing was done.');
       const again = this.prepare(command, actor, located);
       if ('refusal' in again) return this.refuse(command, actor, located, again.refusal);
-      act = again.act;
+      prepared = again;
     }
 
-    // Autorun starts a plan as the user's standing instruction, so its start approves the plan as theirs does; so does a start under its exception
-    // for added tasks, and one the user allowed on the card, which named what it approves. Approved before it acts: the scheduler starts only
-    // approved tasks (ADR-0035), and a retry or run it hands over is started by the scheduler.
-    const approved = actor.kind === 'user' || actor.kind === 'autorun' || this.addedMayStart(actor) || this.asksToApprove(actor);
-    if (approved && STARTS.has(command.command)) {
-      this.host.approve(located ? withSubtasks(located.task) : this.all().map(({ task }) => task.id));
-    }
+    // Taken at the last check, before the start awaits anything: a planner edit landing while the spawn is
+    // under way changes the plan, and the user consented to the plan as it was checked, not as it becomes.
+    // Recorded before it acts too because the scheduler starts only approved tasks (ADR-0035), and a retry
+    // or run it hands over is started by the scheduler.
+    this.host.approve(this.consented(command, actor, located, prepared.approves));
     let acted: Acted;
     try {
-      acted = await act(stopped);
+      acted = await prepared.act(stopped);
     } catch (err) {
       return this.refuse(command, actor, located, err instanceof Error ? err.message : String(err));
     }
@@ -353,6 +351,20 @@ export class ExecutionCommands {
         ? `Queued: once your edit lands, as this reply ends, the user is asked on the approval card ${asking(command, intent, approves)}. Say so in your reply; you are not told what they answer.`
         : `Queued: ${intent} happens once your edit lands, as this reply ends, so it runs as edited. Say so in your reply; you are not told how it goes.`,
     };
+  }
+
+  /**
+   * The tasks a start approves, read from the plan as it stands at the
+   * command's last check. Autorun starts a plan as the user's standing
+   * instruction, so its start approves what it runs as the user's does; so
+   * does a start under its exception for added tasks. A yes on the card
+   * approves the tasks the card named, and no others.
+   */
+  private consented(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined, named: readonly Located[] = []): string[] {
+    if (!STARTS.has(command.command)) return [];
+    if (this.asksToApprove(actor)) return named.flatMap(({ task }) => withSubtasks(task));
+    if (actor.kind !== 'user' && actor.kind !== 'autorun' && !this.addedMayStart(actor)) return [];
+    return located ? withSubtasks(located.task) : this.all().map(({ task }) => task.id);
   }
 
   /**

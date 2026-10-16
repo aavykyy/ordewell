@@ -30,7 +30,7 @@ import { RUN_SETTINGS_DEFAULTS, runSettingsOf, type GlobalRunSettings, type User
 import { SkillsService } from './SkillsService';
 import { resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
 import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
-import { surfacePlan, type HeldEdit, type RunMergeView, type RunView, type SessionBroadcaster, type SessionNotice } from './SessionMessage';
+import { surfacePlan, type HeldEdit, type RunMergeView, type RunView, type SessionBroadcaster, type SessionMessage, type SessionNotice } from './SessionMessage';
 import { EMPTY_RUN, reduceRun } from './runView';
 import { SessionEventRelay } from './SessionEventRelay';
 import { saveSession } from '../utils/sessionStore';
@@ -270,7 +270,7 @@ export function createSession(deps: SessionDeps): Session {
         events.status(session.planState);
         return;
       }
-      deps.broadcast({
+      events.approvalRequested({
         type: 'approval_request',
         id,
         kind: request.kind,
@@ -282,7 +282,7 @@ export function createSession(deps: SessionDeps): Session {
     },
     onSettled: (id, granted, { request }) => {
       if (isRunnerApproval(request)) events.status(session.planState);
-      else deps.broadcast({ type: 'approval_settled', id, granted });
+      else events.approvalSettled(id, granted);
     },
   });
   const runnerApprovals = new RunnerApprovals(approvals);
@@ -533,6 +533,7 @@ export class Session {
     this.aiService = parts.aiService;
     this.planner = parts.planner;
     this.store = parts.store;
+    this.store.onTree = (ids) => this.keepApprovals(ids);
     this.orchestrator = parts.orchestrator;
     this.runs = parts.runs;
     this.events = parts.events;
@@ -848,11 +849,12 @@ export class Session {
 
   /**
    * Whether the user approved this task to run (ADR-0029, ADR-0035): it was in
-   * the plan they executed, or they started it, added it or let it start since.
-   * The one reading of the approval record — the seam and the scheduler both ask it.
+   * the plan they executed, or they started it, added it or let it start since,
+   * and it has been in the plan ever since. The one reading of the approval
+   * record — the seam and the scheduler both ask it.
    */
   isApproved(taskId: string): boolean {
-    return this.plan?.approvedTasks?.includes(taskId) ?? false;
+    return !!this.store.get(taskId) && (this.plan?.approvedTasks?.includes(taskId) ?? false);
   }
 
   /** A task the scheduler leaves for the user to approve; see {@link waitsForApproval}. */
@@ -863,8 +865,22 @@ export class Session {
 
   /** What the user approved to run (ADR-0029): a start of their own approves the task and its subtasks. */
   private approve(taskIds: readonly string[]): void {
-    if (!this.plan || taskIds.length === 0) return;
-    this.plan.approvedTasks = [...new Set([...(this.plan.approvedTasks ?? []), ...taskIds])];
+    // Only tasks in the plan now: an id approved while absent would approve whatever task later comes to carry it.
+    const present = taskIds.filter((id) => this.store.get(id));
+    if (!this.plan || present.length === 0) return;
+    this.plan.approvedTasks = [...new Set([...(this.plan.approvedTasks ?? []), ...present])];
+  }
+
+  /**
+   * A task that leaves the plan takes its approval with it, whichever route
+   * removed it: an edit, a merge or split, a whole plan that leaves it out.
+   * Approval is of the task the user saw, and a planner may later write a new
+   * task under the same id (ADR-0029).
+   */
+  private keepApprovals(ids: ReadonlySet<string>): void {
+    const approved = this.plan?.approvedTasks;
+    if (!approved || approved.every((id) => ids.has(id))) return;
+    this.plan!.approvedTasks = approved.filter((id) => ids.has(id));
   }
 
   private approveTask(taskId: string): void {
@@ -884,6 +900,11 @@ export class Session {
   /** Requests still waiting for an answer, replayed to a surface that connects mid-prompt. */
   outstandingApprovals(): PendingApproval[] {
     return this.approvals.outstanding();
+  }
+
+  /** The planner's requests still waiting, as their cards were announced — what a surface (re)joining replays. */
+  announcedApprovals(): Extract<SessionMessage, { type: 'approval_request' }>[] {
+    return this.events.announcedApprovals();
   }
 
   /** Scopes the user granted this session — surfaced so a UI can show what is already allowed. */
@@ -1218,7 +1239,19 @@ export class Session {
     return inFlight || queued || waiting;
   }
 
-  async generatePlan(goal: string, runners: RunnerId[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {
+  /**
+   * The runners a first turn may plan for. None requested means every enabled
+   * one, read here, after the planner gate: until the installed-agent probe
+   * answers, the enabled default is a stale guess a request must not freeze.
+   */
+  private chosenRunners(requested: RunnerId[] | undefined): RunnerId[] {
+    const enabled = this.catalog.enabledRunners();
+    const chosen = requested ? requested.filter((r) => enabled.includes(r)) : enabled;
+    if (chosen.length === 0) throw new Error('None of the requested runners are enabled');
+    return chosen;
+  }
+
+  async generatePlan(goal: string, runners?: RunnerId[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {
     // A new goal replaces whatever still waits to open: the latest intent wins.
     this.endWaiting(() => new PlannerTurnDiscardedError());
     // Before the plan scope is dropped, so a refusal leaves the plan held now as it was.
@@ -1228,9 +1261,7 @@ export class Session {
     this.goal = goal;
     this.remintSessionId();
     this.beginFreshPlan({ keepGrants: true });
-    const enabled = this.catalog.enabledRunners();
-    const chosenRunners = runners.filter((r) => enabled.includes(r));
-    if (chosenRunners.length === 0) throw new Error('None of the requested runners are enabled');
+    const chosenRunners = this.chosenRunners(runners);
 
     return this.conversation.hold(options?.signal, async (turn) => {
       const { modelsByRunner, runnerModes } = await this.catalog.planning(chosenRunners);
@@ -1269,7 +1300,7 @@ export class Session {
    * message. The conversation itself — transcript, live model context, turn
    * settlement — is {@link PlannerConversation}'s; the Session hosts it.
    */
-  async startPlanning(goal: string, runners: RunnerId[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {
+  async startPlanning(goal: string, runners?: RunnerId[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {
     // A new goal replaces whatever still waits to open: the latest intent wins.
     this.endWaiting(() => new PlannerTurnDiscardedError());
     const pending: PendingOpening = { held: [] };
@@ -1282,9 +1313,7 @@ export class Session {
       this.goal = goal;
       this.remintSessionId();
       this.beginFreshPlan({ keepGrants: true });
-      const enabled = this.catalog.enabledRunners();
-      const chosenRunners = runners.filter((r) => enabled.includes(r));
-      if (chosenRunners.length === 0) throw new Error('None of the requested runners are enabled');
+      const chosenRunners = this.chosenRunners(runners);
 
       const now = new Date().toISOString();
       this.plan = { tasks: [], generatedAt: now, status: 'draft', runners: chosenRunners, lastUpdated: now };
@@ -1519,10 +1548,7 @@ export class Session {
     const bySupervisor = this.supervisorEditing();
     const { tasks: stamped, added } = stampOrigin(before, coerced, bySupervisor);
     coerced = this.preparePlannerTaskUpdates(stamped);
-    if (bySupervisor) {
-      this.approve(added);
-      this.supervision.edited(before, coerced);
-    }
+    if (bySupervisor) this.supervision.edited(before, coerced);
     // A run that ended on a failure is still the one a retry continues: reloaded,
     // the failed task would lose its failure and its retry would run it alone.
     if (this.orchestrator.isRunning || this.orchestrator.awaitsResume) {
@@ -1531,6 +1557,8 @@ export class Session {
       this.orchestrator.loadPlan(coerced, runners);
       this.store.resetForRun({ keepScheduledResumes: true });
     }
+    // Once they are in the plan: approval is only ever of a task the plan holds.
+    if (bySupervisor) this.approve(added);
     return coerced.length;
   }
 

@@ -3,7 +3,7 @@ import { latestTaskCommands } from '../shared/taskCommands';
 import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
   saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS, taskStartedNotice,
-  createEmptyPlan, markRequestFor, pastGateConfirmation, titledRefs, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner, type TaskRowAction,
+  createEmptyPlan, installedPlannerAnswered, markRequestFor, pastGateConfirmation, titledRefs, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner, type TaskRowAction,
   type ExecutionCommand,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit } from '../shared/protocol';
@@ -146,9 +146,13 @@ export async function handleStartPlanning(
   if (!runners) {
     return;
   }
+  // Until the installed agents are detected, the enabled default is a guess:
+  // with no pick of the user's, the session reads the enabled runners itself
+  // once its planner gate opens, rather than plan for an agent not installed.
+  const requested = !pendingRunners?.length && !installedPlannerAnswered() ? undefined : runners;
   // A goal still waiting for the probe is replaced by this one in the session.
   await inPlannerTurn(deps, async () => {
-    const plan = await deps.session.startPlanning(userDescription, runners);
+    const plan = await deps.session.startPlanning(userDescription, requested);
     deps.setCurrentGoal(userDescription);
     deps.setCurrentPlan(plan);
     finishPlannerTurn(plan, deps);

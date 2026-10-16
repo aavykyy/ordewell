@@ -503,7 +503,8 @@ export interface LegacyPlanState {
    * The tasks the user approved to run: every task when they executed the
    * plan, and each one they started or retried themselves since. A command
    * from anyone else starts only these (ADR-0029); a task the planner added
-   * after the approval waits for the user's.
+   * after the approval waits for the user's. Only tasks still in the plan: a
+   * task that leaves takes its approval with it.
    */
   approvedTasks?: string[];
   /**

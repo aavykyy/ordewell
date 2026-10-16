@@ -8,6 +8,7 @@ import { blockedPicker, handoffArrived, showDiff } from './handoff';
 import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, runnerCommands, waitingApproval, waitingCheckpoint, type RunStatus, type TaskView, type TuiState } from './state';
 import type { Key } from './keys';
 import { handleOverlayKey } from './reducers/overlays';
+import { syncApprovals } from './reducers/approvals';
 import { handlePlanKey } from './reducers/planPane';
 import { announceApprovals, announceCheckpoint, answerCheckpoint, continueTaskStep, handleTaskViewKey, openTaskView, taskLogAbandoned, taskLogArrived, taskLogLoaded } from './reducers/taskView';
 import { newSession, pickRewindTarget, runCommand } from './reducers/commands';
@@ -106,7 +107,8 @@ function reduceAction(state: TuiState, action: Action): Step {
     // its status line with it, as a status update would have set it.
     case 'runSnapshot': {
       if (stale(state, action.sessionId)) return step(state);
-      const next = withRun(state, action.view);
+      const run = withRun(state, action.view);
+      const next = action.approvals ? syncApprovals(run, action.approvals) : run;
       const status = runStatus(next, next.tasks);
       return step({ ...next, status });
     }

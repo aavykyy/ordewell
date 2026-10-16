@@ -32,10 +32,9 @@ import type {
   RewindTargetsResponse,
   RunSnapshotFrame,
   RunnersResponse,
+  SessionFrame,
   SessionListResponse,
-  SessionMessage,
   SessionMeta,
-  SessionNotice,
   SessionResponse,
   SettingsResponse,
   SettingsUpdateResponse,
@@ -122,9 +121,11 @@ export interface ExecutionSummary {
  * It used to be `{ type: string; [key: string]: unknown }`, which meant the CLI
  * and TUI adapters consumed no union at all — a new `SessionMessage` variant
  * compiled everywhere and was silently dropped by their `default:` arms. Naming
- * the real type turns that into a compile error at each surface.
+ * the real type turns that into a compile error at each surface. Each
+ * broadcast carries its place in the session's stream, for a client holding
+ * several sockets to tell one broadcast's copies from two broadcasts.
  */
-export type WsEvent = SessionMessage | SessionNotice | RunSnapshotFrame;
+export type WsEvent = SessionFrame | RunSnapshotFrame;
 
 /** A held subscription to a session (`followSession`). `ended` is `'lost'` unless `close` ended it. */
 export interface SessionFollow {

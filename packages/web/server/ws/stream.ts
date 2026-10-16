@@ -29,7 +29,11 @@ export function createWsHandler(pool: OrchestratorPool) {
     // The stream reports changes only. Taken and subscribed in one turn, so no
     // broadcast can fall between the snapshot and the first message after it.
     const view = pool.runSnapshot(sessionId);
-    if (view) ws.send(JSON.stringify({ type: 'run_snapshot', sessionId, view } satisfies RunSnapshotFrame));
+    if (view) {
+      ws.send(JSON.stringify({
+        type: 'run_snapshot', sessionId, view, approvals: pool.announcedApprovals(sessionId), ...pool.streamPosition(sessionId),
+      } satisfies RunSnapshotFrame));
+    }
     pool.subscribe(sessionId, ws);
   });
 

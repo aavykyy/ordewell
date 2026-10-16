@@ -1,4 +1,4 @@
-import type { ConversationMessage, LegacyPlanState, ResearchLogEntry, Task, TaskStatus } from '../models/Task';
+import { flattenTasks, type ConversationMessage, type LegacyPlanState, type ResearchLogEntry, type Task, type TaskStatus } from '../models/Task';
 
 /** The dialogue record a fork carries — what {@link PlannerConversation.clone} returns. */
 export interface ForkedDialogue {
@@ -33,6 +33,7 @@ function forkTask(task: Task): Task {
  * until someone decides here that it should travel.
  */
 export function forkPlanState(plan: LegacyPlanState, tasks: readonly Task[], dialogue: ForkedDialogue, now: string): LegacyPlanState {
+  const carried = new Set(flattenTasks(tasks).map((t) => t.id));
   return {
     tasks: tasks.map(forkTask),
     // The fork is a new session: it lists as the newest, not beside the original.
@@ -44,7 +45,8 @@ export function forkPlanState(plan: LegacyPlanState, tasks: readonly Task[], dia
     researchLog: dialogue.researchLog,
     ...(plan.prdMarkdown !== undefined ? { prdMarkdown: plan.prdMarkdown } : {}),
     // The user's approval is of the tasks, which travel; without it a fork of an executed plan would count every task approved.
-    ...(plan.approvedTasks !== undefined ? { approvedTasks: [...plan.approvedTasks] } : {}),
+    // Only of the tasks that travel: an id left behind would approve whatever task the fork's planner later gives it (ADR-0029).
+    ...(plan.approvedTasks !== undefined ? { approvedTasks: plan.approvedTasks.filter((id) => carried.has(id)) } : {}),
     // Not left to the status, which a surface may have rewritten for display.
     ...(plan.approved !== undefined ? { approved: plan.approved } : {}),
   };

@@ -1,4 +1,4 @@
-import type { RunView, SessionMessage, SessionNotice } from '@ordewell/core';
+import type { RunSnapshotFrame, SessionMessage, SessionNotice, StreamStamp } from '@ordewell/core';
 import type { WsEvent } from '../apiClient';
 import type { Action } from './reducer';
 
@@ -14,12 +14,13 @@ import type { Action } from './reducer';
  * shows: the conversation view for anything a planner said or did, the run's
  * own handling for task lifecycle.
  *
- * Dedupe is per identity, not per subscription kind: each identity counts the
- * copies each subscription has delivered, and a copy is real only while it
- * takes a subscription past every other — the first copy of a broadcast is
- * shown, the same broadcast arriving on any other subscription, or a second
- * run socket, is dropped. A message the planner genuinely repeats is a later
- * broadcast and pulls ahead again.
+ * Dedupe is by the broadcast's place in the session's stream (`StreamStamp`):
+ * the first copy of a sequence number is shown, every other copy — on another
+ * subscription, a second run socket, or the socket a reload opened while the
+ * old one still drained — is dropped. Nothing about it belongs to a
+ * subscription, so a socket that is gone leaves nothing behind to hold back a
+ * later broadcast that happens to read the same, as two clears of a held edit
+ * do. A daemon older than the stamp is deduped by content instead (`Copies`).
  */
 
 export type Dispatch = (action: Action) => void;
@@ -38,7 +39,7 @@ export type Receiver = (event: WsEvent) => void;
 /** A streamed text piece: one of many that arrive in a burst and read as one. */
 type Streamed = Extract<SessionMessage, { type: 'planner_text_delta' | 'planner_thinking_delta' | 'plan_token' }>;
 
-type ConversationMessage = Extract<
+type ConversationMessage = Partial<StreamStamp> & Extract<
   SessionMessage,
   {
     type:
@@ -92,7 +93,7 @@ function joinStreamed(held: Streamed, next: Streamed): Streamed | null {
  * same `now`) plus its text is the identity; a copy that lost its timestamp —
  * the REST backfill of a test-shaped transcript — falls back to its text.
  */
-function identity(event: WsEvent): string {
+function identity(event: Broadcast): string {
   if (event.type === 'planner_message') return replyKey(event.content, event.timestamp);
   if (event.type === 'approval_request' || event.type === 'approval_settled') return `${event.type}:${event.id}`;
   return JSON.stringify(event);
@@ -102,8 +103,77 @@ function replyKey(content: string, timestamp?: string): string {
   return timestamp ? `planner_message:${timestamp}:${content}` : `planner_message:content:${content}`;
 }
 
+/** A broadcast this client may have had more than once. */
+type Broadcast = Exclude<WsEvent, RunSnapshotFrame>;
+
+function stampOf(frame: Partial<StreamStamp>): StreamStamp | null {
+  return frame.stream !== undefined && frame.seq !== undefined ? { stream: frame.stream, seq: frame.seq } : null;
+}
+
 /**
- * How many copies of one identity each subscription has delivered. Counting per
+ * What a run snapshot already accounts for. One of these numbered at or below
+ * the snapshot adopted is a copy that lagged behind it on an older socket, and
+ * applying it after the snapshot would bring back what the snapshot says is
+ * over — a preview cleared, a request answered.
+ */
+const COVERED: ReadonlySet<string> = new Set<Broadcast['type']>(['plan_edit_held', 'status_update', 'task_updated', 'approval_request', 'approval_settled']);
+
+/**
+ * The sequence numbers of one daemon's broadcasts this client has delivered
+ * for one session. A window rather than a high-water mark: two sockets'
+ * frames can interleave out of order, and a frame numbered below one already
+ * shown may still be the first copy of its broadcast.
+ */
+class Delivered {
+  private stream: string | null = null;
+  private highest = 0;
+  private snapshot = 0;
+  private readonly seen = new Set<number>();
+
+  constructor(private readonly window: number) {}
+
+  first({ stream, seq }: StreamStamp): boolean {
+    this.follow(stream);
+    if (seq <= this.highest - this.window || this.seen.has(seq)) return false;
+    this.seen.add(seq);
+    if (seq > this.highest) {
+      this.highest = seq;
+      for (const old of this.seen) if (old <= seq - this.window) this.seen.delete(old);
+    }
+    return true;
+  }
+
+  covered({ seq }: StreamStamp): boolean {
+    return seq <= this.snapshot;
+  }
+
+  /** Whether a snapshot is as new as everything delivered, and so adopted; an older one would undo what came after it. */
+  adopt({ stream, seq }: StreamStamp): boolean {
+    this.follow(stream);
+    if (seq < this.highest) return false;
+    this.snapshot = seq;
+    this.highest = seq;
+    return true;
+  }
+
+  // A new stream is a restarted daemon: its numbers start over and mean nothing against the last one's.
+  private follow(stream: string): void {
+    if (stream === this.stream) return;
+    this.stream = stream;
+    this.highest = 0;
+    this.snapshot = 0;
+    this.seen.clear();
+  }
+}
+
+/** A clear or a drop: applying one twice changes nothing, so an unstamped copy is never held back. */
+function isClear(event: Broadcast): boolean {
+  return (event.type === 'plan_edit_held' && event.held === null) || event.type === 'approval_settled';
+}
+
+/**
+ * How many copies of one identity each subscription has delivered — the
+ * dedupe for a daemon older than the stream stamp. Counting per
  * subscription — rather than per kind — is what keeps a second run socket from
  * showing a broadcast the first already showed. A copy is real only when it
  * takes a subscription past the highest count any subscription has reached:
@@ -191,12 +261,13 @@ export interface SessionInbound {
   /** A burst held for batching goes out now, in order. */
   flush(): void;
   /**
-   * Keeps the connect snapshot instead of delivering it. A load follows the
-   * session before it is the one on screen, so a snapshot dispatched at once
-   * would meet the reducer's stale check and be dropped.
+   * Keeps the connect snapshot instead of delivering it, and every broadcast
+   * after it. A load follows the session before it is the one on screen, so
+   * anything dispatched at once would meet the reducer's stale check and be
+   * dropped — a request answered elsewhere meanwhile among them.
    */
   holdSnapshot(): void;
-  /** Delivers the snapshot held (when `deliver`), then hands them out as they come again. */
+  /** Delivers the snapshot held and what came after it, in order (when `deliver`), then hands them out as they come again. */
   releaseSnapshot(deliver: boolean): void;
 }
 
@@ -223,6 +294,7 @@ export function inboundFor(api: object, dispatch: Dispatch, sessionId: string): 
 }
 
 function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
+  const delivered = new Delivered(256);
   const copies = new Copies(64);
   // Reply texts already on screen, so a timestamp-less backfill of one is not spoken again.
   const shown = new WindowSet(64);
@@ -235,7 +307,8 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
   let held: Streamed | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let holdingSnapshot = false;
-  let heldSnapshot: RunView | null = null;
+  let heldSnapshot: RunSnapshotFrame | null = null;
+  let heldAfter: (() => void)[] = [];
 
   const flush = (): void => {
     if (timer !== null) {
@@ -266,8 +339,19 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
     dispatch({ type: 'sessionMessage', message, sessionId });
   };
 
-  const acceptReply = (id: string, event: Extract<SessionMessage, { type: 'planner_message' }>): void => {
+  /** Whether this delivery is the first of a broadcast this surface has not shown. */
+  const fresh = (id: string, event: Broadcast): boolean => {
+    const stamp = stampOf(event);
+    if (stamp) return delivered.first(stamp) && !(COVERED.has(event.type) && delivered.covered(stamp));
+    return isClear(event) || copies.first(id, identity(event));
+  };
+
+  const acceptReply = (id: string, event: Extract<ConversationMessage, { type: 'planner_message' }>): void => {
     const key = replyKey(event.content, event.timestamp);
+    if (stampOf(event)) {
+      if (fresh(id, event) && !pending.take(key)) showReply(event);
+      return;
+    }
     if (pending.take(key)) {
       copies.credit(id, key);
       return;
@@ -276,12 +360,16 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
     showReply(event);
   };
 
+  const deliverSnapshot = ({ view, approvals }: RunSnapshotFrame): void => {
+    dispatch({ type: 'runSnapshot', view, ...(approvals ? { approvals } : {}), sessionId });
+  };
+
   const deliverConversation = (id: string, event: ConversationMessage): void => {
     if (event.type === 'planner_message') {
       acceptReply(id, event);
       return;
     }
-    if (!copies.first(id, identity(event))) return;
+    if (!fresh(id, event)) return;
     if (event.type === 'plan_generated') {
       dispatch({ type: 'sessionMessage', message: event, sessionId });
       // Every plan a turn lands, one this surface did not send included (a
@@ -299,17 +387,24 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
     // The daemon greets every socket with the run as it stands, so a client
     // that joins mid-run has it before the next update. Never counted as a
     // copy: a reconnect greets with a view identical to an earlier one, and
-    // adopting a snapshot twice changes nothing.
+    // adopting a snapshot twice changes nothing. One older than a broadcast
+    // already shown came in late on a newer socket, and is passed over.
     if (event.type === 'run_snapshot') {
       flush();
-      if (holdingSnapshot) heldSnapshot = event.view;
-      else dispatch({ type: 'runSnapshot', view: event.view, sessionId });
+      const stamp = stampOf(event);
+      if (stamp && !delivered.adopt(stamp)) return;
+      if (holdingSnapshot) heldSnapshot = event;
+      else deliverSnapshot(event);
+      return;
+    }
+    if (holdingSnapshot) {
+      heldAfter.push(() => receive(kind, id, event));
       return;
     }
     if (isStreamed(event)) {
       // Streamed prose has one voice: the planning subscription. A run's own
-      // socket ignores it, as it always has.
-      if (kind === 'planning') hold(event);
+      // socket ignores it, as it always has — and does not count as its copy.
+      if (kind === 'planning' && (!stampOf(event) || fresh(id, event))) hold(event);
       return;
     }
     flush();
@@ -317,7 +412,7 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
       deliverConversation(id, event);
       return;
     }
-    if (!copies.first(id, identity(event))) return;
+    if (!fresh(id, event)) return;
     dispatchLifecycle(dispatch, event, sessionId);
   };
 
@@ -348,12 +443,17 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
     holdSnapshot: () => {
       holdingSnapshot = true;
       heldSnapshot = null;
+      heldAfter = [];
     },
     releaseSnapshot: (deliver) => {
       holdingSnapshot = false;
-      const view = heldSnapshot;
+      const snapshot = heldSnapshot;
+      const after = heldAfter;
       heldSnapshot = null;
-      if (deliver && view) dispatch({ type: 'runSnapshot', view, sessionId });
+      heldAfter = [];
+      if (!deliver) return;
+      if (snapshot) deliverSnapshot(snapshot);
+      for (const next of after) next();
     },
   };
 }

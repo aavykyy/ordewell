@@ -5,7 +5,7 @@ import type { SessionMeta } from './models/Session';
 import type { DiscoveredModel } from './models/Task';
 import type { PlannerNotReady } from './services/plannerReadiness';
 import type { PendingApproval } from './services/PendingApprovals';
-import type { RunView, SurfacePlan, SurfacePlanState } from './services/SessionMessage';
+import type { RunView, SessionMessage, SessionNotice, SurfacePlan, SurfacePlanState } from './services/SessionMessage';
 import type { ConversationCompaction, RewindTarget } from './services/PlannerConversation';
 import type { PlannerModelRecall } from './services/PlannerModelMemory';
 import type { OrchestratorOption } from './services/ProviderRouting';
@@ -251,12 +251,34 @@ export interface ApprovalAnswerResponse extends OkResponse {
 }
 
 /**
- * What a session's socket sends right after `connected`: its run as it stands,
- * so a client that joins mid-run has the run view before the next update.
- * Every frame after it is a `SessionMessage` or `SessionNotice`.
+ * Where a frame stands in its session's broadcast stream. A client holding
+ * several sockets on one session gets every broadcast on each, and a frame's
+ * content is no identity: two clears of a held edit are the same JSON. `seq`
+ * rises by one per broadcast of the session for as long as the daemon runs,
+ * whichever Session object holds the id; `stream` names the daemon process,
+ * so a restarted daemon's numbering is never compared with the last one's.
  */
-export interface RunSnapshotFrame {
+export interface StreamStamp {
+  stream: string;
+  seq: number;
+}
+
+/** A broadcast as the session's socket carries it. Unstamped from a daemon older than the stamp. */
+export type SessionFrame = (SessionMessage | SessionNotice) & Partial<StreamStamp>;
+
+export type ApprovalRequestMessage = Extract<SessionMessage, { type: 'approval_request' }>;
+
+/**
+ * What a session's socket sends right after `connected`: its run as it stands,
+ * so a client that joins mid-run has the run view before the next update —
+ * the held edit's preview included — and the planner's approval requests
+ * still waiting, which no later frame would announce again. `seq` is the last
+ * broadcast it accounts for. Every frame after it is a {@link SessionFrame}.
+ */
+export interface RunSnapshotFrame extends Partial<StreamStamp> {
   type: 'run_snapshot';
   sessionId: string;
   view: RunView;
+  /** Absent from a daemon older than the field: nothing is known, not "none waiting". */
+  approvals?: ApprovalRequestMessage[];
 }

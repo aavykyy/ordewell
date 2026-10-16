@@ -301,6 +301,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     // streaming has not been saved yet, so its live view is sent instead.
     if (managerDeps.isGeneratingPlan()) services.chatProvider.conversation.resync();
     else services.chatProvider.restoreChat(state.plan);
+    services.chatProvider.conversation.waiting(managerDeps.session.announcedApprovals());
     if (state.plan.tasks.length > 0) {
       services.chatProvider.showPlan(state.plan);
       // The run view is the one thing the plan does not carry: task approvals,

@@ -73,6 +73,8 @@ export class SessionEventRelay {
   private pendingSubagents: SubagentRun[] = [];
   private statusHeld = false;
   private statusOwed = false;
+  /** The planner's requests announced and not yet settled, as they were announced: a surface joining now is owed them. */
+  private readonly announced = new Map<string, Extract<SessionMessage, { type: 'approval_request' }>>();
 
   constructor(deps: SessionEventRelayDeps) {
     this.broadcast = deps.broadcast;
@@ -162,6 +164,21 @@ export class SessionEventRelay {
 
   releaseStatus(plan: LegacyPlanState | null): void {
     if (this.statusOwed) this.status(plan);
+  }
+
+  approvalRequested(request: Extract<SessionMessage, { type: 'approval_request' }>): void {
+    this.announced.set(request.id, request);
+    this.broadcast(request);
+  }
+
+  approvalSettled(id: string, granted: boolean): void {
+    this.announced.delete(id);
+    this.broadcast({ type: 'approval_settled', id, granted });
+  }
+
+  /** The planner's approval requests still waiting, in the order they were asked. */
+  announcedApprovals(): Extract<SessionMessage, { type: 'approval_request' }>[] {
+    return [...this.announced.values()];
   }
 
   executionComplete(plan: LegacyPlanState | null): void {

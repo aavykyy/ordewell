@@ -51,8 +51,10 @@ export function plansRoute(pool: OrchestratorPool) {
       const queryRunners = c.req.query('runners');
       // No runners in the request means "whatever is enabled", not claude-code:
       // a hard-coded default here contradicts the /runners toggle state and
-      // fails planning for anyone who disabled claude-code.
-      const runnerList: string[] = Array.isArray(runners) ? runners : (runners ? [runners] : (queryRunners ? queryRunners.split(',').map(s => s.trim()).filter(Boolean) : pool.getRunnerState().enabledRunners));
+      // fails planning for anyone who disabled claude-code. Left undefined for
+      // the session to read after its planner gate, since before the installed
+      // agents are detected the enabled default is not known yet.
+      const runnerList: string[] | undefined = Array.isArray(runners) ? runners : (runners ? [runners] : (queryRunners ? queryRunners.split(',').map(s => s.trim()).filter(Boolean) : undefined));
       const plan = await pool.generatePlan(c.req.param('sessionId'), goal, runnerList, ws, model, { allowInit });
       const { models, modelsByRunner } = await pool.getProviderModels();
       const notes = (pool.session(c.req.param('sessionId')).planState?.conversationHistory ?? [])
@@ -447,7 +449,8 @@ export function plansRoute(pool: OrchestratorPool) {
       const { goal, runners, workspace, model, allowInit } = await c.req.json();
       if (!goal) return c.json({ error: 'goal is required' }, 400);
       const ws = workspace || c.req.query('workspace') || process.cwd();
-      const runnerList: string[] = Array.isArray(runners) ? runners : (runners ? [runners] : pool.getRunnerState().enabledRunners);
+      // As in generate: none requested is read by the session, after its gate.
+      const runnerList: string[] | undefined = Array.isArray(runners) ? runners : (runners ? [runners] : undefined);
       const plan = await pool.startPlanning(c.req.param('sessionId'), goal, runnerList, ws, model, { allowInit });
       return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
     } catch (err) {

@@ -7,7 +7,7 @@ import { createStepLog, type LogLine } from './researchLog';
 import type { SerializedTask, DiscoveredModel } from '@ordewell/core';
 import { mintSessionId, taskOrderLabel } from '@ordewell/core';
 import type { PlanBody, WsEvent } from '../apiClient';
-import { headlessPlannerRefusal } from './shared';
+import { fail, headlessPlannerRefusal } from './shared';
 
 // The one-shot endpoint answers with the stored plan state (`pendingTasks`),
 // the conversation with the wire plan (`tasks`); read as `tasks` alone, a
@@ -39,6 +39,22 @@ function commitNotes(plan: PlanBody): string[] {
   const history = ('conversationHistory' in plan && plan.conversationHistory) || [];
   const marker = history.map((e) => e.kind).lastIndexOf('plan_generated');
   return marker < 0 ? [] : history.slice(marker + 1).filter((e) => e.kind === 'system').map((e) => e.content);
+}
+
+/**
+ * What the user does with the plan now. Autorun (ADR-0030) starts a plan the
+ * planner submits as the reply ends, and its start approves the plan before
+ * the reply reaches this command — so "run it" is said only of a plan nobody
+ * has approved or started, and a running one is pointed at, not run again.
+ */
+async function nextStep(api: ApiClient, plan: PlanBody): Promise<string> {
+  const approved = 'approved' in plan && plan.approved === true;
+  // A submitted task reads `approved` before anything has run it.
+  const moving = planTasks(plan).some((t) => t.status !== undefined && t.status !== 'pending' && t.status !== 'approved');
+  if (!approved && !moving) return `Run 'ordewell run' to execute, 'ordewell status' to inspect, or 'ordewell tui' for the full UI.`;
+  const follow = `Follow it with 'ordewell status', or 'ordewell tui' for the full UI.`;
+  const autorun = await api.getSettings().then((settings) => settings.run?.autorun === true, () => false);
+  return autorun ? `Autorun started the plan. ${follow}` : `The plan is running. ${follow}`;
 }
 
 /** Answers for planner questions. `null` means stdin is exhausted — no answer is coming. */
@@ -187,15 +203,27 @@ export async function handlePlan(
   const state = await api.getRunners();
   const enabledIds = state.runners.filter(r => r.enabled).map(r => r.id);
 
+  // The list is every installed runner, enabled or not. One that is installed
+  // but off is refused with the command that turns it on, as `ordewell runners`
+  // is where the enabled set is chosen; `--runner` picks among it.
+  const enableHint = (id: string) => `Enable it with: ordewell runners ${id} on`;
   let runners: string[];
   if (runnerFlags.length === 0) {
+    if (enabledIds.length === 0) {
+      const installed = state.runners.map((r) => r.id);
+      fail(
+        'No runner is enabled.',
+        installed.length > 0
+          ? `Installed: ${installed.join(', ')}. ${enableHint(installed[0])}`
+          : 'No supported coding agent is installed or on PATH.',
+      );
+    }
     runners = enabledIds;
   } else {
     for (const r of runnerFlags) {
-      if (!enabledIds.includes(r)) {
-        console.error(`Unknown runner: "${r}". Enabled runners: ${enabledIds.join(', ')}`);
-        process.exit(1);
-      }
+      if (enabledIds.includes(r)) continue;
+      if (state.runners.some((known) => known.id === r)) fail(`${r} is installed but not enabled. ${enableHint(r)}`);
+      fail(`Unknown runner: "${r}". Enabled runners: ${enabledIds.join(', ')}`);
     }
     runners = runnerFlags;
   }
@@ -312,7 +340,7 @@ export async function handlePlan(
     printPlan(plan, sessionId, runners, models);
     for (const note of notes) console.log(`\n${note}`);
     saveLastSession(sessionId, goal, runnersOf(plan, runners), workspace);
-    console.log(`\n  Run 'ordewell run' to execute, 'ordewell status' to inspect, or 'ordewell tui' for the full UI.`);
+    console.log(`\n  ${await nextStep(api, plan)}`);
   } catch (err) {
     reader?.close();
     closeStream();
