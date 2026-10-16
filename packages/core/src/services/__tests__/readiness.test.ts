@@ -72,7 +72,7 @@ describe('selectReadyTasks', () => {
     expect(ready).toHaveLength(0);
     expect(excluded.find((e) => e.task.id === 'h1')!.reasons).toEqual(['on-hold']);
     expect(excluded.find((e) => e.task.id === 'b1')!.reasons).toEqual(['status=blocked', 'blocked']);
-    expect(excluded.find((e) => e.task.id === 'd1')!.reasons).toEqual(['deps']);
+    expect(excluded.find((e) => e.task.id === 'd1')!.reasons).toEqual(['deps=missing']);
   });
 
   it('holds back a task outside the user\'s approval record, however ready it is (ADR-0035)', () => {
@@ -91,7 +91,7 @@ describe('selectReadyTasks', () => {
 
     const { ready, excluded } = selectReadyTasks(input([t1, t2]));
     expect(ready.map((t) => t.id)).toEqual(['t1']);
-    expect(excluded.find((e) => e.task.id === 't2')!.reasons).toEqual(['deps']);
+    expect(excluded.find((e) => e.task.id === 't2')!.reasons).toEqual(['deps=t1']);
   });
 
   it('frees a dependent once its dependency completed', () => {
@@ -107,7 +107,7 @@ describe('selectReadyTasks', () => {
 
     const { excluded } = selectReadyTasks(input([t1, t2]));
     expect(isBlocked(t2, storeOf([t1, t2]))).toBe(true);
-    expect(excluded.find((e) => e.task.id === 't2')!.reasons).toEqual(['blocked', 'deps']);
+    expect(excluded.find((e) => e.task.id === 't2')!.reasons).toEqual(['blocked', 'deps=t1']);
   });
 
   it('waits for a dependency to land before starting a dependent in an isolated run', () => {
@@ -116,7 +116,7 @@ describe('selectReadyTasks', () => {
 
     const unlanded = selectReadyTasks(input([t1, t2], { runs: runsOf({ t1: record('t1', 'active') }) }));
     expect(unlanded.ready).toHaveLength(0);
-    expect(unlanded.excluded.find((e) => e.task.id === 't2')!.reasons).toEqual(['deps']);
+    expect(unlanded.excluded.find((e) => e.task.id === 't2')!.reasons).toEqual(['deps=t1']);
 
     const landed = selectReadyTasks(input([t1, t2], { runs: runsOf({ t1: record('t1', 'merged') }) }));
     expect(landed.ready.map((t) => t.id)).toEqual(['t2']);
@@ -158,6 +158,71 @@ describe('dependencyMet', () => {
   it('is unmet until the isolated dependency has merged', () => {
     expect(dependencyMet('t1', completed, runsOf({ t1: record('t1', 'conflict') }))).toBe(false);
     expect(dependencyMet('t1', completed, runsOf({ t1: record('t1', 'merged') }))).toBe(true);
+  });
+});
+
+describe('behind a skipped dependency', () => {
+  // T -> skipped V -> F: the skip lands none of V's work, but F's work is
+  // still what T is meant to build on.
+  const front = (status: Task['status'] = 'pending') => createTask({ id: 'f1', order: 1, title: 'Front', prompt: 'x', status });
+  const skipped = createTask({ id: 'v2', order: 2, title: 'Verify', prompt: 'x', status: 'skipped', dependencies: ['f1'] });
+  const tail = createTask({ id: 't3', order: 3, title: 'Tail', prompt: 'x', dependencies: ['v2'] });
+
+  it('holds the dependent while the work behind the skip is unfinished, naming it', () => {
+    const { ready, excluded } = selectReadyTasks(input([front(), skipped, tail]));
+    expect(ready.map((t) => t.id)).toEqual(['f1']);
+    expect(excluded.find((e) => e.task.id === 't3')!.reasons).toEqual(['deps=f1']);
+    expect(dependencyMet('v2', storeOf([front('in_progress'), skipped, tail]), runsOf())).toBe(false);
+  });
+
+  it('lets it go once that work completed and, in an isolated run, merged into the integration branch', () => {
+    const done = [front('completed'), skipped, tail];
+    expect(selectReadyTasks(input(done, { runs: runsOf({ f1: record('f1', 'active') }) })).ready).toEqual([]);
+    expect(selectReadyTasks(input(done, { runs: runsOf({ f1: record('f1', 'merged') }) })).ready.map((t) => t.id)).toEqual(['t3']);
+    expect(selectReadyTasks(input(done)).ready.map((t) => t.id)).toEqual(['t3']);
+  });
+
+  it('lets the dependent go at once when nothing stands behind the skip', () => {
+    const alone = createTask({ id: 'v2', order: 2, title: 'Verify', prompt: 'x', status: 'skipped' });
+    expect(selectReadyTasks(input([alone, tail])).ready.map((t) => t.id)).toEqual(['t3']);
+  });
+
+  it('releases the dependents of a skipped failed task (ADR-0034)', () => {
+    const failedThenSkipped = createTask({ id: 'v2', order: 2, title: 'Verify', prompt: 'x', status: 'skipped' });
+    const tasks = [front('completed'), { ...failedThenSkipped, dependencies: ['f1'] }, tail];
+    expect(isBlocked(tail, storeOf(tasks))).toBe(false);
+    expect(selectReadyTasks(input(tasks)).ready.map((t) => t.id)).toEqual(['t3']);
+  });
+
+  it('is not held by a failed task behind the skip, or one blocked by it: skipping released them', () => {
+    expect(selectReadyTasks(input([front('failed'), skipped, tail])).ready.map((t) => t.id)).toEqual(['t3']);
+
+    const root = createTask({ id: 'r0', order: 0, title: 'Root', prompt: 'x', status: 'failed' });
+    const waitsOnRoot = { ...front(), dependencies: ['r0'] };
+    expect(selectReadyTasks(input([root, waitsOnRoot, skipped, tail])).ready.map((t) => t.id)).toEqual(['t3']);
+  });
+
+  it('still names a failed task the dependent also depends on directly', () => {
+    const both = { ...tail, dependencies: ['v2', 'f1'] };
+    expect(selectReadyTasks(input([front('failed'), skipped, both])).excluded.find((e) => e.task.id === 't3')!.reasons).toEqual(['blocked', 'deps=f1']);
+  });
+
+  it('walks a chain of skips through to the work behind them', () => {
+    const second = createTask({ id: 's3', order: 3, title: 'Also skipped', prompt: 'x', status: 'skipped', dependencies: ['v2'] });
+    const end = createTask({ id: 't4', order: 4, title: 'End', prompt: 'x', dependencies: ['s3'] });
+    const held = selectReadyTasks(input([front('in_progress'), skipped, second, end]));
+    expect(held.ready).toEqual([]);
+    expect(held.excluded.find((e) => e.task.id === 't4')!.reasons).toEqual(['deps=f1']);
+    expect(selectReadyTasks(input([front('completed'), skipped, second, end])).ready.map((t) => t.id)).toEqual(['t4']);
+  });
+
+  it('walks a cycle of skips once', () => {
+    const a = createTask({ id: 'a1', order: 1, title: 'A', prompt: 'x', status: 'skipped', dependencies: ['b2', 'f1'] });
+    const b = createTask({ id: 'b2', order: 2, title: 'B', prompt: 'x', status: 'skipped', dependencies: ['a1'] });
+    const end = createTask({ id: 't4', order: 4, title: 'End', prompt: 'x', dependencies: ['b2'] });
+    const store = storeOf([front(), a, b, end]);
+    expect(dependencyMet('b2', store, runsOf())).toBe(false);
+    expect(dependencyMet('b2', storeOf([front('completed'), a, b, end]), runsOf())).toBe(true);
   });
 });
 

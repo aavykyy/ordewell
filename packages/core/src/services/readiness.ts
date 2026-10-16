@@ -63,7 +63,7 @@ export function selectReadyTasks(input: ReadinessInput): Readiness {
     if (onHold.has(t.id)) return false;
     if (!input.approved(t.id)) return false;
     if (blockedIn(t, blocked)) return false;
-    if (!t.dependencies.every((depId) => dependencyMet(depId, store, runs))) return false;
+    if (unmetDependencies(t, store, runs).length > 0) return false;
     if (heldByMerge(t, input)) return false;
     if (mergeGate(t, store, runs).length > 0) {
       gated.push(t);
@@ -92,21 +92,72 @@ export function isBlocked(task: Readonly<Task>, store: Pick<PlanStore, 'allTasks
 const blockedIn = (task: Readonly<Task>, blocked: ReadonlyMap<string, string[]>): boolean =>
   task.status === 'blocked' || blocked.has(task.id);
 
+/** What the dependency rule reads of the plan. */
+type DependencyStore = Pick<PlanStore, 'allTasks' | 'get' | 'isCompleted' | 'isSkipped'>;
+
 /**
  * In an isolated run a dependency is met once its work is on the integration
  * branch, not merely once it passed: the dependent's worktree is cut from that
  * branch, so starting earlier would hand it a tree without the work it depends
- * on. A skipped dependency is met at once: none of its work lands, so there
- * is nothing to wait for.
+ * on. A skipped dependency lands nothing of its own, but the work it waited
+ * on is still what the dependent builds on: it is met once the tasks behind
+ * it are, by the same rule (see {@link unmetDependencies}).
  */
 export function dependencyMet(
   depId: string,
-  store: Pick<PlanStore, 'isCompleted' | 'isSkipped'>,
+  store: DependencyStore,
   runs: Pick<IsolationRunController, 'openRecord'>,
 ): boolean {
-  if (store.isSkipped(depId)) return true;
-  if (!store.isCompleted(depId)) return false;
-  const record = runs.openRecord(depId);
+  return waitingBehind([depId], store, runs).length === 0;
+}
+
+/**
+ * The tasks a task's dependencies still hold it back for, nearest first and
+ * each named once: a dependency not met yet, or, through a skipped one, the
+ * nearest unmet tasks behind it. Behind a skip, a failed or blocked task holds nothing
+ * back: skipping is how the user releases the dependents of work that
+ * cannot finish (ADR-0034), so only work still under way or yet to run is
+ * waited for.
+ */
+export function unmetDependencies(
+  task: Readonly<Pick<Task, 'dependencies'>>,
+  store: DependencyStore,
+  runs: Pick<IsolationRunController, 'openRecord'>,
+): string[] {
+  return waitingBehind(task.dependencies, store, runs);
+}
+
+function waitingBehind(
+  depIds: readonly string[],
+  store: DependencyStore,
+  runs: Pick<IsolationRunController, 'openRecord'>,
+): string[] {
+  const seen = new Set<string>();
+  const waiting: string[] = [];
+  // Only a walk through a skip needs it, and most never take one.
+  let blocked: ReadonlyMap<string, string[]> | undefined;
+  const deadEnd = (id: string): boolean => {
+    const task = store.get(id);
+    if (task?.status === 'failed' || task?.status === 'blocked') return true;
+    blocked ??= blockingFailures(store.allTasks);
+    return blocked.has(id);
+  };
+  // Breadth first, so a task that is also a direct dependency is judged as one.
+  const queue = depIds.map((id) => ({ id, behindSkip: false }));
+  for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
+    const { id, behindSkip } = next;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (store.isSkipped(id)) queue.push(...(store.get(id)?.dependencies ?? []).map((dep) => ({ id: dep, behindSkip: true })));
+    else if (!landed(id, store, runs) && !(behindSkip && deadEnd(id))) waiting.push(id);
+  }
+  return waiting;
+}
+
+/** Completed, and in an isolated run merged into the integration branch. */
+function landed(id: string, store: Pick<PlanStore, 'isCompleted'>, runs: Pick<IsolationRunController, 'openRecord'>): boolean {
+  if (!store.isCompleted(id)) return false;
+  const record = runs.openRecord(id);
   return !record || record.status === 'merged';
 }
 
@@ -149,7 +200,8 @@ function exclusionReasons(task: Readonly<Task>, input: ReadinessInput, blocked: 
   if (onHold.has(task.id)) reasons.push('on-hold');
   if (!input.approved(task.id)) reasons.push('unapproved');
   if (blockedIn(task, blocked)) reasons.push('blocked');
-  if (!task.dependencies.every((depId) => dependencyMet(depId, store, runs))) reasons.push('deps');
+  const unmet = unmetDependencies(task, store, runs);
+  if (unmet.length > 0) reasons.push(`deps=${unmet.join(',')}`);
   if (mergeGate(task, store, runs).length > 0) reasons.push('merge-gate');
   if (heldByMerge(task, input)) reasons.push('merging');
   return reasons;

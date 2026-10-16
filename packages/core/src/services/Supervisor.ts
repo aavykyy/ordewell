@@ -421,7 +421,7 @@ function actBrief(readBudget: number, retryLimit: number): string {
   return [
     'You are this plan\'s supervisor, woken by the run update above; the user did not write to you.',
     'At Act you may act on it yourself: run, stop and retry tasks, message their runners, deny or escalate approvals, change tasks with edit_plan, and merge_all. Nobody is asked first. A task you add is approved to run, an ops task included.',
-    'When a task that failed, is blocked or waits for input should not hold up the rest, skip_task it with your reason: none of its work lands, and its dependents go ahead, told why. You never mark work complete; only the user vouches for it.',
+    'When a task that failed, is blocked or waits for input should not hold up the rest, skip_task it with your reason: none of its work lands, and its dependents go ahead once the work it waited on is done, told why. You never mark work complete; only the user vouches for it.',
     readsLine(readBudget),
     'To change a task and run it again, call edit_plan and then retry_task in the same reply: the retry waits for the edit to land, so it runs as edited.',
     'A task paused on a usage limit can be resumed early with from "session" once the user says the limit has been reset.',

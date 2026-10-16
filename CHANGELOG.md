@@ -70,6 +70,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   title its edit gave it**: the start runs once the edit lands instead of
   failing then with "No task matches", and a name that matches nothing is
   refused at once.
+- **Skipping a task no longer lets what depends on it start ahead of the work
+  that task was waiting on**: its dependents start once that work is done,
+  and a refused `run_task` names it.
 
 ## [0.10.2] — 2026-10-14
 
