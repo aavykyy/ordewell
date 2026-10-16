@@ -336,10 +336,14 @@ export class OrchestratorPool {
 
   updateSettings(changes: Record<string, unknown>): SettingsUpdateResponse {
     // Read before any of this call's changes land, so a switch is judged
-    // against what was actually in effect a moment ago.
+    // against what was actually in effect a moment ago. The model too: a
+    // detected agent does not plan with a vendor model left in the
+    // environment, and judging against it would remember that model as the
+    // agent's own pick.
+    const inEffect = this.plannerConfig();
     const current: PlannerSelectionState = {
-      provider: this.plannerProviderInEffect(),
-      model: process.env.ORCHESTRATOR_MODEL ?? '',
+      provider: inEffect.aiProvider,
+      model: inEffect.orchestratorModel,
       effort: process.env.ORDEWELL_PLANNER_EFFORT ?? '',
     };
 
@@ -491,7 +495,7 @@ export class OrchestratorPool {
       models: allModels,
       modelsByRunner,
       modesByRunner: runnerModesFrom(this.registry, runnerIds),
-      orchestratorModel: process.env.ORCHESTRATOR_MODEL || '',
+      orchestratorModel: this.plannerConfig().orchestratorModel,
       providers,
       orchestratorModels,
       providerErrors,

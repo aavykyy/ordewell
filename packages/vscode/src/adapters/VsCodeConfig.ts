@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, parseMaxParallel, normalizeGeminiModel, isApiProvider, isPlannerBackend, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET } from '@ordewell/core';
-import type { ProviderModelLists, SettingsService } from '@ordewell/core';
+import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, parseMaxParallel, normalizeGeminiModel, isApiProvider, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET } from '@ordewell/core';
+import type { ProviderModelLists, ResolvedPlanner, SettingsService } from '@ordewell/core';
 import { SecretStore, type ApiProvider, type SecretKey } from './SecretStore';
 
 export class VsCodeConfig extends BaseConfig {
@@ -145,11 +145,13 @@ export class VsCodeConfig extends BaseConfig {
   /** The setting as written, valid or not; `aiProvider` is what the extension acts on. */
   get rawAiProvider(): string { return this.config.get<string>('aiProvider', '') || ''; }
 
+  private get planner(): ResolvedPlanner {
+    const model = this.config.get<string>('orchestratorModel', '') || process.env.ORCHESTRATOR_MODEL || '';
+    return this.resolvePlanner(model, this._providerModelLists, this.rawAiProvider);
+  }
+
   get aiProvider(): PlannerBackendId {
-    const setting = this.rawAiProvider;
-    if (setting && isPlannerBackend(setting)) return setting;
-    const model = this.config.get<string>('orchestratorModel', '') || process.env.ORCHESTRATOR_MODEL;
-    return this.routedProvider(model, this._providerModelLists);
+    return this.planner.provider;
   }
 
   get apiKey() {
@@ -174,7 +176,8 @@ export class VsCodeConfig extends BaseConfig {
       const raw = this.resolveConfigModel('planningModel', 'geminiModel', 'orchestratorModel');
       return raw ? normalizeGeminiModel(raw) : super.geminiModel;
     }
-    return this.config.get<string>('planningModel', '') || this.config.get<string>('orchestratorModel', '') || process.env.ORCHESTRATOR_MODEL || '';
+    const raw = this.config.get<string>('planningModel', '') || this.config.get<string>('orchestratorModel', '') || process.env.ORCHESTRATOR_MODEL || '';
+    return this.plannerModelFor(this.aiProvider, raw, this.rawAiProvider);
   }
 
   get rawOrchestratorModel() { return this.config.get<string>('orchestratorModel', '') || ''; }
@@ -189,7 +192,7 @@ export class VsCodeConfig extends BaseConfig {
       const raw = this.resolveConfigModel('orchestratorModel', 'geminiModel', 'planningModel');
       return raw ? normalizeGeminiModel(raw) : super.geminiModel;
     }
-    return this.config.get<string>('orchestratorModel', '') || super.orchestratorModel;
+    return this.planner.model;
   }
 
   get geminiModel() { return this.config.get<string>('geminiModel', '') || this.config.get<string>('orchestratorModel', '') || this.config.get<string>('planningModel', '') || super.geminiModel; }
