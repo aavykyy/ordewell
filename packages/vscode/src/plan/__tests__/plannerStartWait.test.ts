@@ -243,4 +243,3 @@ describe('a restored message waiting for the installed-agent probe', () => {
     session.destroy();
   });
 });
-

@@ -34,6 +34,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   turn is still waiting on that look. Adding or removing a key takes effect at
   once, an explicit `AI_PROVIDER` or `/planner` choice always wins, and the
   check looks at the selected provider's own key.
+  A Codex-only or OpenCode-only install plans out of the box: with no saved
+  runner choice, the installed agents are the enabled runners. A leftover
+  vendor URL or a removed key no longer blocks the installed agent, and a
+  model you picked for one provider is not sent to another.
 - **A planner that cannot plan points to `/planner`, not to an OpenRouter
   key.** The refusal comes before the planner turn starts, in the terminal, in
   VS Code and from `ordewell plan` (which names `ordewell planner`), and it
@@ -45,6 +49,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   it to add, it asks on the approval card instead of failing silently after
   the reply. Proposed plan changes now show up in VS Code and the terminal
   while the planner is still replying, marked as landing when the reply ends.
+- **Tasks added while a plan runs wait for your approval, and Stop is
+  complete.** Approval covers exactly the tasks you consented to and is
+  revoked when a task is removed; a task added afterwards shows "waiting for
+  your approval to start". Every start is checked for approval, Stop and
+  capacity in one step. Stop also cancels queued starts and queued planner
+  messages. Approval cards survive a reconnect or reload and appear on every
+  attached surface, and the terminal no longer shows a stale preview of a
+  plan edit. `ordewell plan` says when autorun has already started the plan.
 
 ## [0.10.2] — 2026-10-14
 
