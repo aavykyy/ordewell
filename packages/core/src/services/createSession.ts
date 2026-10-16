@@ -744,6 +744,7 @@ export class Session {
       guardTripped: (trip) => this.supervision.guardTripped(trip),
       heldEdit: (taskId) => this.heldEdit(taskId),
       editedTasks: () => this.editedTasks(),
+      heldHandle: (name) => this.editedPlan().handles.get(name),
       deferUntilLanded: (command, actor, intent, admission) => this.turnEffects.defer(command, actor, intent, admission),
       queuedNotRun: (text) => {
         this.systemNote(text);
@@ -768,11 +769,17 @@ export class Session {
 
   /** The plan's tasks as the open turn's held edit leaves them: as they are, when it holds none or one that would not apply. */
   private editedTasks(): readonly Task[] {
+    return this.editedPlan().tasks;
+  }
+
+  /** {@link editedTasks}, with the id each of the held batch's handles names in them. */
+  private editedPlan(): { tasks: readonly Task[]; handles: ReadonlyMap<string, string> } {
+    const unedited = { tasks: this.store.planTasks, handles: new Map<string, string>() };
     const held = this.conversation.pendingOps();
-    if (!held || held.length === 0 || !this.plan) return this.store.planTasks;
+    if (!held || held.length === 0 || !this.plan) return unedited;
     const runners = this.editRunners();
     const result = applyTaskOps(this.store.planTasks, held, runners, this.catalog.edit(runners));
-    return result.ok ? result.tasks : this.store.planTasks;
+    return result.ok ? { tasks: result.tasks, handles: result.handles ?? new Map() } : unedited;
   }
 
   /** The task as the open turn's held edit leaves it; undefined when that edit removes it. */

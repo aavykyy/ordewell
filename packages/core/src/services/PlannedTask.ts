@@ -39,6 +39,8 @@ export interface Placement {
    * its dependencies are written against; one it left out is made up.
    */
   freshIds?: boolean;
+  /** Where a made-up id comes from: a new one each time, unless the caller keeps them. */
+  newId?: () => string;
 }
 
 export interface PlannedTask {
@@ -132,7 +134,7 @@ function modelOf(raw: Record<string, unknown>, from: TaskModelAssignment | undef
  */
 export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement = {}): PlannedTask {
   const raw = isRecord(spec) ? spec : {};
-  const { parent, from, freshIds } = at;
+  const { parent, from, freshIds, newId = uuidv4 } = at;
   const base = from?.fields ?? {};
   const errors: PlanTaskError[] = [];
   const ignored: PlanTaskError[] = [];
@@ -141,7 +143,7 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
   const title = text(raw.title) ?? '';
   const where = taskWhere(title, parent?.title);
   const plannerId = text(raw.id);
-  const id = freshIds || !plannerId ? uuidv4() : plannerId;
+  const id = freshIds || !plannerId ? newId() : plannerId;
   if (freshIds && plannerId) renamed.set(plannerId, id);
 
   const type: Task['type'] = raw.type === 'user' || raw.type === 'ai' ? raw.type : base.type ?? 'ai';
@@ -184,7 +186,7 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
   const subtasks: Task[] = [];
   if (Array.isArray(raw.subtasks)) {
     for (const s of raw.subtasks) {
-      const child = plannedTask(s, catalog, { parent: { title, sliceType, autonomy, readOnly }, freshIds });
+      const child = plannedTask(s, catalog, { parent: { title, sliceType, autonomy, readOnly }, freshIds, newId });
       subtasks.push(child.task);
       errors.push(...child.errors);
       ignored.push(...child.ignored);

@@ -3,6 +3,7 @@ import {
   addTaskToPlan, removeTaskFromPlan, updateTaskInPlan, renumberTasks,
   opsFlag, inheritedOps, skillNames,
 } from '../models/Task';
+import { v4 as uuidv4 } from 'uuid';
 import { resolveTaskRef } from './TaskRefs';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
 import { validateTaskEdit, lockedTaskRefusal, type EditCatalog, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
@@ -246,6 +247,8 @@ export interface ApplyTaskOpsResult {
   errors: string[];
   /** Human-readable summary of what changed, for the chat transcript. */
   summary: string[];
+  /** On ok, the id of the task each batch handle names. */
+  handles?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -364,6 +367,25 @@ function changedFields(target: Task, changes: Partial<Task>, catalog: EditCatalo
   const fields = Object.keys(changes).filter((f) => f !== 'taskMode');
   if ('taskMode' in changes && isReadOnly({ ...target, ...changes }, catalog) !== isReadOnly(target, catalog)) fields.push('readOnly');
   return fields;
+}
+
+/**
+ * The ids an op's new tasks get, made once and kept for the op: the open
+ * turn's held edit is applied again at each read of the plan as edited and
+ * once more as it lands, and a start queued behind it names the task by the
+ * id it read.
+ */
+const keptIds = new WeakMap<object, string[]>();
+
+function idsOf(op: unknown): () => string {
+  if (typeof op !== 'object' || op === null) return uuidv4;
+  const ids = keptIds.get(op) ?? [];
+  keptIds.set(op, ids);
+  let next = 0;
+  return () => {
+    if (next === ids.length) ids.push(uuidv4());
+    return ids[next++];
+  };
 }
 
 /**
@@ -525,6 +547,7 @@ export function applyTaskOps(
 
   for (const [i, op] of ops.entries()) {
     const label = opLabel(i);
+    const newId = idsOf(op);
     switch (op.op) {
       case 'update': {
         const prep = prepareEdit(op, i, label, 'planner');
@@ -545,7 +568,7 @@ export function applyTaskOps(
       case 'add': {
         const spec = op.task ?? {};
         if (!spec.title) { errors.push(`${label}: new task needs a title`); break; }
-        const planned = plannedTask(spec, intake, { freshIds: true });
+        const planned = plannedTask(spec, intake, { freshIds: true, newId });
         const refused = refusalOf(planned);
         if (refused) { errors.push(`${label}: ${refused}`); break; }
         const resolved = resolveTree(planned, i);
@@ -603,6 +626,7 @@ export function applyTaskOps(
         const stories = [...new Set(toMerge.flatMap((t) => t.userStoriesCovered ?? []))];
         const planned = plannedTask(spec, intake, {
           freshIds: true,
+          newId,
           from: {
             readOnly: !writes,
             fields: {
@@ -670,6 +694,7 @@ export function applyTaskOps(
           }
           const planned = plannedTask(spec, intake, {
             freshIds: true,
+            newId,
             from: {
               readOnly: isReadOnly(target, catalog),
               fields: {
@@ -762,5 +787,5 @@ export function applyTaskOps(
 
   return errors.length
     ? { ok: false, tasks: currentTasks, errors, summary: [] }
-    : { ok: true, tasks, errors: [], summary };
+    : { ok: true, tasks, errors: [], summary, handles: handleId };
 }
