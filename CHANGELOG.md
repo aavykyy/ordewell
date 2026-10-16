@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
+## [Unreleased]
+
+### Changed
+
+- **The first screen says nothing runs until you approve the plan.** The
+  terminal welcome and VS Code's empty chat state it, and warn instead when
+  autorun is on, since a plan then starts as soon as the planner submits it.
+
+### Fixed
+
+- **A first run with no API key plans with an installed coding agent.** With
+  no `AI_PROVIDER` and no vendor key, the planner is the first usable one of
+  Claude Code, Codex and OpenCode instead of failing on a missing OpenRouter
+  key. A key in the environment or kept by the host still wins, and so does a
+  planner you pick with `/planner`. The choice is detected on each start and
+  never written to your settings. A goal typed while the daemon is still
+  looking waits for the answer.
+- **A planner that cannot plan points to `/planner`, not to an OpenRouter
+  key.** The refusal comes before the planner turn starts, in the terminal, in
+  VS Code and from `ordewell plan` (which names `ordewell planner`), and it
+  leaves the live session alone.
+
 ## [0.10.2] — 2026-10-14
 
 ### Added
