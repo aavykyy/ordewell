@@ -5,7 +5,7 @@ import * as path from 'path';
 import { __setConfig, __resetConfig, configUpdates } from '../../test/vscode.mock';
 import { VsCodeConfig, moveAutonomyFromVsCodeSetting } from '../VsCodeConfig';
 import { SecretStore } from '../SecretStore';
-import { DEFAULT_WEB_READ_BUDGET, SettingsService } from '@ordewell/core';
+import { DEFAULT_WEB_READ_BUDGET, getProviderMeta, PROVIDER_DETECT_PRIORITY, recordInstalledPlanner, resetInstalledPlanner, SettingsService } from '@ordewell/core';
 
 /** Build a loaded SecretStore backed by an in-memory map. */
 async function makeStore(initial: Record<string, string> = {}) {
@@ -283,10 +283,15 @@ describe('VsCodeConfig.openAiApiKey resolution', () => {
 });
 
 describe('VsCodeConfig.apiKey', () => {
+  afterEach(() => resetInstalledPlanner());
+
   it('uses the OpenRouter key when the active provider is openrouter', async () => {
     const store = await makeStore({ openrouterKey: 'sk-or', geminiKey: 'g' });
-    // no orchestrator model + no env override → detectProvider falls back to openrouter
-    expect(new VsCodeConfig(store).apiKey).toBe('sk-or');
+    // A stored key is a vendor key, so even with an agent installed nothing moves the planner off openrouter.
+    recordInstalledPlanner('claude-code');
+    const config = new VsCodeConfig(store);
+    expect(config.aiProvider).toBe('openrouter');
+    expect(config.apiKey).toBe('sk-or');
   });
 
   it('resolves the Gemini key from the orchestrator model provider', async () => {
@@ -350,5 +355,39 @@ describe('Full user workflow: SecretStore + /model set + planningModel + openAiA
     expect(config.apiKey).toBe('');
     expect(config.openAiApiKey).toBe('');
     expect(config.planningModel).toBe('');
+  });
+});
+
+describe('VsCodeConfig.aiProvider with an installed coding agent (ADR-0009)', () => {
+  const saved: Record<string, string | undefined> = {};
+  // Every variable detection reads, so a key in the developer's own shell cannot decide a case.
+  const keys = PROVIDER_DETECT_PRIORITY.flatMap((p) => {
+    const meta = getProviderMeta(p);
+    return [...meta.detectEnvVars, ...(meta.baseUrlEnvVar ? [meta.baseUrlEnvVar] : [])];
+  });
+  beforeEach(() => { for (const k of keys) { saved[k] = process.env[k]; delete process.env[k]; } });
+  afterEach(() => {
+    for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+    resetInstalledPlanner();
+  });
+
+  it('plans with the installed agent when no key is held anywhere', async () => {
+    recordInstalledPlanner('claude-code');
+    expect(new VsCodeConfig(await makeStore({})).aiProvider).toBe('claude-code');
+  });
+
+  it('does not keep an openrouter answer read before the activation probe recorded the agent', async () => {
+    const config = new VsCodeConfig(await makeStore({}));
+    expect(config.aiProvider).toBe('openrouter');
+
+    recordInstalledPlanner('claude-code');
+
+    expect(config.aiProvider).toBe('claude-code');
+  });
+
+  it('the aiProvider setting wins over the installed agent', async () => {
+    recordInstalledPlanner('claude-code');
+    __setConfig({ aiProvider: 'codex' });
+    expect(new VsCodeConfig(await makeStore({})).aiProvider).toBe('codex');
   });
 });

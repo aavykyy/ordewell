@@ -10,7 +10,7 @@ import type { PlannerBackendId } from './IConfig';
  */
 export class EnvConfig extends BaseConfig {
   get aiProvider(): PlannerBackendId {
-    return BaseConfig.detectProvider('openrouter');
+    return this.detectProvider();
   }
 
   get apiKey(): string {

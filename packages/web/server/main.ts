@@ -25,6 +25,9 @@ const watchParentPid = watchParentIdx !== -1 ? parseInt(args[watchParentIdx + 1]
 // Tasks run on the structured transport (ADR-0018) as plain child processes,
 // so one runner serves every plan whatever the host has.
 const pool = new OrchestratorPool({ runner: new StructuredRunner() });
+// Before listening, so the first request already finds the probe in flight
+// and waits on it rather than reading the openrouter fallback (ADR-0009).
+void pool.detectInstalledPlanner();
 const server = createServer();
 let ownsToken = false;
 

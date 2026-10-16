@@ -1,4 +1,4 @@
-import { type PlannerBackendId, BaseConfig, DEFAULT_RUNNERS, isApiProvider, isCliProvider, normalizeGeminiModel, resolveProvider } from '@ordewell/core';
+import { type PlannerBackendId, BaseConfig, DEFAULT_RUNNERS, isApiProvider, isCliProvider, normalizeGeminiModel, recordedInstalledPlanner, resolveProvider } from '@ordewell/core';
 import type { ProviderModelLists } from '@ordewell/core';
 
 interface WebConfigOpts {
@@ -36,9 +36,11 @@ export class WebConfig extends BaseConfig {
     // for the whole session, but /model and /planner switches mutate process.env
     // mid-session, so a permanent cache would strand the transport on the old
     // provider (mirrors the live-read behavior of `orchestratorModel` above).
+    // The installed agent is in the key too: the daemon's startup probe can
+    // answer after a config has already settled on the openrouter fallback.
     const explicitEnv = process.env.AI_PROVIDER;
     const model = this._modelOverride || process.env.ORCHESTRATOR_MODEL;
-    const cacheKey = `${explicitEnv ?? ''}|${model ?? ''}`;
+    const cacheKey = `${explicitEnv ?? ''}|${model ?? ''}|${recordedInstalledPlanner() ?? ''}`;
     if (
       this._provider &&
       this._providerCacheKey === cacheKey &&
@@ -68,7 +70,7 @@ export class WebConfig extends BaseConfig {
       }
     }
 
-    this._provider = BaseConfig.detectProvider('openrouter');
+    this._provider = this.detectProvider();
     this._providerCacheKey = cacheKey;
     this._providerCacheLists = this._providerModelLists;
     return this._provider;

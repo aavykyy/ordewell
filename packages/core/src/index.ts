@@ -94,6 +94,7 @@ export type { ExecImpl } from './services/ModelDiscovery';
 export { ModelResolver } from './services/ModelResolver';
 export type { ModelResolverDeps } from './services/ModelResolver';
 export { RunnerInstallation } from './services/RunnerInstallation';
+export { detectInstalledPlanner, findInstalledPlanner, installedPlannerDetected, recordInstalledPlanner, recordedInstalledPlanner, resetInstalledPlanner } from './services/InstalledPlanner';
 export { ModelCatalog } from './services/ModelCatalog';
 export type { CatalogModel } from './services/ModelCatalog';
 export { resolveProvider, fetchAllProviderModels, collectProviderCredentials, toOrchestratorOptions } from './services/ProviderRouting';

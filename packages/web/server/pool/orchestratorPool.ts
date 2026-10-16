@@ -46,6 +46,9 @@ import {
   type PlannerSelectionState,
   StructuredRunner,
   CodexSandboxAvailability,
+  detectInstalledPlanner,
+  installedPlannerDetected,
+  PlannerTurnDiscardedError,
 } from '@ordewell/core';
 import { WebConfig } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
@@ -74,6 +77,8 @@ export interface OrchestratorPoolDeps {
   modelResolver?: ModelResolver;
   /** Overrides the pool's Codex sandbox probe; tests inject one so no real `codex` is started. */
   codexSandbox?: Pick<CodexSandboxAvailability, 'ensure' | 'refresh'>;
+  /** Overrides the pool's installation checks; tests inject one so no real agent binary is asked. */
+  runnerInstallation?: Pick<RunnerInstallation, 'filterInstalled' | 'plannerUsability'>;
 }
 
 export class OrchestratorPool {
@@ -81,7 +86,7 @@ export class OrchestratorPool {
   private clients = new Map<string, Set<WebSocket>>();
   private registry: CoreRunnerRegistry = new RunnerRegistry();
   private modelResolver: ModelResolver;
-  private runnerInstallation = new RunnerInstallation(this.registry);
+  private runnerInstallation: Pick<RunnerInstallation, 'filterInstalled' | 'plannerUsability'>;
   private cachedProviderLists: Record<string, string[]> | undefined;
   private settingsService = new SettingsService();
   private plannerModelMemory = new PlannerModelMemory(this.settingsService);
@@ -93,6 +98,7 @@ export class OrchestratorPool {
     const pluginNotice = removedPluginNotice();
     if (pluginNotice) console.warn(pluginNotice);
     this.runner = deps.runner ?? new StructuredRunner();
+    this.runnerInstallation = deps.runnerInstallation ?? new RunnerInstallation(this.registry);
     this.modelResolver = deps.modelResolver ?? new ModelResolver(this.registry, new WebConfig());
     this.codexSandbox = deps.codexSandbox
       ?? new CodexSandboxAvailability(this.registry, { spawn: nodeSpawn, fetch: globalThis.fetch }, { cwd: process.cwd(), env: process.env });
@@ -105,6 +111,26 @@ export class OrchestratorPool {
    */
   private warmCodexSandbox(): void {
     this.codexSandbox.ensure().catch((err) => console.error(`[web] codex sandbox probe failed: ${err instanceof Error ? err.message : err}`));
+  }
+
+  /**
+   * Find the coding agent that plans when the user has chosen no planner and
+   * set no vendor key (ADR-0009), for the daemon to start as it starts. Every
+   * planner turn below waits on it, so a goal typed the instant the TUI opens
+   * does not plan with an openrouter key nobody set.
+   */
+  detectInstalledPlanner(): Promise<PlannerBackendId | null> {
+    return detectInstalledPlanner(this.runnerInstallation);
+  }
+
+  /**
+   * Wait for that probe before a planner turn. A session closed or replaced
+   * meanwhile must not start one: no client would hear it, and nothing is left
+   * to stop it.
+   */
+  private async plannerTurnMayStart(sessionId: string, session: Session): Promise<void> {
+    await installedPlannerDetected();
+    if (this.sessions.get(sessionId) !== session) throw new PlannerTurnDiscardedError();
   }
 
   subscribe(sessionId: string, ws: WebSocket): void {
@@ -472,6 +498,7 @@ export class OrchestratorPool {
     // approval of every session unanswerable until its 5-minute timeout.
     this.sessions.set(sessionId, session);
     this.warmCodexSandbox();
+    await this.plannerTurnMayStart(sessionId, session);
     return migratePlanState(await session.generatePlan(goal, runners));
   }
 
@@ -488,17 +515,22 @@ export class OrchestratorPool {
     // mid-research approval is answerable rather than 404ing until timeout.
     this.sessions.set(sessionId, session);
     this.warmCodexSandbox();
+    await this.plannerTurnMayStart(sessionId, session);
     return session.startPlanning(goal, runners);
   }
 
   /** Continue the planner dialogue with the user's reply; refused while a planner turn is in flight. */
   async continuePlanning(sessionId: string, message: string): Promise<LegacyPlanState> {
-    return this.session(sessionId).continueConversation(message);
+    const session = this.session(sessionId);
+    // An adopted saved session can take its first planner turn here.
+    await this.plannerTurnMayStart(sessionId, session);
+    return session.continueConversation(message);
   }
 
   /** Condense a session's conversation. The summary turn is a planner turn, so `cancelPlanning` stops it. */
   async compactConversation(sessionId: string): Promise<ConversationCompaction & { plan: LegacyPlanState }> {
     const session = this.session(sessionId);
+    await this.plannerTurnMayStart(sessionId, session);
     const compaction = await session.compactConversation();
     return { ...compaction, plan: session.planState! };
   }

@@ -2,9 +2,10 @@ import type { IConfig, AiProvider, PlannerBackendId } from './IConfig';
 import { parseApprovalModeSetting, type ApprovalModeSetting } from '../services/ApprovalPolicy';
 import { DEFAULT_WEB_READ_BUDGET } from '../services/webReadPolicy';
 import type { ProviderModelLists } from '../services/ProviderRouting';
-import { getProviderMeta, isPlannerBackend, PROVIDER_DETECT_PRIORITY } from '../services/ProviderRegistry';
+import { configuredProviders, getProviderMeta, isPlannerBackend, PROVIDER_DETECT_PRIORITY } from '../services/ProviderRegistry';
 import { DEFAULT_MAX_PARALLEL, parseMaxParallel } from '../utils/maxParallel';
 import { SettingsService } from '../services/SettingsService';
+import { recordedInstalledPlanner } from '../services/InstalledPlanner';
 
 export function normalizeGeminiModel(id: string): string {
   return id.replace(/^gemini:/, '').replace(/^google\//, '');
@@ -144,7 +145,13 @@ export abstract class BaseConfig implements IConfig {
       .filter(Boolean);
   }
 
-  protected static detectProvider(fallback: PlannerBackendId): PlannerBackendId {
+  /**
+   * Who plans when no surface setting names a planner: an explicit
+   * AI_PROVIDER, then a vendor whose key or base URL is in the environment,
+   * then an installed coding agent (ADR-0009), and openrouter only when there
+   * is none of those. One answer for every host, so they cannot drift apart.
+   */
+  protected detectProvider(): PlannerBackendId {
     const env = process.env.AI_PROVIDER;
     if (env && isPlannerBackend(env)) return env;
 
@@ -154,6 +161,10 @@ export abstract class BaseConfig implements IConfig {
       if (meta.baseUrlEnvVar && process.env[meta.baseUrlEnvVar]) return provider;
     }
 
-    return fallback;
+    // A key a host keeps outside the environment (VS Code's secret store) is a
+    // vendor key all the same; its holder planned with openrouter before an
+    // installed agent could, and still does.
+    if (configuredProviders(this).length > 0) return 'openrouter';
+    return recordedInstalledPlanner() ?? 'openrouter';
   }
 }

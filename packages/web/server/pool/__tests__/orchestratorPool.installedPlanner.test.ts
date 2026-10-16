@@ -1,0 +1,114 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import {
+  Session, getProviderMeta, PlannerTurnDiscardedError, PROVIDER_DETECT_PRIORITY, resetInstalledPlanner,
+  type LegacyPlanState, type PlannerBackendId, type PlannerUsability,
+} from '@ordewell/core';
+import { OrchestratorPool } from '../orchestratorPool';
+
+/**
+ * A first run with Claude Code installed and no API key (ADR-0009): the daemon
+ * finds the agent at startup, and a goal typed before it has answered must
+ * wait for it rather than plan with an openrouter key nobody set.
+ */
+describe('OrchestratorPool default planner', () => {
+  const saved = { ...process.env };
+  let dir: string;
+  let workspace: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'ordewell-installed-planner-'));
+    workspace = join(dir, 'ws');
+    mkdirSync(join(workspace, '.git'), { recursive: true });
+    process.env.ORDEWELL_SETTINGS_PATH = join(dir, 'settings.json');
+    delete process.env.AI_PROVIDER;
+    delete process.env.ORCHESTRATOR_MODEL;
+    for (const provider of PROVIDER_DETECT_PRIORITY) {
+      const meta = getProviderMeta(provider);
+      for (const key of [...meta.detectEnvVars, meta.baseUrlEnvVar]) if (key) delete process.env[key];
+    }
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetInstalledPlanner();
+    process.env = { ...saved };
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** An installation whose agents all answer when the test says so: Claude Code first in order. */
+  function gatedInstallation() {
+    let answer!: (value: PlannerUsability) => void;
+    const gate = new Promise<PlannerUsability>((resolve) => { answer = resolve; });
+    return {
+      installation: { plannerUsability: vi.fn(() => gate), filterInstalled: vi.fn(async () => []) },
+      answer: () => answer({ usable: true }),
+    };
+  }
+
+  it('a goal typed before the startup probe answers waits for it, and plans with the agent', async () => {
+    const { installation, answer } = gatedInstallation();
+    const pool = new OrchestratorPool({ runnerInstallation: installation });
+    void pool.detectInstalledPlanner();
+
+    const planners: PlannerBackendId[] = [];
+    const startSpy = vi.spyOn(Session.prototype, 'startPlanning').mockImplementation(async () => {
+      planners.push(pool.getSettings().aiProvider);
+      return {} as LegacyPlanState;
+    });
+
+    const planning = pool.startPlanning('s1', 'ship it', ['claude-code'], workspace);
+    // Registered at once all the same, so a mid-research approval is answerable.
+    expect(pool.hasSession('s1')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(startSpy).not.toHaveBeenCalled();
+
+    answer();
+    await planning;
+    expect(planners).toEqual(['claude-code']);
+    pool.destroyAll();
+  });
+
+  it('a session closed while waiting for the probe never starts its planner turn', async () => {
+    const { installation, answer } = gatedInstallation();
+    const pool = new OrchestratorPool({ runnerInstallation: installation });
+    void pool.detectInstalledPlanner();
+    const startSpy = vi.spyOn(Session.prototype, 'startPlanning').mockResolvedValue({} as LegacyPlanState);
+
+    const planning = pool.startPlanning('s1', 'ship it', ['claude-code'], workspace);
+    pool.destroy('s1');
+    answer();
+
+    await expect(planning).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
+    expect(startSpy).not.toHaveBeenCalled();
+  });
+
+  it('reports the detected agent as the planner in effect', async () => {
+    const { installation, answer } = gatedInstallation();
+    const pool = new OrchestratorPool({ runnerInstallation: installation });
+    expect(pool.getSettings().aiProvider).toBe('openrouter');
+
+    answer();
+    await pool.detectInstalledPlanner();
+
+    expect(pool.getSettings().aiProvider).toBe('claude-code');
+    // Derived on each start, so a key installed later still wins.
+    const settingsFile = join(dir, 'settings.json');
+    expect(existsSync(settingsFile) ? readFileSync(settingsFile, 'utf8') : '').not.toContain('claude-code');
+  });
+
+  it('a /planner pick wins over the detected agent', async () => {
+    const { installation, answer } = gatedInstallation();
+    const pool = new OrchestratorPool({ runnerInstallation: installation });
+    answer();
+    await pool.detectInstalledPlanner();
+
+    const result = pool.updateSettings({ env: { AI_PROVIDER: 'codex' } });
+
+    expect(result.aiProvider).toBe('codex');
+    delete process.env.AI_PROVIDER;
+    expect(pool.getSettings().aiProvider).toBe('claude-code');
+  });
+});

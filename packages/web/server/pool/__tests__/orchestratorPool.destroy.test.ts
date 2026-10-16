@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { Session, type LegacyPlanState } from '@ordewell/core';
+import { PlannerTurnDiscardedError, Session, type LegacyPlanState } from '@ordewell/core';
 import { OrchestratorPool } from '../orchestratorPool';
 
 describe('closing a session', () => {
@@ -14,7 +14,7 @@ describe('closing a session', () => {
     const destroySpy = vi.spyOn(Session.prototype, 'destroy');
 
     try {
-      void pool.startPlanning('s1', 'ship it', ['claude-code'], workspace);
+      const turn = pool.startPlanning('s1', 'ship it', ['claude-code'], workspace);
       const session = pool.session('s1');
 
       pool.destroy('s1');
@@ -22,6 +22,7 @@ describe('closing a session', () => {
       expect(destroySpy.mock.contexts).toContain(session);
       expect(pool.hasSession('s1')).toBe(false);
       expect(pool.cancelPlanning('s1')).toBe(false);
+      await expect(turn).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
     } finally {
       startSpy.mockRestore();
       destroySpy.mockRestore();
@@ -40,14 +41,18 @@ describe('re-planning under a live session id', () => {
     const spy = vi.spyOn(Session.prototype, 'startPlanning').mockReturnValue(new Promise<LegacyPlanState>(() => {}));
 
     try {
-      void pool.startPlanning('s1', 'first', ['claude-code'], workspace);
+      const firstTurn = pool.startPlanning('s1', 'first', ['claude-code'], workspace);
       const first = pool.session('s1');
 
       void pool.startPlanning('s1', 'second', ['claude-code'], workspace);
 
       expect(destroySpy.mock.contexts).toContain(first);
       expect(pool.session('s1')).not.toBe(first);
-      expect(spy).toHaveBeenCalledTimes(2);
+      // Replaced before its turn began (it waits on the installed-planner
+      // probe), so the first session's turn never starts at all.
+      await expect(firstTurn).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.contexts).toEqual([pool.session('s1')]);
     } finally {
       spy.mockRestore();
       destroySpy.mockRestore();

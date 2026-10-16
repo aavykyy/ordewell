@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { getProviderMeta, PROVIDER_DETECT_PRIORITY, recordInstalledPlanner, resetInstalledPlanner } from '@ordewell/core';
 import { WebConfig } from '../WebConfig';
 
 const originalEnv = { ...process.env };
@@ -196,6 +197,32 @@ describe('WebConfig', () => {
       setEnv('ORCHESTRATOR_MODEL', 'gemini-2.5-pro');
 
       expect(config.apiKey).toBe('sk-gem-test');
+    });
+  });
+
+  describe('aiProvider with an installed coding agent (ADR-0009)', () => {
+    beforeEach(() => {
+      // Every variable detection reads, so a key in the developer's own shell cannot decide a case.
+      for (const provider of PROVIDER_DETECT_PRIORITY) {
+        const meta = getProviderMeta(provider);
+        for (const key of [...meta.detectEnvVars, meta.baseUrlEnvVar]) if (key) delete process.env[key];
+      }
+    });
+    afterEach(() => resetInstalledPlanner());
+
+    it('does not keep an openrouter answer read before the probe recorded the agent', () => {
+      const config = new WebConfig();
+      expect(config.aiProvider).toBe('openrouter');
+
+      recordInstalledPlanner('claude-code');
+
+      expect(config.aiProvider).toBe('claude-code');
+    });
+
+    it('a vendor key still wins over the installed agent', () => {
+      recordInstalledPlanner('claude-code');
+      setEnv('OPENROUTER_API_KEY', 'sk-or-test');
+      expect(new WebConfig().aiProvider).toBe('openrouter');
     });
   });
 });
