@@ -21,6 +21,7 @@ Run `ordewell` in your project to open the terminal UI: the conversation on the
 left, the live plan on the right. The first run lets you pick a planner and runners
 with `/planner` (Harness › Model › Effort, saved at the end) and `/runners`, and no API key is needed if you plan with a coding
 agent you already use.
+The welcome screen says it plainly: nothing runs until you approve the plan (unless autorun is on).
 
 `/settings` walks autonomy, supervisor, merge automatically, autorun and parallel
 in one panel and saves only what you changed. `/model` and `/planner-effort` set
