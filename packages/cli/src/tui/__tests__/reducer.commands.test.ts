@@ -32,6 +32,19 @@ describe('models and providers', () => {
     ]);
   });
 
+  it('/model set refuses a vendor model while a coding agent plans on a cold catalog, pointing at /planner', () => {
+    const { state, effects } = run('/model set openai/gpt-4o', { plannerProvider: 'claude-code' });
+    expect(effects).toEqual([]);
+    expect(lastMessage(state)?.role).toBe('error');
+    expect(lastMessage(state)?.text).toContain('/planner');
+  });
+
+  it('/model set takes an OpenCode provider/model id on a cold catalog', () => {
+    expect(run('/model set anthropic/claude-sonnet-4-5', { plannerProvider: 'opencode' }).effects).toEqual([
+      { type: 'setModel', modelId: 'anthropic/claude-sonnet-4-5' },
+    ]);
+  });
+
   it('/model with no argument opens a picker and loads the catalog', () => {
     const { state, effects } = run('/model');
     expect(state.overlay).toMatchObject({ kind: 'picker', picker: { action: { kind: 'set-model' } } });

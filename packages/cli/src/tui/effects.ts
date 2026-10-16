@@ -1,12 +1,12 @@
 import { execSync } from 'child_process';
 import {
-  autonomyLevelLabel, clipboardCopyCommand, getProviderMeta, isApiProvider, isCliProvider, isUserMessage, markRequestFor, newTaskFields, type HasBinFn, type SurfacePlan,
+  autonomyLevelLabel, clipboardCopyCommand, getProviderMeta, isApiProvider, isCliProvider, isUserMessage, markRequestFor, newTaskFields, TERMINAL_UI_COMMANDS, type HasBinFn, type SurfacePlan,
   type PlannerModelRecall,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
 import { DaemonError, WorkspaceInitNeededError, type ApiClient, type SessionFollow } from '../apiClient';
 import { normalizeCatalog } from '../catalog';
-import { plannerSwitchRecall } from '../plannerModelSwitch';
+import { plannerSwitchRecall, uninstalledPlannerRefusal } from '../plannerModelSwitch';
 import type { Action, Effect } from './reducer';
 import type { SessionView } from './state';
 import { mergeOutcome } from '../isolation';
@@ -395,6 +395,13 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     case 'setPlanner': {
       const meta = getProviderMeta(effect.provider);
       if (!meta) throw new Error(`Unknown planner: ${effect.provider}`);
+      // Asked afresh rather than read from state: a list not loaded yet would
+      // claim every agent is missing.
+      if (isCliProvider(effect.provider)) {
+        const installed = ((await api.getRunners()).runners ?? []).map((r) => r.id);
+        const refusal = uninstalledPlannerRefusal(effect.provider, installed, TERMINAL_UI_COMMANDS.pickPlanner);
+        if (refusal) throw new Error(refusal);
+      }
       // Pushed to the live daemon and written to .env, like every other
       // provider setting. The daemon builds a fresh config per session, so the
       // switch lands on the next plan without a restart. Only the provider is

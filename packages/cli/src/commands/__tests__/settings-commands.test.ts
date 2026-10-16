@@ -109,11 +109,19 @@ const CATALOG = {
   modesByRunner: { 'claude-code': [{ id: 'build', label: 'Build' }, { id: 'plan', label: 'Plan' }] },
 };
 
+/** The daemon's runner list with every coding agent installed. */
+const INSTALLED = {
+  runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }, { id: 'codex', name: 'Codex', enabled: true }, { id: 'opencode', name: 'OpenCode', enabled: true }],
+  headless: false,
+  orchestratorModel: '',
+};
+
 describe('ordewell planner', () => {
   it('sends only the provider — the daemon resolves the model, not the client', async () => {
     const d = await fakeDaemon({
       settings: { orchestratorModel: 'deepseek/deepseek-v4-flash', aiProvider: 'openrouter' },
       models: CATALOG,
+      runners: INSTALLED,
     });
     const { handlePlanner } = await import('../planner');
     const { stdout } = await capture(() => handlePlanner(['claude-code'], new ApiClient(d.port)));
@@ -137,6 +145,7 @@ describe('ordewell planner', () => {
         switchRecall: { model: 'sonnet', effort: 'high', source: 'remembered' },
       },
       models: CATALOG,
+      runners: INSTALLED,
     });
     const { handlePlanner } = await import('../planner');
     const { stdout } = await capture(() => handlePlanner(['claude-code'], new ApiClient(d.port)));
@@ -154,6 +163,7 @@ describe('ordewell planner', () => {
     const d = await fakeDaemon({
       settings: { orchestratorModel: 'sonnet', aiProvider: 'openrouter', switchRecall: { model: 'sonnet', effort: '', source: 'catalog-default' } },
       models: CATALOG,
+      runners: INSTALLED,
     });
     const { handlePlanner } = await import('../planner');
     const { stdout } = await capture(() => handlePlanner(['claude-code'], new ApiClient(d.port)));
@@ -167,11 +177,23 @@ describe('ordewell planner', () => {
     const d = await fakeDaemon({
       settings: { orchestratorModel: '', aiProvider: 'openrouter' },
       models: CATALOG,
+      runners: INSTALLED,
     });
     const { handlePlanner } = await import('../planner');
     const { stdout } = await capture(() => handlePlanner(['claude-code'], new ApiClient(d.port)));
 
     expect(stdout).toContain('Pick a model with `ordewell model set <id>`');
+    d.close();
+  });
+
+  it('refuses a coding agent that is not installed, naming the ones that are, without touching the daemon', async () => {
+    const d = await fakeDaemon({ models: CATALOG, runners: { runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }], headless: false, orchestratorModel: '' } });
+    const { handlePlanner } = await import('../planner');
+    const { stderr, exitCode } = await capture(() => handlePlanner(['codex'], new ApiClient(d.port)));
+    expect(stderr).toContain('Codex is not installed');
+    expect(stderr).toContain('claude-code');
+    expect(exitCode).toBe(1);
+    expect(d.sent).toEqual([]);
     d.close();
   });
 
@@ -216,6 +238,25 @@ describe('ordewell model', () => {
     expect(env).toContain('ORCHESTRATOR_MODEL=sonnet');
     expect(env).not.toContain('undefined');
     expect(process.env.ORDEWELL_PLANNER_EFFORT).toBe('');
+    d.close();
+  });
+
+  it('refuses a vendor model for a coding-agent planner whose catalog is cold, pointing at the planner switch', async () => {
+    const d = await fakeDaemon({ settings: { aiProvider: 'claude-code' } });
+    const { handleModel } = await import('../model');
+    const { stderr, exitCode } = await capture(() => handleModel(['set', 'openai/gpt-4o'], new ApiClient(d.port)));
+    expect(stderr).toContain('openai/gpt-4o');
+    expect(stderr).toContain('ordewell planner <id>');
+    expect(exitCode).toBe(1);
+    expect(d.sent).toEqual([]);
+    d.close();
+  });
+
+  it('takes an OpenCode provider/model id while its catalog is cold, as OpenCode names its own models that way', async () => {
+    const d = await fakeDaemon({ settings: { aiProvider: 'opencode' } });
+    const { handleModel } = await import('../model');
+    await capture(() => handleModel(['set', 'anthropic/claude-sonnet-4-5'], new ApiClient(d.port)));
+    expect(d.sent.find((r) => r.method === 'PATCH')!.body).toEqual({ orchestratorModel: 'anthropic/claude-sonnet-4-5' });
     d.close();
   });
 

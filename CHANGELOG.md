@@ -37,7 +37,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   A Codex-only or OpenCode-only install plans out of the box: with no saved
   runner choice, the installed agents are the enabled runners. A leftover
   vendor URL or a removed key no longer blocks the installed agent, and a
-  model you picked for one provider is not sent to another.
+  model you picked for one provider is not sent to another, nor a leftover
+  vendor model to an agent you name with `AI_PROVIDER` or `/planner` (which
+  now refuses an agent that isn't installed).
 - **A planner that cannot plan points to `/planner`, not to an OpenRouter
   key.** The refusal comes before the planner turn starts, in the terminal, in
   VS Code and from `ordewell plan` (which names `ordewell planner`), and it

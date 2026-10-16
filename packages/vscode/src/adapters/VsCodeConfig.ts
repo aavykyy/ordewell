@@ -182,19 +182,22 @@ export class VsCodeConfig extends BaseConfig {
     return this.openrouterKey || this.geminiKey || '';
   }
 
-  private resolveConfigModel(...keys: string[]): string {
+  /**
+   * Gemini's model, from the first of these settings that holds one.
+   * `orchestratorModel` is every planner's, so a model picked there for
+   * another planner is not Gemini's and gives way to what Gemini remembers.
+   */
+  private geminiModelFrom(...keys: string[]): string {
     for (const key of keys) {
-      const val = this.config.get<string>(key, '');
-      if (val) return val;
+      const value = this.config.get<string>(key, '');
+      const own = key === 'orchestratorModel' && value ? this.plannerChoiceFor('google', this.configuredPlanner(value)).model : value;
+      if (own) return normalizeGeminiModel(own);
     }
-    return '';
+    return super.geminiModel;
   }
 
   get planningModel() {
-    if (this.aiProvider === 'google') {
-      const raw = this.resolveConfigModel('planningModel', 'geminiModel', 'orchestratorModel');
-      return raw ? normalizeGeminiModel(raw) : super.geminiModel;
-    }
+    if (this.aiProvider === 'google') return this.geminiModelFrom('planningModel', 'geminiModel', 'orchestratorModel');
     const raw = this.config.get<string>('planningModel', '') || this.config.get<string>('orchestratorModel', '');
     return this.plannerChoiceFor(this.aiProvider, this.configuredPlanner(raw)).model;
   }
@@ -207,10 +210,7 @@ export class VsCodeConfig extends BaseConfig {
 
 
   get orchestratorModel() {
-    if (this.aiProvider === 'google') {
-      const raw = this.resolveConfigModel('orchestratorModel', 'geminiModel', 'planningModel');
-      return raw ? normalizeGeminiModel(raw) : super.geminiModel;
-    }
+    if (this.aiProvider === 'google') return this.geminiModelFrom('orchestratorModel', 'geminiModel', 'planningModel');
     return this.planner.model;
   }
 

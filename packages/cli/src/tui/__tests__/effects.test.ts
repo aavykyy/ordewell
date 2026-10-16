@@ -41,7 +41,7 @@ function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {})
       deleteSession: vi.fn().mockResolvedValue({ ok: true }),
       getSettings: vi.fn().mockResolvedValue({}),
       updateSettings: vi.fn().mockResolvedValue({}),
-      getRunners: vi.fn().mockResolvedValue({ runners: [], orchestratorModel: 'm/1' }),
+      getRunners: vi.fn().mockResolvedValue({ runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }], orchestratorModel: 'm/1' }),
       setRunnerEnabled: vi.fn().mockResolvedValue({ ok: true }),
       getModels: vi.fn().mockResolvedValue({ models: [], providers: [] }),
       streamPlanning: vi.fn().mockReturnValue({ close: vi.fn() }),
@@ -856,6 +856,16 @@ describe('task control', () => {
  * (task 2) — the client only sends the provider and consumes what comes back.
  */
 describe('planner switch', () => {
+  it('refuses a coding agent the daemon does not find installed, naming the ones it does, and switches nothing', async () => {
+    const h = harness();
+
+    await runEffect({ type: 'setPlanner', provider: 'codex' }, h.deps);
+
+    expect(h.actions).toContainEqual(expect.objectContaining({ type: 'failed', message: expect.stringContaining('Codex is not installed') }));
+    expect(h.actions).toContainEqual(expect.objectContaining({ type: 'failed', message: expect.stringContaining('claude-code') }));
+    expect(h.api.updateSettings).not.toHaveBeenCalled();
+  });
+
   it('shows the restored model in state without a further refresh', async () => {
     const h = harness({
       updateSettings: vi.fn().mockResolvedValue({

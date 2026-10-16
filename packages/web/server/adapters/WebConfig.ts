@@ -17,6 +17,8 @@ interface WebConfigOpts {
   modelOverride?: string;
   /** The model a settings write picked in this daemon and the planner it was for, read live; absent when none has. */
   pickedModel?: () => PlannerPick | undefined;
+  /** The model ids a coding agent's discovery last listed, read live; empty while it is cold. */
+  agentCatalog?: (provider: PlannerBackendId) => readonly string[];
 }
 
 export class WebConfig extends BaseConfig {
@@ -24,6 +26,7 @@ export class WebConfig extends BaseConfig {
   private _providerModelLists: () => ProviderModelLists | undefined;
   private _modelOverride: string | undefined;
   private _pickedModel: () => PlannerPick | undefined;
+  private _agentCatalog: (provider: PlannerBackendId) => readonly string[];
 
   constructor(opts?: WebConfigOpts) {
     super();
@@ -32,6 +35,11 @@ export class WebConfig extends BaseConfig {
     this._providerModelLists = typeof lists === 'function' ? lists : () => lists;
     this._modelOverride = opts?.modelOverride;
     this._pickedModel = opts?.pickedModel ?? (() => undefined);
+    this._agentCatalog = opts?.agentCatalog ?? (() => []);
+  }
+
+  protected agentCatalog(provider: PlannerBackendId): readonly string[] {
+    return this._agentCatalog(provider);
   }
 
   setProviderModelLists(lists: ProviderModelLists): void {
@@ -75,9 +83,8 @@ export class WebConfig extends BaseConfig {
   }
 
   get planningModel(): string {
-    if (this.aiProvider === 'google')
-      return normalizeGeminiModel(process.env.GEMINI_MODEL || process.env.ORCHESTRATOR_MODEL || super.geminiModel);
-    return this.plannerChoiceFor(this.aiProvider, this.configuredPlanner()).model;
+    const model = this.plannerChoiceFor(this.aiProvider, this.configuredPlanner()).model;
+    return this.aiProvider === 'google' ? normalizeGeminiModel(process.env.GEMINI_MODEL || model) : model;
   }
 
   get enabledRunners(): string[] {

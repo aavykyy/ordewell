@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import http from 'http';
 import type { AddressInfo } from 'net';
 import type { SpawnFn } from '@ordewell/core';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, delimiter, join } from 'path';
 
@@ -21,11 +21,14 @@ vi.mock('child_process', async (importOriginal) => {
   return { ...actual, spawn, default: { ...actual, spawn } };
 });
 
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import {
   ModelResolver, SettingsService, clearAugmentedPathCache, getProviderMeta, mintDaemonToken, recordInstalledPlanner,
   resetInstalledPlanner, PROVIDER_DETECT_PRIORITY, type IConfig, type IRunner,
 } from '@ordewell/core';
-import { fakeSpawn, type FakeAgentProcess } from '../../../../core/src/services/__tests__/harnessTestKit';
+import { ORDEWELL_MCP_SERVER_NAME } from '../../../../core/src/services/mcp';
+import { fakeSpawn, planJson, type FakeAgentProcess } from '../../../../core/src/services/__tests__/harnessTestKit';
 import { attachWsHandler, createApp } from '../../../../web/server/app';
 import { createRequestListener } from '../../../../web/server/nodeAdapter';
 import { OrchestratorPool } from '../../../../web/server/pool/orchestratorPool';
@@ -45,12 +48,44 @@ function inertResolver(): ModelResolver {
  */
 function claudeAnswer(argv: string[]) {
   return (_written: string, proc: FakeAgentProcess) => {
-    const at = argv.indexOf('--model');
-    const model = at < 0 ? '' : argv[at + 1];
-    proc.emitStderr(model && !['opus', 'sonnet', 'haiku', 'fable'].includes(model)
-      ? `unknown Claude Code model ${model}`
-      : 'stopped after the model was read');
+    proc.emitStderr(unknownModel(argv) ? `unknown Claude Code model ${unknownModel(argv)}` : 'stopped after the model was read');
     proc.exit(1);
+  };
+}
+
+/** The `--model` the real CLI would refuse, or blank. */
+function unknownModel(argv: string[]): string {
+  const at = argv.indexOf('--model');
+  const model = at < 0 ? '' : argv[at + 1];
+  return model && !['opus', 'sonnet', 'haiku', 'fable'].includes(model) ? model : '';
+}
+
+/**
+ * `claude` that plans: it submits a plan through the Ordewell server its
+ * `--mcp-config` names, as the real agent's tool call does, then ends the
+ * turn — so a one-shot run can succeed end to end.
+ */
+function claudePlans(argv: string[]) {
+  return (written: string, proc: FakeAgentProcess) => {
+    if (unknownModel(argv)) {
+      claudeAnswer(argv)(written, proc);
+      return;
+    }
+    void (async () => {
+      const file = JSON.parse(readFileSync(argv[argv.indexOf('--mcp-config') + 1], 'utf8')) as { mcpServers: Record<string, { url: string; headers: Record<string, string> }> };
+      const server = file.mcpServers[ORDEWELL_MCP_SERVER_NAME];
+      const client = new Client({ name: 'fake-claude', version: '0.0.0' });
+      await client.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers: server.headers } }));
+      await client.callTool({ name: 'submit_plan', arguments: JSON.parse(planJson()) as Record<string, unknown> });
+      await client.close();
+      proc.emitStdout([
+        { type: 'assistant', session_id: 'planned', message: { id: 'reply', role: 'assistant', content: [{ type: 'text', text: 'Plan submitted.' }] } },
+        { type: 'result', subtype: 'success', session_id: 'planned', is_error: false, result: 'Plan submitted.' },
+      ].map((frame) => JSON.stringify(frame)).join('\n') + '\n');
+    })().catch((err: unknown) => {
+      proc.emitStderr(`fake claude failed: ${err instanceof Error ? err.message : String(err)}`);
+      proc.exit(1);
+    });
   };
 }
 
@@ -71,6 +106,7 @@ describe('ordewell plan with an inherited planner model', () => {
   let server: http.Server;
   let client: ApiClient;
   let argvs: string[][];
+  let answerFor: (argv: string[]) => (written: string, proc: FakeAgentProcess) => void;
 
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'ordewell-inherited-model-'));
@@ -100,11 +136,12 @@ describe('ordewell plan with an inherited planner model', () => {
     clearAugmentedPathCache();
 
     argvs = [];
+    answerFor = claudeAnswer;
     const fake = fakeSpawn([]);
     boundary.claude = (command, args, options) => {
       argvs.push(args);
       const proc = fake.spawn(command, args, options) as unknown as FakeAgentProcess;
-      const answer = claudeAnswer(args);
+      const answer = answerFor(args);
       // The kit answers the control traffic; a user turn is answered here.
       proc.on('__written', (chunk: string) => {
         if (chunk.includes('"type":"user"')) answer(chunk, proc);
@@ -211,5 +248,47 @@ describe('ordewell plan with an inherited planner model', () => {
     expect(argv).not.toContain('--effort');
     expect(new SettingsService().getPlannerModel('claude-code')).toEqual({ model: 'sonnet', effort: 'high' });
     expect(pool.getSettings().orchestratorModel).toBe('sonnet');
+  });
+
+  for (const leftover of ['openai/gpt-4o', 'deepseek/deepseek-v4-flash']) {
+    it(`plans with a named Claude Code on its own default when the inherited model is the vendor slug ${leftover}`, async () => {
+      process.env.AI_PROVIDER = 'claude-code';
+      process.env.ORCHESTRATOR_MODEL = leftover;
+      answerFor = claudePlans;
+
+      const { stderr, exitCode } = await run(['--goal', 'Add a cache', '--runner', 'claude-code', '--no-chat', '--workspace', workspace]);
+
+      expect(exitCode, stderr).toBeNull();
+      expect(argvs.length).toBeGreaterThan(0);
+      for (const argv of argvs) expect(argv).not.toContain('--model');
+      expect(new SettingsService().getAll().plannerModels).toBeUndefined();
+      expect(await client.getSettings()).toMatchObject({ aiProvider: 'claude-code', orchestratorModel: '' });
+    });
+  }
+
+  it('a named Claude Code with an inherited vendor slug plans with the model and effort it remembers', async () => {
+    process.env.AI_PROVIDER = 'claude-code';
+    new SettingsService().setPlannerModel('claude-code', { model: 'sonnet', effort: 'high' });
+    answerFor = claudePlans;
+
+    const { stderr, exitCode } = await run(['--goal', 'Add a cache', '--runner', 'claude-code', '--no-chat', '--workspace', workspace]);
+
+    expect(exitCode, stderr).toBeNull();
+    const argv = argvs.at(-1) ?? [];
+    expect([argv[argv.indexOf('--model') + 1], argv[argv.indexOf('--effort') + 1]]).toEqual(['sonnet', 'high']);
+    expect(new SettingsService().getPlannerModel('claude-code')).toEqual({ model: 'sonnet', effort: 'high' });
+  });
+
+  it('a named Claude Code keeps the model the command line gives it', async () => {
+    process.env.AI_PROVIDER = 'claude-code';
+    process.env.ORCHESTRATOR_MODEL = 'opus';
+    new SettingsService().setPlannerModel('claude-code', { model: 'sonnet', effort: 'high' });
+    answerFor = claudePlans;
+
+    const { stderr, exitCode } = await run(['--goal', 'Add a cache', '--runner', 'claude-code', '--no-chat', '--workspace', workspace]);
+
+    expect(exitCode, stderr).toBeNull();
+    const argv = argvs.at(-1) ?? [];
+    expect(argv[argv.indexOf('--model') + 1]).toBe('opus');
   });
 });

@@ -42,9 +42,10 @@ export interface PlannerChoice {
 /**
  * Where a resolved model and effort came from. `configured` is a planner the
  * user named, or a vendor, as configured; for an agent detection found,
- * `inherited` is a configured model it can run, `remembered` its last pick
- * and `none` its own default; `request` is one request's model. Only
- * `configured` and `remembered` are the user's own choice for that planner.
+ * `inherited` is a configured model it can run. A planner whose configured
+ * model is not its own gets `remembered`, its last pick, or `none`, its own
+ * default; `request` is one request's model. Only `configured` and
+ * `remembered` are the user's own choice for that planner.
  */
 export type PlannerModelSource = 'configured' | 'inherited' | 'remembered' | 'request' | 'none';
 
@@ -290,17 +291,32 @@ export abstract class BaseConfig implements IConfig {
    * `resolvePlanner`'s model and effort, for a getter that reads its model
    * from other settings than the one `provider` was routed on
    * (`planningModel`): judged against the planner in effect rather than
-   * routed again. A planner the user named, a model picked in this session
-   * and a vendor keep what is configured, and a request's own model wins
-   * over it.
+   * routed again. A model picked in this session for this planner and a
+   * vendor's configured model are kept; a model picked for another planner
+   * is not this one's. A coding agent the user named keeps what is
+   * configured unless it is plainly a vendor's: naming the agent did not
+   * choose a slug left from an old setup. A request's own model wins.
    */
   protected plannerChoiceFor(provider: PlannerBackendId, configured: ConfiguredPlanner): ResolvedChoice {
     const { model, effort, override = '' } = configured;
     const named = isPlannerBackend(configured.setting ?? '') || isPlannerBackend(process.env.AI_PROVIDER ?? '');
-    if (named || configured.pickedFor === provider || isApiProvider(provider)) return { model: override || model, effort, source: override ? 'request' : 'configured' };
-    const own = detectedAgentChoice(provider, configured);
+    const pickedElsewhere = configured.pickedFor !== undefined && configured.pickedFor !== provider;
+    const kept = configured.pickedFor === provider || (!pickedElsewhere && (isApiProvider(provider)
+      || (named && !isForeignModel(provider, model, this.agentCatalog(provider)))));
+    if (kept) return { model: override || model, effort, source: override ? 'request' : 'configured' };
+    const own = pickedElsewhere || named ? rememberedOrDefault(provider) : detectedAgentChoice(provider, configured);
     // No effort was chosen for a model only this request names.
     return !override || override === own.model ? own : { model: override, effort: '', source: 'request' };
+  }
+
+  /**
+   * The model ids a coding agent was last discovered serving, empty while
+   * discovery is cold. A host that holds a runner catalog supplies it: it is
+   * the only evidence that tells OpenCode's `provider/model` ids from an
+   * OpenRouter slug.
+   */
+  protected agentCatalog(_provider: PlannerBackendId): readonly string[] {
+    return [];
   }
 }
 
@@ -321,8 +337,7 @@ function detectedAgentChoice(provider: PlannerBackendId, configured: PlannerChoi
   if (configured.model !== remembered?.model && isStableAlias(provider, configured.model)) {
     return { model: configured.model, effort: configured.effort, source: 'inherited' };
   }
-  if (remembered) return { model: remembered.model, effort: remembered.effort ?? '', source: 'remembered' };
-  return { model: '', effort: '', source: 'none' };
+  return rememberedOrDefault(provider);
 }
 
 function discoveryOf(provider: PlannerBackendId): RunnerModelDiscovery | undefined {
@@ -333,16 +348,43 @@ function isStableAlias(provider: PlannerBackendId, model: string): boolean {
   return discoveryOf(provider)?.canonicalAliases?.some((alias) => alias.modelId === model) ?? false;
 }
 
+const SLUG_SHAPE = /^[\w.-]+\//;
+
 /**
- * The agent's remembered pick, unless it is plainly a vendor's model: before
- * the planner's inherited settings were told apart from picks, `ordewell plan`
- * saved a leftover OpenRouter slug as the detected agent's own. Read past,
- * never deleted, since the settings file is the user's. Every vendor catalog
- * id carries Ordewell's prefix (`openai:`) or is an OpenRouter `org/model`
- * slug, a shape an agent that names its own models that way cannot rule out.
+ * Plainly a vendor's model, which coding agent `agent` cannot run: every
+ * vendor catalog id carries Ordewell's prefix (`openai:`) or is an OpenRouter
+ * `org/model` slug, a shape an agent that names its own models that way
+ * cannot rule out.
+ */
+export function isVendorModelFor(agent: PlannerBackendId, model: string): boolean {
+  if (resolveProviderFromPrefix(model)) return true;
+  return !discoveryOf(agent)?.providerQualifiedIds && SLUG_SHAPE.test(model);
+}
+
+/**
+ * A configured model a named coding agent is not spawned with: plainly a
+ * vendor's or, for an agent whose own ids share the slug shape, one its
+ * discovered catalog does not list. Its stable aliases, its catalog and its
+ * remembered pick are its own whatever their shape.
+ */
+function isForeignModel(agent: PlannerBackendId, model: string, catalog: readonly string[]): boolean {
+  if (!model || isStableAlias(agent, model) || catalog.includes(model) || rememberedChoice(agent)?.model === model) return false;
+  return isVendorModelFor(agent, model) || (catalog.length > 0 && SLUG_SHAPE.test(model));
+}
+
+/**
+ * The planner's remembered pick, unless it is plainly a vendor's model handed
+ * to an agent: before the planner's inherited settings were told apart from
+ * picks, `ordewell plan` saved a leftover OpenRouter slug as the detected
+ * agent's own. Read past, never deleted, since the settings file is the user's.
  */
 function rememberedChoice(provider: PlannerBackendId): PlannerModelChoice | undefined {
   const entry = new SettingsService().getPlannerModel(provider);
-  if (!entry || resolveProviderFromPrefix(entry.model)) return undefined;
-  return !discoveryOf(provider)?.providerQualifiedIds && /^[\w.-]+\//.test(entry.model) ? undefined : entry;
+  return entry && (isApiProvider(provider) || !isVendorModelFor(provider, entry.model)) ? entry : undefined;
+}
+
+/** A planner whose configured model is not its own plans with its remembered pick and that pick's effort, else its own default. */
+function rememberedOrDefault(provider: PlannerBackendId): ResolvedChoice {
+  const remembered = rememberedChoice(provider);
+  return remembered ? { model: remembered.model, effort: remembered.effort ?? '', source: 'remembered' } : { model: '', effort: '', source: 'none' };
 }

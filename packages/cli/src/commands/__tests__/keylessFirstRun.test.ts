@@ -161,6 +161,7 @@ describe('keyless first-run entry points at the process boundary', () => {
       else process.env[key] = value;
     }
     rmSync(dir, { recursive: true, force: true });
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
@@ -468,6 +469,33 @@ describe('keyless first-run entry points at the process boundary', () => {
     expect(vendorRequests).toHaveLength(1);
     expect(JSON.parse(vendorRequests[0].body)).toMatchObject({ model: 'openai/gpt-4o' });
     expect(vendorRequests[0].body).toContain('Use Postgres');
+  });
+
+  it('a model picked for the detected agent is not sent to a vendor whose key is added later', async () => {
+    await client.updateSettings({ orchestratorModel: 'sonnet' });
+    await client.updateSettings({ env: { OPENROUTER_API_KEY: 'test-key', OPENROUTER_BASE_URL: vendorBase } });
+    expect(await client.getSettings()).toMatchObject({ aiProvider: 'openrouter', orchestratorModel: '' });
+
+    await expect(client.startConversation('agent-pick', 'Build a cache', ['claude-code'], workspace))
+      .rejects.toMatchObject({ plannerNotReady: { code: 'no_model', provider: 'openrouter' } });
+    expect(vendorRequests).toEqual([]);
+    expect(argvs).toEqual([]);
+  });
+
+  it('a model picked for OpenRouter is not sent to Google when the key is swapped for a Gemini one', async () => {
+    const outbound = vi.fn(async () => new Response('unexpected', { status: 500 }));
+    const local = globalThis.fetch;
+    vi.stubGlobal('fetch', (input: Parameters<typeof fetch>[0], init?: RequestInit) =>
+      String(input instanceof Request ? input.url : input).startsWith('http://127.0.0.1:') ? local(input, init) : outbound());
+    process.env.ORCHESTRATOR_MODEL = '';
+    await client.updateSettings({ env: { OPENROUTER_API_KEY: 'test-key' } });
+    await client.updateSettings({ orchestratorModel: 'openai/gpt-4o' });
+    await client.updateSettings({ env: { OPENROUTER_API_KEY: '', GEMINI_API_KEY: 'gemini-key' } });
+    expect(await client.getSettings()).toMatchObject({ aiProvider: 'google', orchestratorModel: '' });
+
+    await expect(client.startConversation('swapped', 'Build a cache', ['claude-code'], workspace))
+      .rejects.toMatchObject({ plannerNotReady: { code: 'no_model', provider: 'google' } });
+    expect(outbound).not.toHaveBeenCalled();
   });
 
   for (const leftover of ['OPENROUTER_BASE_URL', 'GEMINI_BASE_URL']) {

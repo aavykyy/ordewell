@@ -175,7 +175,8 @@ async function forwardPlannerEnv(api: ApiClient): Promise<void> {
     if (value) env[key] = value;
   }
   // After the switch, as one write did before: the command line's model
-  // still outranks the one the switch recalled.
+  // still outranks the one the switch recalled. A vendor's slug left for a
+  // coding agent does not; the daemon reads past it to the agent's own pick.
   if (Object.keys(env).length > 0) await api.updateSettings({ env, inherited: true });
 }
 

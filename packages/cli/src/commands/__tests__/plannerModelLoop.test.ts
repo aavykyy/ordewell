@@ -91,6 +91,9 @@ function fakeMemoryDaemon(opts: {
           entries.map((e) => ({ ...e, runnerProvider: runner })));
         return json({ models, modelsByRunner, providers: [], orchestratorModels: [], modesByRunner: {} });
       }
+      if (req.url?.startsWith('/api/runners')) {
+        return json({ runners: Object.keys(opts.modelsByRunner).map((id) => ({ id, name: id, enabled: true })), headless: false, orchestratorModel });
+      }
       return json({ ok: true });
     });
   });

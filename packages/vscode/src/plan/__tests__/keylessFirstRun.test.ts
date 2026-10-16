@@ -344,6 +344,48 @@ describe('VS Code keyless first-run process boundary', () => {
     expect(vendorRequests[0].body).toContain('Use Postgres');
   });
 
+  for (const leftover of ['openai/gpt-4o', 'deepseek/deepseek-v4-flash']) {
+    it(`a named Claude Code planner is spawned without the configured vendor model ${leftover}`, async () => {
+      recordInstalledPlanner('claude-code');
+      setConfig({ aiProvider: 'claude-code', orchestratorModel: leftover });
+      const h = harness();
+      await handleStartPlanning('Build a ledger', h.deps);
+      expect(h.messages.filter((m) => m.type === 'showError')).toEqual([]);
+      expect(argvs).toHaveLength(1);
+      expect(argvs[0]).not.toContain('--model');
+      expect(new SettingsService().getAll().plannerModels).toBeUndefined();
+    });
+  }
+
+  it('a model picked for the detected agent is not sent to a vendor whose key is added later', async () => {
+    recordInstalledPlanner('claude-code');
+    const h = harness();
+    await selectionFor(h).setModel('sonnet');
+    process.env.OPENROUTER_API_KEY = 'test-key';
+    expect(h.config.aiProvider).toBe('openrouter');
+    expect(h.config.orchestratorModel).toBe('');
+
+    await handleStartPlanning('Build a ledger', h.deps);
+    expect(h.messages).toContainEqual({ type: 'showError', error: expect.stringContaining('No planner model selected') });
+    expect(vendorRequests).toEqual([]);
+    expect(argvs).toEqual([]);
+  });
+
+  it('a model picked for OpenRouter is not sent to Google when the key is swapped for a Gemini one', async () => {
+    recordInstalledPlanner('claude-code');
+    process.env.OPENROUTER_API_KEY = 'test-key';
+    const h = harness();
+    await selectionFor(h).setModel('openai/gpt-4o');
+    delete process.env.OPENROUTER_API_KEY;
+    process.env.GEMINI_API_KEY = 'gemini-key';
+    expect(h.config.aiProvider).toBe('google');
+    expect([h.config.orchestratorModel, h.config.planningModel]).toEqual(['', '']);
+
+    await handleStartPlanning('Build a ledger', h.deps);
+    expect(h.messages).toContainEqual({ type: 'showError', error: expect.stringContaining('No planner model selected') });
+    expect(networks).not.toHaveBeenCalled();
+  });
+
   for (const leftover of ['OPENROUTER_BASE_URL', 'GEMINI_BASE_URL']) {
     it(`a leftover ${leftover} without its key does not take planning from the detected agent`, async () => {
       recordInstalledPlanner('claude-code');

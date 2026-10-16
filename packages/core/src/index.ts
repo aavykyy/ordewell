@@ -70,7 +70,7 @@ export { SYMBOL_LANGUAGES, definitionPattern, referencePattern, languageForId, i
 export { buildGrepArgs, buildGlobArgs, buildFallbackGrepArgs, GREP_PCRE_PROBE_ARGS, grepRegexFromProbe, filterFallbackByAnchoredInclude, applyHeadLimit, formatSearchOutput } from './services/ripgrepArgs';
 export type { GrepInvocation, CappedRows, GrepRegex } from './services/ripgrepArgs';
 export * from './interfaces/IConfig';
-export { BaseConfig, normalizeGeminiModel } from './interfaces/BaseConfig';
+export { BaseConfig, isVendorModelFor, normalizeGeminiModel } from './interfaces/BaseConfig';
 export type { ConfiguredPlanner, PlannerChoice, PlannerModelSource, ResolvedChoice, ResolvedPlanner } from './interfaces/BaseConfig';
 export { EnvConfig } from './interfaces/EnvConfig';
 export * from './interfaces/INotification';
