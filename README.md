@@ -85,6 +85,7 @@ OpenCode, and git for task isolation. On Windows, run the terminal UI under WSL.
 
 Run `ordewell` in your project to open the terminal UI, then type a goal. The first
 run lets you pick a planner and runners with `/planner` and `/runners`.
+The welcome screen says it plainly: nothing runs until you approve the plan (unless autorun is on).
 
 The same workflow is available from the command line:
 

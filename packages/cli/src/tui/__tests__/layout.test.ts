@@ -84,6 +84,30 @@ describe('chat pane — no dead notches', () => {
   });
 });
 
+describe('welcome — plan approval', () => {
+  const welcome = (autorun: boolean, over: Partial<TuiState> = {}): TuiState => {
+    const base = chatState(0, { rows: 40, cols: 100, ...over });
+    return { ...base, runSettings: { ...base.runSettings, autorun } };
+  };
+
+  it('says nothing runs until the plan is approved while autorun is off', () => {
+    const text = plain(welcome(false));
+    expect(text).toContain('Nothing runs until you approve the plan.');
+    expect(text).not.toContain('Autorun is on');
+  });
+
+  it('warns instead that a plan starts at once while autorun is on', () => {
+    const text = plain(welcome(true));
+    expect(text).toContain('Autorun is on — a plan starts as soon as the planner submits it. Change it in /settings.');
+    expect(text).not.toContain('Nothing runs until');
+  });
+
+  it('wraps in a narrow pane without losing the words', () => {
+    const text = plain(welcome(true, { cols: 40, rows: 40 })).replace(/\s+/g, ' ');
+    expect(text).toContain('a plan starts as soon as the planner submits it');
+  });
+});
+
 describe('plan pane — an absolute offset that follows the selection by default', () => {
   it('reaches the first task with the last one selected', () => {
     // The delta-on-top-of-the-auto-anchor model could not do this at all: the
