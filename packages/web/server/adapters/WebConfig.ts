@@ -1,4 +1,4 @@
-import { type PlannerBackendId, BaseConfig, DEFAULT_RUNNERS, isApiProvider, normalizeGeminiModel } from '@ordewell/core';
+import { type PlannerBackendId, BaseConfig, DEFAULT_RUNNERS, defaultEnabledRunners, isApiProvider, normalizeGeminiModel } from '@ordewell/core';
 import type { ConfiguredPlanner, ProviderModelLists, ResolvedPlanner } from '@ordewell/core';
 
 interface WebConfigOpts {
@@ -85,7 +85,10 @@ export class WebConfig extends BaseConfig {
 
     // The per-runner toggles that predate ORDEWELL_ENABLED_RUNNERS: three fixed
     // variables, named by runner id on purpose; a newer runner is enabled
-    // through the list above.
+    // through the list above. Only a toggle that is set is a choice: with none,
+    // claude-code's default-on toggle would hide a Codex- or OpenCode-only host.
+    const toggles = ['ORDEWELL_CLAUDE_CODE_ENABLED', 'ORDEWELL_CODEX_ENABLED', 'ORDEWELL_OPENCODE_ENABLED'];
+    if (toggles.every((name) => process.env[name] === undefined)) return defaultEnabledRunners();
     const out: string[] = [];
     if (process.env.ORDEWELL_CLAUDE_CODE_ENABLED !== 'false' && process.env.ORDEWELL_CLAUDE_CODE_ENABLED !== '0') {
       out.push('claude-code');

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, parseMaxParallel, normalizeGeminiModel, isApiProvider, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET } from '@ordewell/core';
+import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, defaultEnabledRunners, parseMaxParallel, normalizeGeminiModel, isApiProvider, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET } from '@ordewell/core';
 import type { ConfiguredPlanner, ProviderModelLists, ResolvedPlanner, SettingsService } from '@ordewell/core';
 import { SecretStore, type ApiProvider, type SecretKey } from './SecretStore';
 
@@ -223,10 +223,17 @@ export class VsCodeConfig extends BaseConfig {
     // Migration from the per-runner toggles that predate `enabledRunners`: a
     // fixed set of three settings that were never extended, so they name their
     // runners by id on purpose and a runner added since has no toggle to read.
-    const legacyCc = this.config.get<boolean>('claudeCode.enabled');
-    const legacyCodex = this.config.get<boolean>('codex.enabled');
-    const legacyOc = this.config.get<boolean>('opencode.enabled');
-    const legacyRunner = this.config.get<string>('runner');
+    // Only a value the user set is a choice: `get` also answers the manifest's
+    // defaults, which would enable all three on a host that has one installed.
+    const userSet = <T>(key: string): T | undefined => {
+      const inspected = this.config.inspect<T>(key);
+      return inspected?.globalValue ?? inspected?.workspaceValue;
+    };
+    const legacyCc = userSet<boolean>('claudeCode.enabled');
+    const legacyCodex = userSet<boolean>('codex.enabled');
+    const legacyOc = userSet<boolean>('opencode.enabled');
+    const legacyRunner = userSet<string>('runner');
+    if ([legacyCc, legacyCodex, legacyOc, legacyRunner].every((value) => value === undefined)) return defaultEnabledRunners();
 
     const enabled: string[] = [];
     if (legacyCc !== undefined) {

@@ -7,7 +7,7 @@ import { createStepLog, type LogLine } from './researchLog';
 import type { SerializedTask, DiscoveredModel } from '@ordewell/core';
 import { mintSessionId, taskOrderLabel } from '@ordewell/core';
 import type { PlanBody, WsEvent } from '../apiClient';
-import { headlessPlannerRefusal } from './shared';
+import { fail, headlessPlannerRefusal } from './shared';
 
 // The one-shot endpoint answers with the stored plan state (`pendingTasks`),
 // the conversation with the wire plan (`tasks`); read as `tasks` alone, a
@@ -187,15 +187,27 @@ export async function handlePlan(
   const state = await api.getRunners();
   const enabledIds = state.runners.filter(r => r.enabled).map(r => r.id);
 
+  // The list is every installed runner, enabled or not. One that is installed
+  // but off is refused with the command that turns it on, as `ordewell runners`
+  // is where the enabled set is chosen; `--runner` picks among it.
+  const enableHint = (id: string) => `Enable it with: ordewell runners ${id} on`;
   let runners: string[];
   if (runnerFlags.length === 0) {
+    if (enabledIds.length === 0) {
+      const installed = state.runners.map((r) => r.id);
+      fail(
+        'No runner is enabled.',
+        installed.length > 0
+          ? `Installed: ${installed.join(', ')}. ${enableHint(installed[0])}`
+          : 'No supported coding agent is installed or on PATH.',
+      );
+    }
     runners = enabledIds;
   } else {
     for (const r of runnerFlags) {
-      if (!enabledIds.includes(r)) {
-        console.error(`Unknown runner: "${r}". Enabled runners: ${enabledIds.join(', ')}`);
-        process.exit(1);
-      }
+      if (enabledIds.includes(r)) continue;
+      if (state.runners.some((known) => known.id === r)) fail(`${r} is installed but not enabled. ${enableHint(r)}`);
+      fail(`Unknown runner: "${r}". Enabled runners: ${enabledIds.join(', ')}`);
     }
     runners = runnerFlags;
   }

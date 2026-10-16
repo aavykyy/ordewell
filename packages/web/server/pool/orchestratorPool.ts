@@ -534,7 +534,7 @@ export class OrchestratorPool {
       }));
   }
 
-  async generatePlan(sessionId: string, goal: string, runners: RunnerId[], workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<PlanState> {
+  async generatePlan(sessionId: string, goal: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<PlanState> {
     const session = this.openPlanningSession(sessionId, workspace, modelOverride, options);
     return migratePlanState(await this.firstTurn(sessionId, session, () => session.generatePlan(goal, runners)));
   }
@@ -571,7 +571,7 @@ export class OrchestratorPool {
    * planner had enough context, otherwise the dialogue so far (last
    * assistant message lives in conversationHistory).
    */
-  async startPlanning(sessionId: string, goal: string, runners: RunnerId[], workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<LegacyPlanState> {
+  async startPlanning(sessionId: string, goal: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<LegacyPlanState> {
     const session = this.openPlanningSession(sessionId, workspace, modelOverride, options);
     return this.firstTurn(sessionId, session, () => session.startPlanning(goal, runners));
   }

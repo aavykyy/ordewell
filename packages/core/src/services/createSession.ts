@@ -1193,7 +1193,19 @@ export class Session {
     return inFlight || queued || waiting;
   }
 
-  async generatePlan(goal: string, runners: RunnerId[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {
+  /**
+   * The runners a first turn may plan for. None requested means every enabled
+   * one, read here, after the planner gate: until the installed-agent probe
+   * answers, the enabled default is a stale guess a request must not freeze.
+   */
+  private chosenRunners(requested: RunnerId[] | undefined): RunnerId[] {
+    const enabled = this.catalog.enabledRunners();
+    const chosen = requested ? requested.filter((r) => enabled.includes(r)) : enabled;
+    if (chosen.length === 0) throw new Error('None of the requested runners are enabled');
+    return chosen;
+  }
+
+  async generatePlan(goal: string, runners?: RunnerId[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {
     // A new goal replaces whatever still waits to open: the latest intent wins.
     this.endWaiting(() => new PlannerTurnDiscardedError());
     // Before the plan scope is dropped, so a refusal leaves the plan held now as it was.
@@ -1203,9 +1215,7 @@ export class Session {
     this.goal = goal;
     this.remintSessionId();
     this.beginFreshPlan({ keepGrants: true });
-    const enabled = this.catalog.enabledRunners();
-    const chosenRunners = runners.filter((r) => enabled.includes(r));
-    if (chosenRunners.length === 0) throw new Error('None of the requested runners are enabled');
+    const chosenRunners = this.chosenRunners(runners);
 
     return this.conversation.hold(options?.signal, async (turn) => {
       const { modelsByRunner, runnerModes } = await this.catalog.planning(chosenRunners);
@@ -1244,7 +1254,7 @@ export class Session {
    * message. The conversation itself — transcript, live model context, turn
    * settlement — is {@link PlannerConversation}'s; the Session hosts it.
    */
-  async startPlanning(goal: string, runners: RunnerId[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {
+  async startPlanning(goal: string, runners?: RunnerId[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {
     // A new goal replaces whatever still waits to open: the latest intent wins.
     this.endWaiting(() => new PlannerTurnDiscardedError());
     const pending: PendingOpening = { held: [] };
@@ -1257,9 +1267,7 @@ export class Session {
       this.goal = goal;
       this.remintSessionId();
       this.beginFreshPlan({ keepGrants: true });
-      const enabled = this.catalog.enabledRunners();
-      const chosenRunners = runners.filter((r) => enabled.includes(r));
-      if (chosenRunners.length === 0) throw new Error('None of the requested runners are enabled');
+      const chosenRunners = this.chosenRunners(runners);
 
       const now = new Date().toISOString();
       this.plan = { tasks: [], generatedAt: now, status: 'draft', runners: chosenRunners, lastUpdated: now };
