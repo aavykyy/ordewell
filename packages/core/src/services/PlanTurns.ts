@@ -54,6 +54,14 @@ export interface PlanTurnsHost {
   run(prompt: TurnPrompt, opts: { taken: () => void; signal?: AbortSignal }): Promise<LegacyPlanState>;
   /** Tell the user what no caller is waiting to hear: a replayed input's failed turn, a resume that failed. */
   notice(message: string): void;
+  /**
+   * Settles once the planner a turn would use is known (ADR-0009); null when
+   * it already is. Opened before, a turn plans with the fallback the
+   * installed-planner probe may replace.
+   */
+  plannerDetecting(): Promise<void> | null;
+  /** Throws {@link PlannerNotReadyError} when the planner in use now cannot plan. */
+  assertPlannerReady(): void;
 }
 
 interface Waiter {
@@ -105,6 +113,10 @@ export function turnPrompt(batch: readonly PendingPlanTurn[]): TurnPrompt {
 export class PlanTurns {
   private readonly waiters = new Map<string, Waiter>();
   private running: Running | null = null;
+  /** A turn is due but waits for the planner to be found. */
+  private detecting = false;
+  /** The refusal last told to the user, so an input that keeps arriving is not refused aloud again and again. */
+  private refusalTold: string | null = null;
   private seq = 0;
 
   constructor(private readonly host: PlanTurnsHost, private readonly holdTimeoutMs = START_HOLD_TIMEOUT_MS) {}
@@ -169,15 +181,58 @@ export class PlanTurns {
    * Start the next turn if one is due: nothing of ours is in flight, the
    * conversation is free, and inputs wait. The host calls it when any planner
    * turn lets the conversation go, and after a load, to replay what waited.
+   *
+   * Every turn passes the planner gate here, whatever brought its input: it
+   * waits for the installed-planner probe, then everything is judged afresh —
+   * the plan, what still waits, and the planner in use at that moment.
    */
   pump(): void {
-    if (this.running) return;
+    if (this.running || this.detecting) return;
     const plan = this.host.plan();
     if (!plan || this.host.conversationBusy()) return;
     const batch = this.liveBatch(plan);
     if (batch.length === 0) return;
     if (batch.every((t) => t.source === 'supervisor') && !this.host.mayWake()) return;
+    const detecting = this.host.plannerDetecting();
+    if (detecting) {
+      this.detecting = true;
+      void detecting.then(() => {
+        this.detecting = false;
+        this.pump();
+      });
+      return;
+    }
+    try {
+      this.host.assertPlannerReady();
+    } catch (err) {
+      this.refuse(plan, err);
+      return;
+    }
+    this.refusalTold = null;
     void this.run(plan, batch);
+  }
+
+  /**
+   * The planner cannot plan, so no turn opens, and nothing it would have
+   * answered is lost. A caller still waiting hears why and holds its own
+   * message, so that message leaves the list, as a refusal before it was
+   * queued would have left it; a message restored from a save has nobody else
+   * holding it, so it stays for the next turn, as wake-ups do.
+   *
+   * Everything waiting is refused, not just the next turn's batch: behind a
+   * forced input, the rest would otherwise wait for a pump nothing calls.
+   */
+  private refuse(plan: LegacyPlanState, err: unknown): void {
+    const waiting = plan.pendingTurns ?? [];
+    const heard = new Set(waiting.filter((t) => t.source === 'user' && this.waiters.has(t.id)).map((t) => t.id));
+    if (this.take(plan, heard)) this.host.persist();
+    for (const t of waiting) this.settle(t.id, (w) => w.reject(err));
+    const kept = waiting.filter((t) => t.source === 'user' && !heard.has(t.id));
+    if (kept.length === 0) return;
+    const told = `${reasonOf(err)} ${keptUnanswered(kept)}`;
+    if (told === this.refusalTold) return;
+    this.refusalTold = told;
+    this.host.notice(told);
   }
 
   /**
@@ -285,6 +340,12 @@ function isInterruption(err: unknown): boolean {
 
 function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function keptUnanswered(inputs: readonly PendingPlanTurn[]): string {
+  const line = inputs[0].text.split('\n')[0];
+  const more = inputs.length > 1 ? ` and ${inputs.length - 1} more` : '';
+  return `"${line}"${more}, sent before the session reloaded, still waits and goes with your next message.`;
 }
 
 function replayFailed(input: PendingPlanTurn, err: unknown): string {

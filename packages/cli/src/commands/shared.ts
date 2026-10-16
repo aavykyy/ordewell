@@ -1,11 +1,11 @@
 import { createInterface } from 'readline';
 import { ensureDaemon, resolvePort } from '../daemon';
-import { ApiClient } from '../apiClient';
+import { ApiClient, DaemonError } from '../apiClient';
 import { normalizeCatalog, type Catalog } from '../catalog';
 import { findEnvFile, writeEnvVar } from '../utils/env';
 import { allTasksOf } from '../utils/tasks';
 import type { TaskView } from '../tui/state';
-import type { SerializedPlan, SerializedTask, SettingsUpdateResponse } from '@ordewell/core';
+import { describePlannerNotReady, HEADLESS_CLI_COMMANDS, type SerializedPlan, type SerializedTask, type SettingsUpdateResponse } from '@ordewell/core';
 import type { PlanBody } from '../apiClient';
 
 export async function connect(subArgs: string[], injected?: ApiClient): Promise<ApiClient> {
@@ -20,6 +20,15 @@ export async function fetchCatalog(api: ApiClient): Promise<Catalog> {
 export function fail(...lines: string[]): never {
   for (const line of lines) console.error(line);
   process.exit(1);
+}
+
+/**
+ * A planner refusal said in the shell's own commands, or null for any other
+ * error. The daemon words it for the terminal UI, whose slash commands a shell
+ * does not have, and sends the reason as data so a client can re-word it.
+ */
+export function headlessPlannerRefusal(err: unknown): string | null {
+  return err instanceof DaemonError && err.plannerNotReady ? describePlannerNotReady(err.plannerNotReady, HEADLESS_CLI_COMMANDS) : null;
 }
 
 /** A yes/no question on the terminal; no terminal to ask on is a no. */

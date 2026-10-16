@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as vscode from 'vscode';
-import { ConversationEditError } from '@ordewell/core';
+import { ConversationEditError, PlannerNotReadyError } from '@ordewell/core';
 import { forkConversation, rewindConversation, compactConversation, type ConversationDeps } from '../conversation';
 
 const showQuickPick = vscode.window.showQuickPick as unknown as ReturnType<typeof vi.fn>;
@@ -238,6 +238,16 @@ describe('compact', () => {
     expect(chatProvider.replaceConversation).not.toHaveBeenCalled();
     expect(persistState).not.toHaveBeenCalled();
     expect(chatProvider.setConversationBusy).toHaveBeenLastCalledWith(false);
+  });
+
+  it('words a planner the session refused with the chat\'s own commands', async () => {
+    const { deps, session, chatProvider } = setup();
+    session.compactConversation.mockRejectedValue(new PlannerNotReadyError({ code: 'no_model', provider: 'openrouter', label: 'OpenRouter' }));
+    await compactConversation(deps);
+
+    expect(chatProvider.showError).toHaveBeenCalledWith(
+      'Could not condense the conversation: No planner model selected for OpenRouter. Pick one with /model set, or switch planner with /planner. Nothing was changed.',
+    );
   });
 
   it('reports a session with no conversation through the chat error', async () => {

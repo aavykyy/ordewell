@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { installedPlannerDetected, type Session } from '@ordewell/core';
+import { CHAT_COMMANDS, describePlannerNotReady, PlannerNotReadyError, type Session } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 
 export interface ConversationDeps {
@@ -116,7 +116,6 @@ export async function compactConversation(deps: ConversationDeps): Promise<void>
   // The webview would let a message through that core refuses mid-compaction.
   deps.chatProvider.setConversationBusy(true);
   try {
-    await installedPlannerDetected();
     const { keptMessages } = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: 'Condensing the conversation…', cancellable: true },
       (_progress, token) => {
@@ -132,6 +131,9 @@ export async function compactConversation(deps: ConversationDeps): Promise<void>
   } catch (err) {
     if (abort.signal.aborted) {
       void vscode.window.showInformationMessage('Condensing cancelled — nothing was changed.');
+    } else if (err instanceof PlannerNotReadyError) {
+      // The refusal ends in its own full stop, and its commands are the core's spelling, not the chat's.
+      deps.chatProvider.showError(`Could not condense the conversation: ${describePlannerNotReady(err.reason, CHAT_COMMANDS)} Nothing was changed.`);
     } else {
       deps.chatProvider.showError(`Could not condense the conversation: ${message(err)} — nothing was changed.`);
     }

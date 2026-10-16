@@ -117,7 +117,7 @@ export class OrchestratorPool {
   /**
    * Find the coding agent that plans when the user has chosen no planner and
    * set no vendor key (ADR-0009), for the daemon to start as it starts. Every
-   * planner turn below waits on it, so a goal typed the instant the TUI opens
+   * planner turn waits on it, so a goal typed the instant the TUI opens
    * does not plan with an openrouter key nobody set.
    */
   detectInstalledPlanner(): Promise<PlannerBackendId | null> {
@@ -125,9 +125,10 @@ export class OrchestratorPool {
   }
 
   /**
-   * Wait for that probe before a planner turn. A session closed or replaced
-   * meanwhile must not start one: no client would hear it, and nothing is left
-   * to stop it.
+   * Wait for that probe before a new session's first planner turn, which is
+   * judged here, ahead of the session it replaces going. A session closed or
+   * replaced meanwhile must not start one: no client would hear it, and
+   * nothing is left to stop it. Every later turn passes the session's own gate.
    */
   private async plannerTurnMayStart(sessionId: string, session: Session): Promise<void> {
     await installedPlannerDetected();
@@ -539,20 +540,18 @@ export class OrchestratorPool {
     return session.startPlanning(goal, runners);
   }
 
-  /** Continue the planner dialogue with the user's reply; refused while a planner turn is in flight. */
+  /**
+   * Continue the planner dialogue with the user's reply; refused while a
+   * planner turn is in flight. The session's own planner gate waits for the
+   * installed-planner probe and judges the planner, as it does for every turn.
+   */
   async continuePlanning(sessionId: string, message: string): Promise<LegacyPlanState> {
-    const session = this.session(sessionId);
-    // An adopted saved session can take its first planner turn here, so the
-    // preflight waits for the probe that may name its planner.
-    await this.plannerTurnMayStart(sessionId, session);
-    session.assertPlannerReady();
-    return session.continueConversation(message);
+    return this.session(sessionId).continueConversation(message);
   }
 
   /** Condense a session's conversation. The summary turn is a planner turn, so `cancelPlanning` stops it. */
   async compactConversation(sessionId: string): Promise<ConversationCompaction & { plan: LegacyPlanState }> {
     const session = this.session(sessionId);
-    await this.plannerTurnMayStart(sessionId, session);
     const compaction = await session.compactConversation();
     return { ...compaction, plan: session.planState! };
   }

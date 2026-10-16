@@ -4,7 +4,7 @@ import type { PlannerBackendId } from '@ordewell/core';
 import type { VsCodeConfig } from '../../adapters/VsCodeConfig';
 
 function config(aiProvider: PlannerBackendId, apiKey: string, planningModel: string, openaiCompatibleBaseUrl = ''): VsCodeConfig {
-  return { aiProvider, apiKey, planningModel, openaiCompatibleBaseUrl } as unknown as VsCodeConfig;
+  return { aiProvider, getProviderApiKey: () => apiKey, planningModel, orchestratorModel: '', openaiCompatibleBaseUrl } as unknown as VsCodeConfig;
 }
 
 /**

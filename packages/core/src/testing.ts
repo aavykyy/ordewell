@@ -66,7 +66,9 @@ export function fakeConfig(overrides: Partial<IConfig> = {}): IConfig {
     webReadBudget: 40,
     setProviderModelLists: () => {},
     getProviderBaseUrl: () => '',
-    getProviderApiKey: () => '',
+    // Every vendor holds a key, so no planner turn is refused for want of one
+    // unless a test takes it away.
+    getProviderApiKey: () => 'sk-test',
     ...overrides,
   };
 }

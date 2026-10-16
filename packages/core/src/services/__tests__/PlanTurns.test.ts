@@ -47,6 +47,8 @@ function fakeHost(current: { plan: LegacyPlanState | null } = { plan: plan() }) 
       });
     })),
     notice: vi.fn(),
+    plannerDetecting: vi.fn((): Promise<void> | null => null),
+    assertPlannerReady: vi.fn(),
   } satisfies PlanTurnsHost;
   return { host, turns, saved, current, held: () => holds };
 }
@@ -406,5 +408,59 @@ describe('turnPrompt', () => {
       { id: '2', source: 'user', text: 'two', timestamp: 't' },
     ]);
     expect(prompt).toEqual({ source: 'user', text: '/tdd one\n\ntwo', skills: [skill], wakeUps: [] });
+  });
+});
+
+describe('the planner gate', () => {
+  const wakeUp = { source: 'supervisor' as const, text: 'Run update:\n- task #1 failed' };
+
+  it('holds a wake-up turn until the planner is found, then opens it', async () => {
+    const { host, turns } = fakeHost();
+    let found!: () => void;
+    const detecting = new Promise<void>((resolve) => { found = resolve; });
+    host.plannerDetecting.mockReturnValue(detecting);
+    const runner = new PlanTurns(host);
+
+    void runner.enqueue(wakeUp);
+    await flushMicrotasks();
+    expect(turns).toHaveLength(0);
+
+    host.plannerDetecting.mockReturnValue(null);
+    found();
+    await flushMicrotasks();
+    expect(turns).toHaveLength(1);
+    expect(turns[0].prompt).toMatchObject({ source: 'supervisor', wakeUps: [wakeUp.text] });
+  });
+
+  it('opens no turn on a planner that cannot plan, and keeps the wake-ups for one that can', async () => {
+    const { host, turns, current } = fakeHost();
+    const refusal = new Error('No planner is ready. Pick one with /planner');
+    host.assertPlannerReady.mockImplementation(() => { throw refusal; });
+    const runner = new PlanTurns(host);
+
+    await expect(runner.enqueue(wakeUp)).rejects.toBe(refusal);
+    expect(turns).toHaveLength(0);
+    expect(current.plan!.pendingTurns!.map((t) => t.text)).toEqual([wakeUp.text]);
+
+    host.assertPlannerReady.mockImplementation(() => {});
+    void runner.enqueue({ source: 'user', text: 'and go on' });
+    await flushMicrotasks();
+    expect(turns[0].prompt).toMatchObject({ source: 'user', text: 'and go on', wakeUps: [wakeUp.text] });
+  });
+
+  it('tells every caller waiting behind a refused force send, not only the forced one', async () => {
+    const { host, turns } = fakeHost();
+    const runner = new PlanTurns(host);
+    void runner.enqueue({ source: 'user', text: 'one' }).catch(() => {});
+    await flushMicrotasks();
+    const second = runner.enqueue({ source: 'user', text: 'two' });
+    const refusal = new Error('No planner is ready. Pick one with /planner');
+    host.assertPlannerReady.mockImplementation(() => { throw refusal; });
+
+    const forced = runner.forceSend({ source: 'user', text: 'now' });
+    turns[0].fail(new PlannerTurnStoppedError());
+
+    await expect(forced).rejects.toBe(refusal);
+    await expect(second).rejects.toBe(refusal);
   });
 });

@@ -75,6 +75,20 @@ describe('OrchestratorPool planner readiness', () => {
     expect(pool.session('s3')).toBeDefined();
   });
 
+  it('refuses what reaches the session past the pool once the key is gone: a force send, a merge, a compaction', async () => {
+    process.env.OPENROUTER_API_KEY = 'sk-or-test';
+    await pool.startPlanning('s5', 'Add a limiter', ['claude-code'], workspace);
+    const continued = vi.spyOn(OpenAiService.prototype, 'continueConversation');
+    transport.mockClear();
+    delete process.env.OPENROUTER_API_KEY;
+
+    await expect(pool.session('s5').forceSendPrompt('go on')).rejects.toBeInstanceOf(PlannerNotReadyError);
+    await expect(pool.session('s5').continueConversation('merge #1 and #2')).rejects.toBeInstanceOf(PlannerNotReadyError);
+    await expect(pool.compactConversation('s5')).rejects.toBeInstanceOf(PlannerNotReadyError);
+    expect(transport).not.toHaveBeenCalled();
+    expect(continued).not.toHaveBeenCalled();
+  });
+
   it('keeps the live session when a restart is refused', async () => {
     process.env.OPENROUTER_API_KEY = 'sk-or-test';
     await pool.startPlanning('s4', 'Add a limiter', ['claude-code'], workspace);

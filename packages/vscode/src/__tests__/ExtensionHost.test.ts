@@ -115,6 +115,7 @@ function fakeConfig() {
     get aiProvider() { return values.aiProvider as AiProvider; },
     get rawAiProvider() { return values.rawAiProvider as string; },
     get apiKey() { return values.apiKey as string; },
+    getProviderApiKey: () => values.apiKey as string,
     get planningModel() { return values.planningModel as string; },
     get orchestratorModel() { return values.orchestratorModel as string; },
     get rawOrchestratorModel() { return values.rawOrchestratorModel as string; },
