@@ -107,8 +107,9 @@ export function turnPrompt(batch: readonly PendingPlanTurn[]): TurnPrompt {
  * lands with it, so it stays through a failed one — unless the user stopped
  * the turn, which was their answer to it. A force send is not an answer to
  * it (ADR-0023, F5): a turn it stopped keeps its wake-ups waiting, undelivered,
- * for the supervisor's next turn. A reload therefore replays exactly what no
- * turn answered.
+ * for the supervisor's next turn. The user's Stop also drops the user's inputs
+ * waiting behind the turn it stopped ({@link stopQueued}). A reload therefore
+ * replays exactly what no turn answered.
  */
 export class PlanTurns {
   private readonly waiters = new Map<string, Waiter>();
@@ -117,6 +118,8 @@ export class PlanTurns {
   private detecting = false;
   /** The refusal last told to the user, so an input that keeps arriving is not refused aloud again and again. */
   private refusalTold: string | null = null;
+  /** The user stopped the turn wake-ups waited behind: they wait for the next input to open one, not for the stop's release. */
+  private quiet = false;
   private seq = 0;
 
   constructor(private readonly host: PlanTurnsHost, private readonly holdTimeoutMs = START_HOLD_TIMEOUT_MS) {}
@@ -176,6 +179,7 @@ export class PlanTurns {
       ...(input.skills && input.skills.length > 0 ? { skills: [...input.skills] } : {}),
       ...(forced ? { forced: true } : {}),
     };
+    this.quiet = false;
     const pending = plan.pendingTurns ?? [];
     const at = forced ? pending.findIndex((t) => !t.forced && !this.running?.ids.has(t.id)) : -1;
     plan.pendingTurns = at === -1 ? [...pending, entry] : [...pending.slice(0, at), entry, ...pending.slice(at)];
@@ -202,7 +206,7 @@ export class PlanTurns {
     if (!plan || this.host.conversationBusy()) return;
     const batch = this.liveBatch(plan);
     if (batch.length === 0) return;
-    if (batch.every((t) => t.source === 'supervisor') && !this.host.mayWake()) return;
+    if (batch.every((t) => t.source === 'supervisor') && (this.quiet || !this.host.mayWake())) return;
     const detecting = this.host.plannerDetecting();
     if (detecting) {
       this.detecting = true;
@@ -246,19 +250,30 @@ export class PlanTurns {
   }
 
   /**
-   * The user's Stop while a turn waits at the planner gate: what waits there
-   * is the turn they stopped, though none has opened, so it ends as a stopped
-   * turn's inputs do — dropped, with each caller told it was stopped. The
-   * probe's answer then finds nothing to open; an input sent after the Stop
-   * waits for it afresh. False when nothing waits there.
+   * The user's Stop of planner work: what waits for it is part of what they
+   * stopped, at any stage — a turn waiting at the planner gate, or an opening
+   * or a reply live. Every user input still waiting ends as a stopped turn's
+   * inputs do — dropped, each caller told it was stopped — so the stopped
+   * turn's release finds none of them to open. The live turn's own inputs are
+   * its to settle. At the gate the waiting batch is the stopped turn, so its
+   * wake-ups go with it. Behind a live turn they are not what the user
+   * answered: they stay undelivered, as a reload keeps them (ADR-0029), and go
+   * with the next turn something else opens — the user's next message or the
+   * supervisor's next wake-up — never off the release of the turn the user
+   * stopped. A force send never comes here: it keeps the queue (ADR-0023).
+   * False when nothing waited.
    */
-  stopWaiting(): boolean {
+  stopQueued(): boolean {
     const plan = this.host.plan();
-    const waiting = plan?.pendingTurns ?? [];
-    if (!plan || !this.detecting || waiting.length === 0) return false;
-    this.take(plan, new Set(waiting.map((t) => t.id)));
+    if (!plan || (!this.detecting && !this.running && !this.host.conversationBusy())) return false;
+    const live = this.running?.ids;
+    const waiting = (plan.pendingTurns ?? []).filter((t) => !live?.has(t.id));
+    const stopped = this.detecting ? waiting : waiting.filter((t) => t.source === 'user');
+    if (stopped.length < waiting.length) this.quiet = true;
+    if (stopped.length === 0) return false;
+    this.take(plan, new Set(stopped.map((t) => t.id)));
     this.host.persist();
-    for (const t of waiting) this.settle(t.id, (w) => w.reject(new PlannerTurnStoppedError()));
+    for (const t of stopped) this.settle(t.id, (w) => w.reject(new PlannerTurnStoppedError()));
     return true;
   }
 
@@ -271,6 +286,7 @@ export class PlanTurns {
   abandon(): void {
     this.running?.release();
     this.running = null;
+    this.quiet = false;
     for (const waiter of this.waiters.values()) waiter.reject(new PlannerTurnDiscardedError());
     this.waiters.clear();
   }
