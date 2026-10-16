@@ -1,7 +1,8 @@
 import {
-  EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, PROVIDER_PRIORITY, autonomyLevelLabel, parseAutonomyLevel, parseMaxParallel, runnerForProvider, getProviderMeta, isApiProvider, isPlannerBackend, type AiProvider,
+  EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, PROVIDER_PRIORITY, TERMINAL_UI_COMMANDS, autonomyLevelLabel, parseAutonomyLevel, parseMaxParallel, runnerForProvider, getProviderMeta, isApiProvider, isPlannerBackend, type AiProvider,
 } from '@ordewell/core';
 import { handoffCommand } from '../handoff';
+import { vendorModelRefusal } from '../../plannerModelSwitch';
 import { findCommand, type ParsedCommand } from '../slash';
 import { findTask, plannerInFlight, type PickerItem, type TuiState } from '../state';
 import { modelsForRunner } from '../taskAssignment';
@@ -237,6 +238,9 @@ function setModel(state: TuiState, args: string[]): Step {
     if (runner && known.length > 0 && !known.some((m) => m.id === args[1])) {
       return fail(state, `${args[1]} was not discovered for ${runner}.`);
     }
+    // A cold catalog cannot vouch for an id, but a vendor's is plainly not the agent's.
+    const refusal = known.length === 0 ? vendorModelRefusal(state.plannerProvider, args[1], TERMINAL_UI_COMMANDS.pickPlanner) : null;
+    if (refusal) return fail(state, refusal);
     return step(state, [{ type: 'setModel', modelId: args[1] }]);
   }
   if (args.length > 0 && args[0] !== 'set') return fail(state, 'Usage: /model [set <model-id>]');

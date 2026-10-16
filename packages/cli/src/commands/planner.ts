@@ -1,5 +1,6 @@
 import {
   CLI_PROVIDERS,
+  HEADLESS_CLI_COMMANDS,
   PROVIDER_PRIORITY,
   getProviderMeta,
   isApiProvider,
@@ -10,7 +11,7 @@ import {
 import type { ApiClient } from '../apiClient';
 import { positionals } from '../utils';
 import { connect, fail, fetchCatalog, persistEnv, writeEnv } from './shared';
-import { plannerSwitchRecall } from '../plannerModelSwitch';
+import { plannerSwitchRecall, uninstalledPlannerRefusal } from '../plannerModelSwitch';
 import { runnerIdChoice } from '../runnerNames';
 
 /**
@@ -32,6 +33,11 @@ export async function handlePlanner(subArgs: string[], injectedApi?: ApiClient):
   const meta = getProviderMeta(provider);
   if (!meta) {
     fail(`Unknown planner: ${provider}`, 'Run `ordewell planner` with no arguments to see the list.');
+  }
+  if (isCliProvider(provider)) {
+    const installed = (await api.getRunners()).runners.map((r) => r.id);
+    const refusal = uninstalledPlannerRefusal(provider, installed, HEADLESS_CLI_COMMANDS.pickPlanner);
+    if (refusal) fail(refusal);
   }
 
   // The daemon owns the model decision now: remember what this provider was

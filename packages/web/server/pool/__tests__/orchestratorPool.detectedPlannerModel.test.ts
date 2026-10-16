@@ -192,4 +192,60 @@ describe('OrchestratorPool settings for a detected coding agent', () => {
     expect(await spawned()).toEqual({ model: 'claude-opus-5-5', effort: 'max' });
     expect(new SettingsService().getPlannerModel('claude-code')).toEqual({ model: 'claude-opus-5-5', effort: 'max' });
   });
+
+  /** `ordewell plan` under AI_PROVIDER=<agent>: the switch, then the environment the CLI inherited. */
+  function forwardNamedPlanner(daemon: OrchestratorPool, provider: string, model: string) {
+    daemon.updateSettings({ env: { AI_PROVIDER: provider } });
+    return daemon.updateSettings({ env: { ORCHESTRATOR_MODEL: model }, inherited: true });
+  }
+
+  for (const leftover of ['openai/gpt-4o', 'deepseek/deepseek-v4-flash']) {
+    it(`a named Claude Code is never spawned with the inherited vendor slug ${leftover}, nor saves it`, async () => {
+      const response = forwardNamedPlanner(pool(), 'claude-code', leftover);
+
+      expect(response).toMatchObject({ aiProvider: 'claude-code', orchestratorModel: '' });
+      expect(await spawnedModel()).toBe('');
+      expect(new SettingsService().getAll().plannerModels).toBeUndefined();
+    });
+
+    it(`a named Codex reports no model for the inherited vendor slug ${leftover}`, () => {
+      const response = forwardNamedPlanner(pool(), 'codex', leftover);
+
+      expect(response).toMatchObject({ aiProvider: 'codex', orchestratorModel: '' });
+      expect(new SettingsService().getAll().plannerModels).toBeUndefined();
+    });
+  }
+
+  it('a named Claude Code with an inherited vendor slug plans with its remembered model and effort', async () => {
+    new SettingsService().setPlannerModel('claude-code', { model: 'sonnet', effort: 'high' });
+
+    forwardNamedPlanner(pool(), 'claude-code', 'openai/gpt-4o');
+
+    expect(await spawned()).toEqual({ model: 'sonnet', effort: 'high' });
+  });
+
+  /** A daemon whose discovery has already listed OpenCode's own models. */
+  function poolWithOpenCodeCatalog(ids: string[]): OrchestratorPool {
+    const modelResolver = {
+      getCachedRunnerModels: (runner: string) => (runner === 'opencode' ? ids.map((modelId) => ({ modelId, modelLabel: modelId })) : []),
+      getCachedPickerOptions: () => [],
+    };
+    return new OrchestratorPool({
+      modelResolver,
+      runnerInstallation: { plannerUsability: vi.fn(async () => ({ usable: true as const })), filterInstalled: vi.fn(async () => []) },
+      codexSandbox: { ensure: vi.fn(async () => undefined), refresh: vi.fn(async () => undefined) },
+    } as unknown as ConstructorParameters<typeof OrchestratorPool>[0]);
+  }
+
+  it('a named OpenCode is not given an inherited slug its discovered catalog does not list', () => {
+    const response = forwardNamedPlanner(poolWithOpenCodeCatalog(['anthropic/claude-sonnet-4-5']), 'opencode', 'deepseek/deepseek-v4-flash');
+
+    expect(response).toMatchObject({ aiProvider: 'opencode', orchestratorModel: '' });
+  });
+
+  it('a named OpenCode keeps an inherited provider/model id its discovered catalog lists', () => {
+    const response = forwardNamedPlanner(poolWithOpenCodeCatalog(['anthropic/claude-sonnet-4-5', 'openai/gpt-4o']), 'opencode', 'openai/gpt-4o');
+
+    expect(response).toMatchObject({ aiProvider: 'opencode', orchestratorModel: 'openai/gpt-4o' });
+  });
 });

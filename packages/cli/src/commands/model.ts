@@ -1,5 +1,6 @@
-import { runnerForProvider } from '@ordewell/core';
+import { HEADLESS_CLI_COMMANDS, runnerForProvider } from '@ordewell/core';
 import { findEnvFile, writeEnvVar } from '../utils/env';
+import { vendorModelRefusal } from '../plannerModelSwitch';
 import type { ApiClient } from '../apiClient';
 import { positionals } from '../utils';
 import { connect, fail, fetchCatalog } from './shared';
@@ -32,7 +33,8 @@ export async function handleModel(subArgs: string[], injectedApi?: ApiClient): P
   const provider = typeof settings.aiProvider === 'string' ? settings.aiProvider : '';
   // A harness planner can only run its own agent's models (ADR-0009), so the
   // typed path gets the same scoping the TUI picker does. A cold catalog says
-  // nothing about the id, so it is only enforced once discovery has landed.
+  // nothing about most ids, so the catalog is only enforced once discovery
+  // has landed; a vendor's id is plainly not the agent's either way.
   const runner = runnerForProvider(provider);
   if (runner) {
     const known = (await fetchCatalog(api)).models.filter((m) => m.runners?.includes(runner));
@@ -42,6 +44,8 @@ export async function handleModel(subArgs: string[], injectedApi?: ApiClient): P
         `Run \`ordewell model\` to see what ${runner} offers.`,
       );
     }
+    const refusal = known.length === 0 ? vendorModelRefusal(provider, modelId, HEADLESS_CLI_COMMANDS.pickPlanner) : null;
+    if (refusal) fail(refusal);
   }
 
   // The daemon keeps the effort only where the new model offers it, so `.env`

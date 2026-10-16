@@ -269,6 +269,7 @@ export class OrchestratorPool {
       modelOverride,
       providerModelLists: () => this.cachedProviderLists,
       pickedModel: () => this.pickedModel,
+      agentCatalog: (provider) => this.plannerCatalogFor(provider).map((model) => model.id),
     });
   }
 
