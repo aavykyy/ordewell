@@ -26,7 +26,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   planner you pick with `/planner`. The choice is detected on each start and
   never written to your settings. A goal typed while the daemon is still
   looking waits for the answer. A vendor model left over from an earlier
-  setup no longer overrides the agent unless that vendor's key is set. A
+  setup no longer overrides the agent unless that vendor's key is set, and a
+  model left over from an earlier vendor setup no longer breaks planning with
+  an installed agent. A
   message restored from before a reload is never lost when the planner cannot
   run: it waits and goes with your next message. Stop works while the first
   turn is still waiting on that look. Adding or removing a key takes effect at
@@ -36,6 +38,13 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   key.** The refusal comes before the planner turn starts, in the terminal, in
   VS Code and from `ordewell plan` (which names `ordewell planner`), and it
   leaves the live session alone.
+- **Plan approval, Guarded starts and proposed edits are more dependable.**
+  The planner and supervisor can start a plan again after a run that ended with
+  a failure, was stopped, or was reloaded, instead of being told the plan was
+  never approved. In Guarded, when the planner tries to start tasks you asked
+  it to add, it asks on the approval card instead of failing silently after
+  the reply. Proposed plan changes now show up in VS Code and the terminal
+  while the planner is still replying, marked as landing when the reply ends.
 
 ## [0.10.2] — 2026-10-14
 
