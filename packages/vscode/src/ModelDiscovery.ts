@@ -1,6 +1,6 @@
 import type * as vscode from 'vscode';
 import {
-  codexSandboxNotice, getProviderMeta, ModelResolver, PROVIDER_LABEL, PROVIDER_PRIORITY, PROVIDER_SHORT_LABEL, runnerForProvider,
+  codexSandboxNotice, getProviderMeta, installedPlannerDetected, ModelResolver, PROVIDER_LABEL, PROVIDER_PRIORITY, PROVIDER_SHORT_LABEL, runnerForProvider,
   type AiProvider, type PlannerBackendId, type CodexSandboxAvailability, type DiscoveredModel, type RunnerInstallation, type RunnerRegistry,
 } from '@ordewell/core';
 import type { ChatViewProvider } from './providers/ChatViewProvider';
@@ -59,6 +59,9 @@ export class ModelDiscovery {
     // The runner list is being refreshed, so the host is asked again: a user
     // who fixed it while the window was open sees the modes come back.
     await d.codexSandbox?.refresh();
+    // With no saved choice the enabled runners are the installed agents, so the
+    // header waits for the probe instead of showing the stale default.
+    await installedPlannerDetected();
     const enabled = d.config.enabledRunners;
     // Resolve installed runners up front so a discovery that returns nothing for
     // an *installed* runner can be surfaced as a real failure (see below).
