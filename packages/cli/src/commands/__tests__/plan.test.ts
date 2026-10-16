@@ -304,6 +304,28 @@ describe('handlePlan', () => {
     srv.close();
   });
 
+  it('rewords a planner-not-ready refusal with the headless commands, not the daemon\'s slash commands', async () => {
+    const reason = { code: 'no_key', provider: 'openrouter', label: 'OpenRouter', keyEnvVar: 'OPENROUTER_API_KEY' };
+    const srv = await startServer((req, res) => {
+      const refused = (req.url || '').includes('/converse/start');
+      res.writeHead(refused ? 409 : 200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(refused
+        ? { error: 'No planner is ready. Pick one with /planner', code: 'planner_not_ready', plannerNotReady: reason }
+        : RUNNERS));
+    });
+    const { handlePlan } = await import('../plan');
+    const { stderr, exitCode } = await capture(() =>
+      handlePlan(['--goal', 'ship it', '--workspace', '/tmp'], { api: new ApiClient(srv.port) }),
+    );
+    expect(stderr).toContain(
+      'No planner is ready. Pick one with ordewell planner <id> — Claude Code, Codex and OpenCode plan with no API key. ' +
+      'To plan with OpenRouter instead, add OPENROUTER_API_KEY with ordewell key set openrouter <key>.',
+    );
+    expect(stderr).not.toContain('/planner');
+    expect(exitCode).toBe(1);
+    srv.close();
+  });
+
   it('aborts on /quit', async () => {
     const question = {
       tasks: [],

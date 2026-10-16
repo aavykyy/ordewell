@@ -80,6 +80,10 @@ export default function EmptyState({ onLoadSession, runSettings }: EmptyStatePro
         Describe your goal and Ordewell will research your codebase,
         generate a structured task plan, and execute it.
       </p>
+      {/* Autorun defaults off, so the approve line stands until the host says otherwise. */}
+      {runSettings?.run.autorun
+        ? <p className="warn">Autorun is on — a plan starts as soon as the planner submits it. Change it in /autorun.</p>
+        : <p>Nothing runs until you approve the plan.</p>}
       {runSettings && (
         <div className="empty-state-setup">
           <SetupRow label="Autonomy" value={runSettings.autonomous ? 'Full' : 'Guarded'} warn={runSettings.autonomous} command="/auto" />

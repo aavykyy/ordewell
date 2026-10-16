@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
-  Session, getProviderMeta, PlannerTurnDiscardedError, PROVIDER_DETECT_PRIORITY, resetInstalledPlanner,
+  Session, getProviderMeta, PlannerNotReadyError, PlannerTurnDiscardedError, PROVIDER_DETECT_PRIORITY, resetInstalledPlanner,
   type LegacyPlanState, type PlannerBackendId, type PlannerUsability,
 } from '@ordewell/core';
 import { OrchestratorPool } from '../orchestratorPool';
@@ -39,12 +39,12 @@ describe('OrchestratorPool default planner', () => {
   });
 
   /** An installation whose agents all answer when the test says so: Claude Code first in order. */
-  function gatedInstallation() {
+  function gatedInstallation(usable = true) {
     let answer!: (value: PlannerUsability) => void;
     const gate = new Promise<PlannerUsability>((resolve) => { answer = resolve; });
     return {
       installation: { plannerUsability: vi.fn(() => gate), filterInstalled: vi.fn(async () => []) },
-      answer: () => answer({ usable: true }),
+      answer: () => answer(usable ? { usable: true } : { usable: false, reason: 'not installed' }),
     };
   }
 
@@ -69,6 +69,20 @@ describe('OrchestratorPool default planner', () => {
     await planning;
     expect(planners).toEqual(['claude-code']);
     pool.destroyAll();
+  });
+
+  it('judges the planner once the probe answers: with no agent installed, the keyless goal is refused and leaves no session', async () => {
+    const { installation, answer } = gatedInstallation(false);
+    const pool = new OrchestratorPool({ runnerInstallation: installation });
+    void pool.detectInstalledPlanner();
+    const startSpy = vi.spyOn(Session.prototype, 'startPlanning').mockResolvedValue({} as LegacyPlanState);
+
+    const planning = pool.startPlanning('s1', 'ship it', ['claude-code'], workspace);
+    answer();
+
+    await expect(planning).rejects.toBeInstanceOf(PlannerNotReadyError);
+    expect(startSpy).not.toHaveBeenCalled();
+    expect(pool.hasSession('s1')).toBe(false);
   });
 
   it('a session closed while waiting for the probe never starts its planner turn', async () => {

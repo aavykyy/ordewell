@@ -341,8 +341,8 @@ describe('transcript', () => {
 
   it('says what is missing when nothing can plan yet', () => {
     const out = text();
-    expect(out).toMatch(/Claude Code, Codex or OpenCode/);
-    expect(out).toContain('/key');
+    // Same order as the not-ready error: the no-key way in first, the vendor key second.
+    expect(out).toMatch(/Claude Code, Codex or OpenCode.*\/planner.*no API key.*\/key/s);
   });
 
   it('treats a configured API provider as enough to plan', () => {
@@ -353,6 +353,14 @@ describe('transcript', () => {
 
   it('marks an error turn as an error', () => {
     expect(text({ conversation: chatOf(['error', 'it broke']) })).toContain('it broke');
+  });
+
+  it('shows the planner-not-ready refusal whole on the ✗ line, wrapped but unaltered', () => {
+    const message = 'No planner is ready. Pick one with /planner — Claude Code, Codex and OpenCode plan with no API key. To plan with OpenRouter instead, add OPENROUTER_API_KEY with /key.';
+    const rows = screen({ conversation: chatOf(['error', message]), cols: 80 }).map(stripAnsi);
+
+    expect(rows.find((l) => l.includes('✗'))).toContain('✗ No planner is ready.');
+    expect(rows.join(' ').replace(/\s+/g, ' ')).toContain(message);
   });
 
   it('renders planner Markdown as terminal-native chat', () => {

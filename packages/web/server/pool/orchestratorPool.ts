@@ -47,6 +47,7 @@ import {
   StructuredRunner,
   CodexSandboxAvailability,
   detectInstalledPlanner,
+  installedPlannerAnswered,
   installedPlannerDetected,
   PlannerTurnDiscardedError,
 } from '@ordewell/core';
@@ -487,19 +488,44 @@ export class OrchestratorPool {
   }
 
   async generatePlan(sessionId: string, goal: string, runners: RunnerId[], workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<PlanState> {
+    const session = await this.openPlanningSession(sessionId, workspace, modelOverride, options);
+    return migratePlanState(await session.generatePlan(goal, runners));
+  }
+
+  /**
+   * Build the session a new planning conversation runs in, register it in
+   * place of any live one, and return once its first planner turn may start.
+   */
+  private async openPlanningSession(sessionId: string, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<Session> {
     const session = this.createSessionFor(sessionId, workspace, modelOverride, options);
+    // Judged on the new session's config (which carries the request's model)
+    // and before the old session is destroyed, so a refusal leaves it alone.
+    // Not while the installed-planner probe is out: its answer can be the
+    // planner, and judging the openrouter fallback now would refuse the very
+    // keyless first run the probe exists for, so that judgement waits below.
+    const judgedNow = installedPlannerAnswered();
+    if (judgedNow) session.assertPlannerReady();
     // After the new session is built, so a refusal above leaves the live one
     // alone; before the set, so its runners and planner turn stop broadcasting.
     this.destroy(sessionId);
     // Registered before the blocking call, not after: research inside
-    // generatePlan can raise an approval and await the answer, and that
-    // answer arrives over POST /api/approvals/:sessionId — which 404s until
-    // the session is in this map. Registering only on return made the first
-    // approval of every session unanswerable until its 5-minute timeout.
+    // the first planner turn can raise an approval and await the answer, and
+    // that answer arrives over POST /api/approvals/:sessionId — which 404s
+    // until the session is in this map. Registering only on return made the
+    // first approval of every session unanswerable until its 5-minute timeout.
     this.sessions.set(sessionId, session);
     this.warmCodexSandbox();
     await this.plannerTurnMayStart(sessionId, session);
-    return migratePlanState(await session.generatePlan(goal, runners));
+    if (!judgedNow) {
+      try {
+        session.assertPlannerReady();
+      } catch (err) {
+        // A refused session is never left addressable, as when judged above.
+        this.destroy(sessionId);
+        throw err;
+      }
+    }
+    return session;
   }
 
   /**
@@ -509,21 +535,17 @@ export class OrchestratorPool {
    * assistant message lives in conversationHistory).
    */
   async startPlanning(sessionId: string, goal: string, runners: RunnerId[], workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<LegacyPlanState> {
-    const session = this.createSessionFor(sessionId, workspace, modelOverride, options);
-    this.destroy(sessionId);
-    // See generatePlan: must be registered before the blocking call so a
-    // mid-research approval is answerable rather than 404ing until timeout.
-    this.sessions.set(sessionId, session);
-    this.warmCodexSandbox();
-    await this.plannerTurnMayStart(sessionId, session);
+    const session = await this.openPlanningSession(sessionId, workspace, modelOverride, options);
     return session.startPlanning(goal, runners);
   }
 
   /** Continue the planner dialogue with the user's reply; refused while a planner turn is in flight. */
   async continuePlanning(sessionId: string, message: string): Promise<LegacyPlanState> {
     const session = this.session(sessionId);
-    // An adopted saved session can take its first planner turn here.
+    // An adopted saved session can take its first planner turn here, so the
+    // preflight waits for the probe that may name its planner.
     await this.plannerTurnMayStart(sessionId, session);
+    session.assertPlannerReady();
     return session.continueConversation(message);
   }
 

@@ -16,6 +16,7 @@ import {
   buildConversationSystemPrompt,
 } from './PlanPrompts';
 import { generatePlanWithRepair } from './PlanRepair';
+import { PLANNER_ESCAPE_HINT } from './plannerReadiness';
 import type { RunnerModeInfo } from './ModeResolver';
 import { ContextCollector } from './ContextCollector';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
@@ -183,7 +184,7 @@ export class GeminiService extends BaseAiService implements IAiService {
   }
 
   ensureInit(): void {
-    if (!this.init()) throw new Error('Gemini API key not configured. Set GEMINI_API_KEY or ordewell.apiKey.');
+    if (!this.init()) throw new Error(`Gemini API key not configured. Set GEMINI_API_KEY or ordewell.apiKey, ${PLANNER_ESCAPE_HINT}.`);
   }
 
   reset(): void {

@@ -35,10 +35,13 @@ describe('OrchestratorPool mid-session planner switch', () => {
     workspace = join(dir, 'ws');
     mkdirSync(workspace);
     mkdirSync(join(workspace, '.git'));
-    for (const key of ['ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL']) {
+    for (const key of ['ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY']) {
       savedEnv[key] = process.env[key];
     }
     process.env.ORDEWELL_SETTINGS_PATH = join(dir, 'settings.json');
+    // Both transports must pass the daemon's readiness check for a switch between them to be reachable.
+    process.env.OPENROUTER_API_KEY = 'sk-or-test';
+    process.env.GEMINI_API_KEY = 'gemini-test';
     pool = new OrchestratorPool({ modelResolver: inertResolver() });
   });
 

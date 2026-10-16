@@ -1,11 +1,11 @@
 import { createInterface } from 'readline';
 import { allTasksOf, flag, flags, hasFlag, saveLastSession } from '../utils';
 import { ensureDaemon, resolvePort } from '../daemon';
-import { ApiClient } from '../apiClient';
+import { ApiClient, DaemonError } from '../apiClient';
 import { createApprovalHandler } from '../approvals';
 import { createStepLog, type LogLine } from './researchLog';
 import type { SerializedTask, DiscoveredModel } from '@ordewell/core';
-import { mintSessionId, taskOrderLabel } from '@ordewell/core';
+import { mintSessionId, taskOrderLabel, describePlannerNotReady, HEADLESS_CLI_COMMANDS } from '@ordewell/core';
 import type { PlanBody, WsEvent } from '../apiClient';
 
 // The one-shot endpoint answers with the stored plan state (`pendingTasks`),
@@ -309,7 +309,12 @@ export async function handlePlan(
     closeStream();
     if (isTty && lastLineLength > 0) process.stderr.write('\r\x1b[2K');
     process.stderr.write('\n');
-    console.error(`Plan generation failed: ${err instanceof Error ? (err as Error).message : String(err)}`);
+    // The daemon words a refusal for the terminal UI; a shell has no slash commands, so say it in its own.
+    if (err instanceof DaemonError && err.plannerNotReady) {
+      console.error(describePlannerNotReady(err.plannerNotReady, HEADLESS_CLI_COMMANDS));
+    } else {
+      console.error(`Plan generation failed: ${err instanceof Error ? (err as Error).message : String(err)}`);
+    }
     process.exit(1);
   }
 }

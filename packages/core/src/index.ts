@@ -94,7 +94,7 @@ export type { ExecImpl } from './services/ModelDiscovery';
 export { ModelResolver } from './services/ModelResolver';
 export type { ModelResolverDeps } from './services/ModelResolver';
 export { RunnerInstallation } from './services/RunnerInstallation';
-export { detectInstalledPlanner, findInstalledPlanner, installedPlannerDetected, recordInstalledPlanner, recordedInstalledPlanner, resetInstalledPlanner } from './services/InstalledPlanner';
+export { detectInstalledPlanner, findInstalledPlanner, installedPlannerAnswered, installedPlannerDetected, recordInstalledPlanner, recordedInstalledPlanner, resetInstalledPlanner } from './services/InstalledPlanner';
 export { ModelCatalog } from './services/ModelCatalog';
 export type { CatalogModel } from './services/ModelCatalog';
 export { resolveProvider, fetchAllProviderModels, collectProviderCredentials, toOrchestratorOptions } from './services/ProviderRouting';
@@ -139,6 +139,7 @@ export { abbreviateHome, resolveSkillInvocation, plannerMessage, plannerTranscri
 export { PlanEditError } from './services/PlanEditError';
 export type * from './daemonContract';
 export { SessionNotFoundError, NoPlanError, AlreadyExecutingError } from './services/SessionErrors';
+export { plannerNotReady, describePlannerNotReady, PlannerNotReadyError, TERMINAL_UI_COMMANDS, CHAT_COMMANDS, HEADLESS_CLI_COMMANDS, type PlannerNotReady, type PlannerCommandSyntax, type PlannerReadinessConfig } from './services/plannerReadiness';
 export type { SessionDeps, SessionRuntimeSettings, SessionPlanner, SaveSession, ConversationFork, ConversationRewind } from './services/createSession';
 export { ExecutionCommands, SUPERVISOR_LEVELS } from './services/ExecutionCommands';
 export type { ExecutionCommand, CommandOutcome, Consent, SupervisorPolicy, LoopGuard, ExecutionHost } from './services/ExecutionCommands';

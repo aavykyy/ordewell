@@ -6,7 +6,7 @@ import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest
 import { CODEX_MANIFEST } from '../../plugins/builtin/codex.manifest';
 import { OPENCODE_MANIFEST } from '../../plugins/builtin/opencode.manifest';
 import {
-  detectInstalledPlanner, findInstalledPlanner, installedPlannerDetected, recordedInstalledPlanner, resetInstalledPlanner,
+  detectInstalledPlanner, findInstalledPlanner, installedPlannerAnswered, installedPlannerDetected, recordedInstalledPlanner, resetInstalledPlanner,
 } from '../InstalledPlanner';
 
 const ALL = [CLAUDE_CODE_MANIFEST, CODEX_MANIFEST, OPENCODE_MANIFEST];
@@ -65,13 +65,16 @@ describe('detectInstalledPlanner', () => {
     const waiting = installedPlannerDetected().then(() => { settled = true; });
     await Promise.resolve();
     expect(settled).toBe(false);
+    expect(installedPlannerAnswered()).toBe(false);
 
     answer({ usable: true });
     await waiting;
+    expect(installedPlannerAnswered()).toBe(true);
     expect(recordedInstalledPlanner()).toBe('claude-code');
   });
 
   it('does not hold a turn up when no probe was started', async () => {
+    expect(installedPlannerAnswered()).toBe(true);
     await expect(installedPlannerDetected()).resolves.toBeUndefined();
   });
 

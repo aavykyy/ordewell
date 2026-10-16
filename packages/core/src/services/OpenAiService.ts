@@ -26,6 +26,7 @@ import { IAiService, ConversationRequest, ConversationTurn } from './AiService';
 import { BaseAiService, ResearchChat, ResearchTurn, ToolResult, ConversationTurnContext } from './BaseAiService';
 import { toOpenAiTools, toOpenAiSubagentTools } from './researchTools';
 import { getProviderMeta, isApiProvider, stripModelPrefix } from './ProviderRegistry';
+import { PLANNER_ESCAPE_HINT } from './plannerReadiness';
 import { compactToolMessages, type CompactableMessage } from './contextCompaction';
 import type { UsageRecord } from '../models/Usage';
 
@@ -220,13 +221,13 @@ export class OpenAiService extends BaseAiService implements IAiService {
     const provider = this.vendor();
     if (provider === 'openai_compatible') {
       if (!this.config.openaiCompatibleBaseUrl) {
-        throw new Error('OpenAI-compatible base URL not configured. Set OPENAI_COMPATIBLE_BASE_URL.');
+        throw new Error(`OpenAI-compatible base URL not configured. Set OPENAI_COMPATIBLE_BASE_URL, ${PLANNER_ESCAPE_HINT}.`);
       }
       return;
     }
     if (!this.config.getProviderApiKey(provider)) {
       const meta = getProviderMeta(provider);
-      throw new Error(`${meta.label} API key not configured. Set ${meta.apiKeyEnvVar}.`);
+      throw new Error(`${meta.label} API key not configured. Set ${meta.apiKeyEnvVar}, ${PLANNER_ESCAPE_HINT}.`);
     }
   }
 

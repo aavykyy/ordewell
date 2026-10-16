@@ -42,6 +42,7 @@ import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
 import { flattenTasks, keepExecutionState, stampOrigin, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskSnapshot, type RunnerId } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
+import { PlannerNotReadyError, plannerNotReady } from './plannerReadiness';
 import type { IConfig, PlannerBackendId } from '../interfaces/IConfig';
 import type { IFileSystem } from '../interfaces/IFileSystem';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
@@ -1076,6 +1077,25 @@ export class Session {
   /** See {@link TaskOrchestrator.hasLiveWork} — a spawned runner, not merely an armed scheduler. */
   get isExecuting(): boolean { return this.orchestrator.hasLiveWork; }
   get status(): 'approved' | 'running' | 'completed' { return this.orchestrator.status; }
+
+  /**
+   * Throws {@link PlannerNotReadyError} when the planner this session's config
+   * selects cannot plan. The daemon calls it ahead of a turn, on the session's
+   * own config, so a model override sent with the request is the one judged.
+   */
+  assertPlannerReady(): void {
+    const { config } = this;
+    const reason = plannerNotReady({
+      aiProvider: config.aiProvider,
+      // The vendor transports read different fields (OpenAI-style the
+      // orchestrator model, Gemini the planning model, which has a default),
+      // so either one set means a model will be found.
+      planningModel: config.orchestratorModel || config.planningModel,
+      openaiCompatibleBaseUrl: config.openaiCompatibleBaseUrl,
+      getProviderApiKey: (provider) => config.getProviderApiKey(provider),
+    });
+    if (reason) throw new PlannerNotReadyError(reason);
+  }
 
   /** Whether a planner turn — a reply, a compaction, plan generation — holds the conversation. */
   get isPlannerBusy(): boolean { return this.conversation.isTurnInFlight; }
