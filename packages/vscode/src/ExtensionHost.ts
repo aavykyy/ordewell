@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import {
-  createSession, createSkillsService, createEmptyPlan, flattenTasks, parseMaxParallel, sessionRuntimeSettings,
+  createSession, createSkillsService, detectInstalledPlanner, createEmptyPlan, flattenTasks, parseMaxParallel, sessionRuntimeSettings,
   type PlannerBackendId, type GlobalRunSettings, type LegacyPlanState, type RunnerId, type Session, type SessionDeps,
 } from '@ordewell/core';
 import { registerCommands, type CommandDeps } from './commands/CommandRegistry';
@@ -365,6 +365,16 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
   }
 
   async function start(): Promise<void> {
+    // Who plans when no planner is chosen and no key is held (ADR-0009). Not
+    // awaited: the preflight and every planner turn wait on it instead, and
+    // the pills are drawn again once it answers.
+    void detectInstalledPlanner(services.runnerInstallation)
+      .then(async () => {
+        sendModelConfig(services.config, services.chatProvider, services.modelResolver);
+        await planner.sendState();
+      })
+      .catch((err) => log(`Planner state refresh failed: ${err instanceof Error ? err.message : String(err)}`));
+
     services.context.subscriptions.push(
       vscodeApi.window.registerWebviewViewProvider('ordewellChatView', services.chatProvider, { webviewOptions: { retainContextWhenHidden: true } }),
     );

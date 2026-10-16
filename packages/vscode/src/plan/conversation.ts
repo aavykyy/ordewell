@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { Session } from '@ordewell/core';
+import { installedPlannerDetected, type Session } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 
 export interface ConversationDeps {
@@ -116,6 +116,7 @@ export async function compactConversation(deps: ConversationDeps): Promise<void>
   // The webview would let a message through that core refuses mid-compaction.
   deps.chatProvider.setConversationBusy(true);
   try {
+    await installedPlannerDetected();
     const { keptMessages } = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: 'Condensing the conversation…', cancellable: true },
       (_progress, token) => {

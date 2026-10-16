@@ -6,6 +6,7 @@ import {
   DEFAULT_RUNNERS, ModelResolver, RunnerRegistry, saveState, clearState,
   listSessions, loadSession,
   SettingsService,
+  installedPlannerDetected,
   type AiProvider,
   type ExecutionCommand,
 } from '@ordewell/core';
@@ -415,6 +416,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         vscode.window.showInformationMessage('No goal to regenerate from. Describe a goal first.');
         return;
       }
+      await installedPlannerDetected();
       const notReady = plannerPreflightError(deps.config);
       if (notReady) {
         deps.chatProvider.showError(notReady);

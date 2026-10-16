@@ -3,8 +3,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { SettingsService } from '../../services/SettingsService';
+import { getProviderMeta, PROVIDER_DETECT_PRIORITY } from '../../services/ProviderRegistry';
+import { recordInstalledPlanner, resetInstalledPlanner } from '../../services/InstalledPlanner';
 import { BaseConfig } from '../BaseConfig';
-import { AiProvider } from '../IConfig';
+import { AiProvider, PlannerBackendId } from '../IConfig';
 
 class TestConfig extends BaseConfig {
   aiProvider: AiProvider = 'openrouter';
@@ -114,12 +116,50 @@ describe('BaseConfig', () => {
   });
 
   describe('provider detection & key resolution', () => {
-    const keys = ['AI_PROVIDER', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'GEMINI_BASE_URL'];
+    // Every variable detection reads, so a key in the developer's own shell cannot decide a case.
+    const keys = [...new Set(['AI_PROVIDER', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'GEMINI_BASE_URL', ...PROVIDER_DETECT_PRIORITY.flatMap((p) => {
+      const meta = getProviderMeta(p);
+      return [...meta.detectEnvVars, ...(meta.baseUrlEnvVar ? [meta.baseUrlEnvVar] : [])];
+    })])];
     const backup: Record<string, string | undefined> = {};
     beforeEach(() => { for (const k of keys) { backup[k] = process.env[k]; delete process.env[k]; } });
-    afterEach(() => { for (const k of keys) { if (backup[k] !== undefined) process.env[k] = backup[k]; else delete process.env[k]; } });
+    afterEach(() => {
+      for (const k of keys) { if (backup[k] !== undefined) process.env[k] = backup[k]; else delete process.env[k]; }
+      resetInstalledPlanner();
+    });
 
-    const detect = () => (BaseConfig as unknown as { detectProvider(f: AiProvider): AiProvider }).detectProvider('openrouter');
+    const detect = (config: BaseConfig = new TestConfig()) => (config as unknown as { detectProvider(): PlannerBackendId }).detectProvider();
+
+    it('an explicit AI_PROVIDER wins over an installed coding agent', () => {
+      recordInstalledPlanner('claude-code');
+      process.env.AI_PROVIDER = 'google';
+      expect(detect()).toBe('google');
+    });
+
+    it('a vendor key in the environment wins over an installed coding agent', () => {
+      recordInstalledPlanner('claude-code');
+      process.env.GEMINI_API_KEY = 'gm-key';
+      expect(detect()).toBe('google');
+    });
+
+    it('an installed coding agent plans when nothing was chosen and no key is set (ADR-0009)', () => {
+      recordInstalledPlanner('codex');
+      expect(detect()).toBe('codex');
+    });
+
+    it('a key the host keeps outside the environment also keeps the installed agent out', () => {
+      // VS Code's secret store, say: a vendor key all the same, which planned with openrouter before.
+      class StoredKeyConfig extends TestConfig {
+        getProviderApiKey(provider: AiProvider): string { return provider === 'anthropic' ? 'sk-ant-stored' : ''; }
+      }
+      recordInstalledPlanner('claude-code');
+      expect(detect(new StoredKeyConfig())).toBe('openrouter');
+    });
+
+    it('falls back to openrouter only when no coding agent is installed', () => {
+      recordInstalledPlanner(null);
+      expect(detect()).toBe('openrouter');
+    });
 
     it('a bare OPENAI_API_KEY resolves to the openai provider, not openrouter', () => {
       process.env.OPENAI_API_KEY = 'sk-openai';

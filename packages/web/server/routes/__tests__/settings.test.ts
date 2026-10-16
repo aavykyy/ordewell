@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
-import { RUN_SETTINGS_DEFAULTS } from '@ordewell/core';
+import { RUN_SETTINGS_DEFAULTS, detectInstalledPlanner, resetInstalledPlanner, type PlannerUsability } from '@ordewell/core';
 import type { OrchestratorPool } from '../../pool/orchestratorPool';
 
 function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
@@ -37,6 +37,23 @@ describe('GET /api/settings', () => {
     const { settingsRoute } = await import('../../routes/settings');
     app = new Hono();
     app.route('/api/settings', settingsRoute(pool));
+  });
+
+  afterEach(() => resetInstalledPlanner());
+
+  it('answers once the startup probe has, so the welcome screen names the planner that will plan', async () => {
+    let answer!: (value: PlannerUsability) => void;
+    const gate = new Promise<PlannerUsability>((resolve) => { answer = resolve; });
+    void detectInstalledPlanner({ plannerUsability: () => gate });
+    vi.mocked(pool.getSettings).mockReturnValue(settingsState({ aiProvider: 'claude-code' }));
+
+    const response = app.request('/api/settings', { method: 'GET' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(pool.getSettings).not.toHaveBeenCalled();
+
+    answer({ usable: true });
+    expect((await response).status).toBe(200);
+    expect(pool.getSettings).toHaveBeenCalled();
   });
 
   it('returns orchestratorModel and feature toggles', async () => {

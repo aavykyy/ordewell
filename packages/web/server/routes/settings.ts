@@ -1,17 +1,22 @@
 import { Hono } from 'hono';
-import { RunSettingsError, type GlobalRunSettings, type SettingsResponse, type SettingsUpdateResponse } from '@ordewell/core';
+import { RunSettingsError, installedPlannerDetected, type GlobalRunSettings, type SettingsResponse, type SettingsUpdateResponse } from '@ordewell/core';
 import type { OrchestratorPool } from '../pool/orchestratorPool';
 import { refuse } from './errors';
 
 export function settingsRoute(pool: OrchestratorPool) {
   const router = new Hono();
 
-  router.get('/', (c) => {
+  // Both wait for the startup probe (ADR-0009): the TUI reads the planner from
+  // here the moment it opens, and a /planner switch is judged against the
+  // planner in effect, which the probe may be about to change.
+  router.get('/', async (c) => {
+    await installedPlannerDetected();
     const settings: SettingsResponse = pool.getSettings();
     return c.json(settings);
   });
 
   router.patch('/', async (c) => {
+    await installedPlannerDetected();
     const body: unknown = await c.req.json();
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length === 0) {
       return refuse(c, 400, 'At least one setting field is required');

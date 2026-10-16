@@ -4,8 +4,8 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { RUN_SETTINGS_DEFAULTS,
-  createTask, RunnerRegistry,
-  type AiProvider, type DiscoveredModel, type IRunner, type LegacyPlanState,
+  createTask, RunnerRegistry, recordedInstalledPlanner, resetInstalledPlanner,
+  type AiProvider, type DiscoveredModel, type IRunner, type LegacyPlanState, type PlannerUsability,
   type ModelResolver, type PlannerModelMemory, type RunnerInstallation,
   type RunView, type Session, type SessionDeps, type SettingsService,
 } from '@ordewell/core';
@@ -184,7 +184,7 @@ function fakeResolver(modelsByRunner: Partial<Record<string, DiscoveredModel[]>>
 function fakeRunnerInstallation(installed: string[]) {
   return {
     filterInstalled: vi.fn(async (runners: string[]) => runners.filter((r) => installed.includes(r))),
-    plannerUsability: vi.fn(async () => ({ usable: true, reason: undefined })),
+    plannerUsability: vi.fn(async (): Promise<PlannerUsability> => ({ usable: true, reason: undefined })),
   };
 }
 
@@ -448,6 +448,35 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     await vi.waitFor(() => expect(__panels).toHaveLength(1));
     expect(__panels[0].viewType).toBe('ordewellTaskLog');
     expect(__panels[0].title).toBe('Task 1 · Parse JSON');
+  });
+});
+
+describe('the planner with no planner chosen and no API key (ADR-0009)', () => {
+  afterEach(() => resetInstalledPlanner());
+
+  it('a goal typed before the activation probe answers waits for it, then plans', async () => {
+    let answer!: (value: PlannerUsability) => void;
+    const gate = new Promise<PlannerUsability>((resolve) => { answer = resolve; });
+    const installation = fakeRunnerInstallation(['claude-code']);
+    installation.plannerUsability.mockImplementation(() => gate);
+    const h = harness({ runnerInstallation: installation });
+    try {
+      // Not awaited: activation's own model discovery asks the same gated
+      // installation. The webview listener is registered before that.
+      const starting = h.host.start();
+
+      h.chat.messages.fire({ type: 'sendMessage', text: 'build a parser', typed: true });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(h.session.spies.startPlanning).not.toHaveBeenCalled();
+      expect(h.chat.provider.showError.mock.calls).toEqual([]);
+
+      answer({ usable: true });
+      await vi.waitFor(() => expect(h.session.spies.startPlanning).toHaveBeenCalledWith('build a parser', ['claude-code']));
+      expect(recordedInstalledPlanner()).toBe('claude-code');
+      await starting;
+    } finally {
+      fs.rmSync(h.workspace, { recursive: true, force: true });
+    }
   });
 });
 

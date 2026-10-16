@@ -4,7 +4,7 @@ import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
   saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReady, describePlannerNotReady, CHAT_COMMANDS, taskStartedNotice,
   createEmptyPlan, markRequestFor, pastGateConfirmation, titledRefs, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner, type TaskRowAction,
-  type ExecutionCommand,
+  type ExecutionCommand, installedPlannerDetected,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit } from '../shared/protocol';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
@@ -109,8 +109,14 @@ export function plannerPreflightError(config: PlanManagerDeps['config']): string
   return reason ? describePlannerNotReady(reason, CHAT_COMMANDS) : null;
 }
 
-/** Reports the preflight failure to the chat and returns false when not ready. */
-function plannerReady(deps: PlanManagerDeps): boolean {
+/**
+ * Reports the preflight failure to the chat and returns false when not ready.
+ * Judged once the activation probe has answered (ADR-0009): before that, the
+ * planner in effect is the openrouter fallback an installed agent replaces,
+ * and a goal typed that early would be refused for want of a key.
+ */
+async function plannerReady(deps: PlanManagerDeps): Promise<boolean> {
+  await installedPlannerDetected();
   const error = plannerPreflightError(deps.config);
   if (!error) return true;
   deps.chatProvider.showError(error);
@@ -120,6 +126,7 @@ function plannerReady(deps: PlanManagerDeps): boolean {
 /** The session owns the turn — its busy state and its stop; a failure is all that is left to report. */
 async function inPlannerTurn(deps: PlanManagerDeps, run: () => Promise<void>): Promise<void> {
   try {
+    await installedPlannerDetected();
     await run();
   } catch (err) {
     reportPlannerError(err, deps);
@@ -140,7 +147,7 @@ export async function handleStartPlanning(
   deps: PlanManagerDeps,
   pendingRunners?: RunnerId[],
 ): Promise<void> {
-  if (!plannerReady(deps)) return;
+  if (!(await plannerReady(deps))) return;
   const runners = resolveRunnerSet(deps, pendingRunners, deps.getCurrentPlan().runners);
   if (!runners) {
     return;
@@ -278,7 +285,7 @@ export async function handleSendMessage(
   pendingRunners: RunnerId[] | undefined,
   setPendingRunners: (r: RunnerId[] | undefined) => void,
 ): Promise<void> {
-  if (!plannerReady(deps)) return;
+  if (!(await plannerReady(deps))) return;
 
   setPendingRunners(pendingRunners);
 

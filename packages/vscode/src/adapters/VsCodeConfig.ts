@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, parseMaxParallel, normalizeGeminiModel, resolveProvider, isApiProvider, isPlannerBackend, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET } from '@ordewell/core';
+import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, parseMaxParallel, normalizeGeminiModel, resolveProvider, isApiProvider, isPlannerBackend, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET, recordedInstalledPlanner } from '@ordewell/core';
 import type { ProviderModelLists, SettingsService } from '@ordewell/core';
 import { SecretStore, type ApiProvider, type SecretKey } from './SecretStore';
 
@@ -7,6 +7,9 @@ export class VsCodeConfig extends BaseConfig {
   private get config() { return vscode.workspace.getConfiguration('ordewell'); }
 
   private _provider: PlannerBackendId | null = null;
+  // The installed agent `_provider` was resolved against: the activation probe
+  // can answer after a read has already settled on the openrouter fallback.
+  private _providerDefault: PlannerBackendId | null = null;
   private _providerModelLists: ProviderModelLists | null = null;
 
   constructor(private readonly secretStore?: SecretStore) {
@@ -148,7 +151,8 @@ export class VsCodeConfig extends BaseConfig {
   get rawAiProvider(): string { return this.config.get<string>('aiProvider', '') || ''; }
 
   get aiProvider(): PlannerBackendId {
-    if (this._provider) return this._provider;
+    if (this._provider && this._providerDefault === recordedInstalledPlanner()) return this._provider;
+    this._providerDefault = recordedInstalledPlanner();
     const env = this.rawAiProvider;
     if (env && isPlannerBackend(env)) {
       this._provider = env;
@@ -162,7 +166,7 @@ export class VsCodeConfig extends BaseConfig {
         return this._provider;
       }
     }
-    this._provider = BaseConfig.detectProvider('openrouter');
+    this._provider = this.detectProvider();
     return this._provider;
   }
 
