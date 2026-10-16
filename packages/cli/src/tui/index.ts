@@ -72,12 +72,14 @@ export async function handleTui(subArgs: string[]): Promise<void> {
     // The level the daemon plans with: the saved one, unless the environment overrides it (ADR-0030).
     // The run settings are seeded from the same file because the first frame is
     // drawn before the daemon answers, and the welcome's autorun line is only
-    // truthful once they are known.
+    // truthful once they are known. That holds only for a daemon this process
+    // spawned, which inherits its settings path; an attached one may read a
+    // different file (ORDEWELL_SETTINGS_PATH), and nothing it reports names that
+    // file, so the welcome stays silent until its own settings arrive.
     initial: {
       workspace,
       autonomous: settings.autonomousMode(),
-      runSettings: settings.getRunSettings(),
-      runSettingsKnown: true,
+      ...(ownedAtLaunch ? { runSettings: settings.getRunSettings(), runSettingsKnown: true } : {}),
       mouseCapture,
       taskSkills,
     },
