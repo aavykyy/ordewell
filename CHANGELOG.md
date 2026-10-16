@@ -12,7 +12,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 - **The first screen says nothing runs until you approve the plan.** The
   terminal welcome and VS Code's empty chat state it, and warn instead when
-  autorun is on, since a plan then starts as soon as the planner submits it.
+  autorun is on, since a plan then starts as soon as the planner submits it. The line
+  appears only once autorun is known to be off, never while that is unknown.
 
 ### Fixed
 
@@ -23,7 +24,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   planner you pick with `/planner`. The choice is detected on each start and
   never written to your settings. A goal typed while the daemon is still
   looking waits for the answer. A vendor model left over from an earlier
-  setup no longer overrides the agent unless that vendor's key is set.
+  setup no longer overrides the agent unless that vendor's key is set. A
+  message restored from before a reload is never lost when the planner cannot
+  run: it waits and goes with your next message. Stop works while the first
+  turn is still waiting on that look. Adding or removing a key takes effect at
+  once, an explicit `AI_PROVIDER` or `/planner` choice always wins, and the
+  check looks at the selected provider's own key.
 - **A planner that cannot plan points to `/planner`, not to an OpenRouter
   key.** The refusal comes before the planner turn starts, in the terminal, in
   VS Code and from `ordewell plan` (which names `ordewell planner`), and it
