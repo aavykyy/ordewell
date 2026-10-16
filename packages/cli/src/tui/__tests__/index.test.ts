@@ -128,7 +128,9 @@ describe('handleTui', () => {
     expect(apiClient.ApiClient).toHaveBeenCalledWith(4000, process.cwd());
     const frame = fakeTerminal.draw.mock.calls[0][0] as string[];
     expect(frame).toHaveLength(24);
-    expect(frame.join('\n')).toContain('Ordewell');
+    // Painted before the daemon has answered whether any agent is installed.
+    expect(frame.join('\n')).toContain('Detecting coding agents…');
+    expect(frame.join('\n')).not.toMatch(/needs one coding agent|not set|none enabled/);
   });
 
   it('leaves the alternate screen before printing a fatal error, so the message survives', async () => {

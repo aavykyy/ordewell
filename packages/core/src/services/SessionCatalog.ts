@@ -6,12 +6,13 @@ import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { IConfig } from '../interfaces/IConfig';
 import { filterModelsForPrompt } from './ModelAllowlistResolver';
 import { runnerModesFrom, resolveDefaultMode, type RunnerModeInfo } from './ModeResolver';
+import { runnerForProvider } from './ProviderRegistry';
 import type { DiscoveredModel, RunnerId } from '../models/Task';
 
 type ModelsByRunner = Partial<Record<RunnerId, DiscoveredModel[]>>;
 
 export interface SessionCatalogDeps {
-  config: Pick<IConfig, 'enabledRunners' | 'autonomousMode'>;
+  config: Pick<IConfig, 'enabledRunners' | 'autonomousMode' | 'aiProvider'>;
   registry: Pick<RunnerRegistry, 'getManifest'>;
   modelResolver: Pick<ModelResolver, 'modelsForRunners' | 'getCachedRunnerModels'>;
   /** Read at each call: a toggle or allowlist edit made since the session was built counts (#69). */
@@ -159,7 +160,15 @@ export class SessionCatalog {
    * and variants.
    */
   async planning(runners: RunnerId[]) {
-    const modelsByRunner = await this.discover(runners);
+    // The planning agent's own catalog too, though it is not offered: it is
+    // the evidence its model is judged by, and OpenCode's ids share an
+    // OpenRouter slug's shape, so a cold one would let a model left from an
+    // old setup reach the agent when it is not also a task runner.
+    const planner = runnerForProvider(this.deps.config.aiProvider);
+    const [modelsByRunner] = await Promise.all([
+      this.discover(runners),
+      planner && !runners.includes(planner) ? this.deps.modelResolver.modelsForRunners([planner]) : undefined,
+    ]);
     return {
       modelsByRunner,
       filteredModels: filterModelsForPrompt(modelsByRunner, this.allowlist()),

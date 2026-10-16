@@ -51,6 +51,14 @@ export interface HostState {
   configuredProviders: AiProvider[];
   /** Who plans (ADR-0009): the backends offered, the one in use, and its runner + effort. */
   planner: { backends: PlannerBackend[]; provider: string; runner?: string; effort?: string };
+  /**
+   * Whether the host has said who can plan, and which agents are installed.
+   * Both come from its probe for coding agents, after the catalog may already
+   * be in; until then the first screen says it is detecting rather than that
+   * nothing is installed.
+   */
+  plannerKnown: boolean;
+  runnersKnown: boolean;
   isReady: boolean;
   modelDiscoveryErrors: Record<string, string>;
   skills: { name: string; description: string; appliesTo?: 'planner' | 'task' }[];
@@ -102,6 +110,8 @@ export const INITIAL_HOST_STATE: HostState = {
   modelOptions: [],
   configuredProviders: [],
   planner: { backends: [], provider: '' },
+  plannerKnown: false,
+  runnersKnown: false,
   isReady: false,
   modelDiscoveryErrors: {},
   skills: [],
@@ -307,6 +317,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
     case 'setPlannerBackends':
       return {
         ...state,
+        plannerKnown: true,
         planner: {
           backends: action.backends ?? [],
           provider: action.provider ?? '',
@@ -333,6 +344,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
         runnerList: list.map((r: RunnerMeta) => ({ id: r.id, displayName: r.displayName })),
         enabledRunnerIds: ids,
         runners,
+        runnersKnown: true,
       };
     }
 

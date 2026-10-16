@@ -101,12 +101,19 @@ export abstract class BaseConfig implements IConfig {
   get geminiBaseUrl(): string | undefined { return process.env.GEMINI_BASE_URL || undefined; }
   get openaiCompatibleBaseUrl(): string { return process.env.OPENAI_COMPATIBLE_BASE_URL || ''; }
   get openaiCompatibleApiKey(): string { return process.env.OPENAI_COMPATIBLE_API_KEY || ''; }
-  get orchestratorModel(): string { return process.env.ORCHESTRATOR_MODEL || ''; }
+  // Every planner backend spawns with this, so even a host with no settings of
+  // its own reads the environment through the planner rule: a named coding
+  // agent is never handed a vendor slug left in ORCHESTRATOR_MODEL.
+  get orchestratorModel(): string { return this.environmentPlannerChoice().model; }
   // Grunt reading must never cost strong-model prices: subagents follow the
   // (cheap) planner model unless explicitly pinned elsewhere.
   get researchSubagentModel(): string { return process.env.ORDEWELL_SUBAGENT_MODEL || this.orchestratorModel; }
   get geminiModel(): string { return normalizeGeminiModel(process.env.GEMINI_MODEL || ''); }
-  get plannerThinkingEffort(): string | undefined { return process.env.ORDEWELL_PLANNER_EFFORT || undefined; }
+  get plannerThinkingEffort(): string | undefined { return this.environmentPlannerChoice().effort || undefined; }
+
+  private environmentPlannerChoice(): ResolvedChoice {
+    return this.plannerChoiceFor(this.aiProvider, { model: process.env.ORCHESTRATOR_MODEL || '', effort: process.env.ORDEWELL_PLANNER_EFFORT || '' });
+  }
 
   // --- New preset getters ---
 

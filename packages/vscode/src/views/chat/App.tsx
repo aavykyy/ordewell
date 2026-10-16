@@ -61,12 +61,14 @@ function runSettingsSummary(run: GlobalRunSettings | undefined, runSettings: Run
   );
 }
 
+const DETECTING = 'Detecting coding agents…';
+
 export default function App() {
   const [host, dispatch] = useReducer(reduceHost, INITIAL_HOST_STATE);
   const {
     conversation, plan, isExecuting, isResearchActive, conversationBusy, error, models, modelsByRunner,
     runnerList, enabledRunnerIds, runners, held, unsent, modesByRunner, runnerNotice, modelConfig,
-    modelOptions, configuredProviders, planner, isReady, modelDiscoveryErrors,
+    modelOptions, configuredProviders, planner, plannerKnown, runnersKnown, isReady, modelDiscoveryErrors,
     skills, taskSkills, checkpoint, taskOutput, run, dockExpanded, dockHeight, settingsRequest,
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
@@ -789,9 +791,13 @@ export default function App() {
           </span>
           {setupCollapsed && (
             <span className="setup-panel-summary">
-              {planner.backends.find((b) => b.id === planner.provider)?.label || 'No planner'}
-              {' · '}
-              {runners.length} runner{runners.length === 1 ? '' : 's'}
+              {plannerKnown
+                ? <>
+                    {planner.backends.find((b) => b.id === planner.provider)?.label || 'No planner'}
+                    {' · '}
+                    {runners.length} runner{runners.length === 1 ? '' : 's'}
+                  </>
+                : DETECTING}
             </span>
           )}
         </button>
@@ -863,7 +869,10 @@ export default function App() {
                 </button>
               );
             })}
-            {visibleRunners.length === 0 && (
+            {visibleRunners.length === 0 && !runnersKnown && (
+              <span className="setup-block-empty">{DETECTING}</span>
+            )}
+            {visibleRunners.length === 0 && runnersKnown && (
               <span className="setup-block-empty">
                 No coding agent detected — install {orNames(agentNames, 'a coding agent')}, then run <code>/refresh</code>.
               </span>
@@ -943,7 +952,15 @@ export default function App() {
           </div>
         )}
 
-        {!hasContent && isReady && !canPlan && (
+        {/* Who can plan comes from the probe for coding agents, which can answer after the catalog. */}
+        {!hasContent && isReady && !canPlan && !plannerKnown && (
+          <div className="loading-state">
+            <div className="loading-pulse" />
+            <p>{DETECTING}</p>
+          </div>
+        )}
+
+        {!hasContent && isReady && !canPlan && plannerKnown && (
           <GetStarted runnerNames={agentNames} onConfigure={handleConfigureApiKey} runSettings={host.runSettings} />
         )}
 

@@ -30,6 +30,9 @@ const screen = (over: Partial<TuiState> = {}): string[] =>
 
 const text = (over: Partial<TuiState> = {}): string => screen(over).join('\n');
 
+/** The daemon has answered who plans, which runners are installed and which keys are set. */
+const DETECTED = { plannerKnown: true, runnersKnown: true, providersKnown: true } satisfies Partial<TuiState>;
+
 /** The planner's settled reply, as the session broadcasts it. */
 const reply = (content: string): Action => ({
   type: 'sessionMessage', message: { type: 'planner_message', content, timestamp: '2026-09-27T10:00:00.000Z' },
@@ -289,6 +292,7 @@ describe('transcript', () => {
 
   it('names the planner and the runners in the setup summary', () => {
     const out = text({
+      ...DETECTED,
       plannerProvider: 'claude-code',
       orchestratorModel: 'claude-sonnet-4-5',
       runners: [
@@ -303,6 +307,7 @@ describe('transcript', () => {
 
   describe('setup rows', () => {
     const claude = {
+      ...DETECTED,
       plannerProvider: 'claude-code',
       orchestratorModel: 'opus',
       runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }],
@@ -340,13 +345,13 @@ describe('transcript', () => {
   });
 
   it('says what is missing when nothing can plan yet', () => {
-    const out = text();
+    const out = text(DETECTED);
     // Same order as the not-ready error: the no-key way in first, the vendor key second.
     expect(out).toMatch(/Claude Code, Codex or OpenCode.*\/planner.*no API key.*\/key/s);
   });
 
   it('treats a configured API provider as enough to plan', () => {
-    const out = text({ plannerProvider: 'openrouter', configuredProviders: ['openrouter'], orchestratorModel: 'x/y' });
+    const out = text({ ...DETECTED, plannerProvider: 'openrouter', configuredProviders: ['openrouter'], orchestratorModel: 'x/y' });
     expect(out).toContain('OpenRouter · x/y');
     expect(out).not.toMatch(/needs one coding agent/i);
   });

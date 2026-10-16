@@ -258,6 +258,7 @@ function reduceAction(state: TuiState, action: Action): Step {
             models: action.models,
             orchestratorModels: action.orchestratorModels ?? state.orchestratorModels,
             configuredProviders: action.providers ?? state.configuredProviders,
+            providersKnown: state.providersKnown || action.providers !== undefined,
             providerErrors: action.providerErrors ?? state.providerErrors,
             modesByRunner: action.modesByRunner ?? state.modesByRunner,
           },
@@ -309,6 +310,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step(refreshStepper(refillPicker({
         ...state,
         runners: action.runners,
+        runnersKnown: true,
         orchestratorModel: action.orchestratorModel ?? state.orchestratorModel,
       }, ['set-task-runner'])));
 
