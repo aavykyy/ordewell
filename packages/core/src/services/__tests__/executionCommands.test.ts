@@ -829,7 +829,7 @@ describe('the command seam\'s extension points', () => {
       scheduling: () => false, startsHeld: () => false, hasLiveWork: () => true, running: () => true, maxParallel: () => 3, runBlocked: () => false,
       dependencyMet: () => true, mergeGate: () => [], blockedBy: () => [], waitingRequests: () => [],
       runPlan: vi.fn(), startTask: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), retryTask: vi.fn(), skipTask: vi.fn(), continueTask: vi.fn(), resumeNow: vi.fn(),
-      messageTask: vi.fn(), denyRequest: vi.fn(), mergeAll: vi.fn(), record: vi.fn(), guardTripped: vi.fn(), heldEdit: () => false, asEdited: (taskId: string) => tasks.find((t) => t.id === taskId), deferUntilLanded: vi.fn(), queuedNotRun: vi.fn(),
+      messageTask: vi.fn(), denyRequest: vi.fn(), mergeAll: vi.fn(), record: vi.fn(), guardTripped: vi.fn(), heldEdit: () => false, editedTasks: () => tasks, deferUntilLanded: vi.fn(), queuedNotRun: vi.fn(),
     };
   }
 
@@ -883,12 +883,13 @@ describe('the command seam\'s extension points', () => {
   });
 
   it('with autorun on and Full, holds a start of a task the turn\'s own edit adds until the edit lands', async () => {
-    const host = { ...stubHost(), autorun: () => true, running: () => false, hasLiveWork: () => false, heldEdit: vi.fn(() => true) };
+    const edited = [task('t1', 1), task('t2', 2, { title: 'Add divide' })];
+    const host = { ...stubHost(), autorun: () => true, running: () => false, hasLiveWork: () => false, heldEdit: vi.fn(() => true), editedTasks: () => edited };
     const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
     const start: ExecutionCommand = { command: 'run_task', task: 'Add divide' };
 
-    expect(await commands.run(start, PLANNER)).toMatchObject({ ok: true, message: expect.stringMatching(/^Queued: start "Add divide" happens once your edit lands/) });
-    expect(host.deferUntilLanded).toHaveBeenCalledWith(start, PLANNER, 'start "Add divide"');
+    expect(await commands.run(start, PLANNER)).toMatchObject({ ok: true, message: expect.stringMatching(/^Queued: start task #2 "Add divide" happens once your edit lands/) });
+    expect(host.deferUntilLanded).toHaveBeenCalledWith(start, PLANNER, 'start task #2 "Add divide"');
     expect(host.record).not.toHaveBeenCalled();
   });
 
@@ -909,8 +910,31 @@ describe('the command seam\'s extension points', () => {
     expect(host.startTask).not.toHaveBeenCalled();
   });
 
+  it('in Guarded, refuses the supervisor\'s start of a task the user has not approved, without asking', async () => {
+    const host = { ...stubHost(), autonomous: () => false, running: () => false, hasLiveWork: () => false, taskApproved: () => false };
+    const request = vi.fn(async () => true);
+    const commands = new ExecutionCommands({ host, consent: { request }, supervisor: () => ({ kind: 'ask' }) });
+
+    expect(await commands.run({ command: 'run_task', task: 't1' }, { kind: 'supervisor', level: 'act' })).toEqual({
+      ok: false, outcome: 'refused', message: 'Task #1 "Task t1" was added after the user approved the plan, so it is not approved to run. Ask the user to start it, or to execute the plan, which approves it.',
+    });
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  // Seen live: run_plan behind an edit adding tasks answered Queued, and was refused only after the reply ended.
+  it('refuses at once a run of the plan behind the turn\'s own edit that adds tasks it may not start', async () => {
+    const edited = [task('t1', 1), task('t2', 2, { title: 'Add divide' })];
+    const host = { ...stubHost(), running: () => false, hasLiveWork: () => false, heldEdit: () => true, editedTasks: () => edited, taskApproved: (id: string) => id === 't1' };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    expect(await commands.run({ command: 'run_plan' }, PLANNER)).toEqual({
+      ok: false, outcome: 'refused', message: 'Task #2 "Add divide" was added after the user approved the plan, so it is not approved to run. Ask the user to execute the plan themselves, which approves it.',
+    });
+    expect(host.deferUntilLanded).not.toHaveBeenCalled();
+  });
+
   it('refuses at once a start of a task the turn\'s own edit removes, rather than queueing it', async () => {
-    const host = { ...stubHost(), running: () => false, hasLiveWork: () => false, heldEdit: () => true, asEdited: () => undefined };
+    const host = { ...stubHost(), running: () => false, hasLiveWork: () => false, heldEdit: () => true, editedTasks: () => [] };
     const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
 
     expect(await commands.run({ command: 'run_task', task: 't1' }, PLANNER)).toEqual({

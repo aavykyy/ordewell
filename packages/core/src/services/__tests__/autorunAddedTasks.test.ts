@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { taskOf } from './sessionTestKit';
+import { EMPTY_CONVERSATION, reduceConversation } from '../../conversation';
 import { changeSettings, ctx, NOW, prose, settled, supervised, task, until, type Env, type Options } from './supervisorTestKit';
 
 /**
@@ -64,28 +65,46 @@ describe('a task the planner adds after approval, with autorun on and Full', () 
     await addCache(env);
 
     const queued = await env.planner.tools().runTask!({ task: 'Add a cache' }, ctx);
-    expect(JSON.parse(queued.text).result).toMatch(/^Queued: start "Add a cache" happens once your edit lands/);
+    expect(JSON.parse(queued.text).result).toMatch(/^Queued: start task #2 "Add a cache" happens once your edit lands/);
     expect(env.run.spawnedIds()).toEqual(['t1']);
     await landEdit(env);
 
     await until(() => env.run.spawnedIds().includes(added(env)!.id));
   });
 
-  it('says a start queued behind the edit that is refused once it lands, to the user and to the next turn', async () => {
+  it('refuses at once a start behind the edit that could not run as edited, rather than queueing it', async () => {
     const env = await supervised([task('t1', 1)], AUTORUN_FULL);
     void env.session.continueConversation('add a cache after task 1 and run it');
     await until(() => env.planner.calls.length === 1);
     await env.planner.tools().editPlan!({ ops: [{ op: 'add', task: { title: 'Add a cache', prompt: 'add a cache', dependencies: ['#1'] } }] }, ctx);
+
+    const start = await env.planner.tools().runTask!({ task: 'Add a cache' }, ctx);
+
+    expect(start.isError).toBe(true);
+    expect(JSON.parse(start.text).reason).toBe('Task #2 "Add a cache" depends on task #1 "Task t1" (running), which has not finished. It can start once it has.');
+    await landEdit(env);
+    expect(env.run.spawnedIds()).toEqual(['t1']);
+  });
+
+  it('says a start queued behind the edit that is refused once it lands, to the user and to the next turn', async () => {
+    const env = await finishedRun();
+    await addCache(env);
     const queued = await env.planner.tools().runTask!({ task: 'Add a cache' }, ctx);
-    expect(JSON.parse(queued.text).result).toMatch(/^Queued: start "Add a cache"/);
+    expect(JSON.parse(queued.text).result).toMatch(/^Queued: start task #2 "Add a cache"/);
+    // Read at the start: the user turns autorun off before the reply ends.
+    changeSettings(env, { autorun: false });
 
     await landEdit(env);
     await settled();
 
-    const refusal = 'Task #2 "Add a cache" depends on task #1 "Task t1" (running), which has not finished. It can start once it has.';
+    const refusal = 'Task #2 "Add a cache" was added after the user approved the plan, so it is not approved to run. Ask the user to start it, or to execute the plan, which approves it.';
     const history = env.session.planState!.conversationHistory!;
     expect(history.filter((e) => e.execution?.outcome === 'refused').map((e) => e.execution!.detail)).toEqual([refusal]);
     expect(history.at(-1)).toMatchObject({ kind: 'system', content: `The queued start of task #2 "Add a cache" did not run: ${refusal}` });
+    // The chat surfaces fold the session's messages into this view; VS Code and the TUI draw its system lines.
+    const view = env.messages.reduce((v, message) => reduceConversation(v, message), EMPTY_CONVERSATION);
+    expect(view.blocks.filter((b) => b.type === 'message' && b.role === 'system').map((b) => b.type === 'message' && b.text))
+      .toContain(`The queued start of task #2 "Add a cache" did not run: ${refusal}`);
     void env.session.continueConversation('is it running?');
     await until(() => env.planner.calls.length === 2);
     expect(env.planner.calls[1].message).toContain(`Run update:\n- The queued start of task #2 "Add a cache" did not run: ${refusal}`);
@@ -138,12 +157,6 @@ describe('a task the planner adds after approval waits for the user', () => {
   it('with autorun off', async () => {
     const env = await finishedRun({ settings: { supervisorLevel: 'off', autorun: false }, config: { autonomousMode: true } });
     expect(await refusedStart(env)).toMatch(/was added after the user approved the plan/);
-  });
-
-  it('under Guarded, without asking on the card first', async () => {
-    const env = await finishedRun({ settings: { supervisorLevel: 'off', autorun: true }, config: { autonomousMode: false } });
-    expect(await refusedStart(env)).toMatch(/was added after the user approved the plan/);
-    expect(env.messages.filter((m) => m.type === 'approval_request')).toEqual([]);
   });
 
   it('when autorun is turned off after the task was added: the setting is read at the start', async () => {

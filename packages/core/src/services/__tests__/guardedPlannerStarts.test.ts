@@ -1,0 +1,178 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { taskOf } from './sessionTestKit';
+import { ctx, NOW, prose, settled, supervised, task, until, type Env, type Options } from './supervisorTestKit';
+
+/**
+ * Guarded means "ask the user first": in the user's own turn, a planner start
+ * of tasks the user has not approved yet asks them on the approval card,
+ * naming the tasks a yes approves, rather than being refused (ADR-0029). A
+ * start behind the turn's own held edit is judged before it is queued.
+ */
+
+beforeEach(() => {
+  vi.useFakeTimers({ now: NOW, toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+const GUARDED: Options = { settings: { supervisorLevel: 'off', autorun: true }, config: { autonomousMode: false } };
+
+/** A plan the user ran, its one task finished, and the user's next turn open. */
+async function finishedRun(options: Options = GUARDED): Promise<Env> {
+  const env = await supervised([task('t1', 1)], options);
+  env.run.of('t1').reportComplete({ status: 'done', summary: '' });
+  await until(() => taskOf(env.session, 't1')!.status === 'completed');
+  await settled();
+  void env.session.continueConversation('add a cache and a log, and run them');
+  await until(() => env.planner.calls.length === 1);
+  return env;
+}
+
+const titled = (env: Env, title: string) => env.session.planTasks.find((t) => t.title === title);
+const cards = (env: Env) => env.messages.flatMap((m) => (m.type === 'approval_request' && m.kind === 'task_start' ? [m] : []));
+const answer = (result: { text: string }) => JSON.parse(result.text) as { result?: string; reason?: string };
+
+async function addTwo(env: Env): Promise<void> {
+  const edit = await env.planner.tools().editPlan!({ ops: [
+    { op: 'add', task: { title: 'Add a cache', prompt: 'add a cache' } },
+    { op: 'add', task: { title: 'Add a log', prompt: 'add a log' } },
+  ] }, ctx);
+  expect(edit.isError).toBeFalsy();
+}
+
+describe('a Guarded planner start in the user\'s turn, of tasks the user has not approved', () => {
+  it('run_plan behind the turn\'s own edit answers that it asks the user once the edit lands', async () => {
+    const env = await finishedRun();
+    await addTwo(env);
+
+    const queued = await env.planner.tools().runPlan!({}, ctx);
+
+    expect(queued.isError).toBeFalsy();
+    expect(answer(queued).result).toBe('Queued: once your edit lands, as this reply ends, the user is asked on the approval card to approve and start task #2 "Add a cache" and task #3 "Add a log", and run the plan. Say so in your reply; you are not told what they answer.');
+    expect(cards(env)).toEqual([]);
+  });
+
+  it('asks once the edit lands, naming the added tasks; a yes approves them and runs the plan', async () => {
+    const env = await finishedRun();
+    await addTwo(env);
+    await env.planner.tools().runPlan!({}, ctx);
+
+    env.planner.calls[0].finish(prose('Added both; I will ask to run them.'));
+    await until(() => cards(env).length === 1);
+
+    expect(cards(env)[0]).toMatchObject({
+      subject: 'Run the plan',
+      detail: 'The planner wants to start work. Allowing approves task #2 "Add a cache" and task #3 "Add a log", added since you approved the plan, and starts them with the rest. Each task runs on its runner, in the mode the plan set.',
+    });
+    expect(env.run.spawnedIds()).toEqual(['t1']);
+    env.session.resolveApproval(cards(env)[0].id, true);
+
+    const cache = titled(env, 'Add a cache')!.id;
+    const log = titled(env, 'Add a log')!.id;
+    await until(() => env.run.spawnedIds().includes(cache) && env.run.spawnedIds().includes(log));
+    expect(env.session.planState!.approvedTasks).toEqual(expect.arrayContaining([cache, log]));
+  });
+
+  it('a no is declined: nothing starts, and the added tasks stay unapproved', async () => {
+    const env = await finishedRun();
+    await addTwo(env);
+    await env.planner.tools().runPlan!({}, ctx);
+    env.planner.calls[0].finish(prose('Added both.'));
+    await until(() => cards(env).length === 1);
+
+    env.session.resolveApproval(cards(env)[0].id, false);
+    await settled();
+
+    expect(env.run.spawnedIds()).toEqual(['t1']);
+    expect(env.session.planState!.approvedTasks).not.toContain(titled(env, 'Add a cache')!.id);
+    const history = env.session.planState!.conversationHistory!;
+    expect(history.filter((e) => e.kind === 'execution').at(-1)!.content).toBe('The planner asked to run the plan; you declined.');
+  });
+
+  it('run_task of a task the same reply adds asks once the edit lands, and a yes approves and starts it', async () => {
+    const env = await finishedRun();
+    await addTwo(env);
+
+    const queued = await env.planner.tools().runTask!({ task: 'Add a cache' }, ctx);
+
+    expect(answer(queued).result).toBe('Queued: once your edit lands, as this reply ends, the user is asked on the approval card to start task #2 "Add a cache", which approves it. Say so in your reply; you are not told what they answer.');
+    env.planner.calls[0].finish(prose('Added both.'));
+    await until(() => cards(env).length === 1);
+    expect(cards(env)[0]).toMatchObject({
+      subject: 'Start task #2 "Add a cache"',
+      detail: 'The planner wants to start work. Allowing approves task #2 "Add a cache", added since you approved the plan. It runs on claude-code in auto mode, as the plan set it.',
+    });
+    env.session.resolveApproval(cards(env)[0].id, true);
+
+    const cache = titled(env, 'Add a cache')!.id;
+    await until(() => env.run.spawnedIds().includes(cache));
+    expect(env.session.planState!.approvedTasks).toContain(cache);
+    expect(env.session.planState!.approvedTasks).not.toContain(titled(env, 'Add a log')!.id);
+  });
+
+  it('run_task of a task added in an earlier reply asks on the card at once', async () => {
+    const env = await finishedRun();
+    await addTwo(env);
+    env.planner.calls[0].finish(prose('Added both.'));
+    await settled();
+    void env.session.continueConversation('run the cache one');
+    await until(() => env.planner.calls.length === 2);
+
+    const pending = env.planner.tools().runTask!({ task: 'Add a cache' }, ctx);
+    await until(() => cards(env).length === 1);
+    env.session.resolveApproval(cards(env)[0].id, true);
+
+    expect(answer(await pending).result).toBe('Started task #2 "Add a cache".');
+    expect(env.session.planState!.approvedTasks).toContain(titled(env, 'Add a cache')!.id);
+  });
+
+  it('a start queued behind an edit that never lands is dropped with a notice, and nobody is asked', async () => {
+    const env = await finishedRun();
+    await addTwo(env);
+    await env.planner.tools().runPlan!({}, ctx);
+
+    env.session.abortPlannerTurn();
+    await settled();
+
+    expect(env.notices).toContainEqual(expect.objectContaining({ level: 'warn', message: 'Not done: run the plan waited for an edit that did not land.' }));
+    expect(cards(env)).toEqual([]);
+    expect(env.run.spawnedIds()).toEqual(['t1']);
+  });
+
+  it('still refuses what could not run whatever the user answered, before asking', async () => {
+    const env = await finishedRun();
+    const edit = await env.planner.tools().editPlan!({ ops: [
+      { op: 'add', task: { title: 'Add a cache', prompt: 'add a cache' }, handle: 'cache' },
+      { op: 'add', task: { title: 'Add a log', prompt: 'add a log', dependencies: ['cache'] } },
+    ] }, ctx);
+    expect(edit.isError).toBeFalsy();
+
+    const start = await env.planner.tools().runTask!({ task: 'Add a log' }, ctx);
+
+    expect(start.isError).toBe(true);
+    expect(answer(start).reason).toBe('Task #3 "Add a log" depends on task #2 "Add a cache" (not started), which has not finished. It can start once it has.');
+    env.planner.calls[0].finish(prose('Added both.'));
+    await settled();
+    expect(cards(env)).toEqual([]);
+  });
+});
+
+describe('a planner start of a plan the user never executed', () => {
+  it('is refused at once with the Execute plan message, never queued, even behind an edit in Guarded', async () => {
+    const env = await supervised([task('t1', 1)], { ...GUARDED, plan: { status: 'draft' }, execute: false });
+    void env.session.continueConversation('add a cache and run it');
+    await until(() => env.planner.calls.length === 1);
+    await env.planner.tools().editPlan!({ ops: [{ op: 'add', task: { title: 'Add a cache', prompt: 'add a cache' } }] }, ctx);
+
+    const start = await env.planner.tools().runPlan!({}, ctx);
+
+    expect(start.isError).toBe(true);
+    expect(answer(start).reason).toBe('The user has not approved this plan yet: they approve it by executing it themselves (Execute plan). Ask them to.');
+    env.planner.calls[0].finish(prose('Added it.'));
+    await settled();
+    expect(cards(env)).toEqual([]);
+    expect(env.run.spawnedIds()).toEqual([]);
+  });
+});

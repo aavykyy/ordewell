@@ -134,8 +134,8 @@ export interface ExecutionHost {
    * named — that lands only when its reply ends.
    */
   heldEdit(taskId?: string): boolean;
-  /** The task as the open turn's held edit leaves it; undefined when that edit removes it. */
-  asEdited(taskId: string): Task | undefined;
+  /** The plan's task tree as the open turn's held edit leaves it: as it is, when it holds none or one that would not apply. */
+  editedTasks(): readonly Task[];
   /** Run the command again, as the same actor, once the open turn's reply has landed its edit; `intent` names it if it never does. */
   deferUntilLanded(command: ExecutionCommand, actor: ExecutionActor, intent: string): void;
   /** A command deferred behind an edit did not run once the edit landed: the user is told, and so is the planner's next turn. */
@@ -172,7 +172,12 @@ interface Acted {
   id?: string;
 }
 
-type Prepared = { refusal: string } | { act: () => Promise<Acted> };
+/**
+ * `approves`: the tasks the start runs that the user has not approved, which
+ * a Guarded planner start in their turn asks them to approve rather than
+ * being refused for.
+ */
+type Prepared = { refusal: string } | { act: () => Promise<Acted>; approves?: Located[] };
 
 /**
  * The command seam (ADR-0029, #91): the one place an execution action from
@@ -202,23 +207,27 @@ export class ExecutionCommands {
     const command: ExecutionCommand = asked.command === 'message_task' && located?.paused
       ? { command: 'retry_task', task: asked.task, from: 'session', message: asked.text }
       : asked;
+    const consent = this.consent(actor, command.command);
     if ('task' in command && !located) {
-      // The turn's own edit may be adding it: under the autorun exception the start waits for it, as a start of an edited task does.
-      if (startsFromPrompt(command) && this.addedMayStart(actor) && this.host.heldEdit()) return this.defer(command, actor, undefined);
       const missing = `No task matches "${command.task}" in the current plan.`;
+      const naming = 'Name it by id, "#order" (a subtask "#order.sub") or exact title.';
+      if (actor.kind === 'user' || !this.host.heldEdit()) return this.refuse(command, actor, undefined, `${missing} ${naming}`);
+      // The turn's own edit may be adding it: a start the user is asked for, or one under the autorun exception, waits for it, as a start of an edited task does.
+      if (startsFromPrompt(command) && (this.addedMayStart(actor) || this.asksToApprove(actor))) {
+        return this.locate(command.task, this.host.editedTasks())
+          ? this.judgeAsEdited(command, actor, undefined, consent)
+          : this.refuse(command, actor, undefined, `${missing} Your edit does not add it either. ${naming}`);
+      }
       // A task the turn's own edit adds is not in the plan until the reply ends, and nothing then starts it on the turn's behalf.
-      return this.refuse(command, actor, undefined, actor.kind !== 'user' && this.host.heldEdit()
-        ? command.command === 'skip_task'
-          ? `${missing} If your edit adds it, a task you add in this reply cannot be skipped in it: leave it out of the edit instead.`
-          : `${missing} If your edit adds it, it lands as this reply ends, so it cannot start in this turn: tell the user, who starts it.`
-        : `${missing} Name it by id, "#order" (a subtask "#order.sub") or exact title.`);
+      return this.refuse(command, actor, undefined, command.command === 'skip_task'
+        ? `${missing} If your edit adds it, a task you add in this reply cannot be skipped in it: leave it out of the edit instead.`
+        : `${missing} If your edit adds it, it lands as this reply ends, so it cannot start in this turn: tell the user, who starts it.`);
     }
 
-    const consent = this.consent(actor, command.command);
     if (consent.kind === 'refuse') return this.refuse(command, actor, located, consent.reason);
     // The plan holds what runs (ADR-0029): a start the turn's own held edit changes waits for that edit to land.
     if (actor.kind !== 'user' && startsFromPrompt(command) && this.host.heldEdit(located?.task.id)) {
-      return (located && this.judgeAsEdited(command, actor, located)) ?? this.defer(command, actor, located);
+      return this.judgeAsEdited(command, actor, located, consent);
     }
 
     const first = this.prepare(command, actor, located);
@@ -229,7 +238,7 @@ export class ExecutionCommands {
     let act = first.act;
     if (consent.kind === 'ask') {
       const plan = this.host.tasks();
-      if (!(await this.deps.consent.request(this.question(command, actor, located)))) {
+      if (!(await this.deps.consent.request(this.question(command, actor, located, first.approves)))) {
         this.keep(command, actor, located, 'declined');
         return { ok: false, outcome: 'declined', message: `The user did not approve: ${this.intent(command, located)}. Do not ask again unless they say so.` };
       }
@@ -246,8 +255,10 @@ export class ExecutionCommands {
     } catch (err) {
       return this.refuse(command, actor, located, err instanceof Error ? err.message : String(err));
     }
-    // Autorun starts a plan as the user's standing instruction, so its start approves the plan as theirs does; so does a start under its exception for added tasks.
-    if ((actor.kind === 'user' || actor.kind === 'autorun' || this.addedMayStart(actor)) && STARTS.has(command.command)) {
+    // Autorun starts a plan as the user's standing instruction, so its start approves the plan as theirs does; so does a start under its exception
+    // for added tasks, and one the user allowed on the card, which named what it approves.
+    const approved = actor.kind === 'user' || actor.kind === 'autorun' || this.addedMayStart(actor) || this.asksToApprove(actor);
+    if (approved && STARTS.has(command.command)) {
       this.host.approve(located ? withSubtasks(located.task) : this.all().map(({ task }) => task.id));
     }
     this.keep(command, actor, located, 'done', doneDetail(command));
@@ -272,17 +283,19 @@ export class ExecutionCommands {
   }
 
   /**
-   * A start that waits for the turn's edit is judged now, against its task as
+   * A start that waits for the turn's edit is judged now, against the plan as
    * that edit leaves it — the edit counts as the change a retry needs — so one
-   * that could never run is refused while the caller still reads the answer.
+   * that could never run is refused while the caller still reads the answer,
+   * and one the user will be asked about says so. `located` is the task as the
+   * plan has it now, absent for a task the edit adds.
    */
-  private judgeAsEdited(command: ExecutionCommand, actor: ExecutionActor, located: Located): CommandOutcome | null {
-    const edited = this.host.asEdited(located.task.id);
-    if (!edited) return this.refuse(command, actor, located, `${capitalize(describe(located))} is removed by your edit, so it cannot start.`);
-    const asEdited = { task: edited, ref: located.ref, paused: pausedOnLimit(edited) };
-    const prepared = this.prepare(command, actor, asEdited);
+  private judgeAsEdited(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined, consent: Consent): CommandOutcome {
+    const tasks = this.host.editedTasks();
+    const asEdited = located ? this.located(located.task.id, tasks) : 'task' in command ? this.locate(command.task, tasks) : undefined;
+    if (located && !asEdited) return this.refuse(command, actor, located, `${capitalize(describe(located))} is removed by your edit, so it cannot start.`);
+    const prepared = this.prepare(command, actor, asEdited, tasks);
     if ('refusal' in prepared) return this.refuse(command, actor, located, prepared.refusal);
-    return this.tripped(command, actor, asEdited);
+    return this.tripped(command, actor, asEdited) ?? this.defer(command, actor, asEdited, consent.kind === 'ask' ? prepared.approves ?? [] : null);
   }
 
   private tripped(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined): CommandOutcome | null {
@@ -296,10 +309,16 @@ export class ExecutionCommands {
     return null;
   }
 
-  private defer(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined): CommandOutcome {
+  /** `approves` is null for a start that runs without asking, else what the user's yes would approve. */
+  private defer(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined, approves: readonly Located[] | null): CommandOutcome {
     const intent = this.intent(command, located);
     this.host.deferUntilLanded(command, actor, intent);
-    return { ok: true, message: `Queued: ${intent} happens once your edit lands, as this reply ends, so it runs as edited. Say so in your reply; you are not told how it goes.` };
+    return {
+      ok: true,
+      message: approves
+        ? `Queued: once your edit lands, as this reply ends, the user is asked on the approval card ${asking(command, intent, approves)}. Say so in your reply; you are not told what they answer.`
+        : `Queued: ${intent} happens once your edit lands, as this reply ends, so it runs as edited. Say so in your reply; you are not told how it goes.`,
+    };
   }
 
   /**
@@ -309,6 +328,16 @@ export class ExecutionCommands {
    */
   private addedMayStart(actor: ExecutionActor): boolean {
     return actor.kind === 'planner-turn' && this.host.autorun() && this.host.autonomous() && this.host.planApproved();
+  }
+
+  /**
+   * Guarded means "ask the user first": a planner start in the user's own
+   * turn asks, so tasks they have not approved go into the question rather
+   * than refusing it. The supervisor's starts stay within what the user
+   * approved (ADR-0029).
+   */
+  private asksToApprove(actor: ExecutionActor): boolean {
+    return actor.kind === 'planner-turn' && this.consent(actor, 'run_task').kind === 'ask';
   }
 
   /**
@@ -329,13 +358,17 @@ export class ExecutionCommands {
     }
   }
 
-  /** Whether the command can run now, and how. Read afresh after a question, since answering takes time. */
-  private prepare(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined): Prepared {
+  /**
+   * Whether the command can run now, and how, judged against `tasks`: the
+   * plan, or the plan as the turn's held edit leaves it. Read afresh after a
+   * question, since answering takes time.
+   */
+  private prepare(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined, tasks: readonly Task[] = this.host.tasks() ?? []): Prepared {
     switch (command.command) {
-      case 'run_plan': return this.prepareRunPlan(actor);
-      case 'run_task': return this.prepareStart(located!, actor, 'run');
+      case 'run_plan': return this.prepareRunPlan(actor, tasks);
+      case 'run_task': return this.prepareStart(located!, actor, 'run', tasks);
       case 'retry_task': return command.from === 'fresh'
-        ? this.prepareStart(located!, actor, 'retry')
+        ? this.prepareStart(located!, actor, 'retry', tasks)
         : located!.paused ? this.prepareResume(located!, actor, command.message) : this.prepareContinue(located!, actor, command.message);
       case 'stop_task': return this.prepareStop(located!);
       case 'stop_run': return this.prepareStopRun();
@@ -346,8 +379,8 @@ export class ExecutionCommands {
     }
   }
 
-  private prepareRunPlan(actor: ExecutionActor): Prepared {
-    const all = this.all();
+  private prepareRunPlan(actor: ExecutionActor, tasks: readonly Task[]): Prepared {
+    const all = this.all(tasks);
     const live = all.filter(({ task }) => this.host.running(task.id));
     if (this.host.hasLiveWork()) {
       return { refusal: `The plan is already running (${named(live)} ${live.length === 1 ? 'is' : 'are'} running). Start one more ready task with run_task, or wait.` };
@@ -355,18 +388,21 @@ export class ExecutionCommands {
     // A new run leaves a skipped task skipped, as it leaves a completed one done.
     const toRun = all.filter(({ task }) => task.type === 'ai' && task.status !== 'completed' && task.status !== 'skipped');
     if (toRun.length === 0) return { refusal: 'Every task has already completed: there is nothing left to run.' };
+    let approves: Located[] = [];
     // Autorun is the user's standing instruction: its run is the user's approval, as Execute plan is.
     if (actor.kind !== 'user' && actor.kind !== 'autorun') {
+      // Executing the plan is how the user first takes it as theirs, so no card stands in for it.
       if (!this.host.planApproved()) {
         return { refusal: 'The user has not approved this plan yet: they approve it by executing it themselves (Execute plan). Ask them to.' };
       }
-      const unapproved = this.addedMayStart(actor) ? [] : toRun.filter(({ task }) => !this.host.taskApproved(task.id));
-      if (unapproved.length > 0) {
-        const one = unapproved.length === 1;
-        return { refusal: `${capitalize(named(unapproved))} ${one ? 'was' : 'were'} added after the user approved the plan, so ${one ? 'it is' : 'they are'} not approved to run. Ask the user to execute the plan themselves, which approves ${one ? 'it' : 'them'}.` };
+      approves = this.addedMayStart(actor) ? [] : toRun.filter(({ task }) => !this.host.taskApproved(task.id));
+      if (approves.length > 0 && !this.asksToApprove(actor)) {
+        const one = approves.length === 1;
+        return { refusal: `${capitalize(named(approves))} ${one ? 'was' : 'were'} added after the user approved the plan, so ${one ? 'it is' : 'they are'} not approved to run. Ask the user to execute the plan themselves, which approves ${one ? 'it' : 'them'}.` };
       }
     }
     return {
+      ...(approves.length > 0 ? { approves } : {}),
       act: async () => {
         await this.host.runPlan(actor);
         if (this.host.runBlocked()) return { message: BLOCKED_RUN };
@@ -382,7 +418,7 @@ export class ExecutionCommands {
   }
 
   /** A start of one task: `run_task`, or a fresh `retry_task`, which also takes a task that failed or waits on the user. */
-  private prepareStart(located: Located, actor: ExecutionActor, how: 'run' | 'retry'): Prepared {
+  private prepareStart(located: Located, actor: ExecutionActor, how: 'run' | 'retry', tasks: readonly Task[]): Prepared {
     const { task } = located;
     const label = describe(located);
     if (task.type === 'user') return { refusal: `${capitalize(label)} is a user task: the user does it by hand, and no runner starts it.` };
@@ -401,29 +437,30 @@ export class ExecutionCommands {
         : located.paused ? 'Resume it in its saved session with retry_task from "session".' : 'Start a new attempt with retry_task.';
       return { refusal: `${capitalize(label)} ${statusWords(task)}. ${next}` };
     }
-    const failed = this.host.blockedBy(task.id).flatMap((id) => this.located(id) ?? []);
+    const failed = this.host.blockedBy(task.id).flatMap((id) => this.located(id, tasks) ?? []);
     if (task.status === 'blocked' || failed.length > 0) {
       return { refusal: `${capitalize(label)} is blocked${failed.length > 0 ? `: ${named(failed)} failed. Retry ${failed.length === 1 ? 'it' : 'them'} first` : '. Ask the user to skip it or fix what blocks it'}.` };
     }
-    const unapproved = this.unapproved(located, actor);
-    if (unapproved) return { refusal: unapproved };
+    const approval = this.unapproved(located, actor);
+    if (approval && 'refusal' in approval) return approval;
 
-    const unmet = task.dependencies.filter((id) => !this.host.dependencyMet(id)).flatMap((id) => this.located(id) ?? []);
+    const unmet = task.dependencies.filter((id) => !this.host.dependencyMet(id)).flatMap((id) => this.located(id, tasks) ?? []);
     if (unmet.length > 0) {
       const one = unmet.length === 1;
       return { refusal: `${capitalize(label)} depends on ${unmet.map((dep) => `${describe(dep)} (${depState(dep.task)})`).join(', ')}, which ${one ? 'has' : 'have'} not finished. It can start once ${one ? 'it has' : 'they have'}.` };
     }
-    const gate = this.host.mergeGate(task.id).flatMap((id) => this.located(id) ?? []);
+    const gate = this.host.mergeGate(task.id).flatMap((id) => this.located(id, tasks) ?? []);
     if (gate.length > 0) {
       return { refusal: `${capitalize(label)} waits for Merge all: the work of ${named(gate)} is not merged into the user's branch yet. Ask the user to merge (Merge all), or to force start it.` };
     }
     // A retry under a running scheduler is left to it, as the Retry button leaves it, so only a start of our own takes a slot.
-    const live = this.all().filter(({ task: t }) => this.host.running(t.id)).length;
+    const live = this.all(tasks).filter(({ task: t }) => this.host.running(t.id)).length;
     if (!(settled && this.host.scheduling()) && live >= this.host.maxParallel()) {
       return { refusal: `${live} tasks are already running, the most this session runs at once. Wait for one to finish, or stop one first.` };
     }
 
     return {
+      ...approval,
       act: async () => {
         // The Retry button's own path: it continues a run that ended on a failure, and hands the task to a scheduler that runs.
         if (settled) await this.host.retryTask(task.id, actor);
@@ -450,9 +487,10 @@ export class ExecutionCommands {
     const eligible = continuability(task);
     if (!eligible.ok) return { refusal: `${eligible.reason} A fresh retry (from "fresh") starts it over from its prompt.` };
     if (!message?.trim()) return { refusal: `Continuing ${label} in its saved session needs a message: what the runner should do next.` };
-    const unapproved = this.unapproved(located, actor);
-    if (unapproved) return { refusal: unapproved };
+    const approval = this.unapproved(located, actor);
+    if (approval && 'refusal' in approval) return approval;
     return {
+      ...approval,
       act: async () => {
         await this.host.continueTask(task.id, message, actor);
         if (this.host.runBlocked()) return { message: BLOCKED_RUN };
@@ -471,10 +509,11 @@ export class ExecutionCommands {
     const label = describe(located);
     const eligible = continuability(task);
     if (!eligible.ok) return { refusal: `${eligible.reason} A fresh retry (from "fresh") starts it over from its prompt.` };
-    const unapproved = this.unapproved(located, actor);
-    if (unapproved) return { refusal: unapproved };
+    const approval = this.unapproved(located, actor);
+    if (approval && 'refusal' in approval) return approval;
     const text = message?.trim();
     return {
+      ...approval,
       act: async () => {
         await this.host.resumeNow(task.id, text || undefined, actor);
         if (this.host.runBlocked()) return { message: BLOCKED_RUN };
@@ -593,27 +632,40 @@ export class ExecutionCommands {
     };
   }
 
-  /** Why a start is not the user's to have made, or null: the user's own call is its own approval. */
-  private unapproved(located: Located, actor: ExecutionActor): string | null {
+  /**
+   * Why a start is not the user's to have made, or the task it asks them to
+   * approve, or null: the user's own call is its own approval.
+   */
+  private unapproved(located: Located, actor: ExecutionActor): { refusal: string } | { approves: Located[] } | null {
     if (actor.kind === 'user' || actor.kind === 'autorun' || this.addedMayStart(actor) || this.host.taskApproved(located.task.id)) return null;
     const label = describe(located);
-    return this.host.planApproved()
-      ? `${capitalize(label)} was added after the user approved the plan, so it is not approved to run. Ask the user to start it, or to execute the plan, which approves it.`
-      : `The user has not approved ${label}: they approve the plan by executing it themselves (Execute plan), or a task by starting it. Ask them to.`;
+    if (!this.host.planApproved()) {
+      return { refusal: `The user has not approved ${label}: they approve the plan by executing it themselves (Execute plan), or a task by starting it. Ask them to.` };
+    }
+    if (this.asksToApprove(actor)) return { approves: [located] };
+    return { refusal: `${capitalize(label)} was added after the user approved the plan, so it is not approved to run. Ask the user to start it, or to execute the plan, which approves it.` };
   }
 
-  /** The Guarded question, on the card the user answers other planner requests on. */
-  private question(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined): ApprovalRequest {
+  /**
+   * The Guarded question, on the card the user answers other planner requests
+   * on. It names every task a yes approves, since a yes is the user's
+   * approval of them as Execute plan would be.
+   */
+  private question(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined, approves: readonly Located[] = []): ApprovalRequest {
     const subject = capitalize(this.intent(command, located));
     const how = located?.task.type === 'ai'
       ? ` It runs on ${located.task.assignedRunner}${located.task.taskMode ? ` in ${located.task.taskMode} mode` : ''}, as the plan set it.`
       : ' Each task runs on its runner, in the mode the plan set.';
+    const one = approves.length === 1;
+    const approving = approves.length === 0 ? '' : command.command === 'run_plan'
+      ? ` Allowing approves ${named(approves)}, added since you approved the plan, and starts ${one ? 'it' : 'them'} with the rest.`
+      : ` Allowing approves ${named(approves)}, added since you approved the plan.`;
     return {
       kind: 'task_start',
       perInvocation: true,
       subject,
       scope: subject,
-      detail: `${actor.kind === 'supervisor' ? 'The supervisor' : 'The planner'} wants to start work.${how}`,
+      detail: `${actor.kind === 'supervisor' ? 'The supervisor' : 'The planner'} wants to start work.${approving}${how}`,
     };
   }
 
@@ -651,18 +703,18 @@ export class ExecutionCommands {
     this.host.record(record, describeExecution(record, command, located?.paused));
   }
 
-  private all(): Located[] {
-    return flattenTasksWithParents(this.host.tasks() ?? []).map(({ task, ref }) => ({ task, ref, paused: pausedOnLimit(task) }));
+  private all(tasks: readonly Task[] = this.host.tasks() ?? []): Located[] {
+    return flattenTasksWithParents(tasks).map(({ task, ref }) => ({ task, ref, paused: pausedOnLimit(task) }));
   }
 
-  private located(id: string): Located | undefined {
-    return this.all().find(({ task }) => task.id === id);
+  private located(id: string, tasks?: readonly Task[]): Located | undefined {
+    return this.all(tasks).find(({ task }) => task.id === id);
   }
 
   /** A reference as a caller writes one — see {@link resolveTaskRef}. */
-  private locate(ref: string): Located | undefined {
-    const task = resolveTaskRef(this.host.tasks() ?? [], ref);
-    return task && this.located(task.id);
+  private locate(ref: string, tasks: readonly Task[] = this.host.tasks() ?? []): Located | undefined {
+    const task = resolveTaskRef(tasks, ref);
+    return task && this.located(task.id, tasks);
   }
 }
 
@@ -676,6 +728,12 @@ function queued(command: ExecutionCommand, located: Located | undefined): string
     case 'retry_task': return command.from === 'session' ? `continuation of ${label}` : `retry of ${label}`;
     default: return `start of ${label}`;
   }
+}
+
+/** What a Guarded start asks the user: "to approve and start task #2 "A", and run the plan". */
+function asking(command: ExecutionCommand, intent: string, approves: readonly Located[]): string {
+  if (approves.length === 0) return `to ${intent}`;
+  return command.command === 'run_plan' ? `to approve and start ${named(approves)}, and run the plan` : `to ${intent}, which approves it`;
 }
 
 /** A command that starts work from the task's prompt as the plan holds it. A continue starts from its message instead. */

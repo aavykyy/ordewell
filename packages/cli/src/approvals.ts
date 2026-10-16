@@ -114,7 +114,10 @@ export async function handleApprovalEvent(
     deps.write('  Approved automatically (--yes).\n');
   } else if (!interactive) {
     granted = false;
-    deps.write('  Denied: no interactive terminal. Re-run with --yes, or pre-approve via ORDEWELL_APPROVAL_ALLOW.\n');
+    // A start is asked every time, so no allowlist settles it: the user's own start is the way through.
+    deps.write(event.kind === 'task_start'
+      ? '  Not started: there is no terminal here to ask you. Start it yourself with `ordewell run`, or Execute plan in the TUI or VS Code.\n'
+      : '  Denied: no interactive terminal. Re-run with --yes, or pre-approve via ORDEWELL_APPROVAL_ALLOW.\n');
   } else {
     const answer = (await deps.ask('  Allow? [y/N] ')).trim().toLowerCase();
     granted = answer === 'y' || answer === 'yes';

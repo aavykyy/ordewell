@@ -715,7 +715,7 @@ export class Session {
       record: (record, text) => this.recordExecution(record, text),
       guardTripped: (trip) => this.supervision.guardTripped(trip),
       heldEdit: (taskId) => this.heldEdit(taskId),
-      asEdited: (taskId) => this.asEdited(taskId),
+      editedTasks: () => this.editedTasks(),
       deferUntilLanded: (command, actor, intent) => this.turnEffects.defer(command, actor, intent),
       queuedNotRun: (text) => {
         this.systemNote(text);
@@ -738,14 +738,18 @@ export class Session {
     return !!before && (!after || editedFields(before, after).length > 0);
   }
 
-  /** The task as the open turn's held edit leaves it: as it is, when it holds none or one that would not apply. */
-  private asEdited(taskId: string): Task | undefined {
+  /** The plan's tasks as the open turn's held edit leaves them: as they are, when it holds none or one that would not apply. */
+  private editedTasks(): readonly Task[] {
     const held = this.conversation.pendingOps();
-    const before = this.store.get(taskId);
-    if (!held || held.length === 0 || !this.plan) return before;
+    if (!held || held.length === 0 || !this.plan) return this.store.planTasks;
     const runners = this.editRunners();
     const result = applyTaskOps(this.store.planTasks, held, runners, this.catalog.edit(runners));
-    return result.ok ? flattenTasks(result.tasks).find((t) => t.id === taskId) : before;
+    return result.ok ? result.tasks : this.store.planTasks;
+  }
+
+  /** The task as the open turn's held edit leaves it; undefined when that edit removes it. */
+  private asEdited(taskId: string): Task | undefined {
+    return flattenTasks(this.editedTasks()).find((t) => t.id === taskId);
   }
 
   /** The open planner turn is the supervisor's, acting at Act: its edits and added tasks are its own (ADR-0029). */
@@ -779,7 +783,9 @@ export class Session {
   /** A line from Ordewell itself, kept in the transcript where it happened. */
   private systemNote(text: string): void {
     this.mutatePlan(() => {
-      this.conversation.append('assistant', text, { kind: 'system' });
+      // Surfaces take from the transcript only entries newer than the last they synced, so a note in that entry's millisecond would never show.
+      const newest = (this.plan?.conversationHistory ?? []).reduce((latest, e) => Math.max(latest, Date.parse(e.timestamp) || 0), 0);
+      this.conversation.append('assistant', text, { kind: 'system', timestamp: new Date(Math.max(Date.now(), newest + 1)).toISOString() });
       return true;
     });
   }
