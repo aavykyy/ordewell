@@ -166,6 +166,7 @@ export function applySettings(state: TuiState, settings: Partial<SettingsRespons
       typeof settings.orchestratorModel === 'string' ? settings.orchestratorModel : state.orchestratorModel,
     plannerProvider:
       typeof settings.aiProvider === 'string' ? settings.aiProvider : state.plannerProvider,
+    plannerKnown: state.plannerKnown || typeof settings.aiProvider === 'string',
     plannerEffort:
       typeof settings.plannerThinkingEffort === 'string' ? settings.plannerThinkingEffort : state.plannerEffort,
     plannerModels:

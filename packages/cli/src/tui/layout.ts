@@ -612,6 +612,8 @@ function welcomeLogo(restRows: number, rows: number, cols: number): string[] {
     .find((lines) => lines.every((line) => width(line) <= cols - 1) && lines.length + restRows <= rows) ?? [];
 }
 
+const DETECTING = 'Detecting coding agents…';
+
 /** `rows` is the pane the welcome is painted into. */
 function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
   const planner = plannerSetup(state);
@@ -620,10 +622,14 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     || state.runners.length > 0
     || state.configuredProviders.length > 0;
 
-  const plannerValue = planner.ready
-    ? [planner.label, state.orchestratorModel || style.yellow('no model'), plannerEffortLabel(state)]
-      .filter(Boolean).join(style.grey(' · '))
-    : style.yellow(planner.label === 'not set' ? 'not set' : `${planner.label} (unavailable)`);
+  // Both rows wait on the daemon's probe for coding agents, as its answers do.
+  const detecting = !state.plannerKnown || !state.runnersKnown;
+  const plannerValue = detecting
+    ? style.grey(DETECTING)
+    : planner.ready
+      ? [planner.label, state.orchestratorModel || style.yellow('no model'), plannerEffortLabel(state)]
+        .filter(Boolean).join(style.grey(' · '))
+      : style.yellow(planner.label === 'not set' ? 'not set' : `${planner.label} (unavailable)`);
 
   const prompt = wrap(style.bold('Describe a goal to start planning.'), Math.max(1, cols - 1));
   // Only true while autorun is off (ADR-0030); with it on, the same spot warns
@@ -639,7 +645,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     setupRow('Planner', plannerValue, '/planner', cols),
     setupRow(
       'Runners',
-      enabledRunners.length > 0 ? enabledRunners.join(', ') : style.yellow('none enabled'),
+      detecting ? style.grey(DETECTING) : enabledRunners.length > 0 ? enabledRunners.join(', ') : style.yellow('none enabled'),
       '/runners',
       cols,
     ),
@@ -647,7 +653,8 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     setupRow('Run', runSettingsValue(state), '/settings', cols),
     '',
   ];
-  const notice = canPlan
+  // Only once nothing usable was found: a key reaches the welcome with the catalog, after the probe.
+  const notice = canPlan || detecting || !state.providersKnown
     ? []
     : [
       ...wrap(

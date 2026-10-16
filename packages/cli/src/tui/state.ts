@@ -468,6 +468,16 @@ export interface TuiState {
    * first frame painted before the daemon answers.
    */
   runSettingsKnown: boolean;
+  /**
+   * Whether the daemon has named who plans and listed the installed runners.
+   * It answers both only once its probe for coding agents has, so until then
+   * the welcome says it is detecting: a first frame of "not set" and "none
+   * enabled" read as an install with nothing usable on it.
+   */
+  plannerKnown: boolean;
+  runnersKnown: boolean;
+  /** Whether `configuredProviders` came from the catalog; until then a key may be set and not yet reported. */
+  providersKnown: boolean;
   runAutoMerge: boolean | null;
   /** The current run's own level, and why its supervisor stopped if it did; null before any run. */
   runSupervisor: { level: SupervisorLevel; unsupervised?: string } | null;
@@ -720,6 +730,9 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     autonomous: true,
     runSettings: { ...RUN_SETTINGS_DEFAULTS },
     runSettingsKnown: false,
+    plannerKnown: false,
+    runnersKnown: false,
+    providersKnown: false,
     runAutoMerge: null,
     runSupervisor: null,
     mouseCapture: true,

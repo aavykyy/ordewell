@@ -39,7 +39,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   vendor URL or a removed key no longer blocks the installed agent, and a
   model you picked for one provider is not sent to another, nor a leftover
   vendor model to an agent you name with `AI_PROVIDER` or `/planner` (which
-  now refuses an agent that isn't installed).
+  now refuses an agent that isn't installed). That holds for an OpenCode
+  planner that runs none of the tasks and in VS Code too, and until the look
+  for installed agents answers, the first screen in the terminal and in VS
+  Code says it is detecting coding agents instead of reporting none.
 - **A planner that cannot plan points to `/planner`, not to an OpenRouter
   key.** The refusal comes before the planner turn starts, in the terminal, in
   VS Code and from `ordewell plan` (which names `ordewell planner`), and it

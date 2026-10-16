@@ -9,8 +9,20 @@ export class VsCodeConfig extends BaseConfig {
   private _providerModelLists: ProviderModelLists | null = null;
   private _pick: { model: string; provider: PlannerBackendId } | undefined;
 
-  constructor(private readonly secretStore?: SecretStore) {
+  /**
+   * `readAgentCatalog` reads the model ids a coding agent's discovery last
+   * listed, live; the resolver that holds them is built from this config, so
+   * it is passed as a reader rather than a catalog.
+   */
+  constructor(
+    private readonly secretStore?: SecretStore,
+    private readonly readAgentCatalog: (provider: PlannerBackendId) => readonly string[] = () => [],
+  ) {
     super();
+  }
+
+  protected agentCatalog(provider: PlannerBackendId): readonly string[] {
+    return this.readAgentCatalog(provider);
   }
 
   // --- Legacy getters ---

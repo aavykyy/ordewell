@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { SessionCatalog, type SessionCatalogDeps } from '../SessionCatalog';
 import { coerceAssignments } from '../ModelAllowlistResolver';
 import { createTask, type DiscoveredModel, type RunnerId } from '../../models/Task';
+import type { PlannerBackendId } from '../../interfaces/IConfig';
 
 const model = (modelId: string, variants: string[] = []): DiscoveredModel =>
   ({ modelId, modelLabel: modelId, variants: variants.map((id) => ({ id, label: id })) });
@@ -13,6 +14,7 @@ function setup(opts: {
   resolverCache?: Record<RunnerId, DiscoveredModel[]>;
   settings?: ReturnType<SessionCatalogDeps['settings']>;
   planRunners?: RunnerId[];
+  aiProvider?: PlannerBackendId;
 } = {}) {
   let settings = opts.settings ?? { enabledRunners: ['claude-code'] };
   let planRunners = opts.planRunners ?? [];
@@ -22,7 +24,7 @@ function setup(opts: {
     getCachedRunnerModels: vi.fn((runner: RunnerId) => opts.resolverCache?.[runner] ?? []),
   };
   const catalog = new SessionCatalog({
-    config: { enabledRunners: ['claude-code', 'codex'], autonomousMode: true },
+    config: { enabledRunners: ['claude-code', 'codex'], autonomousMode: true, aiProvider: opts.aiProvider ?? 'openrouter' },
     registry: { getManifest: (id: string) => ['claude-code', 'codex', 'opencode'].includes(id)
       ? { name: id, displayName: id, runner: { command: id }, features: {}, modelDiscovery: { method: 'hardcoded' }, modes: MODES }
       : undefined },
@@ -90,6 +92,16 @@ describe('SessionCatalog discovery cache', () => {
 
     setPlanRunners(['codex']);
     expect(ids(catalog.models().codex)).toEqual(['gpt-5']);
+  });
+
+  it('discovers the planning agent\'s own catalog with the runners it plans for, without offering it', async () => {
+    const { catalog, resolver } = setup({ aiProvider: 'opencode', discovered: { 'claude-code': [model('sonnet')], opencode: [model('opencode/deepseek-v4.1-flash')] } });
+
+    const { modelsByRunner } = await catalog.planning(['claude-code']);
+
+    expect(resolver.modelsForRunners).toHaveBeenCalledWith(['opencode']);
+    expect(Object.keys(modelsByRunner)).toEqual(['claude-code']);
+    expect(Object.keys(catalog.queryCatalog(['claude-code']).models)).toEqual(['claude-code']);
   });
 
   it('forgets everything on reset', async () => {

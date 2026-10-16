@@ -55,6 +55,8 @@ describe('run settings in the chat', () => {
   for (const autorun of [false, true]) {
     it(`waits for host settings on GetStarted and preserves autorun=${autorun} when planning becomes available`, () => {
       send({ type: 'setConfiguredProviders', providers: [] });
+      // Detection found no coding agent.
+      send({ type: 'setPlannerBackends', backends: [{ id: 'claude-code', label: 'Claude Code', kind: 'harness', runner: 'claude-code', usable: false }], provider: 'openrouter' });
       expect(document.querySelector('.get-started')).not.toBeNull();
       expect(document.body.textContent).not.toContain('Nothing runs until');
       expect(document.body.textContent).not.toContain('Autorun is on');

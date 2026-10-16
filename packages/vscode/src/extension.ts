@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { spawn as nodeSpawn } from 'child_process';
-import { createSession, CodexSandboxAvailability, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner } from '@ordewell/core';
+import { createSession, CodexSandboxAvailability, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner, runnerForProvider } from '@ordewell/core';
 import { ChatViewProvider } from './providers/ChatViewProvider';
 import { VsCodeConfig, moveAutonomyFromVsCodeSetting } from './adapters/VsCodeConfig';
 import { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
@@ -28,8 +28,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   try {
     const secretStore = new SecretStore(context.secrets);
     await secretStore.load();
-    const config = new VsCodeConfig(secretStore);
+    // Bound once the resolver exists, which is itself built from this config.
+    // eslint-disable-next-line prefer-const
+    let modelResolver: ModelResolver | undefined;
+    const config = new VsCodeConfig(secretStore, (provider) => {
+      const runner = runnerForProvider(provider);
+      return runner && modelResolver ? modelResolver.getCachedRunnerModels(runner).map((model) => model.modelId) : [];
+    });
     const runnerRegistry = new RunnerRegistry();
+    modelResolver = new ModelResolver(runnerRegistry, config);
     const settingsService = new SettingsService();
     await moveAutonomyFromVsCodeSetting(settingsService);
 
@@ -51,7 +58,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       runner: new StructuredRunner(),
       settingsService,
       plannerModelMemory: new PlannerModelMemory(settingsService),
-      modelResolver: new ModelResolver(runnerRegistry, config),
+      modelResolver,
       chatProvider: new ChatViewProvider(context.extensionUri),
       sessionFactory: createSession,
     }, vscode);

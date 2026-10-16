@@ -73,7 +73,7 @@ describe('a built-in runner declared by manifest and connector only, on the CLI'
   });
 
   it('is named by the first-run notice and the planner switch hint', async () => {
-    const welcome = render(initialState({ rows: 40, cols: 200 })).join('\n');
+    const welcome = render(initialState({ rows: 40, cols: 200, plannerKnown: true, runnersKnown: true, providersKnown: true })).join('\n');
     expect(welcome).toContain('Claude Code, Codex, OpenCode or Acme Agent');
 
     const api = {
