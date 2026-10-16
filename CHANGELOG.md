@@ -13,7 +13,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **The first screen says nothing runs until you approve the plan.** The
   terminal welcome and VS Code's empty chat state it, and warn instead when
   autorun is on, since a plan then starts as soon as the planner submits it. The line
-  appears only once autorun is known to be off, never while that is unknown.
+  appears only once autorun is known to be off, never while that is unknown,
+  so a terminal attached to an already-running daemon waits for that daemon's
+  own setting.
 
 ### Fixed
 
