@@ -82,8 +82,12 @@ export interface OrchestratorPoolDeps {
   runnerInstallation?: Pick<RunnerInstallation, 'filterInstalled' | 'plannerUsability'>;
 }
 
+interface PendingStart { stopped: boolean }
+
 export class OrchestratorPool {
   private sessions = new Map<string, Session>();
+  /** Starts waiting on the installed-planner probe, by the session they would run in. */
+  private pendingStarts = new WeakMap<Session, Set<PendingStart>>();
   private clients = new Map<string, Set<WebSocket>>();
   private registry: CoreRunnerRegistry = new RunnerRegistry();
   private modelResolver: ModelResolver;
@@ -130,8 +134,19 @@ export class OrchestratorPool {
    * to stop it.
    */
   private async plannerTurnMayStart(sessionId: string, session: Session): Promise<void> {
-    await installedPlannerDetected();
-    if (this.sessions.get(sessionId) !== session) throw new PlannerTurnDiscardedError();
+    // Stop has no turn to abort while the probe is out, so the wait itself is
+    // what it cancels: otherwise the goal the user stopped starts anyway.
+    const wait: PendingStart = { stopped: false };
+    let waits = this.pendingStarts.get(session);
+    if (!waits) this.pendingStarts.set(session, (waits = new Set()));
+    waits.add(wait);
+    try {
+      await installedPlannerDetected();
+    } finally {
+      waits.delete(wait);
+      if (waits.size === 0) this.pendingStarts.delete(session);
+    }
+    if (wait.stopped || this.sessions.get(sessionId) !== session) throw new PlannerTurnDiscardedError();
   }
 
   subscribe(sessionId: string, ws: WebSocket): void {
@@ -563,7 +578,18 @@ export class OrchestratorPool {
    * session that simply is not planning right now.
    */
   cancelPlanning(sessionId: string): boolean {
-    return this.sessions.get(sessionId)?.abortPlannerTurn() ?? false;
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    // Keyed by session, not id: a goal sent after the Stop replaces the
+    // session under the same id and its own wait must not be cancelled.
+    let cancelledWait = false;
+    for (const wait of this.pendingStarts.get(session) ?? []) {
+      if (!wait.stopped) cancelledWait = true;
+      wait.stopped = true;
+    }
+    // Both run: a turn can be in flight while a later one is still waiting.
+    const aborted = session.abortPlannerTurn();
+    return aborted || cancelledWait;
   }
 
   /**

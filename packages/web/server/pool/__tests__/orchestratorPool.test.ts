@@ -392,10 +392,12 @@ describe('OrchestratorPool.cancelPlanning', () => {
   });
 
   it('stops the planner turn the session holds — the session owns it, the pool only routes', async () => {
-    vi.spyOn(Session.prototype, 'startPlanning').mockReturnValue(new Promise<LegacyPlanState>(() => {}));
+    const start = vi.spyOn(Session.prototype, 'startPlanning').mockReturnValue(new Promise<LegacyPlanState>(() => {}));
     const abort = vi.spyOn(Session.prototype, 'abortPlannerTurn').mockReturnValue(true);
 
     void pool.startPlanning('session-abort', 'Add a widget', ['claude-code'], workspace);
+    // A Stop before the turn begins cancels the start instead (see the installed-planner tests).
+    await vi.waitFor(() => expect(start).toHaveBeenCalled());
 
     expect(pool.cancelPlanning('session-abort')).toBe(true);
     expect(abort.mock.contexts).toEqual([pool.session('session-abort')]);

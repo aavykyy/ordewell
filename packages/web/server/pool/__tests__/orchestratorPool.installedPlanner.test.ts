@@ -99,6 +99,43 @@ describe('OrchestratorPool default planner', () => {
     expect(startSpy).not.toHaveBeenCalled();
   });
 
+  it('Stop while waiting for the probe cancels the start: it answers true and no turn ever begins', async () => {
+    const { installation, answer } = gatedInstallation();
+    const pool = new OrchestratorPool({ runnerInstallation: installation });
+    void pool.detectInstalledPlanner();
+    const startSpy = vi.spyOn(Session.prototype, 'startPlanning').mockResolvedValue({} as LegacyPlanState);
+
+    const planning = pool.startPlanning('s1', 'ship it', ['claude-code'], workspace);
+    const settled = expect(planning).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
+    expect(pool.cancelPlanning('s1')).toBe(true);
+    answer();
+
+    await settled;
+    expect(startSpy).not.toHaveBeenCalled();
+    // Nothing is left to stop, so a second Stop has nothing to report.
+    expect(pool.cancelPlanning('s1')).toBe(false);
+    pool.destroyAll();
+  });
+
+  it('a goal sent after the Stop runs normally once detection resolves', async () => {
+    const { installation, answer } = gatedInstallation();
+    const pool = new OrchestratorPool({ runnerInstallation: installation });
+    void pool.detectInstalledPlanner();
+    const startSpy = vi.spyOn(Session.prototype, 'startPlanning').mockResolvedValue({} as LegacyPlanState);
+
+    const first = pool.startPlanning('s1', 'ship it', ['claude-code'], workspace);
+    const firstSettled = expect(first).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
+    pool.cancelPlanning('s1');
+    const second = pool.startPlanning('s1', 'ship it differently', ['claude-code'], workspace);
+    answer();
+
+    await firstSettled;
+    await second;
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    expect(startSpy).toHaveBeenCalledWith('ship it differently', ['claude-code']);
+    pool.destroyAll();
+  });
+
   it('reports the detected agent as the planner in effect', async () => {
     const { installation, answer } = gatedInstallation();
     const pool = new OrchestratorPool({ runnerInstallation: installation });
