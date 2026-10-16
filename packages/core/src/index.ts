@@ -22,6 +22,7 @@ export type {
   DiscoveredModel,
   LegacyPlanState,
   PlanState,
+  PlanStatus,
   ResearchLogEntry,
   ResearchStep,
   ResearchStepOutcome,

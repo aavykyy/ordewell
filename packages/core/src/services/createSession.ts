@@ -681,7 +681,7 @@ export class Session {
   private executionHost(): ExecutionHost {
     return {
       tasks: () => (this.plan ? this.store.planTasks : null),
-      planApproved: () => this.plan !== null && this.plan.status !== 'draft' && this.plan.status !== 'rejected',
+      planApproved: () => this.plan?.approved === true,
       taskApproved: (taskId) => this.plan?.approvedTasks?.includes(taskId) ?? false,
       approve: (taskIds) => this.approve(taskIds),
       autonomous: () => this.config.autonomousMode,
@@ -1470,6 +1470,7 @@ export class Session {
       // run starts cleanly; with nothing live, stopping has nothing to interrupt.
       this.orchestrator.stop();
 
+      plan.approved = true;
       plan.status = 'approved';
       this.store.clearLog();
       this.store.resetForRun();
@@ -1486,6 +1487,7 @@ export class Session {
     // Signing off a review is the user's approval of every task in the plan, as
     // executing it is (ADR-0029): without it the planner's starts refuse the
     // tasks as added since approval.
+    plan.approved = true;
     this.approve(flattenTasks(this.store.planTasks).map((t) => t.id));
     await this.withSave(() => this.orchestrator.approveReview('user'));
     return plan;
@@ -1833,8 +1835,11 @@ export class Session {
     if (adopting) this.supervision.restore(plan.supervision);
     this.goal = goal;
     this.workspace = workspace;
-    // Saved before tasks carried the user's approval: executing a plan approved every task it held.
-    if (!plan.approvedTasks && plan.status !== 'draft' && plan.status !== 'rejected') {
+    // Saved before approval had its own record: the status said it, and
+    // executing a plan approved every task it held. Read once, here, and never
+    // again — a surface rewrites the status for display.
+    plan.approved ??= plan.status !== 'draft' && plan.status !== 'rejected';
+    if (!plan.approvedTasks && plan.approved) {
       plan.approvedTasks = flattenTasks(plan.tasks).map((t) => t.id);
     }
     // The saved ledger is the session's own history: adopt it before the
