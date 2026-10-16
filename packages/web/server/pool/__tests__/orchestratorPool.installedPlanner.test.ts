@@ -4,8 +4,10 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import {
   CliAgentAiService, OpenAiService, Session, getProviderMeta, PlannerNotReadyError, PlannerTurnDiscardedError, PROVIDER_DETECT_PRIORITY,
-  resetInstalledPlanner, saveSession, type ConversationTurn, type LegacyPlanState, type PlannerBackendId, type PlannerUsability,
+  createTask, resetInstalledPlanner, saveSession, type ConversationTurn, type IRunner, type LegacyPlanState, type PlannerBackendId,
+  type PlannerUsability, type RunnerSpawnOptions,
 } from '@ordewell/core';
+import { FakeRunnerSession } from '@ordewell/core/testing';
 import { OrchestratorPool } from '../orchestratorPool';
 
 /**
@@ -188,6 +190,28 @@ describe('OrchestratorPool default planner', () => {
     await second;
     expect(startSpy).toHaveBeenCalledTimes(1);
     expect(startSpy).toHaveBeenCalledWith('ship it differently', ['claude-code']);
+    pool.destroyAll();
+  });
+
+  it('Stop while a restored message waits for the probe answers true, and autorun spawns nothing once the agent is found', async () => {
+    const { installation, answer } = gatedInstallation();
+    const runner = { spawn: vi.fn(async (opts: RunnerSpawnOptions) => new FakeRunnerSession('s1', opts.taskId)), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } satisfies IRunner;
+    const pool = new OrchestratorPool({ runnerInstallation: installation, runner });
+    pool.updateRunSettings({ autorun: true, supervisorLevel: 'off' });
+    void pool.detectInstalledPlanner();
+    const submitted: ConversationTurn = { kind: 'plan', tasks: [createTask({ id: 'p1', order: 1, title: 'Use Postgres', prompt: 'use it', assignedRunner: 'claude-code' })], text: '1. Use Postgres', researchLog: [] };
+    const agent = vi.spyOn(CliAgentAiService.prototype, 'startConversation').mockResolvedValue(submitted);
+    savedWithPendingMessage('stopped');
+    pool.adoptSavedSession('stopped', workspace);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(pool.cancelPlanning('stopped')).toBe(true);
+    answer();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(agent).not.toHaveBeenCalled();
+    expect(runner.spawn).not.toHaveBeenCalled();
+    expect(pool.cancelPlanning('stopped')).toBe(false);
     pool.destroyAll();
   });
 

@@ -236,6 +236,23 @@ export class PlanTurns {
   }
 
   /**
+   * The user's Stop while a turn waits at the planner gate: what waits there
+   * is the turn they stopped, though none has opened, so it ends as a stopped
+   * turn's inputs do — dropped, with each caller told it was stopped. The
+   * probe's answer then finds nothing to open; an input sent after the Stop
+   * waits for it afresh. False when nothing waits there.
+   */
+  stopWaiting(): boolean {
+    const plan = this.host.plan();
+    const waiting = plan?.pendingTurns ?? [];
+    if (!plan || !this.detecting || waiting.length === 0) return false;
+    this.take(plan, new Set(waiting.map((t) => t.id)));
+    this.host.persist();
+    for (const t of waiting) this.settle(t.id, (w) => w.reject(new PlannerTurnStoppedError()));
+    return true;
+  }
+
+  /**
    * The plan these turns served is gone (a new plan, another session adopted,
    * the session closed): the hold goes now, and every caller still waiting
    * hears that its turn was discarded. The turn in flight is the
