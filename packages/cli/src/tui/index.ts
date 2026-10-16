@@ -67,9 +67,20 @@ export async function handleTui(subArgs: string[]): Promise<void> {
   // mouse back for drag-select, and this env var makes that stick.
   const mouseCapture = process.env.ORDEWELL_TUI_MOUSE !== 'false' && process.env.ORDEWELL_TUI_MOUSE !== '0';
 
+  const settings = new SettingsService();
   const app = createApp({
     // The level the daemon plans with: the saved one, unless the environment overrides it (ADR-0030).
-    initial: { workspace, autonomous: new SettingsService().autonomousMode(), mouseCapture, taskSkills },
+    // The run settings are seeded from the same file because the first frame is
+    // drawn before the daemon answers, and the welcome's autorun line is only
+    // truthful once they are known.
+    initial: {
+      workspace,
+      autonomous: settings.autonomousMode(),
+      runSettings: settings.getRunSettings(),
+      runSettingsKnown: true,
+      mouseCapture,
+      taskSkills,
+    },
     draw: (frame) => terminal?.draw(frame),
     perform: (effect) =>
       runEffect(effect, {

@@ -944,7 +944,7 @@ export default function App() {
         )}
 
         {!hasContent && isReady && !canPlan && (
-          <GetStarted runnerNames={agentNames} onConfigure={handleConfigureApiKey} />
+          <GetStarted runnerNames={agentNames} onConfigure={handleConfigureApiKey} runSettings={host.runSettings} />
         )}
 
         {!hasContent && isReady && canPlan && (
