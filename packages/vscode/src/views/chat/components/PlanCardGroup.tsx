@@ -2,6 +2,7 @@ import TaskUsage from './TaskUsage';
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import TaskCard from './TaskCard';
 import NewTaskCard from './NewTaskCard';
+import ProposedTasks from './ProposedTasks';
 import type { TaskDraft } from './NewTaskCard';
 import type { RunnerMode, RunnerOption } from './TaskCard';
 import { Task, DiscoveredModel, TaskModelAssignment, RunTask, RunView } from '@ordewell/core';
@@ -311,6 +312,7 @@ export default function PlanCardGroup({
           );
         })}
       </div>
+      {run.heldEdit && <ProposedTasks held={run.heldEdit} />}
       {!isExecuting && onAddTask && (
         <NewTaskCard tasks={sorted} runners={runners} models={models}
           modelsByRunner={modelsByRunner} modesByRunner={modesByRunner}

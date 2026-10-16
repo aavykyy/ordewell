@@ -15,6 +15,7 @@ import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation
 import { skillLoadNotice, surfaceStep } from '../conversation/records';
 import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
 import { AUTORUN_OFF, AUTORUN_ON } from './PlanPrompts';
+import { heldEditTasks } from './heldEdit';
 
 /**
  * Per-runner model cap for the always-on catalog block. Generous enough that
@@ -173,6 +174,8 @@ interface UserTurn {
   input?: { entries: ConversationMessage[]; research: ResearchLogEntry[]; at: number };
   /** See {@link ReplyOptions.onCommit}. */
   onCommit?: () => void;
+  /** Surfaces were last told the turn holds an edit, so they are told when it no longer does. */
+  heldShown?: boolean;
 }
 
 /** A read made through a planner tool: refused once the turn's budget is gone, else answered, told to land when the budget asks it to. */
@@ -437,6 +440,7 @@ export class PlannerConversation {
     this.abandonTurn();
     if (!open) return;
     this.openTurn = null;
+    this.clearHeld(open);
     if (open.checkpoint) this.restore(open.checkpoint);
     this.host.broadcast({ type: 'planner_turn_ended', turnId: open.stream.turnId, outcome: 'error' });
   }
@@ -508,9 +512,33 @@ export class PlannerConversation {
    * submission replaces an earlier one. False when no user turn is open.
    */
   submit(submission: PlannerSubmission): boolean {
-    if (!this.openTurn) return false;
-    this.openTurn.submitted = submission;
+    const turn = this.openTurn;
+    if (!turn) return false;
+    turn.submitted = submission;
+    this.showHeld(turn, submission);
     return true;
+  }
+
+  /**
+   * Tell surfaces what the turn's edit would leave, from the same applier that
+   * lands it, so an edit that would not apply shows nothing. It stays shown
+   * from the moment it is handed in until it lands, is refused, or the turn
+   * ends: the backend's reply claims it, but it has not landed by then.
+   */
+  private showHeld(turn: UserTurn, held: PlannerSubmission | null): void {
+    const result = held?.kind === 'task_ops' ? this.host.validateOps(held.ops) : undefined;
+    if (!result?.ok) {
+      this.clearHeld(turn);
+      return;
+    }
+    turn.heldShown = true;
+    this.host.broadcast({ type: 'plan_edit_held', held: { turnId: turn.stream.turnId, tasks: heldEditTasks(this.host.tasks(), result.tasks) } });
+  }
+
+  private clearHeld(turn: UserTurn): void {
+    if (!turn.heldShown) return;
+    turn.heldShown = false;
+    this.host.broadcast({ type: 'plan_edit_held', held: null });
   }
 
   /**
@@ -938,6 +966,7 @@ export class PlannerConversation {
       throw interrupted(planner, err);
     } finally {
       if (this.openTurn === turn) this.openTurn = null;
+      this.clearHeld(turn);
       // Released before the end is announced, so a surface that sends its
       // next message on hearing it is not refused by the turn it heard end.
       release();
@@ -1137,6 +1166,7 @@ export class PlannerConversation {
       interpret: async (t) => {
         const refused = t.kind === 'plan' || t.kind === 'task_ops' ? userTurn.wakeUp?.refused(t.kind === 'plan' ? 'plan' : 'edit') : undefined;
         if (refused) {
+          this.clearHeld(userTurn);
           const errors = [refused];
           if (!ai.hasActiveConversation() || signal.aborted) return { done: (t.kind === 'plan' ? invalidPlan : invalidOps)(errors, t.researchLog) };
           return { retry: { errors, corrective: refused } };
@@ -1187,9 +1217,9 @@ export class PlannerConversation {
     const { turnId } = userTurn.stream;
     const skills = await checkOpSkills(turn.ops, this.host.taskSkills());
     this.assertStillCurrent(userTurn);
-    if (skills.errors.length > 0) return { errors: skills.errors.map((e) => e.message) };
+    if (skills.errors.length > 0) return this.refusedHeld(userTurn, skills.errors.map((e) => e.message));
     const result = this.host.validateOps(turn.ops);
-    if (!result.ok) return { errors: result.errors };
+    if (!result.ok) return this.refusedHeld(userTurn, result.errors);
 
     const now = new Date().toISOString();
     const content = `Tasks updated:\n- ${result.summary.join('\n- ')}`;
@@ -1212,10 +1242,18 @@ export class PlannerConversation {
         if (turn.said) this.host.broadcast({ type: 'planner_message', content: turn.said, timestamp: now, turnId, ...voice });
         this.host.broadcast({ type: 'planner_message', content, timestamp: now, turnId, ...voice });
         this.host.broadcastPlan();
+        // After the plan that carries it, so the edit is never missing from both.
+        this.clearHeld(userTurn);
       },
     );
     this.warnSkills(skills.warnings);
     return { plan: plan! };
+  }
+
+  /** The edit was refused as it landed: what it showed is not coming. */
+  private refusedHeld(userTurn: UserTurn, errors: string[]): { errors: string[] } {
+    this.clearHeld(userTurn);
+    return { errors };
   }
 
   /** Commit a settled (non-task_ops) turn through the host's mutation ritual. */

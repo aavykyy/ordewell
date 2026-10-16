@@ -71,7 +71,8 @@ function committed(session: Session, broadcast: ReturnType<typeof vi.fn<(msg: Se
     tasks: session.planTasks,
     runners: session.planState?.runners,
     lastMessage: { role: last?.role, content: last?.content, kind: last?.kind },
-    broadcasts: broadcast.mock.calls.filter(([msg]) => !(msg.type === 'planner_message' && msg.content === said)).map(([msg]) => msg.type),
+    // The preview of a held edit is the tool channel's alone: an envelope reply holds nothing until it settles.
+    broadcasts: broadcast.mock.calls.filter(([msg]) => !(msg.type === 'planner_message' && msg.content === said) && msg.type !== 'plan_edit_held').map(([msg]) => msg.type),
   };
 }
 
