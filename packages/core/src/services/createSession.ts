@@ -5,7 +5,7 @@ import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
 import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome } from './plannerTools';
 import { sharedMcpServer, type OrdewellMcpServer, type PlannerToolHandler } from './mcp';
-import { ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type PlannerSubmission, type RewindTarget, type WakeUpTurn } from './PlannerConversation';
+import { ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type PlannerSubmission, type RewindTarget, type WakeUpTurn } from './PlannerConversation';
 import { forkPlanState, type ForkedDialogue } from './conversationFork';
 import { PlanTurns } from './PlanTurns';
 import { RunSupervision, runOrigin } from './RunSupervision';
@@ -43,6 +43,7 @@ import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
 import { flattenTasks, keepExecutionState, stampOrigin, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskSnapshot, type RunnerId } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
 import { PlannerNotReadyError, plannerNotReadyFor } from './plannerReadiness';
+import { installedPlannerAnswered, installedPlannerDetected } from './InstalledPlanner';
 import type { IConfig, PlannerBackendId } from '../interfaces/IConfig';
 import type { IFileSystem } from '../interfaces/IFileSystem';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
@@ -452,6 +453,8 @@ export class Session {
   private readonly skillsService: Pick<SkillsService, 'findSkill' | 'listSkills' | 'searchedDirs' | 'forRoot'>;
   private readonly conversation: PlannerConversation;
   private readonly turns: PlanTurns;
+  /** Destroyed: a turn that waited for the planner to be found must not open on it. */
+  private closed = false;
   private readonly editor: PlanEditor;
   private readonly commands: ExecutionCommands;
   private readonly supervision: RunSupervision;
@@ -545,7 +548,7 @@ export class Session {
     });
 
     this.turns = new PlanTurns({
-      plan: () => this.plan,
+      plan: () => (this.closed ? null : this.plan),
       conversationBusy: () => this.conversation.isTurnInFlight,
       mayWake: () => this.supervision.mayWake(),
       persist: () => this.persist({ background: true }),
@@ -568,6 +571,8 @@ export class Session {
         return landed;
       },
       notice: (message) => this.notice('error', message),
+      plannerDetecting: () => (installedPlannerAnswered() ? null : installedPlannerDetected()),
+      assertPlannerReady: () => this.assertPlannerReady(),
     });
 
     this.supervision = new RunSupervision({
@@ -1080,12 +1085,37 @@ export class Session {
 
   /**
    * Throws {@link PlannerNotReadyError} when the planner this session's config
-   * selects cannot plan. The daemon calls it ahead of a turn, on the session's
-   * own config, so a model override sent with the request is the one judged.
+   * selects cannot plan. Judged on the session's own config, so a model
+   * override sent with the request is the one judged; every planner turn
+   * passes it, and a host may call it first to refuse before it builds on
+   * the session.
    */
   assertPlannerReady(): void {
     const reason = plannerNotReadyFor(this.config);
     if (reason) throw new PlannerNotReadyError(reason);
+  }
+
+  /**
+   * The planner gate for a turn {@link PlanTurns} does not open — an opening,
+   * plan generation, a compaction — the same one its turns pass: wait for the
+   * installed-planner probe, give up a turn whose plan or session went or
+   * whose caller stopped it meanwhile, then judge the planner in use now.
+   *
+   * Null when the turn may open at once: awaited regardless, the turn would
+   * take the conversation a tick late, and a message sent alongside it would
+   * no longer be refused as one sent during it.
+   */
+  private plannerTurnMayOpen(signal?: AbortSignal): Promise<void> | null {
+    if (installedPlannerAnswered()) {
+      this.assertPlannerReady();
+      return null;
+    }
+    const plan = this.plan;
+    return installedPlannerDetected().then(() => {
+      if (this.closed || this.plan !== plan) throw new PlannerTurnDiscardedError();
+      if (signal?.aborted) throw new PlannerTurnStoppedError();
+      this.assertPlannerReady();
+    });
   }
 
   /** Whether a planner turn — a reply, a compaction, plan generation — holds the conversation. */
@@ -1100,6 +1130,9 @@ export class Session {
   }
 
   async generatePlan(goal: string, runners: RunnerId[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {
+    // Before the plan scope is dropped, so a refusal leaves the plan held now as it was.
+    const opening = this.plannerTurnMayOpen(options?.signal);
+    if (opening) await opening;
     this.plan = null;
     this.goal = goal;
     this.remintSessionId();
@@ -1146,6 +1179,8 @@ export class Session {
    * settlement — is {@link PlannerConversation}'s; the Session hosts it.
    */
   async startPlanning(goal: string, runners: RunnerId[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {
+    const opening = this.plannerTurnMayOpen(options?.signal);
+    if (opening) await opening;
     this.plan = null;
     this.goal = goal;
     this.remintSessionId();
@@ -1226,6 +1261,8 @@ export class Session {
    */
   async compactConversation(signal?: AbortSignal): Promise<ConversationCompaction> {
     if (!this.plan) throw new ConversationEditError('No planning conversation to condense');
+    const opening = this.plannerTurnMayOpen(signal);
+    if (opening) await opening;
     return this.conversation.compact(signal);
   }
 
@@ -1826,6 +1863,7 @@ export class Session {
     // Planning research runs on a separate conduit from task execution — a
     // live spawn_research_agent/bash tool call would otherwise keep running
     // server-side after the client has already moved on to a new session.
+    this.closed = true;
     this.dropPlanScope();
     this.unlistenApprovals?.();
     this.unlistenApprovals = null;

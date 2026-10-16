@@ -42,7 +42,8 @@ export function plannerNotReady(config: PlannerReadinessConfig): PlannerNotReady
  * `plannerNotReady` judged on a host's own config — the one way every host
  * builds the preflight's input, so none can hand it a key the selected
  * planner's transport will not read (a stored OpenRouter key passing for an
- * OpenAI planner, which then failed inside the transport).
+ * OpenAI planner, which then failed inside the transport). Every planner turn
+ * judges through this too, so none can let through what another refuses.
  */
 export function plannerNotReadyFor(
   config: Pick<IConfig, 'aiProvider' | 'orchestratorModel' | 'planningModel' | 'openaiCompatibleBaseUrl' | 'getProviderApiKey'>,

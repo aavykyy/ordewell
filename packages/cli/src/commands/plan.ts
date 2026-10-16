@@ -1,12 +1,13 @@
 import { createInterface } from 'readline';
 import { allTasksOf, flag, flags, hasFlag, saveLastSession } from '../utils';
 import { ensureDaemon, resolvePort } from '../daemon';
-import { ApiClient, DaemonError } from '../apiClient';
+import { ApiClient } from '../apiClient';
 import { createApprovalHandler } from '../approvals';
 import { createStepLog, type LogLine } from './researchLog';
 import type { SerializedTask, DiscoveredModel } from '@ordewell/core';
-import { mintSessionId, taskOrderLabel, describePlannerNotReady, HEADLESS_CLI_COMMANDS } from '@ordewell/core';
+import { mintSessionId, taskOrderLabel } from '@ordewell/core';
 import type { PlanBody, WsEvent } from '../apiClient';
+import { headlessPlannerRefusal } from './shared';
 
 // The one-shot endpoint answers with the stored plan state (`pendingTasks`),
 // the conversation with the wire plan (`tasks`); read as `tasks` alone, a
@@ -309,9 +310,9 @@ export async function handlePlan(
     closeStream();
     if (isTty && lastLineLength > 0) process.stderr.write('\r\x1b[2K');
     process.stderr.write('\n');
-    // The daemon words a refusal for the terminal UI; a shell has no slash commands, so say it in its own.
-    if (err instanceof DaemonError && err.plannerNotReady) {
-      console.error(describePlannerNotReady(err.plannerNotReady, HEADLESS_CLI_COMMANDS));
+    const refusal = headlessPlannerRefusal(err);
+    if (refusal) {
+      console.error(refusal);
     } else {
       console.error(`Plan generation failed: ${err instanceof Error ? (err as Error).message : String(err)}`);
     }

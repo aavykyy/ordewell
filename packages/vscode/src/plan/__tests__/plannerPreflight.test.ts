@@ -6,7 +6,7 @@ import { SecretStore } from '../../adapters/SecretStore';
 import { __setConfig, __resetConfig } from '../../test/vscode.mock';
 
 function config(aiProvider: PlannerBackendId, apiKey: string, planningModel: string, openaiCompatibleBaseUrl = ''): VsCodeConfig {
-  return { aiProvider, planningModel, openaiCompatibleBaseUrl, getProviderApiKey: () => apiKey } as unknown as VsCodeConfig;
+  return { aiProvider, getProviderApiKey: () => apiKey, planningModel, orchestratorModel: '', openaiCompatibleBaseUrl } as unknown as VsCodeConfig;
 }
 
 /**

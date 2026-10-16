@@ -3,8 +3,8 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
-  Session, getProviderMeta, PlannerNotReadyError, PlannerTurnDiscardedError, PROVIDER_DETECT_PRIORITY, resetInstalledPlanner,
-  type LegacyPlanState, type PlannerBackendId, type PlannerUsability,
+  CliAgentAiService, OpenAiService, Session, getProviderMeta, PlannerNotReadyError, PlannerTurnDiscardedError, PROVIDER_DETECT_PRIORITY,
+  resetInstalledPlanner, saveSession, type ConversationTurn, type LegacyPlanState, type PlannerBackendId, type PlannerUsability,
 } from '@ordewell/core';
 import { OrchestratorPool } from '../orchestratorPool';
 
@@ -98,6 +98,60 @@ describe('OrchestratorPool default planner', () => {
 
     await expect(planning).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
     expect(startSpy).not.toHaveBeenCalled();
+  });
+
+  /** A saved session holding a message no planner turn answered before the daemon stopped. */
+  function savedWithPendingMessage(id: string): void {
+    const now = new Date().toISOString();
+    const plan: LegacyPlanState = {
+      tasks: [],
+      generatedAt: now,
+      status: 'draft',
+      runners: ['claude-code'],
+      lastUpdated: now,
+      conversationHistory: [
+        { role: 'user', content: 'ship it', timestamp: now },
+        { role: 'assistant', content: 'Which database?', timestamp: now },
+      ],
+      pendingTurns: [{ id: 'turn-1', source: 'user', text: 'Postgres', timestamp: now }],
+    };
+    saveSession(plan, 'ship it', workspace, id);
+  }
+
+  const reply: ConversationTurn = { kind: 'message', text: 'Noted.', researchLog: [] };
+
+  it('a restored message adopted before the probe answers waits for it, then is answered by the agent', async () => {
+    const { installation, answer } = gatedInstallation();
+    const pool = new OrchestratorPool({ runnerInstallation: installation });
+    void pool.detectInstalledPlanner();
+    const vendor = vi.spyOn(OpenAiService.prototype, 'startConversation').mockResolvedValue(reply);
+    const agent = vi.spyOn(CliAgentAiService.prototype, 'startConversation').mockResolvedValue(reply);
+    savedWithPendingMessage('restored');
+
+    pool.adoptSavedSession('restored', workspace);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(pool.session('restored').planState!.pendingTurns!.map((t) => t.text)).toEqual(['Postgres']);
+
+    answer();
+    await vi.waitFor(() => expect(agent).toHaveBeenCalledTimes(1));
+    expect(vendor).not.toHaveBeenCalled();
+    pool.destroyAll();
+  });
+
+  it('a restored message stays queued when no agent is installed and no key is set', async () => {
+    const { installation, answer } = gatedInstallation(false);
+    const pool = new OrchestratorPool({ runnerInstallation: installation });
+    void pool.detectInstalledPlanner();
+    const vendor = vi.spyOn(OpenAiService.prototype, 'startConversation').mockResolvedValue(reply);
+    savedWithPendingMessage('refused');
+
+    pool.adoptSavedSession('refused', workspace);
+    answer();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(vendor).not.toHaveBeenCalled();
+    expect(pool.session('refused').planState!.pendingTurns!.map((t) => t.text)).toEqual(['Postgres']);
+    pool.destroyAll();
   });
 
   it('Stop while waiting for the probe cancels the start: it answers true and no turn ever begins', async () => {

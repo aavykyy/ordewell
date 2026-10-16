@@ -3,7 +3,7 @@ import { latestTaskCommands } from '../shared/taskCommands';
 import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
   saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS, taskStartedNotice,
-  createEmptyPlan, markRequestFor, pastGateConfirmation, titledRefs, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner, type TaskRowAction,
+  createEmptyPlan, markRequestFor, pastGateConfirmation, titledRefs, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner, type TaskRowAction,
   type ExecutionCommand, installedPlannerDetected,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit } from '../shared/protocol';
@@ -92,11 +92,22 @@ export function reportPlannerError(err: unknown, deps: PlanManagerDeps): void {
   // The stop already ended the turn on screen; a discarded turn belonged to a
   // session the user has already left.
   if (isAbort) return;
+  // The session refuses a turn on a planner that cannot plan; the chat says
+  // so with its own commands, and as the way out rather than a failure.
+  if (err instanceof PlannerNotReadyError) {
+    deps.chatProvider.showError(describePlannerNotReady(err.reason, CHAT_COMMANDS));
+    return;
+  }
   const message = err instanceof Error ? err.message : String(err);
   deps.chatProvider.showError(`Planner failed: ${message}`);
 }
 
-/** The core rule (a harness planner needs no key, ADR-0009), worded with the chat's own commands. */
+/**
+ * The rule the session's own planner gate applies to every turn (a harness
+ * planner needs no key, ADR-0009), worded with the chat's own commands. Read
+ * per provider, as the vendor transport reads its key: a fallback to another
+ * vendor's key passed here only for the transport to refuse the turn.
+ */
 export function plannerPreflightError(config: PlanManagerDeps['config']): string | null {
   const reason = plannerNotReadyFor(config);
   return reason ? describePlannerNotReady(reason, CHAT_COMMANDS) : null;
@@ -122,7 +133,8 @@ export function cancelPendingPlannerStarts(session: Session): void {
 
 /**
  * Reports the preflight failure to the chat and returns false when not ready
- * or when the start was cancelled while it waited.
+ * or when the start was cancelled while it waited: a fast path ahead of the
+ * session's gate, so a goal is refused before the chat moves into planning.
  * Judged once the activation probe has answered (ADR-0009): before that, the
  * planner in effect is the openrouter fallback an installed agent replaces,
  * and a goal typed that early would be refused for want of a key.
@@ -136,7 +148,12 @@ async function plannerReady(deps: PlanManagerDeps, epoch: number): Promise<boole
   return false;
 }
 
-/** The session owns the turn — its busy state and its stop; a failure is all that is left to report. */
+/**
+ * The session owns the turn — its busy state, its stop, and its planner gate,
+ * which judges readiness; a failure is all that is left to report. The probe
+ * wait here is only so a Stop or a new session that lands in it cancels the
+ * start, which the session cannot see before it has a turn to abort.
+ */
 async function inPlannerTurn(deps: PlanManagerDeps, run: () => Promise<void>, epoch = startEpoch(deps.session)): Promise<void> {
   try {
     await installedPlannerDetected();

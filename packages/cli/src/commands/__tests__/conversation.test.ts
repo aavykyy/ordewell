@@ -220,4 +220,22 @@ describe('ordewell compact', () => {
     expect(exitCode).toBe(1);
     expect(stderr).toMatch(expected);
   });
+
+  it('words a planner that cannot plan with the shell\'s commands, not the terminal UI\'s', async () => {
+    const plannerNotReady = { code: 'no_key', provider: 'openrouter', label: 'OpenRouter', keyEnvVar: 'OPENROUTER_API_KEY' };
+    const srv = await daemon(({ url }) => url.includes('/load')
+      ? { body: adopted }
+      : { status: 409, body: { error: 'No planner is ready. Pick one with /planner', code: 'planner_not_ready', plannerNotReady } });
+    const { handleCompact } = await import('../conversation');
+
+    const { stderr, exitCode } = await capture(() => handleCompact(['--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    srv.close();
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain(
+      'Failed to condense: No planner is ready. Pick one with ordewell planner <id> — Claude Code, Codex and OpenCode plan with no API key. ' +
+      'To plan with OpenRouter instead, add OPENROUTER_API_KEY with ordewell key set openrouter <key>.',
+    );
+    expect(stderr).not.toContain('/planner');
+  });
 });

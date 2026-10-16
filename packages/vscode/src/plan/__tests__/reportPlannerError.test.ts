@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { PlannerTurnDiscardedError, PlannerTurnStoppedError } from '@ordewell/core';
+import { PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError } from '@ordewell/core';
 import { reportPlannerError, type PlanManagerDeps } from '../PlanManager';
 
 function harness() {
@@ -31,5 +31,11 @@ describe('reportPlannerError', () => {
     const { deps, showError } = harness();
     reportPlannerError(new PlannerTurnStoppedError({ cause: new Error('Request was aborted.') }), deps);
     expect(showError).not.toHaveBeenCalled();
+  });
+
+  it('words a planner the session refused with the chat\'s own commands, not as a failure', () => {
+    const { deps, showError } = harness();
+    reportPlannerError(new PlannerNotReadyError({ code: 'no_model', provider: 'openrouter', label: 'OpenRouter' }), deps);
+    expect(showError).toHaveBeenCalledWith('No planner model selected for OpenRouter. Pick one with /model set, or switch planner with /planner.');
   });
 });
