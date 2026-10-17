@@ -8,6 +8,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-10-17
+
 ### Fixed
 
 - **Switching planner no longer looks frozen behind a slow coding-agent CLI.**
@@ -38,6 +40,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   configuration. The macOS-only symlink-canonicalization test failures in
   `plannerRepoConfig` and `CliAgentAiService` are fixed by resolving the
   expected paths the way ADR-0028 already judges them.
+- **Contributors:** the architecture decision records live in eight folders under
+  `docs/adr/`, grouped by area, with a README that indexes them and says when a
+  decision deserves an ADR, where it goes and how to write one. ADR numbers and
+  rule IDs do not change, so citations in code and docs still resolve. Five small
+  ADRs (0007, 0019, 0021, 0031, 0039) and the worktree-isolation spec are folded
+  into the documents they amended, and the README lists the retired numbers.
+  `node scripts/verify-adr.mjs` runs in CI and fails on a citation, link, rule ID
+  or front matter that does not resolve.
 
 ## [0.10.3] - 2026-10-16
 
