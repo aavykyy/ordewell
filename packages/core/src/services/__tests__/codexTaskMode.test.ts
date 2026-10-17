@@ -6,6 +6,8 @@ import { CODEX_MANIFEST } from '../../plugins/builtin/codex.manifest';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { StructuredRunner } from '../StructuredRunner';
 import type { StructuredEvent } from '../../interfaces/IRunner';
+import { toTaskLogEvent } from '../../models/TaskLog';
+import { replayTaskLog } from '../../conversation/taskLog';
 import { mcpClientConfig } from '../mcp';
 import { CODEX_ORDEWELL } from '../harness/codexOrdewell';
 import { ApprovalPolicy, effectiveApprovalMode, type ApprovalModeSetting } from '../ApprovalPolicy';
@@ -579,6 +581,45 @@ describe('CodexAdapter task channels', () => {
     adapter.dispose();
   });
 
+  it('marks a turn that failed on the usage limit as one, with the exhausted window\'s reset', async () => {
+    const { adapter, proc } = await startedTask();
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('fix sum', (e) => e.type !== 'runner_loaded' && events.push(e));
+    proc.emitStdout(fixture('codex', 'usage-limit'));
+    await turn;
+
+    expect(events).toEqual([{
+      type: 'error',
+      message: "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later.",
+      usageLimit: { resetsAt: '2026-10-17T20:42:55.000Z' },
+    }]);
+    adapter.dispose();
+  });
+
+  it('marks the limit with no reset when no used-up window is known, and leaves other errors unmarked', async () => {
+    const limitError = { message: "You've hit your usage limit. Try again at 8:10 PM.", codexErrorInfo: 'usageLimitExceeded', additionalDetails: null };
+    // A used-up window whose reset has passed is not this limit's.
+    const stale = line({ method: 'account/rateLimits/updated', params: { rateLimits: { limitId: 'codex', primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1700000000 }, secondary: null } } });
+    const limited = await openTurn([stale, line({ method: 'error', params: { threadId: 'thr-task-1', turnId: 'turn-a', willRetry: false, error: limitError } })]);
+    expect(limited.events).toEqual([{ type: 'error', message: limitError.message, usageLimit: {} }]);
+    limited.adapter.dispose();
+
+    const throttled = await openTurn([line({ method: 'turn/completed', params: { threadId: 'thr-task-1', turn: { id: 'turn-a', status: 'failed', items: [], error: { message: 'Rate limit reached for gpt-5.5.', codexErrorInfo: 'rateLimitExceeded' } } } })]);
+    expect(throttled.events).toEqual([{ type: 'error', message: 'Rate limit reached for gpt-5.5.' }]);
+    throttled.adapter.dispose();
+  });
+
+  it('says nothing of a used-up window reported while no turn is in flight', async () => {
+    const { adapter, proc } = await startedTask();
+    const outOfTurn: AgentEvent[] = [];
+    adapter.onOutOfTurn((e) => outOfTurn.push(e));
+    proc.emitStdout(line({ method: 'account/rateLimits/updated', params: { rateLimits: { limitId: 'codex', primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1792269775 }, secondary: null, rateLimitReachedType: 'rate_limit_reached' } } }));
+    await tick();
+
+    expect(outOfTurn).toEqual([]);
+    adapter.dispose();
+  });
+
   it('reports a declined file change as a failed row, announcing a change it never saw start', async () => {
     const { adapter, proc } = await startedTask();
     const events: AgentEvent[] = [];
@@ -784,6 +825,21 @@ describe('a Codex task on the structured transport', () => {
     expect(session.getOutput()).toBe('› shell(npm test)\n› Update(src/sum.ts)\nFixed the sign in sum.ts.\n<<<ORDEWELL_DONE>>>\n');
     expect(chunks.some((chunk) => chunk.includes('<<<ORDEWELL_DONE>>>'))).toBe(true);
     expect(session.nativeSessionId()).toBe('thr-task-1');
+    session.kill();
+  });
+
+  it('shows a usage limit in the task log in Codex\'s words, and hands the limit and its reset to the session', async () => {
+    const { runner } = codexRunner([...handshake(), fixture('codex', 'usage-limit')]);
+    const session = await runner.spawn(spawnOptions);
+    const events: StructuredEvent[] = [];
+    session.onEvent((e) => events.push(e));
+    const ended = await new Promise((resolve) => session.onTurnEnd(resolve));
+
+    const message = "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later.";
+    expect(ended).toBe('failed');
+    expect(events).toContainEqual({ type: 'error', message, usageLimit: { resetsAt: '2026-10-17T20:42:55.000Z' } });
+    const log = replayTaskLog(events.flatMap((e) => toTaskLogEvent(e) ?? []));
+    expect(log.blocks).toContainEqual(expect.objectContaining({ type: 'message', role: 'error', text: message }));
     session.kill();
   });
 
