@@ -19,7 +19,7 @@ import { inboundFor } from './inbound';
  */
 export type OrdewellApi = Pick<ApiClient,
   | 'startConversation' | 'sendConversationMessage' | 'forceSendPlannerMessage' | 'executePlan' | 'stopExecution' | 'cancelPlanning'
-  | 'taskControl' | 'markTaskComplete' | 'markTaskIncomplete' | 'skipTask' | 'cancelResume' | 'resumeNow'
+  | 'taskControl' | 'markTaskComplete' | 'markTaskIncomplete' | 'skipTask' | 'cancelResume' | 'resumeNow' | 'cancelPlannerResend'
   | 'getTaskLogAttempts' | 'getTaskLog'
   | 'sendTaskMessage' | 'invokeTaskCommand' | 'removeQueuedTaskMessage' | 'forceSendTaskMessage' | 'forceSendQueuedTaskMessage'
   | 'interruptTask' | 'approveTaskCheckpoint' | 'rejectTaskCheckpoint' | 'continueTask'
@@ -620,6 +620,12 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     // user gets to read — no separate notice to repeat it. The daemon also
     // broadcast that summary; `redrawn` keeps a late socket copy of it from
     // landing as a second, spoken turn.
+    case 'cancelPlannerResend': {
+      const { cancelled } = await api.cancelPlannerResend(effect.sessionId);
+      dispatch({ type: 'notice', message: cancelled ? 'Resend cancelled: what waits goes with your next message.' : "Nothing waits on the planner's usage limit to be sent at a reset." });
+      await refreshPlan(deps, effect.sessionId);
+      return;
+    }
     case 'compactConversation': {
       const { plan } = await api.compactConversation(effect.sessionId);
       const inbound = inboundFor(deps.api, deps.dispatch, effect.sessionId);

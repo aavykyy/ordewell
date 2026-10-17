@@ -5,7 +5,7 @@ import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
 import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome } from './plannerTools';
 import { sharedMcpServer, type OrdewellMcpServer, type PlannerToolHandler } from './mcp';
-import { ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type PlannerSubmission, type RewindTarget, type WakeUpTurn } from './PlannerConversation';
+import { ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type PlannerSubmission, type RewindTarget, type WakeUpTurn } from './PlannerConversation';
 import { forkPlanState, type ForkedDialogue } from './conversationFork';
 import { PlanTurns, type PlanTurnInput } from './PlanTurns';
 import { RunSupervision, runOrigin } from './RunSupervision';
@@ -571,6 +571,7 @@ export class Session {
       // After the turn has announced its end, so the next one never starts
       // ahead of it on a surface.
       turnReleased: () => queueMicrotask(() => this.turns.pump()),
+      usageLimit: (said) => this.turns.usageLimit(said),
     });
 
     this.turns = new PlanTurns({
@@ -578,6 +579,10 @@ export class Session {
       conversationBusy: () => this.conversation.isTurnInFlight,
       mayWake: () => this.supervision.mayWake(),
       persist: () => this.persist({ background: true }),
+      announce: () => {
+        this.persist({ background: true });
+        this.events.planGenerated(this.plan, this.goal);
+      },
       interrupt: () => { this.conversation.stopTurn('force_send'); },
       holdStarts: () => this.orchestrator.holdStarts(),
       resumeStarts: async () => {
@@ -599,6 +604,7 @@ export class Session {
       notice: (message) => this.notice('error', message),
       plannerDetecting: () => (installedPlannerAnswered() ? null : installedPlannerDetected()),
       assertPlannerReady: () => this.assertPlannerReady(),
+      plannerRunner: () => runnerForProvider(this.config.aiProvider),
     });
 
     this.supervision = new RunSupervision({
@@ -617,7 +623,6 @@ export class Session {
       },
       deliver: (digest) => this.turns.enqueue({ source: 'supervisor', text: digest }),
       pump: () => this.turns.pump(),
-      plannerRunner: () => runnerForProvider(this.config.aiProvider),
       restartPlanner: () => this.aiService().restart?.(),
       abandonTurn: () => this.conversation.abandonHungTurn(),
       notice: (level, message) => this.notice(level, message),
@@ -1345,6 +1350,10 @@ export class Session {
       const { landed, effects } = await opened;
       this.autorunSubmitted(effects);
       return landed;
+    } catch (err) {
+      if (!(err instanceof PlannerUsageLimitError) || !this.plan) throw err;
+      this.turns.waitOnLimit({ source: 'user', ...this.resolveSkillInvocation(goal) });
+      return this.plan;
     } finally {
       if (this.opening === pending) this.opening = null;
     }
@@ -1727,6 +1736,15 @@ export class Session {
     await this.withSave(() => this.orchestrator.resumeNow(taskId, 'user'));
   }
 
+  /**
+   * Keep what waits on the planner's usage limit from being sent at the reset:
+   * it goes with the user's next message instead. False when nothing waits on
+   * a reset.
+   */
+  cancelPlannerResend(): boolean {
+    return this.turns.cancelResend();
+  }
+
   /** Keep a task paused on a usage limit from resuming on its own; see {@link TaskOrchestrator.cancelScheduledResume}. */
   cancelScheduledResume(taskId: string): boolean {
     return this.saved(() => this.orchestrator.cancelScheduledResume(taskId));
@@ -2006,6 +2024,8 @@ export class Session {
     // guards' memory and any batch inside its debounce window (ADR-0029). The
     // same-object load keeps the live run's, which is fresher than the save.
     if (adopting) this.supervision.restore(plan.supervision);
+    // And a wait on the planner's usage limit, which resends at once if its time has passed.
+    if (adopting) this.turns.restoreResend();
     this.goal = goal;
     this.workspace = workspace;
     // Saved before approval had its own record: the status said it, and

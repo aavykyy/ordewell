@@ -1,8 +1,8 @@
 import type { SupervisorLevel } from '../models/Execution';
 import { createWakePolicy, type RunEvent, type WakeBatch, type WakePolicy, type WakePolicySnapshot } from './WakePolicy';
-import { classifyRunnerStop, readUsageLimitReset } from './runnerExit';
+import { classifyRunnerStop } from './runnerExit';
 import { WAKE_UP_RATE, wakeUpRateTripped, type WakeUpRate } from './LoopGuards';
-import { PlannerTurnDiscardedError, PlannerTurnStoppedError, type PlanChange, type WakeUpTurn } from './PlannerConversation';
+import { PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlanChange, type WakeUpTurn } from './PlannerConversation';
 
 /** How long the first attention event waits for others to join its wake-up. */
 export const WAKE_DEBOUNCE_MS = 5_000;
@@ -19,9 +19,6 @@ export const HUNG_TURN_GRACE_MS = 30_000;
  * wake-up has no user message to keep it short (ADR-0029).
  */
 export const DEFAULT_WAKE_UP_READ_BUDGET = 12;
-
-/** Past the planner's usage-limit reset before a wake-up is tried again, as a task's resume waits (#84). */
-const RESET_MARGIN_MS = 60_000;
 
 /** How long one event's detail runs in a digest: what happened, never the log behind it. */
 const DETAIL_CHARS = 240;
@@ -66,8 +63,6 @@ export interface SupervisorHost {
   readBudget(): number;
   /** Retries the supervisor may make of one task in a run, as the plan sets them. */
   retryLimit(): number;
-  /** The runner the planner runs as, whose usage-limit message says when it resets; null when there is none. */
-  plannerRunner(): string | null;
   /** End the planner's process but keep its session id, so the retry resumes it (ADR-0009). */
   restartPlanner(): void;
   /** Free the conversation from a turn that did not end when stopped, taking back what it wrote. */
@@ -109,7 +104,8 @@ export class WakeUpTimeoutError extends Error {
  * timed out if it hangs, retried once with the planner restarted if it fails,
  * and after that the run goes unsupervised — it carries on as Off, and what
  * was not delivered waits for the user's next message. A planner usage limit
- * is waited out instead. What the supervisor may do in its turns is the
+ * is waited out instead, by the planner's turns, which send the wake-up again
+ * at the reset (`PlannerResend`). What the supervisor may do in its turns is the
  * level's, checked at the command seam and the edit path, never here.
  */
 export class Supervisor {
@@ -120,8 +116,6 @@ export class Supervisor {
   /** The run's end was reported: the scheduler can announce it more than once. */
   private finished = false;
   private runEndPending = false;
-  /** While the planner's usage limit holds wake-ups back: when it lets them go. */
-  private limited: { until: number; timer: ReturnType<typeof setTimeout> } | null = null;
   /** When each wake-up since the last pass was delivered, for the wake-up rate guard. */
   private wakeUps: number[] = [];
   private readonly debounceMs: number;
@@ -155,9 +149,9 @@ export class Supervisor {
     return this.runEndPending;
   }
 
-  /** Whether wake-ups alone may open a turn now: the supervisor watches, and no usage limit holds it. */
+  /** Whether wake-ups alone may open a turn now: the supervisor watches. A usage limit holds every turn, and is the planner turns' to wait out. */
   mayWake(): boolean {
-    return this.watching && this.limited === null;
+    return this.watching;
   }
 
   /**
@@ -233,8 +227,6 @@ export class Supervisor {
   /** The plan these events were about is gone: nothing gathered or waited on carries over. */
   reset(): void {
     this.disarm();
-    if (this.limited) clearTimeout(this.limited.timer);
-    this.limited = null;
     this.failures = 0;
     this.finished = false;
     this.runEndPending = false;
@@ -289,9 +281,17 @@ export class Supervisor {
   private failed(err: unknown): void {
     // The user's stop, or a plan change: the supervisor did not fail.
     if (err instanceof PlannerTurnStoppedError || err instanceof PlannerTurnDiscardedError) return;
+    // Not the supervisor's failure: the turn's wake-ups wait with its other
+    // inputs, and go again at the reset. With no reset to wait for, the run
+    // carries on without its supervisor.
+    if (err instanceof PlannerUsageLimitError) {
+      if (err.resendAt === null) this.giveUp(`the planner hit its usage limit and ${err.held ?? 'did not say when it resets'}`);
+      return;
+    }
     const reason = err instanceof Error ? err.message : String(err);
+    // A backend that throws its limit rather than saying it gives no reset to read.
     if (!(err instanceof WakeUpTimeoutError) && classifyRunnerStop(reason) === 'usage-limit') {
-      this.waitForReset(reason);
+      this.giveUp('the planner hit its usage limit and did not say when it resets');
       return;
     }
     this.failures++;
@@ -301,23 +301,6 @@ export class Supervisor {
       return;
     }
     this.giveUp(`its wake-up turn failed twice (${brief(reason)})`);
-  }
-
-  private waitForReset(said: string): void {
-    const runner = this.host.plannerRunner();
-    const reset = runner ? readUsageLimitReset(runner, said, new Date(this.now())) : null;
-    if (!reset) {
-      this.giveUp('the planner hit its usage limit and did not say when it resets');
-      return;
-    }
-    if (this.limited) clearTimeout(this.limited.timer);
-    const until = reset.getTime() + RESET_MARGIN_MS;
-    const timer = setTimeout(() => {
-      this.limited = null;
-      this.host.pump();
-    }, Math.max(0, until - this.now()));
-    this.limited = { until, timer };
-    this.host.notice('info', `The planner hit its usage limit. The supervisor's wake-ups wait until ${new Date(until).toISOString()}, and are delivered together then.`);
   }
 
   /** The run goes on without a supervisor, and nothing that happened is lost (see {@link standDown}). */

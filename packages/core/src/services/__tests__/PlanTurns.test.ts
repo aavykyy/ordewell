@@ -27,6 +27,7 @@ function fakeHost(current: { plan: LegacyPlanState | null } = { plan: plan() }) 
     conversationBusy: vi.fn(() => false),
     mayWake: vi.fn(() => true),
     persist: vi.fn(() => { saved.push((current.plan?.pendingTurns ?? []).map((t) => t.text)); }),
+    announce: vi.fn(),
     interrupt: vi.fn(),
     holdStarts: vi.fn(() => {
       holds++;
@@ -49,6 +50,7 @@ function fakeHost(current: { plan: LegacyPlanState | null } = { plan: plan() }) 
     notice: vi.fn(),
     plannerDetecting: vi.fn((): Promise<void> | null => null),
     assertPlannerReady: vi.fn(),
+    plannerRunner: vi.fn((): string | null => 'claude-code'),
   } satisfies PlanTurnsHost;
   return { host, turns, saved, current, held: () => holds };
 }

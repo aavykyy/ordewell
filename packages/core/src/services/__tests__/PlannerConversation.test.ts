@@ -60,6 +60,7 @@ function fakeHost(ai: IAiService, plan: LegacyPlanState | null = dialoguePlan())
     validateOps: vi.fn(),
     taskSkills: () => ({ findSkill: () => undefined, searchedDirs: () => [] }),
     notice: vi.fn(),
+    usageLimit: vi.fn((said: string) => ({ text: said, resendAt: null })),
     adoptTasks: vi.fn((tasks) => tasks.length),
     capturePrd: vi.fn(),
     turnAborted: vi.fn(),

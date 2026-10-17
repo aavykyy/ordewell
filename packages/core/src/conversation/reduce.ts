@@ -287,6 +287,7 @@ function syncTranscript(view: ConversationView, { plan, turnId }: Message<'plan_
     if (isNew && entry.kind === 'wake_up') next = takePendingInputs(next, undefined, [entry.content]).view;
     if (isNew && entry.kind === 'plan_generated') next = markPlan(next, entry.content, i === committed ? turnId : undefined);
     if (isNew && entry.kind === 'system') next = append(next, (id) => settledMessage(id, 'system', entry.content));
+    if (isNew && entry.kind === 'error') next = append(next, (id) => settledMessage(id, 'error', entry.content));
     if (isNew && entry.kind === 'compaction') next = markCompaction(next, entry.content);
     if (latest === undefined || entry.timestamp > latest) latest = entry.timestamp;
   }

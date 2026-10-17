@@ -90,6 +90,10 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
       return withIdlePlanner(state, (sessionId) => step(state, [{ type: 'forkConversation', sessionId }]));
     case 'rewind':
       return rewind(state, args[0]);
+    case 'resend':
+      return args[0] === 'cancel'
+        ? withSession(state, (sessionId) => step(state, [{ type: 'cancelPlannerResend', sessionId }]))
+        : step(say(state, 'system', "A planner turn that hits the planner's usage limit is sent again at the reset: /resend cancel keeps it for your next message instead."));
     case 'compact':
       return withIdlePlanner(state, (sessionId) =>
         step({ ...state, planner: 'condensing' }, [{ type: 'compactConversation', sessionId }]),

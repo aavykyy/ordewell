@@ -1,5 +1,6 @@
-import type { LegacyPlanState, PendingPlanTurn, PlanTurnSource, SkillLoad } from '../models/Task';
-import { ConversationBusyError, PlannerTurnDiscardedError, PlannerTurnStoppedError } from './PlannerConversation';
+import type { LegacyPlanState, PendingPlanTurn, PlanTurnSource, RunnerId, SkillLoad } from '../models/Task';
+import { ConversationBusyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError } from './PlannerConversation';
+import { PlannerResend, type PlannerLimit } from './PlannerResend';
 import type { SkillInvocation } from './skillInvocation';
 
 /**
@@ -37,6 +38,8 @@ export interface PlanTurnsHost {
   mayWake(): boolean;
   /** Save the pending list. A background save: it must not count as settling a turn in flight. */
   persist(): void;
+  /** The wait on the planner's usage limit changed with no turn to say so: save the plan in the background, and announce it. */
+  announce(): void;
   /**
    * Stop the planner turn holding the conversation for a force send: it ends
    * as stopped by one, not by the user. The run's tasks are not touched.
@@ -62,6 +65,8 @@ export interface PlanTurnsHost {
   plannerDetecting(): Promise<void> | null;
   /** Throws {@link PlannerNotReadyError} when the planner in use now cannot plan. */
   assertPlannerReady(): void;
+  /** The runner the planner runs as now, whose account a usage limit belongs to; null when it is not a coding agent. */
+  plannerRunner(): RunnerId | null;
 }
 
 interface Waiter {
@@ -105,7 +110,10 @@ export function turnPrompt(batch: readonly PendingPlanTurn[]): TurnPrompt {
  * in the save that lands their turn's outcome; a turn that ends without one
  * drops the user's then. A wake-up batch is only delivered by a turn that
  * lands with it, so it stays through a failed one — unless the user stopped
- * the turn, which was their answer to it. A force send is not an answer to
+ * the turn, which was their answer to it. A turn that ends on the planner's
+ * usage limit keeps every input it took, and no turn opens until the limit's
+ * wait ends ({@link PlannerResend}): what arrives meanwhile waits with them,
+ * and they all go as one turn. A force send is not an answer to
  * it (ADR-0023, F5): a turn it stopped keeps its wake-ups waiting, undelivered,
  * for the supervisor's next turn. The user's Stop also drops the user's inputs
  * waiting behind the turn it stopped ({@link stopQueued}). A reload therefore
@@ -121,8 +129,50 @@ export class PlanTurns {
   /** The user stopped the turn wake-ups waited behind: they wait for the next input to open one, not for the stop's release. */
   private quiet = false;
   private seq = 0;
+  private readonly resend: PlannerResend;
 
-  constructor(private readonly host: PlanTurnsHost, private readonly holdTimeoutMs = START_HOLD_TIMEOUT_MS) {}
+  constructor(private readonly host: PlanTurnsHost, private readonly holdTimeoutMs = START_HOLD_TIMEOUT_MS) {
+    this.resend = new PlannerResend({
+      plan: () => host.plan(),
+      plannerRunner: () => host.plannerRunner(),
+      due: () => {
+        host.announce();
+        this.pump();
+      },
+      changed: () => host.announce(),
+      notice: (message) => host.notice(message),
+    });
+  }
+
+  /** A turn ended on the planner's usage limit: arm the wait for its inputs. Saved with the failure the turn records. */
+  usageLimit(said: string): PlannerLimit {
+    return this.resend.limited(said);
+  }
+
+  /** Keep what waits on the planner's usage limit from being sent at the reset; see {@link PlannerResend.cancel}. */
+  cancelResend(): boolean {
+    if (!this.resend.cancel()) return false;
+    this.host.announce();
+    return true;
+  }
+
+  /**
+   * The conversation's opening ended on the planner's usage limit: its goal
+   * waits with the limit, ahead of what was sent behind it, whose senders are
+   * answered now as any sent during the wait are.
+   */
+  waitOnLimit(input: PlanTurnInput): void {
+    const plan = this.host.plan();
+    if (!plan) return;
+    plan.pendingTurns = [this.pending(input, false), ...(plan.pendingTurns ?? [])];
+    this.host.persist();
+    for (const t of plan.pendingTurns) if (t.source === 'user') this.settle(t.id, (w) => w.resolve(plan));
+  }
+
+  /** A plan adopted off disk: the wait it saved is armed again. */
+  restoreResend(): void {
+    this.resend.restore();
+  }
 
   /** Whether a turn this module opened is in flight. */
   get busy(): boolean {
@@ -171,7 +221,28 @@ export class PlanTurns {
   private admit(input: PlanTurnInput, forced: boolean): Promise<LegacyPlanState> {
     const plan = this.host.plan();
     if (!plan) return Promise.reject(new Error('No planning conversation to continue'));
-    const entry: PendingPlanTurn = {
+    const entry = this.pending(input, forced);
+    this.quiet = false;
+    if (this.resend.arrived()) this.host.announce();
+    const pending = plan.pendingTurns ?? [];
+    const at = forced ? pending.findIndex((t) => !t.forced && !this.running?.ids.has(t.id)) : -1;
+    plan.pendingTurns = at === -1 ? [...pending, entry] : [...pending.slice(0, at), entry, ...pending.slice(at)];
+    this.host.persist();
+    // Its sender is answered now, not hours from now at the reset: the message
+    // is saved, and the turn that sends it is nobody's call to wait on.
+    if (input.source === 'user' && this.resend.holds()) {
+      this.pump();
+      return Promise.resolve(plan);
+    }
+    const settled = new Promise<LegacyPlanState>((resolve, reject) => {
+      this.waiters.set(entry.id, { resolve, reject, signal: input.signal });
+    });
+    this.pump();
+    return settled;
+  }
+
+  private pending(input: PlanTurnInput, forced: boolean): PendingPlanTurn {
+    return {
       id: `turn-${Date.now()}-${++this.seq}`,
       source: input.source,
       text: input.text,
@@ -179,16 +250,6 @@ export class PlanTurns {
       ...(input.skills && input.skills.length > 0 ? { skills: [...input.skills] } : {}),
       ...(forced ? { forced: true } : {}),
     };
-    this.quiet = false;
-    const pending = plan.pendingTurns ?? [];
-    const at = forced ? pending.findIndex((t) => !t.forced && !this.running?.ids.has(t.id)) : -1;
-    plan.pendingTurns = at === -1 ? [...pending, entry] : [...pending.slice(0, at), entry, ...pending.slice(at)];
-    this.host.persist();
-    const settled = new Promise<LegacyPlanState>((resolve, reject) => {
-      this.waiters.set(entry.id, { resolve, reject, signal: input.signal });
-    });
-    this.pump();
-    return settled;
   }
 
   /**
@@ -201,7 +262,7 @@ export class PlanTurns {
    * the plan, what still waits, and the planner in use at that moment.
    */
   pump(): void {
-    if (this.running || this.detecting) return;
+    if (this.running || this.detecting || this.resend.holds()) return;
     const plan = this.host.plan();
     if (!plan || this.host.conversationBusy()) return;
     const batch = this.liveBatch(plan);
@@ -284,6 +345,7 @@ export class PlanTurns {
    * conversation's to abandon; whatever it settles lands nothing here.
    */
   abandon(): void {
+    this.resend.reset();
     this.running?.release();
     this.running = null;
     this.quiet = false;
@@ -330,12 +392,17 @@ export class PlanTurns {
     // Abandoned: the hold is gone and every waiter has heard.
     if (this.running !== running) return;
     const forceStopped = !outcome.ok && running.forceStopped === true;
+    const limited = !outcome.ok && outcome.err instanceof PlannerUsageLimitError;
+    if (outcome.ok) this.resend.landed();
     try {
       // A turn that landed nothing still had its say; the user's inputs go
-      // with it. A failure, or a force send, leaves the wake-ups undelivered.
-      const dropped = outcome.ok || (isInterruption(outcome.err) && !forceStopped)
-        ? ids
-        : new Set(batch.filter((t) => t.source === 'user').map((t) => t.id));
+      // with it. A failure, or a force send, leaves the wake-ups undelivered,
+      // and a usage limit leaves everything, to be sent again.
+      const dropped = limited
+        ? new Set<string>()
+        : outcome.ok || (isInterruption(outcome.err) && !forceStopped)
+          ? ids
+          : new Set(batch.filter((t) => t.source === 'user').map((t) => t.id));
       const took = this.take(plan, dropped);
       // Its wake-ups wait behind the forced inputs, each of which takes a turn alone first.
       if (forceStopped) plan.pendingTurns = [...(plan.pendingTurns ?? []).filter((t) => t.forced), ...(plan.pendingTurns ?? []).filter((t) => !t.forced)];
@@ -350,8 +417,13 @@ export class PlanTurns {
       const ended = outcome;
       const waiting = new Set((plan.pendingTurns ?? []).map((t) => t.id));
       for (const t of batch) {
+        // A user's message waiting on the limit is answered now: its turn is hours off, and the failure is in the transcript.
+        if (limited && t.source === 'user') {
+          this.settle(t.id, (w) => w.resolve(plan));
+          continue;
+        }
         // Kept wake-ups are heard of from the turn that delivers them: the supervisor counts on it.
-        if (forceStopped && waiting.has(t.id)) continue;
+        if ((forceStopped || limited) && waiting.has(t.id)) continue;
         const delivered = this.settle(t.id, (w) => (ended.ok ? w.resolve(ended.plan) : w.reject(ended.err)));
         if (!delivered && !ended.ok && !isInterruption(ended.err) && t.source === 'user') this.host.notice(replayFailed(t, ended.err));
       }
