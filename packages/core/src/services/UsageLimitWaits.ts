@@ -1,3 +1,9 @@
+/** How long after a limit resets the work waiting on it goes again: the runner's clock and ours need not agree to the second. */
+export const RESUME_MARGIN_MS = 60_000;
+
+/** Work sent again after a reset that hits the limit within this did not get past it, so it is not sent again on its own. */
+export const RELAPSE_MS = 5 * 60_000;
+
 /**
  * Waits for runners' usage limits to reset (#84): one per runner, however
  * many tasks it paused, because a limit belongs to the account the runner

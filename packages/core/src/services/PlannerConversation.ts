@@ -16,6 +16,8 @@ import { skillLoadNotice, surfaceStep } from '../conversation/records';
 import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
 import { AUTORUN_OFF, AUTORUN_ON } from './PlanPrompts';
 import { heldEditTasks } from './heldEdit';
+import { classifyRunnerStop } from './runnerExit';
+import type { PlannerLimit } from './PlannerResend';
 import type { AssignmentScope } from './AssignmentScope';
 import { flaggedTasks, runnersChangedBlock, scopeChange } from './RunnerChange';
 
@@ -243,6 +245,8 @@ export interface PlannerConversationHost {
   turnAborted(): void;
   /** A planner turn let the conversation go, so the next one may take it. */
   turnReleased?(): void;
+  /** A turn ended on the planner's usage limit, which it said in `said`: what is sent again, and when. */
+  usageLimit(said: string): PlannerLimit;
 }
 
 /**
@@ -293,6 +297,25 @@ export class PlannerTurnFailedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'PlannerTurnFailedError';
+  }
+}
+
+/**
+ * A planner turn ended on the planner's usage limit (#84). Nothing of it
+ * lands: the transcript keeps the failure instead, out of the planner's own
+ * dialogue, and the turn's inputs wait to be sent again — at `resendAt`, or
+ * with the next input when it is null.
+ */
+export class PlannerUsageLimitError extends PlannerTurnFailedError {
+  readonly resendAt: Date | null;
+  /** Why nothing is sent again on its own, when nothing is. */
+  readonly held?: string;
+
+  constructor(limit: PlannerLimit) {
+    super(limit.text);
+    this.name = 'PlannerUsageLimitError';
+    this.resendAt = limit.resendAt;
+    if (limit.held) this.held = limit.held;
   }
 }
 
@@ -656,8 +679,10 @@ export class PlannerConversation {
    * at it.
    */
   rewindTargets(): RewindTarget[] {
+    // An opening that hit the planner's usage limit left its failure ahead of the goal.
+    const opener = this.transcript.findIndex((m) => m.kind !== 'error');
     return this.transcript.flatMap((m, index) => {
-      if (!isUserMessage(m) || index === 0) return [];
+      if (!isUserMessage(m) || index === opener) return [];
       const line = m.content.split('\n')[0];
       const preview = line.length > REWIND_PREVIEW_WIDTH ? `${line.slice(0, REWIND_PREVIEW_WIDTH - 1)}…` : line;
       return [{ index, preview, content: m.content, timestamp: m.timestamp }];
@@ -800,6 +825,8 @@ export class PlannerConversation {
     return this.userTurn('supersede', goal, signal, async (userTurn) => {
       const opening = await prepare();
       this.assertCurrent(userTurn);
+      // What a usage limit takes back: the goal then waits to be sent again.
+      userTurn.checkpoint = this.snapshot();
       this.recordUser(goal, new Date().toISOString());
       this.toldAutorun = opening.autorun ?? false;
       this.toldScope = this.host.assignmentScope();
@@ -812,7 +839,9 @@ export class PlannerConversation {
         onProgress: userTurn.stream.sink(),
         signal: userTurn.signal,
       });
-      return this.settle(await this.drainTaskQueries(turn, userTurn), userTurn);
+      const settleable = await this.drainTaskQueries(turn, userTurn);
+      this.assertNotLimited(settleable, userTurn);
+      return this.settle(settleable, userTurn);
     });
   }
 
@@ -870,6 +899,7 @@ export class PlannerConversation {
         : await this.resume(outgoing, priorHistory, signal, userTurn.stream.sink());
 
       const settleable = await this.drainTaskQueries(turn, userTurn);
+      this.assertNotLimited(settleable, userTurn);
       if (userTurn.wakeUp) this.assertWakeUpAnswered(settleable, userTurn);
       this.assertCurrent(userTurn, settleable);
       return await this.settle(settleable, userTurn);
@@ -890,6 +920,34 @@ export class PlannerConversation {
   private assertWakeUpAnswered(turn: SettleableTurn, userTurn: UserTurn): void {
     if (userTurn.signal.aborted) throw new PlannerTurnStoppedError();
     if (turn.kind === 'message' && turn.failed) throw new PlannerTurnFailedError(turn.text);
+  }
+
+  /**
+   * A turn that ended on the planner's usage limit lands nothing. What it
+   * wrote is taken back, its failure is kept in its place, and the limit's
+   * wait is armed in the same save. Only a turn Ordewell started gets here,
+   * so a limit is never acted on for a planner nobody asked anything of.
+   */
+  private assertNotLimited(turn: SettleableTurn, userTurn: UserTurn): void {
+    if (turn.kind !== 'message' || !turn.failed || userTurn.signal.aborted || classifyRunnerStop(turn.text) !== 'usage-limit') return;
+    this.assertCurrent(userTurn);
+    if (userTurn.checkpoint) this.restore(userTurn.checkpoint);
+    const limit = this.host.usageLimit(turn.text);
+    this.host.mutate(() => {
+      this.recordFailure(limit.text);
+      return true;
+    }, () => this.host.broadcastPlan());
+    throw new PlannerUsageLimitError(limit);
+  }
+
+  /**
+   * A failure kept in the transcript, drawn as one on reload too, and never
+   * replayed to the planner. Stamped after the newest entry: surfaces take
+   * only entries newer than the last they synced.
+   */
+  private recordFailure(text: string): void {
+    const newest = this.transcript.reduce((latest, e) => Math.max(latest, Date.parse(e.timestamp) || 0), 0);
+    this.append('assistant', text, { kind: 'error', timestamp: new Date(Math.max(Date.now(), newest + 1)).toISOString() });
   }
 
   private assertIdle(operation: string): void {

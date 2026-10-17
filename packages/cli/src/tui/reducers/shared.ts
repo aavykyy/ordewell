@@ -37,6 +37,7 @@ export type Effect =
   | { type: 'loadRewindTargets'; sessionId: string; pick?: number }
   | { type: 'rewindConversation'; sessionId: string; index: number }
   | { type: 'compactConversation'; sessionId: string }
+  | { type: 'cancelPlannerResend'; sessionId: string }
   | { type: 'isolationReviewDiff'; sessionId: string }
   /** `branch` is only for the words the result is reported in; `repaired` likewise (ADR-0015). */
   /** `midRun`: the run and its record stay for later landings (ADR-0020). */

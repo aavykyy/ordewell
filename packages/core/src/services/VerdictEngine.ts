@@ -332,6 +332,13 @@ export class VerdictEngine {
   }
 }
 
+const EXIT_CHECK = 'exit_code';
+
+/** The runner's exit decided it, not a `task_complete` report. */
+export function endedByExit(verdict: Verdict): boolean {
+  return verdict.checks.some((check) => check.name === EXIT_CHECK);
+}
+
 /** A runner that exited without reporting through `task_complete` did not finish, whatever its exit code. */
 function exitVerdict(exitCode: number): Verdict {
   const normalized = exitCode == null ? 0 : exitCode;
@@ -343,7 +350,7 @@ function exitVerdict(exitCode: number): Verdict {
       : `Failed verification: the runner exited with code ${normalized} without calling task_complete.`,
     checks: [
       { name: 'task_complete', passed: false, skipped: false, detail: 'the runner exited before calling task_complete' },
-      { name: 'exit_code', passed: exitOk, skipped: false, detail: exitOk ? 'the runner exited cleanly (code 0)' : `the runner exited with code ${normalized}` },
+      { name: EXIT_CHECK, passed: exitOk, skipped: false, detail: exitOk ? 'the runner exited cleanly (code 0)' : `the runner exited with code ${normalized}` },
     ],
     decidedAt: new Date().toISOString(),
   };

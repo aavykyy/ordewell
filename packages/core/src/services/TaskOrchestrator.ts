@@ -7,7 +7,7 @@ import { INotification } from '../interfaces/INotification';
 import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
 import type { RunnerModelRef } from '../models/RunnerCommand';
 import { summarizeOutput } from './promptAugment';
-import { VerdictEngine } from './VerdictEngine';
+import { endedByExit, VerdictEngine } from './VerdictEngine';
 import { BufferedTaskOutputSource } from './BufferedTaskOutputSource';
 import type { LiveTail, LiveTailOptions, TaskOutputSource } from '../interfaces/TaskOutputSource';
 import { PlanStore } from './PlanStore';
@@ -24,8 +24,8 @@ import { SELF_REPO } from './isolationRecord';
 import { taskRefOf } from './TaskRefs';
 import { IsolationRunController } from './IsolationRunController';
 import { completesTask, Landing, type LandingMessage, type LandingOutcome, type UnlandedOutcome } from './Landing';
-import { classifyRunnerStop, readUsageLimitReset, stopsRunner, type AttemptEnd } from './runnerExit';
-import { UsageLimitWaits } from './UsageLimitWaits';
+import { classifyRunnerStop, readUsageLimitReset, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
+import { RELAPSE_MS, RESUME_MARGIN_MS, UsageLimitWaits } from './UsageLimitWaits';
 import { dependencyMet, mergeGate, selectReadyTasks, type Readiness } from './readiness';
 import { blockingFailures } from './blocking';
 import {
@@ -197,8 +197,10 @@ interface TaskAttempt {
   skills: readonly TaskSkillSnapshot[];
   /** Resumed after a usage limit, at its reset or by {@link TaskOrchestrator.resumeNow}, rather than started; see {@link RELAPSE_MS}. */
   readonly autoResumed: boolean;
-  /** The runner's own words for why the running turn failed, if it did. */
-  turnError: string | null;
+  /** Why the running turn failed, as the runner reported it, if it did. */
+  turnError: TurnFailure | null;
+  /** Where the running turn's output starts in the session's. */
+  turnOutputFrom: number;
   /** The completion reminder went out: once per attempt, so a second turn without `task_complete` waits for input. */
   reminded: boolean;
 }
@@ -1088,6 +1090,8 @@ export class TaskOrchestrator {
     const attempt = this.attempts.get(taskId);
     if (!task || !attempt) return;
     attempt.decided = true;
+    // Read before anything is awaited: the turn an exit cut short ends a moment later.
+    const stoppedMidTurn = endedByExit(verdict) ? saidInFlight(attempt) : null;
 
     console.error(`[TaskOrchestrator] Task ${taskRefOf(this.store.planTasks, task.id) ?? `#${task.order}`} "${task.title}" verdict=${verdict.outcome}`);
     console.error(`[TaskOrchestrator] Runner: ${task.assignedRunner}, Model: ${task.assignedModel?.modelId ?? 'default'}`);
@@ -1115,8 +1119,8 @@ export class TaskOrchestrator {
       this.tell('warn', `Ops task "${task.title}" finished, but changed tracked files in your checkout: ${capConflictFiles(changedFiles)}. An ops task must not change repository files, so nothing was committed: look at the changes, then mark it complete or retry it.`);
     } else if (landing) {
       await this.applyLanding(task, landing, () => this.notifications.info(`Task "${task.title}" completed.`));
-    } else if (classifyRunnerStop(attempt.session?.getOutput() ?? '') === 'usage-limit') {
-      this.pauseOnLimit(task, attempt, attempt.session?.getOutput() ?? '');
+    } else if (stoppedMidTurn !== null && classifyRunnerStop(stoppedMidTurn) === 'usage-limit') {
+      this.pauseOnLimit(task, attempt, stoppedMidTurn);
       if (attempt.worktree) await this.runs.release(taskId, { keep: true });
     } else {
       // Missing completion evidence is a hard boundary for what depends on
@@ -1575,7 +1579,7 @@ export class TaskOrchestrator {
    * (#84); otherwise, or when it was resumed a moment ago and hit the limit
    * again, it waits for the user to retry it.
    */
-  private pauseOnLimit(task: Readonly<Task>, attempt: TaskAttempt, said: string): void {
+  private pauseOnLimit(task: Readonly<Task>, attempt: TaskAttempt, said: string | TurnFailure): void {
     this.store.markAwaitingUser(task.id, 'usage-limit');
     this.holdOnLimit();
     const kept = attempt.worktree ? ': its worktree is kept' : '';
@@ -1607,7 +1611,7 @@ export class TaskOrchestrator {
     const summary = this.output.finalText(taskId);
     this.endAttempt(taskId, 'usage-limit');
     this.pauseOnLimit(task, attempt, attempt.turnError ?? '');
-    this.store.setTaskOutputSummary(taskId, summarizeOutput(attempt.turnError ?? `${attempt.runner} hit its usage limit`, summary));
+    this.store.setTaskOutputSummary(taskId, summarizeOutput(attempt.turnError?.message ?? `${attempt.runner} hit its usage limit`, summary));
     if (attempt.worktree) await this.runs.release(taskId, { keep: true });
     await this.afterVerdict(taskId);
   }
@@ -2018,6 +2022,7 @@ export class TaskOrchestrator {
       skills: [],
       autoResumed: opts.autoResumed === true,
       turnError: null,
+      turnOutputFrom: 0,
       reminded: false,
     };
     this.spawnCounts.set(task.id, attempt.attempt);
@@ -2139,8 +2144,10 @@ export class TaskOrchestrator {
       this.output.attach(task.id, session);
       this.verifier.watch(task, session);
       session.onEvent((event) => {
-        if (event.type === 'turn_start') attempt.turnError = null;
-        else if (event.type === 'error') attempt.turnError = event.message;
+        if (event.type === 'turn_start') {
+          attempt.turnError = null;
+          attempt.turnOutputFrom = session.getOutput().length;
+        } else if (event.type === 'error') attempt.turnError = event;
         else if (event.type === 'model_switched' || event.type === 'model_drifted') {
           this.emit('onModelSwitched', {
             taskId: task.id, sessionId: session.id, from: event.from, model: event.to,
@@ -2159,6 +2166,18 @@ export class TaskOrchestrator {
       this.endAttempt(task.id, 'spawn-failed');
       // Each way out settles the task's status before it awaits anything, so
       // no tick in between finds it in progress with no attempt.
+      const refusal = err instanceof Error ? err.message : String(err);
+      if (attempt.kind.kind !== 'repair' && classifyRunnerStop(refusal) === 'usage-limit') {
+        // The limit refused the turn Ordewell was starting: a pause, as one
+        // mid-turn is, and the saved session stays for the resume to continue.
+        this.pauseOnLimit(task, attempt, refusal);
+        this.store.setTaskOutputSummary(task.id, summarizeOutput(refusal, ''));
+        await this.runs.release(task.id, { keep: true });
+        this.emit('onTaskSettled', { taskId: task.id });
+        this.emit('onTaskChanged');
+        await this.tick();
+        return false;
+      }
       if (attempt.kind.kind === 'continuation') {
         // A runner that exits while starting on a saved session has refused it.
         const refused = err instanceof RunnerStartupExit;
@@ -2322,12 +2341,6 @@ export class TaskOrchestrator {
   }
 }
 
-/** How long after its limit resets a task resumes: the runner's clock and ours need not agree to the second. */
-const RESUME_MARGIN_MS = 60_000;
-
-/** A resumed attempt that hits the limit again within this did not get past the reset, so it is not resumed again. */
-const RELAPSE_MS = 5 * 60_000;
-
 const LIMIT_RESET_MESSAGE = 'Your usage limit has reset. Carry on with the task from where you stopped.';
 
 /** How much of an ops task's last attempt the next one is shown. */
@@ -2335,4 +2348,16 @@ const OPS_RETRY_TAIL_LINES = 60;
 
 function unresumedMessage(task: Task, why: string): string {
   return `Could not continue task "${task.title}": ${why}. Retry starts it afresh.`;
+}
+
+/**
+ * What the runner said in the turn its exit cut short, or null when no turn
+ * was in flight. A limit is acted on only when it ended a turn Ordewell
+ * started (ADR-0018, U1): limit words in a turn that had already ended did
+ * not stop the runner.
+ */
+function saidInFlight(attempt: TaskAttempt): string | null {
+  const session = attempt.session;
+  if (!session || session.turnState() !== 'working') return null;
+  return session.getOutput().slice(attempt.turnOutputFrom);
 }

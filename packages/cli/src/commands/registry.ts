@@ -12,7 +12,7 @@ import { handleRunTask, handleForceStart, handleRetry, handleCancel, handleConti
 import { handleAddTask } from './add-task';
 import { handleRemoveTask } from './remove-task';
 import { handleSessions } from './sessions';
-import { handleCompact, handleFork, handleRewind } from './conversation';
+import { handleCompact, handleFork, handleResend, handleRewind } from './conversation';
 import { handleHandoff } from './handoff';
 import { handlePlanner, handlePlannerEffort } from './planner';
 import { handleModel } from './model';
@@ -80,6 +80,7 @@ export const COMMANDS: Record<string, (args: string[]) => Promise<void> | void> 
   fork: handleFork,
   compact: handleCompact,
   rewind: handleRewind,
+  resend: handleResend,
   handoff: handleHandoff,
   tui: handleTui,
 };

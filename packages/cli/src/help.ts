@@ -22,6 +22,7 @@ Planning:
   ordewell fork                   Continue in a copy of the conversation and its tasks
   ordewell compact                Condense the conversation into a summary (tasks are kept)
   ordewell rewind [<n>]           Fork the conversation from before message <n> (no <n>: list them)
+  ordewell resend cancel          Keep a planner turn waiting on its usage limit from going at the reset
   ordewell handoff [action]       Review, merge, discard or clean up an isolated run
 
 Tasks (<id> is an order number or a task ID):

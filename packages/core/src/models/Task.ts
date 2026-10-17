@@ -381,10 +381,13 @@ export interface ConversationMessage {
    * (ADR-0029), its record in `execution`. 'wake_up' is the digest a wake-up
    * gave the supervisor (role 'user': the model was told it), and
    * 'supervisor' what the supervisor said in a wake-up turn (ADR-0029).
+   * 'error' is a planner turn that ended on the planner's usage limit, drawn
+   * as a failure and never replayed to the planner: it is not the planner's
+   * answer, and its inputs are sent again (see {@link PlannerResendState}).
    * Absent for ordinary chat turns, so sessions saved before markers existed
    * degrade gracefully.
    */
-  kind?: 'plan_generated' | 'system' | 'compaction' | 'skill_load' | 'execution' | 'wake_up' | 'supervisor';
+  kind?: 'plan_generated' | 'system' | 'compaction' | 'skill_load' | 'execution' | 'wake_up' | 'supervisor' | 'error';
   actor?: 'Ordewell setting';
   /** Present exactly when `kind` is 'skill_load'. */
   skill?: SkillLoad;
@@ -481,6 +484,18 @@ export interface SupervisionSnapshot {
   wake?: SupervisorSnapshot;
 }
 
+/**
+ * What waits on the planner's usage limit. With `at`, the inputs no turn
+ * answered are sent again then, on their own; without it — the reset could
+ * not be read, the resend hit the limit again, or it was cancelled — they go
+ * with the next input: the user's message, or a wake-up.
+ */
+export interface PlannerResendState {
+  /** The runner whose account hit the limit; a planner on another one is not held by it. */
+  runner?: RunnerId;
+  at?: string;
+}
+
 export interface LegacyPlanState {
   runSettings?: RunSettings;
   /** What supervision remembers across a daemon restart (ADR-0029); absent on plans saved before it existed. */
@@ -508,6 +523,8 @@ export interface LegacyPlanState {
   isolation?: PlanIsolation;
   /** Kept so a reopened session shows the same token line (#49). */
   plannerUsage?: PlannerUsage;
+  /** The planner hit its usage limit and the inputs its turn took wait to be sent again; absent otherwise. */
+  plannerResend?: PlannerResendState;
   /**
    * The tasks the user approved to run: every task when they executed the
    * plan, and each one they started or retried themselves since. A command

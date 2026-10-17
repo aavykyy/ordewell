@@ -8,6 +8,7 @@ import { fakeConfig, FakeRunnerSession, flushMicrotasks } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
+import { RunnerStartupExit } from '../harness/ordewellBinding';
 
 // Claude Code 2.1.296's wording (#84); the zone is UTC so the expected times
 // do not depend on the machine's.
@@ -123,6 +124,19 @@ describe('a task paused on a usage limit', () => {
     await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now());
     await until(() => spawn.mock.calls.length === 4);
     expect(spawn.mock.calls.slice(2).map(([o]) => o.taskId)).toEqual(['t1', 't3']);
+  });
+
+  it('resumes at the reset the runner reported in a field, when its words name no time', async () => {
+    const { orchestrator, sessions, waits, task } = setup();
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', assignedRunner: 'codex' })], ['codex']);
+    await orchestrator.forceStartTask('t1');
+
+    sessions[0].emitEvent({ type: 'error', message: "You've hit your usage limit. Try again later.", usageLimit: { resetsAt: '2026-10-11T20:42:55.000Z' } });
+    sessions[0].emitTurnEnd('failed');
+    await until(() => task('t1').status === 'awaiting_user');
+
+    expect(task('t1')).toMatchObject({ awaitingReason: 'usage-limit', resumeAt: '2026-10-11T20:43:55.000Z' });
+    expect(waits).toEqual([{ taskId: 't1', runner: 'codex', resumeAt: '2026-10-11T20:43:55.000Z' }]);
   });
 
   it('pauses the same way when the runner exits on the limit', async () => {
@@ -292,6 +306,83 @@ describe('a task paused on a usage limit', () => {
     } finally {
       process.off('unhandledRejection', onUnhandled);
     }
+  });
+});
+
+describe('a limit is acted on only when it ended a turn Ordewell started', () => {
+  it('pauses a start whose runner exits on the limit before its first turn, and resumes it at the reset', async () => {
+    const { orchestrator, spawn, waits, task } = setup();
+    spawn.mockRejectedValueOnce(new RunnerStartupExit(`The claude-code task runner exited with code 1.\n\n${LIMIT}`));
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
+    await orchestrator.forceStartTask('t1');
+    await until(() => task('t1').status === 'awaiting_user');
+
+    expect(task('t1')).toMatchObject({ awaitingReason: 'usage-limit', resumeAt: RESUME_AT });
+    expect(waits).toEqual([{ taskId: 't1', runner: 'claude-code', resumeAt: RESUME_AT }]);
+
+    await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now());
+    await until(() => spawn.mock.calls.length === 2);
+    expect(spawn.mock.calls[1][0].taskId).toBe('t1');
+  });
+
+  it('pauses a continue the limit refuses at once, keeping the saved session for its resume', async () => {
+    const { orchestrator, spawn, task } = setup();
+    spawn.mockRejectedValueOnce(new RunnerStartupExit(`The claude-code task runner exited with code 1.\n\n${LIMIT}`));
+    orchestrator.loadPlan([{ ...createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' }), status: 'completed', runnerSessionId: 'sess-1' }]);
+    await orchestrator.continueTask('t1', 'go on');
+    await until(() => task('t1').status === 'awaiting_user');
+
+    expect(task('t1')).toMatchObject({ awaitingReason: 'usage-limit', resumeAt: RESUME_AT, runnerSessionId: 'sess-1' });
+
+    await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now());
+    await until(() => spawn.mock.calls.length === 2);
+    expect(spawn.mock.calls[1][0]).toMatchObject({ taskId: 't1', resumeSessionId: 'sess-1' });
+  });
+
+  it('fails a runner that exits while the task waits for input, whatever an earlier turn said', async () => {
+    const { orchestrator, sessions, waits, notifications, task } = setup();
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
+    await orchestrator.forceStartTask('t1');
+
+    sessions[0].emitOutput(`${LIMIT}\n`);
+    sessions[0].waitForInput();
+    await until(() => task('t1').status === 'awaiting_user');
+    sessions[0].emitExit(1);
+    await until(() => task('t1').status === 'failed');
+
+    expect(task('t1').resumeAt).toBeUndefined();
+    expect(waits).toEqual([]);
+    expect(vi.mocked(notifications.warn).mock.calls.flat().join('\n')).not.toMatch(/usage limit/);
+  });
+
+  it('fails a runner that exits mid-turn when only an earlier turn named the limit', async () => {
+    const { orchestrator, sessions, waits, task } = setup();
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
+    await orchestrator.forceStartTask('t1');
+
+    sessions[0].emitOutput(`${LIMIT}\n`);
+    sessions[0].waitForInput();
+    await until(() => task('t1').status === 'awaiting_user');
+    orchestrator.sendTaskMessage('t1', 'carry on');
+    await until(() => task('t1').status === 'in_progress');
+    sessions[0].emitOutput('Running the tests.\n');
+    sessions[0].emitExit(1);
+    await until(() => task('t1').status === 'failed');
+
+    expect(waits).toEqual([]);
+  });
+
+  it('fails a task the runner reported failed, even when its words name a limit', async () => {
+    const { orchestrator, sessions, waits, task } = setup();
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
+    await orchestrator.forceStartTask('t1');
+
+    sessions[0].emitOutput('The API answers HTTP 429: Too Many Requests on every call.\n');
+    sessions[0].reportComplete({ status: 'failed', summary: '', reason: 'the API is rate-limited' });
+    sessions[0].emitTurnEnd('completed');
+    await until(() => task('t1').status === 'failed');
+
+    expect(waits).toEqual([]);
   });
 });
 

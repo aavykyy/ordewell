@@ -107,12 +107,14 @@ function skillBlock(skill: SkillLoad): string {
  * carries the skills loaded after it, composed by {@link plannerMessage}, and
  * the load entries themselves are folded away. Sessions saved before skill
  * loads existed hold the expanded text in the message and replay unchanged.
+ * A failed turn's entry is left out: the planner never said it.
  */
 export function plannerTranscript(history: readonly ConversationMessage[]): ConversationMessage[] {
   const out: ConversationMessage[] = [];
   const loadsOf = new Map<number, SkillLoad[]>();
   let owner = -1;
   for (const entry of history) {
+    if (entry.kind === 'error') continue;
     if (entry.kind === 'skill_load' && entry.skill) {
       const loads = entry.skill.invokedBy === 'user' ? loadsOf.get(owner) : undefined;
       if (loads) loads.push(entry.skill);

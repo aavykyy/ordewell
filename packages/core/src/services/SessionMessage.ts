@@ -124,6 +124,8 @@ export type SurfacePlanState =
 
 export type SerializedPlan = {
   runSettings?: LegacyPlanState['runSettings'];
+  /** What waits on the planner's usage limit, and when it goes, so a surface can say so and offer to cancel it. */
+  plannerResend?: LegacyPlanState['plannerResend'];
   tasks: SerializedTask[];
   runners: RunnerId[];
   generatedAt: string;
@@ -469,6 +471,7 @@ export function serializePlan(plan: LegacyPlanState): SerializedPlan {
     runners: plan.runners,
     generatedAt: plan.generatedAt,
     runSettings: plan.runSettings,
+    ...(plan.plannerResend ? { plannerResend: plan.plannerResend } : {}),
     conversationHistory: surfaceConversation(plan.conversationHistory),
     prdMarkdown: plan.prdMarkdown,
   };

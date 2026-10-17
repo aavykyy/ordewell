@@ -18,6 +18,16 @@ import type { RunnerCommand, RunnerMcpServer, RunnerModelRef } from '../../model
  */
 
 /**
+ * A runner's structured word that its account's usage limit ended the turn
+ * (ADR-0018, U1). `resetsAt` (ISO) is when, where the runner's own limit state
+ * says so; without it the reset is read from the error's words, as for a
+ * runner that reports the limit in words alone.
+ */
+export interface UsageLimitSignal {
+  resetsAt?: string;
+}
+
+/**
  * One normalized event from a running agent turn. Deliberately smaller than
  * any single agent's native protocol: this is the intersection Ordewell can act
  * on, not a lossless re-encoding. Event fidelity differs by agent — `thinking`
@@ -94,8 +104,12 @@ export type AgentEvent =
    * Ordewell's to send again (ADR-0023, D4).
    */
   | { type: 'message_dropped'; id: string }
-  /** The turn failed. Carries the agent's own words — never a Ordewell paraphrase. */
-  | { type: 'error'; message: string }
+  /**
+   * The turn failed. Carries the agent's own words — never a Ordewell paraphrase.
+   * `usageLimit` is set where the runner's protocol says in a field, not only
+   * in words, that its account's usage limit failed the turn.
+   */
+  | { type: 'error'; message: string; usageLimit?: UsageLimitSignal }
   /**
    * What the runner loaded for this process from the user's and the
    * project's own setup (#66): its commands and skills, and its MCP servers.
