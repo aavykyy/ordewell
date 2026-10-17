@@ -89,7 +89,9 @@ export class PlanEditor {
    * the rules — and throws, so the surface can say why. Gated on the task existing so an edit to an unknown id still
    * falls through to the no-op `store.update` below instead of throwing.
    * Attached skills meet the rule a planner's do: a planner skill is refused,
-   * a name not found yet only warns.
+   * a name not found yet only warns. A runner change is made by
+   * {@link setTaskRunner}, which re-derives what the runner scopes, ahead of
+   * the rest of the patch.
    *
    * Edits to one task commit in call order: the skill check waits on git, so
    * two quick chip edits (`[a]` then `[a, b]`) could otherwise land the first
@@ -148,12 +150,21 @@ export class PlanEditor {
     const target = this.store.get(taskId);
     const skills = 'skills' in changes && target ? await checkTaskSkillsEdit(target, typedSkills, this.taskSkills()) : undefined;
     if (skills?.errors.length) throw new PlanEditError(skills.errors.map((e) => e.message).join(' '));
-    if ((changes.dependencies || changes.type || 'assignedModel' in changes || changes.taskMode || 'ops' in changes) && target) {
+    if ((changes.dependencies || changes.type || 'assignedModel' in changes || 'assignedRunner' in changes || changes.taskMode || 'ops' in changes) && target) {
       const check = validateTaskEdit('direct', this.store.planTasks, taskId, changes, this.catalog.edit());
       if (!check.ok) throw new PlanEditError(check.error ?? 'Those changes are not valid');
       if (check.clear?.length || check.set) {
         changes = { ...changes, ...Object.fromEntries((check.clear ?? []).map((f) => [f, undefined])), ...check.set };
       }
+    }
+    const { assignedRunner, ...rest } = changes;
+    if (target && assignedRunner && assignedRunner !== target.assignedRunner) {
+      // Written alone, a runner would keep the model, effort and mode its
+      // predecessor scoped. It moves first, so a model named beside it wins
+      // over the one the move derives.
+      const moved = await this.setTaskRunner(taskId, assignedRunner);
+      if (!moved || Object.keys(rest).length === 0) return moved;
+      changes = rest;
     }
     const plan = await this.commitTaskUpdate(taskId, changes);
     if (plan) for (const warning of skills?.warnings ?? []) this.notice('warn', warning);
@@ -186,7 +197,8 @@ export class PlanEditor {
    * because a runner change is never a single-field edit: the task's model,
    * thinking effort and mode are all scoped to its runner, so they are
    * re-derived from the new runner's catalog (see {@link retargetTaskRunner}).
-   * That needs discovery, which is why it is not a branch inside `updateTask`.
+   * That needs discovery, which is why `updateTask` hands a runner change here
+   * rather than writing it as a field.
    *
    * The runner is also admitted into `plan.runners` — see {@link admitRunner}.
    */

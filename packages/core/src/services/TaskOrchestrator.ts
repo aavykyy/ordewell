@@ -1162,17 +1162,19 @@ export class TaskOrchestrator {
     const status = this.store.get(taskId)?.status;
     if (status === 'completed' || status === 'failed' || status === 'awaiting_user') this.emit('onTaskSettled', { taskId });
     this.emit('onTaskChanged');
-    await this.startQueued();
-    if (!this.running) {
-      if (this.attempts.size === 0) {
-        if (this.store.isFinished()) this.planStatus = 'completed';
-        this.emit('onTick');
-        if (this.settled) await this.closeRun();
-        this.emit('onExecutionComplete');
-      }
+    if (this.running) {
+      await this.tick();
       return;
     }
-    await this.tick();
+    // The run the scheduler is not driving is closed here rather than by a
+    // tick, so what was queued behind this task starts here too.
+    await this.startQueued();
+    if (this.attempts.size === 0) {
+      if (this.store.isFinished()) this.planStatus = 'completed';
+      this.emit('onTick');
+      if (this.settled) await this.closeRun();
+      this.emit('onExecutionComplete');
+    }
   }
 
   /**
@@ -1901,6 +1903,9 @@ export class TaskOrchestrator {
     // What this tick starts was admitted as it began: a Stop during one of its awaits withdraws it.
     const admittedAt = this.stopGeneration;
     this.recoverOrphans();
+    // Every way a dependency finishes ticks — a verdict, Mark complete, a skip,
+    // a failed spawn — so a queued force start waiting on it is started here.
+    await this.startQueued();
     if (!this.running) {
       // A run the scheduler is not driving — a manual task run, or a run held
       // on a usage limit with attempts left — is closed by a verdict only. Ended by

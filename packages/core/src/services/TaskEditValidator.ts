@@ -185,7 +185,8 @@ function opsCheck(target: Task, isSubtask: boolean, changes: Partial<Task>): Tas
 /**
  * The rules governing one task edit, shared by both actors. Lock rules
  * (running/completed) apply to the planner only, except that a task's model
- * is nobody's to change while its runner is up ({@link liveModelRefusal}). Well-formedness rules — like
+ * and runner are nobody's to change while its runner is up ({@link liveModelRefusal},
+ * {@link liveRunnerRefusal}). Well-formedness rules — like
  * a hand-set dependency list, the one edit that can leave the plan
  * unschedulable, and type/content coherence on an AI↔MAN flip — describe the
  * task rather than who asked, so they run for both, through the same
@@ -212,6 +213,9 @@ export function validateTaskEdit(
   const landing = coherence?.clear?.includes('assignedModel') ? { ...changes, assignedModel: undefined } : changes;
   if ('assignedModel' in landing && !sameAssignment(landing.assignedModel, target.assignedModel) && catalog?.liveRunner?.(taskId)) {
     return { ok: false, error: liveModelRefusal(target) };
+  }
+  if ('assignedRunner' in changes && changes.assignedRunner !== target.assignedRunner && catalog?.liveRunner?.(taskId)) {
+    return { ok: false, error: liveRunnerRefusal(target) };
   }
 
   if (changes.dependencies) {
