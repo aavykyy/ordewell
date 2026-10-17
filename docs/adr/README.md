@@ -93,7 +93,6 @@ The planner conversation, its harness backends, its research and its skills.
 | [0005](planner/0005-parallel-research-subagents.md) | Parallel read-only research subagents for the planner | accepted | — | — |
 | [0009](planner/0009-coding-agents-as-planners.md) | Coding agents as planners: the harness planner backend | accepted | — | [0026](planner-envelope/0026-one-envelope-for-every-planner.md), [0029](supervision/0029-the-supervisor.md), [0033](planner-envelope/0033-codex-planner-without-its-sandbox.md), [0035](supervision/0035-effects-are-consented-and-recorded.md), [0037](supervision/0037-research-tasks-wake-the-planner.md), [0039](routing/0039-detected-planner-derived-on-refresh.md), [0040](routing/0040-a-slow-model-discovery-never-gates-the-planner-pick.md) |
 | [0012](planner/0012-the-task-query-read-channel.md) | The task-query read channel: reading a task before rewriting it | accepted | — | — |
-| [0021](planner/0021-built-in-skill-seeds-refresh.md) | Unedited built-in skill seeds refresh with the package | accepted | — | — |
 | [0024](planner/0024-unified-skills.md) | Unified skills: one format, one loader, two audiences | accepted | — | — |
 
 ### planner-envelope/
@@ -185,5 +184,6 @@ Folded into another ADR. The number still resolves, and code that cites it stays
 | ADR | Was | Now in |
 |---|---|---|
 | 0019 | Nested repositories are shared live, not refused | [0014](isolation/0014-multi-repo-workspaces.md) |
+| 0021 | Unedited built-in skill seeds refresh with the package | [0024](planner/0024-unified-skills.md) |
 
 <!-- adr-index:end -->

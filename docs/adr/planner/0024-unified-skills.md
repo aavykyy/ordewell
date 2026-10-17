@@ -1,5 +1,7 @@
 ---
 status: accepted
+folds:
+  - "0021 — Unedited built-in skill seeds refresh with the package"
 ---
 
 # 0024 — Unified skills: one format, one loader, two audiences
@@ -7,14 +9,19 @@ status: accepted
 ## Problem
 
 Ordewell had two things called a skill. The planner's skills were `SKILL.md`
-files in `~/.ordewell/skills/`, seeded from the package (ADR-0021) and loaded
-by `/name`. The task-side skills were *toggles* (`tdd`, `verify`): a settings
+files in `~/.ordewell/skills/`, seeded from the package (*Built-in seeds
+refresh*, below) and loaded by `/name`. The task-side skills were *toggles* (`tdd`, `verify`): a settings
 boolean whose only effect was a prompt block. `tdd` was added to every task;
 `verify` told the planner, in chat and one-shot planning alike, to append a
 final verification task. The two shared a word and nothing else, so a team
 could not write a skill for its tasks, share one through git, or have the
 planner choose which tasks get one. `/name` also rewrote the user's message
 into the skill's body, so the transcript no longer showed what was typed.
+
+Built-in skills are copied once into `~/.ordewell/skills/` and that copy wins
+over the package version. The copy was never refreshed, so a fix to a built-in
+(grilling's "one question at a time", commit `36d0254`) never reached anyone
+who had already run Ordewell: their planner kept reading the old text.
 
 ## Decision
 
@@ -49,14 +56,22 @@ a name gets a warning:
   user reviews that plan. A user opts out by setting
   `disable-model-invocation: true` in their own copy in `~/.ordewell/skills/tdd/`.
 
-**Refresh.** The refresh rules are
-[ADR-0021](0021-built-in-skill-seeds-refresh.md)'s: an installed `tdd` still
-equal to the hash recorded when it was seeded (the manifest has recorded `tdd`
-since it was first written) is replaced and so loses the flag; one the user
-edited, including by adding the flag to a copy already carrying the new
-frontmatter, is kept. A copy that is byte-identical to the old seed is
-indistinguishable from an unedited one, so a user who wants the old behaviour
-sets the flag after the refresh, not before.
+**Built-in seeds refresh when unedited (ADR-0021).** `SkillsService` records
+the SKILL.md hash of every seed it writes in `~/.ordewell/skills/.seeded.json`.
+When the package's built-in differs from the installed copy, the copy is
+replaced **only if** its hash still equals the recorded one — the user never
+edited it. An edited copy is left alone.
+
+Installs seeded before the manifest have no record, so a short table of
+superseded built-in hashes (`PRIOR_BUILTIN_HASHES`) stands in for them. Seeds
+written from now on need no table entry when a built-in changes.
+
+For `tdd` that means: an installed `tdd` still equal to the hash recorded when
+it was seeded (the manifest has recorded `tdd` since it was first written) is
+replaced and so loses the flag; one the user edited, including by adding the
+flag to a copy already carrying the new frontmatter, is kept. A copy that is
+byte-identical to the old seed is indistinguishable from an unedited one, so a
+user who wants the old behaviour sets the flag after the refresh, not before.
 
 **Two scopes.** Global `~/.ordewell/skills/` holds the built-in seeds and the
 user's own skills, and is written by the user only. Workspace
@@ -131,8 +146,7 @@ warning at submit saying which folder to commit.
 through the same tool), [ADR-0013](../isolation/0013-worktree-isolation.md) (committed
 skills reach worktrees through git),
 [ADR-0014](../isolation/0014-multi-repo-workspaces.md) (a repo group's skill folders),
-[ADR-0021](0021-built-in-skill-seeds-refresh.md) (seeds still refresh when
-unedited), [ADR-0022](../runners/0022-ordewell-mcp-server.md) (`load_skill` lives on that
+[ADR-0022](../runners/0022-ordewell-mcp-server.md) (`load_skill` lives on that
 server).
 
 ## Considered options
@@ -168,8 +182,13 @@ server).
   the failure the planner's catalog exists to remove.
 - **A new frontmatter field for built-ins.** The invocation field already says
   it, and a user's opt-out needs no separate mechanism.
+- **Always prefer the package version.** Simplest, but silently discards a
+  user's deliberate edits to a skill they own.
+- **Never refresh; tell users to delete the copy.** The status quo; the bug
+  described under Problem is what it costs.
 
 ## History
 
 - 2026-10-09 — accepted: one format and loader; planner and task skills; the `tdd` and `verify` toggles dropped.
 - 2026-10-11 — amended: the `tdd` built-in is model-invocable; the other built-ins stay user-only.
+- 2026-10-17 — ADR-0021 folded in (*Built-in seeds refresh*).
