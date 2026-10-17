@@ -1007,3 +1007,54 @@ describe('ClaudeCodeAdapter runner commands', () => {
     adapter.dispose();
   });
 });
+
+/**
+ * `/model` mid-task, recorded from `claude` 2.1.302 on haiku: the command turn
+ * calls no model and only prints; the next turn's `init`, then its
+ * `message_start`, name the model it now runs (#106).
+ */
+describe('ClaudeCodeAdapter model switches', () => {
+  const recording = () => [fixture('claude-code', 'task-model-before'), fixture('claude-code', 'task-model-command'), fixture('claude-code', 'task-model-switched')];
+
+  it('reports a /model switch once the runner answers on the new model, under the ids it lists', async () => {
+    const { processDeps } = deps(recording());
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskIn('default', { model: 'haiku' }));
+    const events: AgentEvent[] = [];
+    await adapter.send('Reply with just the word one.', (e) => events.push(e));
+    await adapter.invokeCommand('model', 'sonnet', (e) => events.push(e));
+    expect(events.filter((e) => e.type === 'model_switched')).toEqual([]);
+    await adapter.send('Reply with just the word two.', (e) => events.push(e));
+
+    expect(events.filter((e) => e.type === 'model_switched')).toEqual([
+      { type: 'model_switched', from: { model: 'haiku', label: 'Haiku 5.5' }, to: { model: 'sonnet', label: 'Sonnet 5.5' } },
+    ]);
+    adapter.dispose();
+  });
+
+  it('reports no switch the chat did not ask for', async () => {
+    const { processDeps } = deps([fixture('claude-code', 'task-model-before'), fixture('claude-code', 'task-model-switched')]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskIn('default', { model: 'haiku' }));
+    const events: AgentEvent[] = [];
+    await adapter.send('Reply with just the word one.', (e) => events.push(e));
+    await adapter.send('Reply with just the word two.', (e) => events.push(e));
+
+    expect(events.filter((e) => e.type === 'model_switched')).toEqual([]);
+    adapter.dispose();
+  });
+
+  it('lets go of a /model that switched nothing, so a later change is not taken for it', async () => {
+    const { processDeps } = deps([...recording().slice(0, 2), fixture('claude-code', 'task-model-before'), fixture('claude-code', 'task-model-switched')]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskIn('default', { model: 'haiku' }));
+    const events: AgentEvent[] = [];
+    await adapter.send('Reply with just the word one.', (e) => events.push(e));
+    await adapter.invokeCommand('model', 'haiku', (e) => events.push(e));
+    await adapter.send('Reply with just the word one.', (e) => events.push(e));
+    await adapter.send('Reply with just the word two.', (e) => events.push(e));
+
+    expect(events.filter((e) => e.type === 'model_switched')).toEqual([]);
+    adapter.dispose();
+  });
+});

@@ -2,7 +2,7 @@ import type { ApprovalDecision } from '../interfaces/IApproval';
 import type { StructuredEvent, StructuredTurnEnd, TaskMessageFrom } from '../interfaces/IRunner';
 import type { SubagentOutcome, TaskSkillNotice, TaskSkillSnapshot } from './Task';
 import type { UsageRecord } from './Usage';
-import type { RunnerCommand, RunnerMcpServer } from './RunnerCommand';
+import type { RunnerCommand, RunnerMcpServer, RunnerModelRef } from './RunnerCommand';
 
 /**
  * One entry of a structured task's log (ADR-0018, P1): what a runner did,
@@ -35,6 +35,12 @@ export type TaskLogEvent =
   | { type: 'command_output'; text: string }
   /** The runner compacted its own context, asked to or on its own. */
   | { type: 'compaction'; trigger: 'manual' | 'auto'; preTokens?: number; postTokens?: number }
+  /**
+   * A model command sent through the task's chat switched the runner's model,
+   * and the plan now says the new one (#106). `effort` only where the runner
+   * reported one.
+   */
+  | { type: 'model_switched'; from: RunnerModelRef; to: RunnerModelRef; effort?: string }
   /** What the runner loaded from the user's and the project's setup, as its process started. */
   | { type: 'runner_loaded'; commands: RunnerCommand[]; mcpServers: RunnerMcpServer[] }
   | { type: 'turn_end'; reason: StructuredTurnEnd }
@@ -193,6 +199,8 @@ export function toTaskLogEvent(event: StructuredEvent): TaskLogEvent | null {
       };
     case 'command_output':
       return { type: 'command_output', text: event.text };
+    case 'model_switched':
+      return { type: 'model_switched', from: event.from, to: event.to, ...(event.effort ? { effort: event.effort } : {}) };
     case 'background_agent':
       return null;
   }

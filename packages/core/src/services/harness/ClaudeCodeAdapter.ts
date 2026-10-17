@@ -5,7 +5,7 @@ import * as path from 'path';
 import type { SubagentOutcome } from '../../models/Task';
 import { partedPromptUsage, type UsageRecord } from '../../models/Usage';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
-import type { RunnerCommand, RunnerMcpServer } from '../../models/RunnerCommand';
+import { findRunnerCommand, type RunnerCommand, type RunnerMcpServer, type RunnerModelRef } from '../../models/RunnerCommand';
 import { claudeThinkingArgs } from '../../plugins/resolveArgs';
 import type { AgentEvent, AgentStartOptions, PlannerAsk, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
 import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
@@ -204,6 +204,19 @@ interface ClaudeStreamEvent {
   delta?: { type?: string; text?: string; thinking?: string };
 }
 
+/** One model as `initialize` lists it: the value `--model` and `/model` take, the id it runs as, and its name (2.1.302). */
+interface ClaudeModel {
+  value?: string;
+  resolvedModel?: string;
+  displayName?: string;
+}
+
+/**
+ * The CLI's own command that switches the model. Its turn calls no model; the
+ * next turn's `init` and `message_start` name the one it now runs (2.1.302).
+ */
+const MODEL_COMMAND = 'model';
+
 /** One command as `initialize` and `commands_changed` list it (2.1.299); `builtin` marks the CLI's own. */
 interface ClaudeCommand {
   name?: string;
@@ -222,7 +235,7 @@ interface ControlResponse {
    * `initialize`: every model the CLI offers, and the id each value runs as;
    * every command it offers.
    */
-  response?: { mcpServers?: { name?: string; status?: string }[]; models?: { value?: string; resolvedModel?: string }[]; commands?: ClaudeCommand[] };
+  response?: { mcpServers?: { name?: string; status?: string }[]; models?: ClaudeModel[]; commands?: ClaudeCommand[] };
 }
 
 interface ClaudeLine {
@@ -231,6 +244,8 @@ interface ClaudeLine {
   session_id?: string;
   /** `init`: the mode the CLI actually started in. */
   permissionMode?: string;
+  /** `init`: the model the turn runs on, as the id it resolved to. */
+  model?: string;
   result?: string;
   is_error?: boolean;
   /** A failed result's own words when it has no `result` text — a refused `--resume`, say. */
@@ -420,6 +435,14 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private terminalOnly = new Set<string>();
   /** Whether this process's `runner_loaded` went out: its first `init` sends it. */
   private loadedReported = false;
+  /** The models `initialize` listed, which turn the ids the CLI reports back into the ones a plan holds. */
+  private listedModels: ClaudeModel[] = [];
+  /** The id the task's main thread last reported answering on. */
+  private mainModel: string | undefined;
+  /** What the plan should say the task runs: its spawn's model, then each switch followed. */
+  private followedModel: string | undefined;
+  /** A model command sent through the chat whose switch has not been seen yet; `answered` once its own turn ended. */
+  private modelCommand: { args: string; answered: boolean } | null = null;
 
   protected spawnSpec(opts: AgentStartOptions, workspace: Record<string, string>): SpawnSpec {
     if (opts.kind === 'task') return this.taskSpawnSpec(opts);
@@ -466,6 +489,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    */
   private taskSpawnSpec(opts: TaskStartOptions): SpawnSpec {
     this.requestedMode = opts.flags.permissionMode;
+    this.followedModel = opts.model;
     const args = [
       ...TASK_PROTOCOL_ARGS,
       '--permission-prompt-tool', 'stdio',
@@ -525,6 +549,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     // 2.1.299); `init` names them only.
     const initialized = (await this.control({ subtype: 'initialize' }, MODEL_PIN_TIMEOUT_MS))?.response;
     this.listedCommands = initialized?.commands ?? [];
+    this.listedModels = initialized?.models ?? [];
     if (opts.flags.permissionMode !== 'plan' || !opts.model) return;
     const resolved = initialized?.models?.find((m) => m.value === opts.model)?.resolvedModel;
     if (resolved && resolved !== opts.model) await this.control({ subtype: 'set_model', model: resolved }, MODEL_PIN_TIMEOUT_MS);
@@ -621,6 +646,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * for it.
    */
   invokeCommand(name: string, args: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal): Promise<void> {
+    if ((findRunnerCommand(this.commands(), name)?.name ?? name) === MODEL_COMMAND) this.modelCommand = { args: args.trim(), answered: false };
     return this.send(args ? `/${name} ${args}` : `/${name}`, onEvent, signal);
   }
 
@@ -774,6 +800,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
           this.clearFollowOnTimer();
           if (this.refuseOtherMode(msg, emit)) return;
           this.readLoaded(msg, emit);
+          this.followModel(msg.model, emit);
         }
         if (msg.subtype === 'commands_changed' && Array.isArray(msg.commands)) this.listedCommands = msg.commands;
         if (msg.subtype === 'compact_boundary') {
@@ -802,6 +829,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         // text (which carries the plan JSON) already arrived as assistant
         // blocks, so this only settles the turn.
         this.reportSessionCost(msg, emit);
+        if (this.modelCommand) this.modelCommand.answered = true;
         if (this.interruptRequested && (msg.is_error || msg.subtype !== 'success')) {
           this.interruptRequested = false;
           this.closeTurn({ type: 'turn_end', interrupted: true }, emit);
@@ -823,6 +851,46 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       default:
         return;
     }
+  }
+
+  /**
+   * A task's main thread reported the model it answers on. A change is the
+   * user's own switch only when a model command went through the chat before
+   * it: Ordewell never passes `--fallback-model`, so nothing else moves it, and
+   * a change nobody asked for is not written into the plan. A command whose
+   * turn ended with the model unchanged switched nothing, and is let go.
+   *
+   * Effort is not reported: `init` names the model alone (its
+   * `per_turn_effort_active` says effort is on, not which), and `/effort` only
+   * prints, so a switch carries no effort and the plan's stays as planned.
+   */
+  private followModel(reported: string | undefined, emit: (event: AgentEvent) => void): void {
+    if (this.role !== 'task' || !reported || reported === '<synthetic>') return;
+    const previous = this.mainModel;
+    this.mainModel = reported;
+    const command = this.modelCommand;
+    if (previous === undefined || previous === reported) {
+      if (command?.answered) this.modelCommand = null;
+      return;
+    }
+    this.modelCommand = null;
+    if (!command) return;
+    const from = this.listedModel(previous, this.followedModel);
+    const to = this.listedModel(reported, command.args);
+    this.followedModel = to.model;
+    emit({ type: 'model_switched', from, to });
+  }
+
+  /**
+   * The value `initialize` lists for the id a model runs as. Several can share
+   * one (`sonnet`, `default`); the one asked for wins, and `default` only as a
+   * last resort, since it names whatever the CLI's default becomes.
+   */
+  private listedModel(resolved: string, asked: string | undefined): RunnerModelRef {
+    const listed = this.listedModels.filter((m) => m.value && (m.resolvedModel === resolved || m.value === resolved));
+    const pick = listed.find((m) => m.value === asked && asked !== 'default') ?? listed.find((m) => m.value !== 'default') ?? listed[0];
+    if (!pick?.value) return { model: resolved };
+    return { model: pick.value, ...(pick.displayName ? { label: pick.displayName } : {}) };
   }
 
   /**
@@ -921,8 +989,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     // a usage snapshot taken at `message_start`, before any output — its
     // `output_tokens` is a placeholder — and the result's `usage` re-sums these
     // same calls, so either would count them twice.
-    if (event.type === 'message_start') this.plannerModel = event.message?.model;
-    else if (event.type === 'message_delta' && event.usage) emit({ type: 'usage', record: usageRecord(event.usage, this.plannerModel) });
+    if (event.type === 'message_start') {
+      this.plannerModel = event.message?.model;
+      this.followModel(this.plannerModel, emit);
+    } else if (event.type === 'message_delta' && event.usage) emit({ type: 'usage', record: usageRecord(event.usage, this.plannerModel) });
     else if (event.type === 'content_block_start' && event.content_block?.type === 'text') {
       this.pendingBreak = this.turnHasText;
     } else if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text) {

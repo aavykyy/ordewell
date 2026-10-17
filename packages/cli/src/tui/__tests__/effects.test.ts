@@ -1253,6 +1253,15 @@ describe('failures', () => {
     expect(failure.message).toMatch(/deleted/);
   });
 
+  it('shows why a model edit was refused, without the success notice (#106)', async () => {
+    const reason = '"Build" has a live runner, so its model and effort cannot change now: stop the task first, or use the runner\'s own /model';
+    const h = harness({ updateTask: vi.fn().mockRejectedValue(new DaemonError(reason, 400, 'refused')) });
+    await runEffect({ type: 'updateTask', sessionId: 's1', taskId: 't1', changes: { assignedModel: { modelId: 'haiku', modelLabel: 'Haiku' } }, message: 'Model updated.' }, h.deps);
+
+    expect(h.actions).toContainEqual({ type: 'failed', message: reason, code: 'refused' });
+    expect(h.actions).not.toContainEqual({ type: 'notice', message: 'Model updated.' });
+  });
+
   it('leaves an unrelated error message alone', async () => {
     const h = harness({ markTaskComplete: vi.fn().mockRejectedValue(new Error('disk on fire')) });
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'complete' }, h.deps);

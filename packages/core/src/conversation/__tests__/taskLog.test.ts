@@ -490,6 +490,15 @@ describe('reduceTaskLog with the runner\'s own commands (#66)', () => {
     expect(unkeyed(view.blocks).at(-1)).toEqual({ type: 'compaction', trigger: 'auto' });
   });
 
+  it('says where a model switch made in the runner leaves the plan (#106)', () => {
+    const view = replayTaskLog([start, { type: 'model_switched', from: { model: 'haiku', label: 'Haiku 5.5' }, to: { model: 'sonnet', label: 'Sonnet 5.5' } }]);
+    expect(unkeyed(view.blocks).at(-1)).toEqual({
+      type: 'message', role: 'system', text: 'Model changed in the runner: Haiku 5.5 → Sonnet 5.5; the plan now says Sonnet 5.5', streaming: false,
+    });
+    const unlabelled = replayTaskLog([start, { type: 'model_switched', from: { model: 'haiku' }, to: { model: 'claude-opus-4-7' } }]);
+    expect(unkeyed(unlabelled.blocks).at(-1)).toMatchObject({ text: 'Model changed in the runner: haiku → claude-opus-4-7; the plan now says claude-opus-4-7' });
+  });
+
   it('shows what the runner loaded as one block', () => {
     const commands = [{ name: 'pingskill', description: 'Reply', kind: 'skill' as const }];
     const view = replayTaskLog([start, { type: 'runner_loaded', commands, mcpServers: [{ name: 'docs-server', status: 'pending' }] }]);

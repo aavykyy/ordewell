@@ -4,6 +4,7 @@ import { FakeRunnerSession, makeSession, testWorkspace, taskOf, saves } from './
 import { PlanStore } from '../PlanStore';
 import type { ModelResolver } from '../ModelResolver';
 import type { IRunner } from '../../interfaces/IRunner';
+import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 
 /** One AI task, so a removal leaves the scheduler with nothing else to spawn. */
 function soloPlan(): LegacyPlanState {
@@ -390,6 +391,89 @@ describe('Session.updateTask — model and task-mode validity', () => {
     });
 
     expect(state!.tasks.find((t) => t.id === 't1')!.assignedModel?.modelId).toBe('claude-haiku-4-5');
+  });
+});
+
+/**
+ * A task's model belongs to its runner while the runner is up (#106): what
+ * the plan says must be what runs, and a live process cannot be re-modelled
+ * from outside it.
+ */
+describe('Session.updateTask — model of a task with a live runner', () => {
+  const haiku = { modelId: 'claude-haiku-4-5', modelLabel: 'Claude Haiku 4.5' };
+  const refusal = /stop the task first, or use the runner's own \/model/;
+
+  async function running() {
+    const sessions: FakeRunnerSession[] = [];
+    const runner = {
+      spawn: vi.fn(async ({ taskId }: { taskId: string }) => {
+        const live = new FakeRunnerSession(`s-${taskId}`, taskId);
+        sessions.push(live);
+        return live;
+      }),
+      stop: vi.fn(),
+      stopAll: vi.fn(),
+      activeCount: 0,
+    } as unknown as IRunner;
+    const session = makeSession({ runner, modelResolver: resolverFor(CLAUDE_CATALOG) });
+    session.loadPlan(soloPlan(), 'goal', testWorkspace, { persist: false });
+    await session.executePlan();
+    expect(sessions).toHaveLength(1);
+    return { session, live: sessions[0] };
+  }
+
+  it('refuses the user\'s own model or effort edit while the task runs, and allows it once stopped', async () => {
+    const { session } = await running();
+
+    await expect(session.updateTask('only', { assignedModel: haiku })).rejects.toThrow(refusal);
+    await expect(session.updateTask('only', { assignedModel: { ...haiku, thinkingEffort: 'high' } })).rejects.toThrow(refusal);
+    expect(taskOf(session, 'only')?.assignedModel).toBeUndefined();
+
+    await session.cancelTask('only');
+    await session.updateTask('only', { assignedModel: haiku });
+    expect(taskOf(session, 'only')?.assignedModel?.modelId).toBe('claude-haiku-4-5');
+  });
+
+  it('refuses it while the runner waits for input, its process still up', async () => {
+    const { session, live } = await running();
+    live.waitForInput();
+    await vi.waitFor(() => expect(taskOf(session, 'only')?.status).toBe('awaiting_user'));
+
+    await expect(session.updateTask('only', { assignedModel: haiku })).rejects.toThrow(refusal);
+  });
+
+  it('follows a switch made with the runner\'s own /model as a visible edit, off the allowlist too', async () => {
+    const broadcast = vi.fn();
+    const sessions: FakeRunnerSession[] = [];
+    const runner = {
+      spawn: vi.fn(async ({ taskId }: { taskId: string }) => {
+        const live = new FakeRunnerSession(`s-${taskId}`, taskId);
+        sessions.push(live);
+        return live;
+      }),
+      stop: vi.fn(), stopAll: vi.fn(), activeCount: 0,
+    } as unknown as IRunner;
+    const session = makeSession({
+      runner, broadcast, modelResolver: resolverFor(CLAUDE_CATALOG),
+      settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' }, modelAllowlist: { 'claude-code': ['claude-sonnet-4-5'] } }),
+    });
+    const plan = soloPlan();
+    plan.tasks[0].assignedModel = { modelId: 'claude-sonnet-4-5', modelLabel: 'Claude Sonnet 4.5', thinkingEffort: 'high' };
+    session.loadPlan(plan, 'goal', testWorkspace, { persist: false });
+    await session.addTask({ title: 'Docs', prompt: 'write docs', dependencies: ['only'] }); // seeds the catalog
+    await session.executePlan();
+
+    sessions[0].emitEvent({ type: 'model_switched', from: { model: 'claude-sonnet-4-5', label: 'Sonnet 4.5' }, to: { model: 'claude-haiku-4-5', label: 'Haiku 4.5' } });
+
+    const followed = { modelId: 'claude-haiku-4-5', modelLabel: 'Claude Haiku 4.5', thinkingEffort: 'high', availableVariants: [] };
+    await vi.waitFor(() => expect(taskOf(session, 'only')?.assignedModel).toEqual(followed));
+    expect(broadcast).toHaveBeenCalledWith({ type: 'task_updated', taskId: 'only', changes: { assignedModel: followed } });
+  });
+
+  it('lets other fields of a running task change, and a model edit that changes nothing through', async () => {
+    const { session } = await running();
+    await session.updateTask('only', { title: 'Only, renamed', assignedModel: undefined });
+    expect(taskOf(session, 'only')?.title).toBe('Only, renamed');
   });
 });
 

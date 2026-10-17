@@ -5,6 +5,7 @@ const LOG_KINDS = {
   turn_start: true,
   command: true,
   command_output: true,
+  model_switched: true,
   compaction: true,
   runner_loaded: true,
   turn_end: true,
@@ -37,6 +38,7 @@ function eventText(event: TaskLogEvent): string {
     case 'turn_start': return `${event.messageId ? `${event.messageId} ` : ''}${event.forced ? '(forced) ' : ''}${event.from ? '(from Ordewell) ' : ''}${event.message}`;
     case 'command': return `${event.messageId ? `${event.messageId} ` : ''}/${event.name}${event.args ? ` ${event.args}` : ''}`;
     case 'command_output': return event.text;
+    case 'model_switched': return `${event.from.model} → ${event.to.model}${event.effort ? ` (${event.effort})` : ''}`;
     case 'compaction': return `${event.trigger}${event.preTokens !== undefined && event.postTokens !== undefined ? `, ${event.preTokens} → ${event.postTokens} tokens` : ''}`;
     case 'runner_loaded': return [
       `commands: ${event.commands.map((c) => `/${c.name} (${c.kind})`).join(', ') || 'none'}`,
