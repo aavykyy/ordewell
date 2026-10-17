@@ -36,7 +36,7 @@ import { SkillsService, workspaceSkillRoots } from './SkillsService';
 import { capConflictFiles } from './conflictFiles';
 import { resolveWorkspaceEnv, type WorkspaceEnv } from './workspaceEnv';
 import { supportsTaskMode } from './harness/connectors';
-import { continuability } from './continuation';
+import { continuability, sessionOwner } from './continuation';
 import { quotedList } from '../utils/quotedList';
 import type { RunMergeView } from './SessionMessage';
 import { resumeTime } from '../taskRow/status';
@@ -1449,13 +1449,20 @@ export class TaskOrchestrator {
       const resumes = this.awaitsResume;
       this.retryCounts.set(taskId, (this.retryCounts.get(taskId) ?? 0) + 1);
       const ended = this.endAttempt(taskId, 'retry');
+      const movedFrom = this.movedFrom(task);
       this.store.retry(taskId);
+      if (movedFrom) this.store.setCarriedFrom(taskId, movedFrom);
       this.store.unblockDependents(taskId);
       this.onHold.delete(taskId);
       this.emit('onTaskChanged');
-      // A retry starts over from the integration tip, which by now holds what its
-      // predecessors landed; the old attempt's worktree has nothing to offer it.
-      await this.runs.release(taskId, { keep: false }, ended?.integration);
+      if (movedFrom) {
+        // The earlier runner's work is the new attempt's to restore, so its worktree stays until that prepare replaces it.
+        await ended?.integration;
+      } else {
+        // A retry starts over from the integration tip, which by now holds what its
+        // predecessors landed; the old attempt's worktree has nothing to offer it.
+        await this.runs.release(taskId, { keep: false }, ended?.integration);
+      }
       // A Stop while the worktree went leaves the run stopped, the task back to not started.
       if (admittedAt !== this.stopGeneration) return;
       // A retry resumes a run that waits on one, so what the task blocked starts once it passes (ADR-0034).
@@ -1515,6 +1522,17 @@ export class TaskOrchestrator {
     this.emit('onUsageLimitWait', { taskId, runner, resumeAt: null, cancelled: true });
     this.emit('onTaskChanged');
     return true;
+  }
+
+  /**
+   * The runner whose attempt left the task's work, when the task has been
+   * moved off it since: a session cannot cross runners, so whatever starts
+   * the task next is a carry-over of that work, the rule a paused task's move
+   * follows (ADR-0018, U1).
+   */
+  private movedFrom(task: Task): RunnerId | undefined {
+    const owner = sessionOwner(task);
+    return owner && owner !== this.store.resolveTaskRunner(task) ? owner : undefined;
   }
 
   /**
@@ -2265,7 +2283,7 @@ export class TaskOrchestrator {
       this.output.detach(taskId);
     }
     const session = attempt?.session ?? null;
-    if (session) this.saveNativeSession(taskId, session.nativeSessionId());
+    if (attempt && session) this.saveNativeSession(taskId, session.nativeSessionId(), attempt.runner);
     if (stopsRunner(reason)) {
       const task = this.store.get(taskId);
       if (task) this.verifier.clear(task);
@@ -2275,8 +2293,8 @@ export class TaskOrchestrator {
   }
 
   /** Kept on the task once the attempt ends, so a continue can resume it after a reload (ADR-0018, K1). */
-  private saveNativeSession(taskId: string, nativeSessionId: string | null): void {
-    if (nativeSessionId) this.store.setTaskRunnerSessionId(taskId, nativeSessionId);
+  private saveNativeSession(taskId: string, nativeSessionId: string | null, runner: RunnerId): void {
+    if (nativeSessionId) this.store.setTaskRunnerSessionId(taskId, nativeSessionId, runner);
   }
 
   private endAllAttempts(reason: 'stop' | 'load'): TaskAttempt[] {

@@ -4,6 +4,15 @@ import { pausedOnLimit, type Task } from '../models/Task';
 export type Continuability = { ok: true; sessionId: string } | { ok: false; reason: string };
 
 /**
+ * The runner a task's saved session belongs to: the one recorded when it was
+ * saved, else — for a plan from before that — the runner of its last attempt.
+ * Undefined when neither is known.
+ */
+export function sessionOwner(task: Task): string | undefined {
+  return task.runnerSessionOwner ?? task.attemptUsage?.at(-1)?.runner;
+}
+
+/**
  * The rule every surface offers Continue by and the orchestrator enforces: a
  * completed, failed or skipped task, or one paused on a usage limit, whose last
  * attempt left a session id behind. A conflict is resolved by its repair, not a
@@ -18,6 +27,10 @@ export function continuability(task: Task): Continuability {
   const finished = task.status === 'completed' || task.status === 'failed' || task.status === 'skipped';
   if (!finished && !pausedOnLimit(task)) return refuse('only a completed, failed or skipped task, or one paused on a usage limit, can be.');
   if (!task.runnerSessionId) return refuse('its runner left no saved session to resume. Use Retry instead.');
+  const owner = sessionOwner(task);
+  if (owner && owner !== task.assignedRunner) {
+    return refuse(`its saved session belongs to ${owner}; Retry starts fresh on ${task.assignedRunner} and carries over its files.`);
+  }
   return { ok: true, sessionId: task.runnerSessionId };
 }
 

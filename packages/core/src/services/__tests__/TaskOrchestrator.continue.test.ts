@@ -100,6 +100,26 @@ describe('which tasks can be continued (ADR-0018, K1)', () => {
     expect(continuability(plan({ status: 'failed', runnerSessionId: undefined }))).toEqual({ ok: false, reason: expect.stringContaining('no saved session') });
   });
 
+  it('not a task whose saved session belongs to another runner than the one it is now assigned', () => {
+    const moved = plan({ status: 'failed', runnerSessionId: savedSessionId, runnerSessionOwner: 'claude-code', assignedRunner: 'codex' });
+    expect(continuability(moved)).toEqual({
+      ok: false,
+      reason: 'Task "Parse JSON" cannot be continued: its saved session belongs to claude-code; Retry starts fresh on codex and carries over its files.',
+    });
+    expect(continuability({ ...moved, status: 'completed' }).ok).toBe(false);
+    expect(continuability({ ...moved, assignedRunner: 'claude-code' })).toEqual({ ok: true, sessionId: 'sess-1' });
+  });
+
+  it('reads the owner of a session saved before owners were recorded from the last attempt\'s runner', () => {
+    const attemptUsage = [
+      { attempt: 1, runner: 'opencode', startedAt: '2026-10-01T10:00:00.000Z', wallTimeMs: 0, totals: {}, byModel: [] },
+      { attempt: 2, runner: 'claude-code', startedAt: '2026-10-01T11:00:00.000Z', wallTimeMs: 0, totals: {}, byModel: [] },
+    ];
+    const old = plan({ status: 'failed', runnerSessionId: savedSessionId, attemptUsage, assignedRunner: 'codex' });
+    expect(continuability(old)).toEqual({ ok: false, reason: expect.stringContaining('belongs to claude-code') });
+    expect(continuability({ ...old, assignedRunner: 'claude-code' }).ok).toBe(true);
+  });
+
   it('not a task still running, waiting, or never run, nor a user task', () => {
     for (const status of ['pending', 'in_progress', 'awaiting_user', 'blocked'] as const) {
       expect(continuability(plan({ status, runnerSessionId: savedSessionId })).ok).toBe(false);

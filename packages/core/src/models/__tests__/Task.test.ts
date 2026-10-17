@@ -351,6 +351,14 @@ describe('keepExecutionState', () => {
     ]);
   });
 
+  it('keeps the runner a task\'s saved session belongs to, with the session', () => {
+    const stopped = { ...todo('a', 1), runnerSessionId: 'sess-1', runnerSessionOwner: 'claude-code' };
+
+    const [result] = keepExecutionState([stopped], [todo('a', 1)]);
+
+    expect(result).toMatchObject({ runnerSessionId: 'sess-1', runnerSessionOwner: 'claude-code' });
+  });
+
   it('puts a settled task the rewrite left out back beside its old neighbour', () => {
     const current = [done('a', 1), todo('b', 2), done('c', 3), todo('d', 4)];
     const rewrite = [todo('b', 1), todo('d', 2), todo('e', 3)];

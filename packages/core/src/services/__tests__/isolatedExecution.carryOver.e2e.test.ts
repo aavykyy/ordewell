@@ -224,3 +224,52 @@ describe.skipIf(!hasGit)('a paused task moved to another runner keeps its uncomm
     expect(retried.prompt).not.toContain('## Work carried over');
   }, 30_000);
 });
+
+describe.skipIf(!hasGit)('a finished task moved to another runner', () => {
+  it('refuses Continue, and a Retry starts a fresh session on the new runner from the files the earlier attempt left', async () => {
+    const root = repo();
+    const h = setup(root);
+    await h.orchestrator.forceStartTask('t1');
+    writeFileSync(join(h.requests[0].cwd, 'feature.txt'), 'half implemented\n');
+    writeFileSync(join(h.requests[0].cwd, 'new.txt'), 'new implementation\n');
+    h.sessions[0].emitExit(1);
+    await vi.waitFor(() => expect(h.task().status).toBe('failed'), { timeout: 20_000 });
+    await vi.waitFor(() => expect(h.orchestrator.runs.taskIsolation('t1')).toMatchObject({ state: 'kept' }), { timeout: 20_000 });
+    expect(h.task()).toMatchObject({ runnerSessionId: 'native-t1', runnerSessionOwner: 'claude-code' });
+
+    moveTo(h.orchestrator, 'codex');
+
+    await expect(h.orchestrator.continueTask('t1', 'carry on')).rejects.toThrow(
+      'its saved session belongs to claude-code; Retry starts fresh on codex and carries over its files.',
+    );
+    await h.orchestrator.retryTask('t1');
+    await h.orchestrator.forceStartTask('t1');
+
+    const moved = h.requests[1];
+    expect(moved.runner).toBe('codex');
+    expect(moved.resumeSessionId).toBeUndefined();
+    expect(readFileSync(join(moved.cwd, 'feature.txt'), 'utf8')).toBe('half implemented\n');
+    expect(readFileSync(join(moved.cwd, 'new.txt'), 'utf8')).toBe('new implementation\n');
+    expect(moved.prompt).toContain('## Work carried over');
+    expect(moved.prompt).toContain('previous attempt on claude-code');
+    expect(h.task().carriedFrom).toBeUndefined();
+    expect(h.task().runnerSessionOwner).toBeUndefined();
+  }, 30_000);
+
+  it('a completed task\'s Retry after the move carries the earlier files over too', async () => {
+    const root = repo();
+    const h = setup(root, false);
+    await h.orchestrator.forceStartTask('t1');
+    writeFileSync(join(root, 'feature.txt'), 'implemented\n');
+    h.sessions[0].reportComplete({ status: 'done', summary: 'Done' });
+    await vi.waitFor(() => expect(h.task().status).toBe('completed'), { timeout: 20_000 });
+
+    moveTo(h.orchestrator, 'codex');
+    await h.orchestrator.retryTask('t1');
+    await h.orchestrator.forceStartTask('t1');
+
+    const moved = h.requests[1];
+    expect(moved.runner).toBe('codex');
+    expect(moved.prompt).toContain('The files in your working tree come from a previous attempt on claude-code');
+  }, 30_000);
+});
