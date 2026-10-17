@@ -84,7 +84,7 @@ workspace copy is reported as shadowed, so it is never silently lost. Rename
 one of them to use both.
 
 Built-in skills are refreshed when you have not edited your copy
-([ADR-0021](adr/planner/0024-unified-skills.md)).
+([ADR-0024](adr/planner/0024-unified-skills.md)).
 
 ## Using a skill in the planner
 

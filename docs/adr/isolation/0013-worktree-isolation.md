@@ -50,7 +50,8 @@ everything below applies per repo of the group.
   (same integration branches, same base refs) while it has a `merged` task; a
   record with nothing landed holds only superseded attempts and is discarded
   whole before a new one is minted. `discardRun` is how a user starts over.
-- **Naming and location.** A task's worktrees live together in one *task
+- **Naming and location.** A task's worktrees are made by `prepare` when the task
+  starts, not when the run opens. They live together in one *task
   workspace*, `.ordewell/worktrees/<run-id>/<order>-<slug>/`, each at its repo's
   relative path, all on one branch name `ordewell/<run-id>/<order>-<slug>`; the
   integration branch is `ordewell/<run-id>/integration` in each repo.
@@ -261,7 +262,9 @@ everything below applies per repo of the group.
   keeps dependencies for genuine ordering. The shared-workspace text is the
   original, word for word. A dirty tree counts as *not* isolating: the user may
   still choose to run without isolation, and the ordering rule is the safe one
-  then.
+  then. The planner and its research subagents never execute in a worktree: they
+  start at the workspace root, and read-only planning keeps its existing envelope
+  ([ADR-0008](../planner-envelope/0008-planner-exploration-envelope.md)).
 - **Output belongs to the attempt.** The completion call supplies the durable
   summary; the captured plain-output tail is the fallback for summary text.
   No transcript-directory search determines completion or binds an output to
@@ -291,7 +294,8 @@ everything below applies per repo of the group.
   from the saved plan.
 - **Config.** `worktreeIsolation` (default on), an `ORDEWELL_WORKTREE_ISOLATION`
   environment override, an optional `worktreeSetupCommand`
-  (`ORDEWELL_WORKTREE_SETUP`), and `workspaceRepos` and `worktreeLinks`
+  (`ORDEWELL_WORKTREE_SETUP`), and `workspaceRepos`
+  (`ORDEWELL_WORKSPACE_REPOS`) and `worktreeLinks` (`ORDEWELL_WORKTREE_LINKS`)
   (ADR-0014), following the `BaseConfig`/`EnvConfig` pattern. A repo with hooks
   or submodules that assume one worktree opts out with the setting rather than
   by not being a git repo.
@@ -337,7 +341,10 @@ literal git command lines or private fields.
   File-scope-gated scheduling is the obvious follow-up if conflicts prove
   frequent.
 - Pushing, pull requests, or any remote operation.
-- OS-level sandboxing of runners (a separate effort; see ADR-0011).
+- OS-level sandboxing of runners. A runner is scoped by its mode
+  ([ADR-0001](../routing/0001-autonomous-mode-resolution.md));
+  [ADR-0011](../planner-envelope/0011-sandboxing-the-planners-shell.md)
+  sandboxes the planner's shell only.
 - Redefining how Runners themselves use git; they continue to receive a `cwd`.
 
 ## Considered options
@@ -351,10 +358,11 @@ literal git command lines or private fields.
   same-file problem rather than removing it. Tasks in a batch would still edit one
   tree at once, a `pass` could still be won by work a sibling later overwrote, and
   there would be no per-task branch to inspect, retry or undo.
-- **Auto-merging the result into the user's branch.** Rejected: it is the one
-  irreversible step, and it would land work in a tree that may hold uncommitted
-  changes. Ordewell produces one reviewable branch and the user chooses to
-  review, merge or discard.
+- **Auto-merging the result into the user's branch by default.** Rejected: it is
+  the one irreversible step, and it would land work in a tree that may hold
+  uncommitted changes. Ordewell produces one reviewable branch and the user
+  chooses to review, merge or discard. A user who wants the merge made for them
+  opts in once, as above.
 - **Model-resolved merge conflicts, unbounded and unverified.** Rejected:
   resolving a conflict is deciding which of two changes wins, and handing that to
   a model silently rewrites a merge nobody reviewed, with the verdict depending
@@ -411,6 +419,11 @@ literal git command lines or private fields.
 - Git hooks run on the per-task and merge commits as they would for the user. A
   hook that assumes a single worktree refuses the landing, and the task waits on
   the user with its work kept; the user can opt out with the setting.
+- Open: a Codex task's `workspace-write` sandbox is rooted at its worktree, and a
+  linked worktree keeps its git directory in the main repository, outside that
+  root, so a git command the task runs that writes there may be refused.
+  Ordewell's own per-task commit and landing run in core, not in the runner, so
+  integration does not depend on it. Not checked against a real Codex.
 
 ## History
 

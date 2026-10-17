@@ -52,8 +52,9 @@ planner exploration envelope (ADR-0008).
 
 ## Key properties
 
-Two rules of the superseded tmux design (ADR-0007, folded in under *Considered
-options*) outlive it, and other ADRs rely on them:
+Two rules hold for every transport, and other ADRs rely on them. ADR-0013 and
+ADR-0014 cited ADR-0007 (folded in under *Considered options*) for them; D2 is
+its rule T7:
 
 - **A runner is handed a `cwd` and nothing more (D1).** Git never enters
   `IRunner`, `RunnerRegistry` or a runner adapter: isolation prepares a
@@ -202,4 +203,4 @@ tmux; the TUI remains unverified on native Windows (ADR-0010).
 - 2026-10-09 — ADR-0007: the transport setting removed; terminal is only the per-connector fallback (ADR-0018).
 - 2026-10-09 — accepted and implemented; supersedes ADR-0007.
 - 2026-10-10 — the TUI task-log surface corrected to Enter on a task in the plan pane.
-- 2026-10-17 — ADR-0007 folded in under Considered options; its two surviving rules are D1 and D2.
+- 2026-10-17 — ADR-0007 folded in under Considered options; D1 and D2, the two rules other ADRs cited to it, are Key properties here (D2 was its T7).

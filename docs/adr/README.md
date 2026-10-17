@@ -18,6 +18,11 @@ one](#writing-one), [Changing an existing one](#changing-an-existing-one),
 
 ## Should this be an ADR?
 
+First find out what is already decided. Grep `docs/adr` for the module, type,
+setting or command you are changing (`grep -rln PlannerConversation docs/adr`)
+and scan the titles in the index below. If an ADR owns the area, the question is
+usually which part of it changes, not whether to write a new one.
+
 Write a new one only when **all three** are true (the test Matt Pocock's skills
 use, which this project follows):
 
@@ -164,8 +169,9 @@ list four-digit numbers as strings.
 **Style.**
 
 - Use the terms in [CONTEXT.md](../../CONTEXT.md); its *avoid* lists name the
-  synonyms that blur a distinction the project keeps. Add a term there when the
-  ADR introduces one.
+  synonyms that blur a distinction the project keeps. A term the ADR introduces
+  goes there in the change that implements it, since CONTEXT.md describes what
+  is.
 - Name code by module, type or function (`blockingFailures`), with a path only
   when it is hard to find. Do not cite line numbers; they rot.
 - No quantified performance or cost claims ([AGENTS.md](../../AGENTS.md)). A fact
@@ -182,10 +188,13 @@ list four-digit numbers as strings.
 1. Decide it qualifies. If it changes a decision an ADR already records, edit
    that ADR instead (next section).
 2. Take the next number, pick the folder and create the file from the template.
-3. If it changes another ADR, list it in `amends` and add a *Pending* line under
-   that ADR's title until this one is implemented.
+3. If it changes another ADR, list that ADR in `amends`, and add a *Pending* line
+   under the title of each ADR whose text states the rule you are changing, until
+   this one is implemented.
 4. Write it. History starts with today's date and `accepted` (`proposed` if
-   that is its status).
+   that is its status). Check each fact you state (names, defaults, paths,
+   limits) against the code, and do not state a guess as fact: say in your message
+   to the maintainer what you inferred.
 5. Label a rule `(K1)` only once code or another ADR cites it (see Rule IDs).
 6. Cite the ADR in a comment where the code embodies it, saying why:
    `// … (ADR-0018)`. The check fails a citation that does not resolve.
@@ -196,17 +205,21 @@ list four-digit numbers as strings.
 
 ## Changing an existing one
 
-- **Rewrite in place.** Change the part that is no longer true so the ADR reads
-  as what is true now. An option that was chosen and is now dropped moves to
-  Considered options with why. Add one dated History line. Do not add an Update
-  or Amendment section or an "*Amended…*" paragraph; the check warns about them.
+- **Rewrite in place,** in the same change as the code that makes it true.
+  Change the part that is no longer true so the ADR reads as what is true now. An
+  option that was chosen and is now dropped moves to Considered options with why.
+  Add one dated History line. Do not add an Update or Amendment section or an
+  "*Amended…*" paragraph; the check warns about them.
 - **A small change is not a new ADR.** A corrected detail, a new case under an
   existing rule or a renamed control is a rewrite and a History line in the ADR
   that owns the area. A change that is a decision in its own right (it passes the
   test above) gets its own ADR with `amends`.
-- **While it is not built,** the older ADR carries one *Pending* line naming the
-  new one. Once it is implemented, rewrite the older ADR and drop the line; the
-  check fails a Pending line that names a fully implemented ADR.
+- **Decided but not built yet.** The body keeps saying what is true now, and one
+  *Pending* line under the title says what will change. For a change that has its
+  own ADR the line names that ADR; for a small change it says what will change and
+  what it waits on (an issue number). When the code lands, rewrite the body, add
+  the History line and delete the Pending line. The check fails a Pending line
+  that names a fully implemented ADR.
 - **Never renumber or delete a number.** A folded ADR keeps its number in the
   host's `folds`.
 

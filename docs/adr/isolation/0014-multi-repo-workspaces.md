@@ -233,7 +233,8 @@ and crash pruning cover every repo. The integration branches are plain branches
 ### The planner is told
 
 The planner prompt describes the group — its repos and shared paths — for any
-group but a lone repo at `.`: a folder holding a single repo still has its files
+group but a lone repo at `.`, which gets a section only when nested repositories
+are linked into it (above): a folder holding a single repo still has its files
 under that repo's path, and may have shared paths. `isActive` names the repos
 and shared paths when it answers yes for a folder, so the planner can be told
 before a run is minted; a run in force or being continued describes its own
@@ -308,14 +309,14 @@ Core, daemon, TUI, CLI and VS Code.
   name, but refusing the whole group is a bigger failure: it protects nothing.
   The nested repositories are books the tasks may legitimately need to read, and
   a live link discloses its own risk.
-- **Composing the outer repository and the nested ones into one group.** It
-  reads well — the outer at `.`, the nested at their paths — but a git worktree
+- **Composing the outer repository and the nested ones into one group.**
+  Rejected: it reads well — the outer at `.`, the nested at their paths — but a git worktree
   cannot cleanly hold another worktree inside its working directory, and the
   nested repository is *owned* by the outer one in no way that would let its
   history be integrated atomically with it.
-- **Sharing only the unignored nested repositories.** It leaves the silent,
-  invisible case exactly as it is, which is the one the shared-live rule exists
-  to remove.
+- **Sharing only the unignored nested repositories.** Rejected: it leaves the
+  silent, invisible case exactly as it is, which is the one the shared-live rule
+  exists to remove.
 - **Partial landing.** Rejected: a task that changed an API and its client would
   land in one repo and not the other, leaving the integration branches
   inconsistent with each other and `merged` meaning "some of it". A dependent

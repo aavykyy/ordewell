@@ -177,16 +177,16 @@ writing.
   reach tasks already planned, as ADR-0030's run settings do. The user chose
   the plan as the record of what runs: a plan read under Guarded would run
   under Full after a later switch.
-- **Dropping the per-task choice altogether.** Read-only work would either run
-  with write access or need a separate task type.
-- **Replacing the dropdown with a read-only toggle.** It would take Claude's
-  "Ask before edits" and "Edit automatically" away from the user for one task,
-  and saved plans with those modes would need converting.
-- **Mapping a planner's `taskMode: "plan"` to read-only.** A second way to say
-  the same thing, and the one the planner was getting wrong.
+- **Dropping the per-task choice altogether.** Rejected: read-only work would
+  either run with write access or need a separate task type.
+- **Replacing the dropdown with a read-only toggle.** Rejected: it would take
+  Claude's "Ask before edits" and "Edit automatically" away from the user for one
+  task, and saved plans with those modes would need converting.
+- **Mapping a planner's `taskMode: "plan"` to read-only.** Rejected: a second
+  way to say the same thing, and the one the planner was getting wrong.
 - **A read-only task on a runner without a read-only mode falls back to the
-  level's mode.** The task would run with write access the planner said it must
-  not have.
+  level's mode.** Rejected: the task would run with write access the planner said
+  it must not have.
 - **Runtime override** — the setting rewrites modes at spawn, including on
   already-generated plans. Rejected: it makes "what the plan says" differ from
   "what runs", which is the exact silent state this project refuses to create.

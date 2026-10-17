@@ -469,7 +469,7 @@ export interface IWorktreeIsolation {
    * so a crash-recovery prune does not sweep it away; a repair it ends leaves
    * the task `conflict`, as it was before the repair. Takes the run rather than
    * a bare task id: ids are only unique within one plan, and one daemon serves
-   * many (ADR-0007).
+   * many (ADR-0025 D2).
    */
   release(run: IsolationRun, taskId: string, opts: { keep: boolean }): Promise<IsolationRemoval>;
 
