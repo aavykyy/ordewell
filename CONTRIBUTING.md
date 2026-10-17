@@ -9,7 +9,10 @@ Open an issue first. Ordewell has opinions — about where logic lives, about wh
 counts as evidence that a task finished — and a PR that cuts against one of them
 is a bad outcome for both of us. The [ADRs](docs/adr/README.md), grouped by area,
 record most of those opinions, and [CONTEXT.md](CONTEXT.md) is the vocabulary
-they're written in.
+they're written in. If your change makes a decision they don't cover — hard to
+reverse, surprising without context, a real trade-off — add an ADR in the same
+pull request; the README says [what qualifies](docs/adr/README.md#should-this-be-an-adr)
+and how to write one. A smaller change to a recorded decision edits that ADR.
 
 Small fixes (a typo, a crash, an obviously-wrong branch) need no issue. Just
 send them.

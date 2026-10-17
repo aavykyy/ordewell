@@ -15,8 +15,12 @@ and OpenCode can all be running targets.
 - **[docs/adr/](docs/adr/README.md)** — architecture decisions, grouped into
   folders by area, including the options that were rejected and why. The
   README's index lists them; read the ones that touch what you're changing.
-  ADR numbers and rule IDs are permanent (code cites them), and
-  `node scripts/verify-adr.mjs` checks them in CI.
+  Before writing or changing one, read its
+  [guide](docs/adr/README.md#should-this-be-an-adr): a new ADR needs a decision
+  that is hard to reverse, surprising without context and a real trade-off, and
+  anything smaller edits the ADR that owns it. ADR numbers and rule IDs are
+  permanent (code cites them), and `node scripts/verify-adr.mjs` checks them in
+  CI.
 
 ## Build entry point
 

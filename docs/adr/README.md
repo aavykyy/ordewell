@@ -8,55 +8,209 @@ are written in.
 An ADR here is a **living document**: it reads as what is true now, not as a log
 of edits. When a decision changes, the ADR is rewritten once the change is
 implemented and gets one dated line in its History. It never grows an Update or
-Amendment section. [AGENTS.md](../../AGENTS.md) has the full rules.
+Amendment section. [AGENTS.md](../../AGENTS.md) has the conventions that apply to
+all work in this repository.
 
-## Layout
+**Recording a decision?** Go in this order: [Should this be an
+ADR?](#should-this-be-an-adr), [Where it goes](#where-it-goes), [Writing
+one](#writing-one), [Changing an existing one](#changing-an-existing-one),
+[Checks](#checks). Most changes are not new ADRs.
 
-`docs/adr/<folder>/NNNN-slug.md`, in one of the folders below. **Numbers are
-global and permanent**: never reused, never renumbered, and not tied to the
-folder, so a citation such as `ADR-0018` in a source comment stays valid when a
-document moves or is folded into another. `node scripts/verify-adr.mjs --next`
-prints the next free number.
+## Should this be an ADR?
 
-## Template
+Write a new one only when **all three** are true (the test Matt Pocock's skills
+use, which this project follows):
+
+1. **Hard to reverse.** Changing your mind later costs something real: a
+   persisted shape, a public command, setting or flag, the protocol between
+   Ordewell and a runner, a trust boundary, where a module seam sits.
+2. **Surprising without context.** A later reader, human or agent, would look at
+   the code and ask why it is this way, or would "fix" it.
+3. **A real trade-off.** There were credible alternatives and this one was
+   picked for stated reasons. The rejected options are the most useful part of
+   an ADR; if you cannot name one, there is nothing to record.
+
+If one is missing, skip the ADR: an easy decision will just be reversed, an
+unsurprising one needs no explanation, and a decision with no alternative is
+"we did the obvious thing".
+
+**What usually qualifies**
+
+- A rule about what counts as evidence, what the plan is the source of, or who
+  decides (the hard constraints in [CLAUDE.md](../../CLAUDE.md)).
+- Anything that widens or narrows a security boundary. The planner's
+  exploration envelope ([ADR-0008](planner-envelope/0008-planner-exploration-envelope.md))
+  may not be widened without one.
+- How Ordewell drives a runner or hands it tools, and what a runner may do.
+- What is persisted, where a setting lives and what survives a restart.
+- A deliberate "no": something a reasonable contributor would add, and why it
+  was left out.
+- A constraint the code cannot show: a limit of a runner's CLI the design works
+  around, a platform quirk.
+
+**What does not**
+
+- A bug fix, or a refactor that keeps the design. The commit message and a
+  comment that says *why* are the record.
+- A tuning value, a timeout, a label, layout or copy.
+- A command, setting or tool that follows a decision already recorded. Rewrite
+  the part of that ADR it changes and add a History line.
+- A term or its meaning: that is [CONTEXT.md](../../CONTEXT.md). How a user does
+  something: that is `docs/`. What shipped: that is `CHANGELOG.md`.
+- A plan, a to-do list or "how we will build this". Ordewell splits work into
+  tasks; an ADR records the decision that shaped the work, not the steps.
+
+| The change | Where it goes |
+|---|---|
+| A failed task blocks only its dependents, where the run used to halt | A new ADR ([0034](supervision/0034-a-failed-task-blocks-only-its-dependents.md)): it decides what a failure stops, and storing a `blocked` status was rejected. |
+| `skip_task` joins the planner's execution tools | No new ADR: a History line in [0029](supervision/0029-the-supervisor.md), [0022](runners/0022-ordewell-mcp-server.md) and [0009](planner/0009-coding-agents-as-planners.md). |
+| The TUI status row speaks only for the chat on screen | No new ADR: [0030](supervision/0030-global-run-settings.md)'s "Seeing them" is rewritten and gets a History line. |
+
+Unsure? Prefer, in this order: rewriting the ADR that owns the area with a
+History line, a code comment that says why, a new ADR. A one-paragraph ADR that
+passes the test is better than a long one that does not.
+
+## Where it goes
+
+`docs/adr/<folder>/NNNN-slug.md`.
+
+- **Number.** `node scripts/verify-adr.mjs --next` prints the next free one.
+  Numbers are global and permanent: never reused, never renumbered, and not tied
+  to the folder, so a citation such as `ADR-0018` in a source comment stays valid
+  when a document moves or is folded into another.
+- **Slug.** Lower-case words joined by hyphens that state the decision
+  (`a-failed-task-blocks-only-its-dependents`), not the topic (`task-failures`).
+- **Folder.** The one whose line in the index below covers the decision. If two
+  fit, take the one whose invariant the decision defines: what a planner may
+  touch is `planner-envelope` even when a runner is involved. If you still
+  cannot choose, take the folder of the ADR you would amend or cite most, and
+  link the other. A folder is added by editing `FOLDERS` in
+  `scripts/verify-adr.mjs` (the check and the index are generated from it), not
+  by creating a directory.
+
+## Writing one
+
+Start from the template. Only Problem and Decision are required and the sections
+that are there must come in this order, but an ADR that passes the test above has
+at least one rejected option, so Considered options is nearly always there.
 
 ```markdown
 ---
 status: accepted          # proposed | accepted | superseded
-implemented: partial      # full (leave out) | partial | none
+implemented: partial      # full (leave the line out) | partial | none
 amends: ["0013"]          # ADRs whose decision this one changes
 note: "One line, only for what the fields above cannot say."
 ---
 
 # NNNN — A title that states the decision
 
-*Pending:* [ADR-NNNN](...) — what it will change here, until it is implemented.
+*Pending:* [ADR-NNNN](../folder/NNNN-slug.md) — what it will change here.
 
 ## Problem
+What is wrong or undecided, and what prompted it, in CONTEXT.md's words.
+
 ## Decision
-## Key properties       rules that code or other ADRs cite: **Name (K1).**
-## A topic section      design detail too long for Key properties; any number
-## Testing decisions    seams, prior art, what a good test is here   (optional)
-## Out of scope                                                      (optional)
-## Considered options   including any option once chosen and later dropped, with why
+**The decision, in one bold sentence.** Then the detail, in the present tense, as
+if it had always been the design.
+
+## Key properties
+- **A rule others cite (K1).** What it requires, and why.
+
+## A topic section
+Design detail too long for a bullet: a protocol, a state machine, a table. Any
+number of these, between Key properties and Testing decisions.
+
+## Testing decisions
+The seams tests use, the prior art to copy, what a good test is here.
+
+## Out of scope
+What the decision deliberately leaves for later.
+
+## Considered options
+- **An alternative.** Rejected: why.
+
 ## Consequences
-## History              one dated line per change, no restated content
+- What gets easier, what gets harder, what to watch.
+
+## History
+- YYYY-MM-DD — accepted.
 ```
 
-Only Problem and Decision are required, and the sections that are there must
-come in this order. Add a Testing decisions section when the ADR has real test
-seams to name, and an Out of scope section when it deliberately leaves
-something for later. `amended by` is never written down: the index below
-computes it from the other ADRs' `amends`.
+The `*Pending:*` line goes only on an ADR that another, not yet implemented ADR
+will change; drop it from a new ADR. `amended by` is never written down: the
+index below computes it from the other ADRs' `amends`.
 
-## Rule IDs
+**Front matter.** `status` is `proposed` when you are recording a decision the
+maintainer has not made yet, and `accepted` once it is made, which includes a
+change they asked for and review in the same pull request. `implemented` is
+`partial` or `none` for an accepted decision that is not fully built; say what it
+waits on in `note` (`implemented: none`, `note: "sealed runs need #64 first"`).
+`superseded` marks an ADR replaced as a whole whose file is kept, which is rare
+because the replacement normally folds it (see below). `amends` and `supersedes`
+list four-digit numbers as strings.
 
-Label a rule `(K1)` in its bold lead (`- **Talking to a task (M1).**`) once code
-or another ADR cites it, and cite it with the ADR number: `ADR-0018 M1`. IDs are
-namespaced by ADR, so two ADRs may both have an `S1`, and they are never reused
-or renumbered. A citation of an ID the ADR does not define fails the check.
+**Sections.**
 
-## Folding one ADR into another
+- *Decision* states the decision as fact: no "we considered", no dates, no "now"
+  or "no longer". The reasoning that was cut goes to Considered options.
+- *Considered options* keeps an option that was once chosen and later dropped
+  ("The design until 2026-10-14"), with why it went. Record the alternatives that
+  were actually weighed and the reasons actually given; do not invent options to
+  fill the section.
+- *Testing decisions* names seams and prior art, not a list of test files.
+- *History* has one dated line per change and restates nothing. Use the date the
+  change was made.
+
+**Style.**
+
+- Use the terms in [CONTEXT.md](../../CONTEXT.md); its *avoid* lists name the
+  synonyms that blur a distinction the project keeps. Add a term there when the
+  ADR introduces one.
+- Name code by module, type or function (`blockingFailures`), with a path only
+  when it is hard to find. Do not cite line numbers; they rot.
+- No quantified performance or cost claims ([AGENTS.md](../../AGENTS.md)). A fact
+  about an external tool is fine when it carries the version it was checked
+  against.
+- Keep it short enough to read in one pass. Past about 35 KB it is probably two
+  decisions.
+- Wrap prose at about 80 columns. Link an ADR with its relative path on first
+  mention in a section (`[ADR-0029](../supervision/0029-the-supervisor.md)`) and
+  write `ADR-0029` after that.
+
+**In order.**
+
+1. Decide it qualifies. If it changes a decision an ADR already records, edit
+   that ADR instead (next section).
+2. Take the next number, pick the folder and create the file from the template.
+3. If it changes another ADR, list it in `amends` and add a *Pending* line under
+   that ADR's title until this one is implemented.
+4. Write it. History starts with today's date and `accepted` (`proposed` if
+   that is its status).
+5. Label a rule `(K1)` only once code or another ADR cites it (see Rule IDs).
+6. Cite the ADR in a comment where the code embodies it, saying why:
+   `// … (ADR-0018)`. The check fails a citation that does not resolve.
+7. Run `node scripts/verify-adr.mjs --write`, then `node scripts/verify-adr.mjs`
+   must end with 0 failures.
+8. Commit it with the code that implements it. A decision recorded ahead of its
+   code is `implemented: none`.
+
+## Changing an existing one
+
+- **Rewrite in place.** Change the part that is no longer true so the ADR reads
+  as what is true now. An option that was chosen and is now dropped moves to
+  Considered options with why. Add one dated History line. Do not add an Update
+  or Amendment section or an "*Amended…*" paragraph; the check warns about them.
+- **A small change is not a new ADR.** A corrected detail, a new case under an
+  existing rule or a renamed control is a rewrite and a History line in the ADR
+  that owns the area. A change that is a decision in its own right (it passes the
+  test above) gets its own ADR with `amends`.
+- **While it is not built,** the older ADR carries one *Pending* line naming the
+  new one. Once it is implemented, rewrite the older ADR and drop the line; the
+  check fails a Pending line that names a fully implemented ADR.
+- **Never renumber or delete a number.** A folded ADR keeps its number in the
+  host's `folds`.
+
+### Folding one ADR into another
 
 An ADR may be folded into the one it amends when all of these hold:
 
@@ -74,14 +228,21 @@ summarized as a Considered option instead of copied, with its full text left in
 git history; any rule of it that other docs still rely on moves to the host under
 a new ID. Anything else stays a separate ADR, however closely related.
 
+## Rule IDs
+
+Label a rule `(K1)` in its bold lead (`- **Talking to a task (M1).**`) once code
+or another ADR cites it, and cite it with the ADR number: `ADR-0018 M1`. IDs are
+namespaced by ADR, so two ADRs may both have an `S1`, and they are never reused
+or renumbered. A citation of an ID the ADR does not define fails the check.
+
 ## Checks
 
 `node scripts/verify-adr.mjs` runs in CI with the other `scripts/verify-*.mjs`.
 It fails when an `ADR-NNNN` mention or a rule citation anywhere in the repository
 does not resolve, when a link into or out of this folder is broken, when an ADR
-is outside a known folder or has bad front matter or out-of-order sections, when
-a *Pending* line names an ADR that is fully implemented, and when the index below
-is stale (`--write` regenerates it). It only warns about an inline `*Amended…*`
+is outside a known folder or has bad front matter or out-of-order sections or an
+Update or Amendment section, when a *Pending* line names an ADR that is fully
+implemented, and when the index below is stale (`--write` regenerates it). It only warns about an inline `*Amended…*`
 marker; `--strict` makes that a failure too.
 
 <!-- adr-index:start (generated by scripts/verify-adr.mjs --write; do not edit by hand) -->

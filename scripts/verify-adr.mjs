@@ -329,7 +329,8 @@ for (const p of files.filter((f) => f.endsWith('.md'))) {
   read(p).split('\n').forEach((line, i) => {
     if (/^\s*(```|~~~)/.test(line)) { fence = !fence; return; }
     if (fence) return;
-    for (const m of line.matchAll(/\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
+    // A link inside an inline code span is an example, not a link.
+    for (const m of line.replace(/`[^`]*`/g, '').matchAll(/\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
       const target = m[1];
       if (/^([a-z][a-z0-9+.-]*:|\/)/i.test(target)) continue;
       const [filePart, fragment] = target.split('#');
@@ -357,4 +358,5 @@ for (const { level, where, message } of problems.sort((x, y) => x.where.localeCo
 const failures = problems.filter((x) => x.level === 'FAIL').length;
 const warnings = problems.length - failures;
 console.log(`${failures ? 'FAIL' : '  ok'}  ${docs.length} ADRs in ${Object.keys(FOLDERS).length} folders (${aliasHost.size} retired numbers): ${tokenCount} ADR-NNNN mentions, ${citedRules.size} distinct rule citations (${ruleCount} sites), ${linkCount} links; ${failures} failures, ${warnings} warnings`);
+if (failures) console.error('docs/adr/README.md says what an ADR is, where it goes and how to write or change one.');
 process.exit(failures ? 1 : 0);
