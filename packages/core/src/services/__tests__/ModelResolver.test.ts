@@ -6,6 +6,7 @@ import type { RunnerManifest } from '../../plugins/types';
 import type { IConfig } from '../../interfaces/IConfig';
 import { resolveProvider, type ProviderModelLists } from '../ProviderRouting';
 import { getProviderMeta } from '../ProviderRegistry';
+import { OPENCODE_MANIFEST } from '../../plugins/builtin/opencode.manifest';
 
 function configWith(over: Partial<IConfig> = {}): IConfig {
   const base = {
@@ -290,6 +291,53 @@ function capturingConfig(over: Partial<IConfig> = {}): IConfig & { pushed: Provi
   };
   return cfg as unknown as IConfig & { pushed: ProviderModelLists | null };
 }
+
+describe('ModelResolver.contextWindowFor', () => {
+  it('reads a Gemini model\'s window from the inputTokenLimit Gemini\'s own models endpoint reports', async () => {
+    const fetchImpl = fakeFetch([
+      ['/v1beta/models', { models: [
+        { name: 'models/gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', supportedGenerationMethods: ['generateContent'], inputTokenLimit: 1048576, outputTokenLimit: 65536 },
+      ] }],
+    ]);
+    const resolver = new ModelResolver(fakeRegistry({}), configWith({ geminiKey: 'gem-key', openrouterKey: '' }), { fetchImpl });
+    await resolver.pickerOptions();
+
+    // A Gemini usage record names the bare model, as the API was called with it.
+    expect(resolver.contextWindowFor('google', 'gemini-2.5-pro')).toBe(1048576);
+  });
+
+  it('reads a vendor model\'s window from the context_length its /models endpoint reports, and no other', async () => {
+    const fetchImpl = fakeFetch([['/models', { data: [
+      { id: 'anthropic/claude-sonnet', name: 'Claude Sonnet', context_length: 200000 },
+      { id: 'vendor/unsized', name: 'Unsized' },
+    ] }]]);
+    const resolver = new ModelResolver(fakeRegistry({}), configWith(), { fetchImpl });
+    expect(resolver.contextWindowFor('openrouter', 'anthropic/claude-sonnet')).toBeUndefined();
+
+    await resolver.pickerOptions();
+
+    expect(resolver.contextWindowFor('openrouter', 'anthropic/claude-sonnet')).toBe(200000);
+    expect(resolver.contextWindowFor('openrouter', 'vendor/unsized')).toBeUndefined();
+    expect(resolver.contextWindowFor('openrouter', 'vendor/unlisted')).toBeUndefined();
+  });
+
+  it('reads a runner model\'s window from that runner\'s own listing, once it was discovered', async () => {
+    const exec: ExecImpl = vi.fn(async (cmd: string) => {
+      if (cmd.includes('api model.list')) {
+        return { stdout: JSON.stringify({ data: [{ modelID: 'big-pickle', providerID: 'opencode', enabled: true, limit: { context: 400000, output: 32000 } }] }) };
+      }
+      throw Object.assign(new Error('Unrecognized flag'), { code: 1 });
+    });
+    const resolver = new ModelResolver(fakeRegistry({ opencode: OPENCODE_MANIFEST }), configWith({ openrouterKey: '' }), { execImpl: exec });
+    expect(resolver.contextWindowFor('opencode', 'opencode/big-pickle')).toBeUndefined();
+
+    await resolver.modelsForRunners(['opencode']);
+
+    expect(resolver.contextWindowFor('opencode', 'opencode/big-pickle')).toBe(400000);
+    expect(resolver.contextWindowFor('claude-code', 'opencode/big-pickle')).toBeUndefined();
+  });
+
+});
 
 describe('ModelResolver.builtinOptions', () => {
   it('is empty before any catalog fetch — shortcuts never surface models that were not fetched', () => {

@@ -12,6 +12,7 @@ const handoff: HandoffView = {
     path: '.',
     integrationBranch: 'ordewell/r1/integration',
     baseRef: 'abcdef1234567890',
+    baseBranch: 'main',
     landed: [{ taskId: 't1', order: 1, title: 'Add the route' }, { taskId: 't2', order: 2, title: 'Write the tests' }],
   }],
   landed: [{ taskId: 't1', order: 1, title: 'Add the route' }, { taskId: 't2', order: 2, title: 'Write the tests' }],
@@ -167,7 +168,8 @@ describe('the handoff overlay', () => {
 
     expect(asked.effects).toEqual([]);
     expect(asked.state.overlay).toMatchObject({ kind: 'confirm', title: 'Merge into your branch?', action: { kind: 'merge-run' } });
-    expect((asked.state.overlay as { message: string }).message).toContain('ordewell/r1/integration');
+    expect((asked.state.overlay as { message: string }).message).toContain('ordewell/r1/integration into main.');
+    expect((asked.state.overlay as { message: string }).message).toContain('Nothing is merged unless main is checked out.');
     expect((asked.state.overlay as { message: string }).message).toContain("Once it has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.");
 
     const confirmed = press(asked.state, 'enter');
@@ -271,7 +273,7 @@ describe('the diff view', () => {
     const { state } = apply(session({ handoff }), { type: 'handoffDiff', diff: '\n', sessionId: 's1' });
 
     expect(state.overlay).toBeNull();
-    expect(lastMessage(state)?.text).toMatch(/Nothing differs from abcdef12/);
+    expect(lastMessage(state)?.text).toMatch(/Nothing differs from main @ abcdef12\./);
   });
 });
 
@@ -470,8 +472,8 @@ describe('a run over a repo group', () => {
   const branch = 'ordewell/r1/integration';
   const group: HandoffView = {
     repos: [
-      { path: 'api', integrationBranch: branch, baseRef: 'aaaaaaaa', landed: [t(1), t(2)] },
-      { path: 'web', integrationBranch: branch, baseRef: 'bbbbbbbb', landed: [t(2)] },
+      { path: 'api', integrationBranch: branch, baseRef: 'aaaaaaaa', baseBranch: 'main', landed: [t(1), t(2)] },
+      { path: 'web', integrationBranch: branch, baseRef: 'bbbbbbbb', baseBranch: 'main', landed: [t(2)] },
       { path: 'infra', integrationBranch: branch, baseRef: 'cccccccc', landed: [] },
     ],
     landed: [t(1), t(2)],
@@ -490,7 +492,8 @@ describe('a run over a repo group', () => {
     expect(effects).toEqual([]);
     const overlay = state.overlay as { title: string; message: string; action: { kind: string } };
     expect(overlay.title).toBe('Merge all into your branches?');
-    expect(overlay.message).toContain('api, web');
+    expect(overlay.message).toContain('into main in each of api, web.');
+    expect(overlay.message).toContain('Nothing is merged unless each repository is on the branch it started on.');
     expect(overlay.message).not.toContain('infra');
     expect(overlay.message).toMatch(/unless every repository can take it/);
     expect(overlay.message).toContain("Once every repository has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.");

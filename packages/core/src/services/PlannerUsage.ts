@@ -6,6 +6,7 @@ import {
   type UsageRecord,
 } from '../models/Usage';
 import type { SessionMessage } from './SessionMessage';
+import { ContextWindowFill, type CatalogWindow } from './ContextWindowFill';
 
 /** The `planner_usage` member of the session broadcast union. */
 export type PlannerUsageMessage = Extract<SessionMessage, { type: 'planner_usage' }>;
@@ -21,21 +22,29 @@ export type PlannerUsageMessage = Extract<SessionMessage, { type: 'planner_usage
  */
 export class PlannerUsageLedger {
   private usage: PlannerUsage = { totals: {} };
+  private windows: ContextWindowFill;
+
+  /** `catalogWindow` serves the window of a planner model whose backend reports none. */
+  constructor(private readonly catalogWindow: CatalogWindow = () => undefined) {
+    this.windows = new ContextWindowFill(catalogWindow);
+  }
 
   /** Fold one model call's record into the totals; returns the running ledger. */
   record(record: UsageRecord): PlannerUsage {
-    this.usage = addPlannerUsage(this.usage, record);
+    this.usage = addPlannerUsage(this.usage, this.windows.fill(record));
     return this.usage;
   }
 
   /** Adopt a persisted ledger (a reopened session) or start from zero. */
   restore(usage: PlannerUsage | undefined): void {
     this.usage = usage ?? { totals: {} };
+    this.windows = new ContextWindowFill(this.catalogWindow, this.usage);
   }
 
   /** Start a fresh session's ledger from zero. */
   clear(): void {
     this.usage = { totals: {} };
+    this.windows = new ContextWindowFill(this.catalogWindow);
   }
 
   /** Whether anything has been recorded — a plan with no usage says nothing. */

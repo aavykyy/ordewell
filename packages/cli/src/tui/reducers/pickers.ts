@@ -32,6 +32,21 @@ export function refillPicker(state: TuiState, kinds: PickerState['action']['kind
   return { ...state, overlay: { kind: 'picker', picker: { ...overlay.picker, items, hint, index: 0 } } };
 }
 
+/**
+ * The runners picker opens on what was loaded earlier; when the daemon's saved
+ * choice lands it replaces the rows, and the ticks unless the user has already
+ * changed them. The highlight stays where the user put it.
+ */
+export function reseedRunnerChoice(before: TuiState, after: TuiState): TuiState {
+  const overlay = after.overlay;
+  if (overlay?.kind !== 'picker' || overlay.picker.action.kind !== 'set-runners') return after;
+  const enabledIds = (state: TuiState) => state.runners.filter((r) => r.enabled).map((r) => r.id);
+  const shown = enabledIds(before);
+  const untouched = overlay.picker.chosen.length === shown.length && shown.every((id) => overlay.picker.chosen.includes(id));
+  const picker = { ...overlay.picker, items: pickerItemsFor(after, overlay.picker.action) };
+  return { ...after, overlay: { kind: 'picker', picker: untouched ? { ...picker, chosen: enabledIds(after) } : picker } };
+}
+
 /** Provider name + price, so the picker states which provider serves a model. */
 function modelDetail(m: ModelView): string | undefined {
   return [m.provider, m.pricing].filter(Boolean).join(' · ') || undefined;

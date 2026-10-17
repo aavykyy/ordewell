@@ -186,6 +186,8 @@ interface GeminiApiModel {
   name: string;
   displayName: string;
   supportedGenerationMethods?: string[];
+  /** The model's context window as Gemini itself states it. */
+  inputTokenLimit?: number;
 }
 
 function geminiDiscoveryCacheKey(apiKey: string): { key: string; dir: string; file: string } {
@@ -270,6 +272,7 @@ export async function discoverGeminiModels(apiKey: string, baseUrl?: string, fet
             modelLabel: m.displayName || modelId,
             runnerProvider: 'gemini',
             variants: [],
+            ...(typeof m.inputTokenLimit === 'number' && m.inputTokenLimit > 0 ? { contextWindow: m.inputTokenLimit } : {}),
           });
         }
       }

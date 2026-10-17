@@ -39,9 +39,10 @@ export interface SessionEventRelayDeps {
  * observers. A wait on a usage limit, and a task gone idle, reach surfaces as
  * the task's status; `onUsageLimitWait` and `onTaskIdle` themselves are for
  * the supervisor to wake on. The end-of-run handoff is marked by supervision
- * and remembered for a surface joining late, so Session announces it too.
+ * and remembered for a surface joining late, so Session announces it too. A
+ * model switch is a plan edit, which Session's editor announces as one.
  */
-export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onRunStarted' | 'onAutoMerge' | 'onUsageLimitWait' | 'onTaskIdle' | 'onIsolationHandoff'>>;
+export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onRunStarted' | 'onAutoMerge' | 'onUsageLimitWait' | 'onModelSwitched' | 'onTaskIdle' | 'onIsolationHandoff'>>;
 
 /** One subagent's activity seen during a turn: its log entry plus the steps it ran. */
 interface SubagentRun {

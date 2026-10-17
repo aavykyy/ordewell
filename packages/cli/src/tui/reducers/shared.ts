@@ -87,6 +87,8 @@ export type Effect =
   | { type: 'answerTaskCheckpoint'; sessionId: string; taskId: string; answer: 'approve' | 'reject'; reason?: string }
   /** Startup refreshes silently; only a typed `/refresh` sets `announce`. */
   | { type: 'refresh'; announce?: boolean }
+  /** The runners alone, as the daemon has them saved. */
+  | { type: 'loadRunners' }
   | { type: 'exit' };
 
 export type TaskAction = 'complete' | 'uncomplete' | 'skip' | 'retry' | 'cancel' | 'force-start' | 'cancel-resume' | 'resume-now';

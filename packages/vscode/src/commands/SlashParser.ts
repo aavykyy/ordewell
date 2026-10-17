@@ -260,6 +260,8 @@ export async function handleSlashCommand(text: string, deps: SlashDeps): Promise
       deps.runnerRegistry as unknown as RunnerRegistry,
       deps.modelResolver as unknown as ModelResolver,
       deps.settingsService as unknown as SettingsService,
+      undefined,
+      (allowlist) => deps.chatProvider.setModelAllowlist(allowlist),
     );
     return;
   }

@@ -40,6 +40,16 @@ export function parseOpenCodeModels(stdout: string, manifest: RunnerManifest): D
 }
 
 /**
+ * The model's context window from OpenCode's own catalog entry, `limit.context`
+ * — the same field in a v1 `models --verbose` block and a v2 `api model.list`
+ * entry. Not `limit.input`, which some entries leave out.
+ */
+function contextLimit(limit: unknown): { contextWindow?: number } {
+  const context = (limit as { context?: unknown } | null | undefined)?.context;
+  return typeof context === 'number' && Number.isFinite(context) && context > 0 ? { contextWindow: context } : {};
+}
+
+/**
  * Parse `opencode models --verbose` output.
  *
  * The format alternates between a `provider/model-id` line and a JSON block:
@@ -76,6 +86,7 @@ export function parseOpenCodeModelsVerbose(stdout: string, manifest: RunnerManif
     if (seen.has(fullId)) continue;
 
     let variantIds: string[] = [];
+    let window: { contextWindow?: number } = {};
     let modelLabel = prefLabels.get(fullId) || fullId.split('/').pop() || fullId;
     // The provider IS the printed prefix before the first `/` — exactly as
     // the CLI lists it (`opencode/…`, `opencode-go/…`, `openrouter/…`, or any
@@ -86,9 +97,11 @@ export function parseOpenCodeModelsVerbose(stdout: string, manifest: RunnerManif
       const data = JSON.parse(jsonText) as {
         name?: string;
         variants?: Record<string, unknown>;
+        limit?: unknown;
       };
       if (data.name) modelLabel = prefLabels.get(fullId) || data.name;
       variantIds = Object.keys(data.variants ?? {});
+      window = contextLimit(data.limit);
     } catch {
       // No parseable JSON block — keep the id-derived label, no variants.
     }
@@ -99,6 +112,7 @@ export function parseOpenCodeModelsVerbose(stdout: string, manifest: RunnerManif
       modelLabel,
       runnerProvider,
       variants: variantIds.map((id) => ({ id, label: id.charAt(0).toUpperCase() + id.slice(1) })),
+      ...window,
     });
   }
 
@@ -124,7 +138,9 @@ interface OpenCodeApiModel {
   name?: unknown;
   enabled?: unknown;
   variants?: unknown;
+  limit?: unknown;
 }
+
 
 /**
  * Parse `opencode api model.list` output (opencode v2, which dropped
@@ -169,6 +185,7 @@ export function parseOpenCodeModelsApi(stdout: string, manifest: RunnerManifest)
       modelLabel: prefLabels.get(fullId) || (typeof entry.name === 'string' && entry.name) || entry.modelID,
       runnerProvider: entry.providerID,
       variants: variantIds.map((id) => ({ id, label: id.charAt(0).toUpperCase() + id.slice(1) })),
+      ...contextLimit(entry.limit),
     });
   }
 

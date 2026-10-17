@@ -12,7 +12,8 @@ import type { TaskOrchestrator } from './TaskOrchestrator';
 import type { IsolationRunController } from './IsolationRunController';
 import type { SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { checkTaskSkillsEdit, type SkillLookup } from './taskSkills';
-import { opsFlag, skillNames, type DiscoveredModel, type LegacyPlanState, type RunnerId, type Task } from '../models/Task';
+import { opsFlag, skillNames, type DiscoveredModel, type LegacyPlanState, type RunnerId, type Task, type TaskModelAssignment } from '../models/Task';
+import type { RunnerModelRef } from '../models/RunnerCommand';
 
 /** The catalogs an edit reads, as the session holds them at the moment of the edit. */
 export type PlanEditCatalog = Pick<SessionCatalog, 'edit' | 'runner' | 'allowlistFor' | 'models' | 'admit'>;
@@ -83,9 +84,9 @@ export class PlanEditor {
    * between AI and MAN, are the patches that can leave a task incoherent
    * (unschedulable, or carrying fields that mean nothing for its new type),
    * so both go through the same {@link validateTaskEdit} guard the planner's
-   * task-ops applier uses (as the 'direct' actor, which skips the lock rule)
-   * rather than a second copy of the rules — and throws, so the surface can
-   * say why. Gated on the task existing so an edit to an unknown id still
+   * task-ops applier uses (as the 'direct' actor, which skips the lock rule
+   * but not a live runner's hold on its model) rather than a second copy of
+   * the rules — and throws, so the surface can say why. Gated on the task existing so an edit to an unknown id still
    * falls through to the no-op `store.update` below instead of throwing.
    * Attached skills meet the rule a planner's do: a planner skill is refused,
    * a name not found yet only warns.
@@ -95,7 +96,39 @@ export class PlanEditor {
    * one last.
    */
   updateTask(taskId: string, changes: Partial<Task>): Promise<LegacyPlanState | null> {
-    const edit = (this.taskEdits.get(taskId) ?? Promise.resolve()).then(() => this.applyTaskUpdate(taskId, changes));
+    return this.inTaskOrder(taskId, () => this.applyTaskUpdate(taskId, changes));
+  }
+
+  /**
+   * The plan follows a model switch the user made with the runner's own
+   * command (#106), as a direct edit of theirs: saved and announced as
+   * `task_updated`, so every surface shows it, and what a later retry or
+   * continue spawns on. It is the one model edit a live runner allows, since
+   * it says what that runner already runs, and the one that skips the
+   * allowlist: the user picked it in the runner. The runner's own label is
+   * used only for a model discovery does not list. Effort is the runner's
+   * when it reported one, else the plan's stays.
+   */
+  followRunnerModel(taskId: string, model: RunnerModelRef, effort?: string): Promise<LegacyPlanState | null> {
+    return this.inTaskOrder(taskId, async () => {
+      const task = this.store.get(taskId);
+      if (!task || task.type === 'user') return null;
+      const thinkingEffort = effort ?? task.assignedModel?.thinkingEffort;
+      if (task.assignedModel?.modelId === model.model && task.assignedModel.thinkingEffort === thinkingEffort) return this.plan();
+      const listed = this.catalog.models()[task.assignedRunner]?.find((m) => m.modelId === model.model);
+      const assignedModel: TaskModelAssignment = {
+        modelId: model.model,
+        modelLabel: listed?.modelLabel ?? model.label ?? model.model,
+        ...(thinkingEffort ? { thinkingEffort } : {}),
+        ...(listed ? { availableVariants: listed.variants.map((v) => v.id) } : {}),
+      };
+      return this.commitTaskUpdate(taskId, { assignedModel });
+    });
+  }
+
+  /** Edits to one task commit in call order; see {@link updateTask}. */
+  private inTaskOrder(taskId: string, apply: () => Promise<LegacyPlanState | null>): Promise<LegacyPlanState | null> {
+    const edit = (this.taskEdits.get(taskId) ?? Promise.resolve()).then(apply);
     const settled = edit.catch(() => {});
     this.taskEdits.set(taskId, settled);
     void settled.then(() => {
@@ -118,15 +151,19 @@ export class PlanEditor {
         changes = { ...changes, ...Object.fromEntries((check.clear ?? []).map((f) => [f, undefined])), ...check.set };
       }
     }
-    const plan = await this.commit(
+    const plan = await this.commitTaskUpdate(taskId, changes);
+    if (plan) for (const warning of skills?.warnings ?? []) this.notice('warn', warning);
+    return plan;
+  }
+
+  private commitTaskUpdate(taskId: string, changes: Partial<Task>): Promise<LegacyPlanState | null> {
+    return this.commit(
       () => {
         changes = this.scheduler.releaseMovedResume(taskId, changes);
         return Boolean(this.store.update(taskId, changes));
       },
       () => this.broadcast({ type: 'task_updated', taskId, changes: changes as Record<string, unknown> }),
     );
-    if (plan) for (const warning of skills?.warnings ?? []) this.notice('warn', warning);
-    return plan;
   }
 
   /**

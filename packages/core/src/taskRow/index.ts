@@ -6,3 +6,5 @@ export { taskRowView, namedRepos } from './view';
 export type { TaskRowUsage, TaskRowView, TaskRowSubject, TaskRowIsolation, TaskRowContext, TaskRowKind } from './view';
 export { titledRefs, dependentsNotice, pastGateConfirmation, newTaskFields } from './texts';
 export type { NewTaskFields } from './texts';
+export { assignmentIssue, assignmentIssueText } from '../services/AssignmentScope';
+export type { AssignmentScope, AssignmentIssue } from '../services/AssignmentScope';

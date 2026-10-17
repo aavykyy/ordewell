@@ -2,7 +2,7 @@ import type { Effect, Step } from './reducers/shared';
 import { say } from './transcript';
 import { sanitize } from './ansi';
 import type { Key } from './keys';
-import { handoffBase, handoffBranch, isRepoGroup, repairedLanded, repairedNotice, reposWithWork } from '../isolation';
+import { checkoutRule, handoffBase, handoffBranch, isRepoGroup, mergeTarget, repairedLanded, repairedNotice } from '../isolation';
 import type { HandoffView, Overlay, PickerItem, TuiState } from './state';
 
 /**
@@ -110,7 +110,7 @@ export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
             overlay: {
               kind: 'confirm',
               title: isRepoGroup(handoff) ? 'Merge what has landed into your branches?' : 'Merge what has landed into your branch?',
-              message: `Merge ${handoffBranch(handoff)} as it stands now into whatever ${isRepoGroup(handoff) ? `each of ${reposWithWork(handoff).join(', ')} has` : 'you have'} checked out. The run goes on: tasks waiting for Merge all start once it has merged, and later tasks land on the same branch for the next Merge all. A merge that conflicts is aborted, and your ${isRepoGroup(handoff) ? 'trees stay' : 'tree stays'} as ${isRepoGroup(handoff) ? 'they were' : 'it was'}.${repairedNotice(handoff)}`,
+              message: `Merge ${handoffBranch(handoff)} as it stands now into ${mergeTarget(handoff)}.${checkoutRule(handoff)} The run goes on: tasks waiting for Merge all start once it has merged, and later tasks land on the same branch for the next Merge all. A merge that conflicts is aborted, and your ${isRepoGroup(handoff) ? 'trees stay' : 'tree stays'} as ${isRepoGroup(handoff) ? 'they were' : 'it was'}.${repairedNotice(handoff)}`,
               action: { kind: 'merge-run' },
             },
           },
@@ -124,13 +124,13 @@ export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
             ? {
               kind: 'confirm',
               title: 'Merge all into your branches?',
-              message: `Merge ${handoffBranch(handoff)} into whatever each of ${reposWithWork(handoff).join(', ')} has checked out. It checks every repository first and merges none unless every repository can take it; on git older than 2.38 it goes repository by repository and stops at the first that fails. A merge that conflicts is aborted, and your trees stay as they were. Once every repository has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.${repairedNotice(handoff)}`,
+              message: `Merge ${handoffBranch(handoff)} into ${mergeTarget(handoff)}.${checkoutRule(handoff)} It checks every repository first and merges none unless every repository can take it; on git older than 2.38 it goes repository by repository and stops at the first that fails. A merge that conflicts is aborted, and your trees stay as they were. Once every repository has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.${repairedNotice(handoff)}`,
               action: { kind: 'merge-run' },
             }
             : {
               kind: 'confirm',
               title: 'Merge into your branch?',
-              message: `Merge ${handoffBranch(handoff)} into whatever you have checked out. If it conflicts the merge is aborted and your tree stays as it was. Once it has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.${repairedNotice(handoff)}`,
+              message: `Merge ${handoffBranch(handoff)} into ${mergeTarget(handoff)}.${checkoutRule(handoff)} If it conflicts the merge is aborted and your tree stays as it was. Once it has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.${repairedNotice(handoff)}`,
               action: { kind: 'merge-run' },
             },
         },

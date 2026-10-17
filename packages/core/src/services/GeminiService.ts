@@ -3,10 +3,13 @@ import {
   GoogleGenerativeAI,
   GenerativeModel,
   Part,
+  type ChatSession,
+  type Content,
 } from '@google/generative-ai';
 import { Task, DiscoveredModel, ResearchLogEntry, ResearchProgress, RunnerId, DEFAULT_RUNNERS } from '../models/Task';
 import type { UsageRecord } from '../models/Usage';
 import { IConfig } from '../interfaces/IConfig';
+import { normalizeGeminiModel } from '../interfaces/BaseConfig';
 import { IFileSystem } from '../interfaces/IFileSystem';
 import { IWebFetcher } from '../interfaces/IWebFetcher';
 import {
@@ -58,7 +61,7 @@ function tokenCount(value: unknown): number | undefined {
  * model ran and the invoice charges — leaving them out would understate every
  * thinking-model call.
  */
-function usageRecordFrom(usage: Record<string, unknown> | undefined): UsageRecord | undefined {
+function usageRecordFrom(usage: Record<string, unknown> | undefined, model: string): UsageRecord | undefined {
   if (!usage) return undefined;
   const inputTokens = tokenCount(usage.promptTokenCount);
   const answerTokens = tokenCount(usage.candidatesTokenCount);
@@ -66,6 +69,7 @@ function usageRecordFrom(usage: Record<string, unknown> | undefined): UsageRecor
   const reportedOutput = [answerTokens, thoughtTokens].filter((t) => t !== undefined) as number[];
   const record: UsageRecord = {
     source: 'google',
+    model,
     ...(inputTokens !== undefined ? { inputTokens } : {}),
     ...(reportedOutput.length > 0 ? { outputTokens: reportedOutput.reduce((a, b) => a + b, 0) } : {}),
     ...(tokenCount(usage.cachedContentTokenCount) !== undefined ? { cachedInputTokens: tokenCount(usage.cachedContentTokenCount) } : {}),
@@ -75,19 +79,39 @@ function usageRecordFrom(usage: Record<string, unknown> | undefined): UsageRecor
 }
 
 class GeminiResearchChat implements ResearchChat {
+  private chat: ChatSession;
+  /** The model `chat` calls, named on its usage records. */
+  private model: string;
+
   constructor(
-    private chat: ReturnType<GenerativeModel['startChat']>,
+    /** Resolved per call: a model picked mid-conversation must reach the next turn. */
+    private getModel: () => string,
+    /** A chat on `model`, over `history` when one is carried over. */
+    private open: (model: string, history?: Content[]) => ChatSession,
     /** Hooks absent = the call is assembled silently (one-shot research loop): nothing streams, the turn still forms. */
     private hooks: {
       onReasoning?: (text: string, segmentId: string) => void;
       onContent?: (text: string, segmentId: string) => void;
       onUsage?: (record: UsageRecord) => void;
     } = {},
-  ) {}
+  ) {
+    this.model = getModel();
+    this.chat = open(this.model);
+  }
+
+  /** The SDK binds a chat to one model, so a switch reopens it on the new one over the history so far. */
+  private async current(): Promise<ChatSession> {
+    const model = this.getModel();
+    if (model !== this.model) {
+      this.chat = this.open(model, await this.chat.getHistory());
+      this.model = model;
+    }
+    return this.chat;
+  }
 
   async sendMessage(text: string, signal?: AbortSignal): Promise<ResearchTurn> {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-    const result = await this.chat.sendMessageStream(text);
+    const result = await (await this.current()).sendMessageStream(text);
     return this.consume(result.stream);
   }
 
@@ -99,7 +123,7 @@ class GeminiResearchChat implements ResearchChat {
         response: { output: r.output, truncated: r.truncated, totalChars: r.totalChars },
       },
     }));
-    const result = await this.chat.sendMessageStream(funcResponses);
+    const result = await (await this.current()).sendMessageStream(funcResponses);
     return this.consume(result.stream);
   }
 
@@ -137,7 +161,7 @@ class GeminiResearchChat implements ResearchChat {
       }
     }
 
-    const usageRecord = usageRecordFrom(usage);
+    const usageRecord = usageRecordFrom(usage, this.model);
     if (usageRecord) this.hooks.onUsage?.(usageRecord);
 
     // Normalize Gemini's MAX_TOKENS to the OpenAI-style 'length' the
@@ -157,6 +181,8 @@ export class GeminiService extends BaseAiService implements IAiService {
   private genAI: GoogleGenerativeAI | null = null;
   private genAIKey = '';
   private model: GenerativeModel | null = null;
+  /** The id `model` was made for; the SDK's own `model.model` is its `models/…` resource path. */
+  private modelId = '';
 
   constructor(config: IConfig) { super(config); }
 
@@ -172,13 +198,19 @@ export class GeminiService extends BaseAiService implements IAiService {
     return true;
   }
 
-  private getPlanningModel(): GenerativeModel {
+  /** The planner model picked for this session, as the API names it. */
+  private plannerModel(): string {
+    return normalizeGeminiModel(this.config.orchestratorModel || this.config.planningModel);
+  }
+
+  private getPlanningModel(model = this.plannerModel()): GenerativeModel {
     this.init();
-    if (!this.model || this.model.model !== this.config.planningModel) {
+    if (!this.model || this.modelId !== model) {
       this.model = this.genAI!.getGenerativeModel({
-        model: this.config.planningModel,
+        model,
         generationConfig: { temperature: 0.3, topP: 0.95, maxOutputTokens: 16384 },
       });
+      this.modelId = model;
     }
     return this.model;
   }
@@ -196,7 +228,6 @@ export class GeminiService extends BaseAiService implements IAiService {
 
   async startConversation(req: ConversationRequest): Promise<ConversationTurn> {
     this.ensureInit();
-    const genModel = this.getPlanningModel();
 
     const contextStr = await BaseAiService.collectResearchContext(req.fs, req.runners);
     const systemPrompt = buildConversationSystemPrompt(
@@ -230,14 +261,15 @@ export class GeminiService extends BaseAiService implements IAiService {
       seededHistory.push({ role: 'model', parts: [{ text: 'Understood.' }] });
     }
 
-    const chat = genModel.startChat({
-      history: seededHistory,
-      tools: [{ functionDeclarations: req.plannerTools ? CONVERSATION_TOOL_DEFINITIONS : TOOL_DEFINITIONS }],
+    const tools = [{ functionDeclarations: req.plannerTools ? CONVERSATION_TOOL_DEFINITIONS : TOOL_DEFINITIONS }];
+    const open = (model: string, history: Content[] = seededHistory): ChatSession => this.getPlanningModel(model).startChat({
+      history,
+      tools,
       generationConfig: { temperature: 0.3, topP: 0.95, maxOutputTokens: 16384 },
     });
 
     let currentProgress = req.onProgress;
-    const researchChat = new GeminiResearchChat(chat, {
+    const researchChat = new GeminiResearchChat(() => this.plannerModel(), open, {
       onReasoning: (text, segmentId) => currentProgress({ type: 'thinking', text, segmentId }),
       onContent: (text, segmentId) => currentProgress({ type: 'text_delta', text, segmentId }),
       onUsage: (record) => currentProgress({ type: 'usage', record }),
@@ -333,14 +365,13 @@ export class GeminiService extends BaseAiService implements IAiService {
   ): Promise<{ tasks: Task[]; researchLog: ResearchLogEntry[]; researchResults: string }> {
     this.ensureInit();
     const { autonomousDefault } = modes;
-    const genModel = this.getPlanningModel();
 
     const contextStr = await BaseAiService.collectResearchContext(fs, runners);
     const systemPrompt = buildResearchPrompt(userDescription, contextStr, modelsByRunner, runners, runnerModes, modes);
     const firstMessage = `${buildResearchToolsPrompt()}\n\nExplore the workspace to understand the codebase, then generate the plan.`;
 
-    const chat = genModel.startChat({
-      history: [{ role: 'user', parts: [{ text: systemPrompt }] }],
+    const open = (model: string, history: Content[] = [{ role: 'user', parts: [{ text: systemPrompt }] }]): ChatSession => this.getPlanningModel(model).startChat({
+      history,
       tools: [{ functionDeclarations: TOOL_DEFINITIONS }],
       generationConfig: { temperature: 0.3, topP: 0.95, maxOutputTokens: 16384 },
     });
@@ -348,7 +379,7 @@ export class GeminiService extends BaseAiService implements IAiService {
     // A chat built without streaming hooks: the one-shot loop's replies are
     // never planner chat prose, so they must not stream as text deltas — only
     // the bill flows, one record per call.
-    const researchChat: ResearchChat = new GeminiResearchChat(chat, {
+    const researchChat: ResearchChat = new GeminiResearchChat(() => this.plannerModel(), open, {
       onUsage: (record) => onProgress({ type: 'usage', record }),
     });
 

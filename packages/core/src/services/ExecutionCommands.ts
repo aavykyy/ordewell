@@ -913,7 +913,11 @@ function doneWords(record: ExecutionRecord, label: string, continued: 'resume' |
 export function mergeStopped(result: IsolationMergeResult): string {
   switch (result.outcome) {
     case 'merged': return 'it merged';
-    case 'blocked': return 'the user\'s checkout has changes that overlap what it would merge';
+    case 'blocked': {
+      const off = result.blocked.filter((b) => b.reason === 'wrong-branch');
+      if (off.length === 0) return 'the user\'s checkout has changes that overlap what it would merge';
+      return off.map((b) => `${b.repo === '.' ? 'the checkout' : b.repo} is ${b.actual ? `on ${b.actual}` : 'on a detached HEAD'}, not ${b.expected}, which the run started on`).join('; ');
+    }
     case 'conflict': return `it conflicts in ${result.repo}${result.files?.length ? `: ${result.files.slice(0, 5).join(', ')}` : ''}`;
     case 'failed': return `it failed in ${result.repo}`;
   }

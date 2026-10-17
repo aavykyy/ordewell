@@ -344,6 +344,46 @@ describe('texts', () => {
   });
 });
 
+describe('the assignment flag — a task on a runner or model the user has since moved away from', () => {
+  const scope = { enabledRunners: ['claude-code'], allowlist: { 'claude-code': ['claude-sonnet-4'] } };
+  const flag = (over: Partial<TaskRowSubject>, context = { runnerScope: scope }) => taskRowView(subject(over), context).assignmentFlag;
+
+  it('says nothing without a scope to read the assignment against', () => {
+    expect(taskRowView(subject({ assignedRunner: 'codex' })).assignmentFlag).toBeNull();
+  });
+
+  it('flags a task whose runner is switched off', () => {
+    expect(flag({ assignedRunner: 'codex' })).toBe('codex is switched off');
+  });
+
+  it('flags a task whose model is off the runner\'s allowlist, by its label', () => {
+    expect(flag({ assignedRunner: 'claude-code', assignedModel: { modelId: 'claude-opus-4', modelLabel: 'Opus 4' } })).toBe('Opus 4 is not in the allowlist');
+  });
+
+  it('names the runner alone when both are wrong', () => {
+    expect(flag({ assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5', modelLabel: 'GPT-5' } })).toBe('codex is switched off');
+  });
+
+  it('says nothing for an allowlisted model, an unrestricted runner or an unset allowlist', () => {
+    expect(flag({ assignedRunner: 'claude-code', assignedModel: { modelId: 'claude-sonnet-4', modelLabel: 'Sonnet 4' } })).toBeNull();
+    const open = { enabledRunners: ['claude-code', 'codex'], allowlist: { 'claude-code': [] as string[] } };
+    expect(flag({ assignedRunner: 'claude-code', assignedModel: { modelId: 'anything', modelLabel: 'Anything' } }, { runnerScope: open })).toBeNull();
+    expect(flag({ assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5', modelLabel: 'GPT-5' } }, { runnerScope: open })).toBeNull();
+  });
+
+  it.each(['completed', 'skipped'])('says nothing for a %s task: its work is over', (status) => {
+    expect(flag({ status, assignedRunner: 'codex' })).toBeNull();
+  });
+
+  it('says nothing for a manual task, which has no runner', () => {
+    expect(flag({ type: 'user', assignedRunner: 'codex' })).toBeNull();
+  });
+
+  it('flags a running task too: it keeps running, and the row says why it might be moved', () => {
+    expect(flag({ status: 'in_progress', assignedRunner: 'codex' })).toBe('codex is switched off');
+  });
+});
+
 describe('a task row\'s usage', () => {
   const attempt = (n: number, over: Record<string, unknown> = {}) => ({ attempt: n, runner: 'claude-code', startedAt: '', wallTimeMs: 1000, totals: {}, ...over });
 

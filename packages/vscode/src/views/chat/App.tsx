@@ -68,7 +68,7 @@ export default function App() {
   const [host, dispatch] = useReducer(reduceHost, INITIAL_HOST_STATE);
   const {
     conversation, plan, isExecuting, isResearchActive, conversationBusy, error, models, modelsByRunner,
-    runnerList, enabledRunnerIds, runners, held, unsent, modesByRunner, runnerNotice, modelConfig,
+    runnerList, enabledRunnerIds, modelAllowlist, runners, held, unsent, modesByRunner, runnerNotice, modelConfig,
     modelOptions, configuredProviders, planner, plannerKnown, runnersKnown, isReady, modelDiscoveryErrors,
     skills, taskSkills, checkpoint, taskOutput, run, dockExpanded, dockHeight, settingsRequest,
   } = host;
@@ -614,6 +614,11 @@ export default function App() {
     vscode.postMessage({ type: 'setPlanner', provider });
   }, [planner.provider, pendingPlanner]);
 
+  // Before the host sends the runner list every task would read as on a runner that is off.
+  const runnerScope = useMemo(
+    () => (runnersKnown ? { enabledRunners: enabledRunnerIds, allowlist: modelAllowlist } : undefined),
+    [runnersKnown, enabledRunnerIds, modelAllowlist],
+  );
   const visibleRunners = runnerList.filter((r) => enabledRunnerIds.includes(r.id));
 
   // An API key is one of two ways in (ADR-0009): an installed coding agent
@@ -726,6 +731,7 @@ export default function App() {
               taskOutput={taskOutput}
               runnerLabels={runnerLabelMap}
               runners={runnerList}
+              runnerScope={runnerScope}
               onRunnerChange={handleRunnerChange}
               onDependenciesChange={handleDependenciesChange}
               onAddTask={handleAddTask}

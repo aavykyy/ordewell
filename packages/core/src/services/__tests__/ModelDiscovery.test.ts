@@ -576,6 +576,21 @@ describe('ModelDiscovery — OpenCode', () => {
     expect(kimi!.variants).toHaveLength(0);
   });
 
+  it('reads each model\'s window from the limit.context of its verbose block', async () => {
+    const verboseOutput = [
+      'opencode/claude-sonnet-4-6',
+      JSON.stringify({ id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', providerID: 'opencode', limit: { context: 200000, output: 64000 }, variants: {} }),
+      'opencode-go/kimi-k2.6',
+      JSON.stringify({ id: 'kimi-k2.6', name: 'Kimi K2.6', providerID: 'opencode-go', variants: {} }),
+    ].join('\n');
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: verboseOutput }));
+
+    const models = await new ModelDiscovery(registryWith(OPENCODE_MANIFEST), exec).discover('opencode');
+
+    const windows = Object.fromEntries(models.map((m) => [m.modelId, m.contextWindow]));
+    expect(windows).toEqual({ 'opencode/claude-sonnet-4-6': 200000, 'opencode-go/kimi-k2.6': undefined });
+  });
+
   it('accepts ANY provider/model shape the CLI reports — custom providers, uppercase, version pins', async () => {
     // The `opencode models` output is the source of truth: a provider Ordewell
     // has never heard of must flow through both parsers untouched.
@@ -754,6 +769,27 @@ describe('ModelDiscovery — OpenCode', () => {
     expect(byId.get('openrouter/~anthropic/claude-fable-latest')!.modelLabel).toBe('~anthropic/claude-fable-latest');
     // A rejected flag is an answer, not a cold start: one pass, no retry.
     expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads each model\'s window from the limit.context `api model.list` reports', async () => {
+    // Trimmed from what opencode 2.0.31 printed: every one of its 113 models
+    // carried `limit.context`; `input` was absent on some, so it is not the window.
+    const apiOutput = JSON.stringify({
+      data: [
+        { id: 'claude-haiku-5-5', modelID: 'claude-haiku-5-5', providerID: 'opencode', name: 'Claude Haiku 5.5', enabled: true, variants: [], limit: { context: 1000000, output: 128000 } },
+        { id: 'nemotron-3.5-super-vl-free', modelID: 'nemotron-3.5-super-vl-free', providerID: 'opencode', name: 'Nemotron 3.5 Super VL Free', enabled: true, variants: [], limit: { context: 1048576, input: 1048576, output: 131072 } },
+        { id: 'unsized', modelID: 'unsized', providerID: 'opencode', name: 'Unsized', enabled: true, variants: [] },
+      ],
+    });
+    const exec: ExecImpl = vi.fn(async (cmd: string) => {
+      if (cmd.includes('api model.list')) return { stdout: apiOutput };
+      throw Object.assign(new Error('Unrecognized flag'), { code: 1 });
+    });
+
+    const models = await new ModelDiscovery(registryWith(OPENCODE_MANIFEST), exec).discover('opencode');
+
+    const windows = Object.fromEntries(models.map((m) => [m.modelId, m.contextWindow]));
+    expect(windows).toEqual({ 'opencode/claude-haiku-5-5': 1000000, 'opencode/nemotron-3.5-super-vl-free': 1048576, 'opencode/unsized': undefined });
   });
 
   it('falls through to the plain listing when the api answer is not a model list', async () => {

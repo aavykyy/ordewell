@@ -716,6 +716,9 @@ export class StructuredSession extends AbstractRunnerSession {
       case 'assistant_text': this.text.block(event.text); break;
       case 'tool_call': if (!event.subagentId) this.text.line(toolLine(event.name, event.args)); break;
       case 'error': this.text.failure(event.message); break;
+      // The plan follows the switch (#106), so a restart after an interrupt
+      // runs what the plan now says rather than what this attempt started on.
+      case 'model_switched': this.startOptions = { ...this.startOptions, model: event.to.model }; break;
       default: break;
     }
     this.emitEvent(event);

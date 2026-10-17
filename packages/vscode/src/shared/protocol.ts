@@ -216,6 +216,8 @@ export type HostToWebview =
   | { type: 'setTaskSkills'; skills: { name: string; description: string }[] }
   | { type: 'setConfiguredProviders'; providers: AiProvider[] }
   | { type: 'setModelOptions'; modelOptions: ModelOption[] }
+  /** The per-runner model allowlist, sent on ready and after each change: what a task card flags a model against. */
+  | { type: 'setModelAllowlist'; allowlist: Record<string, string[]> }
   | { type: 'setModelsByRunner'; modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>> }
   /** `notice` is the one line the runner list shows while a runner's modes are off on this host, and the page that explains it. */
   | { type: 'setModesByRunner'; modesByRunner: Record<string, RunnerModeMeta[]>; notice?: { line: string; docs: string } | null }
