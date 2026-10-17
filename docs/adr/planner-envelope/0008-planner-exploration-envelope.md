@@ -49,7 +49,7 @@ Both halves have to agree on what the shell will actually do with a string, or t
 
 - **Grants are scoped, not per-call (T1).** Approving `/tmp/dump/a.log` grants `/tmp/dump/*`; approving `az group list` grants `az group list`, derived for known multiplexers from the binary plus the leading non-flag arguments before the first flag, capped at two. Per-call prompting would make real research unusable, and users would reflexively approve.
 
-  *Amended 2026-08-11 (0.4.9).* The scope was originally the binary plus its **first** non-flag argument, which collapsed distinct operations onto one grant: `npm run <script>` scoped to `npm run`, so approving the project's test script pre-authorised every other script in the workspace manifest — attacker-authored on an untrusted repository — and `az group list`/`az group delete` and `aws s3 ls`/`aws s3 rm` each shared a grant across a read and its destructive sibling. Walking stops at the first flag so a flag's value never enters the scope, which keeps a log-style invocation one stable grant rather than a fresh prompt per limit; the cost is that a leading flag empties the lead (`mvn -q test` scopes to `mvn`), accepted deliberately.
+  The scope is not the binary plus its **first** non-flag argument: that collapses distinct operations onto one grant. `npm run <script>` would scope to `npm run`, so approving the project's test script would pre-authorise every other script in the workspace manifest — attacker-authored on an untrusted repository — and `az group list`/`az group delete` and `aws s3 ls`/`aws s3 rm` would each share a grant across a read and its destructive sibling. Walking stops at the first flag so a flag's value never enters the scope, which keeps a log-style invocation one stable grant rather than a fresh prompt per limit; the cost is that a leading flag empties the lead (`mvn -q test` scopes to `mvn`), accepted deliberately.
 - **Denials are remembered too (T2).** A model that retries a blocked lookup burns one tool round instead of re-prompting the user each time.
 - **One in-flight ask per scope (T3).** Parallel tool rounds cannot raise two prompts for the same thing.
 - **Nothing in core knows which UI is listening (T4).** Requests ride the same `SessionMessage` broadcast as every other planner event. VS Code answers in-process via `INotification.confirm`; the CLI and TUI answer over `POST /api/approvals/:sessionId/:approvalId`. A prompt outlives the socket that announced it, which is why answers are HTTP rather than a socket reply.
@@ -390,6 +390,7 @@ model's refusal to write were never security evidence.
 ## History
 
 - 2026-07-31 — accepted.
+- 2026-08-11 — (0.4.9) a grant's scope is the leading non-flag arguments before the first flag, capped at two, not only the first: `npm run <script>` and a read and its destructive sibling no longer share a grant.
 - 2026-09-27 — computed command names refused, computed arguments prompt, `|&`, glued short-flag values.
 - 2026-09-28 — command runners unwrapped or refused, `xargs` allowlist, sed and awk programs read, `<` targets confined.
 - 2026-09-29 — the seam carries runner tool requests (ADR-0018, #56).

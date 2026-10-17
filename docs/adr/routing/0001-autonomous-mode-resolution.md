@@ -34,17 +34,14 @@ Concretely:
   no change to planned tasks until they regenerate. That
   is deliberate — it is the same rule `/model set` follows.
 - **Two levels, one boolean.** The setting is a boolean (`autonomousMode`,
-  `autonomousDefault`, TUI `autonomous`, VS Code `ordewell.autonomousMode`,
-  default on). **Full** is on: each runner's `autonomous`-tagged mode.
+  `autonomousDefault`, TUI `autonomous`, default on), saved machine-wide in
+  `settings.json` ([ADR-0030](../supervision/0030-global-run-settings.md));
+  `ORDEWELL_AUTONOMOUS_MODE` stays as an override Ordewell never writes.
+  **Full** is on: each runner's `autonomous`-tagged mode.
   **Guarded** is off: each runner's `safe`-tagged mode. `/auto full` and
   `/auto guarded` select them (`ordewell auto full|guarded` likewise); `on`, `off`
   and `auto` stay as aliases, and a bare `/auto` in the TUI reports the current level
-  instead of flipping it.
-  *Amended by [ADR-0030](../supervision/0030-global-run-settings.md):* the level is saved
-  machine-wide in `settings.json`, not in `~/.ordewell/.env` or VS Code's
-  `ordewell.autonomousMode`, which is removed; existing values are copied over
-  once, and `ORDEWELL_AUTONOMOUS_MODE` stays as an override Ordewell never
-  writes. Still read at generation, never at spawn.
+  instead of flipping it. Still read at generation, never at spawn.
 - **Manifests declare what autonomy means for that runner.** Core never
   hardcodes mode IDs. Each manifest tags one mode `autonomous: true` and one
   `safe: true`, and its read-only mode, if it has one, `readOnly: true` (the

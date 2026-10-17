@@ -78,42 +78,43 @@ model's behalf, which is precisely what a coding agent replaces.
 
 ## Key properties
 
-- **Mutation belongs to task runners (T1).** Claude planners deny direct edit and
-  shell tools and native plan-mode transitions; Codex planners
-  use an OS read-only sandbox with approvals disabled. OpenCode uses its plan
-  agent and edit-tool denials, which leave a shell enforcement gap (ADR-0008).
-  Adapters also have a task mode, for the structured transport
-  ([ADR-0018](../runners/0018-structured-runner-transport.md)),
-  whose permission mode and effort come from the runner manifest; it is an
-  explicit start switch the planner path never passes, and tests assert it.
-  *Amended by [ADR-0026](../planner-envelope/0026-one-envelope-for-every-planner.md):* a planner's
-  commands run through Ordewell's `run_command`, inside ADR-0008's envelope,
-  and every planner's own permission requests — a user's MCP tool, a fetch, a
-  read outside the workspace — are held open and decided against `IApproval`
-  rather than auto-denied. Claude runs in `default` mode with its prompt tool
-  on stdio, Codex with `approvalPolicy: on-request`, and OpenCode under
-  Ordewell's own permission policy with its shell and subagents withheld. The
-  invariant holds: mutation belongs to the runners, and an absent answer is a
-  denial. Enforcement comes
-  from fixed spawn controls and tool denials, not prompt instructions; native
-  plan mode alone cannot supply the invariant.
-  *Amended by [ADR-0029](../supervision/0029-the-supervisor.md):* the planner's execution
-  tools (`run_plan`, `run_task`, `stop_task`, `stop_run`, `retry_task`,
-  `message_task`, `answer_approval`, `merge_all`, `skip_task`) are a further explicit
-  exception. They change what runs, through one core command seam that checks
-  the supervisor level and the plan's approval; they edit no file and run
-  nothing outside the envelope, so mutation still belongs to the runners.
-  Read-only mode covers what the agent *does*; it does not cover what the agent
-  can *ask for*, and three of those turned out to hang a turn indefinitely
-  rather than fail it. Each is answered, not ignored: OpenCode's `question` tool
-  is withheld at the message (`tools: {question: false, …}`) and its
-  `permission.asked` events are rejected over `/session/{id}/permissions/{id}`;
-  Codex gets a definite reply to *every* server→client request — the declining
-  payload where its result schema can express one, a JSON-RPC error where it
-  cannot (a permission profile, a question for a user, a client-side tool call)
-  — rather than to the three approval methods that happened to be known when
-  the adapter was written. An agent that ends its turn on a refusal without
-  speaking is reported by the refusal, not as an empty reply.
+- **Mutation belongs to task runners (T1).** A planner reads, searches and asks;
+  it never edits a file or runs a shell of its own. Enforcement comes from fixed
+  spawn controls and tool denials, not prompt instructions; native plan mode
+  alone cannot supply the invariant.
+  - Claude runs in `default` mode with its prompt tool on stdio, and its direct
+    edit and shell tools and native plan-mode transitions denied. Codex runs
+    with an OS read-only sandbox and `approvalPolicy: on-request`. OpenCode runs
+    its plan agent under Ordewell's own permission policy, which denies every
+    write and shell tool, with its shell and subagents withheld
+    ([ADR-0026](../planner-envelope/0026-one-envelope-for-every-planner.md)).
+  - A planner's commands run through Ordewell's `run_command`, inside
+    ADR-0008's envelope, and every planner's own permission requests — a user's
+    MCP tool, a fetch, a read outside the workspace — are held open and decided
+    against `IApproval` rather than auto-denied. An absent answer is a denial.
+  - The planner's execution tools (`run_plan`, `run_task`, `stop_task`,
+    `stop_run`, `retry_task`, `message_task`, `answer_approval`, `merge_all`,
+    `skip_task`) are a further explicit exception
+    ([ADR-0029](../supervision/0029-the-supervisor.md)). They change what runs,
+    through one core command seam that checks the supervisor level and the
+    plan's approval; they edit no file and run nothing outside the envelope, so
+    mutation still belongs to the runners.
+  - Adapters also have a task mode, for the structured transport
+    ([ADR-0018](../runners/0018-structured-runner-transport.md)), whose
+    permission mode and effort come from the runner manifest; it is an explicit
+    start switch the planner path never passes, and tests assert it.
+  - Read-only mode covers what the agent *does*; it does not cover what the
+    agent can *ask for*, and three of those turned out to hang a turn
+    indefinitely rather than fail it. Each is answered, not ignored: OpenCode's
+    `question` tool is withheld at the message (`tools: {question: false, …}`)
+    and its `permission.asked` events are rejected over
+    `/session/{id}/permissions/{id}`; Codex gets a definite reply to *every*
+    server→client request — the declining payload where its result schema can
+    express one, a JSON-RPC error where it cannot (a permission profile, a
+    question for a user, a client-side tool call) — rather than to the three
+    approval methods that happened to be known when the adapter was written. An
+    agent that ends its turn on a refusal without speaking is reported by the
+    refusal, not as an empty reply.
 - **The plan arrives as text, through the existing parser (T2).** The final
   assistant message carries the `{"tasks":[…]}` object; last-candidate
   extraction and the two-attempt repair loop handle it exactly as they do for a

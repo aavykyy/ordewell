@@ -157,11 +157,11 @@ planner tools are recorded here as an explicit entry against both:
   of truth (ADR-0001). A structural edit during a live run applies at once to
   tasks not yet started and is refused, with a note, for a running or
   finished task, exactly as an envelope edit is (ADR-0029).
-- **Execution tools are a further explicit entry (P5).** *Added by
-  [ADR-0029](../supervision/0029-the-supervisor.md).* `run_plan`, `run_task`, `stop_task`,
-  `stop_run`, `retry_task`, `message_task`, `answer_approval` (deny or
-  escalate, never allow), `merge_all` and `skip_task` (lands nothing, never
-  marks work complete) change what runs, not files. They
+- **Execution tools are a further explicit entry (P5).** `run_plan`, `run_task`,
+  `stop_task`, `stop_run`, `retry_task`, `message_task`, `answer_approval` (deny
+  or escalate, never allow), `merge_all` and `skip_task` (lands nothing, never
+  marks work complete) change what runs, not files
+  ([ADR-0029](../supervision/0029-the-supervisor.md)). They
   reach the scheduler only through one core command seam, which checks the
   supervisor level, who started the turn and the plan's approval; `task_diff`
   joins the reads. Absent a grant at the seam, the call is refused.
@@ -172,10 +172,11 @@ planner tools are recorded here as an explicit entry against both:
   one. A read through the tool costs what the same read through the envelope
   costs. A wake-up turn, which no user message bounds, spends the plan's
   wake-up read budget instead (ADR-0029).
-- **Waking the planner during a run is out of scope (P4).** So is any write it
-  makes then. Both stay with #27 and #29.
-  *Superseded by [ADR-0029](../supervision/0029-the-supervisor.md):* wake-up turns, live
-  planner turns and a per-turn read budget for wake-ups.
+- **Waking the planner during a run is not this server's (P4).** Wake-up turns,
+  live planner turns and a per-turn read budget for wake-ups are decided in
+  [ADR-0029](../supervision/0029-the-supervisor.md); this server serves them
+  the same tools, with `submit_plan` and `edit_plan` refused in a wake-up turn
+  at Watch.
 
 ### Planner: the catalog is read when the plan is submitted
 
@@ -257,8 +258,6 @@ planner tools are recorded here as an explicit entry against both:
 
 ## History
 
-- 2026-10-11 — saved attempt log reads and task diffs share the existing read cap; API planners use the same read handlers without MCP.
-
 - 2026-10-05 — proposed.
 - 2026-10-05 — V5 amended: checked against Claude Code 2.1.289, its hard cap on a tool call is 1e8 ms, but an HTTP call silent for 300s is aborted. Progress notifications reset that, so the server heartbeats instead of the configuration raising a timeout.
 - 2026-10-05 — Codex checked against 0.160.0: the server is injected per thread (`mcp_servers.ordewell` in the thread config, token read from the environment), pre-authorized with `default_tools_approval_mode = "approve"`; a 200s `checkpoint` call survives on the heartbeat with no timeout raised. Codex keeps MCP tools out of the model's tool list, so a task thread's instructions say where to find them.
@@ -268,5 +267,6 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-11 — execution tools and `task_diff`, live planner turns, wake-up turns ([ADR-0029](../supervision/0029-the-supervisor.md)).
 - 2026-10-11 — live planner turns implemented: `edit_plan` checks a mid-run edit at the call, with no queued outcome.
 - 2026-10-11 — wake-up turns implemented: their reads spend the plan's wake-up read budget, and `submit_plan` and `edit_plan` are refused in them at Watch.
+- 2026-10-11 — saved attempt log reads and task diffs share the existing read cap; API planners use the same read handlers without MCP.
 - 2026-10-13 — S3 by exact name: OpenCode's `ordewell_*` rule and the Claude Code and OpenCode prefix matches pre-approved a repository server named `ordewell_x`'s tools; checked against OpenCode 2.0.27's tool naming.
 - 2026-10-14 — `skip_task` joins the execution tools ([ADR-0029](../supervision/0029-the-supervisor.md)).

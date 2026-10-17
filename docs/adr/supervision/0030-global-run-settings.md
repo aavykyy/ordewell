@@ -117,16 +117,15 @@ two rows: **Autonomy** (Full/Guarded, `/auto`) and **Run** (supervisor level,
 auto-merge, autorun, and their commands). Act and autorun on are drawn as a
 warning, as the autonomous mode's `⚡` is. A status badge shows the same values
 at all times, not only during a run, and during a run shows the run's level
-where it differs from the global one: `Act → Watch (loop guard)`.
+where it differs from the global one: `Act → Watch (loop guard)`. In the TUI
+the badge sits at the right end of the status row rather than on a row of its
+own, and is left off the bare welcome screen, whose Setup block already shows
+the same values.
 
-*2026-10-13:* in the TUI the badge sits at the right end of the status row
-rather than on a row of its own, and is left off the bare welcome screen,
-whose Setup block already shows the same values.
-
-*2026-10-14:* the status row it shares with the badge now speaks only for the
-chat on screen: `Planning…` in the planner's chat, `Working…` in a running
-task's, nothing when that chat is idle. What the run waits on (tasks that wait
-for you, a pause for Merge all) moved to the plan pane's title.
+The status row it shares with the badge speaks only for the chat on screen:
+`Planning…` in the planner's chat, `Working…` in a running task's, nothing when
+that chat is idle. What the run waits on (tasks that wait for you, a pause for
+Merge all) is shown in the plan pane's title.
 
 The two rows keep the glossary's line: *autonomy* names Full/Guarded only, and
 the other four are the **run settings**.
@@ -323,3 +322,8 @@ the daemon reads it from there at generation.
   scheduler reads them as it decides instead of holding a copy pushed from
   several places. A run the supervisor opened had merged by the user's setting
   from another session rather than by its own.
+- 2026-10-13 — in the TUI the badge sits at the right end of the status row
+  rather than on a row of its own, and is left off the bare welcome screen,
+  whose Setup block already shows the same values.
+- 2026-10-14 — the status row the badge shares speaks only for the chat on
+  screen; what the run waits on moved to the plan pane's title.
