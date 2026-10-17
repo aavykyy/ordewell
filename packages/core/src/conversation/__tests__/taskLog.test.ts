@@ -491,12 +491,28 @@ describe('reduceTaskLog with the runner\'s own commands (#66)', () => {
   });
 
   it('says where a model switch made in the runner leaves the plan (#106)', () => {
-    const view = replayTaskLog([start, { type: 'model_switched', from: { model: 'haiku', label: 'Haiku 5.5' }, to: { model: 'sonnet', label: 'Sonnet 5.5' } }]);
+    const haiku = { model: 'haiku', label: 'Haiku 5.5' };
+    const sonnet = { model: 'sonnet', label: 'Sonnet 5.5' };
+    const view = replayTaskLog([start, { type: 'model_switched', from: haiku, to: sonnet, plan: { model: { model: 'sonnet', label: 'Claude Sonnet 5.5' }, effort: 'high' } }]);
     expect(unkeyed(view.blocks).at(-1)).toEqual({
-      type: 'message', role: 'system', text: 'Model changed in the runner: Haiku 5.5 → Sonnet 5.5; the plan now says Sonnet 5.5', streaming: false,
+      type: 'message', role: 'system', text: 'Model changed in the runner: Haiku 5.5 → Sonnet 5.5; the plan now says Claude Sonnet 5.5, high', streaming: false,
     });
-    const unlabelled = replayTaskLog([start, { type: 'model_switched', from: { model: 'haiku' }, to: { model: 'claude-opus-4-7' } }]);
+    const unlabelled = replayTaskLog([start, { type: 'model_switched', from: { model: 'haiku' }, to: { model: 'claude-opus-4-7' }, plan: { model: { model: 'claude-opus-4-7' } } }]);
     expect(unkeyed(unlabelled.blocks).at(-1)).toMatchObject({ text: 'Model changed in the runner: haiku → claude-opus-4-7; the plan now says claude-opus-4-7' });
+  });
+
+  it('says the plan kept its model when it did not follow, and why', () => {
+    const kept = replayTaskLog([start, {
+      type: 'model_switched', from: { model: 'haiku', label: 'Haiku 5.5' }, to: { model: 'sonnet', label: 'Sonnet 5.5' },
+      plan: { model: { model: 'haiku', label: 'Claude Haiku 5.5' } }, kept: 'no model command in the chat asked for it',
+    }]);
+    expect(unkeyed(kept.blocks).at(-1)).toMatchObject({
+      text: 'The runner now answers on Sonnet 5.5; the plan still says Claude Haiku 5.5 (no model command in the chat asked for it)',
+    });
+    const unplanned = replayTaskLog([start, { type: 'model_switched', from: { model: 'haiku' }, to: { model: 'sonnet' }, plan: {}, kept: 'its attempt had already ended' }]);
+    expect(unkeyed(unplanned.blocks).at(-1)).toMatchObject({
+      text: 'The runner now answers on sonnet; the plan names no model (its attempt had already ended)',
+    });
   });
 
   it('shows what the runner loaded as one block', () => {

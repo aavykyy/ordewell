@@ -126,7 +126,13 @@ export type AgentEvent =
    * the plan follows. Each side is named by the id the runner lists it under,
    * the one a plan holds. `effort` only where the runner reports one.
    */
-  | { type: 'model_switched'; from: RunnerModelRef; to: RunnerModelRef; effort?: string };
+  | { type: 'model_switched'; from: RunnerModelRef; to: RunnerModelRef; effort?: string }
+  /**
+   * The runner's main thread now answers on another model with no model
+   * command before it (#106). Nobody in the chat chose it, so the plan does
+   * not follow; the drift is reported so it is stated, not hidden.
+   */
+  | { type: 'model_drifted'; from: RunnerModelRef; to: RunnerModelRef };
 
 /**
  * What a planner's permission request is for, read from the runner's own

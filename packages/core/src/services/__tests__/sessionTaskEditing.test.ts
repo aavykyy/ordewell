@@ -434,6 +434,17 @@ describe('Session.updateTask — model of a task with a live runner', () => {
     expect(taskOf(session, 'only')?.assignedModel?.modelId).toBe('claude-haiku-4-5');
   });
 
+  // A flip to manual clears the model without the patch naming it.
+  it('refuses a flip to a manual task, which would clear the model its runner runs', async () => {
+    const { session, live } = await followable();
+    live.waitForInput();
+    await vi.waitFor(() => expect(taskOf(session, 'only')?.status).toBe('awaiting_user'));
+
+    await expect(session.updateTask('only', { type: 'user', userSteps: [{ order: 1, instruction: 'by hand', completed: false }] })).rejects.toThrow(refusal);
+    expect(taskOf(session, 'only')?.type).toBe('ai');
+    expect(taskOf(session, 'only')?.assignedModel).toEqual(planned);
+  });
+
   it('refuses it while the runner waits for input, its process still up', async () => {
     const { session, live } = await running();
     live.waitForInput();
@@ -442,7 +453,8 @@ describe('Session.updateTask — model of a task with a live runner', () => {
     await expect(session.updateTask('only', { assignedModel: haiku })).rejects.toThrow(refusal);
   });
 
-  it('follows a switch made with the runner\'s own /model as a visible edit, off the allowlist too', async () => {
+  /** A running task on Sonnet, high effort, whose allowlist holds Sonnet alone; the catalog is seeded. */
+  async function followable() {
     const broadcast = vi.fn();
     const sessions: FakeRunnerSession[] = [];
     const runner = {
@@ -462,12 +474,53 @@ describe('Session.updateTask — model of a task with a live runner', () => {
     session.loadPlan(plan, 'goal', testWorkspace, { persist: false });
     await session.addTask({ title: 'Docs', prompt: 'write docs', dependencies: ['only'] }); // seeds the catalog
     await session.executePlan();
+    /** The model lines of the task's log, as surfaces are sent them. */
+    const logged = () => broadcast.mock.calls.map(([m]) => m as { type: string; events?: { type: string }[] })
+      .flatMap((m) => (m.type === 'task_log' ? m.events ?? [] : []))
+      .filter((e) => e.type === 'model_switched');
+    return { session, broadcast, live: sessions[0], logged };
+  }
 
-    sessions[0].emitEvent({ type: 'model_switched', from: { model: 'claude-sonnet-4-5', label: 'Sonnet 4.5' }, to: { model: 'claude-haiku-4-5', label: 'Haiku 4.5' } });
+  const sonnet = { model: 'claude-sonnet-4-5', label: 'Sonnet 4.5' };
+  const haikuRef = { model: 'claude-haiku-4-5', label: 'Haiku 4.5' };
+  const planned = { modelId: 'claude-sonnet-4-5', modelLabel: 'Claude Sonnet 4.5', thinkingEffort: 'high' };
 
-    const followed = { modelId: 'claude-haiku-4-5', modelLabel: 'Claude Haiku 4.5', thinkingEffort: 'high', availableVariants: [] };
+  it('follows a switch made with the runner\'s own /model as a visible edit, off the allowlist too', async () => {
+    const { session, broadcast, live, logged } = await followable();
+
+    live.emitEvent({ type: 'model_switched', from: sonnet, to: haikuRef });
+
+    // Haiku offers no effort, so the plan's `high` does not ride onto it.
+    const followed = { modelId: 'claude-haiku-4-5', modelLabel: 'Claude Haiku 4.5', availableVariants: [] };
     await vi.waitFor(() => expect(taskOf(session, 'only')?.assignedModel).toEqual(followed));
     expect(broadcast).toHaveBeenCalledWith({ type: 'task_updated', taskId: 'only', changes: { assignedModel: followed } });
+    // The log says what the plan took, under the catalog's name for it.
+    await vi.waitFor(() => expect(logged()).toEqual([
+      { type: 'model_switched', from: sonnet, to: haikuRef, plan: { model: { model: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' } } },
+    ]));
+  });
+
+  it('states a change no model command asked for, and leaves the plan as it was', async () => {
+    const { session, live, logged } = await followable();
+
+    live.emitEvent({ type: 'model_drifted', from: sonnet, to: haikuRef });
+
+    await vi.waitFor(() => expect(logged()).toEqual([
+      { type: 'model_switched', from: sonnet, to: haikuRef, plan: { model: { model: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5' }, effort: 'high' }, kept: 'no model command in the chat asked for it' },
+    ]));
+    expect(taskOf(session, 'only')?.assignedModel).toEqual(planned);
+  });
+
+  it('says the plan kept its model when the switch arrives after the attempt ended', async () => {
+    const { session, live, logged } = await followable();
+    await session.cancelTask('only');
+
+    live.emitEvent({ type: 'model_switched', from: sonnet, to: haikuRef });
+
+    await vi.waitFor(() => expect(logged()).toEqual([
+      { type: 'model_switched', from: sonnet, to: haikuRef, plan: { model: { model: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5' }, effort: 'high' }, kept: 'its attempt had already ended' },
+    ]));
+    expect(taskOf(session, 'only')?.assignedModel).toEqual(planned);
   });
 
   it('lets other fields of a running task change, and a model edit that changes nothing through', async () => {

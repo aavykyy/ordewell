@@ -56,6 +56,29 @@ describe('TaskLogRecorder', () => {
     expect(file.saved).toEqual(expected);
   });
 
+  it('writes a note into the log of the attempt that ran its session, at once and past its exit, never into a later attempt\'s', async () => {
+    const first = memoryFile(1);
+    const second = memoryFile(2);
+    const files = [first, second];
+    const sent: SessionMessage[] = [];
+    const recorder = new TaskLogRecorder({ broadcast: (m) => sent.push(m), location: () => ({ baseDir: '/ws', sessionId: 'sess' }), open: () => files.shift()! });
+    const note: TaskLogEvent = { type: 'model_switched', from: { model: 'haiku' }, to: { model: 'sonnet' }, plan: { model: { model: 'sonnet' } } };
+
+    const a = new FakeRunnerSession('s1', 't1');
+    await recorder.wrap(handing(a)).spawn(spawnOpts);
+    a.emitEvent({ type: 'turn_start', text: 'Do it' });
+    recorder.note('s1', 't1', note);
+    expect(first.saved).toEqual([{ type: 'turn_start', message: 'Do it' }, note]);
+    a.emitExit(0);
+    recorder.note('s1', 't1', note);
+    expect(first.saved).toHaveLength(3);
+
+    await recorder.wrap(handing(new FakeRunnerSession('s2', 't1'))).spawn(spawnOpts);
+    recorder.note('s1', 't1', note);
+    expect(first.saved).toHaveLength(3);
+    expect(second.saved).toEqual([]);
+  });
+
   it('opens each attempt\'s log with the skills that attempt was given, shown as one line', async () => {
     const skills = [{ name: 'tdd', source: 'global' as const, path: '/g/tdd/SKILL.md', content: 'RED, GREEN.' }];
     const first = memoryFile(1);

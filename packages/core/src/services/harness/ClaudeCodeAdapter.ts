@@ -441,8 +441,13 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private mainModel: string | undefined;
   /** What the plan should say the task runs: its spawn's model, then each switch followed. */
   private followedModel: string | undefined;
-  /** A model command sent through the chat whose switch has not been seen yet; `answered` once its own turn ended. */
-  private modelCommand: { args: string; answered: boolean } | null = null;
+  /**
+   * Model commands sent through the chat whose switch has not been seen yet,
+   * oldest first, each with the turns still to end before its own has. Several
+   * can be pending: a command's switch is first reported by the next turn's
+   * `init`, which can be another `/model`'s.
+   */
+  private modelCommands: { args: string; turnsLeft: number }[] = [];
 
   protected spawnSpec(opts: AgentStartOptions, workspace: Record<string, string>): SpawnSpec {
     if (opts.kind === 'task') return this.taskSpawnSpec(opts);
@@ -620,6 +625,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     if (this.role !== 'task' || !this.process || this.interruptRequested || this.pendingResume) return false;
     const uuid = randomUUID();
     this.steers.set(uuid, id);
+    // It runs once the turn it was sent into ends, if the CLI runs it as a command at all.
+    this.noteModelCommand(text, 2);
     this.writeLine({ type: 'user', uuid, message: { role: 'user', content: [{ type: 'text', text }] } });
     return true;
   }
@@ -659,7 +666,6 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * for it.
    */
   invokeCommand(name: string, args: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal): Promise<void> {
-    if ((findRunnerCommand(this.commands(), name)?.name ?? name) === MODEL_COMMAND) this.modelCommand = { args: args.trim(), answered: false };
     return this.send(args ? `/${name} ${args}` : `/${name}`, onEvent, signal);
   }
 
@@ -676,10 +682,22 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
 
   protected turnPayload(message: string): string {
     this.openTurnState();
+    this.noteModelCommand(message, 1);
     return `${JSON.stringify({
       type: 'user',
       message: { role: 'user', content: [{ type: 'text', text: message }] },
     })}\n`;
+  }
+
+  /**
+   * The CLI runs a message that starts with a slash command as that command,
+   * whether the surface sent it as one or as plain text, so the message
+   * itself says a model switch was asked for: every way into the chat counts.
+   */
+  private noteModelCommand(text: string, turnsLeft: number): void {
+    const [, name, args = ''] = /^\/(\S+)\s*([\s\S]*)$/.exec(text) ?? [];
+    if (this.role !== 'task' || !name || (findRunnerCommand(this.commands(), name)?.name ?? name) !== MODEL_COMMAND) return;
+    this.modelCommands.push({ args: args.trim(), turnsLeft });
   }
 
   private openTurnState(): void {
@@ -842,7 +860,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         // text (which carries the plan JSON) already arrived as assistant
         // blocks, so this only settles the turn.
         this.reportSessionCost(msg, emit);
-        if (this.modelCommand) this.modelCommand.answered = true;
+        for (const command of this.modelCommands) command.turnsLeft = Math.max(0, command.turnsLeft - 1);
         if (this.interruptRequested && (msg.is_error || msg.subtype !== 'success')) {
           this.interruptRequested = false;
           this.closeTurn({ type: 'turn_end', interrupted: true }, emit);
@@ -868,30 +886,44 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
 
   /**
    * A task's main thread reported the model it answers on. A change is the
-   * user's own switch only when a model command went through the chat before
-   * it: Ordewell never passes `--fallback-model`, so nothing else moves it, and
-   * a change nobody asked for is not written into the plan. A command whose
-   * turn ended with the model unchanged switched nothing, and is let go.
+   * user's own switch when a model command went out before it: Ordewell never
+   * passes `--fallback-model`, so nothing else should move it. A change with
+   * no command before it is reported as drift, and the plan does not follow
+   * it. A command whose turn ended with the model unchanged switched nothing,
+   * and is let go.
    *
-   * Effort is not reported: `init` names the model alone (its
-   * `per_turn_effort_active` says effort is on, not which), and `/effort` only
-   * prints, so a switch carries no effort and the plan's stays as planned.
+   * Effort is never reported (recorded on 2.1.302, `task-effort-command`):
+   * `init` names the model alone, its `per_turn_effort_active` says effort is
+   * on, not which; `/effort low` only prints that it set it; and `/model`
+   * takes no effort (`/model haiku high` is "not found"). So a switch carries
+   * no effort and the plan's stays as planned.
    */
   private followModel(reported: string | undefined, emit: (event: AgentEvent) => void): void {
     if (this.role !== 'task' || !reported || reported === '<synthetic>') return;
     const previous = this.mainModel;
     this.mainModel = reported;
-    const command = this.modelCommand;
     if (previous === undefined || previous === reported) {
-      if (command?.answered) this.modelCommand = null;
+      this.modelCommands = this.modelCommands.filter((c) => c.turnsLeft > 0);
       return;
     }
-    this.modelCommand = null;
-    if (!command) return;
+    // The command that asked for this model, else the oldest: an id the CLI
+    // takes but `initialize` does not list cannot be matched.
+    const matched = this.modelCommands.findIndex((c) => this.runsAs(c.args, reported));
+    const command = this.modelCommands[Math.max(matched, 0)];
+    this.modelCommands = this.modelCommands.slice(Math.max(matched, 0) + 1);
     const from = this.listedModel(previous, this.followedModel);
+    if (!command) {
+      emit({ type: 'model_drifted', from, to: this.listedModel(reported, undefined) });
+      return;
+    }
     const to = this.listedModel(reported, command.args);
     this.followedModel = to.model;
     emit({ type: 'model_switched', from, to });
+  }
+
+  /** Whether the model value `asked` runs as the id `resolved`, by what `initialize` lists. */
+  private runsAs(asked: string, resolved: string): boolean {
+    return asked === resolved || this.listedModels.some((m) => m.value === asked && m.resolvedModel === resolved);
   }
 
   /**

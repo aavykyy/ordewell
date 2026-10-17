@@ -105,11 +105,13 @@ export interface OrchestratorObserver {
    */
   onUsageLimitWait?(data: { taskId: string; runner: string; resumeAt: string | null; cancelled?: true }): void;
   /**
-   * A model command sent through a live task's chat switched its runner's
-   * model (#106): the user's own choice, which the plan is to follow.
+   * A task's runner now answers on another model (#106). `asked` when a model
+   * command sent through its chat chose it: the user's own choice, which the
+   * plan is to follow. `attemptEnded` when the attempt that runs `sessionId`
+   * is no longer the task's, so the switch says nothing of what runs next.
    * `effort` only where the runner reported one.
    */
-  onModelSwitched?(data: { taskId: string; model: RunnerModelRef; effort?: string }): void;
+  onModelSwitched?(data: { taskId: string; sessionId: string; from: RunnerModelRef; model: RunnerModelRef; effort?: string; asked: boolean; attemptEnded: boolean }): void;
   /** A live task's runner went silent (ADR-0018's idle timer); paused while it waits on input, a checkpoint or an approval. */
   onTaskIdle?(data: { taskId: string; idleSince: string }): void;
   onReviewNeeded?(data: { tasks: Task[]; planRunners: RunnerId[] }): void;
@@ -2158,8 +2160,12 @@ export class TaskOrchestrator {
           attempt.turnError = null;
           attempt.turnOutputFrom = session.getOutput().length;
         } else if (event.type === 'error') attempt.turnError = event;
-        else if (event.type === 'model_switched' && this.attempts.get(task.id) === attempt) {
-          this.emit('onModelSwitched', { taskId: task.id, model: event.to, ...(event.effort ? { effort: event.effort } : {}) });
+        else if (event.type === 'model_switched' || event.type === 'model_drifted') {
+          this.emit('onModelSwitched', {
+            taskId: task.id, sessionId: session.id, from: event.from, model: event.to,
+            ...(event.type === 'model_switched' && event.effort ? { effort: event.effort } : {}),
+            asked: event.type === 'model_switched', attemptEnded: this.attempts.get(task.id) !== attempt,
+          });
         }
       });
       session.onTurnEnd((reason) => this.onTurnEnd(task.id, attempt, session, reason));

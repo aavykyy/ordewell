@@ -249,7 +249,7 @@ export function createSession(deps: SessionDeps): Session {
   // A window a runner or provider reports wins; this serves the rest, from
   // the catalogs the resolver already holds.
   const catalogWindow: CatalogWindow = (source, model) => deps.modelResolver.contextWindowFor?.(source, model);
-  const taskLogs = new TaskLogRecorder({
+  const taskLogs: TaskLogRecorder = new TaskLogRecorder({
     broadcast: deps.broadcast,
     // Read through the Session, whose id and workspace are the ones it saves
     // under and can change with a plan. Only read once a task spawns.
@@ -375,6 +375,7 @@ export function createSession(deps: SessionDeps): Session {
     usage,
     approvals,
     approvalPolicy,
+    taskLogs,
     // Every planner's web reads, carried here or natively, are decided by the
     // one policy, which asks through the same channel as paths and commands.
     // The response cache and search provider are process-wide, so parallel
@@ -417,6 +418,8 @@ export interface SessionParts {
   usage: PlannerUsageLedger;
   approvals: PendingApprovals;
   approvalPolicy: ApprovalPolicy;
+  /** Where the Session writes what it made of a task's event into that attempt's log. */
+  taskLogs: Pick<TaskLogRecorder, 'note'>;
   fetcher: IWebFetcher;
   skillsService: Pick<SkillsService, 'findSkill' | 'listSkills' | 'searchedDirs' | 'forRoot'>;
   saveSession: SaveSession;
@@ -465,6 +468,7 @@ export class Session {
   private readonly fsAdapter: IFileSystem;
   private readonly approvals: PendingApprovals;
   private readonly approvalPolicy: ApprovalPolicy;
+  private readonly taskLogs: SessionParts['taskLogs'];
   private readonly fetcher: IWebFetcher;
   private readonly settingsFn: () => SessionRuntimeSettings;
   private readonly save: SaveSession;
@@ -546,6 +550,7 @@ export class Session {
     this.usage = parts.usage;
     this.approvals = parts.approvals;
     this.approvalPolicy = parts.approvalPolicy;
+    this.taskLogs = parts.taskLogs;
     this.fetcher = parts.fetcher;
     this.skillsService = parts.skillsService;
     this.save = parts.saveSession;
@@ -1006,11 +1011,7 @@ export class Session {
       onUsageLimitWait: ({ taskId, runner, resumeAt, cancelled }) => {
         if (!cancelled) this.supervision.observe({ kind: 'usage_limit', taskId, runner, resumeAt });
       },
-      onModelSwitched: ({ taskId, model, effort }) => {
-        void this.editor.followRunnerModel(taskId, model, effort).catch((err: unknown) => {
-          this.notice('warn', `The plan could not follow the model switch of task ${this.store.get(taskId)?.order ?? taskId}: ${err instanceof Error ? err.message : String(err)}`);
-        });
-      },
+      onModelSwitched: (switched) => { void this.followRunnerModel(switched); },
       onTaskIdle: ({ taskId, idleSince }) => {
         this.supervision.observe({ kind: 'task_idle', taskId, detail: `no output since ${idleSince}` });
       },
@@ -1759,6 +1760,36 @@ export class Session {
   /** Keep a task paused on a usage limit from resuming on its own; see {@link TaskOrchestrator.cancelScheduledResume}. */
   cancelScheduledResume(taskId: string): boolean {
     return this.saved(() => this.orchestrator.cancelScheduledResume(taskId));
+  }
+
+  /**
+   * The plan follows a model switch the user made in the runner (#106), and
+   * the task's log says what the plan holds once that settled: a write-back
+   * not made — no model command asked for the change, the attempt had ended,
+   * or the edit failed — is stated, never shown as made.
+   */
+  private async followRunnerModel({ taskId, sessionId, from, model, effort, asked, attemptEnded }: Parameters<NonNullable<OrchestratorObserver['onModelSwitched']>>[0]): Promise<void> {
+    let kept: string | undefined;
+    if (!asked) kept = 'no model command in the chat asked for it';
+    else if (attemptEnded) kept = 'its attempt had already ended';
+    else {
+      try {
+        await this.editor.followRunnerModel(taskId, model, effort);
+      } catch (err: unknown) {
+        kept = `the plan could not follow it: ${err instanceof Error ? err.message : String(err)}`;
+        this.notice('warn', `The plan could not follow the model switch of task ${this.store.get(taskId)?.order ?? taskId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    const assigned = this.store.get(taskId)?.assignedModel;
+    if (!kept && assigned?.modelId !== model.model) kept = 'the plan did not take the edit';
+    this.taskLogs.note(sessionId, taskId, {
+      type: 'model_switched', from, to: model,
+      plan: {
+        ...(assigned ? { model: { model: assigned.modelId, label: assigned.modelLabel } } : {}),
+        ...(assigned?.thinkingEffort ? { effort: assigned.thinkingEffort } : {}),
+      },
+      ...(kept ? { kept } : {}),
+    });
   }
 
   /** Said through both channels: a host shows one or the other, never both (the daemon's toasts are no-ops). */

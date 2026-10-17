@@ -2,7 +2,7 @@ import { canMergeTasks, canSplitTask } from './TaskOps';
 import { validateTaskEdit } from './TaskEditValidator';
 import { unavailableModeReason, type RunnerModeInfo } from './ModeResolver';
 import { retargetTaskRunner, runnerAssignment, type RunnerCatalog } from './TaskRetarget';
-import { effectiveAllowlist } from './ModelAllowlistResolver';
+import { clampThinkingEffort, effectiveAllowlist } from './ModelAllowlistResolver';
 import { buildMergePrompt, buildSplitPrompt } from './PlanPrompts';
 import { conflictResolverTask } from './Landing';
 import { PlanEditError } from './PlanEditError';
@@ -107,15 +107,17 @@ export class PlanEditor {
    * it says what that runner already runs, and the one that skips the
    * allowlist: the user picked it in the runner. The runner's own label is
    * used only for a model discovery does not list. Effort is the runner's
-   * when it reported one, else the plan's stays.
+   * when it reported one, else the plan's, either clamped to what the new
+   * model offers; none for a model discovery does not list.
    */
   followRunnerModel(taskId: string, model: RunnerModelRef, effort?: string): Promise<LegacyPlanState | null> {
     return this.inTaskOrder(taskId, async () => {
       const task = this.store.get(taskId);
       if (!task || task.type === 'user') return null;
-      const thinkingEffort = effort ?? task.assignedModel?.thinkingEffort;
-      if (task.assignedModel?.modelId === model.model && task.assignedModel.thinkingEffort === thinkingEffort) return this.plan();
       const listed = this.catalog.models()[task.assignedRunner]?.find((m) => m.modelId === model.model);
+      // An effort the new model does not offer would be passed to its next spawn.
+      const thinkingEffort = clampThinkingEffort(effort ?? task.assignedModel?.thinkingEffort, listed?.variants ?? []);
+      if (task.assignedModel?.modelId === model.model && task.assignedModel.thinkingEffort === thinkingEffort) return this.plan();
       const assignedModel: TaskModelAssignment = {
         modelId: model.model,
         modelLabel: listed?.modelLabel ?? model.label ?? model.model,

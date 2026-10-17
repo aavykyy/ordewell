@@ -36,11 +36,12 @@ export type TaskLogEvent =
   /** The runner compacted its own context, asked to or on its own. */
   | { type: 'compaction'; trigger: 'manual' | 'auto'; preTokens?: number; postTokens?: number }
   /**
-   * A model command sent through the task's chat switched the runner's model,
-   * and the plan now says the new one (#106). `effort` only where the runner
-   * reported one.
+   * The runner's main thread moved to another model, and what the plan says
+   * once the write-back settled (#106): written from its outcome, not from the
+   * runner's event, so the line never claims an edit that did not land.
+   * `kept` says why the plan did not follow, when it did not.
    */
-  | { type: 'model_switched'; from: RunnerModelRef; to: RunnerModelRef; effort?: string }
+  | { type: 'model_switched'; from: RunnerModelRef; to: RunnerModelRef; plan: { model?: RunnerModelRef; effort?: string }; kept?: string }
   /** What the runner loaded from the user's and the project's setup, as its process started. */
   | { type: 'runner_loaded'; commands: RunnerCommand[]; mcpServers: RunnerMcpServer[] }
   | { type: 'turn_end'; reason: StructuredTurnEnd }
@@ -130,7 +131,8 @@ function withSubagent<E extends TaskLogEvent>(event: E, subagentId: string | und
 
 /**
  * The log entry for one structured event, or null for what the log does not
- * keep: background-agent launches, which the subagent's own events already show.
+ * keep: background-agent launches, which the subagent's own events already
+ * show, and a model change, which is logged with what the plan made of it.
  */
 export function toTaskLogEvent(event: StructuredEvent): TaskLogEvent | null {
   switch (event.type) {
@@ -199,8 +201,9 @@ export function toTaskLogEvent(event: StructuredEvent): TaskLogEvent | null {
       };
     case 'command_output':
       return { type: 'command_output', text: event.text };
+    // Logged once the plan's write-back settles: see `TaskLogRecorder.note`.
     case 'model_switched':
-      return { type: 'model_switched', from: event.from, to: event.to, ...(event.effort ? { effort: event.effort } : {}) };
+    case 'model_drifted':
     case 'background_agent':
       return null;
   }
