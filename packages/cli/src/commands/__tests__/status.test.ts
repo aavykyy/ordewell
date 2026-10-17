@@ -270,9 +270,9 @@ describe('handleStatus --output', () => {
 
     const flags = stripAnsi(stdout).split('\n').filter((l) => l.includes('⚠'));
     expect(flags).toEqual([
-      '      ⚠ codex is switched off; it still runs unless moved',
-      '      ⚠ Opus 4 is not in the allowlist; it still runs unless moved',
-      '        ⚠ codex is switched off; it still runs unless moved',
+      '      ⚠ codex is switched off — runs as assigned unless moved',
+      '      ⚠ Opus 4 is not in the allowlist — runs as assigned unless moved',
+      '        ⚠ codex is switched off — runs as assigned unless moved',
     ]);
     srv.close();
   });

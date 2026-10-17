@@ -4,7 +4,7 @@ import ModelSelector from './ModelSelector';
 import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
 import { pausedOnLimit, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction, AssignmentScope } from '@ordewell/core';
-import { TaskActions, TaskCheck, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
+import { AssignmentFlag, TaskActions, TaskCheck, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
 import type { RunnerMode, RunnerOption } from './TaskCard';
 import { checkLabel } from '../checkLabel';
 
@@ -213,12 +213,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
           <span className={`task-status-badge ${status.cls}`}>{status.label}</span>
         )}
 
-        {row.assignmentFlag && (
-          <span className="task-isolation-badge gate"
-            title="This task still runs as assigned. Change its runner or model to move it, or ask the planner to.">
-            {row.assignmentFlag}
-          </span>
-        )}
+        <AssignmentFlag row={row} />
 
         <UsageLimitControls taskId={task.id} row={row} onResumeNow={onResumeNow} onCancelResume={onCancelResume} />
       </div>

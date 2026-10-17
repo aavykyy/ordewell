@@ -8,6 +8,9 @@ beforeAll(() => { style.enabled = false; });
 
 const frame = (state: TuiState): string => render(state).join('\n');
 
+// The plan pane wraps a long flag across rows; read it back as one line.
+const flat = (state: TuiState): string => frame(state).split('\n').map((l) => l.replace(/^.*│/, '')).join(' ').replace(/\s+/g, ' ');
+
 const task = (over: Partial<TaskView> = {}): TaskView => ({
   id: 't1', order: 1, title: 'Add the route', type: 'ai', status: 'pending', dependencies: [], assignedRunner: 'codex', ...over,
 });
@@ -26,9 +29,17 @@ describe('plan pane — a task outside the enabled runners and allowlist', () =>
 
   it('says what follows by where the task stands: a failed one runs there only if retried, a running one already is', () => {
     const wide = { cols: 180 };
-    expect(frame(plan([task({ status: 'failed' })], wide))).toContain('⚠ codex is switched off; a retry runs it there unless moved');
-    expect(frame(plan([task({ status: 'in_progress' })], wide))).toContain('⚠ codex is switched off; it is already running there');
-    expect(frame(plan([task()], wide))).toContain('⚠ codex is switched off; it still runs unless moved');
+    expect(flat(plan([task({ status: 'failed' })], wide))).toContain('⚠ codex is switched off — failed; a retry would run it there unless moved');
+    expect(flat(plan([task({ status: 'in_progress' })], wide))).toContain('⚠ codex is switched off — already running as assigned');
+    expect(flat(plan([task()], wide))).toContain('⚠ codex is switched off — runs as assigned unless moved');
+  });
+
+  it('does not call a task running whose attempt ended on a usage limit', () => {
+    const wide = { cols: 180 };
+    const paused = (over: Partial<TaskView>) => task({ status: 'awaiting_user', awaitingReason: 'usage-limit', ...over });
+    expect(flat(plan([paused({ resumeAt: '2099-01-01T00:00:00.000Z' })], wide))).toContain('⚠ codex is switched off — paused on a usage limit; resumes there at the reset unless moved');
+    expect(flat(plan([paused({})], wide))).toContain('⚠ codex is switched off — paused on a usage limit; a retry would run it there unless moved');
+    expect(flat(plan([task({ status: 'awaiting_user', awaitingReason: 'conflict' })], wide))).toContain('⚠ codex is switched off — waiting for the user; what runs next runs there unless moved');
   });
 
   it('says its model is not in the allowlist', () => {

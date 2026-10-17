@@ -396,6 +396,7 @@ function showPlan(state: TuiState, plan: unknown): TuiState {
     state.expandedTaskId && findTask(tasks, state.expandedTaskId) ? state.expandedTaskId : null;
   const next: TuiState = {
     ...folded,
+    plannerResend: plannerResendOf(plan),
     expandedTaskId,
     taskEditor: expandedTaskId !== null ? state.taskEditor : null,
   };
@@ -404,6 +405,13 @@ function showPlan(state: TuiState, plan: unknown): TuiState {
     selectedTask: clampSelection(state.selectedTask, planRows(next).length),
     focus: tasks.length === 0 ? 'chat' : state.focus,
   });
+}
+
+/** What the plan says waits on the planner's usage limit; a hold with no time goes with the next message, so there is nothing to show. */
+function plannerResendOf(plan: unknown): TuiState['plannerResend'] {
+  const saved = (plan as { plannerResend?: { runner?: unknown; at?: unknown } } | null | undefined)?.plannerResend;
+  if (typeof saved?.at !== 'string') return null;
+  return { ...(typeof saved.runner === 'string' ? { runner: saved.runner } : {}), at: saved.at };
 }
 
 function runStatus(state: TuiState, tasks: TaskView[]): RunStatus {

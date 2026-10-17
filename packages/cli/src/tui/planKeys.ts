@@ -41,7 +41,13 @@ export const PLAN_KEYS = {
   skills: { keys: 'K', meaning: 'pick the skills it loads', group: 'Assign' },
   ops: { keys: 'O', meaning: 'switch between a change and an ops task', group: 'Assign' },
 
-  start: { keys: 'f', meaning: 'start the task now', group: 'Run', hint: 'f start' },
+  start: {
+    keys: 'f',
+    meaning: 'start the task, approving it if it waits for you; it starts once its dependencies finish',
+    group: 'Run',
+    // Added after the plan was approved, it waits for this key; the row says the same.
+    hint: (task) => (task && taskRowView(task).waitsForApproval ? 'f approve' : 'f start'),
+  },
   runPlan: { keys: 'E', meaning: 'run the whole plan', group: 'Run', hint: 'E run plan' },
   stop: { keys: 'S', meaning: 'stop the run', group: 'Run', hint: 'S stop' },
   cancel: {

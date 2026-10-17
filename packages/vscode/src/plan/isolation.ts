@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { checkoutRule, mergeTarget } from '@ordewell/core';
 import type { PlanManagerDeps } from './PlanManager';
 
 export type IsolationActionKind = 'reviewDiff' | 'merge' | 'discard' | 'cleanup' | 'resolveConflict';
@@ -44,10 +45,13 @@ export async function handleIsolationAction(
         return;
       case 'merge': {
         // Mid-run, Merge all opens the merge gates and the run goes on (ADR-0020).
+        const handoff = deps.session.isolationView()?.handoff;
+        const target = handoff ? mergeTarget(handoff) : 'the branch you have checked out';
+        const rule = handoff ? checkoutRule(handoff) : '';
         const confirm = await vscode.window.showWarningMessage(
           deps.session.isExecuting
-            ? 'Merge what the run has landed so far into your checked-out branch? This cannot be undone from Ordewell. The run goes on: tasks waiting for Merge all start once it has merged, and later tasks land on the same branch.'
-            : 'Merge the isolated run into your checked-out branch? This cannot be undone from Ordewell. Once it has merged, the run\'s worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.',
+            ? `Merge what the run has landed so far into ${target}.${rule} This cannot be undone from Ordewell. The run goes on: tasks waiting for Merge all start once it has merged, and later tasks land on the same branch.`
+            : `Merge the isolated run into ${target}.${rule} This cannot be undone from Ordewell. Once it has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.`,
           { modal: true },
           'Merge',
         );

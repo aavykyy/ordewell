@@ -384,6 +384,28 @@ describe('the assignment flag — a task on a runner or model the user has since
   });
 });
 
+describe('what the assignment flag means for the task, by where it stands', () => {
+  const scope = { enabledRunners: ['claude-code'], allowlist: {} };
+  const consequence = (over: Partial<TaskRowSubject>) => taskRowView(subject({ assignedRunner: 'codex', ...over }), { runnerScope: scope }).assignmentConsequence;
+
+  it.each([
+    [{ status: 'pending' }, 'runs as assigned unless moved'],
+    [{ status: 'in_progress' }, 'already running as assigned'],
+    [{ status: 'failed' }, 'failed; a retry would run it there unless moved'],
+    [{ status: 'awaiting_user', awaitingReason: 'usage-limit' as const, resumeAt: '2099-01-01T00:00:00.000Z' }, 'paused on a usage limit; resumes there at the reset unless moved'],
+    [{ status: 'awaiting_user', awaitingReason: 'usage-limit' as const }, 'paused on a usage limit; a retry would run it there unless moved'],
+    [{ status: 'awaiting_user', awaitingReason: 'conflict' as const }, 'waiting for the user; what runs next runs there unless moved'],
+    [{ status: 'awaiting_user', awaitingReason: 'files-changed' as const }, 'waiting for the user; what runs next runs there unless moved'],
+    [{ status: 'awaiting_user', awaitingReason: 'checkpoint' as const }, 'already running as assigned'],
+  ])('%j reads %j', (over, text) => {
+    expect(consequence(over)).toBe(text);
+  });
+
+  it('is null when the task is not flagged', () => {
+    expect(consequence({ status: 'pending', assignedRunner: 'claude-code' })).toBeNull();
+  });
+});
+
 describe('a task row\'s usage', () => {
   const attempt = (n: number, over: Record<string, unknown> = {}) => ({ attempt: n, runner: 'claude-code', startedAt: '', wallTimeMs: 1000, totals: {}, ...over });
 

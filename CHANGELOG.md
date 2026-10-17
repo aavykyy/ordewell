@@ -25,18 +25,23 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   meanwhile is saved and answered at once. When no reset time is known the
   messages are held for your next one. `/resend cancel` in the terminal UI,
   `ordewell resend cancel` and **Don't resend** in VS Code keep it from going on
-  its own ([ADR-0044](docs/adr/planner/0044-the-planners-usage-limit-waits-and-resends.md)).
+  its own, and the terminal UI keeps a line above the composer, with that
+  command, for as long as the resend waits
+  ([ADR-0044](docs/adr/planner/0044-the-planners-usage-limit-waits-and-resends.md)).
 - **The planner is told when you change runners or models.** On its next turn it
   hears which runners you switched on or off and what changed in an allowlist,
   and which plan tasks that leaves outside. Such a task is flagged on its row
   ("codex is switched off", "Opus 4 is not in the allowlist"), in VS Code and
-  the terminal, and still runs as assigned until you or the planner move it
+  the terminal. What that means depends on where the task stands, in the same
+  words on every surface and in the planner's note: a failed task runs there
+  only if retried, one paused on a usage limit resumes there at the reset or on
+  a retry, and the rest run as assigned until you or the planner move them
   ([ADR-0043](docs/adr/routing/0043-a-change-of-scope-reaches-the-planner-and-flags-tasks.md)).
 - **Approve all.** VS Code shows an **Approve** button on a waiting task's
   card and an **Approve all** button when tasks wait for your approval. `/run`
   while a run is under way approves every waiting task and joins them to the
-  run, each starting once its dependencies finish, and the terminal rows say
-  which key approves
+  run, each starting once its dependencies finish, and the terminal rows, footer
+  and key sheet say that `f` approves
   ([ADR-0035](docs/adr/supervision/0035-effects-are-consented-and-recorded.md)).
 - **VS Code shows a task's usage and assignment while it runs.** The task log
   has a usage line, and an executing task's card keeps its runner, model and
@@ -112,8 +117,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **Merge all lands only on the branch the run started on.** If any repository
   of the run is on another branch, in the middle of a rebase or on a detached
   HEAD, nothing is merged and the notice says which and how to fix it. The
-  handoff, the Merge confirmation, `ordewell status` and VS Code name the branch
-  the run started on, as `main @ a1b2c3d`
+  handoff, the Merge confirmation (VS Code's too, with the rule that the branch
+  must be checked out), `ordewell status` and VS Code name the branch the run
+  started on, as `main @ a1b2c3d`
   ([ADR-0042](docs/adr/isolation/0042-merge-all-lands-only-on-the-branch-the-run-started-on.md)).
 - **The enabled runners are one list shared by VS Code and the terminal UI.**
   They are saved in Ordewell's settings file, and a toggle in one is the list

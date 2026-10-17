@@ -53,3 +53,14 @@ describe('the assignment while a plan executes', () => {
     expect(container.querySelector('.task-assignment-readonly')).toBeNull();
   });
 });
+
+describe('the assignment flag on a subtask card', () => {
+  beforeEach(cleanup);
+
+  it('words the consequence by where the subtask stands', () => {
+    const sub = task({ id: 'sub', status: 'failed' });
+    render(<SubTaskCard task={sub} parentTask={task({ subtasks: [sub] })} models={[]} isExecuting runnerScope={{ enabledRunners: ['claude-code'], allowlist: {} }} {...pickers} />);
+
+    expect(screen.getByText('codex is switched off').getAttribute('title')).toMatch(/^Failed; a retry would run it there unless moved\./);
+  });
+});

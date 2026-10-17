@@ -1024,9 +1024,11 @@ what a task spent in all: the sum of every *attempt usage* across every attempt
 and every model, so a stop, a model change, a move or a continue never makes
 earlier spend vanish. Its context meter is the exception, read from the latest
 attempt, because only the current model's window says how full the next prompt
-is. It is the line a task row, the TUI task view and VS Code's task card and
-log show (`12.4k in · 3.1k out · 2k cached · $0.42 · ctx 18%`): a part nobody
-reported, cost included, is left out, and the line carries no wall time.
+is. It is the line the TUI task view's footer, `ordewell status` and VS Code's
+task-log panel show for one task, and the plan's Tasks total shows summed
+(`12.4k in · 3.1k out · 2k cached · $0.42 · ctx 18%`): a part nobody reported,
+cost included, is left out, and the line carries no wall time. A TUI plan row
+and a VS Code task card draw none.
 *Avoid:* "attempt usage" for it; *Avoid:* an estimated cost or "cost unknown"
 filler.
 

@@ -339,6 +339,16 @@ describe('TaskCard — the assignment flag', () => {
     expect(screen.queryByText(/switched off|not in the allowlist/)).toBeNull();
   });
 
+  it('words what the flag means by where the task stands, not that every flagged task still runs', () => {
+    const tip = () => screen.getByText('codex is switched off').getAttribute('title');
+    const { rerender } = render(card(makeTask({ assignedRunner: 'codex', status: 'failed' })));
+    expect(tip()).toBe('Failed; a retry would run it there unless moved. Change its runner or model to move it, or ask the planner to.');
+    rerender(card(makeTask({ assignedRunner: 'codex', status: 'awaiting_user', awaitingReason: 'usage-limit', resumeAt: '2099-01-01T00:00:00.000Z' })));
+    expect(tip()).toBe('Paused on a usage limit; resumes there at the reset unless moved. Change its runner or model to move it, or ask the planner to.');
+    rerender(card(makeTask({ assignedRunner: 'codex', status: 'in_progress' })));
+    expect(tip()).toBe('Already running as assigned. Change its runner or model to move it, or ask the planner to.');
+  });
+
   it('flags a subtask on a switched-off runner too', () => {
     const sub = makeTask({ id: 't1.1', order: 1, title: 'Sub', assignedRunner: 'codex' });
     render(card(makeTask({ subtasks: [sub] })));

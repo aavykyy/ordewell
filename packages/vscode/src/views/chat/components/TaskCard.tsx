@@ -157,6 +157,18 @@ const ACTION_LABELS: Record<TaskRowAction, string> = {
   cancel: 'Cancel', 'resume-now': 'Resume Now', 'cancel-resume': 'Don\'t Resume', skip: 'Skip', 'force-start': 'Start', complete: 'Mark Complete', uncomplete: 'Mark Not Done',
 };
 
+/** The cue to move a task off a runner or model the user has since moved away from; core words what it means for the task as it stands. */
+export function AssignmentFlag({ row }: { row: Pick<TaskRowView, 'assignmentFlag' | 'assignmentConsequence'> }) {
+  if (!row.assignmentFlag || !row.assignmentConsequence) return null;
+  const consequence = row.assignmentConsequence;
+  return (
+    <span className="task-isolation-badge gate"
+      title={`${consequence[0].toUpperCase()}${consequence.slice(1)}. Change its runner or model to move it, or ask the planner to.`}>
+      {row.assignmentFlag}
+    </span>
+  );
+}
+
 /**
  * The header's controls for a task paused on a usage limit (#84), shown
  * whether or not the plan reads as executing: the pause holds the run, so a
@@ -663,13 +675,7 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
           </button>
         )}
 
-        {/* The task still runs; this is the cue to move it. */}
-        {row.assignmentFlag && (
-          <span className="task-isolation-badge gate"
-            title="This task still runs as assigned. Change its runner or model to move it, or ask the planner to.">
-            {row.assignmentFlag}
-          </span>
-        )}
+        <AssignmentFlag row={row} />
 
         {row.mergeGate && (
           <span className="task-isolation-badge gate"
