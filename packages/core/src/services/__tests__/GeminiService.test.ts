@@ -7,10 +7,16 @@ import type { SkillInfo } from '../SkillsService';
 
 /** The chat instance every getGenerativeModel().startChat() hands back. */
 const startChat = vi.hoisted(() => vi.fn());
+/** The model each getGenerativeModel() call was asked for, in order. */
+const modelsAsked = vi.hoisted((): string[] => []);
 
 vi.mock('@google/generative-ai', () => ({
   GoogleGenerativeAI: class {
-    getGenerativeModel = () => ({ model: 'test-model', startChat: startChat, generateContentStream: vi.fn() });
+    getGenerativeModel = ({ model }: { model: string }) => {
+      modelsAsked.push(model);
+      // As the SDK does: the instance names the model by its resource path.
+      return { model: `models/${model}`, startChat: startChat, generateContentStream: vi.fn() };
+    };
   },
   SchemaType: { STRING: 'STRING', NUMBER: 'NUMBER', ARRAY: 'ARRAY', BOOLEAN: 'BOOLEAN', OBJECT: 'OBJECT' },
 }));
@@ -52,7 +58,7 @@ function geminiConfig(): IConfig {
 }
 
 describe('Gemini research chat streaming', () => {
-  beforeEach(() => startChat.mockReset());
+  beforeEach(() => { startChat.mockReset(); });
 
   it('streams a text reply as deltas under one segment per call, with one usage record from the final chunk', async () => {
     scriptStreams([
@@ -84,11 +90,60 @@ describe('Gemini research chat streaming', () => {
     // Exactly one usage record, assembled from the final chunk's counters.
     const usage = progress.filter((p) => p.type === 'usage');
     expect(usage).toHaveLength(1);
-    expect(usage[0].record).toEqual({ source: 'google', inputTokens: 120, outputTokens: 8, cachedInputTokens: 100 });
+    expect(usage[0].record).toEqual({ source: 'google', model: 'test-model', inputTokens: 120, outputTokens: 8, cachedInputTokens: 100 });
 
     // The final text still lands on the turn the loop classifies.
     expect(turn.kind).toBe('message');
     if (turn.kind === 'message') expect(turn.text).toBe('Which store?');
+  });
+
+  it('calls the picked planner model and names it on each usage record', async () => {
+    modelsAsked.length = 0;
+    scriptStreams([streamResult([
+      { candidates: [{ content: { parts: [{ text: 'Ok.' }] }, finishReason: 'STOP' }] },
+      { usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 2 } },
+    ])]);
+    const service = new GeminiService(fakeConfig({ aiProvider: 'google', apiKey: 'key', planningModel: 'gemini-1.5-flash', orchestratorModel: 'gemini:gemini-2.5-pro' }));
+    const progress: ResearchProgress[] = [];
+    await service.startConversation({ goal: 'go', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem() as IFileSystem, onProgress: (p) => progress.push(p) });
+
+    expect(modelsAsked).toEqual(['gemini-2.5-pro']);
+    expect(progress.filter((p) => p.type === 'usage').map((p) => p.record)).toEqual([{ source: 'google', model: 'gemini-2.5-pro', inputTokens: 50, outputTokens: 2 }]);
+  });
+
+  it('follows a model switched within Gemini on the next turn, over the same history', async () => {
+    modelsAsked.length = 0;
+    const said = (n: number) => ({ role: 'model', parts: [{ text: `reply ${n}` }] });
+    const chats: Array<{ history: unknown[]; sent: unknown[] }> = [];
+    let replies = 0;
+    startChat.mockImplementation(({ history }: { history: unknown[] }) => {
+      const chat = { history: [...history], sent: [] as unknown[] };
+      chats.push(chat);
+      return {
+        getHistory: async () => chat.history,
+        sendMessageStream: async (request: unknown) => {
+          chat.sent.push(request);
+          chat.history.push({ role: 'user', parts: [{ text: request }] }, said(++replies));
+          return streamResult([
+            { candidates: [{ content: { parts: [{ text: `reply ${replies}` }] }, finishReason: 'STOP' }] },
+            { usageMetadata: { promptTokenCount: 100 * replies, candidatesTokenCount: 2 } },
+          ]);
+        },
+      };
+    });
+    const config = fakeConfig({ aiProvider: 'google', apiKey: 'key', orchestratorModel: 'gemini:gemini-2.5-pro' });
+    const service = new GeminiService(config);
+    const progress: ResearchProgress[] = [];
+    await service.startConversation({ goal: 'go', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem() as IFileSystem, onProgress: (p) => progress.push(p) });
+
+    config.orchestratorModel = 'gemini:gemini-2.5-flash';
+    await service.continueConversation('and then?', (p) => progress.push(p));
+
+    expect(modelsAsked).toEqual(['gemini-2.5-pro', 'gemini-2.5-flash']);
+    expect(chats).toHaveLength(2);
+    expect(chats[1].history.slice(0, -2)).toEqual(chats[0].history);
+    expect(chats[1].sent).toEqual(['and then?']);
+    expect(progress.filter((p) => p.type === 'usage').map((p) => p.record?.model)).toEqual(['gemini-2.5-pro', 'gemini-2.5-flash']);
   });
 
   it('assembles tool calls from function-call chunks, streams a tool round as a fresh segment, and still bills each call', async () => {
@@ -135,8 +190,8 @@ describe('Gemini research chat streaming', () => {
     // One bill per call: unspecified counters stay absent rather than zeroing.
     const usage = progress.filter((p) => p.type === 'usage');
     expect(usage).toHaveLength(2);
-    expect(usage[0].record).toEqual({ source: 'google', inputTokens: 40, outputTokens: 9 });
-    expect(usage[1].record).toEqual({ source: 'google', inputTokens: 55, outputTokens: 14, cachedInputTokens: 50 });
+    expect(usage[0].record).toEqual({ source: 'google', model: 'test-model', inputTokens: 40, outputTokens: 9 });
+    expect(usage[1].record).toEqual({ source: 'google', model: 'test-model', inputTokens: 55, outputTokens: 14, cachedInputTokens: 50 });
   });
 
   it('reports no usage when the chunks carry no usageMetadata', async () => {
@@ -192,13 +247,13 @@ describe('Gemini research chat streaming', () => {
     const usage = progress.filter((p) => p.type === 'usage');
     expect(usage).toHaveLength(1);
     // Thought tokens bill as output alongside the answer tokens.
-    expect(usage[0].record).toEqual({ source: 'google', inputTokens: 70, outputTokens: 72 });
+    expect(usage[0].record).toEqual({ source: 'google', model: 'test-model', inputTokens: 70, outputTokens: 72 });
     expect(tasks).toHaveLength(1);
   });
 });
 
 describe('Gemini planner skill catalog', () => {
-  beforeEach(() => startChat.mockReset());
+  beforeEach(() => { startChat.mockReset(); });
 
   it('shows the task skills the planner may attach, and no planner skills, which load only through tools', async () => {
     scriptStreams([streamResult([{ candidates: [{ content: { parts: [{ text: 'Which cache?' }] }, finishReason: 'STOP' }] }])]);

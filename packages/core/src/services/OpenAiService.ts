@@ -59,8 +59,6 @@ class OpenAiResearchChat implements ResearchChat {
     private getSource: () => string = () => 'openai',
     /** One report per API call — the only way a call's usage leaves this chat. */
     private onUsage?: (record: UsageRecord) => void,
-    /** The model's context window when the catalog knows it; omitted from records otherwise. */
-    private contextWindow?: number,
   ) {}
 
   async sendMessage(text: string, signal?: AbortSignal): Promise<ResearchTurn> {
@@ -179,7 +177,6 @@ class OpenAiResearchChat implements ResearchChat {
       hasMeasure = true;
     }
     if (reported.cost !== undefined) { record.reportedCost = { amount: reported.cost, currency: 'USD' }; hasMeasure = true; }
-    if (this.contextWindow && this.contextWindow > 0) record.contextWindow = this.contextWindow;
     return hasMeasure ? record : undefined;
   }
 }
@@ -323,7 +320,6 @@ export class OpenAiService extends BaseAiService implements IAiService {
       (delta, segmentId) => currentProgress({ type: 'text_delta', text: delta, segmentId }),
       () => this.config.aiProvider,
       (record) => currentProgress({ type: 'usage', record }),
-      req.contextWindow,
     );
 
     const ctx: ConversationTurnContext = {

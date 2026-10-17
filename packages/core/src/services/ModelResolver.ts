@@ -5,7 +5,7 @@ import type { IConfig } from '../interfaces/IConfig';
 import type { DiscoveredModel, RunnerId } from '../models/Task';
 import { fetchAllProviderModels, collectProviderCredentials, toOrchestratorOptions, type OrchestratorOption, type ProviderModelLists } from './ProviderRouting';
 import { ORCHESTRATOR_SHORTCUTS } from './ModelShortcuts';
-import { PROVIDER_PRIORITY } from './ProviderRegistry';
+import { PROVIDER_PRIORITY, isApiProvider, prefixModelId, stripModelPrefix } from './ProviderRegistry';
 
 export interface ModelResolverDeps {
   fetchImpl?: typeof fetch;
@@ -103,21 +103,20 @@ export class ModelResolver {
   }
 
   /**
-   * The planner model's context window, from whatever catalog is already
-   * cached (#49): a vendor model comes from the picker catalog, a harness
-   * planner's model from the runner's own discovered models. Reads only —
-   * never triggers a fetch or discovery of its own, so an unknown window stays
-   * unknown and context fill is omitted rather than guessed.
+   * A model's context window from whatever catalog is already cached (#49),
+   * for a usage record whose reporter stated none: a vendor's model from the
+   * picker catalog (its own `/models` endpoint), a runner's model from that
+   * runner's own discovered listing. `source` is the record's reporter, and
+   * `model` the id it named. Reads only — never triggers a fetch or discovery
+   * of its own, so an unknown window stays unknown and context fill is
+   * omitted rather than guessed.
    */
-  contextWindowFor(modelId: string): number | undefined {
-    if (!modelId) return undefined;
-    const picker = this.cachedPickerOptions?.find((o) => o.id === modelId)?.contextWindow;
-    if (picker && picker > 0) return picker;
-    for (const runner of this.config.enabledRunners ?? []) {
-      const found = this.discovery.getCached(runner)?.find((m) => m.modelId === modelId)?.contextWindow;
-      if (found && found > 0) return found;
-    }
-    return undefined;
+  contextWindowFor(source: string, model: string): number | undefined {
+    if (!model) return undefined;
+    const window = isApiProvider(source)
+      ? this.cachedPickerOptions?.find((o) => o.apiProvider === source && o.id === prefixModelId(source, stripModelPrefix(model, source)))?.contextWindow
+      : this.discovery.getCached(source)?.find((m) => m.modelId === model)?.contextWindow;
+    return window && window > 0 ? window : undefined;
   }
 
   invalidate(): void {

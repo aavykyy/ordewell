@@ -37,6 +37,7 @@ import { saveSession } from '../utils/sessionStore';
 import { listTaskLogAttempts, readTaskLog, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
 import { digestTaskLog, type TaskLogEvent } from '../models/TaskLog';
 import { TaskLogRecorder } from './TaskLogRecorder';
+import { withContextWindows, type CatalogWindow } from './ContextWindowFill';
 import { PlannerUsageLedger } from './PlannerUsage';
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
@@ -245,6 +246,9 @@ export function createSession(deps: SessionDeps): Session {
   const mcpServer = deps.mcpServer ?? sharedMcpServer();
   const aiService = pinnedAiService ? () => pinnedAiService : liveAiService(deps.config, deps.workspaceRoot, mcpServer);
   const store = new PlanStore();
+  // A window a runner or provider reports wins; this serves the rest, from
+  // the catalogs the resolver already holds.
+  const catalogWindow: CatalogWindow = (source, model) => deps.modelResolver.contextWindowFor?.(source, model);
   const taskLogs = new TaskLogRecorder({
     broadcast: deps.broadcast,
     // Read through the Session, whose id and workspace are the ones it saves
@@ -289,7 +293,7 @@ export function createSession(deps: SessionDeps): Session {
   const orchestrator = TaskOrchestrator.compose({
     config: deps.config,
     notifications: deps.notifications,
-    runner: taskLogs.wrap(runnerApprovals.wrap(deps.runner)),
+    runner: taskLogs.wrap(runnerApprovals.wrap(withContextWindows(deps.runner, catalogWindow))),
     store,
     output: deps.taskOutput,
     isolation: deps.isolation,
@@ -300,7 +304,7 @@ export function createSession(deps: SessionDeps): Session {
     runSettings: () => session.planState?.runSettings,
     isApproved: (taskId) => session.isApproved(taskId),
   });
-  const usage = new PlannerUsageLedger();
+  const usage = new PlannerUsageLedger(catalogWindow);
   const events = new SessionEventRelay({
     broadcast: deps.broadcast, onNotice: deps.onNotice, store, orchestrator, runs: orchestrator.runs, usage,
     awaitingApproval: (taskId) => runnerApprovals.waiting(taskId),
@@ -1523,9 +1527,6 @@ export class Session {
       autonomousDefault: this.config.autonomousMode,
       autorun: this.userRunSettings().autorun,
       isolatedExecution: await this.runs.plannerLayout(),
-      // The planner's own model window, when a cached catalog knows it, so the
-      // usage line can show context fill (#49). Unknown stays absent.
-      contextWindow: this.modelResolver.contextWindowFor?.(this.config.orchestratorModel),
       fs: this.fsAdapter,
       fetcher: this.fetcher,
       approval: this.approvalPolicy,
