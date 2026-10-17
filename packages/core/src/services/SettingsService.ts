@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import { globalDataDir, migrateOldConfigDir } from '../utils/globalDataDir';
 import type { SupervisorLevel } from '../models/Execution';
 import { DEFAULT_SUPERVISOR_RETRY_LIMIT } from './LoopGuards';
@@ -137,29 +138,64 @@ function sleepSync(ms: number): void {
  * Runs `swap` holding `<file>.lock`, created exclusively, so no other process
  * that saves the file can swap it in between `swap`'s look at it and its
  * rename. Saves are synchronous, so the wait is too.
+ *
+ * The lock names its holder, and a lock is only removed once it is known to be
+ * the one meant: a save suspended past the stale age, whose lock another
+ * process took over, must not free that process's lock on waking, nor may two
+ * waiters that both found it stale remove the one the first then took.
  */
 function withFileLock<T>(file: string, swap: () => T): T {
   const lock = `${file}.lock`;
+  const token = `${process.pid}:${randomUUID()}`;
   for (;;) {
     try {
-      fs.closeSync(fs.openSync(lock, 'wx'));
+      const fd = fs.openSync(lock, 'wx');
+      try {
+        fs.writeSync(fd, token);
+      } finally {
+        fs.closeSync(fd);
+      }
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      let holder: string;
       let age: number;
       try {
+        // Read before its age: a lock replaced in between is then judged by
+        // the new one's age, never by the old one's.
+        holder = fs.readFileSync(lock, 'utf8');
         age = Date.now() - fs.statSync(lock).mtimeMs;
       } catch {
-        continue; // released between the two calls
+        continue; // released between the calls
       }
-      if (age > LOCK_STALE_MS) fs.rmSync(lock, { force: true });
+      if (age > LOCK_STALE_MS) removeLock(lock, holder);
       else sleepSync(LOCK_POLL_MS);
     }
   }
   try {
     return swap();
   } finally {
-    fs.rmSync(lock, { force: true });
+    removeLock(lock, token);
+  }
+}
+
+/**
+ * Removes `lock` if `holder` still holds it. It is moved aside first, which is
+ * atomic, and put back when someone else's turns out to be there.
+ */
+function removeLock(lock: string, holder: string): void {
+  const aside = `${lock}.${process.pid}.${randomUUID()}`;
+  try {
+    fs.renameSync(lock, aside);
+  } catch {
+    return; // already gone
+  }
+  try {
+    if (fs.readFileSync(aside, 'utf8') !== holder) fs.linkSync(aside, lock);
+  } catch {
+    // Taken again meanwhile: the lock moved aside has no place to go back to.
+  } finally {
+    fs.rmSync(aside, { force: true });
   }
 }
 

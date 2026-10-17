@@ -171,6 +171,12 @@ export interface IRunner {
     /** What was counted of that session's running cost before, so its first turn is counted from there. */
     resumeCost?: RunnerSessionCost;
     /**
+     * The model that session last ran on and its window, so a resumed turn that
+     * states none is measured as before. Runners ignore it; the window fill
+     * that wraps one reads it.
+     */
+    resumeWindow?: { source?: string; model?: string; contextWindow?: number };
+    /**
      * Which run of the task this is, from 1. A structured runner binds the
      * attempt's MCP token to it (ADR-0022, A2).
      */

@@ -554,6 +554,21 @@ describe('a continue counts its runner session\'s cost on from what was counted 
     expect(later.runner.spawn).toHaveBeenCalledWith(expect.objectContaining({ resumeSessionId: 'native-1', resumeCost: counted }));
   });
 
+  it('measures a continue against the window its session reported before, when the resumed turn reports none', async () => {
+    const { runner, sessions } = spawning();
+    const session = makeSession({ runner });
+    session.loadPlan(plan(), 'Goal', '/repo');
+    await session.executePlan();
+    sessions[0].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-mystery', inputTokens: 1_000, contextWindow: 500_000 } });
+    sessions[0].reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('completed'));
+
+    await session.continueTask('t1', 'one more thing');
+    sessions[1].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-mystery', inputTokens: 50_000 } });
+
+    await vi.waitFor(() => expect(taskUsageSummary(taskOf(session, 't1')!).contextFill).toEqual({ usedTokens: 50_000, windowTokens: 500_000 }));
+  });
+
   it('hands a fresh attempt no count', async () => {
     const { runner } = spawning();
     const session = makeSession({ runner });

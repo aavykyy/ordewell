@@ -123,9 +123,10 @@ export interface CoercedTasks {
  * gets here (`checkPlanInvariants`).
  *
  * A task whose runner, model and effort are what `planned` already holds for
- * it was not written by this pass, so it keeps the plan's assignment: an
- * allowlist shapes what is planned, not a task left alone, which may be
- * running a model its user switched to (ADR-0041, ADR-0043).
+ * it was not written by this pass, so it keeps the plan's model: an allowlist
+ * shapes what is planned, not a task left alone, which may be running a model
+ * its user switched to (ADR-0041, ADR-0043). Its effort is still clamped to
+ * the model's variants unless the task may have a runner live.
  */
 export function coerceAssignments(
   tasks: readonly Task[],
@@ -184,7 +185,12 @@ export function coerceAssignments(
   const coerceOne = (task: Task): Task => {
     if (task.type === 'user') return task;
     const kept = unwritten(task);
-    if (kept) return { ...task, assignedModel: kept.assignedModel };
+    if (kept) {
+      const left = { ...task, assignedModel: kept.assignedModel };
+      // Still checked against what its model offers now, unless a runner may
+      // be holding it: while one is live the plan names what it runs.
+      return kept.status === 'in_progress' || kept.status === 'awaiting_user' ? left : clampVariant(left);
+    }
     const allowlist = allowedFor(task.assignedRunner);
     // No model assigned: fill in from the allowlist or discovered catalog so
     // merge/split/add outputs (which may omit assignedModel) always land with a

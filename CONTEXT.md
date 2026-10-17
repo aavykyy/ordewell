@@ -728,8 +728,9 @@ connector reports a switch; Codex and OpenCode get no synthesized `/model`,
 since runner commands are never interpreted. While a task's runner is live its
 model and effort are locked for every actor (`liveModelRefusal`), a cleared
 model included, and so is its runner (`liveRunnerRefusal`): stop, edit,
-continue is the way from outside. A planner edit leaves alone an assignment it
-did not change, so the allowlist never undoes the user's switch.
+continue is the way from outside. A planner edit leaves alone a model it
+did not change, so the allowlist never undoes the user's switch; it still
+clamps that task's effort to the model's variants unless a runner may hold it.
 *Avoid:* "model override" and "fallback" for it; *Avoid:* writing the plan from
 a drift.
 
@@ -2001,7 +2002,8 @@ a guessed zero. The window is the reporter's own; a record that states none is
 filled (`ContextWindowFill`) from the runner's own model listing or the
 provider's own models endpoint for that record's model, per record so a model
 change mid-stream reads its own window, and a window reported once is kept for
-its model, even after the stream ran on another. Never from a table kept in Ordewell: neither known leaves the fill
+its model, even after the stream ran on another. A task's Continue starts from
+the window its session was last measured against. Never from a table kept in Ordewell: neither known leaves the fill
 unknown.
 *Avoid:* calling it a percentage when either half is unknown; *Avoid:* a window
 table in Ordewell.

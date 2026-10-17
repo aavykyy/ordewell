@@ -50,7 +50,9 @@ runners are saved in one place.**
   what is planned, not what is started (ADR-0003, P1), and the plan is the
   source of truth (ADR-0001). Moving it is the user's or the planner's call. A
   completed or skipped task is history and is never flagged; a failed one is
-  noted as one a retry would run on the old assignment.
+  noted as one a retry would run on the old assignment, and one paused on a
+  usage limit or on work that did not land as waiting, not running, since its
+  attempt has ended.
 
 ### One store for the enabled runners
 
@@ -65,7 +67,9 @@ runners are saved in one place.**
   save checks the file just before replacing it and redoes the change if
   another process saved first; the check and the swap are one step under a
   lock file beside it (`<file>.lock`, created exclusively, and taken over once
-  stale, from a process that died holding it). Saves are written beside the
+  stale, from a process that died holding it). The lock names its holder and
+  is removed only once it is known to be the one meant, so a holder that wakes
+  after its lock was taken over does not free the new holder's. Saves are written beside the
   file and renamed over it, and the file is watched, so a running surface
   picks up another's toggle.
 
@@ -99,3 +103,4 @@ runners are saved in one place.**
 
 - 2026-10-17 — accepted and implemented: `<runners_changed>` on the planner's next turn, flags for tasks outside the scope, and the enabled runners in the shared settings file.
 - 2026-10-17 — the stamp check and the swap are serialized across processes by a lock file; `ordewell status` flags tasks outside the scope too.
+- 2026-10-17 — the settings lock is removed only by its holder; the planner's note does not call a task whose attempt ended running.

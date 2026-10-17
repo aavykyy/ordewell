@@ -203,6 +203,17 @@ export function countedSessionCost(attempts: readonly AttemptUsage[] | undefined
   return [...attempts ?? []].reverse().find((usage) => usage.runnerSessionCost?.sessionId === sessionId)?.runnerSessionCost;
 }
 
+/**
+ * The model a continue's session last ran on and the window it was measured
+ * against: the latest earlier attempt on the runner, since a fresh attempt
+ * starts a new session and a continue never crosses runners. A resumed turn
+ * that states no window keeps that one, as later calls of one attempt do.
+ */
+export function resumedSessionWindow(attempts: readonly AttemptUsage[] | undefined, runner: string, attempt: number): Pick<PlannerUsage, 'source' | 'model' | 'contextWindow'> | undefined {
+  const last = [...attempts ?? []].reverse().find((usage) => usage.attempt !== attempt && usage.runner === runner);
+  return last?.contextWindow !== undefined ? { source: last.source, model: last.model, contextWindow: last.contextWindow } : undefined;
+}
+
 export interface PlanUsage {
   totals: UsageTotals;
   byModel: ModelUsage[];
