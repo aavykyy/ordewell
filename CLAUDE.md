@@ -12,8 +12,11 @@ and OpenCode can all be running targets.
   distinction the project maintains. Use this vocabulary.
 - **[AGENTS.md](AGENTS.md)** — the full working conventions (commands, layout,
   cautions). This file is the short version; AGENTS.md is the source of truth.
-- **[docs/adr/](docs/adr/)** — architecture decisions, including the options
-  that were rejected and why. Read the ones that touch what you're changing.
+- **[docs/adr/](docs/adr/README.md)** — architecture decisions, grouped into
+  folders by area, including the options that were rejected and why. The
+  README's index lists them; read the ones that touch what you're changing.
+  ADR numbers and rule IDs are permanent (code cites them), and
+  `node scripts/verify-adr.mjs` checks them in CI.
 
 ## Build entry point
 

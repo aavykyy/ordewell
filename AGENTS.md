@@ -8,8 +8,10 @@ Context for coding agents working in this repository. Humans want
 - **[CONTEXT.md](CONTEXT.md)** — the domain glossary. Every term this codebase
   cares about is defined there, with an *avoid* list of synonyms that blur a
   distinction the project maintains. Use the vocabulary in that file.
-- **[docs/adr/](docs/adr/)** — the architecture decisions, including the options
-  that were rejected and why. Read the ones that touch what you're changing.
+- **[docs/adr/](docs/adr/README.md)** — the architecture decisions, grouped into
+  folders by area, including the options that were rejected and why. The
+  README's index lists every one with its status; read the ones that touch what
+  you're changing.
 
 ## Commands
 
@@ -72,9 +74,20 @@ node bench/live/drive-conversation.mjs
   *History* of one dated line per change, with no restated content. Do not
   append `Update`/`Amendment` sections. When a later ADR changes an earlier
   one, rewrite the affected part of the earlier ADR once the change is
-  implemented, and keep the full reasoning in the new ADR. Until then the
-  earlier ADR carries one *Pending* line naming the new ADR. CONTEXT.md follows
-  the same rule: it describes what is, with no dated notes.
+  implemented. Until then the earlier ADR carries one *Pending* line naming the
+  new ADR. Once it is implemented, fold the new ADR into the earlier one when
+  [its folding rules](docs/adr/README.md#folding-one-adr-into-another) allow
+  (small or fully overtaken, nothing citing its rule IDs); otherwise it keeps its
+  full reasoning as a separate ADR. CONTEXT.md follows the same rule: it
+  describes what is, with no dated notes.
+- **ADR numbers and rule IDs are permanent.** Code and docs cite `ADR-NNNN` and
+  rule IDs such as `ADR-0018 M1`. Never reuse or renumber either: a folded ADR
+  keeps its number in the host's `folds`, and moving a file between folders
+  changes no citation. A new ADR goes in `docs/adr/<folder>/NNNN-slug.md` with
+  the number `node scripts/verify-adr.mjs --next` prints, written to the
+  [template](docs/adr/README.md#template). Run `node scripts/verify-adr.mjs`
+  after touching `docs/adr/` (`--write` regenerates the README's index); CI runs
+  it.
 
 ## Cautions
 

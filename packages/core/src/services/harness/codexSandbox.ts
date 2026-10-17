@@ -61,8 +61,10 @@ export async function probeCodexSandbox(
   // Seatbelt or Landlock, so `sandbox: 'read-only'` in `CodexAdapter.startThread`
   // may be honoured by Codex's tool layer rather than by the kernel. The
   // approvals side of the invariant still holds by construction
-  // (`approvalPolicy: 'never'`, and the whole server→client request surface is
-  // refused), and the planner prompt never asks for a write — but "read-only by
+  // (`approvalPolicy: 'on-request'`, where what Codex asks to run or change is
+  // declined and every other server→client request gets a definite refusal or
+  // an Ordewell decision, ADR-0026), and the planner prompt never asks for a
+  // write — but "read-only by
   // construction" (ADR-0009) is a Linux/macOS guarantee, not yet a verified
   // Windows one. Returning 'default' declines to invent a workaround for a
   // failure mode nobody has observed; it does not claim the guarantee is proven.
