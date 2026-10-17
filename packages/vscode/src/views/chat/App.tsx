@@ -348,6 +348,11 @@ export default function App() {
     pushSystem('Plan execution started.');
   }, [pushSystem]);
 
+  // No notice of its own: the session says how many it approved.
+  const handleApproveAll = useCallback(() => {
+    vscode.postMessage({ type: 'sendSystemCommand', command: 'executePlan' });
+  }, []);
+
   const handleStopExecution = useCallback(() => {
     vscode.postMessage({ type: 'sendSystemCommand', command: 'stopExecution' });
     pushSystem('Execution stopped.');
@@ -755,6 +760,7 @@ export default function App() {
               onSplit={handleSplitTask}
               onExecutePlan={handleExecutePlan}
               onStopExecution={handleStopExecution}
+              onApproveAll={handleApproveAll}
               onRunTask={handleRunTask}
               onSendMessage={handleTaskMessage}
               onSendMessageNow={handleTaskMessageNow}

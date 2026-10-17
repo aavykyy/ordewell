@@ -237,6 +237,17 @@ function isPlannerApproval(request: ApprovalRequest): boolean {
 }
 
 /**
+ * The tasks a planner edit wrote: new, or held otherwise than before. Read on
+ * what the task says, not where it stands, so a run moving a task on meanwhile
+ * is not mistaken for the planner rewriting it.
+ */
+function writtenTasks(before: readonly Task[], after: readonly Task[]): string[] {
+  const said = ({ subtasks: _subtasks, status: _status, ...task }: Task): string => JSON.stringify(task);
+  const prior = new Map(flattenTasks(before).map((t) => [t.id, said(t)]));
+  return flattenTasks(after).filter((t) => prior.get(t.id) !== said(t)).map((t) => t.id);
+}
+
+/**
  * The composition root: builds every collaborator a Session drives and wires
  * them to each other, so the Session only receives them. Hosts create a
  * Session here; the optional {@link SessionDeps} are the seams tests fill.
@@ -725,6 +736,7 @@ export class Session {
       tasks: () => (this.plan ? this.store.planTasks : null),
       planApproved: () => this.plan?.approved === true,
       taskApproved: (taskId) => this.isApproved(taskId),
+      waitsForApproval: (taskId) => this.waitsForApproval(taskId),
       approve: (taskIds) => this.approve(taskIds),
       autonomous: () => this.config.autonomousMode,
       autorun: () => this.userRunSettings().autorun,
@@ -748,6 +760,7 @@ export class Session {
         .filter(({ request }) => isRunnerApproval(request) && request.taskId === taskId)
         .map(({ id, request }) => ({ id, subject: request.subject })),
       runPlan: (actor) => this.runWholePlan(runOrigin(actor)),
+      joinRun: (approved) => this.joinRun(approved),
       startTask: (taskId, actor) => this.startOneTask(taskId, runOrigin(actor)),
       stopTask: (taskId) => this.cancelTask(taskId),
       stopRun: () => this.stopExecution(),
@@ -1592,6 +1605,8 @@ export class Session {
     }
     // Once they are in the plan: approval is only ever of a task the plan holds.
     if (bySupervisor) this.approve(added);
+    // With autorun on the user said they need not approve what the planner writes in their turn; read as it lands, so turning it off first holds the task.
+    else if (this.conversation.currentWakeUp === undefined && this.userRunSettings().autorun) this.approve(writtenTasks(before, coerced));
     return coerced.length;
   }
 
@@ -1632,6 +1647,11 @@ export class Session {
   }
 
   async executePlan(): Promise<void> {
+    if (this.orchestrator.hasLiveWork) {
+      const outcome = await this.execute({ command: 'run_plan' }, { kind: 'user' });
+      if (!outcome.ok) throw new TaskControlError(outcome.message);
+      return;
+    }
     this.idlePlan();
     // Executing is the user's approval of every task in the plan (ADR-0029).
     this.approve(flattenTasks(this.store.planTasks).map((t) => t.id));
@@ -1664,6 +1684,28 @@ export class Session {
     });
   }
 
+  /**
+   * Execute while a run is under way (#95): the seam has approved every task,
+   * as executing does, and the run takes them in. A run the scheduler was not
+   * driving, one task started on its own, becomes the plan's run, as Execute
+   * would make it.
+   */
+  private async joinRun(approved: number): Promise<string> {
+    const plan = this.plan!;
+    const scheduling = this.orchestrator.isScheduling;
+    await this.withSave(async () => {
+      plan.approved = true;
+      if (scheduling) await this.orchestrator.tick();
+      else if (this.orchestrator.isReviewApproved) await this.orchestrator.start('user');
+      else await this.orchestrator.approveReview('user');
+    });
+    const line = approved === 0
+      ? scheduling ? 'The plan is already running, and no task waits for your approval.' : 'The plan is running: each task starts once its dependencies finish.'
+      : approved === 1 ? 'Approved 1 task; it starts once its dependencies finish.' : `Approved ${approved} tasks; each starts once its dependencies finish.`;
+    this.notice('info', line);
+    return line;
+  }
+
   async approveReview(): Promise<LegacyPlanState> {
     if (!this.plan) throw new NoPlanError('review');
     const plan = this.plan;
@@ -1676,9 +1718,12 @@ export class Session {
     return plan;
   }
 
-  async forceStartTask(taskId: string): Promise<void> {
+  /** Answers the line saying the task waits for its dependencies, when it was queued behind them rather than started. */
+  async forceStartTask(taskId: string): Promise<string | undefined> {
     this.approveTask(taskId);
-    await this.startOneTask(taskId, 'user');
+    if (!this.plan) return;
+    this.requireTask(taskId);
+    return this.withSave(() => this.orchestrator.forceStartTask(taskId, 'user'));
   }
 
   private async startOneTask(taskId: string, origin: RunOrigin): Promise<void> {

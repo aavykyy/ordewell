@@ -103,8 +103,8 @@ function host(workspace: string) {
   const latest = (taskId: string) => spawned.filter((s) => s.taskId === taskId).at(-1)!;
   const dock = (): SurfacePlan | undefined => posts.filter((m): m is Extract<HostToWebview, { type: 'planUpdated' }> => m.type === 'planUpdated').at(-1)?.plan;
   const restore = () => restoreState(persistence());
-  const open = () => {
-    session.loadPlan(plan(), goal, workspace, { persist: false });
+  const open = (opened: LegacyPlanState = plan()) => {
+    session.loadPlan(opened, goal, workspace, { persist: false });
     current = session.planState!;
   };
   return { session, deps, status, latest, dock, restore, open, spawned };
@@ -167,5 +167,34 @@ describe('VS Code: the user\'s Execute plan stays their approval after the run',
 
     expect(after.session.planState!.tasks.map((t) => t.id)).toEqual(['t1', 't2']);
     expect(await after.session.execute({ command: 'run_plan' }, PLANNER)).toMatchObject({ ok: true });
+  });
+});
+
+describe('VS Code: Execute while a run is under way', () => {
+  let workspace: string;
+  beforeEach(() => {
+    workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-approval-'));
+    (vscode.window.showErrorMessage as unknown as ReturnType<typeof vi.fn>).mockReset();
+  });
+  afterEach(() => { fs.rmSync(workspace, { recursive: true, force: true }); });
+
+  it('approves what waits for approval and keeps the run going, rather than stopping it', async () => {
+    const h = host(workspace);
+    const opened = plan();
+    opened.tasks[1].dependencies = ['t1'];
+    h.open(opened);
+    await handleApprovePlan(h.deps);
+    // As the planner adding it after Execute leaves it: in the plan, outside the approval record.
+    h.session.planState!.approvedTasks = ['t1'];
+    expect(h.session.waitsForApproval('t2')).toBe(true);
+    vi.mocked(h.deps.runner.stopAll).mockClear();
+
+    await handleApprovePlan(h.deps);
+
+    expect(h.deps.runner.stopAll).not.toHaveBeenCalled();
+    expect(h.spawned.map((s) => s.taskId)).toEqual(['t1']);
+    expect(h.session.waitsForApproval('t2')).toBe(false);
+    h.latest('t1').reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(h.spawned.map((s) => s.taskId)).toEqual(['t1', 't2']));
   });
 });

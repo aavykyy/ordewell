@@ -136,6 +136,9 @@ describe('every user control saves before it announces', () => {
   it('force start', async () => {
     const env = setup([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]);
     await env.session.executePlan();
+    // Forced past its failed dependency: one still running would only queue it.
+    env.runnerSession('t1').reportComplete({ status: 'failed', summary: 'broke' });
+    await vi.waitFor(() => expect(env.session.planTasks[0].status).toBe('failed'));
 
     await expectSavedBeforeAnnounced(env, (s) => s.forceStartTask('t2'));
     expect(env.session.planTasks[1].status).toBe('in_progress');

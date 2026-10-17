@@ -27,7 +27,7 @@ import { IsolationRunController } from './IsolationRunController';
 import { completesTask, Landing, type LandingMessage, type LandingOutcome, type UnlandedOutcome } from './Landing';
 import { classifyRunnerStop, readUsageLimitReset, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
 import { RELAPSE_MS, RESUME_MARGIN_MS, UsageLimitWaits } from './UsageLimitWaits';
-import { dependencyMet, mergeGate, selectReadyTasks, type Readiness } from './readiness';
+import { dependencyMet, isBlocked, mergeGate, selectReadyTasks, unmetDependencies, type Readiness } from './readiness';
 import { blockingFailures } from './blocking';
 import {
   attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, mergeExcludes, takesSkills,
@@ -1731,22 +1731,28 @@ export class TaskOrchestrator {
   }
 
   /**
-   * Manually start a single AI task right now, bypassing dependency/readiness
-   * gating (the "force start" affordance on a task card) but never the claim:
-   * it still needs the user's approval, a free slot, and no Stop since it was
-   * asked for, and throws {@link TaskControlError} saying which it lacks.
+   * Manually start a single AI task right now (the "force start" affordance on
+   * a task card), past a failed dependency (ADR-0034) or a merge gate
+   * (ADR-0020), but never past the claim: it still needs the user's approval,
+   * a free slot, and no Stop since it was asked for, and throws
+   * {@link TaskControlError} saying which it lacks. A dependency still under
+   * way or yet to run is not forced past: the task is released to the
+   * scheduler instead, which starts it once they finish, and the line saying
+   * so is the answer.
    * Reuses the scheduler's own claim so a force-started task gets the same
    * augmented prompt, session tracking, and exit handling — callers must not
    * re-spawn the runner themselves. No-op if the task is unknown, not an AI
    * task, or already running.
    */
-  async forceStartTask(taskId: string, origin: RunOrigin = 'user'): Promise<void> {
+  async forceStartTask(taskId: string, origin: RunOrigin = 'user'): Promise<string | undefined> {
     const task = this.store.get(taskId);
     if (!task || task.type !== 'ai') return;
     if (this.attempts.has(taskId)) return;
     this.refuseOpsDuringMerge(task);
+    const queued = this.queuedBehindDependencies(task);
+    if (queued) return queued;
     await this.whileAdmitted(async (admittedAt) => {
-      if (!(await this.openForAdmitted(taskId, origin, () => this.forceStartTask(taskId, origin), admittedAt))) return;
+      if (!(await this.openForAdmitted(taskId, origin, async () => { await this.forceStartTask(taskId, origin); }, admittedAt))) return;
       // The run may have started it while opening.
       if (this.attempts.has(taskId)) return;
       // A Merge all may have begun while it opened.
@@ -1756,6 +1762,26 @@ export class TaskOrchestrator {
       this.notePastGate(task);
       await this.claimed(task, admittedAt);
     });
+  }
+
+  /**
+   * A force start of a task whose dependencies are still under way or yet to
+   * run: started now, it would build on work that is not there, so it waits
+   * for them in the run, off any hold, and says so. Dependencies are never
+   * bypassed silently. A blocked task is forced past its failure as asked.
+   */
+  private queuedBehindDependencies(task: Readonly<Task>): string | null {
+    if (isBlocked(task, this.store)) return null;
+    const waiting = unmetDependencies(task, this.store, this.runs);
+    if (waiting.length === 0) return null;
+    this.onHold.delete(task.id);
+    const names = waiting.map((id) => `task "${this.store.get(id)?.title ?? id}"`);
+    const listed = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+    const idle = this.running ? '' : ' Nothing is running now: run the plan to start them.';
+    const queued = `Task "${task.title}" is approved and starts once ${listed} ${names.length === 1 ? 'finishes' : 'finish'}.${idle}`;
+    this.tell('info', queued);
+    this.emit('onTaskChanged');
+    return queued;
   }
 
   private refuseOpsDuringMerge(task: Readonly<Task>): void {

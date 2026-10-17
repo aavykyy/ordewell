@@ -1,6 +1,5 @@
 import { Hono, type Context, type Env } from 'hono';
 import {
-  AlreadyExecutingError,
   flattenTasks,
   NoPlanError,
   surfacePlan,
@@ -11,6 +10,7 @@ import {
   type ConversationForkResponse,
   type ConversationRewindResponse,
   type ExecuteResponse,
+  type TaskStartResponse,
   type ExecutionCommand,
   type ForceSendResponse,
   type GeneratePlanResponse,
@@ -69,11 +69,10 @@ export function plansRoute(pool: OrchestratorPool) {
   router.post('/:sessionId/execute', async (c) => {
     try {
       const session = pool.session(c.req.param('sessionId'));
-      // The daemon contract keeps `no_plan` and `already_executing` distinct
-      // from a plain refusal; the seam refuses either way, so the codes it
-      // cannot carry are kept here.
+      // The daemon contract keeps `no_plan` distinct from a plain refusal; the
+      // seam refuses either way, so the code it cannot carry is kept here. A
+      // run under way is no refusal: executing then approves what waits (#95).
       if (!session.planState || session.planTasks.length === 0) throw new NoPlanError('execute');
-      if (session.isExecuting) throw new AlreadyExecutingError();
       await runUserCommand(session, { command: 'run_plan' });
       return c.json({ status: 'running' } satisfies ExecuteResponse);
     } catch (err) {
@@ -178,8 +177,8 @@ export function plansRoute(pool: OrchestratorPool) {
 
   router.post('/:sessionId/tasks/:taskId/force-start', async (c) => {
     try {
-      await pool.session(c.req.param('sessionId')).forceStartTask(c.req.param('taskId'));
-      return c.json({ ok: true } satisfies OkResponse);
+      const queued = await pool.session(c.req.param('sessionId')).forceStartTask(c.req.param('taskId'));
+      return c.json({ ok: true, ...(queued ? { queued } : {}) } satisfies TaskStartResponse);
     } catch (err) {
       return failure(c, err, 'force-start');
     }

@@ -108,8 +108,17 @@ describe('a plan row, pinned before its rules move to core', () => {
   });
 
   it('says a task added after the plan was approved waits for the user, and how to approve it (ADR-0035)', () => {
-    expect(frame([task({ waitsForApproval: true })])).toContain('⏸ waiting for your approval to start: added after you approved the plan; f starts it, or /run runs the plan');
-    expect(frame([task({ waitsForApproval: true, status: 'in_progress' })])).not.toContain('waiting for your approval');
+    expect(frame([task({ waitsForApproval: true })])).toContain('⏸ waits for your approval · f approves it · /run approves all');
+    expect(frame([task({ waitsForApproval: true, status: 'in_progress' })])).not.toContain('waits for your approval');
+  });
+
+  it('wraps a row\'s status line in a narrow pane rather than cutting it off, under its glyph', () => {
+    const narrow = planLayout(state([task({ waitsForApproval: true })]), 60, 40).lines;
+    const at = narrow.findIndex((line) => line.includes('⏸'));
+    expect(narrow.slice(at, at + 2)).toEqual([
+      '    ⏸ waits for your approval · f',
+      '       approves it · /run approves all',
+    ]);
   });
 
   it('draws a task a failure blocks as blocked by the failed task, through its dependencies (ADR-0034)', () => {

@@ -32,7 +32,7 @@ describe('ordewell run while a task waits for the user\'s approval (ADR-0035)', 
     }
 
     const out = written.join('');
-    expect(out).toContain('#0002 pending: waiting for your approval to start: `ordewell run-task <id>` starts it');
+    expect(out).toContain('#0002 pending: waits for your approval: `ordewell force-start <id>` approves it, `ordewell run` approves all');
     expect(out).not.toMatch(/#0001 [^\n]*approval/);
   });
 });

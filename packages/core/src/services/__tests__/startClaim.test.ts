@@ -18,7 +18,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const GUARDED: Options = { settings: { supervisorLevel: 'off', autorun: true }, config: { autonomousMode: false, maxParallelSessions: 2 } };
+// Autorun off: with it on, what the planner adds in the user's turn is approved as it lands.
+const GUARDED: Options = { settings: { supervisorLevel: 'off', autorun: false }, config: { autonomousMode: false, maxParallelSessions: 2 } };
 
 const FULL_AUTORUN: Options = { settings: { supervisorLevel: 'off', autorun: true }, config: { autonomousMode: true } };
 const FULL: Options = { settings: { supervisorLevel: 'off' }, config: { autonomousMode: true } };
@@ -90,17 +91,12 @@ describe('the scheduler starts only approved tasks', () => {
     await until(() => env.run.spawnedIds().includes(titled(env, 'Add a cache')?.id ?? 'not added'));
   });
 
-  it('with autorun on in Full, starts a task the planner added only when the planner asks (ADR-0030)', async () => {
+  it('with autorun on, starts a task the planner added in the user\'s turn without anyone asking', async () => {
     const env = await supervised([task('t1', 1)], FULL_AUTORUN);
     const added = await addedInUsersTurn(env);
-    expect(env.run.spawnedIds()).toEqual(['t1']);
 
-    void env.session.continueConversation('start the new work');
-    await until(() => env.planner.calls.length === 2);
-    const started = await env.planner.tools().runTask!({ task: added }, ctx);
-
-    expect(answer(started).result).toBe('Started task #2 "New unapproved work".');
-    expect(env.run.spawnedIds()).toEqual(['t1', added]);
+    await until(() => env.run.spawnedIds().includes(added));
+    expect(cards(env)).toEqual([]);
   });
 });
 

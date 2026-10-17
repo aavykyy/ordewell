@@ -51,6 +51,8 @@ interface PlanCardGroupProps {
   onSplit?: (taskId: string) => void;
   onExecutePlan?: () => void;
   onStopExecution?: () => void;
+  /** Approve every task that waits for approval: each starts once its dependencies finish (ADR-0035). */
+  onApproveAll?: () => void;
   onRunTask?: (taskId: string) => void;
   /** Message a running or waiting task from its card (ADR-0018, M1; ADR-0023, F1). */
   onSendMessage?: (taskId: string, text: string) => void;
@@ -97,6 +99,7 @@ export default function PlanCardGroup({
   onSplit,
   onExecutePlan,
   onStopExecution,
+  onApproveAll,
   onRunTask,
   onSendMessage,
   onSendMessageNow,
@@ -122,6 +125,7 @@ export default function PlanCardGroup({
     index(run.tasks);
     return byId;
   }, [run]);
+  const anyWaitsForApproval = useMemo(() => [...runByTask.values()].some((t) => t.waitsForApproval === true), [runByTask]);
 
   const dependentCountMap = useMemo(() => {
     const m = new Map<string, number>();
@@ -222,7 +226,7 @@ export default function PlanCardGroup({
         </div>
       )}
 
-      {(onExecutePlan || onStopExecution) && (
+      {(onExecutePlan || onStopExecution || (onApproveAll && anyWaitsForApproval)) && (
         <div className="plan-action-bar">
           {isExecuting ? (
             onStopExecution && (
@@ -232,6 +236,12 @@ export default function PlanCardGroup({
             onExecutePlan && (
               <button className="plan-action-btn execute" onClick={onExecutePlan}>Execute Plan</button>
             )
+          )}
+          {onApproveAll && anyWaitsForApproval && (
+            <button className="plan-action-btn approve" onClick={onApproveAll}
+              title="Approve every task that waits for your approval: each starts once its dependencies finish">
+              Approve all
+            </button>
           )}
         </div>
       )}

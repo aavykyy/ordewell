@@ -3489,6 +3489,16 @@ body.vscode-high-contrast-light .task-card.expanded {
   background: var(--red-subtle);
 }
 
+/* The colour of the waiting card's badge, so the button reads as its answer. */
+.plan-action-btn.approve {
+  color: var(--orange);
+  border-color: var(--orange);
+}
+
+.plan-action-btn.approve:hover {
+  background: var(--orange-subtle);
+}
+
 /* ---- Run Task (pre-execution) ---- */
 .task-run-btn-wrapper {
   margin-top: 8px;

@@ -944,43 +944,43 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   if (row.conflict) {
     const where = row.conflict.repo ? ` in ${row.conflict.repo}` : '';
     const files = row.conflict.files ? ` (${row.conflict.files})` : '';
-    lines.push(style.red(truncate(`${bodyPad}⚠ merge conflict${where}${files}: its work is kept on its own branch`, cols)));
+    lines.push(...statusLines(style.red, '⚠', `merge conflict${where}${files}: its work is kept on its own branch`, cols, bodyPad));
   }
   // `attempt` is absent only for a task shown straight from a reloaded plan,
   // before the live stream has caught up.
   if (row.repairing) {
     const files = row.repairing.files ? ` in ${row.repairing.files}` : '';
     const attempt = row.repairing.attempt ? ` (attempt ${row.repairing.attempt.attempt}/${row.repairing.attempt.limit})` : '';
-    lines.push(style.yellow(truncate(`${bodyPad}↻ repairing conflict${files}${attempt}`, cols)));
+    lines.push(...statusLines(style.yellow, '↻', `repairing conflict${files}${attempt}`, cols, bodyPad));
   }
   // A merge gate holds the task as plainly as a task that waits on the user (ADR-0020).
   if (row.mergeGate) {
-    lines.push(style.yellow(truncate(`${bodyPad}⏸ waits for Merge all: ${row.mergeGate.join(', ')} not merged into your branch yet`, cols)));
+    lines.push(...statusLines(style.yellow, '⏸', `waits for Merge all: ${row.mergeGate.join(', ')} not merged into your branch yet`, cols, bodyPad));
   }
   // Named as it is, not lowercased like the other labels: a model's label is a proper name. The task still runs.
   if (row.assignmentFlag) {
-    lines.push(style.yellow(truncate(`${bodyPad}⚠ ${row.assignmentFlag}; it still runs`, cols)));
+    lines.push(...statusLines(style.yellow, '⚠', `${row.assignmentFlag}; it still runs`, cols, bodyPad));
   }
   if (row.waitsForApproval) {
-    lines.push(style.yellow(truncate(`${bodyPad}⏸ ${inRow(row.waitsForApproval)}: added after you approved the plan; f starts it, or /run runs the plan`, cols)));
+    lines.push(...statusLines(style.yellow, '⏸', `${inRow(row.waitsForApproval)} · f approves it · /run approves all`, cols, bodyPad));
   }
   if (row.blockedBy) {
-    lines.push(style.red(truncate(`${bodyPad}⊘ ${inRow(blockedByLabel(row.blockedBy))}: runs once ${row.blockedBy.length === 1 ? 'it is retried and passes' : 'they are retried and pass'}`, cols)));
+    lines.push(...statusLines(style.red, '⊘', `${inRow(blockedByLabel(row.blockedBy))}: runs once ${row.blockedBy.length === 1 ? 'it is retried and passes' : 'they are retried and pass'}`, cols, bodyPad));
   }
   if (row.status === 'skipped') {
-    lines.push(style.grey(truncate(`${bodyPad}» ${inRow(skippedLabel(row.skipReason))}: nothing of it landed; m done lands its kept work`, cols)));
+    lines.push(...statusLines(style.grey, '»', `${inRow(skippedLabel(row.skipReason))}: nothing of it landed; m done lands its kept work`, cols, bodyPad));
   }
   const resumable = row.actions.includes('resume-now');
   if (row.resumes) {
-    lines.push(style.yellow(truncate(`${bodyPad}⏸ ${inRow(row.resumes)}, once the usage limit resets: ${resumable ? 'r resume now · ' : ''}c don't resume`, cols)));
+    lines.push(...statusLines(style.yellow, '⏸', `${inRow(row.resumes)}, once the usage limit resets: ${resumable ? 'r resume now · ' : ''}c don't resume`, cols, bodyPad));
   } else if (resumable) {
-    lines.push(style.yellow(truncate(`${bodyPad}⏸ waits for the usage limit to reset: r resume now`, cols)));
+    lines.push(...statusLines(style.yellow, '⏸', 'waits for the usage limit to reset: r resume now', cols, bodyPad));
   }
   if (row.opsChangedFiles) {
-    lines.push(style.yellow(truncate(`${bodyPad}⚠ an ops task changed tracked files: check them, then m done or /retry`, cols)));
+    lines.push(...statusLines(style.yellow, '⚠', 'an ops task changed tracked files: check them, then m done or /retry', cols, bodyPad));
   }
   if (row.repaired?.landed) {
-    lines.push(style.grey(truncate(`${bodyPad}↻ landed after repairing conflict in ${row.repaired.files}`, cols)));
+    lines.push(...statusLines(style.grey, '↻', `landed after repairing conflict in ${row.repaired.files}`, cols, bodyPad));
   }
 
   let editorLine: number | undefined;
@@ -1033,6 +1033,17 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   }
 
   return { lines, editorLine };
+}
+
+/**
+ * A row's status line, wrapped under its glyph rather than cut off at the
+ * pane's edge: it says what the user can do, and the end of it is the part
+ * they act on.
+ */
+function statusLines(paint: (text: string) => string, glyph: string, text: string, cols: number, pad: string): string[] {
+  const lead = `${pad}${glyph} `;
+  const room = Math.max(1, cols - width(lead));
+  return wrap(text, room).map((line, i) => paint(`${i === 0 ? lead : ' '.repeat(width(lead))}${line}`));
 }
 
 function taskText(label: string, text: string, cols: number, pad = '    '): string[] {

@@ -86,6 +86,8 @@ export interface ExecutionHost {
   planApproved(): boolean;
   /** The user approved this task: it was in the plan they executed, or they started it themselves. */
   taskApproved(taskId: string): boolean;
+  /** A task the scheduler leaves for the user to approve: added to the plan since they approved it (ADR-0035). */
+  waitsForApproval(taskId: string): boolean;
   /** A start the user consented to approves these tasks, before it acts. */
   approve(taskIds: readonly string[]): void;
   /** Full autonomy: starts follow plan approval without a question. */
@@ -117,6 +119,12 @@ export interface ExecutionHost {
   waitingRequests(taskId: string): readonly WaitingRequest[];
   /** A start is told who asked: whether a run it opens continues the last one depends on it (ADR-0029). */
   runPlan(actor: ExecutionActor): Promise<void>;
+  /**
+   * The user's Execute while a run is under way, once it approved every task:
+   * the run takes them in, each starting once its dependencies finish. Answers
+   * the line that says so, naming how many had waited for approval.
+   */
+  joinRun(approved: number): Promise<string>;
   startTask(taskId: string, actor: ExecutionActor): Promise<void>;
   stopTask(taskId: string): Promise<void>;
   stopRun(): void;
@@ -433,6 +441,11 @@ export class ExecutionCommands {
     const all = this.all(tasks);
     const live = all.filter(({ task }) => this.host.running(task.id));
     if (this.host.hasLiveWork()) {
+      // The user's Execute approves what waits rather than restarting the run under way; counted before the approval it records.
+      if (actor.kind === 'user') {
+        const waiting = all.filter(({ task }) => this.host.waitsForApproval(task.id)).length;
+        return { act: async () => ({ message: await this.host.joinRun(waiting) }) };
+      }
       return { refusal: `The plan is already running (${named(live)} ${live.length === 1 ? 'is' : 'are'} running). Start one more ready task with run_task, or wait.` };
     }
     // A new run leaves a skipped task skipped, as it leaves a completed one done.

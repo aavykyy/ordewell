@@ -689,9 +689,9 @@ describe('TaskOrchestrator', () => {
     it('starts no new task while held, leaves the running one alone, and starts it on the tick after release', async () => {
       const { spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ runner: { spawn } });
-      orchestrator.loadPlan(gatedPlan());
+      // Task 1 needs no gate, so the run starts it; a force start would only queue it behind the gate.
+      orchestrator.loadPlan(gatedPlan().map((t) => (t.id === 't1' ? { ...t, dependencies: [] } : t)));
       await orchestrator.approveReview();
-      await orchestrator.forceStartTask('t1');
 
       const release = orchestrator.holdStarts();
       await orchestrator.markTaskComplete('u1');
