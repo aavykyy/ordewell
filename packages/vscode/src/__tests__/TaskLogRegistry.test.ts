@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as vscode from 'vscode';
-import { createTask, type CommandOutcome, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
+import { createTask, type AttemptUsage, type CommandOutcome, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { TaskLogRegistry } from '../providers/TaskLogRegistry';
 import type { HostToTaskLog } from '../shared/taskLogProtocol';
 import { __panels, __resetPanels } from '../test/vscode.mock';
@@ -61,6 +61,27 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     expect(posted(__panels[0])[0]).toMatchObject({ type: 'init', status: { commands: [{ name: 'compact', description: 'Compact context', kind: 'builtin' }] } });
     __panels[0].__receive({ type: 'invokeTaskCommand', name: 'compact', args: 'retain tests' });
     expect(h.session.invokeTaskCommand).toHaveBeenCalledWith('t1', 'compact', 'retain tests');
+  });
+
+  it('carries the task\'s whole spend in its status and re-sends it when a usage event moves it', () => {
+    const h = harness();
+    h.registry.open('t1');
+    __panels[0].__receive({ type: 'ready' });
+    expect(posted(__panels[0])[0]).toMatchObject({ type: 'init' });
+    expect((posted(__panels[0])[0] as { status: { usage?: unknown } }).status.usage).toBeUndefined();
+
+    const spend = (attempt: number, inputTokens: number): AttemptUsage => ({
+      attempt, runner: 'claude-code', startedAt: '', wallTimeMs: 1000, totals: { inputTokens, outputTokens: 10 },
+      lastPromptTokens: 50_000, contextWindow: 200_000,
+    });
+    h.task.attemptUsage = [spend(1, 1000), spend(2, 500)];
+    __panels[0].webview.postMessage.mockClear();
+    h.registry.receive({ type: 'status_update', tasks: [] });
+
+    expect(posted(__panels[0])).toEqual([expect.objectContaining({
+      type: 'status',
+      status: expect.objectContaining({ usage: { totals: { inputTokens: 1500, outputTokens: 20 }, contextFill: { usedTokens: 50_000, windowTokens: 200_000 } } }),
+    })]);
   });
 
   it('never opens a tab by itself, and opens one titled for the task on demand', () => {

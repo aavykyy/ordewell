@@ -27,7 +27,7 @@ describe('task card usage', () => {
   it('keeps the plan-wide Tasks total sum of all attempts', () => {
     const parent = task({ attemptUsage: [usage, { ...usage, attempt: 2 }] });
     const { container } = render(<PlanCardGroup run={EMPTY_RUN} tasks={[parent]} models={[]} />);
-    expect(container.querySelector('.plan-usage')?.textContent).toContain('24,800 in · 6,200 out · $0.84 · 10s');
+    expect(container.querySelector('.plan-usage')?.textContent).toBe('Tasks total: 24,800 in · 6,200 out · $0.84');
     expect(container.textContent).toContain('Tasks total');
   });
 });

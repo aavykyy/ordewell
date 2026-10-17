@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import SkillChips from './SkillChips';
 import ModelSelector from './ModelSelector';
-import TaskAssignment from './TaskAssignment';
+import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
 import { pausedOnLimit, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction } from '@ordewell/core';
 import { TaskActions, TaskCheck, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
@@ -121,6 +121,9 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
             {isExecuting && task.type === 'ai' && task.prompt && (
               <div className="subtask-prompt subtask-prompt-readonly">{task.prompt}</div>
             )}
+
+            {/* The pickers are hidden once the plan runs; what they decided stays readable. */}
+            {isExecuting && <TaskAssignmentReadout task={task} />}
 
             {/* Runner first: it decides which models, efforts and modes exist below it. */}
             {!isExecuting && task.type === 'ai' && runnerOptions.length > 0 && onRunnerChange && (

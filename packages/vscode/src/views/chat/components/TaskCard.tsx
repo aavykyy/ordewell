@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { taskCommand, useRunnerCommands, useTaskCommands } from './RunnerCommands';
 import SubTaskCard from './SubTaskCard';
-import TaskAssignment from './TaskAssignment';
+import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
 import ModelSelector from './ModelSelector';
 import DependencyPicker from './DependencyPicker';
 import SkillChips from './SkillChips';
@@ -542,6 +542,9 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
             {isExecuting && task.type === 'ai' && task.prompt && (
               <div className="task-prompt task-prompt-readonly">{task.prompt}</div>
             )}
+
+            {/* The pickers are hidden once the plan runs; what they decided stays readable. */}
+            {isExecuting && <TaskAssignmentReadout task={task} />}
 
             {/* Runner first: it decides which models, efforts and modes exist below it. */}
             {!isExecuting && task.type === 'ai' && runnerOptions.length > 0 && onRunnerChange && (

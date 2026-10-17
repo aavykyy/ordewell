@@ -1,4 +1,4 @@
-import type { ApprovalDecision, AwaitingReason, DisplayBlock, RunnerCommand, StructuredTurnEnd, TaskStatus } from '@ordewell/core';
+import type { ApprovalDecision, AwaitingReason, DisplayBlock, RunnerCommand, StructuredTurnEnd, TaskStatus, TaskUsageSummary } from '@ordewell/core';
 
 /*
  * The messages between the extension host and a task-log panel (ADR-0018, V1).
@@ -50,6 +50,8 @@ export interface TaskLogStatus {
   continuable: boolean;
   /** Paused on a usage limit with a saved session: Resume now is offered, and the message box resumes it. */
   resumable?: boolean;
+  /** The task's whole spend across every attempt, the meter read on the latest one; absent until an attempt reports. */
+  usage?: Pick<TaskUsageSummary, 'totals' | 'contextFill'>;
 }
 
 export type HostToTaskLog =
