@@ -191,6 +191,24 @@ describe('PlanEditor.updateTask', () => {
     await expect(editor.updateTask('t1', { assignedModel: { modelId: 'gpt-9', modelLabel: 'GPT-9' } })).rejects.toThrow(/claude-code/);
   });
 
+  // A bare runner write would leave the task on a model, effort and mode its old runner scoped.
+  it('moves a runner patched as a field the way the runner picker does, re-deriving what it scopes', async () => {
+    const { editor, plan, task } = setup();
+
+    await editor.updateTask('t1', { assignedRunner: 'codex' });
+
+    expect(task('t1')).toMatchObject({ assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5-codex' }, taskMode: 'fullAccess' });
+    expect(plan!.runners).toEqual(['claude-code', 'codex']);
+  });
+
+  it('lets a model named beside the runner win over the one the move derives, and lands the rest of the patch', async () => {
+    const { editor, task } = setup();
+
+    await editor.updateTask('t1', { assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5-mini', modelLabel: 'gpt-5-mini' }, title: 'Set up' });
+
+    expect(task('t1')).toMatchObject({ assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5-mini' }, taskMode: 'fullAccess', title: 'Set up' });
+  });
+
   it('answers null for a task not in the plan, and does not reschedule', async () => {
     const { editor, scheduler, sent } = setup();
 

@@ -462,6 +462,7 @@ describe('Session.updateTask — model of a task with a live runner', () => {
     live.waitForInput();
     await vi.waitFor(() => expect(taskOf(session, 'only')?.status).toBe('awaiting_user'));
     await expect(session.setTaskRunner('only', 'codex')).rejects.toThrow(runnerRefusal);
+    await expect(session.updateTask('only', { assignedRunner: 'codex' })).rejects.toThrow(runnerRefusal);
     expect(taskOf(session, 'only')).toMatchObject({ assignedRunner: 'claude-code' });
     expect(session.isExecuting).toBe(true);
   });

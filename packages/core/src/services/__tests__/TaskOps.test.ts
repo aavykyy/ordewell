@@ -458,6 +458,15 @@ describe('applyTaskOps — model and task-mode validity', () => {
     expect(res.errors[0]).toContain('stop the task first, or use the runner\'s own /model');
   });
 
+  it('refuses a move to another runner for a task whose runner is up, waiting for input or not', () => {
+    const waiting = samplePlan().map((t) => (t.id === 'a' ? { ...t, status: 'awaiting_user' as const, awaitingReason: 'input' as const } : t));
+    const res = applyTaskOps(waiting, [
+      { op: 'update', taskId: 'a', changes: { assignedRunner: 'codex' } },
+    ], ['claude-code', 'codex'], { ...CATALOG, liveRunner: (id) => id === 'a' });
+    expect(res.ok).toBe(false);
+    expect(res.errors[0]).toContain('"Setup" has a live runner, so its runner cannot change now: stop the task first');
+  });
+
   it('refuses a flip to manual for a task whose runner is up, which would clear its model', () => {
     const waiting = samplePlan().map((t) => (t.id === 'a'
       ? { ...t, status: 'awaiting_user' as const, awaitingReason: 'input' as const, assignedModel: { modelId: 'claude-sonnet-4-5', modelLabel: 'Claude Sonnet 4.5' } }

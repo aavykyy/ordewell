@@ -166,4 +166,27 @@ describe('force starting a task whose dependencies have not finished', () => {
     env.run.of('t1').reportComplete({ status: 'done', summary: '' });
     await until(() => env.run.spawnedIds().includes('t2'));
   });
+
+  it('starts once a dependency run on its own is marked complete instead, with no verdict', async () => {
+    const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { ...AUTORUN_OFF, execute: false });
+    await env.session.forceStartTask('t2');
+    await env.session.runTask('t1');
+
+    await env.session.markTaskComplete('t1');
+
+    await until(() => env.run.spawnedIds().includes('t2'));
+  });
+
+  it('starts once its dependency is skipped, and nothing is left pending a start', async () => {
+    const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { ...AUTORUN_OFF, execute: false });
+    await env.session.forceStartTask('t2');
+    expect(env.session.startsPending).toBe(true);
+
+    const skipped = await env.session.execute({ command: 'skip_task', task: 't1' }, { kind: 'user' });
+    expect(skipped).toMatchObject({ ok: true });
+
+    await until(() => env.run.spawnedIds().includes('t2'));
+    expect(env.run.spawnedIds()).toEqual(['t2']);
+    expect(env.session.startsPending).toBe(false);
+  });
 });
