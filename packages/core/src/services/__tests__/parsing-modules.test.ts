@@ -279,8 +279,8 @@ describe('parsePlanJson', () => {
   });
 
   // Budget models emit sub-steps as bare {id, order, title, description, type};
-  // rejecting the whole plan for that killed real trials. Inheriting from the
-  // parent invents nothing — an ai sub-step of an AFK slice is AFK.
+  // rejecting the whole plan for that threw away usable plans. Inheriting from
+  // the parent invents nothing — an ai sub-step of an AFK slice is AFK.
   it('lets bare ai subtasks inherit their parent classification', () => {
     const raw = JSON.stringify({
       tasks: [{
