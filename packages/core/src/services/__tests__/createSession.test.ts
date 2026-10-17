@@ -515,11 +515,12 @@ describe('currentPlanState — the live plan a surface refreshes from', () => {
 });
 
 describe('a continue counts its runner session\'s cost on from what was counted before', () => {
-  function spawning() {
+  /** Each spawn's session; `nativeIds` picks the native session id a spawn reports, defaulting to one session. */
+  function spawning(nativeIds: string[] = []) {
     const sessions: FakeRunnerSession[] = [];
     const runner = {
       spawn: vi.fn(async ({ taskId }: Parameters<IRunner['spawn']>[0]) => {
-        const s = new FakeRunnerSession(`s${sessions.length + 1}`, taskId, 'native-1');
+        const s = new FakeRunnerSession(`s${sessions.length + 1}`, taskId, nativeIds[sessions.length] ?? 'native-1');
         sessions.push(s);
         return s;
       }),
@@ -567,6 +568,53 @@ describe('a continue counts its runner session\'s cost on from what was counted 
     sessions[1].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-mystery', inputTokens: 50_000 } });
 
     await vi.waitFor(() => expect(taskUsageSummary(taskOf(session, 't1')!).contextFill).toEqual({ usedTokens: 50_000, windowTokens: 500_000 }));
+  });
+
+  // A continue that ends without measuring anything is still the same session:
+  // the window the first attempt reported is its session's, not the empty
+  // ledger the continue left behind.
+  it('keeps the window its session reported across a continue that measured nothing', async () => {
+    const { runner, sessions } = spawning();
+    const session = makeSession({ runner });
+    session.loadPlan(plan(), 'Goal', '/repo');
+    await session.executePlan();
+    sessions[0].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-mystery', inputTokens: 1_000, contextWindow: 500_000 } });
+    sessions[0].reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('completed'));
+
+    await session.continueTask('t1', 'one more thing');
+    sessions[1].reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('completed'));
+
+    await session.continueTask('t1', 'and one more');
+    sessions[2].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-mystery', inputTokens: 50_000 } });
+
+    await vi.waitFor(() => expect(taskUsageSummary(taskOf(session, 't1')!).contextFill).toEqual({ usedTokens: 50_000, windowTokens: 500_000 }));
+  });
+
+  // A window belongs to one runner session: a continue of a fresh attempt's
+  // session never borrows the window an earlier, different session reported.
+  it('never borrows a window from another session', async () => {
+    const { runner, sessions } = spawning(['native-1', 'native-2']);
+    const session = makeSession({ runner });
+    session.loadPlan(plan(), 'Goal', '/repo');
+    await session.executePlan();
+    sessions[0].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-mystery', inputTokens: 1_000, contextWindow: 500_000 } });
+    sessions[0].reportComplete({ status: 'failed', summary: '', reason: 'no' });
+    await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('failed'));
+
+    await session.retryTask('t1');
+    sessions[1].reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('completed'));
+    expect(taskOf(session, 't1')?.runnerSessionId).toBe('native-2');
+
+    await session.continueTask('t1', 'and one more');
+    expect(runner.spawn.mock.calls[2][0].resumeSessionId).toBe('native-2');
+    expect(runner.spawn.mock.calls[2][0].resumeWindow).toBeUndefined();
+    sessions[2].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-mystery', inputTokens: 50_000 } });
+
+    await vi.waitFor(() => expect(taskUsageSummary(taskOf(session, 't1')!).totals.inputTokens).toBe(51_000));
+    expect(taskUsageSummary(taskOf(session, 't1')!).contextFill).toBeUndefined();
   });
 
   it('hands a fresh attempt no count', async () => {

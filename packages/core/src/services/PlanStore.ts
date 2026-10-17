@@ -301,9 +301,9 @@ export class PlanStore {
     if (task?.attemptUsage) task.attemptUsage = task.attemptUsage.map((usage) => usage.attempt === attempt ? addAttemptUsage(usage, record, now) : usage);
   }
 
-  endAttemptUsage(id: string, attempt: number, now: string, runnerSessionCost?: RunnerSessionCost): void {
+  endAttemptUsage(id: string, attempt: number, now: string, runnerSessionCost?: RunnerSessionCost, sessionId?: string): void {
     const task = this._taskMap.get(id);
-    if (task?.attemptUsage) task.attemptUsage = task.attemptUsage.map((usage) => usage.attempt === attempt ? endAttemptUsage(usage, now, runnerSessionCost) : usage);
+    if (task?.attemptUsage) task.attemptUsage = task.attemptUsage.map((usage) => usage.attempt === attempt ? endAttemptUsage(usage, now, runnerSessionCost, sessionId) : usage);
   }
 
   setTaskAttemptSkills(id: string, skills: Task['attemptSkills']): void {

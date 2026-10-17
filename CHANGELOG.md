@@ -71,9 +71,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **Two surfaces saving settings at the same moment no longer lose one save.**
   The last check and the swap happen under a lock file next to the settings file.
 - **The context meter keeps a model's reported window** when the task switches
-  away and back, and when a task is continued.
-- **A settings save no longer frees a lock another process took over.** A save
-  that resumed after its lock went stale leaves the newer holder's lock alone.
+  away and back, when a task is continued, and across a continuation that
+  reported nothing of its own.
+- **A settings save never moves another process's lock out of the way.** A stale
+  lock is taken over only once two looks a poll apart agree it is still the
+  same one, and a lock that is still held after ten seconds, or cannot be
+  removed, is reported with its path instead of retried for ever.
 - **The planner is no longer told a task paused on a usage limit is running.**
   Its note says the task resumes at the reset, or waits for a retry.
 - **A planner edit still fits an untouched task's effort to its model.** An

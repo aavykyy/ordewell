@@ -2205,7 +2205,7 @@ export class TaskOrchestrator {
         env,
         resumeSessionId: kind.kind === 'continuation' ? kind.resumeSessionId : undefined,
         resumeCost: kind.kind === 'continuation' ? countedSessionCost(task.attemptUsage, kind.resumeSessionId) : undefined,
-        resumeWindow: kind.kind === 'continuation' ? resumedSessionWindow(task.attemptUsage, attempt.runner, attempt.attempt) : undefined,
+        resumeWindow: kind.kind === 'continuation' ? resumedSessionWindow(task.attemptUsage, attempt.runner, attempt.attempt, kind.resumeSessionId) : undefined,
         attempt: attempt.attempt,
         ...(attempt.skills.length > 0 ? { skills: attempt.skills } : {}),
         onNotice: (message) => this.tell('warn', `Task "${task.title}": ${message}`),
@@ -2408,11 +2408,12 @@ export class TaskOrchestrator {
     const attempt = this.attempts.get(taskId);
     this.attempts.delete(taskId);
     const session = attempt?.session ?? null;
+    const nativeSessionId = session?.nativeSessionId() ?? null;
     if (attempt) {
-      this.store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString(), session?.sessionCost?.() ?? undefined);
+      this.store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString(), session?.sessionCost?.() ?? undefined, nativeSessionId ?? undefined);
       this.output.detach(taskId);
     }
-    if (attempt && session) this.saveNativeSession(taskId, session.nativeSessionId(), attempt.runner);
+    if (attempt && session) this.saveNativeSession(taskId, nativeSessionId, attempt.runner);
     if (stopsRunner(reason)) {
       const task = this.store.get(taskId);
       if (task) this.verifier.clear(task);
