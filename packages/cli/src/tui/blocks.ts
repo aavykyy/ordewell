@@ -3,7 +3,7 @@ import {
   type DiffRow, type DiffStat,
   type ApprovalBlock, type ApprovalKind, type ApprovalSource, type DisplayBlock, type MessageBlock, type MessageRole, type PlanBlock,
   type CommandBlock, type CommandStatus, type CompactionBlock, type RunnerLoadedBlock,
-  type UsageLine, type UsageTotals,
+  type UsageTotals,
   type SkillLoadBlock, type SubagentBlock, type SubagentStatus, type ThinkingDisplayBlock, type ToolBlock,
 } from '@ordewell/core';
 import { graphemes, pad, sanitize, style, truncate, width, wrap, wrapLines } from './ansi';
@@ -537,26 +537,30 @@ function formatCost(currency: string, amount: number): string {
 export function tokenLine(blocks: readonly DisplayBlock[], cols: number): string | null {
   const usage = blocks[blocks.length - 1];
   if (usage?.type !== 'usage') return null;
-  const parts = usageMeasures(usage.totals, false);
+  const parts = usageMeasures(usage.totals);
   if (usage.model && !usage.contextFill) parts.push('ctx unknown');
   if (usage.contextFill) parts.splice(2, 0, `${Math.round((usage.contextFill.usedTokens / usage.contextFill.windowTokens) * 100)}% ctx`);
   return parts.length > 0 ? style.grey(truncate(parts.join(' · '), cols)) : null;
 }
 
-export function usageMeasures(totals: UsageTotals, unknown: boolean): string[] {
+function usageMeasures(totals: UsageTotals): string[] {
   return [
-    ...(totals.inputTokens !== undefined ? [`${compactCount(totals.inputTokens)} in`] : unknown ? ['unknown in'] : []),
-    ...(totals.outputTokens !== undefined ? [`${compactCount(totals.outputTokens)} out`] : unknown ? ['unknown out'] : []),
+    ...(totals.inputTokens !== undefined ? [`${compactCount(totals.inputTokens)} in`] : []),
+    ...(totals.outputTokens !== undefined ? [`${compactCount(totals.outputTokens)} out`] : []),
     ...(totals.cachedInputTokens !== undefined ? [`${compactCount(totals.cachedInputTokens)} cached`] : []),
     ...Object.entries(totals.reportedCost ?? {}).map(([currency, amount]) => formatCost(currency, amount)),
-    ...(unknown && !Object.keys(totals.reportedCost ?? {}).length ? ['cost unknown'] : []),
   ];
 }
 
-export function taskUsageText(usage: UsageLine & { wallTimeMs?: number; attempt?: number }): string {
+/**
+ * `12.4k in · 3.1k out · 2k cached · $0.42 · ctx 18%`. A part nobody reported is
+ * left out, a cost included; only the meter says so when it cannot be drawn.
+ * Wall time is not a measure the line carries. The meter belongs to one task's
+ * usage, so a plan total passes no `attempt` and shows none.
+ */
+export function taskUsageText(usage: { totals: UsageTotals; contextFill?: { usedTokens: number; windowTokens: number }; attempt?: number }): string {
   return [
-    ...usageMeasures(usage.totals, true),
-    ...(usage.attempt !== undefined ? [usage.contextFill ? `${Math.round((usage.contextFill.usedTokens / usage.contextFill.windowTokens) * 100)}% ctx` : 'ctx unknown'] : []),
-    usage.wallTimeMs !== undefined ? `${Math.floor(usage.wallTimeMs / 1000)}s` : 'time unknown',
+    ...usageMeasures(usage.totals),
+    ...(usage.attempt !== undefined ? [usage.contextFill ? `ctx ${Math.round((usage.contextFill.usedTokens / usage.contextFill.windowTokens) * 100)}%` : 'ctx unknown'] : []),
   ].join(' · ');
 }

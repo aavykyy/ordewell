@@ -8,6 +8,7 @@ import { stripAnsi } from '../ansi';
 import type { AttemptUsage } from '@ordewell/core';
 
 const usage: AttemptUsage = { attempt: 1, runner: 'codex', startedAt: '', wallTimeMs: 5000, totals: { inputTokens: 12400, outputTokens: 3100, reportedCost: { USD: 0.42 } }, byModel: [{ source: 'codex', model: 'actual-model', totals: { inputTokens: 12400 } }], lastPromptTokens: 36000, contextWindow: 200000 };
+const TOTAL = 'Tasks total: 12.4k in · 3.1k out · $0.42';
 const task = (over: Partial<TaskView> = {}): TaskView => ({ id: 't', order: 1, title: 'Work', type: 'ai', status: 'completed', dependencies: [], ...over });
 const lines = (tasks: TaskView[]) => planLayout(initialState({ tasks, rows: 40, cols: 140 }), 40, 140).lines.map(stripAnsi).join('\n');
 
@@ -20,9 +21,9 @@ describe('task row accounting', () => {
   it('keeps the plan total at the top and no usage on the row, collapsed or expanded', () => {
     const t = task({ attemptUsage: [usage] });
     const collapsed = lines([t]);
-    expect(collapsed).toContain('Tasks total: 12.4k in · 3.1k out · $0.42 · 5s');
-    expect(collapsed.replace('Tasks total: 12.4k in · 3.1k out · $0.42 · 5s', '')).not.toMatch(/12\.4k in|18% ctx/);
-    expect(expandedLines(t).replace('Tasks total: 12.4k in · 3.1k out · $0.42 · 5s', '')).not.toMatch(/12\.4k in|18% ctx|actual-model: /);
+    expect(collapsed.split('\n')).toContain(TOTAL);
+    expect(collapsed.replace(TOTAL, '')).not.toMatch(/12\.4k in|18% ctx/);
+    expect(expandedLines(t).replace(TOTAL, '')).not.toMatch(/12\.4k in|18% ctx|actual-model: /);
   });
 
   it('keeps skills, effort and mode off a collapsed row and shows them expanded', () => {
@@ -43,7 +44,7 @@ describe('task row accounting', () => {
     const state = initialState({ sessionId: 's1', tasks: [task()] });
     const updated = reduce(state, update!).state;
     expect(updated.tasks[0].attemptUsage).toEqual([usage]);
-    expect(lines(updated.tasks)).toContain('Tasks total: 12.4k in · 3.1k out · $0.42 · 5s');
+    expect(lines(updated.tasks).split('\n')).toContain(TOTAL);
   });
 
   it('applies nested usage updates without needing a status change', () => {
@@ -72,7 +73,7 @@ describe('task row accounting', () => {
 
     expect(updated.tasks[0].subtasks?.[0].attemptUsage).toEqual([usage]);
     expect(updated.runMerge?.handoff.landed).toEqual([{ taskId: 't', order: 1, title: 'Work' }]);
-    expect(text).toContain('Tasks total: 12.4k in · 3.1k out · $0.42 · 5s');
+    expect(text.split('\n')).toContain(TOTAL);
     expect(text).toContain('1 landed task not merged: /handoff merge');
     expect(layout.rowSpans[0].start).toBe(3);
     const at = revealOffset(layout, layout.maxScroll, layout.rowSpans[0]);
@@ -82,37 +83,23 @@ describe('task row accounting', () => {
     const cleared = reduce(updated, { type: 'statusUpdate', tasks: [] }).state;
     const clearedText = planLayout(cleared, 40, 140).lines.map(stripAnsi).join('\n');
     expect(clearedText).not.toContain('landed task');
-    expect(clearedText).toContain('Tasks total: 12.4k in · 3.1k out · $0.42 · 5s');
+    expect(clearedText.split('\n')).toContain(TOTAL);
   });
 });
 
 describe('task row model name', () => {
   const running = (byModel: AttemptUsage['byModel'], over: Partial<TaskView> = {}) =>
     task({ status: 'running', assignedModel: { modelLabel: 'Sonnet 5.5' } as TaskView['assignedModel'], attemptUsage: [{ ...usage, byModel }], ...over });
-  const expanded = (t: TaskView) => {
-    const state = { ...initialState({ tasks: [t], rows: 40, cols: 140 }), expandedTaskId: t.id };
-    return planLayout(state, 40, 140).lines.map(stripAnsi).join('\n');
-  };
 
-  it('shows the assigned model before usage names one', () => {
+  it('names the plan\'s assignment before usage reports anything', () => {
     const text = lines([running([])]);
     expect(text).toContain('Sonnet 5.5');
     expect(text).not.toContain('model unknown');
   });
 
-  it('shows the model usage reports', () => {
+  it('keeps the plan\'s assignment when usage reports another model', () => {
     const text = lines([running([{ source: 'claude-code', model: 'claude-sonnet-x', totals: { inputTokens: 1 } }])]);
-    expect(text).toContain('claude-sonnet-x');
-    expect(text).not.toContain('model unknown');
-  });
-
-  it('leaves an unnamed entry out of the row', () => {
-    const t = running([
-      { source: 'claude-code', model: 'claude-sonnet-x', totals: { inputTokens: 1 } },
-      { source: 'claude-code', totals: { inputTokens: 7000 } },
-    ]);
-    expect(lines([t])).not.toContain('model unknown');
-    expect(lines([t])).not.toContain('unattributed');
-    expect(expanded(t)).not.toContain('unattributed');
+    expect(text).toContain('Sonnet 5.5');
+    expect(text).not.toContain('claude-sonnet-x');
   });
 });

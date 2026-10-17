@@ -217,3 +217,26 @@ export function planUsage(tasks: readonly UsageTask[]): PlanUsage {
   }
   return result;
 }
+
+/**
+ * What one task spent across every attempt and every model it ran on, so a
+ * stop, a model change and a continue never makes the earlier spend vanish. The
+ * context meter is the exception: it reads the latest attempt, because only the
+ * current model's window says how full the next prompt is.
+ */
+export interface TaskUsageSummary {
+  totals: UsageTotals;
+  attempts: number;
+  contextFill?: { usedTokens: number; windowTokens: number };
+}
+
+export function taskUsageSummary(task: Pick<UsageTask, 'attemptUsage'>): TaskUsageSummary {
+  const attempts = task.attemptUsage ?? [];
+  const latest = attempts.at(-1);
+  const contextFill = latest ? plannerContextFill(latest) : undefined;
+  return {
+    totals: attempts.reduce((sum, attempt) => addUsageTotals(sum, attempt.totals), {} as UsageTotals),
+    attempts: attempts.length,
+    ...(contextFill ? { contextFill } : {}),
+  };
+}
