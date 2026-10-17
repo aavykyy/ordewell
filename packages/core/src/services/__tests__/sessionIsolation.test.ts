@@ -131,7 +131,7 @@ describe('Session with worktree isolation', () => {
     expect(types.indexOf('isolation_handoff')).toBeLessThan(types.indexOf('execution_complete'));
     expect(messages.find((m) => m.type === 'isolation_handoff')).toEqual({
       type: 'isolation_handoff',
-      repos: [{ path: '.', integrationBranch: 'ordewell/run1/integration', baseRef: 'base0000', landed: [{ taskId: 't1', order: 1, title: 'Task t1' }] }],
+      repos: [{ path: '.', integrationBranch: 'ordewell/run1/integration', baseRef: 'base0000', baseBranch: 'main', landed: [{ taskId: 't1', order: 1, title: 'Task t1' }] }],
       landed: [{ taskId: 't1', order: 1, title: 'Task t1' }],
     });
     expect(saved(session)!.isolation).toEqual({
@@ -260,7 +260,7 @@ describe('Session with worktree isolation', () => {
       const landed = [{ taskId: 't1', order: 1, title: 'Task t1' }, { taskId: 't2', order: 2, title: 'Task t2' }];
       expect(messages.find((m) => m.type === 'isolation_handoff')).toEqual({
         type: 'isolation_handoff',
-        repos: [{ path: '.', integrationBranch: 'ordewell/old/integration', baseRef: 'abc', landed }],
+        repos: [{ path: '.', integrationBranch: 'ordewell/old/integration', baseRef: 'abc', baseBranch: 'main', landed }],
         landed,
       });
     } finally {

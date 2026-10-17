@@ -740,6 +740,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     const partial = await this.settleLanding(run);
     if (partial.length > 0) return { outcome: 'blocked', blocked: partial.map((repo) => ({ repo, reason: 'partial-landing', files: [] })) };
     const repos = await this.reposWithWork(run);
+    const misplaced = await this.offBaseBranch(repos);
+    if (misplaced.length > 0) return { outcome: 'blocked', blocked: misplaced };
     // One repo needs no preflight: its merge lands or is aborted whole, as it always has.
     if (run.repos.length === 1 || !(await this.canPreflight())) return this.mergeInTurn(repos);
     const blocked: IsolationMergeBlock[] = [];
@@ -758,6 +760,22 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       if (!ahead.ok || Number(ahead.stdout.trim()) > 0) withWork.push(repo);
     }
     return withWork;
+  }
+
+  /**
+   * A merge goes into whatever is checked out, which is only what the user
+   * meant if it is the branch the run started on. A run that started on a
+   * detached HEAD named no branch, so anything is as good as it was.
+   */
+  private async offBaseBranch(repos: IsolationRepo[]): Promise<IsolationMergeBlock[]> {
+    const off: IsolationMergeBlock[] = [];
+    for (const repo of repos) {
+      if (!repo.baseBranch) continue;
+      const current = (await this.tryGit(repo.root, ['symbolic-ref', '--short', '-q', 'HEAD'])).stdout.trim();
+      if (current === repo.baseBranch) continue;
+      off.push({ repo: repo.path, reason: 'wrong-branch', files: [], expected: repo.baseBranch, ...(current ? { actual: current } : {}) });
+    }
+    return off;
   }
 
   /** `git merge-tree --write-tree`, which merges without touching a tree, arrived in git 2.38. */

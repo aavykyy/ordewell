@@ -3,14 +3,24 @@ import { SELF_REPO } from './isolationRecord';
 import { capConflictFiles } from './conflictFiles';
 
 /** One repo that kept "Merge all" from touching anything, as part of one line. */
-function blockNotice({ repo, reason, files }: IsolationMergeBlock): string {
+function blockNotice({ repo, reason, files, expected, actual }: IsolationMergeBlock): string {
   switch (reason) {
     case 'merge-in-progress': return `${repo} has a merge in progress`;
     case 'conflict': return `${repo} would conflict in ${files.join(', ')}`;
     case 'uncommitted-changes': return `${repo} has uncommitted changes to ${files.join(', ')}`;
     case 'partial-landing': return `${repo} holds part of a task whose landing could not be rolled back`;
+    case 'wrong-branch': return `${repo === SELF_REPO ? 'your checkout' : repo} is ${actual ? `on ${actual}` : 'on a detached HEAD'}; this run started on ${expected}`;
     case 'git-error': return `git could not check ${repo}`;
   }
+}
+
+/** What to do about repos that are off their branch, when that is all that kept the merge back. */
+function branchFix(blocked: IsolationMergeBlock[]): string {
+  if (blocked.length === 0 || blocked.some((b) => b.reason !== 'wrong-branch')) return '';
+  const started = [...new Set(blocked.map((b) => b.expected))];
+  return started.length === 1 && blocked.length === 1
+    ? ` Check out ${started[0]} and press Merge all again.`
+    : ' Check out the branch each repository started on and press Merge all again.';
 }
 
 /** Which repos a "Merge all" that stopped part-way had merged already; merges into the user's branches are never undone. */
@@ -47,7 +57,7 @@ export function describeMergeResult(
       return { level: 'info', message: repaired.length > 0 ? `${base} ${repairedNotice(repaired)}` : base };
     }
     case 'blocked':
-      return { level: 'warn', message: `Merged nothing, so every tree is as it was: ${result.blocked.map(blockNotice).join('; ')}.` };
+      return { level: 'warn', message: `Merged nothing, so every tree is as it was: ${result.blocked.map(blockNotice).join('; ')}.${branchFix(result.blocked)}` };
     case 'conflict':
       return {
         level: 'warn',

@@ -130,3 +130,40 @@ describe('HandoffCard — repo group (ADR-0014)', () => {
     expect(screen.getByText(/api.*stay merged/)).toBeTruthy();
   });
 });
+
+describe('HandoffCard — the branch the run started on', () => {
+  const lone = (baseBranch?: string) => ({
+    ...handoff,
+    repos: [{ ...handoff.repos[0], ...(baseBranch ? { baseBranch } : {}) }],
+  });
+
+  it('names the branch and commit a lone repo landed on top of', () => {
+    render(<HandoffCard {...lone('main')} onAction={vi.fn()} />);
+
+    expect(document.querySelector('.isolation-handoff-base')!.textContent).toBe('2 tasks landed on top of main @ abcdef012345');
+  });
+
+  it('calls a run that started on a detached HEAD that', () => {
+    render(<HandoffCard {...lone()} onAction={vi.fn()} />);
+
+    expect(document.querySelector('.isolation-handoff-base')!.textContent).toBe('2 tasks landed on top of detached at abcdef012345');
+  });
+
+  it('names it per repository for a group', () => {
+    const group = { ...groupHandoff, repos: [{ ...groupHandoff.repos[0], baseBranch: 'main' }, groupHandoff.repos[1]] };
+    render(<HandoffCard {...group} onAction={vi.fn()} />);
+
+    const bases = [...document.querySelectorAll('.isolation-handoff-repo-base')].map((el) => el.textContent);
+    expect(bases).toEqual(['on main @ aaaa11112222', 'on detached at bbbb33334444']);
+  });
+
+  it('says which branch to check out when a repository is on another', () => {
+    const blocked: IsolationMergeResult = {
+      outcome: 'blocked',
+      blocked: [{ repo: 'api', reason: 'wrong-branch', files: [], expected: 'main', actual: 'feature-x' }],
+    };
+    render(<HandoffCard {...groupHandoff} mergeResult={blocked} onAction={vi.fn()} />);
+
+    expect(document.querySelector('.isolation-merge-block')!.textContent).toBe('api is on feature-x; this run started on main. Check out main and merge again');
+  });
+});

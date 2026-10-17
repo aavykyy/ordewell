@@ -54,11 +54,17 @@ function reposOf(run: Record<string, unknown>): RepoFields[] | null {
       r && typeof r.path === 'string' && typeof r.integrationBranch === 'string' && typeof r.baseRef === 'string'
     ));
     return repos.length > 0
-      ? repos.map((r) => ({ path: String(r.path), integrationBranch: String(r.integrationBranch), baseRef: String(r.baseRef) }))
+      ? repos.map((r) => ({
+        path: String(r.path), integrationBranch: String(r.integrationBranch), baseRef: String(r.baseRef),
+        ...(typeof r.baseBranch === 'string' && r.baseBranch ? { baseBranch: r.baseBranch } : {}),
+      }))
       : null;
   }
   if (typeof run.integrationBranch === 'string' && typeof run.baseRef === 'string') {
-    return [{ path: '.', integrationBranch: run.integrationBranch, baseRef: run.baseRef }];
+    return [{
+      path: '.', integrationBranch: run.integrationBranch, baseRef: run.baseRef,
+      ...(typeof run.baseBranch === 'string' && run.baseBranch ? { baseBranch: run.baseBranch } : {}),
+    }];
   }
   return null;
 }
@@ -118,10 +124,39 @@ export function handoffBranch(handoff: HandoffView): string {
   return [...new Set(handoff.repos.map((r) => r.integrationBranch))].join(', ');
 }
 
-/** Where the run forked, as one line names it, each ref cut to `length` and, for a group, headed by its repo. */
+/**
+ * Where the run forked, as one line names it: the branch it started on and the
+ * commit, each ref cut to `length` and, for a group, headed by its repo. A run
+ * that started on a detached HEAD has no branch to name.
+ */
 export function handoffBase(handoff: HandoffView, length: number): string {
   const group = isRepoGroup(handoff);
-  return handoff.repos.map((r) => `${group ? `${r.path} ` : ''}${r.baseRef.slice(0, length)}`).join(', ');
+  return handoff.repos.map((r) => {
+    const ref = r.baseRef.slice(0, length);
+    return `${group ? `${r.path}: ` : ''}${r.baseBranch ? `${r.baseBranch} @ ${ref}` : `detached at ${ref}`}`;
+  }).join(', ');
+}
+
+/**
+ * What a Merge confirmation says the branch lands on: the branch the run
+ * started on, which Merge all insists is checked out. A repo that started
+ * detached has none, and keeps the old wording.
+ */
+export function mergeTarget(handoff: HandoffView): string {
+  if (!isRepoGroup(handoff)) return handoff.repos[0]?.baseBranch ?? 'the branch you have checked out';
+  const targets = handoff.repos.filter((r) => reposWithWork(handoff).includes(r.path));
+  const branches = new Set(targets.map((r) => r.baseBranch));
+  const [only] = branches;
+  if (branches.size === 1 && only) return `${only} in each of ${targets.map((r) => r.path).join(', ')}`;
+  return `each of ${targets.map((r) => `${r.path} (${r.baseBranch ?? 'as checked out'})`).join(', ')}`;
+}
+
+/** The refusal Merge all makes when a repo is on another branch, for a confirmation to warn of; empty when no repo named a branch. */
+export function checkoutRule(handoff: HandoffView): string {
+  const named = handoff.repos.filter((r) => r.baseBranch);
+  if (named.length === 0) return '';
+  if (!isRepoGroup(handoff)) return ` Nothing is merged unless ${named[0]!.baseBranch} is checked out.`;
+  return ' Nothing is merged unless each repository is on the branch it started on.';
 }
 
 /**

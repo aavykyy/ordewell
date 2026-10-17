@@ -94,9 +94,15 @@ describe('migratePlanIsolation', () => {
     ];
 
     expect(handoffOf(migratePlanIsolation(legacy({ tasks })).run)).toEqual({
-      repos: [{ path: '.', integrationBranch: 'ordewell/r1/integration', baseRef: '0123abcd', landed }],
+      repos: [{ path: '.', integrationBranch: 'ordewell/r1/integration', baseRef: '0123abcd', baseBranch: 'main', landed }],
       landed,
     });
+  });
+
+  it('carries no base branch for a run that started on a detached HEAD', () => {
+    const { run } = migratePlanIsolation(legacy({ baseBranch: undefined }));
+
+    expect(handoffOf(run).repos[0]).not.toHaveProperty('baseBranch');
   });
 
   it('leaves a record already in the repo-group shape as it is', () => {
