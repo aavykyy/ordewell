@@ -73,3 +73,97 @@ Tasks planned while the modes were off keep the mode the plan gave them.
 
 Give the task Full access, or assign it to another runner. Full access means
 Codex runs with no sandbox at all.
+
+## Merge all refused: not on the base branch
+
+Ordewell shows **Merged nothing, so every tree is as it was: … is on `<branch>`;
+this run started on `<base>`**, and the handoff stays.
+
+### Cause
+
+Merge all lands each repository's integration branch into whatever that
+repository has checked out, so it insists every repository of the run, with work
+or not, is on the branch the run started on
+([ADR-0042](adr/0042-merge-all-lands-only-on-the-branch-the-run-started-on.md)).
+The handoff, `ordewell status` and the Merge confirmation name that branch (as
+`main @ a1b2c3d`). In a group of repositories, one on the wrong branch keeps all
+of them from merging.
+
+### Fix
+
+```bash
+git -C <repo> branch --show-current   # empty means a detached HEAD
+git -C <repo> switch <base>           # the branch the notice names
+```
+
+Then press Merge all again. Your uncommitted work stays where it is; if it
+blocks the switch, commit or stash it first.
+
+### Mid-rebase
+
+If the notice says **in the middle of a rebase**, the rebase detached HEAD.
+Finish it (`git rebase --continue`) or abort it (`git rebase --abort`) in the
+repository named, check out the base branch, and merge again. A run that
+started on a detached HEAD names no branch and is not checked.
+
+## A runner shows as switched off, and tasks are flagged
+
+A task row reads **codex is switched off** or **Opus 4 is not in the allowlist**,
+and the planner mentions a `runners_changed` note.
+
+The runner is off in your enabled runners, or the model is off its runner's
+allowlist. The task is only flagged: it still runs as assigned, and Ordewell
+moves nothing. Switch the runner back on (`/runners`, or **Ordewell: Toggle
+Runner**), add the model to the allowlist, or move the task to another runner
+or model yourself or ask the planner to
+([ADR-0043](adr/0043-a-change-of-scope-reaches-the-planner-and-flags-tasks.md)).
+
+### Runner toggles are now shared between VS Code and the terminal UI
+
+The enabled runners are saved in Ordewell's settings file, so a toggle in VS
+Code is the list the terminal UI and the daemon plan with, and the reverse. A
+list found in VS Code's old `ordewell.enabledRunners` setting is copied there
+once, unless the file already holds a choice, and then cleared; an empty list
+there is not copied. If a window shows an older list, refresh the runner list.
+
+## The planner hit its usage limit
+
+The transcript shows a failure line with the limit's reset time, and VS Code
+shows **Resending at …** above the composer.
+
+What you sent, and any supervisor wake-up, is kept and goes again as one turn a
+minute after the reset
+([ADR-0044](adr/0044-the-planners-usage-limit-waits-and-resends.md)). Anything
+you send meanwhile is saved and goes with it. To stop the resend, use `/resend
+cancel` in the terminal UI, `ordewell resend cancel`, or **Don't resend** in VS
+Code: what waits then goes with your next message. If the planner did not say
+when the limit resets, or hit it again right after a resend, or you moved the
+planner to another runner, nothing is resent on its own: send a message once
+the limit has reset.
+
+## A task waits for your approval
+
+A row reads **waits for your approval** and the scheduler skips it.
+
+The planner added the task after you approved the plan, and autorun was off, so
+nothing may start it until you approve it
+([ADR-0035](adr/0035-effects-are-consented-and-recorded.md)). Approve it with
+`f` in the terminal UI, `ordewell force-start <id>`, or its card in VS Code;
+approve every waiting task with `/run` (or **Approve all** in VS Code). Neither
+starts a task before its dependencies finish: it starts once they do, and the
+answer says what it waits for. With nothing running, run the plan to start them.
+With autorun on, tasks the planner adds in your turn need no approval.
+
+## Continue is not offered after moving a task to another runner
+
+A saved session belongs to the runner that made it and cannot be opened by
+another. Use Retry: it starts a fresh session on the new runner with the earlier
+runner's files restored
+([ADR-0041](adr/0041-a-tasks-model-follows-the-runners-own-switch.md)).
+
+## A task's model cannot be changed while it runs
+
+Model and effort are locked while a task's runner is up. Stop the task, edit,
+and continue, or use the runner's own `/model` in the task's chat: the plan then
+follows it. A model the runner changed by itself is stated in the task log and
+is not written to the plan.

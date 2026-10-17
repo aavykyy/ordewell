@@ -66,3 +66,4 @@ We decided to add a per-**RunnerId** model-id allowlist (stored on `UserSettings
 - 2026-10-11 — `modifyDuringExecution` removed with the mid-run edit queue ([ADR-0029](0029-the-supervisor.md)).
 - 2026-10-13 — coercion walks subtasks, reports what it changed, and no longer swaps a runner (V1).
 - 2026-10-13 — the unused one-shot `modify` emit path removed, with `Planner.modify`, `IAiService.modifyPlan` and the modify prompt (E1, E3).
+- 2026-10-17 — a `/model` the user sends in a task's chat is written to the plan even off the allowlist, and tasks outside a changed scope are flagged, not moved ([ADR-0041](0041-a-tasks-model-follows-the-runners-own-switch.md), [ADR-0043](0043-a-change-of-scope-reaches-the-planner-and-flags-tasks.md)).

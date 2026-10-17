@@ -171,14 +171,19 @@ progress in a repo the run never touched is none of its business:
 - `git merge-tree --write-tree` against the checked-out HEAD shows no conflict;
 - no uncommitted user changes overlap the incoming files.
 
+Before any of that, every repo of the group, with work or not, must be on the
+branch the run started on, or the answer is `blocked` with `wrong-branch`
+([ADR-0042](0042-merge-all-lands-only-on-the-branch-the-run-started-on.md)).
+
 It merges all repos only if every repo passes; otherwise it merges none and
 answers `blocked` with each repo, its reason (`merge-in-progress`, `conflict`,
-`uncommitted-changes`, `partial-landing`, `git-error`) and its files. A merge
+`uncommitted-changes`, `partial-landing`, `wrong-branch`, `git-error`) and its files. A merge
 that still fails part-way answers `conflict` or `failed`, naming the repo it
 stopped in and the repos already `landed`, which stay merged. On git older than
 2.38, which has no `merge-tree --write-tree`, it merges repo by repo and stops at
 the first failure. A group of one needs no preflight — its one merge lands or is
-aborted whole — so it answers `merged`, `conflict` or `failed`, never `blocked`.
+aborted whole — so it answers `merged`, `conflict` or `failed`, and is `blocked`
+only by a partial landing or by being on the wrong branch.
 Session broadcasts the answer as `isolation_merge`, so every surface can show
 it. During a run, the same Merge all merges what has landed so far and the run
 goes on (ADR-0020). Ordewell never resets a user branch — the rollback under *Atomic
@@ -300,3 +305,4 @@ Core, daemon, TUI, CLI and VS Code.
 - 2026-10-02 — only change tasks are isolated; ops tasks run at the workspace
   root behind a merge gate, and the dirty-tree hold moves to the first change
   task (ADR-0020).
+- 2026-10-17 — Merge all refuses unless every repo is on the branch the run started on ([ADR-0042](0042-merge-all-lands-only-on-the-branch-the-run-started-on.md)).

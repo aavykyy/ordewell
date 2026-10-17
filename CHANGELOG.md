@@ -8,6 +8,39 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **A `/model` you send in a task's chat is written to the plan.** The task
+  card and every later Retry or Continue then use the model you picked in the
+  runner, aliases resolved to the id the runner lists, even when it is not on the
+  allowlist. Effort is written only when the runner reports one. The task log
+  says what the plan now holds. A model change with no model command before it
+  is stated in the log and never written to the plan, and Codex and OpenCode get
+  no synthesized `/model`. While a task's runner is running its model and effort
+  cannot be edited from outside: stop the task, edit, then continue
+  ([ADR-0041](docs/adr/0041-a-tasks-model-follows-the-runners-own-switch.md)).
+- **A planner that hits its usage limit resends at the reset.** The turn shows
+  as a failure with the reset time, what you sent and any wake-up wait with it,
+  and everything goes again as one turn at the reset. A message you send
+  meanwhile is saved and answered at once. When no reset time is known the
+  messages are held for your next one. `/resend cancel` in the terminal UI,
+  `ordewell resend cancel` and **Don't resend** in VS Code keep it from going on
+  its own ([ADR-0044](docs/adr/0044-the-planners-usage-limit-waits-and-resends.md)).
+- **The planner is told when you change runners or models.** On its next turn it
+  hears which runners you switched on or off and what changed in an allowlist,
+  and which plan tasks that leaves outside. Such a task is flagged on its row
+  ("codex is switched off", "Opus 4 is not in the allowlist"), in VS Code and
+  the terminal, and still runs as assigned until you or the planner move it
+  ([ADR-0043](docs/adr/0043-a-change-of-scope-reaches-the-planner-and-flags-tasks.md)).
+- **Approve all.** VS Code shows an **Approve all** button when tasks wait for
+  your approval. `/run` while a run is under way approves every waiting task
+  and joins them to the run, each starting once its dependencies finish, and the
+  terminal rows say which key approves
+  ([ADR-0035](docs/adr/0035-effects-are-consented-and-recorded.md)).
+- **VS Code shows a task's usage and assignment while it runs.** The task log
+  has a usage line, and an executing task's card keeps its runner, model and
+  mode readable.
+
 ### Fixed
 
 - **Switching planner no longer looks frozen behind a slow coding-agent CLI.**
@@ -28,9 +61,56 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   becomes selectable and, with no planner chosen and no API key, the default
   ([ADR-0038](docs/adr/0038-runner-install-verdicts-expire.md),
   [ADR-0039](docs/adr/0039-detected-planner-derived-on-refresh.md)).
+- **A force start no longer starts a task before a dependency still under way.**
+  Past a failed dependency it still waits for the others, and starts when they
+  finish. Approving a dependent during a lone Run Task no longer leaves it
+  stuck.
+- **A model change saved in an older task log replays.** Logs written before the
+  plan's side of a switch was recorded show the runner's change alone.
+- **A queued `/model` write-back cannot change a replacement plan.** If the
+  attempt ended, or the plan was replaced, while the edit waited, nothing is
+  written and the log says so.
+- **A planner turn that failed no longer loses the runners-changed note.** The
+  next turn carries it again.
 
 ### Changed
 
+- **A task's usage is its whole spend.** The usage line sums every attempt and
+  every model the task used, so a stop, a model change or a continue no longer
+  makes the earlier spend disappear, and a resumed Claude Code session counts
+  only its new turns. The context meter follows the latest model and reads that
+  model's window, from the runner's own report, its own model listing or the
+  provider's own endpoint. Cost is shown only when the runner reported it, and
+  the line carries no wall time
+  ([ADR-0041](docs/adr/0041-a-tasks-model-follows-the-runners-own-switch.md)).
+- **Continue never crosses runners, and a Retry after a move carries the work
+  over.** A saved session belongs to the runner that made it, so Continue is
+  offered only while the task is still assigned to that runner. After moving a
+  task to another runner, Retry starts a fresh session there with the earlier
+  runner's files restored, whatever the task's state, not only after a usage
+  limit pause ([ADR-0018](docs/adr/0018-structured-runner-transport.md)).
+- **Merge all lands only on the branch the run started on.** If any repository
+  of the run is on another branch, in the middle of a rebase or on a detached
+  HEAD, nothing is merged and the notice says which and how to fix it. The
+  handoff, the Merge confirmation, `ordewell status` and VS Code name the branch
+  the run started on, as `main @ a1b2c3d`
+  ([ADR-0042](docs/adr/0042-merge-all-lands-only-on-the-branch-the-run-started-on.md)).
+- **The enabled runners are one list shared by VS Code and the terminal UI.**
+  They are saved in Ordewell's settings file, and a toggle in one is the list
+  the other plans with. A list set in VS Code's old `ordewell.enabledRunners`
+  setting is copied there once and cleared. Saves no longer undo another
+  process's save of the file.
+- **A usage limit counts only when it ended a turn Ordewell started.** Limit
+  words left by a turn that had already finished no longer pause a task.
+  Codex's own limit signal is used, with its reset time, and a provider's
+  throttle is no longer taken for an account limit, for tasks, the planner and
+  supervisor wake-ups.
+- **Approving a task is clearer.** A task the planner added after you approved
+  the plan "waits for your approval", and the row names the key that approves it
+  (`f`, `/run`, `ordewell force-start`). With autorun on, tasks the planner adds
+  in your turn need no approval. A force start approves the task and never skips
+  dependencies that have not finished: it queues behind them and says so. A
+  status line too long for the terminal pane wraps instead of being cut off.
 - **Contributors:** `bench/lab/` fakes which coding-agent CLIs a host has
   installed — a throwaway `HOME` and shim dir; `node bench/lab/lab.mjs
   --scenario none` prints ready-to-run env, and `--root <dir>` builds the lab
