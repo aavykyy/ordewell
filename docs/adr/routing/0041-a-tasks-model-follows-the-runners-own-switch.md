@@ -105,8 +105,11 @@ the task is running or paused, where a runner may hold it.
   listing or the provider's own endpoint**, filled per record
   (`ContextWindowFill`) so a model change mid-stream reads its own window. A
   window reported once is kept for its model, and a Continue starts from the
-  window its session was last measured against; neither known leaves the meter
-  unknown. Never an Ordewell table.
+  window its session was last measured against: each attempt's ledger names the
+  runner session it ran in, and the latest earlier attempt of that same session
+  that reported a window is the one taken. A continuation that measured nothing
+  keeps it; a fresh attempt's session never borrows another's. Neither known
+  leaves the meter unknown. Never an Ordewell table.
 
 ### Continue never crosses runners
 
@@ -160,3 +163,5 @@ of the earlier runner's attempt restored (ADR-0018, K1).
 - 2026-10-17 — accepted and implemented (#106): a `/model` in a task chat is written to the plan, a drift is stated, the model is locked while the runner is live, a task's usage is its whole spend with the meter on the latest model, and Continue never crosses runners.
 - 2026-10-17 — the lock covers a cleared model and a runner move; a planner edit keeps an untouched assignment; a switch after its attempt ended says nothing of the plan; a window is kept per model; an ownerless legacy session is owned by its runner at load.
 - 2026-10-17 — a planner edit still clamps an untouched task's effort unless a runner may hold it; a Continue keeps its session's window.
+- 2026-10-17 — a Continue that measured nothing keeps the window its session was last measured against.
+- 2026-10-17 — an attempt's ledger names the runner session it ran in, so that window is found by session: a fresh session never borrows another's.

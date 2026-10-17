@@ -999,8 +999,10 @@ it never runs a skipped task again (ADR-0029).
 a cancel returns a task to pending.
 
 **Attempt usage** (`AttemptUsage`, `Task.attemptUsage`) — the persisted ledger
-of one task attempt: its number, runner, start and end timestamps, wall time,
-and reported usage totals. Reports are grouped by source and the model that
+of one task attempt: its number, runner, the runner session it ran in
+(`sessionId`, as its runner reported it — what a later *Continue* of that
+session resumes), its start and end timestamps, wall time, and reported usage
+totals. Reports are grouped by source and the model that
 actually ran; an unreported model stays unknown. Subagent shares are included
 in totals once. The attempt number continues across reloads. A new attempt
 starts a fresh ledger without dropping earlier attempts. Context fill follows

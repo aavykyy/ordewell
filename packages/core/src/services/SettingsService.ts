@@ -128,7 +128,10 @@ const SAVE_TRIES = 5;
  * its swap: no live save holds it for more than a moment.
  */
 const LOCK_STALE_MS = 2_000;
+/** How long a save waits for a lock it cannot take before it gives up and says so. */
+const LOCK_TIMEOUT_MS = 10_000;
 const LOCK_POLL_MS = 5;
+const LOCK_POLL_MAX_MS = 100;
 
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -139,14 +142,23 @@ function sleepSync(ms: number): void {
  * that saves the file can swap it in between `swap`'s look at it and its
  * rename. Saves are synchronous, so the wait is too.
  *
- * The lock names its holder, and a lock is only removed once it is known to be
- * the one meant: a save suspended past the stale age, whose lock another
- * process took over, must not free that process's lock on waking, nor may two
- * waiters that both found it stale remove the one the first then took.
+ * The lock names its holder. A holder frees only its own lock; a waiter may
+ * remove one only when two looks a poll apart agree that it is still the same
+ * lock — same token, same mtime — and its age says the process that made it
+ * died holding it. A lock another waiter has since taken over is a different
+ * lock, with another token and a fresh mtime, and is left to its holder. The
+ * wait is bounded: a lock that is never free is raised after
+ * {@link LOCK_TIMEOUT_MS}, and one that cannot be removed is raised at once,
+ * rather than retried for ever. What that leaves is the known window of a
+ * holder that neither dies nor finishes: one stalled past the stale age can
+ * still be taken over, and the saves then overlap.
  */
 function withFileLock<T>(file: string, swap: () => T): T {
   const lock = `${file}.lock`;
   const token = `${process.pid}:${randomUUID()}`;
+  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  let last: { token: string; mtimeMs: number } | null = null;
+  let poll = LOCK_POLL_MS;
   for (;;) {
     try {
       const fd = fs.openSync(lock, 'wx');
@@ -158,44 +170,64 @@ function withFileLock<T>(file: string, swap: () => T): T {
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-      let holder: string;
-      let age: number;
-      try {
-        // Read before its age: a lock replaced in between is then judged by
-        // the new one's age, never by the old one's.
-        holder = fs.readFileSync(lock, 'utf8');
-        age = Date.now() - fs.statSync(lock).mtimeMs;
-      } catch {
+    }
+    // Every wait is bounded, whatever it is waiting on: a lock that is never
+    // free is said rather than polled for ever.
+    if (Date.now() >= deadline) {
+      throw new Error(`Cannot save the settings file: ${lock} is still held after ${Math.round(LOCK_TIMEOUT_MS / 1000)} seconds by a process that is not finishing, or it cannot be removed. Check for a process stuck saving there, and delete the file if there is none.`);
+    }
+    let holder: string;
+    let mtimeMs: number;
+    try {
+      holder = fs.readFileSync(lock, 'utf8');
+      mtimeMs = fs.statSync(lock).mtimeMs;
+    } catch (err) {
+      if (gone(err)) {
+        last = null;
         continue; // released between the calls
       }
-      if (age > LOCK_STALE_MS) removeLock(lock, holder);
-      else sleepSync(LOCK_POLL_MS);
+      throw err;
     }
+    const stale = Date.now() - mtimeMs > LOCK_STALE_MS;
+    if (last && last.token === holder && last.mtimeMs === mtimeMs && stale) {
+      unlinkLock(lock);
+      last = null;
+      continue;
+    }
+    last = stale ? { token: holder, mtimeMs } : null;
+    sleepSync(poll);
+    poll = Math.min(poll * 2, LOCK_POLL_MAX_MS);
   }
   try {
     return swap();
   } finally {
-    removeLock(lock, token);
+    releaseLock(lock, token);
   }
 }
 
-/**
- * Removes `lock` if `holder` still holds it. It is moved aside first, which is
- * atomic, and put back when someone else's turns out to be there.
- */
-function removeLock(lock: string, holder: string): void {
-  const aside = `${lock}.${process.pid}.${randomUUID()}`;
+/** True for the one error every look at a lock may meet by racing: it is not there any more. */
+function gone(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException).code === 'ENOENT';
+}
+
+/** Frees the lock this save holds, and leaves one another process has taken over. */
+function releaseLock(lock: string, token: string): void {
+  let holder: string;
   try {
-    fs.renameSync(lock, aside);
-  } catch {
-    return; // already gone
+    holder = fs.readFileSync(lock, 'utf8');
+  } catch (err) {
+    if (gone(err)) return; // already released
+    throw err;
   }
+  if (holder === token) unlinkLock(lock);
+}
+
+/** Removes a lock, tolerating the race that removed it first and nothing else: a refusal is raised. */
+function unlinkLock(lock: string): void {
   try {
-    if (fs.readFileSync(aside, 'utf8') !== holder) fs.linkSync(aside, lock);
-  } catch {
-    // Taken again meanwhile: the lock moved aside has no place to go back to.
-  } finally {
-    fs.rmSync(aside, { force: true });
+    fs.unlinkSync(lock);
+  } catch (err) {
+    if (!gone(err)) throw err;
   }
 }
 

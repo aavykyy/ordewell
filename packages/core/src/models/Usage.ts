@@ -178,6 +178,8 @@ export interface RunnerSessionCost {
 export interface AttemptUsage extends PlannerUsage {
   attempt: number;
   runner: string;
+  /** The runner session this attempt ran in, as its runner reported it: what a later Continue of it resumes. */
+  sessionId?: string;
   startedAt: string;
   endedAt?: string;
   wallTimeMs: number;
@@ -194,8 +196,14 @@ export function addAttemptUsage(usage: AttemptUsage, record: UsageRecord, now: s
   return { ...usage, ...folded, lastPromptTokens: folded.lastPromptTokens, contextWindow: folded.contextWindow, wallTimeMs: Math.max(0, Date.parse(now) - Date.parse(usage.startedAt)) };
 }
 
-export function endAttemptUsage(usage: AttemptUsage, now: string, runnerSessionCost?: RunnerSessionCost): AttemptUsage {
-  return { ...usage, endedAt: now, wallTimeMs: Math.max(0, Date.parse(now) - Date.parse(usage.startedAt)), ...(runnerSessionCost ? { runnerSessionCost } : {}) };
+export function endAttemptUsage(usage: AttemptUsage, now: string, runnerSessionCost?: RunnerSessionCost, sessionId?: string): AttemptUsage {
+  return {
+    ...usage,
+    endedAt: now,
+    wallTimeMs: Math.max(0, Date.parse(now) - Date.parse(usage.startedAt)),
+    ...(sessionId ? { sessionId } : {}),
+    ...(runnerSessionCost ? { runnerSessionCost } : {}),
+  };
 }
 
 /** The count a continue of `sessionId` starts from: the one its latest attempt in that session ended with. */
@@ -205,13 +213,14 @@ export function countedSessionCost(attempts: readonly AttemptUsage[] | undefined
 
 /**
  * The model a continue's session last ran on and the window it was measured
- * against: the latest earlier attempt on the runner, since a fresh attempt
- * starts a new session and a continue never crosses runners. A resumed turn
- * that states no window keeps that one, as later calls of one attempt do.
+ * against: the latest earlier attempt of that same runner session that
+ * reported one. An attempt that measured nothing is skipped — a continuation
+ * does not undo what its session was last measured against — and a window is
+ * never borrowed from another session: a fresh attempt starts one.
  */
-export function resumedSessionWindow(attempts: readonly AttemptUsage[] | undefined, runner: string, attempt: number): Pick<PlannerUsage, 'source' | 'model' | 'contextWindow'> | undefined {
-  const last = [...attempts ?? []].reverse().find((usage) => usage.attempt !== attempt && usage.runner === runner);
-  return last?.contextWindow !== undefined ? { source: last.source, model: last.model, contextWindow: last.contextWindow } : undefined;
+export function resumedSessionWindow(attempts: readonly AttemptUsage[] | undefined, runner: string, attempt: number, sessionId: string): Pick<PlannerUsage, 'source' | 'model' | 'contextWindow'> | undefined {
+  const last = [...attempts ?? []].reverse().find((usage) => usage.attempt !== attempt && usage.runner === runner && usage.sessionId === sessionId && usage.contextWindow !== undefined);
+  return last ? { source: last.source, model: last.model, contextWindow: last.contextWindow } : undefined;
 }
 
 export interface PlanUsage {
