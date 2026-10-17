@@ -29,7 +29,7 @@ export const CODEX_MANIFEST: RunnerManifest = {
   },
 
   modelDiscovery: {
-    // Codex has no `codex models` subcommand (see docs/adr/0004). Discovery
+    // Codex has no `codex models` subcommand (see ADR-0004). Discovery
     // tries three sources in order, each falling through to the next:
     //
     // 1. `codex app-server` stdio JSON-RPC (`initialize` → `model/list`) —

@@ -8,8 +8,10 @@ Context for coding agents working in this repository. Humans want
 - **[CONTEXT.md](CONTEXT.md)** — the domain glossary. Every term this codebase
   cares about is defined there, with an *avoid* list of synonyms that blur a
   distinction the project maintains. Use the vocabulary in that file.
-- **[docs/adr/](docs/adr/)** — the architecture decisions, including the options
-  that were rejected and why. Read the ones that touch what you're changing.
+- **[docs/adr/](docs/adr/README.md)** — the architecture decisions, grouped into
+  folders by area, including the options that were rejected and why. The
+  README's index lists every one with its status; read the ones that touch what
+  you're changing.
 
 ## Commands
 
@@ -65,16 +67,45 @@ node bench/live/drive-conversation.mjs
   tie-breaker.
 - **The plan is the source of truth** for what runs. Modes and models are never
   silently rewritten at spawn time
-  ([ADR-0001](docs/adr/0001-autonomous-mode-resolution.md)).
+  ([ADR-0001](docs/adr/routing/0001-autonomous-mode-resolution.md)).
+## Architecture decisions
+
+[docs/adr/README.md](docs/adr/README.md) is the full guide: read it before
+writing or changing an ADR. In short:
+
+- **A new ADR needs all three: hard to reverse, surprising without context, a
+  real trade-off.** A bug fix, a refactor that keeps the design, a tuning value,
+  a command that follows a recorded decision, and a plan or to-do list are not
+  ADRs. A term goes in CONTEXT.md and a how-to in `docs/`. The README lists
+  [what qualifies](docs/adr/README.md#should-this-be-an-adr), with examples.
+- **A change to a recorded decision edits the ADR that owns it.** Rewrite what is
+  no longer true and add one dated History line. A decision that stands on its
+  own gets its own ADR, with `amends` naming the one it changes.
 - **ADRs state the current decision, not a log of edits.** An ADR reads as
   what is true now: *Decision* as if it had always been the design; *Considered
   options* including any option once chosen and later dropped, with why; and a
   *History* of one dated line per change, with no restated content. Do not
   append `Update`/`Amendment` sections. When a later ADR changes an earlier
   one, rewrite the affected part of the earlier ADR once the change is
-  implemented, and keep the full reasoning in the new ADR. Until then the
-  earlier ADR carries one *Pending* line naming the new ADR. CONTEXT.md follows
-  the same rule: it describes what is, with no dated notes.
+  implemented. Until then the earlier ADR carries one *Pending* line naming the
+  new ADR. Once it is implemented, fold the new ADR into the earlier one when
+  [its folding rules](docs/adr/README.md#folding-one-adr-into-another) allow
+  (small or fully overtaken, nothing citing its rule IDs); otherwise it keeps its
+  full reasoning as a separate ADR. CONTEXT.md follows the same rule: it
+  describes what is, with no dated notes.
+- **Where and how to write one.** `docs/adr/<folder>/NNNN-slug.md`, the folder
+  chosen as [the README says](docs/adr/README.md#where-it-goes), the number from
+  `node scripts/verify-adr.mjs --next`, written to the
+  [template](docs/adr/README.md#writing-one). Write it in the same change as the
+  code it describes, and cite it (`ADR-NNNN`) in a comment where the code
+  embodies it. A decision made ahead of its code is `implemented: none`, with a
+  *Pending* line on the ADR it changes ([the README](docs/adr/README.md#changing-an-existing-one)).
+- **ADR numbers and rule IDs are permanent.** Code and docs cite `ADR-NNNN` and
+  rule IDs such as `ADR-0018 M1`. Never reuse or renumber either: a folded ADR
+  keeps its number in the host's `folds`, and moving a file between folders
+  changes no citation.
+- **Run `node scripts/verify-adr.mjs` after touching `docs/adr/`.** `--write`
+  regenerates the README's index; CI runs the check.
 
 ## Cautions
 
@@ -82,7 +113,7 @@ node bench/live/drive-conversation.mjs
   There is no published measurement behind one, and an earlier projection did
   not survive end-to-end testing. See `bench/README.md`.
 - The planner's exploration envelope is a security boundary
-  ([ADR-0008](docs/adr/0008-planner-exploration-envelope.md)). Do not widen what
+  ([ADR-0008](docs/adr/planner-envelope/0008-planner-exploration-envelope.md)). Do not widen what
   it permits without an ADR.
 - Sessions persist to `.ordewell/` and are gitignored. Nothing there is a
   fixture; do not commit it. The exceptions are `.ordewell/skills/`, which is

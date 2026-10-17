@@ -12,8 +12,15 @@ and OpenCode can all be running targets.
   distinction the project maintains. Use this vocabulary.
 - **[AGENTS.md](AGENTS.md)** — the full working conventions (commands, layout,
   cautions). This file is the short version; AGENTS.md is the source of truth.
-- **[docs/adr/](docs/adr/)** — architecture decisions, including the options
-  that were rejected and why. Read the ones that touch what you're changing.
+- **[docs/adr/](docs/adr/README.md)** — architecture decisions, grouped into
+  folders by area, including the options that were rejected and why. The
+  README's index lists them; read the ones that touch what you're changing.
+  Before writing or changing one, read its
+  [guide](docs/adr/README.md#should-this-be-an-adr): a new ADR needs a decision
+  that is hard to reverse, surprising without context and a real trade-off, and
+  anything smaller edits the ADR that owns it. ADR numbers and rule IDs are
+  permanent (code cites them), and `node scripts/verify-adr.mjs` checks them in
+  CI.
 
 ## Build entry point
 
@@ -34,7 +41,7 @@ compile against.
   `task_complete` bound to the attempt's token. Never make the model the
   tie-breaker.
 - **The plan is the source of truth.** Modes and models are never silently
-  rewritten at spawn time ([ADR-0001](docs/adr/0001-autonomous-mode-resolution.md)).
+  rewritten at spawn time ([ADR-0001](docs/adr/routing/0001-autonomous-mode-resolution.md)).
 - **Comment *why*, never *what*.** Match the comment density of the file you're
   editing.
 
@@ -43,7 +50,7 @@ compile against.
 - Never add a quantified performance or cost claim to user-facing text — there
   is no published measurement behind one ([AGENTS.md](AGENTS.md) cautions).
 - The planner's exploration envelope is a security boundary
-  ([ADR-0008](docs/adr/0008-planner-exploration-envelope.md)). Do not widen what
+  ([ADR-0008](docs/adr/planner-envelope/0008-planner-exploration-envelope.md)). Do not widen what
   it permits without an ADR.
 
 ## Don't

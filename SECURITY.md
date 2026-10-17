@@ -30,7 +30,7 @@ their own repositories. The parts most worth your attention:
   but must not write to it, and must not read outside it without asking. Any way
   to make the planner mutate the workspace, or silently reach outside it, is a
   vulnerability. The design is in
-  [ADR-0008](docs/adr/0008-planner-exploration-envelope.md) and the classifier
+  [ADR-0008](docs/adr/planner-envelope/0008-planner-exploration-envelope.md) and the classifier
   is `packages/core/src/services/commandPolicy.ts`.
 - **Command policy bypass.** Prompt content that gets a would-be-refused command
   classified as safe.
@@ -43,7 +43,7 @@ their own repositories. The parts most worth your attention:
   classifier didn't anticipate. Widening the auto-run set or fixing a
   classification gap therefore changes *which* commands are trusted, never
   *whether* trust in the classifier is well-founded — that second question is
-  [ADR-0011](docs/adr/0011-sandboxing-the-planners-shell.md). That ADR is
+  [ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-shell.md). That ADR is
   accepted: on Linux (bubblewrap) and macOS (Seatbelt), the planner's commands
   will run under a read-only sandbox beneath the classifier. Until that ships,
   and on platforms without a sandbox, the classifier is the only barrier.
@@ -72,7 +72,7 @@ their own repositories. The parts most worth your attention:
 ## What each part can touch
 
 What is true today, without containers. Nothing here is an OS-level sandbox
-except where [ADR-0011](docs/adr/0011-sandboxing-the-planners-shell.md) says so.
+except where [ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-shell.md) says so.
 
 - **Planners, research subagents and the supervisor only read.** They read the
   workspace and the output their own runner saved for them this session, inside
@@ -80,20 +80,20 @@ except where [ADR-0011](docs/adr/0011-sandboxing-the-planners-shell.md) says so.
   else outside the envelope is asked about in Guarded and refused in Full. They
   never write, and they never run the repository's own configuration (hooks,
   project MCP servers, plugins)
-  ([ADR-0008](docs/adr/0008-planner-exploration-envelope.md),
-  [ADR-0026](docs/adr/0026-one-envelope-for-every-planner.md),
-  [ADR-0027](docs/adr/0027-web-reads-in-the-planner-envelope.md),
-  [ADR-0028](docs/adr/0028-planners-never-run-repository-config.md),
-  [ADR-0032](docs/adr/0032-runner-state-outside-the-workspace.md)).
+  ([ADR-0008](docs/adr/planner-envelope/0008-planner-exploration-envelope.md),
+  [ADR-0026](docs/adr/planner-envelope/0026-one-envelope-for-every-planner.md),
+  [ADR-0027](docs/adr/planner-envelope/0027-web-reads-in-the-planner-envelope.md),
+  [ADR-0028](docs/adr/planner-envelope/0028-planners-never-run-repository-config.md),
+  [ADR-0032](docs/adr/planner-envelope/0032-runner-state-outside-the-workspace.md)).
 - **Change and ops tasks run as you**, with the runner's own native tools, in
   the mode their plan assigned
-  ([ADR-0020](docs/adr/0020-ops-tasks-and-merge-gates.md)). They can read and
+  ([ADR-0020](docs/adr/isolation/0020-ops-tasks-and-merge-gates.md)). They can read and
   write outside the workspace (caches, temporary folders, your home directory)
   and reach the network; nothing at the OS or network layer bounds them yet. A
   change task works in its own git worktree. An ops task runs in your checkout,
   after a merge gate has put what it depends on there.
 - **Read-only tasks use their runner's own read-only mode**
-  ([ADR-0031](docs/adr/0031-the-planner-says-read-only-not-a-mode.md)). That
+  ([ADR-0031](docs/adr/routing/0001-autonomous-mode-resolution.md#the-planner-says-read-only-not-a-mode-adr-0031)). That
   mode differs by runner; Claude Code's plan mode, for example, may save notes
   in its own config folder. A task's result is its `task_complete` report,
   which Ordewell stores with the verdict.
