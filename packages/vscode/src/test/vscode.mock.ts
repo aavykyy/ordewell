@@ -5,6 +5,7 @@
 import { vi } from 'vitest';
 
 let configValues: Record<string, unknown> = {};
+let workspaceValues: Record<string, unknown> = {};
 /** Every `update` a test's code made, in order. */
 export const configUpdates: { key: string; value: unknown }[] = [];
 
@@ -13,8 +14,14 @@ export function __setConfig(values: Record<string, unknown>): void {
   configValues = values;
 }
 
+/** Values set for this workspace only: `inspect` reports them apart from the user's own. */
+export function __setWorkspaceConfig(values: Record<string, unknown>): void {
+  workspaceValues = values;
+}
+
 export function __resetConfig(): void {
   configValues = {};
+  workspaceValues = {};
   configUpdates.length = 0;
 }
 
@@ -25,13 +32,20 @@ export const workspace = {
         return (key in configValues ? configValues[key] : defaultValue) as T;
       },
       // A value a test set reads as the user's own (global) one; anything else as unset.
-      inspect<T>(key: string): { key: string; globalValue?: T } | undefined {
-        return key in configValues ? { key, globalValue: configValues[key] as T } : undefined;
+      inspect<T>(key: string): { key: string; globalValue?: T; workspaceValue?: T } | undefined {
+        if (!(key in configValues) && !(key in workspaceValues)) return undefined;
+        return {
+          key,
+          ...(key in configValues ? { globalValue: configValues[key] as T } : {}),
+          ...(key in workspaceValues ? { workspaceValue: workspaceValues[key] as T } : {}),
+        };
       },
-      async update(key: string, value: unknown) {
+      async update(key: string, value: unknown, target?: boolean) {
         configUpdates.push({ key, value });
-        if (value === undefined) delete configValues[key];
-        else configValues[key] = value;
+        // `true` is the user's settings, `false` the workspace's.
+        const store = target === false ? workspaceValues : configValues;
+        if (value === undefined) delete store[key];
+        else store[key] = value;
       },
     };
   },

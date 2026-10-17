@@ -1027,6 +1027,13 @@ describe('settings', () => {
     expect(types(h.actions)).toContain('runnersLoaded');
   });
 
+  it('reloads the saved runner choice without changing it', async () => {
+    const h = harness();
+    await runEffect({ type: 'loadRunners' }, h.deps);
+    expect(h.api.setRunnerEnabled).not.toHaveBeenCalled();
+    expect(types(h.actions)).toEqual(['runnersLoaded']);
+  });
+
   it('applies a confirmed runner set as one batch, reloading and reporting once', async () => {
     const h = harness();
     await runEffect({

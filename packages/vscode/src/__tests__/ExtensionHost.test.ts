@@ -132,7 +132,7 @@ function fakeConfig() {
     update: vi.fn(async (key: string, value: unknown) => { values[key] = value; }),
     onDidChange: vi.fn((listener: () => void) => { listeners.push(listener); return { dispose: vi.fn() }; }),
   };
-  return { config: config as unknown as VsCodeConfig, listeners };
+  return { config: config as unknown as VsCodeConfig, listeners, values };
 }
 
 function fakeSession() {
@@ -198,7 +198,12 @@ function fakeRunnerInstallation(installed: string[]) {
 
 function fakeSettings() {
   let run = { ...RUN_SETTINGS_DEFAULTS };
+  const watchers: Array<() => void> = [];
   return {
+    watchers,
+    /** Another surface saved the file. */
+    saved: () => { for (const listener of watchers) listener(); },
+    watch: vi.fn((listener: () => void) => { watchers.push(listener); return { dispose: vi.fn() }; }),
     getAll: vi.fn(() => ({})),
     getRunSettings: vi.fn(() => ({ ...run })),
     updateRunSettings: vi.fn((changes: Partial<typeof run>) => { run = { ...run, ...changes }; }),
@@ -269,11 +274,48 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     fs.rmSync(h.workspace, { recursive: true, force: true });
   });
 
-  it("hands the session this window's enabled runners, read at each call", async () => {
+  it('hands the session the shared settings as they are, enabled runners included, read at each call', () => {
     h.settings.getAll.mockReturnValue({ enabledRunners: ['opencode'] });
-    await h.config.config.update('enabledRunners', ['claude-code', 'codex']);
+    expect(h.sessionDeps.current?.settings().enabledRunners).toEqual(['opencode']);
 
+    h.settings.getAll.mockReturnValue({ enabledRunners: ['claude-code', 'codex'] });
     expect(h.sessionDeps.current?.settings().enabledRunners).toEqual(['claude-code', 'codex']);
+  });
+
+  it('leaves the session to the config\'s defaults while the user has chosen no runners', () => {
+    h.settings.getAll.mockReturnValue({});
+
+    expect(h.sessionDeps.current?.settings().enabledRunners).toBeUndefined();
+  });
+
+  it('draws the runner header again when another surface changes the settings file', async () => {
+    await h.host.start();
+    h.chat.provider.setEnabledRunnerIds.mockClear();
+    h.config.values.enabledRunners = ['claude-code', 'codex'];
+    h.installation.filterInstalled.mockImplementation(async (runners: string[]) => runners);
+
+    h.settings.saved();
+
+    await vi.waitFor(() => expect(h.chat.provider.setEnabledRunnerIds).toHaveBeenCalledWith(['claude-code', 'codex']));
+  });
+
+  it('does not rediscover models for a save that leaves the enabled runners as they were', async () => {
+    await h.host.start();
+    h.resolver.refreshRunnerModels.mockClear();
+
+    h.settings.saved();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(h.resolver.refreshRunnerModels).not.toHaveBeenCalled();
+  });
+
+  it('shows the run settings another surface saved', async () => {
+    await h.host.start();
+    h.chat.provider.setRunSettings.mockClear();
+
+    h.settings.saved();
+
+    expect(h.chat.provider.setRunSettings).toHaveBeenCalled();
   });
 
   it('registers the webview, the host commands and the webview listener through the given vscode api', async () => {

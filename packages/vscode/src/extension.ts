@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { spawn as nodeSpawn } from 'child_process';
 import { createSession, CodexSandboxAvailability, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner, runnerForProvider } from '@ordewell/core';
 import { ChatViewProvider } from './providers/ChatViewProvider';
-import { VsCodeConfig, moveAutonomyFromVsCodeSetting } from './adapters/VsCodeConfig';
+import { VsCodeConfig, moveAutonomyFromVsCodeSetting, moveEnabledRunnersFromVsCodeSetting } from './adapters/VsCodeConfig';
 import { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
 import { SecretStore } from './adapters/SecretStore';
 import { VsCodeNotification } from './adapters/VsCodeNotification';
@@ -39,6 +39,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     modelResolver = new ModelResolver(runnerRegistry, config);
     const settingsService = new SettingsService();
     await moveAutonomyFromVsCodeSetting(settingsService);
+    await moveEnabledRunnersFromVsCodeSetting(settingsService);
 
     activeHost = createExtension({
       context,

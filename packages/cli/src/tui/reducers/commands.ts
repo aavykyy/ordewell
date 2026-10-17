@@ -399,6 +399,8 @@ function runners(state: TuiState, args: string[]): Step {
 
   const action = { kind: 'set-runners' as const };
   const items = pickerItemsFor(state, action);
+  // Another surface shares the saved choice and may have changed it since this
+  // list was loaded, so what the ticks show is asked for again as it opens.
   return step({ ...state, overlay: {
     kind: 'picker',
     picker: picker('Runners', items, action, {
@@ -406,7 +408,7 @@ function runners(state: TuiState, args: string[]): Step {
       multi: true,
       chosen: state.runners.filter((r) => r.enabled).map((r) => r.id),
     }),
-  } });
+  } }, [{ type: 'loadRunners' }]);
 }
 
 function setMaxParallel(state: TuiState, arg: string | undefined): Step {
