@@ -150,8 +150,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       handleSessionMessage(msg, managerDeps);
     },
     modelResolver: services.modelResolver,
-    // The settings file's runner list is the daemon's; this window's lives in VS Code's own configuration.
-    settings: () => ({ ...sessionRuntimeSettings(services.settingsService.getAll()), enabledRunners: services.config.enabledRunners }),
+    settings: () => sessionRuntimeSettings(services.settingsService.getAll()),
   });
 
   const planner = new PlannerSelection({
@@ -404,6 +403,19 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       discovery.refresh().catch((err) => log(`Model discovery refresh failed: ${err instanceof Error ? err.message : String(err)}`));
       log('Configuration changed, reset services');
     }));
+
+    // The settings file is shared with the TUI and the daemon: what another
+    // surface saves (the enabled runners, the run settings) is drawn here too.
+    let shownRunners = JSON.stringify(services.config.enabledRunners);
+    const watchingSettings = services.settingsService.watch(() => {
+      sendRunSettings();
+      // Discovery spawns the runners' CLIs, so only a change to the list asks for it.
+      const runners = JSON.stringify(services.config.enabledRunners);
+      if (runners === shownRunners) return;
+      shownRunners = runners;
+      discovery.refresh().catch((err) => log(`Model discovery refresh failed: ${err instanceof Error ? err.message : String(err)}`));
+    });
+    services.context.subscriptions.push({ dispose: () => watchingSettings.dispose() });
 
     services.context.subscriptions.push(vscodeApi.workspace.onDidChangeWorkspaceFolders(() => sendSkills()));
 

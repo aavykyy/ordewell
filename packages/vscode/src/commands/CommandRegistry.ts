@@ -124,7 +124,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         ? enabled.filter((r) => r !== target)
         : [...enabled, target];
 
-      await deps.config.update('enabledRunners', newEnabled);
+      deps.settingsService.setEnabledRunners(newEnabled);
       await deps.sendRunnerAndModels();
       vscode.window.showInformationMessage(`Enabled runners: ${newEnabled.length === 0 ? '(none: enable at least one)' : newEnabled.join(', ')}`);
     }),

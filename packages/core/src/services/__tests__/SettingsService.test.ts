@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -68,6 +68,80 @@ describe('SettingsService', () => {
     fs.utimesSync(tempFile, future, future);
 
     expect(service.getModelAllowlist('opencode')).toEqual(['b', 'c']);
+  });
+
+  describe('two processes on one file', () => {
+    /**
+     * Another process's write that lands in the same mtime tick as ours: the
+     * timestamp is pinned to a value both sides have already seen, since a
+     * coarse-grained filesystem does exactly that.
+     */
+    function writeInSameTick(other: SettingsService, write: (s: SettingsService) => void) {
+      const tick = new Date('2026-01-01T00:00:00Z');
+      fs.utimesSync(tempFile, tick, tick);
+      service.getAll();
+      write(other);
+      fs.utimesSync(tempFile, tick, tick);
+    }
+
+    it('sees a write that shares the mtime of the one it last read', () => {
+      service.setEnabledRunners(['opencode']);
+
+      writeInSameTick(new SettingsService(tempFile), (s) => s.setEnabledRunners(['opencode', 'claude-code', 'codex']));
+
+      expect(service.getEnabledRunners()).toEqual(['opencode', 'claude-code', 'codex']);
+    });
+
+    it('does not write back a stale copy over what the other process saved', () => {
+      service.setEnabledRunners(['opencode']);
+      writeInSameTick(new SettingsService(tempFile), (s) => s.setEnabledRunners(['opencode', 'codex']));
+
+      service.setModelAllowlist('codex', ['m']);
+
+      const saved = new SettingsService(tempFile).getAll();
+      expect(saved.enabledRunners).toEqual(['opencode', 'codex']);
+      expect(saved.modelAllowlist).toEqual({ codex: ['m'] });
+    });
+
+    it('replaces the file whole, so no reader meets it half-written and takes it for empty', () => {
+      service.setEnabledRunners(['opencode', 'codex']);
+      const before = fs.statSync(tempFile).ino;
+
+      service.setAutonomousMode(false);
+
+      // A write in place truncates first; a rename swaps the file in one step.
+      expect(fs.statSync(tempFile).ino).not.toBe(before);
+      expect(fs.readdirSync(path.dirname(tempFile))).toEqual([path.basename(tempFile)]);
+    });
+  });
+
+  describe('watching the file', () => {
+    it('tells a listener when another process saves, once per save', async () => {
+      const listener = vi.fn();
+      const watching = service.watch(listener);
+      try {
+        new SettingsService(tempFile).setEnabledRunners(['codex']);
+        await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        expect(listener).toHaveBeenCalledTimes(1);
+
+        new SettingsService(tempFile).setEnabledRunners(['codex', 'opencode']);
+        await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(2));
+        expect(service.getEnabledRunners()).toEqual(['codex', 'opencode']);
+      } finally {
+        watching.dispose();
+      }
+    });
+
+    it('stops telling once disposed', async () => {
+      const listener = vi.fn();
+      service.watch(listener).dispose();
+
+      new SettingsService(tempFile).setEnabledRunners(['codex']);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      expect(listener).not.toHaveBeenCalled();
+    });
   });
 
   it('persists changes to disk', () => {
