@@ -1,6 +1,9 @@
-# 0031 — The planner says read-only, not a mode
+---
+status: accepted
+amends: ["0001"]
+---
 
-**Status:** accepted — amends [ADR-0001](0001-autonomous-mode-resolution.md)
+# 0031 — The planner says read-only, not a mode
 
 **Amends:** ADR-0001 — the planner no longer picks a runner mode per task; it
 says only whether a task is read-only. "The planner is steered, not coerced",

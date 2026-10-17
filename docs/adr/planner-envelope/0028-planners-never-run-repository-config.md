@@ -1,6 +1,9 @@
-# 0028 — Planners never run the repository's config
+---
+status: accepted
+amends: ["0008", "0026", "0027"]
+---
 
-**Status:** accepted — amends [ADR-0026](0026-one-envelope-for-every-planner.md), [ADR-0027](0027-web-reads-in-the-planner-envelope.md) and [ADR-0008](0008-planner-exploration-envelope.md)
+# 0028 — Planners never run the repository's config
 
 ## Problem
 

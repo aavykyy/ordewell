@@ -1,6 +1,8 @@
-# 0022 — The Ordewell MCP server: task and planner tools behind per-caller tokens
+---
+status: accepted
+---
 
-**Status:** accepted, implemented
+# 0022 — The Ordewell MCP server: task and planner tools behind per-caller tokens
 
 *Pending:* [ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md) — `run_script` joins the execution tools, and a script task's exit status is its completion evidence.
 

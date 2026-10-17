@@ -1,6 +1,8 @@
-# 0012 — The task-query read channel: reading a task before rewriting it
+---
+status: accepted
+---
 
-**Status:** accepted
+# 0012 — The task-query read channel: reading a task before rewriting it
 
 ## Problem
 

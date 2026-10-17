@@ -1,6 +1,9 @@
-# 0019 — Nested repositories are shared live, not refused
+---
+status: accepted
+amends: ["0013", "0014"]
+---
 
-**Status:** accepted — amends [ADR-0014](0014-multi-repo-workspaces.md)
+# 0019 — Nested repositories are shared live, not refused
 
 **Amends:** ADR-0014 (multi-repo workspaces), whose `nested-repos` refusal this
 replaces.

@@ -1,6 +1,8 @@
-# 0003 — Per-runner model allowlist for the planner
+---
+status: accepted
+---
 
-**Status:** accepted
+# 0003 — Per-runner model allowlist for the planner
 
 ## Problem
 

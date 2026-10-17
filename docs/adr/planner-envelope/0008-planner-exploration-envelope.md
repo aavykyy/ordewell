@@ -1,6 +1,8 @@
-# 0008 — The planner's exploration envelope: tiered commands, confined paths, one approval seam
+---
+status: accepted
+---
 
-**Status:** accepted
+# 0008 — The planner's exploration envelope: tiered commands, confined paths, one approval seam
 
 *Pending:* [ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md) — the planner performs exact effects as script tasks, and its refusals point there; [ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md) — where a sandbox holds it, a command the envelope would refuse without asking runs sealed.
 

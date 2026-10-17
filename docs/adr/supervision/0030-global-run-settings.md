@@ -1,8 +1,9 @@
-# 0030 — Run settings are global, saved and live; autorun
+---
+status: accepted
+amends: ["0001", "0013", "0020", "0029"]
+---
 
-**Status:** accepted — amends [ADR-0001](../routing/0001-autonomous-mode-resolution.md),
-[ADR-0013](../isolation/0013-worktree-isolation.md), [ADR-0020](../isolation/0020-ops-tasks-and-merge-gates.md)
-and [ADR-0029](0029-the-supervisor.md)
+# 0030 — Run settings are global, saved and live; autorun
 
 *Pending:* [ADR-0035](0035-effects-are-consented-and-recorded.md) — with autorun on in Full, the planner's script tasks run without asking.
 

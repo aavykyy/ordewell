@@ -1,6 +1,9 @@
-# 0025 — Structured-only runners
+---
+status: accepted
+supersedes: ["0007"]
+---
 
-**Status:** accepted, implemented — supersedes [ADR-0007](0007-tmux-backed-runners.md)
+# 0025 — Structured-only runners
 
 ## Problem
 

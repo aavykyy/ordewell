@@ -1,6 +1,11 @@
-# 0036 — The planner's shell: sealed runs instead of refusals, and the harness's own shell as an opt-in
+---
+status: accepted
+implemented: none
+amends: ["0008", "0011", "0026"]
+note: "sealed runs need #64 first"
+---
 
-**Status:** accepted, not yet implemented — amends [ADR-0008](0008-planner-exploration-envelope.md), [ADR-0011](0011-sandboxing-the-planners-shell.md) and [ADR-0026](0026-one-envelope-for-every-planner.md); sealed runs need #64 first
+# 0036 — The planner's shell: sealed runs instead of refusals, and the harness's own shell as an opt-in
 
 ## Problem
 

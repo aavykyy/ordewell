@@ -1,9 +1,9 @@
-# 0029 — The supervisor: levels, live planner turns, execution tools and auto-merge
+---
+status: accepted
+amends: ["0009", "0013", "0020", "0022"]
+---
 
-**Status:** accepted — amends [ADR-0009](../planner/0009-coding-agents-as-planners.md),
-[ADR-0013](../isolation/0013-worktree-isolation.md), [ADR-0020](../isolation/0020-ops-tasks-and-merge-gates.md)
-and [ADR-0022](../runners/0022-ordewell-mcp-server.md); amended by [ADR-0030](0030-global-run-settings.md)
-(the settings are global, saved and live; autorun)
+# 0029 — The supervisor: levels, live planner turns, execution tools and auto-merge
 
 *Pending:* [ADR-0035](0035-effects-are-consented-and-recorded.md) — `run_script` and its consent; [ADR-0037](0037-research-tasks-wake-the-planner.md) — a research task's report wakes the planner at every level.
 

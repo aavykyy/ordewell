@@ -1,7 +1,8 @@
-# 0001 — Autonomous mode resolution
+---
+status: accepted
+---
 
-**Status:** accepted — amended by [ADR-0030](../supervision/0030-global-run-settings.md) (where the level is saved)
-and [ADR-0031](0031-the-planner-says-read-only-not-a-mode.md) (the planner says read-only, not a mode)
+# 0001 — Autonomous mode resolution
 
 ## Problem
 

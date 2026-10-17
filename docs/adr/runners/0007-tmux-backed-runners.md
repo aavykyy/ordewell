@@ -1,6 +1,8 @@
-# 0007 — Runners execute inside tmux, terminals open on demand
+---
+status: superseded
+---
 
-**Status:** superseded by [ADR-0025](0025-structured-only-runners.md)
+# 0007 — Runners execute inside tmux, terminals open on demand
 
 ## Problem
 

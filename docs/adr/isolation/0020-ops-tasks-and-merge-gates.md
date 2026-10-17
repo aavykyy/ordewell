@@ -1,6 +1,9 @@
-# 0020 — Ops tasks run in the workspace, behind a merge gate
+---
+status: accepted
+amends: ["0013", "0014"]
+---
 
-**Status:** accepted — amends [ADR-0013](0013-worktree-isolation.md) and [ADR-0014](0014-multi-repo-workspaces.md); amended by [ADR-0030](../supervision/0030-global-run-settings.md)
+# 0020 — Ops tasks run in the workspace, behind a merge gate
 
 *Pending:* [ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md) — script tasks: ops tasks Ordewell runs itself from a literal script, which the planner may add and start.
 

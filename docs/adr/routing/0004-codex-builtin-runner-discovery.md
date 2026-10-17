@@ -1,6 +1,8 @@
-# 0004 — Codex as a built-in runner; model discovery via `codex app-server`
+---
+status: accepted
+---
 
-**Status:** accepted
+# 0004 — Codex as a built-in runner; model discovery via `codex app-server`
 
 ## Problem
 

@@ -1,6 +1,10 @@
-# 0011 — Sandboxing the planner's shell
+---
+status: accepted
+implemented: none
+note: "accepted 2026-10-01; first proposed as a tracked deferral. The OS sandbox is not built yet (#64)."
+---
 
-**Status:** accepted (2026-10-01; first proposed as a tracked deferral)
+# 0011 — Sandboxing the planner's shell
 
 *Pending:* [ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md) — B7 relaxed: a verified sandbox turns a refusal into a sealed run, with no home directory and no network.
 

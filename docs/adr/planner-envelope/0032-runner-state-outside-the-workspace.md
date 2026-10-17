@@ -1,6 +1,9 @@
-# 0032 — Runner state outside the workspace
+---
+status: accepted
+amends: ["0008", "0026", "0028"]
+---
 
-**Status:** accepted — amends [ADR-0008](0008-planner-exploration-envelope.md), [ADR-0026](0026-one-envelope-for-every-planner.md) and [ADR-0028](0028-planners-never-run-repository-config.md)
+# 0032 — Runner state outside the workspace
 
 ## Problem
 

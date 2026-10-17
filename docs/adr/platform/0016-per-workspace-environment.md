@@ -1,6 +1,8 @@
-# 0016 — Per-workspace environment for the planner and agents
+---
+status: accepted
+---
 
-**Status:** accepted
+# 0016 — Per-workspace environment for the planner and agents
 
 ## Problem
 

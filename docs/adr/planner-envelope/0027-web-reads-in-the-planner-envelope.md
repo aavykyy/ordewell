@@ -1,6 +1,9 @@
-# 0027 — Web reads in the planner envelope
+---
+status: accepted
+amends: ["0008", "0011", "0026"]
+---
 
-**Status:** accepted — amends [ADR-0026](0026-one-envelope-for-every-planner.md), [ADR-0008](0008-planner-exploration-envelope.md) and [ADR-0011](0011-sandboxing-the-planners-shell.md)
+# 0027 — Web reads in the planner envelope
 
 ## Problem
 

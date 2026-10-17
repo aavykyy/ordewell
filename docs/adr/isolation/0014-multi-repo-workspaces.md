@@ -1,6 +1,9 @@
-# 0014 — Multi-repo workspaces: isolate a repo group, land it atomically
+---
+status: accepted
+amends: ["0013"]
+---
 
-**Status:** accepted — extends [ADR-0013](0013-worktree-isolation.md); nested repositories per [ADR-0019](0019-nested-repos-shared-live.md); ops tasks per [ADR-0020](0020-ops-tasks-and-merge-gates.md)
+# 0014 — Multi-repo workspaces: isolate a repo group, land it atomically
 
 ## Problem
 

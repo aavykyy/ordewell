@@ -1,6 +1,10 @@
-# 0023 — Messages reach a running task between tool calls
+---
+status: accepted
+amends: ["0018"]
+note: "changes the rule ADR-0018 M1"
+---
 
-**Status:** accepted, implemented — changes [ADR-0018](0018-structured-runner-transport.md) M1
+# 0023 — Messages reach a running task between tool calls
 
 ## Problem
 

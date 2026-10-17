@@ -1,6 +1,9 @@
-# 0033 — A Codex planner without its sandbox
+---
+status: accepted
+amends: ["0009", "0011", "0026"]
+---
 
-**Status:** accepted — amends [ADR-0009](../planner/0009-coding-agents-as-planners.md), [ADR-0011](0011-sandboxing-the-planners-shell.md) and [ADR-0026](0026-one-envelope-for-every-planner.md)
+# 0033 — A Codex planner without its sandbox
 
 ## Problem
 

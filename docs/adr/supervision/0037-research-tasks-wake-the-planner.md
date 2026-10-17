@@ -1,6 +1,11 @@
-# 0037 — Research that outlives a planner turn is a research task, and its report wakes the planner
+---
+status: accepted
+implemented: none
+amends: ["0009", "0029"]
+note: "starting one without approval waits for #104"
+---
 
-**Status:** accepted, not yet implemented — amends [ADR-0009](../planner/0009-coding-agents-as-planners.md) and [ADR-0029](0029-the-supervisor.md); starting one without approval waits for #104
+# 0037 — Research that outlives a planner turn is a research task, and its report wakes the planner
 
 ## Problem
 

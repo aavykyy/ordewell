@@ -1,6 +1,11 @@
-# 0035 — Every effect is consented to and recorded, whoever performs it
+---
+status: accepted
+implemented: partial
+amends: ["0008", "0009", "0020", "0022", "0026", "0029", "0030"]
+note: "the scheduler starting only approved tasks (#95) is implemented; script tasks and the effect allowlist are not yet. Settles #95."
+---
 
-**Status:** accepted; the scheduler starting only approved tasks (#95) is implemented, script tasks and the effect allowlist are not yet — amends [ADR-0008](../planner-envelope/0008-planner-exploration-envelope.md), [ADR-0009](../planner/0009-coding-agents-as-planners.md), [ADR-0020](../isolation/0020-ops-tasks-and-merge-gates.md), [ADR-0022](../runners/0022-ordewell-mcp-server.md), [ADR-0026](../planner-envelope/0026-one-envelope-for-every-planner.md), [ADR-0029](0029-the-supervisor.md) and [ADR-0030](0030-global-run-settings.md); settles #95
+# 0035 — Every effect is consented to and recorded, whoever performs it
 
 ## Problem
 

@@ -1,6 +1,8 @@
-# 0002 — Planner as a conversation loop (messages only)
+---
+status: accepted
+---
 
-**Status:** accepted, implemented
+# 0002 — Planner as a conversation loop (messages only)
 
 ## Problem
 

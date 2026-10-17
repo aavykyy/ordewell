@@ -1,6 +1,8 @@
-# 0005 — Parallel read-only research subagents for the planner
+---
+status: accepted
+---
 
-**Status:** accepted
+# 0005 — Parallel read-only research subagents for the planner
 
 ## Problem
 

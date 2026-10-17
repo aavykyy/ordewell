@@ -1,6 +1,9 @@
-# 0040 — A slow model discovery never gates the planner pick
+---
+status: accepted
+amends: ["0009"]
+---
 
-**Status:** accepted — amends [ADR-0009](../planner/0009-coding-agents-as-planners.md)
+# 0040 — A slow model discovery never gates the planner pick
 
 ## Problem
 

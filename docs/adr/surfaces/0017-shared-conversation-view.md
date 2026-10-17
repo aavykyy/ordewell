@@ -1,6 +1,8 @@
-# 0017 — The shared conversation view, drawn once in core
+---
+status: accepted
+---
 
-**Status:** accepted
+# 0017 — The shared conversation view, drawn once in core
 
 ## Problem
 

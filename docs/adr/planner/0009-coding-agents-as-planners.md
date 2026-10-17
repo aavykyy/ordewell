@@ -1,6 +1,8 @@
-# 0009 — Coding agents as planners: the harness planner backend
+---
+status: accepted
+---
 
-**Status:** accepted
+# 0009 — Coding agents as planners: the harness planner backend
 
 *Pending:* [ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md) — effects are consented to and recorded whoever performs them, and the planner runs script tasks; [ADR-0037](../supervision/0037-research-tasks-wake-the-planner.md) — research that outlives a turn is a research task, which is why harness subagents are still awaited within it.
 

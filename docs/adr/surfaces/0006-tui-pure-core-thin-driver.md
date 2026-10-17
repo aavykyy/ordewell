@@ -1,6 +1,8 @@
-# 0006 — Terminal UI as a pure core behind a thin driver
+---
+status: accepted
+---
 
-**Status:** accepted
+# 0006 — Terminal UI as a pure core behind a thin driver
 
 ## Problem
 

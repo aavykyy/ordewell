@@ -1,6 +1,9 @@
-# 0034 — A failed task blocks only its dependents
+---
+status: accepted
+amends: ["0013", "0015", "0029"]
+---
 
-**Status:** accepted — amends [ADR-0013](../isolation/0013-worktree-isolation.md), [ADR-0015](../isolation/0015-conflict-repair.md) and [ADR-0029](0029-the-supervisor.md)
+# 0034 — A failed task blocks only its dependents
 
 ## Problem
 

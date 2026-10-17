@@ -1,6 +1,9 @@
-# 0026 — One envelope for every planner
+---
+status: accepted
+amends: ["0008", "0009"]
+---
 
-**Status:** accepted — amends [ADR-0008](0008-planner-exploration-envelope.md) and [ADR-0009](../planner/0009-coding-agents-as-planners.md)
+# 0026 — One envelope for every planner
 
 *Pending:* [ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md) — the effect allowlist, and the `allowlist` mode's pointer to script tasks; [ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md) — sealed runs, and a harness's own shell as a user's opt-in.
 

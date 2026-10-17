@@ -1,6 +1,8 @@
-# 0021 — Unedited built-in skill seeds refresh with the package
+---
+status: accepted
+---
 
-**Status:** accepted
+# 0021 — Unedited built-in skill seeds refresh with the package
 
 ## Problem
 

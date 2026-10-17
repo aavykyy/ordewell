@@ -1,6 +1,8 @@
-# 0024 — Unified skills: one format, one loader, two audiences
+---
+status: accepted
+---
 
-**Status:** accepted
+# 0024 — Unified skills: one format, one loader, two audiences
 
 ## Problem
 

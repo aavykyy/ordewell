@@ -1,6 +1,8 @@
-# 0038 — A runner install verdict is not permanent
+---
+status: accepted
+---
 
-**Status:** accepted
+# 0038 — A runner install verdict is not permanent
 
 ## Problem
 

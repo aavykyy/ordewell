@@ -1,6 +1,9 @@
-# 0039 — The detected planner is derived again on a runner-list refresh
+---
+status: accepted
+amends: ["0009"]
+---
 
-**Status:** accepted — amends [ADR-0009](../planner/0009-coding-agents-as-planners.md)
+# 0039 — The detected planner is derived again on a runner-list refresh
 
 ## Problem
 

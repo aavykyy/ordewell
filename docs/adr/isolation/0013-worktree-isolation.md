@@ -1,6 +1,8 @@
-# 0013 — Worktree isolation: one checkout per task, one branch per run
+---
+status: accepted
+---
 
-**Status:** accepted — extended by [ADR-0014](0014-multi-repo-workspaces.md) (repo groups), [ADR-0015](0015-conflict-repair.md) (conflict repair), [ADR-0019](0019-nested-repos-shared-live.md) (nested repositories) and [ADR-0020](0020-ops-tasks-and-merge-gates.md) (ops tasks and merge gates); amended by [ADR-0030](../supervision/0030-global-run-settings.md) (merge consent is a global setting)
+# 0013 — Worktree isolation: one checkout per task, one branch per run
 
 ## Problem
 

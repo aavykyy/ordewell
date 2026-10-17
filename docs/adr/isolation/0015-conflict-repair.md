@@ -1,6 +1,9 @@
-# 0015 — Conflict repair: the task repairs its own conflict, bounded and evidenced
+---
+status: accepted
+amends: ["0013"]
+---
 
-**Status:** accepted — amends [ADR-0013](0013-worktree-isolation.md)
+# 0015 — Conflict repair: the task repairs its own conflict, bounded and evidenced
 
 **Amends:** ADR-0013 (worktree isolation), which surfaces every merge conflict
 for a human and rejected letting a model resolve one.

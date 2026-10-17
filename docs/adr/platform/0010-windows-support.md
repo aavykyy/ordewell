@@ -1,6 +1,8 @@
-# 0010 — Windows support: one launch seam, one shell seam, one dialect
+---
+status: accepted
+---
 
-**Status:** accepted
+# 0010 — Windows support: one launch seam, one shell seam, one dialect
 
 ## Problem
 

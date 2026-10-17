@@ -1,6 +1,8 @@
-# 0018 — Structured runner transport: drive task runners through their programmatic protocol
+---
+status: accepted
+---
 
-**Status:** accepted
+# 0018 — Structured runner transport: drive task runners through their programmatic protocol
 
 ## Problem
 
