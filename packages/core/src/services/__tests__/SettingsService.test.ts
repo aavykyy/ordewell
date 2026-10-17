@@ -113,6 +113,22 @@ describe('SettingsService', () => {
       expect(new SettingsService(tempFile).getEnabledRunners()).toEqual(['opencode', 'codex', 'claude-code']);
     });
 
+    it('keeps what another process saved while this one was making its change, and makes it again from that', () => {
+      service.setEnabledRunners(['claude-code']);
+      let raced = false;
+
+      const next = service.updateEnabledRunners((saved) => {
+        if (!raced) {
+          raced = true;
+          new SettingsService(tempFile).setEnabledRunners(['claude-code', 'codex']);
+        }
+        return [...(saved ?? []), 'opencode'];
+      });
+
+      expect(next).toEqual(['claude-code', 'codex', 'opencode']);
+      expect(new SettingsService(tempFile).getEnabledRunners()).toEqual(['claude-code', 'codex', 'opencode']);
+    });
+
     it('hands the change nothing when no choice was ever saved', () => {
       const seen = vi.fn((saved: string[] | undefined) => saved ?? ['claude-code']);
 

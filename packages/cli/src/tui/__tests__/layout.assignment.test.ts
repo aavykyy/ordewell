@@ -24,6 +24,13 @@ describe('plan pane — a task outside the enabled runners and allowlist', () =>
     expect(frame(plan([task()]))).toContain('⚠ codex is switched off');
   });
 
+  it('says what follows by where the task stands: a failed one runs there only if retried, a running one already is', () => {
+    const wide = { cols: 180 };
+    expect(frame(plan([task({ status: 'failed' })], wide))).toContain('⚠ codex is switched off; a retry runs it there unless moved');
+    expect(frame(plan([task({ status: 'in_progress' })], wide))).toContain('⚠ codex is switched off; it is already running there');
+    expect(frame(plan([task()], wide))).toContain('⚠ codex is switched off; it still runs unless moved');
+  });
+
   it('says its model is not in the allowlist', () => {
     const out = frame(plan(
       [task({ assignedRunner: 'claude-code', assignedModel: { modelId: 'claude-opus-4', modelLabel: 'Opus 4' } })],

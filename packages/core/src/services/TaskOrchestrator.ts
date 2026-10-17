@@ -354,6 +354,12 @@ export class TaskOrchestrator {
    */
   private onHold = new Set<string>();
   /**
+   * Force starts queued behind dependencies the scheduler will not start them
+   * after: outside a run it drives, or past a failed dependency, which it
+   * never forces. Each starts once those still under way have finished.
+   */
+  private queuedStarts = new Set<string>();
+  /**
    * Tasks Mark complete is landing after it ended their attempt: in progress
    * with no attempt for as long as that takes, and not orphans for it.
    */
@@ -888,6 +894,7 @@ export class TaskOrchestrator {
     this.retryCounts.clear();
     this.spawnCounts.clear();
     this.onHold.clear();
+    this.queuedStarts.clear();
     this.recoverOrphans();
     this.rearmLimitWaits();
   }
@@ -990,6 +997,7 @@ export class TaskOrchestrator {
     }
     this.runs.interrupt();
     this.onHold.clear();
+    if (reason === 'user') this.queuedStarts.clear();
     // A stopped run does not start itself again: what waited on a reset waits for the user now.
     for (const t of this.store.allTasks.filter(waitsForReset)) this.cancelScheduledResume(t.id);
     this.sayStopped(stopped);
@@ -1153,6 +1161,7 @@ export class TaskOrchestrator {
     const status = this.store.get(taskId)?.status;
     if (status === 'completed' || status === 'failed' || status === 'awaiting_user') this.emit('onTaskSettled', { taskId });
     this.emit('onTaskChanged');
+    await this.startQueued();
     if (!this.running) {
       if (this.attempts.size === 0) {
         if (this.store.isFinished()) this.planStatus = 'completed';
@@ -1771,17 +1780,48 @@ export class TaskOrchestrator {
    * bypassed silently. A blocked task is forced past its failure as asked.
    */
   private queuedBehindDependencies(task: Readonly<Task>): string | null {
-    if (isBlocked(task, this.store)) return null;
-    const waiting = unmetDependencies(task, this.store, this.runs);
+    const waiting = this.underWayBefore(task);
     if (waiting.length === 0) return null;
     this.onHold.delete(task.id);
+    if (!this.running || isBlocked(task, this.store)) this.queuedStarts.add(task.id);
     const names = waiting.map((id) => `task "${this.store.get(id)?.title ?? id}"`);
     const listed = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
-    const idle = this.running ? '' : ' Nothing is running now: run the plan to start them.';
+    const idle = this.running || waiting.some((id) => this.attempts.has(id)) ? '' : ' Nothing is running now: run the plan to start them.';
     const queued = `Task "${task.title}" is approved and starts once ${listed} ${names.length === 1 ? 'finishes' : 'finish'}.${idle}`;
     this.tell('info', queued);
     this.emit('onTaskChanged');
     return queued;
+  }
+
+  /** A task's unmet dependencies, less the failed or blocked ones a force start goes past. */
+  private underWayBefore(task: Readonly<Task>): string[] {
+    const blocked = blockingFailures(this.store.allTasks);
+    return unmetDependencies(task, this.store, this.runs).filter((id) => {
+      const status = this.store.get(id)?.status;
+      return status !== 'failed' && status !== 'blocked' && !blocked.has(id);
+    });
+  }
+
+  /**
+   * Starts the queued force starts whose dependencies have now finished. One
+   * the scheduler now drives the run for, and nothing blocks, is left to it.
+   */
+  private async startQueued(): Promise<void> {
+    for (const id of [...this.queuedStarts]) {
+      const task = this.store.get(id);
+      if (!task || this.attempts.has(id) || task.status === 'completed' || task.status === 'skipped') {
+        this.queuedStarts.delete(id);
+        continue;
+      }
+      if (this.underWayBefore(task).length > 0) continue;
+      this.queuedStarts.delete(id);
+      if (this.running && !isBlocked(task, this.store)) continue;
+      try {
+        await this.forceStartTask(id);
+      } catch (err) {
+        this.tell('warn', `Task "${task.title}" did not start once its dependencies finished: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
   }
 
   private refuseOpsDuringMerge(task: Readonly<Task>): void {

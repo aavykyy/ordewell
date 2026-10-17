@@ -866,6 +866,13 @@ function modelsByRunnerOf(models: readonly ModelView[]): Record<string, Discover
   return out;
 }
 
+/** What a flagged assignment means for the task, which depends on where it stands: a failed one runs again only if retried. */
+function assignmentConsequence(status: TaskStatusKind): string {
+  if (status === 'failed') return 'a retry runs it there unless moved';
+  if (status === 'running' || status === 'quiet') return 'it is already running there';
+  return 'it still runs unless moved';
+}
+
 interface TaskLines {
   lines: string[];
   /** The zero-based line within `lines` containing the prompt editor caret. */
@@ -957,9 +964,9 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   if (row.mergeGate) {
     lines.push(...statusLines(style.yellow, '⏸', `waits for Merge all: ${row.mergeGate.join(', ')} not merged into your branch yet`, cols, bodyPad));
   }
-  // Named as it is, not lowercased like the other labels: a model's label is a proper name. The task still runs.
+  // Named as it is, not lowercased like the other labels: a model's label is a proper name.
   if (row.assignmentFlag) {
-    lines.push(...statusLines(style.yellow, '⚠', `${row.assignmentFlag}; it still runs`, cols, bodyPad));
+    lines.push(...statusLines(style.yellow, '⚠', `${row.assignmentFlag}; ${assignmentConsequence(row.status)}`, cols, bodyPad));
   }
   if (row.waitsForApproval) {
     lines.push(...statusLines(style.yellow, '⏸', `${inRow(row.waitsForApproval)} · f approves it · /run approves all`, cols, bodyPad));

@@ -88,6 +88,20 @@ describe('runners changed — the planner is told on its next turn', () => {
     expect(outgoing(1)).toMatch(/switched off: codex/i);
   });
 
+  it('tells again on the next turn when the turn it first went with came back failed', async () => {
+    const { session, settings, outgoing, continueConversation } = harness();
+    await session.startPlanning('goal', ['claude-code', 'codex']);
+
+    settings.enabledRunners = ['claude-code'];
+    continueConversation.mockResolvedValueOnce({ kind: 'message', failed: true, text: 'backend failed before processing the input', researchLog: [] });
+    await session.continueConversation('first');
+    await session.continueConversation('second');
+
+    expect(outgoing(0)).toContain('<runners_changed>');
+    expect(outgoing(1)).toContain('<runners_changed>');
+    expect(outgoing(1)).toMatch(/switched off: codex/i);
+  });
+
   it('says what each flagged task will do by where it stands, not that a failed one still runs', () => {
     const change = { switchedOn: [], switchedOff: ['codex'], allowlists: [] };
     const text = 'codex is switched off';

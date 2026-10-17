@@ -38,7 +38,11 @@ function eventText(event: TaskLogEvent): string {
     case 'turn_start': return `${event.messageId ? `${event.messageId} ` : ''}${event.forced ? '(forced) ' : ''}${event.from ? '(from Ordewell) ' : ''}${event.message}`;
     case 'command': return `${event.messageId ? `${event.messageId} ` : ''}/${event.name}${event.args ? ` ${event.args}` : ''}`;
     case 'command_output': return event.text;
-    case 'model_switched': return `${event.from.model} → ${event.to.model}; plan: ${event.plan.model?.model ?? 'no model'}${event.plan.effort ? ` (${event.plan.effort})` : ''}${event.kept ? `, kept: ${event.kept}` : ''}`;
+    case 'model_switched': {
+      const { plan } = event;
+      const planned = plan ? `; plan: ${plan.model?.model ?? 'no model'}${plan.effort ? ` (${plan.effort})` : ''}` : '';
+      return `${event.from.model} → ${event.to.model}${planned}${event.kept ? `, kept: ${event.kept}` : ''}`;
+    }
     case 'compaction': return `${event.trigger}${event.preTokens !== undefined && event.postTokens !== undefined ? `, ${event.preTokens} → ${event.postTokens} tokens` : ''}`;
     case 'runner_loaded': return [
       `commands: ${event.commands.map((c) => `/${c.name} (${c.kind})`).join(', ') || 'none'}`,

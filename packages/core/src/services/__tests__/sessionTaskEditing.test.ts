@@ -523,6 +523,19 @@ describe('Session.updateTask — model of a task with a live runner', () => {
     expect(taskOf(session, 'only')?.assignedModel).toEqual(planned);
   });
 
+  it('leaves a plan loaded before the queued write-back lands as it is, though a task in it has the same id', async () => {
+    const { session, live } = await followable();
+
+    live.emitEvent({ type: 'model_switched', from: sonnet, to: haikuRef });
+    const other = soloPlan();
+    other.runners = ['codex'];
+    other.tasks[0] = { ...other.tasks[0], assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5', modelLabel: 'GPT-5' } };
+    session.loadPlan(other, 'goal', testWorkspace, { persist: false });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(taskOf(session, 'only')?.assignedModel).toEqual({ modelId: 'gpt-5', modelLabel: 'GPT-5' });
+  });
+
   it('lets other fields of a running task change, and a model edit that changes nothing through', async () => {
     const { session } = await running();
     await session.updateTask('only', { title: 'Only, renamed', assignedModel: undefined });

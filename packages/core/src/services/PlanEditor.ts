@@ -108,12 +108,14 @@ export class PlanEditor {
    * allowlist: the user picked it in the runner. The runner's own label is
    * used only for a model discovery does not list. Effort is the runner's
    * when it reported one, else the plan's, either clamped to what the new
-   * model offers; none for a model discovery does not list.
+   * model offers; none for a model discovery does not list. `live` is asked
+   * as the edit lands, after the edits queued ahead of it: by then the plan
+   * may be another one, whose task of the same id the switch says nothing of.
    */
-  followRunnerModel(taskId: string, model: RunnerModelRef, effort?: string): Promise<LegacyPlanState | null> {
+  followRunnerModel(taskId: string, model: RunnerModelRef, effort: string | undefined, live: () => boolean): Promise<LegacyPlanState | null> {
     return this.inTaskOrder(taskId, async () => {
       const task = this.store.get(taskId);
-      if (!task || task.type === 'user') return null;
+      if (!task || task.type === 'user' || !live()) return null;
       const listed = this.catalog.models()[task.assignedRunner]?.find((m) => m.modelId === model.model);
       // An effort the new model does not offer would be passed to its next spawn.
       const thinkingEffort = clampThinkingEffort(effort ?? task.assignedModel?.thinkingEffort, listed?.variants ?? []);

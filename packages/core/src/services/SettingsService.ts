@@ -119,6 +119,9 @@ export function runSettingsOf(settings: UserSettings): GlobalRunSettings {
   return out;
 }
 
+/** How many times a save is made afresh when another process keeps saving under it. */
+const SAVE_TRIES = 5;
+
 export class SettingsService {
   private filePath: string;
   private cache: UserSettings | null = null;
@@ -199,21 +202,21 @@ export class SettingsService {
   }
 
   setModelAllowlist(runner: string, ids: string[] | undefined): void {
-    this.current();
-    if (ids === undefined) {
-      if (this.cache!.modelAllowlist) {
-        delete this.cache!.modelAllowlist[runner];
-        if (Object.keys(this.cache!.modelAllowlist).length === 0) {
-          this.cache!.modelAllowlist = undefined;
+    this.save(() => {
+      if (ids === undefined) {
+        if (this.cache!.modelAllowlist) {
+          delete this.cache!.modelAllowlist[runner];
+          if (Object.keys(this.cache!.modelAllowlist).length === 0) {
+            this.cache!.modelAllowlist = undefined;
+          }
         }
+      } else {
+        if (!this.cache!.modelAllowlist) {
+          this.cache!.modelAllowlist = {};
+        }
+        this.cache!.modelAllowlist[runner] = ids;
       }
-    } else {
-      if (!this.cache!.modelAllowlist) {
-        this.cache!.modelAllowlist = {};
-      }
-      this.cache!.modelAllowlist[runner] = ids;
-    }
-    this.persist();
+    });
   }
 
   getPlannerModel(provider: string): { model: string; effort?: string } | undefined {
@@ -221,23 +224,23 @@ export class SettingsService {
   }
 
   setPlannerModel(provider: string, entry: { model: string; effort?: string } | undefined): void {
-    this.current();
-    if (entry === undefined) {
-      if (this.cache!.plannerModels) {
-        delete this.cache!.plannerModels[provider];
-        if (Object.keys(this.cache!.plannerModels).length === 0) {
-          this.cache!.plannerModels = undefined;
+    this.save(() => {
+      if (entry === undefined) {
+        if (this.cache!.plannerModels) {
+          delete this.cache!.plannerModels[provider];
+          if (Object.keys(this.cache!.plannerModels).length === 0) {
+            this.cache!.plannerModels = undefined;
+          }
         }
+      } else {
+        if (!this.cache!.plannerModels) {
+          this.cache!.plannerModels = {};
+        }
+        this.cache!.plannerModels[provider] = entry.effort
+          ? { model: entry.model, effort: entry.effort }
+          : { model: entry.model };
       }
-    } else {
-      if (!this.cache!.plannerModels) {
-        this.cache!.plannerModels = {};
-      }
-      this.cache!.plannerModels[provider] = entry.effort
-        ? { model: entry.model, effort: entry.effort }
-        : { model: entry.model };
-    }
-    this.persist();
+    });
   }
 
   getEnabledRunners(): string[] | undefined {
@@ -245,32 +248,33 @@ export class SettingsService {
   }
 
   setEnabledRunners(ids: string[]): void {
-    this.current();
-    this.cache!.enabledRunners = [...ids];
-    this.persist();
+    this.save(() => {
+      this.cache!.enabledRunners = [...ids];
+    });
   }
 
   /**
    * Change the list from what the file holds at this moment: the change is
    * handed the saved list (undefined when the user never chose) and its result
    * is saved in the same call. A list worked out from an earlier read would
-   * save over what another surface set since.
+   * save over what another surface set since. It may be handed the list again,
+   * when another process saved before this one could (see {@link save}).
    */
   updateEnabledRunners(change: (saved: string[] | undefined) => string[]): string[] {
-    this.current();
-    const next = [...change(this.cache!.enabledRunners)];
-    this.cache!.enabledRunners = next;
-    this.persist();
-    return next;
+    return this.save(() => {
+      const next = [...change(this.cache!.enabledRunners)];
+      this.cache!.enabledRunners = next;
+      return next;
+    });
   }
 
   /** Save `ids` as the user's choice unless one is saved already, judged on the file as it is now. */
   setEnabledRunnersIfUnset(ids: string[]): boolean {
-    this.current();
-    if (this.cache!.enabledRunners !== undefined) return false;
-    this.cache!.enabledRunners = [...ids];
-    this.persist();
-    return true;
+    return this.save(() => {
+      if (this.cache!.enabledRunners !== undefined) return false;
+      this.cache!.enabledRunners = [...ids];
+      return true;
+    });
   }
 
   /**
@@ -291,9 +295,9 @@ export class SettingsService {
   }
 
   setAutonomousMode(enabled: boolean): void {
-    this.current();
-    this.cache!.autonomousMode = enabled;
-    this.persist();
+    this.save(() => {
+      this.cache!.autonomousMode = enabled;
+    });
   }
 
   getRunSettings(): GlobalRunSettings {
@@ -307,11 +311,11 @@ export class SettingsService {
         throw new RunSettingsError(RUN_SETTING_CHECKS[key].refusal);
       }
     }
-    this.current();
-    for (const key of RUN_SETTING_KEYS) {
-      if (changes[key] !== undefined) (this.cache as Record<keyof GlobalRunSettings, unknown>)[key] = changes[key];
-    }
-    this.persist();
+    this.save(() => {
+      for (const key of RUN_SETTING_KEYS) {
+        if (changes[key] !== undefined) (this.cache as Record<keyof GlobalRunSettings, unknown>)[key] = changes[key];
+      }
+    });
     return this.getRunSettings();
   }
 
@@ -349,7 +353,25 @@ export class SettingsService {
     return {};
   }
 
-  private persist(): void {
+  /**
+   * Makes `change` to the file as it is now, and saves it. Another process can
+   * save between that read and this write; the file is looked at again just
+   * before ours replaces it, and when it moved the change is made afresh from
+   * what that process saved, so neither save undoes the other. A file that
+   * keeps moving is written over after {@link SAVE_TRIES} tries rather than
+   * never. A change that changes nothing writes nothing.
+   */
+  private save<T>(change: () => T): T {
+    for (let tries = 1; ; tries++) {
+      const before = JSON.stringify(this.current());
+      const read = this.cachedStamp;
+      const result = change();
+      if (JSON.stringify(this.cache) === before || this.persist(tries < SAVE_TRIES ? read : undefined)) return result;
+    }
+  }
+
+  /** False, saving nothing, when the file is no longer the one stamped `expected`. */
+  private persist(expected?: string | null): boolean {
     const dir = path.dirname(this.filePath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
@@ -361,7 +383,12 @@ export class SettingsService {
     // Stamped before the swap, which keeps all three: a save by another process
     // right after ours is then a different stamp, not mistaken for our own.
     const stamp = this.fileStamp(staging);
+    if (expected !== undefined && this.fileStamp() !== expected) {
+      fs.rmSync(staging, { force: true });
+      return false;
+    }
     fs.renameSync(staging, this.filePath);
     this.cachedStamp = stamp;
+    return true;
   }
 }

@@ -107,4 +107,31 @@ describe('force starting a task whose dependencies have not finished', () => {
 
     expect(env.run.spawnedIds()).toEqual(['t1', 't2']);
   });
+
+  it('forced past a failed dependency, it still waits for one under way, and starts once that finishes', async () => {
+    const env = await supervised([task('a', 1), task('b', 2), task('c', 3, { dependencies: ['a', 'b'] })], AUTORUN_OFF);
+    env.run.of('a').reportComplete({ status: 'failed', summary: 'broke' });
+    await until(() => taskOf(env.session, 'a')!.status === 'failed');
+
+    await env.session.forceStartTask('c');
+
+    expect(env.run.spawnedIds()).toEqual(['a', 'b']);
+    expect(infoNotices(env)).toContain('Task "Task c" is approved and starts once task "Task b" finishes.');
+
+    env.run.of('b').reportComplete({ status: 'done', summary: '' });
+    await until(() => env.run.spawnedIds().includes('c'));
+  });
+
+  it('waits for a dependency started on its own with Run Task, and starts once it finishes', async () => {
+    const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { ...AUTORUN_OFF, execute: false });
+    await env.session.runTask('t1');
+
+    await env.session.forceStartTask('t2');
+
+    expect(env.run.spawnedIds()).toEqual(['t1']);
+    expect(infoNotices(env)).toContain('Task "Task t2" is approved and starts once task "Task t1" finishes.');
+
+    env.run.of('t1').reportComplete({ status: 'done', summary: '' });
+    await until(() => env.run.spawnedIds().includes('t2'));
+  });
 });
