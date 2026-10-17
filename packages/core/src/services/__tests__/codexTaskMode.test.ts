@@ -596,7 +596,7 @@ describe('CodexAdapter task channels', () => {
     adapter.dispose();
   });
 
-  it('marks the limit with no reset when no used-up window is known, and leaves other errors unmarked', async () => {
+  it('marks the limit with no reset when no used-up window is known, an error Codex names as another cause as not the limit, and leaves an unnamed one to its words', async () => {
     const limitError = { message: "You've hit your usage limit. Try again at 8:10 PM.", codexErrorInfo: 'usageLimitExceeded', additionalDetails: null };
     // A used-up window whose reset has passed is not this limit's.
     const stale = line({ method: 'account/rateLimits/updated', params: { rateLimits: { limitId: 'codex', primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1700000000 }, secondary: null } } });
@@ -605,8 +605,13 @@ describe('CodexAdapter task channels', () => {
     limited.adapter.dispose();
 
     const throttled = await openTurn([line({ method: 'turn/completed', params: { threadId: 'thr-task-1', turn: { id: 'turn-a', status: 'failed', items: [], error: { message: 'Rate limit reached for gpt-5.5.', codexErrorInfo: 'rateLimitExceeded' } } } })]);
-    expect(throttled.events).toEqual([{ type: 'error', message: 'Rate limit reached for gpt-5.5.' }]);
+    // The provider's throttle, worded like a limit: Codex's field says it is not the account's.
+    expect(throttled.events).toEqual([{ type: 'error', message: 'Rate limit reached for gpt-5.5.', usageLimit: false }]);
     throttled.adapter.dispose();
+
+    const unnamed = await openTurn([line({ method: 'turn/completed', params: { threadId: 'thr-task-1', turn: { id: 'turn-a', status: 'failed', items: [], error: { message: 'stream disconnected', codexErrorInfo: 'other' } } } })]);
+    expect(unnamed.events).toEqual([{ type: 'error', message: 'stream disconnected' }]);
+    unnamed.adapter.dispose();
   });
 
   it('says nothing of a used-up window reported while no turn is in flight', async () => {

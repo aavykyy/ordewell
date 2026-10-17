@@ -16,7 +16,7 @@ import { skillLoadNotice, surfaceStep } from '../conversation/records';
 import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
 import { AUTORUN_OFF, AUTORUN_ON } from './PlanPrompts';
 import { heldEditTasks } from './heldEdit';
-import { classifyRunnerStop } from './runnerExit';
+import { classifyRunnerStop, type TurnFailure } from './runnerExit';
 import type { PlannerLimit } from './PlannerResend';
 import type { AssignmentScope } from './AssignmentScope';
 import { flaggedTasks, runnersChangedBlock, scopeChange } from './RunnerChange';
@@ -245,8 +245,8 @@ export interface PlannerConversationHost {
   turnAborted(): void;
   /** A planner turn let the conversation go, so the next one may take it. */
   turnReleased?(): void;
-  /** A turn ended on the planner's usage limit, which it said in `said`: what is sent again, and when. */
-  usageLimit(said: string): PlannerLimit;
+  /** A turn ended on the planner's usage limit, which it reported as `said`: what is sent again, and when. */
+  usageLimit(said: TurnFailure): PlannerLimit;
 }
 
 /**
@@ -936,10 +936,12 @@ export class PlannerConversation {
    * so a limit is never acted on for a planner nobody asked anything of.
    */
   private assertNotLimited(turn: SettleableTurn, userTurn: UserTurn): void {
-    if (turn.kind !== 'message' || !turn.failed || userTurn.signal.aborted || classifyRunnerStop(turn.text) !== 'usage-limit') return;
+    if (turn.kind !== 'message' || !turn.failed || userTurn.signal.aborted) return;
+    const said: TurnFailure = { message: turn.text, usageLimit: turn.usageLimit };
+    if (classifyRunnerStop(said) !== 'usage-limit') return;
     this.assertCurrent(userTurn);
     if (userTurn.checkpoint) this.restore(userTurn.checkpoint);
-    const limit = this.host.usageLimit(turn.text);
+    const limit = this.host.usageLimit(said);
     this.host.mutate(() => {
       this.recordFailure(limit.text);
       return true;

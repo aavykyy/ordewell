@@ -1,6 +1,7 @@
 import type { LegacyPlanState, PendingPlanTurn, PlanTurnSource, RunnerId, SkillLoad } from '../models/Task';
 import { ConversationBusyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError } from './PlannerConversation';
 import { PlannerResend, type PlannerLimit } from './PlannerResend';
+import type { TurnFailure } from './runnerExit';
 import type { SkillInvocation } from './skillInvocation';
 
 /**
@@ -145,7 +146,7 @@ export class PlanTurns {
   }
 
   /** A turn ended on the planner's usage limit: arm the wait for its inputs. Saved with the failure the turn records. */
-  usageLimit(said: string): PlannerLimit {
+  usageLimit(said: TurnFailure): PlannerLimit {
     return this.resend.limited(said);
   }
 

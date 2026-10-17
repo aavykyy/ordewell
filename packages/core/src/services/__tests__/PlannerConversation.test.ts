@@ -4,6 +4,7 @@ import type { SessionMessage } from '../SessionMessage';
 import type { ConversationTurn, IAiService } from '../AiService';
 import { ConversationBusyError, ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, type PlannerConversationHost } from '../PlannerConversation';
 import type { SkillInfo } from '../SkillsService';
+import type { TurnFailure } from '../runnerExit';
 
 function dialoguePlan(): LegacyPlanState {
   return {
@@ -61,7 +62,7 @@ function fakeHost(ai: IAiService, plan: LegacyPlanState | null = dialoguePlan())
     validateOps: vi.fn(),
     taskSkills: () => ({ findSkill: () => undefined, searchedDirs: () => [] }),
     notice: vi.fn(),
-    usageLimit: vi.fn((said: string) => ({ text: said, resendAt: null })),
+    usageLimit: vi.fn((said: TurnFailure) => ({ text: said.message, resendAt: null })),
     adoptTasks: vi.fn((tasks) => tasks.length),
     capturePrd: vi.fn(),
     turnAborted: vi.fn(),

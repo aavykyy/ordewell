@@ -34,7 +34,7 @@ import { abortScope } from '../../utils/abortScope';
 import { runnerForProvider } from '../ProviderRegistry';
 import { collectResearchContext } from '../ContextCollector';
 import { sensitiveEnvValues } from '../outboundSecrets';
-import type { AgentAdapter, AgentEvent, AgentProcessDeps, PlannerStartOptions } from './AgentAdapter';
+import type { AgentAdapter, AgentEvent, AgentProcessDeps, PlannerStartOptions, UsageLimitSignal } from './AgentAdapter';
 import { connectorFor, createPlannerAdapter } from './connectors';
 import { mapAgentTool, normalizeAgentArgs } from './agentTools';
 import { decidePlannerPermission, type PlannerPermissionGate } from './plannerPermissions';
@@ -103,6 +103,7 @@ interface HarnessTurn {
   researchLog: ResearchStep[];
   /** The agent's own failure, verbatim. Present means the turn did not complete. */
   error?: string;
+  usageLimit?: UsageLimitSignal | false;
   aborted?: boolean;
   /** Subagents the agent left running when it ended the turn. See {@link MAX_AGENT_WAITS}. */
   backgroundAgents: number;
@@ -385,6 +386,7 @@ export class CliAgentAiService implements IAiService {
         // hit its rate limit, or lost its login must say so in the chat rather
         // than leave an empty planner bubble.
         failure: turn.error,
+        usageLimit: turn.usageLimit,
         fullText: [...carried, turn.text].filter((part) => part.trim()).join('\n\n'),
       };
     };
@@ -474,6 +476,7 @@ export class CliAgentAiService implements IAiService {
     };
     const subagentUsage = new Map<string, UsageTotals>();
     let error: string | undefined;
+    let usageLimit: UsageLimitSignal | false | undefined;
     let stepIndex = 0;
     let backgroundAgents = 0;
 
@@ -608,6 +611,7 @@ export class CliAgentAiService implements IAiService {
 
         case 'error':
           error = event.message;
+          usageLimit = event.usageLimit;
           return;
 
         case 'turn_end':
@@ -645,7 +649,7 @@ export class CliAgentAiService implements IAiService {
       // segment streamed is taken back and carried in the failure instead.
       onProgress({ type: 'text_retracted', segmentId: finalSegment });
       text = text.slice(0, finalRunStart);
-      return { text, researchLog, error: failure, aborted: signal?.aborted, backgroundAgents };
+      return { text, researchLog, error: failure, usageLimit, aborted: signal?.aborted, backgroundAgents };
     }
     return { text, researchLog, error, aborted: signal?.aborted, backgroundAgents };
   }
