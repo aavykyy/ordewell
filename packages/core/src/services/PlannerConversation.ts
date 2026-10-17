@@ -895,6 +895,7 @@ export class PlannerConversation {
     // The persisted transcript keeps the raw user message; the model gets the
     // live catalog (always) and the current plan (tasks, statuses, edit
     // protocol — once tasks exist) alongside it.
+    const toldBefore = this.toldScope;
     const contextBlock = [this.catalogBlock(), this.planContextBlock(), this.autorunBlock(), this.runnersChangedBlock(), this.runUpdatesBlock()].filter(Boolean).join('\n\n');
     const said = fromUser ? plannerMessage(message.text, message.skills) : '';
     const outgoing = [contextBlock, ...wakeUps, userTurn.wakeUp?.brief, said].filter(Boolean).join('\n\n');
@@ -906,6 +907,8 @@ export class PlannerConversation {
         : await this.resume(outgoing, priorHistory, signal, userTurn.stream.sink());
 
       const settleable = await this.drainTaskQueries(turn, userTurn);
+      // A turn that failed or was stopped may not have read what it went with: the next one tells it again.
+      if (settleable.kind === 'message' && (settleable.failed || userTurn.signal.aborted)) this.toldScope = toldBefore;
       this.assertNotLimited(settleable, userTurn);
       if (userTurn.wakeUp) this.assertWakeUpAnswered(settleable, userTurn);
       this.assertCurrent(userTurn, settleable);

@@ -25,6 +25,11 @@ describe('compact saved log reads', () => {
     ].join('\n'));
   });
 
+  it('reads a model switch saved before the plan\'s side was recorded', () => {
+    const saved = JSON.parse('{"type":"model_switched","from":{"model":"sonnet"},"to":{"model":"opus"},"effort":"high"}') as TaskLogEvent;
+    expect(renderTaskLog([saved])).toBe('[1 model_switched] sonnet → opus\n');
+  });
+
   it('says which messages Ordewell sent rather than the user', () => {
     const text = renderTaskLog([
       { type: 'turn_start', message: 'Call task_complete.', from: 'ordewell' },

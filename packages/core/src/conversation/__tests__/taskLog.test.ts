@@ -515,6 +515,12 @@ describe('reduceTaskLog with the runner\'s own commands (#66)', () => {
     });
   });
 
+  it('replays a model switch saved before the plan\'s side was recorded, claiming nothing of the plan', () => {
+    const saved = JSON.parse('{"type":"model_switched","from":{"model":"sonnet"},"to":{"model":"opus"},"effort":"high"}') as TaskLogEvent;
+    const view = replayTaskLog([start, saved]);
+    expect(unkeyed(view.blocks).at(-1)).toMatchObject({ text: 'Model changed in the runner: sonnet → opus' });
+  });
+
   it('shows what the runner loaded as one block', () => {
     const commands = [{ name: 'pingskill', description: 'Reply', kind: 'skill' as const }];
     const view = replayTaskLog([start, { type: 'runner_loaded', commands, mcpServers: [{ name: 'docs-server', status: 'pending' }] }]);

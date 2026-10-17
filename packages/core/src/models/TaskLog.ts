@@ -39,9 +39,10 @@ export type TaskLogEvent =
    * The runner's main thread moved to another model, and what the plan says
    * once the write-back settled (#106): written from its outcome, not from the
    * runner's event, so the line never claims an edit that did not land.
-   * `kept` says why the plan did not follow, when it did not.
+   * `kept` says why the plan did not follow, when it did not. A log saved
+   * before the plan's side was recorded has no `plan`: it says nothing of it.
    */
-  | { type: 'model_switched'; from: RunnerModelRef; to: RunnerModelRef; plan: { model?: RunnerModelRef; effort?: string }; kept?: string }
+  | { type: 'model_switched'; from: RunnerModelRef; to: RunnerModelRef; plan?: { model?: RunnerModelRef; effort?: string }; kept?: string }
   /** What the runner loaded from the user's and the project's setup, as its process started. */
   | { type: 'runner_loaded'; commands: RunnerCommand[]; mcpServers: RunnerMcpServer[] }
   | { type: 'turn_end'; reason: StructuredTurnEnd }

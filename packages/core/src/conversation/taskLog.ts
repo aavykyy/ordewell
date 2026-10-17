@@ -262,6 +262,7 @@ function commandOutput(view: TaskLogView, { text }: Event<'command_output'>): Ta
 }
 
 function modelSwitchNotice({ from, to, plan, kept }: Event<'model_switched'>): string {
+  if (!plan) return `Model changed in the runner: ${from.label ?? from.model} → ${to.label ?? to.model}${kept ? ` (${kept})` : ''}`;
   const planned = plan.model ? `${plan.model.label ?? plan.model.model}${plan.effort ? `, ${plan.effort}` : ''}` : undefined;
   if (!kept) return `Model changed in the runner: ${from.label ?? from.model} → ${to.label ?? to.model}; the plan now says ${planned ?? to.label ?? to.model}`;
   return `The runner now answers on ${to.label ?? to.model}; ${planned ? `the plan still says ${planned}` : 'the plan names no model'} (${kept})`;

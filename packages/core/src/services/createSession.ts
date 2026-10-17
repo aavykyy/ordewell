@@ -1815,11 +1815,16 @@ export class Session {
    */
   private async followRunnerModel({ taskId, sessionId, from, model, effort, asked, attemptEnded }: Parameters<NonNullable<OrchestratorObserver['onModelSwitched']>>[0]): Promise<void> {
     let kept: string | undefined;
+    const live = () => this.orchestrator.activeSessionMap.get(taskId) === sessionId;
     if (!asked) kept = 'no model command in the chat asked for it';
     else if (attemptEnded) kept = 'its attempt had already ended';
     else {
       try {
-        await this.editor.followRunnerModel(taskId, model, effort);
+        if (!(await this.editor.followRunnerModel(taskId, model, effort, live)) && !live()) {
+          // The plan now may not be the one the switch was made in: nothing of it is said.
+          this.taskLogs.note(sessionId, taskId, { type: 'model_switched', from, to: model, kept: 'its attempt had already ended' });
+          return;
+        }
       } catch (err: unknown) {
         kept = `the plan could not follow it: ${err instanceof Error ? err.message : String(err)}`;
         this.notice('warn', `The plan could not follow the model switch of task ${this.store.get(taskId)?.order ?? taskId}: ${err instanceof Error ? err.message : String(err)}`);
