@@ -91,7 +91,7 @@ The planner conversation, its harness backends, its research and its skills.
 |---|---|---|---|---|
 | [0002](planner/0002-planner-as-conversation-loop.md) | Planner as a conversation loop (messages only) | accepted | — | — |
 | [0005](planner/0005-parallel-research-subagents.md) | Parallel read-only research subagents for the planner | accepted | — | — |
-| [0009](planner/0009-coding-agents-as-planners.md) | Coding agents as planners: the harness planner backend | accepted | — | [0026](planner-envelope/0026-one-envelope-for-every-planner.md), [0029](supervision/0029-the-supervisor.md), [0033](planner-envelope/0033-codex-planner-without-its-sandbox.md), [0035](supervision/0035-effects-are-consented-and-recorded.md), [0037](supervision/0037-research-tasks-wake-the-planner.md), [0039](routing/0039-detected-planner-derived-on-refresh.md), [0040](routing/0040-a-slow-model-discovery-never-gates-the-planner-pick.md) |
+| [0009](planner/0009-coding-agents-as-planners.md) | Coding agents as planners: the harness planner backend | accepted | — | [0026](planner-envelope/0026-one-envelope-for-every-planner.md), [0029](supervision/0029-the-supervisor.md), [0033](planner-envelope/0033-codex-planner-without-its-sandbox.md), [0035](supervision/0035-effects-are-consented-and-recorded.md), [0037](supervision/0037-research-tasks-wake-the-planner.md), [0038](routing/0038-runner-install-verdicts-expire.md), [0040](routing/0040-a-slow-model-discovery-never-gates-the-planner-pick.md) |
 | [0012](planner/0012-the-task-query-read-channel.md) | The task-query read channel: reading a task before rewriting it | accepted | — | — |
 | [0024](planner/0024-unified-skills.md) | Unified skills: one format, one loader, two audiences | accepted | — | — |
 
@@ -120,8 +120,7 @@ Modes, models and runner discovery.
 | [0003](routing/0003-per-runner-model-allowlist.md) | Per-runner model allowlist for the planner | accepted | — | — |
 | [0004](routing/0004-codex-builtin-runner-discovery.md) | Codex as a built-in runner; model discovery via `codex app-server` | accepted | — | — |
 | [0031](routing/0031-the-planner-says-read-only-not-a-mode.md) | The planner says read-only, not a mode | accepted | [0001](routing/0001-autonomous-mode-resolution.md) | — |
-| [0038](routing/0038-runner-install-verdicts-expire.md) | A runner install verdict is not permanent | accepted | — | — |
-| [0039](routing/0039-detected-planner-derived-on-refresh.md) | The detected planner is derived again on a runner-list refresh | accepted | [0009](planner/0009-coding-agents-as-planners.md) | — |
+| [0038](routing/0038-runner-install-verdicts-expire.md) | A runner install verdict is not permanent, and a refresh derives the detected planner again | accepted | [0009](planner/0009-coding-agents-as-planners.md) | — |
 | [0040](routing/0040-a-slow-model-discovery-never-gates-the-planner-pick.md) | A slow model discovery never gates the planner pick | accepted | [0009](planner/0009-coding-agents-as-planners.md) | — |
 
 ### runners/
@@ -185,5 +184,6 @@ Folded into another ADR. The number still resolves, and code that cites it stays
 |---|---|---|
 | 0019 | Nested repositories are shared live, not refused | [0014](isolation/0014-multi-repo-workspaces.md) |
 | 0021 | Unedited built-in skill seeds refresh with the package | [0024](planner/0024-unified-skills.md) |
+| 0039 | The detected planner is derived again on a runner-list refresh | [0038](routing/0038-runner-install-verdicts-expire.md) |
 
 <!-- adr-index:end -->

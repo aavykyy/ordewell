@@ -27,7 +27,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   window reload. An agent installed while a daemon or a VS Code window runs now
   becomes selectable and, with no planner chosen and no API key, the default
   ([ADR-0038](docs/adr/routing/0038-runner-install-verdicts-expire.md),
-  [ADR-0039](docs/adr/routing/0039-detected-planner-derived-on-refresh.md)).
+  [ADR-0039](docs/adr/routing/0038-runner-install-verdicts-expire.md#the-detected-planner-is-derived-again-on-a-refresh-adr-0039)).
 
 ### Changed
 
