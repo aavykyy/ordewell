@@ -876,6 +876,19 @@ describe('the command seam: merge_all', () => {
     expect(env.session.mergeGate('o2')).toEqual(['t1']);
   });
 
+  it('refuses a supervisor at Act with the branch to check out when a repo is not on the one the run started on', async () => {
+    const env = await landed({
+      outcome: 'blocked',
+      blocked: [{ repo: 'api', reason: 'wrong-branch', files: [], expected: 'main', actual: 'feature-x' }],
+    });
+
+    expect(await env.run({ command: 'merge_all' }, { kind: 'supervisor', level: 'act' })).toEqual({
+      ok: false, outcome: 'refused',
+      message: 'Merge all stopped: api is on feature-x, not main, which the run started on. Nothing was merged; tell the user, who resolves it.',
+    });
+    expect(env.session.mergeGate('o2')).toEqual(['t1']);
+  });
+
 });
 
 describe('the command seam\'s extension points', () => {

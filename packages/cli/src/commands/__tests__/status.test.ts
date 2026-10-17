@@ -122,6 +122,43 @@ describe('handleStatus --output', () => {
     srv.close();
   });
 
+  describe('the base branch of an isolated run', () => {
+    const isolated = (repos: Array<Record<string, unknown>>) => ({
+      meta: SESSION.meta,
+      plan: {
+        pendingTasks: SESSION.plan.pendingTasks,
+        isolation: { resolvers: {}, run: { id: 'r1', workspaceRoot: '/ws', repos, shared: [], sharedRepos: [], tasks: {} } },
+      },
+    });
+    const statusOf = async (session: unknown) => {
+      const srv = await startServer((_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(session));
+      });
+      const { handleStatus } = await import('../status');
+      const { stdout } = await capture(() => handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)));
+      srv.close();
+      return stripAnsi(stdout);
+    };
+    const repo = (path: string, baseRef: string, baseBranch?: string) => (
+      { path, root: `/ws/${path}`, baseRef, integrationBranch: 'ordewell/r1/integration', ...(baseBranch ? { baseBranch } : {}) }
+    );
+
+    it('names the branch the run started on, and the commit', async () => {
+      expect(await statusOf(isolated([repo('.', 'abcdef1234567890', 'main')]))).toContain('Base:     main @ abcdef12\n');
+    });
+
+    it('names each repo of a group, a detached HEAD as that', async () => {
+      const out = await statusOf(isolated([repo('api', 'aaaa1111bbbb', 'main'), repo('web', 'cccc2222dddd')]));
+
+      expect(out).toContain('Base:     api: main @ aaaa1111, web: detached at cccc2222\n');
+    });
+
+    it('says nothing for a session with no isolation record', async () => {
+      expect(await statusOf(SESSION)).not.toContain('Base:');
+    });
+  });
+
   it('counts and names the tasks a failure blocks (ADR-0034)', async () => {
     const session = {
       meta: { ...SESSION.meta, status: 'approved' },

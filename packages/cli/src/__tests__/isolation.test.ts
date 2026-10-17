@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isolationOfPlan, isRepoGroup, mergeOutcome, repairedNotice, repoResultLines, taskRepoNames } from '../isolation';
+import { checkoutRule, handoffBase, isolationOfPlan, isRepoGroup, mergeOutcome, mergeTarget, repairedNotice, repoResultLines, taskRepoNames } from '../isolation';
 import type { HandoffView } from '../tui/state';
 
 const record = (taskId: string, order: number, status: string) => ({
@@ -11,7 +11,7 @@ const plan = {
   isolation: {
     resolvers: {},
     run: {
-      id: 'r1', workspaceRoot: '/ws', baseRef: 'abc123', integrationBranch: 'ordewell/r1/integration',
+      id: 'r1', workspaceRoot: '/ws', baseRef: 'abc123', baseBranch: 'main', integrationBranch: 'ordewell/r1/integration',
       tasks: {
         b: record('b', 2, 'merged'),
         a: record('a', 1, 'merged'),
@@ -27,7 +27,7 @@ describe('isolationOfPlan', () => {
   it('lists what landed in plan order, not record order', () => {
     const landed = [{ taskId: 'a', order: 1, title: 'Task a' }, { taskId: 'b', order: 2, title: 'Task b' }];
     expect(isolationOfPlan(plan)!.handoff).toEqual({
-      repos: [{ path: '.', integrationBranch: 'ordewell/r1/integration', baseRef: 'abc123', landed }],
+      repos: [{ path: '.', integrationBranch: 'ordewell/r1/integration', baseRef: 'abc123', baseBranch: 'main', landed }],
       landed,
     });
   });
@@ -52,7 +52,7 @@ describe('isolationOfPlan', () => {
         resolvers: {},
         run: {
           id: 'r1', workspaceRoot: '/ws', shared: [],
-          repos: [{ path: '.', root: '/ws', baseRef: 'abc123', integrationBranch: 'ordewell/r1/integration' }],
+          repos: [{ path: '.', root: '/ws', baseRef: 'abc123', baseBranch: 'main', integrationBranch: 'ordewell/r1/integration' }],
           tasks: {
             b: groupRecord('b', 2, 'merged'),
             a: groupRecord('a', 1, 'merged'),
@@ -194,5 +194,72 @@ describe('repairedNotice', () => {
     };
 
     expect(repairedNotice(handoff)).toBe(' Task 1 (a.ts) and Task 2 (b.ts) landed through conflict repairs.');
+  });
+});
+
+describe('where the run forked from', () => {
+  const named = (path: string, baseBranch: string | undefined, baseRef: string) => (
+    { path, integrationBranch: 'ordewell/r1/integration', baseRef, ...(baseBranch ? { baseBranch } : {}), landed: [t(1)] }
+  );
+
+  it('names the branch and the commit for a lone repo, and a detached HEAD as that', () => {
+    expect(handoffBase({ repos: [named('.', 'main', 'abcdef1234567890')], landed: [] }, 12)).toBe('main @ abcdef123456');
+    expect(handoffBase({ repos: [named('.', undefined, 'abcdef1234567890')], landed: [] }, 8)).toBe('detached at abcdef12');
+  });
+
+  it('heads each repo of a group', () => {
+    const handoff: HandoffView = { repos: [named('api', 'main', 'aaaa1111'), named('web', undefined, 'bbbb2222')], landed: [] };
+
+    expect(handoffBase(handoff, 12)).toBe('api: main @ aaaa1111, web: detached at bbbb2222');
+  });
+
+  it('is read from a saved run, for a group and for an ADR-0013 record', () => {
+    const groupPlan = { isolation: { run: { repos: [
+      { path: 'api', root: '/ws/api', baseRef: 'aaa', baseBranch: 'develop', integrationBranch: 'ordewell/r1/integration' },
+      { path: 'web', root: '/ws/web', baseRef: 'bbb', integrationBranch: 'ordewell/r1/integration' },
+    ], tasks: {} } } };
+
+    expect(isolationOfPlan(groupPlan)!.handoff.repos.map((r) => r.baseBranch)).toEqual(['develop', undefined]);
+  });
+});
+
+describe('where Merge all lands, for a confirmation', () => {
+  const named = (path: string, baseBranch: string | undefined, landed = [t(1)]) => (
+    { path, integrationBranch: 'ordewell/r1/integration', baseRef: 'aaa', ...(baseBranch ? { baseBranch } : {}), landed }
+  );
+
+  it('names the branch for a lone repo, and the branch that must be checked out', () => {
+    const handoff: HandoffView = { repos: [named('.', 'main')], landed: [t(1)] };
+
+    expect(mergeTarget(handoff)).toBe('main');
+    expect(checkoutRule(handoff)).toBe(' Nothing is merged unless main is checked out.');
+  });
+
+  it('keeps saying the branch you have checked out for a run that started detached', () => {
+    const handoff: HandoffView = { repos: [named('.', undefined)], landed: [t(1)] };
+
+    expect(mergeTarget(handoff)).toBe('the branch you have checked out');
+    expect(checkoutRule(handoff)).toBe('');
+  });
+
+  it('names one branch once for a group, and each repo with its own when they differ', () => {
+    const same: HandoffView = { repos: [named('api', 'main'), named('web', 'main'), named('infra', 'main', [])], landed: [t(1)] };
+    const mixed: HandoffView = { repos: [named('api', 'main'), named('web', 'develop'), named('docs', undefined)], landed: [t(1)] };
+
+    expect(mergeTarget(same)).toBe('main in each of api, web');
+    expect(mergeTarget(mixed)).toBe('each of api (main), web (develop), docs (as checked out)');
+    expect(checkoutRule(mixed)).toBe(' Nothing is merged unless each repository is on the branch it started on.');
+  });
+});
+
+describe('what Merge all says when a repo is on another branch', () => {
+  it('names the branch to check out', () => {
+    const { ok, message } = mergeOutcome({
+      outcome: 'blocked',
+      blocked: [{ repo: '.', reason: 'wrong-branch', files: [], expected: 'main', actual: 'feature-x' }],
+    }, 'ordewell/r1/integration', false);
+
+    expect(ok).toBe(false);
+    expect(message).toBe('Merged nothing, so every tree is as it was: your checkout is on feature-x; this run started on main. Check out main and press Merge all again.');
   });
 });

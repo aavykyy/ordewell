@@ -257,7 +257,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     expect(sawPredecessor.t2).toBe(true);
     const handoff = messages.find((m): m is Extract<SessionMessage, { type: 'isolation_handoff' }> => m.type === 'isolation_handoff')!;
     const both = [{ taskId: 't1', order: 1, title: 'Add a' }, { taskId: 't2', order: 2, title: 'Add b' }];
-    expect(handoff).toEqual({ type: 'isolation_handoff', repos: [{ path: '.', integrationBranch: integration, baseRef: base, landed: both }], landed: both });
+    expect(handoff).toEqual({ type: 'isolation_handoff', repos: [{ path: '.', integrationBranch: integration, baseRef: base, baseBranch: 'main', landed: both }], landed: both });
     expect(git(root, 'show', `${integration}:a.txt`)).toBe('written by t1');
     expect(git(root, 'show', `${integration}:b.txt`)).toBe('written by t2');
     expect(git(root, 'ls-tree', '--name-only', integration).split('\n')).not.toContain('half.txt');

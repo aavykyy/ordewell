@@ -19,6 +19,8 @@ export interface HandoffRepo {
   path: string;
   integrationBranch: string;
   baseRef: string;
+  /** The branch the run started on; absent when it started on a detached HEAD. */
+  baseBranch?: string;
   /** Tasks whose work landed in this repo, in plan order. */
   landed?: HandoffLandedTask[];
 }
@@ -40,17 +42,24 @@ interface HandoffCardProps {
   onAction: (action: 'reviewDiff' | 'merge' | 'discard' | 'cleanup') => void;
 }
 
+/** Where a repo's run forked: the branch and the commit, or that it started on neither. */
+function baseOf({ baseBranch, baseRef }: HandoffRepo): string {
+  const commit = baseRef.slice(0, 12);
+  return baseBranch ? `${baseBranch} @ ${commit}` : `detached at ${commit}`;
+}
+
 function sortLanded(tasks: HandoffLandedTask[]): HandoffLandedTask[] {
   return [...tasks].sort((a, b) => a.order - b.order);
 }
 
 /** Why one repo kept Merge all from touching anything, as one line. */
-function blockReason({ reason, files }: IsolationMergeBlock): string {
+function blockReason({ reason, files, expected, actual }: IsolationMergeBlock): string {
   switch (reason) {
     case 'merge-in-progress': return 'has a merge in progress';
     case 'conflict': return `would conflict${files.length > 0 ? ` in ${files.join(', ')}` : ''}`;
     case 'uncommitted-changes': return `has uncommitted changes${files.length > 0 ? ` to ${files.join(', ')}` : ''}`;
     case 'partial-landing': return 'holds part of a task whose landing could not be rolled back';
+    case 'wrong-branch': return `is ${actual ? `on ${actual}` : 'on a detached HEAD'}; this run started on ${expected}. Check out ${expected} and merge again`;
     case 'git-error': return 'could not be checked by git';
   }
 }
@@ -106,7 +115,7 @@ export default function HandoffCard({ repos, landed, deferredTo, mergeResult, mi
   const isGroup = repos.length > 1;
   // Every repo's integration branch has the same name.
   const branch = [...new Set(repos.map((r) => r.integrationBranch))].join(', ');
-  const baseRef = repos.map((r) => r.baseRef.slice(0, 12)).join(', ');
+  const base = repos.map(baseOf).join(', ');
   return (
     <div className="isolation-handoff">
       <div className="isolation-handoff-header">
@@ -129,7 +138,7 @@ export default function HandoffCard({ repos, landed, deferredTo, mergeResult, mi
             {repos.map((repo) => (
               <div key={repo.path} className="isolation-handoff-repo">
                 <code className="isolation-handoff-repo-path">{repo.path}</code>
-                <span className="isolation-handoff-repo-base">on <code>{repo.baseRef.slice(0, 12)}</code></span>
+                <span className="isolation-handoff-repo-base">on <code>{baseOf(repo)}</code></span>
                 {repo.landed && repo.landed.length > 0 && (
                   <ul className="isolation-handoff-landed">
                     {sortLanded(repo.landed).map((t) => (
@@ -148,7 +157,7 @@ export default function HandoffCard({ repos, landed, deferredTo, mergeResult, mi
       ) : (
         <>
           <div className="isolation-handoff-base">
-            {sorted.length} task{sorted.length === 1 ? '' : 's'} landed on top of <code>{baseRef}</code>
+            {sorted.length} task{sorted.length === 1 ? '' : 's'} landed on top of <code>{base}</code>
           </div>
           {sorted.length > 0 && (
             <ul className="isolation-handoff-landed">
