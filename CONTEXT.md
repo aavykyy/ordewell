@@ -2289,6 +2289,18 @@ that `cmd /s /c` strips. Capacity does not reorder the routes: an overflowing
 batch shim still raises, whereas a line break may fall through to PowerShell.
 PowerShell shims are considered even when PATHEXT omits `.ps1`.
 
+**Runner install probe** (`RunnerInstallation`, `isInstalled`) — how a host
+decides which runners are on this machine before any surface offers one: the
+runner's `<command> --version` over the augmented PATH, a clean exit meaning
+installed and a throw meaning not. The verdict is shallow on purpose — it says
+the binary answers, never that its login works, which the agent's own first
+turn reports. An *installed* verdict is kept for the process; a *missing* one
+expires and is forgotten at once by `refresh()`, which a runner-list refresh
+calls, so a CLI installed while the daemon or the extension host runs is offered
+without a restart (ADR-0038).
+*Avoid:* "health check" — that is the **Attach state** a runner reports about
+itself, not this probe of ours.
+
 **Well-known bin dirs** (`utils/shellPath.ts`, `wellKnownBinDirs`) — where a
 runner might be, when PATH does not say. On Windows there is no login shell to
 query, so this list is the entire safety net, and a directory missing from it is

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
@@ -123,6 +123,16 @@ function approvalSpy(grant: boolean) {
   return { request: vi.fn(async (_req: ApprovalRequest) => grant) };
 }
 
+/**
+ * Where a read actually lands: the planner judges a link where it points
+ * (ADR-0028), so the path is realpath'd. On macOS that folds `/etc` and the
+ * `/var` holding `tmpdir()` into their `/private` targets; on Linux it is a
+ * no-op. Expectations must go through here to match on either host.
+ */
+function resolved(p: string): string {
+  return realpathSync.native(p);
+}
+
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;
@@ -172,7 +182,7 @@ describe('Claude Code planner reads (ADR-0028)', () => {
     await svc.startConversation(request({ approval }));
 
     expect(controlAnswer(spawned.processes[0])).toBe('deny');
-    expect(approval.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: join(outside, 'secret.txt') }));
+    expect(approval.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: resolved(join(outside, 'secret.txt')) }));
   });
 });
 
@@ -659,7 +669,7 @@ describe('runner state outside the workspace (ADR-0032)', () => {
     await svc.startConversation(request({ approval }));
 
     expect(controlAnswer(spawned.processes[0])).toBe('deny');
-    expect(approval.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: join(outside, 'secret.txt') }));
+    expect(approval.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: resolved(join(outside, 'secret.txt')) }));
   });
 
   it('reads the workspace and its saved output with nobody to ask, and refuses the rest', async () => {

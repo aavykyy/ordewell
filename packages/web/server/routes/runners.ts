@@ -6,11 +6,10 @@ export function runnersRoute(pool: OrchestratorPool) {
   const router = new Hono();
 
   router.get('/', async (c) => {
-    // With no saved choice the enabled runners are the installed agents, so
-    // answering before the probe would hand a client the stale default.
-    await installedPlannerDetected();
-    const state = pool.getRunnerState();
+    // getInstalledRunners re-probes the host first, so the state read after it
+    // reflects the fresh answer rather than the stale default.
     const runners = await pool.getInstalledRunners();
+    const state = pool.getRunnerState();
     return c.json({
       runners,
       orchestratorModel: state.orchestratorModel,

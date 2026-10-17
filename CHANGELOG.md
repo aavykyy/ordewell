@@ -8,6 +8,27 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A coding agent installed while Ordewell is running is noticed on the next
+  refresh.** The runner list (`ordewell runners`, the VS Code runner panel) and
+  a VS Code refresh re-check which agents are installed and re-derive the no-key
+  default planner, instead of holding the startup answer until a restart or a
+  window reload. An agent installed while a daemon or a VS Code window runs now
+  becomes selectable and, with no planner chosen and no API key, the default
+  ([ADR-0038](docs/adr/0038-runner-install-verdicts-expire.md),
+  [ADR-0039](docs/adr/0039-detected-planner-derived-on-refresh.md)).
+
+### Changed
+
+- **Contributors:** `bench/lab/` fakes which coding-agent CLIs a host has
+  installed — a throwaway `HOME` and shim dir; `node bench/lab/lab.mjs
+  --scenario none` prints ready-to-run env, and `--root <dir>` builds the lab
+  at a fixed path for the new `Run Extension (no harness, no key)` launch
+  configuration. The macOS-only symlink-canonicalization test failures in
+  `plannerRepoConfig` and `CliAgentAiService` are fixed by resolving the
+  expected paths the way ADR-0028 already judges them.
+
 ## [0.10.3] - 2026-10-16
 
 ### Changed

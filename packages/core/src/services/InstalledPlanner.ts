@@ -6,12 +6,14 @@ import type { RunnerInstallation } from './RunnerInstallation';
 /**
  * The planner a host falls back to when the user chose none and no vendor key
  * is in the environment (ADR-0009): an installed coding agent, so a first run
- * needs no API key. Derived on each start and never saved, so a key added
- * later or a `/planner` pick still wins.
+ * needs no API key. Derived at startup and again on a runner-list refresh, and
+ * never saved, so a key added later or a `/planner` pick still wins, and an
+ * agent installed while a host runs is found without a restart (ADR-0039).
  *
  * Held per process because `BaseConfig.detectProvider` is sync, read on every
- * `aiProvider`, while finding an agent spawns its binary; a host probes once at
- * startup and every config it builds reads the answer here.
+ * `aiProvider`, while finding an agent spawns its binary; a host probes at
+ * startup and when its runner list is refreshed, and every config it builds
+ * reads the answer here.
  */
 let recorded: PlannerBackendId | null = null;
 /** Every usable agent the latest probe found, in registry order; empty until one answers. */
@@ -114,7 +116,8 @@ export function recordedInstalledPlanner(): PlannerBackendId | null {
  * latest probe found installed, so a Codex-only or OpenCode-only host can plan
  * and run on its first start; DEFAULT_RUNNERS while none was found or no probe
  * has answered. Read on each call and never saved, so an agent installed later
- * joins on the next probe and a saved choice — even an empty one — still wins.
+ * joins on the next probe — a runner-list refresh asks again — and a saved
+ * choice, even an empty one, still wins.
  * Every host's config reads it here, so the daemon, CLI, TUI and VS Code agree.
  */
 export function defaultEnabledRunners(): RunnerId[] {

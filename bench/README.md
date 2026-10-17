@@ -50,6 +50,40 @@ core stack:
 - `pipeline.test.mjs` — runs the driver under `node:test`. Needs core built
   first (`npm run build:core`).
 
+## Runner-detection lab (`bench/lab/`)
+
+A throwaway `HOME` and a shim bin dir that decide, for one run, which
+coding-agent CLIs the host appears to have installed — so a machine with Claude
+Code installed can still test the "nothing here" first run, and a Codex-only or
+OpenCode-only one can be faked without uninstalling anything.
+
+- `lab.mjs` — builds the lab (fresh `HOME`, `bin/`, a throwaway git repo) and
+  writes a shim per runner: one that prints a version reads as installed, one
+  that exits 1 reads as absent. The install probe searches the process's own
+  `PATH` first, so a shim in `bin/` shadows a real binary further down. Run
+  `node bench/lab/lab.mjs --scenario <name>` to print ready-to-run env for the
+  TUI and the VS Code extension. Scenarios: `none`, `claude-only`, `codex-only`,
+  `opencode-only`, `claude+opencode`, `all`. `--root <dir>` builds the lab at a
+  fixed path instead of a fresh temp dir (wiped first, so re-runs start clean):
+  the `Run Extension (no harness, no key)` debug configuration in
+  [.vscode/launch.json](../.vscode/launch.json) expects one at `/tmp/ordewell-lab`.
+
+  ```bash
+  node bench/lab/lab.mjs --scenario none --root /tmp/ordewell-lab
+  ```
+
+  The shims are what make a scenario honest — absent runners need their exit-1
+  shims even though nothing is on the lab PATH, because the probe's augmented
+  PATH ends in the well-known bin dirs (`/opt/homebrew/bin`, ~/.local/bin, …),
+  where a real CLI would otherwise answer and "none" would not mean none.
+- `lab.test.mjs` — asserts the real `RunnerInstallation` probe against each
+  scenario, that a failing shim shadows a real CLI, and that a CLI installed
+  while the host runs is seen after `refresh()`. Needs core built first
+  (`npm run build:core`).
+
+The shim tests the *detection* path only: a version stub makes a runner
+selectable, not runnable. End-to-end execution uses `bench/pipeline/fake-claude`.
+
 ## Tests
 
 ```bash

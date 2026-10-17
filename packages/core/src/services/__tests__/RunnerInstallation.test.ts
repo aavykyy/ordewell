@@ -116,3 +116,63 @@ describe('RunnerInstallation.plannerUsability (ADR-0009 preflight)', () => {
     expect(exec).not.toHaveBeenCalled();
   });
 });
+
+describe('RunnerInstallation verdict freshness', () => {
+  it('re-probes a missing CLI once its verdict expires', async () => {
+    let present = false;
+    let clock = 0;
+    const exec: ExecImpl = vi.fn(async () => {
+      if (!present) throw new Error('command not found');
+      return { stdout: '1.0.0' };
+    });
+    const inst = new RunnerInstallation(registryWith(OPENCODE_MANIFEST), exec, () => clock);
+
+    expect(await inst.isInstalled('opencode')).toBe(false);
+    clock += 59_000;
+    expect(await inst.isInstalled('opencode')).toBe(false);
+    expect(exec).toHaveBeenCalledTimes(1);
+
+    present = true;
+    clock += 2_000;
+    expect(await inst.isInstalled('opencode')).toBe(true);
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps an installed verdict past the expiry — only the miss goes stale', async () => {
+    let clock = 0;
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '1.0.0' }));
+    const inst = new RunnerInstallation(registryWith(OPENCODE_MANIFEST), exec, () => clock);
+
+    expect(await inst.isInstalled('opencode')).toBe(true);
+    clock += 10 * 60_000;
+    expect(await inst.isInstalled('opencode')).toBe(true);
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it('refresh() forgets the misses so the next probe sees a just-installed CLI', async () => {
+    let present = false;
+    const exec: ExecImpl = vi.fn(async () => {
+      if (!present) throw new Error('command not found');
+      return { stdout: '1.0.0' };
+    });
+    const inst = new RunnerInstallation(registryWith(OPENCODE_MANIFEST), exec);
+
+    expect(await inst.filterInstalled(['opencode'])).toEqual([]);
+    present = true;
+    expect(await inst.filterInstalled(['opencode'])).toEqual([]);
+    expect(exec).toHaveBeenCalledTimes(1);
+
+    inst.refresh();
+    expect(await inst.filterInstalled(['opencode'])).toEqual(['opencode']);
+  });
+
+  it('refresh() keeps an installed verdict', async () => {
+    const exec: ExecImpl = vi.fn(async () => ({ stdout: '1.0.0' }));
+    const inst = new RunnerInstallation(registryWith(OPENCODE_MANIFEST), exec);
+
+    expect(await inst.isInstalled('opencode')).toBe(true);
+    inst.refresh();
+    expect(await inst.isInstalled('opencode')).toBe(true);
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+});

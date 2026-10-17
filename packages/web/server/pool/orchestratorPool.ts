@@ -69,6 +69,13 @@ export interface AdoptedFork {
   plan: LegacyPlanState;
 }
 
+/**
+ * The installation checks a host supplies the pool. `refresh` is optional so a
+ * test may hand in only the two probes; the real `RunnerInstallation` always
+ * has it, and a refresh then re-probes a CLI installed since the last look.
+ */
+type RunnerInstall = Pick<RunnerInstallation, 'filterInstalled' | 'plannerUsability'> & Partial<Pick<RunnerInstallation, 'refresh'>>;
+
 export interface OrchestratorPoolDeps {
   /**
    * Where every plan's tasks run (ADR-0018), shared across sessions behind
@@ -84,7 +91,7 @@ export interface OrchestratorPoolDeps {
   /** Overrides the pool's Codex sandbox probe; tests inject one so no real `codex` is started. */
   codexSandbox?: Pick<CodexSandboxAvailability, 'ensure' | 'refresh'>;
   /** Overrides the pool's installation checks; tests inject one so no real agent binary is asked. */
-  runnerInstallation?: Pick<RunnerInstallation, 'filterInstalled' | 'plannerUsability'>;
+  runnerInstallation?: RunnerInstall;
 }
 
 export class OrchestratorPool {
@@ -100,7 +107,7 @@ export class OrchestratorPool {
   private sequence = new Map<string, number>();
   private registry: CoreRunnerRegistry = new RunnerRegistry();
   private modelResolver: ModelResolver;
-  private runnerInstallation: Pick<RunnerInstallation, 'filterInstalled' | 'plannerUsability'>;
+  private runnerInstallation: RunnerInstall;
   private cachedProviderLists: Record<string, string[]> | undefined;
   private settingsService = new SettingsService();
   private plannerModelMemory = new PlannerModelMemory(this.settingsService);
@@ -537,11 +544,15 @@ export class OrchestratorPool {
    * runner can't be spawned.
    */
   async getInstalledRunners(): Promise<RunnersResponse['runners']> {
+    // The runner list is the one place a user who just fixed their host looks
+    // again, so every cached answer is asked afresh: the Codex sandbox, the
+    // install verdicts, and the agent detection behind the no-choice defaults.
+    await this.codexSandbox.refresh();
+    this.runnerInstallation.refresh?.();
+    await this.detectInstalledPlanner();
+
     const config = new WebConfig({ enabledRunners: this.enabledRunnerOverride() });
     const enabled = new Set(config.enabledRunners);
-    // The runner list is the one place a user who just fixed their host looks
-    // again, so it is where the cached answer is asked afresh.
-    await this.codexSandbox.refresh();
     const runners = this.registry.list();
     const installedIds = new Set(
       await this.runnerInstallation.filterInstalled(runners.map((p) => p.manifest.name)),

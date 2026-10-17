@@ -190,6 +190,8 @@ function fakeRunnerInstallation(installed: string[]) {
   return {
     filterInstalled: vi.fn(async (runners: string[]) => runners.filter((r) => installed.includes(r))),
     plannerUsability: vi.fn(async (_runner?: string): Promise<PlannerUsability> => ({ usable: true, reason: undefined })),
+    // A discovery refresh asks again; the fake keeps no verdicts, so it is a no-op.
+    refresh: vi.fn(),
   };
 }
 

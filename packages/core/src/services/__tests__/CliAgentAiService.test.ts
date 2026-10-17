@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { realpathSync } from 'fs';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { createAiService } from '../AiService';
 import { fakeConfig, fakeFileSystem } from '../../testing';
@@ -429,7 +430,9 @@ describe('CliAgentAiService — Claude Code', () => {
     const outside = approvalSpy(false);
     const { svc: outsideSvc, spawned: outsideSpawn } = service('claude-code', reachingFor('Read', { file_path: '/etc/hosts' }));
     await outsideSvc.startConversation(request({ approval: outside }));
-    expect(outside.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: '/etc/hosts' }));
+    // Judged where the path points (ADR-0028): on macOS /etc is a symlink to
+    // /private/etc, on Linux it is not, so resolve the expectation the same way.
+    expect(outside.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: realpathSync.native('/etc/hosts') }));
     expect(controlAnswer(outsideSpawn.processes[0])).toMatchObject({ behavior: 'deny' });
 
     const inside = approvalSpy(false);

@@ -20,25 +20,38 @@ const defaultExec: ExecImpl = async (command, options) => {
 const CHECK_TIMEOUT_MS = 8000;
 
 /**
+ * How long a "not installed" verdict is trusted before the next probe re-runs
+ * it. A missing CLI is the verdict that goes stale while a host runs — the user
+ * installs it and expects the next look to see it — whereas an installed one
+ * does not: a CLI that disappears fails its spawn with the real error, which
+ * this shallow probe is not trying to predict. A refresh asks again at once;
+ * this bounds the wait when nothing calls one.
+ */
+const NEGATIVE_TTL_MS = 60_000;
+
+/**
  * Detects whether a runner's underlying CLI is actually installed on the host,
  * by invoking `<command> --version`. Mirrors ModelDiscovery: injectable exec,
  * augmented PATH, per-process cache. A runner that isn't installed should never
  * be offered for selection in any surface.
  */
 export class RunnerInstallation {
-  private cache: Map<string, boolean> = new Map();
+  private cache: Map<string, { installed: boolean; at: number }> = new Map();
   private inflight: Map<string, Promise<boolean>> = new Map();
   private registry: RunnerRegistry;
   private execImpl: ExecImpl;
+  private now: () => number;
 
-  constructor(registry: RunnerRegistry, execImpl: ExecImpl = defaultExec) {
+  constructor(registry: RunnerRegistry, execImpl: ExecImpl = defaultExec, now: () => number = Date.now) {
     this.registry = registry;
     this.execImpl = execImpl;
+    this.now = now;
   }
 
   /** True if the runner's CLI responds to `--version`. Cached per process. */
   async isInstalled(runner: string): Promise<boolean> {
-    if (this.cache.has(runner)) return this.cache.get(runner)!;
+    const cached = this.cache.get(runner);
+    if (cached && (cached.installed || this.now() - cached.at < NEGATIVE_TTL_MS)) return cached.installed;
 
     const existing = this.inflight.get(runner);
     if (existing) return existing;
@@ -46,7 +59,7 @@ export class RunnerInstallation {
     const manifest = this.registry.getManifest(runner);
     const command = manifest?.runner.command;
     if (!command) {
-      this.cache.set(runner, false);
+      this.cache.set(runner, { installed: false, at: this.now() });
       return false;
     }
 
@@ -58,13 +71,23 @@ export class RunnerInstallation {
         return false;
       }
     })().then((installed) => {
-      this.cache.set(runner, installed);
+      this.cache.set(runner, { installed, at: this.now() });
       this.inflight.delete(runner);
       return installed;
     });
 
     this.inflight.set(runner, probe);
     return probe;
+  }
+
+  /**
+   * Forget cached "not installed" verdicts so the next probe re-runs them. A
+   * runner-list refresh calls this, so a CLI installed while the host runs is
+   * offered without a restart. An installed verdict stays: it cannot have
+   * changed without the binary going away, and re-probing one costs a spawn.
+   */
+  refresh(): void {
+    for (const [runner, probe] of this.cache) if (!probe.installed) this.cache.delete(runner);
   }
 
   /**

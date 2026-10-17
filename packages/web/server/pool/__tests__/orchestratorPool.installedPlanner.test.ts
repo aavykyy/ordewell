@@ -319,4 +319,28 @@ describe('OrchestratorPool default planner', () => {
     delete process.env.AI_PROVIDER;
     expect(pool.getSettings().aiProvider).toBe('claude-code');
   });
+
+  it('a runner installed while the daemon runs becomes the default after a runner-list refresh', async () => {
+    let installed: string[] = [];
+    const installation = {
+      plannerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({ usable: installed.includes(runner) })),
+      filterInstalled: vi.fn(async (runners: string[]) => runners.filter((r) => installed.includes(r))),
+      refresh: vi.fn(),
+    };
+    const pool = new OrchestratorPool({
+      runnerInstallation: installation,
+      codexSandbox: { ensure: async () => undefined, refresh: async () => undefined },
+    });
+    // Nothing installed at startup and no key: the openrouter fallback.
+    await pool.detectInstalledPlanner();
+    expect(pool.getSettings().aiProvider).toBe('openrouter');
+    expect(await pool.getInstalledRunners()).toEqual([]);
+
+    installed = ['opencode'];
+    const runners = await pool.getInstalledRunners();
+
+    expect(runners.map((r) => r.id)).toEqual(['opencode']);
+    expect(pool.getSettings().aiProvider).toBe('opencode');
+    pool.destroyAll();
+  });
 });
