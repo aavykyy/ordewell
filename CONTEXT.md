@@ -551,7 +551,11 @@ of one paused on a usage limit (see *Usage-limit resume*), that resumes its
 saved runner session (Claude's `--resume`, Codex's `thread/resume`) with
 the user's message as the next turn.
 It is verified and landed like any attempt, is not offered on conflicts, and
-leaves dependents alone, as retry does. `continuability` is the one rule, and
+leaves dependents alone, as retry does. It never crosses runners: a saved
+session records the runner that owns it (`Task.runnerSessionOwner`, else the
+runner of the last attempt, via `sessionOwner`), and Continue is offered only
+while the task is assigned to that runner; after a move, Retry carries the work
+over (see *Carry-over*). `continuability` is the one rule, and
 a status carries only whether it holds (`continuable`), never the session id.
 The first turn is the message plus a short reminder of the checkpoint
 protocol (`composeContinuationPrompt`), not the original prompt; how the task
@@ -567,12 +571,13 @@ A session the runner
 cannot find fails the attempt with a message that suggests Retry; a fresh
 session is never started in its place.
 *Avoid:* "resume" for the user action (that is the protocol flag), and "retry"
-for it — a retry starts a fresh attempt with no message.
+for it — a retry starts a fresh attempt with no message; "continue" across
+runners.
 
 **Usage-limit resume** (`readUsageLimitReset`, `UsageLimitWaits`,
 `cancelScheduledResume`; ADR-0018, U1) — a task whose runner stopped on its
 account's usage limit is `awaiting_user` with reason `usage-limit`, and the run
-holds. When the runner's message names the reset (Claude Code and Codex do,
+holds. The limit counts only under the *in-flight rule*. When the runner's message names the reset (Claude Code and Codex do,
 read by their connectors' `usageLimitReset`; OpenCode does not), the task carries a `resumeAt` saved with the plan, and at
 that time it is retried as a *Continue* of its saved session. Tasks paused on
 one runner share one wait — the latest of their resets — and resume together;
@@ -593,15 +598,43 @@ keeps the resume because the limit belongs to the runner's account.
 inside the runner and is not this; "paused" for any other wait.
 
 **Carry-over** (`carryOver` attempt kind, `Task.carriedFrom`; ADR-0018, U1) —
-the next attempt of a change task paused on a usage limit and then moved to
-another runner. A session cannot cross runners, so it is a fresh session given
+the next attempt of a change task that was moved to another runner after an
+attempt of the earlier one left work: a task paused on a usage limit, which
+the scheduler starts, or any other task with a saved session, which the user's
+Retry starts. A session cannot cross runners, so it is a fresh session given
 the task's prompt, but its worktree restores the paused attempt's work as a
 *Continue*'s does, and its prompt says the files come from a previous attempt
 on the old runner and may be unfinished. If that work conflicts with what
 landed meanwhile, it starts fresh from the integration tips, and its prompt and
 the task log name the preserved branches. `carriedFrom` is saved with the plan
-until the attempt runs; a retry clears it. An ops task carries nothing over.
+until the attempt runs; a Retry after a move sets it from the session's owner,
+and any other retry clears it. An ops task carries nothing over.
 *Avoid:* "continue" or "resume" for it — no session is resumed.
+
+**In-flight rule** (`saidInFlight`, `classifyRunnerStop`; ADR-0018, U1;
+ADR-0044) — a usage limit is acted on only when it ended a turn Ordewell
+started, or refused one it was starting. Limit words left by a turn that had
+already ended did not stop the runner and pause nothing. Where a runner's
+protocol names the cause in a field, the field decides over the words: Codex's
+`codexErrorInfo` `usageLimitExceeded` is the limit (its reset read from
+`account/rateLimits`), and any other named cause (`rateLimitExceeded`, a
+provider's throttle) is not, however its words read. The same reading serves
+tasks, the planner and the supervisor's wake-ups.
+*Avoid:* "rate limit" for the account limit.
+
+**Planner resend** (`PlannerResend`, the plan's `plannerResend`; ADR-0044) —
+what follows a planner turn that ended on the planner's own usage limit. The
+turn shows as a failure; the inputs it took (the user's message, a wake-up)
+stay pending on the plan, and a wait is saved with it, so a reload keeps it. At
+the reset plus a minute they go again as one turn, with whatever arrived
+meanwhile; a user's message sent meanwhile is answered at once as saved, not
+held for hours. With no reset known, a relapse within five minutes of a
+resend, a cancel (`/resend cancel`, `ordewell resend cancel`, VS Code's *Don't
+resend*) or a planner that moved to another runner, nothing is sent on its own:
+what waits is *held* and goes with the next input. The supervisor keeps no
+wait of its own.
+*Avoid:* "retry" for it — the user did not ask again; "usage-limit resume",
+which is a task's.
 
 **Task log** (`TaskLogEvent`, `reduceTaskLog`, `TaskLogRecorder`) — what a
 structured task did, at full fidelity (ADR-0018, O1b/P1): normalized events —
@@ -676,6 +709,23 @@ a `/name` typed to it goes as text.
 *Avoid:* "slash command" alone (Ordewell's own TUI commands are slash
 commands too, and never run from a task's chat), and calling a runner's
 `/compact` a **Compaction** (that is the planner conversation's).
+
+**Runner-reported model switch** (`model_switched`, `model_drifted`,
+`Session.followRunnerModel`, `PlanEditor.followRunnerModel`; ADR-0041) — a
+task's runner moved to another model. When a model command sent through the
+task's chat preceded it, however the message was routed, it is the user's own
+choice (`model_switched`): the plan follows it as a visible direct edit, saved
+and announced as `task_updated` — the alias resolved to the id the runner lists,
+written even off the allowlist, effort only when the runner reports one. When no
+command preceded it (`model_drifted`) it is stated in the *Task log* and never
+written. The log's `model_switched` line is written from the write-back's
+outcome, so it never claims an edit that did not land. Only the Claude Code
+connector reports a switch; Codex and OpenCode get no synthesized `/model`,
+since runner commands are never interpreted. While a task's runner is live its
+model and effort are locked for every actor (`liveModelRefusal`): stop, edit,
+continue is the way from outside.
+*Avoid:* "model override" and "fallback" for it; *Avoid:* writing the plan from
+a drift.
 
 **Mid-turn delivery** — a task message reaching the model at the runner's next
 step boundary, after the tool call in flight and inside the same turn
@@ -951,12 +1001,25 @@ the latest main-runner model and clears on a switch until the new model reports
 both prompt tokens and its window. `planUsage` sums all task attempts,
 including subtasks, separately from the planner's own ledger. Status updates
 carry both the task ledgers and the plan roll-up; surfaces reuse their planner
-usage formatting. The TUI shows a task's usage only in its task view (the pinned
-footer: measures, time, and a per-model breakdown when more than one model ran),
-never on plan rows; VS Code task cards show none. The plan-level *Tasks total*
-stays at the top. Absent measures mean unknown, never zero or an estimate.
+usage formatting. Surfaces show the sum of a task's attempts (*Task usage*), not one ledger. The
+plan-level *Tasks total* stays at the top. Absent measures mean unknown, never zero or an estimate.
+A runner that reports its session's running cost has that count saved with the
+attempt (`runnerSessionCost`), so a *Continue* of the session counts its first
+turn from there; with no count kept, that turn only sets the baseline.
 *Avoid:* attributing a session cost to its last model without a reported
-breakdown; *Avoid:* mixing planner usage into task totals.
+breakdown; *Avoid:* mixing planner usage into task totals; *Avoid:* "the task's
+usage" for one attempt's ledger — see *Task usage*.
+
+**Task usage** (`TaskUsageSummary`, `taskUsageSummary`, `TaskRowView.usage`) —
+what a task spent in all: the sum of every *attempt usage* across every attempt
+and every model, so a stop, a model change, a move or a continue never makes
+earlier spend vanish. Its context meter is the exception, read from the latest
+attempt, because only the current model's window says how full the next prompt
+is. It is the line a task row, the TUI task view and VS Code's task card and
+log show (`12.4k in · 3.1k out · 2k cached · $0.42 · ctx 18%`): a part nobody
+reported, cost included, is left out, and the line carries no wall time.
+*Avoid:* "attempt usage" for it; *Avoid:* an estimated cost or "cost unknown"
+filler.
 
 **Attempt kind** (`AttemptKind`, `attemptKind.ts`) — what one attempt of a task
 is: `change`, `ops`, `repair` (a *conflict repair*, ADR-0015), `continuation`
@@ -1136,7 +1199,10 @@ fast-forward); "resolver" (that names `resolveConflictAsTask`, the explicit
 `x` action a person asks for — a repair runs before anyone is asked); "auto-resolve" (implies the model's word stands in for the Verdict, which it never does).
 
 **Merge all** — the handoff's one merge, `mergeRun`: every repo's integration
-branch into what the user has checked out there, all or nothing. Each repo with
+branch into what the user has checked out there, all or nothing, and only when
+every repo of the run, with work or not, is on its *base branch* (else
+`blocked`, reason `wrong-branch`, nothing merged; a repo mid-rebase is named as
+such). Each repo with
 work (commits ahead of its base ref) is preflighted without touching its tree —
 no merge of the user's in progress, `git merge-tree --write-tree` against HEAD
 shows no conflict, no uncommitted tracked edit to a file the integration branch
@@ -1211,6 +1277,15 @@ not the user's; *Avoid:* "auto-resolve" — a conflict is never resolved by it.
 minted its record, resolved once at that moment. The integration branch forks from it and
 the review diff is taken against it, so switching or advancing the user's branch
 mid-run does not retarget the run.
+
+**Base branch** (`IsolationRepo.baseBranch`, `startedDetached`; ADR-0042) — the
+branch a repo had checked out when the run minted its record, as opposed to the
+*base ref*, the commit it pointed at. The base ref anchors the fork and the
+review diff; the base branch is where *Merge all* lands, and the surfaces name
+it ("`main` @ `a1b2c3d`"). A run that started on a detached HEAD has none and is
+recorded as `startedDetached`; a record saved before the branch was noted has
+neither, and is not checked.
+*Avoid:* "target branch" — the merge target is the base branch by definition.
 
 **Isolation run** — one Execute-Plan click or one manual task run's worth of
 isolation: the `IsolationRun` record holding the run id, the repo group (`repos`:
@@ -1333,6 +1408,21 @@ carried on *the plan* and the session. Every task carries an `assignedRunner`
 drawn from the set (always present, even for single-runner plans). Size is the
 semantics, not a sentinel: size 1 means a single-runner plan, size >1 means a
 multi-runner plan. Empty is invalid and rejected before planning.
+
+**Assignment scope** (`AssignmentScope`, `assignmentIssue`; ADR-0043) — what the
+user allows a plan to be built from right now: the *enabled runners* and each
+runner's model allowlist. A task whose runner is switched off, or whose model is
+off its runner's allowlist, carries an **assignment flag** (`assignmentFlag`:
+"codex is switched off", "Opus 4 is not in the allowlist") on every surface; it
+still runs as assigned, since the scope shapes what is planned, not what is
+started. Completed and skipped tasks are never flagged. When the scope differs
+from what the planner was last told (`scopeChange`), its next turn carries a
+`<runners_changed>` block naming the change and the flagged tasks; a turn that
+failed or was stopped keeps the note owed. The **enabled runners** are one list
+in the settings file (`enabledRunners`), shared by the terminal UI, the daemon
+and VS Code; VS Code's retired `ordewell.enabledRunners` is copied once and
+cleared.
+*Avoid:* "disabled task" for a flagged one — nothing about it is disabled.
 
 **PlanEditor** — the module behind Session's direct plan edits: `updateTask`,
 `setTaskDependencies`, `setTaskRunner`, `addTask`, `removeTask`, the
@@ -1901,8 +1991,14 @@ window is, from its last prompt's reported input tokens against the window the
 runner reports. Derived only for the planner's own calls: a subagent runs its
 own model, whose window says nothing about the planner's. A reported window of
 0 means "not known", and then the fill is simply omitted — never shown against
-a guessed zero.
-*Avoid:* calling it a percentage when either half is unknown.
+a guessed zero. The window is the reporter's own; a record that states none is
+filled (`ContextWindowFill`) from the runner's own model listing or the
+provider's own models endpoint for that record's model, per record so a model
+change mid-stream reads its own window, and a window reported once is kept for
+its model. Never from a table kept in Ordewell: neither known leaves the fill
+unknown.
+*Avoid:* calling it a percentage when either half is unknown; *Avoid:* a window
+table in Ordewell.
 
 **Subagent lifecycle** — a research subagent as a first-class block: announced
 by `subagent_started` (brief and model), running its calls tagged with its
@@ -2015,7 +2111,8 @@ or on the switch being turned on while a plan waits — and starts ops tasks too
 Independent of the Supervisor level and of Full/Guarded. Recorded as `run_plan`
 with autorun as who asked. With autorun on and Full, the planner may also start
 a task it added after the plan was approved, when it asks; both are read at the
-start.
+start. A task the planner adds in the user's turn is approved as it lands when
+autorun is on, in Full and in Guarded alike, read as the edit lands.
 *Avoid:* "auto-execute", "auto-approve" (approval is a consequence, not the
 setting), "autopilot".
 
@@ -2111,10 +2208,18 @@ not admitted until someone or the scheduler asks to start it.
 
 **Waiting for approval to start** (`waitsForApproval`) — an AI task not started
 yet, in a plan the user approved, outside their approval record: the planner
-added it since (ADR-0035). The scheduler leaves it, and every surface says so
-— VS Code's card, the TUI row, `ordewell status` and `ordewell run`; the user
-approves it by starting it or executing the plan. Derived from the plan and
-its record, never stored as a status.
+added it since (ADR-0035). The scheduler leaves it, and every surface says it
+"waits for your approval" — VS Code's card, with an **Approve all** button, the
+TUI row (`f` approves it, `/run` approves all), `ordewell status` and `ordewell
+run` (`force-start <id>` approves one, `run` approves all). The user approves it
+by force-starting it, by running the plan while a run is under way (which
+approves every waiting task and starts each as its dependencies finish,
+without restarting the run), or by executing the plan. A force start approves
+and never skips an unfinished dependency: the task is queued (`queuedStarts`),
+and the answer names what it waits for; it does go past a failed dependency or
+a merge gate. With *Autorun* on, a task the planner adds in the user's turn is
+approved as its edit lands and never waits. Derived from the plan and its
+record, never stored as a status.
 *Avoid:* "awaiting approval" — that is a *Runner approval* a running task
 waits on.
 

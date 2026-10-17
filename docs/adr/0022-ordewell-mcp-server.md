@@ -266,3 +266,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-11 — wake-up turns implemented: their reads spend the plan's wake-up read budget, and `submit_plan` and `edit_plan` are refused in them at Watch.
 - 2026-10-13 — S3 by exact name: OpenCode's `ordewell_*` rule and the Claude Code and OpenCode prefix matches pre-approved a repository server named `ordewell_x`'s tools; checked against OpenCode 2.0.27's tool naming.
 - 2026-10-14 — `skip_task` joins the execution tools ([ADR-0029](0029-the-supervisor.md)).
+- 2026-10-17 — the live enabled runners (L1) are read from one settings file shared with VS Code, and the planner is told on its next turn what changed ([ADR-0043](0043-a-change-of-scope-reaches-the-planner-and-flags-tasks.md)).

@@ -393,3 +393,4 @@ everything below applies per repo of the group.
 - 2026-10-12 — the end of a run is a handoff unless the user opted in to automatic merging, which now also merges at the end of a run, or the supervisor at Act merges ([ADR-0029](0029-the-supervisor.md), amendment of 2026-10-12).
 - 2026-10-14 — a failed verdict blocks only the task's dependents instead of halting the run ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)).
 - 2026-10-14 — a carry-over restores a usage-limit-paused attempt's work for its new runner (ADR-0018, U1).
+- 2026-10-17 — Merge all merges only into the branch the run started on ([ADR-0042](0042-merge-all-lands-only-on-the-branch-the-run-started-on.md)).

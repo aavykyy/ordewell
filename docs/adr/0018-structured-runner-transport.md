@@ -113,7 +113,10 @@ and completion evidence.
   completes the runner's list alone, at the start of the message, the one
   place a runner reads a command; a reported `/name` runs as that command, an
   unreported one is refused with a note, and with no list reported the text
-  goes as typed. Ordewell's run and plan commands are neither offered nor run
+  goes as typed. A model command is run by the runner like any other; the Claude Code
+  connector sees the model the next turn reports, and the plan follows that
+  switch ([ADR-0041](0041-a-tasks-model-follows-the-runners-own-switch.md)).
+  Ordewell's run and plan commands are neither offered nor run
   there; they stay on the plan pane, its keys and the planner chat, and Esc
   still leaves the view. Claude Code (checked on 2.1.299): the `initialize`
   control request lists every command with its description, argument hint,
@@ -163,7 +166,12 @@ and completion evidence.
 - **Continue (K1).** A retry that resumes the saved native session with the
   user's message as the next turn. It is verified and landed like any attempt.
   It is offered on completed and failed structured tasks with a saved session
-  id, not on conflicts. Dependents are left alone, as with retry. If the runner
+  id, not on conflicts, and only while the task is still assigned to the runner
+  that session belongs to: a saved session records its owner
+  (`runnerSessionOwner`; for a plan from before that, the runner of the last
+  attempt), and a session cannot cross runners
+  ([ADR-0041](0041-a-tasks-model-follows-the-runners-own-switch.md)). Dependents
+  are left alone, as with retry. If the runner
   refuses the resume, the attempt fails; no fresh session is started in its
   place. In an isolated run the task workspace is recreated at the same path
   from the current integration tips, then the previous attempt's unlanded work
@@ -184,12 +192,21 @@ and completion evidence.
   Fresh retries still start clean from the integration tips. Shared runs
   continue in the same checkout with their
   uncommitted work already in place, and say so. A carry-over (U1) — a
-  usage-limit-paused task moved to another runner — restores the paused
-  attempt's work the same way, files only: no session crosses runners, so
-  it is a fresh session given the task's prompt.
+  task moved to another runner, from a usage-limit pause or from any state that
+  left a saved session — restores the earlier runner's attempt's work the same
+  way, files only: no session crosses runners, so it is a fresh session given
+  the task's prompt.
 - **Usage limits (U1, #84).** A runner that stops on its account's usage
-  limit — its process exits with the limit as the last thing it printed, or a
-  turn fails with it as its error — has not failed the task. The attempt ends
+  limit — its process exits mid-turn with the limit as the last thing it
+  printed, or a turn fails with it as its error, or the limit refuses the turn
+  Ordewell was starting — has not failed the task. A limit counts only when it
+  ended a turn Ordewell started: limit words left by a turn that had already
+  ended did not stop the runner. Where the runner's protocol names the cause in
+  a field, the field decides over the words (Codex's `codexErrorInfo`:
+  `usageLimitExceeded` is the limit, with its reset from `account/rateLimits`;
+  any other named cause is not, though its words read like one), and the same
+  reading serves the planner and the supervisor
+  ([ADR-0044](0044-the-planners-usage-limit-waits-and-resends.md)). The attempt ends
   as a verdict would end it (L1), the task is `awaiting_user` with reason
   `usage-limit`, and the run holds: every other start would spend the same
   exhausted limit. When the runner's message says when the limit resets
@@ -221,10 +238,12 @@ and completion evidence.
   both leave the task waiting for a manual retry, as one with no readable
   reset waits. Moving a task to another runner, through a direct edit or the
   planner, cancels its resume through `cancelScheduledResume` before changing
-  its assignment and makes it ready for the scheduler's next slot. Its next
-  attempt is a carry-over (attempt kind `carryOver`, owed through the task's
-  `carriedFrom`, saved with the plan until that attempt runs or a retry
-  clears it): a fresh session on the new runner, its worktree restored from
+  its assignment and makes a paused task ready for the scheduler's next slot.
+  A task that is not paused is moved the same way, and its next start is the
+  user's Retry. Either way the next attempt is a carry-over (attempt kind
+  `carryOver`, owed through the task's `carriedFrom`, which a Retry after a
+  move sets from the session's owner and which is saved with the plan until
+  that attempt runs): a fresh session on the new runner, its worktree restored from
   the paused attempt's work as K1 restores a continue's, and its prompt told
   the files come from a previous attempt on the old runner and may be
   unfinished. When that work conflicts with what landed meanwhile, the
@@ -364,6 +383,13 @@ transport is retained for take-over.
 - **Reading Claude Code's `rate_limit_event`.** Its stream-json reports the
   reset as an epoch too, but the printed message covers both runners that give
   a time, and both ways a limit arrives, with one reader per runner.
+- **Continuing a session on a runner it does not belong to.** Rejected: the new
+  runner cannot open it and the attempt would fail; Continue is not offered
+  after a move.
+- **A Retry after a move that starts clean from the integration tips.** The
+  behaviour when only a paused task's move carried work over: the earlier
+  runner's files were discarded unseen. The carry-over is the same for every
+  move.
 - **Storing the log inside the session JSON.** That file is rewritten on every
   save; an append-only file per attempt is not.
 
@@ -388,3 +414,4 @@ transport is retained for take-over.
 - 2026-10-14 — R1: a task's chat speaks its runner's own slash commands; the task log records commands, compactions and what the runner loaded (#66; Claude Code, Codex, OpenCode and the TUI).
 - 2026-10-14 — R1: VS Code task cards and log tabs complete and invoke native runner commands and draw the runner’s command, compaction and loaded-configuration blocks.
 - 2026-10-14 — U1: a paused task moved to another runner carries the paused attempt's work over to a fresh session (#94).
+- 2026-10-17 — K1/U1: a saved session records its owner and Continue never crosses runners; a Retry after any move to another runner is a carry-over, not only a paused task's; a limit counts only in a turn Ordewell started, and a runner's structured field decides over its words ([ADR-0041](0041-a-tasks-model-follows-the-runners-own-switch.md), [ADR-0044](0044-the-planners-usage-limit-waits-and-resends.md)).

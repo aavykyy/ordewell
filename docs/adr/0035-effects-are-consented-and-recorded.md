@@ -175,10 +175,32 @@ for the user's consent.
 **The scheduler starts only tasks in the plan's approved set** (`approvedTasks`):
 every task when the plan is executed, a task the user adds by hand or starts
 themselves, a task an Act supervisor adds, and one a Full planner starts with
-autorun on. Any other task added after approval waits, shown as waiting for
-the user's approval on every surface. This is the first of #95's two options,
-and it makes ADR-0029's "an unapproved task never starts" true of the
-scheduler too.
+autorun on. Any other task added after approval waits, shown as "waits for
+your approval" on every surface. This is the first of #95's two options, and it
+makes ADR-0029's "an unapproved task never starts" true of the scheduler too.
+
+How the user approves what waits, without starting anything early:
+
+- **With autorun on, a task the planner adds in the user's turn needs no
+  approval.** Autorun is the user's standing word that they need not approve
+  what the planner writes; the tasks the edit wrote are approved as it lands,
+  in Full and in Guarded alike, and start once their dependencies finish. The
+  setting is read as the edit lands, so turning autorun off first holds the
+  task. A task added while autorun was off is approved when the planner next
+  rewrites it with autorun on. A supervisor's wake-up turn is not the user's
+  turn and approves nothing this way.
+- **`/run` (Execute) while a run is under way approves every task that waits.**
+  It does not restart the run: each approved task starts once its dependencies
+  finish, and the answer says how many were approved. A run the scheduler was
+  not driving, one task started on its own, becomes the plan's run.
+- **A force start never skips unfinished dependencies.** It approves the task.
+  If every dependency it would build on has finished, it starts now. If one is
+  still under way or yet to run, the task is approved and queued, and the
+  answer says which it waits for ("starts once task X finishes"). Outside a run
+  it adds that nothing starts it until the plan runs. A force start does go
+  past a failed dependency (ADR-0034) or a merge gate (ADR-0020), as asked, but
+  still waits for any other dependency that is under way. A Stop withdraws a
+  queued start (ADR-0029).
 
 ### What stays
 
@@ -247,6 +269,15 @@ its body.
 - **Names.** *Command*, *action*, *effect* and *operation* were rejected for
   ops tasks (ADR-0020) and stay unused for this. *Script task* says what the
   body is.
+- **A force start that ignores dependencies.** The earlier behaviour: a task
+  started on work that was not there yet. Approving and starting are separate
+  acts; the force start approves, and the task starts when what it builds on
+  has finished.
+- **`/run` during a run refused as already running.** The earlier behaviour: the
+  only way to approve a waiting task was to start it by hand, early.
+- **Autorun approving only what the user wrote.** Rejected: autorun is the
+  user's word that they need not approve what the planner writes in their
+  turn, and the held task otherwise sat with no card.
 
 ## Consequences
 
@@ -274,3 +305,4 @@ its body.
 
 - 2026-10-15 — accepted; settles #95 with its first option. Not yet implemented.
 - 2026-10-16 — #95 implemented: the scheduler starts only tasks in the approval record, checked at the one claim every start passes, and a task the user adds by hand is approved as it lands. A task added after approval waits, shown as waiting for the user's approval to start in VS Code, the TUI, `ordewell status` and `ordewell run`; the user approves it by starting it or executing the plan. Seen live: in Guarded with autorun on, a task the planner added in the user's turn during a run started on its own, with no card. Script tasks and the effect allowlist are not yet implemented.
+- 2026-10-17 — approving what waits: with autorun on the planner's additions in the user's turn are approved as they land, `/run` during a run approves every waiting task and joins the run, and a force start approves the task but queues it behind dependencies still under way; the rows say "waits for your approval" and name the key that approves.
