@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createTask, type LegacyPlanState } from '../../models/Task';
 import type { SkillInfo } from '../SkillsService';
-import { makeSession, FakeRunnerSession, fakeConfig, taskOf, saves } from './sessionTestKit';
+import { makeSession, FakeRunnerSession, fakeConfig, taskOf, saves, memoryTaskLogs } from './sessionTestKit';
+import { plannerContextFill } from '../../models/Usage';
 import { scriptedAdapter, fakeMcpServer } from './harnessTestKit';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { IDLE_TIMEOUT_MS } from '../VerdictEngine';
@@ -771,16 +772,27 @@ describe('session id stability (persist seam)', () => {
       expect(broadcast.mock.calls.map((c) => (c[0] as { type: string }).type)).not.toContain('planner_usage');
     });
 
-    it('threads the planner model window from the resolver into the opening', async () => {
-      const startConversation = vi.fn().mockResolvedValue({ kind: 'message' as const, text: 'hi', researchLog: [] });
+    it('measures the planner\'s context against the resolver\'s window for the model each call names', async () => {
+      const broadcast = vi.fn();
+      const windows: Record<string, number> = { 'gpt-4o': 128000, 'gpt-4o-mini': 64000 };
       const session = makeSession({
-        modelResolver: { modelsForRunners: vi.fn().mockResolvedValue({}), contextWindowFor: () => 200000 },
-        aiService: { startConversation, hasActiveConversation: () => true, reset: vi.fn() },
+        broadcast,
+        modelResolver: { modelsForRunners: vi.fn().mockResolvedValue({}), contextWindowFor: (source: string, model: string) => source === 'openai' ? windows[model] : undefined },
+        aiService: {
+          startConversation: vi.fn(async (req: import('../../services/AiService').ConversationRequest) => {
+            req.onProgress({ type: 'usage', record: { source: 'openai', model: 'gpt-4o', inputTokens: 90000 } });
+            req.onProgress({ type: 'usage', record: { source: 'openai', model: 'gpt-4o-mini', inputTokens: 30000 } });
+            return { kind: 'message' as const, text: 'done', researchLog: [] };
+          }),
+          hasActiveConversation: () => true,
+          reset: vi.fn(),
+        },
       });
 
       await session.startPlanning('goal', ['claude-code']);
 
-      expect(startConversation.mock.calls[0][0]).toMatchObject({ contextWindow: 200000 });
+      const fills = broadcast.mock.calls.map((c) => c[0] as { type: string; contextFill?: unknown }).filter((m) => m.type === 'planner_usage').map((m) => m.contextFill);
+      expect(fills).toEqual([{ usedTokens: 90000, windowTokens: 128000 }, { usedTokens: 30000, windowTokens: 64000 }]);
     });
   });
 
@@ -1324,6 +1336,32 @@ describe('saving a run as its tasks settle', () => {
     restored.loadPlan(persisted, 'Usage', '/repo', { persist: false });
     expect(taskOf(restored, 't1')?.attemptUsage?.[0].totals).toEqual(status.usage?.totals);
     restored.destroy();
+  });
+
+  it('measures a task\'s context against its runner\'s catalog window when the runner reports none', async () => {
+    const runnerSession = new FakeRunnerSession('s-t1', 't1');
+    const runner = { spawn: vi.fn(async () => runnerSession), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } as unknown as IRunner;
+    const logs = memoryTaskLogs();
+    const session = makeSession({
+      runner,
+      openTaskLog: logs,
+      modelResolver: { modelsForRunners: vi.fn().mockResolvedValue({}), contextWindowFor: (source: string, model: string) => source === 'opencode' && model === 'opencode/big-pickle' ? 400000 : undefined },
+    });
+    session.loadPlan({
+      tasks: [createTask({ id: 't1', order: 1, title: 'First', prompt: 'a', assignedRunner: 'opencode' })],
+      generatedAt: new Date().toISOString(), status: 'approved', runners: ['opencode'], lastUpdated: new Date().toISOString(),
+    }, 'Test', '/repo', { persist: false });
+    await session.executePlan();
+
+    runnerSession.emitEvent({ type: 'usage', record: { source: 'opencode', model: 'opencode/big-pickle', inputTokens: 1000 } });
+    runnerSession.emitExit(0);
+
+    const usage = taskOf(session, 't1')?.attemptUsage?.at(-1);
+    expect(usage && plannerContextFill(usage)).toEqual({ usedTokens: 1000, windowTokens: 400000 });
+    // The task log is what a surface folds into the task's own meter.
+    const logged = logs.files.get('t1')?.at(-1)?.find((e) => e.type === 'usage');
+    expect(logged).toEqual({ type: 'usage', record: { source: 'opencode', model: 'opencode/big-pickle', inputTokens: 1000, contextWindow: 400000 } });
+    session.destroy();
   });
 
   it('saves a task\'s verdict the moment it lands, before announcing it, while the run goes on', async () => {

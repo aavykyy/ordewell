@@ -36,12 +36,6 @@ export interface ConversationRequest {
   fetcher?: IWebFetcher;
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
   autonomousDefault?: boolean;
-  /**
-   * The planner model's context window when the catalog knows it. Threaded here
-   * so a usage record can carry it (and the UI can show context fill); absent
-   * when unknown, never guessed (#49).
-   */
-  contextWindow?: number;
   /** Where tasks will run (ADR-0013, ADR-0014): in worktrees, the prompt drops file-overlap ordering and describes a repo group. */
   isolatedExecution?: IsolatedExecution;
   /** A plan the planner submits starts at once (ADR-0030), so the opening prompt has no outline gate. */
