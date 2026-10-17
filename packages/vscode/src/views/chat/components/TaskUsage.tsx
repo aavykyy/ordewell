@@ -1,14 +1,24 @@
 import React from 'react';
-import type { TaskRowView, PlanUsage } from '@ordewell/core';
+import type { UsageTotals } from '@ordewell/core';
 import { measures } from './UsageLine';
 
-export default function TaskUsage({ usage }: { usage: TaskRowView['usage'] | PlanUsage }) {
-  if (!usage) return null;
-  const context = 'contextFill' in usage ? usage.contextFill : undefined;
-  const detail = (usage.byModel ?? []).map((m) => `${m.source} / ${m.model ?? 'unattributed'}: ${measures(m.totals, true).join(' · ')}`).join('\n');
-  return <span className="task-usage" title={detail}>
-    {measures(usage.totals, true).join(' · ')}
-    {'attempt' in usage && ` · ${context ? `context ${Math.round(context.usedTokens / context.windowTokens * 100)}%` : 'context unknown'}`}
-    {usage.wallTimeMs !== undefined ? ` · ${Math.floor(usage.wallTimeMs / 1000)}s` : ' · time unknown'}
-  </span>;
+interface TaskSpend {
+  totals: UsageTotals;
+  contextFill?: { usedTokens: number; windowTokens: number };
+}
+
+/**
+ * A task's spend as one line: only what a runner reported, no wall time and no
+ * per-model split. The meter belongs to one task's current model, so a plan
+ * total passes `meter: false` and shows none.
+ */
+export function taskUsageText(usage: TaskSpend, meter: boolean): string {
+  return [
+    ...measures(usage.totals),
+    ...(meter ? [usage.contextFill ? `ctx ${Math.round(usage.contextFill.usedTokens / usage.contextFill.windowTokens * 100)}%` : 'ctx unknown'] : []),
+  ].join(' · ');
+}
+
+export default function TaskUsage({ usage, meter = false }: { usage: TaskSpend; meter?: boolean }) {
+  return <span className="task-usage">{taskUsageText(usage, meter)}</span>;
 }

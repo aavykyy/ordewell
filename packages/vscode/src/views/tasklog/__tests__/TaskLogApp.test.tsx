@@ -32,6 +32,18 @@ describe('the task log tab (ADR-0018, V1)', () => {
     api.postMessage.mockClear();
   });
 
+  it('pins the task\'s whole spend below the log and follows it as usage arrives', () => {
+    render(<TaskLogApp />);
+    init();
+    expect(screen.queryByRole('status')).toBeNull();
+
+    send({ type: 'status', status: status({ usage: { totals: { inputTokens: 12400, outputTokens: 3100, cachedInputTokens: 2000, reportedCost: { USD: 0.42 } }, contextFill: { usedTokens: 36_000, windowTokens: 200_000 } } }) });
+    expect(screen.getByRole('status')).toHaveTextContent(/^12,400 in · 3,100 out · 2,000 cached · \$0\.42 · ctx 18%$/);
+
+    send({ type: 'status', status: status({ usage: { totals: { inputTokens: 13000, outputTokens: 3200 } } }) });
+    expect(screen.getByRole('status')).toHaveTextContent(/^13,000 in · 3,200 out · ctx unknown$/);
+  });
+
   it('completes only the runner commands and sends a command with arguments', () => {
     render(<TaskLogApp />);
     init({ working: true, commands: [{ name: 'compact', description: 'Compact native context', argumentHint: '[focus]', kind: 'builtin' }] });

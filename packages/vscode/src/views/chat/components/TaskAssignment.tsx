@@ -17,3 +17,14 @@ export default function TaskAssignment({ task }: { task: Task }) {
     </span>
   );
 }
+
+/** The expanded card's stand-in for the runner, model and mode pickers while a plan executes and they are hidden. */
+export function TaskAssignmentReadout({ task }: { task: Task }) {
+  if (task.type !== 'ai') return null;
+  return (
+    <div className="task-assignment-readonly">
+      <span className="task-assignment-readonly-label">Assigned</span>
+      <TaskAssignment task={task} />
+    </div>
+  );
+}

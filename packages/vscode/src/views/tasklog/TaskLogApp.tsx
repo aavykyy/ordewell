@@ -6,6 +6,7 @@ import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type Patched
 import type { HostToTaskLog, TaskLogStatus, TaskLogToHost } from '../../shared/taskLogProtocol';
 import { taskCommand, useRunnerCommands } from '../chat/components/RunnerCommands';
 import { taskLogState } from './taskLogState';
+import { taskUsageText } from '../chat/components/TaskUsage';
 import PendingMessages, { QUEUE_TITLE, SendKeyHint, isSendNowKey, type PendingMessage } from '../chat/components/PendingMessages';
 
 declare function acquireVsCodeApi(): { postMessage(message: TaskLogToHost): void };
@@ -201,6 +202,12 @@ export default function TaskLogApp() {
           : <ConversationBlocks blocks={blocks} detailAll={detailAll} onShowPlan={noop}
               onAnswerApproval={(id, decision) => vscode.postMessage({ type: 'answerApproval', id, decision })} />}
       </div>
+
+      {status?.usage && (
+        <div className="usage-line" role="status">
+          <span className="usage-line-tokens">{taskUsageText(status.usage, true)}</span>
+        </div>
+      )}
 
       {stopArmed && <div className="stop-hint" role="status">Press Esc again to stop</div>}
 

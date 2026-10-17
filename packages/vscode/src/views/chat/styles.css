@@ -2192,6 +2192,21 @@ body.vscode-high-contrast-light .task-card.expanded {
   letter-spacing: 0.4px;
 }
 
+.task-assignment-readonly {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.task-assignment-readonly-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
 .model-selector select {
   background: var(--bg-primary);
   color: var(--text-primary);
