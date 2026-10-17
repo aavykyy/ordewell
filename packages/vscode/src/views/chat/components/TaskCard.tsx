@@ -10,7 +10,7 @@ import { lastLine } from '../taskOutput';
 import { checkLabel } from '../checkLabel';
 import { useFollowOutput } from '../followOutput';
 import { blockedByLabel, dependencyCandidates, capConflictFiles, pausedOnLimit, skippedLabel, taskRowView } from '@ordewell/core/plan-utils';
-import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, TaskRowAction, TaskRowView, TaskStatusKind } from '@ordewell/core';
+import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, TaskRowAction, TaskRowView, TaskStatusKind, AssignmentScope } from '@ordewell/core';
 
 export interface RunnerMode {
   id: string;
@@ -37,6 +37,8 @@ interface TaskCardProps {
   modelsByRunner?: Partial<Record<string, DiscoveredModel[]>>;
   modesByRunner?: Record<string, RunnerMode[]>;
   runners?: RunnerOption[];
+  /** The enabled runners and allowlist an assignment is read against; absent until the host has sent them, and then no task is flagged. */
+  runnerScope?: AssignmentScope;
   effectiveRunner?: string;
   configuredProviders?: ('openrouter' | 'google' | 'openai_compatible')[];
   modelApiMapping?: Record<string, ('openrouter' | 'google' | 'openai_compatible')[]>;
@@ -286,7 +288,7 @@ export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRu
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, run, models, modes, modelsByRunner, modesByRunner, runners, configuredProviders, modelApiMapping, isExecuting, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, planActions, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
+export default function TaskCard({ task, run, models, modes, modelsByRunner, modesByRunner, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, planActions, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const isControlled = expandedProp !== undefined;
   const expanded = isControlled ? expandedProp : internalExpanded;
@@ -309,7 +311,7 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
 
   const isolatedWork = isolation && isolation.state !== 'none' ? isolation : null;
   const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;
-  const row = taskRowView({ ...task, idleSince, awaitingApproval, isolation, mergeGate, continuable: run?.continuable === true, waitsForApproval: run?.waitsForApproval === true }, { tasks: siblings, modes: activeModes });
+  const row = taskRowView({ ...task, idleSince, awaitingApproval, isolation, mergeGate, continuable: run?.continuable === true, waitsForApproval: run?.waitsForApproval === true }, { tasks: siblings, modes: activeModes, runnerScope });
   const conflictFiles = isolatedWork?.conflictFiles ?? [];
   const repair = isolatedWork?.repair ?? null;
 
@@ -611,7 +613,7 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
                   const subModes = subRunner ? (modesByRunner?.[subRunner] ?? []) : [];
                   return (
                     <SubTaskCard key={sub.id} task={sub} parentTask={task} tasks={siblings} models={subModels}
-                      modes={subModes} runners={runners} effectiveRunner={subRunner}
+                      modes={subModes} runners={runners} runnerScope={runnerScope} effectiveRunner={subRunner}
                       configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
                       isExecuting={isExecuting}
                       onRunnerChange={onRunnerChange}
@@ -647,6 +649,14 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
           <span className="task-isolation-badge approval"
             title="Added after you approved the plan, so it does not start on its own. Start it, or Execute plan, to approve it.">
             {row.waitsForApproval}
+          </span>
+        )}
+
+        {/* The task still runs; this is the cue to move it. */}
+        {row.assignmentFlag && (
+          <span className="task-isolation-badge gate"
+            title="This task still runs as assigned. Change its runner or model to move it, or ask the planner to.">
+            {row.assignmentFlag}
           </span>
         )}
 

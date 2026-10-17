@@ -144,3 +144,11 @@ describe('setModesByRunner', () => {
     expect(reduceHost(off, msg({ type: 'setModesByRunner', modesByRunner: {} })).runnerNotice).toBeNull();
   });
 });
+
+describe('setModelAllowlist', () => {
+  it('holds the allowlist the host sent, and an empty one once it is cleared', () => {
+    const set = reduceHost(INITIAL_HOST_STATE, msg({ type: 'setModelAllowlist', allowlist: { codex: ['gpt-5'] } }));
+    expect(set.modelAllowlist).toEqual({ codex: ['gpt-5'] });
+    expect(reduceHost(set, msg({ type: 'setModelAllowlist', allowlist: {} })).modelAllowlist).toEqual({});
+  });
+});

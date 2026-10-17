@@ -5,7 +5,7 @@ import NewTaskCard from './NewTaskCard';
 import ProposedTasks from './ProposedTasks';
 import type { TaskDraft } from './NewTaskCard';
 import type { RunnerMode, RunnerOption } from './TaskCard';
-import { Task, DiscoveredModel, TaskModelAssignment, RunTask, RunView } from '@ordewell/core';
+import { Task, DiscoveredModel, TaskModelAssignment, RunTask, RunView, type AssignmentScope } from '@ordewell/core';
 import { canMergeTasks, canSplitTask, planUsage } from '@ordewell/core/plan-utils';
 
 /** What each level allows, in the picker's tooltip: Act's risk is said where it is chosen (ADR-0029). */
@@ -18,6 +18,8 @@ interface PlanCardGroupProps {
   modesByRunner?: Record<string, RunnerMode[]>;
   /** Installed runners, in registry order — the per-task runner picker's options. */
   runners?: RunnerOption[];
+  /** The enabled runners and allowlist each task is flagged against; absent until the host has sent them. */
+  runnerScope?: AssignmentScope;
   isExecuting?: boolean;
   runnerLabels?: Record<string, string>;
   /** Tail of each running task's runner output, keyed by task id. */
@@ -67,6 +69,7 @@ export default function PlanCardGroup({
   modelsByRunner,
   modesByRunner,
   runners,
+  runnerScope,
   isExecuting,
   runnerLabels: _runnerLabels,
   taskOutput,
@@ -259,6 +262,7 @@ export default function PlanCardGroup({
                 modelsByRunner={modelsByRunner}
                 modesByRunner={modesByRunner}
                 runners={runners}
+                runnerScope={runnerScope}
                 effectiveRunner={effectiveRunner}
                 isExecuting={isExecuting}
                 dependentCount={dependentCountMap.get(task.id) ?? 0}

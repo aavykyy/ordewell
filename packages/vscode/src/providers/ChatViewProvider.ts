@@ -128,6 +128,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this._modelsByRunner = modelsByRunner;
     this.postMessage({ type: 'setModelsByRunner', modelsByRunner });
   }
+  setModelAllowlist(allowlist: Record<string, string[]>): void {
+    this._modelAllowlist = allowlist;
+    this.postMessage({ type: 'setModelAllowlist', allowlist });
+  }
   setModesByRunner(modesByRunner: Record<string, RunnerModeMeta[]>, notice: { line: string; docs: string } | null = null): void {
     this._modesByRunner = modesByRunner;
     this._runnerNotice = notice;
@@ -164,6 +168,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private _modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>> = {};
+  private _modelAllowlist: Record<string, string[]> | null = null;
   private _modesByRunner: Record<string, RunnerModeMeta[]> = {};
   private _runnerNotice: { line: string; docs: string } | null = null;
   /** The installed runners as discovery last listed them; null until it has, which the webview shows as detecting. */
@@ -210,6 +215,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     if (this._modesByRunner && Object.keys(this._modesByRunner).length > 0) {
       this.postMessage({ type: 'setModesByRunner', modesByRunner: this._modesByRunner, notice: this._runnerNotice });
+    }
+    if (this._modelAllowlist) {
+      this.postMessage({ type: 'setModelAllowlist', allowlist: this._modelAllowlist });
     }
     if (this._modelConfig) {
       this.postMessage({ type: 'setModelConfig', modelConfig: this._modelConfig });

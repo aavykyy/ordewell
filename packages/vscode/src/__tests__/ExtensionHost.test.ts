@@ -60,6 +60,7 @@ function fakeChat() {
     setModelsByRunner: vi.fn(),
     setRunnerList: vi.fn(),
     setEnabledRunnerIds: vi.fn(),
+    setModelAllowlist: vi.fn(),
     setModesByRunner: vi.fn(),
     sendConfiguredProviders: vi.fn(),
     setModelConfig: vi.fn(),

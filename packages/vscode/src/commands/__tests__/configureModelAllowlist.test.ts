@@ -123,6 +123,22 @@ describe('configureModelAllowlist', () => {
     expect(settingsService.setModelAllowlist).toHaveBeenCalledWith(runnerName, ['model-a', 'model-b']);
   });
 
+  it('on accept, hands the saved allowlist on so the task cards flag against it', async () => {
+    const runnerName = registry.list()[0].manifest.name;
+    const runnerDisplay = registry.list()[0].manifest.displayName;
+    mockWin.showQuickPick
+      .mockResolvedValueOnce({ runner: runnerName, displayName: runnerDisplay })
+      .mockResolvedValueOnce([{ modelId: 'model-a' }]);
+    mockWin.withProgress.mockImplementation(async (_opts: unknown, fn: () => Promise<unknown>) => fn());
+    (modelResolver.modelsForRunners as import('vitest').Mock).mockResolvedValue({ [runnerName]: [{ modelId: 'model-a', modelLabel: 'Model A', variants: [] }] });
+    (settingsService as unknown as { getAll: () => unknown }).getAll = () => ({ modelAllowlist: { [runnerName]: ['model-a'] } });
+    const changed = vi.fn();
+
+    await configureModelAllowlist(registry, modelResolver, settingsService, mockWin, changed);
+
+    expect(changed).toHaveBeenCalledWith({ [runnerName]: ['model-a'] });
+  });
+
   it('on accept with empty selection, saves empty array', async () => {
     const runnerName = registry.list()[0].manifest.name;
     const runnerDisplay = registry.list()[0].manifest.displayName;

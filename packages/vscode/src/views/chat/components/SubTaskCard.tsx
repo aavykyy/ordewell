@@ -3,7 +3,7 @@ import SkillChips from './SkillChips';
 import ModelSelector from './ModelSelector';
 import TaskAssignment from './TaskAssignment';
 import { pausedOnLimit, taskRowView } from '@ordewell/core/plan-utils';
-import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction } from '@ordewell/core';
+import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction, AssignmentScope } from '@ordewell/core';
 import { TaskActions, TaskCheck, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
 import type { RunnerMode, RunnerOption } from './TaskCard';
 import { checkLabel } from '../checkLabel';
@@ -17,6 +17,7 @@ interface SubTaskCardProps {
   models: DiscoveredModel[];
   modes?: RunnerMode[];
   runners?: RunnerOption[];
+  runnerScope?: AssignmentScope;
   effectiveRunner?: string;
   configuredProviders?: ('openrouter' | 'google' | 'openai_compatible')[];
   modelApiMapping?: Record<string, ('openrouter' | 'google' | 'openai_compatible')[]>;
@@ -51,13 +52,13 @@ const DEFAULT_MODES: RunnerMode[] = [
   { id: 'plan', label: 'Plan', description: 'Read-only analysis' },
 ];
 
-export default function SubTaskCard({ task, parentTask, tasks, models, modes, runners, configuredProviders, modelApiMapping, isExecuting, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry: _onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog }: SubTaskCardProps) {
+export default function SubTaskCard({ task, parentTask, tasks, models, modes, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry: _onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog }: SubTaskCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
 
   const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;
   const runnerOptions = runnerOptionsFor(runners, task.assignedRunner);
-  const row = taskRowView(task, { parent: parentTask, placement: 'subtask', tasks });
+  const row = taskRowView(task, { parent: parentTask, placement: 'subtask', tasks, runnerScope });
   const status = statusBadge(row);
 
   const handlePromptSave = () => {
@@ -207,6 +208,13 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
 
         {(isExecuting || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked' || row.status === 'skipped') && (
           <span className={`task-status-badge ${status.cls}`}>{status.label}</span>
+        )}
+
+        {row.assignmentFlag && (
+          <span className="task-isolation-badge gate"
+            title="This task still runs as assigned. Change its runner or model to move it, or ask the planner to.">
+            {row.assignmentFlag}
+          </span>
         )}
 
         <UsageLimitControls taskId={task.id} row={row} onResumeNow={onResumeNow} onCancelResume={onCancelResume} />

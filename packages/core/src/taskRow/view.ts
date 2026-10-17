@@ -4,6 +4,7 @@ import type { TaskIsolationState } from '../interfaces/IWorktreeIsolation';
 import { taskOrderLabel, taskRefOf } from '../services/TaskRefs';
 import { capConflictFiles } from '../services/conflictFiles';
 import { blockingFailures, type BlockingSubject } from '../services/blocking';
+import { assignmentIssue, assignmentIssueText, type AssignmentScope } from '../services/AssignmentScope';
 import { approvalLabel, awaitingLabel, isTaskRunning, NOT_STARTED, resumeLabel, taskStatusKind, WAITS_FOR_APPROVAL_LABEL, type TaskStatusKind } from './status';
 import { markAction, opsEditable, taskRowActions, type TaskRowAction, type TaskRowPlacement } from './actions';
 
@@ -34,6 +35,8 @@ export interface TaskRowSubject {
   mergeGate?: readonly string[];
   forcedPastGate?: readonly string[];
   attemptUsage?: readonly AttemptUsage[];
+  assignedRunner?: string;
+  assignedModel?: { modelId: string; modelLabel?: string };
 }
 
 export interface TaskRowIsolation {
@@ -70,6 +73,8 @@ export interface TaskRowContext {
   modes?: readonly { id: string; autonomous?: boolean }[];
   /** What a resume time is read against; the clock when absent. */
   now?: Date;
+  /** The enabled runners and allowlist an assignment is read against; without it no assignment is flagged. */
+  runnerScope?: AssignmentScope;
 }
 
 /** Whether the row stands for an AI task, a manual one, or an ops task (ADR-0020). */
@@ -96,6 +101,8 @@ export interface TaskRowView {
   approvals: string | null;
   /** That it waits for the user's approval to start, in sentence case; null once it started, or when it needs none. */
   waitsForApproval: string | null;
+  /** Why the task's runner or model is one the user has since moved away from, in sentence case; null when it is not. The task still runs. */
+  assignmentFlag: string | null;
   /** The task's mode is tagged autonomous: it runs without permission prompts. */
   autonomous: boolean;
   /** The repos its isolated work changed, by path; empty for a group of one. */
@@ -145,6 +152,12 @@ function blockedBy(task: TaskRowSubject, tasks: readonly PlanRefTask[] | undefin
   return blockingFailures(asBlocking(tasks)).get(task.id) ?? [];
 }
 
+function flagOf(task: TaskRowSubject, scope: AssignmentScope | undefined): string | null {
+  if (!scope || task.assignedRunner === undefined) return null;
+  const issue = assignmentIssue({ ...task, assignedRunner: task.assignedRunner }, scope);
+  return issue ? assignmentIssueText(issue) : null;
+}
+
 /**
  * Everything a plan row says about one task, decided once: each surface picks
  * its own words, glyphs and casing for these facts, and derives none of them.
@@ -164,6 +177,7 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
     resumes: resumeLabel(task, context.now),
     approvals: approvalLabel(task.awaitingApproval),
     waitsForApproval: task.waitsForApproval && NOT_STARTED.has(task.status) ? WAITS_FOR_APPROVAL_LABEL : null,
+    assignmentFlag: flagOf(task, context.runnerScope),
     autonomous: task.type === 'ai' && context.modes?.find((m) => m.id === task.taskMode)?.autonomous === true,
     repos: namedRepos(isolation?.repos),
     conflict: isolation?.state === 'conflict'

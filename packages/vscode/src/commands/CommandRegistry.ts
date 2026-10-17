@@ -459,7 +459,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   );
   context.subscriptions.push(
     vscode.commands.registerCommand('ordewell.configureModelAllowlist', async () => {
-      await configureModelAllowlist(deps.runnerRegistry, deps.modelResolver, deps.settingsService);
+      await configureModelAllowlist(deps.runnerRegistry, deps.modelResolver, deps.settingsService, undefined, (allowlist) => deps.chatProvider.setModelAllowlist(allowlist));
     }),
   );
 }
