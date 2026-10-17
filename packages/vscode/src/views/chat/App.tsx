@@ -604,8 +604,12 @@ export default function App() {
   // first-run wall.
   const canPlan = configuredProviders.length > 0 || planner.backends.some((b) => b.usable);
   // The coding agents the host lists as planners are listed whether or not they
-  // are installed, which `runnerList` (installed runners only) cannot say.
+  // are installed, which `runnerList` (installed runners only) cannot say. That
+  // full list is kept only to name what to install; the pills offer the usable
+  // subset alone, so an unavailable agent is left off rather than struck through
+  // (ADR-0009).
   const agentNames = planner.backends.filter((b) => b.kind === 'harness').map((b) => b.label);
+  const offeredBackends = planner.backends.filter((b) => b.usable);
 
   const plannerIsHarness = planner.backends.find((b) => b.id === planner.provider)?.kind === 'harness';
 
@@ -802,56 +806,63 @@ export default function App() {
           )}
         </button>
         <div className={`setup-panel-body${setupCollapsed ? ' collapsed' : ''}`}>
-        {planner.backends.length > 0 && (
-          <section className="setup-block">
-            <div className="setup-block-title">Planner</div>
-            <div className="setup-block-hint">
-              Researches your codebase and writes the plan. A coding agent plans on its own
-              subscription. No API key needed.
-            </div>
-            <div className="planner-backends">
-              {planner.backends.map((b) => (
-                <button
-                  key={b.id}
-                  type="button"
-                  className={`planner-pill ${b.id === planner.provider ? 'active' : ''} ${b.usable ? '' : 'unusable'}`}
-                  disabled={!b.usable}
-                  title={b.reason}
-                  onClick={() => handlePlannerChange(b.id)}
-                >
-                  {b.label}
-                </button>
-              ))}
-            </div>
-            {/* A harness planner has no API provider to filter by, and its models
-                are never in the vendor mapping — passing either would empty the
-                list behind a pill bar that cannot apply to it. */}
-            <ModelSelector
-              models={orchestratorModels}
-              currentModel={orchestratorCurrentModel}
-              configuredProviders={planner.runner ? [] : configuredProviders}
-              modelApiMapping={planner.runner ? {} : orchestratorModelApiMapping}
-              onChange={handleOrchestratorModelChange}
-              label={planner.runner ? 'Model & thinking effort' : 'Model'}
-            />
-            {orchestratorModels.length === 0 && (
-              <div className="model-discovery-error" role="alert">
-                {planner.runner
-                  ? <>No models discovered for this agent yet: run <code>/refresh</code>.</>
-                  : <>No models available. Add an API key with <code>/key</code>, or pick a coding agent above.</>}
+        <section className="setup-block">
+          <div className="setup-block-title">Planner</div>
+          <div className="setup-block-hint">
+            Researches your codebase and writes the plan. A coding agent plans on its own
+            subscription. No API key needed.
+          </div>
+          {offeredBackends.length > 0 ? (
+            <>
+              <div className="planner-backends">
+                {offeredBackends.map((b) => (
+                  <button
+                    key={b.id}
+                    type="button"
+                    className={`planner-pill ${b.id === planner.provider ? 'active' : ''}`}
+                    title={b.reason}
+                    onClick={() => handlePlannerChange(b.id)}
+                  >
+                    {b.label}
+                  </button>
+                ))}
               </div>
-            )}
-            {Object.keys(modelDiscoveryErrors).length > 0 && !planner.runner && (
-              <div className="model-discovery-error" role="alert">
-                ⚠ Couldn't load models for{' '}
-                {Object.entries(modelDiscoveryErrors)
-                  .map(([p, msg]) => `${API_PROVIDER_LABELS[p as keyof typeof API_PROVIDER_LABELS] ?? p} (${msg})`)
-                  .join('; ')}
-                . Check the API key / base URL: those models are omitted.
-              </div>
-            )}
-          </section>
-        )}
+              {/* A harness planner has no API provider to filter by, and its models
+                  are never in the vendor mapping — passing either would empty the
+                  list behind a pill bar that cannot apply to it. */}
+              <ModelSelector
+                models={orchestratorModels}
+                currentModel={orchestratorCurrentModel}
+                configuredProviders={planner.runner ? [] : configuredProviders}
+                modelApiMapping={planner.runner ? {} : orchestratorModelApiMapping}
+                onChange={handleOrchestratorModelChange}
+                label={planner.runner ? 'Model & thinking effort' : 'Model'}
+              />
+              {orchestratorModels.length === 0 && (
+                <div className="model-discovery-error" role="alert">
+                  {planner.runner
+                    ? <>No models discovered for this agent yet: run <code>/refresh</code>.</>
+                    : <>No models available. Add an API key with <code>/key</code>, or pick a coding agent above.</>}
+                </div>
+              )}
+              {Object.keys(modelDiscoveryErrors).length > 0 && !planner.runner && (
+                <div className="model-discovery-error" role="alert">
+                  ⚠ Couldn't load models for{' '}
+                  {Object.entries(modelDiscoveryErrors)
+                    .map(([p, msg]) => `${API_PROVIDER_LABELS[p as keyof typeof API_PROVIDER_LABELS] ?? p} (${msg})`)
+                    .join('; ')}
+                  . Check the API key / base URL: those models are omitted.
+                </div>
+              )}
+            </>
+          ) : (
+            <span className="setup-block-empty">
+              {plannerKnown
+                ? <>No planner available — install {orNames(agentNames, 'a coding agent')}, or add a key with <code>/key</code>.</>
+                : DETECTING}
+            </span>
+          )}
+        </section>
 
         <section className="setup-block">
           <div className="setup-block-title">Runners</div>

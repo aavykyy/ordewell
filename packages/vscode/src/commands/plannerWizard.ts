@@ -12,7 +12,7 @@ export interface PlannerVendorModel extends VendorModelOption {
 export interface PlannerWizardDeps {
   /** What plans right now, read at the start so the steps can mark and pre-select it. */
   current(): { provider: PlannerBackendId; model: string; effort: string };
-  /** Every planner the user could pick, with the reason an unusable one can't be (ADR-0009). */
+  /** Every planner the user could pick; unusable ones are filtered from the steps. */
   plannerBackends(): Promise<PlannerBackend[]>;
   modelsForRunner(runner: string): Promise<DiscoveredModel[]>;
   vendorModels(provider: PlannerBackendId): Promise<PlannerVendorModel[]>;
@@ -50,9 +50,16 @@ const RUNNER_DEFAULT = '';
  * exactly as it was; the three settings can't be left half-switched.
  */
 export async function runPlannerWizard(deps: PlannerWizardDeps): Promise<void> {
-  const backends = await deps.plannerBackends();
+  // Only what can actually plan is offered: an unavailable agent is left out of
+  // the step rather than listed struck through (ADR-0009). A user naming one explicitly
+  // still hears why through the `/planner <id>` command.
+  const backends = (await deps.plannerBackends()).filter((b) => b.usable);
+  if (backends.length === 0) {
+    vscode.window.showWarningMessage('No planner available: install a coding agent, or add an API key with /key.');
+    return;
+  }
   const current = deps.current();
-  const hasHarness = backends.some((b) => b.kind === 'harness' && b.usable);
+  const hasHarness = backends.some((b) => b.kind === 'harness');
 
   const qp = vscode.window.createQuickPick<Item>();
   qp.ignoreFocusOut = true;
@@ -74,7 +81,7 @@ export async function runPlannerWizard(deps: PlannerWizardDeps): Promise<void> {
           placeholder: 'Who researches your goal and writes the plan?',
           items: backends.map((b) => ({
             key: b.id,
-            label: b.usable ? b.label : `$(circle-slash) ${b.label}`,
+            label: b.label,
             description: b.id === current.provider ? 'current' : undefined,
             detail: b.reason,
           })),
@@ -84,11 +91,6 @@ export async function runPlannerWizard(deps: PlannerWizardDeps): Promise<void> {
         if (outcome.kind !== 'accept') return;
         const picked = backends.find((b) => b.id === outcome.key);
         if (!picked) continue;
-        if (!picked.usable) {
-          vscode.window.showWarningMessage(picked.reason ?? `${picked.label} is not available.`);
-          backend = undefined;
-          continue;
-        }
         if (backend?.id !== picked.id) {
           modelId = undefined;
           const catalog = await loadCatalog(picked, deps);

@@ -91,17 +91,12 @@ describe('/planner', () => {
     expect(stepperOf(state).items.find((i) => i.id === 'claude-code')?.detail).toMatch(/no API key/i);
   });
 
-  it('keeps an agent whose CLI is not installed listed, with the reason, and refuses it', () => {
+  it('leaves an agent whose CLI is not installed off the list', () => {
     const opened = run('/planner', { ...ready, runners: [{ id: 'codex', name: 'Codex', enabled: true }] }).state;
 
-    const claude = stepperOf(opened).items.find((i) => i.id === 'claude-code')!;
-    expect(claude.disabled).toBe(true);
-    expect(claude.detail).toMatch(/not installed|PATH/);
-
-    const { state, effects } = choose(opened, 'claude-code');
-    expect(effects).toEqual([]);
-    expect(at(state).step).toBe('Harness');
-    expect(lastMessage(state)?.role).toBe('error');
+    const ids = stepperOf(opened).items.map((i) => i.id);
+    expect(ids).not.toContain('claude-code');
+    expect(ids).toContain('codex');
   });
 
   const saved = (provider: string, modelId: string, effort: string, notice: string) =>
@@ -250,13 +245,13 @@ describe('/planner', () => {
   });
 
   it('fills in the preflight once runner discovery lands', () => {
-    // The stepper can be opened before the daemon has answered; every agent
-    // would otherwise be stuck showing as missing.
+    // The stepper can be opened before the daemon has answered; with no runners
+    // yet no agent is offered, and the list fills once they land.
     const opened = run('/planner', { ...ready, runners: [] }).state;
-    expect(stepperOf(opened).items.find((i) => i.id === 'codex')?.disabled).toBe(true);
+    expect(stepperOf(opened).items.map((i) => i.id)).not.toContain('codex');
 
     const { state } = reduce(opened, { type: 'runnersLoaded', runners: [{ id: 'codex', name: 'Codex', enabled: true }] });
-    expect(stepperOf(state).items.find((i) => i.id === 'codex')?.disabled).toBe(false);
+    expect(stepperOf(state).items.map((i) => i.id)).toContain('codex');
   });
 
   it('fills in the model step once the catalog lands', () => {

@@ -69,7 +69,7 @@ describe('a built-in runner declared by manifest and connector only, on the CLI'
     const runnerPicker = pickerItemsFor(state, { kind: 'set-runners' });
     expect(runnerPicker.map((i) => [i.id, i.label])).toContainEqual(['acme', 'Acme Agent']);
     const planner = plannerItems(state).find((i) => i.id === 'acme');
-    expect(planner).toMatchObject({ label: 'Acme Agent', disabled: false });
+    expect(planner).toMatchObject({ label: 'Acme Agent' });
   });
 
   it('is named by the first-run notice and the planner switch hint', async () => {

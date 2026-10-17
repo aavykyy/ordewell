@@ -450,18 +450,17 @@ describe('planner bar', () => {
     expect(document.querySelector('.setup-block-empty')?.textContent).toContain('install Claude Code or Codex');
   });
 
-  it('shows the planner picker with no API key configured', () => {
+  it('shows only the available agent in the planner picker with no API key configured', () => {
     sendHarnessPlanner();
     const pills = [...document.querySelectorAll('.planner-pill')];
-    expect(pills.map((p) => p.textContent)).toEqual(['Claude Code', 'Codex']);
+    expect(pills.map((p) => p.textContent)).toEqual(['Claude Code']);
     expect(pills[0].className).toContain('active');
   });
 
-  it('disables an agent whose CLI is missing and keeps its reason on screen', () => {
+  it('leaves an agent whose CLI is missing off the row', () => {
     sendHarnessPlanner();
-    const codex = [...document.querySelectorAll('.planner-pill')].find((p) => p.textContent === 'Codex') as HTMLButtonElement;
-    expect(codex.disabled).toBe(true);
-    expect(codex.title).toContain('not installed');
+    const pills = [...document.querySelectorAll('.planner-pill')].map((p) => p.textContent);
+    expect(pills).not.toContain('Codex');
   });
 
   it('switching planner posts setPlanner', () => {

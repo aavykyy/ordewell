@@ -214,13 +214,13 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
  *
  * Coding agents come first: they need no API key, which makes them the answer
  * for the user who has just installed Ordewell and has no vendor account. An
- * agent whose CLI isn't on PATH is listed disabled with the reason rather than
- * hidden — discovering a missing CLI after typing a real goal is the failure
- * the preflight exists to prevent.
+ * agent whose CLI isn't on PATH is left out rather than listed disabled — the
+ * list holds only what the user can pick, and a hint stands in its place when
+ * nothing can plan (ADR-0009).
  */
 export function plannerItems(state: TuiState): PickerItem[] {
   // The daemon's runner list is the TUI's only preflight: an installed runner
-  // is usable, an absent one gets the same not-on-PATH reason VS Code probes for.
+  // is usable, an absent one is dropped from the offered set.
   const installed = new Set(state.runners.map((r) => r.id));
   const usability: Record<string, PlannerUsability> = {};
   for (const id of CLI_PROVIDERS) {
@@ -230,16 +230,18 @@ export function plannerItems(state: TuiState): PickerItem[] {
       : { usable: false, reason: 'CLI not installed or not on PATH' };
   }
 
-  const entries = plannerBackendEntries(usability, state.configuredProviders);
-  const items: PickerItem[] = entries.map((entry) => ({
+  const offered = plannerBackendEntries(usability, state.configuredProviders).filter((entry) => entry.usable);
+  if (offered.length === 0) {
+    return [{ id: '', label: 'No planner available', detail: 'install a coding agent or add a key with /key', disabled: true }];
+  }
+  const items: PickerItem[] = offered.map((entry) => ({
     id: entry.id,
     label: entry.label,
     detail: entry.reason,
     selected: state.plannerProvider === entry.id,
-    disabled: !entry.usable,
   }));
 
-  return entries.some((entry) => entry.kind === 'vendor')
+  return offered.some((entry) => entry.kind === 'vendor')
     ? items
     : [...items, { id: '', label: 'No API providers configured', detail: 'add a key with /key', disabled: true }];
 }

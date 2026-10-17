@@ -64,7 +64,7 @@ describe('/planner wizard: harness path', () => {
 
     let qp = await step();
     expect([qp.step, qp.totalSteps]).toEqual([1, 3]);
-    expect(labels(qp)).toEqual(['Claude Code', '$(circle-slash) Codex', 'OpenRouter']);
+    expect(labels(qp)).toEqual(['Claude Code', 'OpenRouter']);
     qp.__accept(0);
 
     qp = await step();
@@ -107,7 +107,7 @@ describe('/planner wizard: vendor path', () => {
     const deps = makeDeps();
     const done = runPlannerWizard(deps);
 
-    (await step()).__accept(2);
+    (await step()).__accept(1);
     const qp = await step();
     expect([qp.step, qp.totalSteps]).toEqual([2, 2]);
     expect(labels(qp)).toEqual(['GLM 4.6', 'DeepSeek V4']);
@@ -160,20 +160,22 @@ describe('/planner wizard: leaving', () => {
     expect(info).not.toHaveBeenCalled();
   });
 
-  it('keeps an unusable harness on the step and says why', async () => {
+  it('leaves an unusable harness off the step', async () => {
     const deps = makeDeps();
     const done = runPlannerWizard(deps);
 
     const qp = await step();
-    expect((qp.items[1] as { detail?: string }).detail).toBe('codex is not installed');
-    qp.__accept(1);
-    await flush();
-
-    expect(warn).toHaveBeenCalledWith('codex is not installed');
-    expect(__quickPicks).toHaveLength(1);
-    expect(qp.step).toBe(1);
+    expect(labels(qp)).toEqual(['Claude Code', 'OpenRouter']);
     qp.__escape();
     await done;
+    expect(deps.applyChoice).not.toHaveBeenCalled();
+  });
+
+  it('says so and applies nothing when no planner is available', async () => {
+    const deps = makeDeps({ plannerBackends: async () => [CODEX] });
+    await runPlannerWizard(deps);
+
+    expect(warn).toHaveBeenCalledWith('No planner available: install a coding agent, or add an API key with /key.');
     expect(deps.applyChoice).not.toHaveBeenCalled();
   });
 
@@ -195,7 +197,7 @@ describe('/planner wizard: starting point', () => {
     const done = runPlannerWizard(deps);
 
     let qp = await step();
-    expect((qp.items[2] as { description?: string }).description).toBe('current');
+    expect((qp.items[1] as { description?: string }).description).toBe('current');
     expect((qp.activeItems[0] as { label: string }).label).toBe('OpenRouter');
     qp.__accept();
 
