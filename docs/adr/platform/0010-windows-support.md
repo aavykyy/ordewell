@@ -228,8 +228,9 @@ Two things are **explicitly not claimed**:
 
 1. **Codex's read-only guarantee on Windows is unverified.** `codexSandbox`
    correctly short-circuits its bubblewrap probe off Linux, and the approvals
-   half of the invariant holds by construction (`approvalPolicy: 'never'`, the
-   whole server→client request surface refused). But Codex's OS-level sandboxing
+   half of the invariant holds by construction (`approvalPolicy: 'on-request'`,
+   with command, file-change and permission requests declined at once,
+   ADR-0026). But Codex's OS-level sandboxing
    on Windows is not the equivalent of Seatbelt or Landlock, so
    `sandbox: 'read-only'` may be enforced by Codex's tool layer rather than by
    the kernel. "Read-only by construction" is a Linux/macOS guarantee until

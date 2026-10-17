@@ -97,10 +97,12 @@ that depends on.**
 - **Force start passes a gate after one confirmation** that names the
   dependencies whose work is not merged yet. The choice is logged on the task;
   the gate stands for every other task.
-- **Merge at gates automatically is an opt-in plan setting**
-  ([ADR-0029](../supervision/0029-the-supervisor.md)), off by default and saved at run start,
-  with or without a supervisor. Changes during execution apply to the next
-  run. At a gate Ordewell runs Merge all itself through the same queue; a
+- **Merge at gates automatically is an opt-in global user setting**
+  (`/automerge`; [ADR-0029](../supervision/0029-the-supervisor.md),
+  [ADR-0030](../supervision/0030-global-run-settings.md)), off by default, with
+  or without a supervisor. A change applies at once to the session it is typed
+  in, and to other sessions from their next run. At a gate Ordewell runs Merge
+  all itself through the same queue; a
   conflict or dirty overlap aborts with the tree untouched and the gate waits
   for the user, with a notice and an `onAutoMerge` observer event. A failed
   automatic merge waits for a Merge all that goes through — the user's, or an
@@ -108,9 +110,6 @@ that depends on.**
   resumes. The timeline records
   "auto-merged for task N", attributed to Ordewell setting. A supervisor at Act
   may also call `merge_all`.
-  *Amended by [ADR-0030](../supervision/0030-global-run-settings.md):* it is a global user
-  setting, `/automerge`, not a plan setting; a change applies at once to the
-  session it is typed in, and to other sessions from their next run.
 - The plan shows it: an ops task carries an `ops` mark, and a gated task "waits
   for Merge all". Status updates carry each task's gate and a `RunMergeView`
   whenever landed work is not merged into the user's branch yet. It names that

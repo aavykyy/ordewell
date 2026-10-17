@@ -359,9 +359,11 @@ changes where that file goes; moving it into the workspace still violates the
 no-mutation invariant. Denying the shell tools and the plan-mode transitions
 closes that route independently of the native plan-file exception.
 
-Codex planner threads use `sandbox: read-only` and `approvalPolicy: never`;
-permission requests are declined. This is OS-level enforcement for agent
-commands on supported hosts. Claude's tool denials are native CLI enforcement,
+Codex planner threads use `sandbox: read-only` and `approvalPolicy: on-request`:
+a user's MCP tool reaches the envelope as an approval
+([ADR-0026](0026-one-envelope-for-every-planner.md)), while command,
+file-change and permission requests are declined at once. This is OS-level
+enforcement for agent commands on supported hosts. Claude's tool denials are native CLI enforcement,
 not an OS sandbox or a prohibition on the CLI persisting its own session data.
 
 OpenCode's planner shell gap is closed by ADR-0026: its `bash` and `task`

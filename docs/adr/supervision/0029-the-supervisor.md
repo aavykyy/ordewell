@@ -61,19 +61,13 @@ prompt, and the run never depends on it.**
   tasks, message runners, deny approvals, edit the plan and merge, inside the
   loop guards below.
 
-The level is a plan setting, Off by default. **It is saved on the plan at run
-start**: flipping it mid-run changes nothing until the next run, the rule
-ADR-0001 keeps for modes. The one exception goes downward only: a tripped guard
-or a failed supervisor lowers the level for the rest of the run, with a notice,
-and so can the user — drop to Watch, or turn it off — at any time during the
-run. A lowering takes effect at once, in the wake-up turn under way too: what
-that turn calls or edits next is checked against the lowered level.
-
-*Amended by [ADR-0030](0030-global-run-settings.md):* the level is a global
-user setting, Watch by default, set with `/supervisor`. A change applies at
-once, in either direction, to the session it is typed in, and to other
-sessions from their next run. The user's command also lifts a guard's or a
-failure's lowering, the guards' memory kept.
+The level is a global user setting, Watch by default, set with `/supervisor`
+([ADR-0030](0030-global-run-settings.md)). A change applies at once, in either
+direction, to the session it is typed in, and to other sessions from their next
+run. A tripped guard or a failed supervisor also lowers the level for the rest
+of the run, with a notice; the user's command lifts that lowering, the guards'
+memory kept. A lowering takes effect at once, in the wake-up turn under way too:
+what that turn calls or edits next is checked against the lowered level.
 
 The levels are a slim precursor of the mandate (#23). Watch is its `observe`
 grant; Act later becomes the bundle of `control` and `replan` (and the merge
@@ -159,7 +153,8 @@ a user message during a wake-up turn is held as a queued prompt.
   diff on request. A supervisor deciding whether to retry needs what the task
   did, not only what it said.
 - **In a wake-up turn the per-message read cap is replaced by a per-turn read
-  budget set on the plan**, 12 reads unless the plan sets another. The user's
+  budget**, a global setting of 12 reads unless changed with
+  `/supervisor reads <n>` ([ADR-0030](0030-global-run-settings.md)). The user's
   turns keep today's caps
   (`MAX_TASK_QUERIES`, ADR-0022 P3). A wake-up has no user message to bound it,
   and a supervisor reading three things before it must land would miss the one
@@ -233,10 +228,10 @@ narrow (deny), or hand the decision to a person.
 
 - **A user-started turn** follows #91. Stops and messages are always allowed —
   they only end or steer work. Starts and retries ask the user in Guarded and
-  follow plan approval in Full. An unapproved task never starts, at any level.
-  *Amended by [ADR-0030](0030-global-run-settings.md):* with autorun on, a
-  plan the planner submits is approved and started as the user's standing
-  instruction; with autorun on and Full, the planner may also start a task it
+  follow plan approval in Full. An unapproved task never starts, at any level,
+  with one exception ([ADR-0030](0030-global-run-settings.md)): with autorun on,
+  a plan the planner submits is approved and started as the user's standing
+  instruction, and with autorun on and Full the planner may also start a task it
   added after the plan was approved.
   `merge_all` and `skip_task` are refused: the user is in the conversation,
   and presses Merge all or skips the task themselves. A skip decides that
@@ -267,7 +262,8 @@ matching button press, so the plan pane looks the same whichever route acted.
 
 Checked at the seam, where the action executes:
 
-- **Retries per task**: default 2, configurable on the plan. Past it,
+- **Retries per task**: a global setting, 2 unless changed with
+  `/supervisor retries <n>` ([ADR-0030](0030-global-run-settings.md)). Past it,
   `retry_task` is refused.
 - **No identical retry**: a retry after a failure with the same prompt and
   model as the failed attempt is refused. Something has to change.
@@ -334,24 +330,22 @@ for the user.
 
 ### Merge at gates automatically
 
-A plan setting, saved at run start, **usable with the supervisor Off.** When a
-task reaches a merge gate, Ordewell runs Merge all itself, through the same
-queue as landings and the user's Merge all. A conflict, or a dirty overlap in
-the user's tree, aborts it with the tree untouched (ADR-0014's preflight,
-unchanged); the gate then waits for the user, with a notice and, if a
-supervisor is on, a wake-up. The timeline records "auto-merged for task N".
+A global user setting, `/automerge` ([ADR-0030](0030-global-run-settings.md)),
+**usable with the supervisor Off.** When a task reaches a merge gate, Ordewell
+runs Merge all itself, through the same queue as landings and the user's Merge
+all. A conflict, or a dirty overlap in the user's tree, aborts it with the tree
+untouched (ADR-0014's preflight, unchanged); the gate then waits for the user,
+with a notice and, if a supervisor is on, a wake-up. The timeline records
+"auto-merged for task N".
 
 This is a second, opt-in exit from ADR-0013's "never merged for the user",
-beside `merge_all` under Act. Both are switched on by the user per plan;
-without either, the user's Merge all stays the only path.
+beside `merge_all` under Act. Both are switched on by the user, once; without
+either, the user's Merge all stays the only path.
 
-*Amended by [ADR-0030](0030-global-run-settings.md):* a global user setting,
-`/automerge`, not a plan setting saved at run start; a change applies at once
-to the session it is typed in.
-
-*Amended 2026-10-12 — merge at the end of a run, and who opens the handoff.*
-A user who turned auto-merge on was still stopped at the end of the run, and
-the handoff overlay asked about a merge the supervisor was about to make. So:
+The setting reads "merge automatically": at merge gates and at the end of a run.
+It also merges at the end of a run so that a user who turned it on is not
+stopped there, and so that the handoff overlay never asks about a merge the
+supervisor is about to make:
 
 - **The setting also merges at the end of a run.** With it on, when a run
   settles with landed work that is not merged yet, Ordewell runs Merge all
@@ -436,16 +430,13 @@ until #30 exists.
   and shell invariants of ADR-0008, ADR-0009 and ADR-0026 are unchanged: the
   planner still edits no file and runs nothing outside its envelope. Effects
   still happen only in tasks.
-- A plan gains: supervisor level, retry limit, wake-up read budget, merge at
-  gates automatically, and pending turns — the user's messages and the
-  wake-up batches not yet delivered. Older plans load as Off, with no
-  auto-merge. *Amended by [ADR-0030](0030-global-run-settings.md):* the plan
-  keeps only the pending turns and the run's `runSettings`; the level, retry
-  limit, read budget and merge setting are global, and older plans' values are
-  ignored.
+- A plan gains pending turns — the user's messages and the wake-up batches not
+  yet delivered — and the run's `runSettings`. The level, retry limit, read
+  budget and merge setting are global ([ADR-0030](0030-global-run-settings.md));
+  older plans' values are ignored.
 - Act with ops tasks can act on real systems unattended. The level picker says
   so; #23 owns the narrower answer.
-- ADR-0013's "never merged for the user" holds unless the user opts in per plan.
+- ADR-0013's "never merged for the user" holds unless the user opts in, once (ADR-0030).
 
 ## History
 
