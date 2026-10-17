@@ -74,6 +74,22 @@ describe('task control commands', () => {
     srv.close();
   });
 
+  it('says a force start was queued behind unfinished dependencies when the daemon says so, not that it started', async () => {
+    const queued = 'Task "Third" is approved and starts once task "Second" finishes.';
+    const srv = await startServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      if (req.url?.includes('/sessions/')) res.end(JSON.stringify(PLAN));
+      else if (req.url?.endsWith('/merge-gate')) res.end(JSON.stringify({ mergeGate: [] }));
+      else res.end(JSON.stringify({ ok: true, queued }));
+    });
+    const { handleForceStart } = await import('../task-control');
+
+    const { stdout } = await capture(() => handleForceStart(['--session-id', 'session-1', '3'], new ApiClient(srv.port)));
+
+    expect(stdout).toBe(queued);
+    srv.close();
+  });
+
   it('resolves a task by ID prefix', async () => {
     const hits: string[] = [];
     const srv = await serverRecordingHits(hits);

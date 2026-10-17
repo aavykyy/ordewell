@@ -58,7 +58,7 @@ export async function followExecution(
         ? `: ${t.verdict.outcome.toUpperCase()}: ${t.verdict.reason.slice(0, 60)}`
         : '';
       // Nothing starts it on its own (ADR-0035), so a line that only said "pending" would read as next in line.
-      const waits = t.waitsForApproval ? `: ${inLine(WAITS_FOR_APPROVAL_LABEL)}: \`ordewell run-task <id>\` starts it` : '';
+      const waits = t.waitsForApproval ? `: ${inLine(WAITS_FOR_APPROVAL_LABEL)}: \`ordewell force-start <id>\` approves it, \`ordewell run\` approves all` : '';
       lines.push(`  ${icon} #${t.id.slice(-4)} ${t.status}${verdict}${waits}`);
     }
     const output = lines.join('\n');

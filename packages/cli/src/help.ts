@@ -31,7 +31,7 @@ Tasks (<id> is an order number or a task ID):
   ordewell complete <id>          Mark a task complete (alias: mark-complete)
   ordewell uncomplete <id>        Mark a completed task not done
   ordewell skip <id>              Skip a task: nothing it did lands, dependents go ahead
-  ordewell force-start <id>       Start a task now, ignoring dependencies (asks past a merge gate)
+  ordewell force-start <id>       Approve a task and start it now, or once its dependencies finish (asks past a merge gate)
   ordewell run-task <id>          Run only one task
   ordewell retry <id>             Re-run a failed task
   ordewell continue <id> <msg>    Continue a finished task in its saved runner session

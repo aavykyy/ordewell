@@ -55,7 +55,7 @@ export function skippedLabel(reason: string | null): string {
  * for them (ADR-0035). Not a runner approval: nothing has started, so no
  * runner is asking anything.
  */
-export const WAITS_FOR_APPROVAL_LABEL = 'Waiting for your approval to start';
+export const WAITS_FOR_APPROVAL_LABEL = 'Waits for your approval';
 
 /** Runner requests a task waits on (ADR-0018, A1); null when none do. */
 export function approvalLabel(count: number | undefined): string | null {

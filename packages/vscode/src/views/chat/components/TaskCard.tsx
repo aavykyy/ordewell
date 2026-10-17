@@ -650,9 +650,17 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
         {/* The scheduler leaves it for the user (ADR-0035): it must read as waiting on them, not as next in line. */}
         {row.waitsForApproval && (
           <span className="task-isolation-badge approval"
-            title="Added after you approved the plan, so it does not start on its own. Start it, or Execute plan, to approve it.">
+            title="Added after you approved the plan, so it does not start on its own. Approve it, or Approve all, and it starts once its dependencies finish.">
             {row.waitsForApproval}
           </span>
+        )}
+        {/* A force start: core approves it, and never starts it before its dependencies finish. */}
+        {row.waitsForApproval && onForceStart && (
+          <button type="button" className="task-log-open-btn"
+            onClick={(e) => { e.stopPropagation(); onForceStart(task.id); }}
+            title="Approve it to run: it starts once its dependencies finish">
+            Approve
+          </button>
         )}
 
         {/* The task still runs; this is the cue to move it. */}

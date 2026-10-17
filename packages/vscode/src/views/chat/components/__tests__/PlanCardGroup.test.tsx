@@ -88,6 +88,24 @@ describe('PlanCardGroup — Execute Plan / Stop', () => {
     expect(document.querySelector('.plan-action-bar')).toBeNull();
   });
 
+  it('offers Approve all while a task waits for approval, beside Stop, and not otherwise', () => {
+    const onApproveAll = vi.fn();
+    const waiting = makeTask({ id: 't2', order: 2, title: 'Added since' });
+    const run = { ...EMPTY_RUN, tasks: [{ ...waiting, subtasks: [], waitsForApproval: true }] };
+    const { unmount } = render(
+      <PlanCardGroup run={run} tasks={[makeTask(), waiting]} models={emptyModels} isExecuting={true}
+        onStopExecution={vi.fn()} onApproveAll={onApproveAll} />,
+    );
+    expect(screen.getByText('Stop')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve all' }));
+
+    expect(onApproveAll).toHaveBeenCalledOnce();
+    unmount();
+    render(<PlanCardGroup run={EMPTY_RUN} tasks={[makeTask()]} models={emptyModels} isExecuting={true} onStopExecution={vi.fn()} onApproveAll={onApproveAll} />);
+    expect(screen.queryByRole('button', { name: 'Approve all' })).toBeNull();
+  });
+
   it('renders per-task Run Task button via onRunTask when not executing', () => {
     render(
       <PlanCardGroup run={EMPTY_RUN}

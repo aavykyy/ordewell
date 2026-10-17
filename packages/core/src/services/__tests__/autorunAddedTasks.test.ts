@@ -197,11 +197,11 @@ describe('a task the planner adds after approval waits for the user', () => {
     expect(await refusedStart(env)).toMatch(/was added after the user approved the plan/);
   });
 
-  it('when autorun is turned off after the task was added: the setting is read at the start', async () => {
+  it('when autorun is turned off before the edit lands: the setting is read as it lands', async () => {
     const env = await finishedRun();
     await addCache(env);
-    await landEdit(env);
     changeSettings(env, { autorun: false });
+    await landEdit(env);
     void env.session.continueConversation('run it');
     await until(() => env.planner.calls.length === 2);
 
@@ -209,5 +209,55 @@ describe('a task the planner adds after approval waits for the user', () => {
 
     expect(start.isError).toBe(true);
     expect(env.session.planState!.approvedTasks).not.toContain(added(env)!.id);
+  });
+});
+
+describe('with autorun on, a task the planner adds in the user\'s turn needs no approval', () => {
+  async function addedDuringRun(options: Options): Promise<Env> {
+    const env = await supervised([task('t1', 1)], options);
+    void env.session.continueConversation('add a cache after task 1');
+    await until(() => env.planner.calls.length === 1);
+    const edit = await env.planner.tools().editPlan!({ ops: [{ op: 'add', task: { title: 'Add a cache', prompt: 'add a cache', dependencies: ['#1'] } }] }, ctx);
+    expect(edit.isError).toBeFalsy();
+    await landEdit(env);
+    return env;
+  }
+
+  it.each([
+    ['Full', AUTORUN_FULL],
+    ['Guarded', { settings: { supervisorLevel: 'off', autorun: true }, config: { autonomousMode: false } } satisfies Options],
+  ])('in %s: it is approved as it lands, and starts once its dependencies finish', async (_mode, options) => {
+    const env = await addedDuringRun(options);
+
+    expect(env.session.planState!.approvedTasks).toContain(added(env)!.id);
+    expect(env.session.waitsForApproval(added(env)!.id)).toBe(false);
+    expect(env.run.spawnedIds()).toEqual(['t1']);
+
+    env.run.of('t1').reportComplete({ status: 'done', summary: '' });
+    await until(() => env.run.spawnedIds().includes(added(env)!.id));
+  });
+
+  it('a task added while autorun was off is approved once the planner rewrites it with autorun on', async () => {
+    const env = await addedDuringRun({ settings: { supervisorLevel: 'off', autorun: false }, config: { autonomousMode: true } });
+    expect(env.session.waitsForApproval(added(env)!.id)).toBe(true);
+    changeSettings(env, { autorun: true });
+    void env.session.continueConversation('make the cache an LRU');
+    await until(() => env.planner.calls.length === 2);
+
+    const edit = await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#2', changes: { prompt: 'add an LRU cache' } }] }, ctx);
+    expect(edit.isError).toBeFalsy();
+    await landEdit(env, 1);
+
+    expect(env.session.waitsForApproval(added(env)!.id)).toBe(false);
+  });
+
+  it('with autorun off, it still waits for the user', async () => {
+    const env = await addedDuringRun({ settings: { supervisorLevel: 'off', autorun: false }, config: { autonomousMode: true } });
+
+    expect(env.session.waitsForApproval(added(env)!.id)).toBe(true);
+    env.run.of('t1').reportComplete({ status: 'done', summary: '' });
+    await until(() => taskOf(env.session, 't1')!.status === 'completed');
+    await settled();
+    expect(env.run.spawnedIds()).toEqual(['t1']);
   });
 });

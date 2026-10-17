@@ -282,16 +282,17 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       expect(err.code).toBe('no_plan');
     });
 
-    it('says already_executing for a second start while a task is live', async () => {
+    it('answers a second start while a task is live as running, approving what waits rather than restarting the run', async () => {
       saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
       await client.adoptSession('session-saved', workspace);
 
       await expect(client.executePlan('session-saved')).resolves.toEqual({ status: 'running' });
       await vi.waitFor(() => expect(pool.session('session-saved').isExecuting).toBe(true));
-      const err = await refusal(client.executePlan('session-saved'));
+      const live = pool.session('session-saved').runSnapshot().tasks.filter((t) => t.status === 'in_progress').map((t) => t.id);
 
-      expect(err.status).toBe(409);
-      expect(err.code).toBe('already_executing');
+      await expect(client.executePlan('session-saved')).resolves.toEqual({ status: 'running' });
+
+      expect(pool.session('session-saved').runSnapshot().tasks.filter((t) => t.status === 'in_progress').map((t) => t.id)).toEqual(live);
     });
 
     it('refuses a message to a task that is not running, as refused', async () => {

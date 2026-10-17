@@ -43,6 +43,7 @@ import type {
   TaskLogEvent,
   TaskLogResponse,
   TaskMessageResponse,
+  TaskStartResponse,
 } from '@ordewell/core';
 
 const DEFAULT_HTTP_TIMEOUT_MS = 15 * 60 * 1000;
@@ -354,7 +355,7 @@ export class ApiClient {
     sessionId: string,
     taskId: string,
     action: 'run' | 'force-start' | 'retry' | 'cancel',
-  ): Promise<OkResponse> {
+  ): Promise<TaskStartResponse> {
     return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/${action}`, `${action} failed`);
   }
 

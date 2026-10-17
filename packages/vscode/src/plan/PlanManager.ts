@@ -232,10 +232,14 @@ function approvedTasks(tasks: Task[]): Task[] {
 
 export async function handleApprovePlan(deps: PlanManagerDeps): Promise<void> {
   deps.log('=== handleApprovePlan START ===');
+  // A run under way keeps going: Execute then approves what waits for approval, and the session says how many (#95).
   if (deps.session.isExecuting) {
-    deps.log('Stopping existing orchestrator run before approving new plan');
-    deps.session.stopExecution();
-    deps.runner.stopAll();
+    try {
+      await executeUserCommand(deps.session, { command: 'run_plan' });
+    } catch (err) {
+      vscode.window.showErrorMessage(`Could not approve the waiting tasks: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return;
   }
   const plan = deps.getCurrentPlan();
   // The run_plan below is the approval, and the Session records it. New task objects, not edits in place: the plan's tasks are the Session's

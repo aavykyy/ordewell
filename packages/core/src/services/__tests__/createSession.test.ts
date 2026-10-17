@@ -214,7 +214,7 @@ describe('Session phase transitions', () => {
     expect(runner.spawn).toHaveBeenCalledWith(expect.objectContaining({ taskId: 't2' }));
   });
 
-  it('Run Task keeps the session busy until the marker and blocks Execute Plan meanwhile', async () => {
+  it('Run Task keeps the session busy until the marker', async () => {
     const runnerSession = new FakeRunnerSession('runnerSession-1', 't1');
     const runner = {
       spawn: vi.fn().mockResolvedValue(runnerSession),
@@ -240,7 +240,6 @@ describe('Session phase transitions', () => {
     expect(session.isExecuting).toBe(true);
     expect(taskOf(session, 't1')?.status).toBe('in_progress');
     expect(taskOf(session, 't2')?.status).toBe('pending');
-    await expect(session.executePlan()).rejects.toThrow('Session already executing');
 
     runnerSession.reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(session.isExecuting).toBe(false));
@@ -248,6 +247,35 @@ describe('Session phase transitions', () => {
     expect(taskOf(session, 't1')?.status).toBe('completed');
     expect(taskOf(session, 't2')?.status).toBe('pending');
     expect(runner.spawn).toHaveBeenCalledOnce();
+  });
+
+  it('Execute Plan during a Run Task makes it the plan\'s run: the rest start as their dependencies finish', async () => {
+    const sessions = [new FakeRunnerSession('runnerSession-1', 't1'), new FakeRunnerSession('runnerSession-2', 't2')];
+    const runner = {
+      spawn: vi.fn().mockImplementation(() => Promise.resolve(sessions[runner.spawn.mock.calls.length - 1])),
+      stop: vi.fn(),
+      stopAll: vi.fn(),
+      activeCount: 0,
+    } satisfies IRunner;
+    const session = makeSession({ runner });
+    session.loadPlan({
+      tasks: [
+        createTask({ id: 't1', order: 1, title: 'Run only me', prompt: 'one' }),
+        createTask({ id: 't2', order: 2, title: 'After me', prompt: 'two', dependencies: ['t1'] }),
+      ],
+      generatedAt: new Date().toISOString(),
+      status: 'draft',
+      runners: ['claude-code'],
+      lastUpdated: new Date().toISOString(),
+    }, 'Test', '/repo');
+    await session.runTask('t1');
+
+    await session.executePlan();
+
+    expect(runner.spawn).toHaveBeenCalledOnce();
+    sessions[0].reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(runner.spawn).toHaveBeenCalledTimes(2));
+    expect(taskOf(session, 't2')?.status).toBe('in_progress');
   });
 
   it("captures a finished task's reported answer", async () => {

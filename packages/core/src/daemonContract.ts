@@ -65,6 +65,11 @@ export interface OkResponse {
   ok: boolean;
 }
 
+/** A task start's answer: `queued` says why it did not start now, when the task waits for its dependencies instead. */
+export interface TaskStartResponse extends OkResponse {
+  queued?: string;
+}
+
 /**
  * A plan as the planner routes return it: the session's plan state, not the
  * `SerializedPlan` a websocket `plan_generated` carries. The two differ —

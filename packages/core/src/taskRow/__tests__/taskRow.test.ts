@@ -207,7 +207,7 @@ describe('the row view, every status against every annotation', () => {
     }],
     // A task added after the user approved the plan waits for them until it starts; once at work, it was approved (ADR-0035).
     ['a start that waits for the user\'s approval', { waitsForApproval: true }, (v, status) => {
-      expect(v.waitsForApproval).toBe(status === 'pending' || status === 'approved' || status === 'blocked' ? 'Waiting for your approval to start' : null);
+      expect(v.waitsForApproval).toBe(status === 'pending' || status === 'approved' || status === 'blocked' ? 'Waits for your approval' : null);
       expect(v.approvals).toBeNull();
     }],
     ['dependencies', { dependencies: ['t1', 'ghost'] }, (v) => {

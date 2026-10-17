@@ -86,8 +86,8 @@ function makeHandler(action: Action, command: string = action) {
       async (api, sessionId, taskId) => {
         if (PASSES_GATE.has(action)) await confirmPastGate(subArgs, api, sessionId, taskId, confirm);
         try {
-          await api.taskControl(sessionId, taskId, action);
-          console.log(PAST_TENSE[action]);
+          const { queued } = await api.taskControl(sessionId, taskId, action);
+          console.log(queued ?? PAST_TENSE[action]);
         } catch (err) {
           console.error(`Failed to ${action} task: ${(err as Error).message}`);
           process.exit(1);

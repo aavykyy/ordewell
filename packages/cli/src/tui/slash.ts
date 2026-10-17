@@ -39,7 +39,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'skip', usage: '/skip <id>', description: 'Skip a task', category: 'tasks' },
   { name: 'retry', usage: '/retry <id>', description: 'Re-run a failed task', category: 'tasks' },
   { name: 'cancel', usage: '/cancel <id>', description: 'Kill a running task', category: 'tasks' },
-  { name: 'force-start', usage: '/force-start <id>', description: 'Start a task now, ignoring dependencies', category: 'tasks' },
+  { name: 'force-start', usage: '/force-start <id>', description: 'Approve a task and start it now, or once its dependencies finish', category: 'tasks' },
   { name: 'continue', usage: '/continue <id> <message>', description: 'Continue a finished task in its saved runner session, with your message', category: 'tasks' },
   { name: 'open', usage: '/open <id>', description: "Open a task's view: its log, and the keys that answer its checkpoint or tool request", category: 'tasks' },
   { name: 'checkpoint', usage: '/checkpoint <id> approve|reject [reason]', description: 'Answer the checkpoint a task waits at: approve lets it go on, reject tells it why not', category: 'tasks' },

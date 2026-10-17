@@ -17,7 +17,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const GUARDED: Options = { settings: { supervisorLevel: 'off', autorun: true }, config: { autonomousMode: false } };
+// Autorun off: with it on, what the planner adds in the user's turn is approved as it lands, and no start asks about it.
+const GUARDED: Options = { settings: { supervisorLevel: 'off', autorun: false }, config: { autonomousMode: false } };
 
 /** A plan the user ran, its one task finished, and the user's next turn open. */
 async function finishedRun(options: Options = GUARDED): Promise<Env> {
