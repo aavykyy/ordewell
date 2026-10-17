@@ -32,13 +32,10 @@ everything below applies per repo of the group.
 ### Key properties
 
 - **One seam, and it is not the runner's.** A Runner is handed a `cwd` and
-  nothing more (ADR-0025). Git never enters `IRunner`, `RunnerRegistry`
+  nothing more (ADR-0025 D1). Git never enters `IRunner`, `RunnerRegistry`
   or a runner adapter, so Claude Code, Codex and OpenCode cannot produce three
   different git behaviors. The module is injected into the orchestrator the way
-  `IRunner` and `PlanStore` are; scheduling tests use
-  `FakeWorktreeIsolation`, and git behavior is tested against real temporary
-  repositories asserting porcelain state — worktrees listed, branch contents,
-  files present — never command lines.
+  `IRunner` and `PlanStore` are.
 - **Isolation is run-scoped.** An `IsolationRun` is minted when a run's first
   change task starts:
   an id, per repo the base ref resolved to a commit *then* and the integration
@@ -172,29 +169,32 @@ everything below applies per repo of the group.
   files hard links, copied only when a hard link is impossible (a different
   volume), with a notice. Copies are what make the recorded link list matter
   there, since a copied `.envrc` is a plain untracked file.
-- **Merge into the user's branch requires consent.** Ordewell merges into
-  the checked-out branch when the user presses Merge all, or opts into one of
-  ADR-0029's settings. When an isolated run settles, `handoff` runs and
-  `isolation_handoff` (integration branches, base refs, what landed) is broadcast
-  *before* `execution_complete` — the TUI closes its execution stream on the
-  latter, so anything after it is lost. What follows is the user's: review the
-  diff against the base refs (one section per repo), *Merge all* (preflighted in
-  every repo, merging all or none, ADR-0014; a normal `git merge`, aborted on
-  conflict so the user's tree is left as it was), clean up, or discard. Merge
-  all is available whenever a run has unmerged landings, including to open a
-  merge gate during a run (ADR-0020); it takes
-  turns with the landing queue, so it never reads an integration branch
-  mid-landing.
-  [ADR-0029](../supervision/0029-the-supervisor.md) defines two settings the user opts
-  into per plan, both saved at run start. *Merge at gates automatically* runs
-  Merge all when a task reaches a merge gate, and a supervisor at Act may call
-  `merge_all` in its wake-up turns. Both go through the same queue and
-  preflight; a conflict or a dirty overlap aborts with the user's tree
-  untouched, and the gate waits for the user. Without either, Ordewell never
-  merges on its own. *Amended by [ADR-0030](../supervision/0030-global-run-settings.md):*
-  both are global user settings (`/automerge`, `/supervisor act`), opted into
-  once rather than per plan, and a change applies at once to the session it
-  is made in.
+- **Merge into the user's branch requires consent.** Ordewell merges into the
+  checked-out branch when the user presses Merge all, or has opted into one of
+  two settings: *merge automatically* (`/automerge`), and the supervisor at Act
+  (`/supervisor act`), which may call `merge_all` in its wake-up turns
+  ([ADR-0029](../supervision/0029-the-supervisor.md)). Both are global user
+  settings, opted into once rather than per plan, and a change applies at once to
+  the session it is made in ([ADR-0030](../supervision/0030-global-run-settings.md)).
+  Without either, Ordewell never merges on its own.
+
+  When an isolated run settles, `handoff` runs and `isolation_handoff`
+  (integration branches, base refs, what landed) is broadcast *before*
+  `execution_complete` — the TUI closes its execution stream on the latter, so
+  anything after it is lost. What follows is the user's: review the diff against
+  the base refs (one section per repo), *Merge all* (preflighted in every repo,
+  merging all or none, ADR-0014; a normal `git merge`, aborted on conflict so
+  the user's tree is left as it was), clean up, or discard. Two cases hand the
+  merge to Ordewell instead. With *merge automatically* on, a task that reaches
+  a merge gate runs Merge all, and so does the end of a run that settles with
+  landed work not yet merged; the handoff is sent only if that merge stops. With
+  the supervisor at Act, the handoff is sent marked as deferred to the
+  supervisor, who may merge it. Every automatic merge goes through the same
+  queue and preflight as the user's: a conflict or a dirty overlap aborts with
+  the user's tree untouched, and the gate, or the handoff, waits for the user.
+  Merge all is available whenever a run has unmerged landings, including to open
+  a merge gate during a run (ADR-0020); it takes turns with the landing queue,
+  so it never reads an integration branch mid-landing.
 - **Integration branches go once their work is merged, never before.** Ordewell
   never deletes landed work the user has not merged, and never touches a branch
   it does not own. A Merge all that answers `merged` on a settled run clears it
@@ -289,16 +289,56 @@ everything below applies per repo of the group.
   VS Code replays it when its webview reconnects or a session is loaded (the
   card waits while a run executes), and the TUI and CLI read the same record
   from the saved plan.
-- **Tests do not run git by accident.** `fakeConfig` has
-  `worktreeIsolation: false`. An orchestrator built without an injected
-  isolation falls back to git, and the suites run inside this repository; with
-  the setting on, they would create worktrees in it.
 - **Config.** `worktreeIsolation` (default on), an `ORDEWELL_WORKTREE_ISOLATION`
   environment override, an optional `worktreeSetupCommand`
   (`ORDEWELL_WORKTREE_SETUP`), and `workspaceRepos` and `worktreeLinks`
   (ADR-0014), following the `BaseConfig`/`EnvConfig` pattern. A repo with hooks
   or submodules that assume one worktree opts out with the setting rather than
   by not being a git repo.
+
+## Testing decisions
+
+A good test here observes externally visible behaviour: git state at the
+porcelain level (worktrees listed, branch contents, whether a merge is reported
+as conflicted, whether artifacts and cleanup exist), the `cwd` a Runner was
+spawned with, and the task statuses the orchestrator settles on — never the
+literal git command lines or private fields.
+
+- **`GitWorktreeIsolation` runs against real temporary repositories**
+  (`GitWorktreeIsolation.test.ts`), built the way `sessionStore.test.ts` and
+  `workspace.test.ts` build real temp directories. It covers activation and its
+  reasons, detection, dirty trees, the task workspace, the bootstrap, atomic
+  landing (with a crash mid-landing, and git older than 2.38), the handoff,
+  `pruneOrphans`, `sweep` and merged branches. Assertions read `git worktree
+  list`, branch tips and file contents, not strings. These are the real-git
+  files `npm run test:quick` skips.
+- **`TaskOrchestrator` runs against a fake isolation collaborator**
+  (`FakeWorktreeIsolation`, in `TaskOrchestrator.isolation.test.ts`), the way
+  its existing suite fakes `IRunner`, with `fakeConfig` and the shared test kit
+  (`packages/core/src/testing.ts`). It asserts the seam, not git: what `cwd` a
+  Runner is spawned with, when a dependent may start, in what order work
+  integrates, and what a conflict, a cancel, a retry and a workspace without git
+  do to a task.
+- **Tests do not run git by accident.** `fakeConfig` has
+  `worktreeIsolation: false`. An orchestrator built without an injected
+  isolation falls back to git, and the suites run inside this repository; with
+  the setting on, they would create worktrees in it.
+- **Config and the planner prompt** are covered beside the existing config and
+  prompt tests: the `worktreeIsolation` default and its environment override,
+  and the overlap rule present or absent depending on whether isolation is
+  active.
+
+## Out of scope
+
+- Isolation for non-git version control (Mercurial, SVN). The fallback is
+  shared-root execution; only git worktrees are in scope.
+- Overlap-aware scheduling from a declared per-task file scope. The concurrency
+  policy trusts the dependency graph; conflicts are handled, not predicted.
+  File-scope-gated scheduling is the obvious follow-up if conflicts prove
+  frequent.
+- Pushing, pull requests, or any remote operation.
+- OS-level sandboxing of runners (a separate effort; see ADR-0011).
+- Redefining how Runners themselves use git; they continue to receive a `cwd`.
 
 ## Considered options
 
@@ -397,3 +437,4 @@ everything below applies per repo of the group.
 - 2026-10-12 — the end of a run is a handoff unless the user opted in to automatic merging, which now also merges at the end of a run, or the supervisor at Act merges ([ADR-0029](../supervision/0029-the-supervisor.md), amendment of 2026-10-12).
 - 2026-10-14 — a failed verdict blocks only the task's dependents instead of halting the run ([ADR-0034](../supervision/0034-a-failed-task-blocks-only-its-dependents.md)).
 - 2026-10-14 — a carry-over restores a usage-limit-paused attempt's work for its new runner (ADR-0018, U1).
+- 2026-10-17 — the pre-implementation spec this ADR was built from is retired: its testing decisions and out-of-scope list moved here, and the merge paragraph states the global settings and the end-of-run merge that only History held.
