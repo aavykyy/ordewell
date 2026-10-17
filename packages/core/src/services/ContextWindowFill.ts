@@ -55,12 +55,13 @@ function modelKey(source: string | undefined, model: string | undefined): string
 
 /**
  * A runner whose attempts' usage records carry their model's window, each
- * attempt its own stream. It sits innermost, so the attempt's usage and the
+ * attempt its own stream; a continue carries on from the window its session
+ * was last measured against. It sits innermost, so the attempt's usage and the
  * task log a surface folds into the task's meter read the same window.
  */
 export function withContextWindows(runner: IRunner, catalog: CatalogWindow): IRunner {
   return {
-    spawn: async (opts) => windowedSession(await runner.spawn(opts), new ContextWindowFill(catalog)),
+    spawn: async (opts) => windowedSession(await runner.spawn(opts), new ContextWindowFill(catalog, opts.resumeWindow)),
     stop: (sessionId) => runner.stop(sessionId),
     stopAll: () => runner.stopAll(),
     get activeCount() { return runner.activeCount; },

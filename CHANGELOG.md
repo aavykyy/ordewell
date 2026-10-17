@@ -89,7 +89,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **Two surfaces saving settings at the same moment no longer lose one save.**
   The last check and the swap happen under a lock file next to the settings file.
 - **The context meter keeps a model's reported window** when the task switches
-  away and back.
+  away and back, and when a task is continued.
+- **A settings save no longer frees a lock another process took over.** A save
+  that resumed after its lock went stale leaves the newer holder's lock alone.
+- **The planner is no longer told a task paused on a usage limit is running.**
+  Its note says the task resumes at the reset, or waits for a retry.
+- **A planner edit still fits an untouched task's effort to its model.** An
+  effort the model no longer offers is clamped, as before, unless the task is
+  running or paused.
 - **`ordewell status` flags a task on a runner you switched off, or a model off
   its allowlist**, as the terminal UI and VS Code do.
 - **A model switch logged after its attempt ended no longer names the plan's

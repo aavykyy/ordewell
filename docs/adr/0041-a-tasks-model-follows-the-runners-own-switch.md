@@ -80,9 +80,10 @@ discovery the task started during is refused too. **Stop, edit, continue is
 the outside path**, and the runner's own `/model` is the inside one. The
 write-back above is the one model edit a live runner allows, since it records
 what that runner already runs. A planner edit or restatement leaves a task's
-assignment alone where it names the runner, model and effort the plan holds:
-the allowlist shapes what the planner writes, not a model the user switched
-to (ADR-0043).
+model alone where it names the runner, model and effort the plan holds: the
+allowlist shapes what the planner writes, not a model the user switched to
+(ADR-0043). Its effort is still clamped to what that model offers now, unless
+the task is running or paused, where a runner may hold it.
 
 ### A task's usage is its whole spend
 
@@ -99,7 +100,8 @@ to (ADR-0043).
 - **The context window comes from the runner's report, else the runner's own
   listing or the provider's own endpoint**, filled per record
   (`ContextWindowFill`) so a model change mid-stream reads its own window. A
-  window reported once is kept for its model; neither known leaves the meter
+  window reported once is kept for its model, and a Continue starts from the
+  window its session was last measured against; neither known leaves the meter
   unknown. Never an Ordewell table.
 
 ### Continue never crosses runners
@@ -153,3 +155,4 @@ of the earlier runner's attempt restored (ADR-0018, K1).
 
 - 2026-10-17 — accepted and implemented (#106): a `/model` in a task chat is written to the plan, a drift is stated, the model is locked while the runner is live, a task's usage is its whole spend with the meter on the latest model, and Continue never crosses runners.
 - 2026-10-17 — the lock covers a cleared model and a runner move; a planner edit keeps an untouched assignment; a switch after its attempt ended says nothing of the plan; a window is kept per model; an ownerless legacy session is owned by its runner at load.
+- 2026-10-17 — a planner edit still clamps an untouched task's effort unless a runner may hold it; a Continue keeps its session's window.

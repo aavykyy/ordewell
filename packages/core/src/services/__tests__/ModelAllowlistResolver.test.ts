@@ -319,6 +319,21 @@ describe('coerceAssignments', () => {
       expect(result[0].assignedModel!.thinkingEffort).toBe('weird');
     });
 
+    it('clamps a task the pass did not write to what its catalogued model offers now, keeping its off-list model', () => {
+      const saved = opencodeTask('p/limited', 'xhigh');
+      const { tasks, coerced } = coerceAssignments([saved], { opencode: ['p/plain'] }, modelsByRunner, [saved]);
+      expect(tasks[0].assignedModel).toMatchObject({ modelId: 'p/limited', thinkingEffort: 'high', availableVariants: ['low', 'medium', 'high'] });
+      expect(coerced).toEqual([{ taskId: 't1', title: 'test', field: 'thinkingEffort', from: 'xhigh', to: 'high' }]);
+    });
+
+    // Its runner holds the model and effort while it is live (ADR-0041).
+    it('leaves a running task the pass did not write as the plan holds it', () => {
+      const saved = { ...opencodeTask('p/limited', 'xhigh'), status: 'in_progress' as const };
+      const { tasks, coerced } = coerceAssignments([saved], {}, modelsByRunner, [saved]);
+      expect(tasks[0].assignedModel).toEqual(saved.assignedModel);
+      expect(coerced).toEqual([]);
+    });
+
     it('clamps after an allowlist rewrite lands on a catalogued model', () => {
       const result = coerceAssignments(
         [{ ...opencodeTask('p/limited', 'max') }],

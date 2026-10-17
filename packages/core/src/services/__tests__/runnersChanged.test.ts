@@ -118,6 +118,26 @@ describe('runners changed — the planner is told on its next turn', () => {
     expect(block).not.toMatch(/still run/);
   });
 
+  it('does not call a task running whose attempt has ended, as one paused on a usage limit', async () => {
+    const { session, settings, outgoing } = harness();
+    await session.startPlanning('goal', ['claude-code', 'codex']);
+    session.loadPlan(planWith([
+      aiTask({ id: 't1', title: 'Resumes', assignedRunner: 'codex', status: 'awaiting_user', awaitingReason: 'usage-limit', resumeAt: '2099-01-01T00:00:00.000Z' }),
+      aiTask({ id: 't2', title: 'Waits', assignedRunner: 'codex', status: 'awaiting_user', awaitingReason: 'usage-limit' }),
+      aiTask({ id: 't3', title: 'Asks', assignedRunner: 'codex', status: 'awaiting_user', awaitingReason: 'checkpoint' }),
+      aiTask({ id: 't4', title: 'Clashed', assignedRunner: 'codex', status: 'awaiting_user', awaitingReason: 'conflict' }),
+    ], ['claude-code', 'codex']), 'goal', testWorkspace, { persist: false });
+
+    settings.enabledRunners = ['claude-code'];
+    await session.continueConversation('go on');
+    const lines = outgoing(0).split('\n').filter((l) => l.startsWith('- '));
+
+    expect(lines.find((l) => l.includes('"Resumes"'))).toContain('paused on a usage limit; resumes there at the reset unless moved');
+    expect(lines.find((l) => l.includes('"Waits"'))).toContain('paused on a usage limit; a retry would run it there unless moved');
+    expect(lines.find((l) => l.includes('"Asks"'))).toContain('already running as assigned');
+    expect(lines.find((l) => l.includes('"Clashed"'))).toContain('waiting for the user; what runs next runs there unless moved');
+  });
+
   it('reads an allowlist as the catalog does: ids only another runner offers limit nothing', async () => {
     const { session, settings, outgoing } = harness();
     await session.startPlanning('goal', ['claude-code', 'codex']);

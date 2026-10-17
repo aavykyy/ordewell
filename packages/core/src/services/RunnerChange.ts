@@ -1,4 +1,4 @@
-import type { DiscoveredModel, RunnerId } from '../models/Task';
+import type { AwaitingReason, DiscoveredModel, RunnerId, Task } from '../models/Task';
 import { effectiveAllowlist } from './ModelAllowlistResolver';
 import { assignmentIssue, assignmentIssueText, type AssignedTask, type AssignmentScope } from './AssignmentScope';
 
@@ -38,16 +38,32 @@ export function scopeChange(told: AssignmentScope, now: AssignmentScope): ScopeC
 }
 
 /** The plan tasks the scope no longer covers. */
-export function flaggedTasks(rows: readonly { ref: string; task: AssignedTask & { title: string } }[], scope: AssignmentScope): (FlaggedTask & { text: string; status: string })[] {
+export function flaggedTasks(rows: readonly { ref: string; task: AssignedTask & Pick<Task, 'title' | 'awaitingReason' | 'resumeAt'> }[], scope: AssignmentScope): (FlaggedTask & FlaggedStanding & { text: string })[] {
   return rows.flatMap(({ ref, task }) => {
     const issue = assignmentIssue(task, scope);
-    return issue ? [{ ref, title: task.title, task, text: assignmentIssueText(issue), status: task.status }] : [];
+    return issue ? [{ ref, title: task.title, task, text: assignmentIssueText(issue), status: task.status, awaitingReason: task.awaitingReason, resumeAt: task.resumeAt }] : [];
   });
 }
 
-/** What happens to a flagged task as assigned, which depends on where it stands: a failed one only runs again if retried. */
-function consequence(status: string | undefined): string {
+/** Where a flagged task stands, which decides what the planner is told it will do. */
+interface FlaggedStanding {
+  status?: string;
+  awaitingReason?: AwaitingReason;
+  resumeAt?: string;
+}
+
+/**
+ * What happens to a flagged task as assigned, which depends on where it stands:
+ * a failed one only runs again if retried, and a pause whose attempt ended (a
+ * usage limit, work that did not land) has nothing running, whatever its
+ * status says.
+ */
+function consequence({ status, awaitingReason, resumeAt }: FlaggedStanding): string {
   if (status === 'failed') return 'failed; a retry would run it there unless moved';
+  if (status === 'awaiting_user' && awaitingReason === 'usage-limit') {
+    return resumeAt ? 'paused on a usage limit; resumes there at the reset unless moved' : 'paused on a usage limit; a retry would run it there unless moved';
+  }
+  if (status === 'awaiting_user' && (awaitingReason === 'conflict' || awaitingReason === 'files-changed')) return 'waiting for the user; what runs next runs there unless moved';
   if (status === 'in_progress' || status === 'awaiting_user') return 'already running as assigned';
   return 'runs as assigned unless moved';
 }
@@ -65,7 +81,7 @@ function allowlistLine({ runner, before, after }: ScopeChange['allowlists'][numb
  * the allowlist. The tasks it names still run as assigned; moving them is the
  * planner's or the user's call, so this suggests rather than instructs.
  */
-export function runnersChangedBlock(change: ScopeChange, flagged: readonly { ref: string; title: string; text: string; status?: string }[], tools: boolean): string {
+export function runnersChangedBlock(change: ScopeChange, flagged: readonly ({ ref: string; title: string; text: string } & FlaggedStanding)[], tools: boolean): string {
   return [
     '<runners_changed>',
     'The user changed which runners and models you may assign since your last turn.',
@@ -73,7 +89,7 @@ export function runnersChangedBlock(change: ScopeChange, flagged: readonly { ref
     change.switchedOff.length ? `Runners switched off: ${change.switchedOff.join(', ')}.` : '',
     ...change.allowlists.map(allowlistLine),
     flagged.length
-      ? ['These tasks are now outside that:', ...flagged.map((f) => `- ${f.ref} "${f.title}" (${f.text}) — ${consequence(f.status)}`)].join('\n')
+      ? ['These tasks are now outside that:', ...flagged.map((f) => `- ${f.ref} "${f.title}" (${f.text}) — ${consequence(f)}`)].join('\n')
       : '',
     `${tools ? 'list_runners and list_models give' : '<available_models> shows'} what you may assign now.${flagged.length ? ' Consider moving the tasks above to an enabled runner and an allowed model, or tell the user why you left them.' : ''}`,
     '</runners_changed>',

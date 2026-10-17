@@ -6,7 +6,7 @@ import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
 import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
 import type { RunnerModelRef } from '../models/RunnerCommand';
-import { countedSessionCost } from '../models/Usage';
+import { countedSessionCost, resumedSessionWindow } from '../models/Usage';
 import { summarizeOutput } from './promptAugment';
 import { endedByExit, VerdictEngine } from './VerdictEngine';
 import { BufferedTaskOutputSource } from './BufferedTaskOutputSource';
@@ -2205,6 +2205,7 @@ export class TaskOrchestrator {
         env,
         resumeSessionId: kind.kind === 'continuation' ? kind.resumeSessionId : undefined,
         resumeCost: kind.kind === 'continuation' ? countedSessionCost(task.attemptUsage, kind.resumeSessionId) : undefined,
+        resumeWindow: kind.kind === 'continuation' ? resumedSessionWindow(task.attemptUsage, attempt.runner, attempt.attempt) : undefined,
         attempt: attempt.attempt,
         ...(attempt.skills.length > 0 ? { skills: attempt.skills } : {}),
         onNotice: (message) => this.tell('warn', `Task "${task.title}": ${message}`),
