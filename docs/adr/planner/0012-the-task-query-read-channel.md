@@ -89,9 +89,10 @@ than cached or replayed.
   hitting the soft cap early — asking the same thing twice is a loop, not a
   read, and gets the landing nudge on the very next answer rather than
   waiting for three genuinely new questions to also arrive. A wake-up turn
-  (ADR-0029) has no user message to bound it: it gets the plan's wake-up read
-  budget whole (`wakeUpReadBudget`, 12 when unset), and only its last read is
-  told to land.
+  (ADR-0029) has no user message to bound it: it gets the wake-up read budget
+  whole (`wakeUpReadBudget`, a user setting, 12 by default,
+  [ADR-0030](../supervision/0030-global-run-settings.md)), and only its last read
+  is told to land.
 - **Refusing to answer was rejected as the backstop (T5).** Unlike a `bash`
   tool call (ADR-0008, T5: "absent is denial"), a read that stops being
   answered is not a safe default here — the planner has no other way to get

@@ -114,7 +114,7 @@ MCP tool rule (`mcp:find-*`), or a scope pattern (`/opt/data/*`,
 The grammar is in `plannerAllowlist.ts`.
 
 - **A rule names the operation, never less.** A command rule must spell out at
-  least the words its approval scope holds (ADR-0008, T1, amended 2026-08-11),
+  least the words its approval scope holds (ADR-0008, T1),
   so the entry `az group` never covers `az group delete`, and a one-word read
   of a multi-level CLI takes a `*` for its argument (`kubectl get *`).
 - **A wildcard is never a write.** A `*` slot does not match a mutating verb

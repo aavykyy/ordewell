@@ -228,9 +228,10 @@ Two things are **explicitly not claimed**:
 
 1. **Codex's read-only guarantee on Windows is unverified.** `codexSandbox`
    correctly short-circuits its bubblewrap probe off Linux, and the approvals
-   half of the invariant holds by construction (`approvalPolicy: 'on-request'`,
-   with command, file-change and permission requests declined at once,
-   ADR-0026). But Codex's OS-level sandboxing
+   half of the invariant holds by construction (`approvalPolicy: 'on-request'`:
+   what Codex asks to run or change is declined at once, a user's MCP tool is
+   decided by Ordewell, and every other request is refused, ADR-0026). But
+   Codex's OS-level sandboxing
    on Windows is not the equivalent of Seatbelt or Landlock, so
    `sandbox: 'read-only'` may be enforced by Codex's tool layer rather than by
    the kernel. "Read-only by construction" is a Linux/macOS guarantee until
@@ -259,3 +260,4 @@ measured on a Windows host; the rest has not been run on one.
 - 2026-10-09 — aligned with [ADR-0025](../runners/0025-structured-only-runners.md).
 - 2026-10-13 — a returned exit code no longer skips a group leader: the group is signalled and tracked until it is empty.
 - 2026-10-13 — a group whose leader has exited is asked for members before each signal, and dropped once empty.
+- 2026-10-17 — Codex's approvals on Windows read `on-request`, as ADR-0026 made them on 2026-10-10; the text still said `never`.

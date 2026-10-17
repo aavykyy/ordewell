@@ -67,7 +67,8 @@ binaries themselves rather than against memory:
   `/api/session/active` behind the stream for a dropped frame. A prompt has no
   system field, so the planner prompt is a session instruction entry; the
   direct edit controls are the plan agent plus deny rules for `question` and
-  `edit`; these do not enforce read-only shell execution (ADR-0008). The adapter
+  `edit`; shell execution is withheld by Ordewell's permission policy, not by
+  those (ADR-0026). The adapter
   takes a server for 2.x when `/api/info` names a version, and speaks the 1.x protocol otherwise.
   Letting the echo through put the user's goal in the planner's reply — and a
   goal quoting JSON would then have been parsed as the plan.
@@ -78,15 +79,20 @@ model's behalf, which is precisely what a coding agent replaces.
 
 ## Key properties
 
-- **Mutation belongs to task runners (T1).** A planner reads, searches and asks;
-  it never edits a file or runs a shell of its own. Enforcement comes from fixed
-  spawn controls and tool denials, not prompt instructions; native plan mode
-  alone cannot supply the invariant.
+- **Mutation belongs to task runners (T1).** A planner reads, searches and asks.
+  A harness's own edit tools are denied, its commands run through Ordewell's
+  `run_command` inside ADR-0008's envelope, and the one harness shell that stays
+  is Codex's, inside its read-only, network-less sandbox. Enforcement comes from
+  fixed spawn controls and tool denials, not prompt instructions; native plan
+  mode alone cannot supply the invariant.
   - Claude runs in `default` mode with its prompt tool on stdio, and its direct
     edit and shell tools and native plan-mode transitions denied. Codex runs
-    with an OS read-only sandbox and `approvalPolicy: on-request`. OpenCode runs
-    its plan agent under Ordewell's own permission policy, which denies every
-    write and shell tool, with its shell and subagents withheld
+    with an OS read-only sandbox and `approvalPolicy: on-request`, and keeps its
+    own shell inside that sandbox; where no sandbox can start, the shell is
+    switched off and `run_command` is its only one
+    ([ADR-0033](../planner-envelope/0033-codex-planner-without-its-sandbox.md)).
+    OpenCode runs its plan agent under Ordewell's own permission policy, which
+    denies every write and shell tool, with its shell and subagents withheld
     ([ADR-0026](../planner-envelope/0026-one-envelope-for-every-planner.md)).
   - A planner's commands run through Ordewell's `run_command`, inside
     ADR-0008's envelope, and every planner's own permission requests — a user's

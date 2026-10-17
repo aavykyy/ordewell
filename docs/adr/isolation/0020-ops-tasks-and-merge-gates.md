@@ -76,7 +76,7 @@ that depends on.**
   it changed, and the task's work is merged once the checked-out HEAD contains
   those tips. A merge made by hand with git counts as Merge all does, and is
   found the next time the scheduler looks. The gate requires that merge;
-  the per-plan setting below can perform it automatically.
+  the setting below can perform it automatically.
 - A user task is gated for the same reason as an ops task: what the user tests
   or checks by hand is their checkout or their deployment, and before the merge
   neither holds the work the task depends on.
@@ -222,5 +222,5 @@ it.
 - 2026-10-11 — `merge_all` reaches the planner as a tool through the command seam, allowed only to a supervisor at Act ([ADR-0029](../supervision/0029-the-supervisor.md)).
 - 2026-10-11 — wording: automatic merging resumes after any Merge all that goes through, an Act supervisor's `merge_all` included, as the code always did.
 - 2026-10-12 — merge at gates automatically becomes a global user setting, live in the session it is changed in ([ADR-0030](../supervision/0030-global-run-settings.md)).
-- 2026-10-12 — the automatic merge setting also merges at the end of a run, by the same route as a gate merge ([ADR-0029](../supervision/0029-the-supervisor.md), amendment of 2026-10-12).
+- 2026-10-12 — the automatic merge setting also merges at the end of a run, by the same route as a gate merge ([ADR-0029](../supervision/0029-the-supervisor.md), "Merge at gates automatically").
 - 2026-10-16 — the gate covers the task's whole dependency closure, not just its direct dependencies: a dependency on a verification task implies the work it verified, and a verification lands nothing of its own, so a direct-only gate let an ops task act on the user's checkout before that work was merged. A skipped task adds nothing of its own, but the work behind it still counts.

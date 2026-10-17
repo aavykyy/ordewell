@@ -45,7 +45,7 @@ own, the usage-limit reset, which a supervisor should hear about.
 
 ## Decision
 
-**A plan has a supervisor level: Off, Watch or Act. The supervisor is the
+**A run has a supervisor level: Off, Watch or Act. The supervisor is the
 planner conversation that wrote the plan, taking turns while the run goes on.
 What it may do is checked in core at one command seam, never only in its
 prompt, and the run never depends on it.**
@@ -64,10 +64,11 @@ prompt, and the run never depends on it.**
 The level is a global user setting, Watch by default, set with `/supervisor`
 ([ADR-0030](0030-global-run-settings.md)). A change applies at once, in either
 direction, to the session it is typed in, and to other sessions from their next
-run. A tripped guard or a failed supervisor also lowers the level for the rest
-of the run, with a notice; the user's command lifts that lowering, the guards'
-memory kept. A lowering takes effect at once, in the wake-up turn under way too:
-what that turn calls or edits next is checked against the lowered level.
+run. A tripped wake-up-rate guard or a failed supervisor also lowers the level
+for the rest of the run, with a notice; the user's command lifts that lowering,
+the guards' memory kept. A lowering takes effect at once, in the wake-up turn
+under way too: what that turn calls or edits next is checked against the lowered
+level.
 
 The levels are a slim precursor of the mandate (#23). Watch is its `observe`
 grant; Act later becomes the bundle of `control` and `replan` (and the merge
@@ -342,20 +343,20 @@ This is a second, opt-in exit from ADR-0013's "never merged for the user",
 beside `merge_all` under Act. Both are switched on by the user, once; without
 either, the user's Merge all stays the only path.
 
-The setting reads "merge automatically": at merge gates and at the end of a run.
-It also merges at the end of a run so that a user who turned it on is not
-stopped there, and so that the handoff overlay never asks about a merge the
-supervisor is about to make:
+The setting reads "merge automatically": at merge gates and at the end of a
+run, so that a user who turned it on is not stopped at the end of the run
+either:
 
 - **The setting also merges at the end of a run.** With it on, when a run
   settles with landed work that is not merged yet, Ordewell runs Merge all
   itself, by the same route as a gate merge: the `onAutoMerge` observer, the
   "auto-merged" timeline entry, a notice and the `isolation_merge` broadcast.
   If that merge stops (conflict, dirty overlap, failure) the run is handed off
-  as before, and a supervisor that is watching gets an `auto_merge_stopped`
-  event. The command is still `/automerge` and the key is unchanged; the
-  setting reads "merge automatically": at merge gates and at the end of a run.
-- **Surfaces do not open the handoff while a merge is coming.** With
+  to the user, and a supervisor that is watching gets an `auto_merge_stopped`
+  event. The command is `/automerge` and the settings key is
+  `mergeAtGatesAutomatically`.
+- **Surfaces do not open the handoff while a merge is coming,** so the overlay
+  never asks about a merge Ordewell or the supervisor is about to make. With
   auto-merge on, no handoff is sent unless the automatic merge stops. With the
   supervisor at Act, the handoff is sent marked as deferred to the supervisor:
   the TUI prints only its transcript line, and the VS Code card says the
@@ -448,7 +449,7 @@ until #30 exists.
   themselves — and a Guarded start asks on the planner's approval card.
 - 2026-10-11 — live planner turns implemented (`PlanTurns`); the pending plan edit queue, its drain and `modifyDuringExecution` removed.
 - 2026-10-11 — the Watch level (`Supervisor`): wake-ups from run events, `usage_limit` coalesced per runner, run updates, the wake-up read budget, refusals at Watch, failure handling and persistence. Surfaces offer Off and Watch; a plan set to Act runs as Watch until Act's rules land.
-- 2026-10-11 — the Act level: every execution command without asking, `merge_all` as a planner tool (refused in user-started turns), edits in wake-up turns (a whole plan refused), tasks the supervisor adds approved and marked `addedBy: 'supervisor'`, a moved task's scheduled resume cancelled, and the loop guards (`LoopGuards`; retry limit `supervisorRetryLimit`, default 2). Added: the user may lower a running supervisor at once (the downward exception above), a start waits for the same reply's held edit, and a start of a failed task counts as a retry however asked. Surfaces offer Act, saying what it allows.
+- 2026-10-11 — the Act level: every execution command without asking, `merge_all` as a planner tool (refused in user-started turns), edits in wake-up turns (a whole plan refused), tasks the supervisor adds approved and marked `addedBy: 'supervisor'`, a moved task's scheduled resume cancelled, and the loop guards (`LoopGuards`; retry limit `supervisorRetryLimit`, default 2). Added: the user may lower a running supervisor at once, a start waits for the same reply's held edit, and a start of a failed task counts as a retry however asked. Surfaces offer Act, saying what it allows.
 - 2026-10-11 — moved tasks become ready on their new runner through the same resume decision as direct user edits; same-runner model changes keep the wait.
 - 2026-10-11 — supervision survives a daemon restart: the loop guards' memory (retries, failed-attempt shapes, the supervisor's edits, reported trips) and the wake policy's undelivered events, passes and wake-up timestamps are saved on the plan (`supervision`) and restored when it is adopted, so a debounced batch is still delivered and the guards hold at the point they reached. A user-started run still clears them.
 - 2026-10-11 — the surfaces' execution buttons reach the seam as the user, so

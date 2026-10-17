@@ -117,15 +117,16 @@ two rows: **Autonomy** (Full/Guarded, `/auto`) and **Run** (supervisor level,
 auto-merge, autorun, and their commands). Act and autorun on are drawn as a
 warning, as the autonomous mode's `⚡` is. A status badge shows the same values
 at all times, not only during a run, and during a run shows the run's level
-where it differs from the global one: `Act → Watch (loop guard)`. In the TUI
-the badge sits at the right end of the status row rather than on a row of its
-own, and is left off the bare welcome screen, whose Setup block already shows
-the same values.
+where it differs from the global one: `Act → Watch` once the wake-up-rate guard
+has lowered it, with the reason in the supervisor's note. In the TUI the badge
+sits at the right end of the status row and is left off the bare welcome screen,
+whose Setup block already shows the same values.
 
-The status row it shares with the badge speaks only for the chat on screen:
-`Planning…` in the planner's chat, `Working…` in a running task's, nothing when
-that chat is idle. What the run waits on (tasks that wait for you, a pause for
-Merge all) is shown in the plan pane's title.
+The status row it shares with the badge speaks for the chat on screen and for
+nothing else: whether that chat is planning, condensing, working or paused on a
+usage limit, and nothing when it is idle. What the run waits on (tasks that wait
+for you, a pause for Merge all) is shown in the plan pane's title, or on the
+status row when there is no plan pane.
 
 The two rows keep the glossary's line: *autonomy* names Full/Guarded only, and
 the other four are the **run settings**.

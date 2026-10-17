@@ -447,7 +447,7 @@ literal git command lines or private fields.
 - 2026-10-11 — `merge_all` reaches the planner as a tool through the command seam, allowed only to a supervisor at Act ([ADR-0029](../supervision/0029-the-supervisor.md)).
 - 2026-10-11 — a continue restores the previous attempt's preserved work (ADR-0018, K1).
 - 2026-10-12 — the merge consents become global user settings ([ADR-0030](../supervision/0030-global-run-settings.md)).
-- 2026-10-12 — the end of a run is a handoff unless the user opted in to automatic merging, which now also merges at the end of a run, or the supervisor at Act merges ([ADR-0029](../supervision/0029-the-supervisor.md), amendment of 2026-10-12).
+- 2026-10-12 — the end of a run is a handoff unless the user opted in to automatic merging, which now also merges at the end of a run, or the supervisor at Act merges ([ADR-0029](../supervision/0029-the-supervisor.md), "Merge at gates automatically").
 - 2026-10-14 — a failed verdict blocks only the task's dependents instead of halting the run ([ADR-0034](../supervision/0034-a-failed-task-blocks-only-its-dependents.md)).
 - 2026-10-14 — a carry-over restores a usage-limit-paused attempt's work for its new runner (ADR-0018, U1).
 - 2026-10-17 — the pre-implementation spec this ADR was built from is retired: its testing decisions and out-of-scope list moved here, and the merge paragraph states the global settings and the end-of-run merge that only History held.

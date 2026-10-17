@@ -36,12 +36,12 @@ Concretely:
 - **Two levels, one boolean.** The setting is a boolean (`autonomousMode`,
   `autonomousDefault`, TUI `autonomous`, default on), saved machine-wide in
   `settings.json` ([ADR-0030](../supervision/0030-global-run-settings.md));
-  `ORDEWELL_AUTONOMOUS_MODE` stays as an override Ordewell never writes.
+  `ORDEWELL_AUTONOMOUS_MODE` is an override Ordewell never writes.
   **Full** is on: each runner's `autonomous`-tagged mode.
   **Guarded** is off: each runner's `safe`-tagged mode. `/auto full` and
   `/auto guarded` select them (`ordewell auto full|guarded` likewise); `on`, `off`
   and `auto` stay as aliases, and a bare `/auto` in the TUI reports the current level
-  instead of flipping it. Still read at generation, never at spawn.
+  instead of flipping it. Read at generation, never at spawn.
 - **Manifests declare what autonomy means for that runner.** Core never
   hardcodes mode IDs. Each manifest tags one mode `autonomous: true` and one
   `safe: true`, and its read-only mode, if it has one, `readOnly: true` (the

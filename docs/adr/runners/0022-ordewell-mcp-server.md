@@ -170,13 +170,13 @@ planner tools are recorded here as an explicit entry against both:
   `MAX_TASK_QUERIES_HARD` in `PlannerConversation`) and the same escalation:
   a nudge to land the turn past the soft cap, a forced landing at the hard
   one. A read through the tool costs what the same read through the envelope
-  costs. A wake-up turn, which no user message bounds, spends the plan's
-  wake-up read budget instead (ADR-0029).
+  costs. A wake-up turn, which no user message bounds, spends the wake-up read
+  budget instead (ADR-0029).
 - **Waking the planner during a run is not this server's (P4).** Wake-up turns,
   live planner turns and a per-turn read budget for wake-ups are decided in
   [ADR-0029](../supervision/0029-the-supervisor.md); this server serves them
-  the same tools, with `submit_plan` and `edit_plan` refused in a wake-up turn
-  at Watch.
+  the same tools, except that in a wake-up turn `submit_plan` (a whole new plan)
+  is refused and `edit_plan` is refused at Watch.
 
 ### Planner: the catalog is read when the plan is submitted
 

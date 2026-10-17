@@ -361,8 +361,9 @@ closes that route independently of the native plan-file exception.
 
 Codex planner threads use `sandbox: read-only` and `approvalPolicy: on-request`:
 a user's MCP tool reaches the envelope as an approval
-([ADR-0026](0026-one-envelope-for-every-planner.md)), while command,
-file-change and permission requests are declined at once. This is OS-level
+([ADR-0026](0026-one-envelope-for-every-planner.md)), while command and
+file-change requests are declined at once and every other request is refused
+([ADR-0009](../planner/0009-coding-agents-as-planners.md), T1). This is OS-level
 enforcement for agent commands on supported hosts. Claude's tool denials are native CLI enforcement,
 not an OS sandbox or a prohibition on the CLI persisting its own session data.
 
@@ -409,3 +410,4 @@ model's refusal to write were never security evidence.
 - 2026-10-13 — a harness planner reads back the output its runner saved for it this session, outside the workspace, as part of the envelope, and reads the workspace even with nobody to ask ([ADR-0032](0032-runner-state-outside-the-workspace.md)).
 - 2026-10-13 — `sed` printing lines by number moves to `auto`; a denied `sed` names the line reads that run without asking, and a path denied after an unfollowed `cd` says why it was judged from the root.
 - 2026-10-14 — the TUI status row no longer lists the planner's in-flight calls: it relates to the selected chat only and says Planning, with the calls in the transcript.
+- 2026-10-17 — the Codex planner paragraph reads `approvalPolicy: on-request`, as ADR-0026 made it on 2026-10-10; it still said `never`.
