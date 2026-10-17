@@ -361,7 +361,7 @@ describe('a limit is acted on only when it ended a turn Ordewell started', () =>
     sessions[0].waitForInput();
     await until(() => task('t1').status === 'awaiting_user');
     sessions[0].emitExit(1);
-    await until(() => task('t1').status === 'failed' || (console.log('STATUS', task('t1').status, task('t1').awaitingReason), false));
+    await until(() => task('t1').status === 'failed');
 
     expect(task('t1').resumeAt).toBeUndefined();
     expect(waits).toEqual([]);
@@ -380,7 +380,7 @@ describe('a limit is acted on only when it ended a turn Ordewell started', () =>
     await until(() => task('t1').status === 'in_progress');
     sessions[0].emitOutput('Running the tests.\n');
     sessions[0].emitExit(1);
-    await until(() => task('t1').status === 'failed' || (console.log('STATUS', task('t1').status, task('t1').awaitingReason), false));
+    await until(() => task('t1').status === 'failed');
 
     expect(waits).toEqual([]);
   });
@@ -420,7 +420,7 @@ describe('a limit is acted on only when it ended a turn Ordewell started', () =>
     sessions[0].emitOutput('The API answers HTTP 429: Too Many Requests on every call.\n');
     sessions[0].reportComplete({ status: 'failed', summary: '', reason: 'the API is rate-limited' });
     sessions[0].emitTurnEnd('completed');
-    await until(() => task('t1').status === 'failed' || (console.log('STATUS', task('t1').status, task('t1').awaitingReason), false));
+    await until(() => task('t1').status === 'failed');
 
     expect(waits).toEqual([]);
   });

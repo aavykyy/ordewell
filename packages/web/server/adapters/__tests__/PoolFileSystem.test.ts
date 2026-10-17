@@ -6,6 +6,8 @@ import { PoolFileSystem } from '../PoolFileSystem';
 
 let tmpDir: string;
 let fsAdapter: PoolFileSystem;
+/** A symlink to tmpDir, the shape of macOS's /var -> /private/var tmpdir. */
+let linkedRoot: string;
 
 beforeAll(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-pfs-'));
@@ -22,6 +24,8 @@ beforeAll(() => {
   fs.writeFileSync(path.join(tmpDir, 'totals.ts'), 'export function computeTotal(xs: number[]) {\n  return xs.length;\n}\n');
   fs.writeFileSync(path.join(tmpDir, 'caller.ts'), "import { computeTotal } from './totals';\nconst total = computeTotal([1, 2]);\n");
   fsAdapter = new PoolFileSystem(tmpDir);
+  linkedRoot = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-pfs-link-')), 'root');
+  fs.symlinkSync(tmpDir, linkedRoot, 'dir');
 });
 
 /** Forces the POSIX-grep fallback by pre-resolving the ripgrep probe to false. */
@@ -32,6 +36,7 @@ function withoutRipgrep(): PoolFileSystem {
 }
 
 afterAll(() => {
+  fs.rmSync(path.dirname(linkedRoot), { recursive: true, force: true });
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -124,6 +129,14 @@ describe('PoolFileSystem', () => {
       expect(result.success).toBe(true);
       expect(result.output).toContain('nested.txt');
     });
+
+    // ripgrep anchors a `--glob` against its cwd, which the OS reports as the
+    // resolved path; a search path that goes through a symlink never matches it.
+    it('finds anchored matches when the workspace root is a symlink', async () => {
+      const result = await new PoolFileSystem(linkedRoot).glob('subdir/*.txt');
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('subdir/nested.txt');
+    });
   });
 
   describe('grep', () => {
@@ -193,6 +206,12 @@ describe('PoolFileSystem', () => {
       const result = await fsAdapter.grep('nested', { include: 'subdir/*.txt' });
       expect(result.success).toBe(true);
       expect(result.output).toContain('nested.txt');
+    });
+
+    it('honors an anchored include filter when the workspace root is a symlink', async () => {
+      const result = await new PoolFileSystem(linkedRoot).grep('nested', { include: 'subdir/*.txt' });
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('subdir/nested.txt');
     });
   });
 
