@@ -347,6 +347,7 @@ export function createSession(deps: SessionDeps): Session {
     settings: deps.settings,
     // Read through the Session, which holds the plan; the catalog is built first.
     planRunners: (): RunnerId[] => session.planState?.runners ?? [],
+    liveRunner: (taskId) => orchestrator.getAttempt(taskId) !== undefined,
   });
 
   const session = new Session({
@@ -993,6 +994,11 @@ export class Session {
       },
       onUsageLimitWait: ({ taskId, runner, resumeAt, cancelled }) => {
         if (!cancelled) this.supervision.observe({ kind: 'usage_limit', taskId, runner, resumeAt });
+      },
+      onModelSwitched: ({ taskId, model, effort }) => {
+        void this.editor.followRunnerModel(taskId, model, effort).catch((err: unknown) => {
+          this.notice('warn', `The plan could not follow the model switch of task ${this.store.get(taskId)?.order ?? taskId}: ${err instanceof Error ? err.message : String(err)}`);
+        });
       },
       onTaskIdle: ({ taskId, idleSince }) => {
         this.supervision.observe({ kind: 'task_idle', taskId, detail: `no output since ${idleSince}` });

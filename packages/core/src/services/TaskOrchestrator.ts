@@ -5,6 +5,7 @@ import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNE
 import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
 import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
+import type { RunnerModelRef } from '../models/RunnerCommand';
 import { summarizeOutput } from './promptAugment';
 import { VerdictEngine } from './VerdictEngine';
 import { BufferedTaskOutputSource } from './BufferedTaskOutputSource';
@@ -102,6 +103,12 @@ export interface OrchestratorObserver {
    * `cancelled` marks the resume being cancelled, which is no new pause.
    */
   onUsageLimitWait?(data: { taskId: string; runner: string; resumeAt: string | null; cancelled?: true }): void;
+  /**
+   * A model command sent through a live task's chat switched its runner's
+   * model (#106): the user's own choice, which the plan is to follow.
+   * `effort` only where the runner reported one.
+   */
+  onModelSwitched?(data: { taskId: string; model: RunnerModelRef; effort?: string }): void;
   /** A live task's runner went silent (ADR-0018's idle timer); paused while it waits on input, a checkpoint or an approval. */
   onTaskIdle?(data: { taskId: string; idleSince: string }): void;
   onReviewNeeded?(data: { tasks: Task[]; planRunners: RunnerId[] }): void;
@@ -2114,6 +2121,9 @@ export class TaskOrchestrator {
       session.onEvent((event) => {
         if (event.type === 'turn_start') attempt.turnError = null;
         else if (event.type === 'error') attempt.turnError = event.message;
+        else if (event.type === 'model_switched' && this.attempts.get(task.id) === attempt) {
+          this.emit('onModelSwitched', { taskId: task.id, model: event.to, ...(event.effort ? { effort: event.effort } : {}) });
+        }
       });
       session.onTurnEnd((reason) => this.onTurnEnd(task.id, attempt, session, reason));
       return true;

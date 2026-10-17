@@ -19,6 +19,8 @@ export interface SessionCatalogDeps {
   settings: () => { enabledRunners?: RunnerId[]; modelAllowlist?: Record<string, string[]> };
   /** The runners of the plan being edited; empty while the session has none. */
   planRunners: () => RunnerId[];
+  /** Whether a task's runner is up: an attempt claimed, running, quiet or waiting on someone. */
+  liveRunner?: (taskId: string) => boolean;
 }
 
 /**
@@ -140,6 +142,7 @@ export class SessionCatalog {
       runnerModes: this.modes(runners),
       perRunnerAllowlist: this.allowlist(),
       autonomousDefault: this.deps.config.autonomousMode,
+      ...(this.deps.liveRunner ? { liveRunner: this.deps.liveRunner } : {}),
     };
   }
 

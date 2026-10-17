@@ -19,6 +19,12 @@ export interface RunnerCommand {
   aliases?: string[];
 }
 
+/** A model as a runner lists it: the id it accepts, which is the one a plan holds, and the name it shows. */
+export interface RunnerModelRef {
+  model: string;
+  label?: string;
+}
+
 /** An MCP server a runner loaded for a task, and the state the runner reported it in. */
 export interface RunnerMcpServer {
   name: string;
