@@ -251,6 +251,29 @@ export class SettingsService {
   }
 
   /**
+   * Change the list from what the file holds at this moment: the change is
+   * handed the saved list (undefined when the user never chose) and its result
+   * is saved in the same call. A list worked out from an earlier read would
+   * save over what another surface set since.
+   */
+  updateEnabledRunners(change: (saved: string[] | undefined) => string[]): string[] {
+    this.current();
+    const next = [...change(this.cache!.enabledRunners)];
+    this.cache!.enabledRunners = next;
+    this.persist();
+    return next;
+  }
+
+  /** Save `ids` as the user's choice unless one is saved already, judged on the file as it is now. */
+  setEnabledRunnersIfUnset(ids: string[]): boolean {
+    this.current();
+    if (this.cache!.enabledRunners !== undefined) return false;
+    this.cache!.enabledRunners = [...ids];
+    this.persist();
+    return true;
+  }
+
+  /**
    * Full or Guarded (ADR-0001), as saved here (ADR-0030). A value set in the
    * environment wins, so a script or CI run can fix its own without touching
    * the user's file.

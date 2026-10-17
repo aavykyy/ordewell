@@ -57,6 +57,16 @@ describe('describeMergeResult — a repo off the branch the run started on', () 
     );
   });
 
+  it('sends a repository mid-rebase to finish or abort it, not to check a branch out', () => {
+    const { message } = describeMergeResult({
+      outcome: 'blocked',
+      blocked: [{ repo: 'api', reason: 'wrong-branch', files: [], expected: 'main', rebasing: true }],
+    }, branch, true);
+    expect(message).toBe(
+      'Merged nothing, so every tree is as it was: api is in the middle of a rebase; this run started on main. Finish or abort the rebase in api, then press Merge all again.',
+    );
+  });
+
   it('names every repository that is off, with the branch each started on', () => {
     const { message } = describeMergeResult({
       outcome: 'blocked',

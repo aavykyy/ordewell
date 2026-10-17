@@ -876,6 +876,18 @@ describe('the command seam: merge_all', () => {
     expect(env.session.mergeGate('o2')).toEqual(['t1']);
   });
 
+  it('tells a supervisor at Act about a repo mid-rebase as that', async () => {
+    const env = await landed({
+      outcome: 'blocked',
+      blocked: [{ repo: 'api', reason: 'wrong-branch', files: [], expected: 'main', rebasing: true }],
+    });
+
+    expect(await env.run({ command: 'merge_all' }, { kind: 'supervisor', level: 'act' })).toEqual({
+      ok: false, outcome: 'refused',
+      message: 'Merge all stopped: api is in the middle of a rebase, not main, which the run started on. Nothing was merged; tell the user, who resolves it.',
+    });
+  });
+
   it('refuses a supervisor at Act with the branch to check out when a repo is not on the one the run started on', async () => {
     const env = await landed({
       outcome: 'blocked',

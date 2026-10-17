@@ -93,8 +93,10 @@ export interface HandoffRepoView {
   path: string;
   integrationBranch: string;
   baseRef: string;
-  /** The branch the run started on; absent when it started on a detached HEAD. */
+  /** The branch the run started on; absent when it started on a detached HEAD or the record never noted one. */
   baseBranch?: string;
+  /** Set when the run started on a detached HEAD. */
+  startedDetached?: true;
   landed: LandedTaskView[];
 }
 

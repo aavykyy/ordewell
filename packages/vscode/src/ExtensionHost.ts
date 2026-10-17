@@ -410,6 +410,9 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     let shownRunners = JSON.stringify(services.config.enabledRunners);
     const watchingSettings = services.settingsService.watch(() => {
       sendRunSettings();
+      // Discovery re-pushes it too, but only when the runners changed; an
+      // allowlist saved alone would otherwise never reach the webview.
+      services.chatProvider.setModelAllowlist(services.settingsService.getAll().modelAllowlist ?? {});
       // Discovery spawns the runners' CLIs, so only a change to the list asks for it.
       const runners = JSON.stringify(services.config.enabledRunners);
       if (runners === shownRunners) return;

@@ -241,12 +241,22 @@ describe('the enabled runners (one store with every other surface)', () => {
       expect(new SettingsService().getEnabledRunners()).toEqual(['opencode']);
     });
 
-    it('copies a deliberate empty list too', async () => {
+    it('does not make an empty list a machine-wide choice, but still clears it', async () => {
       __setConfig({ enabledRunners: [] });
 
       await moveEnabledRunnersFromVsCodeSetting(new SettingsService());
 
-      expect(new SettingsService().getEnabledRunners()).toEqual([]);
+      expect(new SettingsService().getEnabledRunners()).toBeUndefined();
+      expect(configUpdates).toContainEqual({ key: 'enabledRunners', value: undefined });
+    });
+
+    it('passes over an empty workspace list for the user\'s real choice', async () => {
+      __setConfig({ enabledRunners: ['codex'] });
+      __setWorkspaceConfig({ enabledRunners: [] });
+
+      await moveEnabledRunnersFromVsCodeSetting(new SettingsService());
+
+      expect(new SettingsService().getEnabledRunners()).toEqual(['codex']);
     });
 
     it('keeps a choice already saved over the old setting, and still clears the old one', async () => {

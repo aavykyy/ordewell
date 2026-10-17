@@ -5,7 +5,7 @@ import {
   Session, LegacyPlanState, createEmptyPlan, Task, flattenTasks, flattenTasksWithParents,
   DEFAULT_RUNNERS, ModelResolver, RunnerRegistry, saveState, clearState,
   listSessions, loadSession,
-  SettingsService,
+  SettingsService, installedPlannerDetected,
   type AiProvider,
   type ExecutionCommand,
 } from '@ordewell/core';
@@ -105,6 +105,9 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   );
   context.subscriptions.push(
     vscode.commands.registerCommand('ordewell.toggleRunner', async (runnerArg?: string) => {
+      // Built on the stale default, a toggle would save claude-code over the
+      // installed agents the probe is about to find; the daemon route waits too.
+      await installedPlannerDetected();
       let target = runnerArg;
       if (!target) {
         const runners = deps.runnerRegistry.list();
@@ -119,12 +122,10 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
       }
       if (!target) return;
 
-      const enabled = deps.config.enabledRunners;
-      const newEnabled = enabled.includes(target)
-        ? enabled.filter((r) => r !== target)
-        : [...enabled, target];
-
-      deps.settingsService.setEnabledRunners(newEnabled);
+      const newEnabled = deps.settingsService.updateEnabledRunners((saved) => {
+        const enabled = saved ?? deps.config.enabledRunners;
+        return enabled.includes(target) ? enabled.filter((r) => r !== target) : [...enabled, target];
+      });
       await deps.sendRunnerAndModels();
       vscode.window.showInformationMessage(`Enabled runners: ${newEnabled.length === 0 ? '(none: enable at least one)' : newEnabled.join(', ')}`);
     }),

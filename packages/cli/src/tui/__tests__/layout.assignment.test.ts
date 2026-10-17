@@ -32,6 +32,20 @@ describe('plan pane — a task outside the enabled runners and allowlist', () =>
     expect(out).toContain('⚠ Opus 4 is not in the allowlist');
   });
 
+  it('reads an allowlist as the planner\'s catalog does: ids only another runner lists limit nothing', () => {
+    const out = frame(plan(
+      [task({ assignedRunner: 'claude-code', assignedModel: { modelId: 'claude-opus-4', modelLabel: 'Opus 4' } })],
+      {
+        allowlist: { 'claude-code': ['gpt-5'] },
+        models: [
+          { id: 'claude-opus-4', label: 'Opus 4', provider: '', runners: ['claude-code'] },
+          { id: 'gpt-5', label: 'GPT-5', provider: '', runners: ['codex'] },
+        ],
+      },
+    ));
+    expect(out).not.toContain('is not in the allowlist');
+  });
+
   it('is quiet before the runners have loaded, rather than flagging every task', () => {
     expect(frame(plan([task()], { runners: [] }))).not.toContain('switched off');
   });

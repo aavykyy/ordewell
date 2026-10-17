@@ -309,6 +309,18 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     expect(h.resolver.refreshRunnerModels).not.toHaveBeenCalled();
   });
 
+  it('draws the allowlist another surface saved, though the enabled runners are as they were', async () => {
+    await h.host.start();
+    h.resolver.refreshRunnerModels.mockClear();
+    h.chat.provider.setModelAllowlist.mockClear();
+    h.settings.getAll.mockReturnValue({ modelAllowlist: { codex: ['gpt-5'] } });
+
+    h.settings.saved();
+
+    expect(h.chat.provider.setModelAllowlist).toHaveBeenCalledWith({ codex: ['gpt-5'] });
+    expect(h.resolver.refreshRunnerModels).not.toHaveBeenCalled();
+  });
+
   it('shows the run settings another surface saved', async () => {
     await h.host.start();
     h.chat.provider.setRunSettings.mockClear();

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { DiscoveredModel, LegacyPlanState, RunnerId, Task } from '../../models/Task';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
+import { runnersChangedBlock } from '../RunnerChange';
 import { makeSession, testWorkspace } from './sessionTestKit';
 
 function models(...ids: string[]): DiscoveredModel[] {
@@ -71,6 +72,48 @@ describe('runners changed — the planner is told on its next turn', () => {
     expect(outgoing(0)).not.toContain('<runners_changed>');
     expect(outgoing(1)).toContain('<runners_changed>');
     expect(outgoing(2)).not.toContain('<runners_changed>');
+  });
+
+  it('tells again on the next turn when the turn it first went with failed', async () => {
+    const { session, settings, outgoing, continueConversation } = harness();
+    await session.startPlanning('goal', ['claude-code', 'codex']);
+
+    settings.enabledRunners = ['claude-code'];
+    continueConversation.mockRejectedValueOnce(new Error('backend down'));
+    await expect(session.continueConversation('first')).rejects.toThrow('backend down');
+    await session.continueConversation('second');
+
+    expect(outgoing(0)).toContain('<runners_changed>');
+    expect(outgoing(1)).toContain('<runners_changed>');
+    expect(outgoing(1)).toMatch(/switched off: codex/i);
+  });
+
+  it('says what each flagged task will do by where it stands, not that a failed one still runs', () => {
+    const change = { switchedOn: [], switchedOff: ['codex'], allowlists: [] };
+    const text = 'codex is switched off';
+    const block = runnersChangedBlock(change, [
+      { ref: '#1', title: 'Waiting', text, status: 'pending' },
+      { ref: '#2', title: 'Broke', text, status: 'failed' },
+      { ref: '#3', title: 'Going', text, status: 'in_progress' },
+    ], false);
+    const lines = block.split('\n');
+
+    expect(lines.find((l) => l.includes('"Waiting"'))).toContain('runs as assigned unless moved');
+    expect(lines.find((l) => l.includes('"Broke"'))).toContain('failed; a retry would run it there unless moved');
+    expect(lines.find((l) => l.includes('"Going"'))).toContain('already running as assigned');
+    expect(block).not.toMatch(/still run/);
+  });
+
+  it('reads an allowlist as the catalog does: ids only another runner offers limit nothing', async () => {
+    const { session, settings, outgoing } = harness();
+    await session.startPlanning('goal', ['claude-code', 'codex']);
+    session.loadPlan(planWith([aiTask({ assignedModel: { modelId: 'claude-opus-4', modelLabel: 'Opus 4' } })], ['claude-code', 'codex']), 'goal', testWorkspace, { persist: false });
+
+    settings.modelAllowlist = { 'claude-code': ['gpt-5'] };
+    await session.continueConversation('go on');
+
+    expect(outgoing(0)).not.toContain('<runners_changed>');
+    expect(outgoing(0)).toMatch(/^claude-code: .*claude-opus-4/m);
   });
 
   it('names a runner switched on', async () => {

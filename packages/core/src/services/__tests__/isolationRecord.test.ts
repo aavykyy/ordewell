@@ -99,10 +99,11 @@ describe('migratePlanIsolation', () => {
     });
   });
 
-  it('carries no base branch for a run that started on a detached HEAD', () => {
+  it('carries neither a base branch nor a detached marker for a record that never noted its branch', () => {
     const { run } = migratePlanIsolation(legacy({ baseBranch: undefined }));
 
     expect(handoffOf(run).repos[0]).not.toHaveProperty('baseBranch');
+    expect(handoffOf(run).repos[0]).not.toHaveProperty('startedDetached');
   });
 
   it('leaves a record already in the repo-group shape as it is', () => {
@@ -123,6 +124,17 @@ describe('migratePlanIsolation', () => {
 });
 
 describe('handoffOf', () => {
+  it('says a run started on a detached HEAD, so it is told from a record that never noted its branch', () => {
+    const run: IsolationRun = {
+      id: 'r1', workspaceRoot: '/work/app',
+      repos: [{ path: '.', root: '/work/app', baseRef: '0123abcd', startedDetached: true, integrationBranch: 'ordewell/r1/integration' }],
+      shared: [], sharedRepos: [], tasks: {},
+    };
+
+    expect(handoffOf(run).repos[0]).toMatchObject({ startedDetached: true });
+    expect(handoffOf(run).repos[0]).not.toHaveProperty('baseBranch');
+  });
+
   it('names the files a landed task was repaired for, and leaves other landed tasks without them', () => {
     const repaired: IsolationTaskRecord = {
       taskId: 'r', order: 1, title: 'Task r', branch: 'ordewell/r1/1-r', workspace: '/wt/1-r',

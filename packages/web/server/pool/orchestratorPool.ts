@@ -296,11 +296,13 @@ export class OrchestratorPool {
    * environment's defaults over what the user had chosen.
    */
   setRunnerEnabled(id: string, enabled: boolean): void {
-    const current = this.enabledRunnerOverride() ?? new WebConfig().enabledRunners;
-    const next = enabled
-      ? (current.includes(id) ? current : [...current, id])
-      : current.filter((r) => r !== id);
-    this.settingsService.setEnabledRunners(next);
+    // Worked out from the file as it is when written, not from an earlier read.
+    this.settingsService.updateEnabledRunners((saved) => {
+      const current = saved ?? new WebConfig().enabledRunners;
+      return enabled
+        ? (current.includes(id) ? current : [...current, id])
+        : current.filter((r) => r !== id);
+    });
   }
 
   getSettings(): SettingsResponse {

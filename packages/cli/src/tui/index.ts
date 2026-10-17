@@ -137,6 +137,11 @@ export async function handleTui(subArgs: string[]): Promise<void> {
     },
   });
 
+  // The runners and the allowlist are saved in a file the extension host and
+  // other TUIs write too; without this a toggle made there would flag tasks
+  // here, and tick the pickers, against the old list until the next /refresh.
+  const watchingSettings = settings.watch(() => app.dispatch({ type: 'sharedSettingsChanged' }));
+
   const { rows, cols } = terminal.size();
   app.dispatch({ type: 'resize', rows, cols });
   app.start();
@@ -146,6 +151,7 @@ export async function handleTui(subArgs: string[]): Promise<void> {
   // saved plan, which normalizes any still-'in_progress' task back to
   // 'pending' so the scheduler just reruns it from scratch.
   function shutdown(code: number): void {
+    watchingSettings.dispose();
     terminal?.close();
     if (owned) stopDaemon(port).catch(() => {});
     process.exit(code);

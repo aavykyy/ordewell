@@ -88,6 +88,8 @@ export type Effect =
   | { type: 'refresh'; announce?: boolean }
   /** The runners alone, as the daemon has them saved. */
   | { type: 'loadRunners' }
+  /** The enabled runners and the allowlist, as they are saved now: what flags a task and ticks a picker. */
+  | { type: 'loadScope' }
   | { type: 'exit' };
 
 export type TaskAction = 'complete' | 'uncomplete' | 'skip' | 'retry' | 'cancel' | 'force-start' | 'cancel-resume' | 'resume-now';
@@ -139,6 +141,8 @@ export type Action =
   | { type: 'inputPrefilled'; text: string; sessionId?: string }
   | { type: 'rewindTargetsLoaded'; targets: RewindTargetView[]; sessionId?: string; pick?: number }
   | { type: 'runnersLoaded'; runners: RunnerView[]; orchestratorModel?: string }
+  /** Another surface saved the settings file the runners and the allowlist live in. */
+  | { type: 'sharedSettingsChanged' }
   /**
    * `code` is the daemon's stable reason for a refusal, when it gave one.
    * `turn` marks a failure of the planner turn's own call, the only kind that

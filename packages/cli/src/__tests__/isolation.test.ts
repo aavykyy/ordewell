@@ -198,13 +198,26 @@ describe('repairedNotice', () => {
 });
 
 describe('where the run forked from', () => {
-  const named = (path: string, baseBranch: string | undefined, baseRef: string) => (
-    { path, integrationBranch: 'ordewell/r1/integration', baseRef, ...(baseBranch ? { baseBranch } : {}), landed: [t(1)] }
+  const named = (path: string, baseBranch: string | undefined, baseRef: string, startedDetached = baseBranch === undefined) => (
+    { path, integrationBranch: 'ordewell/r1/integration', baseRef, ...(baseBranch ? { baseBranch } : {}), ...(startedDetached ? { startedDetached: true as const } : {}), landed: [t(1)] }
   );
 
   it('names the branch and the commit for a lone repo, and a detached HEAD as that', () => {
     expect(handoffBase({ repos: [named('.', 'main', 'abcdef1234567890')], landed: [] }, 12)).toBe('main @ abcdef123456');
     expect(handoffBase({ repos: [named('.', undefined, 'abcdef1234567890')], landed: [] }, 8)).toBe('detached at abcdef12');
+  });
+
+  it('does not call a record that never noted its branch detached', () => {
+    expect(handoffBase({ repos: [named('.', undefined, 'abcdef1234567890', false)], landed: [] }, 8)).toBe('base abcdef12');
+  });
+
+  it('reads the detached marker from a saved run, and leaves it off a legacy one', () => {
+    const plan = { isolation: { run: { repos: [
+      { path: 'api', root: '/ws/api', baseRef: 'aaa', startedDetached: true, integrationBranch: 'ordewell/r1/integration' },
+      { path: 'web', root: '/ws/web', baseRef: 'bbb', integrationBranch: 'ordewell/r1/integration' },
+    ], tasks: {} } } };
+
+    expect(isolationOfPlan(plan)!.handoff.repos.map((r) => r.startedDetached)).toEqual([true, undefined]);
   });
 
   it('heads each repo of a group', () => {

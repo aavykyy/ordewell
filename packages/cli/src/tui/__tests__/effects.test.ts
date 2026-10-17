@@ -1233,6 +1233,13 @@ describe('catalogs and sessions', () => {
     expect(types(h.actions)).toEqual(expect.arrayContaining(['runnersLoaded', 'settingsLoaded', 'modelsLoaded']));
   });
 
+  it('loadScope re-reads the runners and the allowlist, not the models', async () => {
+    const h = harness();
+    await runEffect({ type: 'loadScope' }, h.deps);
+    expect(types(h.actions)).toEqual(expect.arrayContaining(['runnersLoaded', 'settingsLoaded']));
+    expect(types(h.actions)).not.toContain('modelsLoaded');
+  });
+
   it('refresh stays silent unless announced', async () => {
     const h = harness();
     await runEffect({ type: 'refresh' }, h.deps);

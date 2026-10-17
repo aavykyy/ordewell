@@ -610,8 +610,8 @@ export default function App() {
 
   // Before the host sends the runner list every task would read as on a runner that is off.
   const runnerScope = useMemo(
-    () => (runnersKnown ? { enabledRunners: enabledRunnerIds, allowlist: modelAllowlist } : undefined),
-    [runnersKnown, enabledRunnerIds, modelAllowlist],
+    () => (runnersKnown ? { enabledRunners: enabledRunnerIds, allowlist: modelAllowlist, models: modelsByRunner } : undefined),
+    [runnersKnown, enabledRunnerIds, modelAllowlist, modelsByRunner],
   );
   const visibleRunners = runnerList.filter((r) => enabledRunnerIds.includes(r.id));
 

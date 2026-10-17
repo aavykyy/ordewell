@@ -19,8 +19,10 @@ export interface HandoffRepo {
   path: string;
   integrationBranch: string;
   baseRef: string;
-  /** The branch the run started on; absent when it started on a detached HEAD. */
+  /** The branch the run started on; absent when it started on a detached HEAD or the record never noted one. */
   baseBranch?: string;
+  /** Set when the run started on a detached HEAD. */
+  startedDetached?: true;
   /** Tasks whose work landed in this repo, in plan order. */
   landed?: HandoffLandedTask[];
 }
@@ -42,10 +44,10 @@ interface HandoffCardProps {
   onAction: (action: 'reviewDiff' | 'merge' | 'discard' | 'cleanup') => void;
 }
 
-/** Where a repo's run forked: the branch and the commit, or that it started on neither. */
-function baseOf({ baseBranch, baseRef }: HandoffRepo): string {
+/** Where a repo's run forked: the branch and the commit, or that it started detached, or just the commit when the record never noted a branch. */
+function baseOf({ baseBranch, startedDetached, baseRef }: HandoffRepo): string {
   const commit = baseRef.slice(0, 12);
-  return baseBranch ? `${baseBranch} @ ${commit}` : `detached at ${commit}`;
+  return baseBranch ? `${baseBranch} @ ${commit}` : `${startedDetached ? 'detached at' : 'base'} ${commit}`;
 }
 
 function sortLanded(tasks: HandoffLandedTask[]): HandoffLandedTask[] {
@@ -53,13 +55,15 @@ function sortLanded(tasks: HandoffLandedTask[]): HandoffLandedTask[] {
 }
 
 /** Why one repo kept Merge all from touching anything, as one line. */
-function blockReason({ reason, files, expected, actual }: IsolationMergeBlock): string {
+function blockReason({ reason, files, expected, actual, rebasing }: IsolationMergeBlock): string {
   switch (reason) {
     case 'merge-in-progress': return 'has a merge in progress';
     case 'conflict': return `would conflict${files.length > 0 ? ` in ${files.join(', ')}` : ''}`;
     case 'uncommitted-changes': return `has uncommitted changes${files.length > 0 ? ` to ${files.join(', ')}` : ''}`;
     case 'partial-landing': return 'holds part of a task whose landing could not be rolled back';
-    case 'wrong-branch': return `is ${actual ? `on ${actual}` : 'on a detached HEAD'}; this run started on ${expected}. Check out ${expected} and merge again`;
+    case 'wrong-branch': return rebasing
+      ? `is in the middle of a rebase; this run started on ${expected}. Finish or abort the rebase, then merge again`
+      : `is ${actual ? `on ${actual}` : 'on a detached HEAD'}; this run started on ${expected}. Check out ${expected} and merge again`;
     case 'git-error': return 'could not be checked by git';
   }
 }

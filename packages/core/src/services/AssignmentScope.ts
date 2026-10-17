@@ -1,3 +1,4 @@
+import type { DiscoveredModel, RunnerId } from '../models/Task';
 import { effectiveAllowlist } from './ModelAllowlistResolver';
 
 /**
@@ -8,6 +9,13 @@ import { effectiveAllowlist } from './ModelAllowlistResolver';
 export interface AssignmentScope {
   enabledRunners: readonly string[];
   allowlist: Readonly<Record<string, readonly string[] | undefined>>;
+  /**
+   * The models discovery has found per runner, where the holder has them. An
+   * allowlist is read against them exactly as the planner's catalog reads it
+   * (ids only another runner lists limit nothing), so a flag never says a
+   * model is off a list the planner sees as no limit.
+   */
+  models?: Readonly<Partial<Record<RunnerId, readonly DiscoveredModel[]>>>;
 }
 
 /** The part of a task an assignment is read from. */
@@ -36,7 +44,7 @@ export function assignmentIssue(task: AssignedTask, scope: AssignmentScope): Ass
   if (task.type !== 'ai' || OVER.has(task.status)) return null;
   if (!scope.enabledRunners.includes(task.assignedRunner)) return { kind: 'runner-off', runner: task.assignedRunner };
   const model = task.assignedModel;
-  const allowed = effectiveAllowlist(scope.allowlist[task.assignedRunner] as string[] | undefined, task.assignedRunner, undefined);
+  const allowed = effectiveAllowlist(scope.allowlist[task.assignedRunner] as string[] | undefined, task.assignedRunner, scope.models as Partial<Record<RunnerId, DiscoveredModel[]>> | undefined);
   if (model && allowed && !allowed.includes(model.modelId)) {
     return { kind: 'model-off-list', runner: task.assignedRunner, modelId: model.modelId, modelLabel: model.modelLabel || model.modelId };
   }
