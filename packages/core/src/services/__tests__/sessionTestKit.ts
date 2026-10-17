@@ -73,12 +73,12 @@ export interface SessionOverrides {
 /** Task-log files that live in memory, numbered per task as the real store numbers them. */
 export function memoryTaskLogs(): NonNullable<SessionDeps['openTaskLog']> & { files: Map<string, TaskLogEvent[][]> } {
   const files = new Map<string, TaskLogEvent[][]>();
-  const open = (_location: TaskLogLocation, taskId: string): TaskLogFile => {
+  const open = (_location: TaskLogLocation, taskId: string, attempt?: number): TaskLogFile => {
     const attempts = files.get(taskId) ?? [];
     files.set(taskId, attempts);
     const events: TaskLogEvent[] = [];
     attempts.push(events);
-    return { attempt: attempts.length, append: (batch) => { events.push(...batch); } };
+    return { attempt: attempt ?? attempts.length, append: (batch) => { events.push(...batch); } };
   };
   return Object.assign(open, { files });
 }

@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'child_process';
 import type { SubagentOutcome } from '../../models/Task';
-import type { UsageRecord } from '../../models/Usage';
+import type { RunnerSessionCost, UsageRecord } from '../../models/Usage';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { McpClientConfig } from '../mcp';
 import type { ProjectMcpServer } from './repoConfig';
@@ -143,6 +143,8 @@ interface AgentStartCommon {
    * degrades to a fresh session seeded from the stored history, not an error.
    */
   resumeSessionId?: string;
+  /** What was counted of the cost of `resumeSessionId` before, for a runner that reports a running total. */
+  resumeCost?: RunnerSessionCost;
 }
 
 /** The read-only planner (ADR-0008/0009). The only start `CliAgentAiService` can express. */
@@ -237,6 +239,9 @@ export interface AgentAdapter {
 
   /** The agent's native session id once it has announced one. Resumption hint only. */
   nativeSessionId(): string | null;
+
+  /** What has been counted of the session's running cost, for a runner that reports one; null while unknown. */
+  sessionCost?(): RunnerSessionCost | null;
 
   /** Kill the process and release its resources. Idempotent. */
   dispose(): void;

@@ -195,7 +195,7 @@ export interface SessionDeps {
   /** Persistence seam. Defaults to the saved-session store under the workspace. */
   saveSession?: SaveSession;
   /** Where a structured task's log is saved (ADR-0018, P1). Defaults to a file per attempt beside the session's. */
-  openTaskLog?: (location: TaskLogLocation, taskId: string) => TaskLogFile;
+  openTaskLog?: (location: TaskLogLocation, taskId: string, attempt?: number) => TaskLogFile;
   /** The Ordewell MCP server a harness planner's tools are served from (ADR-0022). Defaults to the process's one. */
   mcpServer?: OrdewellMcpServer;
 }
@@ -301,6 +301,7 @@ export function createSession(deps: SessionDeps): Session {
     workspaceRoot: deps.workspaceRoot,
     skillsAt: (roots) => (deps.skillsService ?? new SkillsService(roots)).forRoot(roots),
     previousAttemptFromLog: (taskId) => lastAttemptDigest(session.taskLogLocation, taskId),
+    lastLoggedAttempt: (taskId) => session.taskLogAttempts(taskId).at(-1) ?? 0,
     runSettings: () => session.planState?.runSettings,
     isApproved: (taskId) => session.isApproved(taskId),
   });
@@ -1149,10 +1150,12 @@ export class Session {
    * boundary rewrites `in_progress` to `pending` — nothing is running when a
    * session comes off a file — so a surface that re-reads the plan mid-run must
    * come here instead, or every task it is watching reads as never started.
+   * An archived snapshot carries the task as it is now: a retry or continue
+   * keeps the archive while the live task runs on and spends more.
    */
   get currentPlanState(): PlanState | null {
     if (!this.plan) return null;
-    const executionLog = this.store.getExecutionLog();
+    const executionLog = this.store.getExecutionLog().map((s) => ({ ...s, ...this.store.get(s.id) }));
     const logged = new Set(executionLog.map((s) => s.id));
     const pendingTasks = this.store.planTasks.filter((t) => !logged.has(t.id));
     const record = approvalRecordOf(this.plan);
@@ -1163,7 +1166,7 @@ export class Session {
       phase: 'executing',
       history: [],
       message: '',
-      executionLog: [...executionLog],
+      executionLog,
       pendingTasks,
       goal: this.goal,
       runners: this.plan.runners,

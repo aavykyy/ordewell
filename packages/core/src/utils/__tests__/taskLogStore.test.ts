@@ -52,6 +52,14 @@ describe('taskLogStore', () => {
     expect(listTaskLogAttempts(where, 'task-2')).toEqual([]);
   });
 
+  it('saves an attempt under the number it was given, and never over a file already saved', () => {
+    expect(openTaskLog(where, 'task-1', 3).attempt).toBe(3);
+    expect(openTaskLog(where, 'task-1', 3).attempt).toBe(4);
+    expect(openTaskLog(where, 'task-1', 1).attempt).toBe(1);
+    expect(openTaskLog(where, 'task-1', 1).attempt).toBe(5);
+    expect(listTaskLogAttempts(where, 'task-1')).toEqual([1, 3, 4, 5]);
+  });
+
   it('skips a line cut off mid-write and keeps what was saved before it', () => {
     openTaskLog(where, 'task-1').append(turn);
     const file = path.join(sessionDataDir('session-abc', baseDir), 'tasks', 'task-1', '1.jsonl');

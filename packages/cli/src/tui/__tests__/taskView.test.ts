@@ -320,6 +320,19 @@ describe('the task view draws as a runner, not the planner', () => {
       expect(bottom(state, 2)).toEqual(['attempt 1: 12.4k in · 3.1k out · ctx 18%', 'task total: 13.3k in · 3.2k out · ctx 50%']);
     });
 
+    it('keeps the task total under a log no attempt ledger matches, with the log\'s own usage over it', () => {
+      // A log saved before logs and ledgers shared their number: nothing ties it to a ledger.
+      const view = replayTaskLog([
+        { type: 'turn_start', message: 'x' },
+        { type: 'usage', record: { source: 'claude-code', inputTokens: 500, outputTokens: 40 } },
+      ]);
+      const state = withUsage(
+        [attempt(1), attempt(2, { totals: { inputTokens: 900, outputTokens: 80 }, lastPromptTokens: 100_000 })],
+        { attempts: [3, 4], attempt: 3, followLatest: false, view },
+      );
+      expect(bottom(state, 2)).toEqual(['500 in · 40 out', 'task total: 13.3k in · 3.2k out · ctx 50%']);
+    });
+
     it('keeps the scroll bound exact with the footer pinned', () => {
       const many = replayTaskLog(Array.from({ length: 40 }, (_, i): TaskLogEvent => ({ type: 'text_delta', text: `line ${i}\n\n` })));
       const state = withUsage([attempt(1)], { view: many });

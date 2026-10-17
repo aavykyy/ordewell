@@ -436,19 +436,22 @@ const tokenRow = (blocks: readonly DisplayBlock[], cols: number): string[] => {
 /**
  * The opened task's usage: its whole spend across every attempt, with the meter
  * of the latest. On a past attempt that attempt's own numbers come first, the
- * task total under them. When the task reports nothing for the attempt on
- * screen the log's own last usage block is the footer, as it was before.
+ * task total under them. An attempt with no ledger of its own — a log saved
+ * before logs and ledgers shared one number — has the log's own last usage
+ * block there instead, and still the task total.
  */
 function taskUsageFooter(state: TuiState, tv: NonNullable<TuiState['taskView']>, blocks: readonly DisplayBlock[], cols: number): string[] {
   const task = findTask(state.tasks, tv.taskId);
   const reported = task?.attemptUsage ?? [];
+  if (!task || reported.length === 0) return tokenRow(blocks, cols);
   const onScreen = tv.attempt > 0 ? reported.find((a) => a.attempt === tv.attempt) : reported.at(-1);
-  if (!task || !onScreen) return tokenRow(blocks, cols);
   const spend = taskUsageSummary(task);
   const total = taskUsageText({ ...spend, attempt: reported.at(-1)?.attempt ?? 0 });
   if (onScreen === reported.at(-1)) return [style.grey(truncate(total, cols))];
-  const own = taskUsageText({ totals: onScreen.totals, contextFill: plannerContextFill(onScreen), attempt: onScreen.attempt });
-  return [style.grey(truncate(`attempt ${onScreen.attempt}: ${own}`, cols)), style.grey(truncate(`task total: ${total}`, cols))];
+  const own = onScreen
+    ? [style.grey(truncate(`attempt ${onScreen.attempt}: ${taskUsageText({ totals: onScreen.totals, contextFill: plannerContextFill(onScreen), attempt: onScreen.attempt })}`, cols))]
+    : tokenRow(blocks, cols);
+  return [...own, style.grey(truncate(`task total: ${total}`, cols))];
 }
 
 /** How far back the chat pane can be scrolled at the size it is about to be painted. */

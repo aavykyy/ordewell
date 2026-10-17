@@ -45,27 +45,29 @@ export function listTaskLogAttempts(location: TaskLogLocation, taskId: string): 
 }
 
 /**
- * Start the next attempt's file. Numbered from what is on disk rather than
- * from the orchestrator's count, which restarts at one whenever a plan is
- * loaded and would overwrite the attempts before it.
+ * Start an attempt's file, under the attempt's own number so its log and its
+ * usage ledger name the same attempt. Without one, or when that file already
+ * exists, it takes the next number after what is on disk: nothing saved is
+ * ever overwritten.
  */
-export function openTaskLog(location: TaskLogLocation, taskId: string): TaskLogFile {
+export function openTaskLog(location: TaskLogLocation, taskId: string, attempt?: number): TaskLogFile {
   ensureStateDirIgnored(location.baseDir);
   const dir = taskDir(location, taskId);
   fs.mkdirSync(dir, { recursive: true });
-  let attempt = (listTaskLogAttempts(location, taskId).pop() ?? 0) + 1;
+  const next = (listTaskLogAttempts(location, taskId).pop() ?? 0) + 1;
+  let number = attempt !== undefined && Number.isInteger(attempt) && attempt >= 1 ? attempt : next;
   for (;;) {
-    const file = path.join(dir, `${attempt}${EXTENSION}`);
+    const file = path.join(dir, `${number}${EXTENSION}`);
     try {
       // `wx`: a second surface opening the same task's next attempt at the
       // same moment takes the number after, never the same file.
       fs.writeFileSync(file, '', { flag: 'wx' });
     } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'EEXIST') { attempt += 1; continue; }
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST') { number = Math.max(number + 1, next); continue; }
       throw err;
     }
     return {
-      attempt,
+      attempt: number,
       append(events) {
         if (events.length === 0) return;
         fs.appendFileSync(file, events.map((e) => `${JSON.stringify(e)}\n`).join(''));

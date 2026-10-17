@@ -10,7 +10,7 @@ import {
   type RunnerId,
   DEFAULT_RUNNERS,
 } from '../../models/Task';
-import { addUsage, type UsageTotals } from '../../models/Usage';
+import { addUsage, type RunnerSessionCost, type UsageTotals } from '../../models/Usage';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { IFileSystem } from '../../interfaces/IFileSystem';
 import type { IWebFetcher } from '../../interfaces/IWebFetcher';
@@ -147,6 +147,8 @@ class PlannerSession {
    * outlives the session — nothing from one goal may reach the next.
    */
   nativeSessionId: string | null = null;
+  /** What was counted of that session's running cost, so a resume counts on from it rather than dropping its first turn. */
+  sessionCost: RunnerSessionCost | null = null;
   /** Set once the first spawn attached. */
   start: PlannerSessionStart | null = null;
   /**
@@ -630,6 +632,7 @@ export class CliAgentAiService implements IAiService {
     }
 
     session.nativeSessionId = adapter.nativeSessionId() ?? session.nativeSessionId;
+    session.sessionCost = adapter.sessionCost?.() ?? session.sessionCost;
     // A failed turn usually means the process is gone, and an aborted one kills
     // the process by contract. Either way the adapter cannot be sent to again —
     // `dispose()` is terminal — so drop it and let the next turn restart from
@@ -704,7 +707,7 @@ export class CliAgentAiService implements IAiService {
     session.stop();
     const start = session.start;
     if (!start) throw new Error('No active planner conversation.');
-    return this.startAdapter({ ...start.startOptions, resumeSessionId: session.nativeSessionId ?? undefined }, start.tools, session);
+    return this.startAdapter({ ...start.startOptions, resumeSessionId: session.nativeSessionId ?? undefined, resumeCost: session.sessionCost ?? undefined }, start.tools, session);
   }
 
   /**
