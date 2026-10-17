@@ -25,7 +25,7 @@ import { taskRefOf } from './TaskRefs';
 import { IsolationRunController } from './IsolationRunController';
 import { completesTask, Landing, type LandingMessage, type LandingOutcome, type UnlandedOutcome } from './Landing';
 import { classifyRunnerStop, readUsageLimitReset, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
-import { UsageLimitWaits } from './UsageLimitWaits';
+import { RELAPSE_MS, RESUME_MARGIN_MS, UsageLimitWaits } from './UsageLimitWaits';
 import { dependencyMet, mergeGate, selectReadyTasks, type Readiness } from './readiness';
 import { blockingFailures } from './blocking';
 import {
@@ -2334,12 +2334,6 @@ export class TaskOrchestrator {
     return ended;
   }
 }
-
-/** How long after its limit resets a task resumes: the runner's clock and ours need not agree to the second. */
-const RESUME_MARGIN_MS = 60_000;
-
-/** A resumed attempt that hits the limit again within this did not get past the reset, so it is not resumed again. */
-const RELAPSE_MS = 5 * 60_000;
 
 const LIMIT_RESET_MESSAGE = 'Your usage limit has reset. Carry on with the task from where you stopped.';
 

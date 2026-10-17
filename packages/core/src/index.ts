@@ -25,6 +25,7 @@ export type {
   LegacyPlanState,
   PlanState,
   PlanStatus,
+  PlannerResendState,
   ResearchLogEntry,
   ResearchStep,
   ResearchStepOutcome,
@@ -149,7 +150,7 @@ export { ExecutionCommands, SUPERVISOR_LEVELS } from './services/ExecutionComman
 export type { ExecutionCommand, CommandOutcome, Consent, SupervisorPolicy, LoopGuard, ExecutionHost } from './services/ExecutionCommands';
 export { DEFAULT_SUPERVISOR_RETRY_LIMIT } from './services/LoopGuards';
 export type { GuardTrip, GuardTarget } from './services/LoopGuards';
-export { ConversationEditError, ConversationBusyError, PlannerTurnDiscardedError, PlannerTurnStoppedError } from './services/PlannerConversation';
+export { ConversationEditError, ConversationBusyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError } from './services/PlannerConversation';
 export type { RewindTarget, ConversationCompaction, PlannerSubmission } from './services/PlannerConversation';
 export {
   SkillsService,

@@ -485,6 +485,17 @@ export function plansRoute(pool: OrchestratorPool) {
     }
   });
 
+  // What waits on the planner's usage limit then goes with the user's next
+  // message instead of at the reset; `cancelled` is false when nothing waited.
+  router.post('/:sessionId/converse/resend/cancel', (c) => {
+    try {
+      const cancelled = pool.session(c.req.param('sessionId')).cancelPlannerResend();
+      return c.json({ cancelled } satisfies CancelResumeResponse);
+    } catch (err) {
+      return failure(c, err, 'cancel resend', { fallback: 404, message: 'Not found' });
+    }
+  });
+
   // Fork and rewind act on the conversation, never on the plan: the task list
   // rides along as-is (ADR-0002, update of 2026-09-25). A rewind is a fork from
   // just before a user message; the original session is left as it was.

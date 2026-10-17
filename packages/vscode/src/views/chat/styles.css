@@ -5059,6 +5059,20 @@ body.vscode-high-contrast-light .task-card.expanded {
   background: var(--bg-primary);
 }
 
+/* A planner turn waiting on the planner's usage limit, above the composer it would otherwise be typed into again. */
+.planner-resend {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 14px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 /* The stack and the composer read as one block. */
 .pending-messages + .chat-input,
 .pending-messages + .task-log-composer {

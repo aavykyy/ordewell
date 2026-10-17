@@ -339,6 +339,11 @@ export class ApiClient {
     return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/resume/cancel`, 'Cancel resume failed');
   }
 
+  /** Keep what waits on the planner's usage limit from being sent at the reset; `cancelled` is false when nothing waited. */
+  cancelPlannerResend(sessionId: string): Promise<CancelResumeResponse> {
+    return this.call('POST', `/api/plans/${sessionId}/converse/resend/cancel`, 'Cancel resend failed');
+  }
+
   /** Resume a task paused on a usage limit now, in its saved session, once the user says the limit has reset. */
   resumeNow(sessionId: string, taskId: string): Promise<OkResponse> {
     return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/resume/now`, 'Resume failed');

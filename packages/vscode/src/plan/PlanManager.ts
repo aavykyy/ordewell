@@ -456,6 +456,9 @@ export async function handleSystemCommand(
       case 'cancelResume':
         deps.session.cancelScheduledResume(taskId);
         break;
+      case 'cancelPlannerResend':
+        deps.session.cancelPlannerResend();
+        break;
       case 'resumeNow':
         await deps.session.resumeNow(taskId);
         break;

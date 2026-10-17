@@ -24,7 +24,7 @@ export function runOrigin(actor: ExecutionActor): RunOrigin {
  * saved, the user's settings, the transcript, and what the supervisor's
  * wake-ups need of the planner.
  */
-export interface RunSupervisionHost extends Pick<SupervisorHost, 'deliver' | 'pump' | 'plannerRunner' | 'restartPlanner' | 'abandonTurn' | 'notice'> {
+export interface RunSupervisionHost extends Pick<SupervisorHost, 'deliver' | 'pump' | 'restartPlanner' | 'abandonTurn' | 'notice'> {
   /** The plan the run belongs to: its `runSettings` are the run's own, saved with it. Null with no plan. */
   plan(): { runSettings?: RunSettings } | null;
   /** The user's run settings as they stand now (ADR-0030). */
@@ -77,7 +77,6 @@ export class RunSupervision {
       blockedBy: (failedId) => [...blockingFailures([...this.host.tasks()])].filter(([, failures]) => failures.includes(failedId)).map(([taskId]) => taskId),
       readBudget: () => this.settings()?.wakeUpReadBudget ?? host.userSettings().wakeUpReadBudget,
       retryLimit: () => this.retryLimit(),
-      plannerRunner: () => host.plannerRunner(),
       restartPlanner: () => host.restartPlanner(),
       abandonTurn: () => host.abandonTurn(),
       goUnsupervised: (reason) => this.goUnsupervised(reason),

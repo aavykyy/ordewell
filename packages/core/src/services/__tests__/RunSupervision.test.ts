@@ -31,7 +31,6 @@ function harness(user: Partial<GlobalRunSettings> = {}, options: SupervisorOptio
     resendHandoff: vi.fn(),
     deliver: vi.fn(async () => undefined),
     pump: vi.fn(),
-    plannerRunner: () => null,
     restartPlanner: vi.fn(),
     abandonTurn: vi.fn(),
   } satisfies RunSupervisionHost;

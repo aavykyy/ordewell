@@ -431,14 +431,18 @@ describe('when the supervisor fails, the run does not depend on it', () => {
 
     env.planner.calls[0].finish({ kind: 'message', text: LIMIT, researchLog: [], failed: true });
     await settled();
-    expect(env.notices).toContainEqual(expect.objectContaining({ level: 'info', message: expect.stringMatching(new RegExp(`wait until ${RESUME_AT}`)) }));
+    expect(env.session.planState!.conversationHistory!.at(-1)).toMatchObject({ kind: 'error', content: expect.stringMatching(/^claude-code usage limit, resets /) });
+    expect(env.session.planState!.plannerResend).toEqual({ runner: 'claude-code', at: RESUME_AT });
 
     await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now() - 1000);
     expect(env.planner.calls).toHaveLength(1);
     expect(env.planner.aiService.restart).not.toHaveBeenCalled();
 
+    // One wait, one resend: the wake-up goes again once, at the reset.
     await vi.advanceTimersByTimeAsync(1000);
     await until(() => env.planner.calls.length === 2);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(env.planner.calls).toHaveLength(2);
     expect(env.planner.calls[1].message).toMatch(/- task #1 "Task t1" is waiting for input/);
     env.planner.calls[1].finish(prose('Task 1 needs an answer.'));
     await settled();

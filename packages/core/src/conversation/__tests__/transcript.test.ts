@@ -10,6 +10,18 @@ const step = (id: string, timestamp: string, fields: { tool: 'read_file' | 'spaw
 });
 
 describe('fromTranscript', () => {
+  it('draws a planner turn that ended on its usage limit as a failure, live and on reload', () => {
+    const history: ConversationMessage[] = [
+      { role: 'user', content: 'build it', timestamp: '2026-10-11T10:00:00Z' },
+      { role: 'assistant', content: 'claude-code usage limit, resets 3pm. Resending at 3:01pm; anything you send meanwhile goes with it.', timestamp: '2026-10-11T10:00:05Z', kind: 'error' },
+    ];
+    const failure = { type: 'message', role: 'error', text: 'claude-code usage limit, resets 3pm. Resending at 3:01pm; anything you send meanwhile goes with it.', streaming: false };
+
+    expect(unkeyed(fromTranscript(history, []).blocks).at(-1)).toEqual(failure);
+    const live = reduceConversation(fromTranscript(history.slice(0, 1), []), planSnapshot(history));
+    expect(unkeyed(live.blocks).at(-1)).toEqual(failure);
+  });
+
   it('shows pending inputs after the landed transcript, with skill notices and run updates in arrival order', () => {
     const view = fromTranscript([
       { role: 'assistant', content: 'Ready.', timestamp: '2026-10-11T10:00:00Z' },

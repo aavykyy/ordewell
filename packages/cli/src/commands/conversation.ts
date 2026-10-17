@@ -101,3 +101,19 @@ export async function handleRewind(subArgs: string[], injectedApi?: ApiClient): 
   console.log('\nThe message you rewound to, to resend or edit:\n');
   console.log(fork.rewoundMessage);
 }
+
+/**
+ * Keep what waits on the planner's usage limit from being sent at the reset,
+ * as the TUI's `/resend cancel` does: it goes with the next message instead.
+ */
+export async function handleResend(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
+  if (positionals(subArgs)[0] !== 'cancel') fail('Usage: ordewell resend cancel [--session-id <id>] [--workspace /path]');
+  const { api, sessionId } = await adopted(subArgs, injectedApi);
+  let cancelled: boolean;
+  try {
+    ({ cancelled } = await api.cancelPlannerResend(sessionId));
+  } catch (err) {
+    fail(`Failed to cancel the resend: ${(err as Error).message}`);
+  }
+  console.log(cancelled ? 'Resend cancelled: what waits goes with your next message.' : 'Nothing waits on the planner\'s usage limit to be sent at a reset.');
+}

@@ -33,6 +33,7 @@ function roleOf(entry: SerializedConversationMessage): MessageRole {
     case 'system': case 'compaction': case 'execution': return 'system';
     case 'wake_up': return 'wake_up';
     case 'supervisor': return 'supervisor';
+    case 'error': return 'error';
     default: return entry.role === 'user' ? 'user' : 'planner';
   }
 }

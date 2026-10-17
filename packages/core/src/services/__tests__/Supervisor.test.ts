@@ -56,7 +56,7 @@ describe('Supervisor', () => {
   function host(run: SupervisedRun | null): SupervisorHost & { deliver: ReturnType<typeof vi.fn>; dropToWatch: ReturnType<typeof vi.fn> } {
     return {
       run: () => run, deliver: vi.fn(async () => undefined), pump: vi.fn(), saveState: vi.fn(), describeTask, blockedBy: () => [], readBudget: () => 12, retryLimit: () => 2,
-      plannerRunner: () => null, restartPlanner: vi.fn(), abandonTurn: vi.fn(), goUnsupervised: vi.fn(), wakeUpEnded: vi.fn(), dropToWatch: vi.fn(), notice: vi.fn(),
+      restartPlanner: vi.fn(), abandonTurn: vi.fn(), goUnsupervised: vi.fn(), wakeUpEnded: vi.fn(), dropToWatch: vi.fn(), notice: vi.fn(),
     };
   }
 

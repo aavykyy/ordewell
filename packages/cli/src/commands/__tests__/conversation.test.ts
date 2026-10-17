@@ -239,3 +239,30 @@ describe('ordewell compact', () => {
     expect(stderr).not.toContain('/planner');
   });
 });
+
+describe('ordewell resend', () => {
+  it.each([
+    [true, /Resend cancelled: what waits goes with your next message/],
+    [false, /Nothing waits on the planner's usage limit/],
+  ])('cancels what waits on the planner\'s usage limit (cancelled: %s), and says what happened', async (cancelled, said) => {
+    const srv = await daemon(({ url }) => url.includes('/load') ? { body: adopted } : { body: { cancelled } });
+    const { handleResend } = await import('../conversation');
+
+    const { stdout, exitCode } = await capture(() => handleResend(['cancel', '--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    srv.close();
+
+    expect(exitCode).toBeNull();
+    expect(srv.hits.map((h) => `${h.method} ${h.url}`)).toEqual([
+      'POST /api/sessions/session-1/load?workspace=%2Ftmp%2Fws',
+      'POST /api/plans/session-1/converse/resend/cancel',
+    ]);
+    expect(stdout).toMatch(said);
+  });
+
+  it('takes only cancel', async () => {
+    const { handleResend } = await import('../conversation');
+    const { stderr, exitCode } = await capture(() => handleResend([]));
+    expect(exitCode).toBe(1);
+    expect(stderr).toMatch(/Usage: ordewell resend cancel/);
+  });
+});
