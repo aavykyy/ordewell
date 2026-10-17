@@ -1,5 +1,8 @@
 import '@testing-library/jest-dom/vitest';
-import { afterEach, vi } from 'vitest';
+import { afterAll, afterEach, vi } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 // The chat webview reads the VS Code bridge at module load; stub it so components
 // that import App (or call postMessage) can mount under jsdom. The singleton is
@@ -25,3 +28,11 @@ afterEach(async () => {
     cleanup();
   }
 });
+
+// The config reads the enabled runners from the user's settings file, which a
+// test must never take from the developer's own home directory.
+if (process.env.ORDEWELL_SETTINGS_PATH === undefined) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-vscode-test-settings-'));
+  process.env.ORDEWELL_SETTINGS_PATH = path.join(dir, 'settings.json');
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+}

@@ -22,7 +22,7 @@ vi.mock('child_process', async (importOriginal) => {
 
 import {
   BufferedTaskOutputSource, clearAugmentedPathCache, createEmptyPlan, createSession, detectInstalledPlanner, getProviderMeta,
-  PROVIDER_DETECT_PRIORITY, resetInstalledPlanner, RUN_SETTINGS_DEFAULTS, RunnerRegistry,
+  PROVIDER_DETECT_PRIORITY, resetInstalledPlanner, RUN_SETTINGS_DEFAULTS, RunnerRegistry, SettingsService,
   type ModelResolver, type IRunner, type RunnerId,
 } from '@ordewell/core';
 import { fakeFileSystem } from '@ordewell/core/testing';
@@ -94,8 +94,8 @@ describe('VS Code with no saved runner choice enables the installed agents', () 
       notifications: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), confirm: async () => undefined },
       workspaceRoot: () => dir, fsAdapter: fakeFileSystem(),
       broadcast: (message) => chatProvider.conversation.receive(message),
-      // As the extension host hands it over: the config's enabled runners, read live.
-      settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, autorun: false }, enabledRunners: config.enabledRunners }),
+      // As the extension host hands it over: the saved choice, read live; with none the config's defaults decide.
+      settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, autorun: false }, enabledRunners: new SettingsService().getEnabledRunners() }),
       taskOutput: new BufferedTaskOutputSource(), saveSession: () => {},
     });
     let plan = createEmptyPlan();
@@ -155,9 +155,9 @@ describe('VS Code with no saved runner choice enables the installed agents', () 
 
   it('keeps a saved selection, and a saved empty one', async () => {
     await detectInstalledPlanner(only('codex', 'opencode'));
-    __setConfig({ enabledRunners: ['opencode'] });
+    new SettingsService().setEnabledRunners(['opencode']);
     expect(new VsCodeConfig().enabledRunners).toEqual(['opencode']);
-    __setConfig({ enabledRunners: [] });
+    new SettingsService().setEnabledRunners([]);
     const h = harness();
     expect(h.config.enabledRunners).toEqual([]);
     await handleStartPlanning('Build a ledger', h.deps);

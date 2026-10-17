@@ -261,6 +261,11 @@ function commandOutput(view: TaskLogView, { text }: Event<'command_output'>): Ta
   return { ...view, blocks: replaceAt(view.blocks, i, { ...block, output: block.output ? `${block.output}\n${text}` : text }) };
 }
 
+function modelSwitchNotice({ from, to, effort }: Event<'model_switched'>): string {
+  const now = `${to.label ?? to.model}${effort ? `, ${effort}` : ''}`;
+  return `Model changed in the runner: ${from.label ?? from.model} → ${to.label ?? to.model}; the plan now says ${now}`;
+}
+
 /** Among the turn's steps, as a tool call is: what streamed before it is settled. */
 function appendStep(view: TaskLogView, make: (id: string) => DisplayBlock): TaskLogView {
   const next = append(view, make);
@@ -340,6 +345,7 @@ export function reduceTaskLog(view: TaskLogView, event: TaskLogEvent): TaskLogVi
     case 'turn_start': return startTurn(view, event);
     case 'command': return startCommand(view, event);
     case 'command_output': return commandOutput(view, event);
+    case 'model_switched': return append(view, (id) => settledMessage(id, 'system', modelSwitchNotice(event)));
     case 'compaction': return appendStep(view, (id) => ({
       type: 'compaction', id, trigger: event.trigger,
       ...(event.preTokens !== undefined ? { preTokens: event.preTokens } : {}), ...(event.postTokens !== undefined ? { postTokens: event.postTokens } : {}),

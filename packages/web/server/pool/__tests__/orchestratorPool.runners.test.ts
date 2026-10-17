@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { ModelResolver, Session, type LegacyPlanState } from '@ordewell/core';
+import { ModelResolver, Session, SettingsService, type LegacyPlanState } from '@ordewell/core';
 import { OrchestratorPool } from '../orchestratorPool';
 import { withReadyPlanner } from '../../__tests__/readyPlanner';
 
@@ -55,6 +55,23 @@ describe('OrchestratorPool enabled runners', () => {
     pool.setRunnerEnabled('opencode', true);
     pool.setRunnerEnabled('opencode', true);
     expect(new OrchestratorPool().getRunnerState().enabledRunners).toEqual(['claude-code', 'opencode']);
+  });
+
+  it("keeps another process's runner choice made in the same mtime tick as the daemon's last write", () => {
+    const file = process.env.ORDEWELL_SETTINGS_PATH as string;
+    const pool = new OrchestratorPool();
+    pool.setRunnerEnabled('opencode', true);
+    const tick = new Date('2026-01-01T00:00:00Z');
+    fs.utimesSync(file, tick, tick);
+    pool.getRunnerState();
+
+    // The TUI's own process (or an extension host) saves its choice without the daemon hearing of it.
+    new SettingsService(file).setEnabledRunners(['codex']);
+    fs.utimesSync(file, tick, tick);
+
+    expect(pool.getRunnerState().enabledRunners).toEqual(['codex']);
+    pool.setRunnerEnabled('opencode', true);
+    expect(new OrchestratorPool().getRunnerState().enabledRunners).toEqual(['codex', 'opencode']);
   });
 
   it('a session already open sees a runner enabled after it started', async () => {

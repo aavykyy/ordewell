@@ -229,14 +229,15 @@ function answeredAttachCheck(chunk: string, proc: FakeAgentProcess, args: string
 /**
  * Claude Code's `initialize` and `set_model` control requests, answered as
  * `claude` 2.1.296 does: `initialize` lists each model value with the id it
- * runs as, and (2.1.299) the commands it offers. Control traffic, so neither takes a scripted reply.
+ * runs as, and (2.1.299) the commands it offers; (2.1.302) the name it shows
+ * each model under. Control traffic, so neither takes a scripted reply.
  */
 export const CLAUDE_INITIALIZE_MODELS = [
-  { value: 'default', resolvedModel: 'claude-opus-5-5' },
-  { value: 'opus', resolvedModel: 'claude-opus-5-5' },
-  { value: 'sonnet', resolvedModel: 'claude-sonnet-5-5' },
-  { value: 'haiku', resolvedModel: 'claude-haiku-5-5' },
-  { value: 'claude-haiku-5-5', resolvedModel: 'claude-haiku-5-5' },
+  { value: 'default', resolvedModel: 'claude-opus-5-5', displayName: 'Default (recommended)' },
+  { value: 'opus', resolvedModel: 'claude-opus-5-5', displayName: 'Opus 5.5' },
+  { value: 'sonnet', resolvedModel: 'claude-sonnet-5-5', displayName: 'Sonnet 5.5' },
+  { value: 'haiku', resolvedModel: 'claude-haiku-5-5', displayName: 'Haiku 5.5' },
+  { value: 'claude-haiku-5-5', resolvedModel: 'claude-haiku-5-5', displayName: 'Haiku 5.5' },
 ];
 
 /**

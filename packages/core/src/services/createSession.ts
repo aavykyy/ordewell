@@ -37,6 +37,7 @@ import { saveSession } from '../utils/sessionStore';
 import { listTaskLogAttempts, readTaskLog, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
 import { digestTaskLog, type TaskLogEvent } from '../models/TaskLog';
 import { TaskLogRecorder } from './TaskLogRecorder';
+import { withContextWindows, type CatalogWindow } from './ContextWindowFill';
 import { PlannerUsageLedger } from './PlannerUsage';
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
@@ -245,6 +246,9 @@ export function createSession(deps: SessionDeps): Session {
   const mcpServer = deps.mcpServer ?? sharedMcpServer();
   const aiService = pinnedAiService ? () => pinnedAiService : liveAiService(deps.config, deps.workspaceRoot, mcpServer);
   const store = new PlanStore();
+  // A window a runner or provider reports wins; this serves the rest, from
+  // the catalogs the resolver already holds.
+  const catalogWindow: CatalogWindow = (source, model) => deps.modelResolver.contextWindowFor?.(source, model);
   const taskLogs = new TaskLogRecorder({
     broadcast: deps.broadcast,
     // Read through the Session, whose id and workspace are the ones it saves
@@ -289,7 +293,7 @@ export function createSession(deps: SessionDeps): Session {
   const orchestrator = TaskOrchestrator.compose({
     config: deps.config,
     notifications: deps.notifications,
-    runner: taskLogs.wrap(runnerApprovals.wrap(deps.runner)),
+    runner: taskLogs.wrap(runnerApprovals.wrap(withContextWindows(deps.runner, catalogWindow))),
     store,
     output: deps.taskOutput,
     isolation: deps.isolation,
@@ -300,7 +304,7 @@ export function createSession(deps: SessionDeps): Session {
     runSettings: () => session.planState?.runSettings,
     isApproved: (taskId) => session.isApproved(taskId),
   });
-  const usage = new PlannerUsageLedger();
+  const usage = new PlannerUsageLedger(catalogWindow);
   const events = new SessionEventRelay({
     broadcast: deps.broadcast, onNotice: deps.onNotice, store, orchestrator, runs: orchestrator.runs, usage,
     awaitingApproval: (taskId) => runnerApprovals.waiting(taskId),
@@ -347,6 +351,7 @@ export function createSession(deps: SessionDeps): Session {
     settings: deps.settings,
     // Read through the Session, which holds the plan; the catalog is built first.
     planRunners: (): RunnerId[] => session.planState?.runners ?? [],
+    liveRunner: (taskId) => orchestrator.getAttempt(taskId) !== undefined,
   });
 
   const session = new Session({
@@ -550,7 +555,8 @@ export class Session {
       aiService: () => this.aiService(),
       onProgress: (p) => this.events.progress(p),
       opening: (runners) => this.conversationOpening(runners),
-      catalog: () => this.catalog.queryCatalog(this.plan?.runners ?? []),
+      catalog: () => this.catalog.current(),
+      assignmentScope: () => this.catalog.scope(),
       autorun: () => this.userRunSettings().autorun,
       takeRunUpdates: () => this.untoldRunUpdates.splice(0),
       tasks: () => this.store.planTasks,
@@ -993,6 +999,11 @@ export class Session {
       },
       onUsageLimitWait: ({ taskId, runner, resumeAt, cancelled }) => {
         if (!cancelled) this.supervision.observe({ kind: 'usage_limit', taskId, runner, resumeAt });
+      },
+      onModelSwitched: ({ taskId, model, effort }) => {
+        void this.editor.followRunnerModel(taskId, model, effort).catch((err: unknown) => {
+          this.notice('warn', `The plan could not follow the model switch of task ${this.store.get(taskId)?.order ?? taskId}: ${err instanceof Error ? err.message : String(err)}`);
+        });
       },
       onTaskIdle: ({ taskId, idleSince }) => {
         this.supervision.observe({ kind: 'task_idle', taskId, detail: `no output since ${idleSince}` });
@@ -1523,9 +1534,6 @@ export class Session {
       autonomousDefault: this.config.autonomousMode,
       autorun: this.userRunSettings().autorun,
       isolatedExecution: await this.runs.plannerLayout(),
-      // The planner's own model window, when a cached catalog knows it, so the
-      // usage line can show context fill (#49). Unknown stays absent.
-      contextWindow: this.modelResolver.contextWindowFor?.(this.config.orchestratorModel),
       fs: this.fsAdapter,
       fetcher: this.fetcher,
       approval: this.approvalPolicy,

@@ -14,7 +14,7 @@ import { announceApprovals, announceCheckpoint, answerCheckpoint, continueTaskSt
 import { newSession, pickRewindTarget, runCommand } from './reducers/commands';
 import { disarmStop, drainQueue, forceSendPlanner, plannerEscape, restoreForced } from './reducers/turnQueue';
 import { applyIsolationRecord, applySettings, clearRunIsolation, foldRun, followSession, planSnapshot, withRun } from './reducers/incoming';
-import { refillPicker } from './reducers/pickers';
+import { refillPicker, reseedRunnerChoice } from './reducers/pickers';
 import { refreshStepper } from './reducers/stepper';
 import {
   handleMouseSelect, isMouseSelect, isWheel, scrollChat, scrollDelta, scrollPointed, settlePlan, toggleDetail,
@@ -307,12 +307,12 @@ function reduceAction(state: TuiState, action: Action): Step {
       // Installed runners are `/planner`'s preflight signal, so a stepper
       // opened before discovery landed fills in rather than sitting there
       // claiming every agent is missing.
-      return step(refreshStepper(refillPicker({
+      return step(refreshStepper(reseedRunnerChoice(state, refillPicker({
         ...state,
         runners: action.runners,
         runnersKnown: true,
         orchestratorModel: action.orchestratorModel ?? state.orchestratorModel,
-      }, ['set-task-runner'])));
+      }, ['set-task-runner']))));
 
     case 'failed': {
       // A failed call may have been the task view's log read; the view falls

@@ -122,30 +122,76 @@ export function runSettingsOf(settings: UserSettings): GlobalRunSettings {
 export class SettingsService {
   private filePath: string;
   private cache: UserSettings | null = null;
-  private cachedMtimeMs: number | null = null;
+  private cachedStamp: string | null = null;
 
   constructor(filePath: string = getSettingsPath()) {
     this.filePath = filePath;
   }
 
   // Several processes share the settings file (VS Code extension host, web
-  // server, CLI), so the cache is keyed on the file's mtime: a write from any
+  // server, CLI), so the cache is keyed on the file's identity: a write from any
   // other process invalidates it. A stale cache here previously meant an
   // allowlist set in one surface never reached another's planner.
   getAll(): UserSettings {
-    const mtime = this.fileMtimeMs();
-    if (this.cache && mtime === this.cachedMtimeMs) return this.cache;
+    const stamp = this.fileStamp();
+    if (this.cache && stamp === this.cachedStamp) return this.cache;
     this.cache = this.load();
-    this.cachedMtimeMs = mtime;
+    this.cachedStamp = stamp;
     return this.cache;
   }
 
-  private fileMtimeMs(): number | null {
+  /**
+   * Every write replaces the file, so its inode changes with it; the mtime
+   * alone cannot tell two writes apart on a filesystem whose timestamps are
+   * coarse, and a write that shares the last one's tick stayed unseen.
+   */
+  private fileStamp(file: string = this.filePath): string | null {
     try {
-      return fs.statSync(this.filePath).mtimeMs;
+      const stat = fs.statSync(file);
+      return `${stat.ino}:${stat.mtimeMs}:${stat.size}`;
     } catch {
       return null;
     }
+  }
+
+  /**
+   * What a change is applied to: the file as it is now, never a copy held since
+   * an earlier read. Another process may have saved in between, and writing
+   * the whole file back would silently undo it.
+   */
+  private current(): UserSettings {
+    this.cache = null;
+    return this.getAll();
+  }
+
+  /**
+   * Calls `listener` when another process (or this one) saves the file. The
+   * directory is watched, not the file: a write that swaps the file in leaves
+   * a watch on the old one pointing at nothing.
+   */
+  watch(listener: () => void): { dispose(): void } {
+    const dir = path.dirname(this.filePath);
+    const name = path.basename(this.filePath);
+    let seen = this.fileStamp();
+    let timer: NodeJS.Timeout | undefined;
+    let watcher: fs.FSWatcher;
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      watcher = fs.watch(dir, (_event, changed) => {
+        if (changed && changed !== name) return;
+        // One save is several events; the stamp tells whether the file really moved.
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          const stamp = this.fileStamp();
+          if (stamp === seen) return;
+          seen = stamp;
+          listener();
+        }, 50);
+      });
+    } catch {
+      return { dispose() {} };
+    }
+    return { dispose: () => { clearTimeout(timer); watcher.close(); } };
   }
 
   getModelAllowlist(runner: string): string[] | undefined {
@@ -153,7 +199,7 @@ export class SettingsService {
   }
 
   setModelAllowlist(runner: string, ids: string[] | undefined): void {
-    this.getAll();
+    this.current();
     if (ids === undefined) {
       if (this.cache!.modelAllowlist) {
         delete this.cache!.modelAllowlist[runner];
@@ -175,7 +221,7 @@ export class SettingsService {
   }
 
   setPlannerModel(provider: string, entry: { model: string; effort?: string } | undefined): void {
-    this.getAll();
+    this.current();
     if (entry === undefined) {
       if (this.cache!.plannerModels) {
         delete this.cache!.plannerModels[provider];
@@ -199,7 +245,7 @@ export class SettingsService {
   }
 
   setEnabledRunners(ids: string[]): void {
-    this.getAll();
+    this.current();
     this.cache!.enabledRunners = [...ids];
     this.persist();
   }
@@ -222,7 +268,7 @@ export class SettingsService {
   }
 
   setAutonomousMode(enabled: boolean): void {
-    this.getAll();
+    this.current();
     this.cache!.autonomousMode = enabled;
     this.persist();
   }
@@ -238,7 +284,7 @@ export class SettingsService {
         throw new RunSettingsError(RUN_SETTING_CHECKS[key].refusal);
       }
     }
-    this.getAll();
+    this.current();
     for (const key of RUN_SETTING_KEYS) {
       if (changes[key] !== undefined) (this.cache as Record<keyof GlobalRunSettings, unknown>)[key] = changes[key];
     }
@@ -285,7 +331,14 @@ export class SettingsService {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    fs.writeFileSync(this.filePath, JSON.stringify(this.cache, null, 2));
-    this.cachedMtimeMs = this.fileMtimeMs();
+    // Written beside the file and renamed over it, so a process reading at that
+    // moment sees the old file or the new one, never an empty one.
+    const staging = `${this.filePath}.${process.pid}.tmp`;
+    fs.writeFileSync(staging, JSON.stringify(this.cache, null, 2));
+    // Stamped before the swap, which keeps all three: a save by another process
+    // right after ours is then a different stamp, not mistaken for our own.
+    const stamp = this.fileStamp(staging);
+    fs.renameSync(staging, this.filePath);
+    this.cachedStamp = stamp;
   }
 }

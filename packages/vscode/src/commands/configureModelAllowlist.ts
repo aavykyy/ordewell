@@ -22,6 +22,7 @@ export async function configureModelAllowlist(
   modelResolver: ModelResolver,
   settingsService: SettingsService,
   win: Pick<typeof vscode.window, 'showQuickPick' | 'withProgress' | 'showWarningMessage'> = vscode.window,
+  changed?: (allowlist: Record<string, string[]>) => void,
 ): Promise<void> {
   const runners = runnerRegistry.list();
   const runnerItems = runners.map((r) => ({
@@ -83,4 +84,5 @@ export async function configureModelAllowlist(
   if (!selected) return;
 
   settingsService.setModelAllowlist(runnerName, selected.map((s) => (s as typeof items[0]).modelId!));
+  changed?.(settingsService.getAll().modelAllowlist ?? {});
 }

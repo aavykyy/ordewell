@@ -221,24 +221,25 @@
         "ordewell.claudeCode.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Enable Claude Code as a runner (legacy — use enabledRunners instead)"
+          "description": "Enable Claude Code as a runner (legacy — use Ordewell: Toggle Runner instead)"
         },
         "ordewell.opencode.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Enable OpenCode as a runner (legacy — use enabledRunners instead)"
+          "description": "Enable OpenCode as a runner (legacy — use Ordewell: Toggle Runner instead)"
         },
         "ordewell.codex.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Enable Codex as a runner (legacy — use enabledRunners instead)"
+          "description": "Enable Codex as a runner (legacy — use Ordewell: Toggle Runner instead)"
         },
         "ordewell.enabledRunners": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Enabled runner IDs (e.g. [\"claude-code\", \"opencode\"]). Leave unset to use legacy claudeCode/opencode toggles."
+          "description": "Retired: the enabled runners are saved in Ordewell's settings file, shared with the terminal UI. A value here is copied there once, then cleared.",
+          "deprecationMessage": "The enabled runners are now saved in Ordewell's settings file, shared with the terminal UI. Use Ordewell: Toggle Runner, or /runners in the terminal UI."
         },
         "ordewell.maxParallelSessions": {
           "type": "integer",

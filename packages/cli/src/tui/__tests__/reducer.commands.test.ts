@@ -123,6 +123,41 @@ describe('runners and autonomy', () => {
     });
   });
 
+  it('/runners asks the daemon for the saved choice as it opens, since another surface may have changed it', () => {
+    const { effects } = run('/runners', { runners: [{ id: 'opencode', name: 'OpenCode', enabled: true }] });
+    expect(effects).toEqual([{ type: 'loadRunners' }]);
+  });
+
+  it('the saved choice, when it lands, replaces the ticks of a picker the user has not touched', () => {
+    const stale = [
+      { id: 'opencode', name: 'OpenCode', enabled: true },
+      { id: 'codex', name: 'Codex', enabled: false },
+    ];
+    const opened = run('/runners', { runners: stale }).state;
+
+    const { state } = reduce(opened, { type: 'runnersLoaded', runners: [
+      { id: 'opencode', name: 'OpenCode', enabled: true },
+      { id: 'codex', name: 'Codex', enabled: true },
+    ] });
+
+    expect(state.overlay).toMatchObject({ kind: 'picker', picker: { chosen: ['opencode', 'codex'] } });
+  });
+
+  it('keeps what the user has already ticked when the saved choice lands', () => {
+    const stale = [
+      { id: 'opencode', name: 'OpenCode', enabled: true },
+      { id: 'codex', name: 'Codex', enabled: false },
+    ];
+    const opened = run('/runners', { runners: stale }).state;
+    const ticked = reduce(opened, { type: 'key', key: { name: 'char', char: ' ' } }).state;
+    const chosenBefore = (ticked.overlay as { picker: { chosen: string[] } }).picker.chosen;
+    expect(chosenBefore).not.toEqual(['opencode']);
+
+    const { state } = reduce(ticked, { type: 'runnersLoaded', runners: stale });
+
+    expect(state.overlay).toMatchObject({ kind: 'picker', picker: { chosen: chosenBefore } });
+  });
+
   it('/auto full and /auto guarded select the two levels', () => {
     expect(run('/auto full', { autonomous: false }).effects).toEqual([{ type: 'setAutonomous', enabled: true }]);
     expect(run('/auto guarded', { autonomous: true }).effects).toEqual([{ type: 'setAutonomous', enabled: false }]);

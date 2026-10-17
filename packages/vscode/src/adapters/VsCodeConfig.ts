@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, defaultEnabledRunners, parseMaxParallel, normalizeGeminiModel, isApiProvider, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET } from '@ordewell/core';
-import type { ConfiguredPlanner, ProviderModelLists, ResolvedPlanner, SettingsService } from '@ordewell/core';
+import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, defaultEnabledRunners, parseMaxParallel, normalizeGeminiModel, isApiProvider, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET, SettingsService } from '@ordewell/core';
+import type { ConfiguredPlanner, ProviderModelLists, ResolvedPlanner } from '@ordewell/core';
 import { SecretStore, type ApiProvider, type SecretKey } from './SecretStore';
 
 export class VsCodeConfig extends BaseConfig {
@@ -228,10 +228,14 @@ export class VsCodeConfig extends BaseConfig {
 
   get geminiModel() { return this.config.get<string>('geminiModel', '') || this.config.get<string>('orchestratorModel', '') || this.config.get<string>('planningModel', '') || super.geminiModel; }
 
+  /**
+   * The list every surface shares (the settings file). Until the user has
+   * chosen, the answer is what the retired per-runner toggles said, or the
+   * installed agents.
+   */
   get enabledRunners(): string[] {
-    const configured = this.config.inspect<string[]>('enabledRunners');
-    const userValue = configured?.globalValue ?? configured?.workspaceValue;
-    if (userValue !== undefined) return userValue;
+    const saved = new SettingsService().getEnabledRunners();
+    if (saved !== undefined) return saved;
 
     // Migration from the per-runner toggles that predate `enabledRunners`: a
     // fixed set of three settings that were never extended, so they name their
@@ -326,5 +330,26 @@ export async function moveAutonomyFromVsCodeSetting(settings: SettingsService): 
     if (seen?.workspaceValue !== undefined) await config.update('autonomousMode', undefined, false);
   } catch {
     // Not declared any more, so VS Code may refuse the write; the value is already copied.
+  }
+}
+
+/**
+ * The enabled runners moved from VS Code's `ordewell.enabledRunners` to the
+ * settings file, so a toggle in one surface is the list every other one plans
+ * with. A list set there is copied once, unless the file already has a choice,
+ * and the old setting cleared. The workspace's value wins over the user's, as
+ * it did when VS Code read it; an empty list is a choice and moves too.
+ */
+export async function moveEnabledRunnersFromVsCodeSetting(settings: SettingsService): Promise<void> {
+  const config = vscode.workspace.getConfiguration('ordewell');
+  const seen = config.inspect<string[]>('enabledRunners');
+  const value = seen?.workspaceValue ?? seen?.globalValue;
+  if (!Array.isArray(value)) return;
+  if (settings.getEnabledRunners() === undefined) settings.setEnabledRunners(value.map(String));
+  try {
+    if (seen?.globalValue !== undefined) await config.update('enabledRunners', undefined, true);
+    if (seen?.workspaceValue !== undefined) await config.update('enabledRunners', undefined, false);
+  } catch {
+    // Still declared (deprecated), so this should not refuse; if it does the value is already copied and no longer read.
   }
 }

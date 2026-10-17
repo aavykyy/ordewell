@@ -1027,6 +1027,13 @@ describe('settings', () => {
     expect(types(h.actions)).toContain('runnersLoaded');
   });
 
+  it('reloads the saved runner choice without changing it', async () => {
+    const h = harness();
+    await runEffect({ type: 'loadRunners' }, h.deps);
+    expect(h.api.setRunnerEnabled).not.toHaveBeenCalled();
+    expect(types(h.actions)).toEqual(['runnersLoaded']);
+  });
+
   it('applies a confirmed runner set as one batch, reloading and reporting once', async () => {
     const h = harness();
     await runEffect({
@@ -1251,6 +1258,15 @@ describe('failures', () => {
     expect(failure.message).not.toMatch(/re-?plan/i);
     // Another surface may have deleted it: a restart is not the only way a session goes.
     expect(failure.message).toMatch(/deleted/);
+  });
+
+  it('shows why a model edit was refused, without the success notice (#106)', async () => {
+    const reason = '"Build" has a live runner, so its model and effort cannot change now: stop the task first, or use the runner\'s own /model';
+    const h = harness({ updateTask: vi.fn().mockRejectedValue(new DaemonError(reason, 400, 'refused')) });
+    await runEffect({ type: 'updateTask', sessionId: 's1', taskId: 't1', changes: { assignedModel: { modelId: 'haiku', modelLabel: 'Haiku' } }, message: 'Model updated.' }, h.deps);
+
+    expect(h.actions).toContainEqual({ type: 'failed', message: reason, code: 'refused' });
+    expect(h.actions).not.toContainEqual({ type: 'notice', message: 'Model updated.' });
   });
 
   it('leaves an unrelated error message alone', async () => {

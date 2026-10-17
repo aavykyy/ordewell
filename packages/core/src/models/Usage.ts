@@ -23,7 +23,11 @@ export interface UsageRecord {
    * per-token price at all. No report means no cost, not a guessed one.
    */
   reportedCost?: { amount: number; currency: string };
-  /** The model's context window, when the runner itself reports it. */
+  /**
+   * The model's context window: as the runner or provider reported it, or,
+   * when it reported none, from that runner's or provider's own model listing
+   * (`ContextWindowFill`). Never from a table kept in Ordewell.
+   */
   contextWindow?: number;
   /** Set when a subagent made the call; its usage still counts toward the total. */
   subagentId?: string;

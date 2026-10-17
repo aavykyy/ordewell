@@ -449,6 +449,15 @@ describe('applyTaskOps — model and task-mode validity', () => {
     expect(res.ok).toBe(true);
   });
 
+  it('refuses a model for a task whose runner is up, waiting for input or not (#106)', () => {
+    const waiting = samplePlan().map((t) => (t.id === 'a' ? { ...t, status: 'awaiting_user' as const, awaitingReason: 'input' as const } : t));
+    const res = applyTaskOps(waiting, [
+      { op: 'update', taskId: 'a', changes: { assignedModel: { modelId: 'claude-sonnet-4-5', modelLabel: 'Claude Sonnet 4.5' } } },
+    ], ['claude-code'], { ...CATALOG, liveRunner: (id) => id === 'a' });
+    expect(res.ok).toBe(false);
+    expect(res.errors[0]).toContain('stop the task first, or use the runner\'s own /model');
+  });
+
   it('accepts an allowlisted model discovery does not list, as the catalog block shows it', () => {
     const res = applyTaskOps(samplePlan(), [
       { op: 'update', taskId: 'a', changes: { assignedModel: { modelId: 'claude-fable-5', modelLabel: 'claude-fable-5' } } },

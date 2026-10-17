@@ -4,7 +4,7 @@ import type { UsageRecord } from '../../models/Usage';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { McpClientConfig } from '../mcp';
 import type { ProjectMcpServer } from './repoConfig';
-import type { RunnerCommand, RunnerMcpServer } from '../../models/RunnerCommand';
+import type { RunnerCommand, RunnerMcpServer, RunnerModelRef } from '../../models/RunnerCommand';
 
 
 /**
@@ -119,7 +119,14 @@ export type AgentEvent =
   /** The runner compacted its own context: asked to (`manual`) or on its own (`auto`). */
   | { type: 'compaction'; trigger: 'manual' | 'auto'; preTokens?: number; postTokens?: number }
   /** What a runner command that runs without the model printed, as the runner reported it. */
-  | { type: 'command_output'; text: string };
+  | { type: 'command_output'; text: string }
+  /**
+   * The runner's main thread now answers on another model, after a model
+   * command sent through the task's chat (#106): the user's own choice, which
+   * the plan follows. Each side is named by the id the runner lists it under,
+   * the one a plan holds. `effort` only where the runner reports one.
+   */
+  | { type: 'model_switched'; from: RunnerModelRef; to: RunnerModelRef; effort?: string };
 
 /**
  * What a planner's permission request is for, read from the runner's own

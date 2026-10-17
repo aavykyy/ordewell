@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { __setConfig, __resetConfig, configUpdates } from '../../test/vscode.mock';
-import { VsCodeConfig, moveAutonomyFromVsCodeSetting } from '../VsCodeConfig';
+import { __setConfig, __setWorkspaceConfig, __resetConfig, configUpdates } from '../../test/vscode.mock';
+import { VsCodeConfig, moveAutonomyFromVsCodeSetting, moveEnabledRunnersFromVsCodeSetting } from '../VsCodeConfig';
 import { SecretStore } from '../SecretStore';
 import { DEFAULT_WEB_READ_BUDGET, getProviderMeta, PROVIDER_DETECT_PRIORITY, recordInstalledPlanner, resetInstalledPlanner, SettingsService } from '@ordewell/core';
 
@@ -169,6 +169,102 @@ describe('the autonomy level (ADR-0030)', () => {
     await moveAutonomyFromVsCodeSetting(new SettingsService());
 
     expect(new SettingsService().autonomousMode()).toBe(true);
+  });
+});
+
+describe('the enabled runners (one store with every other surface)', () => {
+  const savedPath = process.env.ORDEWELL_SETTINGS_PATH;
+  const savedRunners = process.env.ORDEWELL_RUNNERS;
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-vscode-runners-'));
+    process.env.ORDEWELL_SETTINGS_PATH = path.join(dir, 'settings.json');
+    delete process.env.ORDEWELL_RUNNERS;
+    resetInstalledPlanner();
+  });
+  afterEach(() => {
+    if (savedPath === undefined) delete process.env.ORDEWELL_SETTINGS_PATH;
+    else process.env.ORDEWELL_SETTINGS_PATH = savedPath;
+    if (savedRunners === undefined) delete process.env.ORDEWELL_RUNNERS;
+    else process.env.ORDEWELL_RUNNERS = savedRunners;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('are the list saved in the user\'s settings, which every surface shares', async () => {
+    const config = new VsCodeConfig(await makeStore({}));
+
+    new SettingsService().setEnabledRunners(['codex', 'opencode']);
+
+    expect(config.enabledRunners).toEqual(['codex', 'opencode']);
+  });
+
+  it('ignore the old VS Code setting once the file has a choice, whichever scope set it', async () => {
+    new SettingsService().setEnabledRunners(['codex']);
+    __setConfig({ enabledRunners: ['opencode'] });
+    __setWorkspaceConfig({ enabledRunners: ['claude-code'] });
+
+    expect(new VsCodeConfig(await makeStore({})).enabledRunners).toEqual(['codex']);
+  });
+
+  it('keep a saved empty choice distinct from never having chosen', async () => {
+    new SettingsService().setEnabledRunners([]);
+
+    expect(new VsCodeConfig(await makeStore({})).enabledRunners).toEqual([]);
+  });
+
+  describe('moving the old VS Code setting', () => {
+    it('copies the user\'s value once, then clears it', async () => {
+      __setConfig({ enabledRunners: ['opencode', 'codex'] });
+
+      await moveEnabledRunnersFromVsCodeSetting(new SettingsService());
+
+      expect(new SettingsService().getEnabledRunners()).toEqual(['opencode', 'codex']);
+      expect(configUpdates).toContainEqual({ key: 'enabledRunners', value: undefined });
+      expect(new VsCodeConfig(await makeStore({})).enabledRunners).toEqual(['opencode', 'codex']);
+    });
+
+    it('takes the workspace\'s value over the user\'s, as VS Code itself does, and clears both', async () => {
+      __setConfig({ enabledRunners: ['codex'] });
+      __setWorkspaceConfig({ enabledRunners: ['opencode'] });
+
+      await moveEnabledRunnersFromVsCodeSetting(new SettingsService());
+
+      expect(new SettingsService().getEnabledRunners()).toEqual(['opencode']);
+      expect(configUpdates.filter((u) => u.key === 'enabledRunners')).toHaveLength(2);
+    });
+
+    it('takes a workspace value when the user set none', async () => {
+      __setWorkspaceConfig({ enabledRunners: ['opencode'] });
+
+      await moveEnabledRunnersFromVsCodeSetting(new SettingsService());
+
+      expect(new SettingsService().getEnabledRunners()).toEqual(['opencode']);
+    });
+
+    it('copies a deliberate empty list too', async () => {
+      __setConfig({ enabledRunners: [] });
+
+      await moveEnabledRunnersFromVsCodeSetting(new SettingsService());
+
+      expect(new SettingsService().getEnabledRunners()).toEqual([]);
+    });
+
+    it('keeps a choice already saved over the old setting, and still clears the old one', async () => {
+      new SettingsService().setEnabledRunners(['claude-code']);
+      __setConfig({ enabledRunners: ['opencode'] });
+
+      await moveEnabledRunnersFromVsCodeSetting(new SettingsService());
+
+      expect(new SettingsService().getEnabledRunners()).toEqual(['claude-code']);
+      expect(configUpdates).toContainEqual({ key: 'enabledRunners', value: undefined });
+    });
+
+    it('does nothing when the old setting was never set', async () => {
+      await moveEnabledRunnersFromVsCodeSetting(new SettingsService());
+
+      expect(new SettingsService().getEnabledRunners()).toBeUndefined();
+      expect(configUpdates).toEqual([]);
+    });
   });
 });
 

@@ -617,6 +617,28 @@ describe('StructuredSession interrupt', () => {
     turn.session.kill();
   });
 
+  // The plan follows a /model switch (#106), so a process restarted for the
+  // interrupt must run what the plan now says, not what the attempt started on.
+  it('resumes on the model a /model switched to', async () => {
+    const switchedTurnOpen = fixture('claude-code', 'task-model-switched').split('\n').filter((line) => line && (JSON.parse(line) as { type: string }).type !== 'result').join('\n') + '\n';
+    const { runner, spawned } = harness([
+      fixture('claude-code', 'task-model-before'), fixture('claude-code', 'task-model-command'), switchedTurnOpen,
+    ], 20);
+    const turn = observe(await runner.spawn(options({ modelId: 'haiku', mode: 'default' })));
+    await turn.nextTurnEnd();
+    turn.session.invokeCommand('model', 'sonnet');
+    await turn.nextTurnEnd();
+    turn.session.sendMessage('Reply with just the word two.');
+    await until(() => turn.events.some((e) => e.type === 'model_switched'));
+
+    await turn.session.interrupt();
+
+    expect(spawned.processes).toHaveLength(2);
+    const args = spawned.lastArgs();
+    expect(args[args.indexOf('--model') + 1]).toBe('sonnet');
+    turn.session.kill();
+  });
+
   it('resumes the session it was continuing when interrupted before the runner took it up (ADR-0018, K1)', async () => {
     const { runner, spawned } = harness([() => {}], 20);
     const turn = observe(await runner.spawn(options({ resumeSessionId: 'sess-prev' })));

@@ -75,17 +75,22 @@ describe('catalog block — always-on, allowlist-filtered', () => {
     expect(outgoing).not.toContain('acceptEdits');
   });
 
-  it('only lists runners selected for this plan, not every enabled runner', async () => {
+  it('lists the enabled runners, the set list_runners returns, not only the plan\'s', async () => {
     const continueConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'ok', researchLog: [] });
     const session = makeSession({
       aiService: { continueConversation, hasActiveConversation: () => true },
+      settings: () => ({ enabledRunners: ['claude-code', 'codex'] }),
+      modelResolver: {
+        modelsForRunners: vi.fn().mockResolvedValue({}),
+        getCachedRunnerModels: (runner: string) => (runner === 'codex' ? models('gpt-5') : []),
+      },
     });
     session.loadPlan(emptyPlan(['claude-code']), 'goal', testWorkspace, { persist: false });
 
     await session.continueConversation('go on');
 
     const outgoing = String(continueConversation.mock.calls[0][0]);
-    expect(outgoing).not.toMatch(/^codex:/m);
+    expect(outgoing).toMatch(/^codex: gpt-5$/m);
     expect(outgoing).not.toMatch(/^opencode:/m);
   });
 

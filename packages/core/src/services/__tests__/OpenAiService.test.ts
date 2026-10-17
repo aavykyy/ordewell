@@ -17,6 +17,7 @@ vi.mock('openai', () => ({
 }));
 
 import { OpenAiService } from '../OpenAiService';
+import { PlannerUsageLedger } from '../PlannerUsage';
 
 function streamOf(chunks: unknown[]): AsyncIterable<unknown> {
   return (async function* () {
@@ -71,7 +72,7 @@ describe('OpenAiService model-id prefix stripping', () => {
 describe('OpenAiService usage reporting (#49)', () => {
   beforeEach(() => createSpy.mockClear());
 
-  function usageEvents(config: IConfig, chunks: unknown[], contextWindow?: number): Promise<UsageRecord[]> {
+  function usageEvents(config: IConfig, chunks: unknown[]): Promise<UsageRecord[]> {
     createSpy.mockReturnValue(streamOf(chunks));
     const progress: ResearchProgress[] = [];
     const req: ConversationRequest = {
@@ -80,7 +81,6 @@ describe('OpenAiService usage reporting (#49)', () => {
       modelsByRunner: {},
       fs: fakeFileSystem(),
       onProgress: (p) => progress.push(p),
-      ...(contextWindow ? { contextWindow } : {}),
     };
     return new OpenAiService(config).startConversation(req).then(() =>
       progress.filter((p) => p.type === 'usage').map((p) => p.record!),
@@ -122,19 +122,30 @@ describe('OpenAiService usage reporting (#49)', () => {
     expect(records[0]).not.toHaveProperty('cachedInputTokens');
   });
 
-  it('carries a known context window on the record and omits an unknown one', async () => {
-    const withWindow = await usageEvents(
-      cfg(),
-      [{ choices: [], usage: { prompt_tokens: 10, completion_tokens: 2 } }],
-      128000,
-    );
-    expect(withWindow[0].contextWindow).toBe(128000);
+  // The provider reports no window, so a record claims none: the session reads
+  // the window of the model a record names from its catalog, per call.
+  it('claims no context window the provider did not report', async () => {
+    const records = await usageEvents(cfg(), [{ choices: [], usage: { prompt_tokens: 10, completion_tokens: 2 } }]);
+    expect(records[0]).not.toHaveProperty('contextWindow');
+  });
 
-    const withoutWindow = await usageEvents(
-      cfg(),
-      [{ choices: [], usage: { prompt_tokens: 10, completion_tokens: 2 } }],
-    );
-    expect(withoutWindow[0]).not.toHaveProperty('contextWindow');
+  it('measures the context against the window of the model each call used, across a same-provider switch', async () => {
+    const config = cfg();
+    const progress: ResearchProgress[] = [];
+    createSpy
+      .mockReturnValueOnce(streamOf([{ choices: [{ delta: { content: 'ok' } }] }, { choices: [], usage: { prompt_tokens: 90000, completion_tokens: 2 } }]))
+      .mockReturnValueOnce(streamOf([{ choices: [{ delta: { content: 'ok' } }] }, { choices: [], usage: { prompt_tokens: 30000, completion_tokens: 2 } }]));
+    const service = new OpenAiService(config);
+    await service.startConversation({ goal: 'add a cache', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem(), onProgress: (p) => progress.push(p) });
+    config.orchestratorModel = 'openai:gpt-4o-mini';
+    await service.continueConversation('go on', (p) => progress.push(p));
+
+    const windows: Record<string, number> = { 'gpt-4o': 128000, 'gpt-4o-mini': 64000 };
+    const ledger = new PlannerUsageLedger((source, model) => source === 'openai' ? windows[model] : undefined);
+    for (const p of progress) if (p.type === 'usage') ledger.record(p.record!);
+
+    expect(ledger.message().model).toBe('gpt-4o-mini');
+    expect(ledger.message().contextFill).toEqual({ usedTokens: 30000, windowTokens: 64000 });
   });
 
   // A research subagent's calls must reach the ledger as the subagent's, or its

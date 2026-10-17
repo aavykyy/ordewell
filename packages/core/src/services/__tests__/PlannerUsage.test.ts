@@ -26,6 +26,35 @@ describe('PlannerUsageLedger', () => {
     expect(ledger.message().contextFill).toEqual({ usedTokens: 3000, windowTokens: 128000 });
   });
 
+  it('measures a model whose backend reports no window against its catalog window, model by model', () => {
+    const catalog: Record<string, number> = { 'opencode/a': 100000, 'opencode/b': 400000 };
+    const ledger = new PlannerUsageLedger((source, model) => source === 'opencode' ? catalog[model] : undefined);
+    ledger.record({ source: 'opencode', model: 'opencode/a', inputTokens: 1000 });
+    expect(ledger.message().contextFill).toEqual({ usedTokens: 1000, windowTokens: 100000 });
+
+    ledger.record({ source: 'opencode', model: 'opencode/b', inputTokens: 2000 });
+    expect(ledger.message().contextFill).toEqual({ usedTokens: 2000, windowTokens: 400000 });
+
+    ledger.record({ source: 'opencode', model: 'opencode/unlisted', inputTokens: 3000 });
+    expect(ledger.message().contextFill).toBeUndefined();
+  });
+
+  it('keeps a reported window over the catalog\'s, on the calls that report none', () => {
+    const ledger = new PlannerUsageLedger(() => 100000);
+    ledger.record({ source: 'claude-code', model: 'opus', inputTokens: 1000, contextWindow: 200000 });
+    ledger.record({ source: 'claude-code', model: 'opus', inputTokens: 1500 });
+
+    expect(ledger.message().contextFill).toEqual({ usedTokens: 1500, windowTokens: 200000 });
+  });
+
+  it('keeps a restored ledger\'s window over the catalog\'s while the model is the same', () => {
+    const ledger = new PlannerUsageLedger(() => 100000);
+    ledger.restore({ totals: { inputTokens: 600 }, source: 'claude-code', model: 'opus', lastPromptTokens: 600, contextWindow: 200000 });
+    ledger.record({ source: 'claude-code', model: 'opus', inputTokens: 700 });
+
+    expect(ledger.message().contextFill).toEqual({ usedTokens: 700, windowTokens: 200000 });
+  });
+
   it('carries no turn id outside a turn, and no context fill while the window is unknown', () => {
     const ledger = new PlannerUsageLedger();
     ledger.record({ source: 'openai', inputTokens: 10 });

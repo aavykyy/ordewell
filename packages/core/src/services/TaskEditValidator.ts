@@ -42,6 +42,19 @@ export function lockedTaskRefusal(task: Pick<Task, 'title' | 'status'>, action =
   return null;
 }
 
+/**
+ * Why a task's model or effort cannot change while its runner is up, for
+ * every actor. The plan follows a switch made with the runner's own command
+ * instead (#106), so that is offered beside stopping it.
+ */
+export function liveModelRefusal(task: Pick<Task, 'title'>): string {
+  return `"${task.title}" has a live runner, so its model and effort cannot change now: stop the task first, or use the runner's own /model`;
+}
+
+function sameAssignment(a: TaskModelAssignment | undefined, b: TaskModelAssignment | undefined): boolean {
+  return a?.modelId === b?.modelId && a?.thinkingEffort === b?.thinkingEffort;
+}
+
 const AI_ONLY_FIELDS = ['assignedModel', 'taskMode', 'autonomy', 'ops'] as const satisfies readonly (keyof Task)[];
 
 /**
@@ -57,6 +70,13 @@ export interface EditCatalog {
   perRunnerAllowlist?: Partial<Record<RunnerId, string[]>>;
   /** Full (true) or Guarded: the mode a task the planner writes lands on unless it is read-only (ADR-0031). Full when absent. */
   autonomousDefault?: boolean;
+  /**
+   * Whether a task's runner is up now. Its model is then the runner's (#106):
+   * the process was started on one and only the runner's own command moves it,
+   * so an edit from outside would leave the plan naming what is not running.
+   * Absent means none is.
+   */
+  liveRunner?: (taskId: string) => boolean;
 }
 
 /**
@@ -155,7 +175,8 @@ function opsCheck(target: Task, isSubtask: boolean, changes: Partial<Task>): Tas
 
 /**
  * The rules governing one task edit, shared by both actors. Lock rules
- * (running/completed) apply to the planner only. Well-formedness rules — like
+ * (running/completed) apply to the planner only, except that a task's model
+ * is nobody's to change while its runner is up ({@link liveModelRefusal}). Well-formedness rules — like
  * a hand-set dependency list, the one edit that can leave the plan
  * unschedulable, and type/content coherence on an AI↔MAN flip — describe the
  * task rather than who asked, so they run for both, through the same
@@ -177,6 +198,9 @@ export function validateTaskEdit(
 
   const locked = actor === 'planner' ? lockedTaskRefusal(target, 'modified') : null;
   if (locked) return { ok: false, error: locked };
+  if ('assignedModel' in changes && !sameAssignment(changes.assignedModel, target.assignedModel) && catalog?.liveRunner?.(taskId)) {
+    return { ok: false, error: liveModelRefusal(target) };
+  }
 
   if (changes.dependencies) {
     const depCheck = canSetDependencies(parent?.subtasks ?? tasks, taskId, changes.dependencies);

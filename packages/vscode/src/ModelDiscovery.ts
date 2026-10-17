@@ -16,6 +16,8 @@ export interface ModelDiscoveryDeps {
   codexSandbox?: Pick<CodexSandboxAvailability, 'refresh'>;
   modelResolver: ModelResolver;
   chatProvider: ChatViewProvider;
+  /** The user's model allowlist as of now, sent with the runner list so task cards flag a model that is off it. */
+  modelAllowlist: () => Record<string, string[]>;
   secretStore: SecretStore;
   log: (msg: string) => void;
   /** Re-push who-plans state after discovery, so the planner pills match the fresh catalog. */
@@ -122,6 +124,7 @@ export class ModelDiscovery {
     }));
     d.chatProvider.setRunnerList(runnerList);
     d.chatProvider.setEnabledRunnerIds(enabled.filter((r) => installedIds.has(r)));
+    d.chatProvider.setModelAllowlist(d.modelAllowlist());
 
     const modesByRunner: Record<string, { id: string; label: string; description: string; cliValue?: string; autonomous?: boolean; unavailable?: string }[]> = {};
     for (const entry of installedRunners) {
