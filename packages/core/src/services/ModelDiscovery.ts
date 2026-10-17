@@ -27,8 +27,9 @@ export type ExecImpl = (
 // server) inherits a minimal PATH — hence the augmented PATH.
 const defaultExec: ExecImpl = async (command, options) => {
   const PATH = await augmentedPath();
-  // `opencode models --verbose` emits a JSON block per model and grows with
-  // every provider the user enables (~0.5MB with three providers today);
+  // `opencode models --verbose` (v1) and `opencode api model.list` (v2) emit a
+  // JSON block per model and grow with every provider the user enables
+  // (~0.5MB with three providers today);
   // node's default 1MB maxBuffer would kill the child mid-stream and silently
   // degrade discovery to the variant-less plain parser.
   const { stdout } = await execAsync(command, { ...options, maxBuffer: 32 * 1024 * 1024, env: withPath(process.env, PATH) });
@@ -175,7 +176,7 @@ const GEMINI_MODELS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
  * one because the CLI failed) is remembered before the next lookup re-runs it.
  * The failure that goes stale while a host runs is a cold or misconfigured CLI;
  * without this, every planner switch and every runner-list refresh re-pays a
- * slow or failing spawn — an empty `opencode models` costs ~20s in the field.
+ * slow or failing spawn — `opencode models` boots a background service before it answers.
  * Bounded the same way `RunnerInstallation`'s negative verdict is, and a refresh
  * asks again at once.
  */
@@ -474,6 +475,14 @@ export class ModelDiscovery {
    * other extreme.
    */
   private misses: Map<string, { models: DiscoveredModel[]; at: number }> = new Map();
+  /**
+   * Discoveries still running, so a second lookup of the same runner joins the
+   * first instead of spawning the CLI again. A slow CLI is the case this
+   * exists for: a planner switch and a runner-list refresh land inside one
+   * another's wait, and two `opencode models` calls race each other for the
+   * same background service.
+   */
+  private inflight: Map<string, Promise<DiscoveredModel[]>> = new Map();
   private registry: RunnerRegistry;
   private execImpl: ExecImpl;
   private fetchImpl?: typeof fetch;
@@ -543,13 +552,26 @@ export class ModelDiscovery {
     return models.map((m) => ({ ...m, runnerId: runner, runnerLabel }));
   }
 
-  private async discoverRaw(runner: string): Promise<DiscoveredModel[]> {
+  private discoverRaw(runner: string): Promise<DiscoveredModel[]> {
     const cached = this.cache.get(runner);
-    if (cached) return cached;
+    if (cached) return Promise.resolve(cached);
 
     const remembered = this.misses.get(runner);
-    if (remembered && this.now() - remembered.at < NEGATIVE_TTL_MS) return remembered.models;
+    if (remembered && this.now() - remembered.at < NEGATIVE_TTL_MS) return Promise.resolve(remembered.models);
 
+    const running = this.inflight.get(runner);
+    if (running) return running;
+
+    const started = this.discoverUncached(runner).finally(() => {
+      // A `clear()` while this ran already dropped the entry, and a newer
+      // lookup may have registered its own — only remove ours.
+      if (this.inflight.get(runner) === started) this.inflight.delete(runner);
+    });
+    this.inflight.set(runner, started);
+    return started;
+  }
+
+  private async discoverUncached(runner: string): Promise<DiscoveredModel[]> {
     const manifest = this.registry.getManifest(runner);
     if (!manifest) {
       return [];
@@ -605,6 +627,8 @@ export class ModelDiscovery {
   clear(): void {
     this.cache.clear();
     this.misses.clear();
+    // A refresh asks again at once; it must not join a run that began before it.
+    this.inflight.clear();
   }
 
   /** Whatever `discover()` has already cached for `runner` — never triggers discovery. */

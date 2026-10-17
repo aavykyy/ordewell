@@ -75,6 +75,19 @@ describe('PlannerSelection.apply', () => {
     __setConfig({ aiProvider: 'claude-code', orchestratorModel: 'claude-a', plannerThinkingEffort: '' });
   });
 
+  it('still tells the webview where the planner stands when the switch fails', async () => {
+    // The webview lights the pick before the host answers; a failure that sent
+    // nothing would leave that pill lit for a planner that never changed.
+    const { selection, setPlannerBackends } = setup();
+    const failing = selection as unknown as { change: () => Promise<never> };
+    failing.change = async () => { throw new Error('config write failed'); };
+
+    await expect(selection.apply('codex')).rejects.toThrow('config write failed');
+
+    expect(setPlannerBackends).toHaveBeenCalledOnce();
+    expect(setPlannerBackends.mock.calls[0][1]).toBe('claude-code');
+  });
+
   it('restores what the new backend remembers', async () => {
     const { selection, memory } = setup({ codex: [{ modelId: 'gpt-5-codex', variants: [{ id: 'high' }] }] });
     memory.remember('codex', 'gpt-5-codex', 'high');

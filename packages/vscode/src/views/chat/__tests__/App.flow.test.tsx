@@ -515,6 +515,39 @@ describe('planner bar', () => {
     expect(pill().className).not.toContain('pending');
   });
 
+  it('drops the pending hint when the host answers without switching', () => {
+    // A switch the host declined or failed ends with a state push that still
+    // names the old planner. The hint must not stay lit past it.
+    const withOpenRouter = [...backends, { id: 'openrouter', label: 'OpenRouter', kind: 'vendor' as const, usable: true }];
+    send({ type: 'setPlannerBackends', backends: withOpenRouter, provider: 'claude-code', runner: 'claude-code' });
+    const pill = (label: string) => [...document.querySelectorAll('.planner-pill')].find((p) => p.textContent === label)!;
+    fireEvent.click(pill('OpenRouter'));
+    expect(pill('OpenRouter').className).toContain('pending');
+
+    send({ type: 'setPlannerBackends', backends: withOpenRouter, provider: 'claude-code', runner: 'claude-code' });
+
+    expect(pill('OpenRouter').className).not.toContain('active');
+    expect(pill('OpenRouter').className).not.toContain('pending');
+    expect(pill('Claude Code').className).toContain('active');
+  });
+
+  it('asks the host once for a pick that is already pending', () => {
+    send({
+      type: 'setPlannerBackends',
+      backends: [...backends, { id: 'openrouter', label: 'OpenRouter', kind: 'vendor' as const, usable: true }],
+      provider: 'claude-code',
+      runner: 'claude-code',
+    });
+    const pill = [...document.querySelectorAll('.planner-pill')].find((p) => p.textContent === 'OpenRouter')!;
+    const vscodeApi = (globalThis as unknown as { __vscodeApi: { postMessage: import('vitest').Mock } }).__vscodeApi;
+    vscodeApi.postMessage.mockClear();
+
+    fireEvent.click(pill);
+    fireEvent.click(pill);
+
+    expect(vscodeApi.postMessage.mock.calls.filter(([m]) => m.type === 'setPlanner')).toHaveLength(1);
+  });
+
   it("offers the agent's own catalog, not the vendor one", () => {
     send({ type: 'setModelOptions', modelOptions: [{ id: 'deepseek/deepseek-v4-flash', label: 'V4 Flash', provider: 'openrouter', apiProvider: 'openrouter' }] });
     sendHarnessPlanner();

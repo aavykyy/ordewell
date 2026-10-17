@@ -10,6 +10,16 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **Switching planner no longer looks frozen behind a slow coding-agent CLI.**
+  The picked planner lights at once and the host confirms it; the planner pills
+  are pushed before models are discovered, runners are discovered together, and a
+  discovery that came back empty or failed is remembered briefly instead of being
+  re-run on every switch and refresh. A failed discovery is retried only after a
+  timeout, not after a plain non-zero exit
+  ([ADR-0040](docs/adr/0040-a-slow-model-discovery-never-gates-the-planner-pick.md)).
+- **OpenCode v2 model variants are discovered again.** v2 removed
+  `opencode models --verbose`; the catalog, with each model's variants, is now
+  read from `opencode api model.list` when that flag is rejected.
 - **A coding agent installed while Ordewell is running is noticed on the next
   refresh.** The runner list (`ordewell runners`, the VS Code runner panel) and
   a VS Code refresh re-check which agents are installed and re-derive the no-key

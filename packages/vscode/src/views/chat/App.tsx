@@ -595,18 +595,18 @@ export default function App() {
   // The host resolves the target backend's model catalog before it pushes the
   // new provider, and that discovery can spawn a cold CLI (ADR-0009), so the
   // pill would sit unchanged for the whole wait. Light the pick at once and drop
-  // the hint when the host's own state agrees — the host, not this, still decides.
+  // the hint on the host's next planner state, whatever it says: the host, not
+  // this, decides, so a switch it declined or failed must not stay lit.
   const [pendingPlanner, setPendingPlanner] = useState<string | null>(null);
-  useEffect(() => {
-    if (pendingPlanner && planner.provider === pendingPlanner) setPendingPlanner(null);
-  }, [pendingPlanner, planner.provider]);
+  useEffect(() => { setPendingPlanner(null); }, [planner]);
   const activePlanner = pendingPlanner ?? planner.provider;
 
   const handlePlannerChange = useCallback((provider: string) => {
-    if (provider === planner.provider) return;
+    // Already the planner, or already asked for: a repeat would run the switch twice.
+    if (provider === planner.provider || provider === pendingPlanner) return;
     setPendingPlanner(provider);
     vscode.postMessage({ type: 'setPlanner', provider });
-  }, [planner.provider]);
+  }, [planner.provider, pendingPlanner]);
 
   const visibleRunners = runnerList.filter((r) => enabledRunnerIds.includes(r.id));
 

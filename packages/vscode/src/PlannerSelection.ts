@@ -45,7 +45,13 @@ export class PlannerSelection {
   /** Switch who plans, landing on what that backend remembers (ADR-0009). */
   async apply(provider: PlannerBackendId): Promise<void> {
     if (!getProviderMeta(provider)) return;
-    await this.change({ provider });
+    try {
+      await this.change({ provider });
+    } catch (err) {
+      // The pill the webview lit for this pick has to settle on what is true.
+      await this.sendState().catch(() => undefined);
+      throw err;
+    }
     await this.publish(`Planner set to ${provider}`);
   }
 

@@ -102,11 +102,13 @@ export function parseOpenCodeModelsVerbose(stdout: string, manifest: RunnerManif
     });
   }
 
-  if (models.length === 0) return [];
+  return preferredFirst(models, manifest);
+}
 
-  // Put preferred patterns first, then the rest alphabetically
-  const prefOrder = preferred?.map((p) => p.id) ?? [];
-  models.sort((a, b) => {
+/** Preferred patterns first, then the rest alphabetically. */
+function preferredFirst(models: DiscoveredModel[], manifest: RunnerManifest): DiscoveredModel[] {
+  const prefOrder = manifest.modelDiscovery.preferredPatterns?.map((p) => p.id) ?? [];
+  return [...models].sort((a, b) => {
     const ai = prefOrder.indexOf(a.modelId);
     const bi = prefOrder.indexOf(b.modelId);
     if (ai >= 0 && bi >= 0) return ai - bi;
@@ -114,6 +116,61 @@ export function parseOpenCodeModelsVerbose(stdout: string, manifest: RunnerManif
     if (bi >= 0) return 1;
     return a.modelId.localeCompare(b.modelId);
   });
+}
 
-  return models;
+interface OpenCodeApiModel {
+  modelID?: unknown;
+  providerID?: unknown;
+  name?: unknown;
+  enabled?: unknown;
+  variants?: unknown;
+}
+
+/**
+ * Parse `opencode api model.list` output (opencode v2, which dropped
+ * `models --verbose`). The server answers `{ "data": [ { providerID, modelID,
+ * name, enabled, variants: [{ id, settings }] } ] }`; the id Ordewell uses is
+ * the same `providerID/modelID` that `opencode models` prints. A model the
+ * server reports as not enabled is skipped, since the plain listing would
+ * not offer it either.
+ *
+ * Anything that is not that shape — an HTTP error body, a v1 CLI that does
+ * not know the subcommand — yields no models, so discovery falls through to
+ * the plain `opencode models`.
+ */
+export function parseOpenCodeModelsApi(stdout: string, manifest: RunnerManifest): DiscoveredModel[] {
+  let data: unknown;
+  try {
+    data = (JSON.parse(stdout) as { data?: unknown } | null)?.data;
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(data)) return [];
+
+  const prefLabels = new Map((manifest.modelDiscovery.preferredPatterns ?? []).map((p) => [p.id, p.label]));
+  const seen = new Set<string>();
+  const models: DiscoveredModel[] = [];
+
+  for (const entry of data as OpenCodeApiModel[]) {
+    if (!entry || typeof entry.providerID !== 'string' || typeof entry.modelID !== 'string') continue;
+    if (entry.enabled === false) continue;
+    const fullId = `${entry.providerID}/${entry.modelID}`;
+    if (seen.has(fullId)) continue;
+    seen.add(fullId);
+
+    const variantIds = Array.isArray(entry.variants)
+      ? entry.variants.flatMap((v: unknown) => {
+          const id = (v as { id?: unknown } | null)?.id;
+          return typeof id === 'string' && id ? [id] : [];
+        })
+      : [];
+    models.push({
+      modelId: fullId,
+      modelLabel: prefLabels.get(fullId) || (typeof entry.name === 'string' && entry.name) || entry.modelID,
+      runnerProvider: entry.providerID,
+      variants: variantIds.map((id) => ({ id, label: id.charAt(0).toUpperCase() + id.slice(1) })),
+    });
+  }
+
+  return preferredFirst(models, manifest);
 }

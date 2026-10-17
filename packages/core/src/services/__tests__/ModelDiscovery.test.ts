@@ -691,9 +691,9 @@ describe('ModelDiscovery — OpenCode', () => {
     // discovery degrades to an empty list and the picker silently goes short.
     let pass = 0;
     const exec: ExecImpl = vi.fn(async (_cmd: string) => {
-      // Two commands per pass (verbose, then plain). Time out every command on
-      // the first pass; serve the real list on the second.
-      if (pass < 2) { pass++; throw Object.assign(new Error('ETIMEDOUT'), { killed: true }); }
+      // Three commands per pass (verbose, api, then plain). Time out every
+      // command on the first pass; serve the real list on the second.
+      if (pass < 3) { pass++; throw Object.assign(new Error('ETIMEDOUT'), { killed: true }); }
       pass++;
       return { stdout: ['opencode/gpt-5.1', 'opencode-go/deepseek-v4-pro'].join('\n') };
     });
@@ -706,13 +706,13 @@ describe('ModelDiscovery — OpenCode', () => {
   it('does not retry a command that exited non-zero — the error is an answer', async () => {
     // A missing binary, a rejected flag or a busy port cannot heal on a retry.
     // Repeating the command only doubles the wait (a failing `opencode models`
-    // costs ~20s in the field), so one pass is enough.
+    // still boots its background service first), so one pass is enough.
     const exec: ExecImpl = vi.fn(async () => { throw new Error('ENOENT'); });
     const discovery = new ModelDiscovery(registryWith(OPENCODE_MANIFEST), exec);
 
     expect(await discovery.discover('opencode')).toEqual([]);
-    // 2 commands × 1 pass = 2 attempts.
-    expect(exec).toHaveBeenCalledTimes(2);
+    // 3 commands × 1 pass = 3 attempts.
+    expect(exec).toHaveBeenCalledTimes(3);
   });
 
   it('degrades to an empty list only after the timeout retry also fails', async () => {
@@ -722,8 +722,94 @@ describe('ModelDiscovery — OpenCode', () => {
     const discovery = new ModelDiscovery(registryWith(OPENCODE_MANIFEST), exec);
 
     expect(await discovery.discover('opencode')).toEqual([]);
-    // 2 commands × 2 passes = 4 attempts before giving up.
-    expect(exec).toHaveBeenCalledTimes(4);
+    // 3 commands × 2 passes = 6 attempts before giving up.
+    expect(exec).toHaveBeenCalledTimes(6);
+  });
+
+  it('reads variants from `api model.list` when opencode v2 rejects --verbose', async () => {
+    // v2 dropped `models --verbose` (it prints help and exits non-zero) and
+    // serves the same catalog, variants included, over its local API.
+    const apiOutput = JSON.stringify({
+      location: { directory: '/work' },
+      data: [
+        { id: 'claude-sonnet-5', modelID: 'claude-sonnet-5', providerID: 'opencode', name: 'Claude Sonnet 5', enabled: true, variants: [{ id: 'low', settings: {} }, { id: 'high', settings: {} }] },
+        { id: 'big-pickle', modelID: 'big-pickle', providerID: 'opencode', name: 'Big Pickle', enabled: true, variants: [] },
+        { id: '~anthropic/claude-fable-latest', modelID: '~anthropic/claude-fable-latest', providerID: 'openrouter', enabled: true, variants: [{ id: 'medium' }] },
+        { id: 'off', modelID: 'off', providerID: 'opencode', name: 'Off', enabled: false, variants: [] },
+      ],
+    });
+    const exec: ExecImpl = vi.fn(async (cmd: string) => {
+      if (cmd.includes('--verbose')) throw Object.assign(new Error('Unrecognized flag'), { code: 1 });
+      if (cmd.includes('api model.list')) return { stdout: apiOutput };
+      throw new Error('the plain listing should not be needed');
+    });
+
+    const models = await new ModelDiscovery(registryWith(OPENCODE_MANIFEST), exec).discover('opencode');
+
+    const byId = new Map(models.map((m) => [m.modelId, m]));
+    expect([...byId.keys()].sort()).toEqual(['opencode/big-pickle', 'opencode/claude-sonnet-5', 'openrouter/~anthropic/claude-fable-latest']);
+    expect(byId.get('opencode/claude-sonnet-5')!.modelLabel).toBe('Claude Sonnet 5');
+    expect(byId.get('opencode/claude-sonnet-5')!.variants.map((v) => v.id)).toEqual(['low', 'high']);
+    expect(byId.get('opencode/claude-sonnet-5')!.runnerProvider).toBe('opencode');
+    expect(byId.get('openrouter/~anthropic/claude-fable-latest')!.modelLabel).toBe('~anthropic/claude-fable-latest');
+    // A rejected flag is an answer, not a cold start: one pass, no retry.
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls through to the plain listing when the api answer is not a model list', async () => {
+    // A v1 CLI that does not know `api`, or an HTTP error body, must not hide
+    // the catalog `opencode models` reports.
+    const exec: ExecImpl = vi.fn(async (cmd: string) => {
+      if (cmd.includes('--verbose')) throw new Error('Unrecognized flag');
+      if (cmd.includes('api model.list')) return { stdout: 'HTTP 404 Not Found' };
+      return { stdout: 'opencode/gpt-5.1\n' };
+    });
+
+    const models = await new ModelDiscovery(registryWith(OPENCODE_MANIFEST), exec).discover('opencode');
+
+    expect(models.map((m) => m.modelId)).toEqual(['opencode/gpt-5.1']);
+  });
+
+  it('shares one discovery between lookups of the same runner that overlap', async () => {
+    // A planner switch and a runner-list refresh land inside one another's
+    // wait; two `opencode models` calls would race for the same service.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const exec: ExecImpl = vi.fn(async (cmd: string) => {
+      if (cmd.includes('--verbose') || cmd.includes('api')) throw new Error('not v1 or v2 api');
+      await gate;
+      return { stdout: 'opencode/gpt-5.1\n' };
+    });
+    const discovery = new ModelDiscovery(registryWith(OPENCODE_MANIFEST), exec);
+
+    const a = discovery.discover('opencode');
+    const b = discovery.discover('opencode');
+    release();
+    expect((await a).map((m) => m.modelId)).toEqual(['opencode/gpt-5.1']);
+    expect((await b).map((m) => m.modelId)).toEqual(['opencode/gpt-5.1']);
+
+    // 3 commands, once — not once per lookup.
+    expect(exec).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not join a discovery that began before clear()', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let call = 0;
+    const exec: ExecImpl = vi.fn(async (cmd: string) => {
+      if (cmd.includes('--verbose') || cmd.includes('api')) throw new Error('nope');
+      if (call++ === 0) { await gate; return { stdout: 'opencode/stale\n' }; }
+      return { stdout: 'opencode/fresh\n' };
+    });
+    const discovery = new ModelDiscovery(registryWith(OPENCODE_MANIFEST), exec);
+
+    const before = discovery.discover('opencode');
+    discovery.clear();
+    const after = await discovery.discover('opencode');
+    release();
+    await before;
+
+    expect(after.map((m) => m.modelId)).toEqual(['opencode/fresh']);
   });
 });
 
