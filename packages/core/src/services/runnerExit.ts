@@ -4,6 +4,7 @@
  */
 
 import { connectorFor } from './harness/connectors';
+import type { UsageLimitSignal } from './harness/AgentAdapter';
 
 /**
  * Why a runner stopped, as far as the tail of its own output says. `usage-limit`
@@ -23,9 +24,27 @@ const USAGE_LIMIT_RE = /\b(?:usage|session|weekly|daily|monthly) limit\b|\brate 
 /** How much of a stopped runner's tail is read for the limit signature: the error is the last thing it prints. */
 const USAGE_LIMIT_TAIL = 4096;
 
-/** Classify a stopped runner from the tail of its own output. */
-export function classifyRunnerStop(output: string): RunnerStop {
-  return USAGE_LIMIT_RE.test(output.slice(-USAGE_LIMIT_TAIL)) ? 'usage-limit' : 'stopped';
+/**
+ * A turn's failure as its runner reported it: its words, and `usageLimit`
+ * where its protocol also says so in a field (Codex's `codexErrorInfo`).
+ */
+export interface TurnFailure {
+  message: string;
+  usageLimit?: UsageLimitSignal;
+}
+
+/**
+ * Classify a stopped runner from the tail of its own output, or a failed turn
+ * from its error. A runner's own field is believed over its words; without
+ * one, the words decide.
+ */
+export function classifyRunnerStop(said: string | TurnFailure): RunnerStop {
+  if (typeof said !== 'string' && said.usageLimit) return 'usage-limit';
+  return USAGE_LIMIT_RE.test(wordsOf(said).slice(-USAGE_LIMIT_TAIL)) ? 'usage-limit' : 'stopped';
+}
+
+function wordsOf(said: string | TurnFailure): string {
+  return typeof said === 'string' ? said : said.message;
 }
 
 /** Every way an attempt ends: a verdict, a usage limit, cancel, release, Mark complete, retry, a failed spawn, stop, plan load. */
@@ -42,25 +61,34 @@ export function stopsRunner(reason: AttemptEnd): boolean {
 }
 
 /**
- * When a runner's usage limit resets, read from the limit message it printed,
- * or null when that runner's wording carries no time Ordewell can read — the
- * task then waits for a manual retry. Each runner words it its own way, so
- * its connector reads it (`usageLimitReset`); a runner without a reader gets
- * none.
+ * When a runner's usage limit resets: the time its failure carries in a field
+ * where it has one, else read from the limit message it printed, or null when
+ * that runner's wording carries no time Ordewell can read — the task then
+ * waits for a manual retry. Each runner words it its own way, so its
+ * connector reads it (`usageLimitReset`); a runner without a reader gets none.
  */
-export function readUsageLimitReset(runner: string, output: string, now: Date = new Date()): Date | null {
+export function readUsageLimitReset(runner: string, said: string | TurnFailure, now: Date = new Date()): Date | null {
+  const reset = (typeof said === 'string' ? null : reportedReset(said)) ?? readReset(runner, wordsOf(said), now);
+  // A reset long past is not this stop's: the words were left over, and acting on them would retry at once.
+  if (!reset || reset.getTime() < now.getTime() - DAY_MS) return null;
+  return reset;
+}
+
+function reportedReset(failure: TurnFailure): Date | null {
+  const at = failure.usageLimit?.resetsAt;
+  const reset = at === undefined ? null : new Date(at);
+  return reset && !Number.isNaN(reset.getTime()) ? reset : null;
+}
+
+function readReset(runner: string, output: string, now: Date): Date | null {
   const read = connectorFor(runner)?.usageLimitReset;
   if (!read) return null;
-  let reset: Date | null;
   try {
-    reset = read(output.slice(-USAGE_LIMIT_TAIL), now);
+    return read(output.slice(-USAGE_LIMIT_TAIL), now);
   } catch {
     // An unknown time zone name: the time cannot be placed, so it is not guessed.
     return null;
   }
-  // A reset long past is not this stop's: the words were left over, and acting on them would retry at once.
-  if (!reset || reset.getTime() < now.getTime() - DAY_MS) return null;
-  return reset;
 }
 
 const DAY_MS = 24 * 60 * 60_000;
