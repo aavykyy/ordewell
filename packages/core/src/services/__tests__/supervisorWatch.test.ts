@@ -457,6 +457,16 @@ describe('when the supervisor fails, the run does not depend on it', () => {
 
     expect(env.session.planState!.runSettings!.unsupervised).toMatch(/usage limit and did not say when it resets/);
   });
+
+  it('retries a wake-up whose runner says in a field it failed for something other than its limit, whatever its words say', async () => {
+    const env = await wokenUp();
+
+    env.planner.calls[0].finish({ kind: 'message', text: 'Rate limit exceeded', researchLog: [], failed: true, usageLimit: false });
+    await settled();
+
+    expect(env.session.planState!.runSettings!.unsupervised).toBeUndefined();
+    expect(env.planner.aiService.restart).toHaveBeenCalled();
+  });
 });
 
 describe('undelivered wake-ups across a daemon restart', () => {

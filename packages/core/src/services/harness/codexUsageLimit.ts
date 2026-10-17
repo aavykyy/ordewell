@@ -52,22 +52,26 @@ export function mergeCodexRateLimits(known: CodexRateLimits, params: unknown): C
 
 /**
  * Whether a Codex turn error is its account's usage limit, by the error's
- * `codexErrorInfo`. `rateLimitExceeded` is not: that is the provider's
- * throttle, which Codex retries itself.
+ * `codexErrorInfo`; undefined when the field names no cause (absent, or
+ * `other`). `rateLimitExceeded` is not: that is the provider's throttle,
+ * which Codex retries itself, though its words read like a limit.
  */
-function isCodexUsageLimit(error: unknown): boolean {
+function isCodexUsageLimit(error: unknown): boolean | undefined {
   const info = (error as { codexErrorInfo?: unknown } | null | undefined)?.codexErrorInfo;
+  if (info === undefined || info === null || info === 'other') return undefined;
   if (info === 'usageLimitExceeded') return true;
-  return typeof info === 'object' && info !== null && 'usageLimitExceeded' in info;
+  return typeof info === 'object' && 'usageLimitExceeded' in info;
 }
 
 /**
- * The limit signal for a Codex turn error, or undefined when it is not the
- * usage limit. The reset is the latest among the windows used up and not yet
- * reset: no work runs before every one of them has reset.
+ * The limit signal for a Codex turn error: false when the error names another
+ * cause, undefined when it names none and its words decide. The reset is the
+ * latest among the windows used up and not yet reset: no work runs before
+ * every one of them has reset.
  */
-export function codexUsageLimitSignal(error: unknown, limits: CodexRateLimits, now: Date): UsageLimitSignal | undefined {
-  if (!isCodexUsageLimit(error)) return undefined;
+export function codexUsageLimitSignal(error: unknown, limits: CodexRateLimits, now: Date): UsageLimitSignal | false | undefined {
+  const limited = isCodexUsageLimit(error);
+  if (limited !== true) return limited;
   const resets = [...limits.values()]
     .flatMap((snapshot) => [snapshot.primary, snapshot.secondary])
     .flatMap((window) => window && (window.usedPercent ?? 0) >= 100 && typeof window.resetsAt === 'number' ? [window.resetsAt * 1000] : [])

@@ -884,7 +884,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   private turnFailed(error: CodexTurnError | undefined): AgentEvent {
     const message = error?.message || 'Codex ended the turn with an error.';
     const usageLimit = codexUsageLimitSignal(error, this.rateLimits, new Date());
-    return usageLimit ? { type: 'error', message, usageLimit } : { type: 'error', message };
+    return usageLimit === undefined ? { type: 'error', message } : { type: 'error', message, usageLimit };
   }
 
   private turnStarted(id: unknown): void {

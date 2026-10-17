@@ -1,5 +1,6 @@
 import type { ResearchLogEntry, ResearchProgress, ResearchStep, RunnerId } from '../models/Task';
 import type { ConversationTurn } from './AiService';
+import type { UsageLimitSignal } from './harness/AgentAdapter';
 import type { RunnerModeInfo } from './ModeResolver';
 import {
   classifyPlannerReply, type PlannerReplyClassification, reEmitPlanPrompt, reEmitTaskOpsPrompt, reEmitTaskQueryPrompt, repairLoop, truncatedPlanReEmitPrompt,
@@ -19,6 +20,8 @@ export interface ReplyAttempt {
   aborted?: boolean;
   /** The call ended without a reply (a dead agent, a spent tool budget), and this says why. */
   failure?: string;
+  /** Whether the runner's own field called the failure its usage limit, where it has one. */
+  usageLimit?: UsageLimitSignal | false;
   /**
    * The whole reply the user reads, when it is more than `text`: text from
    * calls the backend continued past on the user's behalf, joined in front.
@@ -103,7 +106,10 @@ export async function settleReply(opts: SettleReplyOptions): Promise<Conversatio
         opts.onProgress({ type: 'interrupted' });
         return { done: turn };
       }
-      if (attempt.failure !== undefined) return { done: { ...message(attempt.failure), failed: true } };
+      if (attempt.failure !== undefined) {
+        const { usageLimit } = attempt;
+        return { done: { ...message(attempt.failure), failed: true, ...(usageLimit !== undefined && { usageLimit }) } };
+      }
       if (!attempt.text.trim()) return { done: message(emptyReplyReport(deniedStep(attempt))) };
 
       const reply: PlannerReplyClassification = opts.classify ? classifyPlannerReply(attempt.text, opts.classify) : { kind: 'prose' };

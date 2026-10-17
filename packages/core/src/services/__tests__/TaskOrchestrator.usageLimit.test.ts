@@ -139,6 +139,19 @@ describe('a task paused on a usage limit', () => {
     expect(waits).toEqual([{ taskId: 't1', runner: 'codex', resumeAt: '2026-10-11T20:43:55.000Z' }]);
   });
 
+  it('does not pause when the runner\'s field names another cause, though its words read like a limit', async () => {
+    const { orchestrator, sessions, waits, task } = setup();
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', assignedRunner: 'codex' })], ['codex']);
+    await orchestrator.forceStartTask('t1');
+
+    sessions[0].emitEvent({ type: 'error', message: 'Rate limit reached for gpt-5.5.', usageLimit: false });
+    sessions[0].emitTurnEnd('failed');
+    await until(() => task('t1').status === 'awaiting_user');
+
+    expect(task('t1').awaitingReason).toBe('input');
+    expect(waits).toEqual([]);
+  });
+
   it('pauses the same way when the runner exits on the limit', async () => {
     const { orchestrator, sessions, spawn, task } = setup();
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
@@ -348,7 +361,7 @@ describe('a limit is acted on only when it ended a turn Ordewell started', () =>
     sessions[0].waitForInput();
     await until(() => task('t1').status === 'awaiting_user');
     sessions[0].emitExit(1);
-    await until(() => task('t1').status === 'failed');
+    await until(() => task('t1').status === 'failed' || (console.log('STATUS', task('t1').status, task('t1').awaitingReason), false));
 
     expect(task('t1').resumeAt).toBeUndefined();
     expect(waits).toEqual([]);
@@ -367,7 +380,7 @@ describe('a limit is acted on only when it ended a turn Ordewell started', () =>
     await until(() => task('t1').status === 'in_progress');
     sessions[0].emitOutput('Running the tests.\n');
     sessions[0].emitExit(1);
-    await until(() => task('t1').status === 'failed');
+    await until(() => task('t1').status === 'failed' || (console.log('STATUS', task('t1').status, task('t1').awaitingReason), false));
 
     expect(waits).toEqual([]);
   });
@@ -380,7 +393,7 @@ describe('a limit is acted on only when it ended a turn Ordewell started', () =>
     sessions[0].emitOutput('The API answers HTTP 429: Too Many Requests on every call.\n');
     sessions[0].reportComplete({ status: 'failed', summary: '', reason: 'the API is rate-limited' });
     sessions[0].emitTurnEnd('completed');
-    await until(() => task('t1').status === 'failed');
+    await until(() => task('t1').status === 'failed' || (console.log('STATUS', task('t1').status, task('t1').awaitingReason), false));
 
     expect(waits).toEqual([]);
   });

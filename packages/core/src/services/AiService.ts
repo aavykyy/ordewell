@@ -11,6 +11,7 @@ import { CliAgentAiService, type CliAgentAiServiceDeps } from './harness/CliAgen
 import type { IsolatedExecution, PlannerModes } from './plannerModes';
 import type { PlannerToolHandler } from './mcp';
 import type { SkillInfo } from './SkillsService';
+import type { UsageLimitSignal } from './harness/AgentAdapter';
 
 /**
  * The planner tools a session offers its conversation (ADR-0022). A backend
@@ -81,9 +82,10 @@ export type ConversationTurn =
   /**
    * `aborted`: the call was stopped, and `text` is only what it had by then.
    * `failed`: the call ended without a reply (a dead agent, a usage limit),
-   * and `text` says why.
+   * and `text` says why; `usageLimit`, where the runner also said in a field
+   * whether that was its usage limit (see {@link TurnFailure}).
    */
-  | { kind: 'message'; text: string; researchLog: ResearchLogEntry[]; aborted?: boolean; failed?: boolean }
+  | { kind: 'message'; text: string; researchLog: ResearchLogEntry[]; aborted?: boolean; failed?: boolean; usageLimit?: UsageLimitSignal | false }
   | { kind: 'plan'; tasks: Task[]; text: string; researchLog: ResearchLogEntry[] }
   | { kind: 'task_ops'; ops: import('./TaskOps').TaskOp[]; text: string; researchLog: ResearchLogEntry[] }
   | { kind: 'task_query'; query: import('./TaskQuery').TaskQuery; text: string; researchLog: ResearchLogEntry[] };

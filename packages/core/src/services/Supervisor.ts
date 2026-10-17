@@ -2,7 +2,7 @@ import type { SupervisorLevel } from '../models/Execution';
 import { createWakePolicy, type RunEvent, type WakeBatch, type WakePolicy, type WakePolicySnapshot } from './WakePolicy';
 import { classifyRunnerStop } from './runnerExit';
 import { WAKE_UP_RATE, wakeUpRateTripped, type WakeUpRate } from './LoopGuards';
-import { PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlanChange, type WakeUpTurn } from './PlannerConversation';
+import { PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlanChange, type WakeUpTurn } from './PlannerConversation';
 
 /** How long the first attention event waits for others to join its wake-up. */
 export const WAKE_DEBOUNCE_MS = 5_000;
@@ -290,7 +290,9 @@ export class Supervisor {
     }
     const reason = err instanceof Error ? err.message : String(err);
     // A backend that throws its limit rather than saying it gives no reset to read.
-    if (!(err instanceof WakeUpTimeoutError) && classifyRunnerStop(reason) === 'usage-limit') {
+    // A turn that said its failure was classified as it settled, by the runner's
+    // own field where it has one, and its words are not read again here.
+    if (!(err instanceof WakeUpTimeoutError) && !(err instanceof PlannerTurnFailedError) && classifyRunnerStop(reason) === 'usage-limit') {
       this.giveUp('the planner hit its usage limit and did not say when it resets');
       return;
     }

@@ -1,5 +1,5 @@
 import type { LegacyPlanState, PlannerResendState, RunnerId } from '../models/Task';
-import { readUsageLimitReset } from './runnerExit';
+import { readUsageLimitReset, type TurnFailure } from './runnerExit';
 import { RELAPSE_MS, RESUME_MARGIN_MS, UsageLimitWaits } from './UsageLimitWaits';
 import { resumeTime } from '../taskRow/status';
 
@@ -55,8 +55,8 @@ export class PlannerResend {
     return this.host.plan()?.plannerResend !== undefined;
   }
 
-  /** A planner turn Ordewell started ended on the planner's usage limit, which it said in `said`. */
-  limited(said: string): PlannerLimit {
+  /** A planner turn Ordewell started ended on the planner's usage limit, which it reported as `said`. */
+  limited(said: TurnFailure): PlannerLimit {
     const plan = this.host.plan();
     const runner = this.host.plannerRunner() ?? undefined;
     const now = new Date();

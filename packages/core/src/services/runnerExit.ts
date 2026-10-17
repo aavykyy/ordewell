@@ -26,11 +26,12 @@ const USAGE_LIMIT_TAIL = 4096;
 
 /**
  * A turn's failure as its runner reported it: its words, and `usageLimit`
- * where its protocol also says so in a field (Codex's `codexErrorInfo`).
+ * where its protocol also says in a field whether it was the limit (Codex's
+ * `codexErrorInfo`).
  */
 export interface TurnFailure {
   message: string;
-  usageLimit?: UsageLimitSignal;
+  usageLimit?: UsageLimitSignal | false;
 }
 
 /**
@@ -39,7 +40,7 @@ export interface TurnFailure {
  * one, the words decide.
  */
 export function classifyRunnerStop(said: string | TurnFailure): RunnerStop {
-  if (typeof said !== 'string' && said.usageLimit) return 'usage-limit';
+  if (typeof said !== 'string' && said.usageLimit !== undefined) return said.usageLimit ? 'usage-limit' : 'stopped';
   return USAGE_LIMIT_RE.test(wordsOf(said).slice(-USAGE_LIMIT_TAIL)) ? 'usage-limit' : 'stopped';
 }
 
@@ -75,7 +76,7 @@ export function readUsageLimitReset(runner: string, said: string | TurnFailure, 
 }
 
 function reportedReset(failure: TurnFailure): Date | null {
-  const at = failure.usageLimit?.resetsAt;
+  const at = failure.usageLimit ? failure.usageLimit.resetsAt : undefined;
   const reset = at === undefined ? null : new Date(at);
   return reset && !Number.isNaN(reset.getTime()) ? reset : null;
 }

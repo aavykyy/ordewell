@@ -107,9 +107,10 @@ export type AgentEvent =
   /**
    * The turn failed. Carries the agent's own words — never a Ordewell paraphrase.
    * `usageLimit` is set where the runner's protocol says in a field, not only
-   * in words, that its account's usage limit failed the turn.
+   * in words, whether its account's usage limit failed the turn: `false` when
+   * the field names another cause, which its words then cannot overrule.
    */
-  | { type: 'error'; message: string; usageLimit?: UsageLimitSignal }
+  | { type: 'error'; message: string; usageLimit?: UsageLimitSignal | false }
   /**
    * What the runner loaded for this process from the user's and the
    * project's own setup (#66): its commands and skills, and its MCP servers.

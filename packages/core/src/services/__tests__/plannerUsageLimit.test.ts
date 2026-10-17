@@ -252,3 +252,33 @@ describe('an opening that ends on the planner\'s usage limit', () => {
     expect(session.rewindTargets()).toEqual([]);
   });
 });
+
+describe('a planner turn whose runner says in a field whether it hit its usage limit', () => {
+  async function codexPlanner() {
+    return supervised([task('t1', 1)], { settings: { supervisorLevel: 'off' }, config: { aiProvider: 'codex' }, execute: false });
+  }
+
+  it('waits for the reset the field carries, though its words name neither the limit nor a time', async () => {
+    const env = await codexPlanner();
+    const sent = env.session.continueConversation('rename task 1');
+    await until(() => env.planner.calls.length === 1);
+    env.planner.calls[0].finish({ ...limited('Codex ended the turn with an error.'), usageLimit: { resetsAt: '2026-10-11T21:30:00.000Z' } });
+    await sent;
+
+    expect(env.session.planState!.conversationHistory!.at(-1)).toMatchObject({ kind: 'error', content: expect.stringMatching(/^codex usage limit, resets /) });
+    expect(env.session.planState!.plannerResend).toEqual({ runner: 'codex', at: '2026-10-11T21:31:00.000Z' });
+    expect(env.session.planState!.pendingTurns!.map((t) => t.text)).toEqual(['rename task 1']);
+  });
+
+  it('is an ordinary failure when the field says it was something else, whatever its words say', async () => {
+    const env = await codexPlanner();
+    const sent = env.session.continueConversation('rename task 1');
+    await until(() => env.planner.calls.length === 1);
+    env.planner.calls[0].finish({ ...limited('Rate limit exceeded'), usageLimit: false });
+    await sent;
+
+    expect(env.session.planState!.plannerResend).toBeUndefined();
+    expect(env.session.planState!.pendingTurns).toEqual([]);
+    expect(env.session.planState!.conversationHistory!.at(-1)).not.toMatchObject({ content: expect.stringMatching(/usage limit/) });
+  });
+});
