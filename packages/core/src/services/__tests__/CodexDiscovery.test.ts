@@ -110,14 +110,28 @@ describe('ModelDiscovery — Codex (app-server → cache file → fallback)', ()
     expect(models[0].variants.map((v) => v.id)).toEqual(['low', 'medium', 'high', 'xhigh']);
   });
 
-  it('does not cache a fallback-only result — the next lookup retries the app-server', async () => {
+  it('remembers a fallback-only result for a short TTL instead of re-querying the app-server every lookup', async () => {
+    // The live call fails and the cache file is missing, so the canonical-alias
+    // fallback comes back. It is not cached (it must heal) but is remembered for
+    // a TTL; past the TTL the live catalog wins.
     let calls = 0;
+    let clock = 0;
     const client: AppServerClientImpl = vi.fn(async () => (++calls === 1 ? null : APP_SERVER_MODELS));
     const readFile = vi.fn(() => null);
-    const discovery = new ModelDiscovery(registryWith(CODEX_MANIFEST), noExec, undefined, client, readFile);
-    await discovery.discover('codex');
-    const second = await discovery.discover('codex');
-    expect(second.map((m) => m.modelId)).toEqual(['gpt-5.6-sol', 'gpt-5.5']);
+    const discovery = new ModelDiscovery(registryWith(CODEX_MANIFEST), noExec, undefined, client, readFile, () => clock);
+
+    const first = await discovery.discover('codex');
+    expect(first.map((m) => m.modelId)).toContain('gpt-5.6-sol');
+
+    clock = 30_000;
+    const withinTtl = await discovery.discover('codex');
+    expect(withinTtl).toEqual(first);
+    expect(client).toHaveBeenCalledTimes(1);
+
+    // 60s TTL is internal; step past any plausible value.
+    clock = 61_000;
+    const afterTtl = await discovery.discover('codex');
+    expect(afterTtl.map((m) => m.modelId)).toEqual(['gpt-5.6-sol', 'gpt-5.5']);
     expect(client).toHaveBeenCalledTimes(2);
   });
 

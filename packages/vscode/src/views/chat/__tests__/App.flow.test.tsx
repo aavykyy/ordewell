@@ -476,6 +476,45 @@ describe('planner bar', () => {
     expect(vscodeApi.postMessage).toHaveBeenCalledWith({ type: 'setPlanner', provider: 'openrouter' });
   });
 
+  it('lights the picked pill at once, before the host confirms the switch', () => {
+    // The host resolves the target's model catalog before it pushes the new
+    // provider, and that can be a cold CLI spawn (ADR-0009). The old pick must
+    // not stay lit for the whole wait.
+    send({
+      type: 'setPlannerBackends',
+      backends: [...backends, { id: 'openrouter', label: 'OpenRouter', kind: 'vendor' as const, usable: true }],
+      provider: 'claude-code',
+      runner: 'claude-code',
+    });
+    const pill = () => [...document.querySelectorAll('.planner-pill')].find((p) => p.textContent === 'OpenRouter')!;
+    expect(pill().className).not.toContain('active');
+
+    fireEvent.click(pill());
+
+    expect(pill().className).toContain('active');
+    expect(pill().className).toContain('pending');
+  });
+
+  it('drops the pending hint once the host confirms the switch', () => {
+    send({
+      type: 'setPlannerBackends',
+      backends: [...backends, { id: 'openrouter', label: 'OpenRouter', kind: 'vendor' as const, usable: true }],
+      provider: 'claude-code',
+      runner: 'claude-code',
+    });
+    const pill = () => [...document.querySelectorAll('.planner-pill')].find((p) => p.textContent === 'OpenRouter')!;
+    fireEvent.click(pill());
+
+    send({
+      type: 'setPlannerBackends',
+      backends: [...backends, { id: 'openrouter', label: 'OpenRouter', kind: 'vendor' as const, usable: true }],
+      provider: 'openrouter',
+    });
+
+    expect(pill().className).toContain('active');
+    expect(pill().className).not.toContain('pending');
+  });
+
   it("offers the agent's own catalog, not the vendor one", () => {
     send({ type: 'setModelOptions', modelOptions: [{ id: 'deepseek/deepseek-v4-flash', label: 'V4 Flash', provider: 'openrouter', apiProvider: 'openrouter' }] });
     sendHarnessPlanner();

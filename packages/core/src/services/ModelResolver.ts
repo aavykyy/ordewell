@@ -32,15 +32,19 @@ export class ModelResolver {
   }
 
   async modelsForRunners(runners: RunnerId[]): Promise<Partial<Record<RunnerId, DiscoveredModel[]>>> {
-    const out: Partial<Record<RunnerId, DiscoveredModel[]>> = {};
-    for (const runner of runners) {
+    // Each runner's discovery can spawn a slow CLI, so they run together rather
+    // than in series: one cold backend must not hold up the others' catalogs.
+    // Deduped, because two concurrent discoveries of one runner would spawn it
+    // twice with no shared in-flight guard.
+    const unique = [...new Set(runners)];
+    const discovered = await Promise.all(unique.map(async (runner) => {
       try {
-        out[runner] = await this.discovery.discover(runner);
+        return [runner, await this.discovery.discover(runner)] as const;
       } catch {
-        out[runner] = [];
+        return [runner, [] as DiscoveredModel[]] as const;
       }
-    }
-    return out;
+    }));
+    return Object.fromEntries(discovered) as Partial<Record<RunnerId, DiscoveredModel[]>>;
   }
 
   async pickerOptions(): Promise<OrchestratorOption[]> {

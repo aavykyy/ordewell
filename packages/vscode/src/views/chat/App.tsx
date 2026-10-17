@@ -592,8 +592,19 @@ export default function App() {
     vscode.postMessage({ type: 'changeSettings', change });
   }, []);
 
+  // The host resolves the target backend's model catalog before it pushes the
+  // new provider, and that discovery can spawn a cold CLI (ADR-0009), so the
+  // pill would sit unchanged for the whole wait. Light the pick at once and drop
+  // the hint when the host's own state agrees — the host, not this, still decides.
+  const [pendingPlanner, setPendingPlanner] = useState<string | null>(null);
+  useEffect(() => {
+    if (pendingPlanner && planner.provider === pendingPlanner) setPendingPlanner(null);
+  }, [pendingPlanner, planner.provider]);
+  const activePlanner = pendingPlanner ?? planner.provider;
+
   const handlePlannerChange = useCallback((provider: string) => {
     if (provider === planner.provider) return;
+    setPendingPlanner(provider);
     vscode.postMessage({ type: 'setPlanner', provider });
   }, [planner.provider]);
 
@@ -797,7 +808,7 @@ export default function App() {
             <span className="setup-panel-summary">
               {plannerKnown
                 ? <>
-                    {planner.backends.find((b) => b.id === planner.provider)?.label || 'No planner'}
+                    {planner.backends.find((b) => b.id === activePlanner)?.label || 'No planner'}
                     {' · '}
                     {runners.length} runner{runners.length === 1 ? '' : 's'}
                   </>
@@ -819,7 +830,7 @@ export default function App() {
                   <button
                     key={b.id}
                     type="button"
-                    className={`planner-pill ${b.id === planner.provider ? 'active' : ''}`}
+                    className={`planner-pill ${b.id === activePlanner ? 'active' : ''}${pendingPlanner === b.id ? ' pending' : ''}`}
                     title={b.reason}
                     onClick={() => handlePlannerChange(b.id)}
                   >

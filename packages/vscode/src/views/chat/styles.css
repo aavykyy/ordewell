@@ -955,6 +955,12 @@ body {
   color: var(--bg-primary);
 }
 
+/* Picked, but the host has not confirmed it yet — it resolves the target's
+   model catalog first, which can be a cold CLI spawn (ADR-0009). */
+.planner-pill.pending {
+  opacity: 0.7;
+}
+
 /* ---- Run settings (Settings panel) ---- */
 .run-settings:focus {
   outline: none;

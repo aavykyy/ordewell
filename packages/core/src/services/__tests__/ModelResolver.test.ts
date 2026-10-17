@@ -101,6 +101,26 @@ describe('ModelResolver.modelsForRunners', () => {
 
     expect(exec).toHaveBeenCalledTimes(2);
   });
+
+  it('discovers runners concurrently so one cold backend does not gate the others', async () => {
+    let started = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const exec: ExecImpl = vi.fn(async () => {
+      started++;
+      if (started === 2) release();
+      await gate;
+      return { stdout: 'x/one One\n' };
+    });
+    const resolver = new ModelResolver(fakeRegistry({ foo: manifest('foo'), bar: manifest('bar') }), config, { execImpl: exec });
+
+    // Sequential discovery would await `foo` before spawning `bar`, and the gate
+    // would never open — so reaching the assertion proves both ran at once.
+    const result = await resolver.modelsForRunners(['foo', 'bar']);
+
+    expect(exec).toHaveBeenCalledTimes(2);
+    expect(Object.keys(result).sort()).toEqual(['bar', 'foo']);
+  });
 });
 
 describe('ModelResolver.pickerOptions', () => {

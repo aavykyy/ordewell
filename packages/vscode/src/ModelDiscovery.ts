@@ -67,6 +67,10 @@ export class ModelDiscovery {
     // agent installed while the window was open otherwise never becomes the
     // default until the window is reloaded.
     await detectInstalledPlanner(d.runnerInstallation);
+    // The planner pills read the config and the install probe alone, so push
+    // them before model discovery: a cold runner CLI can take tens of seconds,
+    // and the picker must not sit empty behind a catalog it does not need.
+    void d.refreshPlannerState().catch((err) => d.log(`Planner state refresh failed: ${err}`));
     const enabled = d.config.enabledRunners;
     // Resolve installed runners up front so a discovery that returns nothing for
     // an *installed* runner can be surfaced as a real failure (see below).
@@ -128,7 +132,6 @@ export class ModelDiscovery {
     d.chatProvider.setModesByRunner(modesByRunner, codexSandboxNotice(modesByRunner));
     d.chatProvider.sendConfiguredProviders(d.config.configuredProviders);
     this.sendModelConfig();
-    void d.refreshPlannerState().catch((err) => d.log(`Planner state refresh failed: ${err}`));
     d.chatProvider.setModelOptions(ModelResolver.builtinOptions());
 
     this.options().then((opts) => {

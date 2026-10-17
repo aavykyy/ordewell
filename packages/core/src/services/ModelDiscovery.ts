@@ -170,6 +170,17 @@ export function parseCodexModelsCache(content: string): DiscoveredModel[] {
 
 const GEMINI_MODELS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * How long a degraded runner discovery (a manifest fallback list, or an empty
+ * one because the CLI failed) is remembered before the next lookup re-runs it.
+ * The failure that goes stale while a host runs is a cold or misconfigured CLI;
+ * without this, every planner switch and every runner-list refresh re-pays a
+ * slow or failing spawn — an empty `opencode models` costs ~20s in the field.
+ * Bounded the same way `RunnerInstallation`'s negative verdict is, and a refresh
+ * asks again at once.
+ */
+const NEGATIVE_TTL_MS = 60_000;
+
 interface GeminiApiModel {
   name: string;
   displayName: string;
@@ -350,33 +361,50 @@ async function discoverFromApi(
   }
 }
 
+/**
+ * Whether a discovery command was killed by its own timeout — the cold-CLI
+ * signal (the server is still starting, the catalog is not fetched yet). A
+ * non-zero exit is not this: the binary is missing, a flag was rejected, or a
+ * port is busy, and none of those heal on a retry. `child_process.exec` rejects
+ * a timed-out child with `killed: true`.
+ */
+function wasKilled(err: unknown): boolean {
+  return !!err && typeof err === 'object' && (err as { killed?: unknown }).killed === true;
+}
+
 async function discoverFromCommand(manifest: RunnerManifest, execImpl: ExecImpl): Promise<{ models: DiscoveredModel[]; fromFallback: boolean }> {
   const discovery = manifest.modelDiscovery;
   const commands: DiscoveryCommand[] = discovery.discoveryCommands ?? [
     { command: discovery.command!, args: discovery.args || [], parser: discovery.parser },
   ];
 
-  const runCommands = async (): Promise<DiscoveredModel[] | null> => {
+  const runCommands = async (): Promise<{ models: DiscoveredModel[] | null; timedOut: boolean }> => {
+    let timedOut = false;
     for (const cmd of commands) {
       try {
         // Generous timeout: a cold runner CLI may spawn its server, install
         // extensions, and fetch its catalog on first invocation after boot.
         const { stdout } = await execImpl(`${cmd.command} ${cmd.args.join(' ')}`, { timeout: 45000 });
         const models = parseModelOutput(stdout, cmd.parser, manifest);
-        if (models.length > 0) return applyVariants(mergeCanonicalAliases(models, manifest), manifest);
-      } catch { /* try next command */ }
+        if (models.length > 0) return { models: applyVariants(mergeCanonicalAliases(models, manifest), manifest), timedOut };
+      } catch (err) {
+        // A killed command is the cold-start shape a warm retry can recover;
+        // anything else is an answer, not a warm-up.
+        if (wasKilled(err)) timedOut = true;
+      }
     }
-    return null;
+    return { models: null, timedOut };
   };
 
-  // First pass. If every command timed out or came back empty, the CLI was
-  // likely cold — it just spawned its server and hadn't fetched its catalog
-  // yet. Retry once (the server is now warm) before degrading to the manifest
-  // fallback, so a cold start never silently produces a short/empty list.
+  // First pass. Retry once only when a command was killed by its timeout — the
+  // CLI was cold and the server is warm by the second pass. A command that
+  // exited non-zero said something real, and repeating it only doubles the wait.
   const first = await runCommands();
-  if (first) return { models: first, fromFallback: false };
-  const second = await runCommands();
-  if (second) return { models: second, fromFallback: false };
+  if (first.models) return { models: first.models, fromFallback: false };
+  if (first.timedOut) {
+    const second = await runCommands();
+    if (second.models) return { models: second.models, fromFallback: false };
+  }
 
   return { models: applyVariants(buildFallbackModels(manifest), manifest), fromFallback: true };
 }
@@ -439,11 +467,19 @@ function parseLineByLine(stdout: string): DiscoveredModel[] {
  */
 export class ModelDiscovery {
   private cache: Map<string, DiscoveredModel[]> = new Map();
+  /**
+   * Degraded results (a fallback list, or empty) remembered for
+   * {@link NEGATIVE_TTL_MS}. They are deliberately not cached — a transient
+   * failure must heal — but re-running a failing CLI on every lookup is the
+   * other extreme.
+   */
+  private misses: Map<string, { models: DiscoveredModel[]; at: number }> = new Map();
   private registry: RunnerRegistry;
   private execImpl: ExecImpl;
   private fetchImpl?: typeof fetch;
   private appServerClient: AppServerClientImpl;
   private readFileImpl: (path: string) => string | null;
+  private now: () => number;
 
   constructor(
     registry: RunnerRegistry,
@@ -451,11 +487,13 @@ export class ModelDiscovery {
     fetchImpl?: typeof fetch,
     appServerClient: AppServerClientImpl = defaultAppServerClient,
     readFileImpl?: (path: string) => string | null,
+    now: () => number = Date.now,
   ) {
     this.registry = registry;
     this.execImpl = execImpl;
     this.fetchImpl = fetchImpl;
     this.appServerClient = appServerClient;
+    this.now = now;
     this.readFileImpl = readFileImpl ?? ((filePath: string) => {
       try {
         return fsSync.readFileSync(filePath.replace(/^~/, osMod.homedir()), 'utf8');
@@ -506,9 +544,11 @@ export class ModelDiscovery {
   }
 
   private async discoverRaw(runner: string): Promise<DiscoveredModel[]> {
-    if (this.cache.has(runner)) {
-      return this.cache.get(runner)!;
-    }
+    const cached = this.cache.get(runner);
+    if (cached) return cached;
+
+    const remembered = this.misses.get(runner);
+    if (remembered && this.now() - remembered.at < NEGATIVE_TTL_MS) return remembered.models;
 
     const manifest = this.registry.getManifest(runner);
     if (!manifest) {
@@ -558,11 +598,13 @@ export class ModelDiscovery {
     }
 
     if (cacheable && models.length > 0) this.cache.set(runner, models);
+    else this.misses.set(runner, { models, at: this.now() });
     return models;
   }
 
   clear(): void {
     this.cache.clear();
+    this.misses.clear();
   }
 
   /** Whatever `discover()` has already cached for `runner` — never triggers discovery. */

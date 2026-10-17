@@ -91,24 +91,50 @@ describe('ModelDiscovery — Claude Code', () => {
     expect(models.every((m) => m.variants.length === 6)).toBe(true);
   });
 
-  it('does not cache a fallback-only result — the next lookup retries discovery', async () => {
-    // Each discover() makes up to two passes (cold-start retry). The first
-    // discover() fails both passes → returns the canonical fallback (not
-    // cached); only the second discover() reaches the CLI and returns the
-    // discovered + merged list.
+  it('remembers a fallback-only result for a short TTL instead of re-running the CLI every lookup', async () => {
+    // The first lookup fails and returns the canonical fallback. That result is
+    // not cached (it must heal) but IS remembered for a TTL, so a planner switch
+    // or a repeated lookup right after does not re-pay a slow/failing CLI. Past
+    // the TTL the CLI is asked again and the discovered list wins.
+    let calls = 0;
+    let clock = 0;
+    const exec: ExecImpl = vi.fn(async (command: string) => {
+      calls++;
+      if (calls === 1) throw new Error('ENOENT');
+      if (command.includes('--help')) return { stdout: MODERN_CLAUDE_HELP };
+      throw new Error('unexpected');
+    });
+    const discovery = new ModelDiscovery(registryWith(CLAUDE_CODE_MANIFEST), exec, failingFetch, undefined, undefined, () => clock);
+
+    const first = await discovery.discover('claude-code');
+    expect(first.map((m) => m.modelId)).toEqual(['opus', 'sonnet', 'haiku', 'fable']);
+
+    clock = 30_000;
+    const withinTtl = await discovery.discover('claude-code');
+    expect(withinTtl.map((m) => m.modelId)).toEqual(['opus', 'sonnet', 'haiku', 'fable']);
+    expect(exec).toHaveBeenCalledTimes(1);
+
+    // 60s TTL is internal; step past any plausible value.
+    clock = 61_000;
+    const afterTtl = await discovery.discover('claude-code');
+    expect(afterTtl.map((m) => m.modelId)).toEqual(['fable', 'opus', 'sonnet', 'haiku']);
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it('clear() drops a remembered miss so the next lookup re-runs the CLI', async () => {
     let calls = 0;
     const exec: ExecImpl = vi.fn(async (command: string) => {
       calls++;
-      if (calls <= 2) throw new Error('ENOENT');
+      if (calls === 1) throw new Error('ENOENT');
       if (command.includes('--help')) return { stdout: MODERN_CLAUDE_HELP };
       throw new Error('unexpected');
     });
     const discovery = new ModelDiscovery(registryWith(CLAUDE_CODE_MANIFEST), exec, failingFetch);
 
-    const first = await discovery.discover('claude-code');
-    expect(first.map((m) => m.modelId)).toEqual(['opus', 'sonnet', 'haiku', 'fable']);
-    const retry = await discovery.discover('claude-code');
-    expect(retry.map((m) => m.modelId)).toEqual(['fable', 'opus', 'sonnet', 'haiku']);
+    expect((await discovery.discover('claude-code')).map((m) => m.modelId)).toEqual(['opus', 'sonnet', 'haiku', 'fable']);
+    discovery.clear();
+    expect((await discovery.discover('claude-code')).map((m) => m.modelId)).toEqual(['fable', 'opus', 'sonnet', 'haiku']);
+    expect(exec).toHaveBeenCalledTimes(2);
   });
 
   it('still parses an explicit enumerated model list from --help when present', async () => {
@@ -658,16 +684,16 @@ describe('ModelDiscovery — OpenCode', () => {
     expect(models[1].runnerProvider).toBe('opencode');
   });
 
-  it('retries once when a cold CLI times out on the first pass, then succeeds', async () => {
-    // Cold start: both discovery commands (verbose + plain) throw on the first
-    // pass while the just-spawned opencode server warms up and fetches its
-    // catalog. Without the retry, discovery degrades to an empty list and the
-    // picker silently goes short. A single retry after warm-up recovers it.
+  it('retries once when a cold CLI is killed by its timeout, then succeeds', async () => {
+    // Cold start: both discovery commands (verbose + plain) time out on the
+    // first pass while the just-spawned opencode server warms up and fetches its
+    // catalog. `exec` rejects a timed-out child as killed. Without the retry,
+    // discovery degrades to an empty list and the picker silently goes short.
     let pass = 0;
     const exec: ExecImpl = vi.fn(async (_cmd: string) => {
-      // Two commands per pass (verbose, then plain). Fail every command on the
-      // first pass; serve the real list on the second.
-      if (pass < 2) { pass++; throw new Error('ETIMEDOUT'); }
+      // Two commands per pass (verbose, then plain). Time out every command on
+      // the first pass; serve the real list on the second.
+      if (pass < 2) { pass++; throw Object.assign(new Error('ETIMEDOUT'), { killed: true }); }
       pass++;
       return { stdout: ['opencode/gpt-5.1', 'opencode-go/deepseek-v4-pro'].join('\n') };
     });
@@ -677,10 +703,22 @@ describe('ModelDiscovery — OpenCode', () => {
     expect(models.map((m) => m.modelId).sort()).toEqual(['opencode-go/deepseek-v4-pro', 'opencode/gpt-5.1']);
   });
 
-  it('degrades to an empty list only after the retry also fails', async () => {
-    // A persistently unavailable CLI (not merely cold) must still return [] —
-    // the retry cannot conjure a catalog. Both passes throw for every command.
+  it('does not retry a command that exited non-zero — the error is an answer', async () => {
+    // A missing binary, a rejected flag or a busy port cannot heal on a retry.
+    // Repeating the command only doubles the wait (a failing `opencode models`
+    // costs ~20s in the field), so one pass is enough.
     const exec: ExecImpl = vi.fn(async () => { throw new Error('ENOENT'); });
+    const discovery = new ModelDiscovery(registryWith(OPENCODE_MANIFEST), exec);
+
+    expect(await discovery.discover('opencode')).toEqual([]);
+    // 2 commands × 1 pass = 2 attempts.
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it('degrades to an empty list only after the timeout retry also fails', async () => {
+    // A persistently cold CLI (times out both passes) must still return [] —
+    // the retry cannot conjure a catalog.
+    const exec: ExecImpl = vi.fn(async () => { throw Object.assign(new Error('ETIMEDOUT'), { killed: true }); });
     const discovery = new ModelDiscovery(registryWith(OPENCODE_MANIFEST), exec);
 
     expect(await discovery.discover('opencode')).toEqual([]);
