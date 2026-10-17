@@ -32,10 +32,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   ("codex is switched off", "Opus 4 is not in the allowlist"), in VS Code and
   the terminal, and still runs as assigned until you or the planner move it
   ([ADR-0043](docs/adr/routing/0043-a-change-of-scope-reaches-the-planner-and-flags-tasks.md)).
-- **Approve all.** VS Code shows an **Approve all** button when tasks wait for
-  your approval. `/run` while a run is under way approves every waiting task
-  and joins them to the run, each starting once its dependencies finish, and the
-  terminal rows say which key approves
+- **Approve all.** VS Code shows an **Approve** button on a waiting task's
+  card and an **Approve all** button when tasks wait for your approval. `/run`
+  while a run is under way approves every waiting task and joins them to the
+  run, each starting once its dependencies finish, and the terminal rows say
+  which key approves
   ([ADR-0035](docs/adr/supervision/0035-effects-are-consented-and-recorded.md)).
 - **VS Code shows a task's usage and assignment while it runs.** The task log
   has a usage line, and an executing task's card keeps its runner, model and
@@ -45,10 +46,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 - **A force start no longer starts a task before a dependency still under way.**
   Past a failed dependency it still waits for the others, and starts when they
-  finish. Approving a dependent during a lone Run Task no longer leaves it
-  stuck.
+  finish, however a dependency ends: a verdict, Mark complete, a skip, or a
+  spawn that failed. Approving a dependent during a lone Run Task no longer
+  leaves it stuck.
 - **A model change saved in an older task log replays.** Logs written before the
   plan's side of a switch was recorded show the runner's change alone.
+- **A task's log and its usage ledger name the same attempt.** A log file takes
+  its attempt's own number, so a reloaded plan never overwrites an attempt's
+  saved log.
 - **A queued `/model` write-back cannot change a replacement plan.** If the
   attempt ended, or the plan was replaced, while the edit waited, nothing is
   written and the log says so.
@@ -68,15 +73,16 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   and one naming the limit pauses it until the reset it reports.
 - **A task from an older saved session no longer continues on another runner.**
   Its session belongs to the runner it was on when the plan loaded.
-- **Two surfaces saving settings at the same moment no longer lose one save.**
-  The last check and the swap happen under a lock file next to the settings file.
+- **Two surfaces saving the settings file at the same moment no longer lose one
+  save.** The last check and the swap happen under an exclusive lock file next
+  to the settings file, and the wait for the lock is bounded: a save never
+  moves another process's lock out of the way, a stale lock is taken over only
+  once two looks a poll apart agree it is still the same one, and a lock that
+  is still held after ten seconds, or cannot be removed, is reported with its
+  path instead of retried for ever.
 - **The context meter keeps a model's reported window** when the task switches
   away and back, when a task is continued, and across a continuation that
   reported nothing of its own.
-- **A settings save never moves another process's lock out of the way.** A stale
-  lock is taken over only once two looks a poll apart agree it is still the
-  same one, and a lock that is still held after ten seconds, or cannot be
-  removed, is reported with its path instead of retried for ever.
 - **The planner is no longer told a task paused on a usage limit is running.**
   Its note says the task resumes at the reset, or waits for a retry.
 - **A planner edit still fits an untouched task's effort to its model.** An
@@ -111,9 +117,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   ([ADR-0042](docs/adr/isolation/0042-merge-all-lands-only-on-the-branch-the-run-started-on.md)).
 - **The enabled runners are one list shared by VS Code and the terminal UI.**
   They are saved in Ordewell's settings file, and a toggle in one is the list
-  the other plans with. A list set in VS Code's old `ordewell.enabledRunners`
-  setting is copied there once and cleared. Saves no longer undo another
-  process's save of the file.
+  the other plans with, picked up as it happens. A list set in VS Code's old
+  `ordewell.enabledRunners` setting is copied there once and cleared.
 - **A usage limit counts only when it ended a turn Ordewell started.** Limit
   words left by a turn that had already finished no longer pause a task.
   Codex's own limit signal is used, with its reset time, and a provider's
