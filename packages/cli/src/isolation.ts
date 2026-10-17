@@ -57,6 +57,7 @@ function reposOf(run: Record<string, unknown>): RepoFields[] | null {
       ? repos.map((r) => ({
         path: String(r.path), integrationBranch: String(r.integrationBranch), baseRef: String(r.baseRef),
         ...(typeof r.baseBranch === 'string' && r.baseBranch ? { baseBranch: r.baseBranch } : {}),
+        ...(r.startedDetached === true ? { startedDetached: true as const } : {}),
       }))
       : null;
   }
@@ -127,13 +128,14 @@ export function handoffBranch(handoff: HandoffView): string {
 /**
  * Where the run forked, as one line names it: the branch it started on and the
  * commit, each ref cut to `length` and, for a group, headed by its repo. A run
- * that started on a detached HEAD has no branch to name.
+ * that started on a detached HEAD has no branch to name, and a record saved
+ * before the branch was noted says only the commit.
  */
 export function handoffBase(handoff: HandoffView, length: number): string {
   const group = isRepoGroup(handoff);
   return handoff.repos.map((r) => {
     const ref = r.baseRef.slice(0, length);
-    return `${group ? `${r.path}: ` : ''}${r.baseBranch ? `${r.baseBranch} @ ${ref}` : `detached at ${ref}`}`;
+    return `${group ? `${r.path}: ` : ''}${r.baseBranch ? `${r.baseBranch} @ ${ref}` : `${r.startedDetached ? 'detached at' : 'base'} ${ref}`}`;
   }).join(', ');
 }
 

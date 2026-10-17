@@ -118,7 +118,7 @@ describe('handoff overlay frame over a repo group', () => {
   const handoff: HandoffView = {
     repos: [
       { path: 'api', integrationBranch: branch, baseRef: 'aaaaaaaaaaaaaaaa', baseBranch: 'main', landed: [t(1, 'One'), t(2, 'Two'), t(3, 'Three')] },
-      { path: 'infra', integrationBranch: branch, baseRef: 'bbbbbbbbbbbbbbbb', landed: [] },
+      { path: 'infra', integrationBranch: branch, baseRef: 'bbbbbbbbbbbbbbbb', startedDetached: true, landed: [] },
     ],
     landed: [t(1, 'One'), t(2, 'Two'), t(3, 'Three')],
   };

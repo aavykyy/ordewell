@@ -3,13 +3,13 @@ import { SELF_REPO } from './isolationRecord';
 import { capConflictFiles } from './conflictFiles';
 
 /** One repo that kept "Merge all" from touching anything, as part of one line. */
-function blockNotice({ repo, reason, files, expected, actual }: IsolationMergeBlock): string {
+function blockNotice({ repo, reason, files, expected, actual, rebasing }: IsolationMergeBlock): string {
   switch (reason) {
     case 'merge-in-progress': return `${repo} has a merge in progress`;
     case 'conflict': return `${repo} would conflict in ${files.join(', ')}`;
     case 'uncommitted-changes': return `${repo} has uncommitted changes to ${files.join(', ')}`;
     case 'partial-landing': return `${repo} holds part of a task whose landing could not be rolled back`;
-    case 'wrong-branch': return `${repo === SELF_REPO ? 'your checkout' : repo} is ${actual ? `on ${actual}` : 'on a detached HEAD'}; this run started on ${expected}`;
+    case 'wrong-branch': return `${repo === SELF_REPO ? 'your checkout' : repo} is ${actual ? `on ${actual}` : rebasing ? 'in the middle of a rebase' : 'on a detached HEAD'}; this run started on ${expected}`;
     case 'git-error': return `git could not check ${repo}`;
   }
 }
@@ -17,6 +17,11 @@ function blockNotice({ repo, reason, files, expected, actual }: IsolationMergeBl
 /** What to do about repos that are off their branch, when that is all that kept the merge back. */
 function branchFix(blocked: IsolationMergeBlock[]): string {
   if (blocked.length === 0 || blocked.some((b) => b.reason !== 'wrong-branch')) return '';
+  const rebasing = blocked.filter((b) => b.rebasing);
+  if (rebasing.length > 0) {
+    const where = rebasing.map((b) => (b.repo === SELF_REPO ? 'your checkout' : b.repo)).join(', ');
+    return ` Finish or abort the rebase in ${where}${rebasing.length < blocked.length ? ' and check out the branch each other repository started on' : ''}, then press Merge all again.`;
+  }
   const started = [...new Set(blocked.map((b) => b.expected))];
   return started.length === 1 && blocked.length === 1
     ? ` Check out ${started[0]} and press Merge all again.`

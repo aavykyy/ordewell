@@ -323,7 +323,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       path: repoPath,
       root,
       baseRef,
-      ...(branch ? { baseBranch: branch } : {}),
+      ...(branch ? { baseBranch: branch } : { startedDetached: true as const }),
       integrationBranch: integrationBranchFor(run.id),
     };
     if (!(await this.tryGit(root, ['branch', repo.integrationBranch, baseRef])).ok) return null;
@@ -739,8 +739,9 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   private async mergeAll(run: IsolationRun): Promise<IsolationMergeResult> {
     const partial = await this.settleLanding(run);
     if (partial.length > 0) return { outcome: 'blocked', blocked: partial.map((repo) => ({ repo, reason: 'partial-landing', files: [] })) };
+    // Every repo, not only those with work: the confirmations promise each is on its starting branch.
+    const misplaced = await this.offBaseBranch(run.repos);
     const repos = await this.reposWithWork(run);
-    const misplaced = await this.offBaseBranch(repos);
     if (misplaced.length > 0) return { outcome: 'blocked', blocked: misplaced };
     // One repo needs no preflight: its merge lands or is aborted whole, as it always has.
     if (run.repos.length === 1 || !(await this.canPreflight())) return this.mergeInTurn(repos);
@@ -773,7 +774,10 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       if (!repo.baseBranch) continue;
       const current = (await this.tryGit(repo.root, ['symbolic-ref', '--short', '-q', 'HEAD'])).stdout.trim();
       if (current === repo.baseBranch) continue;
-      off.push({ repo: repo.path, reason: 'wrong-branch', files: [], expected: repo.baseBranch, ...(current ? { actual: current } : {}) });
+      off.push({
+        repo: repo.path, reason: 'wrong-branch', files: [], expected: repo.baseBranch,
+        ...(current ? { actual: current } : (await this.rebaseInProgress(repo.root)) ? { rebasing: true as const } : {}),
+      });
     }
     return off;
   }
@@ -1331,6 +1335,15 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   private async mergeInProgress(cwd: string): Promise<boolean> {
     if ((await this.tryGit(cwd, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'])).ok) return true;
     return (await this.tryGit(cwd, ['ls-files', '-u'])).stdout.trim() !== '';
+  }
+
+  /** A rebase leaves HEAD detached, so it is told from a checkout the user detached on purpose. */
+  private async rebaseInProgress(cwd: string): Promise<boolean> {
+    for (const dir of ['rebase-merge', 'rebase-apply']) {
+      const found = await this.tryGit(cwd, ['rev-parse', '--git-path', dir]);
+      if (found.ok && fs.existsSync(path.resolve(cwd, found.stdout.trim()))) return true;
+    }
+    return false;
   }
 
   private async abortMerge(cwd: string): Promise<void> {

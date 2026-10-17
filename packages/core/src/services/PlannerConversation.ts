@@ -377,6 +377,8 @@ export interface TranscriptSnapshot {
   readonly researchLog: ResearchLogEntry[] | undefined;
   readonly persisted: number;
   readonly savedInBackground: number;
+  /** What the planner had been told of the user's runners when the turn began. */
+  readonly toldScope: AssignmentScope | null;
 }
 
 export interface ReplyOptions {
@@ -625,6 +627,7 @@ export class PlannerConversation {
       researchLog: plan.researchLog,
       persisted: this.persisted,
       savedInBackground: this.savedInBackground,
+      toldScope: this.toldScope,
     };
   }
 
@@ -639,7 +642,11 @@ export class PlannerConversation {
    * the undo is saved in turn, or a reload would bring the writes back.
    */
   restore(snapshot: TranscriptSnapshot): boolean {
-    if (this.host.plan() !== snapshot.plan || this.persisted !== snapshot.persisted) return false;
+    if (this.host.plan() !== snapshot.plan) return false;
+    // What a turn that never landed told the planner was never said, whether or
+    // not something else was saved meanwhile; the next turn tells it again.
+    this.toldScope = snapshot.toldScope;
+    if (this.persisted !== snapshot.persisted) return false;
     const undo = (): boolean => {
       // A merge already changed the user's branch; a failed planner turn
       // cannot take its timeline record back with its own provisional dialogue.
@@ -1385,6 +1392,10 @@ export class PlannerConversation {
    * The user's runner or allowlist change, when the planner was not told yet —
    * the same once-per-change rule as autorun, for API and harness planners
    * alike. Tasks the change leaves outside the scope are named, not touched.
+   *
+   * A reloaded session is not told: {@link resume} takes the scope as it is
+   * then, as it does the autorun rule, since the catalog the first turn carries
+   * and `list_runners` already show the runners as they are now.
    */
   private runnersChangedBlock(): string | null {
     const now = this.host.assignmentScope();

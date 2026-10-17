@@ -326,6 +326,12 @@ describe('TaskCard — the assignment flag', () => {
     expect(screen.getByText('Opus 4 is not in the allowlist')).toBeTruthy();
   });
 
+  it('reads an allowlist as the planner\'s catalog does: ids only another runner lists limit nothing', () => {
+    const models = { 'claude-code': [{ modelId: 'claude-opus-4', modelLabel: 'Opus 4', variants: [] }], codex: [{ modelId: 'gpt-5', modelLabel: 'GPT-5', variants: [] }] };
+    render(card(makeTask({ assignedModel: { modelId: 'claude-opus-4', modelLabel: 'Opus 4' } }), { enabledRunners: ['claude-code'], allowlist: { 'claude-code': ['gpt-5'] }, models }));
+    expect(screen.queryByText(/not in the allowlist/)).toBeNull();
+  });
+
   it('says nothing for a task inside both, or with no scope known yet', () => {
     const { rerender } = render(card(makeTask()));
     expect(screen.queryByText(/switched off|not in the allowlist/)).toBeNull();

@@ -56,7 +56,7 @@ export class SessionCatalog {
 
   /** The enabled runners and allowlist together, for whoever compares an assignment with them. */
   scope(): AssignmentScope {
-    return { enabledRunners: this.enabledRunners(), allowlist: this.allowlist() };
+    return { enabledRunners: this.enabledRunners(), allowlist: this.allowlist(), models: this.models() };
   }
 
   /** The models the user allows on one runner; unset means no restriction. */

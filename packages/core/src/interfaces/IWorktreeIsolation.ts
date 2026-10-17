@@ -148,8 +148,10 @@ export interface IsolationRepo {
   root: string;
   /** The commit checked out at run start. Switching branches mid-run does not retarget it. */
   baseRef: string;
-  /** Branch name checked out at run start; absent on a detached HEAD. */
+  /** Branch name checked out at run start; absent on a detached HEAD, and on a record saved before this was noted. */
   baseBranch?: string;
+  /** Set when the run started on a detached HEAD, so that is told from a record that never noted its branch. */
+  startedDetached?: true;
   integrationBranch: string;
 }
 
@@ -233,8 +235,10 @@ export interface IsolationHandoffRepo {
   path: string;
   integrationBranch: string;
   baseRef: string;
-  /** The branch the run started on in this repo; absent when it started on a detached HEAD. */
+  /** The branch the run started on in this repo; absent when it started on a detached HEAD or the record never noted one. */
   baseBranch?: string;
+  /** Set when the run started on a detached HEAD. */
+  startedDetached?: true;
   /** Tasks whose work landed in this repo, in plan order. */
   landed: IsolationLandedTask[];
 }
@@ -274,6 +278,8 @@ export interface IsolationMergeBlock {
   expected?: string;
   /** `wrong-branch` only: the branch checked out now; absent on a detached HEAD. */
   actual?: string;
+  /** `wrong-branch` only: the repo is in the middle of a rebase, which is what detached its HEAD. */
+  rebasing?: true;
 }
 
 /**

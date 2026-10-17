@@ -338,14 +338,17 @@ export async function moveAutonomyFromVsCodeSetting(settings: SettingsService): 
  * settings file, so a toggle in one surface is the list every other one plans
  * with. A list set there is copied once, unless the file already has a choice,
  * and the old setting cleared. The workspace's value wins over the user's, as
- * it did when VS Code read it; an empty list is a choice and moves too.
+ * it did when VS Code read it. An empty list is not copied: it was one window's
+ * "none", and as the file's choice it would silence the runner catalog on
+ * every surface of the machine.
  */
 export async function moveEnabledRunnersFromVsCodeSetting(settings: SettingsService): Promise<void> {
   const config = vscode.workspace.getConfiguration('ordewell');
   const seen = config.inspect<string[]>('enabledRunners');
-  const value = seen?.workspaceValue ?? seen?.globalValue;
-  if (!Array.isArray(value)) return;
-  if (settings.getEnabledRunners() === undefined) settings.setEnabledRunners(value.map(String));
+  const set = [seen?.workspaceValue, seen?.globalValue].filter((v): v is string[] => Array.isArray(v));
+  if (set.length === 0) return;
+  const choice = set.find((v) => v.length > 0);
+  if (choice) settings.setEnabledRunnersIfUnset(choice.map(String));
   try {
     if (seen?.globalValue !== undefined) await config.update('enabledRunners', undefined, true);
     if (seen?.workspaceValue !== undefined) await config.update('enabledRunners', undefined, false);

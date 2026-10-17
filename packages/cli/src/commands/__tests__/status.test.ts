@@ -162,12 +162,16 @@ describe('handleStatus --output', () => {
       srv.close();
       return stripAnsi(stdout);
     };
-    const repo = (path: string, baseRef: string, baseBranch?: string) => (
-      { path, root: `/ws/${path}`, baseRef, integrationBranch: 'ordewell/r1/integration', ...(baseBranch ? { baseBranch } : {}) }
+    const repo = (path: string, baseRef: string, baseBranch?: string, startedDetached = baseBranch === undefined) => (
+      { path, root: `/ws/${path}`, baseRef, integrationBranch: 'ordewell/r1/integration', ...(baseBranch ? { baseBranch } : {}), ...(startedDetached ? { startedDetached: true } : {}) }
     );
 
     it('names the branch the run started on, and the commit', async () => {
       expect(await statusOf(isolated([repo('.', 'abcdef1234567890', 'main')]))).toContain('Base:     main @ abcdef12\n');
+    });
+
+    it('names a record that never noted its branch by the commit alone', async () => {
+      expect(await statusOf(isolated([repo('.', 'abcdef1234567890', undefined, false)]))).toContain('Base:     base abcdef12\n');
     });
 
     it('names each repo of a group, a detached HEAD as that', async () => {

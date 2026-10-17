@@ -708,6 +708,10 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       await loadRunners(deps);
       return;
 
+    case 'loadScope':
+      await Promise.all([loadRunners(deps), loadSettings(deps)]);
+      return;
+
     case 'refresh':
       await Promise.all([loadRunners(deps), loadSettings(deps), loadModels(deps)]);
       if (effect.announce) dispatch({ type: 'notice', message: 'Refreshed runners, settings and models.' });

@@ -3,8 +3,8 @@ import { cursorInLines, type CursorPosition } from './editor';
 import { checkpointCardLines, conversationLines, taskUsageText, tokenLine } from './blocks';
 import { chatEditorRoomFor, chatPaneWidth, planPaneWidth } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
-import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
-import { SUPERVISOR_LEVEL_LABEL, type HeldEditMark } from '@ordewell/core';
+import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
+import { SUPERVISOR_LEVEL_LABEL, type DiscoveredModel, type HeldEditMark } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
@@ -857,6 +857,15 @@ export function planScrollExtent(state: TuiState): PlanLayout {
   return planLayout(state, bodyRows(state), cols);
 }
 
+/** The discovered catalog per runner, rebuilt from the models each was tagged with, so an allowlist is read as the planner reads it. */
+function modelsByRunnerOf(models: readonly ModelView[]): Record<string, DiscoveredModel[]> {
+  const out: Record<string, DiscoveredModel[]> = {};
+  for (const m of models) {
+    for (const runner of m.runners ?? []) (out[runner] ??= []).push({ modelId: m.id, modelLabel: m.label, variants: [] });
+  }
+  return out;
+}
+
 interface TaskLines {
   lines: string[];
   /** The zero-based line within `lines` containing the prompt editor caret. */
@@ -867,7 +876,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   const { task, parent } = planRow;
   // Before the runners load, every task would read as on a runner that is off.
   const runnerScope = state.runners.length > 0
-    ? { enabledRunners: state.runners.filter((r) => r.enabled).map((r) => r.id), allowlist: state.allowlist }
+    ? { enabledRunners: state.runners.filter((r) => r.enabled).map((r) => r.id), allowlist: state.allowlist, models: modelsByRunnerOf(state.models) }
     : undefined;
   const row = taskRowView(task, { parent, tasks: state.tasks, modes: modesForTask(state.modesByRunner, task), runnerScope });
   const selected = state.focus === 'plan' && index === state.selectedTask;

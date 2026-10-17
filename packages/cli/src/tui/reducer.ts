@@ -303,6 +303,9 @@ function reduceAction(state: TuiState, action: Action): Step {
         editor: { ...state.editor, text: action.text, cursor: action.text.length, historyIndex: state.editor.history.length, draft: '' },
       });
 
+    case 'sharedSettingsChanged':
+      return step(state, [{ type: 'loadScope' }]);
+
     case 'runnersLoaded':
       // Installed runners are `/planner`'s preflight signal, so a stepper
       // opened before discovery landed fills in rather than sitting there

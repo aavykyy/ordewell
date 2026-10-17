@@ -103,6 +103,36 @@ describe('SettingsService', () => {
       expect(saved.modelAllowlist).toEqual({ codex: ['m'] });
     });
 
+    it('changes the enabled runners from what another process just saved, not from what it last read', () => {
+      service.setEnabledRunners(['opencode']);
+      writeInSameTick(new SettingsService(tempFile), (s) => s.setEnabledRunners(['opencode', 'codex']));
+
+      const next = service.updateEnabledRunners((saved) => [...(saved ?? []), 'claude-code']);
+
+      expect(next).toEqual(['opencode', 'codex', 'claude-code']);
+      expect(new SettingsService(tempFile).getEnabledRunners()).toEqual(['opencode', 'codex', 'claude-code']);
+    });
+
+    it('hands the change nothing when no choice was ever saved', () => {
+      const seen = vi.fn((saved: string[] | undefined) => saved ?? ['claude-code']);
+
+      service.updateEnabledRunners(seen);
+
+      expect(seen).toHaveBeenCalledWith(undefined);
+    });
+
+    it('sets the enabled runners only while no choice is saved, even when another process just saved one', () => {
+      service.getAll();
+      new SettingsService(tempFile).setEnabledRunners([]);
+
+      expect(service.setEnabledRunnersIfUnset(['codex'])).toBe(false);
+      expect(new SettingsService(tempFile).getEnabledRunners()).toEqual([]);
+
+      fs.rmSync(tempFile);
+      expect(service.setEnabledRunnersIfUnset(['codex'])).toBe(true);
+      expect(new SettingsService(tempFile).getEnabledRunners()).toEqual(['codex']);
+    });
+
     it('replaces the file whole, so no reader meets it half-written and takes it for empty', () => {
       service.setEnabledRunners(['opencode', 'codex']);
       const before = fs.statSync(tempFile).ino;

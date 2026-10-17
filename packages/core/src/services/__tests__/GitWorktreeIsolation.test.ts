@@ -1433,6 +1433,18 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
     expect(existsSync(join(root, 'alpha.txt'))).toBe(false);
   });
 
+  it('says a repository mid-rebase is that, not just on a detached HEAD', async () => {
+    const { root, iso, run } = await finishedRun();
+    await iso.handoff(run);
+    git(root, 'checkout', '-q', '--detach');
+    mkdirSync(join(root, '.git', 'rebase-merge'));
+
+    expect(await iso.mergeIntoCheckedOut(run)).toEqual({
+      outcome: 'blocked',
+      blocked: [{ repo: '.', reason: 'wrong-branch', files: [], expected: 'main', rebasing: true }],
+    });
+  });
+
   it('merges as before into a detached HEAD when the run started on one', async () => {
     const root = repo();
     git(root, 'checkout', '-q', '--detach');
@@ -1444,6 +1456,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
     await iso.integrate(t, run);
     await iso.handoff(run);
     expect(run.repos[0]?.baseBranch).toBeUndefined();
+    expect(run.repos[0]?.startedDetached).toBe(true);
 
     expect(await iso.mergeIntoCheckedOut(run)).toEqual({ outcome: 'merged' });
     expect(readFileSync(join(root, 'alpha.txt'), 'utf8')).toBe('alpha\n');
@@ -2443,6 +2456,19 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
 
       expect(heads()).toEqual(before);
       expect(readFileSync(join(dir, 'api', 'api.txt'), 'utf8')).toBe('api\n');
+    });
+
+    it('refuses when a repository with nothing to merge is on another branch than the run started on', async () => {
+      const { dir, iso, run, heads } = await handedOff({}, { idleRepo: 'docs' });
+      git(join(dir, 'docs'), 'checkout', '-q', '-b', 'feature-x');
+      const before = heads();
+
+      expect(await iso.mergeIntoCheckedOut(run)).toEqual({
+        outcome: 'blocked',
+        blocked: [{ repo: 'docs', reason: 'wrong-branch', files: [], expected: 'main', actual: 'feature-x' }],
+      });
+
+      expect(heads()).toEqual(before);
     });
 
     it('merges nothing anywhere when a commit of the user\'s would conflict in one repository', async () => {

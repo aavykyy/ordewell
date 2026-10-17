@@ -33,6 +33,16 @@ describe('createApp', () => {
     expect(h.performed).toContainEqual({ type: 'refresh' });
   });
 
+  it('re-reads the enabled runners and the allowlist when the shared settings file changes', () => {
+    const h = harness();
+    h.app.start();
+    h.performed.length = 0;
+
+    h.app.dispatch({ type: 'sharedSettingsChanged' });
+
+    expect(h.performed).toEqual([{ type: 'loadScope' }]);
+  });
+
   it('reports each new session once, so the CLI can default to it', () => {
     const onSessionChange = vi.fn();
     const app = createApp({ initial: { rows: 24, cols: 80 }, draw: () => {}, perform: async () => {}, onExit: () => {}, onSessionChange });
