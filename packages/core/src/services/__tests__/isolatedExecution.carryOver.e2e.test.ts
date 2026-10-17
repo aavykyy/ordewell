@@ -82,7 +82,12 @@ function setup(root: string, isolated = true, workspaceRepos: string[] = []) {
   return { orchestrator, sessions, requests, task, notifications };
 }
 
-const LIMIT = "You've hit your session limit · resets 8:10pm (UTC)";
+// A reset hours ahead of the real clock: a fixed time of day is "just passed" for the hour after it, and the task would resume at once.
+const LIMIT = (() => {
+  const at = new Date(Date.now() + 3 * 60 * 60_000);
+  const hour = at.getUTCHours() % 12 || 12;
+  return `You've hit your session limit · resets ${hour}:${String(at.getUTCMinutes()).padStart(2, '0')}${at.getUTCHours() < 12 ? 'am' : 'pm'} (UTC)`;
+})();
 
 function hitLimit(session: FakeRunnerSession): void {
   session.emitEvent({ type: 'error', message: LIMIT });

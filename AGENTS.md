@@ -21,7 +21,7 @@ npm run build          # core first — cli, vscode and web depend on its dist/
 npm run lint
 npm run typecheck
 npm test
-npm run test:coverage   # same tests, writes per-package coverage/ reports
+npm run test:coverage   # same tests, plus the per-file coverage floors CI enforces; writes coverage/ reports
 npm run test:changed    # while iterating: only tests affected by uncommitted changes
 npm run test:quick      # every test except the real-git e2e files (*.e2e.test.ts, GitWorktreeIsolation)
 ```
@@ -29,8 +29,12 @@ npm run test:quick      # every test except the real-git e2e files (*.e2e.test.t
 `test:changed` is the inner loop. When `packages/core` changed it rebuilds
 core's `dist/` and runs the quick suites of cli, vscode and web in full, because
 they consume core through `dist/` and vitest cannot see the dependency. It skips
-the e2e files, so run the full `npm test` before pushing; CI always runs the
-full suite.
+the e2e files, so run the full suite before pushing; CI always runs it.
+Before pushing, run `npm run test:coverage` rather than `npm test`: CI fails
+on a per-file coverage floor (`packages/core/vitest.config.ts`) that plain
+`npm test` never checks. A test that depends on the time of day (a usage-limit
+"resets 8:10pm") fails for the hour after that time; derive such a time from
+the clock, or fake it, instead of fixing it.
 
 Build order is not optional: `core` emits the types the other three packages
 compile against. Building a leaf package against a stale `core/dist` produces

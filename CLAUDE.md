@@ -27,7 +27,7 @@ and OpenCode can all be running targets.
 ```bash
 npm install
 npm run build          # core first — cli, vscode and web depend on its dist/
-npm run lint && npm run typecheck && npm test
+npm run lint && npm run typecheck && npm run test:coverage   # CI's gate: tests plus the coverage floors
 ```
 
 Build order is not optional: `core` emits the types the other three packages

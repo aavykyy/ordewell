@@ -169,9 +169,10 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
   const parent = context.parent ?? undefined;
   const isolation = task.isolation && task.isolation.state !== 'none' ? task.isolation : null;
   const spend = taskUsageSummary(task);
+  const latestAttempt = task.attemptUsage?.at(-1);
   const blocked = blockedBy(task, context.tasks);
   return {
-    usage: spend.attempts > 0 ? { totals: spend.totals, ...(spend.contextFill ? { contextFill: spend.contextFill } : {}), attempt: task.attemptUsage?.at(-1)?.attempt ?? 0 } : task.type === 'ai' && ['completed', 'failed', 'in_progress', 'awaiting_user'].includes(task.status) ? { totals: {}, attempt: 0 } : null,
+    usage: latestAttempt ? { totals: spend.totals, ...(spend.contextFill ? { contextFill: spend.contextFill } : {}), attempt: latestAttempt.attempt } : task.type === 'ai' && ['completed', 'failed', 'in_progress', 'awaiting_user'].includes(task.status) ? { totals: {}, attempt: 0 } : null,
     orderLabel: taskOrderLabel(task, parent),
     kind: task.type === 'user' ? 'user' : task.ops ? 'ops' : 'ai',
     status: blocked.length > 0 ? 'blocked' : taskStatusKind(task),

@@ -460,3 +460,61 @@ describe('PlanEditor.admitRunner', () => {
     expect(catalog.models()).toEqual({ codex: CATALOGS.codex.models });
   });
 });
+
+describe('PlanEditor.followRunnerModel', () => {
+  const live = () => true;
+  const withEffort = (effort?: string) => [
+    createTask({ id: 't1', order: 1, title: 'Setup', prompt: 'setup', assignedRunner: 'claude-code', assignedModel: { modelId: 'claude-haiku-4-5', modelLabel: 'Haiku', ...(effort ? { thinkingEffort: effort } : {}) } }),
+    createTask({ id: 'u1', order: 2, title: 'By hand', prompt: '', type: 'user' }),
+  ];
+
+  it('writes a model discovery lists as a visible edit, with its label and variants', async () => {
+    const { editor, catalog, task, sent } = setup({ tasks: withEffort() });
+    catalog.admit('claude-code', CATALOGS['claude-code'].models);
+
+    await editor.followRunnerModel('t1', { model: 'claude-sonnet-4-5', label: 'ignored' }, 'low', live);
+
+    expect(task('t1')?.assignedModel).toEqual({ modelId: 'claude-sonnet-4-5', modelLabel: 'claude-sonnet-4-5', thinkingEffort: 'low', availableVariants: ['low', 'high'] });
+    expect(sent.map((m) => m.type)).toEqual(['task_updated']);
+  });
+
+  it('keeps the plan\'s effort when the runner reported none, clamped to the new model', async () => {
+    const { editor, catalog, task } = setup({ tasks: withEffort('high') });
+    catalog.admit('claude-code', CATALOGS['claude-code'].models);
+
+    await editor.followRunnerModel('t1', { model: 'claude-sonnet-4-5' }, undefined, live);
+    expect(task('t1')?.assignedModel?.thinkingEffort).toBe('high');
+
+    await editor.followRunnerModel('t1', { model: 'claude-haiku-4-5' }, undefined, live);
+    expect(task('t1')?.assignedModel?.thinkingEffort).toBeUndefined();
+  });
+
+  it('writes a model off the allowlist and unlisted by the runner\'s own label, else its id, with no effort', async () => {
+    const { editor, task } = setup({ tasks: withEffort('high') });
+
+    await editor.followRunnerModel('t1', { model: 'claude-future-1', label: 'Future' }, 'high', live);
+    expect(task('t1')?.assignedModel).toEqual({ modelId: 'claude-future-1', modelLabel: 'Future' });
+
+    await editor.followRunnerModel('t1', { model: 'claude-future-2' }, undefined, live);
+    expect(task('t1')?.assignedModel).toEqual({ modelId: 'claude-future-2', modelLabel: 'claude-future-2' });
+  });
+
+  it('writes nothing when the plan already says so', async () => {
+    const { editor, mutate, sent } = setup({ tasks: withEffort() });
+
+    const plan = await editor.followRunnerModel('t1', { model: 'claude-haiku-4-5' }, undefined, live);
+
+    expect(plan).not.toBeNull();
+    expect(mutate).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+  });
+
+  it('says nothing of a task that is gone, is the user\'s, or whose runner is no longer the live one', async () => {
+    const { editor, mutate } = setup({ tasks: withEffort() });
+
+    expect(await editor.followRunnerModel('ghost', { model: 'm' }, undefined, live)).toBeNull();
+    expect(await editor.followRunnerModel('u1', { model: 'm' }, undefined, live)).toBeNull();
+    expect(await editor.followRunnerModel('t1', { model: 'm' }, undefined, () => false)).toBeNull();
+    expect(mutate).not.toHaveBeenCalled();
+  });
+});
