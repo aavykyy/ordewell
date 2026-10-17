@@ -1,5 +1,5 @@
 import { canMergeTasks, canSplitTask } from './TaskOps';
-import { validateTaskEdit } from './TaskEditValidator';
+import { liveRunnerRefusal, validateTaskEdit } from './TaskEditValidator';
 import { unavailableModeReason, type RunnerModeInfo } from './ModeResolver';
 import { retargetTaskRunner, runnerAssignment, type RunnerCatalog } from './TaskRetarget';
 import { clampThinkingEffort, effectiveAllowlist } from './ModelAllowlistResolver';
@@ -148,7 +148,7 @@ export class PlanEditor {
     const target = this.store.get(taskId);
     const skills = 'skills' in changes && target ? await checkTaskSkillsEdit(target, typedSkills, this.taskSkills()) : undefined;
     if (skills?.errors.length) throw new PlanEditError(skills.errors.map((e) => e.message).join(' '));
-    if ((changes.dependencies || changes.type || changes.assignedModel || changes.taskMode || 'ops' in changes) && target) {
+    if ((changes.dependencies || changes.type || 'assignedModel' in changes || changes.taskMode || 'ops' in changes) && target) {
       const check = validateTaskEdit('direct', this.store.planTasks, taskId, changes, this.catalog.edit());
       if (!check.ok) throw new PlanEditError(check.error ?? 'Those changes are not valid');
       if (check.clear?.length || check.set) {
@@ -198,12 +198,15 @@ export class PlanEditor {
     // Guard before discovery, not after: listing models spawns the runner's
     // own CLI, which is far too expensive for a no-op re-pick.
     if (task.assignedRunner === runner || task.type === 'user') return plan;
+    this.refuseLiveRetarget(task);
 
     const catalog = await this.catalog.runner(runner);
     const from = this.catalog.edit([task.assignedRunner]).runnerModes[task.assignedRunner];
     const changes = retargetTaskRunner(task, runner, this.allowedCatalog(catalog, runner), from);
     if (Object.keys(changes).length === 0) return this.plan();
     this.refuseUnavailableMode(runner, changes.taskMode, catalog.modes);
+    // Discovery can take long enough for the task to start meanwhile.
+    this.refuseLiveRetarget(task);
 
     return this.commit(() => {
       if (!this.store.update(taskId, this.scheduler.releaseMovedResume(taskId, changes))) return false;
@@ -239,6 +242,10 @@ export class PlanEditor {
       if (catalog) this.admitRunner(runner, catalog.models);
       return true;
     });
+  }
+
+  private refuseLiveRetarget(task: Task): void {
+    if (this.catalog.edit().liveRunner?.(task.id)) throw new PlanEditError(liveRunnerRefusal(task));
   }
 
   /**

@@ -233,4 +233,47 @@ describe('handleStatus --output', () => {
     expect(lines[lines.indexOf(waiting[0]) - 1]).toContain('Two');
     srv.close();
   });
+
+  // The flag every surface shows for a task outside the user's scope (ADR-0043).
+  it('flags a task on a runner switched off or a model off its allowlist, subtasks too, and never a finished one', async () => {
+    const session = {
+      meta: { ...SESSION.meta, status: 'approved' },
+      plan: {
+        pendingTasks: [
+          { id: 't1', order: 1, title: 'On codex', type: 'ai', status: 'pending', assignedRunner: 'codex', dependencies: [] },
+          { id: 't2', order: 2, title: 'On opus', type: 'ai', status: 'pending', assignedRunner: 'claude-code', assignedModel: { modelId: 'claude-opus-4', modelLabel: 'Opus 4' }, dependencies: [] },
+          { id: 't3', order: 3, title: 'Done on codex', type: 'ai', status: 'completed', assignedRunner: 'codex', dependencies: [] },
+          {
+            id: 't4', order: 4, title: 'Parent', type: 'ai', status: 'pending', assignedRunner: 'claude-code', dependencies: [],
+            subtasks: [{ id: 't4a', order: 1, title: 'Child on codex', type: 'ai', status: 'pending', assignedRunner: 'codex', dependencies: [] }],
+          },
+        ],
+      },
+    };
+    const sonnet = { modelId: 'claude-sonnet-4-5', modelLabel: 'Sonnet 4.5', variants: [] };
+    const opus = { modelId: 'claude-opus-4', modelLabel: 'Opus 4', variants: [] };
+    const srv = await startServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      const url = req.url ?? '';
+      if (url.startsWith('/api/runners')) {
+        res.end(JSON.stringify({ runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }, { id: 'codex', name: 'Codex', enabled: false }], orchestratorModel: '' }));
+      } else if (url.startsWith('/api/settings')) {
+        res.end(JSON.stringify({ modelAllowlist: { 'claude-code': ['claude-sonnet-4-5'] } }));
+      } else if (url.startsWith('/api/models')) {
+        res.end(JSON.stringify({ models: [sonnet, opus], modelsByRunner: { 'claude-code': [sonnet, opus] } }));
+      } else {
+        res.end(JSON.stringify(session));
+      }
+    });
+    const { handleStatus } = await import('../status');
+    const { stdout } = await capture(() => handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)));
+
+    const flags = stripAnsi(stdout).split('\n').filter((l) => l.includes('⚠'));
+    expect(flags).toEqual([
+      '      ⚠ codex is switched off; it still runs unless moved',
+      '      ⚠ Opus 4 is not in the allowlist; it still runs unless moved',
+      '        ⚠ codex is switched off; it still runs unless moved',
+    ]);
+    srv.close();
+  });
 });

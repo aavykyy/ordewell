@@ -1,8 +1,8 @@
-import { taskUsageText } from '../tui/blocks';
+import { assignmentFlagText, taskUsageText } from '../tui/blocks';
 import { writeFileSync } from 'fs';
 import { flag, hasFlag, readLastSession } from '../utils';
 import { iconFor } from '../utils/output';
-import { blockedByLabel, blockingFailures, skippedLabel, flattenTasks, taskOrderLabel, taskRowView, planUsage, waitsForApproval, type ApprovalRecord } from '@ordewell/core';
+import { blockedByLabel, blockingFailures, skippedLabel, flattenTasks, taskOrderLabel, taskRowView, planUsage, waitsForApproval, type ApprovalRecord, type AssignmentScope } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, type SessionMeta } from '../apiClient';
@@ -24,7 +24,7 @@ export async function handleStatus(subArgs: string[], injectedApi?: ApiClient): 
       emitJson(session, outputPath);
       return;
     }
-    printOneSession(sessionId, session.meta, session.plan);
+    printOneSession(sessionId, session.meta, session.plan, await assignmentScope(api));
   } else {
     const sessions = await api.getSessions(workspace);
     if (asJson) {
@@ -62,10 +62,31 @@ function emitJson(payload: unknown, outputPath?: string): void {
   }
 }
 
+/**
+ * The runners and models the user allows, read as the TUI reads them, so a
+ * task outside them is flagged here as on every surface (ADR-0043). A daemon
+ * that cannot say leaves the rows unflagged rather than the status unprinted.
+ */
+async function assignmentScope(api: ApiClient): Promise<AssignmentScope | undefined> {
+  try {
+    const [runners, settings, models] = await Promise.all([api.getRunners(), api.getSettings(), api.getModels()]);
+    // With no runners listed, every task would read as on one switched off.
+    if (!Array.isArray(runners.runners) || runners.runners.length === 0) return undefined;
+    return {
+      enabledRunners: runners.runners.filter((r) => r.enabled).map((r) => r.id),
+      allowlist: settings.modelAllowlist ?? {},
+      models: models.modelsByRunner ?? {},
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function printOneSession(
   sessionId: string,
   meta: SessionMeta,
   plan: Record<string, unknown>,
+  runnerScope: AssignmentScope | undefined,
 ): void {
   const allTasks = allTasksOf(plan);
   const everyTask = flattenTasks(allTasks);
@@ -91,9 +112,10 @@ function printOneSession(
     const model = t.assignedModel ? ` (${t.assignedModel.modelLabel})` : '';
     const shortId = (t.id ?? '').slice(-8);
     console.log(`  ${taskOrderLabel(t).padStart(2)}. ${icon} [${shortId}] ${t.title}${model}`);
-    const row = taskRowView({ ...t, dependencies: t.dependencies ?? [], waitsForApproval: waitsForApproval(t, record) }, { tasks: allTasks });
+    const row = taskRowView({ ...t, dependencies: t.dependencies ?? [], waitsForApproval: waitsForApproval(t, record) }, { tasks: allTasks, runnerScope });
     const waiting = approval(row, taskOrderLabel(t));
     if (waiting) console.log(`      ${waiting}`);
+    if (row.assignmentFlag) console.log(`      ⚠ ${assignmentFlagText(row.assignmentFlag, row.status)}`);
     if (row.blockedBy) console.log(`      ${blockedByLabel(row.blockedBy)}`);
     if (row.status === 'skipped') console.log(`      ${skippedLabel(row.skipReason)}`);
     if (row.usage) console.log(`      ${taskUsageText(row.usage)}`);
@@ -102,9 +124,10 @@ function printOneSession(
       const subModel = sub.assignedModel ? ` (${sub.assignedModel.modelLabel})` : '';
       const subShortId = (sub.id ?? '').slice(-8);
       console.log(`    ${taskOrderLabel(sub, t)}. ${subIcon} [${subShortId}] ${sub.title}${subModel}`);
-      const subRow = taskRowView({ ...sub, dependencies: sub.dependencies ?? [], waitsForApproval: waitsForApproval(sub, record) }, { parent: t, tasks: allTasks });
+      const subRow = taskRowView({ ...sub, dependencies: sub.dependencies ?? [], waitsForApproval: waitsForApproval(sub, record) }, { parent: t, tasks: allTasks, runnerScope });
       const subWaiting = approval(subRow, taskOrderLabel(sub, t));
       if (subWaiting) console.log(`        ${subWaiting}`);
+      if (subRow.assignmentFlag) console.log(`        ⚠ ${assignmentFlagText(subRow.assignmentFlag, subRow.status)}`);
       if (subRow.blockedBy) console.log(`        ${blockedByLabel(subRow.blockedBy)}`);
       if (subRow.status === 'skipped') console.log(`        ${skippedLabel(subRow.skipReason)}`);
       if (subRow.usage) console.log(`        ${taskUsageText(subRow.usage)}`);

@@ -385,6 +385,33 @@ describe('a limit is acted on only when it ended a turn Ordewell started', () =>
     expect(waits).toEqual([]);
   });
 
+  // The runner's field outranks its words on an exit too (ADR-0044).
+  it('fails a runner that exits mid-turn on an error its field says is not the limit', async () => {
+    const { orchestrator, sessions, waits, task } = setup();
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', assignedRunner: 'codex' })], ['codex']);
+    await orchestrator.forceStartTask('t1');
+
+    sessions[0].emitEvent({ type: 'error', message: 'Rate limit exceeded.', usageLimit: false });
+    sessions[0].emitOutput('Rate limit exceeded.\n');
+    sessions[0].emitExit(1);
+    await until(() => task('t1').status === 'failed');
+
+    expect(waits).toEqual([]);
+  });
+
+  it('pauses a runner that exits mid-turn on an error its field names the limit, at the reset in the field', async () => {
+    const { orchestrator, sessions, task } = setup();
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', assignedRunner: 'codex' })], ['codex']);
+    await orchestrator.forceStartTask('t1');
+
+    sessions[0].emitEvent({ type: 'error', message: 'The request failed.', usageLimit: { resetsAt: '2026-10-11T20:42:55.000Z' } });
+    sessions[0].emitOutput('The request failed.\n');
+    sessions[0].emitExit(1);
+    await until(() => task('t1').status === 'awaiting_user');
+
+    expect(task('t1')).toMatchObject({ awaitingReason: 'usage-limit', resumeAt: '2026-10-11T20:43:55.000Z' });
+  });
+
   it('fails a task the runner reported failed, even when its words name a limit', async () => {
     const { orchestrator, sessions, waits, task } = setup();
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);

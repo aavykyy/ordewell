@@ -515,7 +515,7 @@ export class Session {
     turnId: () => this.conversation.currentTurnId,
     recordSkillLoad: (skill) => this.conversation.recordPlannerSkill(skill),
     liveCatalog: () => this.liveCatalog(),
-    coerce: (tasks) => coerceAssignments(tasks, this.catalog.allowlist(), this.catalog.models()),
+    coerce: (tasks) => coerceAssignments(tasks, this.catalog.allowlist(), this.catalog.models(), this.store.planTasks),
     submitPlan: (tasks) => this.submitPlanFromTool(tasks),
     editPlan: (ops) => this.editPlanFromTool(ops),
     tasks: () => this.store.planTasks,
@@ -1518,7 +1518,7 @@ export class Session {
     const result = this.checkPlannerOps(ops, held);
     if (!result.ok) return { ok: false, errors: result.errors };
     if (!this.conversation.submit({ kind: 'task_ops', ops: [...held, ...ops] })) return refuse('No planning turn is open to take the edit.');
-    const { coerced } = coerceAssignments(result.tasks, this.catalog.allowlist(), this.catalog.models());
+    const { coerced } = coerceAssignments(result.tasks, this.catalog.allowlist(), this.catalog.models(), this.store.planTasks);
     return { ok: true, summary: result.summary, coerced: coerced.map(({ taskId: _id, ...rest }) => rest) };
   }
 
@@ -1588,7 +1588,7 @@ export class Session {
     for (const runner of runnersOf(tasks)) this.editor.admitRunner(runner, this.catalog.known(runner));
     const runners = this.plan!.runners;
     const before = this.store.planTasks;
-    let coerced = coerceAssignments(tasks, this.catalog.allowlist(), this.catalog.models()).tasks;
+    let coerced = coerceAssignments(tasks, this.catalog.allowlist(), this.catalog.models(), before).tasks;
     if (how === 'commit') coerced = keepExecutionState(before, carryPlannedModes(before, coerced, this.catalog.edit(runners)));
     // Tasks an Act supervisor adds are approved to run, ops tasks included (ADR-0029): choosing Act was the consent.
     const bySupervisor = this.supervisorEditing();
@@ -1810,21 +1810,18 @@ export class Session {
   /**
    * The plan follows a model switch the user made in the runner (#106), and
    * the task's log says what the plan holds once that settled: a write-back
-   * not made — no model command asked for the change, the attempt had ended,
-   * or the edit failed — is stated, never shown as made.
+   * not made — no model command asked for the change, or the edit failed — is
+   * stated, never shown as made. Once the switch's attempt has ended, the plan
+   * may be another one, so nothing of it is said.
    */
   private async followRunnerModel({ taskId, sessionId, from, model, effort, asked, attemptEnded }: Parameters<NonNullable<OrchestratorObserver['onModelSwitched']>>[0]): Promise<void> {
-    let kept: string | undefined;
+    let kept: string | undefined = asked ? undefined : 'no model command in the chat asked for it';
     const live = () => this.orchestrator.activeSessionMap.get(taskId) === sessionId;
-    if (!asked) kept = 'no model command in the chat asked for it';
-    else if (attemptEnded) kept = 'its attempt had already ended';
-    else {
+    const ended = () => this.taskLogs.note(sessionId, taskId, { type: 'model_switched', from, to: model, kept: kept ?? 'its attempt had already ended' });
+    if (attemptEnded) return ended();
+    if (asked) {
       try {
-        if (!(await this.editor.followRunnerModel(taskId, model, effort, live)) && !live()) {
-          // The plan now may not be the one the switch was made in: nothing of it is said.
-          this.taskLogs.note(sessionId, taskId, { type: 'model_switched', from, to: model, kept: 'its attempt had already ended' });
-          return;
-        }
+        if (!(await this.editor.followRunnerModel(taskId, model, effort, live)) && !live()) return ended();
       } catch (err: unknown) {
         kept = `the plan could not follow it: ${err instanceof Error ? err.message : String(err)}`;
         this.notice('warn', `The plan could not follow the model switch of task ${this.store.get(taskId)?.order ?? taskId}: ${err instanceof Error ? err.message : String(err)}`);

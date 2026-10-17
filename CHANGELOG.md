@@ -72,6 +72,28 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   written and the log says so.
 - **A planner turn that failed no longer loses the runners-changed note.** The
   next turn carries it again.
+- **A planner edit no longer undoes a `/model` you made in a task's chat.** An
+  edit of another task left a model off the allowlist in place, where it had
+  been snapped back to the allowlist's first.
+- **A running task can no longer be moved to another runner, or have its model
+  cleared.** Both are refused as a model edit is: stop the task first.
+- **A force start past a failure waits for work still under way behind a
+  blocked dependency**, rather than starting ahead of it.
+- **Stop withdraws a queued force start when no run is under way.** It said
+  nothing was running, and the task started later when its dependency finished.
+- **A runner that exits mid-turn is read by its structured error first.** A
+  Codex error naming another cause no longer pauses the task as a usage limit,
+  and one naming the limit pauses it until the reset it reports.
+- **A task from an older saved session no longer continues on another runner.**
+  Its session belongs to the runner it was on when the plan loaded.
+- **Two surfaces saving settings at the same moment no longer lose one save.**
+  The last check and the swap happen under a lock file next to the settings file.
+- **The context meter keeps a model's reported window** when the task switches
+  away and back.
+- **`ordewell status` flags a task on a runner you switched off, or a model off
+  its allowlist**, as the terminal UI and VS Code do.
+- **A model switch logged after its attempt ended no longer names the plan's
+  model**, which could belong to a plan loaded since.
 
 ### Changed
 

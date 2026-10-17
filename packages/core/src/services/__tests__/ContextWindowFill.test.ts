@@ -35,6 +35,16 @@ describe('ContextWindowFill', () => {
     expect(fill.fill({ source: 'opencode', model: 'haiku' }).contextWindow).toBeUndefined();
   });
 
+  it('keeps a stated window for its model when the stream comes back to it from another', () => {
+    const fill = new ContextWindowFill(catalog);
+    fill.fill({ source: 'claude-code', model: 'sonnet', contextWindow: 1_000_000 });
+    fill.fill({ source: 'claude-code', model: 'mystery', contextWindow: 500_000 });
+    fill.fill({ source: 'claude-code', model: 'haiku' });
+    expect(fill.fill({ source: 'claude-code', model: 'sonnet' }).contextWindow).toBe(1_000_000);
+    // A model no catalog lists keeps the one its reporter stated, too.
+    expect(fill.fill({ source: 'claude-code', model: 'mystery' }).contextWindow).toBe(500_000);
+  });
+
   it('leaves a subagent\'s record and a breakdown as they are, and the stream\'s model with them', () => {
     const fill = new ContextWindowFill(catalog);
     fill.fill({ source: 'claude-code', model: 'sonnet', contextWindow: 1_000_000 });

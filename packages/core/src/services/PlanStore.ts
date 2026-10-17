@@ -4,6 +4,7 @@ import {
   opsFlag, waitsForReset,
 } from '../models/Task';
 import { startAttemptUsage, addAttemptUsage, endAttemptUsage, type RunnerSessionCost, type UsageRecord } from '../models/Usage';
+import { sessionOwner } from './continuation';
 
 /** Deep copy of a task tree, down to the arrays the store rewrites. */
 function cloneTasks(tasks: ReadonlyArray<Readonly<Task>>): Task[] {
@@ -116,6 +117,9 @@ export class PlanStore {
     // from a saved session is normalized at the disk-load boundary instead.
     for (const task of this._allTasks) {
       if (task.status === 'failed') task.status = 'pending';
+      // A session saved before owners or attempts were recorded belongs to the
+      // runner the task is on as it loads: noted now, a move cannot lose it.
+      if (task.runnerSessionId && !task.runnerSessionOwner) task.runnerSessionOwner = sessionOwner(task) ?? task.assignedRunner;
     }
     this.validateAssignedRunners();
   }

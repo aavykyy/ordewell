@@ -199,8 +199,10 @@ How the user approves what waits, without starting anything early:
   answer says which it waits for ("starts once task X finishes"). Outside a run
   it adds that nothing starts it until the plan runs. A force start does go
   past a failed dependency (ADR-0034) or a merge gate (ADR-0020), as asked, but
-  still waits for any other dependency that is under way. A Stop withdraws a
-  queued start (ADR-0029).
+  still waits for any other dependency that is under way. A dependency blocked
+  behind the failure is gone past with it, but what that dependency waits on
+  that is under way or yet to run is still waited for. A Stop withdraws a
+  queued start (ADR-0029), whether or not a run is under way.
 
 ### What stays
 
@@ -306,3 +308,4 @@ its body.
 - 2026-10-15 — accepted; settles #95 with its first option. Not yet implemented.
 - 2026-10-16 — #95 implemented: the scheduler starts only tasks in the approval record, checked at the one claim every start passes, and a task the user adds by hand is approved as it lands. A task added after approval waits, shown as waiting for the user's approval to start in VS Code, the TUI, `ordewell status` and `ordewell run`; the user approves it by starting it or executing the plan. Seen live: in Guarded with autorun on, a task the planner added in the user's turn during a run started on its own, with no card. Script tasks and the effect allowlist are not yet implemented.
 - 2026-10-17 — approving what waits: with autorun on the planner's additions in the user's turn are approved as they land, `/run` during a run approves every waiting task and joins the run, and a force start approves the task but queues it behind dependencies still under way; the rows say "waits for your approval" and name the key that approves.
+- 2026-10-17 — a force start past a failure waits for the work a blocked dependency waits on, and a Stop with no run under way withdraws a queued start.

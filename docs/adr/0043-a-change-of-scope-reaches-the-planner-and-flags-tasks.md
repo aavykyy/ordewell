@@ -63,9 +63,11 @@ runners are saved in one place.**
 - A change is made on the file as it is now (`updateEnabledRunners`), never on
   a copy read earlier, so a toggle in one surface does not undo another's. A
   save checks the file just before replacing it and redoes the change if
-  another process saved first. Saves are written beside the file and renamed
-  over it, and the file is watched, so a running surface picks up another's
-  toggle.
+  another process saved first; the check and the swap are one step under a
+  lock file beside it (`<file>.lock`, created exclusively, and taken over once
+  stale, from a process that died holding it). Saves are written beside the
+  file and renamed over it, and the file is watched, so a running surface
+  picks up another's toggle.
 
 ## Key properties
 
@@ -96,3 +98,4 @@ runners are saved in one place.**
 ## History
 
 - 2026-10-17 — accepted and implemented: `<runners_changed>` on the planner's next turn, flags for tasks outside the scope, and the enabled runners in the shared settings file.
+- 2026-10-17 — the stamp check and the swap are serialized across processes by a lock file; `ordewell status` flags tasks outside the scope too.

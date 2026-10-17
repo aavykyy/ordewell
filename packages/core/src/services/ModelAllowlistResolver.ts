@@ -1,4 +1,4 @@
-import type { DiscoveredModel, RunnerId, Task } from '../models/Task';
+import { flattenTasks, type DiscoveredModel, type RunnerId, type Task } from '../models/Task';
 
 /**
  * The ids a runner may actually run: the user's allowlist with the ids that
@@ -121,12 +121,26 @@ export interface CoercedTasks {
  * one is filled in, and an effort is clamped to the model's variants. The
  * runner is never changed — one the plan may not use is refused before a task
  * gets here (`checkPlanInvariants`).
+ *
+ * A task whose runner, model and effort are what `planned` already holds for
+ * it was not written by this pass, so it keeps the plan's assignment: an
+ * allowlist shapes what is planned, not a task left alone, which may be
+ * running a model its user switched to (ADR-0041, ADR-0043).
  */
 export function coerceAssignments(
   tasks: readonly Task[],
   perRunnerAllowlist: Partial<Record<RunnerId, string[]>>,
   modelsByRunner?: Partial<Record<RunnerId, DiscoveredModel[]>>,
+  planned: readonly Task[] = [],
 ): CoercedTasks {
+  const prior = new Map(flattenTasks(planned).map((t) => [t.id, t]));
+  const unwritten = (task: Task): Task | undefined => {
+    const was = prior.get(task.id);
+    if (!was?.assignedModel || !task.assignedModel || was.assignedRunner !== task.assignedRunner) return undefined;
+    if (was.assignedModel.modelId !== task.assignedModel.modelId || was.assignedModel.thinkingEffort !== task.assignedModel.thinkingEffort) return undefined;
+    return was;
+  };
+
   // When the discovered catalog is available, snap each assignment's
   // thinkingEffort to a variant the model really has and stamp the model's
   // variant ids on the assignment (runners need them at spawn time); a model
@@ -169,6 +183,8 @@ export function coerceAssignments(
 
   const coerceOne = (task: Task): Task => {
     if (task.type === 'user') return task;
+    const kept = unwritten(task);
+    if (kept) return { ...task, assignedModel: kept.assignedModel };
     const allowlist = allowedFor(task.assignedRunner);
     // No model assigned: fill in from the allowlist or discovered catalog so
     // merge/split/add outputs (which may omit assignedModel) always land with a

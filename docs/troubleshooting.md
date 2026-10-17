@@ -163,7 +163,7 @@ runner's files restored
 
 ## A task's model cannot be changed while it runs
 
-Model and effort are locked while a task's runner is up. Stop the task, edit,
-and continue, or use the runner's own `/model` in the task's chat: the plan then
+Model and effort are locked while a task's runner is up, and so is its runner.
+Stop the task, edit, and continue, or use the runner's own `/model` in the task's chat: the plan then
 follows it. A model the runner changed by itself is stated in the task log and
 is not written to the plan.

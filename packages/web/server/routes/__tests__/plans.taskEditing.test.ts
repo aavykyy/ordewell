@@ -89,6 +89,18 @@ describe('task editing routes', () => {
     });
   });
 
+  describe('PUT with a model cleared', () => {
+    // JSON has no undefined; a null is how a client clears it, and core's lock reads the clear.
+    it('hands updateTask a cleared model, not a null one', async () => {
+      const res = await put({ assignedModel: null });
+
+      expect(res.status).toBe(200);
+      const [, changes] = session.updateTask.mock.calls[0] as [string, Record<string, unknown>];
+      expect('assignedModel' in changes).toBe(true);
+      expect(changes.assignedModel).toBeUndefined();
+    });
+  });
+
   describe('POST /tasks', () => {
     it('awaits addTask, which derives the new task assignment from a runner catalog', async () => {
       const res = await post({ title: 'Docs', dependencies: ['a'] });
