@@ -188,8 +188,8 @@ describe('generatePlanWithRepair truncation corrective', () => {
   });
 
   // The JSON parsed; a shape rule rejected it. "could not be parsed as JSON" is
-  // false here, and the model answered it by re-sending the same object — the
-  // failure mode that killed 4 benchmark trials.
+  // false here, and the model answered it by re-sending the same object, so the
+  // repair never converged.
   it('names the broken rule when complete JSON is rejected on shape, not parsing', async () => {
     const generate = vi.fn()
       .mockResolvedValueOnce('{"tasks":[{"id":"x","order":1,"title":"NoSlice","description":"d","type":"ai","dependencies":[],"subtasks":[]}]}')

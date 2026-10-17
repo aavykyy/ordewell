@@ -18,49 +18,31 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   is stated in the log and never written to the plan, and Codex and OpenCode get
   no synthesized `/model`. While a task's runner is running its model and effort
   cannot be edited from outside: stop the task, edit, then continue
-  ([ADR-0041](docs/adr/0041-a-tasks-model-follows-the-runners-own-switch.md)).
+  ([ADR-0041](docs/adr/routing/0041-a-tasks-model-follows-the-runners-own-switch.md)).
 - **A planner that hits its usage limit resends at the reset.** The turn shows
   as a failure with the reset time, what you sent and any wake-up wait with it,
   and everything goes again as one turn at the reset. A message you send
   meanwhile is saved and answered at once. When no reset time is known the
   messages are held for your next one. `/resend cancel` in the terminal UI,
   `ordewell resend cancel` and **Don't resend** in VS Code keep it from going on
-  its own ([ADR-0044](docs/adr/0044-the-planners-usage-limit-waits-and-resends.md)).
+  its own ([ADR-0044](docs/adr/planner/0044-the-planners-usage-limit-waits-and-resends.md)).
 - **The planner is told when you change runners or models.** On its next turn it
   hears which runners you switched on or off and what changed in an allowlist,
   and which plan tasks that leaves outside. Such a task is flagged on its row
   ("codex is switched off", "Opus 4 is not in the allowlist"), in VS Code and
   the terminal, and still runs as assigned until you or the planner move it
-  ([ADR-0043](docs/adr/0043-a-change-of-scope-reaches-the-planner-and-flags-tasks.md)).
+  ([ADR-0043](docs/adr/routing/0043-a-change-of-scope-reaches-the-planner-and-flags-tasks.md)).
 - **Approve all.** VS Code shows an **Approve all** button when tasks wait for
   your approval. `/run` while a run is under way approves every waiting task
   and joins them to the run, each starting once its dependencies finish, and the
   terminal rows say which key approves
-  ([ADR-0035](docs/adr/0035-effects-are-consented-and-recorded.md)).
+  ([ADR-0035](docs/adr/supervision/0035-effects-are-consented-and-recorded.md)).
 - **VS Code shows a task's usage and assignment while it runs.** The task log
   has a usage line, and an executing task's card keeps its runner, model and
   mode readable.
 
 ### Fixed
 
-- **Switching planner no longer looks frozen behind a slow coding-agent CLI.**
-  The picked planner lights at once and the host confirms it; the planner pills
-  are pushed before models are discovered, runners are discovered together, and a
-  discovery that came back empty or failed is remembered briefly instead of being
-  re-run on every switch and refresh. A failed discovery is retried only after a
-  timeout, not after a plain non-zero exit
-  ([ADR-0040](docs/adr/0040-a-slow-model-discovery-never-gates-the-planner-pick.md)).
-- **OpenCode v2 model variants are discovered again.** v2 removed
-  `opencode models --verbose`; the catalog, with each model's variants, is now
-  read from `opencode api model.list` when that flag is rejected.
-- **A coding agent installed while Ordewell is running is noticed on the next
-  refresh.** The runner list (`ordewell runners`, the VS Code runner panel) and
-  a VS Code refresh re-check which agents are installed and re-derive the no-key
-  default planner, instead of holding the startup answer until a restart or a
-  window reload. An agent installed while a daemon or a VS Code window runs now
-  becomes selectable and, with no planner chosen and no API key, the default
-  ([ADR-0038](docs/adr/0038-runner-install-verdicts-expire.md),
-  [ADR-0039](docs/adr/0039-detected-planner-derived-on-refresh.md)).
 - **A force start no longer starts a task before a dependency still under way.**
   Past a failed dependency it still waits for the others, and starts when they
   finish. Approving a dependent during a lone Run Task no longer leaves it
@@ -111,19 +93,19 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   model's window, from the runner's own report, its own model listing or the
   provider's own endpoint. Cost is shown only when the runner reported it, and
   the line carries no wall time
-  ([ADR-0041](docs/adr/0041-a-tasks-model-follows-the-runners-own-switch.md)).
+  ([ADR-0041](docs/adr/routing/0041-a-tasks-model-follows-the-runners-own-switch.md)).
 - **Continue never crosses runners, and a Retry after a move carries the work
   over.** A saved session belongs to the runner that made it, so Continue is
   offered only while the task is still assigned to that runner. After moving a
   task to another runner, Retry starts a fresh session there with the earlier
   runner's files restored, whatever the task's state, not only after a usage
-  limit pause ([ADR-0018](docs/adr/0018-structured-runner-transport.md)).
+  limit pause ([ADR-0018](docs/adr/runners/0018-structured-runner-transport.md)).
 - **Merge all lands only on the branch the run started on.** If any repository
   of the run is on another branch, in the middle of a rebase or on a detached
   HEAD, nothing is merged and the notice says which and how to fix it. The
   handoff, the Merge confirmation, `ordewell status` and VS Code name the branch
   the run started on, as `main @ a1b2c3d`
-  ([ADR-0042](docs/adr/0042-merge-all-lands-only-on-the-branch-the-run-started-on.md)).
+  ([ADR-0042](docs/adr/isolation/0042-merge-all-lands-only-on-the-branch-the-run-started-on.md)).
 - **The enabled runners are one list shared by VS Code and the terminal UI.**
   They are saved in Ordewell's settings file, and a toggle in one is the list
   the other plans with. A list set in VS Code's old `ordewell.enabledRunners`
@@ -140,6 +122,32 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   in your turn need no approval. A force start approves the task and never skips
   dependencies that have not finished: it queues behind them and says so. A
   status line too long for the terminal pane wraps instead of being cut off.
+
+## [0.10.4] - 2026-10-17
+
+### Fixed
+
+- **Switching planner no longer looks frozen behind a slow coding-agent CLI.**
+  The picked planner lights at once and the host confirms it; the planner pills
+  are pushed before models are discovered, runners are discovered together, and a
+  discovery that came back empty or failed is remembered briefly instead of being
+  re-run on every switch and refresh. A failed discovery is retried only after a
+  timeout, not after a plain non-zero exit
+  ([ADR-0040](docs/adr/routing/0040-a-slow-model-discovery-never-gates-the-planner-pick.md)).
+- **OpenCode v2 model variants are discovered again.** v2 removed
+  `opencode models --verbose`; the catalog, with each model's variants, is now
+  read from `opencode api model.list` when that flag is rejected.
+- **A coding agent installed while Ordewell is running is noticed on the next
+  refresh.** The runner list (`ordewell runners`, the VS Code runner panel) and
+  a VS Code refresh re-check which agents are installed and re-derive the no-key
+  default planner, instead of holding the startup answer until a restart or a
+  window reload. An agent installed while a daemon or a VS Code window runs now
+  becomes selectable and, with no planner chosen and no API key, the default
+  ([ADR-0038](docs/adr/routing/0038-runner-install-verdicts-expire.md),
+  [ADR-0039](docs/adr/routing/0038-runner-install-verdicts-expire.md#the-detected-planner-is-derived-again-on-a-refresh-adr-0039)).
+
+### Changed
+
 - **Contributors:** `bench/lab/` fakes which coding-agent CLIs a host has
   installed — a throwaway `HOME` and shim dir; `node bench/lab/lab.mjs
   --scenario none` prints ready-to-run env, and `--root <dir>` builds the lab
@@ -147,6 +155,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   configuration. The macOS-only symlink-canonicalization test failures in
   `plannerRepoConfig` and `CliAgentAiService` are fixed by resolving the
   expected paths the way ADR-0028 already judges them.
+- **Contributors:** the architecture decision records live in eight folders under
+  `docs/adr/`, grouped by area, with a README that indexes them and says when a
+  decision deserves an ADR, where it goes and how to write one. ADR numbers and
+  rule IDs do not change, so citations in code and docs still resolve. Five small
+  ADRs (0007, 0019, 0021, 0031, 0039) and the worktree-isolation spec are folded
+  into the documents they amended, and the README lists the retired numbers.
+  `node scripts/verify-adr.mjs` runs in CI and fails on a citation, link, rule ID
+  or front matter that does not resolve.
 
 ## [0.10.3] - 2026-10-16
 
@@ -295,12 +311,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   automatically, autorun and Full/Guarded are changed by your chat commands
   only; no planner tool, MCP tool or route the planner can reach sets them,
   and the commands never reach the planner as a message
-  ([ADR-0030](docs/adr/0030-global-run-settings.md)).
+  ([ADR-0030](docs/adr/supervision/0030-global-run-settings.md)).
 - **A supervisor can narrow a runner's permissions, never widen them.**
   `answer_approval` denies a runner's request with a note or hands it to you;
   it cannot allow one. Effects still happen only in tasks: the planner still
   edits no file and runs nothing outside its envelope
-  ([ADR-0029](docs/adr/0029-the-supervisor.md)).
+  ([ADR-0029](docs/adr/supervision/0029-the-supervisor.md)).
 - **A repository cannot poison Ordewell's TOML reader.** Ordewell reads a
   repository's `.codex/config.toml` before anything is approved;
   a `__proto__`, `constructor` or `prototype` key is now refused, and the
@@ -311,8 +327,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   asked about. Ordewell now recognises its own tools by the exact tool or
   server name, never a prefix, and an OpenCode project server whose name could
   give one of its tools an Ordewell name is not offered to the planner at all
-  ([ADR-0022](docs/adr/0022-ordewell-mcp-server.md),
-  [ADR-0028](docs/adr/0028-planners-never-run-repository-config.md)).
+  ([ADR-0022](docs/adr/runners/0022-ordewell-mcp-server.md),
+  [ADR-0028](docs/adr/planner-envelope/0028-planners-never-run-repository-config.md)).
 
 ### Added
 
@@ -331,7 +347,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   compaction and enabled skills; its app-server reports no custom slash
   prompts. OpenCode exposes native commands and skills plus compaction
   (`/summarize` is an alias). TUI-only runner commands are not offered
-  ([ADR-0018](docs/adr/0018-structured-runner-transport.md), #66).
+  ([ADR-0018](docs/adr/runners/0018-structured-runner-transport.md), #66).
 - **A supervisor that watches your run, and optionally acts.** The planner
   conversation that wrote the plan now takes turns while the run goes on, at
   one of three levels: **Off** (it speaks only when you write), **Watch** (the
@@ -344,7 +360,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   log; it is a planner turn, so it uses the planner's usage, and
   `/supervisor off` turns it off. Its notes are marked as the supervisor's in
   the chat. It decides what to do next, never whether a task passed
-  ([ADR-0029](docs/adr/0029-the-supervisor.md)).
+  ([ADR-0029](docs/adr/supervision/0029-the-supervisor.md)).
 - **The supervisor can skip a task at Act.** `skip_task` gives up waiting for
   a task that failed, is blocked or is waiting for input, with a required
   reason that the timeline shows and the dependents are told. Like your Skip,
@@ -353,7 +369,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   cannot skip. A skip of a task the supervisor retried counts against its
   retry limit, it cannot skip a task its own edit adds in the same reply, and
   it never runs a skipped task again: that is yours to decide
-  ([ADR-0029](docs/adr/0029-the-supervisor.md)).
+  ([ADR-0029](docs/adr/supervision/0029-the-supervisor.md)).
 - **Guards that keep Act from looping.** A task is retried at most twice by
   default (`/supervisor retries <n>`), an identical retry or re-adding a
   task it removed is refused, and more than six wake-ups in 30 minutes with no
@@ -385,8 +401,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   branch yet, the TUI plan pane says how many landed tasks are not merged
   (`/handoff merge`) and VS Code shows a Merge all button with the same
   count. A task gated on that work still waits for it
-  ([ADR-0013](docs/adr/0013-worktree-isolation.md),
-  [ADR-0020](docs/adr/0020-ops-tasks-and-merge-gates.md)).
+  ([ADR-0013](docs/adr/isolation/0013-worktree-isolation.md),
+  [ADR-0020](docs/adr/isolation/0020-ops-tasks-and-merge-gates.md)).
 - **Merge automatically.** `/automerge on` merges for you at each merge gate
   and at the end of a run: a run that settles with landed work not yet
   merged runs Merge all itself, by the same preflight. A conflict or a dirty
@@ -405,7 +421,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   UI's status row shows the values (left off the bare welcome, whose Setup
   block shows the same), and so does VS Code's plan bar. `/supervisor act` and
   `/autorun on` ask you to confirm and say what they allow
-  ([ADR-0030](docs/adr/0030-global-run-settings.md)).
+  ([ADR-0030](docs/adr/supervision/0030-global-run-settings.md)).
 - **Autorun.** With `/autorun on`, a plan the planner submits is approved and
   started as if you had pressed Execute, and the planner skips the outline
   gate but still asks clarifying questions. It fires on a submission only,
@@ -420,7 +436,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   marks a manual or ops task ignores the mark with a warning, an edit that
   asks it of an ops task is refused, and the planner is told that a task which
   must run tests, scripts or builds is not read-only
-  ([ADR-0031](docs/adr/0031-the-planner-says-read-only-not-a-mode.md)).
+  ([ADR-0031](docs/adr/routing/0001-autonomous-mode-resolution.md#the-planner-says-read-only-not-a-mode-adr-0031)).
 - **Usage on every task attempt.** Each attempt records its tokens, reported
   cost and wall time, grouped by the model that actually ran. The terminal
   UI's task view pins the usage of the attempt on screen in its footer, with
@@ -438,7 +454,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   the new runner; the other tasks on the old runner keep theirs, and a model
   change on the same runner keeps it. Without a time, after *Don't resume*, or
   when the limit is hit again at once, the task waits for a manual retry
-  ([ADR-0018](docs/adr/0018-structured-runner-transport.md)).
+  ([ADR-0018](docs/adr/runners/0018-structured-runner-transport.md)).
 - **Resume now, when the limit resets early.** A task paused on a usage limit
   resumes in its saved session as soon as you say so, instead of waiting for
   its reset or starting over: *Resume now* on its row (`r` in the terminal UI,
@@ -448,7 +464,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   `retry_task` from `"session"`, and a message sent to it with `message_task`
   resumes it too. A resume that hits the limit again at once waits for you.
   Skip is offered while the task is paused
-  ([ADR-0018](docs/adr/0018-structured-runner-transport.md)).
+  ([ADR-0018](docs/adr/runners/0018-structured-runner-transport.md)).
 - **Send now in the planner chat and on pending messages.** `ctrl-s` in the
   terminal UI, and `Ctrl+Enter` (`Cmd+Enter` on macOS) in VS Code, interrupts
   the planner turn in flight — one another client started too — and answers
@@ -473,7 +489,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   next turn after the interrupt; Codex and OpenCode 1.x discard it at the
   interrupt, so it is sent again first, ahead of the other queued messages;
   OpenCode 2.x refuses messages mid-turn, so nothing changes there
-  ([ADR-0023](docs/adr/0023-messages-reach-a-running-task.md)).
+  ([ADR-0023](docs/adr/runners/0023-messages-reach-a-running-task.md)).
 
 ### Changed
 
@@ -505,7 +521,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   surface, and the run ends once nothing else can start, counting what
   completed, failed and is blocked. Retrying the failed task, or skipping it,
   continues that run, and what it blocked starts
-  ([ADR-0034](docs/adr/0034-a-failed-task-blocks-only-its-dependents.md)).
+  ([ADR-0034](docs/adr/supervision/0034-a-failed-task-blocks-only-its-dependents.md)).
 - **Codex's read-only and Guarded modes are off where its sandbox cannot
   start.** Ordewell checks Codex's sandbox once per daemon. On a host where it
   cannot start (stock Ubuntu 23.10 and later, many containers), those modes are
@@ -513,7 +529,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   pickers, and a task already in one fails at start saying why; Ordewell never
   swaps the mode for another. Full access is not sandboxed and stays available.
   [docs/troubleshooting.md](docs/troubleshooting.md) explains the cause and how
-  to fix it ([ADR-0033](docs/adr/0033-codex-planner-without-its-sandbox.md)).
+  to fix it ([ADR-0033](docs/adr/planner-envelope/0033-codex-planner-without-its-sandbox.md)).
 - **A task's report is its full `task_complete` summary.** The summary is kept
   whole as the task's `report` (cut at 20,000 characters, saying so), and
   `task_query` and `task_output` return it ahead of any log tail. A dependent's
@@ -528,18 +544,18 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   limit, or while your message is queued. The task stays in progress and only
   `task_complete` settles it. Task messages carry a `from: 'ordewell'` marker,
   and the task log shows the reminder as an "Ordewell: …" system line
-  ([ADR-0018](docs/adr/0018-structured-runner-transport.md)).
+  ([ADR-0018](docs/adr/runners/0018-structured-runner-transport.md)).
 - **Runners' own memory is off in Ordewell runs.** Claude Code's auto-memory
   and Codex's memories no longer load into planners or tasks, so a plan and a
   task depend on the repository and your instruction files, not on notes
   outside it. Your runners' memory outside Ordewell is untouched
-  ([ADR-0032](docs/adr/0032-runner-state-outside-the-workspace.md)).
+  ([ADR-0032](docs/adr/planner-envelope/0032-runner-state-outside-the-workspace.md)).
 - **Guarded planners read the web without asking.** Under the default `auto`
   approval mode, fetches and searches run at both levels, still behind the
   private-address guard, the secret check, `!` exclusions and the web-read
   budget. Set the approval mode to `ask` to approve each new site and search
   provider. `curl` and `wget` still ask per site in Guarded
-  ([ADR-0027](docs/adr/0027-web-reads-in-the-planner-envelope.md)).
+  ([ADR-0027](docs/adr/planner-envelope/0027-web-reads-in-the-planner-envelope.md)).
 - **The terminal UI takes the logo's teal, and the welcome's logo fits the
   terminal.** One
   accent, the logo's teal, marks the prompt, the planner, carets, headings and
@@ -593,7 +609,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   planner is no longer shown runner mode lists. A task it adds or moves lands
   on its runner's mode for your level, and under Guarded an edit cannot reach a
   mode only Full allows. A mode you pick by hand is kept
-  ([ADR-0031](docs/adr/0031-the-planner-says-read-only-not-a-mode.md)).
+  ([ADR-0031](docs/adr/routing/0001-autonomous-mode-resolution.md#the-planner-says-read-only-not-a-mode-adr-0031)).
 - **A message during a run is answered at once.** It no longer waits in a queue
   for the scheduler to park between batches: a planner turn takes it while
   running tasks carry on, holds new starts for the length of the turn, and
@@ -610,7 +626,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   on its own to tasks that implement or change behaviour, not to verification,
   docs or ops tasks. Set `disable-model-invocation: true` in your copy in
   `~/.ordewell/skills/tdd/` to opt out. The other built-ins stay user-only
-  ([ADR-0024](docs/adr/0024-unified-skills.md)).
+  ([ADR-0024](docs/adr/planner/0024-unified-skills.md)).
 - **Internals reorganized behind narrower modules.** The three runner adapters
   share one permission ledger; a run's settings and supervision have one owner
   (`RunSupervision`); a spawn-with-tools is one step over a per-conversation
@@ -701,7 +717,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   Substitutions and regex addresses still ask. A denied command now says how
   to rewrite it: the line reads that run freely, or, for a path after a `cd`
   on a line with `;`, that only `&&` chains are followed
-  ([ADR-0008](docs/adr/0008-planner-exploration-envelope.md)).
+  ([ADR-0008](docs/adr/planner-envelope/0008-planner-exploration-envelope.md)).
 - **Codex plans on stock Ubuntu.** Where Codex's sandbox cannot start
   (Ubuntu 23.10 and later restrict the user namespaces it needs), a Codex
   planner no longer stops with an error asking for `sudo`. It plans with its
@@ -709,13 +725,13 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   the other planners do, and a note says how to give it its shell back. A
   Codex task that needs the sandbox is still refused, and the message now
   offers Full access or another runner
-  ([ADR-0033](docs/adr/0033-codex-planner-without-its-sandbox.md)).
+  ([ADR-0033](docs/adr/planner-envelope/0033-codex-planner-without-its-sandbox.md)).
 - **A planner reads back its runner's saved output.** When Claude Code or
   OpenCode saves a long tool result to a file outside the workspace, the
   planner reads that file without asking, in Guarded and Full, as it did
   before planners stopped loading the repository's config. Only the files its
   own session saved count; a link out of them is still asked about
-  ([ADR-0032](docs/adr/0032-runner-state-outside-the-workspace.md)).
+  ([ADR-0032](docs/adr/planner-envelope/0032-runner-state-outside-the-workspace.md)).
 - **A one-shot planner reads the workspace.** A planner with nobody to ask
   had every Claude Code read refused, inside the workspace too.
 - **A usage limit shows once.** Claude Code reports a limit as a message and
@@ -759,7 +775,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   runner the plan may not use is refused, instead of being silently moved to
   the first allowed runner; the model allowlist now walks subtasks as well as
   tasks and says what it changed
-  ([ADR-0003](docs/adr/0003-per-runner-model-allowlist.md)).
+  ([ADR-0003](docs/adr/routing/0003-per-runner-model-allowlist.md)).
 - **A subtask can be edited on its own.** A direct edit to a subtask, by its
   dotted label or its title, used to fail with "Task not found"; it now finds
   its target at any depth and checks its dependencies among its siblings, and
@@ -917,7 +933,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   loads no project config and no language servers; and a Codex planner treats
   the repository as untrusted. The project's instruction files (`CLAUDE.md`,
   `AGENTS.md`) still reach the planner, as text
-  ([ADR-0028](docs/adr/0028-planners-never-run-repository-config.md)).
+  ([ADR-0028](docs/adr/planner-envelope/0028-planners-never-run-repository-config.md)).
 - **Project MCP servers start only once you approve them.** A server a
   repository declares (`.mcp.json`, `opencode.json`, `.codex/config.toml`)
   is shown to you with exactly what would run, and your approval is
@@ -985,7 +1001,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   planners now research under the same rules as the API planner: read-only
   commands run, anything else is decided by your approval mode, and file
   writes are refused in every mode
-  ([ADR-0026](docs/adr/0026-one-envelope-for-every-planner.md)). An OpenCode
+  ([ADR-0026](docs/adr/planner-envelope/0026-one-envelope-for-every-planner.md)). An OpenCode
   planner no longer runs its own shell, subagents or any tool its user
   configuration allows; its permission policy is now Ordewell's alone.
 - **A program named by its path no longer runs unasked.** `./cat README.md`
@@ -1056,7 +1072,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   `EnterPlanMode` and `ExitPlanMode` withheld alongside the edit tools, on
   fresh and resumed sessions alike. It researches with `Read`, `Grep` and
   `Glob`; it no longer runs shell commands
-  ([ADR-0008](docs/adr/0008-planner-exploration-envelope.md)).
+  ([ADR-0008](docs/adr/planner-envelope/0008-planner-exploration-envelope.md)).
 - **A runner never inherits another Ordewell's MCP credential.** When Ordewell
   runs inside a task of another Ordewell, `ORDEWELL_MCP_TOKEN_*` variables from
   the host or workspace environment are dropped, and a parent's server entry
@@ -1074,7 +1090,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   worktree; a task can write a skill there for later tasks. On a name clash the
   global skill wins and the workspace copy is reported as shadowed. All
   built-in skills are user-only. See [docs/skills.md](docs/skills.md) and
-  [ADR-0024](docs/adr/0024-unified-skills.md).
+  [ADR-0024](docs/adr/planner/0024-unified-skills.md).
 - **Task skills.** The planner attaches a skill to a task or subtask, and
   Ordewell puts its text in that task's prompt when it starts, so it works on
   every runner. In VS Code, skills are chips on task and subtask cards, locked
@@ -1148,7 +1164,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   TUI; `/tdd` is now the skill directive.
 - The runner-transport setting, its pill, `/transport` and `ordewell
   transport`. Runners are structured-only
-  ([ADR-0025](docs/adr/0025-structured-only-runners.md)). A saved plan pinned
+  ([ADR-0025](docs/adr/runners/0025-structured-only-runners.md)). A saved plan pinned
   to the terminal transport now runs structured.
 - **Daemon API:** `SettingsResponse` no longer carries `tdd`, `verification` or
   `runnerTransport`, and a settings update that sends them ignores them.
@@ -1649,7 +1665,7 @@ approval or ran. Each is now refused.
   `awk 'BEGIN{system(...)}'` and similar could land at the ask tier with a
   binary-wide remembered grant, contradicting ADR-0008's "refuse is not
   promptable." This narrows the planner's exploration envelope
-  ([ADR-0008](docs/adr/0008-planner-exploration-envelope.md)), it does not
+  ([ADR-0008](docs/adr/planner-envelope/0008-planner-exploration-envelope.md)), it does not
   widen it.
 - **Provider keys and the daemon token are written 0600**, even when they
   replace an existing file created with looser permissions — a plain write
@@ -1766,7 +1782,7 @@ approval or ran. Each is now refused.
   list, or a path glued onto a short flag (`grep -f/etc/passwd`) is now
   refused or prompted instead of running unprompted; computed arguments are
   confined like any other path, and bash's `|&` reads as a pipe. This narrows
-  the planner's exploration envelope ([ADR-0008](docs/adr/0008-planner-exploration-envelope.md)),
+  the planner's exploration envelope ([ADR-0008](docs/adr/planner-envelope/0008-planner-exploration-envelope.md)),
   it does not widen it.
 - **VS Code names a check you made as yours.** A task you marked complete
   reads "Marked by you" rather than presenting your decision as a model
@@ -2326,7 +2342,7 @@ the plan during a conversation instead of only regenerating it.
   dependency repair, and re-arming of failed or completed tasks that releases
   their blocked dependents. The shared edit rules live in `TaskEditValidator`
   so the `Session` and `TaskOps` seams cannot drift apart. See
-  [ADR-0012](docs/adr/0012-the-task-query-read-channel.md).
+  [ADR-0012](docs/adr/planner/0012-the-task-query-read-channel.md).
 
 ### Fixed
 
@@ -2567,26 +2583,26 @@ First public release.
 
 - **Planner as a conversation.** One continuous chat that researches the repo
   read-only, asks when a goal is vague, and whose final message *is* the plan
-  ([ADR-0002](docs/adr/0002-planner-as-conversation-loop.md)).
+  ([ADR-0002](docs/adr/planner/0002-planner-as-conversation-loop.md)).
 - **Per-task model routing.** Every task carries its own runner, model, thinking
   effort and mode, chosen by the planner across the whole plan and editable
   before anything runs.
 - **Harness planners.** Claude Code, Codex or OpenCode can act as the planner on
   a subscription you already hold, with no separate API key
-  ([ADR-0009](docs/adr/0009-coding-agents-as-planners.md)).
+  ([ADR-0009](docs/adr/planner/0009-coding-agents-as-planners.md)).
 - **Evidence-based verdicts.** A task completes only when its unique completion
   marker appears in the runner's output; exit code is kept as diagnostic
   evidence and the model is never the tie-breaker.
 - **Three surfaces over one core** — a VS Code extension, a full-screen terminal
-  UI ([ADR-0006](docs/adr/0006-tui-pure-core-thin-driver.md)), and a CLI where
+  UI ([ADR-0006](docs/adr/surfaces/0006-tui-pure-core-thin-driver.md)), and a CLI where
   every slash command is also a subcommand.
 - **Read-only exploration envelope.** Reads run in parallel, anything reaching
   outside the workspace asks once, and commands that would write are refused
-  ([ADR-0008](docs/adr/0008-planner-exploration-envelope.md)).
+  ([ADR-0008](docs/adr/planner-envelope/0008-planner-exploration-envelope.md)).
 - **Runner plugins.** Claude Code, Codex and OpenCode are built in; any other
   CLI agent is a manifest, not a code change.
 - **Windows support** across every surface except the tmux-backed TUI
-  ([ADR-0010](docs/adr/0010-windows-support.md)).
+  ([ADR-0010](docs/adr/platform/0010-windows-support.md)).
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 

@@ -215,8 +215,7 @@ export class ApiClient {
           ...(body ? { 'Content-Type': 'application/json' } : {}),
           ...(token ? { Authorization: bearerHeaderValue(token) } : {}),
         },
-        // Planner research on a real repository regularly exceeds two minutes.
-        // The benchmark harness uses the same 15-minute default explicitly;
+        // Planner research on a real repository regularly exceeds two minutes;
         // keep the env override for callers that need a tighter/looser bound.
         timeout:
           Number.isFinite(configuredTimeout) && configuredTimeout > 0

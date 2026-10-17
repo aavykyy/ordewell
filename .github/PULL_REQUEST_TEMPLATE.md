@@ -22,5 +22,6 @@ things takes more than twice as long to review.
 - [ ] `npm run lint && npm run typecheck && npm test` passes
 - [ ] Comments explain *why*, not *what*, and match the density of the surrounding file
 - [ ] No new `any`
+- [ ] A decision that is hard to reverse, surprising and a real trade-off comes with an ADR (or an edit to the one that owns it); see docs/adr/README.md. `node scripts/verify-adr.mjs` passes
 - [ ] User-visible changes are noted in `CHANGELOG.md` under Unreleased
 - [ ] No quantified performance or cost claims added to user-facing text

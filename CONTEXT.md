@@ -417,7 +417,7 @@ Code's `disable-model-invocation` and `user-invocable` (unmarked = both). It liv
 `~/.ordewell/skills/` (built-in seeds plus the user's own; tasks never write
 it) or **workspace** `.ordewell/skills/` (committed, so it reaches worktrees
 through git). On a name clash global wins and the workspace copy is reported
-as shadowed. The built-in planner skills are user-only; the built-in `tdd` task skill is model-invocable (ADR-0024, amended). Ordewell never ships, reads, or
+as shadowed. The built-in planner skills are user-only; the built-in `tdd` task skill is model-invocable (ADR-0024). Ordewell never ships, reads, or
 references runner-native skill mechanisms (`.claude/skills`, OpenCode plugins,
 etc.) to deliver a skill. Research subagents (`spawn_research_agent`, ADR-0005)
 are always-on for the planner, not a skill.
@@ -1047,7 +1047,7 @@ split derives its result's mark with `inheritedOps`.
 
 **Isolated execution** — running each *change task* in its own *worktree*
 instead of the shared workspace root, then integrating the results
-deterministically (ADR-0013, amended by ADR-0014 and ADR-0020). Available when the workspace forms a *repo
+deterministically (ADR-0013, ADR-0014 and ADR-0020). Available when the workspace forms a *repo
 group* — a git repository, or a folder of them — with a clean tracked tree in
 each repository and `worktreeIsolation` on; otherwise every task runs in the
 workspace root exactly as before, and `WorktreeIsolation.isActive` says which of
@@ -1057,9 +1057,9 @@ left for a folder with no repository in it. A group's task integrates by an
 atomic *landing*. An *ops task* runs at the workspace root instead, and a run
 decides whether it isolates when its first change task starts, so a run of only
 ops tasks never asks. The
-Runner is only ever handed a `cwd` (ADR-0007) — git never enters
+Runner is only ever handed a `cwd` (ADR-0025) — git never enters
 `IRunner`, `RunnerRegistry` or a runner adapter.
-*Avoid:* "sandbox" (an OS-level runner sandbox is a separate concern, ADR-0011),
+*Avoid:* "sandbox" (an OS-level sandbox is a separate concern, ADR-0011),
 "clone" (a worktree shares the repository's object store).
 
 **WorktreeIsolation** — the deep module owning every git and filesystem
@@ -1272,8 +1272,7 @@ and merge result for a supervisor's wake-up; a failed automatic merge waits for
 a user merge or the next run before automatic merging resumes. The run's copy
 is in `runSettings`, which the scheduler reads as it decides each merge (it
 holds no copy of its own); a change applies to it at once in the session it is
-made in. The timeline records "auto-merged for task N", attributed to Ordewell
-setting. It also merges at the end of a run (ADR-0029, amended 2026-10-12): the
+made in. The timeline records "auto-merged for task N", attributed to "Ordewell setting". It also merges at the end of a run (ADR-0029): the
 end-of-run handoff is sent only if that merge stops. With it and an Act
 supervisor's `merge_all` both off, Ordewell never merges for the user
 (ADR-0013).

@@ -24,7 +24,7 @@ start:
   already in one fails at start with the same reason. Ordewell never swaps the
   mode for another.
 - A Codex planner still plans: its own shell is off and it reads through
-  Ordewell's `run_command` ([ADR-0033](adr/0033-codex-planner-without-its-sandbox.md)).
+  Ordewell's `run_command` ([ADR-0033](adr/planner-envelope/0033-codex-planner-without-its-sandbox.md)).
 
 ### Check it
 
@@ -84,7 +84,7 @@ this run started on `<base>`**, and the handoff stays.
 Merge all lands each repository's integration branch into whatever that
 repository has checked out, so it insists every repository of the run, with work
 or not, is on the branch the run started on
-([ADR-0042](adr/0042-merge-all-lands-only-on-the-branch-the-run-started-on.md)).
+([ADR-0042](adr/isolation/0042-merge-all-lands-only-on-the-branch-the-run-started-on.md)).
 The handoff, `ordewell status` and the Merge confirmation name that branch (as
 `main @ a1b2c3d`). In a group of repositories, one on the wrong branch keeps all
 of them from merging.
@@ -116,7 +116,7 @@ allowlist. The task is only flagged: it still runs as assigned, and Ordewell
 moves nothing. Switch the runner back on (`/runners`, or **Ordewell: Toggle
 Runner**), add the model to the allowlist, or move the task to another runner
 or model yourself or ask the planner to
-([ADR-0043](adr/0043-a-change-of-scope-reaches-the-planner-and-flags-tasks.md)).
+([ADR-0043](adr/routing/0043-a-change-of-scope-reaches-the-planner-and-flags-tasks.md)).
 
 ### Runner toggles are now shared between VS Code and the terminal UI
 
@@ -133,7 +133,7 @@ shows **Resending at …** above the composer.
 
 What you sent, and any supervisor wake-up, is kept and goes again as one turn a
 minute after the reset
-([ADR-0044](adr/0044-the-planners-usage-limit-waits-and-resends.md)). Anything
+([ADR-0044](adr/planner/0044-the-planners-usage-limit-waits-and-resends.md)). Anything
 you send meanwhile is saved and goes with it. To stop the resend, use `/resend
 cancel` in the terminal UI, `ordewell resend cancel`, or **Don't resend** in VS
 Code: what waits then goes with your next message. If the planner did not say
@@ -147,7 +147,7 @@ A row reads **waits for your approval** and the scheduler skips it.
 
 The planner added the task after you approved the plan, and autorun was off, so
 nothing may start it until you approve it
-([ADR-0035](adr/0035-effects-are-consented-and-recorded.md)). Approve it with
+([ADR-0035](adr/supervision/0035-effects-are-consented-and-recorded.md)). Approve it with
 `f` in the terminal UI, `ordewell force-start <id>`, or its card in VS Code;
 approve every waiting task with `/run` (or **Approve all** in VS Code). Neither
 starts a task before its dependencies finish: it starts once they do, and the
@@ -159,7 +159,7 @@ With autorun on, tasks the planner adds in your turn need no approval.
 A saved session belongs to the runner that made it and cannot be opened by
 another. Use Retry: it starts a fresh session on the new runner with the earlier
 runner's files restored
-([ADR-0041](adr/0041-a-tasks-model-follows-the-runners-own-switch.md)).
+([ADR-0041](adr/routing/0041-a-tasks-model-follows-the-runners-own-switch.md)).
 
 ## A task's model cannot be changed while it runs
 

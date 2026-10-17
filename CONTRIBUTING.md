@@ -7,8 +7,12 @@ most useful things you can send.
 
 Open an issue first. Ordewell has opinions — about where logic lives, about what
 counts as evidence that a task finished — and a PR that cuts against one of them
-is a bad outcome for both of us. The [ADRs](docs/adr/) record most of those
-opinions, and [CONTEXT.md](CONTEXT.md) is the vocabulary they're written in.
+is a bad outcome for both of us. The [ADRs](docs/adr/README.md), grouped by area,
+record most of those opinions, and [CONTEXT.md](CONTEXT.md) is the vocabulary
+they're written in. If your change makes a decision they don't cover — hard to
+reverse, surprising without context, a real trade-off — add an ADR in the same
+pull request; the README says [what qualifies](docs/adr/README.md#should-this-be-an-adr)
+and how to write one. A smaller change to a recorded decision edits that ADR.
 
 Small fixes (a typo, a crash, an obviously-wrong branch) need no issue. Just
 send them.
@@ -81,7 +85,7 @@ packages/
 └── web/     Hono HTTP + WebSocket server. This is the local daemon the CLI and
             TUI talk to over 127.0.0.1 — not a website.
 bench/       Offline dev harnesses. Zero dependencies, pure Node.
-docs/adr/    Architecture decisions, including the ones that were rejected.
+docs/adr/    Architecture decisions by area, including the ones that were rejected.
 ```
 
 ## Adding a runner
