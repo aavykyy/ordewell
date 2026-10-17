@@ -1,6 +1,8 @@
 ---
 status: accepted
 amends: ["0013"]
+folds:
+  - "0019 — Nested repositories are shared live, not refused"
 ---
 
 # 0014 — Multi-repo workspaces: isolate a repo group, land it atomically
@@ -34,7 +36,7 @@ code path, not a single-repo path and a multi-repo one.
   vendored clone as a project.
 - **A workspace that is itself a repo is a group of one**, whatever it contains.
   Repositories nested inside it that are not submodules are shared live into
-  every task at their real relative paths (ADR-0019).
+  every task at their real relative paths (see *Nested repositories*).
 - **Git submodules are out of scope.** A submodule is owned by its outer repo,
   which already decides what commit it is at; it is neither refused nor
   isolated separately.
@@ -115,8 +117,8 @@ for the user's merge rather than for a landing.
 Loose files and folders in the workspace root that are not in any repo of the
 group are linked live into every task workspace, so edits to them are live and
 unreviewed. The same applies to any repo that cannot be isolated — no commits,
-or git refuses a worktree — and to nested repositories (ADR-0019); each is named
-in a notice. `.ordewell/` is never linked. A link that leads nowhere (an editor's
+or git refuses a worktree — and to nested repositories (see *Nested
+repositories*); each is named in a notice. `.ordewell/` is never linked. A link that leads nowhere (an editor's
 lock file, `.#NOTES.md`) is not shared — linking it would fail every task — and
 is left out of the notice and the planner prompt.
 
@@ -134,6 +136,32 @@ is left out of the notice and the planner prompt.
   workspace reaches only what the same path in the workspace does. A user's own
   link out of the workspace is shared as a link to that link, not to where it
   leads. The planner's searches skip `.ordewell/` and follow no links.
+
+### Nested repositories (ADR-0019)
+
+**The outer repository isolates; the repositories nested in it are shared live.**
+
+- A workspace that is a repository is a *group of one* whether or not it holds
+  nested repositories. There is no `nested-repos` refusal: `IsolationInactiveReason`
+  has no such reason, and the orchestrator has no fallback notice for one.
+- A nested repository is a repository below the workspace that the outer
+  repository does not own as a submodule: a directory with its own `.git`
+  (directory or file), not a staged gitlink and not declared in `.gitmodules`,
+  found within two levels, skipping `.git`, `.ordewell` and `node_modules`.
+- Each is linked live into every task at the same relative path it has in the
+  workspace, exactly like a shared path of a group. It is recorded as `shared`
+  in the run, so the group's existing disclosure carries it: the one-line
+  notice to the user, and the planner prompt, which tells the planner not to run
+  two tasks that edit the same one at once. It points at the same path in the
+  real workspace, so the planner's envelope (ADR-0008) is unchanged.
+- **An ignored nested repository is shared too.** No linked artifact stands in
+  for it, and the whole point is that it must not vanish. Only if the bootstrap
+  has already linked an artifact that contains it (`vendor/`, `.venv/`) is it
+  left alone, so the artifact stays linked whole rather than being replaced by a
+  link to one repository inside it.
+- The links are made **after** the bootstrap and recorded on the lone repo's
+  worktree like its bootstrapped artifacts, so they are kept out of the task's
+  commit and never walked into on cleanup.
 
 ### Bootstrap
 
@@ -256,9 +284,38 @@ Core, daemon, TUI, CLI and VS Code.
 - **`workspaceRepos` added to auto-detection** rather than replacing it. It was
   the first design. Rejected: a user could not leave a directly-inside repo out.
 - **Refusing a repository that contains nested non-submodule repos**
-  (`nested-repos`). It was the first answer, replacing an outer-only isolation
-  that silently left the nested repos out of every worktree. Rejected by
-  ADR-0019: refusing the whole group protects nothing.
+  (`nested-repos`). It was the first answer: `isActive` answered
+  `{ active: false, reason: 'nested-repos' }` and every task of the run fell
+  back to the shared workspace root with a notice. It replaced an outer-only
+  isolation that silently left the nested repos out of every worktree. Rejected,
+  because the refusal is too coarse in three ways and has a hole:
+  - It is all-or-nothing. One nested clone — a scratch checkout, a vendored
+    repository, a test fixture — turned off isolation for the **whole**
+    workspace, including the outer repository that could be isolated perfectly
+    well. That brought back the overlap ADR-0013 and this ADR exist to remove.
+  - The only remedies the notice offered were to ignore the nested repositories
+    in git or make them submodules, both changes to the user's real repository.
+    `workspaceRepos`, whose whole job is to name the group, could not help: when
+    the workspace is itself a repository, `scanGroup` never reads it.
+  - The case it treated as safe was the leaky one. A nested repository the outer
+    repository *ignores* was exempt from the refusal, so isolation proceeded —
+    but `sharedPaths` returns nothing for a group of one, and a worktree only
+    holds tracked files, so the ignored nested repository was simply absent from
+    every task worktree, with no notice. The unignored case was refused loudly;
+    the ignored case disappeared in silence.
+
+  Half-isolating the outer repository is the failure the refusal was right to
+  name, but refusing the whole group is a bigger failure: it protects nothing.
+  The nested repositories are books the tasks may legitimately need to read, and
+  a live link discloses its own risk.
+- **Composing the outer repository and the nested ones into one group.** It
+  reads well — the outer at `.`, the nested at their paths — but a git worktree
+  cannot cleanly hold another worktree inside its working directory, and the
+  nested repository is *owned* by the outer one in no way that would let its
+  history be integrated atomically with it.
+- **Sharing only the unignored nested repositories.** It leaves the silent,
+  invisible case exactly as it is, which is the one the shared-live rule exists
+  to remove.
 - **Partial landing.** Rejected: a task that changed an API and its client would
   land in one repo and not the other, leaving the integration branches
   inconsistent with each other and `merged` meaning "some of it". A dependent
@@ -294,6 +351,18 @@ Core, daemon, TUI, CLI and VS Code.
   isolation guarantees.
 - `git merge-tree --write-tree` needs git 2.38; older git gets a handoff that
   can land some repos and not others, and says which.
+- A repository with a nested clone isolates: the outer repository in a
+  worktree, the nested ones live and named. Edits to the nested ones are not
+  isolated and not reviewed — visible in the notice and the planner prompt, as
+  for any shared path. That is the trade: the outer repository keeps isolation
+  instead of the whole workspace losing it.
+- Detection of nested repositories stops two levels below the root, while a
+  folder's own repositories are found one level down (*Supported layouts*); both
+  bounds keep the scan off dependency trees. A nested repository deeper than
+  that is not found, and so is not shared.
+- A nested repository inside a linked artifact (`vendor/`, `.venv/`) is live
+  through the whole artifact link rather than linked a second time; the notice
+  still names it, because a live path it is.
 
 ## History
 
@@ -305,3 +374,4 @@ Core, daemon, TUI, CLI and VS Code.
 - 2026-10-02 — only change tasks are isolated; ops tasks run at the workspace
   root behind a merge gate, and the dirty-tree hold moves to the first change
   task (ADR-0020).
+- 2026-10-17 — ADR-0019 folded in as *Nested repositories*.

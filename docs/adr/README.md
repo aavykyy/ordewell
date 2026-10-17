@@ -143,10 +143,9 @@ Worktrees, repo groups, conflicts, ops tasks and merge gates.
 
 | ADR | Title | Status | Amends | Amended by |
 |---|---|---|---|---|
-| [0013](isolation/0013-worktree-isolation.md) | Worktree isolation: one checkout per task, one branch per run | accepted | — | [0014](isolation/0014-multi-repo-workspaces.md), [0015](isolation/0015-conflict-repair.md), [0019](isolation/0019-nested-repos-shared-live.md), [0020](isolation/0020-ops-tasks-and-merge-gates.md), [0029](supervision/0029-the-supervisor.md), [0030](supervision/0030-global-run-settings.md), [0034](supervision/0034-a-failed-task-blocks-only-its-dependents.md) |
-| [0014](isolation/0014-multi-repo-workspaces.md) | Multi-repo workspaces: isolate a repo group, land it atomically | accepted | [0013](isolation/0013-worktree-isolation.md) | [0019](isolation/0019-nested-repos-shared-live.md), [0020](isolation/0020-ops-tasks-and-merge-gates.md) |
+| [0013](isolation/0013-worktree-isolation.md) | Worktree isolation: one checkout per task, one branch per run | accepted | — | [0014](isolation/0014-multi-repo-workspaces.md), [0015](isolation/0015-conflict-repair.md), [0020](isolation/0020-ops-tasks-and-merge-gates.md), [0029](supervision/0029-the-supervisor.md), [0030](supervision/0030-global-run-settings.md), [0034](supervision/0034-a-failed-task-blocks-only-its-dependents.md) |
+| [0014](isolation/0014-multi-repo-workspaces.md) | Multi-repo workspaces: isolate a repo group, land it atomically | accepted | [0013](isolation/0013-worktree-isolation.md) | [0020](isolation/0020-ops-tasks-and-merge-gates.md) |
 | [0015](isolation/0015-conflict-repair.md) | Conflict repair: the task repairs its own conflict, bounded and evidenced | accepted | [0013](isolation/0013-worktree-isolation.md) | [0034](supervision/0034-a-failed-task-blocks-only-its-dependents.md) |
-| [0019](isolation/0019-nested-repos-shared-live.md) | Nested repositories are shared live, not refused | accepted | [0013](isolation/0013-worktree-isolation.md), [0014](isolation/0014-multi-repo-workspaces.md) | — |
 | [0020](isolation/0020-ops-tasks-and-merge-gates.md) | Ops tasks run in the workspace, behind a merge gate | accepted | [0013](isolation/0013-worktree-isolation.md), [0014](isolation/0014-multi-repo-workspaces.md) | [0029](supervision/0029-the-supervisor.md), [0030](supervision/0030-global-run-settings.md), [0035](supervision/0035-effects-are-consented-and-recorded.md) |
 
 ### supervision/
@@ -178,5 +177,13 @@ Windows and the per-workspace environment.
 |---|---|---|---|---|
 | [0010](platform/0010-windows-support.md) | Windows support: one launch seam, one shell seam, one dialect | accepted | — | — |
 | [0016](platform/0016-per-workspace-environment.md) | Per-workspace environment for the planner and agents | accepted | — | — |
+
+### Retired numbers
+
+Folded into another ADR. The number still resolves, and code that cites it stays valid.
+
+| ADR | Was | Now in |
+|---|---|---|
+| 0019 | Nested repositories are shared live, not refused | [0014](isolation/0014-multi-repo-workspaces.md) |
 
 <!-- adr-index:end -->
