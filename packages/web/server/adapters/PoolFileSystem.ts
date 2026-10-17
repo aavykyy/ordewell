@@ -122,8 +122,8 @@ export class PoolFileSystem extends BaseFileSystem {
       // cwd, not the `--` search path — without this, a daemon started outside
       // the workspace silently drops every anchored pattern ("src/**/*") to a
       // false "No files matched.".
-      const anchor = await this.searchAnchor(absRoot);
-      const result = await run('rg', buildGlobArgs(pattern, absRoot), { timeout: SEARCH_TIMEOUT_MS, cwd: anchor, env: this.searchEnv() });
+      const { root, anchor } = await this.searchTarget(absRoot);
+      const result = await run('rg', buildGlobArgs(pattern, root), { timeout: SEARCH_TIMEOUT_MS, cwd: anchor, env: this.searchEnv() });
       // rg exits 1 for "no files matched", which is a valid empty answer.
       if (result.code !== 0 && result.code !== 1 && !result.stdout) {
         return { success: false, output: `Glob failed: ${result.stderr.trim() || 'ripgrep error'}`, truncated: false };
@@ -141,34 +141,43 @@ export class PoolFileSystem extends BaseFileSystem {
     // rather than silently returning a different result set than ripgrep would.
     const basename = pattern.split('/').pop() || pattern;
     const excludeArgs = SEARCH_EXCLUSIONS.flatMap((dir) => ['-not', '-path', `*/${dir}/*`]);
-    const result = await run('find', [absRoot, '-type', 'f', '-name', basename, ...excludeArgs], { timeout: SEARCH_TIMEOUT_MS, env: this.searchEnv() });
+    const { root: findRoot } = await this.searchTarget(absRoot);
+    const result = await run('find', [findRoot, '-type', 'f', '-name', basename, ...excludeArgs], { timeout: SEARCH_TIMEOUT_MS, env: this.searchEnv() });
     if (result.code !== 0 && !result.stdout) {
       return { success: false, output: `Glob failed: ${result.stderr.trim() || 'find error'}`, truncated: false };
     }
     const capped = applyHeadLimit(result.stdout, headLimit);
     return {
       success: true,
-      output: formatSearchOutput(capped, absRoot, { emptyMessage: 'No files matched.' }),
+      output: formatSearchOutput(capped, findRoot, { emptyMessage: 'No files matched.' }),
       truncated: capped.truncated,
     };
   }
 
   /**
-   * A directory to anchor a search in. `cwd` exists only so anchored
-   * `--glob`/`--include` patterns resolve against the search root (see
-   * globImpl), and spawn(2) rejects a `cwd` that is a file with ENOTDIR.
+   * The search path and a directory to anchor it in. `cwd` exists only so
+   * anchored `--glob`/`--include` patterns resolve against the search root, and
+   * spawn(2) rejects a `cwd` that is a file with ENOTDIR.
    *
    * `grep`'s `path` is documented as a directory, but the tool description
    * tells the model to survey with output_mode="files" and then re-run "on a
    * narrower path" — and what that survey hands back are files. rg and grep
    * both search a single file happily, so anchor at the parent rather than
    * failing a legitimately file-scoped search.
+   *
+   * The root is resolved through symlinks because the OS reports a child's cwd
+   * as the resolved path (macOS tmpdir is `/var/...` -> `/private/var/...`),
+   * and ripgrep matches an anchored glob against the search path as written: a
+   * root that goes through a link never matches and yields a false empty
+   * result. Result rows then carry the resolved prefix, which is why callers
+   * strip `anchor` rather than the path they were handed.
    */
-  private async searchAnchor(absRoot: string): Promise<string> {
+  private async searchTarget(absRoot: string): Promise<{ root: string; anchor: string }> {
     try {
-      return (await fs.stat(absRoot)).isDirectory() ? absRoot : path.dirname(absRoot);
+      const root = await fs.realpath(absRoot);
+      return { root, anchor: (await fs.stat(root)).isDirectory() ? root : path.dirname(root) };
     } catch {
-      return absRoot;
+      return { root: absRoot, anchor: absRoot };
     }
   }
 
@@ -177,14 +186,14 @@ export class PoolFileSystem extends BaseFileSystem {
     const useRg = await this.hasRg();
     // Same anchored-glob-vs-cwd hazard as globImpl: an `include` filter with a
     // `/` in it would otherwise resolve against the daemon's cwd, not absRoot.
-    const anchor = await this.searchAnchor(absRoot);
+    const { root, anchor } = await this.searchTarget(absRoot);
     // GNU grep's `--include` only matches a basename, so an anchored pattern
     // like `subdir/*.txt` never matches there — strip it from the grep call
     // and filter matches by relative path afterward instead.
     const anchoredInclude = !useRg && opts.include?.includes('/') ? opts.include : undefined;
     const result = useRg
-      ? await run('rg', buildGrepArgs(pattern, opts, absRoot).args, { timeout: SEARCH_TIMEOUT_MS, cwd: anchor, env: this.searchEnv() })
-      : await run('grep', buildFallbackGrepArgs(pattern, anchoredInclude ? { ...opts, include: undefined } : opts, absRoot, await this.fallbackGrepRegex()), { timeout: SEARCH_TIMEOUT_MS, cwd: anchor, env: this.searchEnv() });
+      ? await run('rg', buildGrepArgs(pattern, opts, root).args, { timeout: SEARCH_TIMEOUT_MS, cwd: anchor, env: this.searchEnv() })
+      : await run('grep', buildFallbackGrepArgs(pattern, anchoredInclude ? { ...opts, include: undefined } : opts, root, await this.fallbackGrepRegex()), { timeout: SEARCH_TIMEOUT_MS, cwd: anchor, env: this.searchEnv() });
 
     // Exit 1 is "no matches" for both tools — a successful search with an empty
     // result, not a failure. Anything else with no stdout is a real error.

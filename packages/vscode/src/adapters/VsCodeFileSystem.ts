@@ -171,8 +171,8 @@ export class VsCodeFileSystem extends BaseFileSystem {
       // ripgrep resolves a `--glob` pattern that contains a `/` against its own
       // cwd, not the `--` search path — without this, an anchored pattern
       // ("src/**/*") silently drops to a false "No files matched.".
-      const anchor = await this.searchAnchor(absRoot);
-      const result = await run('rg', buildGlobArgs(pattern, absRoot), { timeout: SEARCH_TIMEOUT_MS, cwd: anchor, env: this.searchEnv() });
+      const { root, anchor } = await this.searchTarget(absRoot);
+      const result = await run('rg', buildGlobArgs(pattern, root), { timeout: SEARCH_TIMEOUT_MS, cwd: anchor, env: this.searchEnv() });
       if (result.code !== 0 && result.code !== 1 && !result.stdout) {
         return { success: false, output: `Glob failed: ${result.stderr.trim() || 'ripgrep error'}`, truncated: false };
       }
@@ -199,19 +199,25 @@ export class VsCodeFileSystem extends BaseFileSystem {
   }
 
   /**
-   * A directory to anchor a search in. `cwd` exists only so anchored
-   * `--glob`/`--include` patterns resolve against the search root, and spawn(2)
-   * rejects a `cwd` that is a file with ENOTDIR. The tool description invites
-   * a file here — it tells the model to survey with output_mode="files" then
-   * re-run on "a narrower path" — and rg/grep search a single file fine, so
-   * anchor at the parent instead of failing the search. Node `stat` rather than
+   * The search path and a directory to anchor it in. `cwd` exists only so
+   * anchored `--glob`/`--include` patterns resolve against the search root, and
+   * spawn(2) rejects a `cwd` that is a file with ENOTDIR. The tool description
+   * invites a file here — it tells the model to survey with output_mode="files"
+   * then re-run on "a narrower path" — and rg/grep search a single file fine,
+   * so anchor at the parent instead of failing the search. Node `fs` rather than
    * `workspace.fs`: this path already shells out to a local process.
+   *
+   * The root is resolved through symlinks because the OS reports a child's cwd
+   * as the resolved path, and ripgrep matches an anchored glob against the
+   * search path as written: a root that goes through a link never matches and
+   * yields a false empty result. Kept in step with PoolFileSystem.searchTarget.
    */
-  private async searchAnchor(absRoot: string): Promise<string> {
+  private async searchTarget(absRoot: string): Promise<{ root: string; anchor: string }> {
     try {
-      return (await nodeFs.stat(absRoot)).isDirectory() ? absRoot : path.dirname(absRoot);
+      const root = await nodeFs.realpath(absRoot);
+      return { root, anchor: (await nodeFs.stat(root)).isDirectory() ? root : path.dirname(root) };
     } catch {
-      return absRoot;
+      return { root: absRoot, anchor: absRoot };
     }
   }
 
@@ -220,14 +226,14 @@ export class VsCodeFileSystem extends BaseFileSystem {
     const useRg = await this.hasRg();
     // Same anchored-glob-vs-cwd hazard as globImpl: an `include` filter with a
     // `/` in it would otherwise resolve against the extension host's cwd, not absRoot.
-    const anchor = await this.searchAnchor(absRoot);
+    const { root, anchor } = await this.searchTarget(absRoot);
     // GNU grep's `--include` only matches a basename, so an anchored pattern
     // like `subdir/*.txt` never matches there — strip it from the grep call
     // and filter matches by relative path afterward instead.
     const anchoredInclude = !useRg && opts.include?.includes('/') ? opts.include : undefined;
     const result = useRg
-      ? await run('rg', buildGrepArgs(pattern, opts, absRoot).args, { timeout: SEARCH_TIMEOUT_MS, cwd: anchor, env: this.searchEnv() })
-      : await run('grep', buildFallbackGrepArgs(pattern, anchoredInclude ? { ...opts, include: undefined } : opts, absRoot, await this.fallbackGrepRegex()), { timeout: SEARCH_TIMEOUT_MS, cwd: anchor, env: this.searchEnv() });
+      ? await run('rg', buildGrepArgs(pattern, opts, root).args, { timeout: SEARCH_TIMEOUT_MS, cwd: anchor, env: this.searchEnv() })
+      : await run('grep', buildFallbackGrepArgs(pattern, anchoredInclude ? { ...opts, include: undefined } : opts, root, await this.fallbackGrepRegex()), { timeout: SEARCH_TIMEOUT_MS, cwd: anchor, env: this.searchEnv() });
 
     // Exit 1 means "no matches" for both tools — an empty success, not an error.
     if (result.code !== 0 && result.code !== 1 && !result.stdout) {
