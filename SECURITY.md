@@ -93,7 +93,7 @@ except where [ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-s
   change task works in its own git worktree. An ops task runs in your checkout,
   after a merge gate has put what it depends on there.
 - **Read-only tasks use their runner's own read-only mode**
-  ([ADR-0031](docs/adr/routing/0031-the-planner-says-read-only-not-a-mode.md)). That
+  ([ADR-0031](docs/adr/routing/0001-autonomous-mode-resolution.md#the-planner-says-read-only-not-a-mode-adr-0031)). That
   mode differs by runner; Claude Code's plan mode, for example, may save notes
   in its own config folder. A task's result is its `task_complete` report,
   which Ordewell stores with the verdict.

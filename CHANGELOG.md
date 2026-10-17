@@ -311,7 +311,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   marks a manual or ops task ignores the mark with a warning, an edit that
   asks it of an ops task is refused, and the planner is told that a task which
   must run tests, scripts or builds is not read-only
-  ([ADR-0031](docs/adr/routing/0031-the-planner-says-read-only-not-a-mode.md)).
+  ([ADR-0031](docs/adr/routing/0001-autonomous-mode-resolution.md#the-planner-says-read-only-not-a-mode-adr-0031)).
 - **Usage on every task attempt.** Each attempt records its tokens, reported
   cost and wall time, grouped by the model that actually ran. The terminal
   UI's task view pins the usage of the attempt on screen in its footer, with
@@ -484,7 +484,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   planner is no longer shown runner mode lists. A task it adds or moves lands
   on its runner's mode for your level, and under Guarded an edit cannot reach a
   mode only Full allows. A mode you pick by hand is kept
-  ([ADR-0031](docs/adr/routing/0031-the-planner-says-read-only-not-a-mode.md)).
+  ([ADR-0031](docs/adr/routing/0001-autonomous-mode-resolution.md#the-planner-says-read-only-not-a-mode-adr-0031)).
 - **A message during a run is answered at once.** It no longer waits in a queue
   for the scheduler to park between batches: a planner turn takes it while
   running tasks carry on, holds new starts for the length of the turn, and
