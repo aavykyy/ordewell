@@ -57,7 +57,9 @@ unsurprising one needs no explanation, and a decision with no alternative is
 
 - A bug fix, or a refactor that keeps the design. The commit message and a
   comment that says *why* are the record.
-- A tuning value, a timeout, a label, layout or copy.
+- A tuning value, a timeout, a label, layout or copy. An ADR that quotes one is
+  edited in place so the quote stays true, with no History line unless the
+  behaviour changed.
 - A command, setting or tool that follows a decision already recorded. Rewrite
   the part of that ADR it changes and add a History line.
 - A term or its meaning: that is [CONTEXT.md](../../CONTEXT.md). How a user does
@@ -168,8 +170,9 @@ list four-digit numbers as strings.
 
 **Style.**
 
-- Use the terms in [CONTEXT.md](../../CONTEXT.md); its *avoid* lists name the
-  synonyms that blur a distinction the project keeps. A term the ADR introduces
+- Use the terms in [CONTEXT.md](../../CONTEXT.md) (grep it; it is long); its
+  *avoid* lists name the synonyms that blur a distinction the project keeps. A
+  term the ADR introduces
   goes there in the change that implements it, since CONTEXT.md describes what
   is.
 - Name code by module, type or function (`blockingFailures`), with a path only
@@ -194,7 +197,8 @@ list four-digit numbers as strings.
 4. Write it. History starts with today's date and `accepted` (`proposed` if
    that is its status). Check each fact you state (names, defaults, paths,
    limits) against the code, and do not state a guess as fact: say in your message
-   to the maintainer what you inferred.
+   to the maintainer what you inferred. If the request misdescribes what the code
+   does, say so there and record what is true.
 5. Label a rule `(K1)` only once code or another ADR cites it (see Rule IDs).
 6. Cite the ADR in a comment where the code embodies it, saying why:
    `// … (ADR-0018)`. The check fails a citation that does not resolve.
@@ -217,9 +221,10 @@ list four-digit numbers as strings.
 - **Decided but not built yet.** The body keeps saying what is true now, and one
   *Pending* line under the title says what will change. For a change that has its
   own ADR the line names that ADR; for a small change it says what will change and
-  what it waits on (an issue number). When the code lands, rewrite the body, add
-  the History line and delete the Pending line. The check fails a Pending line
-  that names a fully implemented ADR.
+  what it waits on (an issue number). A Pending line names no ADR except the one
+  that will change this one: the check reads every ADR number in it that way, and
+  fails one that names a fully implemented ADR, or the ADR itself. When the code
+  lands, rewrite the body, add the History line and delete the Pending line.
 - **Never renumber or delete a number.** A folded ADR keeps its number in the
   host's `folds`.
 

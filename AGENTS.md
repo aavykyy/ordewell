@@ -98,7 +98,8 @@ writing or changing an ADR. In short:
   `node scripts/verify-adr.mjs --next`, written to the
   [template](docs/adr/README.md#writing-one). Write it in the same change as the
   code it describes, and cite it (`ADR-NNNN`) in a comment where the code
-  embodies it.
+  embodies it. A decision made ahead of its code is `implemented: none`, with a
+  *Pending* line on the ADR it changes ([the README](docs/adr/README.md#changing-an-existing-one)).
 - **ADR numbers and rule IDs are permanent.** Code and docs cite `ADR-NNNN` and
   rule IDs such as `ADR-0018 M1`. Never reuse or renumber either: a folded ADR
   keeps its number in the host's `folds`, and moving a file between folders

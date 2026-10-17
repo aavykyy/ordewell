@@ -203,7 +203,8 @@ for (const d of docs) {
 
   for (const n of d.pending) {
     const target = live.get(n);
-    if (!target) fail(at, `Pending names ADR-${n}, which does not exist`);
+    if (n === d.num) fail(at, 'a Pending line names the ADR that will change this one, not this one: for a small change it names no ADR');
+    else if (!target) fail(at, `Pending names ADR-${n}, which does not exist`);
     else if ((target.fm?.implemented ?? 'full') === 'full') fail(at, `Pending names ADR-${n}, which is fully implemented: fold the change into this ADR and drop the Pending line`);
   }
   for (const line of d.markers) warn(`${at}:${line}`, 'inline amendment marker: rewrite the paragraph to what is true now and put the date in History (AGENTS.md)');

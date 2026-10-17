@@ -100,7 +100,7 @@ attempt. This decides what a failure stops, not how a verdict is reached.
 ## Consequences
 
 - A plan finishes everything it can. A failure leaves only its own dependents
-  undone, named on every surface and in the run's summary.
+  undone, named on every surface and counted in the run's summary.
 - A run can end with failed and blocked tasks, its landed work handed over as
   any finished run's is. The retry that continues it opens a run again.
 - Independent work runs while a failure waits on the user, so a run spends
