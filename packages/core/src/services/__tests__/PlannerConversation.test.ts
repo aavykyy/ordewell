@@ -43,6 +43,7 @@ function fakeHost(ai: IAiService, plan: LegacyPlanState | null = dialoguePlan())
     onProgress: vi.fn(),
     opening: vi.fn().mockResolvedValue({ runners: ['claude-code'], modelsByRunner: {}, fs: {} }),
     catalog: () => ({ runners: ['claude-code'], models: {}, modes: {}, autonomousDefault: true }),
+    assignmentScope: () => ({ enabledRunners: ['claude-code'], allowlist: {} }),
     autorun: () => false,
     takeRunUpdates: () => [],
     tasks: () => [],

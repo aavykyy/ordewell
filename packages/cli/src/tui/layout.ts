@@ -862,7 +862,11 @@ interface TaskLines {
 
 function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: number): TaskLines {
   const { task, parent } = planRow;
-  const row = taskRowView(task, { parent, tasks: state.tasks, modes: modesForTask(state.modesByRunner, task) });
+  // Before the runners load, every task would read as on a runner that is off.
+  const runnerScope = state.runners.length > 0
+    ? { enabledRunners: state.runners.filter((r) => r.enabled).map((r) => r.id), allowlist: state.allowlist }
+    : undefined;
+  const row = taskRowView(task, { parent, tasks: state.tasks, modes: modesForTask(state.modesByRunner, task), runnerScope });
   const selected = state.focus === 'plan' && index === state.selectedTask;
   const expanded = state.expandedTaskId === task.id;
   const rawIcon = row.status === 'running' ? SPINNER[state.spinnerFrame % SPINNER.length] : STATUS_ICON[row.status];
@@ -940,6 +944,10 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   // A merge gate holds the task as plainly as a task that waits on the user (ADR-0020).
   if (row.mergeGate) {
     lines.push(style.yellow(truncate(`${bodyPad}⏸ waits for Merge all: ${row.mergeGate.join(', ')} not merged into your branch yet`, cols)));
+  }
+  // Named as it is, not lowercased like the other labels: a model's label is a proper name. The task still runs.
+  if (row.assignmentFlag) {
+    lines.push(style.yellow(truncate(`${bodyPad}⚠ ${row.assignmentFlag}; it still runs`, cols)));
   }
   if (row.waitsForApproval) {
     lines.push(style.yellow(truncate(`${bodyPad}⏸ ${inRow(row.waitsForApproval)}: added after you approved the plan; f starts it, or /run runs the plan`, cols)));

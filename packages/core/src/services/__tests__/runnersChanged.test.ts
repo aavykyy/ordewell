@@ -1,0 +1,152 @@
+import { describe, it, expect, vi } from 'vitest';
+import type { DiscoveredModel, LegacyPlanState, RunnerId, Task } from '../../models/Task';
+import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
+import { makeSession, testWorkspace } from './sessionTestKit';
+
+function models(...ids: string[]): DiscoveredModel[] {
+  return ids.map((modelId) => ({ modelId, modelLabel: modelId, variants: [] }));
+}
+
+function aiTask(over: Partial<Task>): Task {
+  return {
+    id: 't1', order: 1, title: 'Write the thing', description: 'd', prompt: 'p', type: 'ai', status: 'pending',
+    dependencies: [], assignedRunner: 'claude-code', ...over,
+  } as Task;
+}
+
+function planWith(tasks: Task[], runners: RunnerId[] = ['claude-code']): LegacyPlanState {
+  const now = new Date().toISOString();
+  return { tasks, generatedAt: now, status: 'draft', runners, lastUpdated: now };
+}
+
+/** A session whose enabled runners and allowlist the test moves between turns, as the user's settings do. */
+function harness(options: { tools?: boolean } = {}) {
+  const settings: { enabledRunners: RunnerId[]; modelAllowlist: Record<string, string[]> } = {
+    enabledRunners: ['claude-code', 'codex'],
+    modelAllowlist: {},
+  };
+  const continueConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'ok', researchLog: [] });
+  const session = makeSession({
+    aiService: {
+      continueConversation,
+      hasActiveConversation: () => true,
+      startConversation: vi.fn().mockResolvedValue({ kind: 'message', text: 'hi', researchLog: [] }),
+      ...(options.tools ? { plannerToolsAttached: () => true } : {}),
+    },
+    modelResolver: {
+      modelsForRunners: vi.fn().mockResolvedValue({
+        'claude-code': models('claude-opus-4', 'claude-sonnet-4'),
+        codex: models('gpt-5', 'gpt-5-mini'),
+      }),
+    },
+    settings: () => ({ ...settings, run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } }),
+  });
+  const outgoing = (call: number) => String(continueConversation.mock.calls[call][0]);
+  return { session, settings, outgoing, continueConversation };
+}
+
+describe('runners changed — the planner is told on its next turn', () => {
+  it('names a runner switched off and the plan tasks still assigned to it', async () => {
+    const { session, settings, outgoing } = harness();
+    await session.startPlanning('goal', ['claude-code', 'codex']);
+    session.loadPlan(planWith([aiTask({ assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5', modelLabel: 'gpt-5' } })], ['claude-code', 'codex']), 'goal', testWorkspace, { persist: false });
+
+    settings.enabledRunners = ['claude-code'];
+    await session.continueConversation('go on');
+
+    expect(outgoing(0)).toContain('<runners_changed>');
+    expect(outgoing(0)).toMatch(/switched off: codex/i);
+    expect(outgoing(0)).toContain('#1 "Write the thing" (codex is switched off)');
+  });
+
+  it('sends nothing on a turn where nothing changed, and nothing again after it has told', async () => {
+    const { session, settings, outgoing } = harness();
+    await session.startPlanning('goal', ['claude-code', 'codex']);
+
+    await session.continueConversation('first');
+    settings.enabledRunners = ['claude-code'];
+    await session.continueConversation('second');
+    await session.continueConversation('third');
+
+    expect(outgoing(0)).not.toContain('<runners_changed>');
+    expect(outgoing(1)).toContain('<runners_changed>');
+    expect(outgoing(2)).not.toContain('<runners_changed>');
+  });
+
+  it('names a runner switched on', async () => {
+    const { session, settings, outgoing } = harness();
+    settings.enabledRunners = ['claude-code'];
+    await session.startPlanning('goal', ['claude-code']);
+
+    settings.enabledRunners = ['claude-code', 'codex'];
+    await session.continueConversation('go on');
+
+    expect(outgoing(0)).toMatch(/switched on: codex/i);
+    expect(outgoing(0)).not.toContain('These tasks are now outside');
+  });
+
+  it('names an allowlist narrowed, and the task left on a model off it', async () => {
+    const { session, settings, outgoing } = harness();
+    await session.startPlanning('goal', ['claude-code']);
+    session.loadPlan(planWith([aiTask({ assignedModel: { modelId: 'claude-opus-4', modelLabel: 'Opus 4' } })]), 'goal', testWorkspace, { persist: false });
+
+    settings.modelAllowlist = { 'claude-code': ['claude-sonnet-4'] };
+    await session.continueConversation('go on');
+
+    expect(outgoing(0)).toContain('claude-code is now limited to: claude-sonnet-4');
+    expect(outgoing(0)).toContain('#1 "Write the thing" (Opus 4 is not in the allowlist)');
+  });
+
+  it('says what an edit of the allowlist added and removed', async () => {
+    const { session, settings, outgoing } = harness();
+    settings.modelAllowlist = { 'claude-code': ['claude-sonnet-4', 'claude-opus-4'] };
+    await session.startPlanning('goal', ['claude-code']);
+
+    settings.modelAllowlist = { 'claude-code': ['claude-sonnet-4', 'claude-haiku-4'] };
+    await session.continueConversation('go on');
+
+    expect(outgoing(0)).toContain('claude-code models: now allowed claude-haiku-4; no longer allowed claude-opus-4.');
+  });
+
+  it('does not list a finished task, only those that could still be moved', async () => {
+    const { session, settings, outgoing } = harness();
+    await session.startPlanning('goal', ['claude-code', 'codex']);
+    session.loadPlan(planWith([aiTask({ status: 'completed', assignedRunner: 'codex' })], ['claude-code', 'codex']), 'goal', testWorkspace, { persist: false });
+
+    settings.enabledRunners = ['claude-code'];
+    await session.continueConversation('go on');
+
+    expect(outgoing(0)).toContain('<runners_changed>');
+    expect(outgoing(0)).not.toContain('Write the thing" (codex');
+  });
+
+  it('tells a planner that reads its catalog through tools too, pointing it at the tools', async () => {
+    const { session, settings, outgoing } = harness({ tools: true });
+    await session.startPlanning('goal', ['claude-code', 'codex']);
+
+    settings.enabledRunners = ['claude-code'];
+    await session.continueConversation('go on');
+
+    expect(outgoing(0)).toContain('<runners_changed>');
+    expect(outgoing(0)).toContain('list_runners');
+  });
+});
+
+describe('the API planner\'s <available_models>', () => {
+  const block = (text: string) => text.slice(text.indexOf('<available_models>'), text.indexOf('</available_models>'));
+
+  it('lists every enabled runner, not just the plan\'s, and none switched off', async () => {
+    const { session, settings, outgoing } = harness();
+    settings.enabledRunners = ['claude-code', 'codex'];
+    await session.startPlanning('goal', ['claude-code']);
+    session.loadPlan(planWith([]), 'goal', testWorkspace, { persist: false });
+
+    await session.continueConversation('go on');
+    expect(block(outgoing(0))).toMatch(/^codex: gpt-5, gpt-5-mini$/m);
+
+    settings.enabledRunners = ['claude-code'];
+    await session.continueConversation('again');
+    expect(block(outgoing(1))).not.toMatch(/^codex:/m);
+    expect(block(outgoing(1))).toMatch(/^claude-code:/m);
+  });
+});

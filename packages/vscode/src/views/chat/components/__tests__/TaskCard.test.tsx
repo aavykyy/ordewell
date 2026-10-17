@@ -309,3 +309,34 @@ describe('TaskCard — origin', () => {
     expect(screen.queryByText('Added by supervisor')).toBeNull();
   });
 });
+
+describe('TaskCard — the assignment flag', () => {
+  const scope = { enabledRunners: ['claude-code'], allowlist: { 'claude-code': ['claude-sonnet-4'] } };
+  const card = (task: Task, runnerScope = scope) => (
+    <TaskCard task={task} models={emptyModels} isExecuting={false} runnerScope={runnerScope} />
+  );
+
+  it('says the task\'s runner is switched off, while the task stays runnable', () => {
+    render(card(makeTask({ assignedRunner: 'codex' })));
+    expect(screen.getByText('codex is switched off')).toBeTruthy();
+  });
+
+  it('says the task\'s model is not in the allowlist', () => {
+    render(card(makeTask({ assignedModel: { modelId: 'claude-opus-4', modelLabel: 'Opus 4' } })));
+    expect(screen.getByText('Opus 4 is not in the allowlist')).toBeTruthy();
+  });
+
+  it('says nothing for a task inside both, or with no scope known yet', () => {
+    const { rerender } = render(card(makeTask()));
+    expect(screen.queryByText(/switched off|not in the allowlist/)).toBeNull();
+    rerender(<TaskCard task={makeTask({ assignedRunner: 'codex' })} models={emptyModels} isExecuting={false} />);
+    expect(screen.queryByText(/switched off|not in the allowlist/)).toBeNull();
+  });
+
+  it('flags a subtask on a switched-off runner too', () => {
+    const sub = makeTask({ id: 't1.1', order: 1, title: 'Sub', assignedRunner: 'codex' });
+    render(card(makeTask({ subtasks: [sub] })));
+    act(() => { fireEvent.click(screen.getByText('Test task')); });
+    expect(screen.getByText('codex is switched off')).toBeTruthy();
+  });
+});

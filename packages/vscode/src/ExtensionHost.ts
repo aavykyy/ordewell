@@ -171,6 +171,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     codexSandbox: services.codexSandbox,
     modelResolver: services.modelResolver,
     chatProvider: services.chatProvider,
+    modelAllowlist: () => services.settingsService.getAll().modelAllowlist ?? {},
     secretStore: services.secretStore,
     log,
     refreshPlannerState: () => planner.sendState(),

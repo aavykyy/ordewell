@@ -32,6 +32,7 @@ export interface HostState {
   error: string;
   models: DiscoveredModel[];
   modelsByRunner: Partial<Record<string, DiscoveredModel[]>>;
+  modelAllowlist: Record<string, string[]>;
   runnerList: RunnerInfo[];
   enabledRunnerIds: string[];
   runners: RunnerId[];
@@ -97,6 +98,7 @@ export const INITIAL_HOST_STATE: HostState = {
   error: '',
   models: [],
   modelsByRunner: {},
+  modelAllowlist: {},
   runnerList: [],
   enabledRunnerIds: [...DEFAULT_RUNNERS],
   runners: [...DEFAULT_RUNNERS],
@@ -301,6 +303,9 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'setModelsByRunner':
       return { ...state, modelsByRunner: action.modelsByRunner ?? {} };
+
+    case 'setModelAllowlist':
+      return { ...state, modelAllowlist: action.allowlist ?? {} };
 
     case 'setModesByRunner':
       return { ...state, modesByRunner: action.modesByRunner ?? {}, runnerNotice: action.notice ?? null };

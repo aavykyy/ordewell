@@ -16,6 +16,8 @@ import { skillLoadNotice, surfaceStep } from '../conversation/records';
 import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
 import { AUTORUN_OFF, AUTORUN_ON } from './PlanPrompts';
 import { heldEditTasks } from './heldEdit';
+import type { AssignmentScope } from './AssignmentScope';
+import { flaggedTasks, runnersChangedBlock, scopeChange } from './RunnerChange';
 
 /**
  * Per-runner model cap for the always-on catalog block. Generous enough that
@@ -211,6 +213,8 @@ export interface PlannerConversationHost {
   catalog(): TaskQueryCatalog;
   /** Whether autorun is on now (ADR-0030); the planner is told in the turn after it changes. */
   autorun(): boolean;
+  /** The enabled runners and allowlist as of now; the planner is told in the turn after either changes. */
+  assignmentScope(): AssignmentScope;
   /** Run updates no turn has carried yet, taken by the turn that asks: the next turn is told, whoever opens it. */
   takeRunUpdates(): string[];
   tasks(): readonly Task[];
@@ -395,6 +399,8 @@ export class PlannerConversation {
   private savedInBackground = 0;
   /** What the planner was last told of autorun: by its opening prompt, or a turn's block since. */
   private toldAutorun = false;
+  /** The runners and allowlist the planner was last told of: its opening prompt, or a turn's block since. Null until a conversation opens. */
+  private toldScope: AssignmentScope | null = null;
   private live: PlannerTurn | null = null;
   private openTurn: UserTurn | null = null;
 
@@ -796,6 +802,7 @@ export class PlannerConversation {
       this.assertCurrent(userTurn);
       this.recordUser(goal, new Date().toISOString());
       this.toldAutorun = opening.autorun ?? false;
+      this.toldScope = this.host.assignmentScope();
       const turn = await this.host.aiService().startConversation({
         ...opening,
         // The system prompt's goal is the text as typed; skill bodies ride the
@@ -852,7 +859,7 @@ export class PlannerConversation {
     // The persisted transcript keeps the raw user message; the model gets the
     // live catalog (always) and the current plan (tasks, statuses, edit
     // protocol — once tasks exist) alongside it.
-    const contextBlock = [this.catalogBlock(), this.planContextBlock(), this.autorunBlock(), this.runUpdatesBlock()].filter(Boolean).join('\n\n');
+    const contextBlock = [this.catalogBlock(), this.planContextBlock(), this.autorunBlock(), this.runnersChangedBlock(), this.runUpdatesBlock()].filter(Boolean).join('\n\n');
     const said = fromUser ? plannerMessage(message.text, message.skills) : '';
     const outgoing = [contextBlock, ...wakeUps, userTurn.wakeUp?.brief, said].filter(Boolean).join('\n\n');
 
@@ -1049,6 +1056,7 @@ export class PlannerConversation {
     // dialogue could ride along under the replayed one.
     this.reset();
     this.toldAutorun = opening.autorun ?? false;
+    this.toldScope = this.host.assignmentScope();
     return this.host.aiService().startConversation({
       ...opening,
       runners,
@@ -1313,6 +1321,21 @@ export class PlannerConversation {
     if (now === this.toldAutorun) return null;
     this.toldAutorun = now;
     return now ? AUTORUN_ON : AUTORUN_OFF;
+  }
+
+  /**
+   * The user's runner or allowlist change, when the planner was not told yet —
+   * the same once-per-change rule as autorun, for API and harness planners
+   * alike. Tasks the change leaves outside the scope are named, not touched.
+   */
+  private runnersChangedBlock(): string | null {
+    const now = this.host.assignmentScope();
+    const told = this.toldScope;
+    this.toldScope = now;
+    const change = told && scopeChange(told, now);
+    if (!change) return null;
+    const flagged = flaggedTasks(flattenTasksWithParents(this.host.tasks()), now);
+    return runnersChangedBlock(change, flagged, this.host.aiService().plannerToolsAttached?.() ?? false);
   }
 
   private runUpdatesBlock(): string | null {

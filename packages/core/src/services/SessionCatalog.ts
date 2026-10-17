@@ -6,6 +6,7 @@ import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { IConfig } from '../interfaces/IConfig';
 import { filterModelsForPrompt } from './ModelAllowlistResolver';
 import { runnerModesFrom, resolveDefaultMode, type RunnerModeInfo } from './ModeResolver';
+import type { AssignmentScope } from './AssignmentScope';
 import { runnerForProvider } from './ProviderRegistry';
 import type { DiscoveredModel, RunnerId } from '../models/Task';
 
@@ -53,6 +54,11 @@ export class SessionCatalog {
     return this.deps.settings().modelAllowlist ?? {};
   }
 
+  /** The enabled runners and allowlist together, for whoever compares an assignment with them. */
+  scope(): AssignmentScope {
+    return { enabledRunners: this.enabledRunners(), allowlist: this.allowlist() };
+  }
+
   /** The models the user allows on one runner; unset means no restriction. */
   allowlistFor(runner: RunnerId): string[] | undefined {
     return this.allowlist()[runner];
@@ -68,7 +74,7 @@ export class SessionCatalog {
    */
   models(): ModelsByRunner {
     const out = { ...this.discovered };
-    for (const runner of new Set([...Object.keys(out), ...this.deps.planRunners()])) {
+    for (const runner of new Set([...Object.keys(out), ...this.deps.planRunners(), ...this.enabledRunners()])) {
       const cached = this.deps.modelResolver.getCachedRunnerModels(runner);
       if (cached.length > 0) out[runner] = cached;
     }
@@ -111,9 +117,17 @@ export class SessionCatalog {
    * asked for.
    */
   async live(): Promise<TaskQueryCatalog> {
-    const runners = this.enabledRunners();
-    await this.discover(runners);
-    return this.queryCatalog(runners);
+    await this.discover(this.enabledRunners());
+    return this.current();
+  }
+
+  /**
+   * What {@link live} answers, from what is cached and without discovering:
+   * the enabled runners, however the plan was started. The per-turn block
+   * reads this, so it can never offer a different set than `list_runners`.
+   */
+  current(): TaskQueryCatalog {
+    return this.queryCatalog(this.enabledRunners());
   }
 
   queryCatalog(runners: RunnerId[]): TaskQueryCatalog {
