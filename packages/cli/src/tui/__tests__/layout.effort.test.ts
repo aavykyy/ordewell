@@ -37,11 +37,11 @@ describe('the effort on a collapsed task row', () => {
     expect(metaLine(task({ type: 'user', assignedModel: model({ thinkingEffort: 'high' }) }), 140)).not.toContain('high');
   });
 
-  it('keeps the rule when the row names the model from usage', () => {
+  it("keeps the plan's assignment on the row whichever model usage reports", () => {
     const t = task({
       assignedModel: model({ thinkingEffort: 'high' }),
       attemptUsage: [{ attempt: 1, runner: 'claude-code', startedAt: '', wallTimeMs: 1000, totals: { inputTokens: 1 }, byModel: [{ source: 'claude-code', model: 'claude-sonnet-x', totals: { inputTokens: 1 } }] }],
     });
-    expect(metaLine(t, 140)).toMatch(/claude-code · claude-sonnet-x · high$/);
+    expect(metaLine(t, 140)).toMatch(/claude-code · Claude Opus 5\.5 · high$/);
   });
 });

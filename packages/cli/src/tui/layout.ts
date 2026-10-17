@@ -1,6 +1,6 @@
 import { firstGrapheme, pad, sanitize, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
 import { cursorInLines, type CursorPosition } from './editor';
-import { checkpointCardLines, conversationLines, taskUsageText, usageMeasures, tokenLine } from './blocks';
+import { checkpointCardLines, conversationLines, taskUsageText, tokenLine } from './blocks';
 import { chatEditorRoomFor, chatPaneWidth, planPaneWidth } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
 import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type PlanRow, type TaskView, type TuiState } from './state';
@@ -10,7 +10,7 @@ import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { runnerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
-import { approvalLabel, getProviderMeta, isApiProvider, awaitingLabel, blockedByLabel, skippedLabel, hasHiddenDetail, resumeLabel, resumeTime, runnerForProvider, taskRowView, planUsage, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
+import { approvalLabel, getProviderMeta, isApiProvider, awaitingLabel, blockedByLabel, skippedLabel, hasHiddenDetail, resumeLabel, resumeTime, runnerForProvider, taskRowView, planUsage, taskUsageSummary, plannerContextFill, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -434,27 +434,21 @@ const tokenRow = (blocks: readonly DisplayBlock[], cols: number): string[] => {
 };
 
 /**
- * The opened task's usage for the attempt on screen: the same measures and
- * wall time its row used to carry, then one row per model when more than one
- * reported. `attemptUsage` is kept per attempt, so an earlier attempt shows its
- * own numbers; when it holds nothing for the attempt on screen (or the task has
- * no row-level usage at all) the log's own last usage block is the footer, as it
- * was before — it has no wall time to add.
+ * The opened task's usage: its whole spend across every attempt, with the meter
+ * of the latest. On a past attempt that attempt's own numbers come first, the
+ * task total under them. When the task reports nothing for the attempt on
+ * screen the log's own last usage block is the footer, as it was before.
  */
 function taskUsageFooter(state: TuiState, tv: NonNullable<TuiState['taskView']>, blocks: readonly DisplayBlock[], cols: number): string[] {
   const task = findTask(state.tasks, tv.taskId);
   const reported = task?.attemptUsage ?? [];
   const onScreen = tv.attempt > 0 ? reported.find((a) => a.attempt === tv.attempt) : reported.at(-1);
   if (!task || !onScreen) return tokenRow(blocks, cols);
-  const usage = taskRowView({ ...task, attemptUsage: [onScreen] }).usage;
-  if (!usage) return tokenRow(blocks, cols);
-  const models = usage.byModel ?? [];
-  return [
-    style.grey(truncate(taskUsageText(usage), cols)),
-    ...(models.length > 1
-      ? models.map((m) => style.grey(truncate(`${sanitize(m.model ?? 'unattributed')}: ${usageMeasures(m.totals, true).join(' · ')}`, cols)))
-      : []),
-  ];
+  const spend = taskUsageSummary(task);
+  const total = taskUsageText({ ...spend, attempt: reported.at(-1)?.attempt ?? 0 });
+  if (onScreen === reported.at(-1)) return [style.grey(truncate(total, cols))];
+  const own = taskUsageText({ totals: onScreen.totals, contextFill: plannerContextFill(onScreen), attempt: onScreen.attempt });
+  return [style.grey(truncate(`attempt ${onScreen.attempt}: ${own}`, cols)), style.grey(truncate(`task total: ${total}`, cols))];
 }
 
 /** How far back the chat pane can be scrolled at the size it is about to be painted. */
@@ -900,10 +894,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
     return prefix + (selected ? style.bold(line) : line);
   });
 
-  const reported = [...new Set((row.usage?.byModel ?? []).flatMap((m) => (m.model ? [sanitize(m.model)] : [])))];
-  const model = reported.length
-    ? reported.join(', ')
-    : task.assignedModel?.modelLabel ?? (task.type === 'ai' ? 'default model' : '');
+  const model = task.assignedModel?.modelLabel ?? (task.type === 'ai' ? 'default model' : '');
   const effort = task.type === 'ai'
     ? `effort: ${task.assignedModel?.thinkingEffort ?? 'default'}`
     : '';

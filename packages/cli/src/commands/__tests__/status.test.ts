@@ -78,6 +78,28 @@ describe('handleStatus --output', () => {
     srv.close();
   });
 
+  it('reads a task\'s usage as its whole spend across attempts, with no wall time', async () => {
+    const attempt = (n: number, over: Record<string, unknown>) => ({ attempt: n, runner: 'claude-code', startedAt: '', wallTimeMs: 65_000, totals: {}, ...over });
+    const plan = { pendingTasks: [{
+      id: 't1', order: 1, type: 'ai', title: 'One', status: 'completed',
+      attemptUsage: [
+        attempt(1, { totals: { inputTokens: 1000, outputTokens: 100, reportedCost: { USD: 0.5 } }, lastPromptTokens: 90, contextWindow: 100 }),
+        attempt(2, { totals: { inputTokens: 500, outputTokens: 50, cachedInputTokens: 200 }, lastPromptTokens: 50, contextWindow: 200 }),
+      ],
+    }] };
+    const srv = await startServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ...SESSION, plan }));
+    });
+    const { handleStatus } = await import('../status');
+    const { stdout } = await capture(() => handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)));
+    const lines = stripAnsi(stdout).split('\n').map((l) => l.trim());
+    expect(lines).toContain('Tasks total: 1.5k in · 150 out · 200 cached · $0.50');
+    expect(lines).toContain('1.5k in · 150 out · 200 cached · $0.50 · ctx 25%');
+    expect(stdout).not.toMatch(/\d+s\b|time unknown/);
+    srv.close();
+  });
+
   it('renders subtasks as indented dotted-label lines', async () => {
     const srv = await startServer((_req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
