@@ -6,6 +6,7 @@ import { blockedByLabel, blockingFailures, skippedLabel, flattenTasks, taskOrder
 import { allTasksOf } from '../utils/tasks';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, type SessionMeta } from '../apiClient';
+import { handoffBase, isolationOfPlan } from '../isolation';
 
 export async function handleStatus(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   const sessionId = flag(subArgs, '--session-id');
@@ -75,6 +76,8 @@ function printOneSession(
   console.log(`Goal:     ${meta.goal}`);
   console.log(`Runner:   ${(meta.runners || []).join(', ')}  |  Status: ${meta.status}`);
   console.log(`Phase:    ${plan?.phase || 'unknown'}  |  Created: ${meta.createdAt}`);
+  const isolation = isolationOfPlan(plan);
+  if (isolation) console.log(`Base:     ${handoffBase(isolation.handoff, 8)}`);
   console.log(`Tasks:    ${everyTask.length} total  |  ${count('completed')} done  |  ${count('failed')} failed  |  ${count('in_progress')} running  |  ${count('blocked')} blocked  |  ${count('skipped')} skipped\n`);
 
   const usage = planUsage(allTasks);

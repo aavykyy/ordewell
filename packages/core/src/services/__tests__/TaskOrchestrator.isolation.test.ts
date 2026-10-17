@@ -324,7 +324,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
     await orchestrator.markTaskComplete('t1');
 
     expect(handoffs).toEqual([{
-      repos: [{ path: '.', integrationBranch: 'ordewell/run1/integration', baseRef: 'base0000', landed: [{ taskId: 't1', order: 1, title: 'Task t1' }] }],
+      repos: [{ path: '.', integrationBranch: 'ordewell/run1/integration', baseRef: 'base0000', baseBranch: 'main', landed: [{ taskId: 't1', order: 1, title: 'Task t1' }] }],
       landed: [{ taskId: 't1', order: 1, title: 'Task t1' }],
     }]);
   });
@@ -844,7 +844,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
     await vi.waitFor(() => expect(events).toEqual(['handoff', 'complete']));
 
     expect(handoff).toEqual({
-      repos: [{ path: '.', integrationBranch: 'ordewell/run1/integration', baseRef: 'base0000', landed: [{ taskId: 't1', order: 1, title: 'Task t1' }] }],
+      repos: [{ path: '.', integrationBranch: 'ordewell/run1/integration', baseRef: 'base0000', baseBranch: 'main', landed: [{ taskId: 't1', order: 1, title: 'Task t1' }] }],
       landed: [{ taskId: 't1', order: 1, title: 'Task t1' }],
     });
   });

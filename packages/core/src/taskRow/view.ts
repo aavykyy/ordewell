@@ -1,4 +1,4 @@
-import { usageLine, type AttemptUsage, type UsageLine } from '../models/Usage';
+import { taskUsageSummary, type AttemptUsage, type TaskUsageSummary } from '../models/Usage';
 import type { AwaitingReason } from '../models/Task';
 import type { TaskIsolationState } from '../interfaces/IWorktreeIsolation';
 import { taskOrderLabel, taskRefOf } from '../services/TaskRefs';
@@ -80,9 +80,9 @@ export interface TaskRowContext {
 /** Whether the row stands for an AI task, a manual one, or an ops task (ADR-0020). */
 export type TaskRowKind = 'ai' | 'user' | 'ops';
 
-export interface TaskRowUsage extends UsageLine {
+/** The task's whole spend (see `taskUsageSummary`); `attempt` is the latest one, 0 before any reported. */
+export interface TaskRowUsage extends Pick<TaskUsageSummary, 'totals' | 'contextFill'> {
   attempt: number;
-  wallTimeMs?: number;
 }
 
 export interface TaskRowView {
@@ -165,10 +165,10 @@ function flagOf(task: TaskRowSubject, scope: AssignmentScope | undefined): strin
 export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}): TaskRowView {
   const parent = context.parent ?? undefined;
   const isolation = task.isolation && task.isolation.state !== 'none' ? task.isolation : null;
-  const latestUsage = task.attemptUsage?.at(-1);
+  const spend = taskUsageSummary(task);
   const blocked = blockedBy(task, context.tasks);
   return {
-    usage: latestUsage ? { ...usageLine(latestUsage), attempt: latestUsage.attempt, wallTimeMs: latestUsage.wallTimeMs, byModel: latestUsage.byModel } : task.type === 'ai' && ['completed', 'failed', 'in_progress', 'awaiting_user'].includes(task.status) ? { totals: {}, attempt: 0, byModel: [] } : null,
+    usage: spend.attempts > 0 ? { totals: spend.totals, ...(spend.contextFill ? { contextFill: spend.contextFill } : {}), attempt: task.attemptUsage?.at(-1)?.attempt ?? 0 } : task.type === 'ai' && ['completed', 'failed', 'in_progress', 'awaiting_user'].includes(task.status) ? { totals: {}, attempt: 0 } : null,
     orderLabel: taskOrderLabel(task, parent),
     kind: task.type === 'user' ? 'user' : task.ops ? 'ops' : 'ai',
     status: blocked.length > 0 ? 'blocked' : taskStatusKind(task),

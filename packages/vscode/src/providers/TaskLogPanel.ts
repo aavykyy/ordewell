@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { latestTaskCommands } from '../shared/taskCommands';
-import { canContinue, pausedOnLimit, resumeLabel, type ApprovalAnswer, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
+import { canContinue, pausedOnLimit, resumeLabel, taskUsageSummary, type ApprovalAnswer, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { EMPTY_TASK_LOG, reduceTaskLog, replayTaskLog, type TaskLogView } from '@ordewell/core/plan-utils';
 import { diffConversation } from '../shared/conversationPatch';
 import { renderWebviewHtml } from './webviewHtml';
@@ -227,6 +227,7 @@ export class TaskLogPanel {
   private status(): TaskLogStatus {
     const task = this.deps.getTask(this.taskId);
     const resumes = task ? resumeLabel(task) : null;
+    const spend = task ? taskUsageSummary(task) : undefined;
     return {
       commands: latestTaskCommands(this.deps.session, this.taskId),
       taskId: this.taskId,
@@ -245,6 +246,7 @@ export class TaskLogPanel {
       attempt: this.attempt,
       continuable: task ? canContinue(task) : false,
       resumable: task ? pausedOnLimit(task) && canContinue(task) : false,
+      ...(spend && spend.attempts > 0 ? { usage: { totals: spend.totals, contextFill: spend.contextFill } } : {}),
     };
   }
 

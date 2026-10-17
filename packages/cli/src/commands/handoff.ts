@@ -1,6 +1,6 @@
 import { hasFlag, positionals } from '../utils';
 import type { ApiClient } from '../apiClient';
-import { handoffBase, handoffBranch, isolationOfPlan, isRepoGroup, mergeOutcome, repairedLanded, repairedNotice, repoResultLines, reposWithWork } from '../isolation';
+import { checkoutRule, handoffBase, handoffBranch, isolationOfPlan, isRepoGroup, mergeOutcome, mergeTarget, repairedLanded, repairedNotice, repoResultLines } from '../isolation';
 import { HANDOFF_ACTIONS } from '../tui/handoff';
 import { adopted } from './conversation';
 import { askYesNo, fail } from './shared';
@@ -58,8 +58,8 @@ export async function handleHandoff(
     case 'merge': {
       // A run still going keeps its branches for the tasks still to land (ADR-0020).
       await confirmed((group
-        ? `Merge ${branch} into the branch checked out in each of ${reposWithWork(handoff).join(', ')}? Nothing is merged unless every repository can take it; once a finished run has merged everything, its worktrees and branches are removed.`
-        : `Merge ${branch} into the branch you have checked out? Once a finished run has merged everything, its worktrees and branches are removed.`) + repairedNotice(handoff));
+        ? `Merge ${branch} into ${mergeTarget(handoff)}? Nothing is merged unless every repository can take it${checkoutRule(handoff) ? ' and is on that branch' : ''}; once a finished run has merged everything, its worktrees and branches are removed.`
+        : `Merge ${branch} into ${mergeTarget(handoff)}?${checkoutRule(handoff)} Once a finished run has merged everything, its worktrees and branches are removed.`) + repairedNotice(handoff));
       const { ok, message } = mergeOutcome(await attempt(() => api.mergeRun(sessionId)), branch, group, repairedLanded(handoff));
       if (ok) console.log(message);
       else fail(message);

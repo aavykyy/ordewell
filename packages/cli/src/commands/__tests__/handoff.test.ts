@@ -51,7 +51,7 @@ const isolatedPlan = {
   isolation: {
     resolvers: {},
     run: {
-      id: 'r1', workspaceRoot: '/tmp/ws', baseRef: 'abcdef1234567890', integrationBranch: 'ordewell/r1/integration',
+      id: 'r1', workspaceRoot: '/tmp/ws', baseRef: 'abcdef1234567890', baseBranch: 'main', integrationBranch: 'ordewell/r1/integration',
       tasks: { t1: { taskId: 't1', order: 1, title: 'One', branch: 'ordewell/r1/1-t1', worktree: '/w', status: 'merged', linked: [] } },
     },
   },
@@ -64,7 +64,7 @@ const groupPlan = {
     resolvers: {},
     run: {
       id: 'r1', workspaceRoot: '/tmp/ws', shared: [], sharedRepos: [],
-      repos: ['api', 'web', 'infra'].map((path) => ({ path, root: `/tmp/ws/${path}`, baseRef: `${path}base1234567890`, integrationBranch: 'ordewell/r1/integration' })),
+      repos: ['api', 'web', 'infra'].map((path) => ({ path, root: `/tmp/ws/${path}`, baseRef: `${path}base1234567890`, baseBranch: 'main', integrationBranch: 'ordewell/r1/integration' })),
       tasks: {
         t1: { taskId: 't1', order: 1, title: 'One', branch: 'ordewell/r1/1-t1', workspace: '/w', status: 'merged', repos: { api: repoRecord('api', true), web: repoRecord('web', true), infra: repoRecord('infra', false) } },
         t2: { taskId: 't2', order: 2, title: 'Two', branch: 'ordewell/r1/2-t2', workspace: '/w', status: 'merged', repos: { api: repoRecord('api', true), web: repoRecord('web', false), infra: repoRecord('infra', false) } },
@@ -120,12 +120,20 @@ describe('ordewell handoff', () => {
     expect(stdout).toBe('diff --git a/x b/x');
   });
 
+  it('review says which branch an empty diff is against', async () => {
+    const srv = await isolatedDaemon({ '/isolation/diff': { body: { diff: '\n' } } });
+    const { stdout } = await run(['review'], srv);
+    srv.close();
+
+    expect(stdout).toBe('Nothing differs from main @ abcdef12.');
+  });
+
   it('merge asks first, then merges', async () => {
     const srv = await isolatedDaemon({ '/isolation/merge': { body: { outcome: 'merged' } } });
     const { stdout, confirm } = await run(['merge'], srv);
     srv.close();
 
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('ordewell/r1/integration'));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Merge ordewell/r1/integration into main?'));
     expect(srv.hits.some((h) => h.url.endsWith('/isolation/merge'))).toBe(true);
     expect(stdout).toMatch(/Merged ordewell\/r1\/integration/);
   });
@@ -215,7 +223,7 @@ describe('ordewell handoff over a repo group', () => {
     const { stdout, confirm } = await run(['merge'], srv);
     srv.close();
 
-    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/api, web.*unless every repository can take it/));
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/into main in each of api, web.*unless every repository can take it/));
     expect(stdout).toBe('Merged ordewell/r1/integration into the checked-out branch of every repository.');
   });
 

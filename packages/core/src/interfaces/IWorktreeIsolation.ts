@@ -233,6 +233,8 @@ export interface IsolationHandoffRepo {
   path: string;
   integrationBranch: string;
   baseRef: string;
+  /** The branch the run started on in this repo; absent when it started on a detached HEAD. */
+  baseBranch?: string;
   /** Tasks whose work landed in this repo, in plan order. */
   landed: IsolationLandedTask[];
 }
@@ -258,29 +260,36 @@ export interface IsolationView {
 /**
  * Why "Merge all" would not touch a repo. `partial-landing`: a task's landing
  * was interrupted and could not be rolled back there, so its integration
- * branch holds part of a task.
+ * branch holds part of a task. `wrong-branch`: the repo is not on the branch
+ * the run started on, and the merge would land on some other one.
  */
-export type IsolationMergeBlockReason = 'merge-in-progress' | 'conflict' | 'uncommitted-changes' | 'partial-landing' | 'git-error';
+export type IsolationMergeBlockReason = 'merge-in-progress' | 'conflict' | 'uncommitted-changes' | 'partial-landing' | 'wrong-branch' | 'git-error';
 
 export interface IsolationMergeBlock {
   repo: string;
   reason: IsolationMergeBlockReason;
   /** The files that would conflict, or the user's uncommitted ones the merge also changes; empty for the other reasons. */
   files: string[];
+  /** `wrong-branch` only: the branch the run started on. */
+  expected?: string;
+  /** `wrong-branch` only: the branch checked out now; absent on a detached HEAD. */
+  actual?: string;
 }
 
 /**
  * How "Merge all" went.
  * - `merged`: every repo with work on its integration branch took it.
- * - `blocked`: the preflight found repos that could not, so nothing was
+ * - `blocked`: a repo was on another branch than the run started on, or the
+ *   preflight found repos that could not take their merge, so nothing was
  *   touched anywhere; `blocked` says which and why.
  * - `conflict` / `failed`: a merge stopped in `repo` — on git older than 2.38,
  *   which cannot preflight, or for a reason no preflight could foresee. That
  *   merge was aborted, leaving `repo` as it was; `landed` names the repos
  *   merged before it, which stay merged, and is absent when there are none.
  *
- * A group of one is blocked only by a partial landing; otherwise its one merge
- * lands or is aborted whole, so it reports as it always has.
+ * A group of one is blocked only by a partial landing or by being on the wrong
+ * branch; otherwise its one merge lands or is aborted whole, so it reports as
+ * it always has.
  */
 export type IsolationMergeResult =
   | { outcome: 'merged' }

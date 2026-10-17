@@ -383,3 +383,22 @@ describe('the assignment flag — a task on a runner or model the user has since
     expect(flag({ status: 'in_progress', assignedRunner: 'codex' })).toBe('codex is switched off');
   });
 });
+
+describe('a task row\'s usage', () => {
+  const attempt = (n: number, over: Record<string, unknown> = {}) => ({ attempt: n, runner: 'claude-code', startedAt: '', wallTimeMs: 1000, totals: {}, ...over });
+
+  it('is the task\'s whole spend across attempts, with the meter of the latest', () => {
+    const usage = taskRowView(subject({
+      status: 'completed',
+      attemptUsage: [
+        attempt(1, { totals: { inputTokens: 100, reportedCost: { USD: 1 } }, lastPromptTokens: 90, contextWindow: 100 }),
+        attempt(2, { totals: { inputTokens: 20, outputTokens: 5 }, lastPromptTokens: 20, contextWindow: 200 }),
+      ],
+    })).usage;
+    expect(usage?.totals).toEqual({ inputTokens: 120, outputTokens: 5, reportedCost: { USD: 1 } });
+    expect(usage?.contextFill).toEqual({ usedTokens: 20, windowTokens: 200 });
+    expect(usage?.attempt).toBe(2);
+    expect(usage).not.toHaveProperty('byModel');
+    expect(usage).not.toHaveProperty('wallTimeMs');
+  });
+});

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { addAttemptUsage, startAttemptUsage, endAttemptUsage, planUsage, usageLine, isMeasured, addPlannerUsage } from '../Usage';
+import { addAttemptUsage, startAttemptUsage, endAttemptUsage, planUsage, usageLine, isMeasured, addPlannerUsage, taskUsageSummary } from '../Usage';
 import { createTask, keepExecutionState } from '../Task';
 import { PlanStore } from '../../services/PlanStore';
 
@@ -87,5 +87,20 @@ describe('attempt usage', () => {
     expect(switched.byModel).toHaveLength(2);
     const subagent = addPlannerUsage(first, { source: 'openai', model: 'b', inputTokens: 20, contextWindow: 200, subagentId: 'child' });
     expect(usageLine(subagent).contextFill).toEqual({ usedTokens: 10, windowTokens: 100 });
+  });
+
+  it('sums a task across every attempt and model while the meter follows the latest attempt', () => {
+    const first = addAttemptUsage(startAttemptUsage(1, 'claude-code', start), { source: 'claude-code', model: 'opus', inputTokens: 100, outputTokens: 10, cachedInputTokens: 40, reportedCost: { amount: 1.5, currency: 'USD' }, contextWindow: 1000 }, end);
+    const second = addAttemptUsage(startAttemptUsage(2, 'claude-code', start), { source: 'claude-code', model: 'sonnet', inputTokens: 50, outputTokens: 5, reportedCost: { amount: 0.25, currency: 'USD' }, contextWindow: 200 }, end);
+    const summary = taskUsageSummary(createTask({ attemptUsage: [first, second] }));
+    expect(summary.totals).toEqual({ inputTokens: 150, outputTokens: 15, cachedInputTokens: 40, reportedCost: { USD: 1.75 } });
+    expect(summary.contextFill).toEqual({ usedTokens: 50, windowTokens: 200 });
+    expect(summary.attempts).toBe(2);
+  });
+
+  it('reads a task with no attempts as nothing reported, and keeps an unreported cost absent', () => {
+    expect(taskUsageSummary(createTask({}))).toEqual({ totals: {}, attempts: 0 });
+    const noCost = addAttemptUsage(startAttemptUsage(1, 'codex', start), { source: 'codex', inputTokens: 3 }, end);
+    expect(taskUsageSummary(createTask({ attemptUsage: [noCost] })).totals.reportedCost).toBeUndefined();
   });
 });

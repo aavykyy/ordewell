@@ -117,7 +117,7 @@ describe('handoff overlay frame over a repo group', () => {
   const branch = 'ordewell/r1/integration';
   const handoff: HandoffView = {
     repos: [
-      { path: 'api', integrationBranch: branch, baseRef: 'aaaaaaaaaaaaaaaa', landed: [t(1, 'One'), t(2, 'Two'), t(3, 'Three')] },
+      { path: 'api', integrationBranch: branch, baseRef: 'aaaaaaaaaaaaaaaa', baseBranch: 'main', landed: [t(1, 'One'), t(2, 'Two'), t(3, 'Three')] },
       { path: 'infra', integrationBranch: branch, baseRef: 'bbbbbbbbbbbbbbbb', landed: [] },
     ],
     landed: [t(1, 'One'), t(2, 'Two'), t(3, 'Three')],
@@ -142,8 +142,8 @@ describe('handoff overlay frame over a repo group', () => {
   it('names where each repository forked from', () => {
     const out = frame(open());
 
-    expect(out).toContain('api aaaaaaaaaaaa');
-    expect(out).toContain('infra bbbbbbbbbbbb');
+    expect(out).toContain('api: main @ aaaaaaaaaaaa');
+    expect(out).toContain('infra: detached at bbbbbbbbbbbb');
   });
 
   it('scrolls a long diff of many repos as before', () => {
@@ -161,6 +161,7 @@ describe('handoff overlay frame', () => {
       path: '.',
       integrationBranch: 'ordewell/r1/integration',
       baseRef: 'abcdef1234567890',
+      baseBranch: 'main',
       landed: [{ taskId: 't1', order: 1, title: 'Add the route' }, { taskId: 't2', order: 2, title: 'Write the tests' }],
     }],
     landed: [{ taskId: 't1', order: 1, title: 'Add the route' }, { taskId: 't2', order: 2, title: 'Write the tests' }],
@@ -181,7 +182,7 @@ describe('handoff overlay frame', () => {
 
     expect(out).not.toContain('nothing to merge');
     expect(out).not.toContain('Merge all');
-    expect(out).toContain('Forked from abcdef123456');
+    expect(out).toContain('Forked from main @ abcdef123456');
   });
 
   it('says plainly when nothing landed', () => {

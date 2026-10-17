@@ -1304,7 +1304,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
       { taskId: 'task-2', order: 2, title: 'Add beta' },
     ];
     expect(handoff).toEqual({
-      repos: [{ path: '.', integrationBranch: `ordewell/${run.id}/integration`, baseRef: git(root, 'rev-parse', 'HEAD'), landed }],
+      repos: [{ path: '.', integrationBranch: `ordewell/${run.id}/integration`, baseRef: git(root, 'rev-parse', 'HEAD'), baseBranch: 'main', landed }],
       landed,
     });
   });
@@ -1401,6 +1401,52 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
     expect(readFileSync(join(root, 'alpha.txt'), 'utf8')).toBe('alpha\n');
     expect(readFileSync(join(root, 'beta.txt'), 'utf8')).toBe('beta\n');
     expect(git(root, 'branch', '--show-current')).toBe('main');
+  });
+
+  it('refuses Merge all when another branch is checked out than the run started on, landing nothing', async () => {
+    const { root, iso, run } = await finishedRun();
+    await iso.handoff(run);
+    git(root, 'checkout', '-q', '-b', 'feature-x');
+    const head = git(root, 'rev-parse', 'HEAD');
+
+    expect(await iso.mergeIntoCheckedOut(run)).toEqual({
+      outcome: 'blocked',
+      blocked: [{ repo: '.', reason: 'wrong-branch', files: [], expected: 'main', actual: 'feature-x' }],
+    });
+
+    expect(git(root, 'rev-parse', 'HEAD')).toBe(head);
+    expect(existsSync(join(root, 'alpha.txt'))).toBe(false);
+
+    git(root, 'checkout', '-q', 'main');
+    expect(await iso.mergeIntoCheckedOut(run)).toEqual({ outcome: 'merged' });
+  });
+
+  it('refuses Merge all on a detached HEAD when the run started on a branch', async () => {
+    const { root, iso, run } = await finishedRun();
+    await iso.handoff(run);
+    git(root, 'checkout', '-q', '--detach');
+
+    expect(await iso.mergeIntoCheckedOut(run)).toEqual({
+      outcome: 'blocked',
+      blocked: [{ repo: '.', reason: 'wrong-branch', files: [], expected: 'main' }],
+    });
+    expect(existsSync(join(root, 'alpha.txt'))).toBe(false);
+  });
+
+  it('merges as before into a detached HEAD when the run started on one', async () => {
+    const root = repo();
+    git(root, 'checkout', '-q', '--detach');
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const t = task(1, 'Add alpha');
+    const { cwd } = await iso.prepare(t, run);
+    writeFileSync(join(cwd, 'alpha.txt'), 'alpha\n');
+    await iso.integrate(t, run);
+    await iso.handoff(run);
+    expect(run.repos[0]?.baseBranch).toBeUndefined();
+
+    expect(await iso.mergeIntoCheckedOut(run)).toEqual({ outcome: 'merged' });
+    expect(readFileSync(join(root, 'alpha.txt'), 'utf8')).toBe('alpha\n');
   });
 
   it('aborts a conflicting merge and leaves the checked-out tree as it was', async () => {
@@ -2383,6 +2429,20 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       expect(readFileSync(join(dir, 'api', 'api.txt'), 'utf8')).toBe('run api\n');
       expect(readFileSync(join(dir, 'web', 'web.txt'), 'utf8')).toBe('run web\n');
       for (const repo of ['api', 'web']) expect(git(join(dir, repo), 'branch', '--show-current')).toBe('main');
+    });
+
+    it('merges nothing anywhere when one repository is on another branch than the run started on, naming each that is', async () => {
+      const { dir, iso, run, heads } = await handedOff();
+      git(join(dir, 'web'), 'checkout', '-q', '-b', 'feature-x');
+      const before = heads();
+
+      expect(await iso.mergeIntoCheckedOut(run)).toEqual({
+        outcome: 'blocked',
+        blocked: [{ repo: 'web', reason: 'wrong-branch', files: [], expected: 'main', actual: 'feature-x' }],
+      });
+
+      expect(heads()).toEqual(before);
+      expect(readFileSync(join(dir, 'api', 'api.txt'), 'utf8')).toBe('api\n');
     });
 
     it('merges nothing anywhere when a commit of the user\'s would conflict in one repository', async () => {

@@ -91,6 +91,7 @@ export function handoffOf(run: IsolationRun): IsolationHandoff {
       path: repo.path,
       integrationBranch: repo.integrationBranch,
       baseRef: repo.baseRef,
+      ...(repo.baseBranch ? { baseBranch: repo.baseBranch } : {}),
       landed: merged.filter((r) => r.repos[repo.path]?.changed).map(entry),
     })),
     landed: merged.map(entry),
