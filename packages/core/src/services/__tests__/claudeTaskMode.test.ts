@@ -1032,7 +1032,64 @@ describe('ClaudeCodeAdapter model switches', () => {
     adapter.dispose();
   });
 
-  it('reports no switch the chat did not ask for', async () => {
+  // Recorded the same way, `/model opus` straight after `/model sonnet`: the
+  // second command's own `init` already reports Sonnet, the first switch.
+  it('follows two /model commands back to back, each once the runner answers on its model', async () => {
+    const { processDeps } = deps([...recording().slice(0, 2), fixture('claude-code', 'task-model-command-again'), fixture('claude-code', 'task-model-switched-again')]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskIn('default', { model: 'haiku' }));
+    const events: AgentEvent[] = [];
+    await adapter.send('Reply with just the word one.', (e) => events.push(e));
+    await adapter.invokeCommand('model', 'sonnet', (e) => events.push(e));
+    await adapter.invokeCommand('model', 'opus', (e) => events.push(e));
+    await adapter.send('Reply with just the word two.', (e) => events.push(e));
+
+    expect(events.filter((e) => e.type === 'model_switched')).toEqual([
+      { type: 'model_switched', from: { model: 'haiku', label: 'Haiku 5.5' }, to: { model: 'sonnet', label: 'Sonnet 5.5' } },
+      { type: 'model_switched', from: { model: 'sonnet', label: 'Sonnet 5.5' }, to: { model: 'opus', label: 'Opus 5.5' } },
+    ]);
+    adapter.dispose();
+  });
+
+  // `/effort low` recorded after them: its turn only prints, and no `init`
+  // before or after names an effort, so there is none to follow.
+  it('follows no effort: /effort only prints', async () => {
+    const { processDeps } = deps([...recording().slice(0, 2), fixture('claude-code', 'task-model-command-again'), fixture('claude-code', 'task-model-switched-again'), fixture('claude-code', 'task-effort-command')]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskIn('default', { model: 'haiku' }));
+    await adapter.send('Reply with just the word one.', () => {});
+    await adapter.invokeCommand('model', 'sonnet', () => {});
+    await adapter.invokeCommand('model', 'opus', () => {});
+    await adapter.send('Reply with just the word two.', () => {});
+    const events: AgentEvent[] = [];
+    await adapter.invokeCommand('effort', 'low', (e) => events.push(e));
+
+    expect(events.filter((e) => e.type !== 'usage')).toEqual([
+      { type: 'assistant_text', text: 'Set effort level to low (this session only): Quick, straightforward implementation with minimal overhead' },
+      { type: 'turn_end' },
+    ]);
+    adapter.dispose();
+  });
+
+  // The CLI runs a message that starts with `/model` as the command however
+  // the surface sent it: before the command list arrived, or into a finished
+  // task's composer, it goes out as a plain message.
+  it('follows a /model that went out as a plain message', async () => {
+    const { processDeps } = deps(recording());
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskIn('default', { model: 'haiku' }));
+    const events: AgentEvent[] = [];
+    await adapter.send('Reply with just the word one.', (e) => events.push(e));
+    await adapter.send('/model sonnet', (e) => events.push(e));
+    await adapter.send('Reply with just the word two.', (e) => events.push(e));
+
+    expect(events.filter((e) => e.type === 'model_switched')).toEqual([
+      { type: 'model_switched', from: { model: 'haiku', label: 'Haiku 5.5' }, to: { model: 'sonnet', label: 'Sonnet 5.5' } },
+    ]);
+    adapter.dispose();
+  });
+
+  it('reports a change the chat did not ask for as drift, not as a switch to follow', async () => {
     const { processDeps } = deps([fixture('claude-code', 'task-model-before'), fixture('claude-code', 'task-model-switched')]);
     const adapter = new ClaudeCodeAdapter(processDeps);
     await adapter.start(taskIn('default', { model: 'haiku' }));
@@ -1040,7 +1097,9 @@ describe('ClaudeCodeAdapter model switches', () => {
     await adapter.send('Reply with just the word one.', (e) => events.push(e));
     await adapter.send('Reply with just the word two.', (e) => events.push(e));
 
-    expect(events.filter((e) => e.type === 'model_switched')).toEqual([]);
+    expect(events.filter((e) => e.type === 'model_switched' || e.type === 'model_drifted')).toEqual([
+      { type: 'model_drifted', from: { model: 'haiku', label: 'Haiku 5.5' }, to: { model: 'sonnet', label: 'Sonnet 5.5' } },
+    ]);
     adapter.dispose();
   });
 
@@ -1054,7 +1113,9 @@ describe('ClaudeCodeAdapter model switches', () => {
     await adapter.send('Reply with just the word one.', (e) => events.push(e));
     await adapter.send('Reply with just the word two.', (e) => events.push(e));
 
-    expect(events.filter((e) => e.type === 'model_switched')).toEqual([]);
+    expect(events.filter((e) => e.type === 'model_switched' || e.type === 'model_drifted')).toEqual([
+      { type: 'model_drifted', from: { model: 'haiku', label: 'Haiku 5.5' }, to: { model: 'sonnet', label: 'Sonnet 5.5' } },
+    ]);
     adapter.dispose();
   });
 });

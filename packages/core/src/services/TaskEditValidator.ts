@@ -198,7 +198,10 @@ export function validateTaskEdit(
 
   const locked = actor === 'planner' ? lockedTaskRefusal(target, 'modified') : null;
   if (locked) return { ok: false, error: locked };
-  if ('assignedModel' in changes && !sameAssignment(changes.assignedModel, target.assignedModel) && catalog?.liveRunner?.(taskId)) {
+  const coherence = typeCoherenceCheck(target, changes);
+  // Read on the edit as it lands: a flip to manual clears the model without the patch naming it.
+  const landing = coherence?.clear?.includes('assignedModel') ? { ...changes, assignedModel: undefined } : changes;
+  if ('assignedModel' in landing && !sameAssignment(landing.assignedModel, target.assignedModel) && catalog?.liveRunner?.(taskId)) {
     return { ok: false, error: liveModelRefusal(target) };
   }
 
@@ -207,7 +210,6 @@ export function validateTaskEdit(
     if (!depCheck.ok) return depCheck;
   }
 
-  const coherence = typeCoherenceCheck(target, changes);
   if (coherence && !coherence.ok) return coherence;
 
   const ops = opsCheck(target, parent !== null, changes);

@@ -261,9 +261,10 @@ function commandOutput(view: TaskLogView, { text }: Event<'command_output'>): Ta
   return { ...view, blocks: replaceAt(view.blocks, i, { ...block, output: block.output ? `${block.output}\n${text}` : text }) };
 }
 
-function modelSwitchNotice({ from, to, effort }: Event<'model_switched'>): string {
-  const now = `${to.label ?? to.model}${effort ? `, ${effort}` : ''}`;
-  return `Model changed in the runner: ${from.label ?? from.model} → ${to.label ?? to.model}; the plan now says ${now}`;
+function modelSwitchNotice({ from, to, plan, kept }: Event<'model_switched'>): string {
+  const planned = plan.model ? `${plan.model.label ?? plan.model.model}${plan.effort ? `, ${plan.effort}` : ''}` : undefined;
+  if (!kept) return `Model changed in the runner: ${from.label ?? from.model} → ${to.label ?? to.model}; the plan now says ${planned ?? to.label ?? to.model}`;
+  return `The runner now answers on ${to.label ?? to.model}; ${planned ? `the plan still says ${planned}` : 'the plan names no model'} (${kept})`;
 }
 
 /** Among the turn's steps, as a tool call is: what streamed before it is settled. */

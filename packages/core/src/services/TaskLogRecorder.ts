@@ -32,6 +32,8 @@ export class TaskLogRecorder {
   private readonly open: (location: TaskLogLocation, taskId: string) => TaskLogFile;
   private readonly flushMs: number;
   private readonly logger: ILogger;
+  /** Each task's latest attempt, by the session it records: its log takes a {@link note} until the next attempt starts. */
+  private readonly latest = new Map<string, { sessionId: string; note: (entry: TaskLogEvent) => void }>();
 
   constructor(private readonly deps: TaskLogRecorderDeps) {
     this.open = deps.open ?? openTaskLog;
@@ -52,6 +54,16 @@ export class TaskLogRecorder {
       stopAll: () => runner.stopAll(),
       get activeCount() { return runner.activeCount; },
     };
+  }
+
+  /**
+   * An entry the session did not emit, written into the log of the attempt
+   * that runs `sessionId` and sent at once: what Ordewell made of one of its
+   * events once that settled. Dropped once the task's next attempt started.
+   */
+  note(sessionId: string, taskId: string, entry: TaskLogEvent): void {
+    const attempt = this.latest.get(taskId);
+    if (attempt?.sessionId === sessionId) attempt.note(entry);
   }
 
   /** Start a new attempt's log for `session`, opening with the skills it was given, and keep it until the session exits. */
@@ -84,6 +96,9 @@ export class TaskLogRecorder {
       }
       this.deps.broadcast({ type: 'task_log', taskId, attempt, events: taskLogForSurface(events) });
     };
+
+    // Past the session's exit too: a note can settle after the process ended.
+    this.latest.set(taskId, { sessionId: session.id, note: (entry) => { pending.push(entry); flush(); } });
 
     const openCalls = new Set<string>();
     session.onEvent((event) => {
