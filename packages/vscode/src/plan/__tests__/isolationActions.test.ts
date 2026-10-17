@@ -18,6 +18,8 @@ function deps() {
     cleanupRun: vi.fn().mockResolvedValue(undefined),
     resolveConflictAsTask: vi.fn().mockResolvedValue({ status: 'draft', tasks: [] }),
     planState: null,
+    isExecuting: false,
+    isolationView: vi.fn().mockReturnValue(null),
   };
   const chatProvider = {
     showError: vi.fn(),
@@ -128,6 +130,46 @@ describe('handoff actions (ADR-0013)', () => {
     await handleIsolationAction('merge', undefined, d);
 
     expect(session.mergeRun).toHaveBeenCalledTimes(1);
+  });
+
+  const handoffOn = (...repos: [string, string | undefined][]) => ({
+    tasks: {},
+    handoff: {
+      repos: repos.map(([path, baseBranch]) => ({ path, integrationBranch: 'ordewell/r1/integration', baseRef: 'aaa', ...(baseBranch ? { baseBranch } : {}), landed: [{ taskId: 't1', order: 1, title: 'One' }] })),
+      landed: [{ taskId: 't1', order: 1, title: 'One' }],
+    },
+  });
+
+  it('names the branch it lands on and the rule that it must be checked out, as the terminal does', async () => {
+    showWarningMessage.mockResolvedValue(undefined);
+    const { d, session } = deps();
+    session.isolationView.mockReturnValue(handoffOn(['.', 'main']));
+    await handleIsolationAction('merge', undefined, d);
+
+    const [message] = showWarningMessage.mock.calls[0] as unknown as [string];
+    expect(message).toContain('into main.');
+    expect(message).toContain('Nothing is merged unless main is checked out.');
+  });
+
+  it('names each repo of a group, mid-run as well', async () => {
+    showWarningMessage.mockResolvedValue(undefined);
+    const { d, session } = deps();
+    session.isolationView.mockReturnValue(handoffOn(['api', 'main'], ['web', 'develop']));
+    session.isExecuting = true;
+    await handleIsolationAction('merge', undefined, d);
+
+    const [message] = showWarningMessage.mock.calls[0] as unknown as [string];
+    expect(message).toContain('into each of api (main), web (develop).');
+    expect(message).toContain('Nothing is merged unless each repository is on the branch it started on.');
+  });
+
+  it('keeps saying the checked-out branch when the run holds no handoff to read it from', async () => {
+    showWarningMessage.mockResolvedValue(undefined);
+    const { d } = deps();
+    await handleIsolationAction('merge', undefined, d);
+
+    const [message] = showWarningMessage.mock.calls[0] as unknown as [string];
+    expect(message).toContain('into the branch you have checked out.');
   });
 
   it('does not discard without an explicit confirmation', async () => {

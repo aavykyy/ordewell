@@ -1,4 +1,4 @@
-import type { DiscoveredModel, RunnerId } from '../models/Task';
+import type { AwaitingReason, DiscoveredModel, RunnerId } from '../models/Task';
 import { effectiveAllowlist } from './ModelAllowlistResolver';
 
 /**
@@ -53,4 +53,27 @@ export function assignmentIssue(task: AssignedTask, scope: AssignmentScope): Ass
 
 export function assignmentIssueText(issue: AssignmentIssue): string {
   return issue.kind === 'runner-off' ? `${issue.runner} is switched off` : `${issue.modelLabel} is not in the allowlist`;
+}
+
+/** Where a flagged task stands, which decides what its assignment means. */
+export interface AssignmentStanding {
+  status?: string;
+  awaitingReason?: AwaitingReason;
+  resumeAt?: string | null;
+}
+
+/**
+ * What happens to a flagged task as assigned, which depends on where it stands:
+ * a failed one only runs again if retried, and a pause whose attempt ended (a
+ * usage limit, work that did not land) has nothing running, whatever its
+ * status says. The planner's note and every surface's flag read this one text.
+ */
+export function assignmentConsequence({ status, awaitingReason, resumeAt }: AssignmentStanding): string {
+  if (status === 'failed') return 'failed; a retry would run it there unless moved';
+  if (status === 'awaiting_user' && awaitingReason === 'usage-limit') {
+    return resumeAt ? 'paused on a usage limit; resumes there at the reset unless moved' : 'paused on a usage limit; a retry would run it there unless moved';
+  }
+  if (status === 'awaiting_user' && (awaitingReason === 'conflict' || awaitingReason === 'files-changed')) return 'waiting for the user; what runs next runs there unless moved';
+  if (status === 'in_progress' || status === 'awaiting_user') return 'already running as assigned';
+  return 'runs as assigned unless moved';
 }

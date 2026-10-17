@@ -115,7 +115,7 @@ function printOneSession(
     const row = taskRowView({ ...t, dependencies: t.dependencies ?? [], waitsForApproval: waitsForApproval(t, record) }, { tasks: allTasks, runnerScope });
     const waiting = approval(row, taskOrderLabel(t));
     if (waiting) console.log(`      ${waiting}`);
-    if (row.assignmentFlag) console.log(`      ⚠ ${assignmentFlagText(row.assignmentFlag, row.status)}`);
+    if (row.assignmentFlag) console.log(`      ⚠ ${assignmentFlagText(row)}`);
     if (row.blockedBy) console.log(`      ${blockedByLabel(row.blockedBy)}`);
     if (row.status === 'skipped') console.log(`      ${skippedLabel(row.skipReason)}`);
     if (row.usage) console.log(`      ${taskUsageText(row.usage)}`);
@@ -127,7 +127,7 @@ function printOneSession(
       const subRow = taskRowView({ ...sub, dependencies: sub.dependencies ?? [], waitsForApproval: waitsForApproval(sub, record) }, { parent: t, tasks: allTasks, runnerScope });
       const subWaiting = approval(subRow, taskOrderLabel(sub, t));
       if (subWaiting) console.log(`        ${subWaiting}`);
-      if (subRow.assignmentFlag) console.log(`        ⚠ ${assignmentFlagText(subRow.assignmentFlag, subRow.status)}`);
+      if (subRow.assignmentFlag) console.log(`        ⚠ ${assignmentFlagText(subRow)}`);
       if (subRow.blockedBy) console.log(`        ${blockedByLabel(subRow.blockedBy)}`);
       if (subRow.status === 'skipped') console.log(`        ${skippedLabel(subRow.skipReason)}`);
       if (subRow.usage) console.log(`        ${taskUsageText(subRow.usage)}`);

@@ -21,6 +21,7 @@ const SHARED_TAIL = ['→ expand', '? keys', 'tab chat'];
 describe('plan footer — the keys that fit the selected task', () => {
   it.each<[string, Partial<TaskView>, Partial<TuiState>, string[]]>([
     ['a pending task', {}, {}, ['f start', 'E run plan', 'o model', 'e effort']],
+    ['a task that waits for approval', { waitsForApproval: true }, {}, ['f approve', 'E run plan', 'o model', 'e effort']],
     ['a blocked task', { status: 'blocked' }, {}, ['f start', 's skip', 'E run plan']],
     ['a manual task', { type: 'user' }, {}, ['m done', 'E run plan']],
     ['a running task', { status: 'in_progress' }, {}, ['enter log', 'c cancel']],
@@ -150,6 +151,11 @@ describe('the key sheet', () => {
       expect(text).toContain(keys);
       expect(text).toContain(meaning);
     }
+  });
+
+  it('says f approves a task as well as starts it, since it starts once its dependencies finish', () => {
+    const text = stripAnsi(helpLayout(200, 200, 'keys').lines.join('\n'));
+    expect(text).toMatch(/\bf\s+start the task, approving it if it waits for you; it starts once its dependencies finish/);
   });
 
   it('groups the keys under navigation, assign, run, status and other', () => {

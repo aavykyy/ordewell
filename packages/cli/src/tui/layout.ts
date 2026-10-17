@@ -418,7 +418,7 @@ export function chatLayout(state: TuiState, rows: number, cols: number): ChatLay
   // The usage rows are the session's (or the opened task's), not lines of the
   // transcript: they keep the pane's bottom rows while everything above them
   // scrolls — unless the pane is a single row, which belongs to the conversation.
-  const usage = rows <= 1 ? [] : tv ? taskUsageFooter(state, tv, blocks, cols) : tokenRow(blocks, cols);
+  const usage = rows <= 1 ? [] : tv ? taskUsageFooter(state, tv, blocks, cols) : [...plannerResendRow(state, cols), ...tokenRow(blocks, cols)];
   // The per-model rows are the expendable part: they yield to the transcript
   // so a short pane never trades its last conversation row for a breakdown.
   const footer = usage.slice(0, Math.max(1, rows - taskHeader.length - 1));
@@ -426,6 +426,15 @@ export function chatLayout(state: TuiState, rows: number, cols: number): ChatLay
   // Content that fits hangs off the top so the welcome does not jump when the
   // first message lands; once it overflows the newest lines win the pane.
   return { lines: content, header: taskHeader, footer, anchor: content.length > space ? 'bottom' : 'top', maxScroll: Math.max(0, content.length - space) };
+}
+
+/** The planner turn waiting on its usage limit, pinned beside the usage rows so it stays in view as the chat scrolls. */
+function plannerResendRow(state: TuiState, cols: number): string[] {
+  const { plannerResend } = state;
+  const at = plannerResend ? new Date(plannerResend.at) : null;
+  if (!plannerResend || !at || Number.isNaN(at.getTime())) return [];
+  const whose = plannerResend.runner ? `${plannerResend.runner}'s` : "the planner's";
+  return [style.yellow(truncate(`⏸ Resending at ${resumeTime(at)}, once ${whose} usage limit resets · /resend cancel keeps it for your next message`, cols))];
 }
 
 const tokenRow = (blocks: readonly DisplayBlock[], cols: number): string[] => {
@@ -959,7 +968,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   }
   // Named as it is, not lowercased like the other labels: a model's label is a proper name.
   if (row.assignmentFlag) {
-    lines.push(...statusLines(style.yellow, '⚠', assignmentFlagText(row.assignmentFlag, row.status), cols, bodyPad));
+    lines.push(...statusLines(style.yellow, '⚠', assignmentFlagText(row), cols, bodyPad));
   }
   if (row.waitsForApproval) {
     lines.push(...statusLines(style.yellow, '⏸', `${inRow(row.waitsForApproval)} · f approves it · /run approves all`, cols, bodyPad));

@@ -3,7 +3,7 @@ import {
   type DiffRow, type DiffStat,
   type ApprovalBlock, type ApprovalKind, type ApprovalSource, type DisplayBlock, type MessageBlock, type MessageRole, type PlanBlock,
   type CommandBlock, type CommandStatus, type CompactionBlock, type RunnerLoadedBlock,
-  type UsageTotals, type TaskStatusKind,
+  type UsageTotals,
   type SkillLoadBlock, type SubagentBlock, type SubagentStatus, type ThinkingDisplayBlock, type ToolBlock,
 } from '@ordewell/core';
 import { graphemes, pad, sanitize, style, truncate, width, wrap, wrapLines } from './ansi';
@@ -565,10 +565,7 @@ export function taskUsageText(usage: { totals: UsageTotals; contextFill?: { used
   ].join(' · ');
 }
 
-/** A flagged assignment and what it means for the task, which depends on where it stands: a failed one runs again only if retried. */
-export function assignmentFlagText(flag: string, status: TaskStatusKind): string {
-  const consequence = status === 'failed' ? 'a retry runs it there unless moved'
-    : status === 'running' || status === 'quiet' ? 'it is already running there'
-      : 'it still runs unless moved';
-  return `${flag}; ${consequence}`;
+/** A flagged assignment and what it means for the task as it stands (core words it, so every surface agrees). */
+export function assignmentFlagText(row: { assignmentFlag: string | null; assignmentConsequence: string | null }): string {
+  return `${row.assignmentFlag} — ${row.assignmentConsequence}`;
 }

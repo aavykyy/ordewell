@@ -503,6 +503,8 @@ export interface TuiState {
   handoff: HandoffView | null;
   /** Null once everything landed is merged into the user's branch. */
   runMerge: RunMergeView | null;
+  /** A planner turn that hit the planner's usage limit goes again at this time (read off the plan); null when none waits. */
+  plannerResend: { runner?: string; at: string } | null;
   overlay: Overlay | null;
   /**
    * Approval prompts not yet shown. The planner blocks on each one, so they are
@@ -744,6 +746,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     workspace: process.cwd(),
     handoff: null,
     runMerge: null,
+    plannerResend: null,
     overlay: null,
     pendingApprovals: [],
     queuedPrompts: EMPTY_HOLD,

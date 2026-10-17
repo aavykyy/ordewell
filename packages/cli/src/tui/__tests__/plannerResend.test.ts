@@ -3,6 +3,9 @@ import { initialState, reduce, type Step } from '../reducer';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import type { TuiState } from '../state';
 import { lastMessage } from './chat';
+import { render } from '../render';
+import { stripAnsi } from '../ansi';
+import { chatLayout } from '../layout';
 
 /**
  * A planner turn that ended on the planner's usage limit waits to be sent
@@ -38,5 +41,40 @@ describe('/resend', () => {
       expect(cancelPlannerResend).toHaveBeenCalledWith('s1');
       expect(dispatch).toHaveBeenCalledWith({ type: 'notice', message: expect.stringMatching(said) });
     }
+  });
+});
+
+describe('the resend that waits', () => {
+  const AT = '2099-01-01T20:10:00.000Z';
+  const planWith = (plannerResend?: { runner?: string; at?: string }) => ({ tasks: [], ...(plannerResend ? { plannerResend } : {}) });
+  const shown = (state: TuiState): string => stripAnsi(chatLayout(state, 12, 100).footer.join('\n'));
+  const planUpdated = (state: TuiState, plan: unknown): TuiState => reduce(state, { type: 'planUpdated', plan, sessionId: 's1' }).state;
+
+  it('is kept from the plan and drawn in the chat footer with the way to cancel it', () => {
+    const waiting = planUpdated(session(), planWith({ runner: 'claude-code', at: AT }));
+
+    expect(waiting.plannerResend).toEqual({ runner: 'claude-code', at: AT });
+    expect(shown(waiting)).toMatch(/Resending at .+, once claude-code's usage limit resets/);
+    expect(shown(waiting)).toContain('/resend cancel');
+    expect(stripAnsi(render(waiting).join('\n'))).toContain('Resending at');
+  });
+
+  it('goes when a later plan no longer carries it, as it does once it was sent or cancelled', () => {
+    const waiting = planUpdated(session(), planWith({ at: AT }));
+    const gone = planUpdated(waiting, planWith());
+
+    expect(gone.plannerResend).toBeNull();
+    expect(shown(gone)).not.toContain('Resending');
+  });
+
+  it('is not drawn for a hold with no time, which goes with the next message', () => {
+    const held = planUpdated(session(), planWith({ runner: 'claude-code' }));
+
+    expect(held.plannerResend).toBeNull();
+    expect(shown(held)).not.toContain('Resending');
+  });
+
+  it('names the planner when no runner is recorded', () => {
+    expect(shown(planUpdated(session(), planWith({ at: AT })))).toContain("once the planner's usage limit resets");
   });
 });
