@@ -19,6 +19,12 @@ describe('classifyRunnerStop', () => {
     expect(classifyRunnerStop('')).toBe('stopped');
   });
 
+  it('takes a failure the runner marked as its usage limit at its word, whatever it says', () => {
+    expect(classifyRunnerStop({ message: 'Codex is not available on this workspace right now.', usageLimit: {} })).toBe('usage-limit');
+    expect(classifyRunnerStop({ message: 'compilation failed: unexpected token' })).toBe('stopped');
+    expect(classifyRunnerStop({ message: "You've hit your usage limit. Try again later." })).toBe('usage-limit');
+  });
+
   it('does not read a limit signature buried far above the tail', () => {
     const buried = 'usage limit reached\n' + 'x'.repeat(5000);
     expect(classifyRunnerStop(buried)).toBe('stopped');
@@ -74,6 +80,12 @@ describe('readUsageLimitReset', () => {
     ])('reads %j', (message, expected) => {
       const localNow = new Date(2026, 9, 11, 19, 0);
       expect(readUsageLimitReset('codex', message, localNow)?.getTime()).toBe(expected.getTime());
+    });
+
+    it('takes the reset Codex reported for the used-up window over the words, and the words without one', () => {
+      expect(readUsageLimitReset('codex', { message: "You've hit your usage limit. Try again later.", usageLimit: { resetsAt: '2026-10-11T20:42:55.000Z' } }, now)?.toISOString()).toBe('2026-10-11T20:42:55.000Z');
+      const localNow = new Date(2026, 9, 11, 19, 0);
+      expect(readUsageLimitReset('codex', { message: "You've hit your usage limit. Try again at 8:10 PM.", usageLimit: {} }, localNow)?.getTime()).toBe(new Date(2026, 9, 11, 20, 10).getTime());
     });
 
     it('reads nothing when Codex has no time to give', () => {

@@ -15,6 +15,7 @@ import { awaitAttach, type AttachState } from './ordewellBinding';
 import { CodexRpc, type RpcMessage, type RpcResponse } from './codexRpc';
 import { settleWithin } from './settleWithin';
 import { PermissionLedger } from './permissionLedger';
+import { codexUsageLimitSignal, mergeCodexRateLimits, type CodexRateLimits } from './codexUsageLimit';
 
 const HANDSHAKE_TIMEOUT_MS = 30000;
 /** Codex starts a thread's MCP servers as the thread opens; one that is not up by now is not coming. */
@@ -126,6 +127,12 @@ interface ThreadTokenUsageParams {
     last?: TokenUsageBreakdown;
     modelContextWindow?: number | null;
   };
+}
+
+/** The `TurnError` an `error` notification and a failed `turn/completed` carry; `codexErrorInfo` says what kind. */
+interface CodexTurnError {
+  message?: string;
+  codexErrorInfo?: unknown;
 }
 
 /**
@@ -356,6 +363,11 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   private turn: CodexTurn | null = null;
   /** The last turn this adapter ended — so its second end signal, landing late, ends nothing. */
   private endedTurnId: string | null = null;
+  /**
+   * The account's limit windows as Codex last reported them. Only read when a
+   * turn fails on the usage limit; an update on its own acts on nothing.
+   */
+  private rateLimits: CodexRateLimits = new Map();
   /** An interrupt was asked for during this turn, so however it ends, it was cut short. */
   private interruptRequested = false;
   /**
@@ -789,6 +801,9 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       case 'thread/tokenUsage/updated':
         this.emitUsage(msg.params as ThreadTokenUsageParams | undefined, emit);
         return;
+      case 'account/rateLimits/updated':
+        this.rateLimits = mergeCodexRateLimits(this.rateLimits, msg.params);
+        return;
       case 'turn/started': {
         // A subagent runs its own turn in its own thread; its start must not
         // reset the planner turn's paragraph state.
@@ -836,10 +851,10 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         // A subagent's failure is reported by its own lifecycle, not by ending
         // the planner's turn: the planner is still working and may recover.
         if (this.subagentOf(msg.params?.threadId)) return;
-        const failure = msg.params as { error?: { message?: string }; willRetry?: boolean } | undefined;
+        const failure = msg.params as { error?: CodexTurnError; willRetry?: boolean } | undefined;
         if (failure?.willRetry) return;
         this.closeTurn(emit);
-        emit({ type: 'error', message: failure?.error?.message || 'Codex ended the turn with an error.' });
+        emit(this.turnFailed(failure?.error));
         return;
       }
       case 'turn/completed': {
@@ -847,13 +862,13 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         // Settling the planner on a child's completion cut the turn short
         // before the planner had read the subagent's report.
         if (this.subagentOf(msg.params?.threadId)) return;
-        const turn = msg.params?.turn as { id?: string; status?: string; error?: { message?: string } } | undefined;
+        const turn = msg.params?.turn as { id?: string; status?: string; error?: CodexTurnError } | undefined;
         if (!this.turn || (turn?.id && turn.id === this.endedTurnId)) return;
         this.closeTurn(emit);
         if (this.interruptRequested || turn?.status === 'interrupted') {
           emit({ type: 'turn_end', interrupted: true });
         } else if (turn?.status === 'failed') {
-          emit({ type: 'error', message: turn.error?.message || 'Codex ended the turn with an error.' });
+          emit(this.turnFailed(turn.error));
         } else {
           emit({ type: 'turn_end' });
         }
@@ -864,6 +879,12 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       default:
         return;
     }
+  }
+
+  private turnFailed(error: CodexTurnError | undefined): AgentEvent {
+    const message = error?.message || 'Codex ended the turn with an error.';
+    const usageLimit = codexUsageLimitSignal(error, this.rateLimits, new Date());
+    return usageLimit ? { type: 'error', message, usageLimit } : { type: 'error', message };
   }
 
   private turnStarted(id: unknown): void {
