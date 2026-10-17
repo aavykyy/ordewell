@@ -987,7 +987,7 @@ left for a folder with no repository in it. A group's task integrates by an
 atomic *landing*. An *ops task* runs at the workspace root instead, and a run
 decides whether it isolates when its first change task starts, so a run of only
 ops tasks never asks. The
-Runner is only ever handed a `cwd` (ADR-0007) — git never enters
+Runner is only ever handed a `cwd` (ADR-0025) — git never enters
 `IRunner`, `RunnerRegistry` or a runner adapter.
 *Avoid:* "sandbox" (an OS-level runner sandbox is a separate concern, ADR-0011),
 "clone" (a worktree shares the repository's object store).

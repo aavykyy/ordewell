@@ -67,9 +67,12 @@ An ADR may be folded into the one it amends when all of these hold:
   before changing the code it describes.
 
 Merge section by section (its Problem into the host's Problem, and so on), keep
-every rule ID and rejected option, list `folds: ["0031 — Its title"]` in the
-host's front matter so the old number still resolves, and retarget the links.
-Anything else stays a separate ADR, however closely related.
+every rule ID and rejected option that still applies, list
+`folds: ["0031 — Its title"]` in the host's front matter so the old number still
+resolves, and retarget the links. A design that was fully superseded may be
+summarized as a Considered option instead of copied, with its full text left in
+git history; any rule of it that other docs still rely on moves to the host under
+a new ID. Anything else stays a separate ADR, however closely related.
 
 ## Checks
 
@@ -128,11 +131,10 @@ How runners are driven, messaged and given Ordewell tools.
 
 | ADR | Title | Status | Amends | Amended by |
 |---|---|---|---|---|
-| [0007](runners/0007-tmux-backed-runners.md) | Runners execute inside tmux, terminals open on demand | superseded | — | superseded by [0025](runners/0025-structured-only-runners.md) |
 | [0018](runners/0018-structured-runner-transport.md) | Structured runner transport: drive task runners through their programmatic protocol | accepted | — | [0023](runners/0023-messages-reach-a-running-task.md) |
 | [0022](runners/0022-ordewell-mcp-server.md) | The Ordewell MCP server: task and planner tools behind per-caller tokens | accepted | — | [0029](supervision/0029-the-supervisor.md), [0035](supervision/0035-effects-are-consented-and-recorded.md) |
 | [0023](runners/0023-messages-reach-a-running-task.md) | Messages reach a running task between tool calls | accepted | [0018](runners/0018-structured-runner-transport.md) | — |
-| [0025](runners/0025-structured-only-runners.md) | Structured-only runners | accepted | supersedes [0007](runners/0007-tmux-backed-runners.md) | — |
+| [0025](runners/0025-structured-only-runners.md) | Structured-only runners | accepted | supersedes [0007](runners/0025-structured-only-runners.md) | — |
 
 ### isolation/
 
@@ -181,6 +183,7 @@ Folded into another ADR. The number still resolves, and code that cites it stays
 
 | ADR | Was | Now in |
 |---|---|---|
+| 0007 | Runners execute inside tmux, terminals open on demand | [0025](runners/0025-structured-only-runners.md) |
 | 0019 | Nested repositories are shared live, not refused | [0014](isolation/0014-multi-repo-workspaces.md) |
 | 0021 | Unedited built-in skill seeds refresh with the package | [0024](planner/0024-unified-skills.md) |
 | 0031 | The planner says read-only, not a mode | [0001](routing/0001-autonomous-mode-resolution.md) |

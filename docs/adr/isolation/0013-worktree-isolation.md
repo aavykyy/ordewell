@@ -44,7 +44,7 @@ everything below applies per repo of the group.
   an id, per repo the base ref resolved to a commit *then* and the integration
   branch name, and per-task branch/worktree/status. It is plain JSON so it can
   be persisted with the plan state. Because task ids are only unique within one
-  plan and one daemon serves many (ADR-0007 T7), operations that act on a task
+  plan and one daemon serves many (ADR-0025 D2), operations that act on a task
   take the run — `release(run, taskId, …)`, not a bare id.
 - **A run continues the plan's record while anything has landed on it.** After a
   failure, the next Execute preserves completed tasks, and a fresh integration

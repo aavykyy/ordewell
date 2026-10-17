@@ -1,6 +1,8 @@
 ---
 status: accepted
 supersedes: ["0007"]
+folds:
+  - "0007 — Runners execute inside tmux, terminals open on demand"
 ---
 
 # 0025 — Structured-only runners
@@ -47,6 +49,24 @@ coding-agent session, both task runners and coding-agent planners.**
 API planners keep their existing validated JSON plan, edit and query envelopes;
 these are not completion-marker fallbacks. This decision does not widen the
 planner exploration envelope (ADR-0008).
+
+## Key properties
+
+Two rules of the superseded tmux design (ADR-0007, folded in under *Considered
+options*) outlive it, and other ADRs rely on them:
+
+- **A runner is handed a `cwd` and nothing more (D1).** Git never enters
+  `IRunner`, `RunnerRegistry` or a runner adapter: isolation prepares a
+  directory ([ADR-0013](../isolation/0013-worktree-isolation.md)) and
+  `IRunner.spawn` takes it as `cwd`.
+- **Task ids are scoped by plan session (D2).** Task ids are only unique within
+  one plan — every planner names its first task `task-1` — and one daemon serves
+  many plans through one shared runner. `PoolAwareRunner` therefore tags each
+  spawn with its plan session id (`planSessionId`), which keeps two plans'
+  identically named tasks apart wherever something is keyed by task, the
+  attempt's MCP token among them. For the same reason a plan's stop-all and its
+  count of running sessions come from the sessions that plan spawned, never from
+  the shared runner, so one plan's stop cannot kill another plan's tasks.
 
 ## Expected successor: a generic Agent Client Protocol (ACP) connector
 
@@ -107,6 +127,52 @@ its supported access path and applicable terms need checking before adoption.
 - **Keep terminal as fallback.** Previously adopted; rejected because screen
   scraping, keystroke delivery and a second session lifecycle burden every
   runner feature, with no supported runner needing them.
+- **Runners execute inside tmux, terminals open on demand (ADR-0007).** The
+  terminal transport's last design, and what this decision removes. Every AI
+  runner had run headlessly (`HeadlessRunner`: piped stdio, one-shot, prompt
+  baked into argv), with the orchestrator scanning raw output for
+  `<<<ORDEWELL_CHECKPOINT>>>` and `<<<ORDEWELL_DONE_...>>>` markers
+  (`VerdictEngine`); the TUI dropped `task_output` outright, so a user could not
+  see what a runner was doing, let alone type into it. The ask (the #24
+  follow-up): every spawned runner a real, interactive terminal a user can open
+  and type into, while Ordewell keeps watching and still advances the dependency
+  graph. Tasks ran in a **tmux window** instead of a piped subprocess
+  (`TmuxRunner`, beside `HeadlessRunner`, both behind
+  `ITerminalSession`/`ITerminalRunner`): one shared tmux session per port
+  (`ordewell-<port>`), one window per task attempt, and `ordewell tui` opened a
+  real OS terminal window attached to a task's window on demand (`t` in the plan
+  pane, or `/terminal <id>`), computing the tmux target itself from port and task
+  id because the daemon is always local. Output was captured by `tmux pipe-pane`
+  into a per-session log tailed by byte offset; windows outlived the task (a
+  login shell after the exit code) until a cancel, a retry or daemon shutdown;
+  tmux was automatic with no setting, and a host without it fell back to
+  `HeadlessRunner` with a notice. It went with the whole terminal transport
+  (*Keep terminal as fallback*, above). Its full text, including the
+  interactive-versus-headless permission-flag rules (`-a never` and a
+  `projects.<cwd>.trust_level` override on Codex's interactive shape only), is in
+  git history: `git log --follow -- docs/adr/runners/0007-tmux-backed-runners.md`.
+  Its three rejected alternatives stay here, because a take-over feature would
+  meet them again:
+  - **A pty-multiplexer built into the TUI's own render loop (M2).** Rejected:
+    the TUI's whole render model is pure `render(state) → string[]`,
+    home-and-overwrite (ADR-0006); attaching a live runner needs raw ANSI
+    passthrough, a fundamentally different mode. Doing this over the daemon's
+    WebSocket (since a runner may not be spawned from the same process as any
+    given TUI client) would also mean building bidirectional binary streaming
+    plus resize propagation from scratch — reimplementing tmux, worse.
+  - **Capture-pane polling with prefix-diffing (M3).** Rejected in favor of
+    `pipe-pane` + file tailing: diffing periodic snapshots needs a resync
+    heuristic whenever the pane's scrollback is exceeded between polls, which can
+    re-emit already-seen content and double-count a checkpoint marker.
+    `pipe-pane` gives an exact append-only byte stream tmux is already designed
+    to produce.
+  - **Spawn a real OS terminal emulator as the *only* transport (M4, no tmux
+    underneath).** Rejected: it would only work with a local GUI, failing
+    silently on every SSH/headless box — which is a large fraction of where a
+    terminal-based TUI actually runs. tmux underneath means the daemon-side
+    execution and the checkpoint/verdict machinery keep working identically
+    whether or not a GUI is ever attached; opening a terminal is a pure
+    convenience on top, not a requirement for the pipeline to run.
 - **Keep markers as the no-tools fallback.** Previously adopted; rejected
   because an attach failure would silently downgrade completion, checkpoints
   and planner tools. Respawn once, then fail visibly.
@@ -129,5 +195,11 @@ tmux; the TUI remains unverified on native Windows (ADR-0010).
 
 ## History
 
-- 2026-10-09 — accepted and implemented.
+- 2026-07-31 — ADR-0007 accepted: tmux automatic, no setting.
+- 2026-09-29 — ADR-0007: the transport became a setting (ADR-0018); tmux stays automatic within the terminal transport.
+- 2026-10-02 — ADR-0007: structured the default; the terminal transport, and tmux with it, a fallback.
+- 2026-10-04 — ADR-0007: a runner manifest may carry a command line per major version; OpenCode 2.x uses one.
+- 2026-10-09 — ADR-0007: the transport setting removed; terminal is only the per-connector fallback (ADR-0018).
+- 2026-10-09 — accepted and implemented; supersedes ADR-0007.
 - 2026-10-10 — the TUI task-log surface corrected to Enter on a task in the plan pane.
+- 2026-10-17 — ADR-0007 folded in under Considered options; its two surviving rules are D1 and D2.

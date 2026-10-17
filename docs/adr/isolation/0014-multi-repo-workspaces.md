@@ -57,7 +57,7 @@ keep working. All of a task's worktrees share one branch name,
 `ordewell/<run-id>/<order>-<slug>`, in each repo, so a task is one name to look
 up across the group. The Runner's `cwd` is the task workspace, or the matching
 place inside it when the real workspace root is a subdirectory of a repo
-(ADR-0007: it is handed a `cwd` and nothing more). A directory that holds a
+(ADR-0025 D1: it is handed a `cwd` and nothing more). A directory that holds a
 deeper repo of the group is recreated as a real directory, so the repo's
 worktree sits at its real path, and the directory's other entries are linked one
 by one.
