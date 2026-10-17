@@ -51,6 +51,15 @@ export function liveModelRefusal(task: Pick<Task, 'title'>): string {
   return `"${task.title}" has a live runner, so its model and effort cannot change now: stop the task first, or use the runner's own /model`;
 }
 
+/**
+ * Why a task cannot move to another runner while its runner is up: the move
+ * re-derives the model from the new runner, under the same lock as
+ * {@link liveModelRefusal}, and no runner's own command can make it.
+ */
+export function liveRunnerRefusal(task: Pick<Task, 'title'>): string {
+  return `"${task.title}" has a live runner, so its runner cannot change now: stop the task first`;
+}
+
 function sameAssignment(a: TaskModelAssignment | undefined, b: TaskModelAssignment | undefined): boolean {
   return a?.modelId === b?.modelId && a?.thinkingEffort === b?.thinkingEffort;
 }

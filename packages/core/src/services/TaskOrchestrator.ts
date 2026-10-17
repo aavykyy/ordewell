@@ -774,11 +774,12 @@ export class TaskOrchestrator {
 
   /**
    * Something can still start that nobody has to ask for again: a start
-   * admitted and not yet claimed, or a task that resumes on its own at its
-   * usage limit's reset. A Stop is owed to it, whether or not anything runs.
+   * admitted and not yet claimed, a force start queued behind its
+   * dependencies, or a task that resumes on its own at its usage limit's
+   * reset. A Stop is owed to it, whether or not anything runs.
    */
   get startsPending(): boolean {
-    return this.admissions > 0 || this.store.allTasks.some(waitsForReset);
+    return this.admissions > 0 || this.queuedStarts.size > 0 || this.store.allTasks.some(waitsForReset);
   }
 
   /** Run `work`, which awaits before it claims, under an admission it holds throughout; it is handed the generation it was admitted under. */
@@ -1793,13 +1794,27 @@ export class TaskOrchestrator {
     return queued;
   }
 
-  /** A task's unmet dependencies, less the failed or blocked ones a force start goes past. */
+  /**
+   * A task's unmet dependencies, less the failed or blocked ones a force start
+   * goes past. A blocked one is gone past for its failure only: the work under
+   * way or yet to run that it waits on is still waited for, through it.
+   */
   private underWayBefore(task: Readonly<Task>): string[] {
     const blocked = blockingFailures(this.store.allTasks);
-    return unmetDependencies(task, this.store, this.runs).filter((id) => {
-      const status = this.store.get(id)?.status;
-      return status !== 'failed' && status !== 'blocked' && !blocked.has(id);
-    });
+    const waiting = new Set<string>();
+    const seen = new Set<string>();
+    const walk = (of: Readonly<Task>): void => {
+      for (const id of unmetDependencies(of, this.store, this.runs)) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const dep = this.store.get(id);
+        if (dep?.status === 'failed') continue;
+        if (dep && (dep.status === 'blocked' || blocked.has(id))) walk(dep);
+        else waiting.add(id);
+      }
+    };
+    walk(task);
+    return [...waiting];
   }
 
   /**
@@ -2432,10 +2447,12 @@ function unresumedMessage(task: Task, why: string): string {
  * What the runner said in the turn its exit cut short, or null when no turn
  * was in flight. A limit is acted on only when it ended a turn Ordewell
  * started (ADR-0018, U1): limit words in a turn that had already ended did
- * not stop the runner.
+ * not stop the runner. The turn's error, where the runner said in a field
+ * whether it is the limit, outranks the words (ADR-0044).
  */
-function saidInFlight(attempt: TaskAttempt): string | null {
+function saidInFlight(attempt: TaskAttempt): string | TurnFailure | null {
   const session = attempt.session;
   if (!session || session.turnState() !== 'working') return null;
+  if (attempt.turnError?.usageLimit !== undefined) return attempt.turnError;
   return session.getOutput().slice(attempt.turnOutputFrom);
 }

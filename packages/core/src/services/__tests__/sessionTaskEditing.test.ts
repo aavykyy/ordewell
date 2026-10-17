@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createTask, type LegacyPlanState } from '../../models/Task';
-import { FakeRunnerSession, makeSession, testWorkspace, taskOf, saves } from './sessionTestKit';
+import { FakeRunnerSession, makeSession, testWorkspace, taskOf, saves, type SessionOverrides } from './sessionTestKit';
 import { PlanStore } from '../PlanStore';
 import type { ModelResolver } from '../ModelResolver';
 import type { IRunner } from '../../interfaces/IRunner';
@@ -453,8 +453,49 @@ describe('Session.updateTask — model of a task with a live runner', () => {
     await expect(session.updateTask('only', { assignedModel: haiku })).rejects.toThrow(refusal);
   });
 
+  // A runner change re-derives the model from the new runner, so the lock covers it too.
+  it('refuses moving the task to another runner while it runs or waits for input', async () => {
+    const { session, live } = await running();
+    const runnerRefusal = /has a live runner, so its runner cannot change now: stop the task first/;
+
+    await expect(session.setTaskRunner('only', 'codex')).rejects.toThrow(runnerRefusal);
+    live.waitForInput();
+    await vi.waitFor(() => expect(taskOf(session, 'only')?.status).toBe('awaiting_user'));
+    await expect(session.setTaskRunner('only', 'codex')).rejects.toThrow(runnerRefusal);
+    expect(taskOf(session, 'only')).toMatchObject({ assignedRunner: 'claude-code' });
+    expect(session.isExecuting).toBe(true);
+  });
+
+  it('refuses a runner move whose discovery the task started during', async () => {
+    let listed: (models: typeof CLAUDE_CATALOG) => void = () => {};
+    const modelsForRunners = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { listed = resolve; }))
+      .mockResolvedValue(CLAUDE_CATALOG);
+    const runner = {
+      spawn: vi.fn(async ({ taskId }: { taskId: string }) => new FakeRunnerSession(`s-${taskId}`, taskId)),
+      stop: vi.fn(), stopAll: vi.fn(), activeCount: 0,
+    } as unknown as IRunner;
+    const session = makeSession({ runner, modelResolver: { modelsForRunners } as unknown as Pick<ModelResolver, 'modelsForRunners'> });
+    session.loadPlan(soloPlan(), 'goal', testWorkspace, { persist: false });
+
+    const moving = session.setTaskRunner('only', 'codex');
+    await session.executePlan();
+    expect(taskOf(session, 'only')?.status).toBe('in_progress');
+    listed(CLAUDE_CATALOG);
+
+    await expect(moving).rejects.toThrow(/has a live runner, so its runner cannot change now/);
+    expect(taskOf(session, 'only')).toMatchObject({ assignedRunner: 'claude-code' });
+  });
+
+  it('refuses clearing the model of a task that runs', async () => {
+    const { session } = await followable();
+
+    await expect(session.updateTask('only', { assignedModel: undefined })).rejects.toThrow(refusal);
+    expect(taskOf(session, 'only')?.assignedModel).toEqual(planned);
+  });
+
   /** A running task on Sonnet, high effort, whose allowlist holds Sonnet alone; the catalog is seeded. */
-  async function followable() {
+  async function followable(aiService?: SessionOverrides['aiService']) {
     const broadcast = vi.fn();
     const sessions: FakeRunnerSession[] = [];
     const runner = {
@@ -466,7 +507,7 @@ describe('Session.updateTask — model of a task with a live runner', () => {
       stop: vi.fn(), stopAll: vi.fn(), activeCount: 0,
     } as unknown as IRunner;
     const session = makeSession({
-      runner, broadcast, modelResolver: resolverFor(CLAUDE_CATALOG),
+      runner, broadcast, aiService, modelResolver: resolverFor(CLAUDE_CATALOG),
       settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' }, modelAllowlist: { 'claude-code': ['claude-sonnet-4-5'] } }),
     });
     const plan = soloPlan();
@@ -500,6 +541,25 @@ describe('Session.updateTask — model of a task with a live runner', () => {
     ]));
   });
 
+  // The allowlist shapes what the planner writes, not a task it left alone (ADR-0043).
+  it('keeps a followed off-list model through a planner edit of another task', async () => {
+    const { session, live } = await followable({
+      startConversation: vi.fn(),
+      continueConversation: vi.fn().mockResolvedValue({
+        kind: 'task_ops', ops: [{ op: 'update', taskId: '#2', changes: { title: 'Docs, renamed' } }], text: '', researchLog: [],
+      }),
+      hasActiveConversation: () => true,
+      reset: vi.fn(),
+    });
+    live.emitEvent({ type: 'model_switched', from: sonnet, to: haikuRef });
+    await vi.waitFor(() => expect(taskOf(session, 'only')?.assignedModel?.modelId).toBe('claude-haiku-4-5'));
+
+    await session.continueConversation('rename the docs task');
+
+    expect(session.planTasks.find((t) => t.title === 'Docs, renamed')).toBeDefined();
+    expect(taskOf(session, 'only')?.assignedModel?.modelId).toBe('claude-haiku-4-5');
+  });
+
   it('states a change no model command asked for, and leaves the plan as it was', async () => {
     const { session, live, logged } = await followable();
 
@@ -511,14 +571,15 @@ describe('Session.updateTask — model of a task with a live runner', () => {
     expect(taskOf(session, 'only')?.assignedModel).toEqual(planned);
   });
 
-  it('says the plan kept its model when the switch arrives after the attempt ended', async () => {
+  // The plan may be another one by then, so the log says the runner's change alone.
+  it('leaves the plan as it was when the switch arrives after the attempt ended', async () => {
     const { session, live, logged } = await followable();
     await session.cancelTask('only');
 
     live.emitEvent({ type: 'model_switched', from: sonnet, to: haikuRef });
 
     await vi.waitFor(() => expect(logged()).toEqual([
-      { type: 'model_switched', from: sonnet, to: haikuRef, plan: { model: { model: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5' }, effort: 'high' }, kept: 'its attempt had already ended' },
+      { type: 'model_switched', from: sonnet, to: haikuRef, kept: 'its attempt had already ended' },
     ]));
     expect(taskOf(session, 'only')?.assignedModel).toEqual(planned);
   });
@@ -533,6 +594,21 @@ describe('Session.updateTask — model of a task with a live runner', () => {
     session.loadPlan(other, 'goal', testWorkspace, { persist: false });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    expect(taskOf(session, 'only')?.assignedModel).toEqual({ modelId: 'gpt-5', modelLabel: 'GPT-5' });
+  });
+
+  it('says nothing of a replacement plan when the switch arrives after it loaded', async () => {
+    const { session, live, logged } = await followable();
+    const other = soloPlan();
+    other.runners = ['codex'];
+    other.tasks[0] = { ...other.tasks[0], assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5', modelLabel: 'GPT-5' } };
+    session.loadPlan(other, 'goal', testWorkspace, { persist: false });
+
+    live.emitEvent({ type: 'model_switched', from: sonnet, to: haikuRef });
+
+    await vi.waitFor(() => expect(logged()).toEqual([
+      { type: 'model_switched', from: sonnet, to: haikuRef, kept: 'its attempt had already ended' },
+    ]));
     expect(taskOf(session, 'only')?.assignedModel).toEqual({ modelId: 'gpt-5', modelLabel: 'GPT-5' });
   });
 

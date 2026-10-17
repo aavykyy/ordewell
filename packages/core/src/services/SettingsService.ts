@@ -122,6 +122,47 @@ export function runSettingsOf(settings: UserSettings): GlobalRunSettings {
 /** How many times a save is made afresh when another process keeps saving under it. */
 const SAVE_TRIES = 5;
 
+/**
+ * A lock held this long belongs to a process that died between its check and
+ * its swap: no live save holds it for more than a moment.
+ */
+const LOCK_STALE_MS = 2_000;
+const LOCK_POLL_MS = 5;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Runs `swap` holding `<file>.lock`, created exclusively, so no other process
+ * that saves the file can swap it in between `swap`'s look at it and its
+ * rename. Saves are synchronous, so the wait is too.
+ */
+function withFileLock<T>(file: string, swap: () => T): T {
+  const lock = `${file}.lock`;
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(lock, 'wx'));
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      let age: number;
+      try {
+        age = Date.now() - fs.statSync(lock).mtimeMs;
+      } catch {
+        continue; // released between the two calls
+      }
+      if (age > LOCK_STALE_MS) fs.rmSync(lock, { force: true });
+      else sleepSync(LOCK_POLL_MS);
+    }
+  }
+  try {
+    return swap();
+  } finally {
+    fs.rmSync(lock, { force: true });
+  }
+}
+
 export class SettingsService {
   private filePath: string;
   private cache: UserSettings | null = null;
@@ -359,7 +400,8 @@ export class SettingsService {
    * before ours replaces it, and when it moved the change is made afresh from
    * what that process saved, so neither save undoes the other. A file that
    * keeps moving is written over after {@link SAVE_TRIES} tries rather than
-   * never. A change that changes nothing writes nothing.
+   * never. The look and the swap are one step under the file's lock
+   * ({@link withFileLock}). A change that changes nothing writes nothing.
    */
   private save<T>(change: () => T): T {
     for (let tries = 1; ; tries++) {
@@ -383,11 +425,15 @@ export class SettingsService {
     // Stamped before the swap, which keeps all three: a save by another process
     // right after ours is then a different stamp, not mistaken for our own.
     const stamp = this.fileStamp(staging);
-    if (expected !== undefined && this.fileStamp() !== expected) {
+    const swapped = withFileLock(this.filePath, () => {
+      if (expected !== undefined && this.fileStamp() !== expected) return false;
+      fs.renameSync(staging, this.filePath);
+      return true;
+    });
+    if (!swapped) {
       fs.rmSync(staging, { force: true });
       return false;
     }
-    fs.renameSync(staging, this.filePath);
     this.cachedStamp = stamp;
     return true;
   }

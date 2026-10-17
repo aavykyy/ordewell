@@ -356,6 +356,8 @@ export function plansRoute(pool: OrchestratorPool) {
   router.put('/:sessionId/tasks/:taskId', async (c) => {
     try {
       const { assignedRunner, dependencies, ...rest } = await c.req.json();
+      // JSON cannot carry undefined, so a null is a client clearing the model.
+      if (rest.assignedModel === null) rest.assignedModel = undefined;
       const session = pool.session(c.req.param('sessionId'));
       const taskId = c.req.param('taskId');
 

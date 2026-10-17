@@ -553,7 +553,9 @@ the user's message as the next turn.
 It is verified and landed like any attempt, is not offered on conflicts, and
 leaves dependents alone, as retry does. It never crosses runners: a saved
 session records the runner that owns it (`Task.runnerSessionOwner`, else the
-runner of the last attempt, via `sessionOwner`), and Continue is offered only
+runner of the last attempt, via `sessionOwner`; a session saved with neither is
+given the task's runner as the plan loads, before a move can lose it), and
+Continue is offered only
 while the task is assigned to that runner; after a move, Retry carries the work
 over (see *Carry-over*). `continuability` is the one rule, and
 a status carries only whether it holds (`continuable`), never the session id.
@@ -719,11 +721,15 @@ and announced as `task_updated` — the alias resolved to the id the runner list
 written even off the allowlist, effort only when the runner reports one. When no
 command preceded it (`model_drifted`) it is stated in the *Task log* and never
 written. The log's `model_switched` line is written from the write-back's
-outcome, so it never claims an edit that did not land. Only the Claude Code
+outcome, so it never claims an edit that did not land, and once the switch's
+attempt has ended it says nothing of the plan, which may be another one by then.
+Only the Claude Code
 connector reports a switch; Codex and OpenCode get no synthesized `/model`,
 since runner commands are never interpreted. While a task's runner is live its
-model and effort are locked for every actor (`liveModelRefusal`): stop, edit,
-continue is the way from outside.
+model and effort are locked for every actor (`liveModelRefusal`), a cleared
+model included, and so is its runner (`liveRunnerRefusal`): stop, edit,
+continue is the way from outside. A planner edit leaves alone an assignment it
+did not change, so the allowlist never undoes the user's switch.
 *Avoid:* "model override" and "fallback" for it; *Avoid:* writing the plan from
 a drift.
 
@@ -1995,7 +2001,7 @@ a guessed zero. The window is the reporter's own; a record that states none is
 filled (`ContextWindowFill`) from the runner's own model listing or the
 provider's own models endpoint for that record's model, per record so a model
 change mid-stream reads its own window, and a window reported once is kept for
-its model. Never from a table kept in Ordewell: neither known leaves the fill
+its model, even after the stream ran on another. Never from a table kept in Ordewell: neither known leaves the fill
 unknown.
 *Avoid:* calling it a percentage when either half is unknown; *Avoid:* a window
 table in Ordewell.
@@ -2216,8 +2222,9 @@ by force-starting it, by running the plan while a run is under way (which
 approves every waiting task and starts each as its dependencies finish,
 without restarting the run), or by executing the plan. A force start approves
 and never skips an unfinished dependency: the task is queued (`queuedStarts`),
-and the answer names what it waits for; it does go past a failed dependency or
-a merge gate. With *Autorun* on, a task the planner adds in the user's turn is
+and the answer names what it waits for; it does go past a failed dependency, one
+blocked behind that failure, or a merge gate, but still waits for what such a
+blocked one waits on. A Stop withdraws a queued start, with or without a run. With *Autorun* on, a task the planner adds in the user's turn is
 approved as its edit lands and never waits. Derived from the plan and its
 record, never stored as a status.
 *Avoid:* "awaiting approval" — that is a *Runner approval* a running task

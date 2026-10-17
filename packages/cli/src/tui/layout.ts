@@ -1,6 +1,6 @@
 import { firstGrapheme, pad, sanitize, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
 import { cursorInLines, type CursorPosition } from './editor';
-import { checkpointCardLines, conversationLines, taskUsageText, tokenLine } from './blocks';
+import { assignmentFlagText, checkpointCardLines, conversationLines, taskUsageText, tokenLine } from './blocks';
 import { chatEditorRoomFor, chatPaneWidth, planPaneWidth } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
 import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
@@ -866,13 +866,6 @@ function modelsByRunnerOf(models: readonly ModelView[]): Record<string, Discover
   return out;
 }
 
-/** What a flagged assignment means for the task, which depends on where it stands: a failed one runs again only if retried. */
-function assignmentConsequence(status: TaskStatusKind): string {
-  if (status === 'failed') return 'a retry runs it there unless moved';
-  if (status === 'running' || status === 'quiet') return 'it is already running there';
-  return 'it still runs unless moved';
-}
-
 interface TaskLines {
   lines: string[];
   /** The zero-based line within `lines` containing the prompt editor caret. */
@@ -966,7 +959,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   }
   // Named as it is, not lowercased like the other labels: a model's label is a proper name.
   if (row.assignmentFlag) {
-    lines.push(...statusLines(style.yellow, '⚠', `${row.assignmentFlag}; ${assignmentConsequence(row.status)}`, cols, bodyPad));
+    lines.push(...statusLines(style.yellow, '⚠', assignmentFlagText(row.assignmentFlag, row.status), cols, bodyPad));
   }
   if (row.waitsForApproval) {
     lines.push(...statusLines(style.yellow, '⏸', `${inRow(row.waitsForApproval)} · f approves it · /run approves all`, cols, bodyPad));

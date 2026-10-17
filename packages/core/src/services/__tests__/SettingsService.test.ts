@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { spawn } from 'child_process';
 import { SettingsService, getSettingsPath } from '../SettingsService';
 
 function tempSettingsDir() {
@@ -147,6 +148,44 @@ describe('SettingsService', () => {
       fs.rmSync(tempFile);
       expect(service.setEnabledRunnersIfUnset(['codex'])).toBe(true);
       expect(new SettingsService(tempFile).getEnabledRunners()).toEqual(['codex']);
+    });
+
+    // A real second process, since a save is synchronous: it holds the file's
+    // lock as it would between its last look and its swap, then swaps.
+    it('waits for another process mid-swap, then keeps what that process saved', async () => {
+      service.setEnabledRunners(['claude-code']);
+      const lock = `${tempFile}.lock`;
+      fs.writeFileSync(lock, 'other');
+      const other = spawn(process.execPath, ['-e', `
+        const fs = require('fs');
+        const [file, lock] = process.argv.slice(1);
+        setTimeout(() => {
+          fs.writeFileSync(file + '.other.tmp', JSON.stringify({ enabledRunners: ['claude-code', 'codex'] }));
+          fs.renameSync(file + '.other.tmp', file);
+          fs.rmSync(lock);
+        }, 300);
+      `, tempFile, lock]);
+      const exited = new Promise((resolve) => other.on('exit', resolve));
+
+      service.setModelAllowlist('codex', ['m']);
+      await exited;
+
+      const saved = new SettingsService(tempFile).getAll();
+      expect(saved.enabledRunners).toEqual(['claude-code', 'codex']);
+      expect(saved.modelAllowlist).toEqual({ codex: ['m'] });
+      expect(fs.existsSync(lock)).toBe(false);
+    });
+
+    it('takes over a lock left by a process that died mid-swap', () => {
+      const lock = `${tempFile}.lock`;
+      fs.writeFileSync(lock, 'gone');
+      const longAgo = new Date(Date.now() - 60_000);
+      fs.utimesSync(lock, longAgo, longAgo);
+
+      service.setEnabledRunners(['codex']);
+
+      expect(new SettingsService(tempFile).getEnabledRunners()).toEqual(['codex']);
+      expect(fs.existsSync(lock)).toBe(false);
     });
 
     it('replaces the file whole, so no reader meets it half-written and takes it for empty', () => {

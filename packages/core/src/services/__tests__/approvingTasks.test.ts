@@ -122,6 +122,38 @@ describe('force starting a task whose dependencies have not finished', () => {
     await until(() => env.run.spawnedIds().includes('c'));
   });
 
+  // A dependency blocked behind the failure is gone past with it, not the work it waits on.
+  it('forced past a dependency blocked by a failure, it still waits for what that one waits on', async () => {
+    const env = await supervised([
+      task('a', 1), task('d', 2), task('b', 3, { dependencies: ['a', 'd'] }), task('c', 4, { dependencies: ['b'] }),
+    ], AUTORUN_OFF);
+    env.run.of('a').reportComplete({ status: 'failed', summary: 'broke' });
+    await until(() => taskOf(env.session, 'a')!.status === 'failed');
+
+    await env.session.forceStartTask('c');
+
+    expect(env.run.spawnedIds()).toEqual(['a', 'd']);
+    expect(infoNotices(env)).toContain('Task "Task c" is approved and starts once task "Task d" finishes.');
+
+    env.run.of('d').reportComplete({ status: 'done', summary: '' });
+    await until(() => env.run.spawnedIds().includes('c'));
+    expect(env.run.spawnedIds()).not.toContain('b');
+  });
+
+  it('is withdrawn by a Stop while no run is under way, so a dependency run on its own does not start it', async () => {
+    const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { ...AUTORUN_OFF, execute: false });
+    await env.session.forceStartTask('t2');
+
+    const stopped = await env.session.execute({ command: 'stop_run' }, { kind: 'user' });
+    expect(stopped).toMatchObject({ ok: true });
+
+    await env.session.runTask('t1');
+    env.run.of('t1').reportComplete({ status: 'done', summary: '' });
+    await until(() => taskOf(env.session, 't1')!.status === 'completed');
+    await settled();
+    expect(env.run.spawnedIds()).toEqual(['t1']);
+  });
+
   it('waits for a dependency started on its own with Run Task, and starts once it finishes', async () => {
     const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { ...AUTORUN_OFF, execute: false });
     await env.session.runTask('t1');

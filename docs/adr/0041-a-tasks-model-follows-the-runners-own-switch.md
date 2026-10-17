@@ -52,9 +52,10 @@ model belongs to that runner.**
 - **The task log says what the plan made of it.** `model_switched` is logged
   after the write-back settles, from its outcome, so it never claims an edit
   that did not land: "the plan now says …", or "the plan still says …" with why.
-  A switch whose attempt ended while the edit waited writes nothing and says
-  nothing of the plan, which may be another one by then. An event saved before
-  the plan's side was recorded replays as the runner's change alone.
+  A switch whose attempt had ended, when it arrived or while the edit waited,
+  writes nothing and says nothing of the plan, which may be another one by
+  then. An event saved before the plan's side was recorded replays as the
+  runner's change alone.
 
 ### A change with no model command before it is stated, never written
 
@@ -73,10 +74,15 @@ runner's own command and the plan does not follow it.
 ### Model and effort are locked while a task's runner is live
 
 For every actor, a task's model and effort cannot change while an attempt of it
-is live: `validateTaskEdit` refuses with the reason. **Stop, edit, continue is
+is live: `validateTaskEdit` refuses with the reason, a model cleared as much as
+one replaced. Nor can its runner, which would re-derive both; a move whose
+discovery the task started during is refused too. **Stop, edit, continue is
 the outside path**, and the runner's own `/model` is the inside one. The
 write-back above is the one model edit a live runner allows, since it records
-what that runner already runs.
+what that runner already runs. A planner edit or restatement leaves a task's
+assignment alone where it names the runner, model and effort the plan holds:
+the allowlist shapes what the planner writes, not a model the user switched
+to (ADR-0043).
 
 ### A task's usage is its whole spend
 
@@ -99,7 +105,9 @@ what that runner already runs.
 ### Continue never crosses runners
 
 A saved session records the runner it belongs to (`runnerSessionOwner`; for a
-plan from before that, the runner of its last attempt). Continue is offered and
+plan from before that, the runner of its last attempt, or with no attempt
+recorded either, the runner the task is on when the plan loads, noted then so a
+move cannot lose it). Continue is offered and
 accepted only while the task is assigned to that runner. A move to another
 runner, from any status and not only from a task paused on a usage limit, makes
 the next Retry a *carry-over*: a fresh session on the new runner with the work
@@ -144,3 +152,4 @@ of the earlier runner's attempt restored (ADR-0018, K1).
 ## History
 
 - 2026-10-17 — accepted and implemented (#106): a `/model` in a task chat is written to the plan, a drift is stated, the model is locked while the runner is live, a task's usage is its whole spend with the meter on the latest model, and Continue never crosses runners.
+- 2026-10-17 — the lock covers a cleared model and a runner move; a planner edit keeps an untouched assignment; a switch after its attempt ended says nothing of the plan; a window is kept per model; an ownerless legacy session is owned by its runner at load.

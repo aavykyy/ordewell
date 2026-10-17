@@ -406,3 +406,24 @@ describe('Session.continueTask', () => {
     await expect(session.continueTask('t1', 'again')).rejects.toBeInstanceOf(TaskControlError);
   });
 });
+
+describe('a session saved before its owner or its attempts were recorded', () => {
+  // Its runner then is the only one it can belong to, and a move must not lose that.
+  it('is not offered to the runner the task is moved to', async () => {
+    const session = makeSession({ modelResolver: { modelsForRunners: vi.fn().mockResolvedValue({}) } });
+    const saved: LegacyPlanState = {
+      tasks: [plan({ status: 'completed', assignedRunner: 'claude-code', runnerSessionId: 'native-claude' })],
+      generatedAt: new Date().toISOString(),
+      status: 'approved',
+      runners: ['claude-code', 'codex'],
+      lastUpdated: new Date().toISOString(),
+    };
+    session.loadPlan(saved, 'Goal', '/repo', { persist: false });
+
+    await session.setTaskRunner('t1', 'codex');
+
+    const moved = session.planTasks[0];
+    expect(continuability(moved)).toEqual({ ok: false, reason: expect.stringContaining('its saved session belongs to claude-code') });
+    await expect(session.continueTask('t1', 'carry on')).rejects.toBeInstanceOf(TaskControlError);
+  });
+});
