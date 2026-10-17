@@ -88,6 +88,7 @@ export function migrateLoadedTasks(tasks: readonly Task[]): void {
   for (const task of tasks) {
     if (typeof task.runnerSessionId !== 'string') delete task.runnerSessionId;
     if (typeof task.carriedFrom !== 'string') delete task.carriedFrom;
+    if (typeof task.runnerSessionOwner !== 'string') delete task.runnerSessionOwner;
     const legacy = task as Task & { transport?: { kind?: unknown; nativeSessionId?: unknown } };
     if (!task.runnerSessionId && legacy.transport?.kind === 'structured' && typeof legacy.transport.nativeSessionId === 'string') {
       task.runnerSessionId = legacy.transport.nativeSessionId;
@@ -138,6 +139,13 @@ export interface Task {
   userStoriesCovered?: string[];
   /** The runner's saved session for a later continue; cleared when a fresh attempt starts. */
   runnerSessionId?: string;
+  /**
+   * The runner that session belongs to: a session cannot cross runners, so
+   * Continue is offered only while the task is still assigned to it. Absent
+   * on a plan saved before it was recorded; the last attempt's runner stands
+   * in (see `sessionOwner`).
+   */
+  runnerSessionOwner?: RunnerId;
   /** Set only while `status` is `awaiting_user`, and not always then — a pause saved by an older build has none. */
   awaitingReason?: AwaitingReason;
   /**
@@ -924,6 +932,7 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
         verdict: prior?.verdict,
         outputSummary: prior?.outputSummary,
         runnerSessionId: prior?.runnerSessionId,
+        runnerSessionOwner: prior?.runnerSessionOwner,
         carriedFrom: prior?.carriedFrom,
         attemptSkills: prior?.attemptSkills,
         attemptUsage: prior?.attemptUsage,

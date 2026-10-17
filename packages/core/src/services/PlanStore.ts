@@ -268,9 +268,18 @@ export class PlanStore {
     if (task) task.outputSummary = summary;
   }
 
-  setTaskRunnerSessionId(id: string, runnerSessionId: string | undefined): void {
+  /** The owner is saved with the session it belongs to, and dropped with it. */
+  setTaskRunnerSessionId(id: string, runnerSessionId: string | undefined, owner?: RunnerId): void {
     const task = this._taskMap.get(id);
-    if (task) task.runnerSessionId = runnerSessionId;
+    if (!task) return;
+    task.runnerSessionId = runnerSessionId;
+    if (runnerSessionId && owner) task.runnerSessionOwner = owner;
+    else delete task.runnerSessionOwner;
+  }
+
+  setCarriedFrom(id: string, runner: RunnerId): void {
+    const task = this._taskMap.get(id);
+    if (task) task.carriedFrom = runner;
   }
 
   clearCarriedFrom(id: string): void {
