@@ -3,7 +3,7 @@ import {
   addTaskToPlan, removeTaskFromPlan, updateTaskInPlan,
   opsFlag, waitsForReset,
 } from '../models/Task';
-import { startAttemptUsage, addAttemptUsage, endAttemptUsage, type UsageRecord } from '../models/Usage';
+import { startAttemptUsage, addAttemptUsage, endAttemptUsage, type RunnerSessionCost, type UsageRecord } from '../models/Usage';
 
 /** Deep copy of a task tree, down to the arrays the store rewrites. */
 function cloneTasks(tasks: ReadonlyArray<Readonly<Task>>): Task[] {
@@ -297,9 +297,9 @@ export class PlanStore {
     if (task?.attemptUsage) task.attemptUsage = task.attemptUsage.map((usage) => usage.attempt === attempt ? addAttemptUsage(usage, record, now) : usage);
   }
 
-  endAttemptUsage(id: string, attempt: number, now: string): void {
+  endAttemptUsage(id: string, attempt: number, now: string, runnerSessionCost?: RunnerSessionCost): void {
     const task = this._taskMap.get(id);
-    if (task?.attemptUsage) task.attemptUsage = task.attemptUsage.map((usage) => usage.attempt === attempt ? endAttemptUsage(usage, now) : usage);
+    if (task?.attemptUsage) task.attemptUsage = task.attemptUsage.map((usage) => usage.attempt === attempt ? endAttemptUsage(usage, now, runnerSessionCost) : usage);
   }
 
   setTaskAttemptSkills(id: string, skills: Task['attemptSkills']): void {

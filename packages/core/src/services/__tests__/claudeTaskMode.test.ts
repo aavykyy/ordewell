@@ -355,6 +355,51 @@ describe('ClaudeCodeAdapter in task mode', () => {
     adapter.dispose();
   });
 
+  describe('the cost of a resumed session', () => {
+    // Recorded: the resumed session's running total after its first turn.
+    const RECORDED_TOTAL = 0.0943048;
+    const costs = (events: AgentEvent[]) => events.flatMap((e) => (e.type === 'usage' && e.record.reportedCost ? [e.record] : []));
+
+    it('reports the first turn\'s growth over what was counted of the session before', async () => {
+      const { processDeps } = deps([fixture('claude-code', 'stream-resumed')]);
+      const adapter = new ClaudeCodeAdapter(processDeps);
+      const counted = { sessionId: 'sess-claude-stream-1', usd: 0.09, modelUsd: { 'claude-sonnet-5': 0.09 } };
+      await adapter.start(taskIn('plan', { resumeSessionId: 'sess-claude-stream-1', resumeCost: counted }));
+      const events: AgentEvent[] = [];
+      await adapter.send('go on', (e) => events.push(e));
+
+      expect(costs(events)).toHaveLength(1);
+      expect(costs(events)[0]).toMatchObject({ model: 'claude-sonnet-5', reportedCost: { currency: 'USD' } });
+      expect(costs(events)[0].reportedCost?.amount).toBeCloseTo(RECORDED_TOTAL - 0.09, 10);
+      expect(adapter.sessionCost()).toEqual({ sessionId: 'sess-claude-stream-1', usd: expect.closeTo(RECORDED_TOTAL, 10), modelUsd: { 'claude-sonnet-5': expect.closeTo(RECORDED_TOTAL, 10) } });
+      adapter.dispose();
+    });
+
+    it('reports nothing for a first turn whose session it knows no count of, then counts from its total', async () => {
+      const { processDeps } = deps([fixture('claude-code', 'stream-resumed')]);
+      const adapter = new ClaudeCodeAdapter(processDeps);
+      await adapter.start(taskIn('plan', { resumeSessionId: 'sess-claude-stream-1' }));
+      expect(adapter.sessionCost()).toBeNull();
+      const events: AgentEvent[] = [];
+      await adapter.send('go on', (e) => events.push(e));
+
+      expect(costs(events)).toEqual([]);
+      expect(adapter.sessionCost()).toEqual({ sessionId: 'sess-claude-stream-1', usd: expect.closeTo(RECORDED_TOTAL, 10), modelUsd: { 'claude-sonnet-5': expect.closeTo(RECORDED_TOTAL, 10) } });
+      adapter.dispose();
+    });
+
+    it('does not take a count kept for another session as this one\'s', async () => {
+      const { processDeps } = deps([fixture('claude-code', 'stream-resumed')]);
+      const adapter = new ClaudeCodeAdapter(processDeps);
+      await adapter.start(taskIn('plan', { resumeSessionId: 'sess-claude-stream-1', resumeCost: { sessionId: 'another', usd: 0.01, modelUsd: {} } }));
+      const events: AgentEvent[] = [];
+      await adapter.send('go on', (e) => events.push(e));
+
+      expect(costs(events)).toEqual([]);
+      adapter.dispose();
+    });
+  });
+
   it('leaves a tool request open for someone to answer, and passes the whole request on', async () => {
     const { spawned, processDeps } = deps([fixture('claude-code', 'permission-task')]);
     const adapter = new ClaudeCodeAdapter(processDeps);

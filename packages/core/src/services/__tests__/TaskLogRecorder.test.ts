@@ -11,10 +11,10 @@ import { toTaskLogEvent, type TaskLogEvent } from '../../models/TaskLog';
 import { createTask, type LegacyPlanState } from '../../models/Task';
 import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
-import { listTaskLogAttempts, readTaskLog, type TaskLogFile } from '../../utils/taskLogStore';
+import { listTaskLogAttempts, openTaskLog, readTaskLog, type TaskLogFile } from '../../utils/taskLogStore';
 import { FakeRunnerSession } from '../../testing';
 import { fakeSpawn, fixture } from './harnessTestKit';
-import { makeSession, memoryTaskLogs } from './sessionTestKit';
+import { makeSession, memoryTaskLogs, taskOf } from './sessionTestKit';
 
 type TaskLogMessage = Extract<SessionMessage, { type: 'task_log' }>;
 
@@ -143,11 +143,11 @@ describe('TaskLogRecorder', () => {
     const open = vi.fn(() => memoryFile(1));
     const sent: SessionMessage[] = [];
     const recorder = new TaskLogRecorder({ broadcast: (m) => sent.push(m), location: () => ({ baseDir: '/ws', sessionId: 'sess' }), open });
-    const spawned = await recorder.wrap(handing(session)).spawn(spawnOpts);
+    const spawned = await recorder.wrap(handing(session)).spawn({ ...spawnOpts, attempt: 3 });
     session.emitOutput('hello');
     session.emitExit(0);
     expect(spawned).toBe(session);
-    expect(open).toHaveBeenCalledWith({ baseDir: '/ws', sessionId: 'sess' }, 't1');
+    expect(open).toHaveBeenCalledWith({ baseDir: '/ws', sessionId: 'sess' }, 't1', 3);
     expect(sent).toEqual([]);
   });
 
@@ -292,5 +292,78 @@ describe('a session’s task logs', () => {
     } finally {
       fs.rmSync(baseDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('a task log and its attempt ledger share one number', () => {
+  function plan(): LegacyPlanState {
+    return {
+      tasks: [createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', assignedRunner: 'claude-code' })],
+      generatedAt: new Date().toISOString(),
+      status: 'approved',
+      runners: ['claude-code'],
+      lastUpdated: new Date().toISOString(),
+    };
+  }
+
+  let baseDir: string;
+  beforeEach(() => { baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-tasklog-ledger-')); });
+  afterEach(() => { fs.rmSync(baseDir, { recursive: true, force: true }); });
+
+  /** A runner whose first spawn fails, as a missing CLI does, and every later one runs. */
+  function failingFirst() {
+    const sessions: FakeRunnerSession[] = [];
+    let spawns = 0;
+    const runner: IRunner = {
+      spawn: vi.fn(async (opts: RunnerSpawnOptions) => {
+        spawns += 1;
+        if (spawns === 1) throw new Error('claude: command not found');
+        const session = new FakeRunnerSession(`s${spawns}`, opts.taskId);
+        sessions.push(session);
+        return session;
+      }),
+      stop: vi.fn(),
+      stopAll: vi.fn(),
+      activeCount: 0,
+    };
+    return { runner, sessions };
+  }
+
+  const ledger = (session: ReturnType<typeof makeSession>) => taskOf(session, 't1')?.attemptUsage ?? [];
+
+  it('after a spawn that failed, each log is saved under its own attempt\'s ledger number', async () => {
+    const { runner, sessions } = failingFirst();
+    const session = makeSession({ runner, sessionId: 'sess', workspaceRoot: () => baseDir, openTaskLog });
+    session.loadPlan(plan(), 'Goal', baseDir, { sessionId: 'sess' });
+    await session.executePlan();
+    await vi.waitFor(() => expect(runner.spawn).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('pending'));
+
+    await session.retryTask('t1');
+    sessions[0].emitEvent({ type: 'usage', record: { source: 'claude-code', inputTokens: 100 } });
+    await session.cancelTask('t1');
+    await session.retryTask('t1');
+    sessions[1].emitEvent({ type: 'usage', record: { source: 'claude-code', inputTokens: 200 } });
+    await vi.waitFor(() => expect(ledger(session).map((u) => u.totals.inputTokens)).toEqual([undefined, 100, 200]));
+
+    expect(ledger(session).map((u) => u.attempt)).toEqual([1, 2, 3]);
+    expect(session.taskLogAttempts('t1')).toEqual([2, 3]);
+    await vi.waitFor(() => expect(session.taskLog('t1', 2)).toContainEqual({ type: 'usage', record: { source: 'claude-code', inputTokens: 100 } }));
+  });
+
+  it('numbers a new attempt past the logs saved before its task kept ledgers', async () => {
+    const { runner } = failingFirst();
+    const location = { baseDir, sessionId: 'sess' };
+    openTaskLog(location, 't1');
+    openTaskLog(location, 't1');
+    const session = makeSession({ runner, sessionId: 'sess', workspaceRoot: () => baseDir, openTaskLog });
+    session.loadPlan(plan(), 'Goal', baseDir, { sessionId: 'sess' });
+    await session.executePlan();
+    await vi.waitFor(() => expect(runner.spawn).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('pending'));
+    await session.retryTask('t1');
+
+    expect(ledger(session).map((u) => u.attempt)).toEqual([3, 4]);
+    expect(session.taskLogAttempts('t1')).toEqual([1, 2, 4]);
   });
 });

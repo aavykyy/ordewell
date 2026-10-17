@@ -3,7 +3,7 @@ import { realpathSync } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { SubagentOutcome } from '../../models/Task';
-import { partedPromptUsage, type UsageRecord } from '../../models/Usage';
+import { partedPromptUsage, type RunnerSessionCost, type UsageRecord } from '../../models/Usage';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import { findRunnerCommand, type RunnerCommand, type RunnerMcpServer, type RunnerModelRef } from '../../models/RunnerCommand';
 import { claudeThinkingArgs } from '../../plugins/resolveArgs';
@@ -392,9 +392,9 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   /** The model answering the planner's current message, as its `message_start` named it. */
   private plannerModel: string | undefined;
   /**
-   * The session's `total_cost_usd` as last reported. Undefined after a resume:
-   * the CLI restores the resumed session's running total, and what Ordewell
-   * already counted of it is not ours to know here.
+   * The session's `total_cost_usd` as last counted. A resume starts from what
+   * was counted of that session before, and is undefined without it: the CLI
+   * restores the session's running total, which holds turns counted earlier.
    */
   private reportedCostUsd: number | undefined = 0;
   private reportedModelCostUsd = new Map<string, number>();
@@ -467,11 +467,24 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     if (opts.effort && opts.effort !== 'adaptive') args.push('--effort', opts.effort);
     if (opts.resumeSessionId) {
       args.push('--resume', opts.resumeSessionId);
-      this.reportedCostUsd = undefined;
+      this.countFrom(opts.resumeSessionId, opts.resumeCost);
       this.pendingResume = opts.resumeSessionId;
     }
     this.configDir = workspace.CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude');
     return { command: 'claude', args, env: NO_AUTO_MEMORY };
+  }
+
+  sessionCost(): RunnerSessionCost | null {
+    const sessionId = this.sessionId ?? this.pendingResume;
+    if (!sessionId || this.reportedCostUsd === undefined) return null;
+    return { sessionId, usd: this.reportedCostUsd, modelUsd: Object.fromEntries(this.reportedModelCostUsd) };
+  }
+
+  /** A count kept for another session says nothing of this one's. */
+  private countFrom(sessionId: string, counted: RunnerSessionCost | undefined): void {
+    const known = counted?.sessionId === sessionId ? counted : undefined;
+    this.reportedCostUsd = known?.usd;
+    this.reportedModelCostUsd = new Map(Object.entries(known?.modelUsd ?? {}));
   }
 
   savedOutput(abs: string): boolean {
@@ -500,7 +513,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     if (opts.model) args.push('--model', opts.model);
     if (opts.resumeSessionId) {
       args.push('--resume', opts.resumeSessionId);
-      this.reportedCostUsd = undefined;
+      this.countFrom(opts.resumeSessionId, opts.resumeCost);
       this.pendingResume = opts.resumeSessionId;
     }
     if (opts.mcp) args.push('--append-system-prompt', TASK_COMPLETION_CONTRACT, ...this.ordewellServerArgs(opts.mcp, 'task'));
@@ -1008,7 +1021,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * What only the result line knows: the cost, which covers every call the
    * session made — subagents included, since none of their lines carries one —
    * and the planner model's window. `total_cost_usd` is a running total, so a
-   * turn reports its growth. The first turn after a resume only sets the
+   * turn reports its growth. After a resume it grows from what was counted of
+   * the session before; with no count kept, the first turn only sets the
    * baseline: its total includes turns counted before, and a turn's own share
    * cannot be told apart from them.
    */

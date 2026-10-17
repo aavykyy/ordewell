@@ -12,6 +12,7 @@ import type {
 } from '../interfaces/IRunner';
 import type { ApprovalDecision } from '../interfaces/IApproval';
 import type { RunnerCommand } from '../models/RunnerCommand';
+import type { RunnerSessionCost } from '../models/Usage';
 import { checkpointReply, type CheckpointAnswer, type TaskCompleteArgs } from './mcp/tools';
 import { sharedMcpServer, type OrdewellMcpServer, type TaskTokenScope } from './mcp/OrdewellMcpServer';
 import { mcpClientConfig } from './mcp/clientConfig';
@@ -217,6 +218,7 @@ export class StructuredSession extends AbstractRunnerSession {
   private messageCount = 0;
   private interrupting: Promise<void> | null = null;
   private lastSessionId: string | null = null;
+  private lastSessionCost: RunnerSessionCost | null = null;
   private readonly structuredEmitter = new EventEmitter();
   private permissionCount = 0;
   /**
@@ -453,6 +455,10 @@ export class StructuredSession extends AbstractRunnerSession {
     return this.adapter?.nativeSessionId() ?? this.lastSessionId;
   }
 
+  sessionCost(): RunnerSessionCost | null {
+    return this.adapter?.sessionCost?.() ?? this.lastSessionCost;
+  }
+
   answerPermission(id: string, decision: ApprovalDecision): boolean {
     const open = this.permissions.get(id);
     if (!open) return false;
@@ -507,6 +513,7 @@ export class StructuredSession extends AbstractRunnerSession {
     // A continue interrupted before its runner took the session up still
     // resumes that session, never a fresh one.
     const resumeSessionId = this.nativeSessionId() ?? this.startOptions.resumeSessionId;
+    const resumeCost = this.sessionCost() ?? this.startOptions.resumeCost;
     this.generation += 1;
     turn.abort.abort();
     if (this.adapter) {
@@ -517,7 +524,7 @@ export class StructuredSession extends AbstractRunnerSession {
     for (const message of this.queue) this.requeue(message);
     try {
       this.revokeTools();
-      await this.startAttached({ ...this.startOptions, resumeSessionId });
+      await this.startAttached({ ...this.startOptions, resumeSessionId, resumeCost });
     } catch (err) {
       this.text.line(`Could not restart ${this.launch.runner} after the interrupt: ${err instanceof Error ? err.message : String(err)}`);
       this.withdrawPermissions();
@@ -545,6 +552,7 @@ export class StructuredSession extends AbstractRunnerSession {
         return;
       }
       this.lastSessionId = adapter.nativeSessionId() ?? this.lastSessionId;
+      this.lastSessionCost = adapter.sessionCost?.() ?? this.lastSessionCost;
       this.withdrawPermissions();
       this.baseHandleExit(code);
     });
@@ -584,6 +592,7 @@ export class StructuredSession extends AbstractRunnerSession {
       this.handleEvent({ type: 'error', message: err instanceof Error ? err.message : String(err) });
     }).then(() => {
       this.lastSessionId = adapter.nativeSessionId() ?? this.lastSessionId;
+      this.lastSessionCost = adapter.sessionCost?.() ?? this.lastSessionCost;
       if (generation === this.generation) this.endTurn(turn, turn.reason);
     });
     this.offerNext();
@@ -814,6 +823,7 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
         mode: opts.mode ?? 'default',
         flags: resolveTaskRunnerFlags(manifest, { mode: opts.mode ?? 'default', model: opts.modelId, thinkingEffort: opts.thinkingEffort }),
         resumeSessionId: opts.resumeSessionId,
+        resumeCost: opts.resumeCost,
       },
       interruptGraceMs: this.interruptGraceMs,
       tools: { server: this.mcp, scope: { sessionId: opts.planSessionId ?? '', taskId: opts.taskId, attempt: opts.attempt ?? 1 } },

@@ -2,6 +2,7 @@ import type { IConfig } from './interfaces/IConfig';
 import type { IFileSystem, ToolOutcome } from './interfaces/IFileSystem';
 import type { InvokedCommand, IRunnerSession, QueuedTaskMessage, StructuredEvent, StructuredTurnEnd, TaskMessageFrom } from './interfaces/IRunner';
 import type { RunnerCommand } from './models/RunnerCommand';
+import type { RunnerSessionCost } from './models/Usage';
 import type { ApprovalDecision } from './interfaces/IApproval';
 import type { CheckpointAnswer, TaskCompleteArgs } from './services/mcp/tools';
 import type {
@@ -187,6 +188,9 @@ export class FakeRunnerSession implements IRunnerSession {
     if (this.state === 'working') this.emitTurnEnd('interrupted');
   }
   nativeSessionId(): string | null { return this.sessionId; }
+  /** What `sessionCost()` reports: the runner's running cost as counted, null while unknown. */
+  cost: RunnerSessionCost | null = null;
+  sessionCost(): RunnerSessionCost | null { return this.cost; }
 
   /** What `commands()` reports: the runner's own commands (#66). */
   runnerCommands: RunnerCommand[] = [];

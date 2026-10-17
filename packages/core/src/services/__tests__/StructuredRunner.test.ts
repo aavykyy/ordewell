@@ -653,6 +653,32 @@ describe('StructuredSession interrupt', () => {
     turn.session.kill();
   });
 
+  it('counts a continued session\'s cost on from what was counted before, and a restart from what was counted since', async () => {
+    const counted = { sessionId: 'sess-prev', usd: 0.2, modelUsd: { 'claude-sonnet-5': 0.2 } };
+    const firstReply = [
+      { type: 'system', subtype: 'init', session_id: 'sess-prev', cwd: '/repo', model: 'claude-sonnet-5', permissionMode: 'acceptEdits' },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Done.' }] } },
+      { type: 'result', subtype: 'success', total_cost_usd: 0.5, modelUsage: { 'claude-sonnet-5': { costUSD: 0.5, contextWindow: 200_000 } } },
+    ].map((line) => `${JSON.stringify(line)}\n`).join('');
+    const { runner, spawned } = harness([firstReply, () => {}], 20);
+    const turn = observe(await runner.spawn(options({ resumeSessionId: 'sess-prev', resumeCost: counted })));
+    expect(turn.session.sessionCost?.()).toEqual(counted);
+    await turn.nextTurnEnd();
+    const usage = turn.events.flatMap((e) => (e.type === 'usage' && e.record.reportedCost ? [e.record.reportedCost.amount] : []));
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toBeCloseTo(0.3, 10);
+    const grown = { sessionId: 'sess-prev', usd: 0.5, modelUsd: { 'claude-sonnet-5': 0.5 } };
+    expect(turn.session.sessionCost?.()).toEqual(grown);
+
+    turn.session.sendMessage('And one more thing.');
+    await until(() => userTurns(spawned.processes[0].written).length > 1);
+    await turn.session.interrupt();
+
+    expect(spawned.processes).toHaveLength(2);
+    expect(turn.session.sessionCost?.()).toEqual(grown);
+    turn.session.kill();
+  });
+
   it('does nothing when idle', async () => {
     const { runner, spawned } = harness([fixture('claude-code', 'task-no-marker')]);
     const turn = observe(await runner.spawn(options()));

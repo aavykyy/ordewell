@@ -4,6 +4,7 @@ import type { ApprovalDecision } from './IApproval';
 import type { TaskSkillSnapshot } from '../models/Task';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { RunnerCommand } from '../models/RunnerCommand';
+import type { RunnerSessionCost } from '../models/Usage';
 /** How a structured turn ended. `failed` carries the agent's own words in the preceding `error` event. */
 export type StructuredTurnEnd = 'completed' | 'interrupted' | 'failed';
 /**
@@ -106,6 +107,8 @@ export interface IRunnerSession {
   interrupt(): Promise<void>;
   /** The runner's own session id once announced — what a continue resumes (ADR-0018, K1). */
   nativeSessionId(): string | null;
+  /** What has been counted of that session's running cost, for a runner that reports one; null while unknown. */
+  sessionCost?(): RunnerSessionCost | null;
   /**
    * The slash commands the runner offers this task (#66): its built-ins and
    * the user's and the project's skills and custom commands. Empty for a
@@ -165,6 +168,8 @@ export interface IRunner {
     env?: Record<string, string>;
     /** The runner's own session to continue in (ADR-0018, K1). */
     resumeSessionId?: string;
+    /** What was counted of that session's running cost before, so its first turn is counted from there. */
+    resumeCost?: RunnerSessionCost;
     /**
      * Which run of the task this is, from 1. A structured runner binds the
      * attempt's MCP token to it (ADR-0022, A2).

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { createTask, type LegacyPlanState } from '../../models/Task';
+import { createTask, rejoinPlanTree, type LegacyPlanState, type Task } from '../../models/Task';
 import type { SkillInfo } from '../SkillsService';
 import { makeSession, FakeRunnerSession, fakeConfig, taskOf, saves, memoryTaskLogs } from './sessionTestKit';
-import { plannerContextFill } from '../../models/Usage';
+import { plannerContextFill, taskUsageSummary } from '../../models/Usage';
 import { scriptedAdapter, fakeMcpServer } from './harnessTestKit';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { IDLE_TIMEOUT_MS } from '../VerdictEngine';
@@ -462,6 +462,76 @@ describe('currentPlanState — the live plan a surface refreshes from', () => {
 
   it('is null without a plan', () => {
     expect(makeSession().currentPlanState).toBeNull();
+  });
+
+  it('serves a retried task live, with every attempt it spent, not the snapshot its failure archived', async () => {
+    const { session, sessions } = twoParallel();
+    const served = (): Readonly<Task> | undefined => {
+      const state = session.currentPlanState;
+      return state ? rejoinPlanTree(state.pendingTasks, state.phase === 'executing' ? state.executionLog : []).find((t) => t.id === 't1') : undefined;
+    };
+    await session.executePlan();
+    sessions[0].emitEvent({ type: 'usage', record: { source: 'claude-code', inputTokens: 100, reportedCost: { amount: 1, currency: 'USD' } } });
+    sessions[0].emitExit(1);
+    await vi.waitFor(() => expect(served()?.status).toBe('failed'));
+
+    await session.retryTask('t1');
+    sessions[2].emitEvent({ type: 'usage', record: { source: 'claude-code', inputTokens: 200, reportedCost: { amount: 2, currency: 'USD' } } });
+    expect(served()?.status).toBe('in_progress');
+    expect(taskUsageSummary(served()!)).toMatchObject({ attempts: 2, totals: { inputTokens: 300, reportedCost: { USD: 3 } } });
+
+    await session.cancelTask('t1');
+    expect(served()?.status).toBe('pending');
+    expect(taskUsageSummary(served()!)).toMatchObject({ attempts: 2, totals: { inputTokens: 300, reportedCost: { USD: 3 } } });
+  });
+});
+
+describe('a continue counts its runner session\'s cost on from what was counted before', () => {
+  function spawning() {
+    const sessions: FakeRunnerSession[] = [];
+    const runner = {
+      spawn: vi.fn(async ({ taskId }: Parameters<IRunner['spawn']>[0]) => {
+        const s = new FakeRunnerSession(`s${sessions.length + 1}`, taskId, 'native-1');
+        sessions.push(s);
+        return s;
+      }),
+      stop: vi.fn(),
+      stopAll: vi.fn(),
+      activeCount: 0,
+    } satisfies IRunner;
+    return { runner, sessions };
+  }
+  const plan = (): LegacyPlanState => ({
+    tasks: [createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', assignedRunner: 'claude-code' })],
+    generatedAt: '', status: 'approved', runners: ['claude-code'], lastUpdated: '',
+  });
+  const counted = { sessionId: 'native-1', usd: 0.5, modelUsd: { 'claude-sonnet-5': 0.5 } };
+
+  it('hands the resumed spawn the count its attempt ended with, after a reload too', async () => {
+    const first = spawning();
+    const session = makeSession({ runner: first.runner });
+    session.loadPlan(plan(), 'Goal', '/repo');
+    await session.executePlan();
+    first.sessions[0].cost = counted;
+    first.sessions[0].reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('completed'));
+    const saved = saves(session).mock.calls.at(-1)?.[0];
+    expect(saved?.tasks[0].attemptUsage?.at(-1)?.runnerSessionCost).toEqual(counted);
+
+    const later = spawning();
+    const reloaded = makeSession({ runner: later.runner });
+    reloaded.loadPlan(saved!, 'Goal', '/repo');
+    await reloaded.continueTask('t1', 'one more thing');
+
+    expect(later.runner.spawn).toHaveBeenCalledWith(expect.objectContaining({ resumeSessionId: 'native-1', resumeCost: counted }));
+  });
+
+  it('hands a fresh attempt no count', async () => {
+    const { runner } = spawning();
+    const session = makeSession({ runner });
+    session.loadPlan(plan(), 'Goal', '/repo');
+    await session.executePlan();
+    expect(runner.spawn.mock.calls[0][0].resumeCost).toBeUndefined();
   });
 });
 

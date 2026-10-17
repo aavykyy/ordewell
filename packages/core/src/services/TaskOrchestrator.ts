@@ -6,6 +6,7 @@ import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
 import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
 import type { RunnerModelRef } from '../models/RunnerCommand';
+import { countedSessionCost } from '../models/Usage';
 import { summarizeOutput } from './promptAugment';
 import { endedByExit, VerdictEngine } from './VerdictEngine';
 import { BufferedTaskOutputSource } from './BufferedTaskOutputSource';
@@ -250,6 +251,12 @@ export interface TaskOrchestratorDeps {
   /** What the task's last saved attempt did, or null when it left no log (ADR-0020). */
   previousAttemptFromLog: (taskId: string) => string | null;
   /**
+   * The newest attempt the task has a saved log for, 0 for none. An attempt's
+   * log is saved under its number, so a new one is numbered past a log kept
+   * from before the task had ledgers.
+   */
+  lastLoggedAttempt: (taskId: string) => number;
+  /**
    * The open run's settings, read as each automatic merge is decided rather
    * than copied when the run opens, so a change to the run under way applies
    * at once (ADR-0030); absent before any run.
@@ -279,6 +286,7 @@ export interface TaskOrchestratorOptions {
   workspaceEnv?: (cwd: string) => Promise<WorkspaceEnv>;
   skillsAt?: (roots: readonly string[]) => SkillLookup;
   previousAttemptFromLog?: (taskId: string) => string | null;
+  lastLoggedAttempt?: (taskId: string) => number;
   runSettings?: () => SchedulerRunSettings | undefined;
   /** Every task is approved unless a Session supplies its record: an orchestrator on its own has no user to ask. */
   isApproved?: (taskId: string) => boolean;
@@ -366,6 +374,7 @@ export class TaskOrchestrator {
   private observers: OrchestratorObserver[] = [];
   private skillsAt: (roots: readonly string[]) => SkillLookup;
   private previousAttemptFromLog: (taskId: string) => string | null;
+  private lastLoggedAttempt: (taskId: string) => number;
   private runSettings: () => SchedulerRunSettings | undefined;
   private isApproved: (taskId: string) => boolean;
 
@@ -382,6 +391,7 @@ export class TaskOrchestrator {
     this.workspaceEnv = deps.workspaceEnv;
     this.skillsAt = deps.skillsAt;
     this.previousAttemptFromLog = deps.previousAttemptFromLog;
+    this.lastLoggedAttempt = deps.lastLoggedAttempt;
     this.runSettings = deps.runSettings;
     this.isApproved = deps.isApproved;
 
@@ -451,6 +461,7 @@ export class TaskOrchestrator {
       workspaceEnv: options.workspaceEnv ?? ((cwd) => resolveWorkspaceEnv(cwd)),
       skillsAt: options.skillsAt ?? ((roots) => new SkillsService(roots)),
       previousAttemptFromLog: options.previousAttemptFromLog ?? (() => null),
+      lastLoggedAttempt: options.lastLoggedAttempt ?? (() => 0),
       runSettings: options.runSettings ?? (() => undefined),
       isApproved: options.isApproved ?? (() => true),
     });
@@ -2006,7 +2017,7 @@ export class TaskOrchestrator {
     if (refused) return { refused };
     const attempt: TaskAttempt = {
       taskId: task.id,
-      attempt: Math.max(this.spawnCounts.get(task.id) ?? 0, ...task.attemptUsage?.map((u) => u.attempt) ?? []) + 1,
+      attempt: Math.max(this.spawnCounts.get(task.id) ?? 0, this.lastLoggedAttempt(task.id), ...task.attemptUsage?.map((u) => u.attempt) ?? []) + 1,
       phase: 'starting',
       session: null,
       runner: this.store.resolveTaskRunner(task),
@@ -2110,6 +2121,7 @@ export class TaskOrchestrator {
         title: task.title,
         env,
         resumeSessionId: kind.kind === 'continuation' ? kind.resumeSessionId : undefined,
+        resumeCost: kind.kind === 'continuation' ? countedSessionCost(task.attemptUsage, kind.resumeSessionId) : undefined,
         attempt: attempt.attempt,
         ...(attempt.skills.length > 0 ? { skills: attempt.skills } : {}),
         onNotice: (message) => this.tell('warn', `Task "${task.title}": ${message}`),
@@ -2307,11 +2319,11 @@ export class TaskOrchestrator {
   private endAttempt(taskId: string, reason: AttemptEnd): TaskAttempt | undefined {
     const attempt = this.attempts.get(taskId);
     this.attempts.delete(taskId);
+    const session = attempt?.session ?? null;
     if (attempt) {
-      this.store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString());
+      this.store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString(), session?.sessionCost?.() ?? undefined);
       this.output.detach(taskId);
     }
-    const session = attempt?.session ?? null;
     if (attempt && session) this.saveNativeSession(taskId, session.nativeSessionId(), attempt.runner);
     if (stopsRunner(reason)) {
       const task = this.store.get(taskId);

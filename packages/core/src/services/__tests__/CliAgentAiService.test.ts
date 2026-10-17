@@ -1961,9 +1961,9 @@ describe('CliAgentAiService — Claude Code partial messages, usage and subagent
   });
 
   // A resumed session restores its running total (recorded: 0.0943048 on the
-  // first turn after `--resume`, most of it spent before). Reporting it would
-  // count those turns again.
-  it('reports no cost for the first turn after a resume, rather than the whole session\'s', async () => {
+  // first turn after `--resume`). The process before it counted nothing of it
+  // — it died before any result — so all of it is this session's growth.
+  it('counts the first turn after a resume from what the process before it counted', async () => {
     const controller = new AbortController();
     const { svc, spawned } = service('claude-code', [
       (_written, proc) => {
@@ -1978,7 +1978,10 @@ describe('CliAgentAiService — Claude Code partial messages, usage and subagent
 
     expect(spawned.lastArgs()).toContain('--resume');
     expect(turn.text).toBe('ok');
-    expect(usageRecords(events).some((r) => r.reportedCost)).toBe(false);
+    const costs = usageRecords(events).filter((r) => r.reportedCost);
+    expect(costs).toHaveLength(1);
+    expect(costs[0]).toMatchObject({ model: 'claude-sonnet-5', reportedCost: { currency: 'USD' } });
+    expect(costs[0].reportedCost?.amount).toBeCloseTo(0.0943048, 10);
     expect(usageRecords(events).filter((r) => r.outputTokens !== undefined)).toHaveLength(1);
   });
 

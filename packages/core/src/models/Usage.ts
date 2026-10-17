@@ -163,12 +163,26 @@ export function addModelUsage(models: readonly ModelUsage[], record: UsageRecord
   return models.map((m, i) => i === index ? { ...m, totals: addUsage(m.totals, record) } : m);
 }
 
+/**
+ * What Ordewell has counted of a runner's own session that reports its cost
+ * as a running total: that total and each model's share, in USD, as of its
+ * last report. A resume of that session counts its first report's growth
+ * over this; with no count kept for it, that report only sets the baseline.
+ */
+export interface RunnerSessionCost {
+  sessionId: string;
+  usd: number;
+  modelUsd: Record<string, number>;
+}
+
 export interface AttemptUsage extends PlannerUsage {
   attempt: number;
   runner: string;
   startedAt: string;
   endedAt?: string;
   wallTimeMs: number;
+  /** What was counted of its runner session's running cost as it ended: a continue of that session counts on from it. */
+  runnerSessionCost?: RunnerSessionCost;
 }
 
 export function startAttemptUsage(attempt: number, runner: string, startedAt: string): AttemptUsage {
@@ -180,8 +194,13 @@ export function addAttemptUsage(usage: AttemptUsage, record: UsageRecord, now: s
   return { ...usage, ...folded, lastPromptTokens: folded.lastPromptTokens, contextWindow: folded.contextWindow, wallTimeMs: Math.max(0, Date.parse(now) - Date.parse(usage.startedAt)) };
 }
 
-export function endAttemptUsage(usage: AttemptUsage, now: string): AttemptUsage {
-  return { ...usage, endedAt: now, wallTimeMs: Math.max(0, Date.parse(now) - Date.parse(usage.startedAt)) };
+export function endAttemptUsage(usage: AttemptUsage, now: string, runnerSessionCost?: RunnerSessionCost): AttemptUsage {
+  return { ...usage, endedAt: now, wallTimeMs: Math.max(0, Date.parse(now) - Date.parse(usage.startedAt)), ...(runnerSessionCost ? { runnerSessionCost } : {}) };
+}
+
+/** The count a continue of `sessionId` starts from: the one its latest attempt in that session ended with. */
+export function countedSessionCost(attempts: readonly AttemptUsage[] | undefined, sessionId: string): RunnerSessionCost | undefined {
+  return [...attempts ?? []].reverse().find((usage) => usage.runnerSessionCost?.sessionId === sessionId)?.runnerSessionCost;
 }
 
 export interface PlanUsage {

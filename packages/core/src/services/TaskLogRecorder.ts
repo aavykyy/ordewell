@@ -14,8 +14,8 @@ export interface TaskLogRecorderDeps {
   broadcast: SessionBroadcaster;
   /** Where the session's logs go, read as each attempt starts: a session's id can change between plans. */
   location: () => TaskLogLocation;
-  /** Opens an attempt's file; tests pass one that never touches the disk. */
-  open?: (location: TaskLogLocation, taskId: string) => TaskLogFile;
+  /** Opens an attempt's file, under the attempt's number when the spawn named one; tests pass one that never touches the disk. */
+  open?: (location: TaskLogLocation, taskId: string, attempt?: number) => TaskLogFile;
   flushMs?: number;
   logger?: ILogger;
 }
@@ -29,7 +29,7 @@ export interface TaskLogRecorderDeps {
  * unaware of logs.
  */
 export class TaskLogRecorder {
-  private readonly open: (location: TaskLogLocation, taskId: string) => TaskLogFile;
+  private readonly open: (location: TaskLogLocation, taskId: string, attempt?: number) => TaskLogFile;
   private readonly flushMs: number;
   private readonly logger: ILogger;
 
@@ -45,7 +45,7 @@ export class TaskLogRecorder {
         const session = await runner.spawn(opts);
         // Before returning: the first turn's events are emitted on the next
         // macrotask, and a listener attached later would miss them.
-        this.record(opts.taskId, session, opts.skills);
+        this.record(opts.taskId, session, opts.skills, opts.attempt);
         return session;
       },
       stop: (sessionId) => runner.stop(sessionId),
@@ -55,10 +55,10 @@ export class TaskLogRecorder {
   }
 
   /** Start a new attempt's log for `session`, opening with the skills it was given, and keep it until the session exits. */
-  record(taskId: string, session: IRunnerSession, skills: readonly TaskSkillSnapshot[] = []): void {
+  record(taskId: string, session: IRunnerSession, skills: readonly TaskSkillSnapshot[] = [], attemptNumber?: number): void {
     let file: TaskLogFile | null;
     try {
-      file = this.open(this.deps.location(), taskId);
+      file = this.open(this.deps.location(), taskId, attemptNumber);
     } catch (err: unknown) {
       this.logger.warn('taskLog', `could not create the log of task ${taskId}; it streams but is not saved`, err);
       file = null;
