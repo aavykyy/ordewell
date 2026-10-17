@@ -74,7 +74,7 @@ model's behalf, which is precisely what a coding agent replaces.
 
 ## Key properties
 
-- **Mutation belongs to task runners.** Claude planners deny direct edit and
+- **Mutation belongs to task runners (T1).** Claude planners deny direct edit and
   shell tools and native plan-mode transitions; Codex planners
   use an OS read-only sandbox with approvals disabled. OpenCode uses its plan
   agent and edit-tool denials, which leave a shell enforcement gap (ADR-0008).
@@ -110,22 +110,22 @@ model's behalf, which is precisely what a coding agent replaces.
   — rather than to the three approval methods that happened to be known when
   the adapter was written. An agent that ends its turn on a refusal without
   speaking is reported by the refusal, not as an empty reply.
-- **The plan arrives as text, through the existing parser.** The final
+- **The plan arrives as text, through the existing parser (T2).** The final
   assistant message carries the `{"tasks":[…]}` object; last-candidate
   extraction and the two-attempt repair loop handle it exactly as they do for a
   budget model on OpenRouter. The plan needs no file handoff: granting a
   filesystem write to the planner would violate the no-mutation invariant.
-- **One live process per planner session.** Spawned at
+- **One live process per planner session (T3).** Spawned at
   `startConversation`, fed each turn over stdio, disposed by `Session.reset()`.
   Follow-up messages and corrective re-emits reuse warm context rather than
   re-paying exploration; Stop is a signal to a process already held. Crash or
   surface reload falls back to resume-by-id.
-- **Ordewell's transcript remains the source of truth.** The agent's native
+- **Ordewell's transcript remains the source of truth (T4).** The agent's native
   session id is stored as a resumption *hint* only. If resume fails, a fresh
   agent session is seeded from `conversationHistory` — the same degradation
   `restoreChat` already performs. Session boundaries stay hard: a new session
   disposes the process and forgets the id.
-- **Harness tool activity is honest in the timeline.** `Read`/`Grep`/
+- **Harness tool activity is honest in the timeline (T5).** `Read`/`Grep`/
   `Glob`/`Bash` map onto the existing `ResearchToolType` members and render
   unchanged. Everything else — `Edit`, `WebFetch`, `Task`, `TodoWrite`, whatever
   ships next — maps to one new `agent_tool` member carrying the real name in
@@ -137,7 +137,7 @@ model's behalf, which is precisely what a coding agent replaces.
   `baseInstructions` replaces its base prompt, which takes its description of
   its own tools with it — a planner that has forgotten it can read the workspace
   researches the goal with a web search.
-- **Skills work unmodified.** `PlanPrompts` gains a harness variant that
+- **Skills work unmodified (T6).** `PlanPrompts` gains a harness variant that
   suppresses the tool-envelope and budget-countdown sections while keeping the
   plan schema, runner/mode vocabulary, model catalog and conversational
   protocol byte-identical. A harness planner gets skills as every planner does
@@ -145,16 +145,16 @@ model's behalf, which is precisely what a coding agent replaces.
   model-invocable ones through `load_skill`, and task skills attached in the
   plan. A forked prompt would mean every future skill feature is written twice
   or silently works on one backend only.
-- **The planner's own model is picked from the runner's catalog.**
+- **The planner's own model is picked from the runner's catalog (T7).**
   `ModelDiscovery` already returns per-runner `DiscoveredModel[]` with variants
   — Claude's aliases and adaptive/low→max efforts, Codex's `model/list` with
   per-model `supportedReasoningEfforts`, OpenCode's `models`. The surfaces
   already render a model + variant picker. The cheap-planner thesis therefore
   survives on a subscription: plan with Haiku, execute with Opus.
-- **Research subagents are inert on this backend.** `spawn_research_agent`
+- **Research subagents are inert on this backend (T8).** `spawn_research_agent`
   is a Ordewell-executed tool with no meaning when the agent owns its own
   subagent mechanism. It is hidden rather than silently ignored.
-- **An unusable agent fails before the goal is typed.** `RunnerInstallation`
+- **An unusable agent fails before the goal is typed (T9).** `RunnerInstallation`
   probes the binary and credentials; a planner picker offers only the agents
   that are usable, and states what to install when none is. A turn
   whose process dies surfaces the stderr tail as a visible chat
@@ -163,7 +163,7 @@ model's behalf, which is precisely what a coding agent replaces.
   Codex's `configWarning` — reaches the timeline instead of being dropped for
   arriving before the first turn. That warning is the difference between a
   visible problem and a planner that reads nothing and plans confidently anyway.
-- **A planner whose shell cannot start reads through Ordewell's.** Codex's Linux
+- **A planner whose shell cannot start reads through Ordewell's (T10).** Codex's Linux
   sandbox is bubblewrap, which needs unprivileged user namespaces; Ubuntu 24.04
   restricts those through AppArmor and ships no `bwrap` profile, so every
   command dies with `bwrap: loopback: Failed RTM_NEWADDR` and Codex answers from
@@ -179,7 +179,7 @@ model's behalf, which is precisely what a coding agent replaces.
   ([ADR-0033](0033-codex-planner-without-its-sandbox.md)). A Codex that
   explores nothing is still the silent success this repo forbids, so a
   planner without Ordewell's tools is refused at handshake.
-- **All four surfaces get it for free.** VS Code, web, CLI and TUI consume
+- **All four surfaces get it for free (T11).** VS Code, web, CLI and TUI consume
   `SessionMessage` and `ResearchProgress`; the harness planner emits the same
   events from the same `Session`. No surface learns that a coding agent is on
   the other end.
@@ -271,7 +271,7 @@ this backend should understand they are trading speed for not holding a key.
 - **OpenCode's event stream for tool activity only.** It was, while the echo
   was filtered by dropping all prose from the stream. Rejected: filtering the
   user's message by message id keeps the echo out and the reply streaming.
-- **Live CLI runs as the test suite.** Tests only what ships. Rejected as
+- **Live CLI runs as the test suite (M11).** Tests only what ships. Rejected as
   the default: every turn costs subscription quota and tens of seconds, it
   cannot run in CI without credentials, and a rate-limited account becomes a red
   build that is not a real failure. Recorded JSONL fixtures driven through a
