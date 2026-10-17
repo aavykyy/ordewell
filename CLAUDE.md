@@ -34,7 +34,7 @@ compile against.
   `task_complete` bound to the attempt's token. Never make the model the
   tie-breaker.
 - **The plan is the source of truth.** Modes and models are never silently
-  rewritten at spawn time ([ADR-0001](docs/adr/0001-autonomous-mode-resolution.md)).
+  rewritten at spawn time ([ADR-0001](docs/adr/routing/0001-autonomous-mode-resolution.md)).
 - **Comment *why*, never *what*.** Match the comment density of the file you're
   editing.
 
@@ -43,7 +43,7 @@ compile against.
 - Never add a quantified performance or cost claim to user-facing text — there
   is no published measurement behind one ([AGENTS.md](AGENTS.md) cautions).
 - The planner's exploration envelope is a security boundary
-  ([ADR-0008](docs/adr/0008-planner-exploration-envelope.md)). Do not widen what
+  ([ADR-0008](docs/adr/planner-envelope/0008-planner-exploration-envelope.md)). Do not widen what
   it permits without an ADR.
 
 ## Don't

@@ -3,7 +3,7 @@
 A skill is a folder with a `SKILL.md` file: a short frontmatter block, then
 instructions in Markdown. Ordewell uses the [Agent Skills](https://agentskills.io)
 format, and one loader serves every skill. The design is recorded in
-[ADR-0024](adr/0024-unified-skills.md).
+[ADR-0024](adr/planner/0024-unified-skills.md).
 
 A skill is for one of two audiences:
 
@@ -84,7 +84,7 @@ workspace copy is reported as shadowed, so it is never silently lost. Rename
 one of them to use both.
 
 Built-in skills are refreshed when you have not edited your copy
-([ADR-0021](adr/0021-built-in-skill-seeds-refresh.md)).
+([ADR-0021](adr/planner/0021-built-in-skill-seeds-refresh.md)).
 
 ## Using a skill in the planner
 
@@ -151,7 +151,7 @@ A task can write `.ordewell/skills/<name>/SKILL.md` in its worktree. When it is
 merged, the skill is part of the workspace, and later tasks in the plan can
 have it attached. The task that writes it needs no special handling; it goes
 through the same merge gate as any other change
-([ADR-0020](adr/0020-ops-tasks-and-merge-gates.md)).
+([ADR-0020](adr/isolation/0020-ops-tasks-and-merge-gates.md)).
 
 ## Listing skills
 

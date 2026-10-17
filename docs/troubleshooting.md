@@ -24,7 +24,7 @@ start:
   already in one fails at start with the same reason. Ordewell never swaps the
   mode for another.
 - A Codex planner still plans: its own shell is off and it reads through
-  Ordewell's `run_command` ([ADR-0033](adr/0033-codex-planner-without-its-sandbox.md)).
+  Ordewell's `run_command` ([ADR-0033](adr/planner-envelope/0033-codex-planner-without-its-sandbox.md)).
 
 ### Check it
 

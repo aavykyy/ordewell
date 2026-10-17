@@ -1,13 +1,13 @@
 # Worktree isolation for parallel task execution
 
 > What was built from this spec is recorded in
-> [ADR-0013](../adr/0013-worktree-isolation.md), and
-> [ADR-0014](../adr/0014-multi-repo-workspaces.md) widens it from one repository
+> [ADR-0013](../adr/isolation/0013-worktree-isolation.md), and
+> [ADR-0014](../adr/isolation/0014-multi-repo-workspaces.md) widens it from one repository
 > to a repo group: a folder of repositories isolates them together, with the
 > `workspaceRepos` (`ORDEWELL_WORKSPACE_REPOS`) and `worktreeLinks`
-> (`ORDEWELL_WORKTREE_LINKS`) settings. [ADR-0015](../adr/0015-conflict-repair.md)
+> (`ORDEWELL_WORKTREE_LINKS`) settings. [ADR-0015](../adr/isolation/0015-conflict-repair.md)
 > adds a bounded, evidenced conflict repair before a conflict reaches the user.
-> [ADR-0020](../adr/0020-ops-tasks-and-merge-gates.md) isolates only change
+> [ADR-0020](../adr/isolation/0020-ops-tasks-and-merge-gates.md) isolates only change
 > tasks: an ops task runs at the workspace root behind a merge gate, Merge all
 > can run mid-run, and a run decides whether it isolates at its first change
 > task. Where they differ from this spec, the ADRs are current.
@@ -148,7 +148,7 @@ Runner made on its own, makes per-task attribution visible, and makes the task
 branch an ancestor of the integration branch so it can be deleted safely.
 
 **Conflicts get a bounded repair before they are surfaced.** If the mechanical
-merge conflicts, [ADR-0015](../adr/0015-conflict-repair.md) now runs a
+merge conflicts, [ADR-0015](../adr/isolation/0015-conflict-repair.md) now runs a
 capped, evidenced conflict repair on the task's own attempt first; only a
 conflict that repair does not clear, or has none left to try, becomes
 `awaiting_user`, with the worktree and both refs kept and the surface showing
@@ -258,7 +258,7 @@ exercise the git path.
   policy trusts the dependency graph; conflicts are handled, not predicted.
 - Automatic merging into the user's checked-out branch.
 - Unbounded or opinion-based conflict resolution — a repair
-  ([ADR-0015](../adr/0015-conflict-repair.md)) is capped and only counts as
+  ([ADR-0015](../adr/isolation/0015-conflict-repair.md)) is capped and only counts as
   having repaired a conflict once the evidence it requires holds.
 - OS-level sandboxing of runners (separate effort; see ADR-0011).
 - Pushing, pull requests, or any remote operation.
@@ -283,4 +283,4 @@ exercise the git path.
   obvious follow-up if conflicts prove frequent.
 
 ## History
-- 2026-10-09 — aligned with [ADR-0025](../adr/0025-structured-only-runners.md).
+- 2026-10-09 — aligned with [ADR-0025](../adr/runners/0025-structured-only-runners.md).

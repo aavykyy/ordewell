@@ -110,10 +110,10 @@ being a global dial and becomes a scheduling decision:
   appended to its own prompt.
 - An analysis-only task → `readOnly: true`, which selects the runner's native
   read-only mode; every other task gets the runner's mode for the user's
-  Full/Guarded level ([ADR-0031](adr/0031-the-planner-says-read-only-not-a-mode.md)).
+  Full/Guarded level ([ADR-0031](adr/routing/0031-the-planner-says-read-only-not-a-mode.md)).
   Task modes are distinct from the harness planner's stricter controls;
   native planning modes can permit plan-file writes. See
-  [ADR-0008](adr/0008-planner-exploration-envelope.md).
+  [ADR-0008](adr/planner-envelope/0008-planner-exploration-envelope.md).
 
 The planner is making a portfolio decision across the whole job, not a single global setting. That's
 only expressible because the plan is a list of independently-parameterized tasks instead of one

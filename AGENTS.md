@@ -65,7 +65,7 @@ node bench/live/drive-conversation.mjs
   tie-breaker.
 - **The plan is the source of truth** for what runs. Modes and models are never
   silently rewritten at spawn time
-  ([ADR-0001](docs/adr/0001-autonomous-mode-resolution.md)).
+  ([ADR-0001](docs/adr/routing/0001-autonomous-mode-resolution.md)).
 - **ADRs state the current decision, not a log of edits.** An ADR reads as
   what is true now: *Decision* as if it had always been the design; *Considered
   options* including any option once chosen and later dropped, with why; and a
@@ -82,7 +82,7 @@ node bench/live/drive-conversation.mjs
   There is no published measurement behind one, and an earlier projection did
   not survive end-to-end testing. See `bench/README.md`.
 - The planner's exploration envelope is a security boundary
-  ([ADR-0008](docs/adr/0008-planner-exploration-envelope.md)). Do not widen what
+  ([ADR-0008](docs/adr/planner-envelope/0008-planner-exploration-envelope.md)). Do not widen what
   it permits without an ADR.
 - Sessions persist to `.ordewell/` and are gitignored. Nothing there is a
   fixture; do not commit it. The exceptions are `.ordewell/skills/`, which is
