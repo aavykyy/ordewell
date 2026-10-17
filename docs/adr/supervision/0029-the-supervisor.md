@@ -12,7 +12,7 @@ explicit exception to harness planners being read-only; ADR-0013 — "never
 merged for the user" now has two exits the user opts into; ADR-0020 — the
 "merge at gates automatically" setting it left to the autonomy work.
 
-## Context
+## Problem
 
 Once a run starts, the planner only wakes when the user writes to it, and what
 the user writes mid-run waits in a queue. `Session.processQueuedMessages` hands

@@ -5,7 +5,7 @@
 **Amends:** ADR-0014 (multi-repo workspaces), whose `nested-repos` refusal this
 replaces.
 
-## Context
+## Problem
 
 ADR-0014 made a workspace that is itself a git repository and contains further
 repositories that are not submodules a *refusal*: `isActive` answered

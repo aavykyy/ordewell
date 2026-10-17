@@ -4,6 +4,8 @@
 
 *Pending:* [ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md) — `run_script` joins the execution tools, and a script task's exit status is its completion evidence.
 
+## Problem
+
 Task completion and checkpoints need signals bound to the current attempt,
 independent of text meant for people. Coding-agent planners also need access
 to the live catalog and validated plan operations. An injected MCP server

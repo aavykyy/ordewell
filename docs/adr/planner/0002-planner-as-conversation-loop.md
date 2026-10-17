@@ -2,7 +2,11 @@
 
 **Status:** accepted, implemented
 
+## Problem
+
 Ordewell's planner used to emit several distinct typed artifacts over the course of planning: `QueuedMessage[]` (parsed from `<<ORDEWELL_QUESTION>>` tags in model output), `PrdArtifact` (a structured JSON with `status`/`feedback` fields and a state machine of `pending`/`approved`/`rejected`), and the task plan itself. Each artifact had its own field on `LegacyPlanState`, its own Session operation (`continueResearchWithAnswers`, `approvePrd`, `rejectPrd`, `generatePlanFromPrd`), and its own host-side routing branch (a ladder in `extension.ts` that inferred which operation to call from plan state). The interview mode was observed dying after one question: `Planner.continueResearchWithAnswers` lacked the fallback guard that `generate` had, so when the model emitted `READY_FOR_PRD` instead of a tagged question, it fell straight to PRD synthesis.
+
+## Decision
 
 We decided to collapse the planner to a single messages loop — "the LLM either thinks, executes commands, or sends messages to the user, very similarly to OpenCode." There is one channel: assistant messages in, user messages out, until the planner commits the plan as JSON.
 

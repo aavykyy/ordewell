@@ -13,7 +13,7 @@ gains the autorun exception. ADR-0013 and ADR-0020 — "the user opts in per
 plan" becomes "the user opts in". ADR-0001 — where the Full/Guarded level is
 saved, not what it means.
 
-## Context
+## Problem
 
 ADR-0029 made four settings plan settings: the supervisor level, *Merge at
 gates automatically*, the supervisor's retry limit and the wake-up read budget.

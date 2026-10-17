@@ -2,6 +2,8 @@
 
 **Status:** accepted
 
+## Problem
+
 The per-turn plan context block (`Session.planContextBlock`) deliberately
 carries only short fields — id, order, title, status, type, runner, model,
 mode, effort, autonomy, deps. A twenty-task plan re-sent in full on every
@@ -119,53 +121,6 @@ than cached or replayed.
   planner unsure what a runner offers can ask instead of guessing from the
   capped `<available_models>` block, before task 1 is even drafted.
 
-## Considered options
-
-- **A separate API-only `read_task` tool (M1).** Rejected: a backend-specific
-  read contract would split what each planner can inspect. Both transports now
-  use `task_query`, `task_output` and `task_diff` with shared handlers and
-  validation; the API text envelope remains on the same budget.
-- **Only text envelopes for coding-agent reads and edits (M2).** Previously
-  adopted while MCP injection was absent; rejected now because the injected
-  server provides `task_query`, `task_output`, `task_diff`, and validated edits (ADR-0022).
-  The text read channel serves API planners; coding-agent planners require
-  their connected tools (ADR-0025).
-- **Silently coerce an invalid model/mode instead of refusing (M3).**
-  Rejected. `coerceAssignments` already exists as the safety net for paths
-  that bypass the validator entirely (a plan committed with a stale catalog,
-  for instance) — snapping a bad id to `allowlist[0]` and clearing the paired
-  effort is the right move *there*, where there is no model on the other end
-  of a repair loop to ask. Inside `validateTaskEdit`, a planner mid-edit gets
-  the refusal instead: it names the runner and the bad id and comes back
-  through the same corrective retry every other rejected edit uses. Coercing
-  quietly would let a plan drift onto a model the user's allowlist forbids
-  without either side ever being told it happened.
-- **Require every task referenced inside one batch to carry a real UUID,
-  including tasks the batch itself creates (M4).** Rejected. An `add` op's
-  task does not have an id yet when a later op in the same batch wants to
-  point at it — "add a task, then make the next one depend on it" is one of
-  the most ordinary edits a planner makes. Forcing the model to invent an id
-  up front (and Ordewell to trust an LLM-minted UUID isn't already taken) or
-  forcing a round trip to learn the generated id after the `add` op is
-  smaller and slower than the model an ordinary edit needs to be. Batch
-  `handle`s solve exactly this: any unused name, valid only forward-declared
-  within its own batch, resolved before any op runs and rejected outright if
-  a later op tries to reference one that has not been defined yet.
-- **Inline every task's full body in the per-turn plan block, always (M5).**
-  Rejected — this is the cost this channel exists to avoid. A twenty-task
-  plan resending every prompt, every set of user steps, and every verdict on
-  every single turn is thousands of tokens paid on turns that touch none of
-  it. The query channel pays that cost only on the turns that actually need
-  the detail, and only for the tasks named.
-- **No budget on reads (M6).** Rejected: a planner that misreads the protocol
-  or gets stuck in an edit it cannot resolve would otherwise read forever
-  with nothing to stop it. The escalating-insistence design (soft cap nudges,
-  hard cap forces a landing message) was chosen over an outright refusal
-  past the cap specifically because refusing reads as a hang the model has no
-  way to escape (T5) — the alternative of simply cutting the model off was
-  rejected for the reason ADR-0008 already established for `bash`: an
-  unanswered request is worse than an answered one that comes with a nudge.
-
 ## Live output field
 
 A query's `fields` may include `output`: the
@@ -244,6 +199,53 @@ These reads disclose captured logs and task-owned git changes, never log file
 paths or an arbitrary filesystem read. Git reads disable external diff,
 textconv, clean/process filters and fsmonitor, and do not update the index.
 ADR-0008's exploration envelope is unchanged.
+
+## Considered options
+
+- **A separate API-only `read_task` tool (M1).** Rejected: a backend-specific
+  read contract would split what each planner can inspect. Both transports now
+  use `task_query`, `task_output` and `task_diff` with shared handlers and
+  validation; the API text envelope remains on the same budget.
+- **Only text envelopes for coding-agent reads and edits (M2).** Previously
+  adopted while MCP injection was absent; rejected now because the injected
+  server provides `task_query`, `task_output`, `task_diff`, and validated edits (ADR-0022).
+  The text read channel serves API planners; coding-agent planners require
+  their connected tools (ADR-0025).
+- **Silently coerce an invalid model/mode instead of refusing (M3).**
+  Rejected. `coerceAssignments` already exists as the safety net for paths
+  that bypass the validator entirely (a plan committed with a stale catalog,
+  for instance) — snapping a bad id to `allowlist[0]` and clearing the paired
+  effort is the right move *there*, where there is no model on the other end
+  of a repair loop to ask. Inside `validateTaskEdit`, a planner mid-edit gets
+  the refusal instead: it names the runner and the bad id and comes back
+  through the same corrective retry every other rejected edit uses. Coercing
+  quietly would let a plan drift onto a model the user's allowlist forbids
+  without either side ever being told it happened.
+- **Require every task referenced inside one batch to carry a real UUID,
+  including tasks the batch itself creates (M4).** Rejected. An `add` op's
+  task does not have an id yet when a later op in the same batch wants to
+  point at it — "add a task, then make the next one depend on it" is one of
+  the most ordinary edits a planner makes. Forcing the model to invent an id
+  up front (and Ordewell to trust an LLM-minted UUID isn't already taken) or
+  forcing a round trip to learn the generated id after the `add` op is
+  smaller and slower than the model an ordinary edit needs to be. Batch
+  `handle`s solve exactly this: any unused name, valid only forward-declared
+  within its own batch, resolved before any op runs and rejected outright if
+  a later op tries to reference one that has not been defined yet.
+- **Inline every task's full body in the per-turn plan block, always (M5).**
+  Rejected — this is the cost this channel exists to avoid. A twenty-task
+  plan resending every prompt, every set of user steps, and every verdict on
+  every single turn is thousands of tokens paid on turns that touch none of
+  it. The query channel pays that cost only on the turns that actually need
+  the detail, and only for the tasks named.
+- **No budget on reads (M6).** Rejected: a planner that misreads the protocol
+  or gets stuck in an edit it cannot resolve would otherwise read forever
+  with nothing to stop it. The escalating-insistence design (soft cap nudges,
+  hard cap forces a landing message) was chosen over an outright refusal
+  past the cap specifically because refusing reads as a hang the model has no
+  way to escape (T5) — the alternative of simply cutting the model off was
+  rejected for the reason ADR-0008 already established for `bash`: an
+  unanswered request is worse than an answered one that comes with a nudge.
 
 ## History
 

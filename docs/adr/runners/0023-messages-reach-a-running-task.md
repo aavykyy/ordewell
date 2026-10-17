@@ -2,6 +2,8 @@
 
 **Status:** accepted, implemented — changes [ADR-0018](0018-structured-runner-transport.md) M1
 
+## Problem
+
 ADR-0018's M1 first had a message sent to a structured task wait in
 Ordewell's queue until the runner's turn ended. That rule was written for a conversation of
 short turns. A task is not one: it is usually a single long turn, from the

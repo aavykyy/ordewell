@@ -2,7 +2,7 @@
 
 **Status:** accepted — built-in task skills may be model-invocable, see [Amendment (2026-10-11)](#amendment-2026-10-11)
 
-## Context
+## Problem
 
 Ordewell had two things called a skill. The planner's skills were `SKILL.md`
 files in `~/.ordewell/skills/`, seeded from the package (ADR-0021) and loaded

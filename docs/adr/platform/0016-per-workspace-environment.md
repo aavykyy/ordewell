@@ -2,6 +2,8 @@
 
 **Status:** accepted
 
+## Problem
+
 The daemon, and the VS Code extension host, take their environment once, from
 whatever started them. Every planner turn and task agent inherits it. That is
 right for credentials a user exports in their login shell, and wrong for
@@ -55,7 +57,7 @@ repository being planned:
   paths) are refused here too, from both sources, and named in a warning.
   `PATH` is among them; agents keep the PATH Ordewell resolves for them.
 
-## Rejected
+## Considered options
 
 - **A `runnerEnv` setting.** Settings are global to the machine, and this is
   exactly the configuration that differs per project.

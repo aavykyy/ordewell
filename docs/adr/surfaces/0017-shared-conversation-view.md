@@ -2,6 +2,8 @@
 
 **Status:** accepted
 
+## Problem
+
 The planner conversation existed for a long time (ADR-0002), but what a surface
 showed of it was each surface's own business. The TUI and the VS Code webview
 each accumulated their own presentation state out of the `SessionMessage`
@@ -95,7 +97,7 @@ the same word.)
   boundary and no surface lists edits above the input. The prompt hold above
   is the only thing a surface draws as queued.
 
-## Rejected
+## Considered options
 
 - **Per-surface views, one per client.** That was the status quo: two
   accumulators drifting, and every new message type rendered differently in

@@ -2,7 +2,11 @@
 
 **Status:** accepted
 
+## Problem
+
 Ordewell had the VS Code extension and a per-command CLI, but no interactive terminal client. `ordewell plan` is one-shot and line-oriented: it cannot show a live plan pane, cannot load a skill into the conversation or set a task's skills, and every model/key/allowlist change is a separate process invocation. Issue #24 asked for a TUI with the extension's capabilities.
+
+## Decision
 
 We decided to build `ordewell tui` as a **pure state core** (`state`, `reducer`, `render`, `slash`, `editor`, `keys`, `ansi`) with a **thin, untested driver** (`terminal.ts`, `index.ts`) at the edge, talking to the daemon (`packages/web`, an HTTP + WebSocket server with no frontend, whose clients are the CLI and the TUI). The reducer returns `{ state, effects }`; a separate executor (`effects.ts`) turns those effects into `ApiClient` calls and feeds results back as actions.
 

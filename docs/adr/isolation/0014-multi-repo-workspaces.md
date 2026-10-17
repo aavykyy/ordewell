@@ -2,6 +2,8 @@
 
 **Status:** accepted — extends [ADR-0013](0013-worktree-isolation.md); nested repositories per [ADR-0019](0019-nested-repos-shared-live.md); ops tasks per [ADR-0020](0020-ops-tasks-and-merge-gates.md)
 
+## Problem
+
 Worktree isolation (ADR-0013) assumed the workspace is one git repository. Many
 users open a plain folder that holds several independent repositories — any
 number of them, under any names — and for them isolation reported `not-git` and

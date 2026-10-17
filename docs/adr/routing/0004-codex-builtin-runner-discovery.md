@@ -2,10 +2,16 @@
 
 **Status:** accepted
 
+## Problem
+
 Codex CLI joins Claude Code and OpenCode as a third built-in runner (`BUILTIN_MANIFESTS`
 order: claude-code, codex, opencode — insertion order is picker order). Codex has no
 `codex models` subcommand, so the existing `discoveryCommands` (exec + parse stdout)
-mechanism cannot discover its catalog. We decided to discover via the **`codex
+mechanism cannot discover its catalog.
+
+## Decision
+
+We decided to discover via the **`codex
 app-server` stdio JSON-RPC protocol** (`initialize` → `model/list`), falling back to
 reading `$CODEX_HOME/models_cache.json` (the same catalog, written by Codex itself),
 falling back to hardcoded `fallbackModels` in the manifest.

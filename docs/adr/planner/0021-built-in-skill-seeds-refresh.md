@@ -2,7 +2,7 @@
 
 **Status:** accepted
 
-## Context
+## Problem
 
 Built-in skills are copied once into `~/.ordewell/skills/` and that copy wins
 over the package version. The copy was never refreshed, so a fix to a built-in
@@ -20,7 +20,7 @@ Installs seeded before the manifest have no record, so a short table of
 superseded built-in hashes (`PRIOR_BUILTIN_HASHES`) stands in for them. Seeds
 written from now on need no table entry when a built-in changes.
 
-## Rejected
+## Considered options
 
 - **Always prefer the package version.** Simplest, but silently discards a
   user's deliberate edits to a skill they own.

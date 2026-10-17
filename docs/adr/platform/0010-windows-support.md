@@ -2,6 +2,8 @@
 
 **Status:** accepted
 
+## Problem
+
 Ordewell ran on POSIX only, and not by design — by accretion. Nothing declared a
 platform requirement; every OS touchpoint simply assumed the one the authors
 were on. The result was not a surface that degraded on Windows, it was a surface

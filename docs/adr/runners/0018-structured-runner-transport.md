@@ -2,6 +2,8 @@
 
 **Status:** accepted
 
+## Problem
+
 Runner screen scraping cannot reliably distinguish a completed task, a
 permission request and a turn waiting for input. The harness planners and task
 runners share Claude Code, Codex and OpenCode programmatic connectors.

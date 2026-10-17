@@ -5,6 +5,8 @@
 **Amends:** ADR-0013 (worktree isolation), which surfaces every merge conflict
 for a human and rejected letting a model resolve one.
 
+## Problem
+
 ADR-0013's rule stands for the general case: a conflict is a decision between
 two changes, and handing that decision to a model silently rewrites a merge
 nobody reviewed. But most conflicts a run hits are not that — they are the

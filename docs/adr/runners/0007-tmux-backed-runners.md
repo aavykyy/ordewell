@@ -2,6 +2,8 @@
 
 **Status:** superseded by [ADR-0025](0025-structured-only-runners.md)
 
+## Problem
+
 Every AI runner (`claude`, `codex`, `opencode`) ran headlessly (`HeadlessRunner`): piped stdio, one-shot, prompt baked into argv. The orchestrator only ever read the raw output to scan for a `<<<ORDEWELL_CHECKPOINT>>>` / `<<<ORDEWELL_DONE_...>>>` marker (`VerdictEngine`) and wrote back two fixed sentinel strings. `task_output` reached every client over the websocket but the TUI dropped it outright — a user could never see, let alone type into, what a runner was actually doing. The VS Code extension came closer (`VsCodeTerminalRunner` opens a real integrated-terminal PTY per runner) but Ordewell's own webview still never routed keystrokes into it.
 
 The ask (issue #24 follow-up): every spawned runner should be a real, interactive terminal a user can open and type into directly — the tool's own UI, arrow keys, everything — while Ordewell keeps watching in the background and still auto-advances the dependency graph.

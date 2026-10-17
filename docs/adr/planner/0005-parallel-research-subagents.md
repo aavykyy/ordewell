@@ -2,7 +2,11 @@
 
 **Status:** accepted
 
+## Problem
+
 The planner's research loop is strictly sequential — one tool round at a time in `BaseAiService`. The 2026-07-18 routing-pilot benchmark showed two consequences: planning latency is Ordewell's one losing wall-time metric on quick tasks, and a strong planner model is priced out because it personally reads the repo ($12.75/27 min for a Sonnet-class planner on a 900-file repo vs $0.03–0.10 for Flash). Issue #34.
+
+## Decision
 
 We decided to add a `spawn_research_agent` tool the planner *may* call during research: each call launches one stateless read-only research agent (opencode's `agent` tool is the design reference — `reference_projects/opencode/internal/llm/agent/agent-tool.go`, design only, no code reuse). The agent runs its own bounded tool loop on the cheap subagent model, and only its final digest returns to the planner. The tool is always declared to the planner — no settings toggle gates it.
 

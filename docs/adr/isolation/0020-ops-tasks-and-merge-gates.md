@@ -9,7 +9,7 @@ going, and when a run decides whether it isolates; ADR-0014 (multi-repo
 workspaces) — which tasks are isolated, where it had rejected the task marker
 this ADR adds.
 
-## Context
+## Problem
 
 Not every step of a goal is a change to files. A real working session mixes
 code with operations around it: redeploy on dev and watch the pipeline,

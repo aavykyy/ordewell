@@ -8,7 +8,7 @@ its portfolio judgment, and the Guarded ceiling on its edits go. What stays:
 the mode is fixed when the task is planned, never at spawn; the user's
 per-task choice wins at every level.
 
-## Context
+## Problem
 
 ADR-0001 has the planner choose each task's mode from the runner's list,
 steered towards the level's mode and checked after. In use, nearly every mode

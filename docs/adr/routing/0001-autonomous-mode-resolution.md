@@ -72,7 +72,7 @@ Concretely:
   offers every mode the runner has, and the user's own edits are not checked
   against the level.
 
-## Alternatives considered
+## Considered options
 
 - **The planner picks each task's mode, steered and checked.** It was the
   design until ADR-0031: the prompt listed the level's modes with the default
