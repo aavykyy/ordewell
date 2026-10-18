@@ -485,8 +485,8 @@ export async function handleSystemCommand(
         await deps.session.forceStartTask(taskId);
         break;
       case 'runTask': {
-        // A start past a merge gate is a force start, which the seam has no
-        // command for; the confirmation stays, and the seam runs an ungated one.
+        // A start past a merge gate is a force start, confirmed first; the seam's
+        // run_task refuses a gated one.
         const gated = deps.session.mergeGate(taskId).length > 0;
         if (!(await confirmPastGate(taskId, deps.session))) return;
         deps.chatProvider.clearIsolationHandoff();

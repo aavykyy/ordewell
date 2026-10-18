@@ -150,7 +150,7 @@ export { SessionNotFoundError, NoPlanError, AlreadyExecutingError } from './serv
 export { plannerNotReady, plannerNotReadyFor, describePlannerNotReady, PlannerNotReadyError, TERMINAL_UI_COMMANDS, CHAT_COMMANDS, HEADLESS_CLI_COMMANDS, type PlannerNotReady, type PlannerCommandSyntax, type PlannerReadinessConfig } from './services/plannerReadiness';
 export type { SessionDeps, SessionRuntimeSettings, SessionPlanner, SaveSession, ConversationFork, ConversationRewind } from './services/createSession';
 export { ExecutionCommands, SUPERVISOR_LEVELS } from './services/ExecutionCommands';
-export type { ExecutionCommand, CommandOutcome, Consent, SupervisorPolicy, LoopGuard, ExecutionHost } from './services/ExecutionCommands';
+export type { ExecutionCommand, CommandOutcome, CommandPayload, Consent, SupervisorPolicy, LoopGuard, ExecutionHost } from './services/ExecutionCommands';
 export { DEFAULT_SUPERVISOR_RETRY_LIMIT } from './services/LoopGuards';
 export type { GuardTrip, GuardTarget } from './services/LoopGuards';
 export { ConversationEditError, ConversationBusyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError } from './services/PlannerConversation';

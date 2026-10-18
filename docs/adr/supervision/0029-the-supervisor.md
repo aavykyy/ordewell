@@ -270,6 +270,29 @@ the level picker says so.
 planner turn, or the supervisor — and surfaces draw it as they draw the
 matching button press, so the plan pane looks the same whichever route acted.
 
+**The user's own controls are commands at the same seam.** Besides the tools
+above, which the user's buttons reach as the user, the seam has a command for
+each control only the user presses: `force_start`, `mark_complete`,
+`mark_not_done`, `interrupt_task`, a force send (`message_task` with `force`),
+`force_send_queued`, `remove_queued`, `cancel_resume`, `answer_checkpoint` and
+`approve_review`. Resume now is `retry_task` from `session` on a paused task.
+A planner turn, the supervisor or autorun asking for one is refused: the user
+is in the conversation and presses it. The supervisor never Mark completes,
+at any level. The user's `answer_approval` may allow, allow for the task, or
+deny with a note; everyone else's still only denies or escalates. Each command
+is checked, claimed and recorded as the shared ones are, and saved before any
+surface hears of it. What a command answers besides its line is a typed
+payload: the id of a queued message, the line saying a force start waits for
+its dependencies, and, for the user's Merge all, the whole merge result and
+whether the merge closed the run. A Merge all that stops is refused with that
+result, so the Merge all card can show why. A user's Stop with nothing to
+stop is answered ok and recorded nowhere, since the surface already shows
+the run stopped. A refusal is worded for who asked, in one place: a model is
+told the tools it calls and what to tell the user, the user the controls they
+press. The Session's asynchronous per-verb controls (Resume now, force start,
+Mark complete and Mark not done, interrupt, approving the review, Merge all)
+call these commands as the user.
+
 ### Loop guards (Act)
 
 Checked at the seam, where the action executes:
@@ -473,10 +496,8 @@ until #30 exists.
   Stop execution (`stop_run`), a task message (`message_task`) and a runner
   approval's deny (`answer_approval`). `approveReview` approves every task in
   the plan, as executing it does. Force start past a merge gate, Mark
-  complete/incomplete, Skip and the user's Merge all stay on their Session
-  methods: the seam has no command for the first three, and its `merge_all` is
-  the supervisor's — it flattens the structured merge result the Merge all card
-  renders.
+  complete/incomplete, Skip and the user's Merge all were left on their Session
+  methods, which the seam had no command for.
 - 2026-10-11 — final verification of the merged slices. A planner edit adopted
   after a failure is reconciled into the run instead of reloading the plan. A start deferred behind a held edit
   that never lands is dropped with a notice. VS Code's task-log message and
@@ -509,3 +530,4 @@ until #30 exists.
 - 2026-10-17 — a planner usage limit keeps the turn's wake-ups with its other inputs and sends them in the planner's resend at the reset, instead of the supervisor holding its own wait ([ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md)).
 - 2026-10-18 — the claim takes the task by id with the start's admission and reads the task as it stands, so a start that awaited its run opening runs the task as edited meanwhile; a conflict repair claims under the admission of the attempt whose work it repairs, rather than whatever Stop generation is current; a force start queued behind its dependencies waits for a planner turn's start hold, and the hold's release looks at the queue with or without a run.
 - 2026-10-18 — a planner turn holds what it writes — its inputs, the skills the planner loads, its research subagents — until the save that lands it, so a hung or failed turn has nothing to undo, whatever was saved while it ran.
+- 2026-10-18 — the user's own controls get commands at the seam: force start, Mark complete and Mark not done, interrupt, force sending or taking back a task message, cancelling a scheduled resume, a checkpoint answer and approving the review, refused to anyone but the user; the user's `answer_approval` may allow; a typed payload carries the full Merge all result and a force start's queued line; the user's Stop with nothing running is a quiet no-op; refusals are worded per actor.

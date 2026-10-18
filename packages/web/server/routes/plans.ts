@@ -146,8 +146,8 @@ export function plansRoute(pool: OrchestratorPool) {
   // Orchestrator controls — these spawn or kill runner processes, so they are
   // deliberately separate from the generic `PUT tasks/:taskId` status patch.
   // Each is an execution button, so it goes through the command seam as the
-  // user (ADR-0029). Force start passes a merge gate, which the seam has no
-  // command for, so it stays on the Session method.
+  // user (ADR-0029). Force start has its own route below, since it answers
+  // the line saying it is queued.
   for (const [segment, command] of [
     ['run', (id: string): ExecutionCommand => ({ command: 'run_task', task: id })],
     ['retry', (id: string): ExecutionCommand => ({ command: 'retry_task', task: id, from: 'fresh' })],
@@ -201,9 +201,11 @@ export function plansRoute(pool: OrchestratorPool) {
   };
 
   // A plain message reaches the task through the command seam as the user (ADR-0029),
-  // so it lands in the timeline; force send has no command and stays on the Session.
-  router.post('/:sessionId/tasks/:taskId/messages', messageHandler(async (session, taskId, text) =>
-    (await runUserCommand(session, { command: 'message_task', task: taskId, text })).id ?? ''));
+  // so it lands in the timeline; force send still calls the Session's own method.
+  router.post('/:sessionId/tasks/:taskId/messages', messageHandler(async (session, taskId, text) => {
+    const { payload } = await runUserCommand(session, { command: 'message_task', task: taskId, text });
+    return payload?.kind === 'message' ? payload.id : '';
+  }));
   router.post('/:sessionId/tasks/:taskId/messages/now', messageHandler((session, taskId, text) => session.forceSendTaskMessage(taskId, text)));
 
   // The task runner's own slash command (#66): carried to the runner, never

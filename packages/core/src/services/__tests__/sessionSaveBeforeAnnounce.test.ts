@@ -42,20 +42,27 @@ function setup(tasks: Task[], opts: {
   } satisfies IRunner;
   const seen: { kind: 'save' | 'status'; statuses: string }[] = [];
   const messages: SessionMessage[] = [];
+  // How many timeline records the disk held as each one was announced.
+  let savedRecords = 0;
+  const recordsAtAnnounce: number[] = [];
   const session = makeSession({
     runner,
     isolation: opts.isolation ?? new FakeWorktreeIsolation(),
     config: opts.config,
     aiService: opts.aiService,
-    saveSession: (p) => { seen.push({ kind: 'save', statuses: statuses(flattenTasks(p.tasks)) }); },
+    saveSession: (p) => {
+      seen.push({ kind: 'save', statuses: statuses(flattenTasks(p.tasks)) });
+      savedRecords = (p.conversationHistory ?? []).filter((e) => e.kind === 'execution').length;
+    },
     broadcast: (m) => {
       messages.push(m);
+      if (m.type === 'execution_action') recordsAtAnnounce.push(savedRecords);
       if (m.type === 'status_update') seen.push({ kind: 'status', statuses: statuses(m.tasks) });
     },
   });
   session.loadPlan(plan(tasks), 'goal', '/repo', { persist: false });
   const runnerSession = (taskId: string) => runnerSessions.find((t) => t.taskId === taskId)!;
-  return { session, seen, messages, runnerSession };
+  return { session, seen, messages, runnerSession, recordsAtAnnounce };
 }
 
 /**
@@ -216,6 +223,30 @@ describe('every user control saves before it announces', () => {
     const id = env.session.sendTaskMessage('t1', 'later');
 
     await expectSavedBeforeAnnounced(env, (s) => expect(s[control]('t1', id)).toBe(true));
+  });
+
+  it.each<[string, (s: Session, id: string) => Promise<unknown>]>([
+    ['force send a queued message', (s, id) => s.execute({ command: 'force_send_queued', task: 't1', id }, { kind: 'user' })],
+    ['take back a queued message', (s, id) => s.execute({ command: 'remove_queued', task: 't1', id }, { kind: 'user' })],
+    ['force send a message', (s) => s.execute({ command: 'message_task', task: 't1', text: 'now', force: true }, { kind: 'user' })],
+  ])('%s through the command seam, its record kept before it is told', async (_name, control) => {
+    const env = setup([task('t1', 1)]);
+    await env.session.executePlan();
+    const id = env.session.sendTaskMessage('t1', 'later');
+
+    await expectSavedBeforeAnnounced(env, async (s) => expect(await control(s, id)).toMatchObject({ ok: true }));
+    expect(env.recordsAtAnnounce).toEqual([1]);
+  });
+
+  it('answer a checkpoint through the command seam', async () => {
+    const env = setup([task('t1', 1)]);
+    await env.session.executePlan();
+    const answered = env.runnerSession('t1').callCheckpoint('Shall I proceed?');
+    await vi.waitFor(() => expect(env.session.awaitsCheckpoint('t1')).toBe(true));
+
+    await expectSavedBeforeAnnounced(env, async (s) => expect(await s.execute({ command: 'answer_checkpoint', task: 't1', answer: 'approve' }, { kind: 'user' })).toMatchObject({ ok: true }));
+    await expect(answered).resolves.toEqual({ kind: 'continue' });
+    expect(env.recordsAtAnnounce).toEqual([1]);
   });
 
   it('merge all mid-run, which starts the ops task waiting at its gate', async () => {
