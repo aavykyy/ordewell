@@ -405,6 +405,29 @@ describe('when the supervisor fails, the run does not depend on it', () => {
     expect(history.at(-1)).toMatchObject({ kind: 'supervisor' });
   });
 
+  it('hears nothing more from a turn it took the conversation back from, when that turn ends at last', async () => {
+    const env = await wokenUp();
+    env.planner.state.ignoresStop = true;
+    await vi.advanceTimersByTimeAsync(WAKE_UP_TURN_TIMEOUT_MS);
+    await settled();
+    await vi.advanceTimersByTimeAsync(HUNG_TURN_GRACE_MS);
+    await until(() => env.planner.calls.length === 2);
+    const [hung, retry] = env.messages.flatMap((m) => (m.type === 'planner_turn_started' ? [m.turnId] : []));
+    const taken = env.messages.length;
+
+    // The hung call streams on, then settles while the retry runs: the API services restart nothing.
+    env.planner.calls[0].progress?.({ type: 'text_delta', text: 'Still looking at task 1', segmentId: 'late' });
+    env.planner.calls[0].finish(prose('Task 1 needs an answer.'));
+    await settled();
+
+    expect(env.messages.slice(taken).filter((m) => 'turnId' in m && m.turnId === hung)).toEqual([]);
+    expect(env.messages.filter((m) => m.type === 'planner_turn_ended' && m.turnId === hung)).toHaveLength(1);
+    env.planner.calls[1].finish(prose('Task 1 asked which database to use.'));
+    await settled();
+    expect(env.messages).toContainEqual({ type: 'planner_turn_ended', turnId: retry, outcome: 'message' });
+    expect(env.session.planState!.conversationHistory!.at(-1)).toMatchObject({ kind: 'supervisor', content: 'Task 1 asked which database to use.' });
+  });
+
   it('always lets the run\'s new starts go when a wake-up turn fails, the last one included', async () => {
     const env = await wokenUp({}, [
       task('t1', 1), task('t2', 2), task('t3', 3, { dependencies: ['t2'] }), task('t4', 4, { dependencies: ['t3'] }),

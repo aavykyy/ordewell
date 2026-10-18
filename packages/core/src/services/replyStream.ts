@@ -50,8 +50,22 @@ export class TurnStream {
    * display, and its retry must not build on top of it.
    */
   private readonly shown = new Map<string, object>();
+  private muted = false;
 
-  constructor(readonly turnId: string, private readonly emit: (progress: ResearchProgress) => void) {}
+  constructor(readonly turnId: string, private readonly sendOn: (progress: ResearchProgress) => void) {}
+
+  /**
+   * Send nothing more: the turn was abandoned, and its end already announced.
+   * A call that does not end when stopped streams on whenever it settles, and
+   * what it says would draw in, or cut, the turn that has the conversation now.
+   */
+  mute(): void {
+    this.muted = true;
+  }
+
+  private emit(progress: ResearchProgress): void {
+    if (!this.muted) this.sendOn(progress);
+  }
 
   /**
    * Progress for one backend call. A backend that takes back its attempt

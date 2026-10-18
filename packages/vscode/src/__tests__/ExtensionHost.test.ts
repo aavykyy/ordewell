@@ -138,7 +138,7 @@ function fakeConfig() {
 function fakeSession() {
   const spies = {
     sessionId: 's1',
-    aiServiceInstance: { reset: vi.fn() },
+    plannerSettingsChanged: vi.fn(),
     reschedule: vi.fn(async () => {}),
     applyRunSettings: vi.fn(),
     isExecuting: false,
@@ -400,7 +400,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     await vi.waitFor(() => expect(h.chat.provider.setPlanDockHeight).toHaveBeenCalledWith(340));
   });
 
-  it('resets the AI service, invalidates the resolver and reschedules on a config change', async () => {
+  it('tells the session its planner settings changed, invalidates the resolver and reschedules on a config change', async () => {
     await h.host.start();
     h.resolver.invalidate.mockClear();
     h.resolver.refreshRunnerModels.mockClear();
@@ -408,7 +408,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     for (const listener of h.config.listeners) listener();
 
     expect(h.session.spies.reschedule).toHaveBeenCalled();
-    expect(h.session.spies.aiServiceInstance.reset).toHaveBeenCalled();
+    expect(h.session.spies.plannerSettingsChanged).toHaveBeenCalled();
     expect(h.resolver.invalidate).toHaveBeenCalled();
     await vi.waitFor(() => expect(h.resolver.refreshRunnerModels).toHaveBeenCalled());
   });

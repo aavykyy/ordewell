@@ -1,5 +1,5 @@
 import { expect, vi } from 'vitest';
-import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
+import { createTask, type LegacyPlanState, type ResearchProgress, type Task } from '../../models/Task';
 import type { IRunner } from '../../interfaces/IRunner';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
@@ -26,6 +26,8 @@ export const ctx: McpToolContext = { signal: new AbortController().signal };
 export interface PlannerCall {
   message: string;
   signal?: AbortSignal;
+  /** What the call streams through, as a backend would. */
+  progress?: (progress: ResearchProgress) => void;
   finish(turn: ConversationTurn): void;
   fail(err: unknown): void;
 }
@@ -38,8 +40,8 @@ export interface PlannerCall {
 export function heldPlanner() {
   const calls: PlannerCall[] = [];
   const state = { live: false, ignoresStop: false, saidBeforeStop: 'Looking at task 1', tools: undefined as PlannerToolHandler | undefined };
-  const take = (message: string, signal?: AbortSignal) => new Promise<ConversationTurn>((resolve, reject) => {
-    calls.push({ message, signal, finish: resolve, fail: reject });
+  const take = (message: string, signal?: AbortSignal, progress?: (progress: ResearchProgress) => void) => new Promise<ConversationTurn>((resolve, reject) => {
+    calls.push({ message, signal, progress, finish: resolve, fail: reject });
     signal?.addEventListener('abort', () => {
       if (!state.ignoresStop) resolve({ kind: 'message', text: state.saidBeforeStop, researchLog: [], aborted: true });
     }, { once: true });
@@ -48,9 +50,9 @@ export function heldPlanner() {
     startConversation: vi.fn((req: ConversationRequest) => {
       state.live = true;
       state.tools = req.plannerTools?.handler;
-      return take(req.initialMessage ?? req.goal, req.signal);
+      return take(req.initialMessage ?? req.goal, req.signal, req.onProgress);
     }),
-    continueConversation: vi.fn((message: string, _progress: unknown, signal?: AbortSignal) => take(message, signal)),
+    continueConversation: vi.fn((message: string, progress?: (progress: ResearchProgress) => void, signal?: AbortSignal) => take(message, signal, progress)),
     hasActiveConversation: () => state.live,
     reset: vi.fn(() => { state.live = false; }),
     restart: vi.fn(),

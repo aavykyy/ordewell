@@ -14,12 +14,11 @@ import type { ExecutionRecord } from '../models/Execution';
 import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation } from './skillInvocation';
 import { skillLoadNotice, surfaceStep } from '../conversation/records';
 import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
-import { AUTORUN_OFF, AUTORUN_ON } from './PlanPrompts';
 import { heldEditTasks } from './heldEdit';
 import { classifyRunnerStop, type TurnFailure } from './runnerExit';
 import type { PlannerLimit } from './PlannerResend';
 import type { AssignmentScope } from './AssignmentScope';
-import { flaggedTasks, runnersChangedBlock, scopeChange } from './RunnerChange';
+import { PlannerBriefing, type TurnBriefing } from './PlannerBriefing';
 import { noteRun } from './settleReply';
 import type { StartWait, StartWaitKind } from './readiness';
 import { SubagentRuns } from './SubagentRuns';
@@ -176,8 +175,8 @@ interface UserTurn {
   reads: ReadBudget;
   /** Set when no user message opened the turn: the supervisor answers it. */
   wakeUp?: WakeUpTurn;
-  /** What the planner had been told of the user's runners when the turn opened: a turn that never lands told it nothing. */
-  toldScope: AssignmentScope | null;
+  /** What the turn tells the planner besides its inputs; told only if the turn lands an answer the planner gave. */
+  briefing?: TurnBriefing;
   /** Its message was force sent. */
   forced?: boolean;
   /** Handed in since the backend last answered; see {@link PlannerConversation.submit}. */
@@ -187,6 +186,8 @@ interface UserTurn {
   onCommit?: () => void;
   /** Surfaces were last told the turn holds an edit, so they are told when it no longer does. */
   heldShown?: boolean;
+  /** Its end was announced when it was abandoned; it says nothing more. */
+  ended?: boolean;
   /**
    * Narration of the calls whose reply the turn did not settle on — a read it
    * answered, an attempt a corrective retry discarded. It stays where it
@@ -262,8 +263,6 @@ export interface PlannerConversationHost {
   autorun(): boolean;
   /** The enabled runners and allowlist as of now; the planner is told in the turn after either changes. */
   assignmentScope(): AssignmentScope;
-  /** Run updates no turn has carried yet, taken by the turn that asks: the next turn is told, whoever opens it. */
-  takeRunUpdates(): string[];
   tasks(): readonly Task[];
   /**
    * Why a task cannot start now, from the scheduler's start rule (ADR-0034);
@@ -299,6 +298,8 @@ export interface PlannerConversationHost {
   capturePrd(text: string): void;
   /** The planner turn was stopped or abandoned: whatever it is waiting on (a parked approval) will never be answered. */
   turnAborted(): void;
+  /** A planner turn is about to take the conversation, which nothing holds now. */
+  turnClaiming?(): void;
   /** A planner turn let the conversation go, so the next one may take it. */
   turnReleased?(): void;
   /** A turn ended on the planner's usage limit, which it reported as `said`: what is sent again, and when. */
@@ -332,9 +333,8 @@ export class ConversationBusyError extends ConversationEditError {
 
 /**
  * A planner turn that settled after the plan it was answering was dropped (a
- * new plan, another session adopted, the session closed), or after its call
- * was cut off by something other than its own stop. Nothing it produced was
- * committed: landing it would write one session's reply into another's
+ * new plan, another session adopted, the session closed). Nothing it produced
+ * was committed: landing it would write one session's reply into another's
  * transcript.
  */
 export class PlannerTurnDiscardedError extends Error {
@@ -399,6 +399,9 @@ function interrupted(planner: PlannerTurn, err: unknown): unknown {
   if (planner.signal.aborted) return new PlannerTurnStoppedError({ cause: err });
   return err;
 }
+
+/** What a call cut off by something other than its turn's own stop is saved as. */
+const CUT_OFF = "The planner's call was cut off before it answered.";
 
 /** Width of a rewind target's preview — one picker row, not the whole message. */
 const REWIND_PREVIEW_WIDTH = 80;
@@ -465,14 +468,18 @@ const WHOLE_PLAN_WHILE_RUNNING =
  * drifting from it.
  */
 export class PlannerConversation {
-  /** What the planner was last told of autorun: by its opening prompt, or a turn's block since. */
-  private toldAutorun = false;
-  /** The runners and allowlist the planner was last told of: its opening prompt, or a turn's block since. Null until a conversation opens. */
-  private toldScope: AssignmentScope | null = null;
+  private readonly briefing: PlannerBriefing;
   private live: PlannerTurn | null = null;
   private openTurn: UserTurn | null = null;
 
-  constructor(private readonly host: PlannerConversationHost) {}
+  constructor(private readonly host: PlannerConversationHost) {
+    this.briefing = new PlannerBriefing({
+      autorun: () => host.autorun(),
+      scope: () => host.assignmentScope(),
+      tasks: () => host.tasks(),
+      plannerTools: () => host.aiService().plannerToolsAttached?.() ?? false,
+    });
+  }
 
   get transcript(): readonly ConversationMessage[] {
     return this.host.plan()?.conversationHistory ?? [];
@@ -496,28 +503,37 @@ export class PlannerConversation {
    * free at once rather than when the abandoned turn finishes unwinding.
    */
   abandonTurn(): void {
-    const turn = this.live;
-    if (!turn) return;
-    this.live = null;
-    turn.abandon();
+    this.drop('stopped');
   }
 
   /**
    * Free the conversation from a turn that did not end when stopped — a hung
    * wake-up (ADR-0029). Unlike {@link abandonTurn} the plan stays, so the turn
-   * is forgotten as its failure would have been — nothing it held lands, and
-   * what it told the planner was never said — and its end is announced: the
-   * turn itself may never get there.
+   * is forgotten as its failure would have been: nothing it held lands, and
+   * what it would have told the planner is told to the next turn.
    */
   abandonHungTurn(): void {
+    this.drop('error');
+  }
+
+  /**
+   * Let the live turn go. A user turn's end is announced now, and it says
+   * nothing after — not its stream, not its held edit, not its end again —
+   * since it may settle at any time later: the API services restart nothing,
+   * and a hung call settles whenever it settles, while the next turn runs.
+   */
+  private drop(outcome: 'stopped' | 'error'): void {
+    const turn = this.live;
+    if (!turn) return;
+    this.live = null;
+    turn.abandon();
     const open = this.openTurn;
-    if (!this.live) return;
-    this.abandonTurn();
-    if (!open) return;
+    if (open?.planner !== turn) return;
     this.openTurn = null;
     this.clearHeld(open);
-    this.toldScope = open.toldScope;
-    this.host.broadcast({ type: 'planner_turn_ended', turnId: open.stream.turnId, outcome: 'error' });
+    open.stream.mute();
+    open.ended = true;
+    this.host.broadcast({ type: 'planner_turn_ended', turnId: open.stream.turnId, outcome });
   }
 
   /**
@@ -544,6 +560,7 @@ export class PlannerConversation {
   private claim(admission: TurnAdmission, callerSignal?: AbortSignal): { turn: PlannerTurn; release: () => void } {
     if (admission === 'supersede') this.abandonTurn();
     else if (this.live) throw new ConversationBusyError(admission.refuseAs);
+    this.host.turnClaiming?.();
     const turn = new PlannerTurn();
     this.live = turn;
     turn.signal.addEventListener('abort', () => this.host.turnAborted(), { once: true });
@@ -668,10 +685,23 @@ export class PlannerConversation {
   }
 
   /**
-   * Drop the live model context. Idempotent; the harness backend holds an OS
+   * The plan scope this conversation served is gone: drop the live model
+   * context, and what the planner was told outside the transcript in it (see
+   * {@link PlannerBriefing}). Idempotent; the harness backend holds an OS
    * process here, so callers never gate it on {@link isActive}.
    */
   reset(): void {
+    this.dropContext();
+    this.briefing.clear();
+  }
+
+  /** A run update for the planner's next turn, whoever opens it (ADR-0029). */
+  tellRunUpdate(text: string): void {
+    this.briefing.runUpdate(text);
+  }
+
+  /** Drop the live model context alone: the next turn replays from the transcript. */
+  private dropContext(): void {
     this.host.aiService().reset();
   }
 
@@ -736,7 +766,7 @@ export class PlannerConversation {
       // conversation this replaced or a summary exchange nobody kept. An
       // abandoned compaction's context was dropped by whatever abandoned it,
       // and a reset now would cut off the turn that has the backend since.
-      if (!turn.abandoned) this.reset();
+      if (!turn.abandoned) this.dropContext();
       release();
     }
   }
@@ -752,7 +782,7 @@ export class PlannerConversation {
       ai.pruneContext?.();
       turn = await ai.continueConversation(request, onProgress, signal);
     } else {
-      turn = await this.resume(request, [...this.transcript], signal, onProgress);
+      turn = await this.resume(await this.reopen(), request, [...this.transcript], signal, onProgress);
     }
     if (signal.aborted) throw new ConversationEditError('Condensing was stopped: the conversation is unchanged.');
     const summary = extractSummary(turn.text);
@@ -833,8 +863,7 @@ export class PlannerConversation {
       // limit, then its goal waits to be sent again — leaves no goal behind.
       const now = new Date().toISOString();
       this.holdWrites(userTurn, this.userEntries(goal, now), [this.userPrompt(goal.text, now)]);
-      this.toldAutorun = opening.autorun ?? false;
-      this.toldScope = this.host.assignmentScope();
+      this.briefing.opened(opening.autorun ?? false);
       const turn = await this.host.aiService().startConversation({
         ...opening,
         // The system prompt's goal is the text as typed; skill bodies ride the
@@ -882,24 +911,25 @@ export class PlannerConversation {
     if (fromUser) entries.push(...this.userEntries(message, now, userTurn.forced));
     this.holdWrites(userTurn, entries, fromUser ? [this.userPrompt(message.text, now)] : []);
 
+    // Decided before the briefing is built: a replay's opening states autorun
+    // and the runners itself, so the briefing says neither again.
+    const reopened = this.canContinueLive() ? null : await this.reopen(userTurn);
+    userTurn.briefing = this.briefing.brief();
     // The persisted transcript keeps the raw user message; the model gets the
     // live catalog (always) and the current plan (tasks, statuses, edit
     // protocol — once tasks exist) alongside it.
-    const contextBlock = [this.catalogBlock(), this.planContextBlock(), this.autorunBlock(), this.runnersChangedBlock(), this.runUpdatesBlock()].filter(Boolean).join('\n\n');
+    const contextBlock = [this.catalogBlock(), this.planContextBlock(), ...userTurn.briefing.blocks].filter(Boolean).join('\n\n');
     const said = fromUser ? plannerMessage(message.text, message.skills) : '';
     const outgoing = [contextBlock, ...wakeUps, userTurn.wakeUp?.brief, said].filter(Boolean).join('\n\n');
 
-    const ai = this.host.aiService();
-    const turn = this.canContinueLive()
-      ? await ai.continueConversation(outgoing, userTurn.stream.sink(), signal)
-      : await this.resume(outgoing, priorHistory, signal, userTurn.stream.sink());
+    const turn = reopened
+      ? await this.resume(reopened, outgoing, priorHistory, signal, userTurn.stream.sink())
+      : await this.host.aiService().continueConversation(outgoing, userTurn.stream.sink(), signal);
 
     const settleable = await this.drainTaskQueries(turn, userTurn);
-    // A turn that failed or was stopped may not have read what it went with: the next one tells it again.
-    if (settleable.kind === 'message' && (settleable.failed || userTurn.signal.aborted)) this.toldScope = userTurn.toldScope;
     this.assertNotLimited(settleable, userTurn);
     if (userTurn.wakeUp) this.assertWakeUpAnswered(settleable, userTurn);
-    this.assertCurrent(userTurn, settleable);
+    this.assertCurrent(userTurn);
     return this.settle(settleable, userTurn);
   }
 
@@ -947,15 +977,9 @@ export class PlannerConversation {
     if (this.isTurnInFlight) throw new ConversationBusyError(operation);
   }
 
-  /**
-   * Refuse to land a turn that no longer belongs here: it was abandoned, its
-   * plan is no longer the host's, or its call was cut off by something other
-   * than its own stop (`IAiService.reset` under a plan change) — what such a
-   * call hands back is a fragment of an answer to a dialogue that is gone.
-   */
-  private assertCurrent(userTurn: UserTurn, turn?: SettleableTurn): void {
-    const cutOff = turn?.kind === 'message' && turn.aborted === true && !userTurn.signal.aborted;
-    if (userTurn.planner.abandoned || this.host.plan() !== userTurn.plan || cutOff) throw new PlannerTurnDiscardedError();
+  /** Refuse to land a turn that no longer belongs here: it was abandoned, or its plan is no longer the host's. */
+  private assertCurrent(userTurn: UserTurn): void {
+    if (userTurn.planner.abandoned || this.host.plan() !== userTurn.plan) throw new PlannerTurnDiscardedError();
   }
 
   /**
@@ -1005,7 +1029,7 @@ export class PlannerConversation {
     const { wakeUp, forced } = delivered;
     const turn: UserTurn = {
       stream, planner, signal: planner.signal, plan: this.host.plan(), reads: freshReadBudget(wakeUp), narration: [],
-      toldScope: this.toldScope, writes: { entries: [], research: [], subagents },
+      writes: { entries: [], research: [], subagents },
       ...(wakeUp ? { wakeUp } : {}), ...(forced ? { forced } : {}),
     };
     this.openTurn = turn;
@@ -1024,9 +1048,6 @@ export class PlannerConversation {
       outcome = settled.outcome;
       return settled.plan;
     } catch (err) {
-      // What a turn that never landed told the planner was never said: the next
-      // turn tells it again. An abandoned turn's successor may have told it since.
-      if (!planner.abandoned && this.host.plan() === turn.plan) this.toldScope = turn.toldScope;
       if (err instanceof PlannerTurnDiscardedError) {
         outcome = 'stopped';
         throw err;
@@ -1040,7 +1061,7 @@ export class PlannerConversation {
       release();
       // A stop can still settle — a backend hands back what it had as a
       // message — but the user asked for it to end, and that is what it did.
-      this.host.broadcast({
+      if (!turn.ended) this.host.broadcast({
         type: 'planner_turn_ended', turnId, outcome: planner.signal.aborted ? 'stopped' : outcome,
         ...(planner.forceSent ? { forceSent: true } : {}),
       });
@@ -1079,13 +1100,14 @@ export class PlannerConversation {
    * the order it happened and the inputs leave the plan's pending turns in the
    * save that carried their answer. `outcome` makes the turn's change to the
    * plan and returns what the turn said, which is written, then sent in that
-   * order; `announce` follows it on every surface.
+   * order; `announce` follows it on every surface. The turn's briefing is told
+   * unless the planner gave no answer (`unheard`): a failure, or a stop.
    */
   private land(
     userTurn: UserTurn,
     researchLog: ResearchLogEntry[],
     outcome: () => Landed[],
-    { skillWarnings = [], announce }: { skillWarnings?: readonly string[]; announce?: () => void } = {},
+    { skillWarnings = [], announce, unheard = false }: { skillWarnings?: readonly string[]; announce?: () => void; unheard?: boolean } = {},
   ): LegacyPlanState {
     const { turnId } = userTurn.stream;
     const now = new Date().toISOString();
@@ -1105,6 +1127,7 @@ export class PlannerConversation {
       }
       announce?.();
     });
+    if (!unheard) userTurn.briefing?.heard();
     this.warnSkills(skillWarnings);
     return plan!;
   }
@@ -1128,34 +1151,44 @@ export class PlannerConversation {
   }
 
   /**
+   * The opening a replay starts under, read fresh, the live context dropped
+   * first; what it states of autorun and the runners is what the planner is
+   * told by it. A turn abandoned while the opening was read stops here: the
+   * backend may be its successor's by now.
+   */
+  private async reopen(userTurn?: UserTurn): Promise<ConversationOpening> {
+    const opening = await this.host.opening(this.requirePlan().runners);
+    if (userTurn) this.assertCurrent(userTurn);
+    // Explicit rather than left to each backend's start: a replay begins from
+    // the transcript alone, which for a harness planner means its native
+    // session id goes too — otherwise the agent's own memory of the old
+    // dialogue could ride along under the replayed one.
+    this.dropContext();
+    this.briefing.opened(opening.autorun ?? false);
+    return opening;
+  }
+
+  /**
    * Reopen the model context from the transcript — because the in-memory one
    * is gone (session reload, extension restart), or because it is stale
    * against the planner config now in effect. No LLM call happens for the
    * replayed turns; the first call is the one the user's message opens.
    */
-  private async resume(
+  private resume(
+    opening: ConversationOpening,
     message: string,
     priorHistory: ConversationMessage[],
     signal: AbortSignal,
     onProgress: (progress: ResearchProgress) => void,
   ): Promise<ConversationTurn> {
-    const runners = this.requirePlan().runners;
-    const opening = await this.host.opening(runners);
     const replayed = plannerTranscript(priorHistory);
     // The opening message as typed, unless a compaction has since condensed it
     // away. Its skill bodies replay with it in the transcript, not in the goal.
     const opener = priorHistory[0] && isUserMessage(priorHistory[0]) ? priorHistory[0].content : undefined;
     const goal = opener || this.host.goal() || message;
-    // Explicit rather than left to each backend's start: a replay begins from
-    // the transcript alone, which for a harness planner means its native
-    // session id goes too — otherwise the agent's own memory of the old
-    // dialogue could ride along under the replayed one.
-    this.reset();
-    this.toldAutorun = opening.autorun ?? false;
-    this.toldScope = this.host.assignmentScope();
     return this.host.aiService().startConversation({
       ...opening,
-      runners,
+      runners: this.requirePlan().runners,
       goal,
       onProgress,
       signal,
@@ -1198,9 +1231,20 @@ export class PlannerConversation {
         signal,
       ), userTurn);
     }
-    return carried.length > 0
+    return this.failedIfCutOff(carried.length > 0
       ? { ...current, researchLog: [...carried, ...current.researchLog] }
-      : current;
+      : current, userTurn);
+  }
+
+  /**
+   * A call cut off by something other than the turn's own stop failed: what it
+   * hands back is a fragment of an answer, and the turn keeps what it was sent,
+   * as any failure does. Nothing of Ordewell's resets a backend under a turn on
+   * the same plan (see `PlannerBackend`); one that changes the plan abandons the turn.
+   */
+  private failedIfCutOff(turn: SettleableTurn, userTurn: UserTurn): SettleableTurn {
+    if (turn.kind !== 'message' || !turn.aborted || userTurn.signal.aborted) return turn;
+    return { kind: 'message', text: CUT_OFF, researchLog: turn.researchLog, failed: true, ...writtenOver(turn.runs, CUT_OFF) };
   }
 
   /**
@@ -1286,7 +1330,7 @@ export class PlannerConversation {
           return { retry: { errors, corrective: tools ? resubmitPlanPrompt(errors) : reEmitPlanPrompt(errors.join('; ')) } };
         }
         if (t.kind !== 'task_ops') return { done: { turn: t } };
-        this.assertCurrent(userTurn, t);
+        this.assertCurrent(userTurn);
         const applied = await this.applyTaskOps(t, userTurn);
         if ('plan' in applied) return { done: { plan: applied.plan } };
         // No live conversation (or an abort) means no corrective re-send is
@@ -1301,7 +1345,7 @@ export class PlannerConversation {
     });
 
     if ('plan' in settled) return { plan: settled.plan, outcome: 'task_ops' };
-    this.assertCurrent(userTurn, settled.turn);
+    this.assertCurrent(userTurn);
     return { plan: this.commit(settled.turn, userTurn, settled.skillWarnings ?? []), outcome: settled.turn.kind };
   }
 
@@ -1368,7 +1412,7 @@ export class PlannerConversation {
     return this.land(userTurn, turn.researchLog, () => {
       this.host.capturePrd(text);
       return [{ content: text, runs }];
-    });
+    }, { unheard: turn.failed === true || userTurn.signal.aborted });
   }
 
   /**
@@ -1387,42 +1431,6 @@ export class PlannerConversation {
     if (turn.said !== undefined) return { content: turn.said, runs: this.shown(userTurn, turn.runs, turn.said) };
     const narration = this.shown(userTurn, turn.runs ?? [], '') ?? [];
     return narration.length > 0 ? { content: narration.map((run) => run.text).join('\n\n'), runs: narration } : undefined;
-  }
-
-  /**
-   * The autorun rule (ADR-0030) when it changed since the planner was last
-   * told — in the opening prompt or an earlier turn — so a switch mid-
-   * conversation reaches its next turn without repeating in every one.
-   */
-  private autorunBlock(): string | null {
-    const now = this.host.autorun();
-    if (now === this.toldAutorun) return null;
-    this.toldAutorun = now;
-    return now ? AUTORUN_ON : AUTORUN_OFF;
-  }
-
-  /**
-   * The user's runner or allowlist change, when the planner was not told yet —
-   * the same once-per-change rule as autorun, for API and harness planners
-   * alike. Tasks the change leaves outside the scope are named, not touched.
-   *
-   * A reloaded session is not told: {@link resume} takes the scope as it is
-   * then, as it does the autorun rule, since the catalog the first turn carries
-   * and `list_runners` already show the runners as they are now.
-   */
-  private runnersChangedBlock(): string | null {
-    const now = this.host.assignmentScope();
-    const told = this.toldScope;
-    this.toldScope = now;
-    const change = told && scopeChange(told, now);
-    if (!change) return null;
-    const flagged = flaggedTasks(flattenTasksWithParents(this.host.tasks()), now);
-    return runnersChangedBlock(change, flagged, this.host.aiService().plannerToolsAttached?.() ?? false);
-  }
-
-  private runUpdatesBlock(): string | null {
-    const updates = this.host.takeRunUpdates();
-    return updates.length > 0 ? ['Run update:', ...updates.map((update) => `- ${update}`)].join('\n') : null;
   }
 
   /**

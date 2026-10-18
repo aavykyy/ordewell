@@ -86,4 +86,23 @@ describe('autorun', () => {
     expect(env.planner.calls[2].message).not.toContain('AUTORUN');
     expect(env.planner.calls[3].message).toContain(AUTORUN_OFF);
   });
+
+  it('tells the planner again when the turn that first told it never got an answer', async () => {
+    const env = planning({ autorun: true });
+    const planned = env.session.startPlanning('build it', ['claude-code']);
+    await until(() => env.planner.calls.length === 1);
+    env.planner.calls[0].finish(prose('Which database?'));
+    await planned;
+
+    env.settings.autorun = false;
+    const failed = env.session.continueConversation('Postgres');
+    await until(() => env.planner.calls.length === 2);
+    env.planner.calls[1].fail(new Error('backend down'));
+    await expect(failed).rejects.toThrow('backend down');
+    void env.session.continueConversation('Postgres, then');
+    await until(() => env.planner.calls.length === 3);
+
+    expect(env.planner.calls[1].message).toContain(AUTORUN_OFF);
+    expect(env.planner.calls[2].message).toContain(AUTORUN_OFF);
+  });
 });

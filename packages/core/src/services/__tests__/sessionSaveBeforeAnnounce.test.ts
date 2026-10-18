@@ -42,20 +42,26 @@ function setup(tasks: Task[], opts: {
   } satisfies IRunner;
   const seen: { kind: 'save' | 'status'; statuses: string }[] = [];
   const messages: SessionMessage[] = [];
+  /** Every save and every message, in order. */
+  const events: string[] = [];
   const session = makeSession({
     runner,
     isolation: opts.isolation ?? new FakeWorktreeIsolation(),
     config: opts.config,
     aiService: opts.aiService,
-    saveSession: (p) => { seen.push({ kind: 'save', statuses: statuses(flattenTasks(p.tasks)) }); },
+    saveSession: (p) => {
+      events.push('save');
+      seen.push({ kind: 'save', statuses: statuses(flattenTasks(p.tasks)) });
+    },
     broadcast: (m) => {
+      events.push(m.type);
       messages.push(m);
       if (m.type === 'status_update') seen.push({ kind: 'status', statuses: statuses(m.tasks) });
     },
   });
   session.loadPlan(plan(tasks), 'goal', '/repo', { persist: false });
   const runnerSession = (taskId: string) => runnerSessions.find((t) => t.taskId === taskId)!;
-  return { session, seen, messages, runnerSession };
+  return { session, seen, messages, events, runnerSession };
 }
 
 /**
@@ -156,6 +162,17 @@ describe('every user control saves before it announces', () => {
 
     await expectSavedBeforeAnnounced(env, (s) => s.executePlan());
     expect(env.session.planTasks[0].status).toBe('in_progress');
+  });
+
+  it('the run finishing, which saves the run as it ends before it says so', async () => {
+    const env = setup([task('t1', 1)]);
+    await env.session.executePlan();
+
+    env.runnerSession('t1').reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(env.events).toContain('execution_complete'));
+
+    expect(env.events.lastIndexOf('save')).toBeLessThan(env.events.indexOf('execution_complete'));
+    env.session.destroy();
   });
 
   it('stop', async () => {

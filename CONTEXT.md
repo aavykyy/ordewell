@@ -110,8 +110,8 @@ belongs to the plan it holds, and goes with it: the run (stopped, with its
 agents), the planner turn in flight (abandoned with everything it held, so a
 subagent of it that reports afterwards reaches nothing that is saved), what that turn deferred (its **turn effects**,
 reported as not done), the waiting turns' callers, the conversation,
-supervision and loop-guard memory, the planner usage ledger, the execution log
-and the planner's open prompts. It ends in one teardown, used by all four ways
+the **Planner briefing**, supervision and loop-guard memory, the planner usage
+ledger, the execution log and the planner's open prompts. It ends in one teardown, used by all four ways
 a plan stops being the Session's: a new plan (`startPlanning`/`generatePlan`),
 another session adopted (`loadPlan` of a *different* plan object), `reset`,
 and `destroy`. The scopes the user granted end with it at a session boundary
@@ -169,12 +169,13 @@ takes them with it, whatever saves were made while it ran, so there is nothing
 to take back. It is the only writer of the transcript; every write is made in
 the host's mutation ritual. It builds the per-turn prompt
 blocks (the always-on catalog block and the current-plan block, whose edit
-protocol prose lives beside the applier as `taskOpsProtocol` in `TaskOps.ts`).
+protocol prose lives beside the applier as `taskOpsProtocol` in `TaskOps.ts`),
+and the **Planner briefing** after them.
 The live model context — a vendor service's message list, a harness planner's
-process and native session id — is disposable: `reset()` drops it, and the
-next turn is replayed from the transcript (`reset` runs before every replay,
-so a harness planner never resumes its own memory on top of the replayed
-one). Transcript edits are whole-array
+process and native session id — is disposable: dropping it makes the next turn
+replay from the transcript (it is dropped before every replay, so a harness
+planner never resumes its own memory on top of the replayed one), and
+`reset()` drops it with the briefing when the plan scope ends. Transcript edits are whole-array
 operations (`append`, `replace`), so compacting a conversation is a
 transcript edit plus a `reset`; forking and rewinding copy it instead
 (`clone`, `cloneBefore`) and leave it as it was. It owns the **Planner turn**
@@ -196,9 +197,16 @@ whatever the backend had, as `stopped`. A **Force send** stops it the same way,
 marked as stopped by one, and the forced message's turn follows. A turn whose plan is dropped under it —
 a new plan, another session adopted, the session closed — is *abandoned*:
 stopped, the conversation freed at once, and whatever it settles is discarded
-(`PlannerTurnDiscardedError`) instead of committed. So is a reply cut off by
-something other than its own stop (an `IAiService.reset`), since what such a
-call hands back is a fragment.
+(`PlannerTurnDiscardedError`) instead of committed. So is a hung wake-up whose
+conversation the supervisor takes back (ADR-0029), but its plan stays. An
+abandoned turn's end is announced as it is abandoned, and nothing of it reaches
+a surface after — no streamed text, no held edit, no second end — since its
+call settles whenever it settles, while the next turn runs. Nothing resets the
+planner's backend under a turn: a planner switch, or a settings change its
+client was built from, waits for the turn in flight to end (`PlannerBackend`,
+`Session.plannerSettingsChanged`), and a model or effort change replays the
+next turn instead. A call that comes back cut off by something other than its
+turn's own stop is a failure, and keeps the turn's inputs as one does.
 A turn that throws while stopped or abandoned surfaces as a typed error whatever
 the backend named its own — `PlannerTurnStoppedError` or
 `PlannerTurnDiscardedError`, the original kept as `cause` — one-shot generation
@@ -221,6 +229,18 @@ refused as it landed — each is reported "Not done: … waited for an edit that
 did not land." A plan scope ending abandons them the same way, whether the
 edit landed or not, so none runs on the next plan. Nothing of one turn's
 effects carries into the next.
+
+**Planner briefing** (`PlannerBriefing`) — what the planner is told once per
+change rather than in every turn: that autorun was switched (ADR-0030), that
+the user changed the runners or allowlist it may assign, and the run updates
+no turn has carried yet (ADR-0029). The next turn carries it, whoever opens
+it, and it counts as told only when that turn lands an answer the planner
+gave: one that fails, is stopped, hits the usage limit or is abandoned may not
+have read it, so the turn after says it again. An opening — the first turn or
+a replay from the transcript — states autorun and the runners in its own
+prompt, so the briefing is built after the turn opens and says neither again.
+It belongs to the **Plan scope**. Unlike **Turn effects**, it is what a turn
+says, not what it leaves.
 
 **SessionMessage** — the single union every delivery surface consumes: the
 plan-lifecycle events (`plan_generated`, `planner_message`, `status_update`, …)

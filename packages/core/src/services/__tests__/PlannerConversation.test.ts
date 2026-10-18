@@ -3,7 +3,7 @@ import { createTask, type ConversationMessage, type LegacyPlanState, type Resear
 import type { SessionMessage } from '../SessionMessage';
 import type { ConversationTurn, IAiService, TurnRun } from '../AiService';
 import type { TaskOp } from '../TaskOps';
-import { ConversationBusyError, ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, type PlannerConversationHost } from '../PlannerConversation';
+import { ConversationBusyError, ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, type PlannerConversationHost } from '../PlannerConversation';
 import type { SkillInfo } from '../SkillsService';
 import type { TurnFailure } from '../runnerExit';
 
@@ -47,7 +47,6 @@ function fakeHost(ai: IAiService, plan: LegacyPlanState | null = dialoguePlan())
     catalog: () => ({ runners: ['claude-code'], models: {}, modes: {}, autonomousDefault: true }),
     assignmentScope: () => ({ enabledRunners: ['claude-code'], allowlist: {} }),
     autorun: () => false,
-    takeRunUpdates: () => [],
     tasks: () => [],
     startWaits: () => [],
     liveOutput: () => null,
@@ -732,15 +731,31 @@ describe('PlannerConversation planner turn', () => {
     expect(host.adoptTasks).not.toHaveBeenCalled();
   });
 
-  it('discards a reply cut off by something other than its own stop, and takes its message back out', async () => {
+  // Nothing of Ordewell's resets a backend under a turn on the same plan; a
+  // call that comes back cut off anyway failed, and keeps what it was sent.
+  it('lands a reply cut off by something other than its own stop as a failure, keeping its message', async () => {
+    const { ai, calls } = heldBackend();
+    const { conversation, host, state } = fakeHost(ai, threeTurnPlan());
+
+    const turn = conversation.reply('Also CSV');
+    calls[0].finish({ kind: 'message', text: 'Half an ans', researchLog: [], aborted: true });
+    await turn;
+
+    const [sent, said] = state.plan!.conversationHistory!.slice(-2);
+    expect(sent).toMatchObject({ role: 'user', content: 'Also CSV' });
+    expect(said.content).toBe("The planner's call was cut off before it answered.");
+    expect(ended(host).at(-1)?.outcome).toBe('message');
+  });
+
+  it('fails a wake-up cut off by something other than its own stop, so its digests wait for the next turn', async () => {
     const { ai, calls } = heldBackend();
     const { conversation, state } = fakeHost(ai, threeTurnPlan());
     const before = state.plan!.conversationHistory;
 
-    const turn = conversation.reply('Also CSV');
+    const turn = conversation.reply('', { wakeUps: ['Run update:\n- task #1 failed'], wakeUp: { readBudget: 3, refused: () => undefined } });
     calls[0].finish({ kind: 'message', text: 'Half an ans', researchLog: [], aborted: true });
 
-    await expect(turn).rejects.toThrow(PlannerTurnDiscardedError);
+    await expect(turn).rejects.toThrow(PlannerTurnFailedError);
     expect(state.plan!.conversationHistory).toBe(before);
   });
 
@@ -808,6 +823,31 @@ describe('PlannerConversation planner turn', () => {
     expect(contents).not.toContain('late');
     expect(contents.slice(-2)).toEqual(['And YAML', 'Noted']);
     expect(conversation.isTurnInFlight).toBe(false);
+  });
+
+  it('takes back the edit an abandoned turn showed at once, and tells nothing of it once another turn shows one', async () => {
+    const { ai, calls } = heldBackend();
+    const { conversation, host } = fakeHost(ai, threeTurnPlan());
+    vi.mocked(host.validateOps).mockReturnValue({ ok: true, tasks: [], errors: [], summary: ['removed #1'] });
+    const sent = () => vi.mocked(host.broadcast).mock.calls.map(([m]) => m);
+    const held = () => sent().flatMap((m) => (m.type === 'plan_edit_held' ? [m.held?.turnId ?? null] : []));
+
+    const abandoned = conversation.reply('Remove #1');
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    conversation.submit({ kind: 'task_ops', ops: [{ op: 'remove', taskId: '#1' }] });
+    conversation.abandonTurn();
+    expect(held().at(-1)).toBeNull();
+
+    const next = conversation.reply('Remove #2');
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    conversation.submit({ kind: 'task_ops', ops: [{ op: 'remove', taskId: '#2' }] });
+    const nextTurn = conversation.currentTurnId;
+    calls[0].finish({ kind: 'message', text: 'late', researchLog: [] });
+    await expect(abandoned).rejects.toThrow(PlannerTurnDiscardedError);
+
+    expect(held().at(-1)).toBe(nextTurn);
+    calls[1].finish({ kind: 'message', text: 'Removed.', researchLog: [] });
+    await next;
   });
 
   it('lets one-shot work hold the turn: a reply is refused under it, and it supersedes a live reply', async () => {
