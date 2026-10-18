@@ -51,6 +51,22 @@ starting as usual.
   by reference; the TUI, VS Code and `ordewell status` show "blocked by #N"
   from it. The scheduler, the command seam's refusals and the supervisor read
   the same function.
+- **One start rule.** Whether a task can start now, and if not why, is one
+  pure function (`startWaits`, `packages/core/src/services/readiness.ts`) over
+  the plan, the holds and the open isolated run. It lists every reason a task
+  waits, in a fixed order, so the first is the reason: it has started, Mark
+  complete is landing it, it has no prompt, it is outside the user's approval
+  record, it is on hold, it is blocked, its dependencies are not met (or, for
+  a force start queued behind them, are still under way), a Merge all is under
+  way and it is an ops task, its runner waits on a usage limit's reset, a
+  planner turn holds new starts, it is at its merge gate (ADR-0020), or it is
+  a user task. The scheduler's pick, its second look before each claim, the
+  automatic merge at a gate, the force starts, the command seam's refusals,
+  the task row's merge gate and the planner's view of the plan all read it. A
+  force start reads it as forced: past a hold, a failure, a usage limit and
+  the merge gate the user confirmed, never past dependencies still under way.
+  The claim then checks only what can change at the last moment: a Stop, the
+  approval and a slot (ADR-0029).
 - **The run ends when nothing can start.** With nothing running and every task
   left failed or blocked, the run ends (`execution_complete`), saying how many
   tasks completed, failed and are blocked, and how many were skipped; the
@@ -95,6 +111,12 @@ attempt. This decides what a failure stops, not how a verdict is reached.
   design until the skip landed. Rejected: when a failure cannot be fixed on
   this host, the only way to let its dependents go on was Mark complete, which
   lands the failed work as if someone had vouched for it.
+- **Let each start path work out the start rule itself.** The design until
+  2026-10-18. Rejected: the copies drifted. A runner's usage-limit hold was
+  only in the scheduler's pick, the automatic merge at a gate merged for a
+  task the user had not approved, and a force start queued behind its
+  dependencies started during a planner turn's start hold and past a merge
+  gate nobody had confirmed.
 - **Keep the run open until every failure is retried.** Rejected: a run that
   never ends never hands its work over, and a surface treats the end of the
   execution stream as the run's end; the retry continues an ended run instead.
@@ -114,3 +136,4 @@ attempt. This decides what a failure stops, not how a verdict is reached.
 - 2026-10-14 — a skipped task releases its dependents as a completed one does, without landing its work; a skip continues a run that ended on a failure; run summaries count skipped tasks.
 - 2026-10-16 — a skipped dependency no longer lets its dependents start ahead of the work behind it: they wait until the skipped task's own unfinished ancestors are met, and the scheduler log and the command seam's refusals name those ancestors.
 - 2026-10-18 — the stored `blocked` status is gone from `TaskStatus`, and so is the code that set and cleared it; a saved one loads as pending, and the derived rule is the only blocked rule.
+- 2026-10-18 — the whole start rule is one function, with a typed reason for each wait, which every start path, the seam's refusals, the task row's merge gate and the planner's view read.

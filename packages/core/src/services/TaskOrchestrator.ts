@@ -27,7 +27,7 @@ import { IsolationRunController } from './IsolationRunController';
 import { completesTask, Landing, type LandingMessage, type LandingOutcome, type UnlandedOutcome } from './Landing';
 import { classifyRunnerStop, readUsageLimitReset, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
 import { RELAPSE_MS, RESUME_MARGIN_MS, UsageLimitWaits } from './UsageLimitWaits';
-import { dependencyMet, isBlocked, mergeGate, selectReadyTasks, unmetDependencies, type Readiness } from './readiness';
+import { selectReadyTasks, startWaits, waitOf, type ForcedStart, type Readiness, type StartRuleInput, type StartWait, type StartWaitKind } from './readiness';
 import { blockingFailures } from './blocking';
 import {
   attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, mergeExcludes, takesSkills,
@@ -68,6 +68,9 @@ export interface StartAdmission {
   /** It claimed, or will not: Stop no longer counts it. Idempotent. */
   release(): void;
 }
+
+/** Where a start stands against the user's Stop (ADR-0029): no longer current once one comes. */
+type Admitted = Pick<StartAdmission, 'current'>;
 
 /** What a start the user's Stop withdrew answers, wherever it was waiting. */
 export const STOPPED_BEFORE_START = 'Not done: stopped before it could start. The run was stopped meanwhile; start it again if it is still wanted.';
@@ -198,6 +201,12 @@ interface TaskAttempt {
   decided: boolean;
   /** The task skills put in this attempt's prompt, as read from where it runs. */
   skills: readonly TaskSkillSnapshot[];
+  /**
+   * The start it was claimed for, as the user's Stop stands to it. The repair
+   * its conflict is owed claims under it too, so a Stop since withdraws that
+   * repair as it withdrew the attempt.
+   */
+  readonly admission: Admitted;
   /** Resumed after a usage limit, at its reset or by {@link TaskOrchestrator.resumeNow}, rather than started; see {@link RELAPSE_MS}. */
   readonly autoResumed: boolean;
   /** Why the running turn failed, as the runner reported it, if it did. */
@@ -209,6 +218,20 @@ interface TaskAttempt {
 }
 
 type AttemptPhase = 'starting' | 'running' | 'integrating';
+
+/** A force start queued behind its dependencies (see {@link TaskOrchestrator.forceStartTask}). */
+interface QueuedStart {
+  /** The merge gate as it stood when the user forced the start: every surface confirms that one first (ADR-0020). */
+  pastGate: readonly string[];
+  /** What it last said of a gate it was not confirmed past, so it says so once. */
+  gateNotice?: string;
+}
+
+/** What keeps a queued force start waiting, with nothing to say: it starts once these clear. */
+const QUEUED_WAITS: ReadonlySet<StartWaitKind> = new Set<StartWaitKind>(['queued', 'completing', 'merging', 'start-hold']);
+
+/** A force start the user made now: their own act, past the whole merge gate they confirmed. */
+const FORCED_NOW: ForcedStart = { queued: false };
 
 /**
  * A resume the user, planner or supervisor asked for before the reset; see
@@ -372,7 +395,7 @@ export class TaskOrchestrator {
    * after: outside a run it drives, or past a failed dependency, which it
    * never forces. Each starts once those still under way have finished.
    */
-  private queuedStarts = new Set<string>();
+  private queuedStarts = new Map<string, QueuedStart>();
   /**
    * Tasks Mark complete is landing after it ended their attempt: in progress
    * with no attempt for as long as that takes, and not orphans for it.
@@ -777,11 +800,11 @@ export class TaskOrchestrator {
    * work; once a Stop comes it is no longer current, and its claim is refused.
    */
   admitStart(): StartAdmission {
-    const generation = this.stopGeneration;
+    const { current } = this.admittedNow();
     let held = true;
     this.admissions++;
     return {
-      current: () => generation === this.stopGeneration,
+      current,
       release: () => {
         if (!held) return;
         held = false;
@@ -800,12 +823,17 @@ export class TaskOrchestrator {
     return this.admissions > 0 || this.queuedStarts.size > 0 || this.store.allTasks.some(waitsForReset);
   }
 
-  /** Run `work`, which awaits before it claims, under an admission it holds throughout; it is handed the generation it was admitted under. */
-  private async whileAdmitted<T>(work: (admittedAt: number) => Promise<T>): Promise<T> {
-    const admittedAt = this.stopGeneration;
+  /** A start admitted now that nothing has to count as live work: one that claims before it awaits, or follows on from one that did. */
+  private admittedNow(): Admitted {
+    const generation = this.stopGeneration;
+    return { current: () => generation === this.stopGeneration };
+  }
+
+  /** Run `work`, which awaits before it claims, under an admission it holds throughout and claims under. */
+  private async whileAdmitted<T>(work: (admission: StartAdmission) => Promise<T>): Promise<T> {
     const admission = this.admitStart();
     try {
-      return await work(admittedAt);
+      return await work(admission);
     } finally {
       admission.release();
     }
@@ -887,8 +915,31 @@ export class TaskOrchestrator {
    */
   getMergeGate(taskId: string): string[] {
     const task = this.store.get(taskId);
-    if (!task || (task.status !== 'pending' && task.status !== 'approved')) return [];
-    return mergeGate(task, this.store, this.runs);
+    const waits = task ? this.startWaits(task) : [];
+    return waitOf(waits, 'started') ? [] : waitOf(waits, 'merge-gate')?.unmerged ?? [];
+  }
+
+  /**
+   * Every reason a task cannot start now, from the one start rule
+   * (ADR-0034); none when it can. `forced` judges a start the user forced.
+   * Takes the task, not its id: the command seam judges one as a held edit
+   * leaves it.
+   */
+  startWaits(task: Readonly<Task>, forced?: ForcedStart): StartWait[] {
+    return startWaits(task, this.startRule(), forced);
+  }
+
+  private startRule(): StartRuleInput {
+    return {
+      store: this.store,
+      onHold: this.onHold,
+      approved: this.isApproved,
+      runs: this.runs,
+      merging: this.merging,
+      startsHeld: this.startHolds > 0,
+      completing: this.completing,
+      queued: this.queuedStarts,
+    };
   }
 
   /** The failed tasks a task not started yet waits on, through its dependencies (ADR-0034); empty when it is not blocked. */
@@ -1151,7 +1202,7 @@ export class TaskOrchestrator {
       this.store.markAwaitingUser(taskId, 'files-changed');
       this.tell('warn', `Ops task "${task.title}" finished, but changed tracked files in your checkout: ${capConflictFiles(changedFiles)}. An ops task must not change repository files, so nothing was committed: look at the changes, then mark it complete or retry it.`);
     } else if (landing) {
-      await this.applyLanding(task, landing, () => this.notifications.info(`Task "${task.title}" completed.`));
+      await this.applyLanding(task, landing, attempt.admission, () => this.notifications.info(`Task "${task.title}" completed.`));
     } else if (stoppedMidTurn !== null && classifyRunnerStop(stoppedMidTurn) === 'usage-limit') {
       this.pauseOnLimit(task, attempt, stoppedMidTurn);
       if (attempt.worktree) await this.runs.release(taskId, { keep: true });
@@ -1194,7 +1245,7 @@ export class TaskOrchestrator {
     const outcome = await this.land(attempt, () => this.landing.settleRepair(task, verdict, () => this.attempts.get(task.id) === attempt));
     if (this.attempts.get(task.id) !== attempt) return;
     this.endAttempt(task.id, 'verdict');
-    await this.applyLanding(task, outcome, () => {
+    await this.applyLanding(task, outcome, attempt.admission, () => {
       this.logAndArchive(task, task.verdict ?? verdict);
     });
     await this.afterVerdict(task.id);
@@ -1213,26 +1264,32 @@ export class TaskOrchestrator {
     return attempt.integration;
   }
 
-  /** Settle a task by how its landing went; `onLanded` is what the path that landed it adds to completing it. */
-  private async applyLanding(task: Task, outcome: LandingOutcome, onLanded: () => void): Promise<void> {
-    if (!completesTask(outcome)) return this.settleUnlanded(task, outcome);
+  /**
+   * Settle a task by how its landing went; `onLanded` is what the path that
+   * landed it adds to completing it. `admission` is the start the landed work
+   * came from, which a repair follows on from.
+   */
+  private async applyLanding(task: Task, outcome: LandingOutcome, admission: Admitted, onLanded: () => void): Promise<void> {
+    if (!completesTask(outcome)) return this.settleUnlanded(task, outcome, admission);
     this.store.markCompleted(task.id);
     onLanded();
     this.say(outcome.messages);
-    await this.landResolved(task.id);
+    await this.landResolved(task.id, admission);
   }
 
   /**
    * Work that did not land waits on the user — it never fails the task or
    * blocks its dependents — unless its conflict is owed a repair, which takes
    * the slot the ending attempt freed and never one more than the run allows.
+   * The repair follows on from the start whose work it repairs: a Stop since
+   * that was admitted withdraws it.
    */
-  private settleUnlanded(task: Task, outcome: UnlandedOutcome): void {
+  private settleUnlanded(task: Task, outcome: UnlandedOutcome, admission: Admitted): void {
     this.store.markAwaitingUser(task.id, 'conflict');
     this.say(outcome.messages);
     if (outcome.kind !== 'repair-needed') return;
     if (this.attempts.size < this.config.maxParallelSessions) {
-      const claimed = this.claim(task, this.stopGeneration);
+      const claimed = this.claim(task.id, admission);
       if ('refused' in claimed) this.tell('warn', `The conflict of task "${task.title}" is not repaired: ${claimed.refused}`);
       else this.unawaited(claimed.spawned, `Could not start the repair of task "${task.title}"`);
     } else {
@@ -1241,11 +1298,11 @@ export class TaskOrchestrator {
     }
   }
 
-  private async landResolved(resolverId: string): Promise<void> {
+  private async landResolved(resolverId: string, admission: Admitted): Promise<void> {
     const resolved = await this.landing.landResolved(resolverId);
     if (!resolved) return;
     const { task, outcome } = resolved;
-    await this.applyLanding(task, outcome, () => {
+    await this.applyLanding(task, outcome, admission, () => {
       if (task.verdict) this.logAndArchive(task, task.verdict);
     });
   }
@@ -1258,25 +1315,10 @@ export class TaskOrchestrator {
     if (!this.isScheduling) return { ready: [], candidateCount: 0, excluded: [], gated: [] };
     const maxParallel = this.config.maxParallelSessions;
     const active = this.attempts.size;
-    const waitingRunners = new Set(this.store.allTasks
-      .filter((t) => t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit')
-      .map((t) => this.store.resolveTaskRunner(t)));
-    const onHold = new Set(this.onHold);
-    for (const t of this.store.allTasks) {
-      if (waitingRunners.has(this.store.resolveTaskRunner(t))) onHold.add(t.id);
-    }
-    const readiness = selectReadyTasks({
-      store: this.store,
-      onHold,
-      approved: this.isApproved,
-      runs: this.runs,
-      active,
-      maxParallel,
-      merging: this.merging,
-    });
+    const readiness = selectReadyTasks({ ...this.startRule(), active, maxParallel });
 
-    for (const { task, reasons } of readiness.excluded) {
-      console.log(`[TaskOrchestrator] excluded: ${taskRefOf(this.store.planTasks, task.id) ?? `#${task.order}`} "${task.title}": ${reasons.join(', ')}`);
+    for (const { task, waits } of readiness.excluded) {
+      console.log(`[TaskOrchestrator] excluded: ${taskRefOf(this.store.planTasks, task.id) ?? `#${task.order}`} "${task.title}": ${waits.map((w) => w.kind).join(', ')}`);
     }
     console.log(`[TaskOrchestrator] getReadyTasks: ${readiness.candidateCount} candidates, ${Math.max(0, maxParallel - active)} slots, maxParallel=${maxParallel}`);
     return readiness;
@@ -1317,14 +1359,14 @@ export class TaskOrchestrator {
   }
 
   /**
-   * {@link openFor} for an explicit start admitted at `admittedAt`. A Stop
-   * while the run opened interrupts that opening too, which then opens
-   * nothing; the start says it was stopped rather than going quiet as if a
-   * dirty tree were waiting on the user.
+   * {@link openFor} for an explicit start under `admission`. A Stop while the
+   * run opened interrupts that opening too, which then opens nothing; the
+   * start says it was stopped rather than going quiet as if a dirty tree were
+   * waiting on the user.
    */
-  private async openForAdmitted(taskId: string, origin: RunOrigin, resume: () => Promise<void>, admittedAt: number): Promise<boolean> {
+  private async openForAdmitted(taskId: string, origin: RunOrigin, resume: () => Promise<void>, admission: Admitted): Promise<boolean> {
     const opened = await this.openFor(taskId, origin, resume);
-    if (admittedAt !== this.stopGeneration) throw new TaskControlError(STOPPED_BEFORE_START);
+    if (!admission.current()) throw new TaskControlError(STOPPED_BEFORE_START);
     return opened;
   }
 
@@ -1390,6 +1432,8 @@ export class TaskOrchestrator {
     // A second call made while the first awaits its landing finds no attempt —
     // it was ended by the first — and would land, archive and announce again.
     if (this.completing.has(taskId)) return;
+    // A repair its landing may be owed follows on from this, the user's act.
+    const admission = this.admittedNow();
 
     const ended = this.endAttempt(taskId, 'complete');
     const verdict = this.verifier.markComplete(task);
@@ -1404,7 +1448,7 @@ export class TaskOrchestrator {
     }
 
     if (completesTask(landing)) this.store.markCompleted(taskId);
-    else this.settleUnlanded(task, landing);
+    else this.settleUnlanded(task, landing, admission);
     this.store.setTaskVerdict(taskId, verdict);
     this.store.setTaskOutputSummary(taskId, summarizeOutput(verdict.reason, ''));
     this.logAndArchive(task, verdict);
@@ -1412,7 +1456,7 @@ export class TaskOrchestrator {
       this.onHold.delete(taskId);
       this.notifications.info(`Task "${task.title}" marked complete.`);
       this.say(landing.messages);
-      await this.landResolved(taskId);
+      await this.landResolved(taskId, admission);
     }
 
     this.emit('onTaskChanged');
@@ -1451,7 +1495,7 @@ export class TaskOrchestrator {
     const task = this.store.get(taskId);
     if (!task || task.status === 'completed' || task.status === 'skipped' || this.completing.has(taskId)) return;
     if (task.status === 'in_progress') throw new TaskControlError(`Task "${task.title}" is running: stop it before skipping it.`);
-    await this.whileAdmitted(async (admittedAt) => {
+    await this.whileAdmitted(async (admission) => {
       const resumes = this.awaitsResume;
       this.cancelScheduledResume(taskId);
       const ended = this.endAttempt(taskId, 'skip');
@@ -1462,7 +1506,7 @@ export class TaskOrchestrator {
       this.emit('onTaskChanged');
       await this.runs.release(taskId, { keep: true }, ended?.integration);
       // A Stop while the worktree was kept leaves the run stopped: the skip stands, and nothing it released starts.
-      if (resumes && admittedAt === this.stopGeneration) await this.start(origin);
+      if (resumes && admission.current()) await this.start(origin);
       else await this.tick();
     });
   }
@@ -1483,7 +1527,7 @@ export class TaskOrchestrator {
   async retryTask(taskId: string, origin: RunOrigin = 'user'): Promise<void> {
     const task = this.store.get(taskId);
     if (!task) return;
-    await this.whileAdmitted(async (admittedAt) => {
+    await this.whileAdmitted(async (admission) => {
       const resumes = this.awaitsResume;
       this.retryCounts.set(taskId, (this.retryCounts.get(taskId) ?? 0) + 1);
       const ended = this.endAttempt(taskId, 'retry');
@@ -1501,7 +1545,7 @@ export class TaskOrchestrator {
         await this.runs.release(taskId, { keep: false }, ended?.integration);
       }
       // A Stop while the worktree went leaves the run stopped, the task back to not started.
-      if (admittedAt !== this.stopGeneration) return;
+      if (!admission.current()) return;
       // A retry resumes a run that waits on one, so what the task blocked starts once it passes (ADR-0034).
       if (resumes) await this.start(origin);
       else await this.tick();
@@ -1523,11 +1567,14 @@ export class TaskOrchestrator {
     const eligible = continuability(task);
     if (!eligible.ok) throw new TaskControlError(eligible.reason);
     if (pausedOnLimit(task)) return this.resumeNow(taskId, origin, text);
-    await this.whileAdmitted(async (admittedAt) => {
-      if (!(await this.openForAdmitted(taskId, origin, () => this.continueTask(taskId, message, origin), admittedAt))) return;
-      // The run may have started it while opening; the claim below must be the only one.
-      if (this.attempts.has(taskId) || !continuability(task).ok) return;
-      this.refuseClaim(task, admittedAt);
+    await this.whileAdmitted(async (admission) => {
+      if (!(await this.openForAdmitted(taskId, origin, () => this.continueTask(taskId, message, origin), admission))) return;
+      // The run may have started it while opening, or the task changed: the
+      // claim below must be the only one, and continues the task as it is now.
+      const now = this.store.get(taskId);
+      const resumable = now && continuability(now);
+      if (this.attempts.has(taskId) || !resumable?.ok) return;
+      this.refuseClaim(taskId, admission);
 
       this.retryCounts.set(taskId, (this.retryCounts.get(taskId) ?? 0) + 1);
       this.endAttempt(taskId, 'retry');
@@ -1535,7 +1582,7 @@ export class TaskOrchestrator {
       this.onHold.delete(taskId);
       // Claimed before anything is awaited, so a running scheduler never sees the
       // pending task and starts it afresh. Its prepare replaces the old worktree.
-      const started = this.claimed(task, admittedAt, { message: text, resumeSessionId: eligible.sessionId });
+      const started = this.claimed(taskId, admission, { message: text, resumeSessionId: resumable.sessionId });
       const resumed = this.awaitsResume ? this.start(origin) : Promise.resolve();
       // Both are awaited even if one fails: the claimed attempt's start must not
       // be left unhandled because restarting the run threw.
@@ -1686,7 +1733,7 @@ export class TaskOrchestrator {
     if (!eligible.ok) throw new TaskControlError(eligible.reason);
     // Refused before the runner's wait is disarmed, so a refusal leaves every
     // resume at the reset as it was.
-    this.refuseClaim(task, this.stopGeneration);
+    this.refuseClaim(taskId, this.admittedNow());
     const runner = this.store.resolveTaskRunner(task);
     this.limitWaits.disarm(runner);
     try {
@@ -1715,23 +1762,23 @@ export class TaskOrchestrator {
   private async resumeTask(taskId: string, now?: ResumeNow): Promise<void> {
     const origin = now?.origin ?? 'limit-reset';
     const asked = now?.taskId === taskId;
-    await this.whileAdmitted(async (admittedAt) => {
+    await this.whileAdmitted(async (admission) => {
       const opened = await this.openFor(taskId, origin, () => this.resumeTask(taskId, now));
       // One asked for now answers its caller as stopped; any other was stopped with its run, which said so.
-      if (asked && admittedAt !== this.stopGeneration) throw new TaskControlError(STOPPED_BEFORE_START);
+      if (asked && !admission.current()) throw new TaskControlError(STOPPED_BEFORE_START);
       if (!opened) return;
       const task = this.store.get(taskId);
       // One asked for now resumes without a resume time; any other cancelled meanwhile stays put.
       if (!task || !(asked ? pausedOnLimit(task) : waitsForReset(task)) || this.attempts.has(taskId)) return;
-      if (asked) this.refuseClaim(task, admittedAt);
-      else if (!this.mayResume(task, admittedAt, now !== undefined)) return;
+      if (asked) this.refuseClaim(taskId, admission);
+      else if (!this.mayResume(task, admission, now !== undefined)) return;
       const resumeSessionId = task.runnerSessionId;
       this.retryCounts.set(taskId, (this.retryCounts.get(taskId) ?? 0) + 1);
       this.store.retry(taskId);
       this.onHold.delete(taskId);
       const message = asked && now?.message ? `${LIMIT_RESET_MESSAGE}\n\n${now.message}` : LIMIT_RESET_MESSAGE;
       const continuation = resumeSessionId ? { message, resumeSessionId } : null;
-      const started = this.claimed(task, admittedAt, continuation, { autoResumed: true });
+      const started = this.claimed(taskId, admission, continuation, { autoResumed: true });
       const resumed = this.runState === 'held' && !this.store.allTasks.some(waitsForReset) ? this.start(origin) : Promise.resolve();
       // Both are awaited even if one fails: the claimed attempt's start must not
       // be left unhandled because restarting the run threw.
@@ -1746,10 +1793,10 @@ export class TaskOrchestrator {
    * time, which its caller arms again: the reset has not come. A Stop says
    * so itself.
    */
-  private mayResume(task: Readonly<Task>, admittedAt: number, swept: boolean): boolean {
-    const refused = this.claimRefusal(task, admittedAt);
+  private mayResume(task: Readonly<Task>, admission: Admitted, swept: boolean): boolean {
+    const refused = this.claimRefusal(task.id, admission);
     if (!refused) return true;
-    if (admittedAt !== this.stopGeneration) return false;
+    if (!admission.current()) return false;
     if (swept) {
       this.tell('info', `Task "${task.title}" did not resume now: ${refused} It still resumes on its own at its usage limit's reset.`);
     } else {
@@ -1777,19 +1824,36 @@ export class TaskOrchestrator {
     const task = this.store.get(taskId);
     if (!task || task.type !== 'ai') return;
     if (this.attempts.has(taskId)) return;
-    this.refuseOpsDuringMerge(task);
-    const queued = this.queuedBehindDependencies(task);
+    this.refuseOpsDuringMerge(taskId, FORCED_NOW);
+    const queued = this.queueBehindDependencies(task);
     if (queued) return queued;
-    await this.whileAdmitted(async (admittedAt) => {
-      if (!(await this.openForAdmitted(taskId, origin, async () => { await this.forceStartTask(taskId, origin); }, admittedAt))) return;
+    this.queuedStarts.delete(taskId);
+    await this.startForced(taskId, origin, FORCED_NOW);
+  }
+
+  /**
+   * A forced start, from its run opening to its claim. It is judged again once
+   * the run has opened, against the task as it stands then, which is what
+   * the claim reads and runs. A queued one that something holds back again
+   * meanwhile goes back in the queue.
+   */
+  private async startForced(taskId: string, origin: RunOrigin, forced: ForcedStart): Promise<void> {
+    // A dirty tree's replay of a start made now asks again, from its dependencies on.
+    const resume = forced.queued ? () => this.startForced(taskId, origin, forced) : async () => { await this.forceStartTask(taskId, origin); };
+    await this.whileAdmitted(async (admission) => {
+      if (!(await this.openForAdmitted(taskId, origin, resume, admission))) return;
       // The run may have started it while opening.
       if (this.attempts.has(taskId)) return;
       // A Merge all may have begun while it opened.
-      this.refuseOpsDuringMerge(task);
-      this.refuseClaim(task, admittedAt);
+      this.refuseOpsDuringMerge(taskId, forced);
+      if (forced.queued && this.holdsQueued(taskId, forced)) {
+        this.queuedStarts.set(taskId, { pastGate: forced.pastGate });
+        return;
+      }
+      this.refuseClaim(taskId, admission);
       this.onHold.delete(taskId);
-      this.notePastGate(task);
-      await this.claimed(task, admittedAt);
+      this.notePastGate(taskId);
+      await this.claimed(taskId, admission);
     });
   }
 
@@ -1798,12 +1862,14 @@ export class TaskOrchestrator {
    * run: started now, it would build on work that is not there, so it waits
    * for them in the run, off any hold, and says so. Dependencies are never
    * bypassed silently. A blocked task is forced past its failure as asked.
+   * What it goes past at the merge gate is the gate the user confirmed now.
    */
-  private queuedBehindDependencies(task: Readonly<Task>): string | null {
-    const waiting = this.underWayBefore(task);
+  private queueBehindDependencies(task: Readonly<Task>): string | null {
+    const waits = this.startWaits(task, FORCED_NOW);
+    const waiting = (waitOf(waits, 'dependencies') ?? waitOf(waits, 'queued'))?.waiting ?? [];
     if (waiting.length === 0) return null;
     this.onHold.delete(task.id);
-    if (!this.isScheduling || isBlocked(task, this.store)) this.queuedStarts.add(task.id);
+    if (!this.isScheduling || this.getBlockedBy(task.id).length > 0) this.queuedStarts.set(task.id, { pastGate: this.getMergeGate(task.id) });
     const names = waiting.map((id) => `task "${this.store.get(id)?.title ?? id}"`);
     const listed = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
     const idle = this.isScheduling || waiting.some((id) => this.attempts.has(id)) ? '' : ' Nothing is running now: run the plan to start them.';
@@ -1814,52 +1880,56 @@ export class TaskOrchestrator {
   }
 
   /**
-   * A task's unmet dependencies, less the failed or blocked ones a force start
-   * goes past. A blocked one is gone past for its failure only: the work under
-   * way or yet to run that it waits on is still waited for, through it.
-   */
-  private underWayBefore(task: Readonly<Task>): string[] {
-    const blocked = blockingFailures(this.store.allTasks);
-    const waiting = new Set<string>();
-    const seen = new Set<string>();
-    const walk = (of: Readonly<Task>): void => {
-      for (const id of unmetDependencies(of, this.store, this.runs)) {
-        if (seen.has(id)) continue;
-        seen.add(id);
-        const dep = this.store.get(id);
-        if (dep?.status === 'failed') continue;
-        if (dep && blocked.has(id)) walk(dep);
-        else waiting.add(id);
-      }
-    };
-    walk(task);
-    return [...waiting];
-  }
-
-  /**
-   * Starts the queued force starts whose dependencies have now finished. One
-   * the scheduler now drives the run for, and nothing blocks, is left to it.
+   * Starts the queued force starts nothing holds back any more. One the
+   * scheduler now drives the run for, that nothing blocks and that was not
+   * confirmed past a gate, is left to it. One at a gate the user did not
+   * confirm — work that landed after they forced the start — waits for Merge
+   * all, or for another force start, and says so once.
    */
   private async startQueued(): Promise<void> {
-    for (const id of [...this.queuedStarts]) {
+    for (const [id, queued] of [...this.queuedStarts]) {
       const task = this.store.get(id);
       if (!task || this.attempts.has(id) || task.status === 'completed' || task.status === 'skipped') {
         this.queuedStarts.delete(id);
         continue;
       }
-      if (this.underWayBefore(task).length > 0) continue;
+      const waits = this.startWaits(task, { queued: true, pastGate: queued.pastGate });
+      if (waits.some((w) => QUEUED_WAITS.has(w.kind))) continue;
+      if (this.isScheduling && this.getBlockedBy(id).length === 0 && queued.pastGate.length === 0) {
+        this.queuedStarts.delete(id);
+        continue;
+      }
+      const gate = waitOf(waits, 'merge-gate');
+      if (gate) {
+        this.sayQueuedAtGate(task, queued, gate.unmerged);
+        continue;
+      }
       this.queuedStarts.delete(id);
-      if (this.isScheduling && !isBlocked(task, this.store)) continue;
       try {
-        await this.forceStartTask(id);
+        await this.startForced(id, 'user', { queued: true, pastGate: queued.pastGate });
       } catch (err) {
         this.tell('warn', `Task "${task.title}" did not start once its dependencies finished: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }
 
-  private refuseOpsDuringMerge(task: Readonly<Task>): void {
-    if (this.merging && mergeExcludes(this.nextAttemptKind(task.id))) {
+  /** A queued start the start rule holds back, at a gate it was not confirmed past or otherwise. */
+  private holdsQueued(taskId: string, forced: Extract<ForcedStart, { queued: true }>): boolean {
+    const task = this.store.get(taskId);
+    return !!task && this.startWaits(task, forced).some((w) => QUEUED_WAITS.has(w.kind) || w.kind === 'merge-gate');
+  }
+
+  private sayQueuedAtGate(task: Readonly<Task>, queued: QueuedStart, unmerged: readonly string[]): void {
+    const titles = unmerged.map((id) => `"${this.store.get(id)?.title ?? id}"`).join(', ');
+    const notice = `Task "${task.title}" waits for Merge all: the work of ${titles} is not merged into your branch yet. Merge all to start it, or force start it again to start it without that work.`;
+    if (queued.gateNotice === notice) return;
+    queued.gateNotice = notice;
+    this.tell('info', notice);
+  }
+
+  private refuseOpsDuringMerge(taskId: string, forced: ForcedStart): void {
+    const task = this.store.get(taskId);
+    if (task && waitOf(this.startWaits(task, forced), 'merging')) {
       throw new TaskControlError(`A Merge all is under way: ops task "${task.title}" can start once it has finished.`);
     }
   }
@@ -1869,11 +1939,13 @@ export class TaskOrchestrator {
    * first; the choice is kept on the task and said, because the work it acts
    * on is not in the user's branch.
    */
-  private notePastGate(task: Readonly<Task>): void {
-    const unmerged = mergeGate(task, this.store, this.runs);
-    if (unmerged.length === 0) return;
+  private notePastGate(taskId: string): void {
+    const task = this.store.get(taskId);
+    // Whatever its status: a failed ops task started again acts on the checkout as its first start did.
+    const unmerged = (task && waitOf(this.startWaits(task), 'merge-gate')?.unmerged) ?? [];
+    if (!task || unmerged.length === 0) return;
     const titles = unmerged.map((id) => `"${this.store.get(id)?.title ?? id}"`);
-    this.store.setForcedPastGate(task.id, titles);
+    this.store.setForcedPastGate(taskId, titles);
     this.tell('warn', `Task "${task.title}" was force-started before the work of ${titles.join(', ')} was merged into your branch.`);
   }
 
@@ -1887,15 +1959,15 @@ export class TaskOrchestrator {
     if (this.hasLiveWork) return;
     const task = this.store.get(taskId);
     if (!task || task.type !== 'ai') return;
-    this.refuseOpsDuringMerge(task);
-    await this.whileAdmitted(async (admittedAt) => {
-      if (!(await this.openForAdmitted(taskId, 'user', () => this.runTask(taskId), admittedAt))) return;
+    this.refuseOpsDuringMerge(taskId, FORCED_NOW);
+    await this.whileAdmitted(async (admission) => {
+      if (!(await this.openForAdmitted(taskId, 'user', () => this.runTask(taskId), admission))) return;
       if (this.attempts.has(taskId)) return;
-      this.refuseOpsDuringMerge(task);
-      this.refuseClaim(task, admittedAt);
+      this.refuseOpsDuringMerge(taskId, FORCED_NOW);
+      this.refuseClaim(taskId, admission);
       this.onHold.delete(taskId);
-      this.notePastGate(task);
-      await this.claimed(task, admittedAt);
+      this.notePastGate(taskId);
+      await this.claimed(taskId, admission);
     });
   }
 
@@ -1917,7 +1989,7 @@ export class TaskOrchestrator {
 
   async tick(): Promise<void> {
     // What this tick starts was admitted as it began: a Stop during one of its awaits withdraws it.
-    const admittedAt = this.stopGeneration;
+    const admission = this.admittedNow();
     this.recoverOrphans();
     // Every way a dependency finishes ticks — a verdict, Mark complete, a skip,
     // a failed spawn — so a queued force start waiting on it is started here.
@@ -1931,17 +2003,15 @@ export class TaskOrchestrator {
     let readiness = this.readiness();
     // Work merged by hand opens a gate as Merge all does; only git can tell.
     // A user task's gate counts too, though the scheduler never starts one.
-    const atGate = readiness.gated.length > 0 || this.store.allTasks.some((t) => t.type === 'user' && this.getMergeGate(t.id).length > 0);
-    if (atGate && (await this.runs.refreshInHead())) {
+    if (readiness.gated.length > 0 && (await this.runs.refreshInHead())) {
       this.autoMergeBlocked = false;
       readiness = this.readiness();
     }
     if (!this.isScheduling) return;
     if (this.mergesAutomatically() && !this.autoMergeBlocked && !this.merging
       && ![...this.attempts.values()].some((a) => mergeExcludes(a.kind))) {
-      // A skipped dependency holds nothing back once the work behind it is done, and that work still gates (see mergeGate).
-      const gate = this.store.allTasks.find((t) => this.getMergeGate(t.id).length > 0
-        && !this.onHold.has(t.id) && t.dependencies.every((id) => this.store.isCompleted(id) || (this.store.isSkipped(id) && dependencyMet(id, this.store, this.runs))));
+      // Only for a task the merge lets start, or lets the user do: nothing else holds it back.
+      const gate = readiness.gated[0];
       if (gate) {
         // Another landing must not repeatedly attempt a merge the user now
         // needs to resolve. A user merge or a new run releases this hold.
@@ -1963,16 +2033,12 @@ export class TaskOrchestrator {
       // between that and the claim.
       if (!this.isScheduling) return;
       if (!this.stillReady(id)) continue;
-      const kind = this.nextAttemptKind(id);
-      if (this.merging && mergeExcludes(kind)) continue;
-      if (decidesIsolation(kind) && !(await this.runs.decide(() => this.tick()))) continue;
+      if (decidesIsolation(this.nextAttemptKind(id)) && !(await this.runs.decide(() => this.tick()))) continue;
       if (!this.isScheduling) return;
       if (!this.stillReady(id)) continue;
-      const task = this.store.get(id);
-      if (!task) continue;
-      const claimed = this.claim(task, admittedAt);
+      const claimed = this.claim(id, admission);
       if ('refused' in claimed) {
-        if (admittedAt !== this.stopGeneration) return;
+        if (!admission.current()) return;
         continue;
       }
       await claimed.spawned;
@@ -2061,19 +2127,11 @@ export class TaskOrchestrator {
     this.tell('warn', `Run finished: ${counts}.${retry}`);
   }
 
-  /** Whether the scheduler may start `id` now: it passes every readiness gate and a slot is free. */
+  /** Whether the scheduler may start `id` now: nothing in the start rule holds it back, and a slot is free. */
   private stillReady(id: string): boolean {
-    if (this.startHolds > 0 || this.attempts.has(id) || this.attempts.size >= this.config.maxParallelSessions) return false;
-    const { ready } = selectReadyTasks({
-      store: this.store,
-      onHold: this.onHold,
-      approved: this.isApproved,
-      runs: this.runs,
-      active: 0,
-      maxParallel: Number.POSITIVE_INFINITY,
-      merging: this.merging,
-    });
-    return ready.some((t) => t.id === id);
+    const task = this.store.get(id);
+    if (!task || this.attempts.has(id) || this.attempts.size >= this.config.maxParallelSessions) return false;
+    return this.startWaits(task).length === 0;
   }
 
   /**
@@ -2092,14 +2150,17 @@ export class TaskOrchestrator {
 
   /**
    * Why a start may not take its claim now, or null when it may: a Stop came
-   * since it was admitted (ADR-0029), the task is outside the user's approval
-   * record (ADR-0035), or every slot is taken. Read in the same synchronous
-   * step as the claim it guards, so nothing can change in between.
+   * since it was admitted (ADR-0029), the task left the plan or is being
+   * marked complete, it is outside the user's approval record (ADR-0035), or
+   * every slot is taken. Read in the same synchronous step as the claim it
+   * guards, so nothing can change in between.
    */
-  private claimRefusal(task: Readonly<Task>, admittedAt: number): string | null {
-    if (admittedAt !== this.stopGeneration) return STOPPED_BEFORE_START;
-    if (!this.store.get(task.id)) return `Task "${task.title}" is no longer in the plan.`;
-    if (!this.isApproved(task.id)) return `Task "${task.title}" waits for the user's approval: they approve it by starting it, or by executing the plan.`;
+  private claimRefusal(taskId: string, admission: Admitted): string | null {
+    if (!admission.current()) return STOPPED_BEFORE_START;
+    const task = this.store.get(taskId);
+    if (!task) return `There is no task "${taskId}" in this plan any more.`;
+    if (this.completing.has(taskId)) return `Task "${task.title}" is being marked complete: its work is landing.`;
+    if (!this.isApproved(taskId)) return `Task "${task.title}" waits for the user's approval: they approve it by starting it, or by executing the plan.`;
     const live = this.attempts.size;
     if (live >= this.config.maxParallelSessions) {
       return `${live} ${live === 1 ? 'task is' : 'tasks are'} already running, the most this session runs at once. Wait for one to finish, or stop one first.`;
@@ -2108,14 +2169,14 @@ export class TaskOrchestrator {
   }
 
   /** An explicit start's refusal, before it changes anything: its caller's answer, as a {@link TaskControlError}. */
-  private refuseClaim(task: Readonly<Task>, admittedAt: number): void {
-    const refused = this.claimRefusal(task, admittedAt);
+  private refuseClaim(taskId: string, admission: Admitted): void {
+    const refused = this.claimRefusal(taskId, admission);
     if (refused) throw new TaskControlError(refused);
   }
 
   /** An explicit start's claim, once {@link refuseClaim} let it through: its spawn, or the refusal as a rejection. */
-  private claimed(task: Task, admittedAt: number, continuation: Continuation | null = null, opts: { autoResumed?: boolean } = {}): Promise<void> {
-    const claimed = this.claim(task, admittedAt, continuation, opts);
+  private claimed(taskId: string, admission: Admitted, continuation: Continuation | null = null, opts: { autoResumed?: boolean } = {}): Promise<void> {
+    const claimed = this.claim(taskId, admission, continuation, opts);
     return 'spawned' in claimed ? claimed.spawned : Promise.reject(new TaskControlError(claimed.refused));
   }
 
@@ -2124,12 +2185,16 @@ export class TaskOrchestrator {
    * start, a retry's, a continue, a resume, a repair. Checked and taken in one
    * synchronous step ({@link claimRefusal}), then marked claimed before
    * anything is awaited, so no other start can take the same task or slot.
-   * A task already claimed is not claimed again: there is nothing to start.
+   * The task is read here, as it stands: a start that awaited first — its run
+   * opening, the user's answer — runs what the plan holds now, not what it
+   * held when it was asked for. A task already claimed is not claimed again:
+   * there is nothing to start.
    */
-  private claim(task: Task, admittedAt: number, continuation: Continuation | null = null, opts: { autoResumed?: boolean } = {}): Claim {
-    if (this.attempts.has(task.id)) return { spawned: Promise.resolve() };
-    const refused = this.claimRefusal(task, admittedAt);
+  private claim(taskId: string, admission: Admitted, continuation: Continuation | null = null, opts: { autoResumed?: boolean } = {}): Claim {
+    if (this.attempts.has(taskId)) return { spawned: Promise.resolve() };
+    const refused = this.claimRefusal(taskId, admission);
     if (refused) return { refused };
+    const task = this.store.get(taskId)!;
     const attempt: TaskAttempt = {
       taskId: task.id,
       attempt: Math.max(this.spawnCounts.get(task.id) ?? 0, this.lastLoggedAttempt(task.id), ...task.attemptUsage?.map((u) => u.attempt) ?? []) + 1,
@@ -2144,6 +2209,7 @@ export class TaskOrchestrator {
       startedAt: new Date().toISOString(),
       decided: false,
       skills: [],
+      admission,
       autoResumed: opts.autoResumed === true,
       turnError: null,
       turnOutputFrom: 0,
@@ -2201,9 +2267,10 @@ export class TaskOrchestrator {
       if (checksTree(kind)) attempt.snapshot = await this.runs.snapshotWorkspace();
       if (this.attempts.get(task.id) !== attempt) {
         // Ended while its worktree was being made, so whatever ended it could
-        // not release it. A newer attempt's own prepare replaces it instead.
-        // A repair's worktree holds work that passed, so it is only handed back.
-        if (attempt.worktree && !this.attempts.has(task.id)) await this.runs.release(task.id, { keep: kind.kind === 'repair' });
+        // not release it. A newer attempt's own prepare replaces it instead,
+        // and a Mark complete lands what is in it. A repair's worktree holds
+        // work that passed, so it is only handed back.
+        if (attempt.worktree && !this.attempts.has(task.id) && !this.completing.has(task.id)) await this.runs.release(task.id, { keep: kind.kind === 'repair' });
         this.abandonSpawn(task, attempt);
         return false;
       }
@@ -2322,7 +2389,7 @@ export class TaskOrchestrator {
       }
       if (attempt.kind.kind === 'repair') {
         this.store.markAwaitingUser(task.id, 'conflict');
-        this.settleUnlanded(task, await this.landing.unrepaired(task, `could not start: ${err instanceof Error ? err.message : String(err)}`));
+        this.settleUnlanded(task, await this.landing.unrepaired(task, `could not start: ${err instanceof Error ? err.message : String(err)}`), attempt.admission);
         this.emit('onTaskSettled', { taskId: task.id });
         this.emit('onTaskChanged');
         await this.tick();
@@ -2393,10 +2460,12 @@ export class TaskOrchestrator {
    * A spawn whose attempt ended while it was in flight: kill what it produced
    * and take back the claim it made. Only the claim — whatever ended the
    * attempt may have decided the task since (mark complete, cancel, retry).
+   * A task Mark complete is landing stays in progress until that lands:
+   * back to not started, the scheduler would start it again under the landing.
    */
   private abandonSpawn(task: Task, attempt: TaskAttempt, session?: IRunnerSession): void {
     session?.kill();
-    if (this.attempts.has(task.id) || this.store.get(task.id)?.status !== 'in_progress') return;
+    if (this.attempts.has(task.id) || this.completing.has(task.id) || this.store.get(task.id)?.status !== 'in_progress') return;
     if (attempt.kind.kind === 'repair') this.store.markAwaitingUser(task.id, 'conflict');
     else this.store.markPending(task.id);
     this.emit('onTaskChanged');

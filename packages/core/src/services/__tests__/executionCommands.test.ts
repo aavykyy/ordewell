@@ -912,7 +912,7 @@ describe('the command seam\'s extension points', () => {
       tasks: () => tasks, planApproved: () => true, taskApproved: () => true, waitsForApproval: () => false, approve: vi.fn(), autonomous: () => true, autorun: () => false,
       scheduling: () => false, startsHeld: () => false, hasLiveWork: () => true, startsPending: () => false, admitStart: admission,
       running: () => true, maxParallel: () => 3, runBlocked: () => false,
-      unmetDependencies: () => [], mergeGate: () => [], blockedBy: () => [], waitingRequests: () => [],
+      startWaits: () => [], waitingRequests: () => [],
       runPlan: vi.fn(), joinRun: vi.fn(async () => ''), startTask: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), retryTask: vi.fn(), skipTask: vi.fn(), continueTask: vi.fn(), resumeNow: vi.fn(),
       messageTask: vi.fn(), denyRequest: vi.fn(), mergeAll: vi.fn(), record: vi.fn(), guardTripped: vi.fn(), heldEdit: () => false, editedTasks: () => tasks, heldHandle: () => undefined, deferUntilLanded: vi.fn(), queuedNotRun: vi.fn(),
     };

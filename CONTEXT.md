@@ -956,14 +956,18 @@ task's current one, so a cancel, retry, mark complete, stop or plan load in that
 window is never overwritten by a stale verdict. A verdict whose settling throws
 fails its attempt and says why; nothing it raises goes unhandled. Every start —
 the scheduler's, a run or force start, a retry's, a continue, a resume, a
-repair — takes its claim at one point (`TaskOrchestrator.claim`), which checks
+repair — takes its claim at one point (`TaskOrchestrator.claim`), by task id
+and the *Start admission* it was asked under. It reads the task there, so a
+start that awaited first runs the task as the plan holds it then, and checks
 in the same synchronous step that the task is in the user's approval record,
-that no Stop came since the start was admitted (see *Start admission*), and
-that a slot is free, and marks the attempt claimed before anything is awaited.
-The scheduler also judges each task again right before claiming it — every
-readiness gate — because a start it awaited, a user control or a concurrent
-tick may have changed it, so it never starts held, finished or newly blocked
-work, nor more than `maxParallelSessions` at once.
+that no Stop came since the start was admitted, that Mark complete is not
+landing it and that a slot is free, and marks the attempt claimed before
+anything is awaited. The attempt keeps that admission, and the repair its
+conflict is owed claims under it. The scheduler also judges each task by the
+*Start rule* again right before claiming it, because a start it awaited, a
+user control or a concurrent tick may have changed it, so it never starts
+held, finished or newly blocked work, nor more than `maxParallelSessions` at
+once.
 The working directory is decided in one place (`attemptKind.attemptCwd`): the
 workspace root for an attempt that acts from the checkout, else what the
 `IsolationRunController` gives it — the workspace root when the run does not
@@ -997,6 +1001,23 @@ merge gate keeps it waiting; neither is a block.
 *Avoid:* "halted run" — a failure no longer halts the run; "waiting" for it — a
 task waiting on its dependencies starts on its own once they complete, a blocked
 one only after a retry or a skip.
+
+**Start rule** (`startWaits`, `StartWait`, `services/readiness.ts`) — whether a
+task can start now and, if not, every reason it waits, in a fixed order whose
+first is *the* reason (ADR-0034): it has started; Mark complete is landing it;
+it has no prompt; it is outside the user's approval record; it is on hold; it
+is blocked; its dependencies are not met, or, queued by a force start, are
+still under way; a Merge all is under way and it is an ops task; its runner
+waits on a usage limit's reset; a planner turn holds new starts; it is at its
+*Merge gate*; it is a user task. One pure function over the plan, the holds
+and the open isolated run, which the scheduler, the explicit starts, the
+automatic merge at a gate, the command seam's refusals, the task row's merge
+gate and the planner's view of the plan (`waits:` on each task's line) read. A
+force start reads it as forced: past a hold, a failure, a usage limit and the
+gate the user confirmed. The claim is separate: it checks only what can change
+at the last moment.
+*Avoid:* "readiness gate" for one of its reasons, and "gate" for any reason but
+the *Merge gate*.
 
 **Skipped task** (`status: 'skipped'`, `TaskOrchestrator.skipTask`, the
 `skip_task` command) — a task ended by *Skip*: a terminal state with no
@@ -1279,13 +1300,17 @@ waits until their work is merged into the user's branch (ADR-0020): until the
 checked-out HEAD contains the integration tip each of them landed at. The
 user's Merge all opens it, as does a merge made by hand; Force start passes it
 after a confirmation naming what is not merged, and the task keeps that choice
-(`forcedPastGate`). A run with nothing else to do is *paused* at its gates.
+(`forcedPastGate`). A force start queued behind its dependencies passes only
+the gate the user confirmed when forcing it; work that lands after stops it at
+the gate until Merge all or another force start. A run with nothing else to do
+is *paused* at its gates.
 There is no gate without isolation.
 *Avoid:* "checkpoint" — that is a task asking the user to approve its work.
 
 **Auto-merge at gates** — the **Run setting** *Merge automatically* (key `mergeAtGatesAutomatically`),
 off by default, set with `/automerge` and independent of the Supervisor level
-(ADR-0029, ADR-0030). When a task reaches a merge gate, Ordewell runs Merge all
+(ADR-0029, ADR-0030). When a task waits on nothing but its merge gate — the
+*Start rule* gives no other reason — Ordewell runs Merge all
 itself through the same queue and preflight. A conflict or a dirty overlap
 aborts with the user's tree untouched, and the gate waits for the user with a
 notice. The orchestrator's `onAutoMerge` observer event carries the gated task
@@ -2219,7 +2244,8 @@ takes every input after the opening — a user's message (`source: 'user'`), and
 the supervisor's wake-up batches when they come (`'supervisor'`). Turns run
 one at a time; inputs that arrive during one are taken together by the next,
 in order. While a turn runs the scheduler starts nothing new
-(`TaskOrchestrator.holdStarts`); the hold goes when the turn ends however it
+(`TaskOrchestrator.holdStarts`), nor does a force start queued behind its
+dependencies; the hold goes when the turn ends however it
 ends — landed, stopped, failed, abandoned with its plan — or when it has held
 for `START_HOLD_TIMEOUT_MS`, after which the turn goes on without holding the
 run. Its task edits apply as it settles, to tasks not yet started; an edit
@@ -2271,7 +2297,10 @@ live work, so `stop_run` is never refused, or answered "stopped", while one
 could still start. The user's Stop bumps the *Stop generation*, and a start
 admitted under an older one never takes its claim: it is kept as refused and
 said as "Not done: stopped before it could start", and a card still asking is
-cleared. A restart of an idle scheduler by Execute does not bump it.
+cleared. A restart of an idle scheduler by Execute does not bump it. A claim
+is taken under the admission its start was asked under, and its attempt keeps
+it: a conflict repair follows on from that attempt under the same one, so a
+Stop since withdraws it too.
 *Avoid:* "pending start" for a task — a task waiting on its dependencies is
 not admitted until someone or the scheduler asks to start it.
 
@@ -2286,8 +2315,9 @@ approves every waiting task and starts each as its dependencies finish,
 without restarting the run), or by executing the plan. A force start approves
 and never skips an unfinished dependency: the task is queued (`queuedStarts`),
 and the answer names what it waits for; it does go past a failed dependency, one
-blocked behind that failure, or a merge gate, but still waits for what such a
-blocked one waits on. A Stop withdraws a queued start, with or without a run. With *Autorun* on, a task the planner adds in the user's turn is
+blocked behind that failure, or the merge gate the user confirmed, but still
+waits for what such a blocked one waits on, and for a planner turn's start
+hold. A Stop withdraws a queued start, with or without a run. With *Autorun* on, a task the planner adds in the user's turn is
 approved as its edit lands and never waits. Derived from the plan and its
 record, never stored as a status.
 *Avoid:* "awaiting approval" — that is a *Runner approval* a running task

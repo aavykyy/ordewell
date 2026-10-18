@@ -99,13 +99,18 @@ that depends on.**
   wait on.
 - **Force start passes a gate after one confirmation** that names the
   dependencies whose work is not merged yet. The choice is logged on the task;
-  the gate stands for every other task.
+  the gate stands for every other task. A force start that waits for
+  dependencies still under way passes only the gate the user confirmed when
+  they forced it: work that lands after it was forced stops it at the gate,
+  which says so, and it starts on the Merge all that opens the gate, or on
+  another force start, which asks again.
 - **Merge at gates automatically is an opt-in global user setting**
   (`/automerge`; [ADR-0029](../supervision/0029-the-supervisor.md),
   [ADR-0030](../supervision/0030-global-run-settings.md)), off by default, with
   or without a supervisor. A change applies at once to the session it is typed
-  in, and to other sessions from their next run. At a gate Ordewell runs Merge
-  all itself through the same queue; a
+  in, and to other sessions from their next run. When a task waits on nothing
+  but its gate — approved, off hold, its dependencies met — Ordewell runs
+  Merge all itself through the same queue; a
   conflict or dirty overlap aborts with the tree untouched and the gate waits
   for the user, with a notice and an `onAutoMerge` observer event. A failed
   automatic merge waits for a Merge all that goes through — the user's, or an
@@ -228,3 +233,4 @@ it.
 - 2026-10-12 — the automatic merge setting also merges at the end of a run, by the same route as a gate merge ([ADR-0029](../supervision/0029-the-supervisor.md), "Merge at gates automatically").
 - 2026-10-16 — the gate covers the task's whole dependency closure, not just its direct dependencies: a dependency on a verification task implies the work it verified, and a verification lands nothing of its own, so a direct-only gate let an ops task act on the user's checkout before that work was merged. A skipped task adds nothing of its own, but the work behind it still counts.
 - 2026-10-18 — a merge that leaves the run going no longer clears a surface's isolation marks: the Session announces the run's closing as `run_closed` ([ADR-0013](0013-worktree-isolation.md)).
+- 2026-10-18 — a force start queued behind its dependencies passes only the gate the user confirmed when forcing it, and an automatic merge at a gate is made only for a task nothing else holds back: one the user has not approved no longer triggers it ([ADR-0034](../supervision/0034-a-failed-task-blocks-only-its-dependents.md)'s one start rule).

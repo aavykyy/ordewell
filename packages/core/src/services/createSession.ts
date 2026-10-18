@@ -59,7 +59,6 @@ import { PlanEditError } from './PlanEditError';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { ExecutionCommands, mergeStopped, type CommandOutcome, type ExecutionCommand, type ExecutionHost } from './ExecutionCommands';
 import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
-import { mergeGate, unmetDependencies } from './readiness';
 import { TurnEffects } from './TurnEffects';
 
 /**
@@ -579,6 +578,8 @@ export class Session {
       autorun: () => this.userRunSettings().autorun,
       takeRunUpdates: () => this.untoldRunUpdates.splice(0),
       tasks: () => this.store.planTasks,
+      // Before the user approves the plan, nothing of it starts: every task would say so.
+      startWaits: (task) => (this.plan?.approved ? this.orchestrator.startWaits(task) : []),
       liveOutput: (taskId, opts) => this.orchestrator.getLiveOutput(taskId, opts),
       isExecuting: () => this.isExecuting,
       mutate: (op, notify) => this.mutatePlan(op, notify),
@@ -610,8 +611,9 @@ export class Session {
       },
       interrupt: () => { this.conversation.stopTurn('force_send'); },
       holdStarts: () => this.orchestrator.holdStarts(),
+      // A start queued behind its dependencies waited for the turn too, with or without a run.
       resumeStarts: async () => {
-        if (this.orchestrator.isRunning) await this.withSave(() => this.orchestrator.tick(), { background: true });
+        if (this.orchestrator.isRunning || this.orchestrator.startsPending) await this.withSave(() => this.orchestrator.tick(), { background: true });
       },
       run: async (prompt, { taken, signal }) => {
         // A turn that failed before persist leaves its runs unflushed; drop them so
@@ -750,14 +752,7 @@ export class Session {
       running: (taskId) => this.orchestrator.getAttempt(taskId) !== undefined,
       maxParallel: () => this.config.maxParallelSessions,
       runBlocked: () => this.runs.blocked,
-      // Takes the task, not its id: one added by a held edit is not in the store yet.
-      unmetDependencies: (task) => unmetDependencies(task, this.store, this.runs),
-      // Judged whatever the task's status: a retry of a failed ops task acts on the checkout as a first start does.
-      mergeGate: (taskId) => {
-        const task = this.store.get(taskId);
-        return task ? mergeGate(task, this.store, this.runs) : [];
-      },
-      blockedBy: (taskId) => this.orchestrator.getBlockedBy(taskId),
+      startWaits: (task) => this.orchestrator.startWaits(task),
       waitingRequests: (taskId) => this.approvals.outstanding()
         .filter(({ request }) => isRunnerApproval(request) && request.taskId === taskId)
         .map(({ id, request }) => ({ id, subject: request.subject })),

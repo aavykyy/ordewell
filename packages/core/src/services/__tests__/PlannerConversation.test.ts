@@ -48,6 +48,7 @@ function fakeHost(ai: IAiService, plan: LegacyPlanState | null = dialoguePlan())
     autorun: () => false,
     takeRunUpdates: () => [],
     tasks: () => [],
+    startWaits: () => [],
     liveOutput: () => null,
     isExecuting: () => false,
     mutate: (op, notify) => {
