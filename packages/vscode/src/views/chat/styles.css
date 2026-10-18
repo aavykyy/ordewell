@@ -2994,51 +2994,36 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 /* ---- Execution Status Badges ---- */
-.task-status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  margin-right: 2px;
-}
-
-.task-status-dot.status-completed {
-  background: var(--green);
-}
-
-.task-status-dot.status-running {
-  background: var(--accent);
-  animation: pulse-dot 1.2s ease-in-out infinite;
-}
-
-.task-status-dot.status-failed {
-  background: var(--red);
-}
-
-.task-status-dot.status-blocked {
-  background: var(--orange);
-}
-
-.task-status-dot.status-pending {
-  background: var(--text-muted);
-}
-
-.task-status-dot.status-skipped {
-  background: transparent;
-  border: 1px solid var(--text-muted);
-}
-
-.task-status-dot.status-stalled {
-  background: var(--purple);
+/* The slot takes the row's free space with a zero basis, so a long reason
+   stays on the line with the dependency badges instead of wrapping below them. */
+.task-status-slot {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
 }
 
 .task-status-badge {
   font-size: 10px;
   padding: 1px 6px;
   border-radius: 3px;
-  margin-left: 6px;
   font-weight: 500;
-  flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-status-badge.toggles {
+  cursor: pointer;
+}
+
+.task-status-badge.expanded {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.task-status-badge.toggles:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, var(--accent));
 }
 
 .task-status-badge.status-completed {
@@ -3128,9 +3113,17 @@ body.vscode-high-contrast-light .task-card.expanded {
   border-color: var(--purple);
 }
 
+/* The same pair of reds as the Failed badge, so the ring and the badge read as one state. */
+.task-check.failed {
+  border-color: color-mix(in srgb, var(--red) 80%, var(--text-primary));
+  background: var(--red-subtle);
+}
+
+/* Hollowed to the editor background: unlike an empty to-do ring, nothing is coming. */
 .task-check.skipped {
-  border-style: dashed;
+  border-style: dotted;
   border-color: var(--text-muted);
+  background: var(--bg-primary);
 }
 
 .task-check.clickable {

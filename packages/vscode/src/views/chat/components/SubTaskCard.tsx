@@ -4,7 +4,7 @@ import ModelSelector from './ModelSelector';
 import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
 import { pausedOnLimit, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction, AssignmentScope } from '@ordewell/core';
-import { AssignmentFlag, TaskActions, TaskCheck, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
+import { AssignmentFlag, StatusBadge, TaskActions, TaskCheck, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
 import type { RunnerMode, RunnerOption } from './TaskCard';
 import { checkLabel } from '../checkLabel';
 
@@ -210,7 +210,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
         )}
 
         {(isExecuting || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked' || row.status === 'skipped') && (
-          <span className={`task-status-badge ${status.cls}`}>{status.label}</span>
+          <StatusBadge status={status} />
         )}
 
         <AssignmentFlag row={row} />

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 import { taskCommand, useRunnerCommands, useTaskCommands } from './RunnerCommands';
 import SubTaskCard from './SubTaskCard';
 import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
@@ -110,8 +110,39 @@ export function statusBadge(row: Pick<TaskRowView, 'status' | 'awaiting' | 'bloc
   return { ...badge, label: row.awaiting ?? (row.blockedBy ? blockedByLabel(row.blockedBy) : badge.label) };
 }
 
-const CHECK_STATE: Record<TaskStatusKind, 'done' | 'running' | 'stalled' | 'skipped' | 'todo'> = {
-  done: 'done', running: 'running', quiet: 'stalled', todo: 'todo', awaiting: 'todo', blocked: 'todo', failed: 'todo', skipped: 'skipped',
+/** A skip or block reason can run to a sentence: it is cut to the row it
+ *  shares with the dependency badges, and a click unfolds the whole of it. */
+export function StatusBadge({ status }: { status: { label: string; cls: string } }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [clipped, setClipped] = useState(false);
+  const [open, setOpen] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => setClipped(el.scrollWidth > el.clientWidth));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  // Once open it no longer overflows, so it stays a toggle until folded back.
+  const toggles = clipped || open;
+  const toggle = (): void => setOpen(o => !o);
+  return (
+    <span className="task-status-slot">
+      <span ref={ref} className={`task-status-badge ${status.cls}${open ? ' expanded' : ''}${toggles ? ' toggles' : ''}`}
+        title={toggles && !open ? status.label : undefined}
+        {...(toggles && {
+          role: 'button', tabIndex: 0, 'aria-expanded': open,
+          onClick: (e: React.MouseEvent) => { e.stopPropagation(); toggle(); },
+          onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); toggle(); } },
+        })}>
+        {status.label}
+      </span>
+    </span>
+  );
+}
+
+const CHECK_STATE: Record<TaskStatusKind, 'done' | 'running' | 'stalled' | 'failed' | 'skipped' | 'todo'> = {
+  done: 'done', running: 'running', quiet: 'stalled', todo: 'todo', awaiting: 'todo', blocked: 'todo', failed: 'failed', skipped: 'skipped',
 };
 
 /** Minimal to-do / done indicator: empty ring → pulsing ring → filled check.
@@ -129,7 +160,9 @@ export function TaskCheck({ row, taskId, onMarkComplete, onMarkIncomplete }: { r
         ? 'Stalled: no output recently'
         : state === 'skipped'
           ? (clickable ? 'Skipped: click to mark complete, which lands its kept work' : 'Skipped: nothing of it landed')
-          : (clickable ? 'Click to mark executed' : 'To do');
+          : state === 'failed'
+            ? (clickable ? 'Failed: click to mark executed' : 'Failed')
+            : (clickable ? 'Click to mark executed' : 'To do');
   return (
     <span
       className={`task-check ${state} ${clickable ? 'clickable' : ''}`}
@@ -717,16 +750,6 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
           </button>
         )}
 
-        {/* The awaiting reason is a badge in its own right (ADR-0018, W1): a
-            task held for the user must read as such whether or not a run is
-            still being drawn as active — and so must one a failure blocks. */}
-        {(isExecuting || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked' || row.status === 'skipped') && (
-          <>
-            <span className={`task-status-dot ${status.cls}`} title={status.label} />
-            <span className={`task-status-badge ${status.cls}`}>{status.label}</span>
-          </>
-        )}
-
         {canEditDeps ? (
           <button className="task-dep-badge dep-in task-dep-badge-btn"
             title={task.dependencies.length > 0
@@ -744,6 +767,13 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
           <span className="task-dep-badge dep-out" title={`Required by ${dependentCount} task${dependentCount > 1 ? 's' : ''}`}>
             &#8595;{dependentCount}
           </span>
+        )}
+
+        {/* The awaiting reason is a badge in its own right (ADR-0018, W1): a
+            task held for the user must read as such whether or not a run is
+            still being drawn as active — and so must one a failure blocks. */}
+        {(isExecuting || row.status === 'failed' || row.status === 'awaiting' || row.status === 'blocked' || row.status === 'skipped') && (
+          <StatusBadge status={status} />
         )}
         {planActions}
 

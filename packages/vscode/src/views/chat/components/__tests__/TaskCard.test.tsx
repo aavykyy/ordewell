@@ -256,7 +256,7 @@ describe('TaskCard — Stalled state', () => {
 
     expect(screen.getByText('Stalled')).toBeTruthy();
     expect(screen.queryByText('Running')).toBeNull();
-    expect(document.querySelector('.task-status-dot.status-stalled')).toBeTruthy();
+    expect(document.querySelector('.task-status-badge.status-stalled')).toBeTruthy();
   });
 
   it('renders the normal Running state when idleSince is absent', () => {

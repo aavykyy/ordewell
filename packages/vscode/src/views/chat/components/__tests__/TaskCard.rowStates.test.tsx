@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import TaskCard from '../TaskCard';
 import SubTaskCard from '../SubTaskCard';
@@ -48,7 +48,7 @@ describe('a task card, pinned before its rules move to core', () => {
     ['completed', 'Executed'],
     ['in_progress', 'Running'],
     ['pending', 'To do'],
-    ['failed', 'To do'],
+    ['failed', 'Failed'],
   ] as const)('the check on a %s task is titled "%s"', (status, title) => {
     render(<TaskCard task={makeTask({ status })} models={[]} />);
     expect(document.querySelector('.task-check')?.getAttribute('title')).toBe(title);
@@ -69,6 +69,27 @@ describe('a task card, pinned before its rules move to core', () => {
     unmount();
     render(<TaskCard task={makeTask({ status: 'skipped' })} models={[]} />);
     expect(badge()?.textContent).toBe('Skipped');
+  });
+
+  it('unfolds a skip reason cut to its row on a click, and folds it back', () => {
+    const observed = vi.fn();
+    vi.stubGlobal('ResizeObserver', class { constructor(private cb: () => void) {} observe() { observed(); this.cb(); } disconnect() {} });
+    vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(400);
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(200);
+    try {
+      render(<TaskCard task={makeTask({ status: 'skipped', skipReason: 'a read-only review that did its job' })} models={[]} />);
+      expect(observed).toHaveBeenCalled();
+      const b = screen.getByRole('button', { name: 'Skipped: a read-only review that did its job' });
+      expect(b.getAttribute('aria-expanded')).toBe('false');
+      fireEvent.click(b);
+      expect(b.getAttribute('aria-expanded')).toBe('true');
+      expect(b.className).toContain('expanded');
+      fireEvent.click(b);
+      expect(b.getAttribute('aria-expanded')).toBe('false');
+    } finally {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
   });
 
   it('offers Skip on a failed task, and Mark Complete on a skipped one', () => {
