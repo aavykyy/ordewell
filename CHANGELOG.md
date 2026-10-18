@@ -21,6 +21,86 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   same empty ring as a task still to do.
 - **The collapsed Run settings show their summary on the Run line,**
   right-aligned, instead of on a line of their own.
+- **Every task control you press is kept in the timeline, and every surface
+  sends it through the same checked path.** Resume now, Force start, Mark
+  complete and Mark not done, Interrupt, a checkpoint answer, approving the
+  plan's review, Merge all, and sending, forcing or taking back a task message
+  are recorded with a line worded for you, and a refusal is the same line in
+  the terminal UI, VS Code and `ordewell`: the `ordewell` commands
+  `mark-complete`, `uncomplete`, `skip`, `run-task`, `force-start`, `retry`,
+  `cancel`, `continue`, `checkpoint`, `stop`, `run` and `approve` print it, a
+  task may be named by id, `#order`, title or a unique id prefix, and the CLI
+  reads no plan first. VS Code sends each control the same way, a Deny with a
+  note included, and shows its reason when it is refused; the chat no longer
+  writes its own "cancelled", "skipped", "marked complete" or "Execution
+  stopped." beside the timeline's line. Stop with nothing running records
+  nothing, Mark complete of a task already complete and Mark not done of one
+  that is not say why, and a message already delivered or a resume nobody
+  scheduled shows the refusal
+  ([ADR-0029](docs/adr/supervision/0029-the-supervisor.md)).
+- **Whether a task can start is one decision, and the planner is shown its
+  answer.** The scheduler, a force start, Retry, Continue, the command
+  refusals, a task's merge gate and the planner's view of the plan read the
+  same rule, so the reasons cannot drift between paths. Force start and
+  Continue run the task as it is when they start, so an edit made while the
+  run was opening is no longer lost, and a force start waits for a dependency
+  an edit added meanwhile. A queued force start waits for the planner's turn
+  to end. A force start that waited for its dependencies no longer starts past
+  a merge gate nobody confirmed: it waits for Merge all, or another force
+  start, and says so, and a failed ops task reports its merge gate so starting
+  it asks first; a gated Run you confirm from the CLI starts as a force start,
+  since a plain Run cannot pass a gate. Merging automatically at a gate is not
+  run for an ops task you have not approved. Marking a task complete while it
+  starts no longer puts it back to not started or starts it again, a task with
+  no prompt cannot be started, and hand-added tasks follow the plan's rules
+  ([ADR-0034](docs/adr/supervision/0034-a-failed-task-blocks-only-its-dependents.md)).
+- **Dependencies work across the whole plan, subtasks included, and the
+  planner and your edits follow the same rules.** A dependency must exist and
+  cannot name the task itself, an ancestor or a descendant, or form a cycle;
+  depending on a later task is allowed when it is valid. Dependency pickers
+  keep the choices outside the list they show, removing a parent detaches
+  dependencies on its descendants and releases their runners, and a whole-plan
+  rewrite no longer loses a task's skip reason. `ordewell task-deps` lists
+  every dependency a task has, the daemon resolves a unique id prefix for
+  checkpoints and merge gates as the CLI and terminal UI do, and the terminal
+  UI's task commands and its approval and checkpoint notices name tasks by
+  their dotted reference.
+- **A task moved to another runner gets a model that runner can run.** A move
+  by the planner or by hand, and the parts of a split or merge, land on a
+  model the new runner offers; a submitted task paired with another runner's
+  model gets its runner's model; the planner is told about every swap, and one
+  you did not ask for, such as an allowlist replacement, shows a notice. When
+  a model changes, its thinking effort moves to the nearest level the new
+  model offers, everywhere: the TUI and VS Code pickers, `ordewell
+  task-model` and allowlist swaps (it used to be dropped). Direct edits can no
+  longer set a task's status, verdict or subtasks, an edit that would put an
+  ops task on a read-only mode is refused, a manual task turned into an AI
+  task gets a proper mode and model, a runner change sent with other fields
+  lands as one save, and editing or adding a task with a runner that does not
+  exist is refused
+  ([ADR-0003](docs/adr/routing/0003-per-runner-model-allowlist.md),
+  [ADR-0001](docs/adr/routing/0001-autonomous-mode-resolution.md)).
+- **A planner turn that fails, hits the planner's usage limit or is abandoned
+  leaves nothing behind.** Its message, the skills the planner loads and its
+  research subagents are written only by the save that settles the turn, even
+  when the session was saved while it ran (a task finishing, a settings
+  change, VS Code's Execute). A failed
+  turn's skill bodies are no longer replayed to the planner later, loading
+  another session while the planner researches no longer drops the old
+  session's research into the new one, and pressing Execute during a reply no
+  longer rolls back the planner's token totals
+  ([ADR-0029](docs/adr/supervision/0029-the-supervisor.md)).
+- **A surface drops the run's marks and cards only when the Session says the
+  run is closed.** A Merge all during a run, or an automatic merge at a gate,
+  no longer wipes the Branch and Worktree detail or the resolve-conflict key
+  in the terminal UI or VS Code; they clear when a Merge all left nothing to
+  hand over, or on a discard. Reloading or refreshing a session no longer
+  rebuilds isolation marks from the saved run record, a refused Run task or
+  Force start in VS Code no longer clears the handoff card, the command
+  palette's Force start clears it as the plan pane's does, a refused Execute
+  keeps the previous run's cards, and clearing a failed start drops the dead
+  turn gate
+  ([ADR-0013](docs/adr/isolation/0013-worktree-isolation.md)).
 - **Contributors:** `npm run ci` runs every step of CI's workflow locally, in
   its order, and refuses to start when the workflow has a step it does not
   know. The VS Code integration test now runs on macOS (`@vscode/test-electron`
@@ -28,6 +108,88 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   waits up to ten seconds and a test may run for thirty in every package, so
   tests on real git and file-system events no longer fail on a loaded machine.
   CLAUDE.md imports AGENTS.md instead of keeping a shorter copy of it.
+- **Contributors:** the plan now has one start rule
+  (`readiness.startWaits`), one plan-tree module for placement and
+  dependencies (`PlanTree`) and one resolver for task assignments
+  (`TaskAssignment`) where copies had drifted apart; the command seam carries
+  a command for every user control and the Session's per-verb control methods
+  are gone, so a surface, a daemon route and a CLI command all take
+  `Session.execute`. The three runner adapters share one reply-run reader
+  (`ReplyRuns`), the planner conversation holds a turn's writes until it lands
+  (`PlannerBriefing`, `SubagentRuns`), a task log's saved and live halves are
+  joined in core (`followTaskLog`) by the read's stream position, and the
+  stdio adapters keep one process-lifetime exit callback per runner.
+
+### Fixed
+
+- **The planner's words stay between the tool calls where it said them.**
+  "I'll read README.md now" shows above the Read row it announced and the
+  answer below it, live and after a reload, for Claude Code, Codex, OpenCode
+  and API planners, and a sentence written just before a tool call no longer
+  shows a second time below the tool's row. A corrective retry no longer
+  erases what the planner said before its tool calls, a stopped or force-sent
+  turn keeps it, and sessions saved before this update reload exactly as
+  before ([ADR-0017](docs/adr/surfaces/0017-shared-conversation-view.md)).
+- **A streamed task message no longer appears twice.** Codex tasks no longer
+  show a message both where it streamed and in the summary handed to dependent
+  tasks, and OpenCode text recovered at the end of a turn lands where it
+  streamed, above later tool rows, and no longer shows twice on OpenCode 2.x.
+  A task's log keeps a message in one piece when a model-switch note or a
+  runner warning lands while it streams, and two messages streaming at once no
+  longer swap or merge. A task's plain-text output has one blank line between
+  messages ([ADR-0018](docs/adr/runners/0018-structured-runner-transport.md),
+  [ADR-0009](docs/adr/planner/0009-coding-agents-as-planners.md)).
+- **Opening a task log or switching attempts during a run keeps live text,
+  tool rows, approval cards and turn endings.** Both the terminal UI and VS
+  Code follow a new attempt and ignore late output from an older one. A
+  completed task stops showing Working, Interrupt and Send now, and a runner's
+  exit settles any unfinished command rows
+  ([ADR-0018](docs/adr/runners/0018-structured-runner-transport.md),
+  [ADR-0006](docs/adr/surfaces/0006-tui-pure-core-thin-driver.md)).
+- **Force-sending a task message no longer overtakes one the runner already
+  holds, or puts its reply under the wrong turn.** Consecutive Claude Code
+  turns remain separate even when their output arrives in one chunk, and late
+  subagent activity no longer leaves a task stuck with queued messages. A
+  failed OpenCode permission answer keeps its card open, shows a warning and
+  can be answered again, and OpenCode reconnects a lost event stream once,
+  then reports a failed turn if the stream is lost again
+  ([ADR-0023](docs/adr/runners/0023-messages-reach-a-running-task.md),
+  [ADR-0026](docs/adr/planner-envelope/0026-one-envelope-for-every-planner.md)).
+- **A usage-limit pause no longer ends the run.** When the last task at work
+  pauses on its runner's limit, the run stays open and goes on at the reset
+  instead of being handed over, and with Merge automatically on it is no
+  longer merged before the paused work resumes. A pause with no reset time no
+  longer freezes other runners, a task started on its own keeps its run open
+  for the reset, and a force start, Retry or Skip releases only the wait it
+  ends. Marking the paused task complete, cancelling its resume or removing it
+  from the plan lets the run go on, and a Resume now that cannot start is
+  refused and changes nothing, so the task and the others paused on that
+  runner keep their automatic resumes. A Retry in a finished plan no longer
+  leaves the plan shown as completed
+  ([ADR-0018](docs/adr/runners/0018-structured-runner-transport.md)).
+- **Changing a setting while the planner is answering no longer loses the
+  reply or your message.** Picking a planner, model or effort in VS Code,
+  saving an API key, and `/planner` in the terminal UI wait until the turn
+  ends. Stop in VS Code keeps the planner's live context, starting a new goal
+  or loading another session while a supervisor turn hung no longer breaks the
+  new session's first turn, and a hung turn the supervisor takes back no
+  longer cuts the retry's live tool rows, draws late text or clears the
+  retry's pending edit. A failed or stopped turn leaves the autorun,
+  runners-changed and queued-start notes to be told again, and a reloaded
+  planner chat keeps parallel tool calls where they were announced
+  ([ADR-0009](docs/adr/planner/0009-coding-agents-as-planners.md)).
+- **TUI: a plan refresh no longer ends a planner turn.** Editing, adding or
+  removing a task, changing run settings or cancelling a resend while the
+  planner works no longer sends your queued prompt early, and Esc still stops
+  the turn. Loading another session mid-turn no longer sends the previous
+  session's queued prompts to the loaded one, a repeated fixed reply ("Tasks
+  updated" twice) is shown, a turn's replies appear in order, and after
+  `/fork` `ctrl-s` sends normally instead of force-sending.
+- **A plan file saved with an old `blocked` task status loads that task as
+  pending.** A task could previously stay blocked with nothing to release it.
+  Whether a task is blocked is now decided only by whether a task it depends
+  on failed, and plans saved by current versions behave as before
+  ([ADR-0034](docs/adr/supervision/0034-a-failed-task-blocks-only-its-dependents.md)).
 
 ## [0.10.5] - 2026-10-17
 
