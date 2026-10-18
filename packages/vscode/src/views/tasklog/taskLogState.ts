@@ -10,13 +10,14 @@ export interface TaskLogState {
 
 /**
  * What a task log's header says the task is doing (ADR-0018, V1): a runner
- * request waiting for an answer first — the turn is live but stopped on it
- * (A1) — then the live turn, then the saved reason it waits, then how it
- * settled.
+ * settled status first, then a runner request waiting for an answer (A1),
+ * then the live turn and the saved reason it waits.
  */
 export function taskLogState(
   status: Pick<TaskLogStatus, 'working' | 'awaitingReason' | 'awaitingApproval' | 'planStatus' | 'lastTurnEnd'>,
 ): TaskLogState {
+  if (status.planStatus === 'completed') return { kind: 'done', label: 'Done' };
+  if (status.planStatus === 'failed') return { kind: 'failed', label: 'Failed' };
   const approvals = approvalLabel(status.awaitingApproval);
   if (approvals) return { kind: 'approval', label: approvals };
   if (status.working) return { kind: 'working', label: 'Working' };
@@ -26,8 +27,6 @@ export function taskLogState(
     case 'conflict': return { kind: 'waiting', label: 'Waiting on a merge conflict' };
     case 'usage-limit': return { kind: 'waiting', label: 'Paused on a usage limit' };
   }
-  if (status.planStatus === 'completed') return { kind: 'done', label: 'Done' };
-  if (status.planStatus === 'failed') return { kind: 'failed', label: 'Failed' };
   if (status.lastTurnEnd === 'failed') return { kind: 'failed', label: 'Turn failed' };
   if (status.lastTurnEnd === 'interrupted') return { kind: 'idle', label: 'Interrupted' };
   return { kind: 'idle', label: 'Idle' };

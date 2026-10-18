@@ -53,7 +53,7 @@ type ConversationMessage = Partial<StreamStamp> & Extract<
 >;
 
 /** What the lifecycle switch below is left to handle once conversation is routed out. */
-type LifecycleMessage = Exclude<SessionMessage, ConversationMessage> | SessionNotice;
+type LifecycleMessage = (Exclude<SessionMessage, ConversationMessage> | SessionNotice) & Partial<StreamStamp>;
 
 const CONVERSATION_TYPES: ReadonlySet<string> = new Set<ConversationMessage['type']>([
   'planner_message', 'planner_turn_started', 'planner_turn_ended', 'planner_text_delta', 'planner_thinking_delta',
@@ -526,7 +526,7 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
     // its only reader, and the reducer drops it unless that view is open on
     // this task. The run's watcher itself does nothing with it.
     case 'task_log':
-      dispatch({ type: 'taskLog', taskId: String(event.taskId), attempt: event.attempt, events: event.events, sessionId });
+      dispatch({ type: 'taskLog', taskId: String(event.taskId), attempt: event.attempt, events: event.events, position: stampOf(event) ?? undefined, sessionId });
       return;
 
     case 'task_updated':

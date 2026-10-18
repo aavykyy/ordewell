@@ -40,7 +40,6 @@ import type {
   SettingsUpdateResponse,
   StopResponse,
   TaskLogAttemptsResponse,
-  TaskLogEvent,
   TaskLogResponse,
   TaskMessageResponse,
   TaskStartResponse,
@@ -533,17 +532,17 @@ export class ApiClient {
   }
 
   /** The attempts of a structured task that have a saved log, oldest first. */
-  async getTaskLogAttempts(sessionId: string, taskId: string, workspace?: string): Promise<number[]> {
+  async getTaskLogAttempts(sessionId: string, taskId: string, workspace?: string): Promise<TaskLogAttemptsResponse> {
     const qs = workspace ? `?workspace=${encodeURIComponent(workspace)}` : '';
     const res = await this.call<TaskLogAttemptsResponse>('GET', `/api/sessions/${sessionId}/tasks/${encodeURIComponent(taskId)}/log${qs}`, 'Could not read the task log');
-    return res.attempts;
+    return res;
   }
 
   /** One attempt's saved log, for `replayTaskLog`. */
-  async getTaskLog(sessionId: string, taskId: string, attempt: number, workspace?: string): Promise<TaskLogEvent[]> {
+  async getTaskLog(sessionId: string, taskId: string, attempt: number, workspace?: string): Promise<TaskLogResponse> {
     const qs = workspace ? `?workspace=${encodeURIComponent(workspace)}` : '';
     const res = await this.call<TaskLogResponse>('GET', `/api/sessions/${sessionId}/tasks/${encodeURIComponent(taskId)}/log/${attempt}${qs}`, 'Could not read the task log');
-    return res.events;
+    return res;
   }
 
 

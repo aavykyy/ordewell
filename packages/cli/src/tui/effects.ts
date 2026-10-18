@@ -320,20 +320,20 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     // The saved log is read off disk (ADR-0018, P1) so the view opens with the
     // task's history; the live `task_log` stream then catches it up in place.
     case 'openTaskLog': {
-      const attempts = await api.getTaskLogAttempts(effect.sessionId, effect.taskId, workspace);
+      const { attempts, position } = await api.getTaskLogAttempts(effect.sessionId, effect.taskId, workspace);
       if (attempts.length === 0) {
-        dispatch({ type: 'taskLogLoaded', taskId: effect.taskId, attempts: [], attempt: 0, events: [], sessionId: effect.sessionId });
+        dispatch({ type: 'taskLogLoaded', taskId: effect.taskId, attempts: [], attempt: 0, events: [], position, sessionId: effect.sessionId });
         return;
       }
       const attempt = attempts[attempts.length - 1];
-      const events = await api.getTaskLog(effect.sessionId, effect.taskId, attempt, workspace);
-      dispatch({ type: 'taskLogLoaded', taskId: effect.taskId, attempts, attempt, events, sessionId: effect.sessionId });
+      const log = await api.getTaskLog(effect.sessionId, effect.taskId, attempt, workspace);
+      dispatch({ type: 'taskLogLoaded', taskId: effect.taskId, attempts, ...log, sessionId: effect.sessionId });
       return;
     }
 
     case 'loadTaskAttempt': {
-      const events = await api.getTaskLog(effect.sessionId, effect.taskId, effect.attempt, workspace);
-      dispatch({ type: 'taskLogLoaded', taskId: effect.taskId, attempt: effect.attempt, events, sessionId: effect.sessionId });
+      const log = await api.getTaskLog(effect.sessionId, effect.taskId, effect.attempt, workspace);
+      dispatch({ type: 'taskLogLoaded', taskId: effect.taskId, ...log, sessionId: effect.sessionId });
       return;
     }
 

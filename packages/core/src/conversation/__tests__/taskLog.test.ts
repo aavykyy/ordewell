@@ -7,6 +7,16 @@ import { unkeyed } from './helpers';
 const start: TaskLogEvent = { type: 'turn_start', message: 'Do the task' };
 
 describe('reduceTaskLog', () => {
+  it('stops an unfinished runner command on exit without inventing a turn result', () => {
+    const view = replayTaskLog([
+      { type: 'command', name: 'compact' },
+      { type: 'runner_ended' },
+    ]);
+    expect(view.working).toBe(false);
+    expect(view.lastTurnEnd).toBeUndefined();
+    expect(view.blocks).toMatchObject([{ type: 'command', status: 'stopped' }]);
+  });
+
   it('opens a turn with the message it delivers', () => {
     const view = replayTaskLog([start]);
     expect(view.working).toBe(true);

@@ -23,8 +23,8 @@ function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {})
       skipTask: vi.fn().mockResolvedValue({ ok: true }),
       markTaskComplete: vi.fn().mockResolvedValue({ ok: true }),
       markTaskIncomplete: vi.fn().mockResolvedValue({ ok: true }),
-      getTaskLogAttempts: vi.fn().mockResolvedValue([]),
-      getTaskLog: vi.fn().mockResolvedValue([]),
+      getTaskLogAttempts: vi.fn().mockResolvedValue({ attempts: [] }),
+      getTaskLog: vi.fn().mockResolvedValue({ attempt: 1, events: [] }),
       sendTaskMessage: vi.fn().mockResolvedValue({ id: 'm1' }),
       removeQueuedTaskMessage: vi.fn().mockResolvedValue({ removed: true }),
       forceSendTaskMessage: vi.fn().mockResolvedValue({ id: 'm2' }),
@@ -2027,20 +2027,20 @@ describe('worktree isolation', () => {
 
 describe('a structured task\'s log, messages and interrupt', () => {
   it('opens with the latest saved attempt and reports it to the reducer', async () => {
-    const getTaskLogAttempts = vi.fn().mockResolvedValue([1, 2]);
-    const getTaskLog = vi.fn().mockResolvedValue([{ type: 'text', text: 'hi' }]);
+    const getTaskLogAttempts = vi.fn().mockResolvedValue({ attempts: [1, 2] });
+    const getTaskLog = vi.fn().mockResolvedValue({ attempt: 2, events: [{ type: 'text', text: 'hi' }], position: { stream: 'd', seq: 5 } });
     const h = harness({ getTaskLogAttempts, getTaskLog } as Partial<OrdewellApi>);
 
     await runEffect({ type: 'openTaskLog', sessionId: 's1', taskId: 't1' }, h.deps);
 
     expect(getTaskLog).toHaveBeenCalledWith('s1', 't1', 2, '/ws');
     expect(h.actions).toEqual([
-      { type: 'taskLogLoaded', taskId: 't1', attempts: [1, 2], attempt: 2, events: [{ type: 'text', text: 'hi' }], sessionId: 's1' },
+      { type: 'taskLogLoaded', taskId: 't1', attempts: [1, 2], attempt: 2, events: [{ type: 'text', text: 'hi' }], position: { stream: 'd', seq: 5 }, sessionId: 's1' },
     ]);
   });
 
   it('answers an attempt switch with just that attempt', async () => {
-    const getTaskLog = vi.fn().mockResolvedValue([{ type: 'turn_start', message: 'x' }]);
+    const getTaskLog = vi.fn().mockResolvedValue({ attempt: 1, events: [{ type: 'turn_start', message: 'x' }] });
     const h = harness({ getTaskLog } as Partial<OrdewellApi>);
 
     await runEffect({ type: 'loadTaskAttempt', sessionId: 's1', taskId: 't1', attempt: 1 }, h.deps);

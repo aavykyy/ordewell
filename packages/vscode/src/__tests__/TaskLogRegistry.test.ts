@@ -146,6 +146,16 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     expect(last).toMatchObject({ type: 'init', status: { attempt: 2 } });
   });
 
+  it('ignores a late batch from an older attempt while following the newest', () => {
+    const h = harness({ 1: attemptOne, 2: attemptTwo });
+    h.registry.open('t1');
+    __panels[0].__receive({ type: 'ready' });
+    __panels[0].webview.postMessage.mockClear();
+    h.registry.receive({ type: 'task_log', taskId: 't1', attempt: 1, events: [{ type: 'text', text: 'late old reply' }] });
+    expect(posted(__panels[0])).toEqual([]);
+    expect(h.session.taskLog).not.toHaveBeenCalledWith('t1', 1);
+  });
+
   it('switches to an earlier attempt on request', () => {
     const h = harness({ 1: attemptOne, 2: attemptTwo });
     h.registry.open('t1');

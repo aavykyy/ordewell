@@ -1,5 +1,5 @@
 import { taskPlacement } from '@ordewell/core/plan-utils';
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type RunnerCommand, type RunTask, type RunView, type SupervisorLevel, type TaskLogEvent, type TaskLogView, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type RunnerCommand, type RunTask, type RunView, type SupervisorLevel, type TaskLogFollow, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 import type { SaveSettingsEffect } from './reducers/settings';
 import type { StepperState } from './reducers/stepper';
@@ -331,23 +331,8 @@ export interface Selection {
  * log on open and then from the live `task_log` stream, so a reload and a live
  * run draw identically.
  */
-export interface TaskLogState {
+export interface TaskLogState extends TaskLogFollow {
   taskId: string;
-  view: TaskLogView;
-  /** Attempts with a saved log, oldest first, as last read. */
-  attempts: number[];
-  /** The attempt `view` holds; 0 until the saved log or a live event names one. */
-  attempt: number;
-  /**
-   * Live batches that arrived while the saved log was still loading. A batch
-   * for the loaded attempt is a copy the file already holds and is dropped; a
-   * batch for a different attempt (a retry that raced the read) is folded.
-   */
-  pending: { attempt: number; events: TaskLogEvent[] }[];
-  /** The saved log has been read (or found absent). Until then live batches wait in `pending`. */
-  loaded: boolean;
-  /** Keep following the newest attempt as the task retries; a manual switch turns this off. */
-  followLatest: boolean;
   /**
    * Which pending message ctrl-r and ctrl-s (with the composer empty) act on,
    * as picked with ctrl-n/ctrl-p; null until one is picked, which defaults to

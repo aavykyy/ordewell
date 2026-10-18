@@ -73,7 +73,7 @@ function eventText(event: TaskLogEvent): string {
     case 'approval_requested': return `${event.approvalId} ${event.tool}${event.toolCallId ? ` (call ${event.toolCallId})` : ''}${event.decided ? ` (decided ${event.decided})` : ''}${event.allowForTask ? ' (task grant offered)' : ''} ${event.args}`;
     case 'approval_decided': return `${event.approvalId} ${event.decision}${event.note ? `: ${event.note}` : ''}`;
     case 'approval_withdrawn': return event.approvalId;
-    case 'runner_ended': return 'with calls still open';
+    case 'runner_ended': return 'runner exited';
   }
 }
 

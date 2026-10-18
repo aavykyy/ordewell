@@ -271,8 +271,8 @@ describe('ApiClient — endpoints the TUI drives', () => {
     servers.push(server);
 
     const client = new ApiClient(server.port);
-    expect(await client.getTaskLogAttempts('s1', 't 1', '/ws')).toEqual([1, 2]);
-    expect(await client.getTaskLog('s1', 't 1', 2, '/ws')).toEqual([{ type: 'text', text: 'hi' }]);
+    expect(await client.getTaskLogAttempts('s1', 't 1', '/ws')).toEqual({ attempts: [1, 2] });
+    expect(await client.getTaskLog('s1', 't 1', 2, '/ws')).toEqual({ attempt: 2, events: [{ type: 'text', text: 'hi' }] });
     expect(urls).toEqual(['/api/sessions/s1/tasks/t%201/log?workspace=%2Fws', '/api/sessions/s1/tasks/t%201/log/2?workspace=%2Fws']);
   });
 
