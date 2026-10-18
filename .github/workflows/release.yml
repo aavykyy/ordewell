@@ -56,6 +56,7 @@ jobs:
           publish @ordewell/cli packages/cli
           node .github/workflows/wait-for-npm.mjs @ordewell/cli "$v"
           publish ordewell packages/cli-alias
+          node .github/workflows/wait-for-npm.mjs ordewell "$v"
 
   vscode-publish:
     runs-on: ubuntu-latest

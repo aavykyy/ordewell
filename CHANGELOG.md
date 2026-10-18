@@ -8,6 +8,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Release completion waits for the top-level `ordewell` package to resolve
+  on npm**, as it already does for the packages it depends on.
+
 ## [0.10.8] - 2026-10-18
 
 ### Fixed
