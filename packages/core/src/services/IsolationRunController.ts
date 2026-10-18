@@ -59,6 +59,8 @@ export interface IsolationRunListener {
   blocked(repos: string[]): void;
   /** An isolated run closed and handed its integration branches over. */
   handoff(handoff: IsolationHandoff): void;
+  /** The run was cleared up and forgotten: nothing was handed over, or it was discarded. */
+  closed(): void;
   /** Already said through the notifications; also for a surface that shows no toasts. */
   notice(level: IsolationNoticeLevel, message: string): void;
 }
@@ -634,6 +636,7 @@ export class IsolationRunController {
     this.run = null;
     this.resolvers = {};
     this.listener.changed();
+    this.listener.closed();
   }
 
   private async assess(root: string): Promise<RunDecision> {

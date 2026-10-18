@@ -80,6 +80,10 @@ function running({ awaitingReason: _reason, resumeAt: _resumeAt, skipReason: _sk
   return { ...task, status: 'in_progress' };
 }
 
+function withoutIsolation(tasks: readonly RunTask[]): RunTask[] {
+  return tasks.map(({ isolation: _isolation, ...task }) => ({ ...task, subtasks: withoutIsolation(task.subtasks) }));
+}
+
 function handoffOf({ type: _type, ...handoff }: Extract<RunInput, { type: 'isolation_handoff' }>): IsolationHandoff {
   return handoff;
 }
@@ -124,6 +128,8 @@ export function reduceRun(view: RunView, input: RunInput): RunView {
       return input.result.outcome === 'merged'
         ? { ...view, mergeResult: input.result, handoff: null, runMerge: null }
         : { ...view, mergeResult: input.result };
+    case 'run_closed':
+      return { ...view, tasks: withoutIsolation(view.tasks), handoff: null, runMerge: null, mergeResult: null };
     // A checkpoint's whole question and every status `review_needed` implies
     // arrive in the status update that follows; `review_needed`'s own list is
     // flat, so as a plan it would lift subtasks to the top level.

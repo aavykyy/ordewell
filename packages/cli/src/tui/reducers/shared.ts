@@ -1,4 +1,4 @@
-import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, HeldEdit, PlanUsage, PlannerUsage, ResearchLogEntry, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, TaskLogEvent } from '@ordewell/core';
+import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, HeldEdit, PlanUsage, PlannerUsage, ResearchLogEntry, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, TaskLogEvent } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
   HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
@@ -40,8 +40,7 @@ export type Effect =
   | { type: 'cancelPlannerResend'; sessionId: string }
   | { type: 'isolationReviewDiff'; sessionId: string }
   /** `branch` is only for the words the result is reported in; `repaired` likewise (ADR-0015). */
-  /** `midRun`: the run and its record stay for later landings (ADR-0020). */
-  | { type: 'isolationMerge'; sessionId: string; branch: string; group?: boolean; repaired?: LandedTaskView[]; midRun?: boolean }
+  | { type: 'isolationMerge'; sessionId: string; branch: string; group?: boolean; repaired?: LandedTaskView[] }
   | { type: 'isolationDiscard'; sessionId: string; branch: string }
   | { type: 'isolationCleanup'; sessionId: string; branch: string }
   /** Replays a run a dirty tree parked; `stash` puts tracked changes aside first, `shared` runs in the working tree this once. */
@@ -127,7 +126,8 @@ export type Action =
   | { type: 'isolationHandoff'; handoff: HandoffView; sessionId?: string }
   | { type: 'handoffDiff'; diff: string; sessionId?: string }
   /** The run and its record are gone; nothing is left to hand off or to mark. */
-  | { type: 'runCleared'; sessionId?: string }
+  | { type: 'isolationMerged'; result: IsolationMergeResult; sessionId?: string }
+  | { type: 'runClosed'; sessionId?: string }
   /** The scheduled expiry of an armed stop; the arm simply lapses. */
   | { type: 'stopDisarmed'; arm: number }
   | { type: 'executionComplete'; summary?: { total: number; completed: number; failed: number; blocked?: number; skipped?: number }; stopped?: boolean; sessionId?: string }

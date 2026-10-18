@@ -190,11 +190,19 @@ export interface RunnersResponse {
 export interface SessionResponse {
   meta: SessionMeta;
   plan: SurfacePlanState;
+  /**
+   * The live session's run as `Session.runSnapshot()` holds it, isolation
+   * marks and handoff included. Absent for a session nobody holds: the saved
+   * file has no run to speak of, and a surface does not rebuild one from it.
+   */
+  run?: RunView;
 }
 
 export interface AdoptSessionResponse extends OkResponse {
   plan: SurfacePlan;
   goal: string;
+  /** The adopted session's run, as {@link SessionResponse.run}. */
+  run?: RunView;
 }
 
 export interface TaskLogAttemptsResponse {

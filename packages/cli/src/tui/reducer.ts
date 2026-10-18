@@ -13,7 +13,7 @@ import { handlePlanKey } from './reducers/planPane';
 import { announceApprovals, announceCheckpoint, answerCheckpoint, continueTaskStep, handleTaskViewKey, openTaskView, taskLogAbandoned, taskLogArrived, taskLogLoaded } from './reducers/taskView';
 import { newSession, pickRewindTarget, runCommand } from './reducers/commands';
 import { disarmStop, drainQueue, forceSendPlanner, plannerEscape, restoreForced } from './reducers/turnQueue';
-import { applyIsolationRecord, applySettings, clearRunIsolation, foldRun, followSession, planSnapshot, withRun } from './reducers/incoming';
+import { applySettings, foldRun, followSession, planSnapshot, withRun } from './reducers/incoming';
 import { refillPicker, reseedRunnerChoice } from './reducers/pickers';
 import { refreshStepper } from './reducers/stepper';
 import {
@@ -193,12 +193,17 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step(showDiff(state, action.diff));
     }
 
-    case 'runCleared': {
+    // What Merge all did, folded the way the Session says it: a merge that
+    // leaves the run going keeps the marks (ADR-0020), and only `run_closed`
+    // takes them (below).
+    case 'isolationMerged': {
       if (stale(state, action.sessionId)) return step(state);
-      // Whatever overlay the discard or merge was confirmed from is already closed; one
-      // opened since (a picker, help) has nothing to do with the run and stays.
-      const overlay = state.overlay?.kind === 'handoff' ? null : state.overlay;
-      return step({ ...withRun(state, clearRunIsolation(state.run)), overlay });
+      return step(withoutHandoffOverlay(foldRun(state, { type: 'isolation_merge', result: action.result })));
+    }
+
+    case 'runClosed': {
+      if (stale(state, action.sessionId)) return step(state);
+      return step(withoutHandoffOverlay(foldRun(state, { type: 'run_closed' })));
     }
 
     case 'executionComplete': {
@@ -379,13 +384,21 @@ function reduceAction(state: TuiState, action: Action): Step {
   }
 }
 
+/**
+ * The overlay a merge or discard was confirmed from is closed with the handoff
+ * it showed; one opened since (a picker, help) has nothing to do with the run.
+ */
+function withoutHandoffOverlay(state: TuiState): TuiState {
+  return state.handoff || state.overlay?.kind !== 'handoff' ? state : { ...state, overlay: null };
+}
+
 /** A plan onto the pane, whether or not it ends a planner turn. */
 function showPlan(state: TuiState, plan: unknown): TuiState {
   // The plan folds into the run view, which keeps every status-only field
   // the stream last reported — a checkpoint, continuable, a merge gate. A
   // saved plan's isolation record is read on top, since a load had no live
   // stream to tell it; a planner reply carries none and leaves it as it was.
-  const folded = applyIsolationRecord(foldRun(state, planSnapshot(plan)), plan);
+  const folded = foldRun(state, planSnapshot(plan));
   const { tasks } = folded;
   // A plan refresh can supersede the task whose prompt is open; the editor
   // survives only while its task does. The cursor is clamped against the

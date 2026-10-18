@@ -13,7 +13,7 @@ function planned(id: string, order: number): SerializedTask {
 }
 
 /** A host-like deps where the run view is real, so the fold is the thing under test. */
-function deps(opts: { isolated?: boolean } = {}): { d: PlanManagerDeps; posted: RunView[]; run: RunViewHost } {
+function deps(): { d: PlanManagerDeps; posted: RunView[]; run: RunViewHost } {
   const posted: RunView[] = [];
   const run = new RunViewHost((m) => { if (m.type === 'runView') posted.push(m.view); });
   run.adopt(reduceRun(EMPTY_RUN, {
@@ -22,10 +22,9 @@ function deps(opts: { isolated?: boolean } = {}): { d: PlanManagerDeps; posted: 
     goal: 'g',
     runners: ['claude-code'],
   }));
-  const isolation = opts.isolated ? { tasks: {}, handoff: { repos: [], landed: [] } } : null;
   const plan = { status: 'draft', tasks: [] } as unknown as LegacyPlanState;
   const d = {
-    session: { isExecuting: true, status: 'running', isolationView: () => isolation },
+    session: { isExecuting: true, status: 'running' },
     chatProvider: { run, conversation: { receive: vi.fn() }, showPlan: vi.fn(), clearIsolationHandoff: () => run.clearIsolation() },
     getCurrentPlan: () => plan,
     isGeneratingPlan: () => false,
@@ -122,7 +121,7 @@ describe('worktree isolation folds onto the run view (ADR-0013)', () => {
   });
 
   it('keeps the per-task marks after a Merge all mid-run, whose run goes on', () => {
-    const { d, posted } = deps({ isolated: true });
+    const { d, posted } = deps();
     handleSessionMessage({ type: 'status_update', tasks: [{ id: 't1', status: 'in_progress', verdict: null, isolation: { state: 'conflict', branch: 'b', worktree: 'w', repos: [] } }] }, d);
 
     handleSessionMessage({ type: 'isolation_merge', result: { outcome: 'merged' } }, d);
@@ -131,12 +130,23 @@ describe('worktree isolation folds onto the run view (ADR-0013)', () => {
     expect(last(posted).tasks.find((t) => t.id === 't1')!.isolation?.state).toBe('conflict');
   });
 
-  it('drops the handoff card and the marks once Merge all merged everything', () => {
+  it('keeps the handoff card of a run the merge left open, for the Session to close in its own words', () => {
     const { d, posted } = deps();
     handleSessionMessage({ type: 'isolation_handoff', repos: [], landed: [] }, d);
     handleSessionMessage({ type: 'status_update', tasks: [{ id: 't1', status: 'in_progress', verdict: null, isolation: { state: 'conflict', branch: 'b', worktree: 'w', repos: [] } }] }, d);
 
     handleSessionMessage({ type: 'isolation_merge', result: { outcome: 'merged' } }, d);
+
+    expect(last(posted).tasks.find((t) => t.id === 't1')!.isolation).toBeDefined();
+  });
+
+  it('drops the handoff card and the marks once the Session says the run is closed', () => {
+    const { d, posted } = deps();
+    handleSessionMessage({ type: 'isolation_handoff', repos: [], landed: [] }, d);
+    handleSessionMessage({ type: 'status_update', tasks: [{ id: 't1', status: 'in_progress', verdict: null, isolation: { state: 'conflict', branch: 'b', worktree: 'w', repos: [] } }] }, d);
+
+    handleSessionMessage({ type: 'isolation_merge', result: { outcome: 'merged' } }, d);
+    handleSessionMessage({ type: 'run_closed' }, d);
 
     expect(last(posted).mergeResult).toBeNull();
     expect(last(posted).handoff).toBeNull();
@@ -149,6 +159,7 @@ describe('worktree isolation folds onto the run view (ADR-0013)', () => {
     handleSessionMessage({ type: 'isolation_handoff', repos: [{ path: '.', integrationBranch: 'i', baseRef: 'abc', landed }], landed, deferredTo: 'supervisor' }, d);
 
     handleSessionMessage({ type: 'isolation_merge', result: { outcome: 'merged' } }, d);
+    handleSessionMessage({ type: 'run_closed' }, d);
 
     expect(last(posted).handoff).toBeNull();
   });

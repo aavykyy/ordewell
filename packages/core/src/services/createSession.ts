@@ -471,6 +471,8 @@ export class Session {
    * supervisor has first.
    */
   private sentHandoff: IsolationHandoff | null = null;
+  /** The run was forgotten and no surface has been told yet; see {@link announceClosed}. */
+  private closedUnannounced = false;
   /** The edit the open planner turn holds, as last announced: a surface that joins mid-turn is shown it. */
   private sentHeld: HeldEdit | null = null;
   private readonly notifications: INotification;
@@ -539,7 +541,7 @@ export class Session {
     this.workspace = parts.workspace;
     this.fsAdapter = parts.fsAdapter;
     this.broadcast = (msg) => {
-      if (msg.type === 'isolation_handoff' || msg.type === 'isolation_merge') {
+      if (msg.type === 'isolation_handoff' || msg.type === 'isolation_merge' || msg.type === 'run_closed') {
         this.sentHandoff = reduceRun({ ...EMPTY_RUN, handoff: this.sentHandoff }, msg).handoff;
       }
       if (msg.type === 'plan_edit_held') this.sentHeld = msg.held;
@@ -1003,6 +1005,7 @@ export class Session {
         this.persist({ background: true });
         this.events.planGenerated(this.plan, this.goal);
         this.broadcast({ type: 'isolation_merge', result, trigger });
+        this.announceClosed();
         if (result.outcome !== 'merged') this.supervision.observe({ kind: 'auto_merge_stopped', ...(taskId === undefined ? {} : { taskId }), detail: mergeStopped(result) });
       },
       onTaskChanged: () => {
@@ -1038,8 +1041,10 @@ export class Session {
         this.persist({ background: true });
         relay.onIsolationChanged();
       },
+      onRunClosed: () => { this.closedUnannounced = true; },
       onIsolationHandoff: (handoff) => this.broadcast({ type: 'isolation_handoff', ...this.supervision.handoff(handoff) }),
       onExecutionComplete: () => {
+        this.announceClosed();
         relay.onExecutionComplete();
         this.persist({ background: true });
         this.supervision.runFinished();
@@ -1118,6 +1123,7 @@ export class Session {
     if (!keepGrants) this.approvalPolicy.reset();
     this.store.clearLog();
     this.sentHandoff = null;
+    this.closedUnannounced = false;
     this.sentHeld = null;
   }
 
@@ -1956,7 +1962,20 @@ export class Session {
     this.runs.requireRun();
     const result = await this.withSave(() => this.orchestrator.mergeRun());
     this.broadcast({ type: 'isolation_merge', result });
+    this.announceClosed();
     return result;
+  }
+
+  /**
+   * Say so when the isolated run is gone: a merge that left nothing to hand
+   * over clears it up (ADR-0013), and so does a discard. Surfaces fold this
+   * instead of reading the merge result, which cannot tell a merge that ended
+   * the run from one that only opened a gate (ADR-0020).
+   */
+  private announceClosed(): void {
+    if (!this.closedUnannounced) return;
+    this.closedUnannounced = false;
+    this.broadcast({ type: 'run_closed' });
   }
 
   /** Remove the run's worktrees and task branches; keep its integration branch to review or merge. */
@@ -1973,6 +1992,7 @@ export class Session {
   async discardRun(): Promise<void> {
     this.requireSettledRun();
     await this.withSave(() => this.runs.discard());
+    this.announceClosed();
   }
 
   private requireSettledRun(): void {

@@ -86,11 +86,6 @@ export function handoffArrived(state: TuiState, handoff: HandoffView): TuiState 
   return state.overlay ? told : { ...told, overlay: { kind: 'handoff', index: 0, diff: null } };
 }
 
-/** A saved plan's record has no deferral to report; the mark stands until the unmarked handoff of the same run replaces it. */
-export function withDeferral(fresh: HandoffView, known: HandoffView | null): HandoffView {
-  return known?.deferredTo && handoffBranch(known) === handoffBranch(fresh) ? { ...fresh, deferredTo: known.deferredTo } : fresh;
-}
-
 export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
   const { sessionId } = state;
   const handoff = currentHandoff(state);
@@ -164,7 +159,6 @@ export function confirmedHandoff(state: TuiState, kind: 'merge-run' | 'discard-r
       type: 'isolationMerge', sessionId, branch: handoffBranch(handoff),
       ...(isRepoGroup(handoff) ? { group: true } : {}),
       ...(repaired.length > 0 ? { repaired } : {}),
-      ...(midRun(state) ? { midRun: true } : {}),
     }
     : { type: 'isolationDiscard', sessionId, branch: handoffBranch(handoff) };
   return { state: closed, effects: [effect] };
