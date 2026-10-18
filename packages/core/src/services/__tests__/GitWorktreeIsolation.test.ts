@@ -2251,8 +2251,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       expect(run.landing).toBeUndefined();
     });
 
-    // Room for the wait below inside each test: vitest's own limit is five seconds.
-    describe('after a crash mid-landing', { timeout: 20_000 }, () => {
+    describe('after a crash mid-landing', () => {
       // Three repositories; task 1 has landed a change to web.txt, and task 2
       // changes all three, colliding in web — merged last, in path order.
       function trio(): string {
@@ -2281,9 +2280,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
         const tips = Object.fromEntries(['api', 'db', 'web'].map((repo) => [repo, tip(dir, repo, started)]));
         let saved = '';
         void iso.integrate(all, started, () => { saved = JSON.stringify(started); });
-        // Real git across three repositories before the crash point: waitFor's
-        // one-second default ran out on a loaded CI runner under coverage.
-        await vi.waitFor(() => expect(crash.crashed()).toBe(true), { timeout: 10_000 });
+        await vi.waitFor(() => expect(crash.crashed()).toBe(true));
         return { persisted: JSON.parse(saved) as IsolationRun, tips, workspace: a.cwd };
       }
 

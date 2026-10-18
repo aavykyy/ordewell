@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { sharedTest } from '../../vitest.shared';
 
 // Floors for the modules the seam refactors introduced, each at its measured
 // value rounded down. The rest of the codebase stays report-only (see ci.yml).
@@ -12,6 +13,7 @@ const floor = (lines: number, branches: number, functions: number, statements = 
 
 export default defineConfig({
   test: {
+    ...sharedTest,
     include: ['src/**/*.test.ts'],
     coverage: {
       provider: 'v8',

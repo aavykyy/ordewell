@@ -201,24 +201,22 @@ describe('SettingsService', () => {
   });
 
   describe('watching the file', () => {
-    // A file-system event can take past waitFor's one-second default while the
-    // full suite loads the machine, so each wait gets more, and the test room for both.
     it('tells a listener when another process saves, once per save', async () => {
       const listener = vi.fn();
       const watching = service.watch(listener);
       try {
         new SettingsService(tempFile).setEnabledRunners(['codex']);
-        await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+        await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
         await new Promise((resolve) => setTimeout(resolve, 150));
         expect(listener).toHaveBeenCalledTimes(1);
 
         new SettingsService(tempFile).setEnabledRunners(['codex', 'opencode']);
-        await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(2), { timeout: 5_000 });
+        await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(2));
         expect(service.getEnabledRunners()).toEqual(['codex', 'opencode']);
       } finally {
         watching.dispose();
       }
-    }, 15_000);
+    });
 
     it('stops telling once disposed', async () => {
       const listener = vi.fn();

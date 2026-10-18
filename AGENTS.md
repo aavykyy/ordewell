@@ -42,9 +42,15 @@ runs: beyond lint, typecheck and `test:coverage` (whose per-file floors in
 scripts, the offline planner e2e, the VS Code integration test and packaging.
 It refuses to start when ci.yml has a step it does not know, so add any new
 step to `scripts/ci.mjs` too. The integration test downloads VS Code into
-`packages/vscode/.vscode-test` on its first run. A test that depends on the time of day (a usage-limit
-"resets 8:10pm") fails for the hour after that time; derive such a time from
-the clock, or fake it, instead of fixing it.
+`packages/vscode/.vscode-test` on its first run.
+
+A test that depends on the time of day (a usage-limit "resets 8:10pm") fails
+for the hour after that time; derive such a time from the clock, or fake it,
+instead of fixing it. A recorded fixture with a fixed future instant expires
+the same way. `vi.waitFor` waits up to ten seconds here, not vitest's one
+(`vitest.setup.ts`), and a test may run for thirty, because real git and
+file-system events can take past a second on a loaded machine: pass a
+`timeout` only to wait longer still.
 
 Build order is not optional: `core` emits the types the other three packages
 compile against. Building a leaf package against a stale `core/dist` produces
