@@ -161,7 +161,7 @@ describe('Merge at gates automatically', () => {
     pass('c3');
     await vi.waitFor(() => expect(merged(iso)).toHaveLength(first === 'manual' ? 3 : 2));
     expect(session.mergeGate('u4')).toEqual([]);
-    expect(session.planState!.conversationHistory!.map((e) => e.content)).toEqual([
+    expect(session.planState!.conversationHistory!.filter((e) => e.kind !== 'execution').map((e) => e.content)).toEqual([
       ...(first === 'clean' ? ['Ordewell setting: auto-merged for task 2'] : []), 'Ordewell setting: auto-merged for task 4',
     ]);
   });
@@ -331,7 +331,7 @@ describe('Merge all at the end of the run', () => {
     expect(merged(iso)).toHaveLength(1);
     expect(handoffs(messages)).toEqual([]);
     expect(session.isolationView()).toBeNull();
-    expect(session.planState!.conversationHistory!.map((e) => e.content)).toEqual(['Ordewell setting: auto-merged for task 2']);
+    expect(session.planState!.conversationHistory!.filter((e) => e.kind !== 'execution').map((e) => e.content)).toEqual(['Ordewell setting: auto-merged for task 2']);
   });
 });
 
