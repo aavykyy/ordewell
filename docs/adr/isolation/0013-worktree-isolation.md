@@ -65,12 +65,12 @@ everything below applies per repo of the group.
   until the landing answers. Only `merged` completes it, so "a dependent waits
   for its predecessor to be *integrated*" is not a second rule in
   `getReadyTasks` but what `completed` means in an isolated run
-  (`dependencyMet` states it anyway, for completions that did not come from a
-  verdict). Keeping the attempt live also keeps the identity rule: a cancel,
-  retry or stop during the merge wins, and waits for the merge before it tears
-  the worktree down. Mark complete is a passed verdict the user vouches for, so
-  it integrates too — the way out of a stuck task whose work is sitting in its
-  worktree, and of a conflict resolved by hand.
+  (`readiness.landed` checks the record too, for completions that did not come
+  from a verdict). Keeping the attempt live also keeps the identity rule: a
+  cancel, retry or stop during the merge wins, and waits for the merge before
+  it tears the worktree down. Mark complete is a passed verdict the user
+  vouches for, so it integrates too — the way out of a stuck task whose work is
+  sitting in its worktree, and of a conflict resolved by hand.
 - **Integration is a serialized queue.** Verdicts can land concurrently. The
   module merges one task at a time with `git merge --no-ff` — a merge commit per
   task preserves any commits a Runner made itself, makes attribution visible, and

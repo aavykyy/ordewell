@@ -244,6 +244,9 @@ export abstract class BaseAiService {
     // once would be hostile in every surface.
     const precomputed = new Map<number, { success: boolean; output: string; truncated: boolean }>();
     const spawnSubagentIds = new Map<number, string>();
+    // When each call was announced, not when its result landed: a reloaded
+    // transcript places each row where the live view drew the call.
+    const announcedAt = new Map<number, string>();
     const normalizedArgs = toolCalls.map((tc) => {
       const args = { ...tc.args };
       if (tc.name === 'read_file' && !('maxBytes' in args) && !('limit' in args)) args.limit = 2000;
@@ -258,12 +261,14 @@ export abstract class BaseAiService {
         ? mapWithConcurrency(spawnIndexes, SUBAGENT_LIMITS.maxConcurrent, async (i) => {
           const subagentId = uuidv4();
           spawnSubagentIds.set(i, subagentId);
+          announcedAt.set(i, new Date().toISOString());
           onProgress({ type: 'tool_call', tool: toolCalls[i].name, toolArgs: JSON.stringify(toolCalls[i].args), subagentId, toolCallId: toolCalls[i].id });
           precomputed.set(i, await this.executeSpawnAgent({ ...toolCalls[i].args }, fs, onProgress, signal, subagentId, fetcher));
         })
         : Promise.resolve(),
       parallelIndexes.length > 1
         ? mapWithConcurrency(parallelIndexes, TOOL_ROUND_CONCURRENCY, async (i) => {
+          announcedAt.set(i, new Date().toISOString());
           onProgress({ type: 'tool_call', tool: toolCalls[i].name, toolArgs: JSON.stringify(toolCalls[i].args), toolCallId: toolCalls[i].id });
           precomputed.set(i, await executeTool(toolCalls[i].name, normalizedArgs[i], fs, fetcher, signal));
         })
@@ -275,7 +280,10 @@ export abstract class BaseAiService {
 
       const preResult = precomputed.get(index);
       const named = stepTool(tc.name, plannerTools);
-      if (!preResult) onProgress({ type: 'tool_call', ...named, toolArgs: JSON.stringify(tc.args), toolCallId: tc.id });
+      if (!preResult) {
+        announcedAt.set(index, new Date().toISOString());
+        onProgress({ type: 'tool_call', ...named, toolArgs: JSON.stringify(tc.args), toolCallId: tc.id });
+      }
 
       // The serial tail of the round is where a stop actually lands: `bash`,
       // `fetch` and `web_search` run one after another and can each sit on an
@@ -305,7 +313,7 @@ export abstract class BaseAiService {
         success: toolResult.success,
         outcome,
         toolCallId: tc.id,
-        timestamp: new Date().toISOString(),
+        timestamp: announcedAt.get(index) ?? new Date().toISOString(),
         ...(thinking && !thinkingAttached ? { thinkingText: thinking } : {}),
       };
       if (thinking && !thinkingAttached) thinkingAttached = true;

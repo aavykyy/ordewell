@@ -217,10 +217,25 @@ export class PlanEditor {
    * unrelated edit. A user may put a task on any runner.
    */
   private refuseBreach(taskId: string, edit: Partial<Task>, catalog: AssignmentCatalog): void {
+    const broken = this.firstBreach(updateTaskInPlan(this.store.planTasks, taskId, edit), catalog);
+    if (broken) throw new PlanEditError(broken.message);
+  }
+
+  /**
+   * The same rules for the route that names no existing task: a hand-added
+   * task the direct-edit path would refuse is refused here too (CONTEXT.md,
+   * "Hand-added task").
+   */
+  private refuseAddedBreach(added: Task, catalog: AssignmentCatalog): void {
+    const broken = this.firstBreach([...this.store.planTasks, added], catalog);
+    if (broken) throw new PlanEditError(broken.message);
+  }
+
+  /** The first rule `tasks` breaks that the plan does not already break, or none. */
+  private firstBreach(tasks: readonly Task[], catalog: AssignmentCatalog): PlanTaskError | undefined {
     const key = (e: PlanTaskError) => `${e.taskId ?? ''}\u0000${e.field}`;
     const standing = new Set(checkPlanInvariants(this.store.planTasks, undefined, catalog.runnerModes).map(key));
-    const broken = checkPlanInvariants(updateTaskInPlan(this.store.planTasks, taskId, edit), undefined, catalog.runnerModes).find((e) => !standing.has(key(e)));
-    if (broken) throw new PlanEditError(broken.message);
+    return checkPlanInvariants(tasks, undefined, catalog.runnerModes).find((e) => !standing.has(key(e)));
   }
 
   private commitTaskUpdate(taskId: string, changes: Partial<Task>): Promise<LegacyPlanState | null> {
@@ -278,12 +293,17 @@ export class PlanEditor {
     const dependencies = (draft.dependencies ?? []).filter((id) => this.store.get(id));
     const discovered = draft.type === 'user' ? undefined : await this.discover(runner);
     const written: Task = { ...createTask({ ...draft, assignedRunner: runner, dependencies }), taskMode: draft.taskMode };
-    const outcome = resolveAssignment({ writer: 'userAdd', task: written, catalog: this.assignmentCatalog(runner, discovered) });
+    const catalog = this.assignmentCatalog(runner, discovered);
+    const outcome = resolveAssignment({ writer: 'userAdd', task: written, catalog });
     if (!outcome.ok) throw new PlanEditError(outcome.error);
     const { assignedModel, taskMode } = outcome.task;
+    // A task put in the plan by hand is held to the plan's rules as one the
+    // direct-edit path patches: an ops task in its runner's read-only mode is
+    // refused the same way (CONTEXT.md, "Hand-added task").
+    this.refuseAddedBreach(outcome.task, catalog);
 
     const added = await this.commit(() => {
-      this.approve([this.store.add({ ...draft, assignedModel, taskMode, assignedRunner: runner, dependencies }).id]);
+      this.approve([this.store.add({ ...draft, id: written.id, assignedModel, taskMode, assignedRunner: runner, dependencies }).id]);
       if (discovered) this.admitRunner(runner, discovered.models);
       return true;
     });

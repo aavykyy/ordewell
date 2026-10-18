@@ -70,15 +70,7 @@ afterEach(() => {
 });
 
 describe('adversarial: a held run released by the ways a wait goes besides Mark complete and Don\'t resume', () => {
-  // ADVERSARIAL FINDING (held-run): a planner edit that removes the last task paused on a usage limit
-  // releases nothing — `reconcilePlan` (TaskOrchestrator.ts:986) adopts the edited list without
-  // `dropResume`/`releaseHold`, and the planner turn's end only ticks when the scheduler is running or a
-  // start is pending (`resumeStarts`, createSession.ts:597), which a held run is not. The run sits held
-  // with nothing waiting on a reset, contradicting ADR-0018 U1: "the hold on the run is released once
-  // nothing else waits on a reset … the task marked complete, its resume cancelled, or the task leaving
-  // the plan". The direct editor path (`releaseTask`) is fixed; the planner path is not.
-  // Expected: `awaitsResume` false and the rest of the plan starts once the edit lands.
-  it.skip('goes on when a planner edit removes the last paused task, as reconcilePlan lands it', async () => {
+  it('goes on when a planner edit removes the last paused task, as reconcilePlan lands it', async () => {
     const { orchestrator, sessions, spawn, task } = setup({ maxParallelSessions: 1 });
     orchestrator.loadPlan([
       createTask({ id: 't1', order: 1, title: 'Paused', prompt: 'do first' }),

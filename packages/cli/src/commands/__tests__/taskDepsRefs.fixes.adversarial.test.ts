@@ -73,12 +73,7 @@ describe('adversarial: task-deps outside the earlier-sibling list, and a prefix 
     } finally { d.close(); }
   });
 
-  // ADVERSARIAL FINDING (task-deps): the dependency value is resolved with `resolveTaskRef` alone
-  // (commands/task-assign.ts:219), so a unique id prefix the user types — the reference rule CONTEXT.md
-  // says "the CLI … read[s]" — stays a literal and `canSetDependencies` refuses it. Expected: the value
-  // resolves like every other user reference (resolveUserTaskRef), so `ordewell task-deps 3 bet` sets
-  // the dependency on beta-2.
-  it.skip('resolves a dependency value the user typed as a unique id prefix', async () => {
+  it('resolves a dependency value the user typed as a unique id prefix', async () => {
     const d = await fakeDaemon();
     try {
       const { handleTaskDeps } = await import('../task-assign');

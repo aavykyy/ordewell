@@ -60,8 +60,7 @@ describe('adversarial: Execute plan clears the run\'s cards only once the seam a
   });
   afterEach(() => { fs.rmSync(workspace, { recursive: true, force: true }); });
 
-  // ADVERSARIAL FINDING (surfaces): packages/vscode/src/plan/PlanManager.ts:252 clears the isolation handoff and every task mark inside `handleApprovePlan` before the seam's `run_plan` answers, while the same file's `startTask` (line 492-495) documents the rule — "Cleared only once the seam accepts it: a refused start replaced no run, and the Session still holds every mark and the handoff." A refused Execute (every task already completed, a plan whose run was stopped) wipes the card on screen for a run the Session still holds, and no message brings it back. Expected: `run_plan` answers first; a refusal leaves the cards and the handoff as they were.
-  it.skip('a refused Execute plan leaves the previous run\'s handoff and marks alone', async () => {
+  it('a refused Execute plan leaves the previous run\'s handoff and marks alone', async () => {
     const { d, clear } = deps(workspace);
 
     await handleApprovePlan(d);

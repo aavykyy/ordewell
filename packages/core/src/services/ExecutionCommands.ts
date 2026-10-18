@@ -593,6 +593,8 @@ export class ExecutionCommands {
       return { refusal: `${capitalize(label)} ${statusWords(task)}. ${next}` };
     }
     const waits = this.host.startWaits(task);
+    // The start rule's `no-prompt`: a task with nothing to run is never started.
+    if (waitOf(waits, 'no-prompt')) return { refusal: noPromptRefusal(label) };
     const failed = (waitOf(waits, 'blocked')?.failed ?? []).flatMap((id) => this.located(id, tasks) ?? []);
     if (failed.length > 0) {
       return { refusal: `${capitalize(label)} is blocked: ${named(failed)} failed. Retry ${failed.length === 1 ? 'it' : 'them'} first.` };
@@ -648,6 +650,9 @@ export class ExecutionCommands {
     if (task.type === 'user') return { refusal: `${capitalize(label)} is a user task: ${USER_VOICE.byHand}` };
     if (this.host.running(task.id) || task.status === 'in_progress') return { refusal: `${capitalize(label)} is already running.` };
     if (task.status === 'completed') return { refusal: `${capitalize(label)} has already completed. ${USER_VOICE.completed}` };
+    // A force start goes past a hold, a failure and a gate, but not the fact
+    // that there is nothing to run (ADR-0034).
+    if (waitOf(this.host.startWaits(task), 'no-prompt')) return { refusal: noPromptRefusal(label) };
     return {
       act: async () => {
         const queued = await this.host.forceStart(task.id);
@@ -1150,6 +1155,11 @@ function named(tasks: readonly Located[]): string {
 
 function capitalize(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** A start of an AI task the plan gives no prompt: the start rule's `no-prompt`, in one wording (ADR-0034). */
+function noPromptRefusal(label: string): string {
+  return `${capitalize(label)} has no prompt, so there is nothing to run. Write one first.`;
 }
 
 const STATUS_WORDS: Record<TaskStatus, string> = {

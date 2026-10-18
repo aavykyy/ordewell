@@ -2,7 +2,7 @@ import { Hono, type Context, type Env } from 'hono';
 import {
   flattenTasks,
   NoPlanError,
-  resolveTaskRef,
+  resolveUserTaskRef,
   surfacePlan,
   surfacePlanState,
   TaskControlError,
@@ -35,9 +35,9 @@ import { failure, refuse } from './errors';
 
 const NO_CHECKPOINT = 'The task is not waiting at a checkpoint: it was answered already, withdrawn, or has no runner left to hear it.';
 
-/** The id of the task a reference names, as the seam resolves it; the reference itself when the plan holds no such task, for the seam to refuse. */
+/** The id of the task a reference names, as the seam resolves it — the user's unique id prefix included; the reference itself when the plan holds no such task, for the seam to refuse. */
 function idOfRef(session: ReturnType<OrchestratorPool['session']>, ref: string): string {
-  return resolveTaskRef(session.planState?.tasks ?? [], ref)?.id ?? ref;
+  return resolveUserTaskRef(session.planState?.tasks ?? [], ref)?.id ?? ref;
 }
 
 /** One execution button's command, run as the user (ADR-0029): a refusal becomes the 400 the surface already shows. */
@@ -252,8 +252,10 @@ export function plansRoute(pool: OrchestratorPool) {
         const body: unknown = answer === 'reject' ? await c.req.json().catch(() => ({})) : {};
         const reason = typeof body === 'object' && body !== null && 'reason' in body && typeof body.reason === 'string' ? body.reason.trim() : '';
         const session = pool.session(c.req.param('sessionId'));
-        const taskId = c.req.param('taskId');
-        if (!session.awaitsCheckpoint(idOfRef(session, taskId))) return refuse(c, 409, NO_CHECKPOINT, 'checkpoint_not_waiting');
+        const taskId = idOfRef(session, c.req.param('taskId'));
+        // Resolved once: the pre-check and the seam judge the same task, the
+        // user's unique id prefix included (ADR-0029).
+        if (!session.awaitsCheckpoint(taskId)) return refuse(c, 409, NO_CHECKPOINT, 'checkpoint_not_waiting');
         const { message } = await runUserCommand(session, { command: 'answer_checkpoint', task: taskId, answer, ...(reason ? { reason } : {}) });
         return c.json({ ok: true, message } satisfies OkResponse);
       } catch (err) {

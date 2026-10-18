@@ -272,8 +272,8 @@ describe('CliAgentAiService — Claude Code', () => {
     const calls = events.filter((e) => e.type === 'tool_call');
     expect(calls.map((c) => [c.toolCallId, c.subagentId])).toEqual([['toolu_agent', undefined], ['toolu_sub_read', 'toolu_agent']]);
     expect(turn.researchLog.flatMap((s) => ('toolCallId' in s ? [[s.toolCallId, s.subagentId]] : []))).toEqual([
-      ['toolu_sub_read', 'toolu_agent'],
       ['toolu_agent', undefined],
+      ['toolu_sub_read', 'toolu_agent'],
     ]);
   });
 
@@ -756,7 +756,8 @@ describe('CliAgentAiService — streamed events (#47)', () => {
     expect(events.find((e) => e.type === 'tool_call' && e.toolCallId === 'c1')?.subagentId).toBe('sa1');
     expect(events.find((e) => e.type === 'tool_result' && e.toolCallId === 'c1')?.subagentId).toBe('sa1');
     const steps = turn.researchLog.filter((e): e is ResearchStep => !('type' in e));
-    expect(steps.map((step) => [step.toolCallId, step.subagentId])).toEqual([['c1', 'sa1'], ['task-1', undefined]]);
+    // In the order the calls were announced, so a reload draws them there.
+    expect(steps.map((step) => [step.toolCallId, step.subagentId])).toEqual([['task-1', undefined], ['c1', 'sa1']]);
   });
 
   it('settles a reply that looks like a botched plan as prose, with no corrective re-emit', async () => {

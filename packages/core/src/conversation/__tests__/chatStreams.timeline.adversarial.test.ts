@@ -193,14 +193,10 @@ describe('a message that settles with no runs at all (a backend that reports non
 });
 
 describe('a run that began after a tool call but before its result', () => {
-  // ADVERSARIAL FINDING (timeline): a reloaded planner transcript places a
-  // tool row at the time its result landed, not when the model announced the
-  // call, so a run that began after the call but before its result reloads
-  // above the call — the inverse of the order the live view drew. Expected:
-  // the transcript keeps the call at its announcement point, as the task log
-  // does, so a run that began after it stays below it.
-  it.skip('stays below the call it followed, live and after a reload', () => {
-    const read = step('1', 'read_file', 'c1', 3000);
+  it('stays below the call it followed, live and after a reload', () => {
+    // A research step is stamped when its call was announced (the producer's
+    // rule), even though its result lands after the run that follows it.
+    const read = step('1', 'read_file', 'c1', 1500);
     const stream: SessionMessage[] = [
       { type: 'planner_turn_started', turnId: 't1', prompt: 'look' },
       { type: 'planner_text_delta', turnId: 't1', segmentId: 'seg-1', text: 'Let me check.' },
@@ -288,7 +284,7 @@ describe('a corrective retry after a botched envelope', () => {
       message: 'edit it',
       classify: { runners: ['claude-code'] },
       onProgress: (p) => {
-        if (p.type === 'text_delta') progress({ type: 'planner_text_delta', turnId: 't1', segmentId: p.segmentId ?? '', text: p.text });
+        if (p.type === 'text_delta') progress({ type: 'planner_text_delta', turnId: 't1', segmentId: p.segmentId ?? '', text: p.text ?? '' });
         else if (p.type === 'text_retracted') progress({ type: 'planner_text_retracted', turnId: 't1', segmentId: p.segmentId });
         else if (p.type === 'tool_call') progress({ type: 'research_step', turnId: 't1', tool: p.tool ?? 'read_file', args: '{}', toolCallId: 'c1' });
         else if (p.type === 'tool_result') progress({ type: 'research_step_done', turnId: 't1', step: p.step! });

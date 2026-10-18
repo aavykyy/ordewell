@@ -8,10 +8,8 @@ import { ApiClient } from '../../apiClient';
  * all to start it, or force start it") — only a force start goes past the
  * gate (ADR-0020) — and VS Code's Run task converts to a force start once the
  * user confirms (PlanManager `handleSystemCommand('runTask')`), as the TUI's
- * `f` does. The CLI asks the same question but then sends `run`, so its yes
- * can never be honoured: the daemon refuses with an instruction to force
- * start. Expected: a `run-task` the user confirmed past a gate starts as the
- * force start it is.
+ * `f` does. The CLI asks the same question and sends the force start the
+ * confirmation stands for.
  */
 
 function startServer(handler: (req: http.IncomingMessage, res: http.ServerResponse) => void): Promise<{ port: number; close: () => void }> {
@@ -59,8 +57,7 @@ function gatedServer(hits: string[]) {
 }
 
 describe('adversarial: a run-task confirmed past its merge gate', () => {
-  // ADVERSARIAL FINDING (command path): packages/cli/src/commands/task-control.ts:91 puts `run` in PASSES_GATE, so a gated `ordewell run-task` asks "Start it anyway?" — but on a yes (line 117) it sends the `run` route, and the seam's `run_task` refuses a gated task (packages/core/src/services/ExecutionCommands.ts:611-613; only `force_start` passes a gate, ADR-0020), answering "Merge all to start it, or force start it". VS Code's Run task converts to a force start once the user confirms. Expected: the CLI does the same, so the confirmed start reaches `force-start`.
-  it.skip('starts through force-start once the user confirmed the work it would act without', async () => {
+  it('starts through force-start once the user confirmed the work it would act without', async () => {
     const hits: string[] = [];
     const srv = await gatedServer(hits);
     const { handleRunTask } = await import('../task-control');
