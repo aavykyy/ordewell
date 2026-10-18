@@ -7,9 +7,10 @@ import { v4 as uuidv4 } from 'uuid';
 import { resolveTaskRef } from './TaskRefs';
 import { taskPlacement } from './PlanTree';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
-import { validateTaskEdit, lockedTaskRefusal, type EditCatalog, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
+import { validateTaskEdit, lockedTaskRefusal, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
+import { resolveAssignment, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
 import { plannedTask, checkPlanInvariants, detectCycle, taskWhere, MODE_NOT_THE_PLANNERS, MANUAL_NOT_READ_ONLY, OPS_NOT_READ_ONLY, type IntakeCatalog, type PlannedTask, type PlanTaskError } from './PlannedTask';
-import { plannedMode, taggedReadOnlyMode, type PlannedMode } from './ModeResolver';
+import { taggedReadOnlyMode } from './ModeResolver';
 
 /**
  * Targeted task edits emitted by the planner conversation (the 'task_ops'
@@ -248,6 +249,8 @@ export interface ApplyTaskOpsResult {
   errors: string[];
   /** Human-readable summary of what changed, for the chat transcript. */
   summary: string[];
+  /** On ok, what the batch's tasks were adjusted to beyond what the planner wrote, as they stand at its end. */
+  adjustments?: AssignmentAdjustment[];
   /** On ok, the id of the task each batch handle names. */
   handles?: ReadonlyMap<string, string>;
 }
@@ -312,26 +315,23 @@ function askedReadOnly(spec: PlannerTaskSpec | undefined): boolean | undefined {
   return typeof spec?.readOnly === 'boolean' ? spec.readOnly : undefined;
 }
 
-function isReadOnly(task: Task, catalog: EditCatalog | undefined): boolean {
-  return task.taskMode !== undefined && task.taskMode === taggedReadOnlyMode(catalog?.runnerModes[task.assignedRunner]);
+function isReadOnly(task: Task, catalog: AssignmentCatalog | undefined): boolean {
+  return task.taskMode !== undefined && task.taskMode === taggedReadOnlyMode(catalog?.runnerModes?.[task.assignedRunner]);
 }
 
 /**
- * The mode a planner edit lands a task on (ADR-0031). A task stays read-only
- * or not unless the planner says otherwise, so a move or split never quietly
- * gives a read-only task write access. Undefined mode with no catalog to read
- * the runner's modes from.
+ * The fields an edit changed, as the planner names them: those it wrote, and
+ * `readOnly` when that flipped, never the mode it landed on (ADR-0031) nor a
+ * model the resolver put in, which is reported beside the edit instead.
  */
-function landingMode(runner: RunnerId, readOnly: boolean | undefined, current: string | undefined, catalog: EditCatalog | undefined): PlannedMode {
-  return plannedMode(runner, catalog?.runnerModes, { readOnly, current }, catalog?.autonomousDefault ?? true);
-}
-
-/** The fields an edit changed, as the planner names them: `readOnly` when that flipped, never the mode it landed on (ADR-0031). */
-function changedFields(target: Task, changes: Partial<Task>, catalog: EditCatalog | undefined): string[] {
-  const fields = Object.keys(changes).filter((f) => f !== 'taskMode');
-  if ('taskMode' in changes && isReadOnly({ ...target, ...changes }, catalog) !== isReadOnly(target, catalog)) fields.push('readOnly');
+function changedFields(target: Task, written: Partial<Task>, landed: Partial<Task>, catalog: AssignmentCatalog | undefined): string[] {
+  const fields = Object.keys(written).filter((f) => f !== 'taskMode');
+  if (isReadOnly({ ...target, ...landed }, catalog) !== isReadOnly(target, catalog)) fields.push('readOnly');
   return fields;
 }
+
+/** Nothing discovered and no runner live: what an edit resolves without a catalog. */
+const NO_CATALOG: AssignmentCatalog = { modelsByRunner: {} };
 
 /**
  * The ids an op's new tasks get, made once and kept for the op: the open
@@ -362,7 +362,7 @@ export function applyTaskOps(
   currentTasks: readonly Task[],
   newOps: TaskOp[],
   runners: RunnerId[],
-  catalog?: EditCatalog,
+  catalog?: AssignmentCatalog,
   held: readonly TaskOp[] = [],
 ): ApplyTaskOpsResult {
   // Ops already accepted earlier in the batch apply first; errors number only
@@ -372,6 +372,7 @@ export function applyTaskOps(
   let tasks: Task[] = JSON.parse(JSON.stringify(currentTasks));
   const errors: string[] = [];
   const summary: string[] = [];
+  const adjustments: AssignmentAdjustment[] = [];
 
   // Batch handles: planner-chosen names for a task an add/merge/split op is
   // about to create, so a later op in the same batch can reference it before
@@ -447,9 +448,11 @@ export function applyTaskOps(
 
   /**
    * The resolve-and-validate half shared by "update" and "rearm": resolve the
-   * target, apply the field allowlist and runner check, run the edit validator
-   * under the op's audience, then resolve any dependency refs. `refuseRunning`
-   * is rearm's extra lock check, kept before the field work so its message wins.
+   * target, apply the field allowlist, run the edit validator under the op's
+   * audience and the assignment resolver as the planner's edit, then resolve
+   * any dependency refs. `refuseRunning` is rearm's extra lock check, kept
+   * before the field work so its message wins. `changes` is what lands;
+   * `fields` what the planner changed, as its summary names it.
    */
   const prepareEdit = (
     op: { taskId: string; changes?: PlannerTaskSpec },
@@ -457,7 +460,7 @@ export function applyTaskOps(
     label: string,
     audience: TaskEditActor,
     refuseRunning = false,
-  ): { target: Task; changes: Partial<Task>; check: TaskEditCheck } | { error: string } => {
+  ): { target: Task; changes: Partial<Task>; fields: string[]; check: TaskEditCheck } | { error: string } => {
     const ref = resolveRef(op.taskId, currentTasks, tasks, handleOwner, handleId, opIndex);
     if ('error' in ref) return { error: `${label}: ${ref.error}` };
     const target = findInTasks(tasks, ref.id);
@@ -475,28 +478,29 @@ export function applyTaskOps(
     // their resolved ids on the final graph: a later op may finish a rewire.
     const changesForCheck: Partial<Task> = { ...changes };
     delete changesForCheck.dependencies;
-    const check = validateTaskEdit(audience, tasks, target.id, changesForCheck, catalog);
+    const check = validateTaskEdit(audience, tasks, target.id, changesForCheck);
     if (!check.ok) return { error: `${label}: ${check.error}` };
     for (const field of check.clear ?? []) (changes as Record<string, unknown>)[field] = undefined;
     Object.assign(changes, check.set);
     const readOnly = askedReadOnly(op.changes);
     if (readOnly === true && (changes.type ?? target.type) === 'user') return { error: `${label}: ${MANUAL_NOT_READ_ONLY}` };
     if ((changes.ops ?? target.ops) && (readOnly ?? isReadOnly(target, catalog))) return { error: `${label}: ${OPS_NOT_READ_ONLY}` };
-    const moved = changes.assignedRunner !== undefined && changes.assignedRunner !== target.assignedRunner;
-    const becomesAi = changes.type === 'ai' && target.type === 'user';
-    // A runner not allowed has no mode to land on; the plan's rules refuse it once the op is applied.
-    const known = runners.includes(changes.assignedRunner ?? target.assignedRunner);
-    if (known && (readOnly !== undefined || moved || becomesAi) && (changes.type ?? target.type) !== 'user') {
-      const mode = landingMode(changes.assignedRunner ?? target.assignedRunner, readOnly ?? isReadOnly(target, catalog), target.taskMode, catalog);
-      if (!mode.ok) return { error: `${label}: ${mode.error}` };
-      if (mode.mode !== undefined && mode.mode !== target.taskMode) changes.taskMode = mode.mode;
+    const landed: Partial<Task> = { ...changes };
+    const written = { ...target, ...changes };
+    // A runner not allowed has nothing to resolve against; the plan's rules refuse it once the op is applied.
+    if (written.type === 'user' || runners.includes(written.assignedRunner)) {
+      const resolved = resolveAssignment({ writer: 'edit', task: written, before: target, readOnly, catalog: catalog ?? NO_CATALOG });
+      if (!resolved.ok) return { error: `${label}: ${resolved.error}` };
+      if (resolved.task.assignedModel !== written.assignedModel) landed.assignedModel = resolved.task.assignedModel;
+      if (resolved.task.taskMode !== written.taskMode) landed.taskMode = resolved.task.taskMode;
+      adjustments.push(...resolved.adjustments);
     }
     if ('dependencies' in changes) {
       const { ids, bad } = resolveDeps(changes.dependencies, opIndex);
       if (bad.length) return { error: `${label}: unknown dependencies: ${bad.join(', ')}` };
-      changes.dependencies = ids;
+      landed.dependencies = ids;
     }
-    return { target, changes, check };
+    return { target, changes: landed, fields: changedFields(target, changes, landed, catalog), check };
   };
 
   // A rule the batch ends in breach of is the op's that first broke it. What
@@ -505,7 +509,7 @@ export function applyTaskOps(
   // told by its task and rule, not its wording: the wording carries the title,
   // which an edit may change.
   const breachKey = (e: PlanTaskError) => `${e.taskId ?? ''}\u0000${e.field}`;
-  const standing = new Set(checkPlanInvariants(currentTasks, runners).map(breachKey));
+  const standing = new Set(checkPlanInvariants(currentTasks, runners, catalog?.runnerModes).map(breachKey));
   const brokenBy = new Map<string, string>();
   let lastLabel = opLabel(0);
 
@@ -516,8 +520,8 @@ export function applyTaskOps(
       case 'update': {
         const prep = prepareEdit(op, i, label, 'planner');
         if ('error' in prep) { errors.push(prep.error); break; }
-        const { target, changes, check } = prep;
-        if (Object.keys(changes).length === 0) {
+        const { target, changes, fields, check } = prep;
+        if (fields.length === 0) {
           const readOnly = askedReadOnly(op.changes);
           if (readOnly !== undefined && isReadOnly(target, catalog) === readOnly) { summary.push(`"${target.title}" is already ${readOnly ? '' : 'not '}read-only`); break; }
           errors.push(`${label}: no valid changes provided`);
@@ -525,7 +529,6 @@ export function applyTaskOps(
         }
         tasks = updateTaskInPlan(tasks, target.id, changes);
         const clearedNote = check.clear?.length ? `; cleared ${check.clear.join(', ')}` : '';
-        const fields = changedFields(target, changes, catalog);
         summary.push(`Updated "${target.title}"${fields.length ? ` (${fields.join(', ')})` : ''}${clearedNote}`);
         break;
       }
@@ -535,6 +538,7 @@ export function applyTaskOps(
         const planned = plannedTask(spec, intake, { freshIds: true, newId });
         const refused = refusalOf(planned);
         if (refused) { errors.push(`${label}: ${refused}`); break; }
+        adjustments.push(...planned.adjustments);
         const resolved = resolveTree(planned, i);
         if ('error' in resolved) { errors.push(`${label}: ${resolved.error}`); break; }
         tasks = addTaskToPlan(tasks, resolved.task);
@@ -610,6 +614,7 @@ export function applyTaskOps(
         });
         const refused = refusalOf(planned);
         if (refused) { errors.push(`${label}: ${refused}`); break; }
+        adjustments.push(...planned.adjustments);
         const built = resolveTree({ ...planned, task: { ...planned.task, dependencies: [] } }, i);
         if ('error' in built) { errors.push(`${label}: ${built.error}`); break; }
         const mergedTask: Task = { ...built.task, dependencies: ids };
@@ -676,6 +681,7 @@ export function applyTaskOps(
           });
           const refused = refusalOf(planned);
           if (refused) { errors.push(`${label}: split part ${p + 1}: ${refused}`); buildError = true; break; }
+          adjustments.push(...planned.adjustments);
           const resolved = resolveTree({ ...planned, task: { ...planned.task, dependencies: [] } }, i);
           if ('error' in resolved) { errors.push(`${label}: split part ${p + 1}: ${resolved.error}`); buildError = true; break; }
           const nt: Task = { ...resolved.task, dependencies: deps };
@@ -700,10 +706,9 @@ export function applyTaskOps(
         // validates as a direct edit; well-formedness still applies.
         const prep = prepareEdit(op, i, label, 'direct', true);
         if ('error' in prep) { errors.push(prep.error); break; }
-        const { target, changes, check } = prep;
+        const { target, changes, fields, check } = prep;
         tasks = updateTaskInPlan(tasks, target.id, { ...changes, status: 'pending', verdict: undefined, outputSummary: undefined, awaitingReason: undefined, resumeAt: undefined, skipReason: undefined });
         const clearedNote = check.clear?.length ? `; cleared ${check.clear.join(', ')}` : '';
-        const fields = changedFields(target, changes, catalog);
         const changedNote = fields.length ? ` (${fields.join(', ')})` : '';
         summary.push(`Re-armed "${target.title}"${changedNote}${clearedNote}`);
         break;
@@ -715,13 +720,13 @@ export function applyTaskOps(
     lastLabel = label;
     // Invariants are judged on the final state, so a later op may complete an
     // earlier one; here they only record which op a breach belongs to.
-    const now = new Set(checkPlanInvariants(tasks, runners).map(breachKey));
+    const now = new Set(checkPlanInvariants(tasks, runners, catalog?.runnerModes).map(breachKey));
     for (const key of brokenBy.keys()) if (!now.has(key)) brokenBy.delete(key);
     for (const key of now) if (!standing.has(key) && !brokenBy.has(key)) brokenBy.set(key, label);
   }
 
   if (!errors.length) {
-    for (const e of checkPlanInvariants(tasks, runners)) {
+    for (const e of checkPlanInvariants(tasks, runners, catalog?.runnerModes)) {
       const key = breachKey(e);
       if (!standing.has(key)) errors.push(`${brokenBy.get(key) ?? lastLabel}: ${e.message}`);
     }
@@ -741,7 +746,17 @@ export function applyTaskOps(
     }
   }
 
-  return errors.length
-    ? { ok: false, tasks: currentTasks, errors, summary: [] }
-    : { ok: true, tasks, errors: [], summary, handles: handleId };
+  if (errors.length) return { ok: false, tasks: currentTasks, errors, summary: [] };
+  // A later op may move or remove what an earlier one adjusted: only what still stands is reported.
+  const landed = new Map(flattenTasks(tasks).map((t) => [t.id, t]));
+  const told = new Set<string>();
+  const standingAdjustments = adjustments.filter((a) => {
+    const task = landed.get(a.taskId);
+    const now = a.field === 'assignedModel' ? task?.assignedModel?.modelId : task?.assignedModel?.thinkingEffort;
+    const key = `${a.taskId}\u0000${a.field}`;
+    if (task === undefined || (now ?? null) !== a.to || told.has(key)) return false;
+    told.add(key);
+    return true;
+  });
+  return { ok: true, tasks, errors: [], summary, handles: handleId, adjustments: standingAdjustments };
 }

@@ -102,8 +102,9 @@ export async function handleTaskModel(subArgs: string[], injectedApi?: ApiClient
     const assignedModel = assignedModelFor(model, task.assignedModel?.thinkingEffort);
     await api.updateTask(sessionId, task.id, { assignedModel });
     console.log(`Task ${refOf(tasks, task)} model set to ${model.label}.`);
-    if (task.assignedModel?.thinkingEffort && !assignedModel.thinkingEffort) {
-      console.log(`  ${model.label} does not expose "${task.assignedModel.thinkingEffort}", so the effort went back to the runner default.`);
+    const was = task.assignedModel?.thinkingEffort;
+    if (was && assignedModel.thinkingEffort !== was) {
+      console.log(`  ${model.label} does not expose "${was}", so the effort is now ${assignedModel.thinkingEffort ? `"${assignedModel.thinkingEffort}", its nearest level` : 'the runner default'}.`);
     }
   });
 }

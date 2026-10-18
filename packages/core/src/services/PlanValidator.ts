@@ -97,7 +97,7 @@ export function validatePlanTasks(
   const errors = [
     ...sliceRequired(tasks),
     ...planned.flatMap((p) => p.errors),
-    ...checkPlanInvariants(tasks, runners),
+    ...checkPlanInvariants(tasks, runners, runnerModes),
   ];
 
   if (errors.length > 0) return { ok: false, errors };

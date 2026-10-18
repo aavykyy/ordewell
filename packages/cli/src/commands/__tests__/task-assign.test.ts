@@ -24,8 +24,9 @@ const CATALOG = {
   models: [
     { modelId: 'sonnet', modelLabel: 'Sonnet', variants: [{ id: 'high', label: 'High' }] },
     { modelId: 'gpt-5-codex', modelLabel: 'GPT-5 Codex' },
+    { modelId: 'haiku', modelLabel: 'Haiku', variants: [{ id: 'low', label: 'Low' }] },
   ],
-  modelsByRunner: { 'claude-code': [{ modelId: 'sonnet' }], codex: [{ modelId: 'gpt-5-codex' }] },
+  modelsByRunner: { 'claude-code': [{ modelId: 'sonnet' }, { modelId: 'haiku' }], codex: [{ modelId: 'gpt-5-codex' }] },
   modesByRunner: { 'claude-code': [{ id: 'build', label: 'Build' }, { id: 'plan', label: 'Plan' }] },
   providers: [],
   orchestratorModels: [],
@@ -128,6 +129,18 @@ describe('ordewell task-model', () => {
     await capture(() => handleTaskModel([...SESSION, '2', 'sonnet'], new ApiClient(d.port)));
     expect(updates(d.sent)[0].body.assignedModel).toMatchObject({ modelId: 'sonnet', thinkingEffort: 'high' });
     d.close();
+  });
+});
+
+describe('ordewell task-model and the effort', () => {
+  // One rule with core's: the effort moves to the new model's nearest level, and the CLI says so.
+  it('carries an effort the new model lacks to its nearest level, and says where it went', async () => {
+    const d = await fakeDaemon();
+    const { handleTaskModel } = await import('../task-assign');
+    const { stdout } = await capture(() => handleTaskModel([...SESSION, '2', 'haiku'], new ApiClient(d.port)));
+    d.close();
+    expect(d.sent.at(-1)?.body.assignedModel).toMatchObject({ modelId: 'haiku', thinkingEffort: 'low' });
+    expect(stdout).toContain('Haiku does not expose "high", so the effort is now "low", its nearest level.');
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createTask, type LegacyPlanState } from '../../models/Task';
+import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import { FakeRunnerSession, makeSession, testWorkspace, taskOf, saves, type SessionOverrides } from './sessionTestKit';
 import { PlanStore } from '../PlanStore';
 import type { ModelResolver } from '../ModelResolver';
@@ -372,6 +372,38 @@ describe('Session.updateTask — type coherence on AI <-> MAN flips', () => {
   });
 });
 
+describe('Session.updateTask — the rules the plan\'s tasks are held to together', () => {
+  // Bug: these ran on the planner's paths only.
+  it('refuses a manual task made AFK, an AFK task given user steps, and an ops task on a read-only mode', async () => {
+    const plan = planWith();
+    plan.tasks.push(createTask({ id: 'u', order: 3, title: 'Sign off', type: 'user', sliceType: 'HITL', userSteps: [{ order: 1, instruction: 'sign', completed: false }], assignedRunner: 'claude-code' }));
+    plan.tasks[1].ops = true;
+    plan.tasks[1].taskMode = 'bypassPermissions';
+    const session = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG) });
+    session.loadPlan(plan, 'goal', testWorkspace, { persist: false });
+    const steps = [{ order: 1, instruction: 'check by hand', completed: false }];
+
+    await expect(session.updateTask('u', { sliceType: 'AFK' })).rejects.toThrow('User Task "Sign off" has sliceType "AFK". User tasks must have sliceType "HITL".');
+    await expect(session.updateTask('t1', { autonomy: 'AFK', userSteps: steps })).rejects.toThrow('Task "Setup" has autonomy "AFK" but contains userSteps. AFK tasks must not have user touchpoints.');
+    await expect(session.updateTask('t2', { taskMode: 'plan' })).rejects.toThrow('Task "Build" is an ops task, which runs commands, so it cannot run in its runner\'s read-only mode');
+
+    expect(taskOf(session, 'u')?.sliceType).toBe('HITL');
+    expect(taskOf(session, 't1')?.autonomy).toBeUndefined();
+    expect(taskOf(session, 't2')?.taskMode).toBe('bypassPermissions');
+  });
+
+  it('lets an edit through a plan that already broke a rule elsewhere', async () => {
+    const plan = planWith();
+    plan.tasks.push(createTask({ id: 'u', order: 3, title: 'Sign off', type: 'user', sliceType: 'AFK', assignedRunner: 'claude-code' }));
+    const session = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG) });
+    session.loadPlan(plan, 'goal', testWorkspace, { persist: false });
+
+    await session.updateTask('t1', { title: 'Renamed' });
+
+    expect(taskOf(session, 't1')?.title).toBe('Renamed');
+  });
+});
+
 describe('Session.updateTask — the ops flag (ADR-0020)', () => {
   function loaded(plan = planWith()) {
     const session = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG) });
@@ -436,6 +468,19 @@ describe('Session.updateTask — model and task-mode validity', () => {
     });
 
     expect(state!.tasks.find((t) => t.id === 't1')!.assignedModel?.modelId).toBe('claude-haiku-4-5');
+  });
+
+  // Bug: a direct edit's effort was never checked, so a level the model lacks reached its spawn.
+  it('holds the effort to what the model offers, at the nearest level, and says so', async () => {
+    const onNotice = vi.fn();
+    const session = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG), onNotice });
+    session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
+    await session.addTask({ title: 'Docs', prompt: 'write docs' });
+
+    await session.updateTask('t1', { assignedModel: { modelId: 'claude-sonnet-4-5', modelLabel: 'Claude Sonnet 4.5', thinkingEffort: 'max' } });
+
+    expect(taskOf(session, 't1')?.assignedModel).toMatchObject({ modelId: 'claude-sonnet-4-5', thinkingEffort: 'high' });
+    expect(onNotice).toHaveBeenCalledWith(expect.objectContaining({ level: 'info', message: 'Task "Setup": effort max → high.' }));
   });
 });
 
@@ -718,6 +763,36 @@ describe('Session.updateTask — what a field patch saves and announces', () => 
 
     expect(updates()[0].changes).toEqual({ ops: undefined });
     expect(updates()[0].changes).toHaveProperty('ops');
+  });
+
+  // Bug: a direct edit wrote any field, so a PUT could mark a task done with no verdict, or replace its subtree unchecked.
+  it('takes only the fields a direct edit may set: never a status, a verdict or a subtree', async () => {
+    const { session, updates } = loaded();
+    const smuggled = { status: 'completed', verdict: { outcome: 'pass', checks: [], decidedAt: '2026-01-01T00:00:00Z' }, subtasks: [createTask({ id: 'x', title: 'Smuggled' })] } as unknown as Partial<Task>;
+
+    await session.updateTask('t1', { ...smuggled, title: 'Renamed' });
+
+    expect(taskOf(session, 't1')).toMatchObject({ status: 'pending', title: 'Renamed', subtasks: [] });
+    expect(taskOf(session, 't1')?.verdict).toBeUndefined();
+    expect(updates().map((u) => u.changes)).toEqual([{ title: 'Renamed' }]);
+  });
+
+  it('saves nothing for a patch of fields a direct edit may not set, and still answers that the task exists', async () => {
+    const { session, order } = loaded();
+
+    expect(await session.updateTask('t1', { status: 'completed' })).not.toBeNull();
+    expect(await session.updateTask('ghost', { status: 'completed' })).toBeNull();
+
+    expect(taskOf(session, 't1')?.status).toBe('pending');
+    expect(order).toEqual([]);
+  });
+
+  it('adds a task with only the fields a new task may be given', async () => {
+    const { session } = loaded();
+
+    await session.addTask({ title: 'Docs', prompt: 'write docs', status: 'completed', subtasks: [createTask({ id: 'x', title: 'Smuggled' })] } as Partial<Task>);
+
+    expect(session.planTasks.at(-1)).toMatchObject({ title: 'Docs', status: 'pending', subtasks: [] });
   });
 
   // The direct-edit reschedule covers a field patch as it covers add and remove.

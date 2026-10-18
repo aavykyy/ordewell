@@ -128,7 +128,7 @@ describe('model allowlist wiring', () => {
     expect(plan.tasks[0].assignedModel?.thinkingEffort).toBeUndefined();
   });
 
-  it('loadPlan does NOT call filterModelsForPrompt or coerceAssignments (keeps stored modelId as-is)', () => {
+  it('loadPlan does NOT filter or resolve assignments (keeps stored modelId as-is)', () => {
     const session = makeSession();
     const plan: LegacyPlanState = {
       tasks: [createTask({

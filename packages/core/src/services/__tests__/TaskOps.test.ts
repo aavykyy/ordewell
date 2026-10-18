@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { applyTaskOps, parseTaskOpsJson, textHasTaskOps, canMergeTasks, canSplitTask } from '../TaskOps';
-import { validateTaskEdit } from '../TaskEditValidator';
+import { resolveAssignment } from '../TaskAssignment';
 import { blockingFailures } from '../blocking';
 import { validatePlanTasks } from '../PlanValidator';
 import { PlanParseError } from '../JsonExtractor';
@@ -542,7 +542,7 @@ describe('applyTaskOps — model and task-mode validity', () => {
   });
 
   // Thinking effort is an alias-resolution problem, not an invention problem
-  // (clampThinkingEffort handles it downstream in coerceAssignments) — a
+  // (the assignment resolver clamps it to what the model offers) — a
   // differently-spelled effort must never be refused here.
   it('never refuses on thinkingEffort spelling — that stays the clamp\'s job', () => {
     const res = applyTaskOps(samplePlan(), [
@@ -1133,6 +1133,8 @@ describe('applyTaskOps — the mode a planner edit lands a task on (ADR-0031)', 
   });
 
   it('leaves the user\'s own edit alone: any mode the runner has, at either level', () => {
-    expect(validateTaskEdit('direct', samplePlan(), 'a', { taskMode: 'bypassPermissions' }, catalog(false))).toEqual({ ok: true });
+    const before = samplePlan()[0];
+    const outcome = resolveAssignment({ writer: 'user', task: { ...before, taskMode: 'bypassPermissions' }, before, catalog: catalog(false) });
+    expect(outcome).toMatchObject({ ok: true, task: { taskMode: 'bypassPermissions' } });
   });
 });

@@ -51,8 +51,8 @@ model belongs to that runner.**
   in the runner; the allowlist is advice to the planner (ADR-0003, P1).
 - **Effort is written only when the runner reports one.** Claude Code does not:
   `init` names the model alone, and `/model` takes no effort. The plan's effort
-  stays, clamped to what the new model offers; a model discovery does not list
-  gets none.
+  stays, carried to the new model by the one rule every model change follows
+  (its nearest level, ADR-0003 T2); a model discovery does not list gets none.
 - **The task log says what the plan made of it.** `model_switched` is logged
   after the write-back settles, from its outcome, so it never claims an edit
   that did not land: "the plan now says …", or "the plan still says …" with why.
@@ -77,17 +77,18 @@ runner's own command and the plan does not follow it.
 
 ### Model and effort are locked while a task's runner is live
 
-For every actor, a task's model and effort cannot change while an attempt of it
-is live: `validateTaskEdit` refuses with the reason, a model cleared as much as
-one replaced. Nor can its runner, which would re-derive both; a move whose
+For every writer, a task's model and effort cannot change while an attempt of it
+is live — claimed, running, quiet or waiting on someone, the one test of a live
+runner, never the task's status: the assignment resolver (`resolveAssignment`)
+refuses with the reason, a model cleared as much as one replaced. Nor can its runner, which would re-derive both; a move whose
 discovery the task started during is refused too. **Stop, edit, continue is
 the outside path**, and the runner's own `/model` is the inside one. The
 write-back above is the one model edit a live runner allows, since it records
-what that runner already runs. A planner edit or restatement leaves a task's
-model alone where it names the runner, model and effort the plan holds: the
-allowlist shapes what the planner writes, not a model the user switched to
-(ADR-0043). Its effort is still clamped to what that model offers now, unless
-the task is running or paused, where a runner may hold it.
+what that runner already runs. A planner edit or restatement, or a user's edit,
+leaves a task's model alone where it names the runner and model the plan holds,
+an edit of the effort alone included: the allowlist shapes what is written, not
+a model the user switched to (ADR-0043). Its effort is still clamped to what
+that model offers now, unless its runner is live and holds it.
 
 ### A task's usage is its whole spend
 
@@ -165,3 +166,4 @@ of the earlier runner's attempt restored (ADR-0018, K1).
 - 2026-10-17 — a planner edit still clamps an untouched task's effort unless a runner may hold it; a Continue keeps its session's window.
 - 2026-10-17 — a Continue that measured nothing keeps the window its session was last measured against.
 - 2026-10-17 — an attempt's ledger names the runner session it ran in, so that window is found by session: a fresh session never borrows another's.
+- 2026-10-18 — the hold and the untouched model are the assignment resolver's, for every writer; a live runner is one test, an attempt that exists, not the task's status; an edit of the effort alone leaves the model untouched; the plan's effort follows a `/model` by the one rule.

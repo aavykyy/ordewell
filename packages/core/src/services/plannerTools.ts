@@ -3,7 +3,7 @@ import type { SkillInfo } from './SkillsService';
 import { modelInvocablePlannerSkills, snapshotSkill } from './skillInvocation';
 import { autonomyLevelLabel, readOnlyMode } from './ModeResolver';
 import { validatePlanTasks } from './PlanValidator';
-import type { CoercedTasks, Coercion } from './ModelAllowlistResolver';
+import type { AssignmentAdjustment } from './TaskAssignment';
 import {
   fitTail, taskQuerySignature, OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX, OUTPUT_TAIL_MAX_CHARS, TASK_QUERY_TASK_FIELDS, TASK_READ_ANSWER_OR_EDIT,
   type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog, type TaskQueryField,
@@ -32,8 +32,8 @@ export interface PlannerToolsHost {
   recordSkillLoad(skill: SkillLoad): boolean;
   /** Enabled runners, their modes and their allowlisted models, as of now. */
   liveCatalog(): Promise<TaskQueryCatalog>;
-  /** The assignments a commit of these tasks would land, under the allowlist in force (ADR-0003). */
-  coerce(tasks: readonly Task[]): CoercedTasks;
+  /** What landing these tasks would change in their assignments, under the catalog and allowlist in force (ADR-0003). */
+  adjustments(tasks: readonly Task[]): AssignmentAdjustment[];
   /** Hand a validated plan to the open planner turn. False when no turn is open. */
   submitPlan(tasks: Task[]): boolean;
   /** Check a batch against the live catalog and hand it to the open planner turn, which commits it as it settles. */
@@ -72,8 +72,8 @@ export const PLANNER_TURN_ENDED = 'The planning turn this call was made in has e
 
 /** What an edit made through the tool came to. */
 export type PlanEditOutcome =
-  // An edit's tasks get their ids as it lands, so what coercion changed is named by title.
-  | { ok: true; summary: string[]; coerced?: Omit<Coercion, 'taskId'>[] }
+  // An edit's tasks get their ids as it lands, so what its assignments were adjusted to is named by title.
+  | { ok: true; summary: string[]; coerced?: Omit<AssignmentAdjustment, 'taskId'>[] }
   | { ok: false; errors: string[] };
 
 /** The runners a set of tasks runs on. A user task runs on none. */
@@ -169,7 +169,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       }
 
       const warnings = [...(result.warnings ?? []), ...skills.warnings];
-      const { coerced } = host.coerce(result.tasks);
+      const coerced = host.adjustments(result.tasks);
       if (!host.submitPlan(result.tasks)) {
         return { isError: true, text: JSON.stringify({ ok: false, errors: [{ field: 'tasks', message: 'No planning turn is open to take the plan.' }] }) };
       }

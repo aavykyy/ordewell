@@ -7,8 +7,6 @@ describe('task editing routes', () => {
   let app: Hono;
   let session: {
     updateTask: ReturnType<typeof vi.fn>;
-    setTaskRunner: ReturnType<typeof vi.fn>;
-    setTaskDependencies: ReturnType<typeof vi.fn>;
     addTask: ReturnType<typeof vi.fn>;
     removeTask: ReturnType<typeof vi.fn>;
     markTaskIncomplete: ReturnType<typeof vi.fn>;
@@ -19,8 +17,6 @@ describe('task editing routes', () => {
   beforeEach(async () => {
     session = {
       updateTask: vi.fn().mockReturnValue({ tasks: [] }),
-      setTaskRunner: vi.fn().mockResolvedValue({ tasks: [] }),
-      setTaskDependencies: vi.fn().mockReturnValue({ tasks: [] }),
       addTask: vi.fn().mockResolvedValue({ tasks: [] }),
       removeTask: vi.fn().mockReturnValue({ tasks: [] }),
       markTaskIncomplete: vi.fn().mockResolvedValue(undefined),
@@ -41,26 +37,22 @@ describe('task editing routes', () => {
   });
 
   describe('PUT with dependencies', () => {
-    it('routes the list to setTaskDependencies, which validates it', async () => {
-      const res = await put({ dependencies: ['a', 'b'] });
+    // The session checks the list against the whole plan, with the rest of the patch, in one edit.
+    it('hands the list to updateTask with the rest of the patch', async () => {
+      const res = await put({ dependencies: ['a'], prompt: 'rewritten' });
 
       expect(res.status).toBe(200);
-      expect(session.setTaskDependencies).toHaveBeenCalledWith('t1', ['a', 'b']);
-      expect(session.updateTask).not.toHaveBeenCalled();
+      expect(session.updateTask).toHaveBeenCalledWith('t1', { dependencies: ['a'], prompt: 'rewritten' });
     });
 
-    it('routes a cleared list too, rather than reading it as an absent field', async () => {
-      const res = await put({ dependencies: [] });
+    it('hands a cleared list over too, rather than reading it as an absent field', async () => {
+      await put({ dependencies: [] });
 
-      expect(res.status).toBe(200);
-      expect(session.setTaskDependencies).toHaveBeenCalledWith('t1', []);
-      expect(session.updateTask).not.toHaveBeenCalled();
+      expect(session.updateTask).toHaveBeenCalledWith('t1', { dependencies: [] });
     });
 
     it('reports a refused edit as a client error, with the reason', async () => {
-      session.setTaskDependencies.mockImplementation(() => {
-        throw new Error('"Setup" cannot depend on "Test", which comes after it in the plan');
-      });
+      session.updateTask.mockRejectedValue(new PlanEditError('"Setup" cannot depend on "Test", which comes after it in the plan'));
 
       const res = await put({ dependencies: ['t3'] });
 
@@ -68,24 +60,10 @@ describe('task editing routes', () => {
       expect((await res.json() as { error: string }).error).toMatch(/comes after it/);
     });
 
-    it('applies the rest of the patch alongside the dependencies', async () => {
-      const res = await put({ dependencies: ['a'], prompt: 'rewritten' });
-
-      expect(res.status).toBe(200);
-      expect(session.setTaskDependencies).toHaveBeenCalledWith('t1', ['a']);
-      expect(session.updateTask).toHaveBeenCalledWith('t1', { prompt: 'rewritten' });
-    });
-
     it('404s when the task does not exist', async () => {
-      session.setTaskDependencies.mockReturnValue(null);
+      session.updateTask.mockReturnValue(null);
 
       expect((await put({ dependencies: [] })).status).toBe(404);
-    });
-
-    it('never lets a dependency list reach updateTask unvalidated', async () => {
-      await put({ dependencies: ['a'], prompt: 'x' });
-
-      expect(session.updateTask).not.toHaveBeenCalledWith('t1', expect.objectContaining({ dependencies: expect.anything() }));
     });
   });
 

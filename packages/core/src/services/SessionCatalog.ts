@@ -1,11 +1,10 @@
 import type { TaskQueryCatalog } from './TaskQuery';
-import type { EditCatalog } from './TaskEditValidator';
-import type { RunnerCatalog } from './TaskRetarget';
+import { assignableRunners, type AssignmentCatalog, type AssignmentWriter, type RunnerCatalog } from './TaskAssignment';
 import type { ModelResolver } from './ModelResolver';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { IConfig } from '../interfaces/IConfig';
 import { filterModelsForPrompt } from './ModelAllowlistResolver';
-import { runnerModesFrom, resolveDefaultMode, type RunnerModeInfo } from './ModeResolver';
+import { runnerModesFrom, type RunnerModeInfo } from './ModeResolver';
 import type { AssignmentScope } from './AssignmentScope';
 import { runnerForProvider } from './ProviderRegistry';
 import type { DiscoveredModel, RunnerId } from '../models/Task';
@@ -45,6 +44,11 @@ export class SessionCatalog {
       .filter((runner) => this.deps.registry.getManifest(runner) !== undefined);
   }
 
+  /** The runners `writer` may put a task on now ({@link assignableRunners}); undefined means any. */
+  runnersFor(writer: AssignmentWriter): RunnerId[] | undefined {
+    return assignableRunners(writer, this.enabledRunners(), this.deps.planRunners());
+  }
+
   /**
    * The allowlist in force right now. Unset means no restriction — falling
    * back to the one planning started under would keep a restriction the user
@@ -57,11 +61,6 @@ export class SessionCatalog {
   /** The enabled runners and allowlist together, for whoever compares an assignment with them. */
   scope(): AssignmentScope {
     return { enabledRunners: this.enabledRunners(), allowlist: this.allowlist(), models: this.models() };
-  }
-
-  /** The models the user allows on one runner; unset means no restriction. */
-  allowlistFor(runner: RunnerId): string[] | undefined {
-    return this.allowlist()[runner];
   }
 
   /**
@@ -127,7 +126,7 @@ export class SessionCatalog {
    * reads this, so it can never offer a different set than `list_runners`.
    */
   current(): TaskQueryCatalog {
-    return this.queryCatalog(this.enabledRunners());
+    return this.queryCatalog(this.runnersFor('plan') ?? []);
   }
 
   queryCatalog(runners: RunnerId[]): TaskQueryCatalog {
@@ -143,14 +142,13 @@ export class SessionCatalog {
   }
 
   /**
-   * The catalog a model/task-mode edit is checked against — the same
-   * discovered models and manifest modes the per-turn catalog block shows the
-   * planner, so a refusal here can never name something invalid that the
-   * planner was never told about. The catalog is not filtered by the
-   * allowlist here — `checkModelAndModeValidity` narrows by allowlist itself,
-   * the same way `coerceAssignments` does.
+   * The catalog an assignment is resolved against — the same discovered
+   * models and manifest modes the per-turn catalog block shows the planner,
+   * so a refusal can never name something invalid that the planner was never
+   * told about. The models are not filtered by the allowlist here: the
+   * resolver reads the allowlist itself (`resolveAssignment`).
    */
-  edit(runners: RunnerId[] = this.deps.planRunners()): EditCatalog {
+  edit(runners: RunnerId[] = this.deps.planRunners()): AssignmentCatalog & { runnerModes: Record<RunnerId, RunnerModeInfo[]> } {
     return {
       modelsByRunner: this.models(),
       runnerModes: this.modes(runners),
@@ -160,13 +158,11 @@ export class SessionCatalog {
     };
   }
 
-  /** What a runner offers, as `runnerAssignment` needs it. Spawns the runner's CLI to list models. */
+  /** What a runner offers a task moved to it or added on it. Spawns the runner's CLI to list models. */
   async runner(runner: RunnerId): Promise<RunnerCatalog> {
-    const modes = this.modes([runner])[runner];
     return {
       models: (await this.deps.modelResolver.modelsForRunners([runner]))[runner] ?? [],
-      modes,
-      defaultMode: resolveDefaultMode(modes, this.deps.config.autonomousMode),
+      modes: this.modes([runner])[runner],
     };
   }
 

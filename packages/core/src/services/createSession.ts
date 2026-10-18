@@ -24,7 +24,7 @@ import { sharedWebResponseCache } from './WebResponseCache';
 import { sharedSearchProvider } from './DuckDuckGoSearchProvider';
 import { PROVIDER_PRIORITY, runnerForProvider } from './ProviderRegistry';
 import { ModelResolver } from './ModelResolver';
-import { coerceAssignments } from './ModelAllowlistResolver';
+import { resolveAssignments } from './TaskAssignment';
 import { plannerModesFrom } from './plannerModes';
 import { RUN_SETTINGS_DEFAULTS, runSettingsOf, type GlobalRunSettings, type UserSettings } from './SettingsService';
 import { SkillsService } from './SkillsService';
@@ -516,7 +516,7 @@ export class Session {
     turnId: () => this.conversation.currentTurnId,
     recordSkillLoad: (skill) => this.conversation.recordPlannerSkill(skill),
     liveCatalog: () => this.liveCatalog(),
-    coerce: (tasks) => coerceAssignments(tasks, this.catalog.allowlist(), this.catalog.models(), this.store.planTasks),
+    adjustments: (tasks) => resolveAssignments(tasks, this.store.planTasks, this.catalog.edit()).adjustments,
     submitPlan: (tasks) => this.submitPlanFromTool(tasks),
     editPlan: (ops) => this.editPlanFromTool(ops),
     tasks: () => this.store.planTasks,
@@ -821,12 +821,12 @@ export class Session {
   }
 
   /**
-   * The runners a planner edit may put a task on: the plan's own, and every
-   * runner enabled now. An edit is checked as it is made and again as it lands
-   * against this one set, so what was accepted cannot be refused at commit.
+   * The runners a planner edit may put a task on (`assignableRunners`). An
+   * edit is checked as it is made and again as it lands against this one set,
+   * so what was accepted cannot be refused at commit.
    */
   private editRunners(): RunnerId[] {
-    return [...new Set([...(this.plan?.runners ?? []), ...this.catalog.enabledRunners()])];
+    return this.catalog.runnersFor('edit') ?? [];
   }
 
   /**
@@ -1519,8 +1519,9 @@ export class Session {
     const result = this.checkPlannerOps(ops, held);
     if (!result.ok) return { ok: false, errors: result.errors };
     if (!this.conversation.submit({ kind: 'task_ops', ops: [...held, ...ops] })) return refuse('No planning turn is open to take the edit.');
-    const { coerced } = coerceAssignments(result.tasks, this.catalog.allowlist(), this.catalog.models(), this.store.planTasks);
-    return { ok: true, summary: result.summary, coerced: coerced.map(({ taskId: _id, ...rest }) => rest) };
+    // What the edit's own ops were adjusted to, then what landing them would change besides, an untouched task's effort say.
+    const adjusted = [...(result.adjustments ?? []), ...resolveAssignments(result.tasks, this.store.planTasks, this.catalog.edit()).adjustments];
+    return { ok: true, summary: result.summary, coerced: adjusted.map(({ taskId: _id, ...rest }) => rest) };
   }
 
   /** Whether the planner conversation is live (started and not yet committed to a plan). */
@@ -1589,7 +1590,7 @@ export class Session {
     for (const runner of runnersOf(tasks)) this.editor.admitRunner(runner, this.catalog.known(runner));
     const runners = this.plan!.runners;
     const before = this.store.planTasks;
-    let coerced = coerceAssignments(tasks, this.catalog.allowlist(), this.catalog.models(), before).tasks;
+    let coerced = resolveAssignments(tasks, before, this.catalog.edit(runners)).tasks;
     if (how === 'commit') coerced = keepExecutionState(before, carryPlannedModes(before, coerced, this.catalog.edit(runners)));
     // Tasks an Act supervisor adds are approved to run, ops tasks included (ADR-0029): choosing Act was the consent.
     const bySupervisor = this.supervisorEditing();

@@ -1355,6 +1355,36 @@ describe('one intake for submit_plan and edit_plan', () => {
     expect(errorsOf(second!)).toEqual([{ op: 1, kind: 'add', message: 'Task "Docs" has invalid assignedRunner "nope". Expected one of: claude-code' }]);
     expect(planner.session.planTasks.map((t) => t.title)).toEqual(['First', 'Task b']);
   });
+
+  // Bug: a move kept the old runner's model, and the planner was told nothing.
+  it('refills the model of a task moved to another runner from that runner, and says so', async () => {
+    const both = { enabledRunners: ['claude-code', 'codex'] };
+    const edit = await viaEdit([{ op: 'update', taskId: '#1', changes: { assignedRunner: 'codex' } }], both);
+
+    expect(edit.answer.isError).toBe(false);
+    expect(edit.tasks[0]).toMatchObject({ assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5' } });
+    expect((edit.answer.body as { coerced: unknown }).coerced).toContainEqual({ title: 'Task a', field: 'assignedModel', from: 'claude-sonnet-4', to: 'gpt-5' });
+  });
+
+  it('refills a split part or a merged task that names only another runner, and says so', async () => {
+    const both = { enabledRunners: ['claude-code', 'codex'] };
+    const split = await viaEdit([{ op: 'split', taskId: '#2', parts: [{ title: 'Half one' }, { title: 'Half two', assignedRunner: 'codex' }] }], both);
+    const merge = await viaEdit([{ op: 'merge', taskIds: ['#1', '#2'], merged: { title: 'Both', assignedRunner: 'codex' } }], both);
+
+    expect(split.tasks.map((t) => [t.title, t.assignedRunner, t.assignedModel?.modelId])).toEqual([
+      ['Task a', 'claude-code', 'claude-sonnet-4'], ['Half one', 'claude-code', 'claude-sonnet-4'], ['Half two', 'codex', 'gpt-5'],
+    ]);
+    expect((split.answer.body as { coerced: unknown }).coerced).toEqual([{ title: 'Half two', field: 'assignedModel', from: 'claude-sonnet-4', to: 'gpt-5' }]);
+    expect(merge.tasks[0]).toMatchObject({ title: 'Both', assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5' } });
+    expect((merge.answer.body as { coerced: unknown }).coerced).toEqual([{ title: 'Both', field: 'assignedModel', from: 'claude-sonnet-4', to: 'gpt-5' }]);
+  });
+
+  it('refills a submitted task whose model only another runner lists, and says so', async () => {
+    const submit = await viaSubmit([planTask('a', 1, 'codex', 'claude-sonnet-4')], { enabledRunners: ['claude-code', 'codex'] });
+
+    expect(submit.tasks[0]).toMatchObject({ assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5' } });
+    expect((submit.answer.body as { coerced: unknown }).coerced).toEqual([{ taskId: 'a', title: 'Task a', field: 'assignedModel', from: 'claude-sonnet-4', to: 'gpt-5' }]);
+  });
 });
 
 describe('what the planner says around a plan or edit it submits', () => {
@@ -1640,7 +1670,7 @@ describe('a submission whose planner turn ends while its skill check runs', () =
       turnId: () => state.turn,
       recordSkillLoad: () => false,
       liveCatalog: async () => ({ runners: ['claude-code'], models: { 'claude-code': [{ modelId: 'claude-sonnet-4', modelLabel: 'Sonnet', variants: [] }] }, modes: {}, autonomousDefault: true }),
-      coerce: (tasks) => ({ tasks: [...tasks], coerced: [] }),
+      adjustments: () => [],
       submitPlan: vi.fn(() => true),
       editPlan: vi.fn(async () => ({ ok: true as const, summary: [], queued: false })),
       tasks: () => [],
@@ -1706,7 +1736,7 @@ describe('task references in the read tools', () => {
     turnId: () => 'turn-1',
     recordSkillLoad: () => false,
     liveCatalog: async () => ({ runners: ['claude-code'], models: {}, modes: {}, autonomousDefault: true }),
-    coerce: (tasks) => ({ tasks: [...tasks], coerced: [] }),
+    adjustments: () => [],
     submitPlan: () => true,
     editPlan: async () => ({ ok: true as const, summary: [], queued: false }),
     tasks: () => plan,

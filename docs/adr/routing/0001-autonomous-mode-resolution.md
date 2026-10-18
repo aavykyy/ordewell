@@ -69,7 +69,10 @@ Concretely:
   survives. A read-only task on a runner with no read-only mode is refused.
 - **Manual per-task override in the UI wins at every level.** The dropdown
   offers every mode the runner has, and the user's own edits are not checked
-  against the level.
+  against the level. A user's edit that names no mode gets one the way the
+  planner's does where it needs one — a move to another runner, a manual task
+  turned into an AI one, a task added — so a mode picked by hand is never
+  rewritten and no task lands on a mode its runner lacks.
 
 ### The planner says read-only, not a mode (ADR-0031)
 
@@ -149,7 +152,12 @@ writing.
 
 - **The per-task mode dropdown** on every surface, and the CLI's mode commands,
   keep every mode the runner offers. A user moving a read-only task to another
-  runner lands it on that runner's read-only mode, found by tag, not by id.
+  runner lands it on that runner's read-only mode, found by tag, not by id, and
+  a move to a runner with none is refused, as the planner's is: the user gives
+  it another mode first. A user turning a manual task into an AI one gets the
+  level's mode, as the planner's would. The rules the plan's tasks keep together
+  hold for the user's edits too: one that would put an ops task on its runner's
+  read-only mode is refused.
 - **Saved plans load as they are.** Their tasks already carry concrete modes,
   including modes the planner chose under the old rule. Nothing is migrated.
 
@@ -240,8 +248,10 @@ writing.
 - The level decides the planner's tasks; it never overrides a human's
   explicit choice.
 - `ModeResolver` loses `buildModeGuide`, `filteredBuildModes` and
-  `resolveTaskMode`, and gains the fill-in table above as one function; the edit
-  path and the plan parser both call it. The Guarded ceiling on planner edits
+  `resolveTaskMode`, and gains the fill-in table above as one function
+  (`plannedMode`). The assignment resolver (`resolveAssignment`) decides when
+  it applies and calls it for every writer: the plan parser, the planner's
+  edits, and the user's edits and added tasks. The Guarded ceiling on planner edits
   goes: the planner can no longer name a mode for it to refuse.
 - The plan block, `list_runners`, the catalog read and `edit_plan`'s
   summaries show `read-only` and which runners take it, never a
@@ -278,3 +288,4 @@ writing.
   user sends in a task's chat is written to the plan as their edit, and a model
   the runner moves to on its own is stated, never written
   ([ADR-0041](0041-a-tasks-model-follows-the-runners-own-switch.md)).
+- 2026-10-18 — one assignment resolver derives the mode for every writer: a user's move of a read-only task to a runner without a read-only mode is refused, a manual task the user turns into an AI one gets the level's mode, and a user's edit may not put an ops task on a read-only mode.

@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import type { DiscoveredModel, TaskModelAssignment } from '@ordewell/core';
+import { clampThinkingEffort } from '@ordewell/core/plan-utils';
 
 type ApiProvider = 'openrouter' | 'google' | 'openai_compatible' | 'openai' | 'xai' | 'groq' | 'deepseek' | 'together' | 'mistral' | 'anthropic' | 'fireworks' | 'perplexity' | 'zhipu' | 'kimi' | 'cerebras' | 'deepinfra' | 'doubao' | 'qwen' | 'hunyuan' | 'baichuan' | 'minimax' | 'yi' | 'stepfun' | 'siliconflow' | 'cohere' | 'novita';
 
@@ -268,15 +269,13 @@ export default function ModelSelector({
   };
 
   const handleSelect = (model: DiscoveredModel) => {
-    // Carry the effort over only when the new model actually offers it;
-    // otherwise fall back to the runner default so the badge never claims a
+    // Core's one rule for an effort through a model change: its nearest level
+    // on the new model, none where it has none, so the badge never claims a
     // variant the session won't use.
-    const carried = currentModel?.thinkingEffort;
-    const valid = carried && model.variants.some((v) => v.id === carried);
     onChange({
       modelId: model.modelId,
       modelLabel: model.modelLabel,
-      thinkingEffort: valid ? carried : undefined,
+      thinkingEffort: clampThinkingEffort(currentModel?.thinkingEffort, model.variants),
       availableVariants: model.variants.map((v) => v.id),
     });
     setSearch('');

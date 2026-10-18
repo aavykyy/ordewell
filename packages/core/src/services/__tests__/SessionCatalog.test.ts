@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SessionCatalog, type SessionCatalogDeps } from '../SessionCatalog';
-import { coerceAssignments } from '../ModelAllowlistResolver';
+import { resolveAssignments } from '../TaskAssignment';
 import { createTask, type DiscoveredModel, type RunnerId } from '../../models/Task';
 import type { PlannerBackendId } from '../../interfaces/IConfig';
 
@@ -61,8 +61,6 @@ describe('SessionCatalog enabled runners and allowlist', () => {
   it('reads the allowlist live, and unset means no restriction', () => {
     const { catalog, setSettings } = setup({ settings: { modelAllowlist: { codex: ['gpt-5'] } } });
     expect(catalog.allowlist()).toEqual({ codex: ['gpt-5'] });
-    expect(catalog.allowlistFor('codex')).toEqual(['gpt-5']);
-    expect(catalog.allowlistFor('claude-code')).toBeUndefined();
 
     setSettings({});
     expect(catalog.allowlist()).toEqual({});
@@ -156,14 +154,13 @@ describe('SessionCatalog views', () => {
     expect(ids(catalog.known('claude-code'))).toEqual(['sonnet', 'haiku']);
   });
 
-  it('describes one runner with its models, modes and default mode, without remembering it', async () => {
+  it('describes one runner with its models and modes, without remembering it', async () => {
     const { catalog } = setup({ discovered: { codex: [model('gpt-5')] } });
 
     const runner = await catalog.runner('codex');
 
     expect(ids(runner.models)).toEqual(['gpt-5']);
     expect(runner.modes).toEqual(MODES);
-    expect(runner.defaultMode).toBe('agent');
     expect(catalog.known('codex')).toEqual([]);
   });
 });
@@ -188,18 +185,18 @@ describe('SessionCatalog.admit', () => {
     expect(ids(catalog.known('codex'))).toEqual(['gpt-5']);
   });
 
-  it('gives coercion the variants it clamps an admitted runner\'s effort against', () => {
+  it('gives the resolver the variants it clamps an admitted runner\'s effort against', () => {
     const { catalog } = setup();
     const task = createTask({
       id: 't1', order: 1, title: 'T', prompt: 'p', assignedRunner: 'codex',
       assignedModel: { modelId: 'gpt-5', modelLabel: 'gpt-5', thinkingEffort: 'xhigh' },
     });
 
-    const unadmitted = coerceAssignments([task], catalog.allowlist(), catalog.models()).tasks;
+    const unadmitted = resolveAssignments([task], [], catalog.edit()).tasks;
     expect(unadmitted[0].assignedModel?.thinkingEffort).toBe('xhigh');
 
     catalog.admit('codex', [model('gpt-5', ['low', 'high'])]);
-    const admitted = coerceAssignments([task], catalog.allowlist(), catalog.models()).tasks;
+    const admitted = resolveAssignments([task], [], catalog.edit()).tasks;
     expect(admitted[0].assignedModel?.thinkingEffort).toBe('high');
     expect(admitted[0].assignedModel?.availableVariants).toEqual(['low', 'high']);
   });

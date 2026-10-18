@@ -1,3 +1,4 @@
+import { clampThinkingEffort } from '@ordewell/core/plan-utils';
 import type { ModeView, ModelView, TaskView } from './state';
 
 /**
@@ -36,10 +37,14 @@ export function effortsForTask(models: ModelView[], task: TaskView): { id: strin
   }));
 }
 
-/** Carries the current effort over only if the new model still supports it, so switching models never leaves a stale effort assigned. */
+/**
+ * The assignment a picked model makes, carrying the current effort by core's
+ * one rule: kept where the new model offers it, else its nearest level, none
+ * where it has none — so switching models never leaves a stale effort assigned.
+ */
 export function assignedModelFor(model: ModelView, currentEffort: string | undefined): NonNullable<TaskView['assignedModel']> {
   const variants = model.variants ?? [];
-  const thinkingEffort = variants.some((variant) => variant.id === currentEffort) ? currentEffort : undefined;
+  const thinkingEffort = clampThinkingEffort(currentEffort, variants);
   return {
     modelId: model.id,
     modelLabel: model.label,

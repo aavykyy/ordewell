@@ -355,34 +355,14 @@ export function plansRoute(pool: OrchestratorPool) {
 
   router.put('/:sessionId/tasks/:taskId', async (c) => {
     try {
-      const { assignedRunner, dependencies, ...rest } = await c.req.json();
+      const changes = await c.req.json();
       // JSON cannot carry undefined, so a null is a client clearing the model.
-      if (rest.assignedModel === null) rest.assignedModel = undefined;
-      const session = pool.session(c.req.param('sessionId'));
-      const taskId = c.req.param('taskId');
-
-      // Two fields are not field writes. A runner change carries the task's
-      // model, effort and mode with it, and a dependency list has to be
-      // validated against the whole graph — each has one owner on the session.
-      // The runner goes first: its retarget derives a model, and an explicit
-      // model in the same patch must win over that derived one.
-      const hasRunner = typeof assignedRunner === 'string';
-      const hasDeps = Array.isArray(dependencies);
-
-      let result = null;
-      if (hasRunner) result = await session.setTaskRunner(taskId, assignedRunner);
-      if (hasDeps) {
-        try {
-          result = await session.setTaskDependencies(taskId, dependencies.map(String));
-        } catch (err) {
-          // A rejected dependency edit is the client's mistake, not a fault.
-          return failure(c, err, 'task dependencies', { fallback: 400 });
-        }
-      }
-      // An empty patch still reaches updateTask — that is how a caller asks
-      // whether the task exists at all.
-      if (Object.keys(rest).length > 0 || (!hasRunner && !hasDeps)) result = await session.updateTask(taskId, rest);
-
+      if (changes.assignedModel === null) changes.assignedModel = undefined;
+      // One edit, whatever it holds: the session takes the fields a direct
+      // edit may set, moves the runner with what it scopes, checks the
+      // dependency list against the whole plan, and lands it as one save. An
+      // empty patch still asks whether the task exists at all.
+      const result = await pool.session(c.req.param('sessionId')).updateTask(c.req.param('taskId'), changes);
       if (!result) return refuse(c, 404, 'Task not found', 'task_not_found');
       return c.json({ ok: true } satisfies OkResponse);
     } catch (err) {

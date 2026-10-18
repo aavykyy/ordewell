@@ -150,9 +150,10 @@ planner tools are recorded here as an explicit entry against both:
   `.ordewell/` or an arbitrary git ref (ADR-0012).
 - **The only writes are `submit_plan` and `edit_plan` (P2).** They go through
   the same validation and commit path as the envelopes they replace: the live
-  catalog, `coerceAssignments` (ADR-0003: a stray model id is coerced to
-  `allowlist[0]` with its effort cleared, and the result reports the
-  coercion), and `applyTaskOps` with `TaskEditValidator` (ADR-0012). The same
+  catalog, the assignment resolver (ADR-0003: a stray model id in a
+  submitted plan is replaced by the allowlist's, its effort carried to the
+  nearest level, and the result reports the adjustment), and `applyTaskOps`
+  with `TaskEditValidator` (ADR-0012). The same
   tasks produce the same plan by either route, and the plan stays the source
   of truth (ADR-0001). A structural edit during a live run applies at once to
   tasks not yet started and is refused, with a note, for a running or
@@ -271,3 +272,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-13 — S3 by exact name: OpenCode's `ordewell_*` rule and the Claude Code and OpenCode prefix matches pre-approved a repository server named `ordewell_x`'s tools; checked against OpenCode 2.0.27's tool naming.
 - 2026-10-14 — `skip_task` joins the execution tools ([ADR-0029](../supervision/0029-the-supervisor.md)).
 - 2026-10-17 — the live enabled runners (L1) are read from one settings file shared with VS Code, and the planner is told on its next turn what changed ([ADR-0043](../routing/0043-a-change-of-scope-reaches-the-planner-and-flags-tasks.md)).
+- 2026-10-18 — `submit_plan` and `edit_plan` report what the assignment resolver adjusted, an edit's own ops included (P2, [ADR-0003](../routing/0003-per-runner-model-allowlist.md)).
