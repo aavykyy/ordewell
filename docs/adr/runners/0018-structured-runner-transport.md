@@ -213,15 +213,18 @@ and completion evidence.
   ([ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md)). The attempt ends
   as a verdict would end it (L1), the task is `awaiting_user` with reason
   `usage-limit`, and the run holds: every other start would spend the same
-  exhausted limit. When the runner's message says when the limit resets
+  exhausted limit. A held run stays open
+  ([ADR-0034](../supervision/0034-a-failed-task-blocks-only-its-dependents.md)):
+  with nothing left at work it is neither handed over nor merged at its end,
+  and sends no `execution_complete`. When the runner's message says when the limit resets
   (`readUsageLimitReset`, beside `classifyRunnerStop`: Claude Code and Codex
   do; OpenCode passes its provider's error through and adds no time), the task
   gets a resume time, saved with the plan: the reset plus a minute. Tasks
   paused on one runner share one wait, at the latest of their resets, and
   resume together. A resume is a continue (K1) of the task's saved session —
   a fresh attempt where none was saved — told the limit has reset, and once
-  nothing else waits on a reset and no task has failed, the hold on the run is
-  released. Its message says the limit has reset and reports what K1 did with
+  nothing else waits on a reset, the hold on the run is released, whether or
+  not a task failed meanwhile (ADR-0034). Its message says the limit has reset and reports what K1 did with
   the previous work: restored in the working tree, or a conflict fallback to
   the integration tips with the preserved branches named. The saved session
   and its working files must agree for an unattended run to carry on after a
@@ -229,7 +232,11 @@ and completion evidence.
   now* (`resumeNow`) — on the task row, or a message sent to the paused task,
   which follows the reset notice in the same continuation — resumes it in its
   saved session at once, with or without a resume time, and with it every task
-  waiting on that runner's reset, as the reset itself would. The planner and
+  waiting on that runner's reset, as the reset itself would. A Resume now the
+  asked task cannot take — every slot taken, or the task not approved — is
+  refused before anything changes, so every resume at the reset stands. A task
+  it sweeps along that cannot start keeps its resume time and waits for the
+  reset; only at the reset does one that cannot start wait for the user. The planner and
   the supervisor ask for it with `retry_task` from `session`, or `message_task`;
   a pause is not a failure, so the supervisor's identical-retry guard does not
   apply, though it counts against its retry limit. A task with no saved session
@@ -237,7 +244,10 @@ and completion evidence.
   automatic or asked for, that hits the limit again within five minutes waits
   for a manual retry, and says so. A plan loaded with a resume time still ahead
   waits for it again; one that
-  passed while nothing ran — the daemon was down — resumes at once. Cancelling
+  passed while nothing ran — the daemon was down — resumes at once. The hold
+  lives with the run, not the plan: a loaded plan has no run, so its reset
+  resumes only the paused tasks, and the rest of the plan waits for Execute, as
+  any run does after a restart. Cancelling
   the resume (the task row and the task view) and stopping the run
   both leave the task waiting for a manual retry, as one with no readable
   reset waits. Moving a task to another runner, through a direct edit or the
@@ -419,3 +429,4 @@ transport is retained for take-over.
 - 2026-10-14 — R1: VS Code task cards and log tabs complete and invoke native runner commands and draw the runner’s command, compaction and loaded-configuration blocks.
 - 2026-10-14 — U1: a paused task moved to another runner carries the paused attempt's work over to a fresh session (#94).
 - 2026-10-17 — K1/U1: a saved session records its owner and Continue never crosses runners; a Retry after any move to another runner is a carry-over, not only a paused task's; a limit counts only in a turn Ordewell started, and a runner's structured field decides over its words ([ADR-0041](../routing/0041-a-tasks-model-follows-the-runners-own-switch.md), [ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md)).
+- 2026-10-18 — U1: a held run stays open with nothing at work; the reset releases the hold whatever failed meanwhile; a refused Resume now changes no resume, and a task it sweeps along keeps waiting for its reset; a loaded plan's reset resumes only its paused tasks.

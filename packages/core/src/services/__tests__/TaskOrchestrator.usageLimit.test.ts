@@ -4,7 +4,7 @@ import { createTask, type Task } from '../../models/Task';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { serializeTaskStatus } from '../SessionMessage';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { fakeConfig, FakeRunnerSession, flushMicrotasks } from '../../testing';
+import { fakeConfig, FakeRunnerSession, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
@@ -16,7 +16,7 @@ const LIMIT = "You've hit your session limit · resets 8:10pm (UTC)";
 const NOW = new Date('2026-10-11T17:00:00Z');
 const RESUME_AT = '2026-10-11T20:11:00.000Z';
 
-function setup(opts: { maxParallelSessions?: number } = {}) {
+function setup(opts: { maxParallelSessions?: number; isolation?: FakeWorktreeIsolation; mergeAutomatically?: boolean } = {}) {
   const sessions: FakeRunnerSession[] = [];
   const runner = {
     spawn: vi.fn(async (o: RunnerSpawnOptions): Promise<IRunnerSession> => {
@@ -37,8 +37,10 @@ function setup(opts: { maxParallelSessions?: number } = {}) {
     registry: new RunnerRegistry(),
     workspaceRoot: () => '/repo',
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
+    ...(opts.isolation ? { isolation: opts.isolation } : {}),
+    runSettings: () => ({ mergeAtGatesAutomatically: opts.mergeAutomatically ?? false }),
   });
-  const waits: { taskId: string; runner: string; resumeAt: string | null }[] = [];
+  const waits: { taskId: string; runner: string; resumeAt: string | null; cancelled?: true }[] = [];
   orchestrator.subscribe({ onUsageLimitWait: (data) => waits.push(data) });
   const task = (id: string): Readonly<Task> => orchestrator.storeInstance.get(id)!;
   return { orchestrator, sessions, spawn: runner.spawn, notifications, waits, task };
@@ -322,6 +324,95 @@ describe('a task paused on a usage limit', () => {
   });
 });
 
+// ADR-0034: a task on a usage limit keeps the run open. Its end is terminal to
+// every surface, and it would hand the run over, or merge it, mid-run.
+describe('a usage-limit pause keeps the run open', () => {
+  function runEvents(orchestrator: TaskOrchestrator): string[] {
+    const events: string[] = [];
+    orchestrator.subscribe({
+      onRunStarted: ({ origin }) => events.push(`started:${origin}`),
+      onAutoMerge: ({ trigger }) => events.push(`merge:${trigger.kind}`),
+      onIsolationHandoff: () => events.push('handoff'),
+      onExecutionComplete: () => events.push('complete'),
+    });
+    return events;
+  }
+
+  const stops: [string, { refuse?: true; hit?: (session: FakeRunnerSession) => void }][] = [
+    ['its turn fails on the limit', { hit: (session) => hitLimitInTurn(session) }],
+    ['its runner exits on the limit', { hit: (session) => { session.emitOutput(LIMIT); session.emitExit(1); } }],
+    ['the limit refuses its start', { refuse: true }],
+  ];
+
+  it.each(stops)('when the last task at work pauses because %s, then goes on at the reset', async (_how, stop) => {
+    const { orchestrator, sessions, spawn, task } = setup({ maxParallelSessions: 1, isolation: new FakeWorktreeIsolation(), mergeAutomatically: true });
+    const events = runEvents(orchestrator);
+    orchestrator.loadPlan([
+      createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' }),
+      createTask({ id: 't2', order: 2, title: 'Second', prompt: 'do second' }),
+    ]);
+    await orchestrator.approveReview();
+    if (stop.refuse) spawn.mockRejectedValueOnce(new RunnerStartupExit(`The claude-code task runner exited with code 1.\n\n${LIMIT}`));
+    sessions[0].reportComplete({ status: 'done', summary: '' });
+    await until(() => spawn.mock.calls.length === 2);
+    stop.hit?.(sessions[1]);
+    await until(() => task('t2').status === 'awaiting_user');
+    await flushMicrotasks(20);
+
+    expect(task('t2')).toMatchObject({ awaitingReason: 'usage-limit', resumeAt: RESUME_AT });
+    expect(events).toEqual(['started:user']);
+    expect(orchestrator.runs.isOpen).toBe(true);
+    expect(orchestrator.awaitsResume).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now());
+    await until(() => spawn.mock.calls.length === 3);
+    expect(spawn.mock.calls[2][0].taskId).toBe('t2');
+    expect(orchestrator.isScheduling).toBe(true);
+    sessions.at(-1)!.reportComplete({ status: 'done', summary: '' });
+    await until(() => events.includes('complete'));
+
+    expect(events).toEqual(['started:user', 'merge:run_end', 'complete']);
+    expect(orchestrator.status).toBe('completed');
+  });
+
+  it('and an edit while it is held does not read as a running plan', async () => {
+    const { orchestrator, sessions, task } = setup({ maxParallelSessions: 2 });
+    const tasks = [
+      createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' }),
+      createTask({ id: 't2', order: 2, title: 'Second', prompt: 'do second' }),
+    ];
+    orchestrator.loadPlan(tasks);
+    await orchestrator.approveReview();
+    hitLimitInTurn(sessions[0]);
+    await until(() => task('t1').status === 'awaiting_user');
+
+    orchestrator.reconcilePlan(orchestrator.storeInstance.snapshot());
+
+    expect(orchestrator.status).toBe('approved');
+    expect(orchestrator.isScheduling).toBe(false);
+    expect(orchestrator.awaitsResume).toBe(true);
+  });
+
+  it('when the user cancels the last task at work while the run is held', async () => {
+    const { orchestrator, sessions, task } = setup({ maxParallelSessions: 2, isolation: new FakeWorktreeIsolation() });
+    const events = runEvents(orchestrator);
+    orchestrator.loadPlan([
+      createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' }),
+      createTask({ id: 't2', order: 2, title: 'Second', prompt: 'do second' }),
+    ]);
+    await orchestrator.approveReview();
+    hitLimitInTurn(sessions[0]);
+    await until(() => task('t1').status === 'awaiting_user');
+
+    await orchestrator.cancelTask('t2');
+    await flushMicrotasks(20);
+
+    expect(events).toEqual(['started:user']);
+    expect(orchestrator.runs.isOpen).toBe(true);
+    expect(orchestrator.awaitsResume).toBe(true);
+  });
+});
+
 describe('a limit is acted on only when it ended a turn Ordewell started', () => {
   it('pauses a start whose runner exits on the limit before its first turn, and resumes it at the reset', async () => {
     const { orchestrator, spawn, waits, task } = setup();
@@ -561,6 +652,55 @@ describe('resuming a task paused on a usage limit now', () => {
     expect(notifications.warn).toHaveBeenCalledWith(expect.stringContaining('hit its usage limit again right after it was resumed'));
     await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
     expect(spawn).toHaveBeenCalledTimes(2);
+  });
+
+  describe('that cannot start', () => {
+    const paused = (id: string, order: number): Task => ({
+      ...createTask({ id, order, title: `Paused ${id}`, prompt: 'do it' }),
+      status: 'awaiting_user',
+      awaitingReason: 'usage-limit',
+      resumeAt: RESUME_AT,
+      runnerSessionId: `native-${id}`,
+    });
+
+    it('keeps every resume at the reset when the asked task is refused for want of a slot', async () => {
+      const { orchestrator, sessions, spawn, notifications, waits, task } = setup({ maxParallelSessions: 1 });
+      orchestrator.loadPlan([
+        paused('t1', 1),
+        paused('t2', 2),
+        createTask({ id: 'busy', order: 3, title: 'Busy', prompt: 'do it', assignedRunner: 'codex' }),
+      ], ['claude-code', 'codex']);
+      await orchestrator.forceStartTask('busy');
+
+      await expect(orchestrator.resumeNow('t1', 'user')).rejects.toThrow('already running');
+
+      expect(task('t1').resumeAt).toBe(RESUME_AT);
+      expect(task('t2').resumeAt).toBe(RESUME_AT);
+      expect(waits.filter((w) => w.cancelled)).toEqual([]);
+      expect(vi.mocked(notifications.warn).mock.calls.flat().join('\n')).not.toMatch(/did not resume/);
+      sessions[0].reportComplete({ status: 'done', summary: '' });
+      await until(() => task('busy').status === 'completed');
+      await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now());
+      await until(() => spawn.mock.calls.length === 2);
+      expect(spawn.mock.calls[1][0]).toMatchObject({ taskId: 't1', resumeSessionId: 'native-t1' });
+    });
+
+    it('leaves a task swept along waiting for its reset, not for the user, when no slot is left for it', async () => {
+      const { orchestrator, sessions, spawn, notifications, waits, task } = setup({ maxParallelSessions: 1 });
+      orchestrator.loadPlan([paused('t1', 1), paused('t2', 2)]);
+
+      await orchestrator.resumeNow('t1', 'user');
+
+      expect(spawn.mock.calls.map(([o]) => o.taskId)).toEqual(['t1']);
+      expect(task('t2')).toMatchObject({ status: 'awaiting_user', awaitingReason: 'usage-limit', resumeAt: RESUME_AT });
+      expect(waits.filter((w) => w.cancelled)).toEqual([]);
+      expect(vi.mocked(notifications.warn).mock.calls.flat().join('\n')).not.toMatch(/did not resume at its usage limit's reset/);
+      sessions[0].reportComplete({ status: 'done', summary: '' });
+      await until(() => task('t1').status === 'completed');
+      await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now());
+      await until(() => spawn.mock.calls.length === 2);
+      expect(spawn.mock.calls[1][0]).toMatchObject({ taskId: 't2', resumeSessionId: 'native-t2' });
+    });
   });
 
   it('refuses a task with no saved session, and one not paused on a limit', async () => {
