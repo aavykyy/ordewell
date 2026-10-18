@@ -4,10 +4,8 @@ import {
 } from '@ordewell/core';
 import { sanitize } from '../ansi';
 import type { TaskView, TuiState } from '../state';
-import { isolationOfPlan } from '../../isolation';
 import { hear } from '../transcript';
 import { dropApproval, enqueueApproval } from './approvals';
-import { withDeferral } from '../handoff';
 
 /**
  * A plan's text, safe to lay out. Every field here was written by a model, so
@@ -125,38 +123,6 @@ export function withRun(state: TuiState, run: RunView): TuiState {
 export function foldRun(state: TuiState, input: RunInput): TuiState {
   const run = reduceRun(state.run, input);
   return run === state.run ? state : withRun(state, run);
-}
-
-function mapRunTasks(tasks: RunTask[], map: (task: RunTask) => RunTask): RunTask[] {
-  return tasks.map((task) => ({ ...map(task), subtasks: mapRunTasks(task.subtasks, map) }));
-}
-
-/**
- * A persisted plan's run record, read on a load that had no live stream to tell
- * it: each task's isolation mark and the run's handoff. A run the surface
- * already holds — from the connect snapshot or its own stream — keeps its
- * deferral for the same run.
- */
-export function applyIsolationRecord(state: TuiState, plan: unknown): TuiState {
-  const record = isolationOfPlan(plan);
-  if (!record) return state;
-  const { run } = state;
-  return withRun(state, {
-    ...run,
-    tasks: mapRunTasks(run.tasks, (task) => ({ ...task, isolation: (record.tasks[task.id] ?? { state: 'none' }) as RunTask['isolation'] })),
-    handoff: withDeferral(record.handoff, run.handoff),
-  });
-}
-
-/** Isolation belongs to one session's run: forget it all, the handoff and every task's mark. */
-export function clearRunIsolation(run: RunView): RunView {
-  return {
-    ...run,
-    handoff: null,
-    runMerge: null,
-    mergeResult: null,
-    tasks: mapRunTasks(run.tasks, ({ isolation: _dropped, ...task }) => task),
-  };
 }
 
 export function applySettings(state: TuiState, settings: Partial<SettingsResponse>): TuiState {

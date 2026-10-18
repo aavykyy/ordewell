@@ -1,4 +1,4 @@
-import { EMPTY_RUN, reduceRun, type RunTask, type RunView, type SessionMessage } from '@ordewell/core';
+import { EMPTY_RUN, reduceRun, type RunView, type SessionMessage } from '@ordewell/core';
 import type { HostToWebview } from './shared/protocol';
 
 /**
@@ -31,12 +31,12 @@ export class RunViewHost {
   }
 
   /**
-   * The run's isolation is gone — discarded, or a plan restarted. No single
-   * message says so on every path, so the marks and cards are cleared here
-   * rather than left stale until a status update happens to omit them.
+   * A new run is starting on a plan whose last one left its cards up: the
+   * same fold the Session's `run_closed` gives, since no message says a run
+   * was replaced.
    */
   clearIsolation(): void {
-    this.show({ ...this.view, tasks: clearIsolation(this.view.tasks), handoff: null, mergeResult: null, runMerge: null });
+    this.show(reduceRun(this.view, { type: 'run_closed' }));
   }
 
   private show(view: RunView): void {
@@ -44,8 +44,4 @@ export class RunViewHost {
     this.view = view;
     this.post({ type: 'runView', view });
   }
-}
-
-function clearIsolation(tasks: readonly RunTask[]): RunTask[] {
-  return tasks.map(({ isolation: _isolation, ...task }) => ({ ...task, subtasks: clearIsolation(task.subtasks) }));
 }

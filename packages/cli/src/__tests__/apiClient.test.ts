@@ -353,6 +353,17 @@ describe('ApiClient — adopting a saved session', () => {
     expect(result.plan.tasks).toHaveLength(1);
   });
 
+  it('hands on the run the session holds', async () => {
+    const run = { tasks: [], runMerge: null, handoff: null, mergeResult: null };
+    const server = await startCustomServer((_req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ ok: true, plan: {}, goal: '', run }));
+    });
+    servers.push(server);
+
+    expect((await new ApiClient(server.port).adoptSession('s1')).run).toEqual(run);
+  });
+
   it('omits the workspace when none is given', async () => {
     let url = '';
     const server = await startCustomServer((req, res) => {

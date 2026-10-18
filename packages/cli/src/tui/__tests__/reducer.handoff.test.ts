@@ -318,17 +318,42 @@ describe('isolation_blocked', () => {
   });
 });
 
-describe('discarding', () => {
+describe('the run closing', () => {
   it('clears the handoff, the marks, and only its own overlay', () => {
     const before = withHandoff({
       tasks: [task({ isolation: { state: 'conflict', branch: 'b', worktree: 'w' } })],
       overlay: { kind: 'handoff', index: 2, diff: null },
     });
 
-    const { state } = apply(before, { type: 'runCleared', sessionId: 's1' });
+    const { state } = apply(before, { type: 'runClosed', sessionId: 's1' });
 
     expect(state.handoff).toBeNull();
     expect(state.tasks[0].isolation).toBeUndefined();
+    expect(state.overlay).toBeNull();
+  });
+
+  it('leaves an overlay opened since alone', () => {
+    const { state } = apply(withHandoff({ overlay: { kind: 'help' } }), { type: 'runClosed', sessionId: 's1' });
+
+    expect(state.overlay).toEqual({ kind: 'help' });
+  });
+});
+
+describe('a Merge all that leaves the run open', () => {
+  const landing = { state: 'integrated' as const, branch: 'ordewell/r1/1-t1', worktree: '/w/1', repos: ['.'] };
+
+  it('keeps every task\'s isolation, and drops what it merged from the handoff, its overlay and the merge view', () => {
+    const before = withHandoff({
+      tasks: [task({ isolation: landing })],
+      runMerge: { waitingAtGate: true, paused: false, handoff },
+      overlay: { kind: 'handoff', index: 0, diff: null },
+    });
+
+    const { state } = apply(before, { type: 'isolationMerged', result: { outcome: 'merged' }, sessionId: 's1' });
+
+    expect(state.tasks[0].isolation).toEqual(landing);
+    expect(state.handoff).toBeNull();
+    expect(state.runMerge).toBeNull();
     expect(state.overlay).toBeNull();
   });
 });
@@ -340,7 +365,7 @@ describe('a merge while the handoff is deferred', () => {
       overlay: { kind: 'handoff', index: 0, diff: null },
     });
 
-    const { state } = apply(before, { type: 'runCleared', sessionId: 's1' });
+    const { state } = apply(before, { type: 'runClosed', sessionId: 's1' });
 
     expect(state.handoff).toBeNull();
     expect(state.overlay).toBeNull();
@@ -397,36 +422,20 @@ describe('per-task isolation on the plan', () => {
     },
   };
 
-  it('reads a saved plan\'s run record, so a reloaded session shows its conflict and its handoff', () => {
-    const { state } = apply(session(), { type: 'planUpdated', sessionId: 's1', plan: savedPlan });
+  it('takes isolation from the Session\'s run view, not from the run record a saved plan carries', () => {
+    const planned = apply(session(), { type: 'planUpdated', sessionId: 's1', plan: savedPlan }).state;
+    expect(planned.tasks.map((t) => t.isolation)).toEqual([undefined, undefined]);
+    expect(planned.handoff).toBeNull();
 
-    expect(state.tasks.map((t) => t.isolation?.state)).toEqual(['conflict', 'none']);
-    expect(state.handoff).toEqual({ repos: [{ path: '.', integrationBranch: 'ordewell/r1/integration', baseRef: 'abc', landed: [] }], landed: [] });
-  });
-
-  it('keeps the supervisor deferral across a plan refresh of the same run', () => {
-    const deferred = session({ handoff: { ...handoff, deferredTo: 'supervisor' } });
-
-    const { state } = apply(deferred, { type: 'planUpdated', sessionId: 's1', plan: savedPlan });
-
-    expect(state.handoff).toMatchObject({ deferredTo: 'supervisor', repos: [{ integrationBranch: 'ordewell/r1/integration' }] });
-  });
-
-  it('reads a repairing task from a saved plan\'s run record (ADR-0015)', () => {
-    const repairingPlan = {
-      tasks: [{ id: 't2', order: 2, title: 'T2', type: 'ai', status: 'in_progress' }],
-      isolation: {
-        resolvers: {},
-        run: {
-          id: 'r1', workspaceRoot: '/ws', baseRef: 'abc', integrationBranch: 'ordewell/r1/integration',
-          tasks: { t2: { taskId: 't2', order: 2, title: 'T2', branch: 'ordewell/r1/2-t2', worktree: '/w/2-t2', status: 'repairing', linked: [], conflictFiles: ['a.ts'], repairs: 1, repairedFiles: ['a.ts'] } },
-        },
-      },
+    const view = {
+      ...planned.run,
+      tasks: planned.run.tasks.map((t) => (t.id === 't2' ? { ...t, isolation: conflict } : t)),
+      handoff: { ...handoff, deferredTo: 'supervisor' as const },
     };
+    const { state } = apply(planned, { type: 'runSnapshot', view, sessionId: 's1' });
 
-    const { state } = apply(session(), { type: 'planUpdated', sessionId: 's1', plan: repairingPlan });
-
-    expect(state.tasks[0].isolation).toMatchObject({ state: 'repairing', conflictFiles: ['a.ts'], repairedFiles: ['a.ts'] });
+    expect(state.tasks.map((t) => t.isolation?.state)).toEqual(['conflict', undefined]);
+    expect(state.handoff).toMatchObject({ deferredTo: 'supervisor' });
   });
 
   it('a fork holds no run: switching to one drops the original\'s handoff and marks', () => {

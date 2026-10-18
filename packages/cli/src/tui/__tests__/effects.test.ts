@@ -1903,13 +1903,13 @@ describe('worktree isolation', () => {
     expect(h.actions).toEqual([{ type: 'handoffDiff', diff: 'diff --git a/x b/x', sessionId: 's1' }]);
   });
 
-  it('a merged run says where it landed, and clears the run it no longer has to hand over', async () => {
+  it('a merged run says where it landed, and leaves the run to the Session\'s own word on whether it closed', async () => {
     const h = harness({ mergeRun: vi.fn().mockResolvedValue({ outcome: 'merged' }) } as Partial<OrdewellApi>);
 
     await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration' }, h.deps);
 
     expect(messageOf(h.actions, 'notice')).toMatch(/Merged ordewell\/r1\/integration into your checked-out branch/);
-    expect(h.actions).toContainEqual({ type: 'runCleared', sessionId: 's1' });
+    expect(types(h.actions)).toEqual(['notice']);
   });
 
   it('keeps the run to hand over after a Merge all that did not merge everything', async () => {
@@ -1917,18 +1917,24 @@ describe('worktree isolation', () => {
 
     await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration', group: true }, h.deps);
 
-    expect(types(h.actions)).not.toContain('runCleared');
+    expect(types(h.actions)).not.toContain('runClosed');
   });
 
-  it('clears the run when another surface\'s Merge all merged everything, and only then', async () => {
+  it('folds what any surface\'s Merge all did, and closes the run only when the Session says it closed', async () => {
+    const blocked = { outcome: 'blocked' as const, blocked: [{ repo: 'web', reason: 'conflict' as const, files: ['w.txt'] }] };
     const h = running([
-      { type: 'isolation_merge', result: { outcome: 'blocked', blocked: [{ repo: 'web', reason: 'conflict', files: ['w.txt'] }] } },
+      { type: 'isolation_merge', result: blocked },
       { type: 'isolation_merge', result: { outcome: 'merged' } },
+      { type: 'run_closed' },
     ]);
 
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    expect(h.actions.filter((a) => a.type === 'runCleared')).toEqual([{ type: 'runCleared', sessionId: 's1' }]);
+    expect(h.actions.filter((a) => a.type === 'isolationMerged' || a.type === 'runClosed')).toEqual([
+      { type: 'isolationMerged', result: blocked, sessionId: 's1' },
+      { type: 'isolationMerged', result: { outcome: 'merged' }, sessionId: 's1' },
+      { type: 'runClosed', sessionId: 's1' },
+    ]);
   });
 
   it.each([
@@ -1943,12 +1949,12 @@ describe('worktree isolation', () => {
     expect(messageOf(h.actions, 'notice')).toBeUndefined();
   });
 
-  it('discard tells the reducer the run is gone', async () => {
+  it('discard leaves telling the reducer the run is gone to the Session', async () => {
     const h = harness({ discardRun: vi.fn().mockResolvedValue(undefined) } as Partial<OrdewellApi>);
 
     await runEffect({ type: 'isolationDiscard', sessionId: 's1', branch: 'ordewell/r1/integration' }, h.deps);
 
-    expect(types(h.actions)).toEqual(['runCleared', 'notice']);
+    expect(types(h.actions)).toEqual(['notice']);
   });
 
   it('cleanup refreshes the plan, since the worktrees the marks named are gone', async () => {
@@ -1960,6 +1966,25 @@ describe('worktree isolation', () => {
     expect(cleanupRun).toHaveBeenCalledWith('s1');
     expect(h.api.getSession).toHaveBeenCalled();
     expect(messageOf(h.actions, 'notice')).toMatch(/ordewell\/r1\/integration is kept/);
+  });
+
+  it('a refresh takes the run the Session holds, so marks are never rebuilt from the saved record', async () => {
+    const view = { tasks: [], runMerge: null, handoff: null, mergeResult: null };
+    const h = harness({ cleanupRun: vi.fn().mockResolvedValue(undefined), getSession: vi.fn().mockResolvedValue({ meta: { id: 's1' }, plan: { tasks: [] }, run: view }) } as Partial<OrdewellApi>);
+
+    await runEffect({ type: 'isolationCleanup', sessionId: 's1', branch: 'ordewell/r1/integration' }, h.deps);
+
+    expect(h.actions).toContainEqual({ type: 'runSnapshot', view, sessionId: 's1' });
+    expect(types(h.actions).indexOf('runSnapshot')).toBeGreaterThan(types(h.actions).indexOf('planUpdated'));
+  });
+
+  it('a load takes the run of the session it adopted', async () => {
+    const view = { tasks: [], runMerge: null, handoff: null, mergeResult: null };
+    const h = harness({ adoptSession: vi.fn().mockResolvedValue({ ok: true, plan: { tasks: [{ id: 't1' }] }, goal: 'Rate limiting', run: view }) } as Partial<OrdewellApi>);
+
+    await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
+
+    expect(h.actions).toContainEqual({ type: 'runSnapshot', view, sessionId: 's9' });
   });
 
   it.each([

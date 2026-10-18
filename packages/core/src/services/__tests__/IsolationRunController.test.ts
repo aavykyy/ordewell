@@ -11,6 +11,7 @@ function setup(isolation = new FakeWorktreeIsolation()) {
     changed: vi.fn(),
     blocked: vi.fn(),
     handoff: vi.fn(),
+    closed: vi.fn(),
     notice: vi.fn(),
   };
   const notifications = fakeNotification();
@@ -326,14 +327,16 @@ describe('IsolationRunController', () => {
     });
 
     it('forgets a settled run once everything merged into the checked-out branch', async () => {
-      const { runs } = setup();
+      const { runs, listener } = setup();
       await runs.decide(async () => undefined);
       await runs.attemptCwd(task('t1', 1), 'fresh');
       await runs.integrate(task('t1', 1));
       await runs.close();
+      expect(listener.closed).not.toHaveBeenCalled();
 
       expect(await runs.merge()).toEqual({ outcome: 'merged' });
 
+      expect(listener.closed).toHaveBeenCalledTimes(1);
       expect(runs.current).toBeNull();
       expect(runs.planIsolation).toBeNull();
     });

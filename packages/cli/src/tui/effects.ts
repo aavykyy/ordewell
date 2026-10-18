@@ -572,11 +572,12 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
         else unfollow(deps, effect.sessionId);
         throw err;
       }
-      const { plan, goal } = adopted;
+      const { plan, goal, run } = adopted;
       dispatch({ type: 'sessionStarted', sessionId: effect.sessionId, goal });
       dispatch(restoredChat(plan, effect.sessionId));
       inbound.releaseSnapshot(true);
       dispatch({ type: 'planUpdated', plan, sessionId: effect.sessionId });
+      if (run) dispatch({ type: 'runSnapshot', view: run, sessionId: effect.sessionId });
       dispatch({ type: 'notice', message: `Loaded "${goal || effect.sessionId}".` });
       return;
     }
@@ -643,17 +644,16 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     // A conflict or a refusal is an answer, not a fault: either way the user's
     // tree is exactly as it was, and the words say what to do next. A full
     // merge of a settled run leaves nothing to hand over — the daemon has
-    // cleared the run up; one mid-run leaves the run going (ADR-0020).
+    // cleared the run up and says so on the stream (`run_closed`); one
+    // mid-run leaves the run going (ADR-0020).
     case 'isolationMerge': {
       const { ok, message } = mergeOutcome(await api.mergeRun(effect.sessionId), effect.branch, effect.group === true, effect.repaired ?? []);
-      if (ok && !effect.midRun) dispatch({ type: 'runCleared', sessionId: effect.sessionId });
       dispatch({ type: ok ? 'notice' : 'failed', message });
       return;
     }
 
     case 'isolationDiscard':
       await api.discardRun(effect.sessionId);
-      dispatch({ type: 'runCleared', sessionId: effect.sessionId });
       dispatch({ type: 'notice', message: `Discarded the run and ${effect.branch}.` });
       return;
 
@@ -934,8 +934,10 @@ function compactionSummary(plan: unknown): { content: string; timestamp?: string
 }
 
 async function refreshPlan(deps: EffectDeps, sessionId: string): Promise<void> {
-  const { plan } = await deps.api.getSession(sessionId, deps.workspace);
+  const { plan, run } = await deps.api.getSession(sessionId, deps.workspace);
   deps.dispatch({ type: 'planUpdated', plan, sessionId });
+  // The Session's own word on the run, isolation marks and handoff included.
+  if (run) deps.dispatch({ type: 'runSnapshot', view: run, sessionId });
 }
 
 async function loadModels(deps: EffectDeps): Promise<void> {
