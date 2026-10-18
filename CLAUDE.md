@@ -1,7 +1,6 @@
 # CLAUDE.md
 
-Claude Code, welcome. Everything this repository asks of a coding agent lives
-in AGENTS.md, which Codex and OpenCode read too; it is imported here so there
-is one copy to keep true.
+Agent instructions for this repository live in [AGENTS.md](AGENTS.md), shared
+with Codex and OpenCode, and are imported below.
 
 @AGENTS.md
