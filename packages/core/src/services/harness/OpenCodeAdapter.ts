@@ -770,9 +770,9 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     void this.processEnded.then(() => listener(this.runner.exitCode, this.exitMessage()));
   }
 
-  answerPermission(id: string, decision: ApprovalDecision): boolean {
+  answerPermission(id: string, decision: ApprovalDecision): boolean | Promise<boolean> {
     if (this.v2) return this.process ? this.v2.answerPermission(id, decision) : false;
-    return this.process ? this.permissions.answer(id, decision) : false;
+    return this.process ? this.permissions.answerAsync(id, decision) : false;
   }
 
   /**
@@ -1032,8 +1032,10 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
    */
   private async replyPermission(id: string, sessionId: string, reply: { reply: PermissionAnswer; message?: string }): Promise<void> {
     const response = await this.request('POST', `/permission/${id}/reply`, reply);
-    if (response.status !== 404) return;
-    await this.request('POST', `/session/${sessionId}/permissions/${id}`, { response: reply.reply });
+    const delivered = response.status === 404
+      ? await this.request('POST', `/session/${sessionId}/permissions/${id}`, { response: reply.reply })
+      : response;
+    if (!delivered.ok) throw new Error(`OpenCode permission reply failed: ${delivered.status} ${delivered.statusText}`);
   }
 
   /** `/event` for one turn — see {@link openEventStream}. Load-bearing for {@link onPermissionAsked}. */

@@ -1431,13 +1431,14 @@ describe('a Codex task taking a message mid-turn on the structured transport', (
     await until(() => events.some((e) => e.type === 'message_handed_over'));
     expect(session.queued()).toEqual([{ id, text: 'use Postgres', handedOver: true }]);
 
+    const ended = new Promise<void>((resolve) => session.onTurnEnd(() => resolve()));
     proc.emitStdout(
       line({ method: 'item/completed', params: { threadId: 'thr-task-1', turnId: 'turn-a', item: { id: 'cmd-1', type: 'commandExecution', command: 'sleep 20', cwd: '/repo', aggregatedOutput: '', exitCode: 0 } } })
       + userMessage(String(steer.params?.clientUserMessageId))
       + line({ method: 'item/completed', params: { threadId: 'thr-task-1', turnId: 'turn-a', item: { id: 'msg-a', type: 'agentMessage', text: 'Using Postgres.' } } })
       + turnCompleted('turn-a'),
     );
-    await new Promise<void>((resolve) => session.onTurnEnd(() => resolve()));
+    await ended;
 
     expect(events.map((e) => e.type)).toEqual([
       'turn_start', 'tool_call', 'message_queued', 'message_handed_over', 'tool_result', 'message_delivered', 'assistant_text', 'turn_end',

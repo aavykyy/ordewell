@@ -48,7 +48,7 @@ export abstract class AbstractRunnerSession implements IRunnerSession {
   abstract nativeSessionId(): string | null;
   abstract commands(): RunnerCommand[];
   abstract invokeCommand(name: string, args?: string): string;
-  abstract answerPermission(id: string, decision: ApprovalDecision): boolean;
+  abstract answerPermission(id: string, decision: ApprovalDecision): boolean | Promise<boolean>;
   abstract onTaskComplete(listener: (report: TaskCompleteArgs) => void): void;
   abstract onToolCheckpoint(handler: (question: string, signal: AbortSignal) => Promise<CheckpointAnswer>): void;
 }

@@ -472,12 +472,14 @@ export class OpenCodeV2 {
     return interruptAcknowledged(turn, this.host.processEnded, timeoutMs);
   }
 
-  answerPermission(id: string, decision: ApprovalDecision): boolean {
-    return this.permissions.answer(id, decision);
+  answerPermission(id: string, decision: ApprovalDecision): Promise<boolean> {
+    return this.permissions.answerAsync(id, decision);
   }
 
   private async replyPermission(id: string, sessionId: string, decision: ApprovalDecision): Promise<void> {
-    await this.host.request('POST', `/api/session/${sessionId}/permission/${id}/reply`, permissionReply(decision, 'decision'));
+    const response = await this.host.request('POST', `/api/session/${sessionId}/permission/${id}/reply`, permissionReply(decision, 'decision'));
+    if (!response.ok) throw new Error(`OpenCode permission reply failed: ${response.status} ${response.statusText}`);
+
   }
 
   /** `/api/event` for one turn — see {@link openEventStream}. */

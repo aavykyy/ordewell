@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { StructuredRunner } from '../StructuredRunner';
+import { RunnerApprovals } from '../RunnerApprovals';
+import { PendingApprovals } from '../PendingApprovals';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import type { IRunnerSession, StructuredEvent, StructuredTurnEnd } from '../../interfaces/IRunner';
@@ -7,7 +9,7 @@ import type { AgentEvent, SpawnFn, AgentStartOptions, TaskModeAgentAdapter, Task
 import type { OrdewellMcpServer } from '../mcp/OrdewellMcpServer';
 import { TASK_COMPLETION_CONTRACT } from '../mcp';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
-import { claudeTurnEndQueue, fakeSpawn, fixture, type FakeSpawnResult, type ScriptedReply } from './harnessTestKit';
+import { claudeTurnEndQueue, claudeSteerRecording, fakeSpawn, fixture, type FakeSpawnResult, type ScriptedReply } from './harnessTestKit';
 
 /**
  * The structured transport (ADR-0018) driven through the real Claude Code
@@ -66,7 +68,13 @@ function observe(session: IRunnerSession) {
     for (const resolve of ready) resolve();
   });
   session.onExit((code) => exits.push(code));
-  const nextTurnEnd = () => new Promise<void>((resolve) => { waiters.push(resolve); });
+  let consumedEnds = 0;
+  const nextTurnEnd = async () => {
+    consumedEnds += 1;
+    if (turnEnds.length < consumedEnds) await new Promise<void>((resolve) => { waiters.push(resolve); });
+    // The event ends the turn before the adapter releases its send.
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+  };
   return { session, chunks, events, turnEnds, statesAtTurnEnd, exits, nextTurnEnd };
 }
 
@@ -361,6 +369,41 @@ describe('StructuredSession output', () => {
     turn.session.kill();
   });
 
+  it('keeps an HTTP permission card pending until delivery and offers it again after a failed reply', async () => {
+    let emit: (event: AgentEvent) => void = () => {};
+    let finish: () => void = () => {};
+    let rejectReply: (err: Error) => void = () => {};
+    let attempts = 0;
+    const adapter: TaskModeAgentAdapter = {
+      agentId: 'opencode', start: async () => {}, nativeSessionId: () => null, dispose: () => {},
+      mcpAttached: async () => true, interrupt: async () => true, onProcessExit: () => {},
+      send: (_text, onEvent) => new Promise<void>((resolve) => { emit = onEvent; finish = resolve; }),
+      answerPermission: () => ++attempts === 1
+        ? new Promise<boolean>((_resolve, reject) => { rejectReply = reject; }) : Promise.resolve(true),
+    };
+    const runner = new StructuredRunner({ createAdapter: () => adapter });
+    const approvals = new PendingApprovals();
+    const bridge = new RunnerApprovals(approvals);
+    const turn = observe(await bridge.wrap(runner).spawn(options({ runner: 'opencode', mode: 'build' })));
+    await tick();
+    emit({ type: 'permission_request', id: 'per_1', name: 'shell', detail: '{}' });
+    const id = `${turn.session.id}-perm-1`;
+    expect(approvals.resolve(id, { decision: 'allow' })).toBe(true);
+    expect(turn.session.answerPermission(id, { decision: 'deny' })).toBe(false);
+    expect(turn.events.some((e) => e.type === 'permission_decided')).toBe(false);
+    rejectReply(new Error('offline'));
+    await until(() => approvals.outstanding().length === 1);
+    expect(approvals.outstanding()[0].id).toBe(id);
+    expect(bridge.waiting(turn.session.taskId)).toBe(1);
+    expect(turn.events.filter((e) => e.type === 'permission_request').map((e) => e.id)).toEqual([id, id]);
+    expect(turn.events.some((e) => e.type === 'permission_withdrawn' || e.type === 'permission_decided')).toBe(false);
+    expect(approvals.resolve(id, { decision: 'deny' })).toBe(true);
+    await until(() => turn.events.some((e) => e.type === 'permission_decided'));
+    expect(turn.events).toContainEqual({ type: 'permission_decided', id, decision: { decision: 'deny' } });
+    finish();
+    turn.session.kill();
+  });
+
   it('shows a request the task\'s mode already answered as asked and decided, with nothing left open', async () => {
     const answered: string[] = [];
     const decided: AgentEvent = { type: 'permission_request', id: 'per_1', name: 'bash', detail: '{}', decided: { decision: 'allow' } };
@@ -423,6 +466,30 @@ describe('StructuredSession output', () => {
 });
 
 describe('StructuredSession messages', () => {
+  it('gives an echoed message its own turn when its first line shares the previous result chunk', async () => {
+    const { before } = claudeSteerRecording('after-result');
+    const spawned = fakeSpawn([before, (written, proc) => {
+      const { uuid } = JSON.parse(written) as { uuid: string };
+      const recording = fixture('claude-code', 'task-steer-after-result', { STEER_UUID: uuid });
+      proc.emitStdout(recording.slice(before.length));
+    }]);
+    const runner = new StructuredRunner({ process: {
+      spawn: spawned.spawn, resolvePath: async () => '/usr/bin', platform: 'linux', isDirectory: () => true, exists: () => true,
+    } });
+    const turn = observe(await runner.spawn(options({ mode: 'bypassPermissions' })));
+    await firstTurn(spawned);
+    const id = turn.session.sendMessage('Now reply with only the word PINEAPPLE.');
+    await tick();
+    await until(() => turn.events.some((e) => e.type === 'assistant_text' && e.text === 'PINEAPPLE'));
+    expect(turn.events.filter((e) => e.type === 'turn_start' || e.type === 'turn_end' || e.type === 'message_delivered')).toEqual([
+      { type: 'turn_start', text: 'Do the task' },
+      { type: 'turn_end', reason: 'completed' },
+      { type: 'turn_start', text: 'Now reply with only the word PINEAPPLE.', messageId: id },
+      { type: 'turn_end', reason: 'completed' },
+    ]);
+    turn.session.kill();
+  });
+
   it('holds a write made during a turn until the turn ends, then delivers it without going idle', async () => {
     const { runner, spawned } = harness([
       () => { /* the first turn stays open until the test ends it */ },
@@ -437,7 +504,7 @@ describe('StructuredSession messages', () => {
 
     spawned.processes[0].emitStdout(fixture('claude-code', 'task-marker'));
     await turn.nextTurnEnd();
-    expect(turn.statesAtTurnEnd).toEqual(['working']);
+    expect(turn.statesAtTurnEnd.slice(0, 1)).toEqual(['working']);
     expect(turn.session.queued()).toEqual([]);
     expect(userTurns(spawned.processes[0].written)).toEqual(['Do the task', 'Yes, go ahead.']);
 

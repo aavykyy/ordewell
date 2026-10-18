@@ -238,6 +238,8 @@ export class StructuredSession extends AbstractRunnerSession {
   private readonly text: PlainTextChannel;
   private state: 'working' | 'idle' = 'idle';
   private turn: OpenTurn | null = null;
+  /** A terminal event ends the turn before the adapter releases its send. */
+  private sending: OpenTurn | null = null;
   private turnCount = 0;
   private queue: PendingMessage[] = [];
   private messageCount = 0;
@@ -251,7 +253,7 @@ export class StructuredSession extends AbstractRunnerSession {
    * id. The runner's ids are only unique to its process — Codex numbers its
    * requests — while an approval must be answerable by id across the session.
    */
-  private readonly permissions = new Map<string, { requestId: string; adapter: TaskModeAgentAdapter }>();
+  private readonly permissions = new Map<string, { requestId: string; adapter: TaskModeAgentAdapter; event: Extract<AgentEvent, { type: 'permission_request' }>; answering: boolean }>();
   /** The launch's start options, with this attempt's server once its token is issued. */
   private startOptions: TaskStartOptions;
   /** This attempt's MCP token, until the session ends (ADR-0022, A2). */
@@ -399,8 +401,9 @@ export class StructuredSession extends AbstractRunnerSession {
     const id = `msg-${this.messageCount}`;
     const sender = opening.from ? { from: opening.from } : {};
     if (this.exited) this.emitEvent({ type: 'message_undelivered', messageId: id, text, ...sender });
-    else if (this.state === 'idle' && this.adapterStarted) this.deliver(text, opening);
+    else if (this.state === 'idle' && this.adapterStarted && !this.sending) this.deliver(text, opening);
     else {
+      this.state = 'working';
       this.queue.push({ id, text, stage: 'queued', ...opening });
       this.emitEvent({ type: 'message_queued', messageId: id, text, ...sender });
       this.offerNext();
@@ -484,16 +487,29 @@ export class StructuredSession extends AbstractRunnerSession {
     return this.adapter?.sessionCost?.() ?? this.lastSessionCost;
   }
 
-  answerPermission(id: string, decision: ApprovalDecision): boolean {
+  answerPermission(id: string, decision: ApprovalDecision): boolean | Promise<boolean> {
     const open = this.permissions.get(id);
-    if (!open) return false;
-    this.permissions.delete(id);
-    if (!open.adapter.answerPermission(open.requestId, decision)) {
-      this.emitEvent({ type: 'permission_withdrawn', id });
+    if (!open || open.answering) return false;
+    open.answering = true;
+    const settle = (accepted: boolean): boolean => {
+      if (this.permissions.get(id) !== open) return false;
+      this.permissions.delete(id);
+      this.emitEvent(accepted ? { type: 'permission_decided', id, decision } : { type: 'permission_withdrawn', id });
+      return accepted;
+    };
+    const retry = (): false => {
+      if (this.permissions.get(id) === open) {
+        open.answering = false;
+        // The approval seam has settled the user's answer; ask under the same
+        // id again so its still-pending card can take another delivery attempt.
+        this.emitEvent({ ...open.event, id });
+      }
       return false;
-    }
-    this.emitEvent({ type: 'permission_decided', id, decision });
-    return true;
+    };
+    try {
+      const answer = open.adapter.answerPermission(open.requestId, decision);
+      return answer instanceof Promise ? answer.then(settle, retry) : settle(answer);
+    } catch { return retry(); }
   }
 
   /** Every open request goes unanswered once the process that asked is gone. */
@@ -540,6 +556,7 @@ export class StructuredSession extends AbstractRunnerSession {
     const resumeSessionId = this.nativeSessionId() ?? this.startOptions.resumeSessionId;
     const resumeCost = this.sessionCost() ?? this.startOptions.resumeCost;
     this.generation += 1;
+    this.sending = null;
     turn.abort.abort();
     if (this.adapter) {
       this.withdrawPermissions(this.adapter);
@@ -601,6 +618,7 @@ export class StructuredSession extends AbstractRunnerSession {
     const adapter = this.adapter;
     if (!adapter) return;
     const turn = this.openTurn(text, message);
+    this.sending = turn;
     const generation = this.generation;
     const onEvent = (event: AgentEvent): void => {
       if (generation !== this.generation) return;
@@ -618,7 +636,11 @@ export class StructuredSession extends AbstractRunnerSession {
     }).then(() => {
       this.lastSessionId = adapter.nativeSessionId() ?? this.lastSessionId;
       this.lastSessionCost = adapter.sessionCost?.() ?? this.lastSessionCost;
-      if (generation === this.generation) this.endTurn(turn, turn.reason);
+      if (this.sending === turn) this.sending = null;
+      if (generation === this.generation) {
+        this.endTurn(turn, turn.reason);
+        this.deliverNext();
+      }
     });
     this.offerNext();
   }
@@ -694,6 +716,7 @@ export class StructuredSession extends AbstractRunnerSession {
       if (event.type === 'error' && turn) turn.reason = 'failed';
       this.handleEvent(event);
     }
+    if (turn && (event.type === 'turn_end' || event.type === 'error')) this.endTurn(turn, turn.reason);
   }
 
   /**
@@ -715,12 +738,11 @@ export class StructuredSession extends AbstractRunnerSession {
       }
       return;
     }
-    if (!turn && TURN_OPENING_EVENTS.has(event.type)) {
+    if (!turn && TURN_OPENING_EVENTS.has(event.type) && !('subagentId' in event && event.subagentId)) {
       turn = this.openTurn('');
       this.offerNext();
     }
     this.route(adapter, turn, event);
-    if (turn && (event.type === 'turn_end' || event.type === 'error')) this.endTurn(turn, turn.reason);
   }
 
   private openPermission(adapter: TaskModeAgentAdapter, event: Extract<AgentEvent, { type: 'permission_request' }>): void {
@@ -731,7 +753,7 @@ export class StructuredSession extends AbstractRunnerSession {
       this.emitEvent({ type: 'permission_decided', id, decision: event.decided });
       return;
     }
-    this.permissions.set(id, { requestId: event.id, adapter });
+    this.permissions.set(id, { requestId: event.id, adapter, event, answering: false });
     this.emitEvent({ ...event, id });
   }
 
@@ -781,9 +803,9 @@ export class StructuredSession extends AbstractRunnerSession {
    * back in Ordewell's hands: while it is on offer or owed, nothing overtakes it.
    */
   private deliverNext(): void {
-    if (this.exited || (this.turn && !this.turn.ended)) return;
+    if (this.exited || this.sending || (this.turn && !this.turn.ended)) return;
     const head = this.queue[0];
-    if (head?.stage !== 'queued') return;
+    if (!head || this.queue.some((message) => message.stage !== 'queued')) return;
     this.queue.shift();
     this.deliver(head.text, head);
   }

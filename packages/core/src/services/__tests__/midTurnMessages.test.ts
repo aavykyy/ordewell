@@ -492,6 +492,42 @@ describe('the attempt\'s verdict when a message is read mid-turn', () => {
  * queued, with no stop at "waiting for input" in between.
  */
 describe('force send', () => {
+  it('logs late subagent activity without opening a turn that traps the next message', async () => {
+    const task = await steering();
+    task.adapter.endTurn(true);
+    await flushMicrotasks();
+    task.adapter.emitOutOfTurn(
+      { type: 'thinking', text: 'Still working', subagentId: 'child' },
+      { type: 'tool_call', id: 'child-call', name: 'Read', args: {}, subagentId: 'child' },
+    );
+    expect(task.session.turnState()).toBe('idle');
+    expect(of(task.events, 'turn_start')).toHaveLength(1);
+    expect(of(task.events, 'thinking', 'tool_call')).toHaveLength(2);
+    task.session.sendMessage('Next');
+    expect(task.adapter.sent).toEqual(['Do the task', 'Next']);
+  });
+
+  it('waits for a message Claude Code still holds before sending a different forced message', async () => {
+    const task = await steering();
+    const first = task.session.sendMessage('A');
+    await flushMicrotasks();
+    const forced = task.session.forceSend('B');
+    await flushMicrotasks();
+
+    expect(task.adapter.sent).toEqual(['Do the task']);
+    expect(task.session.turnState()).toBe('working');
+    task.adapter.emitOutOfTurn({ type: 'message_delivered', id: first });
+    task.adapter.emitOutOfTurn({ type: 'assistant_text', runId: 'a', text: 'Reply to A' }, { type: 'turn_end' });
+    await flushMicrotasks();
+    task.adapter.emitOutOfTurn({ type: 'message_delivered', id: forced });
+    await flushMicrotasks();
+    expect(of(task.events, 'turn_start')).toEqual([
+      { type: 'turn_start', text: 'Do the task' },
+      { type: 'turn_start', text: 'A', messageId: first },
+      { type: 'turn_start', text: 'B', messageId: forced, forced: true },
+    ]);
+  });
+
   async function turnEnd() {
     const { runner, adapters } = runnerOf(() => new TurnEndAdapter());
     const task = observe(await runner.spawn(options({ runner: 'claude-code' })));
@@ -546,15 +582,16 @@ describe('force send', () => {
     expect(task.session.queued().every((m) => m.handedOver)).toBe(true);
 
     const now = task.session.forceSend('now');
+    task.adapter.deliver(kept);
     task.adapter.drop(dropped);
     task.adapter.finishInterrupt();
     await flushMicrotasks();
 
     expect(task.adapter.sent).toEqual(['Do the task', 'now']);
     expect(of(task.events, 'turn_start').at(-1)).toMatchObject({ messageId: now, forced: true });
-    // Codex discards what it had not consumed; the rest the runner still owes.
+    // Codex re-sends only the unread message after the forced one.
     expect(task.adapter.steers.map((s) => s.text)).toEqual(['kept', 'dropped', 'dropped']);
-    expect(task.session.queued().map((m) => m.id)).toEqual([kept, dropped]);
+    expect(task.session.queued().map((m) => m.id)).toEqual([dropped]);
   });
 
   it('is never steered into the turn it interrupts', async () => {

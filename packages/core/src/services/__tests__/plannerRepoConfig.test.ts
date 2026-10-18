@@ -11,7 +11,7 @@ import { ApprovalPolicy } from '../ApprovalPolicy';
 import type { ProjectServerApprovals } from '../harness/projectServers';
 import { createTaskAdapter } from '../harness/connectors';
 import type { AgentProcessDeps, PlannerStartOptions, TaskStartOptions } from '../harness/AgentAdapter';
-import { fakeMcpServer, fakeSpawn, fixture, type FakeAgentProcess, type ScriptedReply } from './harnessTestKit';
+import { fakeMcpServer, fakeSpawn, fixture, sseResponse, type FakeAgentProcess, type ScriptedReply } from './harnessTestKit';
 
 /**
  * ADR-0028: a planner runs nothing the repository's config names. Driven at
@@ -443,6 +443,7 @@ function openCodeService(root: string, options: ServiceOptions = {}) {
   const answer = (body: unknown) => ({ ok: true, status: 200, statusText: 'OK', json: async () => body, body: null }) as unknown as Response;
   const fetchImpl = (async (input: string | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url.endsWith('/event')) return sseResponse(init).response;
     if (url.endsWith('/api/info')) return answer({});
     if (url.endsWith('/mcp')) return answer({ ordewell: { status: 'connected' } });
     if (url.endsWith('/session')) return answer({ id: 'ses_1' });

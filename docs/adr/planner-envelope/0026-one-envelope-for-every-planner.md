@@ -68,7 +68,9 @@ to one permission ledger (`permissionLedger.ts`), shared by planners and
 tasks on every runner. The ledger holds it open, and cancels any request
 still open when the turn ends. `CliAgentAiService` decides it against the
 session's approval policy and web fetcher, and answers through the adapter;
-the adapter only turns the answer into its runner's reply.
+the adapter only turns the answer into its runner's reply. An HTTP answer
+keeps its request open until delivery succeeds. A failed reply is logged and
+the request remains answerable, including one that was allowed automatically.
 
 | request | decision |
 | --- | --- |
@@ -275,3 +277,4 @@ refused from a workspace's environment files (ADR-0016).
 - 2026-10-13 — Codex's own shell is off for a planner on a host where its sandbox cannot start ([ADR-0033](0033-codex-planner-without-its-sandbox.md)).
 - 2026-10-13 — a server named `ordewell_x` had its tools allowed at once as Ordewell's, past the `mcp_tool` approval: Claude Code's and OpenCode's adapters matched a prefix, and OpenCode's rule was `ordewell_*`. Ordewell's tools are now told apart by exact name (ADR-0022, S3).
 - 2026-10-13 — the three adapters' copies of the permission table disagreed: Codex allowed an Ordewell tool without logging it, only OpenCode cancelled a request left open at a turn's end, and Codex named an approval's tool from a call that had already finished. One permission ledger now holds the table for every runner.
+- 2026-10-18 — the permission ledger waits for HTTP reply delivery and retains failed answers for retry.

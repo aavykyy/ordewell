@@ -16,7 +16,7 @@ import { settleWithin } from './settleWithin';
  * own frames and hands what they mean to the pieces here.
  */
 
-/** How long a turn waits for the event stream before posting anyway. */
+/** How long each event-stream connection attempt can take. */
 const STREAM_CONNECT_TIMEOUT_MS = 5000;
 
 type OnEvent = (event: AgentEvent) => void;
@@ -223,9 +223,7 @@ export function openCodePermissions(
   reply: (id: string, sessionId: string, decision: ApprovalDecision) => Promise<void>,
   stance: () => LedgerStance,
 ): PermissionLedger<OpenCodeAskHandle> {
-  return new PermissionLedger(({ id, sessionId }, decision) => {
-    void reply(id, sessionId, decision).catch(() => { /* a server that forgot the request will not hang on it either */ });
-  }, stance);
+  return new PermissionLedger(({ id, sessionId }, decision) => reply(id, sessionId, decision), stance);
 }
 
 /**
@@ -340,7 +338,12 @@ export async function settleTurn(turn: TurnLatch, how: TurnSettlement, onEvent: 
     if (signal?.aborted) resolve();
     signal?.addEventListener('abort', () => resolve(), { once: true });
   });
-  await Promise.race([turn.ended, aborted, how.processEnded, how.streamFailed]);
+  try {
+    await Promise.race([turn.ended, aborted, how.processEnded, how.streamFailed]);
+  } catch (err) {
+    how.permissions.endTurn(onEvent);
+    throw err;
+  }
   if (signal?.aborted) return false;
   if (!turn.done) {
     onEvent({ type: 'error', message: how.exitMessage() });
@@ -360,9 +363,9 @@ export async function interruptAcknowledged(turn: TurnLatch, processEnded: Promi
 /** One turn's event stream, open. */
 export interface EventStream {
   /**
-   * Rejects with what a frame handler threw; never resolves. The stream is
-   * dead from then on, and it is the only channel permission requests arrive
-   * on: a turn still waiting on its server would wait on a request nobody
+   * Rejects after one failed reconnect, or with what a frame handler threw;
+   * never resolves. The stream is dead from then on, and it is the only
+   * channel permission requests arrive on: a turn still waiting on its server would wait on a request nobody
    * sees, so it fails instead, as a stdio adapter's turn does.
    */
   readonly failed: Promise<never>;
@@ -376,8 +379,8 @@ export interface EventStream {
  * Open the event stream for one turn and wait until it is connected. The
  * stream stopped being best-effort the moment permission answers moved onto
  * it: a request raised before we connect is one nobody answers, and the turn
- * hangs on it. Waiting is bounded so a server that never opens the stream
- * still gets its turn.
+ * hangs on it. A lost connection is retried once; a second loss fails the
+ * turn rather than leaving it blocked on an unseen request.
  */
 export async function openEventStream<F>(
   connect: (signal: AbortSignal) => Promise<Response | null>,
@@ -391,15 +394,34 @@ export async function openEventStream<F>(
   const failed = new Promise<never>((_resolve, reject) => { fail = reject; });
   // Heard by whoever races it; a turn that ended first never does.
   failed.catch(() => {});
-  // A frame handler that throws is Ordewell's own failure, not a frame the
-  // runner sent badly — the only thing that escapes the read loop below.
+  // A handler failure belongs to Ordewell; reconnecting cannot repair it.
   let handlerError: unknown;
-  const live = streamEvents(connect, streamAbort.signal, onFrame, connected, onActivity)
-    .catch((err: unknown) => {
-      handlerError = err;
-      fail(err);
-    });
-  await settleWithin(ready, { timeoutMs: STREAM_CONNECT_TIMEOUT_MS, onTimeout: () => undefined });
+  const live = (async () => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const attemptAbort = new AbortController();
+      const abortAttempt = () => attemptAbort.abort();
+      streamAbort.signal.addEventListener('abort', abortAttempt, { once: true });
+      const stopped = new Promise<void>((resolve) => attemptAbort.signal.addEventListener('abort', () => resolve(), { once: true }));
+      try {
+        await streamEvents((signal) => settleWithin(connect(signal), {
+          timeoutMs: STREAM_CONNECT_TIMEOUT_MS, ended: stopped,
+          onTimeout: () => { throw new EventStreamLostError(); }, onEnded: () => null,
+        }), attemptAbort.signal, onFrame, connected, onActivity);
+        return;
+      } catch (err) {
+        if (streamAbort.signal.aborted && err instanceof EventStreamLostError) return;
+        if (err instanceof EventStreamLostError && attempt === 0) continue;
+        handlerError = err;
+        fail(err);
+        connected();
+        return;
+      } finally {
+        streamAbort.signal.removeEventListener('abort', abortAttempt);
+        attemptAbort.abort();
+      }
+    }
+  })();
+  await ready;
   return {
     failed,
     get broken() { return handlerError !== undefined; },
@@ -422,16 +444,18 @@ async function streamEvents<F>(
   onConnected: () => void,
   onActivity?: () => void,
 ): Promise<void> {
-  const response = await connect(signal).catch(() => null);
+  const response = await connect(signal).catch(() => { throw new EventStreamLostError(); });
+  if (signal.aborted) return;
   const body = response?.body;
+  if (response?.status !== 200 || !body) throw new EventStreamLostError();
   onConnected();
-  if (!body) return;
   const reader = body.getReader();
   const decoder = new TextDecoder();
   const lines = new LineBuffer();
   for (;;) {
-    const { done, value } = await reader.read().catch(() => ({ done: true, value: undefined }));
-    if (done) return;
+    const { done, value } = await reader.read().catch(() => { throw new EventStreamLostError(); });
+    if (signal.aborted) return;
+    if (done) throw new EventStreamLostError();
     // Any bytes at all mean the server is still talking, independent of
     // whether this chunk resolves into an event that is forwarded — the same
     // gap that made Claude Code's watchdog false-positive on filtered
@@ -451,4 +475,8 @@ async function streamEvents<F>(
       onFrame(frame);
     });
   }
+}
+
+class EventStreamLostError extends Error {
+  constructor() { super("The OpenCode runner's event stream was lost."); }
 }

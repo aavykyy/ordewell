@@ -125,9 +125,10 @@ export interface IRunnerSession {
   invokeCommand(name: string, args?: string): string;
   /**
    * Answer a `permission_request` this session emitted, by its event id. False
-   * when it is no longer open — answered, withdrawn, or never asked.
+   * when it is no longer open — answered, withdrawn, or never asked. An HTTP
+   * answer settles after delivery; on failure it stays open and returns false.
    */
-  answerPermission(id: string, decision: ApprovalDecision): boolean;
+  answerPermission(id: string, decision: ApprovalDecision): boolean | Promise<boolean>;
   /**
    * The runner's `task_complete` calls on this attempt's token (ADR-0022):
    * the only completion evidence, for `VerdictEngine` to weigh.

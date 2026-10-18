@@ -37,11 +37,12 @@ const ALLOW: ApprovalDecision = { decision: 'allow' };
  * how to read its runner's request and how to `reply` to it.
  */
 export class PermissionLedger<Handle> {
-  private readonly open = new Map<string, Handle>();
+  private readonly open = new Map<string, { handle: Handle; onEvent: OnEvent }>();
+  private readonly answering = new Set<string>();
 
   constructor(
-    /** Sends the answer in the runner's own schema. Must not throw: a runner that forgot the request will not hang on it. */
-    private readonly reply: (handle: Handle, decision: ApprovalDecision) => void,
+    /** Sends the answer in the runner's own schema; an HTTP reply settles only once delivered. */
+    private readonly reply: (handle: Handle, decision: ApprovalDecision) => void | Promise<void>,
     /** Read at each request, since a ledger is made before its runner starts. */
     private readonly stance: () => LedgerStance,
   ) {}
@@ -56,34 +57,67 @@ export class PermissionLedger<Handle> {
   raise(request: RaisedRequest, handle: Handle, onEvent: OnEvent): void {
     const { ordewell, suggestions, ask, ...shown } = request;
     const { role, autoApprove } = this.stance();
+    const pending: AgentEvent = role === 'task'
+      ? { type: 'permission_request', ...shown, suggestions: suggestions ?? [] }
+      : { type: 'permission_request', ...shown, ...(ask ? { ask } : {}) };
     if (ordewell || (role === 'task' && autoApprove)) {
-      // Answered even when showing it throws: that is Ordewell's failure, and a
-      // runner left waiting on its completion call would hang the task.
-      try {
-        onEvent({ type: 'permission_request', ...shown, decided: ALLOW });
-      } finally {
-        this.reply(handle, ALLOW);
-      }
+      const sent = this.reply(handle, ALLOW);
+      if (sent instanceof Promise) {
+        const open = { handle, onEvent };
+        this.open.set(request.id, open);
+        this.answering.add(request.id);
+        void this.awaitReply(request.id, open, sent).then((delivered) => {
+          if (delivered) onEvent({ type: 'permission_request', ...shown, decided: ALLOW });
+        }, () => {
+          if (this.open.get(request.id) === open) onEvent(pending);
+        });
+      } else onEvent({ type: 'permission_request', ...shown, decided: ALLOW });
       return;
     }
-    this.open.set(request.id, handle);
-    onEvent(role === 'task'
-      ? { type: 'permission_request', ...shown, suggestions: suggestions ?? [] }
-      : { type: 'permission_request', ...shown, ...(ask ? { ask } : {}) });
+    this.open.set(request.id, { handle, onEvent });
+    onEvent(pending);
   }
 
   /** The answer to an open request. False when it is not open — answered, withdrawn, or never asked. */
   answer(id: string, decision: ApprovalDecision): boolean {
     if (!this.open.has(id)) return false;
-    const handle = this.open.get(id) as Handle;
+    const { handle } = this.open.get(id)!;
     this.open.delete(id);
     this.reply(handle, decision);
     return true;
   }
 
+  /** HTTP answers keep the request open until the server accepts the reply. */
+  async answerAsync(id: string, decision: ApprovalDecision): Promise<boolean> {
+    const open = this.open.get(id);
+    if (!open || this.answering.has(id)) return false;
+    this.answering.add(id);
+    // Stop denies requests before disposing of the runner in the same tick.
+    const sent = new Promise<void>((resolve) => resolve(this.reply(open.handle, decision)));
+    return this.awaitReply(id, open, sent);
+  }
+
+  private async awaitReply(id: string, open: { handle: Handle; onEvent: OnEvent }, sent: Promise<void>): Promise<boolean> {
+    try {
+      await sent;
+      if (this.open.get(id) !== open) return false;
+      this.open.delete(id);
+      return true;
+    } catch (err) {
+      if (this.open.get(id) === open) open.onEvent({
+        type: 'thinking',
+        text: `Could not deliver the permission answer: ${err instanceof Error ? err.message : String(err)}. The request is still open.`,
+      });
+      throw err;
+    } finally {
+      this.answering.delete(id);
+    }
+  }
+
   /** The runner settled a request itself — an interrupt cancelled its call, or its own rule answered it. It takes no answer now. */
   withdraw(id: string | undefined, onEvent: OnEvent): void {
-    if (id !== undefined && this.open.delete(id)) onEvent({ type: 'permission_cancelled', id });
+    // OpenCode echoes our reply on SSE before its HTTP request settles.
+    if (id !== undefined && !this.answering.has(id) && this.open.delete(id)) onEvent({ type: 'permission_cancelled', id });
   }
 
   /**

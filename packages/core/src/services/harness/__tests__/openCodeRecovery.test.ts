@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { OpenCodeAdapter } from '../OpenCodeAdapter';
 import type { AgentEvent, AgentProcessDeps } from '../AgentAdapter';
-import { fakeSpawn } from '../../__tests__/harnessTestKit';
+import { fakeSpawn, sseResponse } from '../../__tests__/harnessTestKit';
 
 /**
  * The planner turn's POST is held open for the whole turn, and Node's global
@@ -20,6 +20,7 @@ function fakeFetch(routes: Record<string, Handler>): { fetch: typeof globalThis.
     calls.push(key);
     const handler = routes[key];
     if (!handler) throw new Error(`unrouted request: ${key}`);
+    if (key === 'GET /event') return sseResponse(init).response;
     const value = handler(url, init);
     if (value instanceof Error) throw value;
     return { ok: true, status: 200, statusText: 'OK', body: null, json: async () => value } as unknown as Response;
