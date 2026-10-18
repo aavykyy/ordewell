@@ -573,7 +573,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
         throw err;
       }
       const { plan, goal, run } = adopted;
-      dispatch({ type: 'sessionStarted', sessionId: effect.sessionId, goal });
+      dispatch({ type: 'sessionLoaded', sessionId: effect.sessionId, goal });
       dispatch(restoredChat(plan, effect.sessionId));
       inbound.releaseSnapshot(true);
       dispatch({ type: 'planUpdated', plan, sessionId: effect.sessionId });
@@ -884,8 +884,7 @@ async function converse(deps: EffectDeps, sessionId: string, call: () => Promise
     // drains the next queued prompt, so the reply would otherwise land after
     // the prompt that queue sent, in the wrong order. The socket usually
     // delivered the same words; the backfill is dropped when it did.
-    const reply = lastAssistantMessage(plan);
-    if (reply) inbound.backfill(reply.content, reply.timestamp, reply.runs);
+    for (const reply of turnReplies(plan)) inbound.backfill(reply.content, reply.timestamp, reply.runs);
     deps.dispatch({ type: 'planUpdated', plan, sessionId });
   } finally {
     inbound.flush();
@@ -907,23 +906,24 @@ function restoredChat(plan: unknown, sessionId: string): Action {
 }
 
 /**
- * The reply the turn settled on, with the timestamp a socket copy of it would
- * carry. Only a plain entry is a reply: the markers a turn leaves after it — a
- * plan committed, a run autorun started, a skill loaded — are drawn by their
- * own broadcasts, and spoken here they were a second planner line. Nothing
- * before the user's message is this turn's.
+ * The replies the turn settled on, in order, each with the timestamp and runs a
+ * socket copy of it would carry. Only a plain entry is a reply: the markers a
+ * turn leaves after it — a plan committed, a run autorun started, a skill
+ * loaded — are drawn by their own broadcasts, and spoken here they were a
+ * second planner line. Nothing before the user's message is this turn's.
  */
-function lastAssistantMessage(plan: unknown): Pick<SerializedConversationMessage, 'content' | 'runs'> & { timestamp?: string } | null {
+function turnReplies(plan: unknown): Array<Pick<SerializedConversationMessage, 'content' | 'runs'> & { timestamp?: string }> {
   const history = (plan as Pick<SurfacePlan, 'conversationHistory'> | null)?.conversationHistory ?? [];
+  const replies: Array<Pick<SerializedConversationMessage, 'content' | 'runs'> & { timestamp?: string }> = [];
   for (let i = history.length - 1; i >= 0; i--) {
     const entry = history[i];
-    if (isUserMessage(entry)) return null;
+    if (isUserMessage(entry)) break;
     if (entry.role === 'assistant' && entry.kind === undefined) {
       const { content, timestamp, runs } = entry;
-      return { content, ...(timestamp ? { timestamp } : {}), ...(runs ? { runs } : {}) };
+      replies.unshift({ content, ...(timestamp ? { timestamp } : {}), ...(runs ? { runs } : {}) });
     }
   }
-  return null;
+  return replies;
 }
 
 /** The summary a compaction just made the transcript's first entry, if this plan came from one. */
@@ -935,7 +935,8 @@ function compactionSummary(plan: unknown): { content: string; timestamp?: string
 
 async function refreshPlan(deps: EffectDeps, sessionId: string): Promise<void> {
   const { plan, run } = await deps.api.getSession(sessionId, deps.workspace);
-  deps.dispatch({ type: 'planUpdated', plan, sessionId });
+  // Not `planUpdated`: that is a turn's end, and a refresh can land in the middle of one.
+  deps.dispatch({ type: 'planRefreshed', plan, sessionId });
   // The Session's own word on the run, isolation marks and handoff included.
   if (run) deps.dispatch({ type: 'runSnapshot', view: run, sessionId });
 }
