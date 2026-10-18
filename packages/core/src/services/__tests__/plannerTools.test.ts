@@ -947,7 +947,7 @@ async function runningPlan(second: Parameters<typeof planThen>[0], opts: { sessi
     activeCount: 0,
   } as unknown as IRunner;
   const planner = await planThen(second, { ...rest, runner });
-  await planner.session.executePlan();
+  await planner.session.execute({ command: 'run_plan' }, { kind: 'user' });
   return planner;
 }
 

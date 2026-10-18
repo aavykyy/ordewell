@@ -166,7 +166,7 @@ describe('Session.addTask', () => {
     const runner = recordingRunner();
     const session = makeSession({ runner, modelResolver: resolverFor(CLAUDE_CATALOG) });
     session.loadPlan(pausedOnUserTask(), 'goal', testWorkspace, { persist: false });
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     expect(runner.spawned).toEqual([]);
 
     const state = await session.addTask({ title: 'Docs', prompt: 'write docs', dependencies: ['a'] });
@@ -185,7 +185,7 @@ describe('Session.removeTask', () => {
     plan.tasks[0].type = 'user';
     plan.tasks[0].subtasks = [createTask({ id: 'child', order: 1, prompt: 'inspect' })];
     session.loadPlan(plan, 'goal', testWorkspace, { persist: false });
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     expect(runner.spawned).toEqual(['child']);
 
     await session.removeTask('only');
@@ -203,7 +203,7 @@ describe('Session.removeTask', () => {
     ] })];
     plan.tasks[1].dependencies = ['child', 'leaf'];
     session.loadPlan(plan, 'goal', testWorkspace, { persist: false });
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     await session.removeTask('t1');
 
@@ -228,7 +228,7 @@ describe('Session.removeTask', () => {
     const runner = recordingRunner();
     const session = makeSession({ runner, modelResolver: resolverFor(CLAUDE_CATALOG) });
     session.loadPlan(soloPlan(), 'goal', testWorkspace, { persist: false });
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     expect(runner.spawned).toEqual(['only']);
 
     await session.removeTask('only');
@@ -244,7 +244,7 @@ describe('Session.removeTask', () => {
     const runner = recordingRunner();
     const session = makeSession({ runner, modelResolver: resolverFor(CLAUDE_CATALOG) });
     session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     await session.removeTask('t1');
 
@@ -259,7 +259,7 @@ describe('Session.removeTask', () => {
     const runner = recordingRunner();
     const session = makeSession({ runner, modelResolver: resolverFor(CLAUDE_CATALOG) });
     session.loadPlan(pausedOnUserTask(), 'goal', testWorkspace, { persist: false });
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     await session.removeTask('a');
 
@@ -268,7 +268,7 @@ describe('Session.removeTask', () => {
     expect(taskOf(session, 'b')!.status).toBe('pending');
 
     // Still schedulable: the run is armed, so finishing the user task fans out.
-    await session.markTaskComplete('b');
+    await session.execute({ command: 'mark_complete', task: 'b' }, { kind: 'user' });
     expect(runner.spawned).toEqual(['c']);
   });
 });
@@ -507,7 +507,7 @@ describe('Session.updateTask — model of a task with a live runner', () => {
     } as unknown as IRunner;
     const session = makeSession({ runner, modelResolver: resolverFor(CLAUDE_CATALOG) });
     session.loadPlan(soloPlan(), 'goal', testWorkspace, { persist: false });
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     expect(sessions).toHaveLength(1);
     return { session, live: sessions[0] };
   }
@@ -519,7 +519,7 @@ describe('Session.updateTask — model of a task with a live runner', () => {
     await expect(session.updateTask('only', { assignedModel: { ...haiku, thinkingEffort: 'high' } })).rejects.toThrow(refusal);
     expect(taskOf(session, 'only')?.assignedModel).toBeUndefined();
 
-    await session.cancelTask('only');
+    await session.execute({ command: 'stop_task', task: 'only' }, { kind: 'user' });
     await session.updateTask('only', { assignedModel: haiku });
     expect(taskOf(session, 'only')?.assignedModel?.modelId).toBe('claude-haiku-4-5');
   });
@@ -570,7 +570,7 @@ describe('Session.updateTask — model of a task with a live runner', () => {
     session.loadPlan(soloPlan(), 'goal', testWorkspace, { persist: false });
 
     const moving = session.setTaskRunner('only', 'codex');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     expect(taskOf(session, 'only')?.status).toBe('in_progress');
     listed(CLAUDE_CATALOG);
 
@@ -605,7 +605,7 @@ describe('Session.updateTask — model of a task with a live runner', () => {
     plan.tasks[0].assignedModel = { modelId: 'claude-sonnet-4-5', modelLabel: 'Claude Sonnet 4.5', thinkingEffort: 'high' };
     session.loadPlan(plan, 'goal', testWorkspace, { persist: false });
     await session.addTask({ title: 'Docs', prompt: 'write docs', dependencies: ['only'] }); // seeds the catalog
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     /** The model lines of the task's log, as surfaces are sent them. */
     const logged = () => broadcast.mock.calls.map(([m]) => m as { type: string; events?: { type: string }[] })
       .flatMap((m) => (m.type === 'task_log' ? m.events ?? [] : []))
@@ -665,7 +665,7 @@ describe('Session.updateTask — model of a task with a live runner', () => {
   // The plan may be another one by then, so the log says the runner's change alone.
   it('leaves the plan as it was when the switch arrives after the attempt ended', async () => {
     const { session, live, logged } = await followable();
-    await session.cancelTask('only');
+    await session.execute({ command: 'stop_task', task: 'only' }, { kind: 'user' });
 
     live.emitEvent({ type: 'model_switched', from: sonnet, to: haikuRef });
 
@@ -800,7 +800,7 @@ describe('Session.updateTask — what a field patch saves and announces', () => 
     const runner = recordingRunner();
     const session = makeSession({ runner, modelResolver: resolverFor(CLAUDE_CATALOG) });
     session.loadPlan(pausedOnUserTask(), 'goal', testWorkspace, { persist: false });
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     expect(runner.spawned).toEqual([]);
 
     await session.setTaskDependencies('c', ['a']);
@@ -830,7 +830,7 @@ describe('Session.removeTask of a task not in the plan', () => {
     const runner = recordingRunner();
     const session = makeSession({ runner, modelResolver: resolverFor(CLAUDE_CATALOG) });
     session.loadPlan(soloPlan(), 'goal', testWorkspace, { persist: false });
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     saves(session).mockClear();
 
     expect(await session.removeTask('ghost')).toBeNull();

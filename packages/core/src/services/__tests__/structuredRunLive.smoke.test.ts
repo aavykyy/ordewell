@@ -71,7 +71,7 @@ describe.runIf(live)('structured run — live', () => {
 
     try {
       session.loadPlan(plan, 'Structured run', dir);
-      await session.executePlan();
+      await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
       await vi.waitFor(() => expect(taskOf(session, 'live-1')?.status).toBe('completed'), { timeout: TIMEOUT_MS, interval: 500 });
       const first = taskOf(session, 'live-1')!;
@@ -120,7 +120,7 @@ describe.runIf(live)('structured run — live', () => {
 
     try {
       session.loadPlan(plan, 'Structured approval', dir);
-      await session.executePlan();
+      await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
       await vi.waitFor(() => expect(session.outstandingApprovals()).toHaveLength(1), { timeout: TIMEOUT_MS, interval: 250 });
       const [pending] = session.outstandingApprovals();
@@ -170,7 +170,7 @@ describe.runIf(live)('structured run — live', () => {
 
     try {
       session.loadPlan(plan, 'Structured deny', dir);
-      await session.executePlan();
+      await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
       await vi.waitFor(() => expect(session.outstandingApprovals()).toHaveLength(1), { timeout: TIMEOUT_MS, interval: 250 });
       session.resolveApproval(session.outstandingApprovals()[0].id, { decision: 'deny', note: 'Not a.txt — write it to notes/b.txt instead.' });
@@ -178,7 +178,7 @@ describe.runIf(live)('structured run — live', () => {
 
       await vi.waitFor(() => expect(writes()).toHaveLength(2), { timeout: TIMEOUT_MS, interval: 250 });
       expect(writes()[1].args).toContain('notes/b.txt');
-      await session.cancelTask('live-deny');
+      await session.execute({ command: 'stop_task', task: 'live-deny' }, { kind: 'user' });
       expect(session.outstandingApprovals()).toEqual([]);
       await vi.waitFor(() => expect(logged()).toContainEqual({ type: 'approval_decided', approvalId: writes()[1].approvalId, decision: 'deny' }), { timeout: 10_000 });
       expect(existsSync(join(dir, 'a.txt'))).toBe(false);

@@ -76,7 +76,7 @@ describe('a planner rewrite never undoes finished work', () => {
     expect(taskOf(session, 'b')).toMatchObject({ status: 'completed', prompt: 'build it' });
     expect(taskOf(session, 'd')).toBeDefined();
 
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     expect(spawned).toEqual(['c']);
   });
 
@@ -95,7 +95,7 @@ describe('a planner rewrite never undoes finished work', () => {
       aiService: { startConversation: vi.fn(), continueConversation, hasActiveConversation: () => true, reset: vi.fn() },
     });
     session.loadPlan(halfDonePlan(), 'build it', testWorkspace, { persist: false });
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     expect(spawned).toEqual(['c']);
 
     const plan = await session.continueConversation('add a docs task');
@@ -130,9 +130,9 @@ describe('a planner rewrite never undoes finished work', () => {
     plan.tasks[1] = createTask({ ...plan.tasks[1], status: 'pending' });
     plan.tasks.push(createTask({ id: 'e', order: 4, title: 'Lint', prompt: 'lint it', dependencies: ['a'], assignedRunner: 'claude-code' }));
     session.loadPlan(plan, 'build it', testWorkspace, { persist: false });
-    await session.executePlan(); // 'b' and 'e' go live
-    await session.markTaskComplete('e'); // finished in this run, so it is in the execution log
-    await session.cancelTask('b'); // the run stays armed with nothing live
+    await session.execute({ command: 'run_plan' }, { kind: 'user' }); // 'b' and 'e' go live
+    await session.execute({ command: 'mark_complete', task: 'e' }, { kind: 'user' }); // finished in this run, so it is in the execution log
+    await session.execute({ command: 'stop_task', task: 'b' }, { kind: 'user' }); // the run stays armed with nothing live
     expect(session.isExecuting).toBe(false);
 
     await session.continueConversation('add a docs task');
@@ -159,8 +159,8 @@ describe('a planner rewrite never undoes finished work', () => {
       },
     });
     session.loadPlan(halfDonePlan(), 'build it', testWorkspace, { persist: false });
-    await session.executePlan();
-    await session.cancelTask('c'); // the run stays armed with nothing live
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
+    await session.execute({ command: 'stop_task', task: 'c' }, { kind: 'user' }); // the run stays armed with nothing live
 
     await session.continueConversation('add a docs task');
 

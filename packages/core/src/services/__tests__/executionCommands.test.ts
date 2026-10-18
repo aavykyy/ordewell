@@ -52,7 +52,7 @@ function setup(opts: { autonomous?: boolean; isolation?: FakeWorktreeIsolation; 
 async function running(opts: Parameters<typeof setup>[0] = {}) {
   const env = setup(opts);
   env.session.loadPlan(plan([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]), 'goal', testWorkspace, { persist: false });
-  await env.session.executePlan();
+  await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
   return env;
 }
 
@@ -67,7 +67,7 @@ describe('the command seam: run_task', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-10-11T12:00:00Z'));
     const outcome = await byTool.run({ command: 'run_task', task: '1' });
-    await byButton.session.forceStartTask('t1');
+    await byButton.session.execute({ command: 'force_start', task: 't1' }, { kind: 'user' });
     vi.useRealTimers();
 
     expect(outcome).toEqual({ ok: true, message: 'Started task #1 "Task t1".' });
@@ -111,7 +111,7 @@ describe('the command seam: run_task', () => {
   it('refuses a task a failure blocks through its dependencies, naming the failed task to retry (ADR-0034)', async () => {
     const env = setup();
     env.session.loadPlan(plan([task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { dependencies: ['t2'] })]), 'goal', testWorkspace, { persist: false });
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     env.latest('t1').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
     await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('failed'));
 
@@ -123,7 +123,7 @@ describe('the command seam: run_task', () => {
   it('refuses a task waiting at its merge gate, and says the merge is the user\'s', async () => {
     const env = setup({ isolation: new FakeWorktreeIsolation() });
     env.session.loadPlan(plan([task('t1', 1), task('o2', 2, { ops: true, dependencies: ['t1'] })]), 'goal', testWorkspace, { persist: false });
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     env.latest('t1').reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(env.session.mergeGate('o2')).toEqual(['t1']));
 
@@ -140,7 +140,7 @@ describe('the command seam: run_task', () => {
     isolation.mergedByHand.add('v2');
     const env = setup({ isolation });
     env.session.loadPlan(plan([task('t1', 1), task('v2', 2, { dependencies: ['t1'] }), task('o3', 3, { ops: true, dependencies: ['v2'] })]), 'goal', testWorkspace, { persist: false });
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     env.latest('t1').reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(env.spawned('v2')).toHaveLength(1));
     env.latest('v2').reportComplete({ status: 'done', summary: '' });
@@ -160,10 +160,10 @@ describe('the command seam: run_task', () => {
   it('refuses a retry of a failed ops task whose ancestors\' work is still not merged', async () => {
     const env = setup({ isolation: new FakeWorktreeIsolation() });
     env.session.loadPlan(plan([task('t1', 1), task('o2', 2, { ops: true, dependencies: ['t1'] })]), 'goal', testWorkspace, { persist: false });
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     env.latest('t1').reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(env.session.mergeGate('o2')).toEqual(['t1']));
-    await env.session.forceStartTask('o2');
+    await env.session.execute({ command: 'force_start', task: 'o2' }, { kind: 'user' });
     env.latest('o2').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
     await vi.waitFor(() => expect(taskOf(env.session, 'o2')!.status).toBe('failed'));
 
@@ -177,7 +177,7 @@ describe('the command seam: run_task', () => {
   it('refuses a user task, a running task, and a failed one with what to do instead', async () => {
     const env = await running();
     env.session.loadPlan(plan([task('t1', 1), task('u2', 2, { type: 'user', prompt: undefined })]), 'goal', testWorkspace, { persist: false });
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     expect((await env.run({ command: 'run_task', task: 'u2' })).message).toBe('Task #2 "Task u2" is a user task: the user does it by hand, and no runner starts it.');
     expect((await env.run({ command: 'run_task', task: 't1' })).message).toBe('Task #1 "Task t1" is already running.');
@@ -233,7 +233,7 @@ describe('the command seam: an unapproved plan or task never starts', () => {
       .toBe('Task #2 "Task t2" was added after the user approved the plan, so it is not approved to run. Ask the user to execute the plan themselves, which approves it.');
     expect(env.spawn).not.toHaveBeenCalled();
 
-    await env.session.forceStartTask('t2');
+    await env.session.execute({ command: 'force_start', task: 't2' }, { kind: 'user' });
     expect(env.session.planState!.approvedTasks).toEqual(['t1', 't2']);
   });
 
@@ -248,7 +248,7 @@ describe('the command seam: an unapproved plan or task never starts', () => {
     const env = setup();
     env.session.loadPlan(plan([task('t1', 1), task('t2', 2)], { status: 'draft' }), 'goal', testWorkspace, { persist: false });
 
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     expect(env.session.planState!.approvedTasks).toEqual(['t1', 't2']);
   });
@@ -261,7 +261,7 @@ describe('the command seam: an unapproved plan or task never starts', () => {
       'goal', testWorkspace, { persist: false },
     );
 
-    await env.session.approveReview();
+    await env.session.execute({ command: 'approve_review' }, { kind: 'user' });
 
     expect(env.session.planState!.approvedTasks).toEqual(['u1', 't2']);
     // The planner's start of t2 is refused for its unmet dependency, not for approval:
@@ -347,7 +347,7 @@ describe('the command seam: stop_task and stop_run', () => {
   it('keeps an ops task\'s retry context when it is stopped midway (ADR-0020)', async () => {
     const env = setup();
     env.session.loadPlan(plan([task('o1', 1, { ops: true })]), 'goal', testWorkspace, { persist: false });
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     env.latest('o1').emitOutput('created resource group rg-dev\n');
 
     expect((await env.run({ command: 'stop_task', task: 'o1' })).message).toContain('A retry is told what this attempt did.');
@@ -361,7 +361,7 @@ describe('the command seam: stop_task and stop_run', () => {
   it('stops every running task and keeps the plan, as the stop button does', async () => {
     const env = setup();
     env.session.loadPlan(plan([task('t1', 1), task('t2', 2)]), 'goal', testWorkspace, { persist: false });
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     const outcome = await env.run({ command: 'stop_run' });
 
@@ -383,7 +383,7 @@ describe('the command seam: retry_task', () => {
   it('starts a fresh attempt of a failed task, even with no run to hand it to', async () => {
     const env = setup();
     env.session.loadPlan(plan([task('t1', 1)]), 'goal', testWorkspace, { persist: false });
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     env.latest('t1').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
     await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('failed'));
     env.session.stopExecution();
@@ -396,7 +396,7 @@ describe('the command seam: retry_task', () => {
   it('continues a finished task in its saved session with the message', async () => {
     const env = setup();
     env.session.loadPlan(plan([task('t1', 1)]), 'goal', testWorkspace, { persist: false });
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     env.latest('t1').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
     await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('failed'));
 
@@ -521,7 +521,7 @@ describe('the command seam: a task paused on a usage limit', () => {
     const env = await running({ autonomous: false });
     env.latest('t1').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
     await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('failed'));
-    await env.session.retryTask('t1');
+    await env.session.execute({ command: 'retry_task', task: 't1', from: 'fresh' }, { kind: 'user' });
     await vi.waitFor(() => expect(env.spawned('t1')).toHaveLength(2));
 
     for (const n of [3, 4]) {
@@ -654,6 +654,7 @@ describe('the command seam: who asked', () => {
 
     const entries = env.session.planState!.conversationHistory!.filter((e) => e.kind === 'execution');
     expect(entries.map((e) => [e.execution!.actor, e.content])).toEqual([
+      ['user', 'You started the plan.'],
       ['user', 'You stopped task #1 "Task t1".'],
       ['planner-turn', 'The planner started task #1 "Task t1".'],
     ]);
@@ -661,7 +662,11 @@ describe('the command seam: who asked', () => {
     const reloaded = fromTranscript(env.session.planState!.conversationHistory, []);
     const lines = (view: typeof live) => view.blocks.flatMap((b) => (b.type === 'message' ? [[b.role, b.text]] : []));
     expect(lines(reloaded)).toEqual(lines(live));
-    expect(lines(live)).toEqual([['system', 'You stopped task #1 "Task t1".'], ['system', 'The planner started task #1 "Task t1".']]);
+    expect(lines(live)).toEqual([
+      ['system', 'You started the plan.'],
+      ['system', 'You stopped task #1 "Task t1".'],
+      ['system', 'The planner started task #1 "Task t1".'],
+    ]);
   });
 
   it('records the user\'s own start as "You started ...", the same wording the button press gets', async () => {
@@ -783,7 +788,7 @@ describe('the command seam: skip_task', () => {
   it('skips a blocked task and one waiting for input for a supervisor at Act', async () => {
     const env = setup();
     env.session.loadPlan(plan([task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3)]), 'goal', testWorkspace, { persist: false });
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     env.latest('t1').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
     env.latest('t3').waitForInput();
     await vi.waitFor(() => expect(taskOf(env.session, 't3')!.status).toBe('awaiting_user'));
@@ -840,7 +845,7 @@ describe('the command seam: merge_all', () => {
     if (mergeResult) isolation.mergeResult = mergeResult;
     const env = setup({ isolation });
     env.session.loadPlan(plan([task('t1', 1), task('o2', 2, { ops: true, dependencies: ['t1'] })]), 'goal', testWorkspace, { persist: false });
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     env.latest('t1').reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(env.session.mergeGate('o2')).toEqual(['t1']));
     return { ...env, merges: () => isolation.calls.filter((c) => c.op === 'mergeIntoCheckedOut').length };

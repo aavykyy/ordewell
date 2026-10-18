@@ -45,7 +45,7 @@ function setup(saveSession?: typeof sessionStore.saveSession) {
 /** Execute plan, then a run that ends with t1 failed and t2 done. */
 async function runEndedWithAFailure(env: ReturnType<typeof setup>, workspace = testWorkspace) {
   env.session.loadPlan(draft([task('t1', 1), task('t2', 2)]), 'goal', workspace, { persist: false });
-  await env.session.executePlan();
+  await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
   env.latest('t1').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
   env.latest('t2').reportComplete({ status: 'done', summary: '' });
   await vi.waitFor(() => {
@@ -71,7 +71,7 @@ describe('plan approval is read from the approval record, never from the display
   it('survives a stopped run: the planner may run the plan again and retry an approved task', async () => {
     const env = setup();
     env.session.loadPlan(draft([task('t1', 1)]), 'goal', testWorkspace, { persist: false });
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     await env.session.execute({ command: 'stop_run' }, { kind: 'user' });
     // What VS Code's execution_stopped handler wrote.
     env.session.planState!.status = 'draft';
@@ -137,7 +137,7 @@ describe('plan approval is read from the approval record, never from the display
   it('is not given by the user starting one task: the plan stays unapproved', async () => {
     const env = setup();
     env.session.loadPlan(draft([task('t1', 1), task('t2', 2)]), 'goal', testWorkspace, { persist: false });
-    await env.session.forceStartTask('t1');
+    await env.session.execute({ command: 'force_start', task: 't1' }, { kind: 'user' });
     env.latest('t1').reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(env.session.isExecuting).toBe(false));
 

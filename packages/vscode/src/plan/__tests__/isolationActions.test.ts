@@ -13,7 +13,7 @@ function deps() {
     continueWithStash: vi.fn().mockResolvedValue(undefined),
     continueWithoutIsolation: vi.fn().mockResolvedValue(undefined),
     reviewRunDiff: vi.fn().mockResolvedValue('diff --git a/x b/x'),
-    mergeRun: vi.fn().mockResolvedValue('merged'),
+    execute: vi.fn().mockResolvedValue({ ok: true, message: 'Merged the run\'s landed work into your branch. Tasks waiting at a merge gate for it can start.', payload: { kind: 'merge', result: { outcome: 'merged' }, closed: true } }),
     discardRun: vi.fn().mockResolvedValue(undefined),
     cleanupRun: vi.fn().mockResolvedValue(undefined),
     resolveConflictAsTask: vi.fn().mockResolvedValue({ status: 'draft', tasks: [] }),
@@ -121,7 +121,7 @@ describe('handoff actions (ADR-0013)', () => {
     await handleIsolationAction('merge', undefined, d);
 
     expect(showWarningMessage).toHaveBeenCalledTimes(1);
-    expect(session.mergeRun).not.toHaveBeenCalled();
+    expect(session.execute).not.toHaveBeenCalled();
   });
 
   it('merges only after the host confirms', async () => {
@@ -129,7 +129,8 @@ describe('handoff actions (ADR-0013)', () => {
     const { d, session } = deps();
     await handleIsolationAction('merge', undefined, d);
 
-    expect(session.mergeRun).toHaveBeenCalledTimes(1);
+    expect(session.execute).toHaveBeenCalledTimes(1);
+    expect(session.execute).toHaveBeenCalledWith({ command: 'merge_all' }, { kind: 'user' });
   });
 
   const handoffOn = (...repos: [string, string | undefined][]) => ({

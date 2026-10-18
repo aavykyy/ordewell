@@ -12,7 +12,6 @@ import type { IsolationMergeResult } from '../../interfaces/IWorktreeIsolation';
 import type { ConversationTurn, IAiService } from '../AiService';
 import type { Session } from '../createSession';
 import { PlanEditError } from '../PlanEditError';
-import { TaskControlError } from '../TaskOrchestrator';
 
 function runner() {
   const sessions: FakeRunnerSession[] = [];
@@ -52,7 +51,7 @@ describe('Session with worktree isolation', () => {
     const t1 = task('t1', 1);
     const t2 = task('t2', 2, { dependencies: ['t1'] });
     session.loadPlan(plan([t1, t2]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     expect(session.runMergeView()).toBeNull();
     expect(lastStatus()!.runMerge).toBeUndefined();
 
@@ -64,7 +63,7 @@ describe('Session with worktree isolation', () => {
     expect(lastStatus()!.runMerge).toEqual(session.runMergeView());
     expect(isolation.calls.map((c) => c.op)).not.toContain('mergeIntoCheckedOut');
 
-    await session.mergeRun();
+    await session.execute({ command: 'merge_all' }, { kind: 'user' });
 
     expect(session.runMergeView()).toBeNull();
     expect(lastStatus()!.runMerge).toBeUndefined();
@@ -81,13 +80,14 @@ describe('Session with worktree isolation', () => {
     const { session, lastStatus, pass, spawn, messages } = setup();
     const t1 = task('t1', 1);
     session.loadPlan(plan([t1, task('o2', 2, { ops: true, dependencies: ['t1'] })]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass(t1);
     await vi.waitFor(() => expect(lastStatus()!.tasks.find((t) => t.id === 'o2')!.mergeGate).toEqual(['t1']));
     expect(lastStatus()!.runMerge).toMatchObject({ waitingAtGate: true, paused: true, landed: [{ taskId: 't1', title: 'Task t1' }] });
     expect(messages.map((m) => m.type)).not.toContain('execution_complete');
 
-    expect(await session.mergeRun()).toEqual({ outcome: 'merged' });
+    const merged = await session.execute({ command: 'merge_all' }, { kind: 'user' });
+    expect(merged).toMatchObject({ ok: true, payload: { kind: 'merge', result: { outcome: 'merged' } } });
 
     await vi.waitFor(() => expect(spawn.mock.calls.map(([o]) => o.taskId)).toContain('o2'));
     expect(lastStatus()!.tasks.find((t) => t.id === 'o2')!.mergeGate).toBeUndefined();
@@ -99,7 +99,7 @@ describe('Session with worktree isolation', () => {
     const { session, lastStatus } = setup();
     session.loadPlan(plan([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]), 'goal', '/repo');
 
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     expect(lastStatus()!.tasks.find((t) => t.id === 't1')!.isolation).toEqual({
       state: 'active', branch: 'ordewell/run1/1-t1', worktree: '/fake-worktrees/run1/1-t1', repos: [],
@@ -113,7 +113,7 @@ describe('Session with worktree isolation', () => {
     const { session, lastStatus } = setup(isolation);
     session.loadPlan(plan([task('t1', 1)]), 'goal', '/repo');
 
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     expect(Object.keys(lastStatus()!.tasks[0]).sort()).toEqual(['attemptUsage', 'id', 'idleSince', 'status', 'verdict']);
   });
@@ -122,7 +122,7 @@ describe('Session with worktree isolation', () => {
     const { session, messages, pass } = setup();
     const t1 = task('t1', 1);
     session.loadPlan(plan([t1]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     pass(t1);
     await vi.waitFor(() => expect(messages.map((m) => m.type)).toContain('execution_complete'));
@@ -146,7 +146,7 @@ describe('Session with worktree isolation', () => {
     const { session, notices, messages } = setup(isolation);
     session.loadPlan(plan([task('t1', 1)]), 'goal', '/repo');
 
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     expect(notices).toEqual([{ type: 'notice', level: 'info', message: 'Not a git repository: tasks run in the workspace root without worktree isolation.' }]);
     expect(messages.map((m) => m.type)).not.toContain('notice');
@@ -164,7 +164,7 @@ describe('Session with worktree isolation', () => {
     it('does not start, says why, and does not report the run as complete', async () => {
       const { session, messages, spawn } = dirty();
 
-      await session.executePlan();
+      await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
       expect(spawn).not.toHaveBeenCalled();
       expect(messages).toContainEqual({ type: 'isolation_blocked', reason: 'dirty', message: expect.stringMatching(/stash/i) });
@@ -177,7 +177,7 @@ describe('Session with worktree isolation', () => {
       const { session, messages } = setup(isolation);
       session.loadPlan(plan([task('t1', 1)]), 'goal', '/group');
 
-      await session.executePlan();
+      await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
       expect(messages).toContainEqual({
         type: 'isolation_blocked',
@@ -189,7 +189,7 @@ describe('Session with worktree isolation', () => {
 
     it('continues isolated after stashing', async () => {
       const { session, spawn, isolation } = dirty();
-      await session.executePlan();
+      await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
       await session.continueWithStash();
 
@@ -199,7 +199,7 @@ describe('Session with worktree isolation', () => {
 
     it('continues in the workspace root when the user opts out for this run', async () => {
       const { session, spawn } = dirty();
-      await session.executePlan();
+      await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
       await session.continueWithoutIsolation();
 
@@ -223,7 +223,7 @@ describe('Session with worktree isolation', () => {
 
     session.loadPlan(saved, 'goal', '/repo');
     await vi.waitFor(() => expect(isolation.calls).toEqual([{ op: 'pruneOrphans' }]));
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     expect(spawn.mock.calls[0][0].cwd).toBe('/fake-worktrees/old/2-t2');
   });
@@ -252,7 +252,7 @@ describe('Session with worktree isolation', () => {
       const loaded = sessionStore.loadSession('session-legacy1', dir)!;
       session.loadPlan(loaded.plan, loaded.meta.goal, '/repo');
       await vi.waitFor(() => expect(isolation.calls).toEqual([{ op: 'pruneOrphans' }]));
-      await session.executePlan();
+      await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
       expect(spawn.mock.calls[0][0].cwd).toBe('/fake-worktrees/old/2-t2');
       pass(session.planState!.tasks[1]);
@@ -330,7 +330,7 @@ describe('Session with worktree isolation', () => {
     const { session, pass } = setup();
     const t1 = task('t1', 1);
     session.loadPlan(plan([t1]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass(t1);
     await vi.waitFor(() => expect(saved(session)?.isolation).toBeDefined());
 
@@ -345,7 +345,7 @@ describe('Session with worktree isolation', () => {
       const env = setup();
       const t1 = task('t1', 1);
       env.session.loadPlan(plan([t1]), 'goal', '/repo');
-      await env.session.executePlan();
+      await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
       env.pass(t1);
       await vi.waitFor(() => expect(env.messages.map((m) => m.type)).toContain('execution_complete'));
       return env;
@@ -361,7 +361,8 @@ describe('Session with worktree isolation', () => {
       const { session, isolation } = await landed();
       expect(isolation.calls.map((c) => c.op)).not.toContain('mergeIntoCheckedOut');
 
-      expect(await session.mergeRun()).toEqual({ outcome: 'merged' });
+      const merged = await session.execute({ command: 'merge_all' }, { kind: 'user' });
+      expect(merged).toMatchObject({ ok: true, payload: { kind: 'merge', result: { outcome: 'merged' } } });
       expect(isolation.calls.map((c) => c.op)).toContain('mergeIntoCheckedOut');
     });
 
@@ -369,7 +370,7 @@ describe('Session with worktree isolation', () => {
       const { session, messages } = await landed();
       messages.length = 0;
 
-      await session.mergeRun();
+      await session.execute({ command: 'merge_all' }, { kind: 'user' });
 
       expect(session.planState!.isolation).toBeUndefined();
       expect(session.isolationView()).toBeNull();
@@ -384,7 +385,7 @@ describe('Session with worktree isolation', () => {
       const { session, isolation, messages } = await landed();
       isolation.mergeResult = { outcome: 'conflict', repo: '.', files: ['a.ts'] };
 
-      await session.mergeRun();
+      await session.execute({ command: 'merge_all' }, { kind: 'user' });
 
       expect(messages.map((m) => m.type)).not.toContain('run_closed');
     });
@@ -394,11 +395,11 @@ describe('Session with worktree isolation', () => {
       const t1 = task('t1', 1);
       const t2 = task('t2', 2, { dependencies: ['t1'] });
       session.loadPlan(plan([t1, t2]), 'goal', '/repo');
-      await session.executePlan();
+      await session.execute({ command: 'run_plan' }, { kind: 'user' });
       pass(t1);
       await vi.waitFor(() => expect(spawn.mock.calls.map(([o]) => o.taskId)).toContain('t2'));
 
-      await session.mergeRun();
+      await session.execute({ command: 'merge_all' }, { kind: 'user' });
 
       expect(messages.map((m) => m.type)).toContain('isolation_merge');
       expect(messages.map((m) => m.type)).not.toContain('run_closed');
@@ -418,7 +419,8 @@ describe('Session with worktree isolation', () => {
       const result: IsolationMergeResult = { outcome: 'blocked', blocked: [{ repo: 'web', reason: 'conflict', files: ['web.txt'] }] };
       isolation.mergeResult = result;
 
-      expect(await session.mergeRun()).toEqual(result);
+      const merged = await session.execute({ command: 'merge_all' }, { kind: 'user' });
+      expect(merged).toMatchObject({ ok: false, outcome: 'refused', payload: { kind: 'merge', result } });
       expect(messages.filter((m) => m.type === 'isolation_merge').at(-1)).toEqual({ type: 'isolation_merge', result });
     });
 
@@ -426,7 +428,7 @@ describe('Session with worktree isolation', () => {
       const { session, isolation, pass } = setup();
       const t1 = task('t1', 1);
       session.loadPlan(plan([t1]), 'goal', '/repo');
-      await session.executePlan();
+      await session.execute({ command: 'run_plan' }, { kind: 'user' });
       const openMerge = isolation.holdIntegration('t1');
 
       pass(t1);
@@ -454,7 +456,7 @@ describe('Session with worktree isolation', () => {
     it('refuses while the run is still executing', async () => {
       const { session } = setup();
       session.loadPlan(plan([task('t1', 1)]), 'goal', '/repo');
-      await session.executePlan();
+      await session.execute({ command: 'run_plan' }, { kind: 'user' });
       await expect(session.discardRun()).rejects.toThrow(/running/i);
     });
   });
@@ -464,7 +466,7 @@ describe('Session with worktree isolation', () => {
     isolation.outcomes.set('t1', 'conflict');
     const t1 = task('t1', 1, { assignedModel: { modelId: 'sonnet', modelLabel: 'Sonnet' } });
     session.loadPlan(plan([t1, task('t2', 2, { dependencies: ['t1'] })]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass(t1);
     await vi.waitFor(() => expect(taskOf(session, 't1')!.status).toBe('awaiting_user'));
     expect(session.planTasks).toHaveLength(2);
@@ -487,7 +489,7 @@ describe('Session with worktree isolation', () => {
     const { session, pass } = setup(isolation);
     const t1 = task('t1', 1);
     session.loadPlan(plan([t1]), 'goal', '/group');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass(t1);
     await vi.waitFor(() => expect(taskOf(session, 't1')!.status).toBe('awaiting_user'));
 
@@ -523,7 +525,7 @@ describe('Session with worktree isolation', () => {
         ...plan([t1, t2]),
         conversationHistory: talk(['goal', 'Plan generated.'], ['split task 2', 'Done.'], ['rename it', 'Renamed.'], ['and test it', 'Added.']),
       }, 'goal', '/repo');
-      await env.session.executePlan();
+      await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
       env.pass(t1);
       env.pass(t2);
       await vi.waitFor(() => expect(taskOf(env.session, 't2')!.status).toBe('awaiting_user'));
@@ -545,7 +547,7 @@ describe('Session with worktree isolation', () => {
       expect(forkedId).toBe(fork.sessionId);
       expect(forked.conversationHistory).toHaveLength(6);
       expect(forked.isolation).toBeUndefined();
-      expect(session.planState!.conversationHistory).toHaveLength(8);
+      expect(session.planState!.conversationHistory).toHaveLength(9);
       expect(session.planState!.isolation).toEqual(record);
 
       await session.compactConversation();
@@ -643,10 +645,9 @@ describe('Session isolation actions it refuses', () => {
     const { session, isolation, messages } = setup();
     session.loadPlan(plan([task('t1', 1)]), 'goal', '/repo', { persist: false });
 
-    const refused = session.mergeRun();
+    const refused = await session.execute({ command: 'merge_all' }, { kind: 'user' });
 
-    await expect(refused).rejects.toThrow('This plan has no isolated run');
-    await expect(refused).rejects.toBeInstanceOf(TaskControlError);
+    expect(refused).toMatchObject({ ok: false, outcome: 'refused', message: 'This plan has no isolated run' });
     expect(isolation.calls).toEqual([]);
     expect(messages.map((m) => m.type)).not.toContain('isolation_merge');
     expect(messages.at(-1)).toMatchObject({ type: 'execution_action', record: { command: 'merge_all', actor: 'user', outcome: 'refused' } });
@@ -657,7 +658,7 @@ describe('Session isolation actions it refuses', () => {
     isolation.availability = { active: false, reason: 'not-git' };
     const { session, spawn } = setup(isolation);
     session.loadPlan(plan([task('t1', 1)]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     expect(spawn).toHaveBeenCalled();
 
     await expect(session.cleanupRun()).rejects.toThrow('This plan has no isolated run');
@@ -667,22 +668,22 @@ describe('Session isolation actions it refuses', () => {
   it('says an ops-only run has no isolated run, rather than waiting for its ops task', async () => {
     const { session, spawn } = setup();
     session.loadPlan(plan([task('o1', 1, { ops: true })]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
 
-    await expect(session.mergeRun()).rejects.toThrow('This plan has no isolated run');
+    expect(await session.execute({ command: 'merge_all' }, { kind: 'user' })).toMatchObject({ ok: false, outcome: 'refused', message: 'This plan has no isolated run' });
   });
 
   it('refuses Merge all while an ops task runs in the checkout, and announces no merge', async () => {
     const { session, isolation, messages, pass } = setup();
     const t1 = task('t1', 1);
     session.loadPlan(plan([t1, task('o2', 2, { ops: true })]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(taskOf(session, 'o2')!.status).toBe('in_progress'));
     pass(t1);
     await vi.waitFor(() => expect(taskOf(session, 't1')!.status).toBe('completed'));
 
-    await expect(session.mergeRun()).rejects.toBeInstanceOf(TaskControlError);
+    expect(await session.execute({ command: 'merge_all' }, { kind: 'user' })).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(/^Ops task .* is running in your checkout/) });
 
     expect(isolation.calls.map((c) => c.op)).not.toContain('mergeIntoCheckedOut');
     expect(messages.map((m) => m.type)).not.toContain('isolation_merge');
@@ -691,7 +692,7 @@ describe('Session isolation actions it refuses', () => {
   it('refuses to clean up a run still going, as a refused request', async () => {
     const { session, isolation } = setup();
     session.loadPlan(plan([task('t1', 1)]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     const refused = session.cleanupRun();
 
@@ -706,7 +707,7 @@ describe('Session isolation actions on a landed run', () => {
     const env = setup();
     const t1 = task('t1', 1);
     env.session.loadPlan(plan([t1]), 'goal', '/repo');
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     env.pass(t1);
     await vi.waitFor(() => expect(env.messages.map((m) => m.type)).toContain('execution_complete'));
     return env;
@@ -723,7 +724,8 @@ describe('Session isolation actions on a landed run', () => {
     const { session, spawn } = await landed();
 
     await session.discardRun();
-    await session.runTask('t1');
+    await session.execute({ command: 'mark_not_done', task: 't1' }, { kind: 'user' });
+    await session.execute({ command: 'run_task', task: 't1' }, { kind: 'user' });
 
     expect(spawn.mock.calls.at(-1)![0].cwd).toBe('/fake-worktrees/run2/1-t1');
   });
@@ -735,7 +737,8 @@ describe('Session isolation actions on a landed run', () => {
     await session.reviewRunDiff();
 
     expect(session.isolationView()).not.toBeNull();
-    expect(await session.mergeRun()).toEqual({ outcome: 'merged' });
+    const merged = await session.execute({ command: 'merge_all' }, { kind: 'user' });
+    expect(merged).toMatchObject({ ok: true, payload: { kind: 'merge', result: { outcome: 'merged' } } });
     expect(isolation.calls.map((c) => c.op)).toEqual(expect.arrayContaining(['reviewDiff', 'mergeIntoCheckedOut']));
   });
 });

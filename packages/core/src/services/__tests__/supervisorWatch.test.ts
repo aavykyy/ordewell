@@ -159,7 +159,7 @@ describe('the supervisor at Watch: what wakes it', () => {
     env.planner.calls[0].finish(prose('Task 1 waits for the reset.'));
     await settled();
 
-    expect(env.session.cancelScheduledResume('t1')).toBe(true);
+    expect(await env.session.execute({ command: 'cancel_resume', task: 't1' }, { kind: 'user' })).toMatchObject({ ok: true });
     await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS * 4);
 
     expect(env.planner.calls).toHaveLength(1);
@@ -209,8 +209,8 @@ describe('a wake-up turn', () => {
     expect(env.messages).toContainEqual(expect.objectContaining({ type: 'planner_message', supervisor: true }));
     const roles = (view: typeof EMPTY_CONVERSATION) => view.blocks.flatMap((b) => (b.type === 'message' ? [b.role] : []));
     const live = env.messages.reduce((view, m) => reduceConversation(view, m), EMPTY_CONVERSATION);
-    expect(roles(live)).toEqual(['wake_up', 'supervisor']);
-    expect(roles(fromTranscript(history, []))).toEqual(['user', 'wake_up', 'supervisor']);
+    expect(roles(live)).toEqual(['system', 'wake_up', 'supervisor']);
+    expect(roles(fromTranscript(history, []))).toEqual(['user', 'system', 'wake_up', 'supervisor']);
   });
 
   it('refuses every execution tool at Watch, telling the supervisor to suggest it to the user', async () => {
@@ -232,7 +232,10 @@ describe('a wake-up turn', () => {
     expect(taskOf(env.session, 't2')!.status).toBe('in_progress');
     expect(env.run.of('t1').delivered).not.toContain('use Postgres');
     const records = env.session.planState!.conversationHistory!.flatMap((e) => (e.execution ? [e.execution] : []));
-    expect(records.map((r) => [r.actor, r.level, r.outcome])).toEqual(Array(5).fill(['supervisor', 'watch', 'refused']));
+    expect(records.map((r) => [r.actor, r.level, r.outcome])).toEqual([
+      ['user', undefined, 'done'],
+      ...Array(5).fill(['supervisor', 'watch', 'refused']),
+    ]);
   });
 
   it('refuses a plan edit made through the tools, and nothing is saved', async () => {

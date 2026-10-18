@@ -60,7 +60,7 @@ describe('adversarial: a Resume now the seam cannot take changes nothing', () =>
   it('keeps every resume at the reset when the supervisor\'s retry_task finds every slot taken', async () => {
     const env = setup();
     env.session.loadPlan(plan([paused('t1', 1), paused('t2', 2), task('busy', 3)]), 'goal', testWorkspace, { persist: false });
-    await env.session.forceStartTask('busy');
+    await env.session.execute({ command: 'force_start', task: 'busy' }, { kind: 'user' });
 
     const outcome = await env.session.execute({ command: 'retry_task', task: 't1', from: 'session' }, ACT);
 
@@ -73,7 +73,7 @@ describe('adversarial: a Resume now the seam cannot take changes nothing', () =>
   it('keeps the resume at the reset when a message sent to a paused task cannot take a slot', async () => {
     const env = setup();
     env.session.loadPlan(plan([paused('t1', 1), paused('t2', 2), task('busy', 3)]), 'goal', testWorkspace, { persist: false });
-    await env.session.forceStartTask('busy');
+    await env.session.execute({ command: 'force_start', task: 'busy' }, { kind: 'user' });
 
     const outcome = await env.session.execute({ command: 'message_task', task: 't1', text: 'limits reset, go on' }, { kind: 'user' });
 
@@ -86,14 +86,14 @@ describe('adversarial: a Resume now the seam cannot take changes nothing', () =>
   it('resumes both tasks of the runner at the reset after the refusal, once the slots are free', async () => {
     const env = setup(2);
     env.session.loadPlan(plan([paused('t1', 1), paused('t2', 2), task('busy', 3), task('busy2', 4)]), 'goal', testWorkspace, { persist: false });
-    await env.session.forceStartTask('busy');
-    await env.session.forceStartTask('busy2');
+    await env.session.execute({ command: 'force_start', task: 'busy' }, { kind: 'user' });
+    await env.session.execute({ command: 'force_start', task: 'busy2' }, { kind: 'user' });
 
     const refused = await env.session.execute({ command: 'retry_task', task: 't1', from: 'session' }, ACT);
     expect(refused.ok).toBe(false);
 
-    await env.session.markTaskComplete(taskOf(env.session, 'busy')!.id);
-    await env.session.markTaskComplete(taskOf(env.session, 'busy2')!.id);
+    await env.session.execute({ command: 'mark_complete', task: taskOf(env.session, 'busy')!.id }, { kind: 'user' });
+    await env.session.execute({ command: 'mark_complete', task: taskOf(env.session, 'busy2')!.id }, { kind: 'user' });
 
     await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now());
     await vi.waitFor(() => expect(env.spawned('t1')).toHaveLength(1));

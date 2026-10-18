@@ -218,7 +218,7 @@ describe('the slot limit holds at the claim', () => {
     const env = await supervised([task('t1', 1), task('t2', 2)], ONE_SLOT);
     expect(env.run.spawnedIds()).toEqual(['t1']);
 
-    await expect(env.session.forceStartTask('t2')).rejects.toThrow(FULL_SLOT);
+    await expect(env.session.execute({ command: 'force_start', task: 't2' }, { kind: 'user' })).resolves.toEqual({ ok: false, outcome: 'refused', message: FULL_SLOT });
     expect(env.run.spawnedIds()).toEqual(['t1']);
 
     env.run.of('t1').reportComplete({ status: 'done', summary: '' });
@@ -242,10 +242,10 @@ describe('the slot limit holds at the claim', () => {
   it('starts one task when Execute and a force start race for the last slot', async () => {
     const env = await supervised([task('t1', 1), task('t2', 2)], { ...ONE_SLOT, execute: false });
 
-    const results = await Promise.allSettled([env.session.executePlan(), env.session.forceStartTask('t2')]);
+    const results = await Promise.all([env.session.execute({ command: 'run_plan' }, { kind: 'user' }), env.session.execute({ command: 'force_start', task: 't2' }, { kind: 'user' })]);
 
     expect(env.run.spawnedIds()).toHaveLength(1);
-    expect(results.filter((r) => r.status === 'rejected')).toHaveLength(env.run.spawnedIds()[0] === 't1' ? 1 : 0);
+    expect(results.filter((r) => !r.ok)).toHaveLength(env.run.spawnedIds()[0] === 't1' ? 1 : 0);
   });
 });
 

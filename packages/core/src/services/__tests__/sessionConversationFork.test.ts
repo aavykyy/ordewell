@@ -92,7 +92,7 @@ describe('Session.forkConversation', () => {
     const session = makeSession();
     session.loadPlan(runningPlan(), GOAL, workspace, { sessionId: 'session-original', persist: false });
     // Loaded, it has nothing running it; started, it is in flight.
-    await session.forceStartTask('running');
+    await session.execute({ command: 'force_start', task: 'running' }, { kind: 'user' });
     saves(session).mockImplementation(sessionStore.saveSession);
 
     const fork = session.forkConversation();
@@ -145,7 +145,7 @@ describe('Session.forkConversation', () => {
     const plan = runningPlan();
     plan.tasks = [task('first', 1, 'pending')];
     session.loadPlan(plan, GOAL, workspace, { sessionId: 'session-original', persist: false });
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     const persisted = saves(session).mock.calls.at(-1)![0];
     expect(persisted.isolation?.run.tasks.first.branch).toBeTruthy();
     saves(session).mockImplementation(sessionStore.saveSession);

@@ -60,12 +60,19 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; maxParallel?: number }
   return { session, messages, timeline, latest, spawned, run, load, ...r };
 }
 
+/** The id a `message_task` answers, through the seam as the user. */
+async function sendTaskMessage(env: ReturnType<typeof setup>, taskId: string, text: string): Promise<string> {
+  const outcome = await env.run({ command: 'message_task', task: taskId, text }, USER);
+  if (outcome.payload?.kind !== 'message') throw new Error('message_task answered without an id');
+  return outcome.payload.id;
+}
+
 describe('Resume now at the seam', () => {
   it('resumes a paused task from the Session\'s control as the user\'s retry_task from session, kept in the timeline', async () => {
     const env = setup();
     env.load([paused('t1', 1)]);
 
-    await env.session.resumeNow('t1');
+    await env.session.execute({ command: 'retry_task', task: 't1', from: 'session' }, { kind: 'user' });
 
     expect(env.spawned('t1')).toHaveLength(1);
     expect(env.timeline().at(-1)).toMatchObject({
@@ -79,7 +86,7 @@ describe('force_start', () => {
   it('starts a task past its merge gate, as the user confirmed, and keeps it in the timeline', async () => {
     const env = setup({ isolation: new FakeWorktreeIsolation() });
     env.load([task('t1', 1), task('o2', 2, { ops: true, dependencies: ['t1'] })]);
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     env.latest('t1').reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(env.session.mergeGate('o2')).toEqual(['t1']));
 
@@ -93,18 +100,18 @@ describe('force_start', () => {
     });
   });
 
-  it('answers the line saying it is queued behind its dependencies, as its payload, from the Session\'s control too', async () => {
+  it('answers the line saying it is queued behind its dependencies, as its payload', async () => {
     const env = setup();
     env.load([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]);
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     const outcome = await env.run({ command: 'force_start', task: 't2' });
 
     const line = 'Task "Task t2" is approved and starts once task "Task t1" finishes.';
     expect(outcome).toEqual({ ok: true, message: line, payload: { kind: 'queued', line } });
     expect(env.spawned('t2')).toHaveLength(0);
-    expect(await env.session.forceStartTask('t2')).toBe(line);
-    expect(env.timeline().map((m) => m.record.command)).toEqual(['force_start', 'force_start']);
+    expect(await env.session.execute({ command: 'force_start', task: 't2' }, { kind: 'user' })).toMatchObject({ ok: true, payload: { kind: 'queued', line } });
+    expect(env.timeline().map((m) => m.record.command)).toEqual(['run_plan', 'force_start', 'force_start']);
   });
 });
 
@@ -112,7 +119,7 @@ describe('refusals worded for who asked', () => {
   it('names the user\'s controls to the user, and the tools to a planner', async () => {
     const env = setup();
     env.load([task('t1', 1)]);
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     expect((await env.run({ command: 'retry_task', task: 't1', from: 'fresh' })).message)
       .toBe('Task #1 "Task t1" is running: stop it first, or send it a message.');
@@ -127,13 +134,14 @@ describe('mark_complete and mark_not_done', () => {
   it('lands a task the user vouches for, and takes the completion back, each kept in the timeline', async () => {
     const env = setup();
     env.load([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]);
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     expect(await env.run({ command: 'mark_complete', task: 't1' })).toEqual({ ok: true, message: 'Marked task #1 "Task t1" complete.' });
     expect(taskOf(env.session, 't1')!.status).toBe('completed');
     expect(await env.run({ command: 'mark_not_done', task: 't1' })).toEqual({ ok: true, message: 'Marked task #1 "Task t1" not done: it waits until you retry or start it.' });
     expect(taskOf(env.session, 't1')!.status).toBe('pending');
     expect(env.timeline().map((m) => m.text)).toEqual([
+      'You started the plan.',
       'You marked task #1 "Task t1" complete.',
       'You marked task #1 "Task t1" not done.',
     ]);
@@ -147,12 +155,12 @@ describe('mark_complete and mark_not_done', () => {
     expect((await env.run({ command: 'mark_not_done', task: 't2' })).message).toBe('Task #2 "Task t2" has not completed, so there is nothing to mark not done.');
   });
 
-  it('goes through the Session\'s own controls', async () => {
+  it('goes through the command seam as the user', async () => {
     const env = setup();
     env.load([task('t1', 1)]);
 
-    await env.session.markTaskComplete('t1');
-    await env.session.markTaskIncomplete('t1');
+    await env.session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
+    await env.session.execute({ command: 'mark_not_done', task: 't1' }, { kind: 'user' });
 
     expect(env.timeline().map((m) => m.record.command)).toEqual(['mark_complete', 'mark_not_done']);
   });
@@ -170,18 +178,19 @@ describe('mark_complete and mark_not_done', () => {
 });
 
 describe('interrupt_task', () => {
-  it('stops the running turn, keeping the session, from the Session\'s control too, and refuses a model', async () => {
+  it('stops the running turn, keeping the session, and refuses a model', async () => {
     const env = setup();
     env.load([task('t1', 1)]);
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     expect(await env.run({ command: 'interrupt_task', task: 't1' })).toEqual({ ok: true, message: 'Interrupted task #1 "Task t1": it waits for your message.' });
     expect(env.latest('t1').interrupts).toBe(1);
     expect((await env.run({ command: 'interrupt_task', task: 't1' }, PLANNER)).message).toMatch(/^Interrupt is the user's own control/);
     expect(env.latest('t1').interrupts).toBe(1);
     env.latest('t1').state = 'working';
-    await env.session.interruptTask('t1');
+    await env.session.execute({ command: 'interrupt_task', task: 't1' }, { kind: 'user' });
     expect(env.timeline().map((m) => m.text)).toEqual([
+      'You started the plan.',
       'You interrupted task #1 "Task t1".',
       expect.stringMatching(/^The planner asked to interrupt task #1 "Task t1"; refused: Interrupt is the user's own control/),
       'You interrupted task #1 "Task t1".',
@@ -200,7 +209,7 @@ describe('force sending and taking back task messages', () => {
   it('force sends a message, interrupting the turn, and refuses a model a force send', async () => {
     const env = setup();
     env.load([task('t1', 1)]);
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     const outcome = await env.run({ command: 'message_task', task: 't1', text: 'stop and use the cache', force: true });
 
@@ -213,9 +222,9 @@ describe('force sending and taking back task messages', () => {
   it('force sends a queued message, and takes one back, refusing one already delivered', async () => {
     const env = setup();
     env.load([task('t1', 1)]);
-    await env.session.executePlan();
-    const first = env.session.sendTaskMessage('t1', 'first');
-    const second = env.session.sendTaskMessage('t1', 'second');
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
+    const first = await sendTaskMessage(env, 't1', 'first');
+    const second = await sendTaskMessage(env, 't1', 'second');
 
     expect(await env.run({ command: 'force_send_queued', task: 't1', id: first })).toEqual({ ok: true, message: 'Sent your queued message to task #1 "Task t1" now: its turn is interrupted, and the runner reads it next.' });
     expect(env.latest('t1').interrupts).toBe(1);
@@ -223,7 +232,7 @@ describe('force sending and taking back task messages', () => {
     expect(env.latest('t1').queued()).toEqual([]);
     expect(env.latest('t1').delivered).toEqual(['first']);
     expect((await env.run({ command: 'remove_queued', task: 't1', id: second })).message).toBe('That message to task #1 "Task t1" was already delivered or taken back.');
-    expect(env.timeline().map((m) => m.text)).toEqual([
+    expect(env.timeline().slice(-3).map((m) => m.text)).toEqual([
       'You force sent a queued message to task #1 "Task t1".',
       'You took back a queued message to task #1 "Task t1".',
       'You asked to take back a queued message to task #1 "Task t1"; refused: That message to task #1 "Task t1" was already delivered or taken back.',
@@ -251,7 +260,7 @@ describe('answer_checkpoint', () => {
   async function atCheckpoint() {
     const env = setup();
     env.load([task('t1', 1), task('t2', 2)]);
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     const answer = env.latest('t1').callCheckpoint('Drop the table?');
     await vi.waitFor(() => expect(env.session.awaitsCheckpoint('t1')).toBe(true));
     return { ...env, answer };
@@ -284,13 +293,13 @@ describe('answer_checkpoint', () => {
 });
 
 describe('approve_review', () => {
-  it('approves every task in the plan and runs it, from the Session\'s control too, and refuses a model', async () => {
+  it('approves every task in the plan and runs it, and refuses a model', async () => {
     const env = setup();
     env.load([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { status: 'draft' });
 
     expect((await env.run({ command: 'approve_review' }, PLANNER)).message).toMatch(/^Approving the review is the user's own control/);
     expect(env.spawned('t1')).toHaveLength(0);
-    await env.session.approveReview();
+    await env.session.execute({ command: 'approve_review' }, { kind: 'user' });
 
     expect(env.spawned('t1')).toHaveLength(1);
     expect(env.session.isApproved('t2')).toBe(true);
@@ -302,7 +311,7 @@ describe('the user\'s answer_approval', () => {
   async function asking() {
     const env = setup();
     env.load([task('t1', 1)]);
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     env.latest('t1').requestPermission('p1', 'Bash', { command: 'git push' }, [{ type: 'addRules' }]);
     await vi.waitFor(() => expect(env.session.outstandingApprovals()).toHaveLength(1));
     return env;
@@ -335,7 +344,7 @@ describe('the user\'s merge_all', () => {
     if (mergeResult) isolation.mergeResult = mergeResult;
     const env = setup({ isolation });
     env.load(tasks);
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     env.latest('t1').reportComplete({ status: 'done', summary: '' });
     return env;
   }
@@ -352,11 +361,12 @@ describe('the user\'s merge_all', () => {
     expect(env.timeline().at(-1)!.text).toBe('You merged the run\'s work into your branch.');
   });
 
-  it('says the run closed when the merge left nothing to hand over, from the Session\'s control too', async () => {
+  it('says the run closed when the merge left nothing to hand over', async () => {
     const env = await landed([task('t1', 1)]);
     await vi.waitFor(() => expect(env.session.runMergeView()).not.toBeNull());
 
-    expect(await env.session.mergeRun()).toEqual({ outcome: 'merged' });
+    const merged = await env.session.execute({ command: 'merge_all' }, { kind: 'user' });
+    expect(merged).toMatchObject({ ok: true, payload: { kind: 'merge', result: { outcome: 'merged' }, closed: true } });
     expect(env.messages.map((m) => m.type)).toContain('run_closed');
     expect(env.timeline().at(-1)!.record).toMatchObject({ command: 'merge_all', actor: 'user', outcome: 'done' });
   });
@@ -371,7 +381,7 @@ describe('the user\'s merge_all', () => {
       message: 'Merge all stopped: it conflicts in .: src/a.ts. Nothing was merged.',
       payload: { kind: 'merge', result: conflict, closed: false },
     });
-    expect(await env.session.mergeRun()).toEqual(conflict);
+    expect(await env.session.execute({ command: 'merge_all' }, { kind: 'user' })).toMatchObject({ ok: false, outcome: 'refused', payload: { kind: 'merge', result: conflict } });
   });
 });
 
@@ -407,7 +417,7 @@ describe('the user\'s controls are the user\'s', () => {
     async (_name, _who, command, actor) => {
       const env = setup();
       env.load([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]);
-      await env.session.executePlan();
+      await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
       const before = env.session.planTasks.map((t) => t.status);
 
       const outcome = await env.run(command, actor);

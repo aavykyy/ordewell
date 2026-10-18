@@ -69,7 +69,7 @@ async function liveRun() {
   const run = recordingRunner();
   const session = makeSession({ aiService: planner.aiService, runner: run.runner });
   session.loadPlan(runPlan([first(), second()]), 'build it', testWorkspace);
-  await session.executePlan();
+  await session.execute({ command: 'run_plan' }, { kind: 'user' });
   expect(run.spawnedIds()).toEqual(['t1']);
   return { session, ...planner, ...run };
 }
@@ -147,7 +147,7 @@ describe('live planner turns during a run', () => {
     await answered;
     expect(taskOf(session, 't1')).toMatchObject({ prompt: 'do first, importing from ./lib', status: 'failed' });
 
-    await session.retryTask('t1');
+    await session.execute({ command: 'retry_task', task: 't1', from: 'fresh' }, { kind: 'user' });
     await vi.waitFor(() => expect(spawnedIds()).toEqual(['t1', 't1']));
     finish('t1');
     await vi.waitFor(() => expect(spawnedIds()).toEqual(['t1', 't1', 't2']));
@@ -174,7 +174,7 @@ describe('live planner turns during a run', () => {
     const run = recordingRunner();
     const session = makeSession({ aiService, runner: run.runner });
     session.loadPlan(runPlan(tasks()), 'build it', testWorkspace);
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     expect(session.isExecuting).toBe(true);
 
     const answered = session.continueConversation('rename task 1');
@@ -311,9 +311,9 @@ describe('live planner turns during a run', () => {
     await expect(answered).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
     calls[0].finish(ops({ op: 'update', taskId: '#1', changes: { title: 'Renamed in the old plan' } }));
 
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     expect(spawnedIds()).toEqual(['t1', 'o1']);
     expect(taskOf(session, 'o1')!.title).toBe('Other');
-    expect(other.conversationHistory).toHaveLength(2);
+    expect(other.conversationHistory).toHaveLength(3);
   });
 });

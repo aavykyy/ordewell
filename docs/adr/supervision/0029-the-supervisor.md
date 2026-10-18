@@ -290,9 +290,8 @@ result, so the Merge all card can show why. A user's Stop with nothing to
 stop is answered ok and recorded nowhere, since the surface already shows
 the run stopped. A refusal is worded for who asked, in one place: a model is
 told the tools it calls and what to tell the user, the user the controls they
-press. The Session's asynchronous per-verb controls (Resume now, force start,
-Mark complete and Mark not done, interrupt, approving the review, Merge all)
-call these commands as the user.
+press. Every surface's control reaches these commands through the Session's one
+`execute` as the user; the Session keeps no per-verb control method for them.
 VS Code sends each of its controls — task cards, the plan bar, the command
 palette and the task-log panel, a Deny with a note included — through these
 commands as the user, and shows a refusal as the seam worded it; the chat writes
@@ -549,3 +548,4 @@ until #30 exists.
 - 2026-10-18 — VS Code sends every control, the task-log panel's answers to a runner's request included, through the seam as the user, and the chat stops writing notices that contradicted the timeline's line.
 - 2026-10-18 — a hung turn's end is announced once, when the conversation is taken back, and nothing it streams or settles afterwards reaches a surface; a run update is told again after a turn that did not land an answer.
 - 2026-10-18 — the daemon, the CLI and the TUI send every control through the seam as the user: the daemon's routes answer each command's line and carry a refusal as the seam worded it, the CLI sends a task reference as typed and prints that line, and the TUI drops the notices that repeated the timeline's.
+- 2026-10-18 — every user control reaches the seam through `Session.execute`; the Session's per-verb control methods (Execute plan, Run task, Retry, Continue, Stop, Mark complete and not done, Resume now, force start, interrupt, approving the review, Merge all, the task-message and queued-message controls, a checkpoint answer and cancelling a scheduled resume) are gone, so a surface, the daemon's routes and the CLI's commands all take the one path, and `TaskOrchestrator.runTask` goes with them.

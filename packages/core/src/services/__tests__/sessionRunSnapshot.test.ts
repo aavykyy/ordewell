@@ -52,7 +52,7 @@ describe('Session.runSnapshot', () => {
     const early = env.session.runSnapshot();
     env.messages.length = 0;
 
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     env.runnerSession('t1').emitExit(1);
     await vi.waitFor(() => expect(env.session.planTasks[0].status).toBe('failed'));
 

@@ -57,7 +57,7 @@ describe('running the plan while a run is under way', () => {
   it('starts at once an approved task with nothing left to wait on', async () => {
     const env = await waitingDuringRun([{ title: 'Add a cache' }]);
 
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     expect(infoNotices(env)).toContain('Approved 1 task; it starts once its dependencies finish.');
     await until(() => env.run.spawnedIds().includes(byTitle(env, 'Add a cache').id));
@@ -79,7 +79,7 @@ describe('force starting a task whose dependencies have not finished', () => {
     const env = await waitingDuringRun([{ title: 'Add a cache', dependencies: ['#1'] }]);
     const cache = byTitle(env, 'Add a cache').id;
 
-    await env.session.forceStartTask(cache);
+    await env.session.execute({ command: 'force_start', task: cache }, { kind: 'user' });
 
     expect(env.run.spawnedIds()).toEqual(['t1']);
     expect(env.session.waitsForApproval(cache)).toBe(false);
@@ -92,7 +92,7 @@ describe('force starting a task whose dependencies have not finished', () => {
   it('says that nothing will start it while no run is under way', async () => {
     const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { ...AUTORUN_OFF, execute: false });
 
-    await env.session.forceStartTask('t2');
+    await env.session.execute({ command: 'force_start', task: 't2' }, { kind: 'user' });
 
     expect(env.run.spawnedIds()).toEqual([]);
     expect(infoNotices(env)).toContain('Task "Task t2" is approved and starts once task "Task t1" finishes. Nothing is running now: run the plan to start them.');
@@ -103,7 +103,7 @@ describe('force starting a task whose dependencies have not finished', () => {
     env.run.of('t1').reportComplete({ status: 'failed', summary: 'broke' });
     await until(() => taskOf(env.session, 't1')!.status === 'failed');
 
-    await env.session.forceStartTask('t2');
+    await env.session.execute({ command: 'force_start', task: 't2' }, { kind: 'user' });
 
     expect(env.run.spawnedIds()).toEqual(['t1', 't2']);
   });
@@ -113,7 +113,7 @@ describe('force starting a task whose dependencies have not finished', () => {
     env.run.of('a').reportComplete({ status: 'failed', summary: 'broke' });
     await until(() => taskOf(env.session, 'a')!.status === 'failed');
 
-    await env.session.forceStartTask('c');
+    await env.session.execute({ command: 'force_start', task: 'c' }, { kind: 'user' });
 
     expect(env.run.spawnedIds()).toEqual(['a', 'b']);
     expect(infoNotices(env)).toContain('Task "Task c" is approved and starts once task "Task b" finishes.');
@@ -130,7 +130,7 @@ describe('force starting a task whose dependencies have not finished', () => {
     env.run.of('a').reportComplete({ status: 'failed', summary: 'broke' });
     await until(() => taskOf(env.session, 'a')!.status === 'failed');
 
-    await env.session.forceStartTask('c');
+    await env.session.execute({ command: 'force_start', task: 'c' }, { kind: 'user' });
 
     expect(env.run.spawnedIds()).toEqual(['a', 'd']);
     expect(infoNotices(env)).toContain('Task "Task c" is approved and starts once task "Task d" finishes.');
@@ -142,12 +142,12 @@ describe('force starting a task whose dependencies have not finished', () => {
 
   it('is withdrawn by a Stop while no run is under way, so a dependency run on its own does not start it', async () => {
     const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { ...AUTORUN_OFF, execute: false });
-    await env.session.forceStartTask('t2');
+    await env.session.execute({ command: 'force_start', task: 't2' }, { kind: 'user' });
 
     const stopped = await env.session.execute({ command: 'stop_run' }, { kind: 'user' });
     expect(stopped).toMatchObject({ ok: true });
 
-    await env.session.runTask('t1');
+    await env.session.execute({ command: 'run_task', task: 't1' }, { kind: 'user' });
     env.run.of('t1').reportComplete({ status: 'done', summary: '' });
     await until(() => taskOf(env.session, 't1')!.status === 'completed');
     await settled();
@@ -156,9 +156,9 @@ describe('force starting a task whose dependencies have not finished', () => {
 
   it('waits for a dependency started on its own with Run Task, and starts once it finishes', async () => {
     const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { ...AUTORUN_OFF, execute: false });
-    await env.session.runTask('t1');
+    await env.session.execute({ command: 'run_task', task: 't1' }, { kind: 'user' });
 
-    await env.session.forceStartTask('t2');
+    await env.session.execute({ command: 'force_start', task: 't2' }, { kind: 'user' });
 
     expect(env.run.spawnedIds()).toEqual(['t1']);
     expect(infoNotices(env)).toContain('Task "Task t2" is approved and starts once task "Task t1" finishes.');
@@ -170,8 +170,8 @@ describe('force starting a task whose dependencies have not finished', () => {
   // The race the planner turn's start hold exists to prevent (ADR-0029): the turn's edit to t2 would be refused as running.
   it('waits while a planner turn holds new starts, and starts as the turn ends', async () => {
     const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { ...AUTORUN_OFF, execute: false });
-    await env.session.runTask('t1');
-    await env.session.forceStartTask('t2');
+    await env.session.execute({ command: 'run_task', task: 't1' }, { kind: 'user' });
+    await env.session.execute({ command: 'force_start', task: 't2' }, { kind: 'user' });
     void env.session.continueConversation('how is it going?');
     await until(() => env.planner.calls.length === 1);
 
@@ -186,17 +186,17 @@ describe('force starting a task whose dependencies have not finished', () => {
 
   it('starts once a dependency run on its own is marked complete instead, with no verdict', async () => {
     const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { ...AUTORUN_OFF, execute: false });
-    await env.session.forceStartTask('t2');
-    await env.session.runTask('t1');
+    await env.session.execute({ command: 'force_start', task: 't2' }, { kind: 'user' });
+    await env.session.execute({ command: 'run_task', task: 't1' }, { kind: 'user' });
 
-    await env.session.markTaskComplete('t1');
+    await env.session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
 
     await until(() => env.run.spawnedIds().includes('t2'));
   });
 
   it('starts once its dependency is skipped, and nothing is left pending a start', async () => {
     const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { ...AUTORUN_OFF, execute: false });
-    await env.session.forceStartTask('t2');
+    await env.session.execute({ command: 'force_start', task: 't2' }, { kind: 'user' });
     expect(env.session.startsPending).toBe(true);
 
     const skipped = await env.session.execute({ command: 'skip_task', task: 't1' }, { kind: 'user' });

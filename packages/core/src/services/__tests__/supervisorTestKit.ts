@@ -122,7 +122,7 @@ export async function supervised(tasks: Task[] = [task('t1', 1), task('t2', 2)],
     ...(options.isolation ? { workspaceRoot: () => '/repo' } : {}),
   });
   session.loadPlan(plan(tasks, options.plan), 'build it', options.isolation ? '/repo' : testWorkspace);
-  if (options.execute !== false) await session.executePlan();
+  if (options.execute !== false) await session.execute({ command: 'run_plan' }, { kind: 'user' });
   return { session, planner, run, messages, notices, settings };
 }
 

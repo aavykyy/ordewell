@@ -133,7 +133,7 @@ describe('task_complete over HTTP, through the orchestrator', () => {
     const stale = adapters[0].config;
 
     await orchestrator.retryTask('t1');
-    await orchestrator.runTask('t1');
+    await orchestrator.forceStartTask('t1');
     await vi.waitFor(() => expect(adapters).toHaveLength(2));
 
     await expect(connect(stale)).rejects.toThrow();

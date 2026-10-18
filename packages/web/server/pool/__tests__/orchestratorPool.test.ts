@@ -79,7 +79,7 @@ describe('OrchestratorPool.adoptSavedSession', () => {
     const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
     pool.adoptSavedSession(meta.id, workspace);
 
-    await expect(pool.session(meta.id).markTaskComplete('t2')).resolves.not.toThrow();
+    await expect(pool.session(meta.id).execute({ command: 'mark_complete', task: 't2' }, { kind: 'user' })).resolves.toMatchObject({ ok: true });
   });
 
   // persist() derives the filename from goal + createdAt + id, so adopting a
@@ -452,7 +452,7 @@ describe('OrchestratorPool run notices', () => {
     const sent: string[] = [];
     pool.subscribe(meta.id, { OPEN: 1, readyState: 1, send: (data: string) => sent.push(data) } as never);
 
-    await pool.session(meta.id).runTask('t2').catch(() => undefined);
+    await pool.session(meta.id).execute({ command: 'run_task', task: 't2' }, { kind: 'user' }).catch(() => undefined);
 
     const frames = sent.map((s) => JSON.parse(s) as { type: string; level?: string; message?: string });
     expect(frames).toContainEqual(expect.objectContaining({ type: 'notice', level: 'info', message: expect.stringMatching(/workspace root|isolation/i) }));

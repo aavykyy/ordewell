@@ -165,7 +165,7 @@ describe('a session\'s runner approvals', () => {
     const sent: SessionMessage[] = [];
     const session = makeSession({ runner, broadcast: (m) => sent.push(m) });
     session.loadPlan(plan(), 'Goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(sessions).toHaveLength(1));
     return { session, sessions, sent, runner };
   }
@@ -202,8 +202,7 @@ describe('a session\'s runner approvals', () => {
   });
 
   it.each([
-    ['cancel', (s: Awaited<ReturnType<typeof running>>['session']) => s.cancelTask('t1')],
-    ['retry', (s: Awaited<ReturnType<typeof running>>['session']) => s.retryTask('t1')],
+    ['cancel', (s: Awaited<ReturnType<typeof running>>['session']) => s.execute({ command: 'stop_task', task: 't1' }, { kind: 'user' })],
     ['stop', async (s: Awaited<ReturnType<typeof running>>['session']) => { s.stopExecution(); }],
   ])('denies what the task still waits on when it is %s-ed, before its runner goes', async (_how, end) => {
     const { session, sessions, runner } = await running();

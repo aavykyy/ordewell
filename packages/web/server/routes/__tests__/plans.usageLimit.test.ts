@@ -51,7 +51,7 @@ describe('task editing route with a task waiting on a usage-limit reset', () => 
       runners: ['claude-code'], status: 'approved', generatedAt: '2026-10-11T18:00:00Z', lastUpdated: '2026-10-11T18:00:00Z',
     };
     session.loadPlan(plan, 'build it', process.cwd());
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     const limit = "You've hit your session limit · resets 8:10pm (UTC)";
     sessions[0].emitEvent({ type: 'error', message: limit });
     sessions[0].emitOutput(limit);

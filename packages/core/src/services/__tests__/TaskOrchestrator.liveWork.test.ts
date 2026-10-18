@@ -82,7 +82,7 @@ describe('a merge never deletes a live task\'s worktree', () => {
     expect(status('t13')).toBe('pending');
     expect(status('t15')).toBe('pending');
 
-    await orchestrator.runTask('t14');
+    await orchestrator.forceStartTask('t14');
     pass(t14);
     await vi.waitFor(() => expect(status('t14')).toBe('completed'));
 
@@ -114,7 +114,7 @@ describe('a merge never deletes a live task\'s worktree', () => {
       // A checkpoint saved before a reload: waiting on the user mid-attempt.
       orchestrator.loadPlan([t1, { ...task('t2', 2, { status: 'awaiting_user' }), awaitingReason: 'checkpoint' }]);
 
-      await orchestrator.runTask('t1');
+      await orchestrator.forceStartTask('t1');
       pass(t1);
       await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
       await flushMicrotasks();
@@ -181,7 +181,7 @@ describe('a merge never deletes a live task\'s worktree', () => {
     it('is not a task Mark complete is still landing', async () => {
       const { orchestrator, isolation, status, notices } = setup();
       orchestrator.loadPlan([task('t1', 1)]);
-      await orchestrator.runTask('t1');
+      await orchestrator.forceStartTask('t1');
       const open = isolation.holdIntegration('t1');
 
       const completing = orchestrator.markTaskComplete('t1');

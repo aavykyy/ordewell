@@ -172,7 +172,7 @@ describe('Session.setTaskRunner', () => {
     session.loadPlan(planWith(['claude-code']), 'goal', testWorkspace, { persist: false });
 
     await session.setTaskRunner('t1', 'codex');
-    await session.runTask('t1');
+    await session.execute({ command: 'run_task', task: 't1' }, { kind: 'user' });
 
     expect(spawn).toHaveBeenCalledWith(expect.objectContaining({ runner: 'codex' }));
   });

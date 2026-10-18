@@ -204,7 +204,7 @@ describe('TaskOrchestrator: ops tasks and merge gates (ADR-0020)', () => {
       const env = setup();
       const t1 = change('t1', 1);
       env.orchestrator.loadPlan([t1, ops('o2', 2, { dependencies: ['t1'] })]);
-      await env.orchestrator.runTask('t1');
+      await env.orchestrator.forceStartTask('t1');
       // No gate yet, so no surface asked: the start is queued behind t1.
       expect(env.orchestrator.getMergeGate('o2')).toEqual([]);
       expect(await env.orchestrator.forceStartTask('o2')).toMatch(/starts once task "Task t1" finishes/);
@@ -225,7 +225,7 @@ describe('TaskOrchestrator: ops tasks and merge gates (ADR-0020)', () => {
     it('keeps a single-task run past the gate on the task, as a force start', async () => {
       const env = await gated();
 
-      await env.orchestrator.runTask('o2');
+      await env.orchestrator.forceStartTask('o2');
 
       expect(env.spawned('o2')[0].cwd).toBe('/repo');
       expect(env.orchestrator.storeInstance.get('o2')!.forcedPastGate).toEqual(['"Task t1"']);
