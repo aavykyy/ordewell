@@ -577,7 +577,83 @@ describe('OpenCodeAdapter task mode — permissions', () => {
 
     expect(server.requests.find((r) => r.path === '/permission/per_1/reply')?.body).toEqual({ reply: 'once' });
     expect(events).toContainEqual(expect.objectContaining({ type: 'permission_request', id: 'per_1', name: 'bash', decided: { decision: 'allow' } }));
-    expect(adapter.answerPermission('per_1', { decision: 'deny' })).toBe(false);
+    expect(await adapter.answerPermission('per_1', { decision: 'deny' })).toBe(false);
+    adapter.dispose();
+  });
+
+  it('waits for an automatic permission answer too, and leaves a failed one available for retry', async () => {
+    let reply: (value: Reply) => void = () => {};
+    const server = fakeServer({ 'POST /permission/per_1/reply': () => new Promise<Reply>((resolve) => { reply = resolve; }) });
+    const { adapter, events, turn, stream } = await turnWith(server, taskStart());
+    stream.push(ask('per_1'));
+    await until(() => server.requests.some((r) => r.path === '/permission/per_1/reply'));
+    expect(events.some((e) => e.type === 'permission_request' && e.decided)).toBe(false);
+    reply({ status: 503 });
+    await until(() => events.some((e) => e.type === 'thinking' && e.text.includes('still open')));
+    expect(events).toContainEqual(expect.objectContaining({ type: 'permission_request', id: 'per_1' }));
+    expect(events.some((e) => e.type === 'permission_request' && e.decided)).toBe(false);
+    const answer = adapter.answerPermission('per_1', { decision: 'deny' });
+    await until(() => server.requests.filter((r) => r.path === '/permission/per_1/reply').length === 2);
+    reply(true);
+    expect(await answer).toBe(true);
+    stream.push(status('idle'));
+    await turn;
+    adapter.dispose();
+  });
+
+  it('fails the turn and withdraws its requests when the event stream is lost twice', async () => {
+    const server = fakeServer();
+    const fetchImpl = server.fetch;
+    let connections = 0;
+    server.fetch = (async (input: unknown, init?: RequestInit) => {
+      if (!String(input).endsWith('/event')) return fetchImpl(String(input), init);
+      connections++;
+      let read = false;
+      return new Response(new ReadableStream({ pull(controller) {
+        if (!read && connections === 1) {
+          read = true;
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(ask('per_1'))}\n\n`));
+        } else controller.error(new Error('socket closed'));
+      } }));
+    }) as typeof fetch;
+    const { adapter } = await startTask(server, planMode);
+    const events: AgentEvent[] = [];
+    await expect(adapter.send('go', (event) => events.push(event))).rejects.toThrow('event stream was lost');
+    expect(connections).toBe(2);
+    expect(events).toContainEqual({ type: 'permission_cancelled', id: 'per_1' });
+    adapter.dispose();
+  });
+
+  it('does not withdraw an answer when OpenCode echoes permission.replied before its HTTP response', async () => {
+    let reply: (value: Reply) => void = () => {};
+    const server = fakeServer({ 'POST /permission/per_1/reply': () => new Promise<Reply>((resolve) => { reply = resolve; }) });
+    const { adapter, events, turn, stream } = await turnWith(server, planMode);
+    stream.push(ask('per_1'));
+    await until(() => events.some((e) => e.type === 'permission_request'));
+    const answer = adapter.answerPermission('per_1', { decision: 'allow' });
+    await until(() => server.requests.some((r) => r.path === '/permission/per_1/reply'));
+    stream.push({ type: 'permission.replied', properties: { sessionID: SES, requestID: 'per_1' } });
+    await tick();
+    expect(events.some((e) => e.type === 'permission_cancelled')).toBe(false);
+    reply(true);
+    expect(await answer).toBe(true);
+    stream.push(status('idle'));
+    await turn;
+    adapter.dispose();
+  });
+
+  it('keeps a permission request open when posting its answer fails, and logs the failure', async () => {
+    let attempts = 0;
+    const server = fakeServer({ 'POST /permission/per_1/reply': () => ({ status: ++attempts === 1 ? 503 : 200 }) });
+    const { adapter, events, turn, stream } = await turnWith(server, planMode);
+    stream.push(ask('per_1'));
+    await until(() => events.some((e) => e.type === 'permission_request'));
+
+    await expect(adapter.answerPermission('per_1', { decision: 'allow' })).rejects.toThrow('503');
+    expect(events).toContainEqual({ type: 'thinking', text: 'Could not deliver the permission answer: OpenCode permission reply failed: 503 503. The request is still open.' });
+    expect(await adapter.answerPermission('per_1', { decision: 'deny' })).toBe(true);
+    stream.push(status('idle'));
+    await turn;
     adapter.dispose();
   });
 
@@ -599,8 +675,8 @@ describe('OpenCodeAdapter task mode — permissions', () => {
     });
     expect(server.requests.some((r) => r.path.startsWith('/permission/'))).toBe(false);
 
-    expect(adapter.answerPermission('per_1', { decision: 'allowForTask' })).toBe(true);
-    expect(adapter.answerPermission('per_1', { decision: 'allow' })).toBe(false);
+    expect(await adapter.answerPermission('per_1', { decision: 'allowForTask' })).toBe(true);
+    expect(await adapter.answerPermission('per_1', { decision: 'allow' })).toBe(false);
     await until(() => server.requests.some((r) => r.path === '/permission/per_1/reply'));
     expect(server.requests.find((r) => r.path === '/permission/per_1/reply')?.body).toEqual({ reply: 'always' });
     stream.push(status('idle'));
@@ -632,7 +708,7 @@ describe('OpenCodeAdapter task mode — permissions', () => {
     stream.push(ask('per_2', { sessionID: 'ses_child' }));
     await until(() => events.some((e) => e.type === 'permission_request'));
     expect(events.find((e) => e.type === 'permission_request')).toMatchObject({ id: 'per_2', name: 'bash' });
-    expect(adapter.answerPermission('per_2', { decision: 'allow' })).toBe(true);
+    expect(await adapter.answerPermission('per_2', { decision: 'allow' })).toBe(true);
     stream.push(status('idle'));
     await turn;
     adapter.dispose();
@@ -645,7 +721,7 @@ describe('OpenCodeAdapter task mode — permissions', () => {
     stream.push({ type: 'permission.replied', properties: { sessionID: SES, requestID: 'per_1', reply: 'reject' } });
     await until(() => events.some((e) => e.type === 'permission_cancelled'));
     expect(events).toContainEqual({ type: 'permission_cancelled', id: 'per_1' });
-    expect(adapter.answerPermission('per_1', { decision: 'allow' })).toBe(false);
+    expect(await adapter.answerPermission('per_1', { decision: 'allow' })).toBe(false);
     stream.push(status('idle'));
     await turn;
     adapter.dispose();
@@ -675,7 +751,7 @@ describe('OpenCodeAdapter task mode — shared protocol behaviour', () => {
     await turn;
 
     expect(events.slice(-2)).toEqual([{ type: 'permission_cancelled', id: 'per_1' }, { type: 'turn_end' }]);
-    expect(adapter.answerPermission('per_1', { decision: 'allow' })).toBe(false);
+    expect(await adapter.answerPermission('per_1', { decision: 'allow' })).toBe(false);
     expect(server.requests.some((r) => r.path.startsWith('/permission/'))).toBe(false);
     adapter.dispose();
   });
@@ -793,7 +869,7 @@ describe('OpenCodeAdapter planner — still read-only', () => {
     stream.push(ask('per_1'));
     await until(() => events.some((e) => e.type === 'permission_request'));
     expect(server.requests.some((r) => r.path === '/permission/per_1/reply')).toBe(false);
-    expect(adapter.answerPermission('per_1', { decision: 'deny' })).toBe(true);
+    expect(await adapter.answerPermission('per_1', { decision: 'deny' })).toBe(true);
     await until(() => server.requests.some((r) => r.path === '/permission/per_1/reply'));
     release();
     await turn;
@@ -815,7 +891,7 @@ describe('OpenCodeAdapter planner — still read-only', () => {
     for (const request of server.requests) expect(request.authorization).toBe(basic(password!));
     expect(events.find((e) => e.type === 'permission_request')).toMatchObject({ id: 'per_1', name: 'bash', ask: { kind: 'other' } });
     expect(events.find((e) => e.type === 'permission_request')).not.toHaveProperty('decided');
-    expect(adapter.answerPermission('per_1', { decision: 'allow' })).toBe(false);
+    expect(await adapter.answerPermission('per_1', { decision: 'allow' })).toBe(false);
     adapter.dispose();
   });
 

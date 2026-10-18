@@ -482,6 +482,28 @@ describe('OpenCode 2.x — permission requests', () => {
     adapter.dispose();
   });
 
+  it('keeps a failed permission reply open on 2.x so it can be retried', async () => {
+    let attempts = 0;
+    const server = fakeServer({ [`POST /api/session/${SES}/permission/per_1/reply`]: () => {
+      if (++attempts === 1) return { status: 502 };
+      return {};
+    } });
+    const { adapter } = await start(server, taskStart({ flags: { permissionMode: 'plan', modeSettings: {} } }));
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (event) => events.push(event));
+    const stream = await server.stream();
+    await until(() => server.requests.some((r) => r.path.endsWith('/prompt')));
+    stream.push(started());
+    stream.push(permissionAsk('per_1'));
+    await until(() => events.some((e) => e.type === 'permission_request'));
+    await expect(adapter.answerPermission('per_1', { decision: 'allow' })).rejects.toThrow('502');
+    expect(events).toContainEqual(expect.objectContaining({ type: 'thinking', text: expect.stringContaining('The request is still open.') }));
+    expect(await adapter.answerPermission('per_1', { decision: 'deny' })).toBe(true);
+    stream.push(succeeded());
+    await turn;
+    adapter.dispose();
+  });
+
   it('leaves a request open under any other mode until it is answered', async () => {
     const server = fakeServer();
     const { adapter } = await start(server, taskStart({ flags: { permissionMode: 'plan', modeSettings: {} } }));
@@ -495,10 +517,10 @@ describe('OpenCode 2.x — permission requests', () => {
 
     expect(events.find((e) => e.type === 'permission_request')).not.toHaveProperty('decided');
     expect(server.requests.some((r) => r.path.endsWith('/permission/per_1/reply'))).toBe(false);
-    expect(adapter.answerPermission('per_1', { decision: 'allowForTask' })).toBe(true);
+    expect(await adapter.answerPermission('per_1', { decision: 'allowForTask' })).toBe(true);
     await until(() => server.requests.some((r) => r.path.endsWith('/permission/per_1/reply')));
     expect(server.requests.find((r) => r.path.endsWith('/permission/per_1/reply'))?.body).toEqual({ decision: 'always' });
-    expect(adapter.answerPermission('per_1', { decision: 'allow' })).toBe(false);
+    expect(await adapter.answerPermission('per_1', { decision: 'allow' })).toBe(false);
     stream.push(succeeded());
     await turn;
     adapter.dispose();
@@ -514,7 +536,7 @@ describe('OpenCode 2.x — permission requests', () => {
     stream.push(started());
     stream.push(permissionAsk('per_1'));
     await until(() => events.some((e) => e.type === 'permission_request'));
-    expect(adapter.answerPermission('per_1', { decision: 'deny', note: 'not that' })).toBe(true);
+    expect(await adapter.answerPermission('per_1', { decision: 'deny', note: 'not that' })).toBe(true);
     await until(() => server.requests.some((r) => r.path.endsWith('/permission/per_1/reply')));
 
     expect(server.requests.find((r) => r.path.endsWith('/permission/per_1/reply'))?.body).toEqual({ decision: 'reject', message: 'not that' });
@@ -536,7 +558,7 @@ describe('OpenCode 2.x — permission requests', () => {
     stream.push({ type: 'permission.replied', data: { sessionID: SES, requestID: 'per_1', reply: 'reject' } });
     await until(() => events.some((e) => e.type === 'permission_cancelled'));
 
-    expect(adapter.answerPermission('per_1', { decision: 'allow' })).toBe(false);
+    expect(await adapter.answerPermission('per_1', { decision: 'allow' })).toBe(false);
     stream.push(succeeded());
     await turn;
     adapter.dispose();
@@ -554,13 +576,13 @@ describe('OpenCode 2.x — permission requests', () => {
     await until(() => events.some((e) => e.type === 'permission_request'));
     expect(server.requests.some((r) => r.path.endsWith('/permission/per_1/reply'))).toBe(false);
     expect(events.find((e) => e.type === 'permission_request')).not.toHaveProperty('decided');
-    expect(adapter.answerPermission('per_1', { decision: 'deny' })).toBe(true);
+    expect(await adapter.answerPermission('per_1', { decision: 'deny' })).toBe(true);
     await until(() => server.requests.some((r) => r.path.endsWith('/permission/per_1/reply')));
     stream.push(succeeded());
     await turn;
 
     expect(server.requests.find((r) => r.path.endsWith('/permission/per_1/reply'))?.body).toEqual({ decision: 'reject' });
-    expect(adapter.answerPermission('per_1', { decision: 'allow' })).toBe(false);
+    expect(await adapter.answerPermission('per_1', { decision: 'allow' })).toBe(false);
     adapter.dispose();
   });
 });
@@ -838,7 +860,7 @@ describe('OpenCode 2.x — shared protocol behaviour', () => {
     await turn;
 
     expect(events.slice(-2)).toEqual([{ type: 'permission_cancelled', id: 'per_1' }, { type: 'turn_end' }]);
-    expect(adapter.answerPermission('per_1', { decision: 'allow' })).toBe(false);
+    expect(await adapter.answerPermission('per_1', { decision: 'allow' })).toBe(false);
     expect(server.requests.some((r) => r.path.endsWith('/permission/per_1/reply'))).toBe(false);
     adapter.dispose();
   });

@@ -190,7 +190,7 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
     expect(announced).toHaveLength(1);
     const request = announced[0] as Extract<AgentEvent, { type: 'permission_request' }>;
     if (request.decided) expect(request.decided).toEqual({ decision: 'deny' });
-    else expect(adapter.answerPermission?.(request.id, { decision: 'deny' })).toBe(true);
+    else expect(await adapter.answerPermission?.(request.id, { decision: 'deny' })).toBe(true);
     expect(await answer).toBe('deny');
     adapter.dispose();
   });

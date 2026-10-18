@@ -569,7 +569,7 @@ export class CliAgentAiService implements IAiService {
                   if (toolUseId) deniedCalls.add(toolUseId);
                   else announceDenial(`Access denied: "${event.name}" was refused. ${decision.note ?? ''}`.trim());
                 }
-                adapter.answerPermission?.(id, decision);
+                return adapter.answerPermission?.(id, decision);
               })
               // A runner that cannot take its answer has lost its process, and its turn ends on that error.
               .catch(() => {});

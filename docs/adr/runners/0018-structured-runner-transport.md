@@ -163,8 +163,11 @@ and completion evidence.
   belongs to the same turn. Completion evidence arrives through the MCP tool,
   independent of the output stream. If the CLI starts
   no follow-on turn once the list is empty, the turn ends after a short grace.
-  Anything a runner does by itself after a turn has closed is delivered to the
-  session as a turn of its own, with no user message, instead of being dropped.
+  Main-thread work a runner starts after a turn has closed opens a turn of
+  its own, with no user message. A subagent's late activity is logged without
+  opening a main-thread turn. A routed turn-end or error event ends its turn
+  immediately, before another protocol line in the same stdout chunk can be
+  assigned to it; queued input waits for the adapter to release its send.
 - **The plan's mode is held (B2).** `--permission-mode auto` on a model or
   account without auto mode is not refused: the CLI starts in `default` and
   asks about every write. The connector compares the mode `init` reports with
@@ -301,7 +304,12 @@ and completion evidence.
   back to the agent. The card appears in the task log, with a notice line in
   the TUI and a badge on the VS Code card. Cancel, stop and retry deny pending
   requests, so nothing is left hanging. The supervisor (#28) can answer through
-  the same seam later; nothing assumes a human is the only answerer.
+  the same seam later; nothing assumes a human is the only answerer. An
+  OpenCode answer is decided only after its HTTP reply succeeds. A failed
+  reply keeps the request open and adds a task-log warning, so its card can
+  take another answer. OpenCode reconnects a lost event stream once during
+  a turn; another loss fails the turn in plain words, since unseen permission
+  requests cannot be answered.
 - **Surfaces (V1, #57).** In the TUI, Enter on a task in the plan pane
   swaps the chat pane to the task view: a distinct accent colour, a state
   header, a `→ Task N` composer label whose `/` is the runner's (R1), and Esc
@@ -448,4 +456,5 @@ transport is retained for take-over.
 - 2026-10-17 — K1/U1: a saved session records its owner and Continue never crosses runners; a Retry after any move to another runner is a carry-over, not only a paused task's; a limit counts only in a turn Ordewell started, and a runner's structured field decides over its words ([ADR-0041](../routing/0041-a-tasks-model-follows-the-runners-own-switch.md), [ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md)).
 - 2026-10-18 — U1: a held run stays open with nothing at work; the reset releases the hold whatever failed meanwhile; a refused Resume now changes no resume, and a task it sweeps along keeps waiting for its reset; a loaded plan's reset resumes only its paused tasks.
 - 2026-10-18 — O1/P1: text is kept by run — written once to the plain text, settled in its own block, merged only within its run; older logs replay as before.
+- 2026-10-18 — B1/A1: only main-thread work opens a turn; routed terminal events end it immediately, HTTP permission answers wait for delivery, and a lost OpenCode event stream gets one reconnect before the turn fails.
 - 2026-10-18 — P1: saved and live task logs join by stream position through one follow reducer, and every runner exit closes its view's turn.

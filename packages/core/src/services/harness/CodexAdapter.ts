@@ -405,7 +405,10 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
 
   constructor(deps: AgentProcessDeps) {
     super(deps);
-    void this.processEnded.then(() => this.rpc.close('The Codex app-server process ended.'));
+    void this.processEnded.then(() => {
+      for (const steer of [...this.turn?.steers.values() ?? []]) steer.settle(false);
+      this.rpc.close('The Codex app-server process ended.');
+    });
   }
 
   protected spawnSpec(opts: AgentStartOptions): SpawnSpec {
@@ -667,7 +670,6 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         steer.accepted = true;
         steer.settle(true);
       });
-      void this.processEnded.then(() => steer.settle(false));
       this.whenNamed(turn, send);
     });
   }

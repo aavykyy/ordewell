@@ -123,8 +123,11 @@ turn-scoped and never touches the run's tasks.**
 - **The forced message goes first; the rest keep their order (F2).** Messages
   still in Ordewell's queue follow the forced one in the order they were sent.
   Messages already handed over to the runner are where the runners differ:
-  Claude Code keeps them in the conversation and the model reads them in the
-  same turn as the forced message, ahead of it (they were sent first); Codex
+  Claude Code keeps them in the conversation and the model reads them ahead
+  of the forced message (they were sent first), in the current turn or in a
+  turn the CLI opens for them. Turn-end delivery waits while any message is
+  still handed over or being offered, wherever it sits in Ordewell's queue;
+  a forced message cannot overtake the runner's own queue. Codex
   discards a steered message it had not consumed, and the OpenCode 1.x
   adapter deletes one still unread when the abort leaves the session idle,
   so Ordewell re-sends it after the forced one (D4). Ordewell cannot reorder
@@ -351,3 +354,4 @@ interrupt (D4 covers it either way).
 - 2026-10-13 — force send extended to the planner chat, turn-scoped (F5); core and daemon route.
 - 2026-10-13 — F5: a force send keeps the run update of a wake-up turn it stops.
 - 2026-10-14 — F1: a handed-over message can be force sent, and is never sent twice; probed on Claude Code 2.1.299. F2 corrected for OpenCode 1.x, whose adapter lets go of an unread message at the abort. Removal of a handed-over message stays refused.
+- 2026-10-18 — F2: turn-end delivery waits for every message the runner still holds, including one behind a newly forced message.

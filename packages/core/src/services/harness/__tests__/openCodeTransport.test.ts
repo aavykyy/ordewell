@@ -145,22 +145,22 @@ describe('openCodePermissions', () => {
     return { permissions, replies, events, onEvent: (e: AgentEvent) => events.push(e) };
   }
 
-  it('raises a request once however often a turn sees it, and answers it on the session that asked', () => {
+  it('raises a request once however often a turn sees it, and answers it on the session that asked', async () => {
     const { permissions, replies, events, onEvent } = desk();
     const seen = new Set<string>();
     raiseOnce(permissions, request('per_1'), 'ses_child', seen, onEvent);
     raiseOnce(permissions, request('per_1'), 'ses_child', seen, onEvent);
 
     expect(events).toEqual([{ type: 'permission_request', id: 'per_1', name: 'bash', detail: '{}', suggestions: [] }]);
-    expect(permissions.answer('per_1', { decision: 'deny', note: 'no' })).toBe(true);
+    expect(await permissions.answerAsync('per_1', { decision: 'deny', note: 'no' })).toBe(true);
     expect(replies).toEqual([['per_1', 'ses_child', { decision: 'deny', note: 'no' }]]);
   });
 
-  it('takes a reply the server fails as answered', async () => {
+  it('keeps a reply the server fails open', async () => {
     const { permissions, onEvent } = desk(true);
     raiseOnce(permissions, request('per_1'), 'ses', new Set(), onEvent);
-    expect(permissions.answer('per_1', { decision: 'allow' })).toBe(true);
-    await tick();
+    await expect(permissions.answerAsync('per_1', { decision: 'allow' })).rejects.toThrow('gone');
+    await expect(permissions.answerAsync('per_1', { decision: 'allow' })).rejects.toThrow('gone');
   });
 
   // OpenCode names a tool `<server>_<tool>`, so a server named `ordewell_x` puts its tools under Ordewell's prefix.
@@ -215,13 +215,13 @@ describe('settleTurn', () => {
     return { how, order, events, onEvent: (e: AgentEvent) => events.push(e) };
   }
 
-  it('rejects with what a frame handler threw, reporting nothing of its own', async () => {
+  it('rejects with what a frame handler threw and cancels requests that cannot finish', async () => {
     const turn = turnLatch();
     const { how, order, events, onEvent } = settlement({ streamFailed: Promise.reject(new Error('handler blew up')) });
 
     await expect(settleTurn(turn, how, onEvent)).rejects.toThrow('handler blew up');
     expect(order).toEqual([]);
-    expect(events).toEqual([]);
+    expect(events).toEqual([{ type: 'permission_cancelled', id: 'per_1' }]);
   });
 
   it('reads back, cancels what is still open, then reports the outcome', async () => {
@@ -275,6 +275,38 @@ describe('interruptAcknowledged', () => {
 });
 
 describe('openEventStream', () => {
+  it.each(['connect', 'status', 'body', 'read', 'end'])('fails visibly after two lost %s streams', async (fault) => {
+    let attempts = 0;
+    const stream = await openEventStream(async () => {
+      attempts++;
+      if (fault === 'connect') throw new Error('ECONNREFUSED');
+      if (fault === 'status') return new Response('unavailable', { status: 503 });
+      if (fault === 'body') return new Response(null);
+      return new Response(new ReadableStream({ start(controller) {
+        if (fault === 'read') controller.error(new Error('read failed'));
+        else controller.close();
+      } }));
+    }, () => {});
+    await tick();
+    expect(attempts).toBe(2);
+    await expect(stream.failed).rejects.toThrow("The OpenCode runner's event stream was lost.");
+    expect(stream.broken).toBe(true);
+    await expect(stream.close()).rejects.toThrow('event stream was lost');
+  });
+
+  it('reconnects once when the event stream connection fails', async () => {
+    let attempts = 0;
+    const frames: unknown[] = [];
+    const stream = await openEventStream(async (signal) => {
+      if (++attempts === 1) throw new Error('ECONNRESET');
+      return sseResponse({ signal }, ['data: {"restored":true}\n\n']).response;
+    }, (frame) => frames.push(frame));
+    await tick();
+    expect(attempts).toBe(2);
+    expect(frames).toEqual([{ restored: true }]);
+    await stream.close();
+  });
+
   it('parses data frames across reads, skips lines that are none, and counts every read as activity', async () => {
     const frames: unknown[] = [];
     let activity = 0;
@@ -312,37 +344,69 @@ describe('openEventStream', () => {
     expect(frames).toEqual([{ n: 1 }]);
   });
 
-  it('gives the turn its post when the server has no stream, or refuses it', async () => {
+  it('fails when the server has no stream, or refuses it', async () => {
     const bodiless = await openEventStream(async () => ({ ok: true, body: null }) as unknown as Response, () => {});
-    await bodiless.close();
+    await expect(bodiless.close()).rejects.toThrow('event stream was lost');
     const refused = await openEventStream(async () => { throw new Error('ECONNREFUSED'); }, () => {});
-    await refused.close();
+    await expect(refused.close()).rejects.toThrow('event stream was lost');
   });
 
-  it('stops waiting for a stream that never connects, and still closes it', async () => {
+  it('retries a connection that never opens, then fails and aborts both connections', async () => {
     vi.useFakeTimers();
     try {
-      let aborted = false;
-      let opened = false;
+      const signals: AbortSignal[] = [];
       const open = openEventStream(async (signal) => {
-        opened = true;
-        signal.addEventListener('abort', () => { aborted = true; });
+        signals.push(signal);
         return new Promise<Response | null>(() => {});
       }, () => {});
       let settled = false;
       void open.then(() => { settled = true; });
-
       await vi.advanceTimersByTimeAsync(4999);
-      expect(opened).toBe(true);
       expect(settled).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
-      expect(settled).toBe(true);
-
-      void (await open).close();
-      expect(aborted).toBe(true);
+      expect(signals).toHaveLength(2);
+      expect(signals[0].aborted).toBe(true);
+      await vi.advanceTimersByTimeAsync(5000);
+      const stream = await open;
+      await expect(stream.failed).rejects.toThrow('event stream was lost');
+      await expect(stream.close()).rejects.toThrow('event stream was lost');
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('closes quietly while its reconnect is still waiting for headers', async () => {
+    let connections = 0;
+    let breakStream: () => void = () => {};
+    let reconnectSignal: AbortSignal | undefined;
+    const stream = await openEventStream(async (signal) => {
+      if (++connections > 1) {
+        reconnectSignal = signal;
+        return new Promise<Response>(() => {});
+      }
+      return new Response(new ReadableStream({ start(controller) {
+        breakStream = () => controller.error(new Error('socket lost'));
+      } }));
+    }, () => {});
+    breakStream();
+    await vi.waitFor(() => expect(connections).toBe(2));
+    await stream.close();
+    expect(reconnectSignal?.aborted).toBe(true);
+    expect(stream.broken).toBe(false);
+  });
+
+  it('does not mistake an aborted read for losing the event stream', async () => {
+    let connections = 0;
+    const stream = await openEventStream(async (signal) => {
+      connections++;
+      return new Response(new ReadableStream({ start(controller) {
+        signal.addEventListener('abort', () => controller.error(new Error('aborted')), { once: true });
+      } }));
+    }, () => {});
+    await stream.close();
+    expect(connections).toBe(1);
+    expect(stream.broken).toBe(false);
   });
 
   it('ends the stream on close', async () => {

@@ -693,6 +693,8 @@ exactly, is allowed at once; a task's request under an auto-approving mode is
 answered at once; both are logged as decided. Anything else is held open — a
 task's with the runner's own grants, a planner's with what it is for — until
 it is answered, withdrawn by the runner, or cancelled because its turn ended.
+An HTTP answer settles only when its reply succeeds; a failed reply is logged
+and leaves the request open for another answer, including an automatic one.
 An adapter supplies only how to read its runner's request and how to reply,
 so the same request logs the same events on every runner.
 *Avoid:* "permission queue" (requests are answered in any order).

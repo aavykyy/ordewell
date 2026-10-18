@@ -296,9 +296,10 @@ export interface AgentAdapter {
   /**
    * Answer an open `permission_request`. False when the id is not open — it
    * was answered, cancelled, or never asked. Absent on an adapter that leaves
-   * no planner request open.
+   * no planner request open. HTTP replies resolve only after delivery and
+   * reject on failure, leaving the request open for another attempt.
    */
-  answerPermission?(id: string, decision: ApprovalDecision): boolean;
+  answerPermission?(id: string, decision: ApprovalDecision): boolean | Promise<boolean>;
 }
 
 /** What an adapter adds to run a task rather than a planner (ADR-0018). */
@@ -333,7 +334,7 @@ export interface TaskModeAgentAdapter extends AgentAdapter {
    * mid-turn.
    */
   steer?(id: string, text: string): Promise<boolean>;
-  answerPermission(id: string, decision: ApprovalDecision): boolean;
+  answerPermission(id: string, decision: ApprovalDecision): boolean | Promise<boolean>;
   /**
    * The slash commands the runner offers this session — its built-ins, the
    * user's and the project's skills and custom commands (#66) — as it

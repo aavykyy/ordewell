@@ -1326,8 +1326,8 @@ describe('CliAgentAiService — OpenCode', () => {
   /**
    * `sseFrames`, when given, makes `/event` a real stream: the frames are
    * delivered before the message POST resolves, which is where the server
-   * raises its permission requests. Omitted, `/event` answers with no body —
-   * the shape a server too old to stream produces.
+   * raises its permission requests. Omitted, the stream stays open without
+   * emitting frames.
    */
   function openCodeService(routes: (url: string, init?: RequestInit) => unknown, sseFrames?: string[]) {
     const spawned = fakeSpawn([]);
@@ -1345,7 +1345,6 @@ describe('CliAgentAiService — OpenCode', () => {
       if (url.endsWith('/mcp')) return { ok: true, status: 200, statusText: 'OK', json: async () => ({ ordewell: { status: 'connected' } }) } as unknown as Response;
       const body = routes(url, init);
       if (url.endsWith('/event')) {
-        if (!sseFrames) return { ok: true, status: 200, statusText: 'OK', body: null } as unknown as Response;
         return sseResponse(init, sseFrames).response;
       }
       return {
@@ -1464,7 +1463,7 @@ describe('CliAgentAiService — OpenCode', () => {
     };
     const fetchImpl = (async (input: string | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.endsWith('/event')) return { ok: true, status: 200, statusText: 'OK', body: null } as unknown as Response;
+      if (url.endsWith('/event')) return sseResponse(init).response;
       if (url.endsWith('/mcp')) return { ok: true, status: 200, statusText: 'OK', json: async () => ({ ordewell: { status: 'connected' } }) } as unknown as Response;
       if (init?.body) seen.push(JSON.parse(String(init.body)));
       return {

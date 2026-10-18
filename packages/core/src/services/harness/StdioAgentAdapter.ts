@@ -66,6 +66,8 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
 
   constructor(protected deps: AgentProcessDeps) {
     this.runner = new RunnerProcess(deps);
+    // One listener for the process lifetime; completed turns retain no exit closure.
+    void this.runner.ended.then(() => this.turnEmit?.({ type: 'error', message: this.exitMessage() }));
   }
 
   /**
@@ -190,9 +192,6 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
         if (event.type === 'turn_end' || event.type === 'error') finish();
       };
 
-      // A process that dies mid-turn must surface its stderr, not hang the
-      // planner behind a `turn_end` that will never come.
-      const onExit = () => emit({ type: 'error', message: this.exitMessage() });
       const onAbort = () => {
         if (settled) return;
         // Stop means stop: the agent is holding real context we are abandoning,
@@ -203,10 +202,6 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
 
       this.turnEmit = emit;
       this.turnActivity = onActivity ?? null;
-      // The runner's end, not Node's 'exit': the process's last protocol line
-      // can still be arriving when Node reports 'exit', and reporting its death
-      // then makes that line read as never having come.
-      void this.runner.ended.then(onExit);
       if (signal?.aborted) { onAbort(); return; }
       signal?.addEventListener('abort', onAbort, { once: true });
 
