@@ -434,7 +434,6 @@ export async function handleResolveApproval(id: string, granted: boolean, deps: 
  */
 export function handleStopPlanning(deps: PlanManagerDeps): void {
   deps.session.abortPlannerTurn();
-  deps.session.aiServiceInstance.reset();
   deps.chatProvider.conversation.stop();
   deps.log('Research stopped');
 }

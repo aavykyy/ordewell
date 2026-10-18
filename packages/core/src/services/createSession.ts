@@ -1,4 +1,5 @@
 import { createAiService, type IAiService } from './AiService';
+import { PlannerBackend } from './PlannerBackend';
 import { applyTaskOps, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
 import { carryPlannedModes } from './ModeResolver';
 import type { TaskQueryCatalog } from './TaskQuery';
@@ -46,7 +47,7 @@ import { approvalRecordOf, flattenTasks, keepExecutionState, stampOrigin, waitsF
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
 import { PlannerNotReadyError, plannerNotReadyFor } from './plannerReadiness';
 import { installedPlannerAnswered, installedPlannerDetected } from './InstalledPlanner';
-import type { IConfig, PlannerBackendId } from '../interfaces/IConfig';
+import type { IConfig } from '../interfaces/IConfig';
 import type { IFileSystem } from '../interfaces/IFileSystem';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { INotification } from '../interfaces/INotification';
@@ -201,33 +202,6 @@ export interface SessionDeps {
 }
 
 /**
- * The planner transport for the provider configured *right now* (ADR-0009).
- *
- * Resolved on every read rather than once at construction, because a
- * Session outlives the choice: VS Code hosts exactly one for the whole
- * window, and the webview pills and `/planner` switch backends underneath it.
- * The model id was already read live, so a service captured at construction
- * meant a switched planner kept the old backend and got handed the new one's
- * model — an OpenCode model id spawned as `claude --model opencode/…`, which
- * the agent rejects as nonexistent.
- *
- * Switching releases the outgoing service: a harness planner holds an OS
- * process, so dropping the reference without `reset()` leaks an agent.
- */
-function liveAiService(config: IConfig, workspaceRoot: () => string, mcpServer: OrdewellMcpServer): () => IAiService {
-  let live: IAiService | null = null;
-  let liveProvider: PlannerBackendId | null = null;
-  return () => {
-    const provider = config.aiProvider;
-    if (live && liveProvider === provider) return live;
-    live?.reset();
-    live = createAiService(config, { workspaceRoot, mcpServer });
-    liveProvider = provider;
-    return live;
-  };
-}
-
-/**
  * The planner's own prompts. A turn's abort or a plan change settles these;
  * a task runner's request belongs to its attempt, and is denied when that
  * attempt's runner stops.
@@ -253,9 +227,16 @@ function writtenTasks(before: readonly Task[], after: readonly Task[]): string[]
  * Session here; the optional {@link SessionDeps} are the seams tests fill.
  */
 export function createSession(deps: SessionDeps): Session {
-  const pinnedAiService = deps.aiService;
   const mcpServer = deps.mcpServer ?? sharedMcpServer();
-  const aiService = pinnedAiService ? () => pinnedAiService : liveAiService(deps.config, deps.workspaceRoot, mcpServer);
+  // Made by the Session (it is the conversation's host); an approval prompt
+  // names the turn that raised it, and the backend waits for the turn on it,
+  // so both read it once it exists.
+  let conversation: PlannerConversation | undefined;
+  const busy = () => conversation?.isTurnInFlight ?? false;
+  const backend = new PlannerBackend(deps.aiService
+    ? { pinned: deps.aiService, busy }
+    : { provider: () => deps.config.aiProvider, create: () => createAiService(deps.config, { workspaceRoot: deps.workspaceRoot, mcpServer }), busy });
+  const aiService = () => backend.current();
   const store = new PlanStore();
   // A window a runner or provider reports wins; this serves the rest, from
   // the catalogs the resolver already holds.
@@ -267,10 +248,6 @@ export function createSession(deps: SessionDeps): Session {
     location: () => session.taskLogLocation,
     open: deps.openTaskLog,
   });
-  // Made by the Session (it is the conversation's host); an approval prompt
-  // names the turn that raised it, so the chain below reads it once it exists.
-  let conversation: PlannerConversation | undefined;
-
   // The approval chain: the filesystem asks the policy, the policy asks the
   // registry, the registry announces on the same broadcast seam every other
   // planner event uses, and any surface answers through `resolveApproval`.
@@ -377,7 +354,7 @@ export function createSession(deps: SessionDeps): Session {
     modelResolver: deps.modelResolver,
     settings: deps.settings,
     hostSessionId: deps.sessionId,
-    aiService,
+    backend,
     planner: deps.planner ?? new Planner(deps.config, aiService),
     store,
     orchestrator,
@@ -419,7 +396,7 @@ export interface SessionParts {
   modelResolver: ModelResolver;
   settings: () => SessionRuntimeSettings;
   hostSessionId?: string;
-  aiService: () => IAiService;
+  backend: PlannerBackend;
   planner: SessionPlanner;
   store: PlanStore;
   orchestrator: TaskOrchestrator;
@@ -451,7 +428,7 @@ export interface SessionParts {
  * (setModels, setRunnerList, …) stay on the host; Session never emits them.
  */
 export class Session {
-  private readonly aiService: () => IAiService;
+  private readonly backend: PlannerBackend;
   private readonly usage: PlannerUsageLedger;
   private readonly events: SessionEventRelay;
   private readonly planner: SessionPlanner;
@@ -509,8 +486,6 @@ export class Session {
   private turnEffects: TurnEffects = this.newTurnEffects();
   /** Every turn's effects with starts still owed: a turn's may still be running its starts when the next opens. */
   private readonly owingEffects = new Set<TurnEffects>();
-  /** What the planner's next turn is told before anything else; see {@link PlannerConversationHost.takeRunUpdates}. */
-  private readonly untoldRunUpdates: string[] = [];
   private unlistenApprovals: (() => void) | null;
   private readonly plannerTools: PlannerToolHandler = plannerToolHandler({
     skills: () => this.workspaceSkills().listSkills(),
@@ -553,7 +528,7 @@ export class Session {
     this.settingsFn = parts.settings;
     this.hostSessionId = parts.hostSessionId;
     this.currentSessionId = parts.hostSessionId ?? mintSessionId();
-    this.aiService = parts.aiService;
+    this.backend = parts.backend;
     this.planner = parts.planner;
     this.store = parts.store;
     this.store.onTree = (ids) => this.keepApprovals(ids);
@@ -571,13 +546,12 @@ export class Session {
     this.conversation = parts.conversation({
       plan: () => this.plan,
       goal: () => this.goal,
-      aiService: () => this.aiService(),
+      aiService: () => this.backend.current(),
       onProgress: (p) => this.events.progress(p),
       opening: (runners) => this.conversationOpening(runners),
       catalog: () => this.catalog.current(),
       assignmentScope: () => this.catalog.scope(),
       autorun: () => this.userRunSettings().autorun,
-      takeRunUpdates: () => this.untoldRunUpdates.splice(0),
       tasks: () => this.store.planTasks,
       // Before the user approves the plan, nothing of it starts: every task would say so.
       startWaits: (task) => (this.plan?.approved ? this.orchestrator.startWaits(task) : []),
@@ -595,9 +569,16 @@ export class Session {
       // serve; denying it at once unblocks the research loop, which otherwise
       // sat out the approval's five-minute timeout before seeing the stop.
       turnAborted: () => this.approvals.clear(isPlannerApproval),
+      // A planner switch or settings change made while no turn ran is made
+      // before the next one takes the backend, and one made during a turn as
+      // soon as it is over.
+      turnClaiming: () => this.backend.settle(),
       // After the turn has announced its end, so the next one never starts
       // ahead of it on a surface.
-      turnReleased: () => queueMicrotask(() => this.turns.pump()),
+      turnReleased: () => {
+        this.backend.settle();
+        queueMicrotask(() => this.turns.pump());
+      },
       usageLimit: (said) => this.turns.usageLimit(said),
     });
 
@@ -648,7 +629,7 @@ export class Session {
       },
       deliver: (digest) => this.turns.enqueue({ source: 'supervisor', text: digest }),
       pump: () => this.turns.pump(),
-      restartPlanner: () => this.aiService().restart?.(),
+      restartPlanner: () => this.backend.current().restart?.(),
       abandonTurn: () => this.conversation.abandonHungTurn(),
       notice: (level, message) => this.notice(level, message),
     });
@@ -666,7 +647,7 @@ export class Session {
       scheduler: this.orchestrator,
       runs: this.runs,
       broadcast: (msg) => this.broadcast(msg),
-      plannerTools: () => this.aiService().plannerToolsAttached?.() ?? false,
+      plannerTools: () => this.backend.current().plannerToolsAttached?.() ?? false,
       taskSkills: () => this.workspaceSkills(),
       notice: (level, message) => this.notice(level, message),
       approve: (taskIds) => this.approve(taskIds),
@@ -796,7 +777,7 @@ export class Session {
       deferUntilLanded: (command, actor, intent, admission) => this.turnEffects.defer(command, actor, intent, admission),
       queuedNotRun: (text) => {
         this.systemNote(text);
-        this.untoldRunUpdates.push(text);
+        this.conversation.tellRunUpdate(text);
       },
     };
   }
@@ -1057,9 +1038,9 @@ export class Session {
       onRunClosed: () => { this.closedUnannounced = true; },
       onIsolationHandoff: (handoff) => this.broadcast({ type: 'isolation_handoff', ...this.supervision.handoff(handoff) }),
       onExecutionComplete: () => {
+        this.persist();
         this.announceClosed();
         relay.onExecutionComplete();
-        this.persist();
         this.supervision.runFinished();
       },
     };
@@ -1120,7 +1101,6 @@ export class Session {
     this.turnEffects.abandon();
     for (const effects of this.owingEffects) effects.abandon();
     this.owingEffects.clear();
-    this.untoldRunUpdates.length = 0;
     this.conversation.reset();
     // Totals belong to the plan they were recorded under; a fresh plan starts
     // its ledger from zero so the previous session's line never lingers.
@@ -2209,5 +2189,12 @@ export class Session {
     this.unsubObserver = null;
   }
 
-  get aiServiceInstance(): IAiService { return this.aiService(); }
+  /**
+   * The planner's settings or credentials changed: its backend is let go and
+   * built afresh from them, once no planner turn is running on it (see
+   * {@link PlannerBackend}).
+   */
+  plannerSettingsChanged(): void {
+    this.backend.settingsChanged();
+  }
 }

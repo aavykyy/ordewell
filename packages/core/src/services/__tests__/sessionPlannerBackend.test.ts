@@ -24,6 +24,9 @@ vi.mock('../AiService', async (importOriginal) => {
   };
 });
 
+/** Anything that asks the Session about its planner reads the backend configured now. */
+const read = (session: ReturnType<typeof makeSession>) => void session.isConversationActive;
+
 describe('Session planner backend', () => {
   beforeEach(() => { created.length = 0; });
 
@@ -31,7 +34,7 @@ describe('Session planner backend', () => {
     const config = fakeConfig({ aiProvider: 'claude-code' });
     const session = makeSession({ config });
 
-    expect(session.aiServiceInstance).toBe(created[0].service);
+    read(session);
     expect(created).toHaveLength(1);
     expect(created[0].provider).toBe('claude-code');
   });
@@ -39,39 +42,39 @@ describe('Session planner backend', () => {
   it('rebuilds when the host switches planner mid-session, and releases the old one', () => {
     const config = fakeConfig({ aiProvider: 'claude-code' });
     const session = makeSession({ config });
-    const first = session.aiServiceInstance;
+    read(session);
 
     (config as { aiProvider: IConfig['aiProvider'] }).aiProvider = 'opencode';
-    const second = session.aiServiceInstance;
+    read(session);
 
-    expect(second).not.toBe(first);
     expect(created.map((c) => c.provider)).toEqual(['claude-code', 'opencode']);
     // A harness planner holds an agent process; dropping the reference without
     // reset() leaks it.
-    expect(first.reset).toHaveBeenCalled();
+    expect(created[0].service.reset).toHaveBeenCalled();
   });
 
   it('keeps one service while the provider is unchanged', () => {
     const session = makeSession({ config: fakeConfig({ aiProvider: 'opencode' }) });
-    expect(session.aiServiceInstance).toBe(session.aiServiceInstance);
+    read(session);
+    read(session);
     expect(created).toHaveLength(1);
   });
 
   it('gives a harness planner the session workspace, not the host process cwd', () => {
     const session = makeSession({ config: fakeConfig({ aiProvider: 'opencode' }) });
-    void session.aiServiceInstance;
+    read(session);
     expect(created[0].workspaceRoot?.()).toBe(testWorkspace);
   });
 
   it('never replaces an injected service', () => {
-    const injected = { reset: vi.fn() };
+    const injected = { reset: vi.fn(), hasActiveConversation: vi.fn().mockReturnValue(false) };
     const config = fakeConfig({ aiProvider: 'claude-code' });
     const session = makeSession({ config, aiService: injected });
 
-    const first = session.aiServiceInstance;
     (config as { aiProvider: IConfig['aiProvider'] }).aiProvider = 'opencode';
+    read(session);
 
-    expect(session.aiServiceInstance).toBe(first);
+    expect(injected.hasActiveConversation).toHaveBeenCalled();
     expect(created).toHaveLength(0);
   });
 });

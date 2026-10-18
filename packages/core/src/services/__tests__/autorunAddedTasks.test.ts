@@ -152,6 +152,24 @@ describe('a task the planner adds after approval, with autorun on and Full', () 
     expect(env.planner.calls[2].message).not.toContain('The queued start');
   });
 
+  it('tells the next turn again of a start that did not run when the turn that told it never got an answer', async () => {
+    const env = await finishedRun();
+    await addCache(env);
+    await env.planner.tools().runTask!({ task: 'Add a cache' }, ctx);
+    changeSettings(env, { autorun: false });
+    await landEdit(env);
+    await settled();
+
+    const failed = env.session.continueConversation('is it running?');
+    await until(() => env.planner.calls.length === 2);
+    env.planner.calls[1].fail(new Error('backend down'));
+    await expect(failed).rejects.toThrow('backend down');
+    void env.session.continueConversation('is it running now?');
+    await until(() => env.planner.calls.length === 3);
+
+    expect(env.planner.calls[2].message).toContain('Run update:\n- The queued start of task #2 "Add a cache" did not run: ');
+  });
+
   it('starts an added ops task too', async () => {
     const env = await finishedRun();
     await addCache(env, true);
