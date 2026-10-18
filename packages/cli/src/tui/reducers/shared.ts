@@ -101,7 +101,12 @@ export type Action =
   | { type: 'sessionDeleted'; sessionId: string }
   /** A saved session's records, which the conversation is rebuilt from as a reload would show it. */
   | { type: 'chatRestored'; history: SerializedConversationMessage[]; researchLog?: ResearchLogEntry[]; plannerUsage?: PlannerUsage; pendingTurns?: SerializedPendingTurn[]; sessionId?: string }
+  /** A planner turn's call returned its plan: the one action that ends the turn. */
   | { type: 'planUpdated'; plan: unknown; sessionId?: string }
+  /** The plan as the daemon holds it after a request that is not a planner turn; a turn out stays out. */
+  | { type: 'planRefreshed'; plan: unknown; sessionId: string }
+  /** A saved session is now the one on screen; nothing of the last session's turn carries over. */
+  | { type: 'sessionLoaded'; sessionId: string; goal: string }
   /** A plan the daemon broadcast, not one a call of this surface returned. */
   | { type: 'planBroadcast'; plan: unknown; sessionId: string }
   /** One planner message from the session, as it came: core's conversation view decides what it shows. */

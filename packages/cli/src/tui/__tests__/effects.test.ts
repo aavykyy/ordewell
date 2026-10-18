@@ -240,6 +240,67 @@ describe('planning', () => {
     expect(heard(h.actions)).toEqual([{ type: 'planner_message', content, timestamp: '2026-10-18T10:00:05.000Z', runs }]);
   });
 
+  // A fixed reply repeats: the same task edit twice says 'Tasks updated' twice.
+  it('backfills a reply that repeats an earlier one, by its timestamp rather than its words', async () => {
+    const same = 'Tasks updated:\n- #3 updated';
+    let turn = 0;
+    const h = streaming(async (emit) => {
+      turn += 1;
+      if (turn === 1) emit({ type: 'planner_message', content: same, timestamp: '2026-10-18T10:00:00.000Z' });
+      return {
+        tasks: [],
+        conversationHistory: [
+          { role: 'user', content: 'edit task 3' },
+          { role: 'assistant', content: same, timestamp: turn === 1 ? '2026-10-18T10:00:00.000Z' : '2026-10-18T10:05:00.000Z' },
+        ],
+      };
+    }, 'sendConversationMessage');
+
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'edit task 3' }, h.deps);
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'edit task 3 again' }, h.deps);
+
+    expect(heard(h.actions)).toEqual([
+      { type: 'planner_message', content: same, timestamp: '2026-10-18T10:00:00.000Z' },
+      { type: 'planner_message', content: same, timestamp: '2026-10-18T10:05:00.000Z' },
+    ]);
+  });
+
+  it('backfills every reply the turn left, in order, not only the last', async () => {
+    const h = streaming(async () => ({
+      tasks: [],
+      conversationHistory: [
+        { role: 'user', content: 'first' },
+        { role: 'assistant', content: 'An earlier turn.', timestamp: '2026-10-18T09:00:00.000Z' },
+        { role: 'user', content: 'x' },
+        { role: 'assistant', content: 'Let me check task 2.', timestamp: '2026-10-18T10:00:01.000Z' },
+        { role: 'assistant', content: 'Plan generated with 1 task.', kind: 'plan_generated', timestamp: '2026-10-18T10:00:02.000Z' },
+        { role: 'assistant', content: 'Tasks updated:\n- #2 updated', timestamp: '2026-10-18T10:00:03.000Z' },
+      ],
+    }), 'sendConversationMessage');
+
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'x' }, h.deps);
+
+    expect(heard(h.actions).map((m) => m.type === 'planner_message' && m.content)).toEqual(['Let me check task 2.', 'Tasks updated:\n- #2 updated']);
+  });
+
+  it('speaks only the replies the socket lost', async () => {
+    const h = streaming(async (emit) => {
+      emit({ type: 'planner_message', content: 'Tasks updated:\n- #2 updated', timestamp: '2026-10-18T10:00:03.000Z' });
+      return {
+        tasks: [],
+        conversationHistory: [
+          { role: 'user', content: 'x' },
+          { role: 'assistant', content: 'Let me check task 2.', timestamp: '2026-10-18T10:00:01.000Z' },
+          { role: 'assistant', content: 'Tasks updated:\n- #2 updated', timestamp: '2026-10-18T10:00:03.000Z' },
+        ],
+      };
+    }, 'sendConversationMessage');
+
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'x' }, h.deps);
+
+    expect(heard(h.actions).map((m) => m.type === 'planner_message' && m.content)).toEqual(['Tasks updated:\n- #2 updated', 'Let me check task 2.']);
+  });
+
   it('backfills the last spoken reply, not a skill-load entry that follows it', async () => {
     const skill = { invokedBy: 'planner' as const, name: 'review-plan', source: 'global' as const, path: '~/s', content: 'BODY' };
     const h = streaming(async () => ({
@@ -811,7 +872,7 @@ describe('task control', () => {
   it('refreshes the plan after a task action so the pane matches the server', async () => {
     const h = harness();
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'retry' }, h.deps);
-    expect(types(h.actions)).toContain('planUpdated');
+    expect(types(h.actions)).toContain('planRefreshed');
   });
 
   it('a watched start subscribes before the request, so the task cannot start unobserved', async () => {
@@ -865,7 +926,7 @@ describe('task control', () => {
     }, h.deps);
 
     expect(h.api.updateTask).toHaveBeenCalledWith('s1', 't1', { thinkingEffort: 'high' });
-    expect(types(h.actions)).toContain('planUpdated');
+    expect(types(h.actions)).toContain('planRefreshed');
     expect(h.actions).toContainEqual({ type: 'notice', message: 'Effort updated.' });
   });
 
@@ -1205,7 +1266,7 @@ describe('catalogs and sessions', () => {
     const h = harness();
     await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
 
-    expect(h.actions).toContainEqual({ type: 'sessionStarted', sessionId: 's9', goal: 'Rate limiting' });
+    expect(h.actions).toContainEqual({ type: 'sessionLoaded', sessionId: 's9', goal: 'Rate limiting' });
     expect(h.actions).toContainEqual({ type: 'planUpdated', plan: { tasks: [{ id: 't1' }] }, sessionId: 's9' });
   });
 
@@ -2034,7 +2095,7 @@ describe('worktree isolation', () => {
     await runEffect({ type: 'resolveConflict', sessionId: 's1', taskId: 't2' }, h.deps);
 
     expect(resolveConflictAsTask).toHaveBeenCalledWith('s1', 't2');
-    expect(types(h.actions)).toEqual(['planUpdated', 'notice']);
+    expect(types(h.actions)).toEqual(['planRefreshed', 'notice']);
   });
 
   it('a refused action surfaces the daemon\'s reason', async () => {
@@ -2157,7 +2218,7 @@ describe('run settings effect (ADR-0030)', () => {
 
     expect(h.api.updateRunSettings).toHaveBeenCalledWith({ supervisorLevel: 'act' }, 's1');
     expect(h.actions).toContainEqual({ type: 'settingsLoaded', settings: answered });
-    expect(h.actions).toContainEqual(expect.objectContaining({ type: 'planUpdated', sessionId: 's1' }));
+    expect(h.actions).toContainEqual(expect.objectContaining({ type: 'planRefreshed', sessionId: 's1' }));
   });
 });
 
@@ -2242,7 +2303,7 @@ describe('following the session', () => {
 
     const order = types(h.actions);
     expect(h.actions).toContainEqual({ type: 'runSnapshot', view, sessionId: 's9' });
-    expect(order.indexOf('runSnapshot')).toBeGreaterThan(order.indexOf('sessionStarted'));
+    expect(order.indexOf('runSnapshot')).toBeGreaterThan(order.indexOf('sessionLoaded'));
     expect(order.indexOf('runSnapshot')).toBeLessThan(order.indexOf('planUpdated'));
   });
 

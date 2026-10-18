@@ -1,4 +1,4 @@
-import { blockingFailures, DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, fromTranscript, holdPrompt, taskStartedNotice, type RunnerId } from '@ordewell/core';
+import { blockingFailures, DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, NO_TURN, fromTranscript, holdPrompt, taskStartedNotice, type RunnerId } from '@ordewell/core';
 import { chatEditorRoomFor } from './geometry';
 import { SPINNER_CYCLE, chatScrollMax } from './layout';
 import { activeToken, composerCompletions, findCommand, parseRunnerCommand, parseSlash, runnerCommandFor, type ParsedCommand } from './slash';
@@ -54,6 +54,25 @@ function reduceAction(state: TuiState, action: Action): Step {
     case 'sessionStarted':
       return step(withRun({ ...state, sessionId: action.sessionId, goal: action.goal, taskView: null }, EMPTY_RUN));
 
+    // A loaded session is a different one: the turn the old one had out, the
+    // prompts held behind it and a stop armed against it are not this one's.
+    // (`sessionStarted` cannot reset them: `startConversation` dispatches it
+    // as its own turn begins.)
+    case 'sessionLoaded':
+      return step(withRun({
+        ...state,
+        sessionId: action.sessionId,
+        goal: action.goal,
+        taskView: null,
+        planner: 'idle',
+        turnGate: NO_TURN,
+        pendingApprovals: [],
+        queuedPrompts: EMPTY_HOLD,
+        stopArmed: false,
+        forceSendPending: null,
+        overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
+      }, EMPTY_RUN));
+
     // The daemon registers a session only once planning succeeds; when it does
     // not, holding on to the id would send every next message to a session the
     // server never had.
@@ -79,6 +98,10 @@ function reduceAction(state: TuiState, action: Action): Step {
     case 'chatRestored':
       if (stale(state, action.sessionId)) return step(state);
       return step({ ...state, conversation: fromTranscript(action.history, action.researchLog, action.plannerUsage, action.pendingTurns), scroll: 0 });
+
+    case 'planRefreshed':
+      if (stale(state, action.sessionId)) return step(state);
+      return step(showPlan(state, action.plan));
 
     case 'planUpdated': {
       if (stale(state, action.sessionId)) return step(state);

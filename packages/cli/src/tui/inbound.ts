@@ -297,8 +297,11 @@ export function inboundFor(api: object, dispatch: Dispatch, sessionId: string): 
 function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
   const delivered = new Delivered(256);
   const copies = new Copies(64);
-  // Reply texts already on screen, so a timestamp-less backfill of one is not spoken again.
+  // Replies already on screen. A backfill with a timestamp is told by its key:
+  // a fixed reply that repeats ("Tasks updated") is the same words, not the
+  // same reply. One without can only be told by its words.
   const shown = new WindowSet(64);
+  const shownTexts = new WindowSet(64);
   // Entries a redraw or a backfill already accounts for; the next matching copy is stale.
   const pending = new WindowSet(16);
 
@@ -336,7 +339,8 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
   };
 
   const showReply = (message: Extract<SessionMessage, { type: 'planner_message' }>): void => {
-    shown.add(message.content);
+    shown.add(replyKey(message.content, message.timestamp));
+    shownTexts.add(message.content);
     dispatch({ type: 'sessionMessage', message, sessionId });
   };
 
@@ -429,7 +433,7 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
       return (event) => receive('execution', id, event);
     },
     backfill: (content, timestamp, runs) => {
-      if (shown.has(content)) return;
+      if (timestamp ? shown.has(replyKey(content, timestamp)) : shownTexts.has(content)) return;
       const message = { type: 'planner_message' as const, content, timestamp: timestamp ?? new Date().toISOString(), ...(runs ? { runs } : {}) };
       showReply(message);
       // A copy still in flight — the REST answer can beat the socket frame —
@@ -437,7 +441,8 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
       if (timestamp) pending.add(replyKey(content, timestamp));
     },
     redrawn: (content, timestamp) => {
-      shown.add(content);
+      shown.add(replyKey(content, timestamp));
+      shownTexts.add(content);
       pending.add(replyKey(content, timestamp));
     },
     flush,
