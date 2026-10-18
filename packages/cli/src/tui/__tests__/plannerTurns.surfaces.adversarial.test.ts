@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createTask, serializeTask, type RunView } from '@ordewell/core';
 import { initialState, reduce, type Action } from '../reducer';
 import type { TuiState } from '../state';
 
@@ -54,9 +55,10 @@ describe('adversarial: leaving a session drops its turn gate and queue', () => {
 describe('adversarial: the run closed is the Session\'s to say (ADR-0013, ADR-0020)', () => {
   /** A run whose one task carries a conflict mark and whose handoff card is up. */
   const runWithCards = (): TuiState => {
-    const view = {
+    const task = serializeTask(createTask({ id: 't1', order: 1, title: 'Deploy', prompt: 'deploy', status: 'completed' }));
+    const view: RunView = {
       tasks: [{
-        id: 't1', order: 1, title: 'Deploy', status: 'completed', subtasks: [],
+        ...task,
         isolation: { state: 'conflict', branch: 'ordewell/r1/1-deploy', worktree: '/wt/1', repos: ['.'], conflictRepo: '.', conflictFiles: ['x.ts'] },
       }],
       runMerge: null,
