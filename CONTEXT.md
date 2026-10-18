@@ -72,7 +72,11 @@ are saved before any surface hears of them too: a synchronous one holds its
 `status_update` until the save, and an asynchronous one (`withSave`) saves
 before each `status_update` announced while it runs, and once more when it
 ends — a hold across its spawns and git work would stall every task's status
-and let an `execution_complete` it causes overtake the update held back. The
+and let an `execution_complete` it causes overtake the update held back. All
+but reschedule, the two ways past a dirty tree and clean up or discard have a
+command at the *Command seam*, which records them; the Session's asynchronous
+per-verb controls (Resume now, force start, Mark complete and not done,
+interrupt, approve the review, Merge all) call it as the user. The
 run going on when a planner turn lets its start hold go is saved before its
 statuses go out the same way. `loadPlan` persists the plan it adopts
 directly, and `generatePlan` through the ritual. Direct (non-planner) edits go one step further
@@ -2348,10 +2352,18 @@ paused.
 **Command seam** (`ExecutionCommands`, `Session.execute`) — the one core entry
 point every execution action reaches the scheduler through: `run_plan`,
 `run_task`, `stop_task`, `stop_run`, `retry_task`, `message_task`,
-`answer_approval`, `merge_all`, `skip_task` (ADR-0029, #91).
+`answer_approval`, `merge_all`, `skip_task` (ADR-0029, #91), and the user's
+own controls, refused to anyone else: `force_start`, `mark_complete`,
+`mark_not_done`, `interrupt_task`, a force send (`message_task` with `force`),
+`force_send_queued`, `remove_queued`, `cancel_resume`, `answer_checkpoint` and
+`approve_review`. Resume now is `retry_task` from `session` on a paused task.
 It checks who asked (user, planner turn, supervisor), the Supervisor level,
-plan approval and the loop guards, refuses with an actionable note, and records
-each action in the timeline with who asked. No planner tool reaches into
+plan approval and the loop guards, refuses with an actionable note worded for
+who asked (a model's tools, or the user's controls), and records each action
+in the timeline with who asked. A `CommandOutcome` carries a typed payload
+where a surface needs more than its line: a queued message's id, a force
+start's queued line, and the user's Merge all result with whether it closed
+the run. The user's Stop with nothing to stop is an ok no-op, recorded nowhere. No planner tool reaches into
 `TaskOrchestrator` directly, and the mandate (#23) plugs in here. Plan approval
 is the user's: executing the plan approves every task in it, and a task the
 user starts, retries or adds by hand is approved too (`approvedTasks` on the
@@ -2364,11 +2376,12 @@ turn asks for after editing that task in the same reply waits for the held
 edit to land, then goes through the seam again; an edit that never lands — the
 turn stopped, or the edit refused as it landed — drops the start, with a
 notice, rather than running it on the unedited plan. `merge_all` is refused in a
-user-started turn — the user presses Merge all — and allowed only to a
-supervisor at Act; so is `skip_task`, which needs a reason from anyone but the
-user. The user's Skip reaches the seam as the user.
-`answer_approval` denies or escalates, never allows: allowing would widen the
-mode the plan gave the task.
+user-started turn — the user presses Merge all — and allowed to the supervisor
+only at Act; so is `skip_task`, which needs a reason from anyone but the
+user. The user's Skip and Merge all reach the seam as the user.
+`answer_approval` denies or escalates, never allows, for anyone but the user:
+allowing would widen the mode the plan gave the task. The user's may allow,
+allow for the task, or deny with a note.
 *Avoid:* "command surface" — that is the set of user commands by name (slash
 commands and `ordewell` subcommands); *Avoid:* "action API".
 

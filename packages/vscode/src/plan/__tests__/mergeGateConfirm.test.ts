@@ -30,8 +30,7 @@ describe('starting a task past its merge gate (ADR-0020)', () => {
 
   it.each([
     ['forceStart', 'forceStartTask'],
-    // A gated Run is the same start past the gate as Force start, which the
-    // command seam has no command for.
+    // A gated Run is the same start past the gate as Force start.
     ['runTask', 'forceStartTask'],
   ] as const)('%s asks in a modal naming the unmerged work, and starts nothing on a cancel', async (command, method) => {
     showWarningMessage.mockResolvedValue(undefined);

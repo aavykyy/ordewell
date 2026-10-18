@@ -375,7 +375,8 @@ describe('Session with worktree isolation', () => {
       expect(session.isolationView()).toBeNull();
       const update = messages.filter((m) => m.type === 'status_update').at(-1);
       expect(update?.type === 'status_update' && update.tasks.every((t) => t.isolation === undefined)).toBe(true);
-      expect(messages.slice(-2)).toEqual([{ type: 'isolation_merge', result: { outcome: 'merged' } }, { type: 'run_closed' }]);
+      // The timeline's record of the user's Merge all follows what it did.
+      expect(messages.slice(-3).map((m) => (m.type === 'execution_action' ? m.record.command : m))).toEqual([{ type: 'isolation_merge', result: { outcome: 'merged' } }, { type: 'run_closed' }, 'merge_all']);
       await expect(session.cleanupRun()).rejects.toThrow('This plan has no isolated run');
     });
 
@@ -418,7 +419,7 @@ describe('Session with worktree isolation', () => {
       isolation.mergeResult = result;
 
       expect(await session.mergeRun()).toEqual(result);
-      expect(messages.at(-1)).toEqual({ type: 'isolation_merge', result });
+      expect(messages.filter((m) => m.type === 'isolation_merge').at(-1)).toEqual({ type: 'isolation_merge', result });
     });
 
     it('saves the run with its landing before anything merges, and again once it has landed', async () => {
@@ -625,7 +626,7 @@ describe('Session with worktree isolation', () => {
 });
 
 describe('Session isolation actions it refuses', () => {
-  it.each(['reviewRunDiff', 'mergeRun', 'cleanupRun', 'discardRun'] as const)('%s refuses a plan that never isolated, as a refused request', async (action) => {
+  it.each(['reviewRunDiff', 'cleanupRun', 'discardRun'] as const)('%s refuses a plan that never isolated, as a refused request', async (action) => {
     const { session, isolation, messages } = setup();
     session.loadPlan(plan([task('t1', 1)]), 'goal', '/repo', { persist: false });
 
@@ -636,6 +637,19 @@ describe('Session isolation actions it refuses', () => {
     expect(isolation.calls).toEqual([]);
     expect(messages.map((m) => m.type)).not.toContain('isolation_merge');
     expect(saves(session)).not.toHaveBeenCalled();
+  });
+
+  it('refuses Merge all of a plan that never isolated at the command seam, keeping the refusal in the timeline', async () => {
+    const { session, isolation, messages } = setup();
+    session.loadPlan(plan([task('t1', 1)]), 'goal', '/repo', { persist: false });
+
+    const refused = session.mergeRun();
+
+    await expect(refused).rejects.toThrow('This plan has no isolated run');
+    await expect(refused).rejects.toBeInstanceOf(TaskControlError);
+    expect(isolation.calls).toEqual([]);
+    expect(messages.map((m) => m.type)).not.toContain('isolation_merge');
+    expect(messages.at(-1)).toMatchObject({ type: 'execution_action', record: { command: 'merge_all', actor: 'user', outcome: 'refused' } });
   });
 
   it('says a run in the workspace root has no isolated run, before saying it still runs', async () => {
@@ -656,10 +670,7 @@ describe('Session isolation actions it refuses', () => {
     await session.executePlan();
     await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
 
-    const refused = session.mergeRun();
-
-    await expect(refused).rejects.toThrow('This plan has no isolated run');
-    await expect(refused).rejects.toBeInstanceOf(PlanEditError);
+    await expect(session.mergeRun()).rejects.toThrow('This plan has no isolated run');
   });
 
   it('refuses Merge all while an ops task runs in the checkout, and announces no merge', async () => {

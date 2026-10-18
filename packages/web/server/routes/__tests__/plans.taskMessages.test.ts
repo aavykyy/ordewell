@@ -30,7 +30,7 @@ function request(app: Hono, method: string, path: string, body?: unknown) {
 
 describe('talking to a structured task over the daemon (ADR-0018, M1)', () => {
   it('sends a message through the command seam as the user, answering its queued id', async () => {
-    const execute = vi.fn().mockResolvedValue({ ok: true, message: 'Sent to task #1 "Build".', id: 'msg-1' });
+    const execute = vi.fn().mockResolvedValue({ ok: true, message: 'Sent to task #1 "Build".', payload: { kind: 'message', id: 'msg-1' } });
     const res = await request(appFor({ execute }), 'POST', '/messages', { text: 'use Postgres' });
 
     expect(res.status).toBe(200);

@@ -543,7 +543,7 @@ describe('the command seam: message_task', () => {
     const env = await running();
 
     expect(await env.run({ command: 'message_task', task: 't1', text: 'also update the docs' })).toEqual({
-      ok: true, message: 'Sent to task #1 "Task t1". The runner reads it at its next step, or when its turn ends.', id: 'msg-1',
+      ok: true, message: 'Sent to task #1 "Task t1". The runner reads it at its next step, or when its turn ends.', payload: { kind: 'message', id: 'msg-1' },
     });
     expect(env.latest('t1').queued()).toEqual([{ id: 'msg-1', text: 'also update the docs' }]);
     expect(env.timeline().at(-1)!.text).toBe('The planner sent task #1 "Task t1" a message: "also update the docs"');
@@ -913,8 +913,8 @@ describe('the command seam\'s extension points', () => {
       scheduling: () => false, startsHeld: () => false, hasLiveWork: () => true, startsPending: () => false, admitStart: admission,
       running: () => true, maxParallel: () => 3, runBlocked: () => false,
       startWaits: () => [], waitingRequests: () => [],
-      runPlan: vi.fn(), joinRun: vi.fn(async () => ''), startTask: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), retryTask: vi.fn(), skipTask: vi.fn(), continueTask: vi.fn(), resumeNow: vi.fn(),
-      messageTask: vi.fn(), denyRequest: vi.fn(), mergeAll: vi.fn(), record: vi.fn(), guardTripped: vi.fn(), heldEdit: () => false, editedTasks: () => tasks, heldHandle: () => undefined, deferUntilLanded: vi.fn(), queuedNotRun: vi.fn(),
+      runPlan: vi.fn(), joinRun: vi.fn(async () => ''), startTask: vi.fn(), forceStart: vi.fn(), markComplete: vi.fn(), markNotDone: vi.fn(), interrupt: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), retryTask: vi.fn(), skipTask: vi.fn(), continueTask: vi.fn(), resumeNow: vi.fn(),
+      messageTask: vi.fn(), forceMessage: vi.fn(), forceSendQueued: vi.fn(), removeQueued: vi.fn(), cancelResume: vi.fn(), awaitsCheckpoint: () => false, answerCheckpoint: vi.fn(), approveReview: vi.fn(), answerRequest: vi.fn(), mergeAll: vi.fn(), record: vi.fn(), guardTripped: vi.fn(), heldEdit: () => false, editedTasks: () => tasks, heldHandle: () => undefined, deferUntilLanded: vi.fn(), queuedNotRun: vi.fn(),
     };
   }
 

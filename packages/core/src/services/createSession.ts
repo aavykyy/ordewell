@@ -672,6 +672,13 @@ export class Session {
     return this.commands.run(command, actor);
   }
 
+  /** A per-verb control through the seam as the user, its refusal thrown as the control's own error. */
+  private async userControl(command: ExecutionCommand): Promise<Extract<CommandOutcome, { ok: true }>> {
+    const outcome = await this.execute(command, { kind: 'user' });
+    if (!outcome.ok) throw new TaskControlError(outcome.message);
+    return outcome;
+  }
+
   private newTurnEffects(): TurnEffects {
     return new TurnEffects({
       replay: (command, actor, admission) => this.commands.replay(command, actor, admission),
@@ -738,6 +745,10 @@ export class Session {
       runPlan: (actor) => this.runWholePlan(runOrigin(actor)),
       joinRun: (approved) => this.joinRun(approved),
       startTask: (taskId, actor) => this.startOneTask(taskId, runOrigin(actor)),
+      forceStart: (taskId) => this.withSave(() => this.orchestrator.forceStartTask(taskId, 'user')),
+      markComplete: (taskId) => this.withSave(() => this.orchestrator.markTaskComplete(taskId)),
+      markNotDone: (taskId) => this.withSave(() => this.orchestrator.markTaskIncomplete(taskId)),
+      interrupt: (taskId) => this.withSave(() => this.orchestrator.interruptTask(taskId)),
       stopTask: (taskId) => this.cancelTask(taskId),
       stopRun: () => this.stopExecution(),
       retryTask: (taskId, actor) => this.restartTask(taskId, runOrigin(actor)),
@@ -745,8 +756,19 @@ export class Session {
       continueTask: (taskId, message, actor) => this.resumeTask(taskId, message, runOrigin(actor)),
       resumeNow: (taskId, message, actor) => this.withSave(() => this.orchestrator.resumeNow(taskId, runOrigin(actor), message)),
       messageTask: (taskId, text) => this.sendTaskMessage(taskId, text),
-      denyRequest: (requestId, note) => this.resolveApproval(requestId, { decision: 'deny', ...(note ? { note } : {}) }),
-      mergeAll: () => this.mergeRun(),
+      forceMessage: (taskId, text) => this.forceSendTaskMessage(taskId, text),
+      forceSendQueued: (taskId, id) => this.forceSendQueuedTaskMessage(taskId, id),
+      removeQueued: (taskId, id) => this.removeQueuedTaskMessage(taskId, id),
+      cancelResume: (taskId) => this.cancelScheduledResume(taskId),
+      awaitsCheckpoint: (taskId) => this.awaitsCheckpoint(taskId),
+      approveReview: async () => {
+        // The plan's own mark beside the record the seam keeps: planner starts read it (ADR-0029).
+        this.plan!.approved = true;
+        await this.withSave(() => this.orchestrator.approveReview('user'));
+      },
+      answerCheckpoint: (taskId, approve, reason) => (approve ? this.approveCheckpoint(taskId) : this.rejectCheckpoint(taskId, reason)),
+      answerRequest: (requestId, decision) => this.resolveApproval(requestId, decision),
+      mergeAll: () => this.mergeAll(),
       record: (record, text) => this.recordExecution(record, text),
       guardTripped: (trip) => this.supervision.guardTripped(trip),
       heldEdit: (taskId) => this.heldEdit(taskId),
@@ -1688,21 +1710,14 @@ export class Session {
   async approveReview(): Promise<LegacyPlanState> {
     if (!this.plan) throw new NoPlanError('review');
     const plan = this.plan;
-    // Signing off a review is the user's approval of every task in the plan, as
-    // executing it is (ADR-0029): without it the planner's starts refuse the
-    // tasks as added since approval.
-    plan.approved = true;
-    this.approve(flattenTasks(this.store.planTasks).map((t) => t.id));
-    await this.withSave(() => this.orchestrator.approveReview('user'));
+    await this.userControl({ command: 'approve_review' });
     return plan;
   }
 
   /** Answers the line saying the task waits for its dependencies, when it was queued behind them rather than started. */
   async forceStartTask(taskId: string): Promise<string | undefined> {
-    this.approveTask(taskId);
-    if (!this.plan) return;
-    this.requireTask(taskId);
-    return this.withSave(() => this.orchestrator.forceStartTask(taskId, 'user'));
+    const { payload } = await this.userControl({ command: 'force_start', task: taskId });
+    return payload?.kind === 'queued' ? payload.line : undefined;
   }
 
   private async startOneTask(taskId: string, origin: RunOrigin): Promise<void> {
@@ -1760,16 +1775,16 @@ export class Session {
   }
 
   async markTaskComplete(taskId: string): Promise<void> {
-    await this.withSave(() => this.orchestrator.markTaskComplete(taskId));
+    await this.userControl({ command: 'mark_complete', task: taskId });
   }
 
   async markTaskIncomplete(taskId: string): Promise<void> {
-    await this.withSave(() => this.orchestrator.markTaskIncomplete(taskId));
+    await this.userControl({ command: 'mark_not_done', task: taskId });
   }
 
   /** Resume a task paused on a usage limit now, once the user says it has reset; see {@link TaskOrchestrator.resumeNow}. */
   async resumeNow(taskId: string): Promise<void> {
-    await this.withSave(() => this.orchestrator.resumeNow(taskId, 'user'));
+    await this.userControl({ command: 'retry_task', task: taskId, from: 'session' });
   }
 
   /**
@@ -1871,7 +1886,7 @@ export class Session {
   }
 
   async interruptTask(taskId: string): Promise<void> {
-    await this.withSave(() => this.orchestrator.interruptTask(taskId));
+    await this.userControl({ command: 'interrupt_task', task: taskId });
   }
 
   /** Replay a run a dirty tree blocked, after stashing the tracked changes. */
@@ -1921,22 +1936,29 @@ export class Session {
     return this.runs.reviewDiff();
   }
 
+  /** The user's Merge all, through the seam: the merge result, merged or stopped, for the Merge all card. */
+  async mergeRun(): Promise<IsolationMergeResult> {
+    const outcome = await this.execute({ command: 'merge_all' }, { kind: 'user' });
+    if (outcome.payload?.kind === 'merge') return outcome.payload.result;
+    if (!outcome.ok) throw new TaskControlError(outcome.message);
+    throw new Error('Merge all answered without its result.');
+  }
+
   /**
    * "Merge all": each repo's integration branch into whatever the user has
    * checked out there — every repo, or none if any cannot take it. The one
-   * irreversible step of isolated execution. Automatic gate merging and the
-   * supervisor's merge_all share this path. During a run it merges what has
-   * landed so far,
-   * which is what opens a merge gate (ADR-0020); it waits for no ops task,
-   * and refuses while one runs.
+   * irreversible step of isolated execution. The user's Merge all and the
+   * supervisor's merge_all reach it through the seam; automatic gate merging
+   * shares the scheduler's half of it. During a run it merges what has landed
+   * so far, which is what opens a merge gate (ADR-0020); it waits for no ops
+   * task, and refuses while one runs.
    */
-  async mergeRun(): Promise<IsolationMergeResult> {
+  private async mergeAll(): Promise<{ result: IsolationMergeResult; closed: boolean }> {
     // Ahead of the ops refusal: with no run there is nothing to merge once the ops task ends either.
     this.runs.requireRun();
     const result = await this.withSave(() => this.orchestrator.mergeRun());
     this.broadcast({ type: 'isolation_merge', result });
-    this.announceClosed();
-    return result;
+    return { result, closed: this.announceClosed() };
   }
 
   /**
@@ -1945,10 +1967,11 @@ export class Session {
    * instead of reading the merge result, which cannot tell a merge that ended
    * the run from one that only opened a gate (ADR-0020).
    */
-  private announceClosed(): void {
-    if (!this.closedUnannounced) return;
+  private announceClosed(): boolean {
+    if (!this.closedUnannounced) return false;
     this.closedUnannounced = false;
     this.broadcast({ type: 'run_closed' });
+    return true;
   }
 
   /** Remove the run's worktrees and task branches; keep its integration branch to review or merge. */

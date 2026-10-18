@@ -30,7 +30,16 @@ export type ExecutionCommandName =
   | 'message_task'
   | 'answer_approval'
   | 'merge_all'
-  | 'skip_task';
+  | 'skip_task'
+  | 'force_start'
+  | 'mark_complete'
+  | 'mark_not_done'
+  | 'interrupt_task'
+  | 'force_send_queued'
+  | 'remove_queued'
+  | 'cancel_resume'
+  | 'answer_checkpoint'
+  | 'approve_review';
 
 /**
  * One call at the command seam as the timeline keeps it: what was asked, by

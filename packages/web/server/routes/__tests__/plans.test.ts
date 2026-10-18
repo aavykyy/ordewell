@@ -141,7 +141,7 @@ describe('task control routes', () => {
     expect(execute).toHaveBeenCalledWith(command, { kind: 'user' });
   });
 
-  it('keeps force-start on the Session method: the seam has no command for a start past a merge gate', async () => {
+  it('force-starts through the Session method, which answers the queued line', async () => {
     const forceStartTask = vi.fn().mockResolvedValue(undefined);
     const execute = vi.fn();
     const pool = fakePool({ session: vi.fn().mockReturnValue({ forceStartTask, execute }) } as never);
