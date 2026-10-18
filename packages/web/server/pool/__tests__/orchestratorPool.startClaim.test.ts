@@ -92,7 +92,7 @@ describe('task starts and Stop sent to the daemon at once', () => {
     const [run, stop] = await Promise.all([post(id, 'tasks/t1/run'), post(id, 'stop')]);
 
     expect(stop.status).toBe(200);
-    expect(await stop.json()).toEqual({ status: 'stopped' });
+    expect(await stop.json()).toMatchObject({ status: 'stopped', message: expect.stringContaining('Stopped the run') });
     expect(run.status).toBe(400);
     expect(await run.json()).toMatchObject({ error: STOPPED_BEFORE_START, code: 'refused' });
     await vi.waitFor(() => expect(session.isExecuting).toBe(false));
@@ -118,7 +118,7 @@ describe('task starts and Stop sent to the daemon at once', () => {
     const stop = await post(id, 'stop');
 
     expect(stop.status).toBe(200);
-    expect(await stop.json()).toEqual({ status: 'stopped' });
+    expect(await stop.json()).toEqual({ status: 'stopped', message: 'Nothing is running: there is nothing to stop.' });
     expect(spawnedIds()).toEqual([]);
   });
 });

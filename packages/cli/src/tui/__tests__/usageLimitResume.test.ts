@@ -124,7 +124,7 @@ describe('a task paused on a usage limit in the TUI', () => {
     expect(resumeNow).toHaveBeenCalledWith('s1', 't1');
   });
 
-  it('asks the daemon to cancel the resume, and says what happened', async () => {
+  it('asks the daemon to cancel the resume, leaving what it says to the timeline', async () => {
     const cancelResume = vi.fn().mockResolvedValue({ cancelled: true });
     const dispatch = vi.fn();
     const deps: EffectDeps = {
@@ -135,6 +135,6 @@ describe('a task paused on a usage limit in the TUI', () => {
     // Only the request is pinned; the plan refresh after it has no daemon to reach.
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'cancel-resume' }, deps).catch(() => undefined);
     expect(cancelResume).toHaveBeenCalledWith('s1', 't1');
-    expect(dispatch).toHaveBeenCalledWith({ type: 'notice', message: 'Resume cancelled: retry the task once the limit resets.' });
+    expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'notice' }));
   });
 });

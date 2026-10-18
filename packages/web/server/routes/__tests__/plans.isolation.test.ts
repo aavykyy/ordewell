@@ -67,19 +67,25 @@ describe('GET /:sessionId/tasks/:taskId/merge-gate (ADR-0020)', () => {
   });
 });
 
+/** What the seam answers the user's Merge all: the result in its payload, refused when git stopped it. */
+const merged = (result: { outcome: string }) => result.outcome === 'merged'
+  ? { ok: true, message: 'Merged.', payload: { kind: 'merge', result, closed: false } }
+  : { ok: false, outcome: 'refused', message: 'Merge all stopped.', payload: { kind: 'merge', result, closed: false } };
+
 describe('POST /:sessionId/isolation/merge', () => {
   it.each(['merged', 'conflict', 'failed'] as const)('reports a %s merge as an outcome, not an HTTP error', async (outcome) => {
-    const mergeRun = vi.fn().mockResolvedValue({ outcome });
-    const app = appFor({ mergeRun });
+    const execute = vi.fn().mockResolvedValue(merged({ outcome }));
+    const app = appFor({ execute });
 
     const res = await post(app, 'isolation/merge');
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ outcome });
+    expect(execute).toHaveBeenCalledWith({ command: 'merge_all' }, { kind: 'user' });
   });
 
   it('passes on which repo stopped the merge and its conflicted files', async () => {
-    const app = appFor({ mergeRun: vi.fn().mockResolvedValue({ outcome: 'conflict', repo: '.', files: ['shared.txt'] }) });
+    const app = appFor({ execute: vi.fn().mockResolvedValue(merged({ outcome: 'conflict', repo: '.', files: ['shared.txt'] } as never)) });
 
     const res = await post(app, 'isolation/merge');
 
@@ -92,7 +98,7 @@ describe('POST /:sessionId/isolation/merge', () => {
       { repo: 'web', reason: 'uncommitted-changes', files: ['index.html'] },
       { repo: 'infra', reason: 'merge-in-progress', files: [] },
     ];
-    const app = appFor({ mergeRun: vi.fn().mockResolvedValue({ outcome: 'blocked', blocked }) });
+    const app = appFor({ execute: vi.fn().mockResolvedValue(merged({ outcome: 'blocked', blocked } as never)) });
 
     const res = await post(app, 'isolation/merge');
 
@@ -102,15 +108,18 @@ describe('POST /:sessionId/isolation/merge', () => {
 
   it('answers a Merge all that stopped part-way with the repos that stay merged', async () => {
     const result = { outcome: 'conflict', repo: 'web', files: ['web.txt'], landed: ['api'] };
-    const app = appFor({ mergeRun: vi.fn().mockResolvedValue(result) });
+    const app = appFor({ execute: vi.fn().mockResolvedValue(merged(result)) });
 
     expect(await (await post(app, 'isolation/merge')).json()).toEqual(result);
   });
 
-  it('is a 400 while the run is still running', async () => {
-    const app = appFor({ mergeRun: vi.fn().mockRejectedValue(new PlanEditError('The run is still running — stop it first')) });
+  it('is a 400, with the reason, when the seam refused before merging anything', async () => {
+    const app = appFor({ execute: vi.fn().mockResolvedValue({ ok: false, outcome: 'refused', message: 'The run is still running — stop it first' }) });
 
-    expect((await post(app, 'isolation/merge')).status).toBe(400);
+    const res = await post(app, 'isolation/merge');
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'The run is still running — stop it first', code: 'refused' });
   });
 });
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
-import { PlanEditError, SessionNotFoundError, TaskControlError } from '@ordewell/core';
+import { PlanEditError, SessionNotFoundError } from '@ordewell/core';
 import type { OrchestratorPool } from '../../pool/orchestratorPool';
 
 describe('task editing routes', () => {
@@ -9,9 +9,7 @@ describe('task editing routes', () => {
     updateTask: ReturnType<typeof vi.fn>;
     addTask: ReturnType<typeof vi.fn>;
     removeTask: ReturnType<typeof vi.fn>;
-    markTaskIncomplete: ReturnType<typeof vi.fn>;
-    cancelScheduledResume: ReturnType<typeof vi.fn>;
-    resumeNow: ReturnType<typeof vi.fn>;
+    execute: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
@@ -19,9 +17,7 @@ describe('task editing routes', () => {
       updateTask: vi.fn().mockReturnValue({ tasks: [] }),
       addTask: vi.fn().mockResolvedValue({ tasks: [] }),
       removeTask: vi.fn().mockReturnValue({ tasks: [] }),
-      markTaskIncomplete: vi.fn().mockResolvedValue(undefined),
-      cancelScheduledResume: vi.fn().mockReturnValue(true),
-      resumeNow: vi.fn().mockResolvedValue(undefined),
+      execute: vi.fn().mockResolvedValue({ ok: true, message: 'Done.' }),
     };
     const pool = { session: vi.fn().mockReturnValue(session) } as unknown as OrchestratorPool;
     const { plansRoute } = await import('../../routes/plans');
@@ -121,15 +117,16 @@ describe('task editing routes', () => {
   });
 
   describe('POST /tasks/:taskId/uncomplete', () => {
-    it('un-marks the task', async () => {
+    it('un-marks the task through the command seam as the user, answering its line', async () => {
       const res = await app.request('/api/plans/s1/tasks/t1/uncomplete', { method: 'POST' });
 
       expect(res.status).toBe(200);
-      expect(session.markTaskIncomplete).toHaveBeenCalledWith('t1');
+      expect(await res.json()).toEqual({ ok: true, message: 'Done.' });
+      expect(session.execute).toHaveBeenCalledWith({ command: 'mark_not_done', task: 't1' }, { kind: 'user' });
     });
 
     it('404s when the session is gone', async () => {
-      session.markTaskIncomplete.mockRejectedValue(new SessionNotFoundError());
+      session.execute.mockRejectedValue(new SessionNotFoundError());
 
       const res = await app.request('/api/plans/s1/tasks/t1/uncomplete', { method: 'POST' });
 
@@ -137,45 +134,51 @@ describe('task editing routes', () => {
     });
 
     it('survives a non-Error throw rather than crashing the route', async () => {
-      session.markTaskIncomplete.mockRejectedValue('boom');
+      session.execute.mockRejectedValue('boom');
 
       const res = await app.request('/api/plans/s1/tasks/t1/uncomplete', { method: 'POST' });
 
-      expect(res.status).toBe(404);
-      expect((await res.json() as { error: string }).error).toBe('Not found');
+      expect(res.status).toBe(500);
+      expect((await res.json() as { error: string }).error).toBe('Internal error');
     });
   });
 
   describe('POST /tasks/:taskId/resume/cancel', () => {
-    it('cancels the resume of a task paused on a usage limit, and says whether there was one', async () => {
+    it('cancels the resume of a task paused on a usage limit through the seam, answering its line', async () => {
       const res = await app.request('/api/plans/s1/tasks/t1/resume/cancel', { method: 'POST' });
 
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ cancelled: true });
-      expect(session.cancelScheduledResume).toHaveBeenCalledWith('t1');
+      expect(await res.json()).toEqual({ cancelled: true, message: 'Done.' });
+      expect(session.execute).toHaveBeenCalledWith({ command: 'cancel_resume', task: 't1' }, { kind: 'user' });
+    });
 
-      session.cancelScheduledResume.mockReturnValue(false);
-      expect(await (await app.request('/api/plans/s1/tasks/t1/resume/cancel', { method: 'POST' })).json()).toEqual({ cancelled: false });
+    it('refuses, with the reason, a task that has no resume scheduled', async () => {
+      session.execute.mockResolvedValue({ ok: false, outcome: 'refused', message: 'Task #1 "Fix" has no resume scheduled.' });
+
+      const res = await app.request('/api/plans/s1/tasks/t1/resume/cancel', { method: 'POST' });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'Task #1 "Fix" has no resume scheduled.', code: 'refused' });
     });
 
     it('404s when the session is gone', async () => {
-      session.cancelScheduledResume.mockImplementation(() => { throw new SessionNotFoundError(); });
+      session.execute.mockRejectedValue(new SessionNotFoundError());
 
       expect((await app.request('/api/plans/s1/tasks/t1/resume/cancel', { method: 'POST' })).status).toBe(404);
     });
   });
 
   describe('POST /tasks/:taskId/resume/now', () => {
-    it('resumes a task paused on a usage limit now', async () => {
+    it('resumes a task paused on a usage limit now, as the user\'s retry from its saved session', async () => {
       const res = await app.request('/api/plans/s1/tasks/t1/resume/now', { method: 'POST' });
 
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ ok: true });
-      expect(session.resumeNow).toHaveBeenCalledWith('t1');
+      expect(await res.json()).toEqual({ ok: true, message: 'Done.' });
+      expect(session.execute).toHaveBeenCalledWith({ command: 'retry_task', task: 't1', from: 'session' }, { kind: 'user' });
     });
 
     it('refuses with the reason when the task cannot be resumed', async () => {
-      session.resumeNow.mockRejectedValue(new TaskControlError('Task "Fix" is not paused on a usage limit.'));
+      session.execute.mockResolvedValue({ ok: false, outcome: 'refused', message: 'Task "Fix" is not paused on a usage limit.' });
 
       const res = await app.request('/api/plans/s1/tasks/t1/resume/now', { method: 'POST' });
 

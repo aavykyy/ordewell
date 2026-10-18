@@ -675,10 +675,14 @@ describe('execution', () => {
     expect(types(h.actions)).toEqual([]);
   });
 
-  it('stops a run', async () => {
+  // The seam keeps its own line of a Stop in the timeline, and the run's end
+  // is announced by the stream: a notice here would say it a third time, and
+  // untruly when nothing was running.
+  it('stops a run, leaving what it says to the timeline', async () => {
     const h = harness();
     await runEffect({ type: 'stopExecution', sessionId: 's1' }, h.deps);
     expect(h.api.stopExecution).toHaveBeenCalledWith('s1');
+    expect(h.actions).toEqual([]);
   });
 
   it('cancels a planning turn', async () => {
@@ -2143,12 +2147,22 @@ describe('a structured task\'s log, messages and interrupt', () => {
     expect(h.actions).toEqual([]);
   });
 
-  it('says when a taken-back message had already gone out', async () => {
-    const h = harness({ removeQueuedTaskMessage: vi.fn().mockResolvedValue({ removed: false }) } as Partial<OrdewellApi>);
+  it('takes a queued message back and leaves what it says to the timeline', async () => {
+    const h = harness();
 
     await runEffect({ type: 'removeTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm1' }, h.deps);
 
-    expect(messageOf(h.actions, 'notice')).toMatch(/already delivered/);
+    expect(h.api.removeQueuedTaskMessage).toHaveBeenCalledWith('s1', 't1', 'm1');
+    expect(h.actions).toEqual([]);
+  });
+
+  it('shows the daemon\'s words when a message to take back had already gone out', async () => {
+    const refusal = new DaemonError('That message to task #1 "Build" was already delivered or taken back.', 400, 'refused');
+    const h = harness({ removeQueuedTaskMessage: vi.fn().mockRejectedValue(refusal) } as Partial<OrdewellApi>);
+
+    await runEffect({ type: 'removeTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm1' }, h.deps);
+
+    expect(h.actions).toEqual([{ type: 'failed', message: refusal.message, code: 'refused' }]);
   });
 
   it('continues a finished task, holding the execution stream open when asked to watch (ADR-0018, K1)', async () => {
@@ -2176,14 +2190,14 @@ describe('a structured task\'s log, messages and interrupt', () => {
     expect(h.deps.api.streamExecution).not.toHaveBeenCalled();
   });
 
-  it('interrupts the task and says so', async () => {
+  it('interrupts the task, leaving what it says to the timeline', async () => {
     const interruptTask = vi.fn().mockResolvedValue({ ok: true });
     const h = harness({ interruptTask } as Partial<OrdewellApi>);
 
     await runEffect({ type: 'interruptTask', sessionId: 's1', taskId: 't1' }, h.deps);
 
     expect(interruptTask).toHaveBeenCalledWith('s1', 't1');
-    expect(messageOf(h.actions, 'notice')).toMatch(/Interrupting/);
+    expect(h.actions).toEqual([]);
   });
 
   it('answers a runner\'s request with the whole decision', async () => {

@@ -39,7 +39,8 @@ async function expectNoBodies(res: Response): Promise<void> {
 
 describe('plan routes keep skill bodies off the wire', () => {
   const session = {
-    approveReview: async () => planWithBodies(),
+    planState: planWithBodies(),
+    execute: async () => ({ ok: true, message: 'Approved the plan.' }),
     requestMerge: async () => planWithBodies(),
     requestSplit: async () => planWithBodies(),
     resolveConflictAsTask: async () => planWithBodies(),

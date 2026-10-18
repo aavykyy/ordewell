@@ -212,9 +212,10 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       await withExecutionStream(deps, effect.sessionId, () => api.executePlan(effect.sessionId));
       return;
 
+    // The seam keeps its own line of a Stop in the timeline and the stream
+    // announces the run's end, so this adds none (ADR-0029).
     case 'stopExecution':
       await api.stopExecution(effect.sessionId);
-      dispatch({ type: 'notice', message: 'Execution stopped.' });
       return;
 
     case 'cancelPlanning': {
@@ -238,8 +239,8 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     case 'taskAction': {
       const { sessionId, taskId, action } = effect;
       if (action === 'cancel-resume') {
-        const { cancelled } = await api.cancelResume(sessionId, taskId);
-        dispatch({ type: 'notice', message: cancelled ? 'Resume cancelled: retry the task once the limit resets.' : 'That task had no resume scheduled.' });
+        // A task with no resume scheduled is refused in the daemon's words.
+        await api.cancelResume(sessionId, taskId);
         await refreshPlan(deps, sessionId);
         return;
       }
@@ -356,11 +357,10 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       return;
     }
 
-    case 'removeTaskMessage': {
-      const { removed } = await api.removeQueuedTaskMessage(effect.sessionId, effect.taskId, effect.messageId);
-      if (!removed) dispatch({ type: 'notice', message: 'That message was already delivered to the task.' });
+    // One already delivered is refused in the daemon's words.
+    case 'removeTaskMessage':
+      await api.removeQueuedTaskMessage(effect.sessionId, effect.taskId, effect.messageId);
       return;
-    }
 
     // The task log shows the forced message at the head of the queue, then
     // the interrupt, then the turn it opens; nothing to dispatch here.
@@ -368,15 +368,12 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       await api.forceSendTaskMessage(effect.sessionId, effect.taskId, effect.text);
       return;
 
-    case 'forceSendQueuedTaskMessage': {
-      const { sent } = await api.forceSendQueuedTaskMessage(effect.sessionId, effect.taskId, effect.messageId);
-      if (!sent) dispatch({ type: 'notice', message: 'That message has already reached the runner.' });
+    case 'forceSendQueuedTaskMessage':
+      await api.forceSendQueuedTaskMessage(effect.sessionId, effect.taskId, effect.messageId);
       return;
-    }
 
     case 'interruptTask':
       await api.interruptTask(effect.sessionId, effect.taskId);
-      dispatch({ type: 'notice', message: 'Interrupting the task…' });
       return;
 
     case 'setModel': {

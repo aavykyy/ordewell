@@ -14,15 +14,15 @@ const PAST_TENSE: Record<Action, string> = {
 };
 
 /**
- * Resolve `--session-id` (falling back to the last planned session) and turn a
- * task identifier into a real task ID. Shared by every task-scoped command.
+ * Resolve `--session-id` (falling back to the last planned session) and the
+ * task as the user typed it, with the client to send it by. The reference is
+ * resolved by whoever acts on it: the command seam, for a control.
  */
-export async function withResolvedTask(
+async function sessionAndRef(
   subArgs: string[],
   usage: string,
   injectedApi: ApiClient | undefined,
-  run: (api: ApiClient, sessionId: string, taskId: string, plan: PlanBody) => Promise<void>,
-): Promise<void> {
+): Promise<{ api: ApiClient; sessionId: string; ref: string; workspace: string }> {
   const workspace = flag(subArgs, '--workspace') || process.cwd();
   let sessionId = flag(subArgs, '--session-id');
   if (!sessionId) {
@@ -34,13 +34,41 @@ export async function withResolvedTask(
     sessionId = last.sessionId;
   }
 
-  const identifier = positionals(subArgs)[0];
-  if (!identifier) {
+  const ref = positionals(subArgs)[0];
+  if (!ref) {
     console.error(usage);
     process.exit(1);
   }
 
   const api = injectedApi || new ApiClient(await ensureDaemon(resolvePort(subArgs)));
+  return { api, sessionId, ref, workspace };
+}
+
+/**
+ * A task-scoped control: the task is sent as typed (an id, "#order" or title)
+ * and the daemon's command seam resolves it, so there is no plan to fetch first.
+ */
+export async function withTaskRef(
+  subArgs: string[],
+  usage: string,
+  injectedApi: ApiClient | undefined,
+  run: (api: ApiClient, sessionId: string, ref: string) => Promise<void>,
+): Promise<void> {
+  const { api, sessionId, ref } = await sessionAndRef(subArgs, usage, injectedApi);
+  await run(api, sessionId, ref);
+}
+
+/**
+ * A plan edit that names a task: not a control, so no seam resolves the name
+ * and the task's id is looked up in the plan here.
+ */
+export async function withResolvedTask(
+  subArgs: string[],
+  usage: string,
+  injectedApi: ApiClient | undefined,
+  run: (api: ApiClient, sessionId: string, taskId: string, plan: PlanBody) => Promise<void>,
+): Promise<void> {
+  const { api, sessionId, ref, workspace } = await sessionAndRef(subArgs, usage, injectedApi);
 
   let plan;
   try {
@@ -50,9 +78,9 @@ export async function withResolvedTask(
     process.exit(1);
   }
 
-  const taskId = resolveTaskId(plan, identifier);
+  const taskId = resolveTaskId(plan, ref);
   if (!taskId) {
-    console.error(`Task not found: "${identifier}"`);
+    console.error(`Task not found: "${ref}"`);
     process.exit(1);
   }
 
@@ -66,11 +94,11 @@ const PASSES_GATE: ReadonlySet<Action> = new Set<Action>(['run', 'force-start'])
  * A start that passes a merge gate (ADR-0020) asks first, naming the work the
  * task would act without; `--yes` is the scriptable way to have asked already.
  */
-async function confirmPastGate(subArgs: string[], api: ApiClient, sessionId: string, taskId: string, confirm: (question: string) => Promise<boolean>): Promise<void> {
+async function confirmPastGate(subArgs: string[], api: ApiClient, sessionId: string, ref: string, confirm: (question: string) => Promise<boolean>): Promise<void> {
   if (hasFlag(subArgs, '--yes')) return;
   // A daemon that cannot say (an older one, or a session it does not hold) is
   // left to answer the start itself.
-  const unmerged = await api.getMergeGate(sessionId, taskId).catch(() => []);
+  const unmerged = await api.getMergeGate(sessionId, ref).catch(() => []);
   if (unmerged.length === 0) return;
   const question = `${pastGateConfirmation(unmerged.map((d) => titledTaskRef(d)))} Start it anyway?`;
   if (!(await confirm(question))) fail('Not started: nothing was changed. Pass --yes to start it without a prompt.');
@@ -79,15 +107,15 @@ async function confirmPastGate(subArgs: string[], api: ApiClient, sessionId: str
 function makeHandler(action: Action, command: string = action) {
   const yes = PASSES_GATE.has(action) ? ' [--yes]' : '';
   return async function handle(subArgs: string[], injectedApi?: ApiClient, confirm: (question: string) => Promise<boolean> = askYesNo): Promise<void> {
-    await withResolvedTask(
+    await withTaskRef(
       subArgs,
       `Usage: ordewell ${command} <task-id-or-order> [--session-id <id>] [--workspace /path]${yes}`,
       injectedApi,
-      async (api, sessionId, taskId) => {
-        if (PASSES_GATE.has(action)) await confirmPastGate(subArgs, api, sessionId, taskId, confirm);
+      async (api, sessionId, ref) => {
+        if (PASSES_GATE.has(action)) await confirmPastGate(subArgs, api, sessionId, ref, confirm);
         try {
-          const { queued } = await api.taskControl(sessionId, taskId, action);
-          console.log(queued ?? PAST_TENSE[action]);
+          const { message, queued } = await api.taskControl(sessionId, ref, action);
+          console.log(message ?? queued ?? PAST_TENSE[action]);
         } catch (err) {
           console.error(`Failed to ${action} task: ${(err as Error).message}`);
           process.exit(1);
@@ -109,10 +137,10 @@ export async function handleContinue(subArgs: string[], injectedApi?: ApiClient)
     console.error(usage);
     process.exit(1);
   }
-  await withResolvedTask(subArgs, usage, injectedApi, async (api, sessionId, taskId) => {
+  await withTaskRef(subArgs, usage, injectedApi, async (api, sessionId, ref) => {
     try {
-      await api.continueTask(sessionId, taskId, message);
-      console.log('Task continued.');
+      const sent = await api.continueTask(sessionId, ref, message);
+      console.log(sent.message ?? 'Task continued.');
     } catch (err) {
       console.error(`Failed to continue task: ${(err as Error).message}`);
       process.exit(1);
@@ -137,11 +165,12 @@ export async function handleCheckpoint(subArgs: string[], injectedApi?: ApiClien
     console.error(`Approving takes no note: reject with a reason to tell the task something.\n${usage}`);
     process.exit(1);
   }
-  await withResolvedTask(subArgs, usage, injectedApi, async (api, sessionId, taskId) => {
+  await withTaskRef(subArgs, usage, injectedApi, async (api, sessionId, ref) => {
     try {
-      if (answer === 'approve') await api.approveTaskCheckpoint(sessionId, taskId);
-      else await api.rejectTaskCheckpoint(sessionId, taskId, reason || undefined);
-      console.log(answer === 'approve' ? 'Checkpoint approved.' : 'Checkpoint rejected.');
+      const sent = answer === 'approve'
+        ? await api.approveTaskCheckpoint(sessionId, ref)
+        : await api.rejectTaskCheckpoint(sessionId, ref, reason || undefined);
+      console.log(sent.message ?? (answer === 'approve' ? 'Checkpoint approved.' : 'Checkpoint rejected.'));
     } catch (err) {
       console.error(`Failed to ${answer} checkpoint: ${(err as Error).message}`);
       process.exit(1);

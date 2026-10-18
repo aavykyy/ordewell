@@ -48,13 +48,13 @@ export function approvalsRoute(pool: OrchestratorPool) {
 
     const answer = answerOf(await c.req.json().catch(() => null));
     const decided = toApprovalDecision(answer);
-    // A runner request the user denies goes through the command seam, so their
-    // action is kept in the timeline (ADR-0029). An allow must reach the
-    // approval path: the seam never allows, and the user's own Allow is legitimate.
+    // A runner request goes through the command seam as the user's answer, so
+    // their action is kept in the timeline (ADR-0029). The planner's own
+    // prompt is no execution action and is answered directly.
     const request = pool.outstandingApprovals(sessionId).find((pending) => pending.id === approvalId)?.request;
-    if (decided.decision === 'deny' && request?.taskId) {
+    if (request?.taskId) {
       const outcome = await pool.session(sessionId).execute(
-        { command: 'answer_approval', task: request.taskId, approval: approvalId, answer: 'deny', ...(decided.note ? { note: decided.note } : {}) },
+        { command: 'answer_approval', task: request.taskId, approval: approvalId, answer: decided.decision, ...(decided.decision === 'deny' && decided.note ? { note: decided.note } : {}) },
         { kind: 'user' },
       );
       if (!outcome.ok) return refuse(c, 400, outcome.message, 'refused');

@@ -297,6 +297,13 @@ VS Code sends each of its controls — task cards, the plan bar, the command
 palette and the task-log panel, a Deny with a note included — through these
 commands as the user, and shows a refusal as the seam worded it; the chat writes
 no note of its own for them, so the timeline's line is the only one.
+The daemon's routes for these controls are thin wrappers over `Session.execute`
+as the user: each answers the command's line as `message` and a refusal as the
+400 that carries it, so the CLI prints the same words the other surfaces show.
+A task named in a route is resolved by the seam, so the CLI sends a reference as
+typed (an id, `#order` or title) and reads no plan first. The TUI writes no
+notice beside the timeline's line for a control and shows a refusal as the
+daemon worded it.
 
 ### Loop guards (Act)
 
@@ -541,3 +548,4 @@ until #30 exists.
 - 2026-10-18 — the user's own controls get commands at the seam: force start, Mark complete and Mark not done, interrupt, force sending or taking back a task message, cancelling a scheduled resume, a checkpoint answer and approving the review, refused to anyone but the user; the user's `answer_approval` may allow; a typed payload carries the full Merge all result and a force start's queued line; the user's Stop with nothing running is a quiet no-op; refusals are worded per actor.
 - 2026-10-18 — VS Code sends every control, the task-log panel's answers to a runner's request included, through the seam as the user, and the chat stops writing notices that contradicted the timeline's line.
 - 2026-10-18 — a hung turn's end is announced once, when the conversation is taken back, and nothing it streams or settles afterwards reaches a surface; a run update is told again after a turn that did not land an answer.
+- 2026-10-18 — the daemon, the CLI and the TUI send every control through the seam as the user: the daemon's routes answer each command's line and carry a refusal as the seam worded it, the CLI sends a task reference as typed and prints that line, and the TUI drops the notices that repeated the timeline's.
