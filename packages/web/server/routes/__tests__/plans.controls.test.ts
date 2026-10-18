@@ -121,7 +121,9 @@ describe('a control from the daemon lands one execution_action line, worded by t
   it('cancelling a scheduled resume answers the seam\'s line, and refuses a task with none', async () => {
     const h = start([task('t1', 1), task('t2', 2)]);
     await h.session.execute({ command: 'force_start', task: 't1' }, { kind: 'user' });
-    const limit = "You've hit your session limit · resets 8:10pm (UTC)";
+    const reset = new Date(Date.now() + 3_600_000);
+    const time = `${reset.getUTCHours() % 12 || 12}:${String(reset.getUTCMinutes()).padStart(2, '0')}${reset.getUTCHours() >= 12 ? 'pm' : 'am'}`;
+    const limit = `You've hit your session limit · resets ${time} (UTC)`;
     h.latest('t1').emitEvent({ type: 'error', message: limit });
     h.latest('t1').emitOutput(`${limit}\n`);
     h.latest('t1').emitTurnEnd('failed');

@@ -6,7 +6,6 @@ import type { IRunner } from '../../interfaces/IRunner';
 import type { SessionMessage } from '../SessionMessage';
 import type { ExecutionActor } from '../../models/Execution';
 import type { ExecutionCommand } from '../ExecutionCommands';
-import { hitLimit } from './supervisorTestKit';
 
 /**
  * The user's own controls at the command seam (ADR-0029): each is checked,
@@ -246,7 +245,12 @@ describe('cancel_resume', () => {
     const env = setup();
     env.load([task('t1', 1), task('t2', 2)]);
     await env.run({ command: 'force_start', task: 't1' });
-    hitLimit(env.latest('t1'));
+    const reset = new Date(Date.now() + 3_600_000);
+    const time = `${reset.getUTCHours() % 12 || 12}:${String(reset.getUTCMinutes()).padStart(2, '0')}${reset.getUTCHours() >= 12 ? 'pm' : 'am'}`;
+    const limit = `You've hit your session limit · resets ${time} (UTC)`;
+    env.latest('t1').emitEvent({ type: 'error', message: limit });
+    env.latest('t1').emitOutput(`${limit}\n`);
+    env.latest('t1').emitTurnEnd('failed');
     await vi.waitFor(() => expect(taskOf(env.session, 't1')!.resumeAt).toBeDefined());
     env.messages.length = 0;
 
