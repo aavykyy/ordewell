@@ -1259,7 +1259,7 @@ describe('one intake for submit_plan and edit_plan', () => {
     const unknown = await viaEdit([{ op: 'add', task: { title: 'Docs', subtasks: [sub('Child', { dependencies: ['zzz'] })] } }]);
     const byRef = await viaEdit([{ op: 'add', task: { title: 'Docs', subtasks: [sub('Child', { dependencies: ['#1'] })] } }]);
 
-    expect(errorsOf(submit.answer).map((e) => e.message)).toEqual(['subtask "Child" of "Task a" depends on "zzz", which is not a task in the plan']);
+    expect(errorsOf(submit.answer).map((e) => e.message)).toEqual(['subtask "Child" of "Task a": Unknown dependency "zzz"']);
     expect(errorsOf(unknown.answer)).toEqual([{ op: 1, kind: 'add', message: 'unknown dependencies of subtask "Child" of "Docs": zzz (task "zzz" not found)' }]);
     expect(byRef.answer.isError).toBe(false);
     expect(byRef.tasks[2].subtasks[0].dependencies).toEqual([byRef.tasks[0].id]);

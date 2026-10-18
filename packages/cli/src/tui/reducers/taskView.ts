@@ -1,7 +1,7 @@
 import { EMPTY_TASK_LOG, reduceTaskLog, replayTaskLog, resumeLabel, runnerToolSubject, truncateCheckpointSummary, type ApprovalDecision, type TaskLogEvent } from '@ordewell/core';
 import { commit } from '../editor';
 import type { Key } from '../keys';
-import { continuesTask, findTask, queuedTarget, resumesTask, waitingApproval, waitingCheckpoint, type TaskLogState, type TuiState } from '../state';
+import { continuesTask, findTask, refFor, queuedTarget, resumesTask, waitingApproval, waitingCheckpoint, type TaskLogState, type TuiState } from '../state';
 import { say } from '../transcript';
 import { step, type Step, type Action } from './shared';
 
@@ -107,9 +107,9 @@ export function taskLogArrived(state: TuiState, action: Extract<Action, { type: 
 export function announceApprovals(state: TuiState, action: Extract<Action, { type: 'taskLog' }>): TuiState {
   if (state.taskView?.taskId === action.taskId) return state;
   const task = findTask(state.tasks, action.taskId);
-  const way = task ? `tab to the plan, select task ${task.order} and press enter (or /open ${task.order})` : 'tab to the plan, select it and press enter';
+  const way = task ? `tab to the plan, select task ${refFor(state, task)} and press enter (or /open ${refFor(state, task)})` : 'tab to the plan, select it and press enter';
   const spoken = action.events.reduce((s, event) => (event.type === 'approval_requested' && !event.decided
-    ? say(s, 'system', `Task ${task?.order ?? '?'} waits for approval: ${runnerToolSubject(event.tool, event.args)}: ${way}, then ctrl-y allows or ctrl-g denies`)
+    ? say(s, 'system', `Task ${task ? refFor(state, task) : '?'} waits for approval: ${runnerToolSubject(event.tool, event.args)}: ${way}, then ctrl-y allows or ctrl-g denies`)
     : s), state);
   return spoken !== state ? { ...spoken, scroll: state.scroll } : spoken;
 }
@@ -120,8 +120,8 @@ export function announceApprovals(state: TuiState, action: Extract<Action, { typ
  */
 export function announceCheckpoint(state: TuiState, action: Extract<Action, { type: 'taskCheckpoint' }>): TuiState {
   const task = findTask(state.tasks, action.taskId) ?? state.tasks.find((t) => t.title === action.title);
-  const label = task ? `Task ${task.order}` : action.title;
-  const where = task ? `tab to the plan, select task ${task.order} and press enter (or /open ${task.order}) to answer` : 'tab to the plan, select it and press enter to answer';
+  const label = task ? `Task ${refFor(state, task)}` : action.title;
+  const where = task ? `tab to the plan, select task ${refFor(state, task)} and press enter (or /open ${refFor(state, task)}) to answer` : 'tab to the plan, select it and press enter to answer';
   const spoken = say(state, 'system', `${label} asks: ${truncateCheckpointSummary(action.summary)}: ${where}`);
   return { ...spoken, scroll: state.scroll };
 }

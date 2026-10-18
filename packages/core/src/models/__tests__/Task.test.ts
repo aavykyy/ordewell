@@ -333,6 +333,19 @@ describe('keepExecutionState', () => {
   const done = (id: string, order: number) => createTask({ id, order, title: id.toUpperCase(), prompt: `do ${id}`, status: 'completed' });
   const todo = (id: string, order: number) => createTask({ id, order, title: id.toUpperCase(), prompt: `do ${id}` });
 
+  it('keeps the reason for a skipped subtask when the planner restates it', () => {
+    const current = [{ ...todo('parent', 1), subtasks: [
+      { ...todo('child', 1), status: 'skipped' as const, skipReason: 'The test host is unavailable' },
+    ] }];
+    const rewrite = [{ ...todo('parent', 1), subtasks: [
+      { ...todo('child', 1), skipReason: 'invented by the planner' },
+    ] }];
+
+    const result = keepExecutionState(current, rewrite);
+
+    expect(result[0].subtasks[0]).toMatchObject({ status: 'skipped', skipReason: 'The test host is unavailable' });
+  });
+
   it('keeps a settled task exactly as it stands wherever the rewrite names it', () => {
     const running = createTask({ id: 'b', order: 2, title: 'B', prompt: 'do b', status: 'in_progress' });
     const held = createTask({ id: 'c', order: 3, title: 'C', prompt: 'do c', status: 'awaiting_user' });

@@ -1407,11 +1407,12 @@ bare order. One module
 both renders labels (`taskOrderLabel`, `taskRef`, `titledTaskRef`) and resolves
 references against the plan tree (`resolveTaskRef`) — every planner op and read
 tool, the per-turn plan block (which lists subtasks under their dotted labels),
-execution commands and the CLI read the same grammar. A batch handle is the one
+execution commands, the CLI and TUI commands read the same grammar. The CLI
+and TUI accept a unique id prefix as a fallback. A batch handle is the one
 reference `applyTaskOps` adds on top, and order labels and titles in a batch
 resolve against the plan as it stood before the batch began.
 *Avoid:* "#N" for a subtask, resolving an order against a flattened task list;
-`TaskRef` (the structural dependency-edit type below) for a written reference.
+`TaskRef` (the structural dependency-edit type) for a written reference.
 
 **Runner set** — the ordered `runners: RunnerId[]` a plan may execute across,
 carried on *the plan* and the session. Every task carries an `assignedRunner`
@@ -1465,30 +1466,35 @@ runner the plan's tasks run on. Both surfaces route through it
 (`PUT /api/plans/:s/tasks/:t` dispatches an `assignedRunner` in the body to it
 rather than writing the field), so no surface owns a second copy of the clamp.
 
+**Plan tree (`PlanTree`)** — the shared placement and dependency rules over a
+plan's task tree, including a surface's structural projection. `walkPlan` and
+`taskPlacement` return the task's siblings, ancestors, parent and dotted path;
+`subtreeIds` includes the task and all its descendants. Removing a task detaches
+dependencies on every id in its subtree and releases every descendant runner.
+`dependentsOf` names the surviving tasks whose edges that removal detaches.
+`TaskRefs` renders and resolves references using the same traversal.
+
 **Dependency edit (`dependencyCandidates` + `canSetDependencies` +
-`Session.setTaskDependencies`)** — a hand-edited dependency list is the one task
-edit that can leave a plan unschedulable, so like the runner it is not a field
-write. The rule is that dependencies point *backwards in display order*, the same
-invariant `applyTaskOps`' post-pass owns (its sole owner — `order` itself
-is not user-editable, since independent tasks fan out and position was never the
-schedule); with that, a cycle cannot be expressed and no cycle check is needed at
-the edit site. On the planner path that post-pass *repairs* rather than refuses:
-a batch declares dependencies and `repairOrder` re-slots whatever the graph now
-demands, keeping unrelated tasks in their relative order and every running or
-completed task in the exact slot it already holds — a batch that could only be
-satisfied by shifting one of those is what gets refused, naming it. The `reorder`
-op therefore survives only as deliberate re-prioritising of *independent* tasks;
-nobody has to re-declare a whole plan to move one dependency.
-`dependencyCandidates` is what a picker offers (earlier tasks only; omit the id
-for a task that does not exist yet, since a new task lands last) and
-`canSetDependencies` is what the API refuses — one rule, two readings of it, so a
-picker can never offer an edit the server rejects. Both are typed structurally
-(`TaskRef`) rather than over `Task`, because the TUI projects tasks into its own
-`TaskView`: a `Task`-only signature is what would have forced a second copy of
-the rule into the reducer. `Session.setTaskDependencies` throws rather than
-returning null so the surface can say *why* (`PUT` maps it to 400, VS Code to a
-warning, and both then re-show the accepted list — a refused edit must not leave
-an optimistic checkbox on screen).
+`Session.setTaskDependencies`)** — dependencies may name any task in the plan
+except the task itself, its ancestors and its descendants, provided no cycle
+forms. The planner and user follow this same rule, across branches and at every
+depth. `PlanTree` owns the target restrictions and cycle check; direct edits,
+planner batches and whole-plan intake all read them. A planner batch is checked
+on its final graph, so a later op may finish an earlier rewire. Its post-pass
+`repairOrder` places top-level dependencies before their dependents, keeping
+unrelated tasks in relative order and running or completed tasks in their slots;
+a batch that requires moving a pinned task is refused, naming it. Display order
+is not a requirement on a user's dependency edit.
+
+`dependencyCandidates` takes the whole tree and offers earlier siblings of the
+target (all top-level tasks when the id is omitted for a new task). Pickers may
+offer this narrower list, but keep every existing dependency when a user changes
+it, including those outside the offered list. `canSetDependencies` checks the
+whole tree, so an edit the planner could write is not refused because a picker
+cannot offer it. Both helpers are structural so the TUI's `TaskView` follows the
+same rules. `Session.setTaskDependencies` throws rather than returning null so a
+surface can say why (`PUT` maps it to 400, VS Code to a warning, and both re-show
+the accepted list after a refusal).
 
 **Hand-added task (`Session.addTask`, done by *PlanEditor*)** — async, and for the same reason
 `setTaskRunner` is: a task with no model or mode is not a lighter task but an
@@ -1531,8 +1537,9 @@ state, never swapped in for it — the same rule `applyTaskOps` enforces, for
 the path that has no ops to check. A *settled* task (`completed`,
 `in_progress`, `awaiting_user`) is kept exactly as it stands where the rewrite
 names it and put back beside its old neighbour where the rewrite leaves it out;
-every other task keeps its status, and one the rewrite adds starts `pending`. A
-planner restates tasks, it never witnessed one run, so no status is ever read
+every other task keeps its status and skip reason, and one the rewrite adds
+starts `pending`. A planner restates tasks, it never witnessed one run, so no
+status is ever read
 from a rewrite. Without this, a planner that answered "add a task" with the
 full plan echoed finished tasks as `pending` and they ran again.
 *Avoid:* "regenerating" the plan for an edit — only `generatePlan` and the
@@ -1571,7 +1578,8 @@ runner, the prompt, the slice inherited from a parent, the mode from read-only
 or not) is written there once — and reports what the planner may not set (a
 mode, read-only on a manual task) for the route to warn about or refuse.
 `checkPlanInvariants` holds the resulting tasks to the rules a plan keeps at
-every depth: unique ids, dependencies that exist, no cycle, a runner the plan may
+every depth: unique ids, dependencies that exist and name neither the task itself
+nor its ancestors or descendants, no cycle, a runner the plan may
 use, an AFK task with no user steps, a manual task HITL, and ops only on a
 top-level AI task. `validatePlanTasks` calls both on a whole plan; `applyTaskOps`
 calls `plannedTask` for each task an op makes and `checkPlanInvariants` on the

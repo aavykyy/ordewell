@@ -17,10 +17,10 @@ export function titledRefs(ids: readonly string[], tasks: readonly Named[]): str
  * do. Named rather than counted: the removal rewrites their dependency lists,
  * and a bare "Remove task?" would hide that.
  */
-export function dependentsNotice(dependents: readonly { order: number; title: string }[]): string | null {
+export function dependentsNotice(dependents: readonly { id?: string; order: number; title: string }[], tasks: readonly Named[] = []): string | null {
   if (dependents.length === 0) return null;
   const subject = dependents.length === 1 ? '1 task depends' : `${dependents.length} tasks depend`;
-  return `${subject} on it and will lose that dependency: ${dependents.map((t) => titledTaskRef(t)).join(', ')}.`;
+  return `${subject} on it and will lose that dependency: ${dependents.map((t) => (t.id ? titledTaskRefOf(tasks, t.id) : undefined) ?? titledTaskRef(t)).join(', ')}.`;
 }
 
 /**

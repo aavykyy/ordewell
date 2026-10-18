@@ -1,6 +1,7 @@
 import { serializeTask, type RunInput, type RunTask, type RunTaskStatus, type RunView, type SerializedTask, type SerializedTaskStatus, type SurfacePlan, type SurfacePlanState, type SurfaceTask } from './SessionMessage';
 import type { IsolationHandoff } from '../interfaces/IWorktreeIsolation';
 import { rejoinPlanTree } from '../models/Task';
+import { walkPlan } from './PlanTree';
 
 export const EMPTY_RUN: RunView = { tasks: [], runMerge: null, handoff: null, mergeResult: null };
 
@@ -20,9 +21,7 @@ function split({ verdict, idleSince, isolation, checkpoint, queued, continuable,
  * plan, absent meaning none; status-only fields as the stream last said.
  */
 function refresh(previous: readonly RunTask[], tasks: readonly SerializedTask[]): RunTask[] {
-  const held = new Map<string, RunTask>();
-  const index = (list: readonly RunTask[]): void => list.forEach((t) => { held.set(t.id, t); index(t.subtasks); });
-  index(previous);
+  const held = new Map([...walkPlan(previous)].map(({ task }) => [task.id, task]));
   const fold = ({ subtasks, ...task }: SerializedTask): RunTask => {
     const was = held.get(task.id);
     const { checkpoint, ...status } = was ? split(was).status : {};

@@ -6,7 +6,7 @@ import type { SkillSource } from '../services/SkillsService';
 import type { SupervisionMemorySnapshot } from '../services/LoopGuards';
 import type { SupervisorSnapshot } from '../services/Supervisor';
 import { SKILL_NAME_PATTERN } from '../conversation/skillTokens';
-import { taskOrderLabel } from '../services/TaskRefs';
+import { subtreeIds, walkPlan } from '../services/PlanTree';
 
 export interface UserStep {
   order: number;
@@ -778,7 +778,7 @@ export function createEmptyPlan(): LegacyPlanState {
 }
 
 export function flattenTasks(tasks: readonly Task[]): Task[] {
-  return tasks.flatMap((t) => [t, ...flattenTasks(t.subtasks ?? [])]);
+  return [...walkPlan(tasks)].map(({ task }) => task);
 }
 
 /**
@@ -818,14 +818,7 @@ export interface TaskWithParent {
 }
 
 export function flattenTasksWithParents(tasks: readonly Task[]): TaskWithParent[] {
-  const rows: TaskWithParent[] = [];
-  const walk = (t: Task, parent: Task | null, parentLabel?: string) => {
-    const label = taskOrderLabel(t, parent ? { order: parent.order, label: parentLabel } : undefined);
-    rows.push({ task: t, parent, label, ref: `#${label}` });
-    for (const sub of t.subtasks ?? []) walk(sub, t, label);
-  };
-  for (const t of tasks) walk(t, null);
-  return rows;
+  return [...walkPlan(tasks)].map(({ task, parent, label }) => ({ task, parent: parent ?? null, label, ref: `#${label}` }));
 }
 
 export function addTaskToPlan(tasks: readonly Task[], partial: Partial<Task>): Task[] {
@@ -839,14 +832,15 @@ export function addTaskToPlan(tasks: readonly Task[], partial: Partial<Task>): T
 }
 
 export function removeTaskFromPlan(tasks: readonly Task[], taskId: string): Task[] {
-  const result = tasks
-    .filter((t) => t.id !== taskId)
+  const removed = subtreeIds(tasks, taskId);
+  const prune = (level: readonly Task[]): Task[] => level
+    .filter((t) => !removed.has(t.id))
     .map((t) => ({
       ...t,
-      dependencies: t.dependencies.filter((depId) => depId !== taskId),
-      subtasks: removeTaskFromPlan(t.subtasks, taskId),
+      dependencies: t.dependencies.filter((depId) => !removed.has(depId)),
+      subtasks: prune(t.subtasks),
     }));
-  return renumberTasks(result);
+  return renumberTasks(prune(tasks));
 }
 
 export function updateTaskInPlan(tasks: readonly Task[], taskId: string, changes: Partial<Task>): Task[] {
@@ -948,6 +942,7 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
       return {
         ...t,
         status: prior?.status ?? 'pending',
+        skipReason: prior?.skipReason,
         verdict: prior?.verdict,
         outputSummary: prior?.outputSummary,
         runnerSessionId: prior?.runnerSessionId,

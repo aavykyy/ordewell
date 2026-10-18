@@ -88,7 +88,7 @@ function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Recor
 }
 
 describe('PlanEditor.updateTask', () => {
-  it('edits a subtask\'s dependencies, model and ops flag, checking dependencies among its siblings', async () => {
+  it('edits a subtask\'s dependencies, model and ops flag, checking dependencies across the plan', async () => {
     const withSubtasks = tasks();
     withSubtasks[1].subtasks = [
       createTask({ id: 's1', order: 1, title: 'Compile', prompt: 'compile', assignedRunner: 'claude-code' }),
@@ -100,7 +100,7 @@ describe('PlanEditor.updateTask', () => {
     expect(task('s2')!.dependencies).toEqual(['s1']);
     expect(task('s2')!.assignedModel?.modelId).toBe('claude-haiku-4-5');
 
-    await expect(editor.updateTask('s1', { dependencies: ['s2'] })).rejects.toThrow('comes after it');
+    await expect(editor.updateTask('s1', { dependencies: ['s2'] })).rejects.toThrow(/cycle/i);
     await expect(editor.updateTask('s1', { ops: true })).rejects.toThrow('subtask');
   });
 
@@ -178,7 +178,7 @@ describe('PlanEditor.updateTask', () => {
 
     const refused = editor.updateTask('t1', { dependencies: ['t2'] });
 
-    await expect(refused).rejects.toThrow(/comes after it/);
+    await expect(refused).rejects.toThrow(/cycle/i);
     await expect(refused).rejects.toBeInstanceOf(PlanEditError);
     expect(mutate).not.toHaveBeenCalled();
     expect(scheduler.tick).not.toHaveBeenCalled();
@@ -247,7 +247,8 @@ describe('PlanEditor.setTaskDependencies', () => {
     await editor.setTaskDependencies('t2', []);
     expect(task('t2')!.dependencies).toEqual([]);
 
-    await expect(editor.setTaskDependencies('t1', ['t2'])).rejects.toThrow(/comes after it/);
+    await editor.setTaskDependencies('t1', ['t2']);
+    expect(task('t1')!.dependencies).toEqual(['t2']);
   });
 
   it('answers null without a plan', async () => {

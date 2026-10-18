@@ -1,5 +1,5 @@
 import { codexSandboxNotice } from '@ordewell/core';
-import { dependentsNotice, dependentsOf, pastGateConfirmation, titledRefs } from '@ordewell/core/plan-utils';
+import { dependentsNotice, dependentsOf, pastGateConfirmation, titledRefs, resolveTaskRef, walkPlan } from '@ordewell/core/plan-utils';
 import { findTask, refFor, titledRefFor, type ModelView, type TaskView, type TuiState } from '../state';
 import { assignedModelFor, effortsForTask, modesForTask, runnerAccepts } from '../taskAssignment';
 import { picker, pickerItemsFor } from './pickers';
@@ -27,7 +27,7 @@ export function confirmRemoveTask(state: TuiState, task: TaskView): Step {
     overlay: {
       kind: 'confirm',
       title: `Remove ${titledRefFor(state, task)}?`,
-      message: dependentsNotice(dependentsOf(state.tasks, task.id)) ?? 'This cannot be undone.',
+      message: dependentsNotice(dependentsOf(state.tasks, task.id), state.tasks) ?? 'This cannot be undone.',
       action: { kind: 'remove-task', taskId: task.id },
     },
   });
@@ -72,16 +72,16 @@ export function confirmForceStartPastGate(state: TuiState, task: TaskView): Step
 export function openTaskDepsPicker(state: TuiState, task: TaskView): Step {
   const action = { kind: 'set-task-deps' as const, taskId: task.id };
   const items = pickerItemsFor(state, action);
-  if (items.length === 0) return fail(state, `Nothing runs before ${refFor(state, task)}, so it has no possible dependencies.`);
+  if (items.length === 0) return fail(state, `No earlier siblings to offer as dependencies for ${refFor(state, task)}.`);
   return step({
     ...state,
     overlay: {
       kind: 'picker',
       picker: picker(`Depends on · ${titledRefFor(state, task)}`, items, action, {
-        hint: 'Only tasks earlier in the plan can be dependencies.',
+        hint: 'Offers earlier siblings; existing dependencies are kept.',
         multi: true,
         filterable: true,
-        chosen: task.dependencies.filter((id) => items.some((i) => i.id === id)),
+        chosen: task.dependencies,
       }),
     },
   });
@@ -356,13 +356,9 @@ export function taskCommand(
 
 /** Users refer to tasks by the number shown in the plan pane as often as by id. */
 export function resolveTaskId(state: TuiState, token: string): string | null {
-  const byId = findTask(state.tasks, token);
-  if (byId) return byId.id;
-
-  const order = Number(token);
-  if (Number.isInteger(order)) {
-    const byOrder = state.tasks.find((t) => t.order === order);
-    if (byOrder) return byOrder.id;
-  }
-  return null;
+  const found = resolveTaskRef(state.tasks, token);
+  if (found) return found.id;
+  const prefix = token.trim();
+  const matches = prefix ? [...walkPlan(state.tasks)].map(({ task }) => task).filter((task) => task.id.startsWith(prefix)) : [];
+  return matches.length === 1 ? matches[0].id : null;
 }
