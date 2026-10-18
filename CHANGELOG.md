@@ -8,6 +8,13 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.10.8] - 2026-10-18
+
+### Fixed
+
+- **The VS Code extension now ships its changelog**, including release notes
+  for the saved-session loading fix.
+
 ## [0.10.7] - 2026-10-18
 
 ### Fixed
