@@ -10,6 +10,7 @@ export {
   pausedOnLimit,
   migratePlanState,
   resolveTaskRef,
+  resolveUserTaskRef,
   taskOrderLabel,
   taskRef,
   taskRefOf,

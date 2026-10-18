@@ -35,12 +35,28 @@ function deps(refusal: { ok: false; outcome: 'refused'; message: string }) {
 describe('adversarial: a refused start keeps the run it did not replace', () => {
   beforeEach(() => showWarningMessage.mockReset());
 
-  // ADVERSARIAL FINDING (vscode): a Run task the seam refuses (dependencies unmet, already running, a user task) still wipes the run view first — PlanManager.ts:530 calls `chatProvider.clearIsolationHandoff()` BEFORE `execute`, and forceStartPastGate (PlanManager.ts:484) does the same for force start. A refusal replaces no run, so the webview loses the handoff card and every isolation mark the Session still holds (a `run_closed` fold with no `run_closed`), and the TUI — whose task actions dispatch no clear — disagrees with VS Code on the same control. Expected: the clear happens only after the seam answers ok (a start the seam accepted), or not at all — the Session's own broadcasts and `run_closed` are the word both surfaces fold.
-  it.skip('a Run task the seam refuses leaves the handoff and marks alone', async () => {
+  it('a Run task the seam refuses leaves the handoff and marks alone', async () => {
     const { d, chatProvider } = deps({ ok: false, outcome: 'refused', message: 'task #2 "Deploy" depends on task #1 "Fix", which failed. Retry it first.' });
 
     await handleSystemCommand('runTask', 'ops', d);
 
     expect(chatProvider.clearIsolationHandoff).not.toHaveBeenCalled();
+  });
+
+  it('a Force start the seam refuses leaves them alone too', async () => {
+    const { d, chatProvider } = deps({ ok: false, outcome: 'refused', message: 'Task "Deploy" is running.' });
+
+    await handleSystemCommand('forceStart', 'ops', d);
+
+    expect(chatProvider.clearIsolationHandoff).not.toHaveBeenCalled();
+  });
+
+  it('a Run task the seam accepts clears the cards its run left up', async () => {
+    const { d, session, chatProvider } = deps({ ok: false, outcome: 'refused', message: 'unused' });
+    session.execute.mockResolvedValue({ ok: true, outcome: 'done', message: 'Started task #2 "Deploy".' });
+
+    await handleSystemCommand('runTask', 'ops', d);
+
+    expect(chatProvider.clearIsolationHandoff).toHaveBeenCalledTimes(1);
   });
 });

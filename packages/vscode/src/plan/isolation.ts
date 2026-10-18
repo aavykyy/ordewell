@@ -89,9 +89,9 @@ export async function handleIsolationAction(
         return;
       }
     }
-    // The Session broadcasts a fresh status_update as the run record changes,
-    // but the persisted plan state is the source the dock reads; re-show it so
-    // the card reflects the action without waiting for the next tick.
+    // The cards follow the Session's broadcasts through the run view; the
+    // plan is re-shown and saved for what the action changed in it, such as a
+    // task's status, without waiting for the next tick.
     if (deps.session.planState) deps.setCurrentPlan(deps.session.planState);
     deps.chatProvider.showPlan(deps.getCurrentPlan());
     deps.persistState();

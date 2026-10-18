@@ -69,8 +69,8 @@ describe('GET /:sessionId/tasks/:taskId/merge-gate (ADR-0020)', () => {
 
 /** What the seam answers the user's Merge all: the result in its payload, refused when git stopped it. */
 const merged = (result: { outcome: string }) => result.outcome === 'merged'
-  ? { ok: true, message: 'Merged.', payload: { kind: 'merge', result, closed: false } }
-  : { ok: false, outcome: 'refused', message: 'Merge all stopped.', payload: { kind: 'merge', result, closed: false } };
+  ? { ok: true, message: 'Merged.', payload: { kind: 'merge', result } }
+  : { ok: false, outcome: 'refused', message: 'Merge all stopped.', payload: { kind: 'merge', result } };
 
 describe('POST /:sessionId/isolation/merge', () => {
   it.each(['merged', 'conflict', 'failed'] as const)('reports a %s merge as an outcome, not an HTTP error', async (outcome) => {

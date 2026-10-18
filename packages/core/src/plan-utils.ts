@@ -17,7 +17,7 @@ export * from './conversation';
 // The task row view is pure for the same reason: the webview draws a task card
 // from the facts the TUI paints its plan row from.
 export * from './taskRow';
-export { taskOrderLabel, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, resolveTaskRef } from './services/TaskRefs';
+export { taskOrderLabel, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, resolveTaskRef, resolveUserTaskRef } from './services/TaskRefs';
 export type { RefTask } from './services/TaskRefs';
 // The one runner default, shared with the webview so its initial state cannot
 // drift from the plans the host builds.

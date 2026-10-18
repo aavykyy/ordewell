@@ -3,6 +3,7 @@ import type { ResearchProgress } from '../../models/Task';
 import type { TurnRun } from '../AiService';
 import { opensWithJsonObject } from '../JsonExtractor';
 import { sameMessage } from '../../utils/sameMessage';
+import { joinRuns } from '../settleReply';
 
 /**
  * One run of a planner turn's reply text (see `AgentEvent`). Its `text` is its
@@ -26,12 +27,8 @@ interface Run extends TurnRun {
  */
 function failureAfterReply(tail: readonly Run[], error: string): string {
   const repeated = sameMessage(tail.at(-1)?.text ?? '', error);
-  const before = joined(repeated ? tail.slice(0, -1) : tail).trim();
+  const before = joinRuns(repeated ? tail.slice(0, -1) : tail).trim();
   return before && opensWithJsonObject(before) !== true ? `${before}\n\n${error}` : error;
-}
-
-function joined(runs: readonly Run[]): string {
-  return runs.map((run) => run.text).filter((text) => text).join('\n\n');
 }
 
 /**
@@ -67,7 +64,7 @@ export class TurnReply {
   }
 
   get text(): string {
-    return joined(this.started);
+    return joinRuns(this.started);
   }
 
   /** The reply's runs in the order they began; one a planner tool call followed is narration. */

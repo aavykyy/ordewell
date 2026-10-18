@@ -1712,8 +1712,8 @@ export class Session {
   }
 
   /** Keep a task paused on a usage limit from resuming on its own; see {@link TaskOrchestrator.cancelScheduledResume}. */
-  private cancelScheduledResume(taskId: string): boolean {
-    return this.saved(() => this.orchestrator.cancelScheduledResume(taskId));
+  private cancelScheduledResume(taskId: string): Promise<boolean> {
+    return this.withSave(() => this.orchestrator.cancelScheduledResume(taskId));
   }
 
   /**
@@ -1858,12 +1858,13 @@ export class Session {
    * so far, which is what opens a merge gate (ADR-0020); it waits for no ops
    * task, and refuses while one runs.
    */
-  private async mergeAll(): Promise<{ result: IsolationMergeResult; closed: boolean }> {
+  private async mergeAll(): Promise<IsolationMergeResult> {
     // Ahead of the ops refusal: with no run there is nothing to merge once the ops task ends either.
     this.runs.requireRun();
     const result = await this.withSave(() => this.orchestrator.mergeRun());
     this.broadcast({ type: 'isolation_merge', result });
-    return { result, closed: this.announceClosed() };
+    this.announceClosed();
+    return result;
   }
 
   /**
@@ -1872,11 +1873,10 @@ export class Session {
    * instead of reading the merge result, which cannot tell a merge that ended
    * the run from one that only opened a gate (ADR-0020).
    */
-  private announceClosed(): boolean {
-    if (!this.closedUnannounced) return false;
+  private announceClosed(): void {
+    if (!this.closedUnannounced) return;
     this.closedUnannounced = false;
     this.broadcast({ type: 'run_closed' });
-    return true;
   }
 
   /** Remove the run's worktrees and task branches; keep its integration branch to review or merge. */

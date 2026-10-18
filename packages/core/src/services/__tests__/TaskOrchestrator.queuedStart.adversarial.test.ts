@@ -55,8 +55,7 @@ function editWhileOpening(env: ReturnType<typeof setup>, edit: () => void): void
 }
 
 describe('adversarial: a queued force start re-reads the task as it opens its run', () => {
-  // ADVERSARIAL FINDING (start rule): `holdsQueued` tests the wait kinds `queued`, `completing`, `merging` and `start-hold`, but by the time it runs the task has been taken out of `queuedStarts`, so an unmet dependency reads as `dependencies` — which is not in the set — and the start is let through (TaskOrchestrator.ts:1917). Expected: the start goes back to the queue, as ADR-0034 says ("never past dependencies still under way").
-  it.skip('goes back to the queue when a dependency becomes unmet while its run opens', async () => {
+  it('goes back to the queue when a dependency becomes unmet while its run opens', async () => {
     const env = setup();
     env.orchestrator.loadPlan([change('a', 1), change('c', 2, { dependencies: ['a'] })]);
     // No run yet: the force start is queued behind a.
@@ -72,8 +71,7 @@ describe('adversarial: a queued force start re-reads the task as it opens its ru
     expect(env.orchestrator.startsPending).toBe(true);
   });
 
-  // ADVERSARIAL FINDING (start rule): a start made now is not judged again after its run opens — `startForced` re-checks only the merge (`refuseOpsDuringMerge`) and, for a queued start, `holdsQueued` — so an edit that adds an unfinished dependency while the run opens is run past, against ADR-0034's "never past dependencies still under way" (TaskOrchestrator.ts:1840). Expected: the start is re-judged and does not start past the new dependency.
-  it.skip('a start made now does not start past a dependency an edit adds while its run opens', async () => {
+  it('a start made now does not start past a dependency an edit adds while its run opens', async () => {
     const env = setup();
     env.orchestrator.loadPlan([change('c', 2)]);
     env.store.add({ id: 'b', order: 1, title: 'Task b', prompt: 'do b', type: 'ai' });

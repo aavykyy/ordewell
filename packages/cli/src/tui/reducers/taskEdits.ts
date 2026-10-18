@@ -1,5 +1,5 @@
 import { codexSandboxNotice } from '@ordewell/core';
-import { dependentsNotice, dependentsOf, pastGateConfirmation, titledRefs, resolveTaskRef, walkPlan } from '@ordewell/core/plan-utils';
+import { dependentsNotice, dependentsOf, pastGateConfirmation, titledRefs, resolveUserTaskRef } from '@ordewell/core/plan-utils';
 import { findTask, refFor, titledRefFor, type ModelView, type TaskView, type TuiState } from '../state';
 import { assignedModelFor, effortsForTask, modesForTask, runnerAccepts } from '../taskAssignment';
 import { picker, pickerItemsFor } from './pickers';
@@ -356,9 +356,5 @@ export function taskCommand(
 
 /** Users refer to tasks by the number shown in the plan pane as often as by id. */
 export function resolveTaskId(state: TuiState, token: string): string | null {
-  const found = resolveTaskRef(state.tasks, token);
-  if (found) return found.id;
-  const prefix = token.trim();
-  const matches = prefix ? [...walkPlan(state.tasks)].map(({ task }) => task).filter((task) => task.id.startsWith(prefix)) : [];
-  return matches.length === 1 ? matches[0].id : null;
+  return resolveUserTaskRef(state.tasks, token)?.id ?? null;
 }

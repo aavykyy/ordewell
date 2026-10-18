@@ -356,8 +356,9 @@ describe('the user\'s merge_all', () => {
     expect(await env.run({ command: 'merge_all' })).toEqual({
       ok: true,
       message: 'Merged the run\'s landed work into your branch. Tasks waiting at a merge gate for it can start.',
-      payload: { kind: 'merge', result: { outcome: 'merged' }, closed: false },
+      payload: { kind: 'merge', result: { outcome: 'merged' } },
     });
+    expect(env.messages.map((m) => m.type)).not.toContain('run_closed');
     expect(env.timeline().at(-1)!.text).toBe('You merged the run\'s work into your branch.');
   });
 
@@ -366,7 +367,7 @@ describe('the user\'s merge_all', () => {
     await vi.waitFor(() => expect(env.session.runMergeView()).not.toBeNull());
 
     const merged = await env.session.execute({ command: 'merge_all' }, { kind: 'user' });
-    expect(merged).toMatchObject({ ok: true, payload: { kind: 'merge', result: { outcome: 'merged' }, closed: true } });
+    expect(merged).toMatchObject({ ok: true, payload: { kind: 'merge', result: { outcome: 'merged' } } });
     expect(env.messages.map((m) => m.type)).toContain('run_closed');
     expect(env.timeline().at(-1)!.record).toMatchObject({ command: 'merge_all', actor: 'user', outcome: 'done' });
   });
@@ -379,7 +380,7 @@ describe('the user\'s merge_all', () => {
     expect(await env.run({ command: 'merge_all' })).toEqual({
       ok: false, outcome: 'refused',
       message: 'Merge all stopped: it conflicts in .: src/a.ts. Nothing was merged.',
-      payload: { kind: 'merge', result: conflict, closed: false },
+      payload: { kind: 'merge', result: conflict },
     });
     expect(await env.session.execute({ command: 'merge_all' }, { kind: 'user' })).toMatchObject({ ok: false, outcome: 'refused', payload: { kind: 'merge', result: conflict } });
   });

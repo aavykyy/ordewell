@@ -242,6 +242,19 @@ describe('ordewell task-deps', () => {
     expect(stdout.split('\n').filter((l) => l.includes('task-3'))).toEqual([]);
     d.close();
   });
+
+  it('lists a dependency it holds outside the earlier tasks too, since a value replaces the whole list', async () => {
+    const d = await fakeDaemon({ ...PLAN, tasks: [
+      PLAN.tasks[0],
+      { ...PLAN.tasks[1], subtasks: [{ ...PLAN.tasks[1], id: 'child-a', order: 1, title: 'Draft' }] },
+      { ...PLAN.tasks[2], dependencies: ['child-a'] },
+    ] });
+    try {
+      const { handleTaskDeps } = await import('../task-assign');
+      const { stdout } = await capture(() => handleTaskDeps([...SESSION, '3'], new ApiClient(d.port)));
+      expect(stdout).toContain('* child-a  #2.1 Draft');
+    } finally { d.close(); }
+  });
 });
 
 describe('ordewell task-ops (ADR-0020)', () => {

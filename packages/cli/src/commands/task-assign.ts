@@ -191,13 +191,19 @@ const DEPS_USAGE = 'Usage: ordewell task-deps <task-id-or-order> [<id,id,…>|no
 export async function handleTaskDeps(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   await withTask(subArgs, DEPS_USAGE, injectedApi, async (api, sessionId, task, tasks, value) => {
     const candidates = dependencyCandidates(tasks, task.id);
+    // A value replaces the whole list, so one the task holds that is not on
+    // offer — another task's subtask, say — is shown too, or an edit made from
+    // this listing would drop it unseen.
+    const held = task.dependencies
+      .filter((id) => !candidates.some((c) => c.id === id))
+      .flatMap((id) => resolveTaskRef(tasks, id) ?? []);
 
     if (!value) {
       console.log(`\nDependencies · ${namedOf(tasks, task)}\n`);
       if (candidates.length === 0) {
         console.log(`  No earlier siblings to offer as dependencies for ${refOf(tasks, task)}.`);
       }
-      for (const c of candidates) {
+      for (const c of [...candidates, ...held]) {
         const chosen = task.dependencies.includes(c.id);
         console.log(`  ${chosen ? '*' : ' '} ${c.id}  ${namedOf(tasks, c)}${c.status === 'completed' ? '  (already completed)' : ''}`);
       }

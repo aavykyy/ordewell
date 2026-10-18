@@ -65,8 +65,7 @@ describe('adversarial: switching session mid-turn', () => {
     expect(forked.sessionId).toBe('s2');
   });
 
-  // ADVERSARIAL FINDING (tui): `sessionForked` (packages/cli/src/tui/reducer.ts:308) does not reset `turnGate`, so switching to a fork while the gate holds a turn puts the old session's turn in the fork's gate. The daemon refuses a fork mid-turn, but the TUI's idle check races a turn starting on the daemon, and a turn settled over REST whose `planner_turn_ended` the socket lost leaves the gate open at planner idle — after which ctrl-s on the fork force-sends (POST converse/message/now, ADR-0023 F5) instead of the plain send the comment at reducer.ts:535-538 promises with no turn in flight. Expected: `sessionForked` resets `turnGate` to NO_TURN, as `sessionLoaded` (reducer.ts:68) does.
-  it.skip('the fork starts with no turn of its own: its gate is closed, so ctrl-s is the plain send enter is', () => {
+  it('the fork starts with no turn of its own: its gate is closed, so ctrl-s is the plain send enter is', () => {
     const forked = reduce(midTurn(), { type: 'sessionForked', sessionId: 's2', goal: 'g' }).state;
 
     expect(forked.turnGate.open).toBeNull();

@@ -116,6 +116,8 @@ export class Supervisor {
   /** The run's end was reported: the scheduler can announce it more than once. */
   private finished = false;
   private runEndPending = false;
+  /** Ends the wake-up turn in flight as discarded; null while none is. */
+  private discardTurn: (() => void) | null = null;
   /** When each wake-up since the last pass was delivered, for the wake-up rate guard. */
   private wakeUps: number[] = [];
   private readonly debounceMs: number;
@@ -227,6 +229,7 @@ export class Supervisor {
   /** The plan these events were about is gone: nothing gathered or waited on carries over. */
   reset(): void {
     this.disarm();
+    this.discardTurn?.();
     this.failures = 0;
     this.finished = false;
     this.runEndPending = false;
@@ -247,6 +250,7 @@ export class Supervisor {
     if (signal?.aborted) controller.abort();
     else signal?.addEventListener('abort', relay, { once: true });
     let timedOut = false;
+    let discarded = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let grace: ReturnType<typeof setTimeout> | undefined;
     // A run that throws before its first await fails the turn like any other failure, rather than escaping the count.
@@ -254,6 +258,12 @@ export class Supervisor {
     // Raced below; once the race is lost, the turn's own failure is nobody's to hear.
     answered.catch(() => {});
     const hung = new Promise<never>((_, reject) => {
+      // Its grace would abandon whatever turn holds the conversation by then:
+      // once the plan scope ends, the turn ends with it, untimed.
+      this.discardTurn = () => {
+        discarded = true;
+        reject(new PlannerTurnDiscardedError());
+      };
       timer = setTimeout(() => {
         timedOut = true;
         controller.abort();
@@ -268,12 +278,13 @@ export class Supervisor {
       this.failures = 0;
       return landed;
     } catch (err) {
-      const failure = timedOut ? new WakeUpTimeoutError(this.turnTimeoutMs) : err;
+      const failure = timedOut && !discarded ? new WakeUpTimeoutError(this.turnTimeoutMs) : err;
       this.failed(failure);
       throw failure;
     } finally {
       clearTimeout(timer);
       clearTimeout(grace);
+      this.discardTurn = null;
       signal?.removeEventListener('abort', relay);
     }
   }

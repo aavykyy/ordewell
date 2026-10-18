@@ -183,13 +183,7 @@ describe('adversarial: a user-added task with a model off the allowlist (session
     }));
   });
 
-  // ADVERSARIAL FINDING (assignment): a direct edit or added task may name a runner id no manifest
-  // declares — discovery of it finds nothing, nothing refuses it, and the task lands unspawnable (no
-  // model, the `build` default), admitted into the plan's runner set. CONTEXT.md (*Planned task*)
-  // says "An unknown runner is an error on every route, never swapped for another", and the planner
-  // routes refuse one through `checkPlanInvariants`; the direct path is a route.
-  // Expected: `Session.updateTask`/`Session.addTask` refuse a runner the registry has no manifest for.
-  it.skip('refuses a runner no manifest declares, as every planner route does', async () => {
+  it('refuses a runner no manifest declares, as every planner route does', async () => {
     const session = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG) });
     session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
 

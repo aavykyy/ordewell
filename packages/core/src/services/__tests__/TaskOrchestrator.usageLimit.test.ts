@@ -191,12 +191,12 @@ describe('a task paused on a usage limit', () => {
     hitLimitInTurn(sessions[0]);
     await until(() => task('t1').status === 'awaiting_user');
 
-    expect(orchestrator.cancelScheduledResume('t1')).toBe(true);
+    expect(await orchestrator.cancelScheduledResume('t1')).toBe(true);
 
     expect(task('t1')).toMatchObject({ status: 'awaiting_user', awaitingReason: 'usage-limit' });
     expect(task('t1').resumeAt).toBeUndefined();
     expect(waits.at(-1)).toEqual({ taskId: 't1', runner: 'claude-code', resumeAt: null, cancelled: true });
-    expect(orchestrator.cancelScheduledResume('t1')).toBe(false);
+    expect(await orchestrator.cancelScheduledResume('t1')).toBe(false);
     await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
     expect(spawn).toHaveBeenCalledTimes(1);
 

@@ -76,7 +76,7 @@ describe('adversarial: a merge gate, a Merge all mid-run and a skipped task', ()
     // The user's Merge all, taken mid-run.
     const merged = await session.execute({ command: 'merge_all' }, { kind: 'user' });
     expect(merged.ok).toBe(true);
-    expect(merged.payload).toMatchObject({ kind: 'merge', result: { outcome: 'merged' }, closed: false });
+    expect(merged.payload).toMatchObject({ kind: 'merge', result: { outcome: 'merged' } });
     expect(session.mergeGate('o3')).toEqual([]);
     // The run is still open: the surfaces keep their marks until the Session says so (ADR-0013).
     expect(messages.filter((m) => m.type === 'run_closed')).toHaveLength(0);

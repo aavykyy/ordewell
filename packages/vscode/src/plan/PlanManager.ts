@@ -481,8 +481,17 @@ export async function confirmPastGate(taskId: string, session: Pick<Session, 'me
  */
 export async function forceStartPastGate(taskId: string, deps: Pick<PlanManagerDeps, 'session' | 'chatProvider'>): Promise<void> {
   if (!(await confirmPastGate(taskId, deps.session))) return;
+  await startTask(deps, { command: 'force_start', task: taskId });
+}
+
+/**
+ * A start reopens the run whose cards its last end left up. Cleared only once
+ * the seam accepts it: a refused start replaced no run, and the Session still
+ * holds every mark and the handoff.
+ */
+async function startTask(deps: Pick<PlanManagerDeps, 'session' | 'chatProvider'>, command: ExecutionCommand): Promise<void> {
+  await executeUserCommand(deps.session, command);
   deps.chatProvider.clearIsolationHandoff();
-  await executeUserCommand(deps.session, { command: 'force_start', task: taskId });
 }
 
 export async function handleSystemCommand(
@@ -527,8 +536,7 @@ export async function handleSystemCommand(
           await forceStartPastGate(taskId, deps);
           break;
         }
-        deps.chatProvider.clearIsolationHandoff();
-        await executeUserCommand(deps.session, { command: 'run_task', task: taskId });
+        await startTask(deps, { command: 'run_task', task: taskId });
         break;
       }
       case 'executePlan':
