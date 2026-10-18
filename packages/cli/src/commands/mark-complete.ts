@@ -1,16 +1,16 @@
 import { ApiClient } from '../apiClient';
 import { flag } from '../utils';
-import { withResolvedTask } from './task-control';
+import { withTaskRef } from './task-control';
 
 export async function handleMarkComplete(subArgs: string[], api?: ApiClient): Promise<void> {
-  await withResolvedTask(
+  await withTaskRef(
     subArgs,
     'Usage: ordewell mark-complete <task-id-or-order> [--session-id <id>]',
     api,
-    async (client, sessionId, taskId) => {
+    async (client, sessionId, ref) => {
       try {
-        await client.markTaskComplete(sessionId, taskId);
-        console.log('Task marked complete.');
+        const done = await client.markTaskComplete(sessionId, ref);
+        console.log(done.message ?? 'Task marked complete.');
       } catch (err) {
         console.error(`Failed to mark task complete: ${(err as Error).message}`);
         process.exit(1);
@@ -20,14 +20,14 @@ export async function handleMarkComplete(subArgs: string[], api?: ApiClient): Pr
 }
 
 export async function handleUncomplete(subArgs: string[], api?: ApiClient): Promise<void> {
-  await withResolvedTask(
+  await withTaskRef(
     subArgs,
     'Usage: ordewell uncomplete <task-id-or-order> [--session-id <id>]',
     api,
-    async (client, sessionId, taskId) => {
+    async (client, sessionId, ref) => {
       try {
-        await client.markTaskIncomplete(sessionId, taskId);
-        console.log('Task marked not done.');
+        const done = await client.markTaskIncomplete(sessionId, ref);
+        console.log(done.message ?? 'Task marked not done.');
       } catch (err) {
         console.error(`Failed to mark task not done: ${(err as Error).message}`);
         process.exit(1);
@@ -41,14 +41,14 @@ export async function handleUncomplete(subArgs: string[], api?: ApiClient): Prom
  * ahead. It is not a mark complete: only that vouches for the work.
  */
 export async function handleSkip(subArgs: string[], api?: ApiClient): Promise<void> {
-  await withResolvedTask(
+  await withTaskRef(
     subArgs,
     'Usage: ordewell skip <task-id-or-order> [--reason <text>] [--session-id <id>]',
     api,
-    async (client, sessionId, taskId) => {
+    async (client, sessionId, ref) => {
       try {
-        await client.skipTask(sessionId, taskId, flag(subArgs, '--reason'));
-        console.log('Task skipped: none of its work lands, and the tasks that depend on it go ahead without it once the work it waited on is done.');
+        const done = await client.skipTask(sessionId, ref, flag(subArgs, '--reason'));
+        console.log(done.message ?? 'Task skipped: none of its work lands, and the tasks that depend on it go ahead without it once the work it waited on is done.');
       } catch (err) {
         console.error(`Failed to skip task: ${(err as Error).message}`);
         process.exit(1);

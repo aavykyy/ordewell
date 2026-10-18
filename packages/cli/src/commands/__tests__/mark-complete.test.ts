@@ -34,60 +34,79 @@ async function capture(fn: () => Promise<void>): Promise<{ stdout: string; stder
   return { stdout: logs.join('\n'), stderr: errs.join('\n'), exitCode };
 }
 
+/** A daemon that records what it is asked and answers each control in the seam's words. */
+async function daemon(answer: (url: string) => { status: number; body: unknown }, hits: string[] = []) {
+  return startServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      hits.push(`${req.method} ${req.url}`);
+      const { status, body } = answer(req.url ?? '');
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(body));
+    });
+  });
+}
+
 describe('handleMarkComplete', () => {
-  it('resolves by order number and marks the task complete', async () => {
-    const srv = await startServer((req, res) => {
-      if (req.url?.includes('/sessions/')) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          meta: { id: 'session-1', goal: 'test', runners: ['claude-code'], taskCount: 2, status: 'running', createdAt: '', updatedAt: '' },
-          plan: { pendingTasks: [{ id: 'task-abc', order: 2, title: 'Second', status: 'pending' }] },
-        }));
-      } else {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true }));
-      }
-    });
+  it('sends the task as typed, for the seam to resolve, and prints the seam\'s line', async () => {
+    const hits: string[] = [];
+    const srv = await daemon(() => ({ status: 200, body: { ok: true, message: 'Marked task #2 "Second" complete.' } }), hits);
     const api = new ApiClient(srv.port);
     const { handleMarkComplete } = await import('../mark-complete');
+
     const { stdout } = await capture(() => handleMarkComplete(['--session-id', 'session-1', '2'], api));
-    expect(stdout).toContain('Task marked complete.');
+
+    expect(hits).toEqual(['POST /api/plans/session-1/tasks/2/complete']);
+    expect(stdout).toBe('Marked task #2 "Second" complete.');
     srv.close();
   });
 
-  it('resolves by task ID prefix and marks the task complete', async () => {
-    const srv = await startServer((req, res) => {
-      if (req.url?.includes('/sessions/')) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          meta: { id: 'session-1', goal: 'test', runners: ['claude-code'], taskCount: 1, status: 'running', createdAt: '', updatedAt: '' },
-          plan: { pendingTasks: [{ id: 'task-abc-123', order: 1, title: 'First', status: 'pending' }] },
-        }));
-      } else {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true }));
-      }
-    });
-    const api = new ApiClient(srv.port);
+  it('keeps a title or an order with a hash intact in the route', async () => {
+    const hits: string[] = [];
+    const srv = await daemon(() => ({ status: 200, body: { ok: true, message: 'ok' } }), hits);
     const { handleMarkComplete } = await import('../mark-complete');
-    const { stdout } = await capture(() => handleMarkComplete(['--session-id', 'session-1', 'task-abc'], api));
-    expect(stdout).toContain('Task marked complete.');
+
+    await capture(() => handleMarkComplete(['--session-id', 'session-1', '#2.1'], new ApiClient(srv.port)));
+
+    expect(hits).toEqual(['POST /api/plans/session-1/tasks/%232.1/complete']);
     srv.close();
   });
 
-  it('errors when task identifier cannot be resolved', async () => {
-    const srv = await startServer((req, res) => {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        meta: { id: 'session-1', goal: 'test', runners: ['claude-code'], taskCount: 0, status: 'running', createdAt: '', updatedAt: '' },
-        plan: { pendingTasks: [] },
-      }));
-    });
-    const api = new ApiClient(srv.port);
+  it('falls back to its own words when an older daemon sends no line', async () => {
+    const srv = await daemon(() => ({ status: 200, body: { ok: true } }));
     const { handleMarkComplete } = await import('../mark-complete');
-    const { stderr, exitCode } = await capture(() => handleMarkComplete(['--session-id', 'session-1', '99'], api));
-    expect(stderr).toContain('Task not found');
+
+    const { stdout } = await capture(() => handleMarkComplete(['--session-id', 'session-1', '2'], new ApiClient(srv.port)));
+
+    expect(stdout).toBe('Task marked complete.');
+    srv.close();
+  });
+
+  it('reports the seam\'s refusal when the task is not in the plan', async () => {
+    const srv = await daemon(() => ({ status: 400, body: { error: 'There is no task "99" in this plan.', code: 'refused' } }));
+    const { handleMarkComplete } = await import('../mark-complete');
+
+    const { stderr, exitCode } = await capture(() => handleMarkComplete(['--session-id', 'session-1', '99'], new ApiClient(srv.port)));
+
+    expect(stderr).toContain('Failed to mark task complete: There is no task "99" in this plan.');
     expect(exitCode).toBe(1);
+    srv.close();
+  });
+});
+
+describe('handleUncomplete and handleSkip', () => {
+  it('print the seam\'s lines for Mark not done and Skip', async () => {
+    const hits: string[] = [];
+    const srv = await daemon((url) => ({ status: 200, body: { ok: true, message: url.endsWith('/skip') ? 'Skipped task #2.' : 'Marked task #2 not done.' } }), hits);
+    const mod = await import('../mark-complete');
+    const api = new ApiClient(srv.port);
+
+    const undone = await capture(() => mod.handleUncomplete(['--session-id', 'session-1', '2'], api));
+    const skipped = await capture(() => mod.handleSkip(['--session-id', 'session-1', '2', '--reason', 'not needed'], api));
+
+    expect(hits).toEqual(['POST /api/plans/session-1/tasks/2/uncomplete', 'POST /api/plans/session-1/tasks/2/skip']);
+    expect(undone.stdout).toBe('Marked task #2 not done.');
+    expect(skipped.stdout).toBe('Skipped task #2.');
     srv.close();
   });
 });

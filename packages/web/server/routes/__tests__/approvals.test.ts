@@ -119,8 +119,11 @@ describe('POST /api/approvals/:sessionId/:approvalId', () => {
     expect(pool.resolveApproval).not.toHaveBeenCalled();
   });
 
-  it('keeps an allow on the approval path: the seam never allows', async () => {
-    const execute = vi.fn();
+  it.each([
+    [{ decision: 'allow' }, { command: 'answer_approval', task: 't1', approval: 'ap-1', answer: 'allow' }],
+    [{ decision: 'allowForTask' }, { command: 'answer_approval', task: 't1', approval: 'ap-1', answer: 'allowForTask' }],
+  ])('routes the user\'s allow of a runner request %o through the command seam too', async (body, command) => {
+    const execute = vi.fn().mockResolvedValue({ ok: true, message: 'Allowed.' });
     pool = fakePool({
       outstandingApprovals: vi.fn().mockReturnValue([
         { id: 'ap-1', createdAt: '2026-10-11T18:00:00Z', request: { kind: 'runner_tool', subject: 'Bash(npm test)', scope: 'Bash(npm test)', taskId: 't1' } },
@@ -133,12 +136,30 @@ describe('POST /api/approvals/:sessionId/:approvalId', () => {
     const res = await app.request('/api/approvals/s1/ap-1', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ decision: 'allow' }),
+      body: JSON.stringify(body),
     });
 
     expect(res.status).toBe(200);
-    expect(pool.resolveApproval).toHaveBeenCalledWith('s1', 'ap-1', { decision: 'allow' });
-    expect(execute).not.toHaveBeenCalled();
+    expect(await res.json()).toEqual({ ok: true, granted: true, decision: body.decision });
+    expect(execute).toHaveBeenCalledWith(command, { kind: 'user' });
+    expect(pool.resolveApproval).not.toHaveBeenCalled();
+  });
+
+  it('answers 400 with the seam\'s reason when it refuses the answer', async () => {
+    const execute = vi.fn().mockResolvedValue({ ok: false, outcome: 'refused', message: 'The request ap-1 was answered meanwhile.' });
+    pool = fakePool({
+      outstandingApprovals: vi.fn().mockReturnValue([
+        { id: 'ap-1', createdAt: '2026-10-11T18:00:00Z', request: { kind: 'runner_tool', subject: 'Bash(npm test)', scope: 'Bash(npm test)', taskId: 't1' } },
+      ]),
+      session: vi.fn().mockReturnValue({ execute }),
+    });
+    app = new Hono();
+    app.route('/api/approvals', approvalsRoute(pool));
+
+    const res = await app.request('/api/approvals/s1/ap-1', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision: 'allow' }) });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'The request ap-1 was answered meanwhile.', code: 'refused' });
   });
 
   it('404s for an unknown session', async () => {

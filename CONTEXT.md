@@ -2366,7 +2366,15 @@ start's queued line, and the user's Merge all result with whether it closed
 the run. The user's Stop with nothing to stop is an ok no-op, recorded nowhere.
 VS Code's task cards, plan bar, command palette and task-log panel send every
 control through it as the user and show a refusal's line as the seam worded it;
-the chat adds no note of its own beside the timeline's line for the control. No planner tool reaches into
+the chat adds no note of its own beside the timeline's line for the control.
+The daemon's task-control routes (complete, uncomplete, resume, force start,
+interrupt, checkpoint answers, queued-message controls, review approval, Merge
+all and a runner request's answers) are thin wrappers that run the matching
+command as the user and answer in its words: a refusal is the 400 carrying the
+seam's line, and a task named in a route is resolved by the seam (an id,
+`#order` or title). The CLI sends the task as typed and prints the daemon's
+line; the TUI adds no notice of its own beside the timeline's line, and shows a
+refusal as the daemon worded it. No planner tool reaches into
 `TaskOrchestrator` directly, and the mandate (#23) plugs in here. Plan approval
 is the user's: executing the plan approves every task in it, and a task the
 user starts, retries or adds by hand is approved too (`approvedTasks` on the

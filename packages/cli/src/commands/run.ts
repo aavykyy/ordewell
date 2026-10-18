@@ -163,7 +163,8 @@ export async function handleRun(subArgs: string[], injectedApi?: ApiClient): Pro
   const onBlocked = hasFlag(subArgs, '--stash') ? 'stash' : hasFlag(subArgs, '--without-isolation') ? 'shared' : undefined;
   await followExecution(api, sessionId, async () => {
     try {
-      await api.executePlan(sessionId);
+      const started = await api.executePlan(sessionId);
+      if (started.message) console.error(started.message);
     } catch (err) {
       console.error(`Failed to start execution: ${(err as Error).message}`);
       process.exit(1);

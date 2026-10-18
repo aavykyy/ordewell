@@ -5,6 +5,7 @@ import { bearerHeaderValue, readDaemonToken, tokenSubprotocols, mintSessionId } 
 import type {
   AdoptSessionResponse,
   ApprovalAnswer,
+  ApproveReviewResponse,
   CancelPlanningResponse,
   CancelResumeResponse,
   ConversationCompactResponse,
@@ -316,26 +317,26 @@ export class ApiClient {
    * `resetForRun`) before approving, which is right for starting a plan and
    * wrong for releasing one that is already part-way through a review pause.
    */
-  approveReview(sessionId: string): Promise<PlanResponse> {
+  approveReview(sessionId: string): Promise<ApproveReviewResponse> {
     return this.call('POST', `/api/plans/${sessionId}/review/approve`, 'Approve failed');
   }
 
   markTaskComplete(sessionId: string, taskId: string): Promise<OkResponse> {
-    return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/complete`, 'Mark complete failed');
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/complete`, 'Mark complete failed');
   }
 
   /** Skip: end the task without landing its work, so what depends on it goes ahead once the work it waited on is done; never a mark complete. */
   skipTask(sessionId: string, taskId: string, reason?: string): Promise<OkResponse> {
-    return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/skip`, 'Skip failed', reason ? { reason } : {});
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/skip`, 'Skip failed', reason ? { reason } : {});
   }
 
   markTaskIncomplete(sessionId: string, taskId: string): Promise<OkResponse> {
-    return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/uncomplete`, 'Mark not done failed');
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/uncomplete`, 'Mark not done failed');
   }
 
-  /** Keep a task paused on a usage limit from resuming on its own; `cancelled` is false when none was scheduled. */
+  /** Keep a task paused on a usage limit from resuming on its own; a task with none scheduled is refused with the reason. */
   cancelResume(sessionId: string, taskId: string): Promise<CancelResumeResponse> {
-    return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/resume/cancel`, 'Cancel resume failed');
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/resume/cancel`, 'Cancel resume failed');
   }
 
   /** Keep what waits on the planner's usage limit from being sent at the reset; `cancelled` is false when nothing waited. */
@@ -345,7 +346,7 @@ export class ApiClient {
 
   /** Resume a task paused on a usage limit now, in its saved session, once the user says the limit has reset. */
   resumeNow(sessionId: string, taskId: string): Promise<OkResponse> {
-    return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/resume/now`, 'Resume failed');
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/resume/now`, 'Resume failed');
   }
 
   /** run | force-start | retry | cancel — real orchestrator work, not a status patch. */
@@ -354,51 +355,51 @@ export class ApiClient {
     taskId: string,
     action: 'run' | 'force-start' | 'retry' | 'cancel',
   ): Promise<TaskStartResponse> {
-    return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/${action}`, `${action} failed`);
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/${action}`, `${action} failed`);
   }
 
   /** A user message to a structured task: delivered now if it waits for input, else queued behind its turn. */
   sendTaskMessage(sessionId: string, taskId: string, text: string): Promise<TaskMessageResponse> {
-    return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/messages`, 'Send message failed', { text });
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/messages`, 'Send message failed', { text });
   }
 
   /** Force send: interrupt the task's running turn and deliver `text` next, ahead of anything queued (ADR-0023, F1). */
   forceSendTaskMessage(sessionId: string, taskId: string, text: string): Promise<TaskMessageResponse> {
-    return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/messages/now`, 'Send now failed', { text });
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/messages/now`, 'Send now failed', { text });
   }
 
   /** Run the task runner's own command `/name args` as a turn of its own (#66). */
   invokeTaskCommand(sessionId: string, taskId: string, name: string, args: string): Promise<TaskMessageResponse> {
-    return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/commands`, 'Command failed', { name, args });
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/commands`, 'Command failed', { name, args });
   }
 
-  /** Force send a message still queued; `sent` is false once the runner already has it. */
+  /** Force send a message still queued; one the runner already has is refused with the reason. */
   forceSendQueuedTaskMessage(sessionId: string, taskId: string, messageId: string): Promise<ForceSendResponse> {
-    return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/messages/${encodeURIComponent(messageId)}/now`, 'Send now failed');
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/messages/${encodeURIComponent(messageId)}/now`, 'Send now failed');
   }
 
   /** Continue a finished structured task in its saved session, with `text` as its next turn. */
   continueTask(sessionId: string, taskId: string, text: string): Promise<OkResponse> {
-    return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/continue`, 'Continue failed', { text });
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/continue`, 'Continue failed', { text });
   }
 
-  /** `removed` is false once the message was already delivered. */
+  /** Take back a queued message; one already delivered is refused with the reason. */
   removeQueuedTaskMessage(sessionId: string, taskId: string, messageId: string): Promise<RemoveMessageResponse> {
-    return this.call('DELETE', `/api/plans/${sessionId}/tasks/${taskId}/messages/${encodeURIComponent(messageId)}`, 'Remove message failed');
+    return this.call('DELETE', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/messages/${encodeURIComponent(messageId)}`, 'Remove message failed');
   }
 
   interruptTask(sessionId: string, taskId: string): Promise<OkResponse> {
-    return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/interrupt`, 'Interrupt failed');
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/interrupt`, 'Interrupt failed');
   }
 
   /** Let a task go on from the checkpoint it waits at; refused, with the reason, when none waits. */
   approveTaskCheckpoint(sessionId: string, taskId: string): Promise<OkResponse> {
-    return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/checkpoint/approve`, 'Approve checkpoint failed');
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/checkpoint/approve`, 'Approve checkpoint failed');
   }
 
   /** Turn a task back at its checkpoint; `reason` is what the agent is told. */
   rejectTaskCheckpoint(sessionId: string, taskId: string, reason?: string): Promise<OkResponse> {
-    return this.call('POST', `/api/plans/${sessionId}/tasks/${taskId}/checkpoint/reject`, 'Reject checkpoint failed', reason ? { reason } : {});
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/checkpoint/reject`, 'Reject checkpoint failed', reason ? { reason } : {});
   }
 
   addTask(sessionId: string, task: Record<string, unknown>): Promise<OkResponse> {
@@ -406,11 +407,11 @@ export class ApiClient {
   }
 
   updateTask(sessionId: string, taskId: string, changes: Record<string, unknown>): Promise<OkResponse> {
-    return this.call('PUT', `/api/plans/${sessionId}/tasks/${taskId}`, 'Update task failed', changes);
+    return this.call('PUT', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}`, 'Update task failed', changes);
   }
 
   removeTask(sessionId: string, taskId: string): Promise<OkResponse> {
-    return this.call('DELETE', `/api/plans/${sessionId}/tasks/${taskId}`, 'Remove task failed');
+    return this.call('DELETE', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}`, 'Remove task failed');
   }
 
   /**
@@ -458,7 +459,7 @@ export class ApiClient {
 
   /** The ancestors a task waits on at its merge gate (ADR-0020); empty when nothing gates it. */
   async getMergeGate(sessionId: string, taskId: string): Promise<MergeGateEntry[]> {
-    const res = await this.call<MergeGateResponse>('GET', `/api/plans/${sessionId}/tasks/${taskId}/merge-gate`, 'Could not read the merge gate');
+    const res = await this.call<MergeGateResponse>('GET', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/merge-gate`, 'Could not read the merge gate');
     return res.mergeGate ?? [];
   }
 
@@ -496,7 +497,7 @@ export class ApiClient {
   }
 
   async resolveConflictAsTask(sessionId: string, taskId: string): Promise<ResolveConflictResponse['plan']> {
-    const res = await this.call<ResolveConflictResponse>('POST', `/api/plans/${sessionId}/tasks/${taskId}/resolve-conflict`, 'Could not add a resolver task');
+    const res = await this.call<ResolveConflictResponse>('POST', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/resolve-conflict`, 'Could not add a resolver task');
     return res.plan;
   }
 

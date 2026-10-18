@@ -62,14 +62,14 @@ describe('task control commands', () => {
     ['handleForceStart', 'force-start', 'Task force-started.'],
     ['handleRetry', 'retry', 'Task retried.'],
     ['handleCancel', 'cancel', 'Task cancelled.'],
-  ])('%s posts the %s route', async (handlerName, segment, message) => {
+  ])('%s posts the %s route with the task as typed', async (handlerName, segment, message) => {
     const hits: string[] = [];
     const srv = await serverRecordingHits(hits);
     const mod: unknown = await import('../task-control');
     const { stdout } = await capture(() =>
       (mod as Record<string, (...args: unknown[]) => Promise<void>>)[handlerName](['--session-id', 'session-1', '3'], new ApiClient(srv.port)),
     );
-    expect(hits).toEqual([`POST /api/plans/session-1/tasks/task-abc-123/${segment}`]);
+    expect(hits).toEqual([`POST /api/plans/session-1/tasks/3/${segment}`]);
     expect(stdout).toContain(message);
     srv.close();
   });
@@ -90,27 +90,38 @@ describe('task control commands', () => {
     srv.close();
   });
 
-  it('resolves a task by ID prefix', async () => {
+  it('sends an id as typed and prints the seam\'s line instead of its own', async () => {
     const hits: string[] = [];
-    const srv = await serverRecordingHits(hits);
+    const srv = await startServer((req, res) => {
+      hits.push(`${req.method} ${req.url}`);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, message: 'Retrying task #3 "Third".' }));
+    });
     const { handleRetry } = await import('../task-control');
-    await capture(() => handleRetry(['--session-id', 'session-1', 'task-abc'], new ApiClient(srv.port)));
-    expect(hits[0]).toContain('task-abc-123/retry');
+
+    const { stdout } = await capture(() => handleRetry(['--session-id', 'session-1', 'task-abc-123'], new ApiClient(srv.port)));
+
+    expect(hits).toEqual(['POST /api/plans/session-1/tasks/task-abc-123/retry']);
+    expect(stdout).toBe('Retrying task #3 "Third".');
     srv.close();
   });
 
-  it('errors when the task identifier cannot be resolved', async () => {
-    const srv = await serverRecordingHits([]);
+  it('reports the seam\'s refusal when the task is not in the plan', async () => {
+    const srv = await startServer((req, res) => {
+      req.resume();
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'There is no task "99" in this plan.', code: 'refused' }));
+    });
     const { handleCancel } = await import('../task-control');
     const { stderr, exitCode } = await capture(() =>
       handleCancel(['--session-id', 'session-1', '99'], new ApiClient(srv.port)),
     );
-    expect(stderr).toContain('Task not found');
+    expect(stderr).toContain('Failed to cancel task: There is no task "99" in this plan.');
     expect(exitCode).toBe(1);
     srv.close();
   });
 
-  it('continue posts the message to the resolved task\'s continue route (ADR-0018, K1)', async () => {
+  it('continue posts the message to the task\'s continue route as typed (ADR-0018, K1)', async () => {
     let body = '';
     const hits: string[] = [];
     const srv = await startServer((req, res) => {
@@ -126,7 +137,7 @@ describe('task control commands', () => {
     const { stdout } = await capture(() =>
       handleContinue(['--session-id', 'session-1', '3', 'also', 'handle', 'arrays'], new ApiClient(srv.port)),
     );
-    expect(hits).toEqual(['POST /api/plans/session-1/tasks/task-abc-123/continue']);
+    expect(hits).toEqual(['POST /api/plans/session-1/tasks/3/continue']);
     expect(JSON.parse(body)).toEqual({ text: 'also handle arrays' });
     expect(stdout).toContain('Task continued.');
     srv.close();
@@ -272,7 +283,7 @@ describe('starting a task past its merge gate (ADR-0020)', () => {
     await capture(() => handleForceStart(['--session-id', 'session-1', '--yes', '2'], new ApiClient(srv.port), async (q) => { asked.push(q); return false; }));
 
     expect(asked).toHaveLength(1);
-    expect(hits).toEqual(['POST /api/plans/session-1/tasks/ops-2/force-start', 'POST /api/plans/session-1/tasks/ops-2/force-start']);
+    expect(hits).toEqual(['POST /api/plans/session-1/tasks/2/force-start', 'POST /api/plans/session-1/tasks/2/force-start']);
     srv.close();
   });
 
@@ -283,7 +294,7 @@ describe('starting a task past its merge gate (ADR-0020)', () => {
 
     await capture(() => handleForceStart(['--session-id', 'session-1', '2'], new ApiClient(srv.port), async () => { throw new Error('asked'); }));
 
-    expect(hits).toEqual(['POST /api/plans/session-1/tasks/ops-2/force-start']);
+    expect(hits).toEqual(['POST /api/plans/session-1/tasks/2/force-start']);
     srv.close();
   });
 
@@ -294,7 +305,7 @@ describe('starting a task past its merge gate (ADR-0020)', () => {
 
     await capture(() => handleRetry(['--session-id', 'session-1', '2'], new ApiClient(srv.port), async () => { throw new Error('asked'); }));
 
-    expect(hits).toEqual(['POST /api/plans/session-1/tasks/ops-2/retry']);
+    expect(hits).toEqual(['POST /api/plans/session-1/tasks/2/retry']);
     srv.close();
   });
 });

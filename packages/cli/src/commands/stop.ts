@@ -1,8 +1,9 @@
 import { flag, readLastSession } from '../utils';
-import { ensureDaemon, stopDaemon, resolvePort } from '../daemon';
-import { ApiClient } from '../apiClient';
+import { stopDaemon, resolvePort } from '../daemon';
+import type { ApiClient } from '../apiClient';
+import { connect } from './shared';
 
-export async function handleStop(subArgs: string[]): Promise<void> {
+export async function handleStop(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   if (subArgs.includes('--server') || subArgs[0] === 'server') {
     const stopped = await stopDaemon(resolvePort(subArgs));
     if (!stopped) process.exit(1);
@@ -21,8 +22,7 @@ export async function handleStop(subArgs: string[]): Promise<void> {
     console.error(`Stopping last session: ${sessionId}`);
   }
 
-  const port = await ensureDaemon(resolvePort(subArgs));
-  const api = new ApiClient(port);
-  await api.stopExecution(sessionId);
-  console.log('Execution stopped.');
+  const api = await connect(subArgs, injectedApi);
+  const { message } = await api.stopExecution(sessionId);
+  console.log(message ?? 'Execution stopped.');
 }

@@ -6,6 +6,7 @@ import { footerHints, helpLayout } from '../layout';
 import { decodeKey } from '../keys';
 import { openTaskView } from '../reducers/taskView';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
+import { DaemonError } from '../../apiClient';
 import type { Action } from '../reducer';
 import type { TaskLogState, TaskView, TuiState } from '../state';
 
@@ -166,11 +167,16 @@ describe('the force send effects', () => {
     expect(actions).toEqual([]);
   });
 
-  it('says so when the message was delivered before send now reached it', async () => {
-    const forceSendQueuedTaskMessage = vi.fn().mockResolvedValue({ sent: false });
+  it('leaves what it says to the timeline, and shows the daemon\'s words when the message was delivered before send now reached it', async () => {
+    const forceSendQueuedTaskMessage = vi.fn().mockResolvedValue({ sent: true });
     const { effectDeps, actions } = deps({ forceSendQueuedTaskMessage });
     await runEffect({ type: 'forceSendQueuedTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm1' }, effectDeps);
     expect(forceSendQueuedTaskMessage).toHaveBeenCalledWith('s1', 't1', 'm1');
-    expect(actions).toEqual([{ type: 'notice', message: expect.stringMatching(/already reached the runner/) }]);
+    expect(actions).toEqual([]);
+
+    const refusal = new DaemonError('That message to task #1 "Build" was already delivered.', 400, 'refused');
+    const late = deps({ forceSendQueuedTaskMessage: vi.fn().mockRejectedValue(refusal) });
+    await runEffect({ type: 'forceSendQueuedTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm1' }, late.effectDeps);
+    expect(late.actions).toEqual([{ type: 'failed', message: refusal.message, code: 'refused' }]);
   });
 });

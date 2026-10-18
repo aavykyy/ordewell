@@ -59,7 +59,7 @@ describe('ordewell checkpoint', () => {
     const { srv, hits, api } = await daemon();
     const { handleCheckpoint } = await import('../task-control');
     const { stdout } = await capture(() => handleCheckpoint(['--session-id', 'session-1', '3', 'approve'], api));
-    expect(hits).toEqual(['POST /api/plans/session-1/tasks/task-abc-123/checkpoint/approve']);
+    expect(hits).toEqual(['POST /api/plans/session-1/tasks/3/checkpoint/approve']);
     expect(stdout).toContain('Checkpoint approved.');
     srv.close();
   });
@@ -68,7 +68,7 @@ describe('ordewell checkpoint', () => {
     const { srv, hits, api } = await daemon();
     const { handleCheckpoint } = await import('../task-control');
     const { stdout } = await capture(() => handleCheckpoint(['--session-id', 'session-1', '3', 'reject', 'keep', 'the', 'table'], api));
-    expect(hits).toEqual(['POST /api/plans/session-1/tasks/task-abc-123/checkpoint/reject {"reason":"keep the table"}']);
+    expect(hits).toEqual(['POST /api/plans/session-1/tasks/3/checkpoint/reject {"reason":"keep the table"}']);
     expect(stdout).toContain('Checkpoint rejected.');
     srv.close();
   });
@@ -77,7 +77,7 @@ describe('ordewell checkpoint', () => {
     const { srv, hits, api } = await daemon();
     const { handleCheckpoint } = await import('../task-control');
     await capture(() => handleCheckpoint(['--session-id', 'session-1', '3', 'reject'], api));
-    expect(hits).toEqual(['POST /api/plans/session-1/tasks/task-abc-123/checkpoint/reject {}']);
+    expect(hits).toEqual(['POST /api/plans/session-1/tasks/3/checkpoint/reject {}']);
     srv.close();
   });
 

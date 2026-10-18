@@ -33,7 +33,7 @@ function liveDaemon(scripts: { execute?: Event[]; approve?: Event[]; stash?: Eve
       setTimeout(() => onReady?.(), 0);
     })),
     executePlan: vi.fn(async () => { broadcast(scripts.execute); return { status: 'running' }; }),
-    approveReview: vi.fn(async () => { broadcast(scripts.approve); }),
+    approveReview: vi.fn(async () => { broadcast(scripts.approve); return { plan: {} }; }),
     stopExecution: vi.fn().mockResolvedValue({ status: 'stopped' }),
     continueWithStash: vi.fn(async () => { broadcast(scripts.stash); }),
     continueWithoutIsolation: vi.fn(async () => { broadcast(scripts.shared); }),

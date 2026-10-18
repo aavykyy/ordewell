@@ -61,7 +61,16 @@ export interface ErrorBody {
   plannerNotReady?: PlannerNotReady;
 }
 
-export interface OkResponse {
+/**
+ * What the command seam said of a control the user pressed (ADR-0029), for the
+ * surface to show as it is, so each words a control alike. Absent from a daemon
+ * older than the field, and from a call that never reached the seam.
+ */
+export interface Worded {
+  message?: string;
+}
+
+export interface OkResponse extends Worded {
   ok: boolean;
 }
 
@@ -80,6 +89,9 @@ export interface TaskStartResponse extends OkResponse {
 export interface PlanResponse {
   plan: SurfacePlan;
 }
+
+/** `POST /plans/:id/review/approve`: the plan the user signed off, as it now runs. */
+export interface ApproveReviewResponse extends PlanResponse, Worded {}
 
 /** `POST /plans/:id/resolve-conflict`: `null` when the session had no conflict to hand a resolver task. */
 export interface ResolveConflictResponse {
@@ -107,11 +119,11 @@ export interface GeneratePlanResponse extends Pick<ModelsResponse, 'models' | 'm
   notes?: string[];
 }
 
-export interface ExecuteResponse {
+export interface ExecuteResponse extends Worded {
   status: 'running';
 }
 
-export interface StopResponse {
+export interface StopResponse extends Worded {
   status: 'stopped';
 }
 
@@ -119,8 +131,8 @@ export interface CancelPlanningResponse {
   cancelled: boolean;
 }
 
-/** `POST /api/plans/:id/tasks/:taskId/resume/cancel` — false when no resume was scheduled for the task. */
-export interface CancelResumeResponse {
+/** `POST …/resume/cancel` (cancelled is true: a task with no resume scheduled is refused) and `POST …/converse/resend/cancel` (false when nothing waited). */
+export interface CancelResumeResponse extends Worded {
   cancelled: boolean;
 }
 
@@ -128,11 +140,11 @@ export interface TaskMessageResponse {
   id: string;
 }
 
-export interface ForceSendResponse {
+export interface ForceSendResponse extends Worded {
   sent: boolean;
 }
 
-export interface RemoveMessageResponse {
+export interface RemoveMessageResponse extends Worded {
   removed: boolean;
 }
 

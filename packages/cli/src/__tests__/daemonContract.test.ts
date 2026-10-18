@@ -21,6 +21,11 @@ import { createApp } from '../../../web/server/app';
 import { createRequestListener } from '../../../web/server/nodeAdapter';
 import { OrchestratorPool } from '../../../web/server/pool/orchestratorPool';
 import { ApiClient, DaemonError, WorkspaceInitNeededError } from '../apiClient';
+import { handleCheckpoint, handleCancel, handleForceStart } from '../commands/task-control';
+import { handleSkip, handleMarkComplete, handleUncomplete } from '../commands/mark-complete';
+import { handleStop } from '../commands/stop';
+import { runEffect, type EffectDeps } from '../tui/effects';
+import type { Action, Effect } from '../tui/reducer';
 
 /**
  * The CLI's `ApiClient` against the real `createApp` and `OrchestratorPool`,
@@ -52,11 +57,15 @@ function inertResolver(): ModelResolver {
   return new ModelResolver(registry, keyless);
 }
 
-/** Tasks that start and never finish, so a run stays live until the test ends it. */
-function holdingRunner(): IRunner {
+/** Tasks that start and never finish, so a run stays live until the test ends it; `spawned` holds each one a test may drive. */
+function holdingRunner(spawned: FakeRunnerSession[] = []): IRunner {
   return {
     activeCount: 0,
-    spawn: vi.fn(async () => new FakeRunnerSession()),
+    spawn: vi.fn(async (opts: Parameters<IRunner['spawn']>[0]) => {
+      const task = new FakeRunnerSession(`s${spawned.length + 1}`, opts.taskId);
+      spawned.push(task);
+      return task;
+    }),
     stop: vi.fn(),
     stopAll: vi.fn(),
   };
@@ -69,6 +78,7 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
   let pool: OrchestratorPool;
   let server: http.Server;
   let client: ApiClient;
+  let spawned: FakeRunnerSession[];
 
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'ordewell-contract-'));
@@ -85,7 +95,8 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
     vi.spyOn(OpenAiService.prototype, 'startConversation').mockResolvedValue(TEXT);
     vi.spyOn(GeminiService.prototype, 'startConversation').mockResolvedValue(TEXT);
 
-    pool = new OrchestratorPool({ modelResolver: inertResolver(), runner: holdingRunner() });
+    spawned = [];
+    pool = new OrchestratorPool({ modelResolver: inertResolver(), runner: holdingRunner(spawned) });
     server = http.createServer();
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const port = (server.address() as AddressInfo).port;
@@ -137,7 +148,7 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
       expect(pool.hasSession('session-saved')).toBe(false);
 
-      await expect(client.markTaskComplete('session-saved', 't1')).resolves.toEqual({ ok: true });
+      await expect(client.markTaskComplete('session-saved', 't1')).resolves.toEqual({ ok: true, message: 'Marked task #1 "Add the limiter" complete.' });
 
       expect(pool.hasSession('session-saved')).toBe(true);
     });
@@ -150,7 +161,7 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       ];
       saveSession(plan, 'Rate limiting', workspace, 'session-saved');
 
-      await expect(client.skipTask('session-saved', 't1', 'the limiter is not needed')).resolves.toEqual({ ok: true });
+      await expect(client.skipTask('session-saved', 't1', 'the limiter is not needed')).resolves.toMatchObject({ ok: true, message: expect.stringContaining('Skipped task #1') });
       const err = await refusal(client.skipTask('session-saved', 't2'));
 
       const skipped = pool.session('session-saved').planState!.tasks.find((t) => t.id === 't1')!;
@@ -286,11 +297,11 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
       await client.adoptSession('session-saved', workspace);
 
-      await expect(client.executePlan('session-saved')).resolves.toEqual({ status: 'running' });
+      await expect(client.executePlan('session-saved')).resolves.toMatchObject({ status: 'running' });
       await vi.waitFor(() => expect(pool.session('session-saved').isExecuting).toBe(true));
       const live = pool.session('session-saved').runSnapshot().tasks.filter((t) => t.status === 'in_progress').map((t) => t.id);
 
-      await expect(client.executePlan('session-saved')).resolves.toEqual({ status: 'running' });
+      await expect(client.executePlan('session-saved')).resolves.toMatchObject({ status: 'running' });
 
       expect(pool.session('session-saved').runSnapshot().tasks.filter((t) => t.status === 'in_progress').map((t) => t.id)).toEqual(live);
     });
@@ -313,6 +324,89 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
 
       expect(err.status).toBe(409);
       expect(err.code).toBe('checkpoint_not_waiting');
+    });
+  });
+
+  describe('a control lands exactly one execution_action line, whichever surface sent it (ADR-0029)', () => {
+    const silent = () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+    };
+
+    /** What the session's timeline holds of the user's controls, as the transcript every surface reads keeps it. */
+    const timeline = (sessionId: string) => (pool.session(sessionId).planState?.conversationHistory ?? [])
+      .filter((entry) => entry.kind === 'execution')
+      .map((entry) => entry.content);
+
+    function tui(): { deps: EffectDeps; actions: Action[] } {
+      const actions: Action[] = [];
+      const deps: EffectDeps = {
+        api: client, workspace, port: 0, dispatch: (action) => { actions.push(action); }, newSessionId: () => 'unused',
+        setEnvVar: () => {}, saveAutonomy: () => ({ overridden: false }), hasBin: () => true, exit: () => {},
+        reviveDaemon: async () => false, setMouseCapture: () => {}, writeTerminal: () => {},
+      };
+      return { deps, actions };
+    }
+
+    interface Control {
+      name: string;
+      /** The state the control acts on, reached through the daemon. */
+      before?: (sessionId: string) => Promise<void>;
+      cli?: (sessionId: string) => Promise<void>;
+      effect: (sessionId: string) => Effect;
+      /** The line it keeps, the same whichever surface sent it; none when the control had nothing to do. */
+      line: string | null;
+    }
+
+    const running = async (sessionId: string) => { await client.executePlan(sessionId); await vi.waitFor(() => expect(spawned).toHaveLength(1)); };
+    const task = (sessionId: string, action: 'complete' | 'uncomplete' | 'skip' | 'retry' | 'cancel' | 'force-start'): Effect => ({ type: 'taskAction', sessionId, taskId: 't1', action });
+
+    const controls: Control[] = [
+      { name: 'Mark complete', cli: (id) => handleMarkComplete(['--session-id', id, '1'], client), effect: (id) => task(id, 'complete'), line: 'You marked task #1 "Add the limiter" complete.' },
+      {
+        name: 'Mark not done',
+        before: async (id) => { await client.markTaskComplete(id, 't1'); },
+        cli: (id) => handleUncomplete(['--session-id', id, '1'], client),
+        effect: (id) => task(id, 'uncomplete'),
+        line: 'You marked task #1 "Add the limiter" not done.',
+      },
+      { name: 'Skip', cli: (id) => handleSkip(['--session-id', id, '1'], client), effect: (id) => task(id, 'skip'), line: 'You skipped task #1 "Add the limiter".' },
+      { name: 'Force start', cli: (id) => handleForceStart(['--session-id', id, '1', '--yes'], client), effect: (id) => task(id, 'force-start'), line: 'You force started task #1 "Add the limiter".' },
+      { name: 'Cancel', before: running, cli: (id) => handleCancel(['--session-id', id, '1'], client), effect: (id) => task(id, 'cancel'), line: 'You stopped task #1 "Add the limiter".' },
+      { name: 'Stop', before: running, cli: (id) => handleStop(['--session-id', id], client), effect: (id) => ({ type: 'stopExecution', sessionId: id }), line: 'You stopped the run.' },
+      { name: 'a Stop with nothing running', cli: (id) => handleStop(['--session-id', id], client), effect: (id) => ({ type: 'stopExecution', sessionId: id }), line: null },
+      { name: 'Interrupt', before: running, effect: (id) => ({ type: 'interruptTask', sessionId: id, taskId: 't1' }), line: 'You interrupted task #1 "Add the limiter".' },
+      {
+        name: 'a checkpoint answer',
+        before: async (id) => {
+          await running(id);
+          void spawned[0].callCheckpoint('Drop the table?');
+          await vi.waitFor(() => expect(pool.session(id).awaitsCheckpoint('t1')).toBe(true));
+        },
+        cli: (id) => handleCheckpoint(['--session-id', id, '1', 'approve'], client),
+        effect: (id) => ({ type: 'answerTaskCheckpoint', sessionId: id, taskId: 't1', answer: 'approve' }),
+        line: 'You approved the checkpoint of task #1 "Add the limiter".',
+      },
+    ];
+
+    it.each(controls.flatMap((control) => [
+      ...(control.cli ? [[control.name, 'the CLI', control] as const] : []),
+      [control.name, 'the TUI', control] as const,
+    ]))('%s from %s', async (_name, surface, control) => {
+      silent();
+      saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
+      await client.adoptSession('session-saved', workspace);
+      await control.before?.('session-saved');
+      const kept = timeline('session-saved').length;
+
+      if (surface === 'the CLI') await control.cli!('session-saved');
+      else {
+        const { deps, actions } = tui();
+        await runEffect(control.effect('session-saved'), deps);
+        expect(actions.filter((a) => a.type === 'failed')).toEqual([]);
+      }
+
+      expect(timeline('session-saved').slice(kept)).toEqual(control.line ? [control.line] : []);
     });
   });
 

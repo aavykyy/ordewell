@@ -65,75 +65,58 @@ describe('talking to a structured task over the daemon (ADR-0018, M1)', () => {
     expect(invokeTaskCommand).toHaveBeenCalledWith('t1', 'compact', '');
   });
 
-  it('takes back a queued message, saying whether it was still there', async () => {
-    const removeQueuedTaskMessage = vi.fn(() => false);
-    const res = await request(appFor({ removeQueuedTaskMessage }), 'DELETE', '/messages/msg-2');
+  it('takes back a queued message through the command seam as the user, answering its line', async () => {
+    const execute = vi.fn().mockResolvedValue({ ok: true, message: 'Took back your queued message to task #1 "Build".' });
+    const res = await request(appFor({ execute }), 'DELETE', '/messages/msg-2');
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ removed: false });
-    expect(removeQueuedTaskMessage).toHaveBeenCalledWith('t1', 'msg-2');
+    expect(await res.json()).toEqual({ removed: true, message: 'Took back your queued message to task #1 "Build".' });
+    expect(execute).toHaveBeenCalledWith({ command: 'remove_queued', task: 't1', id: 'msg-2' }, { kind: 'user' });
   });
 
-  it('interrupts the running turn', async () => {
-    const interruptTask = vi.fn(async () => {});
-    const res = await request(appFor({ interruptTask }), 'POST', '/interrupt');
+  it('interrupts the running turn through the seam', async () => {
+    const execute = vi.fn().mockResolvedValue({ ok: true, message: 'Interrupted task #1 "Build": it waits for your message.' });
+    const res = await request(appFor({ execute }), 'POST', '/interrupt');
 
     expect(res.status).toBe(200);
-    expect(interruptTask).toHaveBeenCalledWith('t1');
+    expect(await res.json()).toEqual({ ok: true, message: 'Interrupted task #1 "Build": it waits for your message.' });
+    expect(execute).toHaveBeenCalledWith({ command: 'interrupt_task', task: 't1' }, { kind: 'user' });
   });
 
-  it('force sends a new message and answers with its id (ADR-0023, F1)', async () => {
-    const forceSendTaskMessage = vi.fn(() => 'msg-3');
-    const res = await request(appFor({ forceSendTaskMessage }), 'POST', '/messages/now', { text: 'stop, use Postgres' });
+  it('force sends a new message through the seam and answers with its id (ADR-0023, F1)', async () => {
+    const execute = vi.fn().mockResolvedValue({ ok: true, message: 'Sent now.', payload: { kind: 'message', id: 'msg-3' } });
+    const res = await request(appFor({ execute }), 'POST', '/messages/now', { text: 'stop, use Postgres' });
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ id: 'msg-3' });
-    expect(forceSendTaskMessage).toHaveBeenCalledWith('t1', 'stop, use Postgres');
+    expect(execute).toHaveBeenCalledWith({ command: 'message_task', task: 't1', text: 'stop, use Postgres', force: true }, { kind: 'user' });
   });
 
   it('asks for the text rather than force sending an empty message', async () => {
-    const forceSendTaskMessage = vi.fn();
-    const res = await request(appFor({ forceSendTaskMessage }), 'POST', '/messages/now', {});
+    const execute = vi.fn();
+    const res = await request(appFor({ execute }), 'POST', '/messages/now', {});
 
     expect(res.status).toBe(400);
-    expect(forceSendTaskMessage).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
   });
 
-  it('force sends a pending message by id, saying whether it was still pending', async () => {
-    const forceSendQueuedTaskMessage = vi.fn(() => true);
-    const res = await request(appFor({ forceSendQueuedTaskMessage }), 'POST', '/messages/msg-2/now');
+  it('force sends a queued message by id through the seam', async () => {
+    const execute = vi.fn().mockResolvedValue({ ok: true, message: 'Sent your queued message to task #1 "Build" now.' });
+    const res = await request(appFor({ execute }), 'POST', '/messages/msg-2/now');
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ sent: true });
-    expect(forceSendQueuedTaskMessage).toHaveBeenCalledWith('t1', 'msg-2');
-  });
-
-  it('answers a force send to a task that is not running with 400 and the reason', async () => {
-    const refusal = new TaskControlError('Task "Only" is not running, so there is no turn to send a message to.');
-    const app = appFor({
-      forceSendTaskMessage: () => { throw refusal; },
-      forceSendQueuedTaskMessage: () => { throw refusal; },
-    });
-
-    for (const res of [
-      await request(app, 'POST', '/messages/now', { text: 'hi' }),
-      await request(app, 'POST', '/messages/msg-1/now'),
-    ]) {
-      expect(res.status).toBe(400);
-      expect(await res.json()).toEqual({ error: refusal.message, code: 'refused' });
-    }
+    expect(await res.json()).toEqual({ sent: true, message: 'Sent your queued message to task #1 "Build" now.' });
+    expect(execute).toHaveBeenCalledWith({ command: 'force_send_queued', task: 't1', id: 'msg-2' }, { kind: 'user' });
   });
 
   it('answers a refusal for a task that is not running with 400 and the reason', async () => {
     const refusal = new TaskControlError('Task "Only" is not running, so there is no turn to send a message to.');
-    const app = appFor({
-      execute: async () => ({ ok: false, outcome: 'refused', message: refusal.message }),
-      removeQueuedTaskMessage: () => { throw refusal; },
-      interruptTask: async () => { throw refusal; },
-    });
+    const app = appFor({ execute: async () => ({ ok: false, outcome: 'refused', message: refusal.message }) });
 
     for (const res of [
       await request(app, 'POST', '/messages', { text: 'hi' }),
+      await request(app, 'POST', '/messages/now', { text: 'hi' }),
+      await request(app, 'POST', '/messages/msg-1/now'),
       await request(app, 'DELETE', '/messages/msg-1'),
       await request(app, 'POST', '/interrupt'),
     ]) {
@@ -179,18 +162,19 @@ describe('force sending a message the runner already has over the daemon (ADR-00
     return { app, task };
   }
 
-  it('accepts the id of a handed-over message, interrupting the turn, and says when nothing is left to send', async () => {
+  it('accepts the id of a handed-over message, interrupting the turn, and refuses once nothing is left to send', async () => {
     const { app, task } = await running();
     task.messages.push({ id: 'msg-7', text: 'use Postgres', handedOver: true });
 
     const sent = await request(app, 'POST', '/messages/msg-7/now');
     expect(sent.status).toBe(200);
-    expect(await sent.json()).toEqual({ sent: true });
+    expect(await sent.json()).toMatchObject({ sent: true });
     expect(task.interrupts).toBe(1);
     expect(task.delivered).toEqual(['use Postgres']);
 
     const gone = await request(app, 'POST', '/messages/msg-7/now');
-    expect(await gone.json()).toEqual({ sent: false });
+    expect(gone.status).toBe(400);
+    expect(await gone.json()).toEqual({ error: 'That message to task #1 "Build" was already delivered.', code: 'refused' });
   });
 });
 
@@ -200,7 +184,7 @@ describe('continuing a finished structured task over the daemon (ADR-0018, K1)',
     const res = await request(appFor({ execute }), 'POST', '/continue', { text: 'also handle arrays' });
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
+    expect(await res.json()).toEqual({ ok: true, message: 'Continuing task #1 "Build" in its saved session with your message.' });
     expect(execute).toHaveBeenCalledWith({ command: 'retry_task', task: 't1', from: 'session', message: 'also handle arrays' }, { kind: 'user' });
   });
 

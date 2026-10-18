@@ -137,14 +137,14 @@ describe('task control routes', () => {
     const res = await app.request(`/api/plans/s1/tasks/t9/${segment}`, { method: 'POST' });
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
+    expect(await res.json()).toEqual({ ok: true, message: 'done' });
     expect(execute).toHaveBeenCalledWith(command, { kind: 'user' });
   });
 
-  it('force-starts through the Session method, which answers the queued line', async () => {
-    const forceStartTask = vi.fn().mockResolvedValue(undefined);
-    const execute = vi.fn();
-    const pool = fakePool({ session: vi.fn().mockReturnValue({ forceStartTask, execute }) } as never);
+  it('force-starts through the seam, answering the queued line from its payload', async () => {
+    const line = 'Task "Deploy" is approved and starts once task "Build" finishes.';
+    const execute = vi.fn().mockResolvedValue({ ok: true, message: line, payload: { kind: 'queued', line } });
+    const pool = fakePool({ session: vi.fn().mockReturnValue({ execute }) } as never);
     const { plansRoute } = await import('../../routes/plans');
     const app = new Hono();
     app.route('/api/plans', plansRoute(pool));
@@ -152,8 +152,8 @@ describe('task control routes', () => {
     const res = await app.request('/api/plans/s1/tasks/t9/force-start', { method: 'POST' });
 
     expect(res.status).toBe(200);
-    expect(forceStartTask).toHaveBeenCalledWith('t9');
-    expect(execute).not.toHaveBeenCalled();
+    expect(await res.json()).toEqual({ ok: true, queued: line, message: line });
+    expect(execute).toHaveBeenCalledWith({ command: 'force_start', task: 't9' }, { kind: 'user' });
   });
 
   it('answers a seam refusal with 400 and its reason', async () => {
@@ -214,7 +214,7 @@ describe('run controls reach the command seam as the user', () => {
     const res = await (await appFor({ execute })).request('/api/plans/s1/execute', { method: 'POST' });
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: 'running' });
+    expect(await res.json()).toEqual({ status: 'running', message: 'The plan is running.' });
     expect(execute).toHaveBeenCalledWith({ command: 'run_plan' }, { kind: 'user' });
   });
 
@@ -231,7 +231,7 @@ describe('run controls reach the command seam as the user', () => {
     const res = await (await appFor({ execute })).request('/api/plans/s1/stop', { method: 'POST' });
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: 'stopped' });
+    expect(await res.json()).toEqual({ status: 'stopped', message: 'Stopped the run.' });
     expect(execute).toHaveBeenCalledWith({ command: 'stop_run' }, { kind: 'user' });
   });
 });
