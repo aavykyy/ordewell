@@ -59,7 +59,7 @@ describe('OrchestratorPool task logs', () => {
     await pool.session(meta.id).runTask('t1');
     await vi.waitFor(() => expect(sessions).toHaveLength(1));
     sessions[0].emitEvent({ type: 'turn_start', text: 'do it' });
-    sessions[0].emitEvent({ type: 'assistant_text', text: 'Working on it.' });
+    sessions[0].emitEvent({ type: 'assistant_text', runId: 'r1', text: 'Working on it.' });
     sessions[0].emitEvent({ type: 'turn_end', reason: 'completed' });
 
     const frames = () => sent.map((s) => JSON.parse(s) as { type: string; taskId?: string; attempt?: number; events?: unknown[] });
@@ -69,7 +69,7 @@ describe('OrchestratorPool task logs', () => {
     const events = logged.flatMap((f) => f.events ?? []);
     expect(events).toEqual([
       { type: 'turn_start', message: 'do it' },
-      { type: 'text', text: 'Working on it.' },
+      { type: 'text', runId: 'r1', text: 'Working on it.' },
       { type: 'turn_end', reason: 'completed' },
     ]);
     expect(readTaskLog({ baseDir: workspace, sessionId: meta.id }, 't1', 1)).toEqual(events);

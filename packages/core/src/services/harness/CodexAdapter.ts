@@ -15,6 +15,7 @@ import { awaitAttach, type AttachState } from './ordewellBinding';
 import { CodexRpc, type RpcMessage, type RpcResponse } from './codexRpc';
 import { settleWithin } from './settleWithin';
 import { PermissionLedger } from './permissionLedger';
+import { ReplyRuns } from './replyRuns';
 import { codexUsageLimitSignal, mergeCodexRateLimits, type CodexRateLimits } from './codexUsageLimit';
 
 const HANDSHAKE_TIMEOUT_MS = 30000;
@@ -357,8 +358,8 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   private threadModel: string | null = null;
   private readonly rpc = new CodexRpc((payload) => this.writeLine(payload));
   private startOpts: AgentStartOptions | null = null;
-  /** Whether this turn has already emitted prose — see the `agentMessage` case. */
-  private turnHasText = false;
+  /** The planner thread's runs of reply text this turn, each under its `agentMessage` item's id. */
+  private replyRuns = new ReplyRuns();
   /** The turn in flight. `turn/interrupt` and `turn/steer` cannot be sent before it has an id. */
   private turn: CodexTurn | null = null;
   /** The last turn this adapter ended — so its second end signal, landing late, ends nothing. */
@@ -759,16 +760,16 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         if (this.fromInterruptedTurn(msg.params)) return;
         this.emitItemDone(msg.params?.item as ThreadItem | undefined, emit, this.subagentOf(msg.params?.threadId));
         return;
-      // Reply text streams before its completed item. The completed item is
-      // authoritative — the service replaces the deltas with it — so both are
+      // Reply text streams before its completed item, under the item's id. The
+      // completed item is authoritative — it replaces the deltas — so both are
       // forwarded and no run is counted twice.
       case 'item/agentMessage/delta': {
-        const params = msg.params as { threadId?: string; delta?: string } | undefined;
+        const params = msg.params as { threadId?: string; itemId?: string; delta?: string } | undefined;
         // A subagent's words are addressed to the planner, not the user: let
         // them through and the planner's reply becomes an answer to a prompt
         // the user never sent.
         if (!params?.delta || this.subagentOf(params.threadId)) return;
-        emit({ type: 'assistant_text_delta', text: params.delta });
+        this.replyRuns.delta(params.itemId ?? '', params.delta, emit);
         return;
       }
       // `summaryTextDelta` streams a reasoning summary part, `textDelta` the raw
@@ -806,9 +807,9 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         return;
       case 'turn/started': {
         // A subagent runs its own turn in its own thread; its start must not
-        // reset the planner turn's paragraph state.
+        // reset the planner turn's runs.
         if (this.subagentOf(msg.params?.threadId)) return;
-        this.turnHasText = false;
+        this.replyRuns = new ReplyRuns();
         const turn = msg.params?.turn as { id?: unknown } | undefined;
         this.turnStarted(turn?.id ?? msg.params?.turnId);
         return;
@@ -1145,15 +1146,12 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         if (!subagentId) this.steerDelivered(item, emit);
         return;
       // A Codex turn is several whole messages — progress commentary, then the
-      // final answer — not a token stream. Concatenated raw they run together
-      // ("…as requested.`head` failed because…"), so each one after the first
-      // opens a paragraph.
+      // final answer — each a run of its own under its item's id.
       case 'agentMessage':
         // A subagent's message is addressed to the planner, not the user. Its
         // report reaches the user through the planner's own synthesis.
         if (subagentId || !item.text) return;
-        emit({ type: 'assistant_text', text: this.turnHasText ? `\n\n${item.text}` : item.text });
-        this.turnHasText = true;
+        this.replyRuns.complete(id, item.text, emit);
         return;
       case 'reasoning': {
         const text = flattenText(item.summary) || flattenText(item.content) || item.text || '';

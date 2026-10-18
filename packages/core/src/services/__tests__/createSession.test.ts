@@ -968,7 +968,7 @@ describe('session id stability (persist seam)', () => {
             { type: 'tool_call', id: 'c1', name: 'Grep', args: { pattern: 'cache' }, subagentId: 'sa1' },
             { type: 'tool_result', id: 'c1', name: 'Grep', output: 'src/cache.ts', success: true, subagentId: 'sa1' },
             { type: 'subagent_finished', subagentId: 'sa1', outcome: 'done', digest: 'src/cache.ts' },
-            { type: 'assistant_text', text: 'Found it.' },
+            { type: 'assistant_text', runId: 'r1', text: 'Found it.' },
             { type: 'turn_end' },
           ]]),
           workspaceRoot: () => '/repo',
@@ -1005,11 +1005,11 @@ describe('session id stability (persist seam)', () => {
         {
           mcpServer: fakeMcpServer(),
           createAdapter: scriptedAdapter([[
-            { type: 'assistant_text_delta', text: 'Looking. ' },
+            { type: 'assistant_text_delta', runId: 'r1', text: 'Looking. ' },
             { type: 'tool_call', id: 'c1', name: 'Grep', args: { pattern: 'cache' } },
             { type: 'tool_result', id: 'c1', name: 'Grep', output: 'src/cache.ts', success: true },
-            { type: 'assistant_text_delta', text: 'It is in src/cache.ts.' },
-            { type: 'assistant_text', text: 'It is in src/cache.ts.' },
+            { type: 'assistant_text_delta', runId: 'r2', text: 'It is in src/cache.ts.' },
+            { type: 'assistant_text', runId: 'r2', text: 'It is in src/cache.ts.' },
             { type: 'usage', record: { source: 'claude-code', inputTokens: 100, outputTokens: 10 } },
             { type: 'turn_end' },
           ]]),
@@ -1030,7 +1030,7 @@ describe('session id stability (persist seam)', () => {
 
       const view = broadcasts.reduce(reduceConversation, EMPTY_CONVERSATION);
       const message = view.blocks.find((b) => b.type === 'message' && b.role === 'planner');
-      expect(message).toMatchObject({ text: 'Looking. It is in src/cache.ts.', streaming: false });
+      expect(message).toMatchObject({ text: 'Looking. \n\nIt is in src/cache.ts.', streaming: false });
       expect(view.blocks.some((b) => b.type === 'plan' && b.status === 'building')).toBe(false);
       expect(view.blocks.some((b) => b.type === 'tool')).toBe(true);
       expect(view.blocks.some((b) => b.type === 'usage')).toBe(true);
@@ -1046,7 +1046,7 @@ describe('session id stability (persist seam)', () => {
             { type: 'thinking_delta', text: 'the cache.' },
             { type: 'thinking', text: 'Grep for the cache.' },
             { type: 'thinking', text: 'Scan src.', subagentId: 'sa1' },
-            { type: 'assistant_text', text: 'Found it.' },
+            { type: 'assistant_text', runId: 'r1', text: 'Found it.' },
             { type: 'turn_end' },
           ]]),
           workspaceRoot: () => '/repo',

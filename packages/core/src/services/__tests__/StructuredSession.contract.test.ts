@@ -196,10 +196,10 @@ describe('the done marker on the plain-text channel', () => {
       await until(() => adapter.sent.length === n + 1);
       const from = turn.chunks.length;
       adapter.emit(
-        { type: 'assistant_text_delta', text: `Checked.\nAll done: ${MARKER.slice(0, i)}` },
-        { type: 'assistant_text_delta', text: MARKER.slice(i, j) },
-        { type: 'assistant_text_delta', text: `${MARKER.slice(j)}\nBye.` },
-        { type: 'assistant_text', text: `Checked.\nAll done: ${MARKER}\nBye.` },
+        { type: 'assistant_text_delta', runId: 'r1', text: `Checked.\nAll done: ${MARKER.slice(0, i)}` },
+        { type: 'assistant_text_delta', runId: 'r1', text: MARKER.slice(i, j) },
+        { type: 'assistant_text_delta', runId: 'r1', text: `${MARKER.slice(j)}\nBye.` },
+        { type: 'assistant_text', runId: 'r1', text: `Checked.\nAll done: ${MARKER}\nBye.` },
       );
       adapter.endTurn();
       await until(() => turn.turnEnds.length === n + 1);
@@ -217,9 +217,9 @@ describe('the done marker on the plain-text channel', () => {
     await until(() => adapters[0].sent.length === 1);
 
     adapters[0].emit(
-      { type: 'assistant_text_delta', text: '<<<ORDEWELL' },
-      { type: 'assistant_text_delta', text: '_DONE_' },
-      { type: 'assistant_text_delta', text: 'mk-1>>>' },
+      { type: 'assistant_text_delta', runId: 'r1', text: '<<<ORDEWELL' },
+      { type: 'assistant_text_delta', runId: 'r1', text: '_DONE_' },
+      { type: 'assistant_text_delta', runId: 'r1', text: 'mk-1>>>' },
     );
     expect(turn.chunks).toEqual([]);
     adapters[0].endTurn();
@@ -243,7 +243,7 @@ describe('what else the plain-text channel carries', () => {
 
   it('draws each call as one line: its key argument collapsed onto it, cut at 120 characters, subagent calls left out', async () => {
     const turn = await oneTurn([
-      { type: 'assistant_text_delta', text: 'Let me check' },
+      { type: 'assistant_text_delta', runId: 'r1', text: 'Let me check' },
       { type: 'tool_call', id: 'c1', name: 'Bash', args: { command: 'npm test\n   && npm run lint', description: 'Run the checks' } },
       { type: 'tool_call', id: 'c2', name: 'Grep', args: { pattern: 'x'.repeat(200) } },
       { type: 'tool_call', id: 'c3', name: 'TodoWrite', args: { todos: [] } },
@@ -263,24 +263,38 @@ describe('what else the plain-text channel carries', () => {
 
   it('keeps the text it already wrote when the authoritative block disagrees, and writes the block too', async () => {
     const turn = await oneTurn([
-      { type: 'assistant_text_delta', text: 'First draft.\n' },
-      { type: 'assistant_text', text: 'Second thoughts.' },
+      { type: 'assistant_text_delta', runId: 'r1', text: 'First draft.\n' },
+      { type: 'assistant_text', runId: 'r1', text: 'Second thoughts.' },
     ]);
     expect(turn.session.getOutput()).toBe('First draft.\nSecond thoughts.\n');
   });
 
   it('writes nothing twice when the block repeats what its deltas streamed', async () => {
     const turn = await oneTurn([
-      { type: 'assistant_text_delta', text: 'One line.\nTwo' },
-      { type: 'assistant_text_delta', text: ' lines.' },
-      { type: 'assistant_text', text: 'One line.\nTwo lines.' },
+      { type: 'assistant_text_delta', runId: 'r1', text: 'One line.\nTwo' },
+      { type: 'assistant_text_delta', runId: 'r1', text: ' lines.' },
+      { type: 'assistant_text', runId: 'r1', text: 'One line.\nTwo lines.' },
     ]);
     expect(turn.session.getOutput()).toBe('One line.\nTwo lines.\n');
   });
 
+  it('writes each run once wherever its copy lands, a paragraph after the text before it', async () => {
+    const turn = await oneTurn([
+      { type: 'assistant_text_delta', runId: 'a', text: 'Let me look.' },
+      { type: 'tool_call', id: 'c1', name: 'Read', args: { file_path: '/repo/a.ts' } },
+      { type: 'assistant_text_delta', runId: 'b', text: 'Found' },
+      // The first run's copy, landing after the call and the next run began.
+      { type: 'assistant_text', runId: 'a', text: 'Let me look.' },
+      { type: 'assistant_text_delta', runId: 'b', text: ' it.' },
+      { type: 'assistant_text', runId: 'b', text: 'Found it.' },
+      { type: 'assistant_text', runId: 'c', text: 'Done.' },
+    ]);
+    expect(turn.session.getOutput()).toBe('Let me look.\n› Read(/repo/a.ts)\n\nFound it.\n\nDone.\n');
+  });
+
   it('writes a failed turn\'s own words on a line of their own, and the turn ends failed', async () => {
     const turn = await oneTurn([
-      { type: 'assistant_text_delta', text: 'Half a sen' },
+      { type: 'assistant_text_delta', runId: 'r1', text: 'Half a sen' },
       { type: 'error', message: 'API Error: 529 overloaded' },
     ], (adapter) => adapter.settle());
 
@@ -416,7 +430,7 @@ describe('interrupting a turn', () => {
     expect(turn.exits).toEqual([]);
 
     // The replaced runner is not heard from again, whatever it still says.
-    adapters[0].emit({ type: 'assistant_text', text: 'stale words' });
+    adapters[0].emit({ type: 'assistant_text', runId: 'r1', text: 'stale words' });
     adapters[0].exit(137);
     await tick();
     expect(turn.session.getOutput()).not.toContain('stale words');

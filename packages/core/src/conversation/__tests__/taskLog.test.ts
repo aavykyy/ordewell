@@ -53,7 +53,60 @@ describe('reduceTaskLog', () => {
     expect(view.blocks[1]).toMatchObject({ type: 'message', text: 'Checking the tree.', streaming: false });
   });
 
-  it('starts a later text block of the turn as its own block, without the paragraph break that joins them', () => {
+  describe('runs of text by their id', () => {
+    const agentTexts = (view: ReturnType<typeof replayTaskLog>) => view.blocks.flatMap((b) => (b.type === 'message' && b.role === 'agent' ? [b.text] : []));
+
+    // The note a followed model switch writes lands whenever its plan
+    // write-back settles, which can be in the middle of a run.
+    it('keeps a run in one block when a note lands in the middle of it, and settles it there', () => {
+      const view = replayTaskLog([
+        start,
+        { type: 'text_delta', runId: 'r1', text: 'Looking' },
+        { type: 'model_switched', from: { model: 'haiku' }, to: { model: 'sonnet' }, plan: { model: { model: 'sonnet' } } },
+        { type: 'text_delta', runId: 'r1', text: ' around' },
+        { type: 'text', runId: 'r1', text: 'Looking around.' },
+      ]);
+      expect(view.blocks.map((b) => (b.type === 'message' ? `${b.role}:${b.text}${b.streaming ? '…' : ''}` : b.type))).toEqual([
+        'user:Do the task', 'agent:Looking around.', 'system:Model changed in the runner: haiku → sonnet; the plan now says sonnet',
+      ]);
+    });
+
+    // Codex reports a setup problem as thinking, whenever it notices one.
+    it('keeps a run in one block across a runner warning shown as thinking', () => {
+      const view = replayTaskLog([
+        start,
+        { type: 'text_delta', runId: 'item_m1', text: 'Checking' },
+        { type: 'thinking', text: 'Codex configuration warning: unknown key' },
+        { type: 'text_delta', runId: 'item_m1', text: ' the tree' },
+        { type: 'text', runId: 'item_m1', text: 'Checking the tree.' },
+      ]);
+      expect(agentTexts(view)).toEqual(['Checking the tree.']);
+      expect(view.blocks.map((b) => b.type)).toEqual(['message', 'message', 'thinking']);
+    });
+
+    it('never crosses two runs that stream before the first completes', () => {
+      const view = replayTaskLog([
+        start,
+        { type: 'text_delta', runId: 'a', text: 'First ' },
+        { type: 'tool_call', id: 'c1', name: 'Bash', args: '{"command":"ls"}' },
+        { type: 'text_delta', runId: 'b', text: 'Second ' },
+        { type: 'text_delta', runId: 'a', text: 'run.' },
+        { type: 'text', runId: 'a', text: 'First run.' },
+        { type: 'text_delta', runId: 'b', text: 'run.' },
+        { type: 'text', runId: 'b', text: 'Second run.' },
+      ]);
+      expect(view.blocks.map((b) => (b.type === 'message' ? b.text : b.type))).toEqual(['Do the task', 'First run.', 'tool', 'Second run.']);
+    });
+
+    it('shows a run that never streamed whole, where its copy arrives', () => {
+      const view = replayTaskLog([start, { type: 'text', runId: 'a', text: 'First.' }, { type: 'text', runId: 'b', text: 'Second.' }]);
+      expect(agentTexts(view)).toEqual(['First.', 'Second.']);
+    });
+  });
+
+  // Saved before runs carried an id: one stream for every run, and each run
+  // after the first opening with the paragraph break that joined it.
+  it('replays a log saved before runs carried an id: a later text block of the turn is its own block, without its paragraph break', () => {
     const view = replayTaskLog([
       start,
       { type: 'text', text: 'First.' },

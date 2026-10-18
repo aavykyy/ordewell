@@ -36,18 +36,22 @@ export interface UsageLimitSignal {
  */
 export type AgentEvent =
   /**
-   * A complete run of the assistant's reply. Concatenated in order to form the
-   * turn's text. When the same run already streamed as `assistant_text_delta`,
-   * this is the authoritative copy of it — it replaces the deltas, it is not
-   * appended after them.
+   * A complete run of the assistant's reply — one text block, message or
+   * part — under `runId`, the runner's own id for it. It is the authoritative
+   * copy of the deltas streamed under the same id: it replaces them wherever
+   * they now sit, it is not appended after them. No run carries the
+   * paragraph break between it and the one before; a consumer joining runs
+   * puts one there itself.
    */
-  | { type: 'assistant_text'; text: string }
+  | { type: 'assistant_text'; runId: string; text: string }
   /**
-   * An incremental piece of the assistant's reply, for agents that stream
-   * partial messages. The planner's own text only: a subagent's words never
-   * arrive here, so they can never become the reply.
+   * An incremental piece of the run `runId`, for agents that stream partial
+   * messages. A run's first delta marks where it began, which is where it
+   * stays when its complete copy arrives after later steps. The planner's own
+   * text only: a subagent's words never arrive here, so they can never
+   * become the reply.
    */
-  | { type: 'assistant_text_delta'; text: string }
+  | { type: 'assistant_text_delta'; runId: string; text: string }
   /**
    * Reasoning the agent chose to expose. Never contributes to the reply text.
    * Like `assistant_text`, it supersedes deltas already streamed for it.

@@ -865,8 +865,7 @@ describe('ClaudeCodeAdapter steer', () => {
 
     await until(() => outOfTurn.some((e) => e.type === 'turn_end'));
     expect(outOfTurn[0]).toEqual({ type: 'message_delivered', id: 'msg-1' });
-    // A turn of its own: its text opens no paragraph after the last turn's.
-    expect(outOfTurn.filter((e) => e.type === 'assistant_text')).toEqual([{ type: 'assistant_text', text: 'PINEAPPLE' }]);
+    expect(outOfTurn.filter((e) => e.type === 'assistant_text')).toEqual([{ type: 'assistant_text', runId: 'msg_011CfmAWQwKMox4L4MVgU2r7:1', text: 'PINEAPPLE' }]);
     expect(outOfTurn.filter((e) => e.type === 'message_delivered' || e.type === 'message_dropped')).toHaveLength(1);
     expect(sent(spawned).filter((w) => w.includes('PINEAPPLE'))).toHaveLength(1);
     adapter.dispose();
@@ -1018,7 +1017,7 @@ describe('ClaudeCodeAdapter runner commands', () => {
 
     const loaded = events.filter((e) => e.type === 'runner_loaded');
     expect(loaded).toEqual([{ type: 'runner_loaded', commands: adapter.commands(), mcpServers: [{ name: 'docs-server', status: 'pending' }] }]);
-    expect(events.find((e) => e.type === 'assistant_text')).toEqual({ type: 'assistant_text', text: 'PONG-SKILL' });
+    expect(events.find((e) => e.type === 'assistant_text')).toEqual({ type: 'assistant_text', runId: 'msg_011Cg1ych2PQ6DHrmD81ySTt:0', text: 'PONG-SKILL' });
     adapter.dispose();
   });
 
@@ -1110,7 +1109,7 @@ describe('ClaudeCodeAdapter model switches', () => {
     await adapter.invokeCommand('effort', 'low', (e) => events.push(e));
 
     expect(events.filter((e) => e.type !== 'usage')).toEqual([
-      { type: 'assistant_text', text: 'Set effort level to low (this session only): Quick, straightforward implementation with minimal overhead' },
+      { type: 'assistant_text', runId: 'c6e3aedd-0c29-4a98-89b7-0708cdd1f663:0', text: 'Set effort level to low (this session only): Quick, straightforward implementation with minimal overhead' },
       { type: 'turn_end' },
     ]);
     adapter.dispose();

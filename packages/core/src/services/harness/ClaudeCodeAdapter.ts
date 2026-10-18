@@ -13,6 +13,7 @@ import { markedLines, structuredPatchText } from './fileDiff';
 import { ORDEWELL_MCP_SERVER_NAME, TASK_COMPLETION_CONTRACT, type McpClientConfig, type OwnerOnlyFile } from '../mcp';
 import { CLAUDE_ORDEWELL } from './claudeOrdewell';
 import { PermissionLedger } from './permissionLedger';
+import { ReplyRuns } from './replyRuns';
 import { settleWithin } from './settleWithin';
 import { awaitAttach, type OrdewellToolRole } from './ordewellBinding';
 import { claudeLocalServers } from './claudeRepoConfig';
@@ -198,9 +199,10 @@ interface ClaudeUsage {
 /** One Anthropic Messages streaming event, as `--include-partial-messages` relays it. */
 interface ClaudeStreamEvent {
   type: string;
-  message?: { model?: string };
+  /** The content block a `content_block_*` event is about, by its place in the message. */
+  index?: number;
+  message?: { id?: string; model?: string };
   usage?: ClaudeUsage;
-  content_block?: { type: string };
   delta?: { type?: string; text?: string; thinking?: string };
 }
 
@@ -385,12 +387,13 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     () => ({ role: this.role, autoApprove: false }),
   );
 
-  /** Whether this turn has already emitted reply text — see {@link handleLine}. */
-  private turnHasText = false;
-  /** The text block streaming now follows earlier reply text, so its first delta opens the paragraph. */
-  private pendingBreak = false;
-  /** The model answering the planner's current message, as its `message_start` named it. */
+  /** This turn's runs of reply text, each a text block named `<message id>:<block index>`. */
+  private replyRuns = new ReplyRuns();
+  /** The model answering the planner's current message, and the message's id, as its `message_start` named them. */
   private plannerModel: string | undefined;
+  private streamingMessage: string | undefined;
+  /** The message the last `assistant` line was part of, and how many of its blocks the lines have carried. */
+  private lineMessage: { id: string; blocks: number } | null = null;
   /**
    * The session's `total_cost_usd` as last counted. A resume starts from what
    * was counted of that session before, and is undefined without it: the CLI
@@ -701,7 +704,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   }
 
   private openTurnState(): void {
-    this.turnHasText = false;
+    this.replyRuns = new ReplyRuns();
     this.interruptRequested = false;
     this.resultHeld = false;
     this.turnClosed = false;
@@ -787,13 +790,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         }
         for (const block of blocksOf(msg)) {
           // A turn is several whole messages — narration between tool rounds,
-          // then the final answer — not a token stream. Concatenated raw they
-          // run together ("…in parallel.That agent returned…"), so each one
-          // after the first opens a paragraph.
-          if (block.type === 'text' && block.text) {
-            emit({ type: 'assistant_text', text: this.turnHasText ? `\n\n${block.text}` : block.text });
-            this.turnHasText = true;
-          } else if (block.type === 'thinking' && block.thinking) emit({ type: 'thinking', text: block.thinking });
+          // then the final answer — and each text block in them is a run of its own.
+          const runId = this.blockId(msg.message?.id);
+          if (block.type === 'text' && block.text) this.replyRuns.complete(runId, block.text, emit);
+          else if (block.type === 'thinking' && block.thinking) emit({ type: 'thinking', text: block.thinking });
           else if (block.type === 'tool_use' && block.name) {
             const id = block.id ?? block.name;
             emit({ type: 'tool_call', id, name: block.name, args: block.input ?? {} });
@@ -1025,6 +1025,17 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   }
 
   /**
+   * The id of the next block an `assistant` line carries, `<message>:<index>`.
+   * The CLI sends a message as one line per content block, in order, so a
+   * block's place among its message's lines is the `index` its stream events
+   * carry (checked against every recorded transcript).
+   */
+  private blockId(messageId = ''): string {
+    if (this.lineMessage?.id !== messageId) this.lineMessage = { id: messageId, blocks: 0 };
+    return `${messageId}:${this.lineMessage.blocks++}`;
+  }
+
+  /**
    * Partial output of the planner's own message. The complete `assistant` line
    * for each block follows its deltas and is authoritative for that block (see
    * {@link AgentEvent}), so nothing here has to reconcile with it.
@@ -1036,14 +1047,11 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     // same calls, so either would count them twice.
     if (event.type === 'message_start') {
       this.plannerModel = event.message?.model;
+      this.streamingMessage = event.message?.id;
       this.followModel(this.plannerModel, emit);
     } else if (event.type === 'message_delta' && event.usage) emit({ type: 'usage', record: usageRecord(event.usage, this.plannerModel) });
-    else if (event.type === 'content_block_start' && event.content_block?.type === 'text') {
-      this.pendingBreak = this.turnHasText;
-    } else if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text) {
-      if (this.pendingBreak) emit({ type: 'assistant_text_delta', text: '\n\n' });
-      this.pendingBreak = false;
-      emit({ type: 'assistant_text_delta', text: event.delta.text });
+    else if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text) {
+      this.replyRuns.delta(`${this.streamingMessage ?? ''}:${event.index ?? 0}`, event.delta.text, emit);
     } else if (event.type === 'content_block_delta' && event.delta?.type === 'thinking_delta' && event.delta.thinking) {
       emit({ type: 'thinking_delta', text: event.delta.thinking });
     }

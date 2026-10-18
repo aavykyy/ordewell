@@ -13,7 +13,7 @@ import type { SubmitPlanArgs } from '../mcp/tools';
  * asks for a planner, and the service has no way to spell anything else.
  */
 
-const planTurn: AgentEvent[] = [{ type: 'assistant_text', text: planJson() }, { type: 'turn_end' }];
+const planTurn: AgentEvent[] = [{ type: 'assistant_text', runId: 'r1', text: planJson() }, { type: 'turn_end' }];
 
 /** `submits`: every turn calls submit_plan with the plan first, as a one-shot must for its plan to count. */
 function recordingService(turns: AgentEvent[][], { submits = false } = {}) {
@@ -41,9 +41,9 @@ function recordingService(turns: AgentEvent[][], { submits = false } = {}) {
 describe('CliAgentAiService start boundary', () => {
   it('starts a planner for a conversation, and again when it resumes a dead one', async () => {
     const { svc, starts } = recordingService([
-      [{ type: 'assistant_text', text: 'Which cache?' }, { type: 'turn_end' }],
+      [{ type: 'assistant_text', runId: 'r1', text: 'Which cache?' }, { type: 'turn_end' }],
       [{ type: 'error', message: 'claude exited' }],
-      [{ type: 'assistant_text', text: 'Redis it is.' }, { type: 'turn_end' }],
+      [{ type: 'assistant_text', runId: 'r1', text: 'Redis it is.' }, { type: 'turn_end' }],
     ]);
     await svc.startConversation({ plannerTools: { sessionId: 's1', handler: {} }, goal: 'Add a cache', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem(), onProgress: () => {} });
     await svc.continueConversation('Redis', () => {});

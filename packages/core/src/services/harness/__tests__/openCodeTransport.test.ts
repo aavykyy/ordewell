@@ -5,7 +5,7 @@ import type { AgentEvent, TaskStartOptions } from '../AgentAdapter';
 import { mcpClientConfig } from '../../mcp';
 import { sseResponse } from '../../__tests__/harnessTestKit';
 import {
-  ChildSessions, PendingSteers, ReplyText, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePermissions, openCodePlannerAsk, openEventStream, permissionReply, plannerSystem, raiseOnce, settleTurn,
+  ChildSessions, PendingSteers, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePermissions, openCodePlannerAsk, openEventStream, permissionReply, plannerSystem, raiseOnce, settleTurn,
   splitModelId, turnLatch, usageRecord,
 } from '../openCodeTransport';
 import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION } from '../openCodeOrdewell';
@@ -170,49 +170,6 @@ describe('openCodePermissions', () => {
 
   it.each(['ordewell_submit_plan', 'ordewell_task_complete'])('takes %s for an Ordewell tool', (name) => {
     expect(OPENCODE_ORDEWELL.isOrdewellAsk(name)).toBe(true);
-  });
-});
-
-describe('ReplyText', () => {
-  function collect() {
-    const events: AgentEvent[] = [];
-    return { events, onEvent: (e: AgentEvent) => events.push(e) };
-  }
-
-  it('opens a paragraph for each run after the first, and emits a run once', () => {
-    const text = new ReplyText();
-    const { events, onEvent } = collect();
-    text.complete('a', 'First.', onEvent);
-    text.complete('a', 'First.', onEvent);
-    text.complete('b', 'Second.', onEvent);
-
-    expect(events).toEqual([{ type: 'assistant_text', text: 'First.' }, { type: 'assistant_text', text: '\n\nSecond.' }]);
-  });
-
-  it('drops a run of nothing but whitespace', () => {
-    const text = new ReplyText();
-    const { events, onEvent } = collect();
-    text.complete('a', '\n\n', onEvent);
-    text.complete('b', 'Reply.', onEvent);
-
-    expect(events).toEqual([{ type: 'assistant_text', text: 'Reply.' }]);
-  });
-
-  it('streams deltas that add up to the completed run, holding back leading whitespace', () => {
-    const text = new ReplyText();
-    const { events, onEvent } = collect();
-    text.complete('a', 'First.', onEvent);
-    text.delta('b', '\n', onEvent);
-    text.delta('b', 'Sec', onEvent);
-    text.delta('b', 'ond.', onEvent);
-    text.complete('b', '\nSecond.', onEvent);
-    text.delta('b', 'late', onEvent);
-
-    expect(events.slice(1)).toEqual([
-      { type: 'assistant_text_delta', text: '\n\n\nSec' },
-      { type: 'assistant_text_delta', text: 'ond.' },
-      { type: 'assistant_text', text: '\n\n\nSecond.' },
-    ]);
   });
 });
 

@@ -27,9 +27,7 @@ import { checkPlanSkills, type SkillLookup } from '../taskSkills';
 import { PLANNER_TURN_ENDED } from '../plannerTools';
 import { settleReply, type ReplyAttempt } from '../settleReply';
 import { ReplySplitter } from '../replyStream';
-import { opensWithJsonObject } from '../JsonExtractor';
 import { redactSecrets } from '../../utils/redactSecrets';
-import { sameMessage } from '../../utils/sameMessage';
 import { abortScope } from '../../utils/abortScope';
 import { runnerForProvider } from '../ProviderRegistry';
 import { collectResearchContext } from '../ContextCollector';
@@ -42,6 +40,7 @@ import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
 import { mcpClientConfig, sharedMcpServer, type OrdewellMcpServer } from '../mcp';
 import { instructionsBlock, repoRoot } from './repoConfig';
 import { NOT_APPROVED, decideProjectServers, fileProjectServerApprovals, heldServersNote, recordUnusable, type ProjectServerApprovals } from './projectServers';
+import { TurnReply, type ReplyRun } from './turnReply';
 import type { IApproval } from '../../interfaces/IApproval';
 
 /**
@@ -100,6 +99,8 @@ const ONE_SHOT_ATTEMPTS = 2;
 /** One completed harness turn, before classification. */
 interface HarnessTurn {
   text: string;
+  /** The runs `text` joins, in the order they began. */
+  runs: ReplyRun[];
   researchLog: ResearchStep[];
   /** The agent's own failure, verbatim. Present means the turn did not complete. */
   error?: string;
@@ -107,19 +108,6 @@ interface HarnessTurn {
   aborted?: boolean;
   /** Subagents the agent left running when it ended the turn. See {@link MAX_AGENT_WAITS}. */
   backgroundAgents: number;
-}
-
-/**
- * The failure a turn ends on, in front of which the final run's own text is
- * kept. Claude Code says a usage limit twice — as an assistant message and as
- * the `result` of the failed turn — and a block that only repeats the failure
- * is dropped so the user reads it once. Text that came before it is a real
- * reply, and a JSON envelope the planner never finished is not one.
- */
-function failureAfterReply(run: string, blockAt: number, error: string): string {
-  const repeated = sameMessage(run.slice(blockAt), error);
-  const before = (repeated ? run.slice(0, blockAt) : run).trim();
-  return before && opensWithJsonObject(before) !== true ? `${before}\n\n${error}` : error;
 }
 
 /** What a planner session is spawned with and decides its runner's requests against. */
@@ -452,18 +440,7 @@ export class CliAgentAiService implements IAiService {
     const adapter = await this.ensureAdapter(session);
     const pendingCalls = new Map<string, { tool: ResearchStep['tool']; toolLabel?: string; args: string; subagentId?: string }>();
     const researchLog: ResearchStep[] = [];
-    let text = '';
-    // Deltas of the reply run still open. Its complete `assistant_text`
-    // replaces them; a tool call or the end of the turn commits them as sent.
-    let streamedRun = '';
-    // Segments a run's own text streams under. A fresh id per run so a plan
-    // envelope opening right after a tool call is classified on its own
-    // opening, not carried over from whatever the text before the call was.
-    let segmentId = uuidv4();
-    const commitRun = () => { text += streamedRun; streamedRun = ''; runStart = text.length; segmentId = uuidv4(); };
-    // Where the open run, and the latest complete text block in it, begin in `text`.
-    let runStart = 0;
-    let blockStart = 0;
+    const reply = new TurnReply(onProgress);
     // Who streamed thinking deltas (the planner as '', or a subagent) since
     // their last complete `thinking`, which then repeats what was already sent.
     const streamedThinking = new Set<string>();
@@ -512,15 +489,11 @@ export class CliAgentAiService implements IAiService {
     const sent = adapter.send(message, (event: AgentEvent) => {
       switch (event.type) {
         case 'assistant_text_delta':
-          streamedRun += event.text;
-          onProgress({ type: 'text_delta', text: event.text, segmentId });
+          reply.delta(event.runId, event.text);
           return;
 
         case 'assistant_text':
-          blockStart = text.length;
-          text += event.text;
-          if (streamedRun) streamedRun = '';
-          else onProgress({ type: 'text_delta', text: event.text, segmentId });
+          reply.complete(event.runId, event.text);
           return;
 
         case 'thinking_delta':
@@ -533,9 +506,7 @@ export class CliAgentAiService implements IAiService {
           return;
 
         case 'tool_call': {
-          // A subagent's call happens inside the planner's own pending call;
-          // it does not end the planner's run of text.
-          if (!event.subagentId) commitRun();
+          if (!event.subagentId) reply.toolCall();
           const mapped = mapAgentTool(event.name);
           const args = JSON.stringify(normalizeAgentArgs(mapped.tool, event.args));
           const subagentId = event.subagentId;
@@ -625,10 +596,6 @@ export class CliAgentAiService implements IAiService {
       throw err;
     }
 
-    const finalSegment = segmentId;
-    const finalRunStart = runStart;
-    commitRun();
-
     // Anything still pending when the turn ended never produced a result —
     // report it rather than leaving a spinner running in every surface.
     for (const id of [...pendingCalls.keys()]) {
@@ -644,14 +611,10 @@ export class CliAgentAiService implements IAiService {
     if (error || signal?.aborted) session.stop();
 
     if (error) {
-      const failure = failureAfterReply(text.slice(finalRunStart), Math.max(blockStart, finalRunStart) - finalRunStart, error);
-      // The settled failure replaces the turn's final segment, so what that
-      // segment streamed is taken back and carried in the failure instead.
-      onProgress({ type: 'text_retracted', segmentId: finalSegment });
-      text = text.slice(0, finalRunStart);
-      return { text, researchLog, error: failure, usageLimit, aborted: signal?.aborted, backgroundAgents };
+      const failure = reply.fail(error);
+      return { text: reply.text, runs: reply.runs(), researchLog, error: failure, usageLimit, aborted: signal?.aborted, backgroundAgents };
     }
-    return { text, researchLog, error, aborted: signal?.aborted, backgroundAgents };
+    return { text: reply.text, runs: reply.runs(), researchLog, error, aborted: signal?.aborted, backgroundAgents };
   }
 
   // --- Process lifecycle ---

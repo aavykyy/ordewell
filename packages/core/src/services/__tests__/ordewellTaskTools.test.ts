@@ -32,7 +32,7 @@ class IdleAdapter implements TaskModeAgentAdapter {
     this.onEvent = onEvent;
     return new Promise<void>(() => undefined);
   }
-  say(text: string): void { this.onEvent?.({ type: 'assistant_text_delta', text }); }
+  say(text: string): void { this.onEvent?.({ type: 'assistant_text_delta', runId: 'r1', text }); }
   async interrupt(): Promise<boolean> { return false; }
   onProcessExit(listener: (code: number) => void): void { this.exit.push(listener); }
   answerPermission(_id: string, _decision: ApprovalDecision): boolean { return true; }

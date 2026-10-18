@@ -46,12 +46,12 @@ describe('TaskLogRecorder', () => {
     await recorder.wrap(handing(session)).spawn(spawnOpts);
 
     session.emitEvent({ type: 'turn_start', text: 'Do it' });
-    session.emitEvent({ type: 'assistant_text_delta', text: 'Hel' });
-    session.emitEvent({ type: 'assistant_text_delta', text: 'lo' });
+    session.emitEvent({ type: 'assistant_text_delta', runId: 'r1', text: 'Hel' });
+    session.emitEvent({ type: 'assistant_text_delta', runId: 'r1', text: 'lo' });
     expect(sent).toEqual([]);
     vi.advanceTimersByTime(60);
 
-    const expected: TaskLogEvent[] = [{ type: 'turn_start', message: 'Do it' }, { type: 'text_delta', text: 'Hello' }];
+    const expected: TaskLogEvent[] = [{ type: 'turn_start', message: 'Do it' }, { type: 'text_delta', runId: 'r1', text: 'Hello' }];
     expect(sent).toEqual([{ type: 'task_log', taskId: 't1', attempt: 1, events: expected }]);
     expect(file.saved).toEqual(expected);
   });
@@ -109,9 +109,9 @@ describe('TaskLogRecorder', () => {
     const recorder = new TaskLogRecorder({ broadcast: (m) => sent.push(m), location: () => ({ baseDir: '/ws', sessionId: 'sess' }), open: () => memoryFile() });
     await recorder.wrap(handing(session)).spawn(spawnOpts);
 
-    session.emitEvent({ type: 'assistant_text', text: 'Done.' });
+    session.emitEvent({ type: 'assistant_text', runId: 'r1', text: 'Done.' });
     session.emitEvent({ type: 'turn_end', reason: 'completed' });
-    expect(taskLogs(sent).flatMap((m) => m.events)).toEqual([{ type: 'text', text: 'Done.' }, { type: 'turn_end', reason: 'completed' }]);
+    expect(taskLogs(sent).flatMap((m) => m.events)).toEqual([{ type: 'text', runId: 'r1', text: 'Done.' }, { type: 'turn_end', reason: 'completed' }]);
   });
 
   it('flushes what is left when the session exits', async () => {

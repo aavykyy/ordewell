@@ -81,38 +81,47 @@ function toolLine(name: string, args: Record<string, unknown>): string {
  * the fallback summary see. Deliberately lossy — no JSON, no ANSI, subagents
  * left out.
  *
- * Deltas are held back until a line completes or their block ends, so output
- * is written a line at a time rather than a token at a time.
+ * Deltas are held back until a line completes or their run ends, so output
+ * is written a line at a time rather than a token at a time. Output is only
+ * ever appended: a run's complete copy writes what that run's own deltas did
+ * not, and a run after earlier text of the turn opens a paragraph.
  */
 class PlainTextChannel {
+  /** The run whose deltas are held in `pending` until their line completes. */
+  private open: string | null = null;
   private pending = '';
-  /** What this text block has already written from its deltas. */
-  private streamed = '';
-  /** The turn's latest whole text block. */
+  /** What each of the turn's runs has written. */
+  private readonly written = new Map<string, string>();
+  /** The turn's latest complete run. */
   private latest = '';
   private atLineStart = true;
 
   constructor(private readonly write: (text: string) => void) {}
 
-  delta(text: string): void {
+  delta(runId: string, text: string): void {
+    this.enter(runId);
     this.pending += text;
     const newline = this.pending.lastIndexOf('\n');
     if (newline < 0) return;
-    const complete = this.pending.slice(0, newline + 1);
+    this.say(runId, this.pending.slice(0, newline + 1));
     this.pending = this.pending.slice(newline + 1);
-    this.streamed += complete;
-    this.out(complete);
   }
 
-  /** A text block's authoritative copy, which supersedes its deltas. */
-  block(text: string): void {
-    const streamed = this.streamed;
-    this.pending = '';
-    this.streamed = '';
+  /** A run's authoritative copy, which supersedes its deltas. */
+  block(runId: string, text: string): void {
+    if (this.open === runId) this.pending = '';
+    this.enter(runId);
+    this.open = null;
     this.latest = text;
-    // Anything else means the deltas and the block disagree; the block wins,
-    // even at the cost of repeating text — evidence is never dropped.
-    this.out(text.startsWith(streamed) ? text.slice(streamed.length) : text);
+    const streamed = this.written.get(runId) ?? '';
+    if (text.startsWith(streamed)) {
+      this.say(runId, text.slice(streamed.length));
+      return;
+    }
+    // Its deltas and its copy disagree, as when the stream lost a frame: the
+    // copy wins, even at the cost of repeating text — evidence is never dropped.
+    if (!this.atLineStart) this.out('\n');
+    this.say(runId, text);
   }
 
   line(text: string): void {
@@ -128,22 +137,38 @@ class PlainTextChannel {
    */
   failure(message: string): void {
     this.flush();
-    if (sameMessage(this.streamed || this.latest, message)) return;
+    const streaming = this.open === null ? '' : this.written.get(this.open) ?? '';
+    if (sameMessage(streaming || this.latest, message)) return;
     this.line(message);
   }
 
   endTurn(): void {
     this.flush();
-    this.streamed = '';
+    this.open = null;
+    this.written.clear();
     this.latest = '';
     if (!this.atLineStart) this.out('\n');
   }
 
+  /** `runId` speaks now: the run held before it is written out, and a run new to the turn opens its paragraph. */
+  private enter(runId: string): void {
+    if (this.open === runId) return;
+    this.flush();
+    this.open = runId;
+    if (this.written.has(runId)) return;
+    if ([...this.written.values()].some(Boolean)) this.out(this.atLineStart ? '\n' : '\n\n');
+    this.written.set(runId, '');
+  }
+
   private flush(): void {
-    if (!this.pending) return;
-    this.streamed += this.pending;
-    this.out(this.pending);
+    if (!this.pending || this.open === null) return;
+    this.say(this.open, this.pending);
     this.pending = '';
+  }
+
+  private say(runId: string, text: string): void {
+    this.written.set(runId, (this.written.get(runId) ?? '') + text);
+    this.out(text);
   }
 
   private out(text: string): void {
@@ -721,8 +746,8 @@ export class StructuredSession extends AbstractRunnerSession {
 
   private handleEvent(event: Exclude<AgentEvent, { type: 'turn_end' | 'permission_request' | 'permission_cancelled' | 'message_delivered' | 'message_dropped' }>): void {
     switch (event.type) {
-      case 'assistant_text_delta': this.text.delta(event.text); break;
-      case 'assistant_text': this.text.block(event.text); break;
+      case 'assistant_text_delta': this.text.delta(event.runId, event.text); break;
+      case 'assistant_text': this.text.block(event.runId, event.text); break;
       case 'tool_call': if (!event.subagentId) this.text.line(toolLine(event.name, event.args)); break;
       case 'error': this.text.failure(event.message); break;
       // The plan follows the switch (#106), so a restart after an interrupt

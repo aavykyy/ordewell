@@ -5,6 +5,9 @@ import { mcpClientConfig } from '../../mcp';
 import { OPENCODE_PLANNER_PERMISSION } from '../openCodeOrdewell';
 import { OPENCODE_MANIFEST } from '../../../plugins/builtin/opencode.manifest';
 import { modeIds, fakeSpawn, sseResponse, type FakeEventStream } from '../../__tests__/harnessTestKit';
+import type { StructuredEvent } from '../../../interfaces/IRunner';
+import { toTaskLogEvent } from '../../../models/TaskLog';
+import { replayTaskLog } from '../../../conversation/taskLog';
 
 /**
  * OpenCode's task mode (ADR-0018, #55): `opencode serve` driven over HTTP
@@ -215,7 +218,7 @@ describe('OpenCodeAdapter task mode — when a turn ends', () => {
     stream.push(status('idle'));
     await turn;
 
-    expect(events).toContainEqual({ type: 'assistant_text', text: 'Done. <<<MARKER>>>' });
+    expect(events).toContainEqual({ type: 'assistant_text', runId: 'prt_1', text: 'Done. <<<MARKER>>>' });
     expect(events).toContainEqual({ type: 'usage', record: expect.objectContaining({ source: 'opencode', model: 'anthropic/claude-sonnet-4', outputTokens: 5 }) });
     expect(events.at(-1)).toEqual({ type: 'turn_end' });
     adapter.dispose();
@@ -267,7 +270,7 @@ describe('OpenCodeAdapter task mode — when a turn ends', () => {
     delete server.status[SES];
     stream.push(status('idle'));
     await turn;
-    expect(events).toContainEqual({ type: 'assistant_text', text: 'ok' });
+    expect(events).toContainEqual({ type: 'assistant_text', runId: 'prt_1', text: 'ok' });
     adapter.dispose();
   });
 
@@ -297,7 +300,37 @@ describe('OpenCodeAdapter task mode — when a turn ends', () => {
     stream.push(status('busy'));
     stream.push(status('idle'));
     await turn;
-    expect(events).toEqual([{ type: 'assistant_text', text: 'All done <<<MARKER>>>' }, { type: 'turn_end' }]);
+    expect(events).toEqual([{ type: 'assistant_text', runId: 'prt_1', text: 'All done <<<MARKER>>>' }, { type: 'turn_end' }]);
+    adapter.dispose();
+  });
+
+  // The stream delivered the first part's deltas and lost the frame that
+  // completed it; the read-back completes it as the run it streamed as.
+  it('reads back a part whose completion the stream lost where its deltas streamed, above the call after it', async () => {
+    const bash = { id: 'prt_2', messageID: 'msg_a', sessionID: SES, type: 'tool', tool: 'bash', callID: 'call_1', state: { status: 'completed', input: { command: 'ls' }, output: 'src' } };
+    const server = fakeServer({
+      [`GET /session/${SES}/message`]: () => [
+        { info: { id: 'msg_u', role: 'user' }, parts: [{ id: 'prt_u', messageID: 'msg_u', type: 'text', text: 'do the task' }] },
+        { info: { id: 'msg_a', role: 'assistant', time: { created: 1, completed: 2 } }, parts: [{ id: 'prt_1', messageID: 'msg_a', type: 'text', text: 'Checking the tree.' }, bash] },
+        { info: { id: 'msg_b', role: 'assistant', time: { created: 3, completed: 4 } }, parts: [{ id: 'prt_3', messageID: 'msg_b', type: 'text', text: 'Done.' }] },
+      ],
+    });
+    const { adapter } = await startTask(server);
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('do the task', (e) => events.push(e));
+    const stream = await server.stream();
+    stream.push(status('busy'));
+    stream.push(assistant('msg_a'));
+    stream.push({ type: 'message.part.updated', properties: { sessionID: SES, part: { id: 'prt_1', messageID: 'msg_a', sessionID: SES, type: 'text', text: '', time: { start: 1 } } } });
+    stream.push({ type: 'message.part.delta', properties: { sessionID: SES, messageID: 'msg_a', partID: 'prt_1', field: 'text', delta: 'Checking ' } });
+    stream.push({ type: 'message.part.updated', properties: { sessionID: SES, part: bash } });
+    stream.push(assistant('msg_b'));
+    stream.push(textPart('prt_3', 'msg_b', 'Done.'));
+    stream.push(status('idle'));
+    await turn;
+
+    const log = events.flatMap((e) => (e.type === 'turn_end' ? [] : toTaskLogEvent(e as StructuredEvent) ?? []));
+    expect(replayTaskLog(log).blocks.map((b) => (b.type === 'message' ? b.text : b.type))).toEqual(['Checking the tree.', 'tool', 'Done.']);
     adapter.dispose();
   });
 
@@ -683,7 +716,7 @@ describe('OpenCodeAdapter task mode — shared protocol behaviour', () => {
     stream.pushRaw(`${reply.slice(60)}data: ${JSON.stringify(status('idle'))}\n\n`);
     await turn;
 
-    expect(events).toEqual([{ type: 'assistant_text', text: 'Split <<<MARKER>>>' }, { type: 'turn_end' }]);
+    expect(events).toEqual([{ type: 'assistant_text', runId: 'prt_1', text: 'Split <<<MARKER>>>' }, { type: 'turn_end' }]);
     adapter.dispose();
   });
 
@@ -1099,7 +1132,7 @@ it('runs an OpenCode 1.x listed command through the command endpoint with the ta
   const events: AgentEvent[] = [];
   await adapter.invokeCommand!('hello', 'Bob', (e) => events.push(e));
   expect(server.requests.find((r) => r.path === '/session/ses_task/command')?.body).toEqual({ command: 'hello', arguments: 'Bob', agent: 'build', model: 'anthropic/claude-sonnet-4' });
-  expect(events.filter((e) => e.type === 'assistant_text' || e.type === 'turn_end')).toEqual([{ type: 'assistant_text', text: 'Hello Bob' }, { type: 'turn_end' }]);
+  expect(events.filter((e) => e.type === 'assistant_text' || e.type === 'turn_end')).toEqual([{ type: 'assistant_text', runId: 'text-command', text: 'Hello Bob' }, { type: 'turn_end' }]);
   adapter.dispose();
 });
 

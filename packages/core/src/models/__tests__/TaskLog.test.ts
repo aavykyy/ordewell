@@ -118,6 +118,20 @@ describe('coalesceTaskLog', () => {
       { type: 'text', text: ' again' },
     ]);
   });
+
+  it('never merges deltas of two runs', () => {
+    const events: TaskLogEvent[] = [
+      { type: 'text_delta', runId: 'a', text: 'Fir' },
+      { type: 'text_delta', runId: 'a', text: 'st' },
+      { type: 'text_delta', runId: 'b', text: 'Sec' },
+      { type: 'text_delta', runId: 'a', text: '.' },
+    ];
+    expect(coalesceTaskLog(events)).toEqual([
+      { type: 'text_delta', runId: 'a', text: 'First' },
+      { type: 'text_delta', runId: 'b', text: 'Sec' },
+      { type: 'text_delta', runId: 'a', text: '.' },
+    ]);
+  });
 });
 
 describe('digestTaskLog', () => {
