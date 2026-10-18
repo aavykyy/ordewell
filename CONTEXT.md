@@ -404,7 +404,7 @@ one-line preview — every user message except the opening goal, since a
 conversation without its goal is a new session (after a **Compaction**, the
 summary entry stands where the goal did). The task list rides along as it is
 now, including tasks created after that message: a rewind moves where the
-conversation resumes, not what the plan is (ADR-0002, updates of 2026-09-25).
+conversation resumes, not what the plan is (ADR-0002).
 The rewound message's full text comes back with the fork (`rewoundMessage`) so
 a surface can offer it for resending or editing. The fork has no native
 planner session, so its first message replays the shortened transcript on

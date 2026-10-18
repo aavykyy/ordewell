@@ -12,6 +12,41 @@
 - **A failed task's ring is red and a skipped one is dotted**, instead of the
   empty ring of a task still to do.
 - **The collapsed Run settings show their summary on the Run line.**
+- **Every task control is sent through the same checked path as the terminal
+  UI's**, so each is kept in the timeline with who pressed it: Resume now,
+  Don't Resume, Mark complete and Mark not done, Force start (card and command
+  palette), Interrupt, queued messages, checkpoint answers and a request's
+  Allow or Deny. A refused control shows its reason, and the chat no longer
+  writes its own "cancelled" or "Execution stopped." beside the timeline's
+  line.
+- **A task moved to another runner gets a model that runner can run**, and its
+  thinking effort moves to the nearest level the new model offers.
+- **A usage-limit pause keeps the run open**, and a Retry in a finished plan
+  no longer shows the plan as completed.
+- **Changing a setting while the planner is answering no longer loses the
+  turn**, and Stop keeps the planner's live context.
+- **Dependencies work across the whole plan, subtasks included**, and the
+  dependency picker keeps the choices outside its list.
+- **Run marks and cards are dropped only for the run they belong to.** A
+  refused Run task, Force start or Execute keeps the previous handoff and
+  marks, while the command palette's Force start clears them as the plan
+  pane's does.
+
+### Fixed
+
+- **The planner's words stay between the tool calls where it said them**, live
+  and after a window reload.
+- **A streamed task message no longer appears twice**, and opening a task log
+  or switching attempts during a run keeps live text, tool rows, approval
+  cards and turn endings.
+- **Force-sending a message no longer overtakes one the runner already
+  holds**, consecutive Claude Code turns stay separate, and a failed OpenCode
+  permission answer keeps its card open and can be answered again.
+- **A plan saved with an old blocked status loads as pending.**
+- **Completed tasks stop showing Working, Interrupt and Send now.**
+- **A planner turn that fails, hits its usage limit or is abandoned leaves
+  nothing behind**, including the skills it loaded and its research, and
+  Execute during a reply no longer rolls back the planner's token totals.
 
 ## [0.10.5] — 2026-10-17
 
