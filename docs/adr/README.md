@@ -42,7 +42,7 @@ unsurprising one needs no explanation, and a decision with no alternative is
 **What usually qualifies**
 
 - A rule about what counts as evidence, what the plan is the source of, or who
-  decides (the hard constraints in [CLAUDE.md](../../CLAUDE.md)).
+  decides (the conventions in [AGENTS.md](../../AGENTS.md#conventions)).
 - Anything that widens or narrows a security boundary. The planner's
   exploration envelope ([ADR-0008](planner-envelope/0008-planner-exploration-envelope.md))
   may not be widened without one.
