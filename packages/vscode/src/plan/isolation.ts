@@ -67,7 +67,6 @@ export async function handleIsolationAction(
         );
         if (confirm !== 'Discard') return;
         await deps.session.discardRun();
-        deps.chatProvider.clearIsolationHandoff();
         break;
       }
       case 'cleanup':

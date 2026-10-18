@@ -127,6 +127,8 @@ export interface OrchestratorObserver {
   onIsolationBlocked?(data: { reason: 'dirty'; repos: string[] }): void;
   /** An isolated run settled; emitted before `onExecutionComplete`, which surfaces treat as terminal. */
   onIsolationHandoff?(handoff: IsolationHandoff): void;
+  /** The isolated run was cleared up and forgotten, by a Merge all that left nothing to hand over or by a discard. */
+  onRunClosed?(): void;
   /**
    * What a run says about how it isolates — the fallback to the workspace root,
    * shared paths, copies, a stash. Beside the notification channel, which a
@@ -463,6 +465,7 @@ export class TaskOrchestrator {
         changed: (detached) => orchestrator.emit('onIsolationChanged', detached),
         blocked: (repos) => orchestrator.emit('onIsolationBlocked', { reason: 'dirty', repos }),
         handoff: (handoff) => orchestrator.emit('onIsolationHandoff', handoff),
+        closed: () => orchestrator.emit('onRunClosed'),
         notice: (level, message) => orchestrator.emit('onIsolationNotice', { level, message }),
       },
       liveTasks: (): ReadonlySet<string> => orchestrator.liveTaskIds(),

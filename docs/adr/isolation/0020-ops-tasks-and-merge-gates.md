@@ -87,7 +87,10 @@ that depends on.**
   end-of-run Merge all merges the rest; what was merged at a gate is already in
   the user's history, and the handoff names only what is not. The run is cleared
   up only when it has settled and everything is merged — by a last Merge all, or
-  already at its gates, which leaves nothing to hand over. Merge all and landings
+  already at its gates, which leaves nothing to hand over. The Session then
+  broadcasts `run_closed`, after the `isolation_merge` that caused it, and every
+  surface drops the run's marks and cards on that and on nothing else: a merge
+  that leaves the run going keeps them. Merge all and landings
   take turns on one queue, so a merge never reads an integration branch
   mid-landing.
 - When the merge goes through, the gated tasks start by themselves. When it does
@@ -224,3 +227,4 @@ it.
 - 2026-10-12 — merge at gates automatically becomes a global user setting, live in the session it is changed in ([ADR-0030](../supervision/0030-global-run-settings.md)).
 - 2026-10-12 — the automatic merge setting also merges at the end of a run, by the same route as a gate merge ([ADR-0029](../supervision/0029-the-supervisor.md), "Merge at gates automatically").
 - 2026-10-16 — the gate covers the task's whole dependency closure, not just its direct dependencies: a dependency on a verification task implies the work it verified, and a verification lands nothing of its own, so a direct-only gate let an ops task act on the user's checkout before that work was merged. A skipped task adds nothing of its own, but the work behind it still counts.
+- 2026-10-18 — a merge that leaves the run going no longer clears a surface's isolation marks: the Session announces the run's closing as `run_closed` ([ADR-0013](0013-worktree-isolation.md)).

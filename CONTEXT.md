@@ -237,7 +237,8 @@ isolated run settles, *before* `execution_complete`.
 Under ADR-0014 a task's `isolation` also names the `repos` it changed and, while
 it is conflicted or failed to land, the `conflictRepo` that stopped it;
 `isolation_blocked` names the dirty `repos` of a group; and `isolation_merge`
-carries what *Merge all* did, blocked repos and all, to every surface.
+carries what *Merge all* did, blocked repos and all, to every surface;
+`run_closed` follows it when the Session cleared the run up.
 *Avoid:* "event", "progress callback" for this concept — and do not add a
 per-call progress override; the broadcast seam is the only channel.
 
@@ -1956,9 +1957,15 @@ fields (verdict, `idleSince`, isolation, checkpoint, queued messages,
 last status update said, the checkpoint question only while the task still
 waits at it. A status update replaces every status field it covers. The daemon
 sends `Session.runSnapshot()` as a `run_snapshot` frame right after
-`connected`, so a client that joins mid-run has the run before the next update.
+`connected`, so a client that joins mid-run has the run before the next update;
+the session routes' load and read answers carry it too. Whether the run is
+closed is the Session's word, `run_closed` (a Merge all that left nothing to
+hand over, or a discard), which `reduceRun` folds into dropping the marks,
+the handoff and the merge view; a merge that leaves the run going keeps them.
 *Avoid:* a surface deciding for itself which task fields survive a plan
 refresh — the surfaces disagreed, and one dropped checkpoints and `addedBy`;
+*Avoid:* a surface guessing from a merge result, or from the saved run record,
+whether the run is closed;
 *Avoid:* "task state" for the whole of it — a task's status is one field.
 
 **Turn gate** (`TurnGate`, `followTurn`, `stopTurn`) — the stop rule, beside

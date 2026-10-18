@@ -98,6 +98,30 @@ describe('reduceRun', () => {
       expect(blocked).toEqual({ ...landed, mergeResult: { outcome: 'blocked', blocked: [] } });
       expect(merged).toEqual({ ...landed, mergeResult: { outcome: 'merged' }, handoff: null, runMerge: null });
     });
+
+    describe('with a task marked', () => {
+      const isolation = { state: 'integrated' as const, branch: 'ordewell/run/1-t1', worktree: '/wt/1', repos: ['.'] };
+      const marked = play([
+        generated([planned('t1', 1)]),
+        { type: 'status_update', tasks: [{ id: 't1', status: 'completed', verdict: null, isolation }], runMerge: { waitingAtGate: false, paused: false, repos, landed: [] } },
+        { type: 'isolation_handoff', repos, landed: [] },
+      ]);
+
+      it('keeps the marks through a merge that leaves the run open', () => {
+        const view = reduceRun(marked, { type: 'isolation_merge', result: { outcome: 'merged' } });
+
+        expect(view.tasks[0].isolation).toEqual(isolation);
+      });
+
+      it('drops the marks, the handoff and what Merge all said once the run is closed', () => {
+        const merged = reduceRun(marked, { type: 'isolation_merge', result: { outcome: 'merged' } });
+        const view = reduceRun(merged, { type: 'run_closed' });
+
+        expect(view.tasks[0]).not.toHaveProperty('isolation');
+        expect(view).toMatchObject({ handoff: null, runMerge: null, mergeResult: null });
+        expect(view.tasks).toHaveLength(1);
+      });
+    });
   });
 
   it.each<RunInput>([

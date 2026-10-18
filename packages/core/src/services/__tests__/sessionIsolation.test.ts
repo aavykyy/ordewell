@@ -375,8 +375,41 @@ describe('Session with worktree isolation', () => {
       expect(session.isolationView()).toBeNull();
       const update = messages.filter((m) => m.type === 'status_update').at(-1);
       expect(update?.type === 'status_update' && update.tasks.every((t) => t.isolation === undefined)).toBe(true);
-      expect(messages.at(-1)).toEqual({ type: 'isolation_merge', result: { outcome: 'merged' } });
+      expect(messages.slice(-2)).toEqual([{ type: 'isolation_merge', result: { outcome: 'merged' } }, { type: 'run_closed' }]);
       await expect(session.cleanupRun()).rejects.toThrow('This plan has no isolated run');
+    });
+
+    it('does not close the run for a merge that did not go through', async () => {
+      const { session, isolation, messages } = await landed();
+      isolation.mergeResult = { outcome: 'conflict', repo: '.', files: ['a.ts'] };
+
+      await session.mergeRun();
+
+      expect(messages.map((m) => m.type)).not.toContain('run_closed');
+    });
+
+    it('does not close a run that a merge mid-run leaves going', async () => {
+      const { session, messages, pass, spawn } = setup();
+      const t1 = task('t1', 1);
+      const t2 = task('t2', 2, { dependencies: ['t1'] });
+      session.loadPlan(plan([t1, t2]), 'goal', '/repo');
+      await session.executePlan();
+      pass(t1);
+      await vi.waitFor(() => expect(spawn.mock.calls.map(([o]) => o.taskId)).toContain('t2'));
+
+      await session.mergeRun();
+
+      expect(messages.map((m) => m.type)).toContain('isolation_merge');
+      expect(messages.map((m) => m.type)).not.toContain('run_closed');
+      expect(session.isolationView()).not.toBeNull();
+    });
+
+    it('tells every surface the run is closed when a discard forgets it', async () => {
+      const { session, messages } = await landed();
+
+      await session.discardRun();
+
+      expect(messages.at(-1)).toEqual({ type: 'run_closed' });
     });
 
     it('tells every surface what Merge all did, down to each repository that blocked it', async () => {
