@@ -8,6 +8,27 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **VS Code task cards give the title the full row.** The runner, model and
+  effort sit under it with **Open log** beside them, and the row below the card
+  starts where the title does: dependencies, then the status, then Merge and
+  Split, with the remove button after them.
+- **A task's status reads as one badge after its dependencies.** The dot beside
+  it is gone. A long skip or block reason is cut to that row, and a click (or
+  Enter) unfolds the whole of it and folds it back.
+- **A failed task's ring is red and a skipped one is dotted,** instead of the
+  same empty ring as a task still to do.
+- **The collapsed Run settings show their summary on the Run line,**
+  right-aligned, instead of on a line of their own.
+- **Contributors:** `npm run ci` runs every step of CI's workflow locally, in
+  its order, and refuses to start when the workflow has a step it does not
+  know. The VS Code integration test now runs on macOS (`@vscode/test-electron`
+  3.1.0 finds the renamed app binary) and from a VS Code terminal. `vi.waitFor`
+  waits up to ten seconds and a test may run for thirty in every package, so
+  tests on real git and file-system events no longer fail on a loaded machine.
+  CLAUDE.md imports AGENTS.md instead of keeping a shorter copy of it.
+
 ## [0.10.5] - 2026-10-17
 
 ### Added

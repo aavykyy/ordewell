@@ -162,8 +162,10 @@ planner must fail before the goal is typed when the agent is unusable.
 ## Releasing
 
 Releases are driven by a version tag. Bump every package to the same version
-(`cli-alias` pins `@ordewell/cli` exactly), update the CHANGELOG, commit as
-`release: X.Y.Z`, then:
+(`cli-alias` pins `@ordewell/cli` exactly), move each changelog's
+`[Unreleased]` entries under the new version (`CHANGELOG.md`, and
+`packages/vscode/CHANGELOG.md`, which ships in the extension and keeps only
+what a VS Code user sees), commit as `release: X.Y.Z`, then:
 
 ```bash
 git tag v0.4.6 && git push origin v0.4.6

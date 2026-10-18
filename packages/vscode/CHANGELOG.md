@@ -1,5 +1,95 @@
 # Change Log
 
+## [Unreleased]
+
+### Changed
+
+- **Task cards give the title the full row.** The runner, model and effort sit
+  under it with **Open log** beside them, and the row below the card starts
+  where the title does: dependencies, the status, then Merge and Split.
+- **A task's status is one badge after its dependencies.** A long skip or block
+  reason is cut to that row; click it to read the whole of it.
+- **A failed task's ring is red and a skipped one is dotted**, instead of the
+  empty ring of a task still to do.
+- **The collapsed Run settings show their summary on the Run line.**
+
+## [0.10.5] — 2026-10-17
+
+### Added
+
+- **A `/model` you send in a task's chat is written to the plan**, so the card
+  and every later Retry or Continue use the model you picked in the runner.
+- **A planner that hits its usage limit resends at the reset.** **Don't
+  resend** keeps it from going on its own.
+- **The planner is told when you change runners or models**, and a task the
+  change leaves outside is flagged on its card ("codex is switched off").
+- **Approve all.** A waiting task's card has an **Approve** button, and
+  **Approve all** appears when tasks wait for your approval.
+- **A task's usage and assignment stay visible while it runs:** a usage line in
+  the task log, and the runner, model and mode on the card.
+
+### Changed
+
+- **A task's usage is its whole spend**, summed over every attempt and model.
+  The context meter reads the latest model's window, and cost shows only when
+  the runner reported it.
+- **Continue stays on the runner that made the session**, and a Retry after
+  moving a task to another runner carries its files over.
+- **Merge all lands only on the branch the run started on**, and the Merge
+  confirmation names it (`main @ a1b2c3d`).
+- **The enabled runners are one list shared with the terminal UI**, saved in
+  Ordewell's settings file. A list in the old `ordewell.enabledRunners` setting
+  is copied there once and cleared.
+- **A usage limit counts only when it ended a turn Ordewell started**, and a
+  provider's throttle is no longer taken for an account limit.
+
+### Fixed
+
+- **A force start never starts a task ahead of a dependency still under way.**
+- **VS Code and the terminal saving settings at the same moment no longer lose
+  one save.**
+- **A running task can no longer be moved to another runner or have its model
+  cleared.** Stop it first.
+- **The context meter keeps a model's reported window** when a task switches
+  away and back, and across a Continue.
+
+## [0.10.4] — 2026-10-17
+
+### Fixed
+
+- **Switching planner no longer looks frozen behind a slow coding-agent CLI.**
+  The picked planner lights at once.
+- **A coding agent installed while VS Code is open is noticed on the next
+  refresh**, in the runner panel and as the no-key default planner, without a
+  window reload.
+- **OpenCode v2 model variants are discovered again.**
+
+## [0.10.3] — 2026-10-16
+
+### Changed
+
+- **First-start API-key setup offers every supported provider** through a
+  single **Add API key** button.
+- **Task cards show the runner, model and thinking effort beneath the title**,
+  during execution too.
+- **The empty chat says nothing runs until you approve the plan**, or warns
+  that a plan starts at once when autorun is on.
+
+### Fixed
+
+- **A first run with no API key plans with an installed coding agent** (Claude
+  Code, Codex or OpenCode) instead of failing on a missing OpenRouter key, and
+  says it is detecting coding agents until it knows.
+- **A planner that cannot plan points to `/planner`**, not to an OpenRouter key.
+- **Plan approval and Guarded starts are more dependable.** The planner can
+  start a plan again after a run that failed, was stopped or was reloaded,
+  Guarded asks on the approval card, and proposed plan changes show while the
+  planner is still replying.
+- **Tasks added while a plan runs wait for your approval, and Stop also cancels
+  queued starts and messages.** Approval cards survive a reload.
+- **An ops or user task waits until all the work it builds on is merged into
+  your branch.**
+
 ## [0.10.2] — 2026-10-14
 
 ### Added
