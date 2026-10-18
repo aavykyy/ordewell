@@ -313,8 +313,9 @@ accepted. Each tripped guard also posts a supervisor message to the user.
 - **A wake-up turn has a timeout** of ten minutes. On a crash or hang the
   planner is restarted by its saved native session id (ADR-0009's resume path)
   and the turn retried once. A turn that does not end when stopped has the
-  conversation taken back from it, and what it wrote is undone as a failure's
-  would be. A planner turn that ends without a reply — a dead agent — is a
+  conversation taken back from it, and nothing it held lands, as nothing of a
+  failed turn does: a planner turn writes nothing to the dialogue until the
+  save that lands it, so there is nothing to undo. A planner turn that ends without a reply — a dead agent — is a
   crash here, not a note.
 - **Then the run goes unsupervised**: it carries on as Off, with a visible
   notice. Wake-ups not delivered are persisted and handed over whole at the
@@ -507,3 +508,4 @@ until #30 exists.
 - 2026-10-16 — the Stop generation: the user's Stop withdraws every start admitted before it and not yet claimed — one queued behind a held edit, one waiting on its card, one still opening its run — each kept as refused and said as not done, and counts them as work to stop. Every start claims its task at one point that checks approval, the Stop generation and a free slot together. Seen live: a `run_plan` queued behind an edit started the plan after the user's Execute and Stop; a Run sent beside Stop left the task running after Stop answered "stopped"; with one slot, two Runs sent at once both spawned.
 - 2026-10-17 — a planner usage limit keeps the turn's wake-ups with its other inputs and sends them in the planner's resend at the reset, instead of the supervisor holding its own wait ([ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md)).
 - 2026-10-18 — the claim takes the task by id with the start's admission and reads the task as it stands, so a start that awaited its run opening runs the task as edited meanwhile; a conflict repair claims under the admission of the attempt whose work it repairs, rather than whatever Stop generation is current; a force start queued behind its dependencies waits for a planner turn's start hold, and the hold's release looks at the queue with or without a run.
+- 2026-10-18 — a planner turn holds what it writes — its inputs, the skills the planner loads, its research subagents — until the save that lands it, so a hung or failed turn has nothing to undo, whatever was saved while it ran.

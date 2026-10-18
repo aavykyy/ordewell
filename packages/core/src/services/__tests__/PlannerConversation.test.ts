@@ -55,7 +55,6 @@ function fakeHost(ai: IAiService, plan: LegacyPlanState | null = dialoguePlan())
     mutate: (op, notify) => {
       if (!state.plan || !op()) return null;
       state.persists++;
-      conversation.markPersisted();
       notify?.();
       return state.plan;
     },
@@ -94,75 +93,50 @@ describe('PlannerConversation transcript', () => {
 
     expect(conversation.transcript).toEqual([{ role: 'assistant', content: 'summary', timestamp: '2026-01-02T00:00:00Z' }]);
   });
+});
 
-  it('restore undoes writes made since the snapshot', () => {
-    const { conversation, state } = fakeHost(fakeAi());
-    const snap = conversation.snapshot()!;
+describe('what a planner turn writes', () => {
+  const plannerLoad: SkillLoad = { invokedBy: 'planner', name: 'review-plan', source: 'global', path: '~/skills/review-plan/SKILL.md', content: 'REVIEW BODY' };
+  const record = (at: string) => ({ command: 'run_task' as const, actor: 'planner-turn' as const, outcome: 'done' as const, at });
 
-    conversation.append('user', 'unsent', { timestamp: '2026-01-01T00:00:02Z' });
+  /** A turn that, while it runs, has a command at the seam saved, loads a skill, then has another saved. */
+  function turnWithSavesDuringIt(settle: () => Promise<ConversationTurn>) {
+    const made = fakeHost(fakeAi({
+      continueConversation: vi.fn(async () => {
+        const { conversation, host } = made;
+        host.mutate(() => {
+          conversation.recordExecution(record('2026-01-01T00:00:03Z'), 'Started task 1.');
+          return true;
+        });
+        conversation.recordPlannerSkill(plannerLoad);
+        host.mutate(() => {
+          conversation.recordExecution(record('2026-01-01T00:00:04Z'), 'Started task 2.');
+          return true;
+        });
+        return settle();
+      }),
+    }));
+    return made;
+  }
 
-    expect(conversation.restore(snap)).toBe(true);
-    expect(state.plan!.conversationHistory).toHaveLength(2);
+  it('lands what it held where each happened, among what was saved while it ran', async () => {
+    const { conversation, state } = turnWithSavesDuringIt(async () => ({ kind: 'message', text: 'Both started.', researchLog: [] }));
+
+    await conversation.reply('start them');
+
+    expect(state.plan!.conversationHistory!.map((m) => m.kind ?? m.content)).toEqual([
+      'build me a parser', 'Which file formats?', 'start them', 'execution', 'skill_load', 'execution', 'Both started.',
+    ]);
+    expect(state.plan!.researchLog!.map((e) => ('content' in e ? e.content : e.id))).toEqual(['build me a parser', 'start them']);
   });
 
-  it('restore refuses once anything was persisted since the snapshot', () => {
-    const { conversation, state } = fakeHost(fakeAi());
-    const snap = conversation.snapshot()!;
+  it('writes nothing of its own when it fails, though saves were made while it ran', async () => {
+    const { conversation, state } = turnWithSavesDuringIt(async () => { throw new Error('planner transport down'); });
 
-    conversation.append('user', 'sent', { timestamp: '2026-01-01T00:00:02Z' });
-    conversation.markPersisted();
+    await expect(conversation.reply('start them')).rejects.toThrow('planner transport down');
 
-    expect(conversation.restore(snap)).toBe(false);
-    expect(state.plan!.conversationHistory).toHaveLength(3);
-  });
-
-  // A task settling mid-turn saves the whole plan, the turn's unsent message
-  // with it. That save is not the turn landing, so it must not keep the turn
-  // from being taken back — and disk has to follow memory back once it is.
-  it('restore still undoes a turn a background save caught in flight, and saves the undo', () => {
-    const { conversation, state } = fakeHost(fakeAi());
-    const snap = conversation.snapshot()!;
-
-    conversation.append('user', 'unsent', { timestamp: '2026-01-01T00:00:02Z' });
-    conversation.markPersisted({ background: true });
-
-    expect(conversation.restore(snap)).toBe(true);
-    expect(state.plan!.conversationHistory).toHaveLength(2);
-    expect(state.persists).toBe(1);
-  });
-
-  it('keeps an automatic merge record when undoing a failed planner turn', () => {
-    const { conversation, state } = fakeHost(fakeAi());
-    const snap = conversation.snapshot()!;
-    conversation.append('user', 'unsent');
-    const action = { role: 'assistant' as const, kind: 'system' as const,
-      actor: 'Ordewell setting' as const, content: 'Ordewell setting: auto-merged for task 2',
-      timestamp: '2026-01-01T00:00:03Z' };
-    state.plan!.conversationHistory = [...state.plan!.conversationHistory!, action];
-    conversation.markPersisted({ background: true });
-    expect(conversation.restore(snap)).toBe(true);
-    expect(state.plan!.conversationHistory).toEqual([...snap.history!, action]);
-    expect(state.persists).toBe(1);
-  });
-
-  it('restore saves nothing when no save caught the turn', () => {
-    const { conversation, state } = fakeHost(fakeAi());
-    const snap = conversation.snapshot()!;
-
-    conversation.append('user', 'unsent', { timestamp: '2026-01-01T00:00:02Z' });
-
-    expect(conversation.restore(snap)).toBe(true);
-    expect(state.persists).toBe(0);
-  });
-
-  it('restore never writes a snapshot onto a plan adopted after it was taken', () => {
-    const { conversation, state } = fakeHost(fakeAi());
-    const snap = conversation.snapshot()!;
-    const adopted = { ...dialoguePlan(), conversationHistory: [] };
-    state.plan = adopted;
-
-    expect(conversation.restore(snap)).toBe(false);
-    expect(adopted.conversationHistory).toEqual([]);
+    expect(state.plan!.conversationHistory!.map((m) => m.kind ?? m.content)).toEqual(['build me a parser', 'Which file formats?', 'execution', 'execution']);
+    expect(state.plan!.researchLog).toHaveLength(1);
   });
 });
 

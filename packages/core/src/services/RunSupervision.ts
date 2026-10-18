@@ -41,7 +41,7 @@ export interface RunSupervisionHost extends Pick<SupervisorHost, 'deliver' | 'pu
   supervisorNote(text: string): void;
   /** The run's settings changed with nothing to say: save and announce the plan. */
   changed(): void;
-  /** Save the plan in the background: what supervision remembers goes with it. */
+  /** Save the plan, and what supervision remembers with it. */
   save(): void;
   /** Send the end-of-run handoff again, unmarked, unless the run merged meanwhile or a new one opened. */
   resendHandoff(): void;

@@ -33,6 +33,7 @@ import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
 import { surfacePlan, type HeldEdit, type RunMergeView, type RunView, type SessionBroadcaster, type SessionMessage, type SessionNotice } from './SessionMessage';
 import { EMPTY_RUN, reduceRun } from './runView';
 import { SessionEventRelay } from './SessionEventRelay';
+import { SubagentRuns } from './SubagentRuns';
 import { saveSession } from '../utils/sessionStore';
 import { listTaskLogAttempts, readTaskLog, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
 import { digestTaskLog, type TaskLogEvent } from '../models/TaskLog';
@@ -604,21 +605,18 @@ export class Session {
       plan: () => (this.closed ? null : this.plan),
       conversationBusy: () => this.conversation.isTurnInFlight,
       mayWake: () => this.supervision.mayWake(),
-      persist: () => this.persist({ background: true }),
+      persist: () => this.persist(),
       announce: () => {
-        this.persist({ background: true });
+        this.persist();
         this.events.planGenerated(this.plan, this.goal);
       },
       interrupt: () => { this.conversation.stopTurn('force_send'); },
       holdStarts: () => this.orchestrator.holdStarts(),
       // A start queued behind its dependencies waited for the turn too, with or without a run.
       resumeStarts: async () => {
-        if (this.orchestrator.isRunning || this.orchestrator.startsPending) await this.withSave(() => this.orchestrator.tick(), { background: true });
+        if (this.orchestrator.isRunning || this.orchestrator.startsPending) await this.withSave(() => this.orchestrator.tick());
       },
       run: async (prompt, { taken, signal }) => {
-        // A turn that failed before persist leaves its runs unflushed; drop them so
-        // the next turn's log cannot absorb a previous turn's uncommitted activity.
-        this.events.dropSubagentRuns();
         const reply = (turnSignal: AbortSignal | undefined, wakeUp?: WakeUpTurn) =>
           this.conversation.reply(prompt, { signal: turnSignal, onCommit: taken, wakeUps: prompt.wakeUps, forced: prompt.forced, ...(wakeUp ? { wakeUp } : {}) });
         // Wake-ups that ride with a user's message are context for the user's turn.
@@ -643,7 +641,7 @@ export class Session {
       systemNote: (text) => this.systemNote(text),
       supervisorNote: (text) => this.supervisorNote(text),
       changed: () => this.mutatePlan(() => true),
-      save: () => this.persist({ background: true }),
+      save: () => this.persist(),
       resendHandoff: () => {
         const handoff = this.owedHandoff();
         if (handoff) this.broadcast({ type: 'isolation_handoff', ...handoff });
@@ -982,23 +980,21 @@ export class Session {
       onRunStarted: ({ origin }) => {
         if (!this.plan) return;
         this.supervision.runStarted(origin);
-        this.persist({ background: true });
+        this.persist();
         this.events.planGenerated(this.plan, this.goal);
       },
       onAutoMerge: ({ trigger, result }) => {
         if (!this.plan) return;
         const taskId = trigger.kind === 'gate' ? trigger.taskId : undefined;
-        if (result.outcome === 'merged') {
-          this.plan.conversationHistory = [...(this.plan.conversationHistory ?? []), {
-            role: 'assistant', kind: 'system', actor: 'Ordewell setting',
-            content: taskId === undefined
+        // Saved either way: the run record changed with the merge.
+        this.mutatePlan(() => {
+          if (result.outcome === 'merged') {
+            this.conversation.append('assistant', taskId === undefined
               ? 'Ordewell setting: auto-merged at the end of the run'
-              : `Ordewell setting: auto-merged for task ${this.store.get(taskId)?.order ?? taskId}`,
-            timestamp: new Date().toISOString(),
-          }];
-        }
-        this.persist({ background: true });
-        this.events.planGenerated(this.plan, this.goal);
+              : `Ordewell setting: auto-merged for task ${this.store.get(taskId)?.order ?? taskId}`, { kind: 'system', actor: 'Ordewell setting' });
+          }
+          return true;
+        });
         this.broadcast({ type: 'isolation_merge', result, trigger });
         this.announceClosed();
         if (result.outcome !== 'merged') this.supervision.observe({ kind: 'auto_merge_stopped', ...(taskId === undefined ? {} : { taskId }), detail: mergeStopped(result) });
@@ -1017,7 +1013,7 @@ export class Session {
       onTaskSettled: ({ taskId }) => {
         const task = this.store.get(taskId);
         if (task) this.supervision.taskSettled(task);
-        this.persist({ background: true });
+        this.persist();
       },
       onUsageLimitWait: ({ taskId, runner, resumeAt, cancelled }) => {
         if (!cancelled) this.supervision.observe({ kind: 'usage_limit', taskId, runner, resumeAt });
@@ -1027,13 +1023,13 @@ export class Session {
         this.supervision.observe({ kind: 'task_idle', taskId, detail: `no output since ${idleSince}` });
       },
       onUsageChanged: () => {
-        this.persist({ background: true });
+        this.persist();
         relay.onUsageChanged();
       },
       onIsolationChanged: () => {
         // The run record names branches and worktrees on disk, so it is saved
         // as it changes rather than at the end: a crash must still find them.
-        this.persist({ background: true });
+        this.persist();
         relay.onIsolationChanged();
       },
       onRunClosed: () => { this.closedUnannounced = true; },
@@ -1041,7 +1037,7 @@ export class Session {
       onExecutionComplete: () => {
         this.announceClosed();
         relay.onExecutionComplete();
-        this.persist({ background: true });
+        this.persist();
         this.supervision.runFinished();
       },
     };
@@ -1059,13 +1055,12 @@ export class Session {
   }
 
   /**
-   * Persists PlanStore state to disk. PlanStore is the single authority.
-   * `background`: an execution event's save, which may land in the middle of a
-   * planner turn without settling it (see {@link PlannerConversation.restore}).
+   * Persists PlanStore state to disk. PlanStore is the single authority. Any
+   * save may come in the middle of a planner turn, and finds nothing of it to
+   * write: a turn holds what it writes until the mutation that lands it.
    */
-  private persist(opts: { background?: boolean } = {}): void {
+  private persist(): void {
     if (!this.plan) return;
-    this.events.flushSubagentRuns(this.plan);
     this.syncPlanTasks();
     this.plan.isolation = this.runs.planIsolation ?? undefined;
     this.plan.plannerUsage = this.usage.snapshot();
@@ -1074,7 +1069,6 @@ export class Session {
     this.plan.supervision = this.supervision.snapshot();
     this.plan.lastUpdated = new Date().toISOString();
     this.save(this.plan, this.goal, this.workspace, this.currentSessionId);
-    this.conversation.markPersisted(opts);
   }
 
   /** A new plan on a long-lived Session gets its own persisted identity (unless the host fixed one). */
@@ -1086,16 +1080,13 @@ export class Session {
    * The plan scope ends: everything that belongs to the plan this Session
    * holds goes, so nothing of it reaches the next one — a new plan, another
    * session adopted, or the Session closed. Its run is stopped, the planner
-   * turn in flight is abandoned with its uncommitted subagent steps, what that
-   * turn deferred is settled, and the conversation, supervision, usage ledger,
+   * turn in flight is abandoned with everything it held, what that turn
+   * deferred is settled, and the conversation, supervision, usage ledger,
    * execution log and planner prompts are cleared. A new plan on the same
    * Session keeps the scopes the user granted (`keepGrants`); a session
    * boundary does not (ADR-0008).
    */
   private dropPlanScope({ keepGrants = false }: { keepGrants?: boolean } = {}): void {
-    // Before the stop, whose save would otherwise write the abandoned turn's
-    // steps into the plan it saves.
-    this.events.dropSubagentRuns();
     // A turn waiting at the planner gate belongs to this scope too: let open
     // later, it would plan the old goal in whatever scope is held by then.
     this.endWaiting(() => new PlannerTurnDiscardedError());
@@ -1313,6 +1304,7 @@ export class Session {
       const { modelsByRunner, runnerModes } = await this.catalog.planning(chosenRunners);
       const settings = this.settingsFn();
       const modes = { ...plannerModesFrom(this.config.autonomousMode), isolatedExecution: await this.runs.plannerLayout(), taskSkills: this.workspaceSkills() };
+      const subagents = new SubagentRuns();
 
       const { skillWarnings = [], ...plan } = await this.planner.generate({
         goal,
@@ -1322,20 +1314,25 @@ export class Session {
         autonomousDefault: this.config.autonomousMode,
         fs: this.fsAdapter,
         fetcher: this.fetcher,
-        onProgress: (p) => this.events.progress(p),
+        onProgress: (p) => {
+          subagents.observe(p);
+          this.events.progress(p);
+        },
         signal: turn.signal,
         perRunnerAllowlist: settings.modelAllowlist,
         modes,
       });
       if (turn.abandoned) throw new PlannerTurnDiscardedError();
 
+      // Part of the plan as it is adopted, like the research the planner returned.
+      plan.researchLog = subagents.foldInto(plan.researchLog ?? []);
       this.plan = plan;
-      this.saved(() => {
+      this.mutatePlan(() => {
         this.conversation.recordSkillWarnings(skillWarnings, plan.generatedAt);
         this.orchestrator.loadPlan(plan.tasks, plan.runners);
         this.store.resetForRun({ preserveCompleted: false });
+        return true;
       });
-      this.events.planGenerated(this.plan, this.goal);
       for (const warning of skillWarnings) this.notice('warn', warning);
       return plan;
     });
@@ -1865,7 +1862,7 @@ export class Session {
    * is back in progress, and saved so before any surface is told.
    */
   sendTaskMessage(taskId: string, text: string): string {
-    return this.saved(() => this.orchestrator.sendTaskMessage(taskId, text), { background: true });
+    return this.saved(() => this.orchestrator.sendTaskMessage(taskId, text));
   }
 
   /**
@@ -1873,7 +1870,7 @@ export class Session {
    * this message next. Throws `TaskControlError` where a plain message would.
    */
   forceSendTaskMessage(taskId: string, text: string): string {
-    return this.saved(() => this.orchestrator.forceSendTaskMessage(taskId, text), { background: true });
+    return this.saved(() => this.orchestrator.forceSendTaskMessage(taskId, text));
   }
 
   /**
@@ -1881,19 +1878,19 @@ export class Session {
    * Throws `TaskControlError` where a plain message would.
    */
   invokeTaskCommand(taskId: string, name: string, args = ''): string {
-    return this.saved(() => this.orchestrator.invokeTaskCommand(taskId, name, args), { background: true });
+    return this.saved(() => this.orchestrator.invokeTaskCommand(taskId, name, args));
   }
 
   forceSendQueuedTaskMessage(taskId: string, id: string): boolean {
-    return this.saved(() => this.orchestrator.forceSendQueuedTaskMessage(taskId, id), { background: true });
+    return this.saved(() => this.orchestrator.forceSendQueuedTaskMessage(taskId, id));
   }
 
   removeQueuedTaskMessage(taskId: string, id: string): boolean {
-    return this.saved(() => this.orchestrator.removeQueuedTaskMessage(taskId, id), { background: true });
+    return this.saved(() => this.orchestrator.removeQueuedTaskMessage(taskId, id));
   }
 
   async interruptTask(taskId: string): Promise<void> {
-    await this.withSave(() => this.orchestrator.interruptTask(taskId), { background: true });
+    await this.withSave(() => this.orchestrator.interruptTask(taskId));
   }
 
   /** Replay a run a dirty tree blocked, after stashing the tracked changes. */
@@ -2021,16 +2018,13 @@ export class Session {
    * a hold would stall every task's status for as long, and an
    * `execution_complete` the control triggers would overtake the status held
    * back — which a surface treats as the end of the stream. Instead each status
-   * announced while one runs is saved first (see {@link observer}), as the
-   * background save of an execution event: it may land mid planner turn. So
-   * is the last one where the control is itself execution, not the user's
-   * word on the plan (`background`).
+   * announced while one runs is saved first (see {@link observer}).
    */
-  private async withSave<T>(op: () => Promise<T>, opts: { background?: boolean } = {}): Promise<T> {
+  private async withSave<T>(op: () => Promise<T>): Promise<T> {
     this.controlsInFlight++;
     try {
       const result = await op();
-      this.persist(opts);
+      this.persist();
       return result;
     } finally {
       this.controlsInFlight--;
@@ -2038,13 +2032,13 @@ export class Session {
   }
 
   private saveForControl(): void {
-    if (this.controlsInFlight > 0) this.persist({ background: true });
+    if (this.controlsInFlight > 0) this.persist();
   }
 
   /** A control that finishes synchronously: its status is held until it is saved. */
-  private saved<T>(op: () => T, opts: { background?: boolean } = {}): T {
+  private saved<T>(op: () => T): T {
     const result = this.events.holdStatus(op);
-    this.persist(opts);
+    this.persist();
     this.events.releaseStatus(this.plan);
     return result;
   }
@@ -2141,7 +2135,9 @@ export class Session {
     }
     // The saved ledger is the session's own history: adopt it before the
     // persist below writes the plan back, so a load does not zero the totals.
-    this.usage.restore(plan.plannerUsage);
+    // The same-object load keeps the live ledger, which holds what the turn in
+    // flight spent and the save does not yet.
+    if (adopting) this.usage.restore(plan.plannerUsage);
     // Adopting the saved session's id keeps subsequent persists writing to the
     // same file instead of forking the session under a fresh identity.
     if (opts?.sessionId) this.currentSessionId = opts.sessionId;

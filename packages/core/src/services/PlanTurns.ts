@@ -37,9 +37,9 @@ export interface PlanTurnsHost {
   conversationBusy(): boolean;
   /** Whether wake-ups alone may open a turn now; when not, they wait for one that may, or for the user's next message. */
   mayWake(): boolean;
-  /** Save the pending list. A background save: it must not count as settling a turn in flight. */
+  /** Save the pending list. */
   persist(): void;
-  /** The wait on the planner's usage limit changed with no turn to say so: save the plan in the background, and announce it. */
+  /** The wait on the planner's usage limit changed with no turn to say so: save the plan, and announce it. */
   announce(): void;
   /**
    * Stop the planner turn holding the conversation for a force send: it ends

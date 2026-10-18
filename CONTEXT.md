@@ -56,8 +56,9 @@ The Session adds to the relay's observer only the saves some events owe, each
 made before the event is announced: a task that settles on its own
 (`onTaskSettled` — completed, failed or awaiting the user) is saved as it
 settles, so a shared run does not wait for its end to record a verdict.
-These execution-event saves are *background* saves: one that lands in the
-middle of a planner turn does not settle that turn (see *PlannerConversation*).
+Any save may land in the middle of a planner turn, and none settles it: the
+turn holds what it writes until the mutation that lands it (see
+*PlannerConversation*), so there is nothing of it for another save to write.
 Mutation is an internal seam — every structural plan mutation *and every
 settled conversation turn* (plan commit, task-ops apply, planner message) runs
 one `mutatePlan` ritual (store op → persist → broadcast). The ritual covers plan
@@ -72,10 +73,9 @@ are saved before any surface hears of them too: a synchronous one holds its
 before each `status_update` announced while it runs, and once more when it
 ends — a hold across its spawns and git work would stall every task's status
 and let an `execution_complete` it causes overtake the update held back. The
-saves made while it runs are background saves, as are a task control's own;
-so is the run going on when a planner turn lets its start hold go, which is
-saved before its statuses go out the same way. `generatePlan` and `loadPlan` persist
-the plan they adopt directly. Direct (non-planner) edits go one step further
+run going on when a planner turn lets its start hold go is saved before its
+statuses go out the same way. `loadPlan` persists the plan it adopts
+directly, and `generatePlan` through the ritual. Direct (non-planner) edits go one step further
 through `editPlan`, which adds the reschedule they owe an armed scheduler:
 nothing else wakes one after a hand edit, because no planner turn ends to let
 a start hold go, so a task the edit unblocked would sit ready and never start. PlanStore is the single source of truth for task
@@ -107,8 +107,8 @@ Session is the lifecycle owner, not a registry.
 
 **Plan scope** (`Session.dropPlanScope`) — everything a Session holds that
 belongs to the plan it holds, and goes with it: the run (stopped, with its
-agents), the planner turn in flight (abandoned, its uncommitted subagent steps
-dropped before anything saves), what that turn deferred (its **turn effects**,
+agents), the planner turn in flight (abandoned with everything it held, so a
+subagent of it that reports afterwards reaches nothing that is saved), what that turn deferred (its **turn effects**,
 reported as not done), the waiting turns' callers, the conversation,
 supervision and loop-guard memory, the planner usage ledger, the execution log
 and the planner's open prompts. It ends in one teardown, used by all four ways
@@ -117,7 +117,9 @@ another session adopted (`loadPlan` of a *different* plan object), `reset`,
 and `destroy`. The scopes the user granted end with it at a session boundary
 (adopt, reset, destroy — ADR-0008), and are kept by a new plan started on the
 same Session. A host never stops the run or the runners itself around these
-calls. Re-adopting the *same* plan object (approval) is not a scope end.
+calls. Re-adopting the *same* plan object (approval) is not a scope end, and
+keeps what the Session holds live — supervision's memory, the usage ledger with
+what a turn in flight has spent — over the plan's saved copies.
 *Avoid:* "session reset" for the adopt or new-plan cases — only `reset` also
 mints a new identity and clears the model cache.
 
@@ -142,9 +144,9 @@ the *ModelResolver*'s own cache is a different one that this overlays.
 **SessionEventRelay** — the one place a surface's view of a Session is made:
 it turns orchestrator events (task changes, ticks, review, checkpoints,
 isolation, execution complete) and planner progress into **SessionMessage**
-broadcasts, holds status updates back while a mutation is in flight, and
-gathers a turn's subagent runs until the Session's next persist folds them
-into the research log. It never persists; where an event owes a save, the
+broadcasts, and holds status updates back while a mutation is in flight. It
+holds nothing of a planner turn — a turn's subagent runs are the turn's own
+(*PlannerConversation*) — and never persists; where an event owes a save, the
 Session saves before handing the event on. Built by `createSession`, tested
 directly against a fake broadcast.
 *Avoid:* "the broadcaster" — `SessionBroadcaster` is the transport callback the
@@ -156,18 +158,23 @@ the planner's `researchLog`), the live model context behind it, and every turn
 from the user's message to a settled outcome. Planner turns settle through one
 path: the first turn and every later turn get the same read draining (the
 task-query channel), task-ops validation and bounded corrective retries, and
-commit through the host's `mutatePlan` ritual. It builds the per-turn prompt
+commit through the host's `mutatePlan` ritual, in one landing mutation. A turn
+writes nothing while it runs: its inputs (the opening's goal, the user's
+message and wake-up digests, with the skills they load), the skills the planner
+loads and the research subagents it starts are held on the turn, each entry
+with the point in the transcript it belongs at, and that mutation writes them
+there, ahead of whatever was saved meanwhile (a call at the seam, a settings
+note). A turn that never lands — failed, stopped before settling, abandoned —
+takes them with it, whatever saves were made while it ran, so there is nothing
+to take back. It is the only writer of the transcript; every write is made in
+the host's mutation ritual. It builds the per-turn prompt
 blocks (the always-on catalog block and the current-plan block, whose edit
 protocol prose lives beside the applier as `taskOpsProtocol` in `TaskOps.ts`).
 The live model context — a vendor service's message list, a harness planner's
 process and native session id — is disposable: `reset()` drops it, and the
 next turn is replayed from the transcript (`reset` runs before every replay,
 so a harness planner never resumes its own memory on top of the replayed
-one). A turn that throws before anything was persisted rolls its own writes
-back (`snapshot`/`restore`); once anything has been persisted, memory already
-matches disk and the rollback declines. A background save — a task settling
-mid-turn — does not count: the turn still rolls back, and the undo is saved
-through the mutation ritual so disk follows memory. Transcript edits are whole-array
+one). Transcript edits are whole-array
 operations (`append`, `replace`), so compacting a conversation is a
 transcript edit plus a `reset`; forking and rewinding copy it instead
 (`clone`, `cloneBefore`) and leave it as it was. It owns the **Planner turn**

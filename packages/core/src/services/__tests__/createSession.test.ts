@@ -924,6 +924,39 @@ describe('session id stability (persist seam)', () => {
       });
     });
 
+    // VS Code's Execute re-adopts the Session's own plan object, and is offered
+    // while a planner turn runs: what that turn spent is recorded, not yet saved.
+    it('keeps a turn\'s unsaved usage when the plan it is answering is re-adopted', async () => {
+      const broadcast = vi.fn();
+      let progress: ((p: import('../../models/Task').ResearchProgress) => void) | undefined;
+      const session = makeSession({
+        broadcast,
+        aiService: {
+          startConversation: vi.fn(async (req: import('../../services/AiService').ConversationRequest) => {
+            req.onProgress({ type: 'usage', record: { source: 'openai', inputTokens: 100 } });
+            return { kind: 'message' as const, text: 'Which store?', researchLog: [] };
+          }),
+          continueConversation: vi.fn((_message: string, onProgress: (p: import('../../models/Task').ResearchProgress) => void) => {
+            progress = onProgress;
+            return new Promise<never>(() => {});
+          }),
+          hasActiveConversation: () => true,
+          reset: vi.fn(),
+        },
+      });
+      await session.startPlanning('goal', ['claude-code']);
+      void session.continueConversation('postgres').catch(() => {});
+      await vi.waitFor(() => expect(progress).toBeDefined());
+      progress!({ type: 'usage', record: { source: 'openai', inputTokens: 50 } });
+      broadcast.mockClear();
+
+      session.loadPlan(session.planState!, 'goal', '/repo');
+
+      expect(saves(session).mock.calls.at(-1)![0].plannerUsage?.totals).toEqual({ inputTokens: 150 });
+      const sent = broadcast.mock.calls.map(([m]) => m).filter((m) => m.type === 'planner_usage');
+      expect(sent.map((m) => m.totals)).toEqual([{ inputTokens: 150 }]);
+    });
+
     it('does not re-broadcast usage for a plan that never recorded any', () => {
       const broadcast = vi.fn();
       const session = makeSession({ broadcast });
@@ -958,6 +991,26 @@ describe('session id stability (persist seam)', () => {
   });
 
   describe('subagent persistence (#50)', () => {
+    it('saves the subagents one-shot plan generation started with the plan', async () => {
+      const step: import('../../models/Task').ResearchStep = { id: 'a1', tool: 'grep', args: '{}', result: '', success: true, outcome: 'success', subagentId: 'sa-a', timestamp: '' };
+      const session = makeSession({
+        planner: {
+          generate: vi.fn(async (req: { onProgress?: (p: import('../../models/Task').ResearchProgress) => void }) => {
+            req.onProgress?.({ type: 'subagent_started', subagentId: 'sa-a', brief: 'explore a' });
+            req.onProgress?.({ type: 'tool_result', subagentId: 'sa-a', step });
+            req.onProgress?.({ type: 'subagent_finished', subagentId: 'sa-a', outcome: 'done', digest: 'found a' });
+            return { tasks: [], generatedAt: '', status: 'draft' as const, runners: ['claude-code' as const], lastUpdated: '', researchLog: [step] };
+          }),
+        },
+      });
+
+      await session.generatePlan('add persistence', ['claude-code']);
+
+      const saved = saves(session).mock.calls.at(-1)![0] as LegacyPlanState;
+      expect((saved.researchLog ?? []).map((e) => e.id)).toEqual(['sa-sa-a', 'a1']);
+      expect(saved.researchLog![0]).toMatchObject({ brief: 'explore a', outcome: 'done', digest: 'found a' });
+    });
+
     it('persists a harness planner\'s subagent events the same way', async () => {
       const cli = new CliAgentAiService(
         fakeConfig({ aiProvider: 'claude-code' }),

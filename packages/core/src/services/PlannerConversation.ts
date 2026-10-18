@@ -22,6 +22,7 @@ import type { AssignmentScope } from './AssignmentScope';
 import { flaggedTasks, runnersChangedBlock, scopeChange } from './RunnerChange';
 import { noteRun } from './settleReply';
 import type { StartWait, StartWaitKind } from './readiness';
+import { SubagentRuns } from './SubagentRuns';
 
 /**
  * Per-runner model cap for the always-on catalog block. Generous enough that
@@ -175,22 +176,13 @@ interface UserTurn {
   reads: ReadBudget;
   /** Set when no user message opened the turn: the supervisor answers it. */
   wakeUp?: WakeUpTurn;
-  /** Where its failure returns the dialogue to, once it has written to it. */
-  checkpoint?: TranscriptSnapshot | null;
+  /** What the planner had been told of the user's runners when the turn opened: a turn that never lands told it nothing. */
+  toldScope: AssignmentScope | null;
   /** Its message was force sent. */
   forced?: boolean;
   /** Handed in since the backend last answered; see {@link PlannerConversation.submit}. */
   submitted?: PlannerSubmission;
-  /**
-   * The turn's inputs — the user's message and the skills its `/name` tokens
-   * loaded, the wake-up digests, and the user-prompt research entry — held
-   * until the mutation that lands the outcome writes them. While the turn is in
-   * flight they live only in the plan's pending turns, so a background save
-   * cannot persist them in the transcript too and a reload cannot replay both.
-   * `at` is where they belong in the transcript, before anything the turn wrote
-   * as it ran (a planner skill load, a command at the seam).
-   */
-  input?: { entries: ConversationMessage[]; research: ResearchLogEntry[]; at: number };
+  writes: TurnWrites;
   /** See {@link ReplyOptions.onCommit}. */
   onCommit?: () => void;
   /** Surfaces were last told the turn holds an edit, so they are told when it no longer does. */
@@ -201,6 +193,38 @@ interface UserTurn {
    * streamed, and the reply is saved with it (ADR-0017 A1).
    */
   narration: TurnRun[];
+}
+
+/**
+ * What a turn writes to the dialogue, held until the one mutation that lands
+ * its outcome writes it all (see {@link PlannerConversation.land}): its inputs —
+ * the opening's goal, or the user's message and the wake-up digests, each with
+ * the skills its `/name` tokens loaded and its user-prompt research entry — the
+ * skills the planner loads as it runs, and the research subagents it starts.
+ * Nothing of it is written while the turn is in flight, so no other save can
+ * persist it, a turn that never lands has nothing to take back, and a reload
+ * cannot replay an input the transcript also holds (ADR-0029).
+ */
+interface TurnWrites {
+  /**
+   * Each entry with where it belongs: the transcript's length when it was
+   * held, so it lands ahead of what was written after it — a command at the
+   * seam, a settings note — not at the end.
+   */
+  entries: { at: number; entry: ConversationMessage }[];
+  research: ResearchLogEntry[];
+  subagents: SubagentRuns;
+}
+
+/**
+ * A message a landing turn writes: in the turn's voice — the supervisor's in a
+ * wake-up turn — unless it is the plan marker, which keeps its own kind and is
+ * told to surfaces by the plan broadcast rather than as a planner message.
+ */
+interface Landed {
+  content: string;
+  kind?: 'plan_generated';
+  runs?: ReplyRun[];
 }
 
 /** A read made through a planner tool: refused once the turn's budget is gone, else answered, told to land when the budget asks it to. */
@@ -258,7 +282,13 @@ export interface PlannerConversationHost {
   broadcast: SessionBroadcaster;
   /** `turnId`: the planner turn whose commit this is, when one is. */
   broadcastPlan(turnId?: string): void;
-  /** Validate a batch against live state. Pure — nothing is applied. */
+  /**
+   * Validate a batch against live state; nothing of it is applied. A
+   * supervisor's batch that trips the oscillation guard is refused, and the
+   * user is told of the trip once, in the supervisor's voice (ADR-0029): a note
+   * saved as it is written, like any of Ordewell's own, which a turn in flight
+   * holds nothing in.
+   */
   validateOps(ops: TaskOp[]): ApplyTaskOpsResult;
   /** The workspace's skill catalog under its repo group's layout, which the skills a plan or edit attaches are checked against. */
   taskSkills(): SkillLookup;
@@ -396,17 +426,6 @@ export interface ConversationCompaction {
   keptMessages: number;
 }
 
-/** A point a failed turn returns the dialogue to. Opaque outside this module. */
-export interface TranscriptSnapshot {
-  readonly plan: LegacyPlanState;
-  readonly history: ConversationMessage[] | undefined;
-  readonly researchLog: ResearchLogEntry[] | undefined;
-  readonly persisted: number;
-  readonly savedInBackground: number;
-  /** What the planner had been told of the user's runners when the turn began. */
-  readonly toldScope: AssignmentScope | null;
-}
-
 export interface ReplyOptions {
   signal?: AbortSignal;
   /**
@@ -434,8 +453,10 @@ const WHOLE_PLAN_WHILE_RUNNING =
  *
  * It is the only writer of `conversationHistory` and of the planner's
  * `researchLog`. The writes land on the host's plan object — which is what the
- * session persists and broadcasts — but only ever inside the host's mutation
- * ritual or ahead of a turn that will either reach it or be rolled back.
+ * session persists and broadcasts — and only ever inside the host's mutation
+ * ritual, so each reaches disk in the save made for it. A planner turn writes
+ * nothing until the mutation that lands it ({@link land}): any other save made
+ * while it runs finds nothing of it to persist.
  *
  * The live model context (a vendor service's message list, a harness planner's
  * process and native session id) is disposable: {@link reset} drops it and the
@@ -444,10 +465,6 @@ const WHOLE_PLAN_WHILE_RUNNING =
  * drifting from it.
  */
 export class PlannerConversation {
-  /** Bumped on every persist, so a rollback can tell whether its writes already reached disk. */
-  private persisted = 0;
-  /** Saves an execution event made while a turn may be in flight; see {@link restore}. */
-  private savedInBackground = 0;
   /** What the planner was last told of autorun: by its opening prompt, or a turn's block since. */
   private toldAutorun = false;
   /** The runners and allowlist the planner was last told of: its opening prompt, or a turn's block since. Null until a conversation opens. */
@@ -487,9 +504,10 @@ export class PlannerConversation {
 
   /**
    * Free the conversation from a turn that did not end when stopped — a hung
-   * wake-up (ADR-0029). Unlike {@link abandonTurn} the plan stays, so what the
-   * turn wrote is taken back as its failure would have, and its end is
-   * announced: the turn itself may never get there.
+   * wake-up (ADR-0029). Unlike {@link abandonTurn} the plan stays, so the turn
+   * is forgotten as its failure would have been — nothing it held lands, and
+   * what it told the planner was never said — and its end is announced: the
+   * turn itself may never get there.
    */
   abandonHungTurn(): void {
     const open = this.openTurn;
@@ -498,7 +516,7 @@ export class PlannerConversation {
     if (!open) return;
     this.openTurn = null;
     this.clearHeld(open);
-    if (open.checkpoint) this.restore(open.checkpoint);
+    this.toldScope = open.toldScope;
     this.host.broadcast({ type: 'planner_turn_ended', turnId: open.stream.turnId, outcome: 'error' });
   }
 
@@ -554,10 +572,11 @@ export class PlannerConversation {
     return this.openTurn?.wakeUp;
   }
 
+  /** A skill the planner loaded in the open turn, held with the turn; false when none is open to take it. */
   recordPlannerSkill(skill: SkillLoad): boolean {
     const turn = this.openTurn;
     if (!turn || turn.signal.aborted || turn.plan !== this.host.plan()) return false;
-    this.appendEntries([{ role: 'assistant', content: skillLoadLabel(skill), timestamp: new Date().toISOString(), kind: 'skill_load', skill }]);
+    this.holdWrites(turn, [{ role: 'assistant', content: skillLoadLabel(skill), timestamp: new Date().toISOString(), kind: 'skill_load', skill }]);
     this.host.broadcast({ type: 'planner_skill_loaded', turnId: turn.stream.turnId, skill: skillLoadNotice(skill) });
     return true;
   }
@@ -629,9 +648,11 @@ export class PlannerConversation {
     return this.host.aiService().hasActiveConversation();
   }
 
-  append(role: ConversationMessage['role'], content: string, opts: { timestamp?: string; kind?: ConversationMessage['kind']; runs?: ReplyRun[] } = {}): void {
+  /** Call inside the host's mutation ritual. */
+  append(role: ConversationMessage['role'], content: string, opts: { timestamp?: string; kind?: ConversationMessage['kind']; runs?: ReplyRun[]; actor?: ConversationMessage['actor'] } = {}): void {
     this.appendEntries([{
-      role, content, timestamp: opts.timestamp ?? new Date().toISOString(), ...(opts.kind ? { kind: opts.kind } : {}), ...(opts.runs ? { runs: opts.runs } : {}),
+      role, content, timestamp: opts.timestamp ?? new Date().toISOString(),
+      ...(opts.kind ? { kind: opts.kind } : {}), ...(opts.actor ? { actor: opts.actor } : {}), ...(opts.runs ? { runs: opts.runs } : {}),
     }]);
   }
 
@@ -644,58 +665,6 @@ export class PlannerConversation {
   replace(messages: readonly ConversationMessage[]): void {
     const plan = this.host.plan();
     if (plan) plan.conversationHistory = [...messages];
-  }
-
-  snapshot(): TranscriptSnapshot | null {
-    const plan = this.host.plan();
-    if (!plan) return null;
-    return {
-      plan,
-      history: plan.conversationHistory,
-      researchLog: plan.researchLog,
-      persisted: this.persisted,
-      savedInBackground: this.savedInBackground,
-      toldScope: this.toldScope,
-    };
-  }
-
-  /**
-   * Put the dialogue back where {@link snapshot} found it — unless anything
-   * was persisted since, because then memory already matches disk and every
-   * surface, and undoing it would erase work the user has seen land. Also a
-   * no-op once a different plan has been adopted.
-   *
-   * A background save (a task settling mid-turn) wrote the turn's writes to
-   * disk without landing anything the user saw, so it does not stop the undo;
-   * the undo is saved in turn, or a reload would bring the writes back.
-   */
-  restore(snapshot: TranscriptSnapshot): boolean {
-    if (this.host.plan() !== snapshot.plan) return false;
-    // What a turn that never landed told the planner was never said, whether or
-    // not something else was saved meanwhile; the next turn tells it again.
-    this.toldScope = snapshot.toldScope;
-    if (this.persisted !== snapshot.persisted) return false;
-    const undo = (): boolean => {
-      // A merge already changed the user's branch; a failed planner turn
-      // cannot take its timeline record back with its own provisional dialogue.
-      const actions = (snapshot.plan.conversationHistory ?? []).filter((entry) =>
-        entry.actor === 'Ordewell setting' && !(snapshot.history ?? []).includes(entry));
-      snapshot.plan.conversationHistory = actions.length > 0 ? [...(snapshot.history ?? []), ...actions] : snapshot.history;
-      snapshot.plan.researchLog = snapshot.researchLog;
-      return true;
-    };
-    if (this.savedInBackground === snapshot.savedInBackground) undo();
-    else this.host.mutate(undo, () => {});
-    return true;
-  }
-
-  /**
-   * The host calls this after every persist. `background` is a save no call
-   * of the user's made — an execution event landing mid-turn.
-   */
-  markPersisted(opts: { background?: boolean } = {}): void {
-    if (opts.background) this.savedInBackground++;
-    else this.persisted++;
   }
 
   /**
@@ -860,9 +829,10 @@ export class PlannerConversation {
     return this.userTurn('supersede', goal, signal, async (userTurn) => {
       const opening = await prepare();
       this.assertCurrent(userTurn);
-      // What a usage limit takes back: the goal then waits to be sent again.
-      userTurn.checkpoint = this.snapshot();
-      this.recordUser(goal, new Date().toISOString());
+      // Held like any turn's input: an opening that never lands — a usage
+      // limit, then its goal waits to be sent again — leaves no goal behind.
+      const now = new Date().toISOString();
+      this.holdWrites(userTurn, this.userEntries(goal, now), [this.userPrompt(goal.text, now)]);
       this.toldAutorun = opening.autorun ?? false;
       this.toldScope = this.host.assignmentScope();
       const turn = await this.host.aiService().startConversation({
@@ -881,9 +851,9 @@ export class PlannerConversation {
   }
 
   /**
-   * Every later user message, from the transcript append to a persisted
-   * outcome. A turn that throws before anything was persisted takes its own
-   * writes back out, so session memory never drifts from disk and the UI.
+   * Every later user message, to a persisted outcome. A turn that throws lands
+   * nothing: what it held is dropped with it, so session memory never drifts
+   * from disk and the UI.
    */
   async reply(message: string | SkillInvocation, options: ReplyOptions = {}): Promise<LegacyPlanState> {
     const sent = typeof message === 'string' ? { text: message, skills: [] } : message;
@@ -900,53 +870,37 @@ export class PlannerConversation {
     const { signal } = userTurn;
     const plan = this.requirePlan();
     const priorHistory = plan.conversationHistory ?? [];
-    const checkpoint = this.snapshot();
-    userTurn.checkpoint = checkpoint;
     const now = new Date().toISOString();
     const fromUser = wakeUps.length === 0 || message.text !== '' || message.skills.length > 0;
-    // Held, not written: a background save mid-turn must never land these in
-    // the transcript while their pending turns still hold them (ADR-0029).
+    // Held, not written: a save mid-turn must never land these in the
+    // transcript while their pending turns still hold them (ADR-0029).
     // Deferring the write — rather than tagging the entries and skipping them
     // on replay — is what keeps the transcript and `pendingTurns` from ever
     // holding the same input after a save; the two leave together in the save
     // that lands the outcome.
     const entries: ConversationMessage[] = wakeUps.map((content): ConversationMessage => ({ role: 'user', content, timestamp: now, kind: 'wake_up' }));
     if (fromUser) entries.push(...this.userEntries(message, now, userTurn.forced));
-    userTurn.input = {
-      entries,
-      research: fromUser ? [{ id: `up-${Date.now()}`, type: 'user_prompt', content: message.text, timestamp: now }] : [],
-      // `priorHistory` is the transcript as it stood when the turn opened;
-      // anything the turn appends as it runs goes after this point.
-      at: priorHistory.length,
-    };
+    this.holdWrites(userTurn, entries, fromUser ? [this.userPrompt(message.text, now)] : []);
 
     // The persisted transcript keeps the raw user message; the model gets the
     // live catalog (always) and the current plan (tasks, statuses, edit
     // protocol — once tasks exist) alongside it.
-    const toldBefore = this.toldScope;
     const contextBlock = [this.catalogBlock(), this.planContextBlock(), this.autorunBlock(), this.runnersChangedBlock(), this.runUpdatesBlock()].filter(Boolean).join('\n\n');
     const said = fromUser ? plannerMessage(message.text, message.skills) : '';
     const outgoing = [contextBlock, ...wakeUps, userTurn.wakeUp?.brief, said].filter(Boolean).join('\n\n');
 
     const ai = this.host.aiService();
-    try {
-      const turn = this.canContinueLive()
-        ? await ai.continueConversation(outgoing, userTurn.stream.sink(), signal)
-        : await this.resume(outgoing, priorHistory, signal, userTurn.stream.sink());
+    const turn = this.canContinueLive()
+      ? await ai.continueConversation(outgoing, userTurn.stream.sink(), signal)
+      : await this.resume(outgoing, priorHistory, signal, userTurn.stream.sink());
 
-      const settleable = await this.drainTaskQueries(turn, userTurn);
-      // A turn that failed or was stopped may not have read what it went with: the next one tells it again.
-      if (settleable.kind === 'message' && (settleable.failed || userTurn.signal.aborted)) this.toldScope = toldBefore;
-      this.assertNotLimited(settleable, userTurn);
-      if (userTurn.wakeUp) this.assertWakeUpAnswered(settleable, userTurn);
-      this.assertCurrent(userTurn, settleable);
-      return await this.settle(settleable, userTurn);
-    } catch (err) {
-      // An abandoned turn gave the conversation up already, and a rollback now
-      // could take the next turn's message out along with its own.
-      if (checkpoint && !userTurn.planner.abandoned) this.restore(checkpoint);
-      throw err;
-    }
+    const settleable = await this.drainTaskQueries(turn, userTurn);
+    // A turn that failed or was stopped may not have read what it went with: the next one tells it again.
+    if (settleable.kind === 'message' && (settleable.failed || userTurn.signal.aborted)) this.toldScope = userTurn.toldScope;
+    this.assertNotLimited(settleable, userTurn);
+    if (userTurn.wakeUp) this.assertWakeUpAnswered(settleable, userTurn);
+    this.assertCurrent(userTurn, settleable);
+    return this.settle(settleable, userTurn);
   }
 
   /**
@@ -961,17 +915,16 @@ export class PlannerConversation {
   }
 
   /**
-   * A turn that ended on the planner's usage limit lands nothing. What it
-   * wrote is taken back, its failure is kept in its place, and the limit's
-   * wait is armed in the same save. Only a turn Ordewell started gets here,
-   * so a limit is never acted on for a planner nobody asked anything of.
+   * A turn that ended on the planner's usage limit lands nothing: what it held
+   * is dropped, its failure is kept in its place, and the limit's wait is armed
+   * in the same save. Only a turn Ordewell started gets here, so a limit is
+   * never acted on for a planner nobody asked anything of.
    */
   private assertNotLimited(turn: SettleableTurn, userTurn: UserTurn): void {
     if (turn.kind !== 'message' || !turn.failed || userTurn.signal.aborted) return;
     const said: TurnFailure = { message: turn.text, usageLimit: turn.usageLimit };
     if (classifyRunnerStop(said) !== 'usage-limit') return;
     this.assertCurrent(userTurn);
-    if (userTurn.checkpoint) this.restore(userTurn.checkpoint);
     const limit = this.host.usageLimit(said);
     this.host.mutate(() => {
       this.recordFailure(limit.text);
@@ -1042,10 +995,17 @@ export class PlannerConversation {
   ): Promise<LegacyPlanState> {
     const { turn: planner, release } = this.claim(admission, signal);
     const turnId = uuidv4();
-    const stream = new TurnStream(turnId, (p) => this.host.onProgress(p));
+    const subagents = new SubagentRuns();
+    // The turn's own stream: a subagent it started that reports after the turn
+    // is gone reaches only the turn's own record, which nothing will write.
+    const stream = new TurnStream(turnId, (p) => {
+      subagents.observe(p);
+      this.host.onProgress(p);
+    });
     const { wakeUp, forced } = delivered;
     const turn: UserTurn = {
       stream, planner, signal: planner.signal, plan: this.host.plan(), reads: freshReadBudget(wakeUp), narration: [],
+      toldScope: this.toldScope, writes: { entries: [], research: [], subagents },
       ...(wakeUp ? { wakeUp } : {}), ...(forced ? { forced } : {}),
     };
     this.openTurn = turn;
@@ -1064,6 +1024,9 @@ export class PlannerConversation {
       outcome = settled.outcome;
       return settled.plan;
     } catch (err) {
+      // What a turn that never landed told the planner was never said: the next
+      // turn tells it again. An abandoned turn's successor may have told it since.
+      if (!planner.abandoned && this.host.plan() === turn.plan) this.toldScope = turn.toldScope;
       if (err instanceof PlannerTurnDiscardedError) {
         outcome = 'stopped';
         throw err;
@@ -1098,29 +1061,64 @@ export class PlannerConversation {
     ];
   }
 
-  private recordUser({ text, skills }: SkillInvocation, timestamp: string): void {
-    this.appendEntries(this.userEntries({ text, skills }, timestamp));
-    this.recordResearch([{ id: `up-${Date.now()}`, type: 'user_prompt', content: text, timestamp }]);
+  private userPrompt(content: string, timestamp: string): ResearchLogEntry {
+    return { id: `up-${Date.now()}`, type: 'user_prompt', content, timestamp };
+  }
+
+  /** Hold what the turn writes until it lands, each entry where the transcript stands now; see {@link TurnWrites}. */
+  private holdWrites(userTurn: UserTurn, entries: readonly ConversationMessage[], research: readonly ResearchLogEntry[] = []): void {
+    const at = this.transcript.length;
+    userTurn.writes.entries.push(...entries.map((entry) => ({ at, entry })));
+    userTurn.writes.research.push(...research);
   }
 
   /**
-   * Write the turn's held inputs inside the mutation that lands the outcome —
-   * call at its top, before the assistant entries, so the transcript reads in
-   * the order it happened and the inputs leave the plan in the save that
-   * carried their answer (ADR-0029). They go back where the turn opened, ahead
-   * of whatever it wrote as it ran (a planner skill load, a command at the
-   * seam), not at the end.
+   * The one mutation that lands a turn's outcome (ADR-0029). What the turn held
+   * goes in first — each entry where it belongs, ahead of what was written
+   * after it, then the research and the subagents — so the transcript reads in
+   * the order it happened and the inputs leave the plan's pending turns in the
+   * save that carried their answer. `outcome` makes the turn's change to the
+   * plan and returns what the turn said, which is written, then sent in that
+   * order; `announce` follows it on every surface.
    */
-  private commitInput(userTurn: UserTurn): void {
-    const input = userTurn.input;
-    if (!input) return;
-    const plan = this.host.plan();
-    if (plan) {
-      const history = plan.conversationHistory ?? [];
-      const at = Math.min(input.at, history.length);
-      plan.conversationHistory = [...history.slice(0, at), ...input.entries, ...history.slice(at)];
-    }
-    this.recordResearch(input.research);
+  private land(
+    userTurn: UserTurn,
+    researchLog: ResearchLogEntry[],
+    outcome: () => Landed[],
+    { skillWarnings = [], announce }: { skillWarnings?: readonly string[]; announce?: () => void } = {},
+  ): LegacyPlanState {
+    const { turnId } = userTurn.stream;
+    const now = new Date().toISOString();
+    // A supervisor's words and edits are drawn as the supervisor's, so the user can tell what changed on its own.
+    const supervisor = userTurn.wakeUp !== undefined;
+    let said: Landed[] = [];
+    const plan = this.host.mutate(() => {
+      this.writeHeld(userTurn, researchLog);
+      said = outcome();
+      for (const { content, kind, runs } of said) this.append('assistant', content, { timestamp: now, kind: kind ?? (supervisor ? 'supervisor' : undefined), runs });
+      this.recordSkillWarnings(skillWarnings, now);
+      userTurn.onCommit?.();
+      return true;
+    }, () => {
+      for (const { content, kind, runs } of said) {
+        if (kind !== 'plan_generated') this.host.broadcast({ type: 'planner_message', content, timestamp: now, turnId, ...(supervisor ? { supervisor: true } : {}), ...withRuns(runs) });
+      }
+      announce?.();
+    });
+    this.warnSkills(skillWarnings);
+    return plan!;
+  }
+
+  private writeHeld(userTurn: UserTurn, researchLog: ResearchLogEntry[]): void {
+    const plan = this.requirePlan();
+    const { entries, research, subagents } = userTurn.writes;
+    const history = [...(plan.conversationHistory ?? [])];
+    // Past the held entries already placed, which all belong at or before it.
+    entries.forEach(({ at, entry }, placed) => history.splice(Math.min(at + placed, history.length), 0, entry));
+    plan.conversationHistory = history;
+    this.recordResearch([...research, ...researchLog]);
+    // After the turn's own research, which a harness planner logs a subagent's steps in too: they are regrouped under it.
+    plan.researchLog = subagents.foldInto(plan.researchLog ?? []);
   }
 
   private recordResearch(entries: ResearchLogEntry[]): void {
@@ -1304,9 +1302,7 @@ export class PlannerConversation {
 
     if ('plan' in settled) return { plan: settled.plan, outcome: 'task_ops' };
     this.assertCurrent(userTurn, settled.turn);
-    const plan = this.commit(settled.turn, userTurn, settled.skillWarnings ?? []);
-    this.warnSkills(settled.skillWarnings ?? []);
-    return { plan, outcome: settled.turn.kind };
+    return { plan: this.commit(settled.turn, userTurn, settled.skillWarnings ?? []), outcome: settled.turn.kind };
   }
 
   /** A name not found at submit only warns: a task the attaching one depends on may create it. */
@@ -1317,41 +1313,25 @@ export class PlannerConversation {
   /** Validate + commit a task_ops turn atomically. Returns the errors on rejection (plan untouched). */
   private async applyTaskOps(turn: Extract<SettleableTurn, { kind: 'task_ops' }>, userTurn: UserTurn): Promise<{ plan: LegacyPlanState } | { errors: string[] }> {
     this.requirePlan();
-    const { turnId } = userTurn.stream;
     const skills = await checkOpSkills(turn.ops, this.host.taskSkills());
     this.assertStillCurrent(userTurn);
     if (skills.errors.length > 0) return this.refusedHeld(userTurn, skills.errors.map((e) => e.message));
     const result = this.host.validateOps(turn.ops);
     if (!result.ok) return this.refusedHeld(userTurn, result.errors);
 
-    const now = new Date().toISOString();
-    const content = `Tasks updated:\n- ${result.summary.join('\n- ')}`;
-    // A supervisor's edit is drawn as the supervisor's, so the user can tell what changed on its own.
-    const supervisor = userTurn.wakeUp !== undefined;
-    const kind = supervisor ? { kind: 'supervisor' as const } : {};
-    const voice = supervisor ? { supervisor: true as const } : {};
     const said = this.said(turn, userTurn);
-    const plan = this.host.mutate(
-      () => {
-        this.commitInput(userTurn);
-        this.recordResearch(turn.researchLog);
-        this.host.adoptTasks(result.tasks, 'edit');
-        if (said) this.append('assistant', said.content, { timestamp: now, ...kind, runs: said.runs });
-        this.append('assistant', content, { timestamp: now, ...kind });
-        this.recordSkillWarnings(skills.warnings, now);
-        userTurn.onCommit?.();
-        return true;
-      },
-      () => {
-        if (said) this.host.broadcast({ type: 'planner_message', content: said.content, timestamp: now, turnId, ...voice, ...withRuns(said.runs) });
-        this.host.broadcast({ type: 'planner_message', content, timestamp: now, turnId, ...voice });
+    const plan = this.land(userTurn, turn.researchLog, () => {
+      this.host.adoptTasks(result.tasks, 'edit');
+      return [...(said ? [said] : []), { content: `Tasks updated:\n- ${result.summary.join('\n- ')}` }];
+    }, {
+      skillWarnings: skills.warnings,
+      announce: () => {
         this.host.broadcastPlan();
         // After the plan that carries it, so the edit is never missing from both.
         this.clearHeld(userTurn);
       },
-    );
-    this.warnSkills(skills.warnings);
-    return { plan: plan! };
+    });
+    return { plan };
   }
 
   /** The edit was refused as it landed: what it showed is not coming. */
@@ -1360,30 +1340,19 @@ export class PlannerConversation {
     return { errors };
   }
 
-  /** Commit a settled (non-task_ops) turn through the host's mutation ritual. */
+  /** Commit a settled (non-task_ops) turn: a whole plan, or what it said. */
   private commit(turn: CommitTurn, userTurn: UserTurn, skillWarnings: readonly string[]): LegacyPlanState {
     this.requirePlan();
-    const { turnId } = userTurn.stream;
-    const now = new Date().toISOString();
 
     if (turn.kind === 'plan') {
       const said = this.said(turn, userTurn);
-      return this.host.mutate(() => {
-        this.commitInput(userTurn);
-        this.recordResearch(turn.researchLog);
+      return this.land(userTurn, turn.researchLog, () => {
         // A cheap model may emit the PRD block and the plan JSON in one turn —
         // capture the PRD here too so it isn't dropped with the plan preamble.
         this.host.capturePrd(turn.text);
         const count = this.host.adoptTasks(turn.tasks, 'commit');
-        if (said) this.append('assistant', said.content, { timestamp: now, runs: said.runs });
-        this.append('assistant', `Plan generated with ${count} task${count === 1 ? '' : 's'}.`, { timestamp: now, kind: 'plan_generated' });
-        this.recordSkillWarnings(skillWarnings, now);
-        userTurn.onCommit?.();
-        return true;
-      }, () => {
-        if (said) this.host.broadcast({ type: 'planner_message', content: said.content, timestamp: now, turnId, ...withRuns(said.runs) });
-        this.host.broadcastPlan(turnId);
-      })!;
+        return [...(said ? [said] : []), { content: `Plan generated with ${count} task${count === 1 ? '' : 's'}.`, kind: 'plan_generated' }];
+      }, { skillWarnings, announce: () => this.host.broadcastPlan(userTurn.stream.turnId) });
     }
 
     // Budget models occasionally return an empty content turn after tool use —
@@ -1396,18 +1365,10 @@ export class PlannerConversation {
         ? '(Stopped before replying.)'
         : '(The planner returned an empty response. Reply to continue, or rephrase your goal.)';
     const runs = this.shown(userTurn, replied ? turn.runs : writtenOver(turn.runs, text).runs, text);
-    const supervisor = userTurn.wakeUp !== undefined;
-    return this.host.mutate(
-      () => {
-        this.commitInput(userTurn);
-        this.recordResearch(turn.researchLog);
-        this.append('assistant', text, { timestamp: now, ...(supervisor ? { kind: 'supervisor' as const } : {}), runs });
-        this.host.capturePrd(text);
-        userTurn.onCommit?.();
-        return true;
-      },
-      () => this.host.broadcast({ type: 'planner_message', content: text, timestamp: now, turnId, ...(supervisor ? { supervisor: true } : {}), ...withRuns(runs) }),
-    )!;
+    return this.land(userTurn, turn.researchLog, () => {
+      this.host.capturePrd(text);
+      return [{ content: text, runs }];
+    });
   }
 
   /**

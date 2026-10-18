@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createTask, type LegacyPlanState } from '../../models/Task';
+import { createTask, type LegacyPlanState, type ResearchProgress } from '../../models/Task';
 import { FakeRunnerSession, makeSession, saves, testWorkspace } from './sessionTestKit';
 import type { IRunner } from '../../interfaces/IRunner';
+import type { ConversationRequest } from '../AiService';
+import type { Session } from '../createSession';
+import type { PlannerToolHandler } from '../mcp/tools';
+import type { SkillInfo } from '../SkillsService';
 
 /** A runner double that records the order tasks were spawned in. */
 function recordingRunner(spawned: string[]): IRunner {
@@ -58,12 +62,12 @@ function pausedRunPlan(): LegacyPlanState {
   };
 }
 
-describe('continueConversation rollback on failure', () => {
+describe('a planner turn that fails', () => {
   // The transport can reject for reasons unrelated to the session (a model or
-  // planner switch leaving the AI adapter mismatched). The user message this
-  // call appended is only in memory — it must come back out, or every failed
-  // retry silently diverges session memory from what is on disk / shown.
-  it('rolls back this call\'s own unpersisted append when the AI transport rejects', async () => {
+  // planner switch leaving the AI adapter mismatched). The user message is
+  // held until the turn lands — written, every failed retry would silently
+  // diverge session memory from what is on disk / shown.
+  it('writes nothing of its own when the AI transport rejects', async () => {
     const session = makeSession({
       aiService: {
         startConversation: vi.fn(),
@@ -86,8 +90,7 @@ describe('continueConversation rollback on failure', () => {
   // onTaskChanged observer). The orchestrator isolates a throwing observer
   // from its own scheduling (TaskOrchestrator.emit), so this no longer
   // reaches the caller as a rejection — but the guard this exercises is that
-  // the already-persisted, already-broadcast task_ops turn is never rolled
-  // back regardless.
+  // the already-persisted, already-broadcast task_ops turn stays regardless.
   it('keeps an already-persisted task_ops turn when the re-tick broadcast fails', async () => {
     const spawned: string[] = [];
     let armed = false;
@@ -131,11 +134,67 @@ describe('continueConversation rollback on failure', () => {
   });
 });
 
-describe('continueConversation rollback when a task settles mid-turn', () => {
-  // A verdict is saved the moment it lands, the in-flight turn's user message
-  // with it. That save is not the turn landing: a turn that then fails still
-  // takes its message back out, and the undo reaches disk too.
-  it('rolls back the failed turn in memory and on disk', async () => {
+describe('a failed turn after a save of the user\'s during it', () => {
+  const skill: SkillInfo = {
+    name: 'review-plan', description: 'Review a plan', metadata: { name: 'review-plan', description: 'Review a plan' },
+    source: 'global', path: '/skills/review-plan/SKILL.md', content: 'REVIEW BODY', appliesTo: 'planner', modelInvocable: true, userInvocable: false,
+  };
+
+  /**
+   * A planner that loads a skill and starts a research subagent in its second
+   * turn, while VS Code re-adopts the plan — a save no planner turn made —
+   * and then fails.
+   */
+  function failingAfterASave() {
+    let tools: PlannerToolHandler | undefined;
+    const session: Session = makeSession({
+      skillsService: { findSkill: (name: string) => (name === skill.name ? skill : undefined), listSkills: () => [skill] },
+      aiService: {
+        startConversation: vi.fn(async (req: ConversationRequest) => {
+          tools = req.plannerTools?.handler;
+          return { kind: 'message' as const, text: 'Which store?', researchLog: [] };
+        }),
+        continueConversation: vi.fn(async (_message: string, onProgress: (p: ResearchProgress) => void) => {
+          await tools!.loadSkill!({ name: skill.name }, { signal: new AbortController().signal });
+          onProgress({ type: 'subagent_started', subagentId: 'sa1', brief: 'find the store' });
+          onProgress({ type: 'subagent_finished', subagentId: 'sa1', outcome: 'done', digest: 'postgres' });
+          session.loadPlan(session.planState!, 'build me a parser', testWorkspace);
+          throw new Error('planner transport down');
+        }),
+        hasActiveConversation: () => true,
+        reset: vi.fn(),
+      },
+    });
+    return session;
+  }
+
+  it('leaves no planner skill load behind, so none is replayed', async () => {
+    const session = failingAfterASave();
+    await session.startPlanning('build me a parser', ['claude-code']);
+
+    await expect(session.continueConversation('postgres')).rejects.toThrow('planner transport down');
+
+    expect(session.planState!.conversationHistory!.map((m) => m.content)).toEqual(['build me a parser', 'Which store?']);
+    expect(saves(session).mock.calls.at(-1)![0].conversationHistory!.some((m) => m.kind === 'skill_load')).toBe(false);
+  });
+
+  it('leaves no research subagent of the turn behind', async () => {
+    const session = failingAfterASave();
+    await session.startPlanning('build me a parser', ['claude-code']);
+
+    await expect(session.continueConversation('postgres')).rejects.toThrow('planner transport down');
+
+    const subagents = (log: LegacyPlanState['researchLog']) => (log ?? []).filter((e) => 'type' in e && e.type === 'subagent');
+    expect(subagents(session.planState!.researchLog)).toEqual([]);
+    expect(subagents(saves(session).mock.calls.at(-1)![0].researchLog)).toEqual([]);
+  });
+});
+
+describe('a failed turn after a task settled during it', () => {
+  // A verdict is saved the moment it lands. That save is not the turn landing:
+  // it finds nothing of the turn to write, so a turn that then fails leaves no
+  // message behind, in memory or on disk.
+  it('leaves nothing of the turn in memory or on disk', async () => {
     const live = new Map<string, FakeRunnerSession>();
     const runner = {
       spawn: vi.fn(async ({ taskId }: { taskId: string }) => {
