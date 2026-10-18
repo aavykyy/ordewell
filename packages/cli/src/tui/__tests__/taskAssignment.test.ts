@@ -77,9 +77,10 @@ describe('assignedModelFor', () => {
     });
   });
 
-  it('drops the effort when the new model does not support it', () => {
+  // One rule with core's (clampThinkingEffort): it was kept only on an exact match here.
+  it('carries an effort the new model lacks to the nearest level it has', () => {
     const m = model({ variants: [{ id: 'low', label: 'Low' }] });
-    expect(assignedModelFor(m, 'high').thinkingEffort).toBeUndefined();
+    expect(assignedModelFor(m, 'high').thinkingEffort).toBe('low');
   });
 
   it('drops the effort when the new model has no variants at all', () => {

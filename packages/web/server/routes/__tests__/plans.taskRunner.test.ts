@@ -3,10 +3,11 @@ import { Hono } from 'hono';
 import type { OrchestratorPool } from '../../pool/orchestratorPool';
 
 /**
- * A runner change is not a field write: `Session.setTaskRunner` re-derives the
- * task's model, thinking effort and mode from the new runner's catalog. Routing
- * it through `updateTask` instead would persist a runner the task's model
- * cannot be spawned on.
+ * A runner change is not a field write alone: the session moves the task with
+ * the model, thinking effort and mode its runner scopes. The route hands it
+ * over with the rest of the patch, as one edit the session lands in one save,
+ * checked after it has discovered the new runner: split, the first save's
+ * reschedule could start the task ahead of the rest, unchecked.
  */
 describe('PUT /:sessionId/tasks/:taskId with assignedRunner', () => {
   let app: Hono;
@@ -14,7 +15,7 @@ describe('PUT /:sessionId/tasks/:taskId with assignedRunner', () => {
 
   beforeEach(async () => {
     session = {
-      updateTask: vi.fn().mockReturnValue({ tasks: [] }),
+      updateTask: vi.fn().mockResolvedValue({ tasks: [] }),
       setTaskRunner: vi.fn().mockResolvedValue({ tasks: [] }),
     };
     const pool = { session: vi.fn().mockReturnValue(session) } as unknown as OrchestratorPool;
@@ -31,36 +32,17 @@ describe('PUT /:sessionId/tasks/:taskId with assignedRunner', () => {
     });
   }
 
-  it('routes a runner change to setTaskRunner, not updateTask', async () => {
-    const res = await put({ assignedRunner: 'codex' });
+  it('hands a runner change to updateTask with the rest of the patch, as one edit', async () => {
+    const res = await put({ assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5', modelLabel: 'GPT-5' }, prompt: 'rewritten' });
 
     expect(res.status).toBe(200);
-    expect(session.setTaskRunner).toHaveBeenCalledWith('t1', 'codex');
-    expect(session.updateTask).not.toHaveBeenCalled();
-  });
-
-  it('applies the rest of the patch after the runner is retargeted', async () => {
-    // Order matters: retargeting derives a model for the new runner, so an
-    // explicit model in the same patch has to land last or it is overwritten.
-    const res = await put({ assignedRunner: 'codex', prompt: 'rewritten' });
-
-    expect(res.status).toBe(200);
-    expect(session.setTaskRunner).toHaveBeenCalledWith('t1', 'codex');
-    expect(session.updateTask).toHaveBeenCalledWith('t1', { prompt: 'rewritten' });
-    expect(session.setTaskRunner.mock.invocationCallOrder[0])
-      .toBeLessThan(session.updateTask.mock.invocationCallOrder[0]);
-  });
-
-  it('still goes through updateTask for a patch with no runner in it', async () => {
-    const res = await put({ taskMode: 'plan' });
-
-    expect(res.status).toBe(200);
+    expect(session.updateTask).toHaveBeenCalledTimes(1);
+    expect(session.updateTask).toHaveBeenCalledWith('t1', { assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5', modelLabel: 'GPT-5' }, prompt: 'rewritten' });
     expect(session.setTaskRunner).not.toHaveBeenCalled();
-    expect(session.updateTask).toHaveBeenCalledWith('t1', { taskMode: 'plan' });
   });
 
   it('404s when the task does not exist', async () => {
-    session.setTaskRunner.mockResolvedValue(null);
+    session.updateTask.mockResolvedValue(null);
 
     expect((await put({ assignedRunner: 'codex' })).status).toBe(404);
   });

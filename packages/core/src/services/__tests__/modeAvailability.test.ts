@@ -1,8 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { plannedMode, readOnlyRunners, runnerModesFrom } from '../ModeResolver';
-import { validateTaskEdit } from '../TaskEditValidator';
-import { retargetTaskRunner } from '../TaskRetarget';
+import { resolveAssignment } from '../TaskAssignment';
 import { CODEX_SANDBOX_MODE_REASON } from '../harness/codexSandbox';
 import type { Task } from '../../models/Task';
 
@@ -45,20 +44,18 @@ describe('a runner mode that is unavailable on this host', () => {
   });
 
   it('is refused for a hand-picked task mode, with the reason', () => {
-    const check = validateTaskEdit('direct', [task({ assignedRunner: 'codex' })], 't1', { taskMode: 'plan' }, {
-      modelsByRunner: {}, runnerModes: catalog(),
-    });
+    const before = task({ assignedRunner: 'codex', taskMode: 'fullAccess' });
+    const outcome = resolveAssignment({ writer: 'user', task: { ...before, taskMode: 'plan' }, before, catalog: { modelsByRunner: {}, runnerModes: catalog() } });
 
-    expect(check.ok).toBe(false);
-    expect(check.error).toContain(CODEX_SANDBOX_MODE_REASON);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toContain(CODEX_SANDBOX_MODE_REASON);
   });
 
-  it('is not what a read-only task lands on when it is moved: the move is left to be refused, not made writable', () => {
-    const modes = catalog();
-    const readOnlyTask = task({ assignedRunner: 'claude-code', taskMode: 'plan' });
+  it('is not what a read-only task lands on when it is moved: the move is refused, not made writable', () => {
+    const before = task({ assignedRunner: 'claude-code', taskMode: 'plan' });
+    const outcome = resolveAssignment({ writer: 'user', task: { ...before, assignedRunner: 'codex' }, before, catalog: { modelsByRunner: {}, runnerModes: catalog() } });
 
-    const patch = retargetTaskRunner(readOnlyTask, 'codex', { models: [], modes: modes.codex, defaultMode: 'fullAccess' }, modes['claude-code']);
-
-    expect(patch.taskMode).toBe('plan');
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toContain(CODEX_SANDBOX_MODE_REASON);
   });
 });

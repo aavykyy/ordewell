@@ -17,7 +17,7 @@ afterEach(async () => {
 function host(execute: (command: ExecutionCommand) => Promise<CommandOutcome>, turnId: () => string | undefined = () => 'turn-1'): PlannerToolsHost {
   const unused = async (): Promise<never> => { throw new Error('not used here'); };
   return {
-    skills: () => [], turnId, recordSkillLoad: () => false, liveCatalog: unused, coerce: (tasks) => ({ tasks: [...tasks], coerced: [] }),
+    skills: () => [], turnId, recordSkillLoad: () => false, liveCatalog: unused, adjustments: () => [],
     submitPlan: () => false, editPlan: unused, tasks: () => [], read: unused, liveOutput: () => null, lastAttempt: () => null,
     taskLogAttempts: () => [], taskLog: () => [], taskDiff: unused,
     taskSkills: () => ({ findSkill: () => undefined, searchedDirs: () => [] }), runCommand: unused, fetchUrl: unused, webSearch: unused,

@@ -1,14 +1,12 @@
-import { Task, flattenTasksWithParents, RunnerId, DiscoveredModel, TaskModelAssignment, TaskMode } from '../models/Task';
+import { Task, flattenTasksWithParents } from '../models/Task';
 import { canSetDependencies } from './PlanTree';
-import { effectiveAllowlist } from './ModelAllowlistResolver';
-import { unavailableModeReason, type RunnerModeInfo } from './ModeResolver';
 import { NOT_STARTED } from '../taskRow/status';
 import { opsPlacementRefusal } from './PlannedTask';
 
 /**
  * Who is making the edit. The planner (`applyTaskOps`) and the direct-edit
- * path (`Session.updateTask`/`setTaskDependencies`, reached by the TUI, the
- * webview task card, and `PUT /tasks/:taskId`) are deliberately asymmetric —
+ * path (`PlanEditor.updateTask`, reached by the TUI, the CLI, the webview
+ * task card, and `PUT /tasks/:taskId`) are deliberately asymmetric —
  * see CONTEXT.md, "Direct edit vs planner edit". The planner may not reach
  * into a task that is running or already finished; the direct path may,
  * because it is the user editing their own plan, and pays what that costs at
@@ -42,99 +40,7 @@ export function lockedTaskRefusal(task: Pick<Task, 'title' | 'status'>, action =
   return null;
 }
 
-/**
- * Why a task's model or effort cannot change while its runner is up, for
- * every actor. The plan follows a switch made with the runner's own command
- * instead (#106), so that is offered beside stopping it.
- */
-export function liveModelRefusal(task: Pick<Task, 'title'>): string {
-  return `"${task.title}" has a live runner, so its model and effort cannot change now: stop the task first, or use the runner's own /model`;
-}
-
-/**
- * Why a task cannot move to another runner while its runner is up: the move
- * re-derives the model from the new runner, under the same lock as
- * {@link liveModelRefusal}, and no runner's own command can make it.
- */
-export function liveRunnerRefusal(task: Pick<Task, 'title'>): string {
-  return `"${task.title}" has a live runner, so its runner cannot change now: stop the task first`;
-}
-
-function sameAssignment(a: TaskModelAssignment | undefined, b: TaskModelAssignment | undefined): boolean {
-  return a?.modelId === b?.modelId && a?.thinkingEffort === b?.thinkingEffort;
-}
-
 const AI_ONLY_FIELDS = ['assignedModel', 'taskMode', 'autonomy', 'ops'] as const satisfies readonly (keyof Task)[];
-
-/**
- * The catalog a model/task-mode edit is checked against — the same discovered
- * models and manifest modes the planner was shown in the per-turn catalog
- * block (`PlannerConversation.catalogBlock`), so a refusal here can never name something
- * as invalid that the planner was never told about, or vice versa.
- */
-export interface EditCatalog {
-  modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>>;
-  runnerModes: Partial<Record<RunnerId, RunnerModeInfo[]>>;
-  /** Raw (unfiltered) allowlist, keyed by runner — the same shape `coerceAssignments` takes. */
-  perRunnerAllowlist?: Partial<Record<RunnerId, string[]>>;
-  /** Full (true) or Guarded: the mode a task the planner writes lands on unless it is read-only (ADR-0031). Full when absent. */
-  autonomousDefault?: boolean;
-  /**
-   * Whether a task's runner is up now. Its model is then the runner's (#106):
-   * the process was started on one and only the runner's own command moves it,
-   * so an edit from outside would leave the plan naming what is not running.
-   * Absent means none is.
-   */
-  liveRunner?: (taskId: string) => boolean;
-}
-
-/**
- * Whether an assigned model and task mode are things the target runner
- * actually offers. Invented ids are refused rather than silently substituted
- * downstream (`coerceAssignments` remains the safety net for paths that never
- * go through this validator) — the planner gets the refusal, with the runner
- * named, through the same repair loop as every other edit rejection.
- *
- * `catalog` is optional: callers with no discovered catalog on hand (most unit
- * tests, a runner with no manifest modes) skip these checks rather than
- * refusing everything sight-unseen.
- */
-export function checkModelAndModeValidity(
-  runner: RunnerId,
-  assignedModel: TaskModelAssignment | undefined,
-  taskMode: TaskMode | undefined,
-  catalog: EditCatalog | undefined,
-): TaskEditCheck {
-  if (!catalog) return { ok: true };
-
-  if (assignedModel) {
-    const models = catalog.modelsByRunner[runner];
-    if (models) {
-      const modelId = assignedModel.modelId;
-      const allowed = effectiveAllowlist(catalog.perRunnerAllowlist?.[runner], runner, catalog.modelsByRunner);
-      // An allowlisted id discovery doesn't list is one `filterModelsForPrompt`
-      // shows the planner anyway — refusing it here would contradict the
-      // catalog block; the runner validates it last.
-      if (!models.some((m) => m.modelId === modelId) && !allowed?.includes(modelId)) {
-        return { ok: false, error: `Runner "${runner}" does not offer model "${modelId}"` };
-      }
-      if (allowed && !allowed.includes(modelId)) {
-        return { ok: false, error: `Model "${modelId}" is excluded by the allowlist for runner "${runner}"` };
-      }
-    }
-  }
-
-  if (taskMode !== undefined) {
-    const modes = catalog.runnerModes[runner];
-    if (modes && modes.length > 0 && !modes.some((m) => m.id === taskMode)) {
-      return { ok: false, error: `Runner "${runner}" has no task mode "${taskMode}": valid modes: ${modes.map((m) => m.id).join(', ')}` };
-    }
-    const unavailable = unavailableModeReason(modes, taskMode);
-    if (unavailable) return { ok: false, error: `Mode "${taskMode}" of runner "${runner}" is unavailable on this host: ${unavailable}` };
-  }
-
-  return { ok: true };
-}
 
 /**
  * Coherence between `type` and the fields that only make sense for one side
@@ -183,14 +89,16 @@ function opsCheck(target: Task, isSubtask: boolean, changes: Partial<Task>): Tas
 }
 
 /**
- * The rules governing one task edit, shared by both actors. Lock rules
- * (running/completed) apply to the planner only, except that a task's model
- * and runner are nobody's to change while its runner is up ({@link liveModelRefusal},
- * {@link liveRunnerRefusal}). Well-formedness rules — like
- * a hand-set dependency list, the one edit that can leave the plan
- * unschedulable, and type/content coherence on an AI↔MAN flip — describe the
- * task rather than who asked, so they run for both, through the same
- * {@link canSetDependencies} guard the pickers and the API read.
+ * The rules governing one task edit that are not about what it runs on: who
+ * may make it, and whether the task stays well-formed. Lock rules
+ * (running/completed) apply to the planner only. Well-formedness rules — a
+ * hand-set dependency list, the one edit that can leave the plan
+ * unschedulable, type/content coherence on an AI↔MAN flip, and where an ops
+ * task may be — describe the task rather than who asked, so they run for
+ * both, through the same {@link canSetDependencies} guard the pickers and the
+ * API read. What the task's runner, model, effort and mode end up as is the
+ * assignment resolver's (`resolveAssignment`), and the rules the plan's tasks
+ * are held to together are `checkPlanInvariants`', both for both actors too.
  *
  * `tasks` is the plan tree: the target is found at any depth, and its
  * dependencies are checked against the whole plan tree.
@@ -200,7 +108,6 @@ export function validateTaskEdit(
   tasks: readonly Task[],
   taskId: string,
   changes: Partial<Task>,
-  catalog?: EditCatalog,
 ): TaskEditCheck {
   const found = flattenTasksWithParents(tasks).find(({ task }) => task.id === taskId);
   if (!found) return { ok: false, error: 'Task not found' };
@@ -208,28 +115,17 @@ export function validateTaskEdit(
 
   const locked = actor === 'planner' ? lockedTaskRefusal(target, 'modified') : null;
   if (locked) return { ok: false, error: locked };
-  const coherence = typeCoherenceCheck(target, changes);
-  // Read on the edit as it lands: a flip to manual clears the model without the patch naming it.
-  const landing = coherence?.clear?.includes('assignedModel') ? { ...changes, assignedModel: undefined } : changes;
-  if ('assignedModel' in landing && !sameAssignment(landing.assignedModel, target.assignedModel) && catalog?.liveRunner?.(taskId)) {
-    return { ok: false, error: liveModelRefusal(target) };
-  }
-  if ('assignedRunner' in changes && changes.assignedRunner !== target.assignedRunner && catalog?.liveRunner?.(taskId)) {
-    return { ok: false, error: liveRunnerRefusal(target) };
-  }
 
   if (changes.dependencies) {
     const depCheck = canSetDependencies(tasks, taskId, changes.dependencies);
     if (!depCheck.ok) return depCheck;
   }
 
+  const coherence = typeCoherenceCheck(target, changes);
   if (coherence && !coherence.ok) return coherence;
 
   const ops = opsCheck(target, parent !== null, changes);
   if (ops) return ops;
-
-  const validity = checkModelAndModeValidity(changes.assignedRunner ?? target.assignedRunner, changes.assignedModel, changes.taskMode, catalog);
-  if (!validity.ok) return validity;
 
   return coherence ?? { ok: true };
 }

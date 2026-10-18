@@ -726,12 +726,13 @@ outcome, so it never claims an edit that did not land, and once the switch's
 attempt has ended it says nothing of the plan, which may be another one by then.
 Only the Claude Code
 connector reports a switch; Codex and OpenCode get no synthesized `/model`,
-since runner commands are never interpreted. While a task's runner is live its
-model and effort are locked for every actor (`liveModelRefusal`), a cleared
-model included, and so is its runner (`liveRunnerRefusal`): stop, edit,
-continue is the way from outside. A planner edit leaves alone a model it
-did not change, so the allowlist never undoes the user's switch; it still
-clamps that task's effort to the model's variants unless a runner may hold it.
+since runner commands are never interpreted. While a task's *live runner*
+holds it, its model and effort are locked for every writer but the runner
+itself (`liveModelRefusal`, in the *Assignment resolver*), a cleared model
+included, and so is its runner (`liveRunnerRefusal`): stop, edit, continue is
+the way from outside. A planner edit leaves alone a model it did not change, so
+the allowlist never undoes the user's switch; it still clamps that task's
+effort to the model's variants unless its runner is live.
 *Avoid:* "model override" and "fallback" for it; *Avoid:* writing the plan from
 a drift.
 
@@ -1439,8 +1440,8 @@ cleared.
 **PlanEditor** — the module behind Session's direct plan edits: `updateTask`,
 `setTaskDependencies`, `setTaskRunner`, `addTask`, `removeTask`, the
 conflict-resolver task, and the requests that ask the planner to merge or split
-tasks. `Session`'s methods of those names are one-line delegations; the rules (the lock on settled tasks, the runner retarget,
-the derived assignment of a hand-added task, the ops mark) live here, reaching
+tasks. `Session`'s methods of those names are one-line delegations; the rules (the fields a direct edit may set, the runner retarget,
+the resolved assignment of an edited or hand-added task, the ops mark) live here, reaching
 the plan only through the session's `mutate` ritual, so every edit saves and
 announces once. A refused edit throws `PlanEditError`, which a surface reads as
 "you asked for something invalid" rather than "something broke"; the same error
@@ -1449,23 +1450,51 @@ on a plan with no run.
 *Avoid:* "plan manager", "task editor" (the *TaskEditValidator* below only
 checks); "Session" for the owner of these rules — Session hosts them.
 
-**Runner retarget (`TaskRetarget` + `Session.setTaskRunner`)** — a task's runner
-is the one assignment that cannot be edited as a single field. Its model,
-thinking effort and mode are all scoped to the runner, so `claude-sonnet-4-5` on
-Codex or `acceptEdits` on OpenCode are not degraded choices but unspawnable
-ones. `retargetTaskRunner` (pure) preserves each of the three when the new
-runner also offers it and otherwise snaps to that runner's preferred entry —
-discovery already sorts models by the manifest's `preferredPatterns`, `modes[0]`
-is the manifest's own first choice, and the effort goes through
-`clampThinkingEffort`. An empty catalog means discovery failed, not that the
-runner offers nothing, so that field is left untouched and the runner validates
-last (as in `coerceAssignments`). `Session.setTaskRunner` is the one entry
-point, and the *PlanEditor* behind it the one owner: async because it needs discovery, guarded before that call because listing
-models spawns the runner's own CLI, and it admits the runner into `plan.runners`
-— the set a planner edit checks a task's runner against, and which names every
-runner the plan's tasks run on. Both surfaces route through it
-(`PUT /api/plans/:s/tasks/:t` dispatches an `assignedRunner` in the body to it
-rather than writing the field), so no surface owns a second copy of the clamp.
+**Assignment resolver** (`resolveAssignment`, `resolveAssignments`,
+`services/TaskAssignment.ts`) — the one rule for what a task runs on: its
+runner, model, thinking effort and mode. Every writer calls it — `submit_plan`
+and a text plan (`plannedTask`), `edit_plan` and `taskOps` (`applyTaskOps`), the
+planner's tasks as they land (`resolveAssignments`, also what `submit_plan` and
+`edit_plan` report as `coerced`), a user's direct edit and added task
+(*PlanEditor*), and the runner's own `/model` (`followRunnerModel`) — and it
+returns the task with each change it made to what was written, named
+(`AssignmentAdjustment`), or a refusal. The planner is told the adjustments in
+its tool answer; the user in a notice, for whatever of theirs was replaced.
+What differs is decided by the writer (`AssignmentWriter`): a model the writer
+names that its runner does not offer or the allowlist excludes is refused for a
+planner edit and a user's edit, replaced for a submitted plan and a user's added
+task, and written as it is for the runner's own `/model`. A model the writer
+left alone stays, off the allowlist too (ADR-0043). A model only another runner
+lists provably cannot run here, so it is treated as unassigned and refilled from
+the task's runner — the allowlist's first model the runner lists, else the
+allowlist's first, else the runner's first — which is also what a task moved to
+another runner gets unless its new runner lists the model it had. The effort
+follows the model by one rule (`clampThinkingEffort`): kept where the model
+offers it, else its nearest level, else none; the TUI's and VS Code's model
+pickers call the same rule. The mode is the user's pick where they made one, and
+otherwise is derived, as for the planner (ADR-0001), when a task is new, moves
+runner, turns from a manual task into an AI one, or the planner says read-only
+or not. Which runners a writer may use is `assignableRunners`: the enabled ones
+for a submitted plan, the plan's own too for a planner edit, any for the user.
+*Live runner* — an attempt of the task is claimed, running, quiet or waiting on
+someone (`liveRunner`). It is the one test for the hold above, and for leaving
+an untouched task's effort as it is.
+*Avoid:* deciding any of this at a call site; "coercion" for what the planner's
+edit is refused; a task's status as the test for a live runner.
+
+**Runner retarget** (`Session.setTaskRunner`) — a task's runner is the one
+assignment that cannot be edited as a single field: its model, effort and mode
+are scoped to the runner, so `claude-sonnet-4-5` on Codex or `acceptEdits` on
+OpenCode are not degraded choices but unspawnable ones. A runner change is part
+of a direct edit (`PlanEditor.updateTask`; `setTaskRunner` is that edit with
+the runner alone): the new runner's catalog is discovered first — refused before
+that, since listing models spawns the runner's own CLI, if the task's runner is
+live — then the whole patch is checked and resolved (*Assignment resolver*) and
+lands as one save, after which the runner is admitted into `plan.runners`. A
+read-only task lands on the new runner's read-only mode, found by tag, and a
+move to a runner with none is refused. A model or mode named beside the runner
+wins over the one the move derives. `PUT /api/plans/:s/tasks/:t` hands the whole
+body over as one edit, so no surface splits it.
 
 **Plan tree (`PlanTree`)** — the shared placement and dependency rules over a
 plan's task tree, including a surface's structural projection. `walkPlan` and
@@ -1499,8 +1528,10 @@ the accepted list after a refusal).
 
 **Hand-added task (`Session.addTask`, done by *PlanEditor*)** — async, and for the same reason
 `setTaskRunner` is: a task with no model or mode is not a lighter task but an
-unspawnable one, so an unset assignment is derived from the runner's catalog
-through the same `runnerAssignment` the runner retarget uses. The runner defaults
+unspawnable one, so its assignment is resolved from the runner's catalog as the
+user's added task (*Assignment resolver*): a model they named that the allowlist
+excludes is replaced, and they are told. It takes only the fields a direct edit
+may set, so a draft cannot arrive completed or with a subtree. The runner defaults
 to `plan.runners[0]` and is admitted into the plan (`admitRunner`, shared with
 `setTaskRunner`) — `createTask`'s own `'claude-code'` fallback would otherwise
 fail `validateAssignedRunners` on the next load of a plan that disabled it.
@@ -1521,14 +1552,17 @@ that simply dropped the task could never reach the runner session again and the
 orchestrator went on counting it as active — one of the ways "Execution is
 running" became permanent. Removing a `completed` task drops it from the
 completed set, which is safe because `removeTaskFromPlan` detaches the
-dependents in the same op.
+dependents in the same op. A direct edit sets only the fields the planner may
+change (`UPDATABLE_FIELDS`): a task's status, verdict and subtasks are
+execution's and the plan tree's, never a patch's.
 The asymmetry itself is expressed as one `actor` parameter (`'planner' |
 'direct'`) on **TaskEditValidator**'s single `validateTaskEdit`, not as two
 separate rule implementations — see below.
-*Avoid:* adding a second copy of a rule to one side. A hand-set dependency list,
-a type flip, and a model/mode assignment are all validated by
-`validateTaskEdit` — the one guard the pickers, the API and the planner all
-read, `canSetDependencies` included as one of the checks it runs.
+*Avoid:* adding a second copy of a rule to one side. A hand-set dependency list
+and a type flip are checked by `validateTaskEdit`, what the task runs on by the
+*Assignment resolver*, and the rules the plan's tasks keep together by
+`checkPlanInvariants` — each the one guard the pickers, the API and the planner
+all read.
 
 **Planner rewrite** (`keepExecutionState(current, rewrite)`) — a planner
 answering an edit with a whole task list instead of task ops: a `plan` turn on
@@ -1547,42 +1581,42 @@ full plan echoed finished tasks as `pending` and they ran again.
 first plan commit start from zero, and only `rearm` or Mark not done re-runs a
 finished task.
 
-**TaskEditValidator** (`validateTaskEdit(actor, tasks, taskId, changes,
-catalog?)`) — the one checker behind both edit paths described above:
-`applyTaskOps` calls it with `actor: 'planner'`, `PlanEditor.updateTask` (behind
-`Session.updateTask`) calls it with `actor: 'direct'`. Only the lock rule (no touching `in_progress` or
-`completed`) reads the actor; every other rule — a hand-set dependency list
-(`canSetDependencies`), coherence on an AI↔MAN `type` flip, and whether an
-`assignedModel`/`taskMode` is something the target runner actually offers —
-describes the *task*, not who is editing it, so both actors run the same
-check. A flip that is well-formed returns which fields the new type stripped
-of meaning (`TaskEditCheck.clear`) — `assignedModel` (and with it the effort)/
-`taskMode`/`autonomy` going to `user`, `userSteps` going to `ai` — named so the
-caller can force-clear them and say what was lost, rather than leaving stale
-values that describe a type the task no longer has. The `EditCatalog` a
-model/mode check runs against is deliberately the same discovered models and
-manifest modes the planner was already shown, in the per-turn catalog block
-and in a Task query catalog answer (below) — a refusal here can never name
-something invalid that the planner was never told about, or the reverse.
-*Avoid:* calling `coerceAssignments` from here — that function is the silent
-safety net for paths that never reach this validator (a plan committed under a
-now-stale catalog); this validator refuses instead of coercing, because a
-planner mid-edit has a repair loop to answer to and a coerced value it never
-asked for would drift the plan without telling either side.
+**TaskEditValidator** (`validateTaskEdit(actor, tasks, taskId, changes)`) —
+the checker of who may make an edit and whether the task stays well-formed,
+behind both edit paths described above: `applyTaskOps` calls it with `actor:
+'planner'`, `PlanEditor.updateTask` (behind `Session.updateTask`) with `actor:
+'direct'`. Only the lock rule (no touching `in_progress` or `completed`) reads
+the actor; the rest — a hand-set dependency list (`canSetDependencies`),
+coherence on an AI↔MAN `type` flip, and where an ops task may be — describes
+the *task*, not who is editing it. A flip that is well-formed returns which
+fields the new type stripped of meaning (`TaskEditCheck.clear`) —
+`assignedModel` (and with it the effort)/`taskMode`/`autonomy` going to `user`,
+`userSteps` going to `ai` — named so the caller can force-clear them and say
+what was lost, rather than leaving stale values that describe a type the task
+no longer has. What the task runs on is the *Assignment resolver*'s, which
+reads the same discovered models and manifest modes the planner was shown, in
+the per-turn catalog block and in a Task query catalog answer (below) — a
+refusal there can never name something invalid that the planner was never told
+about, or the reverse.
+*Avoid:* checking a model, effort or mode here.
 
 **Planned task** (`plannedTask` + `checkPlanInvariants`, `services/PlannedTask.ts`)
 — the one intake for a task the planner writes, whichever route it took: a
 submitted plan (`submit_plan`, the plan envelope) or an edit that adds, merges
 or splits (`edit_plan`, `taskOps`). `plannedTask` builds the task and its
 subtasks from the planner's JSON — every fallback its omissions meet (the
-runner, the prompt, the slice inherited from a parent, the mode from read-only
-or not) is written there once — and reports what the planner may not set (a
-mode, read-only on a manual task) for the route to warn about or refuse.
+runner, the prompt, the slice inherited from a parent) is written there once,
+and its assignment (the mode from read-only or not, and for an edit the model)
+is the *Assignment resolver*'s, reading a merge's or split part's model as
+carried from the task it is made of — and reports what the planner may not set
+(a mode, read-only on a manual task) for the route to warn about or refuse.
 `checkPlanInvariants` holds the resulting tasks to the rules a plan keeps at
 every depth: unique ids, dependencies that exist and name neither the task itself
 nor its ancestors or descendants, no cycle, a runner the plan may
-use, an AFK task with no user steps, a manual task HITL, and ops only on a
-top-level AI task. `validatePlanTasks` calls both on a whole plan; `applyTaskOps`
+use, an AFK task with no user steps, a manual task HITL, ops only on a
+top-level AI task and never on its runner's read-only mode. The user's direct
+edits are held to the same rules (any runner allowed), refused only for one the
+edit breaks. `validatePlanTasks` calls both on a whole plan; `applyTaskOps`
 calls `plannedTask` for each task an op makes and `checkPlanInvariants` on the
 batch's final state, so a later op may complete an earlier one; a broken rule is
 named against the op that first broke it, and a rule the plan already broke
@@ -1741,7 +1775,7 @@ what gives the surfaces' icon/label switches their exhaustiveness checking.
 **Stepped picker** — the TUI overlay that walks several dependent choices in one panel (`/planner`, `/settings`): the steps are listed at the top, enter saves the step at once (`/planner` then advances; `/settings` stays on the step), ←/→ jump between steps (tab/shift-tab still work) without saving the highlighted row, and esc closes from any step, keeping what was saved. A later step's options are rebuilt when an earlier choice changes. Short lists number their rows (digit keys select), labels and details are aligned in columns, and the current value carries a `(current)` marker. Numeric settings are typed (↑/↓ move by one), not picked from a list. VS Code's `/planner` is a multi-step quick pick with a Back button; VS Code's `/settings` is the Run block of the webview Settings panel, where each setting is saved as it is set.
 *Avoid:* "wizard" for the TUI overlay.
 
-**ModelAllowlistResolver** — the deep module owning the planner-visibility allowlist policy: narrowing what `modelsByRunner` the planner sees in its prompt (the nudge) and rewriting any emitted `assignedModel.modelId` outside the allowlist to `allowlist[0]` for that runner, wiping the paired `thinkingEffort` (the coerce). It walks subtasks too, never moves a task to another runner (an unknown runner is refused before coercion, see *Planned task*), and returns what it changed beside the tasks, which `submit_plan` and `edit_plan` report. `coerceAssignments` also clamps each `thinkingEffort` to a variant the assigned model actually offers (per the discovered catalog, when passed): invalid efforts snap to the nearest rung of the known effort ladder (`clampThinkingEffort`), or to undefined — the runner default — when no mapping exists. Symmetric to `ModeResolver` — both own a planner policy paired with a post-parse fix. Reads its state from `SettingsService` (`UserSettings.modelAllowlist`, keyed by `RunnerId`, id-level not variant-level). The restriction is advice to the planner only: the per-task dropdown stays full (manual override is sovereign), `loadPlan` is untouched, and the orchestrator never consults it. A set allowlist is a hard bound on what the planner sees: allowlisted ids not covered by discovery are synthesized into the prompt list rather than falling back to the full discovered list (which would leak non-allowlisted models to the planner).
+**ModelAllowlistResolver** — the deep module owning how the allowlist is read and shown: narrowing what `modelsByRunner` the planner sees in its prompt (`filterModelsForPrompt`, the nudge), the three-way reading of which allowlisted ids a runner may run (`effectiveAllowlist`), and the effort ladder (`clampThinkingEffort`): an effort kept where the model offers it, else snapped to the nearest rung, else undefined — the runner default — when no mapping exists or the model offers no levels. What a stray model meets is the *Assignment resolver*'s, by writer: replaced by the allowlist's model for a submitted plan and a user's added task, with its effort carried by the same ladder and the change named; refused for a planner edit and a user's direct edit; written as it is for the runner's own `/model`. A task's runner is never moved (an unknown runner is refused, see *Planned task*). Symmetric to `ModeResolver`. Reads its state from `SettingsService` (`UserSettings.modelAllowlist`, keyed by `RunnerId`, id-level not variant-level). The pickers list every discovered model, `loadPlan` is untouched, and the orchestrator never consults it. A set allowlist is a hard bound on what the planner sees: allowlisted ids not covered by discovery are synthesized into the prompt list rather than falling back to the full discovered list (which would leak non-allowlisted models to the planner).
 *Avoid:* "model filter", "model restriction service" — and do not collapse into `ModelResolver`; the discovery/routing module stays unaware of the policy, the same way `ModeResolver` stays separate from `ModelResolver`.
 
 **Provider model lists** — the canonical `{ openrouter[], google[] }` id lists

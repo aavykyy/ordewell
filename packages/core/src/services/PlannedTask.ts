@@ -1,8 +1,8 @@
 import { dependencyTargetErrors, findDependencyCycle } from './PlanTree';
 import { v4 as uuidv4 } from 'uuid';
 import { Task, RunnerId, TaskModelAssignment, DEFAULT_RUNNERS, createTask, flattenTasksWithParents, inheritedSkills, skillNames } from '../models/Task';
-import { plannedMode, type RunnerModeInfo } from './ModeResolver';
-import { checkModelAndModeValidity, type EditCatalog } from './TaskEditValidator';
+import { taggedReadOnlyMode, type RunnerModeInfo } from './ModeResolver';
+import { resolveAssignment, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
 
 /** One reason a planned task was refused, pinned to the task and field it is about. */
 export interface PlanTaskError {
@@ -19,10 +19,11 @@ export interface IntakeCatalog {
   runnerModes?: Partial<Record<RunnerId, readonly RunnerModeInfo[]>>;
   autonomousDefault?: boolean;
   /**
-   * An edit's assigned models are checked against the catalog and refused; a
-   * submitted plan's are coerced after it lands instead (ADR-0003).
+   * An edit's assignments are resolved against the catalog as it is planned,
+   * and a model it names that the runner does not offer is refused; a
+   * submitted plan's models are resolved as it lands instead (ADR-0003).
    */
-  models?: EditCatalog;
+  models?: AssignmentCatalog;
 }
 
 /** Where a planned task lands, which decides what it inherits. */
@@ -56,6 +57,8 @@ export interface PlannedTask {
   ignored: PlanTaskError[];
   /** The planner's id for each task of the tree that was given a fresh one. */
   renamed: Map<string, string>;
+  /** What the tree's assignments were adjusted to beyond what the planner wrote, for the planner to be told. */
+  adjustments: AssignmentAdjustment[];
 }
 
 /** The planner names no mode (ADR-0031): it says read-only, and the mode follows. */
@@ -128,7 +131,11 @@ function modelOf(raw: Record<string, unknown>, from: TaskModelAssignment | undef
  *   {@link checkPlanInvariants} refuses;
  * - an AI task's prompt is its own, else its description, else its title, so
  *   it is never unschedulable;
- * - the mode is decided here from read-only or not, never named (ADR-0031);
+ * - the assignment — model, effort, and the mode decided from read-only or
+ *   not, never named (ADR-0031) — is the resolver's (`resolveAssignment`),
+ *   as it is for every writer: a model a merge or split carries is read as
+ *   what the task was made from, so a part moved to another runner gets that
+ *   runner's;
  * - an AI subtask with no slice classification takes its parent's: an `ai`
  *   sub-step of an AFK slice is AFK. Not a blanket default, which would strip
  *   a human gate the planner intended; a manual subtask must still say HITL.
@@ -140,6 +147,7 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
   const errors: PlanTaskError[] = [];
   const ignored: PlanTaskError[] = [];
   const renamed = new Map<string, string>();
+  const adjustments: AssignmentAdjustment[] = [];
 
   const title = text(raw.title) ?? '';
   const where = taskWhere(title, parent?.title);
@@ -163,22 +171,7 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
   const asked = typeof raw.readOnly === 'boolean' ? raw.readOnly : undefined;
   const readOnly = ai && !ops && (asked ?? from?.readOnly ?? parent?.readOnly ?? false);
 
-  let taskMode = base.taskMode;
-  if (ai && catalog.runners.includes(assignedRunner)) {
-    const mode = plannedMode(assignedRunner, catalog.runnerModes, { readOnly, current: base.taskMode }, catalog.autonomousDefault ?? true);
-    if (!mode.ok) errors.push({ taskId: id, field: 'readOnly', message: `${where}: ${mode.error}` });
-    else if (mode.mode !== undefined) taskMode = mode.mode;
-  }
-  // With no runner modes to read, `plan` is the guess that keeps a read-only task from writing.
-  if (taskMode === undefined && readOnly && !catalog.runnerModes) taskMode = 'plan';
-
   const assignedModel = ai ? modelOf(raw, base.assignedModel) : undefined;
-  // Only a model the planner named: one carried over from the tasks a merge or split is made of was never its pick.
-  if (assignedModel && isRecord(raw.assignedModel) && catalog.models && catalog.runners.includes(assignedRunner)) {
-    const validity = checkModelAndModeValidity(assignedRunner, assignedModel, undefined, catalog.models);
-    if (!validity.ok) errors.push({ taskId: id, field: 'assignedModel', message: `${where}: ${validity.error}` });
-  }
-
   const slice = (value: unknown): 'AFK' | 'HITL' | undefined => (value === 'AFK' || value === 'HITL' ? value : undefined);
   // Explicit child values always win; inheritance only fills a gap, and only for `ai` tasks.
   const autonomy = ai ? slice(raw.autonomy) ?? base.autonomy ?? parent?.autonomy : undefined;
@@ -191,11 +184,12 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
       subtasks.push(child.task);
       errors.push(...child.errors);
       ignored.push(...child.ignored);
+      adjustments.push(...child.adjustments);
       for (const [was, now] of child.renamed) renamed.set(was, now);
     }
   }
 
-  const task = createTask({
+  const fields = {
     id,
     order: Number(raw.order ?? 0),
     title,
@@ -209,22 +203,51 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
     subtasks,
     assignedModel,
     assignedRunner,
-    taskMode,
     autonomy,
     sliceType,
     userStoriesCovered: Array.isArray(raw.userStoriesCovered) ? raw.userStoriesCovered.map(String) : base.userStoriesCovered,
     ops,
     skills: from ? inheritedSkills(raw.skills, base.skills) : skillNames(raw.skills),
-  });
+  };
+  let taskMode = base.taskMode;
+  let landedModel = assignedModel;
+  if (ai && catalog.runners.includes(assignedRunner)) {
+    const resolved = resolveAssignment({
+      writer: catalog.models ? 'edit' : 'plan',
+      task: { ...createTask(fields), taskMode },
+      from: from ? { assignedRunner: base.assignedRunner ?? assignedRunner, assignedModel: base.assignedModel, taskMode: base.taskMode } : undefined,
+      readOnly,
+      catalog: { modelsByRunner: {}, ...catalog.models, runnerModes: catalog.runnerModes, autonomousDefault: catalog.autonomousDefault },
+    });
+    if (!resolved.ok) {
+      // The planner names no mode: one it cannot have is about the read-only answer it gave (ADR-0031).
+      errors.push({ taskId: id, field: resolved.field === 'taskMode' ? 'readOnly' : resolved.field, message: `${where}: ${resolved.error}` });
+    } else {
+      taskMode = resolved.task.taskMode;
+      landedModel = resolved.task.assignedModel;
+      adjustments.push(...resolved.adjustments);
+    }
+  }
+  // With no runner modes to read, `plan` is the guess that keeps a read-only task from writing.
+  if (taskMode === undefined && readOnly && !catalog.runnerModes) taskMode = 'plan';
+
+  const task = createTask({ ...fields, assignedModel: landedModel, taskMode });
   if (Array.isArray(raw.skills)) skillsAsked.set(task, raw.skills);
-  return { task, errors, ignored, renamed };
+  return { task, errors, ignored, renamed, adjustments };
 }
 
 /**
  * The rules a plan's tasks are held to together, subtasks included, whichever
- * route they arrived by.
+ * route they arrived by and whoever wrote them, the planner or the user.
+ * `runners` are the ones the writer may put a task on (`assignableRunners`),
+ * any when undefined; with `runnerModes`, an ops task is held off its
+ * runner's read-only mode.
  */
-export function checkPlanInvariants(tasks: readonly Task[], runners: readonly RunnerId[]): PlanTaskError[] {
+export function checkPlanInvariants(
+  tasks: readonly Task[],
+  runners: readonly RunnerId[] | undefined,
+  runnerModes?: Partial<Record<RunnerId, readonly RunnerModeInfo[]>>,
+): PlanTaskError[] {
   const rows = flattenTasksWithParents(tasks);
   const errors: PlanTaskError[] = [];
   const seen = new Set<string>();
@@ -241,7 +264,10 @@ export function checkPlanInvariants(tasks: readonly Task[], runners: readonly Ru
     }
     const opsRefused = t.ops ? opsPlacementRefusal(t.type, parent !== null) : null;
     if (opsRefused) fail('ops', `${where} ${opsRefused}`);
-    if (t.type !== 'user' && !runners.includes(t.assignedRunner)) {
+    if (t.ops && t.taskMode !== undefined && t.taskMode === taggedReadOnlyMode(runnerModes?.[t.assignedRunner])) {
+      fail('taskMode', `${where} is an ops task, which runs commands, so it cannot run in its runner's read-only mode`);
+    }
+    if (runners && t.type !== 'user' && !runners.includes(t.assignedRunner)) {
       fail('assignedRunner', `${where} has invalid assignedRunner "${t.assignedRunner}". Expected one of: ${runners.join(', ')}`);
     }
   }

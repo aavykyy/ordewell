@@ -4,7 +4,8 @@ import { IFileSystem } from '../interfaces/IFileSystem';
 import { IWebFetcher } from '../interfaces/IWebFetcher';
 import { IAiService } from './AiService';
 import type { RunnerModeInfo } from './ModeResolver';
-import { filterModelsForPrompt, coerceAssignments } from './ModelAllowlistResolver';
+import { filterModelsForPrompt } from './ModelAllowlistResolver';
+import { resolveAssignments } from './TaskAssignment';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
 import { checkPlanSkills } from './taskSkills';
 
@@ -119,7 +120,7 @@ export class Planner {
     }
 
     return {
-      tasks: coerceAssignments(tasks, req.perRunnerAllowlist ?? {}, req.modelsByRunner).tasks,
+      tasks: resolveAssignments(tasks, [], { modelsByRunner: req.modelsByRunner ?? {}, perRunnerAllowlist: req.perRunnerAllowlist ?? {} }).tasks,
       generatedAt: now,
       status: 'draft',
       runners: req.runners,

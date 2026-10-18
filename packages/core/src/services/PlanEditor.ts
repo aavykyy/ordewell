@@ -1,11 +1,11 @@
-import { canMergeTasks, canSplitTask } from './TaskOps';
+import { canMergeTasks, canSplitTask, UPDATABLE_FIELDS } from './TaskOps';
 import { subtreeIds } from './PlanTree';
-import { liveRunnerRefusal, validateTaskEdit } from './TaskEditValidator';
-import { unavailableModeReason, type RunnerModeInfo } from './ModeResolver';
-import { retargetTaskRunner, runnerAssignment, type RunnerCatalog } from './TaskRetarget';
-import { clampThinkingEffort, effectiveAllowlist } from './ModelAllowlistResolver';
+import { validateTaskEdit } from './TaskEditValidator';
+import { liveRunnerRefusal, resolveAssignment, type AssignmentAdjustment, type AssignmentCatalog, type RunnerCatalog } from './TaskAssignment';
+import { clampThinkingEffort } from './ModelAllowlistResolver';
 import { buildMergePrompt, buildSplitPrompt } from './PlanPrompts';
 import { conflictResolverTask } from './Landing';
+import { checkPlanInvariants, type PlanTaskError } from './PlannedTask';
 import { PlanEditError } from './PlanEditError';
 import type { SessionCatalog } from './SessionCatalog';
 import type { PlanStore } from './PlanStore';
@@ -13,11 +13,14 @@ import type { TaskOrchestrator } from './TaskOrchestrator';
 import type { IsolationRunController } from './IsolationRunController';
 import type { SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { checkTaskSkillsEdit, type SkillLookup } from './taskSkills';
-import { opsFlag, skillNames, type DiscoveredModel, type LegacyPlanState, type RunnerId, type Task, type TaskModelAssignment } from '../models/Task';
+import { createTask, opsFlag, skillNames, updateTaskInPlan, type DiscoveredModel, type LegacyPlanState, type RunnerId, type Task, type TaskModelAssignment } from '../models/Task';
 import type { RunnerModelRef } from '../models/RunnerCommand';
 
+/** The fields that decide what a task runs on: an edit that touches none of them leaves the assignment as it stands. */
+const ASSIGNMENT_FIELDS = ['assignedRunner', 'assignedModel', 'taskMode', 'type'] as const satisfies readonly (keyof Task)[];
+
 /** The catalogs an edit reads, as the session holds them at the moment of the edit. */
-export type PlanEditCatalog = Pick<SessionCatalog, 'edit' | 'runner' | 'allowlistFor' | 'models' | 'admit'>;
+export type PlanEditCatalog = Pick<SessionCatalog, 'edit' | 'runner' | 'admit'>;
 
 export interface PlanEditorDeps {
   store: PlanStore;
@@ -81,22 +84,26 @@ export class PlanEditor {
   }
 
   /**
-   * Patch one task's fields. A hand-set dependency list, or a type flip
-   * between AI and MAN, are the patches that can leave a task incoherent
-   * (unschedulable, or carrying fields that mean nothing for its new type),
-   * so both go through the same {@link validateTaskEdit} guard the planner's
-   * task-ops applier uses (as the 'direct' actor, which skips the lock rule
-   * but not a live runner's hold on its model) rather than a second copy of
-   * the rules — and throws, so the surface can say why. Gated on the task existing so an edit to an unknown id still
-   * falls through to the no-op `store.update` below instead of throwing.
-   * Attached skills meet the rule a planner's do: a planner skill is refused,
-   * a name not found yet only warns. A runner change is made by
-   * {@link setTaskRunner}, which re-derives what the runner scopes, ahead of
-   * the rest of the patch.
+   * Patch one task's fields: the user's direct edit. Only the fields the
+   * planner may change are taken ({@link directChanges}); a task's status,
+   * verdict or subtasks are execution's and the plan tree's, never a patch's.
+   * The edit meets the rules the planner's task ops meet — who may make it and
+   * whether the task stays well-formed ({@link validateTaskEdit}, as the
+   * 'direct' actor, which skips the lock rule), what its runner, model, effort
+   * and mode end up as ({@link resolveAssignment}, as the user's), and the
+   * rules the plan's tasks are held to together (`checkPlanInvariants`) — and
+   * throws, so the surface can say why. Attached skills meet the rule a
+   * planner's do: a planner skill is refused, a name not found yet only warns.
+   *
+   * A runner change is part of the same patch: the new runner's catalog is
+   * discovered first, and the whole edit lands as one save, checked after the
+   * last wait — the task may have started meanwhile, and a live runner holds
+   * its runner and model. A model named beside the runner wins over one the
+   * move would derive.
    *
    * Edits to one task commit in call order: the skill check waits on git, so
    * two quick chip edits (`[a]` then `[a, b]`) could otherwise land the first
-   * one last.
+   * one last. An empty patch changes nothing and answers whether the task exists.
    */
   updateTask(taskId: string, changes: Partial<Task>): Promise<LegacyPlanState | null> {
     return this.inTaskOrder(taskId, () => this.applyTaskUpdate(taskId, changes));
@@ -110,26 +117,27 @@ export class PlanEditor {
    * it says what that runner already runs, and the one that skips the
    * allowlist: the user picked it in the runner. The runner's own label is
    * used only for a model discovery does not list. Effort is the runner's
-   * when it reported one, else the plan's, either clamped to what the new
-   * model offers; none for a model discovery does not list. `live` is asked
-   * as the edit lands, after the edits queued ahead of it: by then the plan
-   * may be another one, whose task of the same id the switch says nothing of.
+   * when it reported one, else the plan's, carried to the new model by the
+   * one rule ({@link clampThinkingEffort}); none for a model discovery does
+   * not list. `live` is asked as the edit lands, after the edits queued ahead
+   * of it: by then the plan may be another one, whose task of the same id the
+   * switch says nothing of.
    */
   followRunnerModel(taskId: string, model: RunnerModelRef, effort: string | undefined, live: () => boolean): Promise<LegacyPlanState | null> {
     return this.inTaskOrder(taskId, async () => {
       const task = this.store.get(taskId);
       if (!task || task.type === 'user' || !live()) return null;
-      const listed = this.catalog.models()[task.assignedRunner]?.find((m) => m.modelId === model.model);
-      // An effort the new model does not offer would be passed to its next spawn.
+      const catalog = this.catalog.edit();
+      const listed = catalog.modelsByRunner[task.assignedRunner]?.find((m) => m.modelId === model.model);
       const thinkingEffort = clampThinkingEffort(effort ?? task.assignedModel?.thinkingEffort, listed?.variants ?? []);
       if (task.assignedModel?.modelId === model.model && task.assignedModel.thinkingEffort === thinkingEffort) return this.plan();
       const assignedModel: TaskModelAssignment = {
         modelId: model.model,
         modelLabel: listed?.modelLabel ?? model.label ?? model.model,
         ...(thinkingEffort ? { thinkingEffort } : {}),
-        ...(listed ? { availableVariants: listed.variants.map((v) => v.id) } : {}),
       };
-      return this.commitTaskUpdate(taskId, { assignedModel });
+      const outcome = resolveAssignment({ writer: 'runner', task: { ...task, assignedModel }, before: task, catalog });
+      return this.commitTaskUpdate(taskId, { assignedModel: outcome.ok ? outcome.task.assignedModel : assignedModel });
     });
   }
 
@@ -144,32 +152,75 @@ export class PlanEditor {
     return edit;
   }
 
-  private async applyTaskUpdate(taskId: string, changes: Partial<Task>): Promise<LegacyPlanState | null> {
-    if ('ops' in changes) changes = { ...changes, ops: opsFlag(changes.ops) };
-    const typedSkills = changes.skills;
-    if ('skills' in changes) changes = { ...changes, skills: skillNames(changes.skills) };
+  private async applyTaskUpdate(taskId: string, patch: Partial<Task>): Promise<LegacyPlanState | null> {
     const target = this.store.get(taskId);
-    const skills = 'skills' in changes && target ? await checkTaskSkillsEdit(target, typedSkills, this.taskSkills()) : undefined;
+    if (!target) return null;
+    const changes = directChanges(patch, target);
+    if (Object.keys(changes).length === 0) return this.plan();
+    const skills = 'skills' in changes ? await checkTaskSkillsEdit(target, patch.skills, this.taskSkills()) : undefined;
     if (skills?.errors.length) throw new PlanEditError(skills.errors.map((e) => e.message).join(' '));
-    if ((changes.dependencies || changes.type || 'assignedModel' in changes || 'assignedRunner' in changes || changes.taskMode || 'ops' in changes) && target) {
-      const check = validateTaskEdit('direct', this.store.planTasks, taskId, changes, this.catalog.edit());
-      if (!check.ok) throw new PlanEditError(check.error ?? 'Those changes are not valid');
-      if (check.clear?.length || check.set) {
-        changes = { ...changes, ...Object.fromEntries((check.clear ?? []).map((f) => [f, undefined])), ...check.set };
-      }
+    const runner = changes.assignedRunner ?? target.assignedRunner;
+    // Listing models spawns the runner's own CLI: a move that could not be made anyway is refused first.
+    if (changes.assignedRunner) this.refuseLiveRetarget(target);
+    const discovered = changes.assignedRunner || (changes.type === 'ai' && target.type === 'user') ? await this.catalog.runner(runner) : undefined;
+    const landed = this.landedEdit(taskId, changes, discovered);
+    if (!landed) return null;
+    const { edit, adjustments } = landed;
+    const moved = edit.assignedRunner !== undefined;
+    const plan = await this.commit(
+      () => {
+        const released = this.scheduler.releaseMovedResume(taskId, edit);
+        if (!this.store.update(taskId, released)) return false;
+        Object.assign(edit, released);
+        if (moved && discovered) this.admitRunner(runner, discovered.models);
+        return true;
+      },
+      // A move can admit a runner to the plan, which only the whole plan's announcement carries.
+      moved ? undefined : () => this.broadcast({ type: 'task_updated', taskId, changes: edit as Record<string, unknown> }),
+    );
+    if (plan) {
+      this.tellAdjusted(adjustments);
+      for (const warning of skills?.warnings ?? []) this.notice('warn', warning);
     }
-    const { assignedRunner, ...rest } = changes;
-    if (target && assignedRunner && assignedRunner !== target.assignedRunner) {
-      // Written alone, a runner would keep the model, effort and mode its
-      // predecessor scoped. It moves first, so a model named beside it wins
-      // over the one the move derives.
-      const moved = await this.setTaskRunner(taskId, assignedRunner);
-      if (!moved || Object.keys(rest).length === 0) return moved;
-      changes = rest;
-    }
-    const plan = await this.commitTaskUpdate(taskId, changes);
-    if (plan) for (const warning of skills?.warnings ?? []) this.notice('warn', warning);
     return plan;
+  }
+
+  /**
+   * A direct edit as it lands: checked against the plan as it is now, after
+   * every wait, with what its runner, model, effort and mode resolve to. Null
+   * when the task is gone; throws on a refusal.
+   */
+  private landedEdit(taskId: string, changes: Partial<Task>, discovered: RunnerCatalog | undefined): { edit: Partial<Task>; adjustments: AssignmentAdjustment[] } | null {
+    const before = this.store.get(taskId);
+    if (!before) return null;
+    const check = validateTaskEdit('direct', this.store.planTasks, taskId, changes);
+    if (!check.ok) throw new PlanEditError(check.error ?? 'Those changes are not valid');
+    const edit: Partial<Task> = { ...changes, ...Object.fromEntries((check.clear ?? []).map((f) => [f, undefined])), ...check.set };
+    const catalog = this.assignmentCatalog(edit.assignedRunner ?? before.assignedRunner, discovered);
+    let adjustments: AssignmentAdjustment[] = [];
+    if (ASSIGNMENT_FIELDS.some((f) => f in edit)) {
+      const written = { ...before, ...edit };
+      const outcome = resolveAssignment({ writer: 'user', task: written, before, catalog });
+      if (!outcome.ok) throw new PlanEditError(outcome.error);
+      if (outcome.task.assignedModel !== written.assignedModel) edit.assignedModel = outcome.task.assignedModel;
+      if (outcome.task.taskMode !== written.taskMode) edit.taskMode = outcome.task.taskMode;
+      adjustments = outcome.adjustments;
+    }
+    this.refuseBreach(taskId, edit, catalog);
+    return { edit, adjustments };
+  }
+
+  /**
+   * The rules the plan's tasks are held to together hold for the user's edits
+   * as for the planner's: one this edit would break is refused. One the plan
+   * already broke — a rule written since it was saved, say — never blocks an
+   * unrelated edit. A user may put a task on any runner.
+   */
+  private refuseBreach(taskId: string, edit: Partial<Task>, catalog: AssignmentCatalog): void {
+    const key = (e: PlanTaskError) => `${e.taskId ?? ''}\u0000${e.field}`;
+    const standing = new Set(checkPlanInvariants(this.store.planTasks, undefined, catalog.runnerModes).map(key));
+    const broken = checkPlanInvariants(updateTaskInPlan(this.store.planTasks, taskId, edit), undefined, catalog.runnerModes).find((e) => !standing.has(key(e)));
+    if (broken) throw new PlanEditError(broken.message);
   }
 
   private commitTaskUpdate(taskId: string, changes: Partial<Task>): Promise<LegacyPlanState | null> {
@@ -194,67 +245,50 @@ export class PlanEditor {
   }
 
   /**
-   * Move one task onto a different runner. Distinct from {@link updateTask}
-   * because a runner change is never a single-field edit: the task's model,
-   * thinking effort and mode are all scoped to its runner, so they are
-   * re-derived from the new runner's catalog (see {@link retargetTaskRunner}).
-   * That needs discovery, which is why `updateTask` hands a runner change here
-   * rather than writing it as a field.
-   *
-   * The runner is also admitted into `plan.runners` — see {@link admitRunner}.
+   * Move one task onto a different runner: a field patch of its runner, which
+   * {@link updateTask} lands with what the runner scopes — the task's model,
+   * thinking effort and mode — resolved from the new runner's catalog, and
+   * admits the runner into `plan.runners` (see {@link admitRunner}). A re-pick
+   * of the same runner, or a runner for a manual task, changes nothing and
+   * asks discovery nothing.
    */
   async setTaskRunner(taskId: string, runner: RunnerId): Promise<LegacyPlanState | null> {
-    const plan = this.plan();
-    if (!plan) return null;
-    const task = this.store.get(taskId);
-    if (!task) return null;
-    // Guard before discovery, not after: listing models spawns the runner's
-    // own CLI, which is far too expensive for a no-op re-pick.
-    if (task.assignedRunner === runner || task.type === 'user') return plan;
-    this.refuseLiveRetarget(task);
-
-    const catalog = await this.catalog.runner(runner);
-    const from = this.catalog.edit([task.assignedRunner]).runnerModes[task.assignedRunner];
-    const changes = retargetTaskRunner(task, runner, this.allowedCatalog(catalog, runner), from);
-    if (Object.keys(changes).length === 0) return this.plan();
-    this.refuseUnavailableMode(runner, changes.taskMode, catalog.modes);
-    // Discovery can take long enough for the task to start meanwhile.
-    this.refuseLiveRetarget(task);
-
-    return this.commit(() => {
-      if (!this.store.update(taskId, this.scheduler.releaseMovedResume(taskId, changes))) return false;
-      this.admitRunner(runner, catalog.models);
-      return true;
-    });
+    if (!this.plan()) return null;
+    return this.updateTask(taskId, { assignedRunner: runner });
   }
 
   /**
    * Add one task, filling in whatever the caller left unset. A task with no
    * runnable assignment is not a lighter task but an unspawnable one, so the
    * runner falls back to the plan's first and the model, effort and mode are
-   * derived from that runner's catalog — the same derivation a runner change
-   * uses ({@link runnerAssignment}), which is why this is async like
-   * {@link setTaskRunner}. Anything the caller did choose survives when the
-   * runner offers it.
+   * resolved from that runner's catalog as the user's added task
+   * ({@link resolveAssignment}), which is why this is async like a runner
+   * change. Anything the caller did choose survives when the runner offers it;
+   * what was put in its place is named to them.
    *
    * Dependencies naming tasks that don't exist are dropped rather than rejected:
    * the caller is a picker over the current plan, so a stale id means the plan
    * moved on, not that the whole task should be refused.
    */
-  async addTask(draft: Partial<Task>): Promise<LegacyPlanState | null> {
+  async addTask(given: Partial<Task>): Promise<LegacyPlanState | null> {
     const plan = this.plan();
     if (!plan) return null;
+    const draft = editableFields(given);
     const runner = draft.assignedRunner ?? plan.runners[0];
     const dependencies = (draft.dependencies ?? []).filter((id) => this.store.get(id));
-    const catalog = draft.type === 'user' ? null : await this.catalog.runner(runner);
-    const assignment = catalog ? runnerAssignment(this.allowedCatalog(catalog, runner), draft) : {};
-    if (catalog) this.refuseUnavailableMode(runner, assignment.taskMode, catalog.modes);
+    const discovered = draft.type === 'user' ? undefined : await this.catalog.runner(runner);
+    const written: Task = { ...createTask({ ...draft, assignedRunner: runner, dependencies }), taskMode: draft.taskMode };
+    const outcome = resolveAssignment({ writer: 'userAdd', task: written, catalog: this.assignmentCatalog(runner, discovered) });
+    if (!outcome.ok) throw new PlanEditError(outcome.error);
+    const { assignedModel, taskMode } = outcome.task;
 
-    return this.commit(() => {
-      this.approve([this.store.add({ ...draft, ...assignment, assignedRunner: runner, dependencies }).id]);
-      if (catalog) this.admitRunner(runner, catalog.models);
+    const added = await this.commit(() => {
+      this.approve([this.store.add({ ...draft, assignedModel, taskMode, assignedRunner: runner, dependencies }).id]);
+      if (discovered) this.admitRunner(runner, discovered.models);
       return true;
     });
+    if (added) this.tellAdjusted(outcome.adjustments);
+    return added;
   }
 
   private refuseLiveRetarget(task: Task): void {
@@ -262,13 +296,18 @@ export class PlanEditor {
   }
 
   /**
-   * A mode the host cannot run is refused, with its reason, not swapped for
-   * another: the plan is the source of truth for what runs (ADR-0001), and a
-   * task meant to be sandboxed must not quietly get more access.
+   * Never silent (ADR-0001): what the user had that their edit replaced — a
+   * model the allowlist excludes, or one the new runner does not offer, and
+   * the effort that followed it. A model filled in where they named none
+   * replaced nothing of theirs.
    */
-  private refuseUnavailableMode(runner: RunnerId, mode: string | undefined, modes: readonly RunnerModeInfo[]): void {
-    const reason = unavailableModeReason(modes, mode);
-    if (reason) throw new PlanEditError(`Mode "${mode}" of runner "${runner}" is unavailable on this host: ${reason}`);
+  private tellAdjusted(adjustments: readonly AssignmentAdjustment[]): void {
+    const byTask = new Map<string, AssignmentAdjustment[]>();
+    for (const a of adjustments) if (a.from !== null) byTask.set(a.taskId, [...(byTask.get(a.taskId) ?? []), a]);
+    for (const changes of byTask.values()) {
+      const said = changes.map((a) => `${a.field === 'assignedModel' ? 'model' : 'effort'} ${a.from} → ${a.to ?? 'none'}`);
+      this.notice('info', `Task "${changes[0].title}": ${said.join(', ')}.`);
+    }
   }
 
   /**
@@ -358,29 +397,45 @@ export class PlanEditor {
   }
 
   /**
-   * What a *derived* assignment may draw from: the runner's catalog narrowed to
-   * the user's allowlist. Deriving from the full catalog would hand a task the
-   * runner's first model regardless of a restriction the user set — the next
-   * planner turn's `coerceAssignments` would snap it back anyway, so the user
-   * would see their pick silently change instead of never being offered.
-   *
-   * The catalog itself stays unnarrowed because {@link admitRunner} remembers
-   * it as what the runner really offers, which is what effort clamping needs.
+   * What a direct edit is resolved against: the session's catalog, with the
+   * catalog just discovered for the runner the edit moves the task to or
+   * fills it from. A discovery that found nothing leaves what is known.
    */
-  private allowedCatalog(catalog: RunnerCatalog, runner: RunnerId): RunnerCatalog {
-    // The other runners' catalogs are what lets `effectiveAllowlist` tell an id
-    // this runner hasn't listed yet from one that belongs to a different runner.
-    const allowed = effectiveAllowlist(
-      this.catalog.allowlistFor(runner),
-      runner,
-      { ...this.catalog.models(), [runner]: catalog.models },
-    );
-    if (!allowed) return catalog;
-    const models = catalog.models.filter((m) => allowed.includes(m.modelId));
-    // Nothing left means the allowlist named only ids this runner hasn't
-    // listed. An empty catalog reads as "discovery failed" to
-    // `runnerAssignment`, which then leaves the task on the *old* runner's
-    // model — a worse outcome than ignoring the restriction for this derivation.
-    return models.length > 0 ? { ...catalog, models } : catalog;
+  private assignmentCatalog(runner: RunnerId, discovered: RunnerCatalog | undefined): AssignmentCatalog {
+    const catalog = this.catalog.edit();
+    if (!discovered) return catalog;
+    return {
+      ...catalog,
+      modelsByRunner: discovered.models.length > 0 ? { ...catalog.modelsByRunner, [runner]: discovered.models } : catalog.modelsByRunner,
+      runnerModes: { ...catalog.runnerModes, [runner]: discovered.modes },
+    };
   }
+}
+
+/** The fields of `given` a user may write on a task, new or not: those the planner may change. */
+function editableFields(given: Partial<Task>): Partial<Task> {
+  const fields: Partial<Task> = {};
+  for (const key of UPDATABLE_FIELDS) {
+    if (key in given) (fields as Record<string, unknown>)[key] = (given as Record<string, unknown>)[key];
+  }
+  if ('ops' in fields) fields.ops = opsFlag(fields.ops);
+  return fields;
+}
+
+/**
+ * The fields a direct edit may set: those the planner may change
+ * (`UPDATABLE_FIELDS`), which is everything a surface sends — a task's
+ * status, verdict or subtasks are execution's and the plan tree's, never a
+ * patch's. The ops flag and skills are read as every entry point reads them,
+ * and a runner that changes nothing — the same one, or one for a task that
+ * stays manual — is dropped, so it asks discovery nothing.
+ */
+function directChanges(patch: Partial<Task>, target: Task): Partial<Task> {
+  const changes = editableFields(patch);
+  if ('skills' in changes) changes.skills = skillNames(changes.skills);
+  if (Array.isArray(changes.dependencies)) changes.dependencies = changes.dependencies.map(String);
+  else delete changes.dependencies;
+  const stays = changes.assignedRunner === target.assignedRunner || (changes.type ?? target.type) === 'user';
+  if ('assignedRunner' in changes && (typeof changes.assignedRunner !== 'string' || !changes.assignedRunner || stays)) delete changes.assignedRunner;
+  return changes;
 }

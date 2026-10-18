@@ -107,7 +107,7 @@ than cached or replayed.
 - **Answered against the same catalog an edit is checked against (T7).** The
   full-catalog answer (`renderTaskQueryAnswer`'s `<runner_catalog>` block) is
   built from the allowlist-filtered models and the manifest modes — exactly
-  what `TaskEditValidator.checkModelAndModeValidity` validates a following
+  what the assignment resolver (`resolveAssignment`) checks a following
   `taskOps` edit against. A refusal on the edit that follows can therefore
   never name something invalid that the read just told the planner was fine,
   or vice versa.
@@ -215,12 +215,13 @@ ADR-0008's exploration envelope is unchanged.
   The text read channel serves API planners; coding-agent planners require
   their connected tools (ADR-0025).
 - **Silently coerce an invalid model/mode instead of refusing (M3).**
-  Rejected. `coerceAssignments` already exists as the safety net for paths
-  that bypass the validator entirely (a plan committed with a stale catalog,
-  for instance) — snapping a bad id to `allowlist[0]` and clearing the paired
-  effort is the right move *there*, where there is no model on the other end
-  of a repair loop to ask. Inside `validateTaskEdit`, a planner mid-edit gets
-  the refusal instead: it names the runner and the bad id and comes back
+  Rejected. The resolver's landing pass (`resolveAssignments`) is the safety
+  net for a plan that lands with nobody to answer a refusal (a plan committed
+  with a stale catalog, for instance) — replacing a bad id with the
+  allowlist's model, its effort carried to the nearest level, and naming the
+  change is the right move *there*, where there is no model on the other end
+  of a repair loop to ask. For an edit, a planner mid-edit gets the refusal
+  instead: it names the runner and the bad id and comes back
   through the same corrective retry every other rejected edit uses. Coercing
   quietly would let a plan drift onto a model the user's allowlist forbids
   without either side ever being told it happened.
@@ -258,3 +259,4 @@ ADR-0008's exploration envelope is unchanged.
 - 2026-10-11 — mid-run edits are applied or refused at once, with no queue for a read to wait behind ([ADR-0029](../supervision/0029-the-supervisor.md)).
 - 2026-10-11 — T4: a wake-up turn spends the plan's wake-up read budget in place of the per-user-turn caps ([ADR-0029](../supervision/0029-the-supervisor.md)).
 - 2026-10-13 — references resolve through the shared `TaskRefs` grammar, which reaches subtasks by their dotted label.
+- 2026-10-18 — an edit's model and mode are checked by the assignment resolver, which every writer calls, rather than by `TaskEditValidator` (T7, M3).

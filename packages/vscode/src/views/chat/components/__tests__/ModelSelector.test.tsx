@@ -330,12 +330,21 @@ describe('ModelSelector thinking variants', () => {
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
   });
 
-  it('drops an effort the new model does not support when switching models', () => {
+  // One rule with core's (clampThinkingEffort): it was kept only on an exact match here.
+  it('carries an effort the new model lacks to the nearest level it has when switching models', () => {
     const onChange = vi.fn();
     renderWithCurrent({ modelId: 'p/rich', modelLabel: 'Rich', thinkingEffort: 'xhigh' }, onChange);
     fireEvent.click(screen.getByText(/Rich ·/));
     fireEvent.click(screen.getByText('Limited'));
-    expect(onChange).toHaveBeenCalledWith({ modelId: 'p/limited', modelLabel: 'Limited', thinkingEffort: undefined, availableVariants: ['low', 'high'] });
+    expect(onChange).toHaveBeenCalledWith({ modelId: 'p/limited', modelLabel: 'Limited', thinkingEffort: 'high', availableVariants: ['low', 'high'] });
+  });
+
+  it('drops the effort when switching to a model with no levels', () => {
+    const onChange = vi.fn();
+    renderWithCurrent({ modelId: 'p/rich', modelLabel: 'Rich', thinkingEffort: 'xhigh' }, onChange);
+    fireEvent.click(screen.getByText(/Rich ·/));
+    fireEvent.click(screen.getByText('Plain'));
+    expect(onChange).toHaveBeenCalledWith({ modelId: 'p/plain', modelLabel: 'Plain', thinkingEffort: undefined, availableVariants: [] });
   });
 
   it('keeps the effort when the new model supports it', () => {

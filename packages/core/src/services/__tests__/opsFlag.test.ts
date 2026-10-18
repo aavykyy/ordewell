@@ -39,8 +39,6 @@ function editor(tasks = plan()) {
   const catalog: PlanEditCatalog = {
     edit: () => ({ modelsByRunner: {}, runnerModes: {} }),
     runner: async () => ({ models: [], modes: [] }),
-    allowlistFor: () => undefined,
-    models: () => ({}),
     admit: () => undefined,
   };
   const edit = new PlanEditor({

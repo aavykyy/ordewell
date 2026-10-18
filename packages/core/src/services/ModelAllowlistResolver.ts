@@ -1,4 +1,4 @@
-import { flattenTasks, type DiscoveredModel, type RunnerId, type Task } from '../models/Task';
+import type { DiscoveredModel, RunnerId } from '../models/Task';
 
 /**
  * The ids a runner may actually run: the user's allowlist with the ids that
@@ -14,8 +14,7 @@ import { flattenTasks, type DiscoveredModel, type RunnerId, type Task } from '..
  *
  * - listed for this runner → keep;
  * - listed for no runner → unknown, and the user said it explicitly, so keep it
- *   and let the runner validate last (the same call `coerceAssignments` and
- *   `TaskRetarget` make);
+ *   and let the runner validate last (the same call `resolveAssignment` makes);
  * - listed only for other runners → provably not this runner's, so drop it.
  *
  * When that leaves nothing, the whole allowlist was about some other runner
@@ -74,10 +73,14 @@ const EFFORT_LADDER = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max
 const EFFORT_ALIASES: Record<string, string> = { disabled: 'none', adaptive: 'medium' };
 
 /**
- * Clamp a planner/user-supplied thinking effort to what the model actually
- * offers. Invalid values map to the nearest rung the model supports (so a
- * Claude-style "xhigh" on a low/medium/high model becomes "high") and fall
- * back to undefined — the runner's own default — when no mapping exists.
+ * The one rule for an effort and a model: the effort a task keeps on a model,
+ * whether it was written with it or carried from the model before. Kept where
+ * the model offers it; otherwise mapped to the nearest rung the model
+ * supports (so a Claude-style "xhigh" on a low/medium/high model becomes
+ * "high"); undefined — the runner's own default — when no mapping exists or
+ * the model offers no levels, which is how a model discovery does not list
+ * reads (`variants` empty). Core's resolver and every surface's model picker
+ * call it, so a model change lands on the same effort wherever it is made.
  */
 export function clampThinkingEffort(
   effort: string | undefined,
@@ -98,126 +101,4 @@ export function clampThinkingEffort(
     if (higher && ids.has(higher)) return higher;
   }
   return undefined;
-}
-
-/** A change coercion made to a planned task, named so it is never silent (ADR-0001). */
-export interface Coercion {
-  taskId: string;
-  title: string;
-  field: 'assignedModel' | 'thinkingEffort';
-  from: string | null;
-  to: string | null;
-}
-
-export interface CoercedTasks {
-  tasks: Task[];
-  /** What changed, subtasks included, in plan order. */
-  coerced: Coercion[];
-}
-
-/**
- * Snap each AI task's assignment, subtasks included, to what its runner may
- * run: a model outside the allowlist moves to the allowlist's first, a missing
- * one is filled in, and an effort is clamped to the model's variants. The
- * runner is never changed — one the plan may not use is refused before a task
- * gets here (`checkPlanInvariants`).
- *
- * A task whose runner, model and effort are what `planned` already holds for
- * it was not written by this pass, so it keeps the plan's model: an allowlist
- * shapes what is planned, not a task left alone, which may be running a model
- * its user switched to (ADR-0041, ADR-0043). Its effort is still clamped to
- * the model's variants unless the task may have a runner live.
- */
-export function coerceAssignments(
-  tasks: readonly Task[],
-  perRunnerAllowlist: Partial<Record<RunnerId, string[]>>,
-  modelsByRunner?: Partial<Record<RunnerId, DiscoveredModel[]>>,
-  planned: readonly Task[] = [],
-): CoercedTasks {
-  const prior = new Map(flattenTasks(planned).map((t) => [t.id, t]));
-  const unwritten = (task: Task): Task | undefined => {
-    const was = prior.get(task.id);
-    if (!was?.assignedModel || !task.assignedModel || was.assignedRunner !== task.assignedRunner) return undefined;
-    if (was.assignedModel.modelId !== task.assignedModel.modelId || was.assignedModel.thinkingEffort !== task.assignedModel.thinkingEffort) return undefined;
-    return was;
-  };
-
-  // When the discovered catalog is available, snap each assignment's
-  // thinkingEffort to a variant the model really has and stamp the model's
-  // variant ids on the assignment (runners need them at spawn time); a model
-  // we can't find in the catalog keeps its effort untouched (the runner
-  // validates last).
-  const clampVariant = (task: Task): Task => {
-    if (!task.assignedModel || !modelsByRunner) return task;
-    const model = modelsByRunner[task.assignedRunner]?.find(
-      (m) => m.modelId === task.assignedModel!.modelId,
-    );
-    if (!model) return task;
-    const clamped = clampThinkingEffort(task.assignedModel.thinkingEffort, model.variants);
-    return {
-      ...task,
-      assignedModel: {
-        ...task.assignedModel,
-        thinkingEffort: clamped,
-        availableVariants: model.variants.map((v) => v.id),
-      },
-    };
-  };
-
-  // One reading of the allowlist for the whole pass, so the models a task is
-  // snapped to are the same ones the planner was shown (`filterModelsForPrompt`).
-  const allowedFor = (runner: RunnerId): string[] | undefined =>
-    effectiveAllowlist(perRunnerAllowlist[runner], runner, modelsByRunner);
-
-  // A snapped-to model keeps the catalog's label and variant list where we have
-  // one — an id alone reads as the model's name in every surface, and leaves the
-  // effort picker with nothing to offer.
-  const assignmentFor = (runner: RunnerId, modelId: string): NonNullable<Task['assignedModel']> => {
-    const known = modelsByRunner?.[runner]?.find((m) => m.modelId === modelId);
-    return {
-      modelId,
-      modelLabel: known?.modelLabel ?? modelId,
-      thinkingEffort: undefined,
-      ...(known ? { availableVariants: known.variants.map((v) => v.id) } : {}),
-    };
-  };
-
-  const coerceOne = (task: Task): Task => {
-    if (task.type === 'user') return task;
-    const kept = unwritten(task);
-    if (kept) {
-      const left = { ...task, assignedModel: kept.assignedModel };
-      // Still checked against what its model offers now, unless a runner may
-      // be holding it: while one is live the plan names what it runs.
-      return kept.status === 'in_progress' || kept.status === 'awaiting_user' ? left : clampVariant(left);
-    }
-    const allowlist = allowedFor(task.assignedRunner);
-    // No model assigned: fill in from the allowlist or discovered catalog so
-    // merge/split/add outputs (which may omit assignedModel) always land with a
-    // valid model for the task's runner.
-    if (!task.assignedModel) {
-      if (allowlist && allowlist.length > 0) {
-        return clampVariant({ ...task, assignedModel: assignmentFor(task.assignedRunner, allowlist[0]) });
-      }
-      const discovered = modelsByRunner?.[task.assignedRunner]?.[0];
-      if (discovered) {
-        return clampVariant({ ...task, assignedModel: assignmentFor(task.assignedRunner, discovered.modelId) });
-      }
-      return task;
-    }
-    if (!allowlist || allowlist.length === 0) return clampVariant(task);
-    if (allowlist.includes(task.assignedModel.modelId)) return clampVariant(task);
-    return { ...task, assignedModel: assignmentFor(task.assignedRunner, allowlist[0]) };
-  };
-
-  const coerced: Coercion[] = [];
-  const walk = (list: readonly Task[]): Task[] => list.map((task) => {
-    const after = coerceOne(task);
-    const [fromModel, toModel] = [task.assignedModel?.modelId ?? null, after.assignedModel?.modelId ?? null];
-    if (fromModel !== toModel) coerced.push({ taskId: task.id, title: task.title, field: 'assignedModel', from: fromModel, to: toModel });
-    const [fromEffort, toEffort] = [task.assignedModel?.thinkingEffort ?? null, after.assignedModel?.thinkingEffort ?? null];
-    if (fromEffort !== toEffort) coerced.push({ taskId: task.id, title: task.title, field: 'thinkingEffort', from: fromEffort, to: toEffort });
-    return { ...after, subtasks: walk(task.subtasks ?? []) };
-  });
-  return { tasks: walk(tasks), coerced };
 }

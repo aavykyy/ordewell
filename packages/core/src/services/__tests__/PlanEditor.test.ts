@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { PlanEditor, type PlanEditCatalog } from '../PlanEditor';
 import { PlanEditError } from '../PlanEditError';
 import { PlanStore } from '../PlanStore';
-import type { RunnerCatalog } from '../TaskRetarget';
+import type { RunnerCatalog } from '../TaskAssignment';
 import type { SessionMessage } from '../SessionMessage';
 import type { SkillInfo } from '../SkillsService';
 import type { SkillLookup } from '../taskSkills';
@@ -15,13 +15,11 @@ const model = (modelId: string, variants: string[] = []): DiscoveredModel =>
 const CATALOGS: Record<RunnerId, RunnerCatalog> = {
   'claude-code': {
     models: [model('claude-sonnet-4-5', ['low', 'high']), model('claude-haiku-4-5')],
-    modes: [{ id: 'build', label: 'Build', description: '' }, { id: 'acceptEdits', label: 'Accept edits', description: '' }],
-    defaultMode: 'build',
+    modes: [{ id: 'build', label: 'Build', description: '', autonomous: true }, { id: 'acceptEdits', label: 'Accept edits', description: '' }],
   },
   codex: {
     models: [model('gpt-5-codex', ['low', 'high']), model('gpt-5-mini')],
     modes: [{ id: 'agent', label: 'Agent', description: '' }, { id: 'fullAccess', label: 'Full access', description: '', autonomous: true }],
-    defaultMode: 'fullAccess',
   },
 };
 
@@ -37,7 +35,7 @@ function tasks(): Task[] {
  * is the session's contract in miniature — the op runs, and only a change is
  * saved and announced — so what the editor hands it is all that is asserted.
  */
-function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Record<RunnerId, string[]>>; catalogs?: Record<RunnerId, RunnerCatalog>; run?: IsolationRun | null; skills?: SkillInfo[]; uncommitted?: SkillLookup['uncommitted'] } = {}) {
+function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Record<RunnerId, string[]>>; catalogs?: Record<RunnerId, RunnerCatalog>; run?: IsolationRun | null; skills?: SkillInfo[]; uncommitted?: SkillLookup['uncommitted']; live?: (taskId: string) => boolean } = {}) {
   const store = new PlanStore();
   const now = '2026-01-01T00:00:00Z';
   const plan: LegacyPlanState | null = opts.plan === false ? null : { tasks: [], generatedAt: now, status: 'approved', runners: ['claude-code'], lastUpdated: now };
@@ -47,10 +45,13 @@ function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Recor
   const remembered: Partial<Record<RunnerId, DiscoveredModel[]>> = {};
   const catalogs = opts.catalogs ?? CATALOGS;
   const catalog: PlanEditCatalog = {
-    edit: () => ({ modelsByRunner: { 'claude-code': CATALOGS['claude-code'].models }, runnerModes: { 'claude-code': CATALOGS['claude-code'].modes } }),
+    edit: () => ({
+      modelsByRunner: { 'claude-code': CATALOGS['claude-code'].models, ...remembered },
+      runnerModes: { 'claude-code': CATALOGS['claude-code'].modes },
+      ...(opts.allowlist ? { perRunnerAllowlist: opts.allowlist } : {}),
+      ...(opts.live ? { liveRunner: opts.live } : {}),
+    }),
     runner: vi.fn(async (runner: RunnerId) => catalogs[runner] ?? { models: [], modes: [] }),
-    allowlistFor: (runner) => opts.allowlist?.[runner],
-    models: () => ({ ...remembered }),
     admit: vi.fn((runner: RunnerId, models: DiscoveredModel[]) => { if (models.length > 0) remembered[runner] = models; }),
   };
   const mutate = vi.fn((op: () => boolean, notify?: () => void) => {
@@ -84,7 +85,7 @@ function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Recor
     approve,
   });
   const task = (id: string) => store.get(id);
-  return { editor, store, plan, events, sent, catalog, mutate, scheduler, runs, plannerTools, notice, approve, task };
+  return { editor, store, plan, events, sent, catalog, remembered, mutate, scheduler, runs, plannerTools, notice, approve, task };
 }
 
 describe('PlanEditor.updateTask', () => {
@@ -102,6 +103,39 @@ describe('PlanEditor.updateTask', () => {
 
     await expect(editor.updateTask('s1', { dependencies: ['s2'] })).rejects.toThrow(/cycle/i);
     await expect(editor.updateTask('s1', { ops: true })).rejects.toThrow('subtask');
+  });
+
+  // Bug: the flip derived nothing, so the task ran on the legacy `build` default and its runner's own model.
+  it('gives a manual task turned into an AI task the mode and model the planner path would', async () => {
+    const manual = createTask({ id: 'm1', order: 3, title: 'Sign off', type: 'user', userSteps: [{ order: 1, instruction: 'by hand', completed: false }], assignedRunner: 'codex' });
+    const { editor, task } = setup({ tasks: [...tasks(), manual] });
+
+    await editor.updateTask('m1', { type: 'ai', prompt: 'sign it off' });
+
+    expect(task('m1')).toMatchObject({ type: 'ai', taskMode: 'fullAccess', assignedModel: { modelId: 'gpt-5-codex' } });
+  });
+
+  // Bug: the runner moved in one save and the rest in a second, unchecked, which the first save's reschedule could start the task ahead of.
+  it('lands a runner change sent with other fields as one save, checked before the task can start', async () => {
+    let live = false;
+    const { editor, events, task, scheduler } = setup({ live: () => live });
+    // A reschedule after a save is what starts a ready task.
+    scheduler.tick.mockImplementation(async () => { events.push('tick'); live = true; });
+
+    await editor.updateTask('t1', { assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5-mini', modelLabel: 'Mini' }, title: 'Set up' });
+
+    expect(task('t1')).toMatchObject({ assignedRunner: 'codex', assignedModel: { modelId: 'gpt-5-mini' }, title: 'Set up', taskMode: 'fullAccess' });
+    expect(events).toEqual(['saved', 'plan announced', 'tick']);
+  });
+
+  it('refuses a move whose task started while its new runner was being discovered', async () => {
+    let live = false;
+    const { editor, catalog, task, mutate } = setup({ live: () => live });
+    vi.mocked(catalog.runner).mockImplementationOnce(async () => { live = true; return CATALOGS.codex; });
+
+    await expect(editor.updateTask('t1', { assignedRunner: 'codex', title: 'Set up' })).rejects.toThrow('"Setup" has a live runner, so its runner cannot change now: stop the task first');
+    expect(mutate).not.toHaveBeenCalled();
+    expect(task('t1')).toMatchObject({ assignedRunner: 'claude-code', title: 'Setup' });
   });
 
   const skill = (name: string, appliesTo: SkillInfo['appliesTo']): SkillInfo => ({
@@ -300,13 +334,15 @@ describe('PlanEditor.setTaskRunner', () => {
     expect(mutate).not.toHaveBeenCalled();
   });
 
-  it('keeps nothing in the remembered catalog when discovery found nothing', async () => {
-    const { editor, catalog, task } = setup({ catalogs: { codex: { models: [], modes: CATALOGS.codex.modes, defaultMode: 'fullAccess' } } });
+  // Only Claude Code lists the model, so it provably cannot run on Codex: the runner's own default stands in.
+  it('unassigns a model only the old runner lists, and keeps nothing remembered, when discovery found nothing', async () => {
+    const { editor, remembered, task, notice } = setup({ catalogs: { codex: { models: [], modes: CATALOGS.codex.modes } } });
 
     await editor.setTaskRunner('t1', 'codex');
 
-    expect(task('t1')).toMatchObject({ assignedRunner: 'codex', assignedModel: { modelId: 'claude-sonnet-4-5' } });
-    expect(catalog.models()).toEqual({});
+    expect(task('t1')).toMatchObject({ assignedRunner: 'codex', assignedModel: undefined });
+    expect(notice).toHaveBeenCalledWith('info', 'Task "Setup": model claude-sonnet-4-5 → none.');
+    expect(remembered).toEqual({});
   });
 
   it('answers null for a task not in the plan, or without a plan', async () => {
@@ -323,6 +359,24 @@ describe('PlanEditor.addTask', () => {
 
     expect(approve).toHaveBeenCalledWith([store.planTasks.at(-1)!.id]);
     expect(approve.mock.invocationCallOrder[0]).toBeLessThan(scheduler.tick.mock.invocationCallOrder.at(-1)!);
+  });
+
+  // Bug: the model was swapped for the allowlist's with nothing said.
+  it('replaces a model the allowlist excludes, carrying its effort, and tells the user', async () => {
+    const { editor, store, notice } = setup({ allowlist: { 'claude-code': ['claude-haiku-4-5'] } });
+
+    await editor.addTask({ title: 'Docs', prompt: 'write docs', assignedModel: { modelId: 'claude-sonnet-4-5', modelLabel: 'Sonnet', thinkingEffort: 'high' } });
+
+    expect(store.planTasks.at(-1)!.assignedModel?.modelId).toBe('claude-haiku-4-5');
+    expect(notice).toHaveBeenCalledWith('info', 'Task "Docs": model claude-sonnet-4-5 → claude-haiku-4-5, effort high → none.');
+  });
+
+  it('says nothing of a model it filled in where the user named none', async () => {
+    const { editor, notice } = setup();
+
+    await editor.addTask({ title: 'Docs', prompt: 'write docs' });
+
+    expect(notice).not.toHaveBeenCalled();
   });
 
   it('fills in a runnable assignment on the plan\'s first runner', async () => {
@@ -452,13 +506,13 @@ describe('PlanEditor merge and split requests', () => {
 
 describe('PlanEditor.admitRunner', () => {
   it('adds a runner once, and remembers only a catalog discovery filled', () => {
-    const { editor, plan, catalog } = setup();
+    const { editor, plan, remembered } = setup();
 
     editor.admitRunner('codex', []);
     editor.admitRunner('codex', CATALOGS.codex.models);
 
     expect(plan!.runners).toEqual(['claude-code', 'codex']);
-    expect(catalog.models()).toEqual({ codex: CATALOGS.codex.models });
+    expect(remembered).toEqual({ codex: CATALOGS.codex.models });
   });
 });
 

@@ -24,6 +24,7 @@ export default defineConfig({
       thresholds: {
         'src/services/PlanEditError.ts': floor(100, 100, 100),
         'src/services/PlanEditor.ts': floor(100, 92, 100),
+        'src/services/TaskAssignment.ts': floor(100, 97, 100),
         'src/services/attemptKind.ts': floor(100, 100, 100),
         'src/services/harness/claudeOrdewell.ts': floor(100, 83, 100),
         'src/services/harness/codexOrdewell.ts': floor(100, 94, 100),
