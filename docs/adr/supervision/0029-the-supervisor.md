@@ -126,10 +126,12 @@ tasks carry on.** A planner turn already holds the conversation one at a time
 a user message during a wake-up turn is held as a queued prompt.
 
 - **The scheduler holds new starts for the duration of a turn.** Running tasks
-  are untouched; nothing new is spawned until the turn ends. The hold is always
-  released when the turn ends — settled, stopped, failed or timed out — so a
-  planner that crashes cannot freeze the run. This is what keeps a turn's plan
-  edits from racing a task that would otherwise start mid-turn.
+  are untouched; nothing new is spawned until the turn ends, a force start
+  queued behind its dependencies included, though one finishes mid-turn. The
+  hold is always released when the turn ends — settled, stopped, failed or
+  timed out — so a planner that crashes cannot freeze the run, and its release
+  looks again at what was queued, with or without a run. This is what keeps a
+  turn's plan edits from racing a task that would otherwise start mid-turn.
 - **Plan edits in a turn apply at once to tasks not yet started.** An edit aimed
   at a running or finished task is refused with a note the model can act on:
   "task 4 is running; stop it first, or retry it after". That is the planner
@@ -202,9 +204,18 @@ them could still start. None of them starts afterwards: each is kept in the
 timeline as refused, and said as not done, "stopped before it could start";
 a card still asking is cleared. A start asked for after the Stop is a new one,
 and runs. Every start — the scheduler's, `run_task`, a retry, a continue, a
-resume, a force start, a replayed one — claims its task at one point, which
-checks in one step that the user approved the task, that no Stop came since
-the start was admitted, and that a slot is free, before anything is awaited.
+resume, a force start, a replayed one, a conflict repair — claims its task at
+one point, which checks in one step that the user approved the task, that no
+Stop came since the start was admitted, that Mark complete is not landing it
+and that a slot is free, before anything is awaited. The claim takes the task
+by id with the admission the start was asked under, and reads the task as it
+stands then: a start that awaited first — its run opening, the user's answer —
+runs what the plan holds, an edit made meanwhile included. Each attempt keeps
+the admission it was claimed under, and the repair its conflict is owed claims
+under that one, so a Stop since withdraws the repair as it did the attempt.
+Whether the task may start at all is the one start rule
+([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)), read before the
+claim.
 
 **`skip_task` never vouches for work.** Verdicts come from evidence, so the
 supervisor cannot Mark complete: that lands the work as if someone had checked
@@ -333,7 +344,8 @@ for the user.
 ### Merge at gates automatically
 
 A global user setting, `/automerge` ([ADR-0030](0030-global-run-settings.md)),
-**usable with the supervisor Off.** When a task reaches a merge gate, Ordewell
+**usable with the supervisor Off.** When a task reaches a merge gate with
+nothing else holding it back — approved, off hold, its dependencies met — Ordewell
 runs Merge all itself, through the same queue as landings and the user's Merge
 all. A conflict, or a dirty overlap in the user's tree, aborts it with the tree
 untouched (ADR-0014's preflight, unchanged); the gate then waits for the user,
@@ -494,3 +506,4 @@ until #30 exists.
 - 2026-10-16 — approval covers exactly what the user consented to, and leaves the plan with its task. A start approves the tasks it was checked against, taken at its last check — after any question — and recorded before it acts, never read again after it awaits; a yes on the Guarded card approves the tasks the card names and no others. The record stays keyed by task id and is kept continuous with the plan: every rebuild of the task tree — an edit's remove, merge or split, a whole plan that leaves a task out, a reconciled edit, a load, a fork — drops the approval of each id no longer in it, so a removed task's id, written again by a planner later, names a new task nobody approved. `Session.isApproved` is the one read, for the seam and the scheduler alike. A creation identity per task was weighed and not taken: a task an edit adds already gets an id the planner cannot choose, and an id a whole plan restates is the same task by the rules that carry its status, verdict and runner session across the rewrite (`keepExecutionState`, `stampOrigin`), so an identity would only mirror id continuity, at the cost of a new saved field on every task and surface. The one gap, an id that leaves and comes back, is closed where it leaves. A saved session loads with its approvals; an id whose task is no longer in it is dropped as it is adopted. Seen in an audit: Execute's spawn held while a planner edit landed approved the added task; and a removed task's id, brought back as an ops task with a new prompt, started on `run_task` with nobody asked.
 - 2026-10-16 — the Stop generation: the user's Stop withdraws every start admitted before it and not yet claimed — one queued behind a held edit, one waiting on its card, one still opening its run — each kept as refused and said as not done, and counts them as work to stop. Every start claims its task at one point that checks approval, the Stop generation and a free slot together. Seen live: a `run_plan` queued behind an edit started the plan after the user's Execute and Stop; a Run sent beside Stop left the task running after Stop answered "stopped"; with one slot, two Runs sent at once both spawned.
 - 2026-10-17 — a planner usage limit keeps the turn's wake-ups with its other inputs and sends them in the planner's resend at the reset, instead of the supervisor holding its own wait ([ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md)).
+- 2026-10-18 — the claim takes the task by id with the start's admission and reads the task as it stands, so a start that awaited its run opening runs the task as edited meanwhile; a conflict repair claims under the admission of the attempt whose work it repairs, rather than whatever Stop generation is current; a force start queued behind its dependencies waits for a planner turn's start hold, and the hold's release looks at the queue with or without a run.

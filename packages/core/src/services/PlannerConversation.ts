@@ -20,6 +20,7 @@ import { classifyRunnerStop, type TurnFailure } from './runnerExit';
 import type { PlannerLimit } from './PlannerResend';
 import type { AssignmentScope } from './AssignmentScope';
 import { flaggedTasks, runnersChangedBlock, scopeChange } from './RunnerChange';
+import type { StartWait, StartWaitKind } from './readiness';
 
 /**
  * Per-runner model cap for the always-on catalog block. Generous enough that
@@ -220,6 +221,11 @@ export interface PlannerConversationHost {
   /** Run updates no turn has carried yet, taken by the turn that asks: the next turn is told, whoever opens it. */
   takeRunUpdates(): string[];
   tasks(): readonly Task[];
+  /**
+   * Why a task cannot start now, from the scheduler's start rule (ADR-0034);
+   * none once nothing holds it back, or while the plan is not yet approved.
+   */
+  startWaits(task: Readonly<Task>): readonly StartWait[];
   /**
    * The orchestrator's live capture for a task's latest attempt, backing the
    * `output` field of a read. Injected the same way as the catalog so the
@@ -1496,7 +1502,25 @@ export class PlannerConversation {
       const runFields = isMan
         ? `steps:${t.userSteps?.length ?? 0}`
         : `${t.assignedModel ? `model:${t.assignedModel.modelId} ` : ''}${readOnly ? 'read-only ' : ''}effort:${t.assignedModel?.thinkingEffort ?? '-'}`;
-      return `${parent ? '  ' : ''}${refOf.get(t.id)} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : t.ops ? 'AI ops' : 'AI'} runner:${t.assignedRunner} ${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:[${t.dependencies.map((d) => refOf.get(d) ?? d).join(', ')}]${t.skills?.length ? ` skills:[${t.skills.join(', ')}]` : ''}`;
+      const refs = (ids: readonly string[]) => `[${ids.map((d) => refOf.get(d) ?? d).join(', ')}]`;
+      return `${parent ? '  ' : ''}${refOf.get(t.id)} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : t.ops ? 'AI ops' : 'AI'} runner:${t.assignedRunner} ${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:${refs(t.dependencies)}${t.skills?.length ? ` skills:[${t.skills.join(', ')}]` : ''}${waitNote(this.host.startWaits(t), refs)}`;
     });
+  }
+}
+
+/** Said already by a task's line — its status, its type — or by the note that execution is running. */
+const SAID_ON_THE_LINE: ReadonlySet<StartWaitKind> = new Set<StartWaitKind>(['started', 'by-hand', 'start-hold']);
+
+/** The first reason the start rule gives that the task's line does not already say, as a short field. */
+function waitNote(waits: readonly StartWait[], refs: (ids: readonly string[]) => string): string {
+  const wait = waits.find((w) => !SAID_ON_THE_LINE.has(w.kind));
+  if (!wait) return '';
+  switch (wait.kind) {
+    case 'blocked': return ` waits:blocked${refs(wait.failed)}`;
+    case 'dependencies':
+    case 'queued': return ` waits:${wait.kind}${refs(wait.waiting)}`;
+    case 'merge-gate': return ` waits:merge-gate${refs(wait.unmerged)}`;
+    case 'usage-limit': return ` waits:usage-limit[${wait.runner}]`;
+    default: return ` waits:${wait.kind}`;
   }
 }

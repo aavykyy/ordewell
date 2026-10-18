@@ -48,7 +48,7 @@ export interface PlanTurnsHost {
   interrupt(): void;
   /** Hold the scheduler's new starts; the returned release is idempotent. */
   holdStarts(): () => void;
-  /** Tick an armed scheduler after a release, so what became ready during the turn starts. */
+  /** Tick after a release, so what became ready during the turn starts: the armed scheduler's work, and queued force starts. */
   resumeStarts(): Promise<void>;
   /**
    * One planner turn on `prompt`. `taken` must run inside the mutation that

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { selectReadyTasks, isBlocked, dependencyMet, mergeGate, type ReadinessInput } from '../readiness';
+import { selectReadyTasks, startWaits, unmetDependencies, mergeGate, type ReadinessInput, type Readiness, type StartWait } from '../readiness';
 import { createTask, type Task } from '../../models/Task';
 import type { IsolationTaskRecord, IsolationTaskStatus } from '../../interfaces/IWorktreeIsolation';
 
@@ -12,6 +12,7 @@ function storeOf(tasks: Task[]) {
     isSkipped: (id: string) => byId.get(id)?.status === 'skipped',
     isOps: (id: string) => byId.get(id)?.ops === true,
     get: (id: string) => byId.get(id),
+    resolveTaskRunner: (t: Readonly<Task>) => t.assignedRunner,
   };
 }
 
@@ -34,9 +35,19 @@ function input(tasks: Task[], overrides: Partial<ReadinessInput> = {}): Readines
     runs: runsOf(),
     active: 0,
     maxParallel: 3,
+    merging: false,
+    startsHeld: false,
+    completing: new Set(),
+    queued: new Set(),
     ...overrides,
   };
 }
+
+/** Why the scheduler passed over a task with a prompt. */
+const why = (readiness: Readiness, taskId: string): StartWait[] | undefined => readiness.excluded.find((e) => e.task.id === taskId)?.waits;
+
+/** Whether a dependency on `depId` is met: the work behind it is on the integration branch. */
+const met = (depId: string, store: ReturnType<typeof storeOf>, runs = runsOf()) => unmetDependencies({ dependencies: [depId] }, store, runs).length === 0;
 
 describe('selectReadyTasks', () => {
   it('offers pending AI tasks with a prompt, lowest order first', () => {
@@ -66,30 +77,30 @@ describe('selectReadyTasks', () => {
     const held = createTask({ id: 'h1', order: 1, title: 'Held', prompt: 'x' });
     const dep = createTask({ id: 'd1', order: 3, title: 'Dep', prompt: 'x', dependencies: ['missing'] });
 
-    const { ready, excluded } = selectReadyTasks(input([held, dep], { onHold: new Set(['h1']) }));
+    const readiness = selectReadyTasks(input([held, dep], { onHold: new Set(['h1']) }));
 
-    expect(ready).toHaveLength(0);
-    expect(excluded.find((e) => e.task.id === 'h1')!.reasons).toEqual(['on-hold']);
-    expect(excluded.find((e) => e.task.id === 'd1')!.reasons).toEqual(['deps=missing']);
+    expect(readiness.ready).toHaveLength(0);
+    expect(why(readiness, 'h1')).toEqual([{ kind: 'on-hold' }]);
+    expect(why(readiness, 'd1')).toEqual([{ kind: 'dependencies', waiting: ['missing'] }]);
   });
 
   it('holds back a task outside the user\'s approval record, however ready it is (ADR-0035)', () => {
     const approved = createTask({ id: 't1', order: 1, title: 'Approved', prompt: 'x' });
     const added = createTask({ id: 't2', order: 2, title: 'Added since', prompt: 'x' });
 
-    const { ready, excluded } = selectReadyTasks(input([approved, added], { approved: (id) => id === 't1' }));
+    const readiness = selectReadyTasks(input([approved, added], { approved: (id) => id === 't1' }));
 
-    expect(ready.map((t) => t.id)).toEqual(['t1']);
-    expect(excluded.find((e) => e.task.id === 't2')!.reasons).toEqual(['unapproved']);
+    expect(readiness.ready.map((t) => t.id)).toEqual(['t1']);
+    expect(why(readiness, 't2')).toEqual([{ kind: 'unapproved' }]);
   });
 
   it('does not start a dependent until its dependency has completed', () => {
     const t1 = createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' });
     const t2 = createTask({ id: 't2', order: 2, title: 'Second', prompt: 'do second', dependencies: ['t1'] });
 
-    const { ready, excluded } = selectReadyTasks(input([t1, t2]));
-    expect(ready.map((t) => t.id)).toEqual(['t1']);
-    expect(excluded.find((e) => e.task.id === 't2')!.reasons).toEqual(['deps=t1']);
+    const readiness = selectReadyTasks(input([t1, t2]));
+    expect(readiness.ready.map((t) => t.id)).toEqual(['t1']);
+    expect(why(readiness, 't2')).toEqual([{ kind: 'dependencies', waiting: ['t1'] }]);
   });
 
   it('frees a dependent once its dependency completed', () => {
@@ -103,9 +114,7 @@ describe('selectReadyTasks', () => {
     const t1 = createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first', status: 'failed' });
     const t2 = createTask({ id: 't2', order: 2, title: 'Second', prompt: 'do second', dependencies: ['t1'] });
 
-    const { excluded } = selectReadyTasks(input([t1, t2]));
-    expect(isBlocked(t2, storeOf([t1, t2]))).toBe(true);
-    expect(excluded.find((e) => e.task.id === 't2')!.reasons).toEqual(['blocked', 'deps=t1']);
+    expect(why(selectReadyTasks(input([t1, t2])), 't2')).toEqual([{ kind: 'blocked', failed: ['t1'] }, { kind: 'dependencies', waiting: ['t1'] }]);
   });
 
   it('waits for a dependency to land before starting a dependent in an isolated run', () => {
@@ -114,19 +123,19 @@ describe('selectReadyTasks', () => {
 
     const unlanded = selectReadyTasks(input([t1, t2], { runs: runsOf({ t1: record('t1', 'active') }) }));
     expect(unlanded.ready).toHaveLength(0);
-    expect(unlanded.excluded.find((e) => e.task.id === 't2')!.reasons).toEqual(['deps=t1']);
+    expect(why(unlanded, 't2')).toEqual([{ kind: 'dependencies', waiting: ['t1'] }]);
 
     const landed = selectReadyTasks(input([t1, t2], { runs: runsOf({ t1: record('t1', 'merged') }) }));
     expect(landed.ready.map((t) => t.id)).toEqual(['t2']);
   });
 
-  it('offers nothing when the slots are already full', () => {
+  it('offers nothing when the slots are already full, though it counts what could start', () => {
     const t1 = createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' });
 
     const { ready, candidateCount, excluded } = selectReadyTasks(input([t1], { active: 1, maxParallel: 1 }));
 
     expect(ready).toHaveLength(0);
-    expect(candidateCount).toBe(0);
+    expect(candidateCount).toBe(1);
     expect(excluded).toHaveLength(0);
   });
 
@@ -141,21 +150,21 @@ describe('selectReadyTasks', () => {
   });
 });
 
-describe('dependencyMet', () => {
+describe('a dependency', () => {
   const completed = storeOf([createTask({ id: 't1', order: 1, title: 'First', prompt: 'x', status: 'completed' })]);
   const pending = storeOf([createTask({ id: 't1', order: 1, title: 'First', prompt: 'x' })]);
 
-  it('is unmet while the dependency has not completed', () => {
-    expect(dependencyMet('t1', pending, runsOf())).toBe(false);
+  it('is unmet while it has not completed', () => {
+    expect(met('t1', pending)).toBe(false);
   });
 
-  it('is met once the dependency completed and no isolation run gates it', () => {
-    expect(dependencyMet('t1', completed, runsOf())).toBe(true);
+  it('is met once it completed and no isolation run gates it', () => {
+    expect(met('t1', completed)).toBe(true);
   });
 
-  it('is unmet until the isolated dependency has merged', () => {
-    expect(dependencyMet('t1', completed, runsOf({ t1: record('t1', 'conflict') }))).toBe(false);
-    expect(dependencyMet('t1', completed, runsOf({ t1: record('t1', 'merged') }))).toBe(true);
+  it('is unmet until its isolated work has merged', () => {
+    expect(met('t1', completed, runsOf({ t1: record('t1', 'conflict') }))).toBe(false);
+    expect(met('t1', completed, runsOf({ t1: record('t1', 'merged') }))).toBe(true);
   });
 });
 
@@ -167,10 +176,10 @@ describe('behind a skipped dependency', () => {
   const tail = createTask({ id: 't3', order: 3, title: 'Tail', prompt: 'x', dependencies: ['v2'] });
 
   it('holds the dependent while the work behind the skip is unfinished, naming it', () => {
-    const { ready, excluded } = selectReadyTasks(input([front(), skipped, tail]));
-    expect(ready.map((t) => t.id)).toEqual(['f1']);
-    expect(excluded.find((e) => e.task.id === 't3')!.reasons).toEqual(['deps=f1']);
-    expect(dependencyMet('v2', storeOf([front('in_progress'), skipped, tail]), runsOf())).toBe(false);
+    const readiness = selectReadyTasks(input([front(), skipped, tail]));
+    expect(readiness.ready.map((t) => t.id)).toEqual(['f1']);
+    expect(why(readiness, 't3')).toEqual([{ kind: 'dependencies', waiting: ['f1'] }]);
+    expect(met('v2', storeOf([front('in_progress'), skipped, tail]))).toBe(false);
   });
 
   it('lets it go once that work completed and, in an isolated run, merged into the integration branch', () => {
@@ -188,7 +197,6 @@ describe('behind a skipped dependency', () => {
   it('releases the dependents of a skipped failed task (ADR-0034)', () => {
     const failedThenSkipped = createTask({ id: 'v2', order: 2, title: 'Verify', prompt: 'x', status: 'skipped' });
     const tasks = [front('completed'), { ...failedThenSkipped, dependencies: ['f1'] }, tail];
-    expect(isBlocked(tail, storeOf(tasks))).toBe(false);
     expect(selectReadyTasks(input(tasks)).ready.map((t) => t.id)).toEqual(['t3']);
   });
 
@@ -202,7 +210,7 @@ describe('behind a skipped dependency', () => {
 
   it('still names a failed task the dependent also depends on directly', () => {
     const both = { ...tail, dependencies: ['v2', 'f1'] };
-    expect(selectReadyTasks(input([front('failed'), skipped, both])).excluded.find((e) => e.task.id === 't3')!.reasons).toEqual(['blocked', 'deps=f1']);
+    expect(why(selectReadyTasks(input([front('failed'), skipped, both])), 't3')).toEqual([{ kind: 'blocked', failed: ['f1'] }, { kind: 'dependencies', waiting: ['f1'] }]);
   });
 
   it('walks a chain of skips through to the work behind them', () => {
@@ -210,7 +218,7 @@ describe('behind a skipped dependency', () => {
     const end = createTask({ id: 't4', order: 4, title: 'End', prompt: 'x', dependencies: ['s3'] });
     const held = selectReadyTasks(input([front('in_progress'), skipped, second, end]));
     expect(held.ready).toEqual([]);
-    expect(held.excluded.find((e) => e.task.id === 't4')!.reasons).toEqual(['deps=f1']);
+    expect(why(held, 't4')).toEqual([{ kind: 'dependencies', waiting: ['f1'] }]);
     expect(selectReadyTasks(input([front('completed'), skipped, second, end])).ready.map((t) => t.id)).toEqual(['t4']);
   });
 
@@ -218,22 +226,21 @@ describe('behind a skipped dependency', () => {
     const a = createTask({ id: 'a1', order: 1, title: 'A', prompt: 'x', status: 'skipped', dependencies: ['b2', 'f1'] });
     const b = createTask({ id: 'b2', order: 2, title: 'B', prompt: 'x', status: 'skipped', dependencies: ['a1'] });
     const end = createTask({ id: 't4', order: 4, title: 'End', prompt: 'x', dependencies: ['b2'] });
-    const store = storeOf([front(), a, b, end]);
-    expect(dependencyMet('b2', store, runsOf())).toBe(false);
-    expect(dependencyMet('b2', storeOf([front('completed'), a, b, end]), runsOf())).toBe(true);
+    expect(met('b2', storeOf([front(), a, b, end]))).toBe(false);
+    expect(met('b2', storeOf([front('completed'), a, b, end]))).toBe(true);
   });
 });
 
-describe('isBlocked', () => {
+describe('the blocked wait', () => {
   it('reads a failed dependency', () => {
     const failed = createTask({ id: 't1', order: 1, title: 'Failed', prompt: 'x', status: 'failed' });
     const dependent = createTask({ id: 't2', order: 2, title: 'Dependent', prompt: 'x', dependencies: ['t1'] });
-    expect(isBlocked(dependent, storeOf([failed, dependent]))).toBe(true);
+    expect(startWaits(dependent, input([failed, dependent]))).toContainEqual({ kind: 'blocked', failed: ['t1'] });
   });
 
   it('does not block a task without dependencies', () => {
     const task = createTask({ id: 't1', order: 1, title: 'Free', prompt: 'x' });
-    expect(isBlocked(task, storeOf([task]))).toBe(false);
+    expect(startWaits(task, input([task]))).toEqual([]);
   });
 });
 
@@ -245,10 +252,15 @@ describe('the merge gate (ADR-0020)', () => {
   const tasks = [done, opsTask, userTask, changeTask];
   const landed = (inHead: boolean) => runsOf({ t1: { ...record('t1', 'merged'), ...(inHead ? { inHead: true as const } : {}) } });
 
-  it('holds an ops task whose change dependency has landed but is not merged, and reports it gated', () => {
+  it('holds an ops task whose change dependency has landed but is not merged, and reports it and the user task gated', () => {
     const { ready, gated } = selectReadyTasks(input(tasks, { runs: landed(false) }));
     expect(ready.map((t) => t.id)).toEqual(['t4']);
-    expect(gated.map((t) => t.id)).toEqual(['o2']);
+    expect(gated.map((t) => t.id)).toEqual(['o2', 'u3']);
+  });
+
+  it('reports gated only a task nothing else holds back (ADR-0035)', () => {
+    const { gated } = selectReadyTasks(input(tasks, { runs: landed(false), approved: (id) => id !== 'o2', onHold: new Set(['u3']) }));
+    expect(gated).toEqual([]);
   });
 
   it('lets it go once that work is in the user\'s branch', () => {
@@ -326,6 +338,76 @@ describe('the merge gate (ADR-0020)', () => {
       const ops = createTask({ id: 'o3', order: 3, title: 'Ops', prompt: 'x', ops: true, dependencies: ['b2'] });
       const runs = runsOf({ a1: record('a1', 'merged') });
       expect(mergeGate(ops, storeOf([a, b, ops]), runs)).toEqual(['a1']);
+    });
+  });
+});
+
+describe('the start rule', () => {
+  const t1 = createTask({ id: 't1', order: 1, title: 'First', prompt: 'x', assignedRunner: 'codex' });
+
+  it('lists every wait in order, the reason first', () => {
+    const t2 = createTask({ id: 't2', order: 2, title: 'Second', prompt: 'x', dependencies: ['t1'] });
+    expect(startWaits(t2, input([t1, t2], { approved: () => false, startsHeld: true }))).toEqual([
+      { kind: 'unapproved' },
+      { kind: 'dependencies', waiting: ['t1'] },
+      { kind: 'start-hold' },
+    ]);
+  });
+
+  it('holds a task Mark complete is landing', () => {
+    expect(startWaits(t1, input([t1], { completing: new Set(['t1']) }))).toEqual([{ kind: 'completing' }]);
+  });
+
+  it('holds every task on a runner waiting for its usage limit to reset, and only those', () => {
+    // Spread over createTask, which drops the awaiting reason only a run sets.
+    const paused: Task = { ...createTask({ id: 'p0', order: 0, title: 'Paused', prompt: 'x', assignedRunner: 'codex' }), status: 'awaiting_user', awaitingReason: 'usage-limit' };
+    const other = createTask({ id: 't2', order: 2, title: 'Other', prompt: 'x', assignedRunner: 'claude-code' });
+    const readiness = selectReadyTasks(input([paused, t1, other]));
+    expect(readiness.ready.map((t) => t.id)).toEqual(['t2']);
+    expect(why(readiness, 't1')).toEqual([{ kind: 'usage-limit', runner: 'codex' }]);
+  });
+
+  it('says a task that started, has no prompt, or is the user\'s waits for that', () => {
+    const user = createTask({ id: 'u1', order: 1, title: 'Check', type: 'user' });
+    const empty = createTask({ id: 'a1', order: 2, title: 'Later' });
+    const running = createTask({ id: 'r1', order: 3, title: 'Running', prompt: 'x', status: 'in_progress' });
+    const all = input([user, empty, running]);
+    expect(startWaits(user, all)).toEqual([{ kind: 'by-hand' }]);
+    expect(startWaits(empty, all)).toEqual([{ kind: 'no-prompt' }]);
+    expect(startWaits(running, all)).toEqual([{ kind: 'started' }]);
+  });
+
+  describe('for a start the user forced (ADR-0034)', () => {
+    const failed = createTask({ id: 'a', order: 1, title: 'A', prompt: 'x', status: 'failed' });
+    const underWay = createTask({ id: 'b', order: 2, title: 'B', prompt: 'x', status: 'in_progress' });
+    const blockedDep = createTask({ id: 'c', order: 3, title: 'C', prompt: 'x', dependencies: ['a', 'b'] });
+    const forced = createTask({ id: 'd', order: 4, title: 'D', prompt: 'x', dependencies: ['a', 'c'] });
+    const plan = [failed, underWay, blockedDep, forced];
+
+    it('goes past a failure, a hold and a planner turn, but waits on the work still under way, through what the failure blocks', () => {
+      const rule = input(plan, { onHold: new Set(['d']), startsHeld: true });
+      expect(startWaits(forced, rule)).toEqual([
+        { kind: 'on-hold' },
+        { kind: 'blocked', failed: ['a'] },
+        { kind: 'dependencies', waiting: ['a', 'c'] },
+        { kind: 'start-hold' },
+      ]);
+      expect(startWaits(forced, rule, { queued: false })).toEqual([{ kind: 'dependencies', waiting: ['b'] }]);
+    });
+
+    it('queued, says so, and waits for a planner turn', () => {
+      const rule = input(plan, { startsHeld: true, queued: new Set(['d']) });
+      expect(startWaits(forced, rule, { queued: true, pastGate: [] })).toEqual([{ kind: 'queued', waiting: ['b'] }, { kind: 'start-hold' }]);
+    });
+
+    it('goes past the whole gate made now, and only the gate it was confirmed past once queued', () => {
+      const fix = createTask({ id: 'f1', order: 1, title: 'Fix', prompt: 'x', status: 'completed' });
+      const docs = createTask({ id: 'f2', order: 2, title: 'Docs', prompt: 'x', status: 'completed' });
+      const deploy = createTask({ id: 'o3', order: 3, title: 'Deploy', prompt: 'x', ops: true, dependencies: ['f1', 'f2'] });
+      const rule = input([fix, docs, deploy], { runs: runsOf({ f1: record('f1', 'merged'), f2: record('f2', 'merged') }) });
+      expect(startWaits(deploy, rule)).toEqual([{ kind: 'merge-gate', unmerged: ['f1', 'f2'] }]);
+      expect(startWaits(deploy, rule, { queued: false })).toEqual([]);
+      expect(startWaits(deploy, rule, { queued: true, pastGate: ['f1'] })).toEqual([{ kind: 'merge-gate', unmerged: ['f2'] }]);
     });
   });
 });

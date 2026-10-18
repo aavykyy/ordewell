@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createTask, type LegacyPlanState } from '../../models/Task';
+import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import { makeSession } from './sessionTestKit';
 
 describe('planContextBlock task-shape fields', () => {
@@ -103,6 +103,35 @@ describe('planContextBlock task-shape fields', () => {
 
     expect(aiLine).toContain('[pending]');
     expect(manLine).toContain('deps:[#1]');
+  });
+
+  describe('why a task cannot start yet, from the scheduler\'s start rule', () => {
+    const at = (id: string, order: number, over: Partial<Task> = {}) => createTask({ id, order, title: `Task ${id}`, prompt: 'do it', assignedRunner: 'claude-code', ...over });
+    const plan = (approved: boolean): LegacyPlanState => ({
+      tasks: [at('t1', 1), at('t2', 2, { dependencies: ['t1'] }), at('t3', 3)],
+      generatedAt: new Date().toISOString(), status: approved ? 'approved' : 'draft', runners: ['claude-code'], lastUpdated: new Date().toISOString(),
+      ...(approved ? { approvedTasks: ['t1', 't2'] } : {}),
+    });
+    async function linesOf(approved: boolean): Promise<(id: string) => string> {
+      const continueConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'ok', researchLog: [] });
+      const session = makeSession({ aiService: { continueConversation, hasActiveConversation: () => true } });
+      session.loadPlan(plan(approved), 'Test goal', '/repo');
+      await session.continueConversation('why is nothing running?');
+      const lines = (continueConversation.mock.calls[0][0] as string).split('\n');
+      return (id) => lines.find((l) => l.includes(`id=${id} `))!;
+    }
+
+    it('names the first reason on each line of an approved plan', async () => {
+      const line = await linesOf(true);
+      expect(line('t1')).not.toContain('waits:');
+      expect(line('t2')).toMatch(/ waits:dependencies\[#1\]$/);
+      expect(line('t3')).toMatch(/ waits:unapproved$/);
+    });
+
+    it('says nothing before the user approves the plan, when nothing of it starts', async () => {
+      const line = await linesOf(false);
+      for (const id of ['t1', 't2', 't3']) expect(line(id)).not.toContain('waits:');
+    });
   });
 
   it('keeps the per-turn plan block compact — a short suffix per task, not a paragraph, on a large plan', async () => {
