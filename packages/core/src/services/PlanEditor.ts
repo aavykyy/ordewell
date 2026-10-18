@@ -1,4 +1,5 @@
 import { canMergeTasks, canSplitTask } from './TaskOps';
+import { subtreeIds } from './PlanTree';
 import { liveRunnerRefusal, validateTaskEdit } from './TaskEditValidator';
 import { unavailableModeReason, type RunnerModeInfo } from './ModeResolver';
 import { retargetTaskRunner, runnerAssignment, type RunnerCatalog } from './TaskRetarget';
@@ -279,7 +280,7 @@ export class PlanEditor {
    */
   async removeTask(taskId: string): Promise<LegacyPlanState | null> {
     if (!this.plan() || !this.store.get(taskId)) return null;
-    await this.scheduler.releaseTask(taskId);
+    for (const id of subtreeIds(this.store.planTasks, taskId)) await this.scheduler.releaseTask(id);
     return this.commit(() => (this.store.remove(taskId), true));
   }
 

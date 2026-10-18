@@ -118,6 +118,18 @@ describe('what the task view shows', () => {
 });
 
 describe('waiting for approval, from the daemon', () => {
+  it('announces a subtask with the dotted reference that /open accepts', () => {
+    const base = initialState({ sessionId: 's1', tasks: [
+      task({ id: 'parent', order: 2, subtasks: [task({ id: 'child', order: 1 })] }),
+    ] });
+    const state = reduce(base, { type: 'taskLog', sessionId: 's1', taskId: 'child', attempt: 1, events: [asked('ap-1')] }).state;
+
+    expect(state.conversation.blocks.at(-1)).toMatchObject({
+      text: expect.stringContaining('Task #2.1 waits for approval'),
+    });
+    expect(state.conversation.blocks.at(-1)).toMatchObject({ text: expect.stringContaining('/open #2.1') });
+  });
+
   it('is read off the status update and shown on the task\'s row', () => {
     const actions: Action[] = [];
     const receive = inboundFor({}, (action) => actions.push(action), 's1').execution();
@@ -142,7 +154,7 @@ describe('the notice a request raises', () => {
   it('speaks in the planner chat, where the task view is not open', () => {
     const state = initialState({ sessionId: 's1', tasks: [task()] });
     const next = reduce(state, arrived([asked('ap-1')])).state;
-    expect(next.conversation.blocks.at(-1)).toMatchObject({ text: 'Task 2 waits for approval: Bash(npm test): tab to the plan, select task 2 and press enter (or /open 2), then ctrl-y allows or ctrl-g denies' });
+    expect(next.conversation.blocks.at(-1)).toMatchObject({ text: 'Task #2 waits for approval: Bash(npm test): tab to the plan, select task #2 and press enter (or /open #2), then ctrl-y allows or ctrl-g denies' });
   });
 
   it('says nothing about a request the runner already answered itself', () => {

@@ -223,12 +223,21 @@ describe('the question, from the daemon', () => {
 });
 
 describe('the notice in the chat pane', () => {
+  it('names a subtask by its dotted reference', () => {
+    const base = initialState({ sessionId: 's1', tasks: [
+      task({ id: 'parent', order: 2, subtasks: [task({ id: 'child', order: 1 })] }),
+    ] });
+    const state = reduce(base, { type: 'taskCheckpoint', taskId: 'child', title: 'Migrate the schema', summary: 'Proceed?', sessionId: 's1' }).state;
+
+    expect(lastMessage(state)?.text).toBe('Task #2.1 asks: Proceed?: tab to the plan, select task #2.1 and press enter (or /open #2.1) to answer');
+  });
+
   const asks = (over: Partial<Extract<Action, { type: 'taskCheckpoint' }>> = {}): Action =>
     ({ type: 'taskCheckpoint', taskId: 't1', title: 'Migrate the schema', summary: QUESTION, sessionId: 's1', ...over });
 
   it('names the task and the first line of its question, and points at the view', () => {
     const state = reduce(initialState({ sessionId: 's1', tasks: [task()] }), asks()).state;
-    expect(lastMessage(state)).toMatchObject({ role: 'system', text: 'Task 2 asks: Drop the users table?: tab to the plan, select task 2 and press enter (or /open 2) to answer' });
+    expect(lastMessage(state)).toMatchObject({ role: 'system', text: 'Task #2 asks: Drop the users table?: tab to the plan, select task #2 and press enter (or /open #2) to answer' });
   });
 
   it('arrives from the daemon\'s checkpoint message', () => {

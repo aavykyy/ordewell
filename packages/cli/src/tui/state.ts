@@ -1,3 +1,4 @@
+import { taskPlacement } from '@ordewell/core/plan-utils';
 import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type GlobalRunSettings, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type RunnerCommand, type RunTask, type RunView, type SupervisorLevel, type TaskLogEvent, type TaskLogView, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 import type { SaveSettingsEffect } from './reducers/settings';
@@ -654,12 +655,7 @@ export function resumesTask(task: TaskView | undefined): boolean {
  * would treat every subtask as gone the moment one is expanded.
  */
 export function findTask(tasks: TaskView[], id: string): TaskView | undefined {
-  for (const task of tasks) {
-    if (task.id === id) return task;
-    const found = findTask(task.subtasks ?? [], id);
-    if (found) return found;
-  }
-  return undefined;
+  return taskPlacement(tasks, id)?.task;
 }
 
 /**

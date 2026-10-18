@@ -43,6 +43,17 @@ describe('parseTaskOpsJson', () => {
 });
 
 describe('applyTaskOps', () => {
+  it('refuses a planner self-dependency rather than silently dropping it', () => {
+    const plan = samplePlan();
+    const result = applyTaskOps(plan, [
+      { op: 'update', taskId: '#2', changes: { dependencies: ['#2'] } },
+    ], ['claude-code']);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/cycle|itself/);
+    expect(result.tasks).toBe(plan);
+  });
+
   it('updates a task referenced by #order', () => {
     const res = applyTaskOps(samplePlan(), [{ op: 'update', taskId: '#2', changes: { title: 'Build v2' } }], ['claude-code']);
     expect(res.ok).toBe(true);

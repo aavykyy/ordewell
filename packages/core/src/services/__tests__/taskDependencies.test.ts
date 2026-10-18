@@ -48,10 +48,10 @@ describe('canSetDependencies', () => {
     expect(result.error).toMatch(/cannot depend on itself/);
   });
 
-  it('rejects a dependency that comes after the task, which is what a cycle looks like here', () => {
+  it('rejects a dependency that closes a cycle', () => {
     const result = canSetDependencies(chain(), 'a', ['c']);
     expect(result.ok).toBe(false);
-    expect(result.error).toMatch(/comes after it/);
+    expect(result.error).toMatch(/cycle/i);
   });
 
   it('rejects an id no task has', () => {
@@ -60,5 +60,40 @@ describe('canSetDependencies', () => {
 
   it('rejects an edit to a task that is not in the plan', () => {
     expect(canSetDependencies(chain(), 'ghost', [])).toEqual({ ok: false, error: 'Task not found' });
+  });
+});
+
+// These literals describe the same graph the planner and direct-edit APIs read.
+function branchedPlan(): Task[] {
+  return [
+    createTask({ id: 'a', order: 1, title: 'A', subtasks: [
+      createTask({ id: 'a1', order: 1, title: 'A1' }),
+      createTask({ id: 'a2', order: 2, title: 'A2', subtasks: [createTask({ id: 'leaf', order: 1, title: 'Leaf' })] }),
+    ] }),
+    createTask({ id: 'b', order: 2, title: 'B', subtasks: [createTask({ id: 'b1', order: 1, title: 'B1' })] }),
+  ];
+}
+
+describe('dependencies across the plan tree', () => {
+  it.each([
+    ['a', 'b1', true],
+    ['a1', 'a2', true],
+    ['a1', 'b1', true],
+    ['b1', 'a2', true],
+    ['a', 'leaf', false],
+    ['leaf', 'a', false],
+    ['leaf', 'a2', false],
+    ['leaf', 'leaf', false],
+    ['leaf', 'missing', false],
+  ])('%s depending on %s is allowed: %s', (id, dep, allowed) => {
+    expect(canSetDependencies(branchedPlan(), id, [dep]).ok).toBe(allowed);
+  });
+
+  it('detects a cycle across two branches', () => {
+    const tasks = branchedPlan();
+    tasks[1].subtasks[0].dependencies = ['a1'];
+    expect(canSetDependencies(tasks, 'a1', ['b1'])).toEqual({
+      ok: false, error: 'Dependency cycle detected: "A1" → "B1" → "A1"',
+    });
   });
 });

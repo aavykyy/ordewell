@@ -59,6 +59,20 @@ describe('TaskCard — remove button', () => {
 });
 
 describe('TaskCard — dependency editor', () => {
+  it('keeps an existing dependency on a subtask outside the offered list', () => {
+    const onDependenciesChange = vi.fn();
+    const task = makeTask({ dependencies: ['child'] });
+    render(<TaskCard task={task} models={noModels} siblings={[
+      makeTask({ id: 't1', order: 1, title: 'Setup', subtasks: [makeTask({ id: 'child', order: 1 })] }),
+      task,
+    ]} onDependenciesChange={onDependenciesChange} />);
+    expand();
+    fireEvent.click(screen.getByTitle('Edit dependencies'));
+    fireEvent.click(depOption('Setup')!);
+
+    expect(onDependenciesChange).toHaveBeenCalledWith('t2', ['child', 't1']);
+  });
+
   it('offers only the tasks that come before this one', () => {
     render(
       <TaskCard task={makeTask()} models={noModels} siblings={SIBLINGS} onDependenciesChange={vi.fn()} />,
@@ -114,7 +128,7 @@ describe('TaskCard — dependency editor', () => {
     expand();
     act(() => { fireEvent.click(screen.getByTitle('Edit dependencies')); });
 
-    expect(screen.getByText(/no possible dependencies/i)).toBeTruthy();
+    expect(screen.getByText(/No earlier siblings/i)).toBeTruthy();
   });
 
   it('stays read-only while the plan is executing', () => {

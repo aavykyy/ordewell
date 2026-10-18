@@ -5,6 +5,7 @@ import {
 } from '../models/Task';
 import { v4 as uuidv4 } from 'uuid';
 import { resolveTaskRef } from './TaskRefs';
+import { taskPlacement } from './PlanTree';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
 import { validateTaskEdit, lockedTaskRefusal, type EditCatalog, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
 import { plannedTask, checkPlanInvariants, detectCycle, taskWhere, MODE_NOT_THE_PLANNERS, MANUAL_NOT_READ_ONLY, OPS_NOT_READ_ONLY, type IntakeCatalog, type PlannedTask, type PlanTaskError } from './PlannedTask';
@@ -166,7 +167,7 @@ function updatableChanges(raw: Partial<Task> | undefined): Partial<Task> {
 }
 
 function findInTasks(tasks: readonly Task[], id: string): Task | undefined {
-  return flattenTasks(tasks).find((t) => t.id === id);
+  return taskPlacement(tasks, id)?.task;
 }
 
 function findTopLevel(tasks: Task[], id: string): Task | undefined {
@@ -295,44 +296,7 @@ export interface TaskRef {
   dependencies: string[];
 }
 
-/** The tasks listing `taskId` as a dependency — exactly what removing it detaches. */
-export function dependentsOf<T extends Pick<TaskRef, 'id' | 'dependencies'>>(tasks: T[], taskId: string): T[] {
-  return tasks.filter((t) => t.id !== taskId && t.dependencies.includes(taskId));
-}
-
-/**
- * The tasks that may become dependencies of `taskId`: those displayed before it.
- *
- * Offering only earlier tasks is what keeps a hand-edited graph valid without a
- * cycle check — dependencies then only ever point backwards in display order,
- * the same invariant `applyTaskOps` enforces. Omit `taskId` for a task that does
- * not exist yet: it lands last, so every current task is a candidate.
- */
-export function dependencyCandidates<T extends Pick<TaskRef, 'id' | 'order'>>(tasks: readonly T[], taskId?: string): T[] {
-  if (!taskId) return [...tasks];
-  const target = tasks.find((t) => t.id === taskId);
-  return target ? tasks.filter((t) => t.order < target.order) : [];
-}
-
-/** Pre-flight check for a hand-edited dependency list: every id exists and comes earlier. */
-export function canSetDependencies<T extends TaskRef>(
-  tasks: readonly T[],
-  taskId: string,
-  dependencies: string[],
-): { ok: boolean; error?: string } {
-  const target = tasks.find((t) => t.id === taskId);
-  if (!target) return { ok: false, error: 'Task not found' };
-  const allowed = new Set(dependencyCandidates(tasks, taskId).map((t) => t.id));
-  for (const dep of dependencies) {
-    if (dep === taskId) return { ok: false, error: `"${target.title}" cannot depend on itself` };
-    const found = tasks.find((t) => t.id === dep);
-    if (!found) return { ok: false, error: `Unknown dependency "${dep}"` };
-    if (!allowed.has(dep)) {
-      return { ok: false, error: `"${target.title}" cannot depend on "${found.title}", which comes after it in the plan` };
-    }
-  }
-  return { ok: true };
-}
+export { dependencyCandidates, canSetDependencies, dependentsOf } from './PlanTree';
 
 /** Pre-flight check for a split: the task exists and is not locked by execution. */
 export function canSplitTask(tasks: readonly Task[], taskId: string): { ok: boolean; error?: string } {
@@ -472,7 +436,7 @@ export function applyTaskOps(
         if (typeof done === 'string') return done;
         subtasks.push(done);
       }
-      return { ...t, dependencies: ids.filter((id) => id !== t.id), subtasks };
+      return { ...t, dependencies: ids, subtasks };
     };
     const done = walk(planned.task);
     return typeof done === 'string' ? { error: done } : { task: done };
@@ -507,8 +471,8 @@ export function applyTaskOps(
       changes.assignedModel = { ...model, thinkingEffort: op.changes.thinkingEffort ?? undefined };
     }
     // Dependency refs are still unresolved (e.g. "#3") at this point, so the
-    // check runs on everything but them; resolveDeps below handles them once
-    // they're real ids.
+    // check runs on everything but them. The shared plan invariants check
+    // their resolved ids on the final graph: a later op may finish a rewire.
     const changesForCheck: Partial<Task> = { ...changes };
     delete changesForCheck.dependencies;
     const check = validateTaskEdit(audience, tasks, target.id, changesForCheck, catalog);
@@ -530,7 +494,7 @@ export function applyTaskOps(
     if ('dependencies' in changes) {
       const { ids, bad } = resolveDeps(changes.dependencies, opIndex);
       if (bad.length) return { error: `${label}: unknown dependencies: ${bad.join(', ')}` };
-      changes.dependencies = ids.filter((id) => id !== target.id);
+      changes.dependencies = ids;
     }
     return { target, changes, check };
   };

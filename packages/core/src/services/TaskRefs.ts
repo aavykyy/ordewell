@@ -1,18 +1,15 @@
+import { taskPlacement, walkPlan, type TreeTask } from './PlanTree';
+
 /**
  * Task references: the one grammar for naming a task in a plan, both ways.
  * A label is rendered from a task's order under its parent ("2", "2.1"), and
  * a reference written by anyone — the planner, a tool call, a command — is
- * resolved back against the plan tree. Pure and import-free so a
+ * resolved back against the plan tree. Pure so a
  * browser-bundled surface can use it through `@ordewell/core/plan-utils`.
  */
 
 /** The shape a reference resolves over: the plan's task tree, or a surface's projection of it. */
-export interface RefTask<T> {
-  id: string;
-  order: number;
-  title: string;
-  subtasks?: readonly T[];
-}
+export type RefTask<T> = TreeTask<T>;
 
 /**
  * The parent a label extends. A label is the full path ("3.2.1"), so a parent
@@ -46,18 +43,9 @@ export interface RefTaskMatch<T> {
   label: string;
 }
 
-function* depthFirst<T extends RefTask<T>>(tasks: readonly T[], parent?: T, parentLabel?: string): Generator<RefTaskMatch<T>> {
-  for (const task of tasks) {
-    const label = taskOrderLabel(task, parent ? { order: parent.order, label: parentLabel } : undefined);
-    yield { task, parent, label };
-    yield* depthFirst(task.subtasks ?? [], task, label);
-  }
-}
-
 /** The task a plan tree holds, by id, with its parent; undefined when the tree holds none. */
 export function findTaskRef<T extends RefTask<T>>(tasks: readonly T[], id: string): RefTaskMatch<T> | undefined {
-  for (const match of depthFirst(tasks)) if (match.task.id === id) return match;
-  return undefined;
+  return taskPlacement(tasks, id);
 }
 
 /**
@@ -90,7 +78,7 @@ export function titledTaskRefOf<T extends RefTask<T>>(tasks: readonly T[], id: s
 export function resolveTaskRef<T extends RefTask<T>>(tasks: readonly T[], ref: string | number): T | undefined {
   const s = String(ref).trim();
   if (!s) return undefined;
-  for (const { task } of depthFirst(tasks)) if (task.id === s) return task;
+  for (const { task } of walkPlan(tasks)) if (task.id === s) return task;
   const label = s.startsWith('#') ? s.slice(1) : s;
   if (/^\d+(\.\d+)*$/.test(label)) {
     let level: readonly T[] | undefined = tasks;
@@ -101,6 +89,6 @@ export function resolveTaskRef<T extends RefTask<T>>(tasks: readonly T[], ref: s
     }
     return found;
   }
-  for (const { task } of depthFirst(tasks)) if (task.title === s) return task;
+  for (const { task } of walkPlan(tasks)) if (task.title === s) return task;
   return undefined;
 }
