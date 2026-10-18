@@ -180,7 +180,7 @@ describe('a log that cannot be created', () => {
     const inner: IRunner = { spawn: vi.fn(async () => session), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 };
     await recorder.wrap(inner).spawn({ taskId: TASK, runner: 'claude-code', prompt: 'Do it', cwd: '/repo' });
 
-    session.emitEvent({ type: 'assistant_text', text: 'Done.' });
+    session.emitEvent({ type: 'assistant_text', runId: 'r1', text: 'Done.' });
     session.emitEvent({ type: 'turn_end', reason: 'completed' });
     session.emitEvent({ type: 'turn_end', reason: 'completed' });
 

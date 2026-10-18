@@ -154,8 +154,6 @@ interface TurnState extends StreamTurn<V2Frame> {
   stepModels: Map<string, string>;
   /** A delegation call's own id and its brief, remembered so `subagent_started` can name it. */
   briefs: Map<string, string>;
-  /** Assistant messages whose text the stream delivered, so a read-back does not repeat them. */
-  streamedMessages: Set<string>;
   /** A `read` call's id → the path it reads; its `external_directory` request names only the folder. */
   readPaths: Map<string, string>;
 }
@@ -166,7 +164,16 @@ interface Turn extends TurnLatch {
 }
 
 function newTurnState(): TurnState {
-  return { ...streamTurn<V2Frame>(), toolNames: new Map(), stepModels: new Map(), briefs: new Map(), streamedMessages: new Set(), readPaths: new Map() };
+  return { ...streamTurn<V2Frame>(), toolNames: new Map(), stepModels: new Map(), briefs: new Map(), readPaths: new Map() };
+}
+
+/**
+ * A run of reply text: one text part of an assistant message, by its ordinal,
+ * which counts the message's text parts alone (OpenCode 2.0.32's runner keeps
+ * a counter per part kind).
+ */
+function textRun(messageId: string, ordinal: number | undefined): string {
+  return `${messageId}:${ordinal ?? 0}`;
 }
 
 function contentText(content: V2ToolContent[] | undefined): string {
@@ -430,9 +437,11 @@ export class OpenCodeV2 {
   }
 
   /**
-   * Whatever of the turn's own replies the stream missed. A message whose text
-   * the stream delivered adds nothing here; one that lost its text frames still
-   * reaches the plain-text channel, which a summary falls back to.
+   * Whatever of the turn's own replies the stream missed, each text part as
+   * the run the stream names it. A run the stream completed adds nothing; one
+   * whose end frame was dropped is completed as the run it streamed as; one
+   * that lost every frame still reaches the plain-text channel, which a
+   * summary falls back to.
    */
   private async readBack(state: TurnState, onEvent: (e: AgentEvent) => void): Promise<void> {
     const messages = await this.messages();
@@ -441,9 +450,10 @@ export class OpenCodeV2 {
     const latestUser = messages.findIndex((m) => m.type === 'user');
     const own = latestUser < 0 ? messages : messages.slice(0, latestUser);
     for (const message of [...own].reverse()) {
-      if (message.type !== 'assistant' || !message.id || state.streamedMessages.has(message.id)) continue;
-      (message.content ?? []).forEach((part, index) => {
-        if (part.type === 'text' && part.text) state.text.complete(`${message.id}:readback:${index}`, part.text, onEvent);
+      if (message.type !== 'assistant' || !message.id) continue;
+      const id = message.id;
+      (message.content ?? []).filter((part) => part.type === 'text').forEach((part, ordinal) => {
+        if (part.text) state.text.complete(textRun(id, ordinal), part.text, onEvent);
       });
     }
   }
@@ -548,12 +558,11 @@ export class OpenCodeV2 {
       }
       case 'session.text.delta':
         // A subagent's text is its report to its caller, not the reply; the delegating call's result carries it.
-        if (!subagentId && data.delta) state.text.delta(`${message}:${data.ordinal ?? 0}`, data.delta, onEvent);
+        if (!subagentId && data.delta) state.text.delta(textRun(message, data.ordinal), data.delta, onEvent);
         return;
       case 'session.text.ended':
         if (subagentId || !data.text) return;
-        if (message) state.streamedMessages.add(message);
-        state.text.complete(`${message}:${data.ordinal ?? 0}`, data.text, onEvent);
+        state.text.complete(textRun(message, data.ordinal), data.text, onEvent);
         return;
       case 'session.tool.input.started':
         if (data.id && data.name) state.toolNames.set(data.id, data.name);

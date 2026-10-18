@@ -591,7 +591,7 @@ describe('CliAgentAiService — Claude Code', () => {
         send: async (_message, onEvent, signal) => {
           signals.push(signal);
           if (signals.length === 2) await new Promise<void>((resolve) => { release = resolve; });
-          onEvent({ type: 'assistant_text', text: 'ok' });
+          onEvent({ type: 'assistant_text', runId: 'r1', text: 'ok' });
           onEvent({ type: 'turn_end' });
         },
       }),
@@ -665,9 +665,9 @@ describe('CliAgentAiService — streamed events (#47)', () => {
 
   it('streams reply deltas once, and takes the complete text as authoritative', async () => {
     const svc = scripted([
-      { type: 'assistant_text_delta', text: 'Which ' },
-      { type: 'assistant_text_delta', text: 'stor' },
-      { type: 'assistant_text', text: 'Which store?' },
+      { type: 'assistant_text_delta', runId: 'r1', text: 'Which ' },
+      { type: 'assistant_text_delta', runId: 'r1', text: 'stor' },
+      { type: 'assistant_text', runId: 'r1', text: 'Which store?' },
       { type: 'turn_end' },
     ]);
     const { events, onProgress } = collector();
@@ -685,9 +685,9 @@ describe('CliAgentAiService — streamed events (#47)', () => {
     // entirely, so every harness reply — plain prose included — rendered as
     // "Building plan…" until the turn settled (#48).
     const svc = scripted([
-      { type: 'assistant_text_delta', text: 'Which ' },
-      { type: 'assistant_text_delta', text: 'store?' },
-      { type: 'assistant_text', text: 'Which store?' },
+      { type: 'assistant_text_delta', runId: 'r1', text: 'Which ' },
+      { type: 'assistant_text_delta', runId: 'r1', text: 'store?' },
+      { type: 'assistant_text', runId: 'r1', text: 'Which store?' },
       { type: 'turn_end' },
     ]);
     const routed: ResearchProgress[] = [];
@@ -702,36 +702,36 @@ describe('CliAgentAiService — streamed events (#47)', () => {
 
   it('keeps the text streamed before a tool call when a later run completes', async () => {
     const svc = scripted([
-      { type: 'assistant_text_delta', text: 'Let me look. ' },
+      { type: 'assistant_text_delta', runId: 'r1', text: 'Let me look. ' },
       { type: 'tool_call', id: 'c1', name: 'Read', args: { file_path: 'a.ts' } },
       { type: 'tool_result', id: 'c1', name: 'Read', output: 'x', success: true },
-      { type: 'assistant_text_delta', text: 'Found it.' },
-      { type: 'assistant_text', text: 'Found it.' },
+      { type: 'assistant_text_delta', runId: 'r2', text: 'Found it.' },
+      { type: 'assistant_text', runId: 'r2', text: 'Found it.' },
       { type: 'turn_end' },
     ]);
 
     const turn = await svc.startConversation(request());
 
-    expect(turn.text).toBe('Let me look. Found it.');
+    expect(turn.text).toBe('Let me look. \n\nFound it.');
   });
 
   it('tags subagent activity with its subagent and keeps it out of the reply', async () => {
     const svc = scripted([
-      { type: 'assistant_text', text: 'Delegating. ' },
+      { type: 'assistant_text', runId: 'r1', text: 'Delegating. ' },
       { type: 'tool_call', id: 'task-1', name: 'Task', args: { prompt: 'find the cache' } },
       { type: 'thinking_delta', text: 'grep ', subagentId: 'sa1' },
       { type: 'thinking', text: 'grep first', subagentId: 'sa1' },
       { type: 'tool_call', id: 'c1', name: 'Grep', args: { pattern: 'cache' }, subagentId: 'sa1' },
       { type: 'tool_result', id: 'c1', name: 'Grep', output: 'src/cache.ts', success: true, subagentId: 'sa1' },
       { type: 'tool_result', id: 'task-1', name: 'Task', output: 'It is in src/cache.ts', success: true },
-      { type: 'assistant_text_delta', text: 'It is in src/cache.ts.' },
+      { type: 'assistant_text_delta', runId: 'r2', text: 'It is in src/cache.ts.' },
       { type: 'turn_end' },
     ]);
     const { events, onProgress } = collector();
 
     const turn = await svc.startConversation(request({ onProgress }));
 
-    expect(turn.text).toBe('Delegating. It is in src/cache.ts.');
+    expect(turn.text).toBe('Delegating. \n\nIt is in src/cache.ts.');
     const deltas = events.filter((e) => e.type === 'text_delta');
     expect(deltas.map((e) => e.text)).toEqual(['Delegating. ', 'It is in src/cache.ts.']);
     // The subagent's Task call commits the planner's run, so its reply after
@@ -747,8 +747,8 @@ describe('CliAgentAiService — streamed events (#47)', () => {
   it('settles a reply that looks like a botched plan as prose, with no corrective re-emit', async () => {
     const broken = '{"tasks":[{"id":"t1","order":1,"title":"A","description":"d","type":"ai","dependencies":[],"subtasks":[]}]}';
     const svc = scripted(
-      [{ type: 'assistant_text', text: broken }, { type: 'turn_end' }],
-      [{ type: 'assistant_text', text: planJson() }, { type: 'turn_end' }],
+      [{ type: 'assistant_text', runId: 'r1', text: broken }, { type: 'turn_end' }],
+      [{ type: 'assistant_text', runId: 'r1', text: planJson() }, { type: 'turn_end' }],
     );
     const { events, onProgress } = collector();
 
@@ -761,8 +761,8 @@ describe('CliAgentAiService — streamed events (#47)', () => {
 
   it('takes back what an empty reply streamed before nudging the agent', async () => {
     const svc = scripted(
-      [{ type: 'assistant_text_delta', text: '\n' }, { type: 'assistant_text', text: '' }, { type: 'turn_end' }],
-      [{ type: 'assistant_text', text: 'Which store?' }, { type: 'turn_end' }],
+      [{ type: 'assistant_text_delta', runId: 'r1', text: '\n' }, { type: 'assistant_text', runId: 'r1', text: '' }, { type: 'turn_end' }],
+      [{ type: 'assistant_text', runId: 'r1', text: 'Which store?' }, { type: 'turn_end' }],
     );
     const { events, onProgress } = collector();
 
@@ -782,7 +782,7 @@ describe('CliAgentAiService — streamed events (#47)', () => {
       { type: 'usage', record: { source: 'claude-code', inputTokens: 100, subagentId: 'sa1' } },
       { type: 'subagent_finished', subagentId: 'sa1', outcome: 'done', digest: 'src/cache.ts' },
       { type: 'usage', record: { source: 'claude-code', inputTokens: 5000, outputTokens: 80, reportedCost: { amount: 0.04, currency: 'USD' } } },
-      { type: 'assistant_text', text: 'It is in src/cache.ts.' },
+      { type: 'assistant_text', runId: 'r1', text: 'It is in src/cache.ts.' },
       { type: 'turn_end' },
     ]);
     const { events, onProgress } = collector();
@@ -805,8 +805,8 @@ describe('CliAgentAiService — streamed events (#47)', () => {
     const started = { type: 'subagent_started', subagentId: 'sa1', brief: 'find the cache' } as const;
     const finished = { type: 'subagent_finished', subagentId: 'sa1', outcome: 'done', digest: 'src/cache.ts' } as const;
     const svc = scripted(
-      [started, started, { type: 'assistant_text', text: 'Looking.' }, { type: 'turn_end' }],
-      [finished, started, finished, { type: 'subagent_finished', subagentId: 'ghost', outcome: 'failed', digest: '' }, { type: 'assistant_text', text: 'Found it.' }, { type: 'turn_end' }],
+      [started, started, { type: 'assistant_text', runId: 'r1', text: 'Looking.' }, { type: 'turn_end' }],
+      [finished, started, finished, { type: 'subagent_finished', subagentId: 'ghost', outcome: 'failed', digest: '' }, { type: 'assistant_text', runId: 'r1', text: 'Found it.' }, { type: 'turn_end' }],
     );
     const { events, onProgress } = collector();
 
@@ -842,8 +842,8 @@ describe('CliAgentAiService — a usage limit the agent says twice (#79)', () =>
 
   it('takes back a streamed copy of the limit too', async () => {
     const svc = scripted([
-      { type: 'assistant_text_delta', text: limit },
-      { type: 'assistant_text', text: limit },
+      { type: 'assistant_text_delta', runId: 'r1', text: limit },
+      { type: 'assistant_text', runId: 'r1', text: limit },
       { type: 'error', message: `${limit}.` },
     ]);
     const { events, onProgress } = collector();
@@ -867,10 +867,10 @@ describe('CliAgentAiService — a usage limit the agent says twice (#79)', () =>
 
   it('leaves an earlier segment of the reply showing, with the failure after it', async () => {
     const svc = scripted([
-      { type: 'assistant_text', text: 'Reading the cache.' },
+      { type: 'assistant_text', runId: 'r1', text: 'Reading the cache.' },
       { type: 'tool_call', id: 'c1', name: 'Read', args: { file_path: 'src/cache.ts' } },
       { type: 'tool_result', id: 'c1', name: 'Read', output: 'export {}', success: true },
-      { type: 'assistant_text', text: limit },
+      { type: 'assistant_text', runId: 'r2', text: limit },
       { type: 'error', message: `${limit}.` },
     ]);
     const { events, onProgress } = collector();
@@ -883,7 +883,7 @@ describe('CliAgentAiService — a usage limit the agent says twice (#79)', () =>
 
   it('keeps reply text that only mentions the failure', async () => {
     const svc = scripted([
-      { type: 'assistant_text', text: `I stopped early: ${limit}` },
+      { type: 'assistant_text', runId: 'r1', text: `I stopped early: ${limit}` },
       { type: 'error', message: limit },
     ]);
 
@@ -894,7 +894,7 @@ describe('CliAgentAiService — a usage limit the agent says twice (#79)', () =>
 
   it('keeps an unrelated reply that came before the failure, beside it', async () => {
     const svc = scripted([
-      { type: 'assistant_text', text: 'Which store should the cache use?' },
+      { type: 'assistant_text', runId: 'r1', text: 'Which store should the cache use?' },
       { type: 'error', message: `${limit}.` },
     ]);
 
@@ -1365,7 +1365,7 @@ describe('CliAgentAiService — OpenCode', () => {
 
   // One OpenCode message can carry text on both sides of a tool call. Run
   // together they read as one broken sentence ("…let me check.The factory is…"),
-  // the same way Claude Code's and Codex's did before each grew a separator.
+  // as any runner's several runs of text would.
   it('opens a paragraph for a second text part instead of running them together', async () => {
     const { svc } = openCodeService((url) => {
       if (url.endsWith('/session')) return { id: 'ses_parts' };
@@ -1661,6 +1661,35 @@ describe('CliAgentAiService — OpenCode', () => {
     expect(events.filter((e) => e.type === 'subagent_started' || e.type === 'subagent_finished').map((e) => e.type)).toEqual(['subagent_started', 'subagent_finished']);
   });
 
+  // In the recording the planner's first text part streamed before its `task`
+  // call and completed only after the call had started. Recorded as nothing but
+  // newlines; given words, it is the text a late completion used to repeat.
+  it('keeps text that began before a tool call above it, once, when its completion arrives after the call', async () => {
+    const said = 'I will have a subagent read it.';
+    const early = 'prt_0e0161564001KdeNCS3UUcJpRp';
+    const { sessionId, frames, response } = openCodeFixture('subagent');
+    const worded = frames.map((frame) => {
+      const event = JSON.parse(frame.slice('data: '.length)) as { properties: { partID?: string; delta?: string; part?: { id?: string; text?: string } } };
+      if (event.properties.partID === early) event.properties.delta = said;
+      else if (event.properties.part?.id === early && event.properties.part.text) event.properties.part.text = said;
+      else return frame;
+      return `data: ${JSON.stringify(event)}\n\n`;
+    });
+    const { svc } = openCodeService((url) => {
+      if (url.endsWith('/session')) return { id: sessionId };
+      return new Promise((resolve) => setTimeout(() => resolve(response), 0));
+    }, worded);
+    const { events, onProgress } = collector();
+
+    const turn = await svc.startConversation(request({ onProgress, runners: ['opencode'] }));
+
+    expect(turn.text).toBe(`${said}\n\n\`math.ts\` exports a single function \`add(a: number, b: number): number\`.`);
+    const call = events.findIndex((e) => e.type === 'tool_call' && e.toolArgs?.includes('Read math.ts'));
+    const streamed = events.flatMap((e, i) => (e.type === 'text_delta' && e.text === said ? [i] : []));
+    expect(streamed).toHaveLength(1);
+    expect(streamed[0]).toBeLessThan(call);
+  });
+
   it('connects the event stream before sending, so an early permission is not missed', async () => {
     const order: string[] = [];
     const { svc } = openCodeService((url) => {
@@ -1725,12 +1754,12 @@ describe('CliAgentAiService — one-shot plan generation', () => {
     const plan = planJson();
     const mcp = fakeMcpServer();
     const scripted = scriptedAdapter([[
-      { type: 'assistant_text', text: 'Here is the plan.' },
+      { type: 'assistant_text', runId: 'r1', text: 'Here is the plan.' },
       { type: 'tool_call', id: 'c1', name: 'Read', args: { file_path: 'README.md' } },
       { type: 'tool_result', id: 'c1', name: 'Read', output: '# App', success: true },
-      { type: 'assistant_text_delta', text: plan.slice(0, 40) },
-      { type: 'assistant_text_delta', text: plan.slice(40) },
-      { type: 'assistant_text', text: plan },
+      { type: 'assistant_text_delta', runId: 'r2', text: plan.slice(0, 40) },
+      { type: 'assistant_text_delta', runId: 'r2', text: plan.slice(40) },
+      { type: 'assistant_text', runId: 'r2', text: plan },
       { type: 'turn_end' },
     ]]);
     const svc = new CliAgentAiService(fakeConfig({ aiProvider: 'claude-code' }), {
@@ -1860,14 +1889,17 @@ describe('CliAgentAiService — Claude Code partial messages, usage and subagent
   const plannerTokens = (events: ResearchProgress[]) => events.filter((e) => e.type === 'text_delta').map((e) => e.text);
   const usageRecords = (events: ResearchProgress[]) => events.flatMap((e) => (e.type === 'usage' && e.record ? [e.record] : []));
 
-  it('streams reply deltas that add up to the final text, paragraph break included', async () => {
+  it('streams each run\'s deltas under its own segment, and joins the runs with a paragraph break', async () => {
     const { svc } = service('claude-code', [fixture('claude-code', 'stream-tool-rounds')]);
     const { events, onProgress } = collector();
     const turn = await svc.startConversation(request({ onProgress }));
 
     expect(plannerTokens(events)).toEqual([
-      'I\'ll read README.md now', '.', '\n\n', 'The first line of README.md is', ' "hello".',
+      'I\'ll read README.md now', '.', 'The first line of README.md is', ' "hello".',
     ]);
+    const segments = events.flatMap((e) => (e.type === 'text_delta' ? [e.segmentId] : []));
+    expect(new Set(segments.slice(0, 2)).size).toBe(1);
+    expect(segments[2]).not.toBe(segments[0]);
     expect(turn.text).toBe('I\'ll read README.md now.\n\nThe first line of README.md is "hello".');
   });
 
@@ -2127,7 +2159,7 @@ describe('CliAgentAiService — resource lifecycle', () => {
           send: async (message, onEvent, signal, onLiveness) => {
             record.sent.push(message);
             if (behavior.send) return behavior.send(message, onEvent, signal, onLiveness);
-            onEvent({ type: 'assistant_text', text: `reply ${processes.indexOf(record) + 1}` });
+            onEvent({ type: 'assistant_text', runId: 'r1', text: `reply ${processes.indexOf(record) + 1}` });
             onEvent({ type: 'turn_end' });
           },
           nativeSessionId: () => null,
@@ -2192,7 +2224,7 @@ describe('CliAgentAiService — resource lifecycle', () => {
         send: async (_message, onEvent) => {
           onEvent({ type: 'permission_request', id: 'req-1', name: 'Write', detail: '/etc/hosts' });
           await vi.waitFor(() => expect(answered).toBe(true));
-          onEvent({ type: 'assistant_text', text: 'ok' });
+          onEvent({ type: 'assistant_text', runId: 'r1', text: 'ok' });
           onEvent({ type: 'turn_end' });
         },
         answerPermission: () => {

@@ -73,6 +73,18 @@ binaries themselves rather than against memory:
   Letting the echo through put the user's goal in the planner's reply — and a
   goal quoting JSON would then have been parsed as the plan.
 
+Each adapter reads its agent's protocol into one `AgentEvent` union. Reply text
+arrives in *runs*, each under the runner's own id for it: a Claude Code text
+block as `<message id>:<block index>`, a Codex `agentMessage` item by its id, an
+OpenCode text part by its id (on 2.x `<message id>:<ordinal>`, the ordinal
+counting the message's text parts alone). A run's `assistant_text_delta`s and its
+complete `assistant_text` carry the same `runId`, and the complete copy replaces
+the deltas where the run began, so text that began before a tool call stays
+above it however late its copy arrives; a read-back of what the stream missed
+reuses the id of the run it recovers. No run carries the paragraph break between
+it and the one before: the service joins a turn's runs with one and streams each
+under a segment of its own (`TurnReply`).
+
 Exploration is the harness's job, not Ordewell's. `BaseAiService` is deliberately
 **not** the parent class here: its entire body is Ordewell executing tools on the
 model's behalf, which is precisely what a coding agent replaces.
@@ -279,6 +291,14 @@ this backend should understand they are trading speed for not holding a key.
   `researchStepSummary` and four surfaces' icon/label switches, and one new
   member with a label field buys the same honesty without turning every one of
   those into a runtime default branch.
+- **The paragraph break inside the reply text.** Previously adopted: each
+  adapter opened a later run of a turn with `\n\n` in the text it sent, so
+  runs concatenated into paragraphs. Dropped because every adapter, and every
+  consumer, then worked out by its own rule which run a piece of text belonged
+  to, and the rules disagreed: Codex's deltas carried no break while its
+  complete message did, so a task's plain text wrote the message twice; a run
+  whose copy arrived after a tool call joined the reply a second time; and an
+  OpenCode read-back under a key of its own showed its text twice.
 - **OpenCode's event stream for tool activity only.** It was, while the echo
   was filtered by dropping all prose from the stream. Rejected: filtering the
   user's message by message id keeps the echo out and the reply streaming.
@@ -322,3 +342,4 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-10-17 — the detected agent is derived again on a runner-list refresh, so a coding agent installed while a host runs becomes the planner without a restart ([ADR-0039](../routing/0038-runner-install-verdicts-expire.md#the-detected-planner-is-derived-again-on-a-refresh-adr-0039)).
 - 2026-10-17 — a planner picker offers only usable coding agents and configured vendors, with a one-line hint when none is, instead of listing unusable agents greyed-out.
 - 2026-10-17 — a planner switch is shown at once and no longer waits on the target's model discovery; a failed discovery is remembered briefly instead of re-run on every switch ([ADR-0040](../routing/0040-a-slow-model-discovery-never-gates-the-planner-pick.md)).
+- 2026-10-18 — reply text arrives in runs under the runner's own ids, with no paragraph break inside the text; consumers join runs themselves.

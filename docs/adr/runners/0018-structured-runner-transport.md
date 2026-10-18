@@ -37,12 +37,18 @@ and completion evidence.
   (stream format, input format, permission-prompt channel, resume).
 - **Two channels (O1).**
   (a) *Plain text to `onOutput`*: the assembled agent text plus one short line
-  per tool call (`› Bash(npm test)`), no JSON and no ANSI. It feeds
+  per tool call (`› Bash(npm test)`), no JSON and no ANSI. It is only ever
+  appended to: each run of reply text (ADR-0009) is written once — its
+  complete copy adds what its own deltas did not — a paragraph after the
+  turn's text before it. It feeds
   the planner's live-output read (#3), usage-limit
   classification and the fallback summary handed to dependents.
   (b) *A full-fidelity view* built from the structured events as ADR-0017
   display blocks: streaming text, thinking, expandable tool calls with
-  arguments and results, nested subagents, usage, approval cards. Channel (a)
+  arguments and results, nested subagents, usage, approval cards. Each run of
+  text streams into a block of its own, which its complete copy settles
+  wherever it now sits, so a note or another run landing in the middle of it
+  splits or crosses nothing. Channel (a)
   is deliberately lossy; nothing that needs fidelity reads it.
 - **A turn without a completion call is "waiting for input" (W1).** A turn that ends
   without a `task_complete` call makes the task `awaiting_user` with a saved reason:
@@ -272,9 +278,11 @@ and completion evidence.
   a cancelled resume is marked as one, so it wakes nobody.
 - **Task log persistence (P1).** Append-only, per attempt, at
   `.ordewell/sessions/<session>/tasks/<task>/<attempt>.jsonl`, holding
-  normalized events with long tool output trimmed. The same reducer rebuilds
-  the view on reload. Earlier attempts are kept, and the log is deleted with
-  the session.
+  normalized events with long tool output trimmed; a run's text events carry
+  its id, and consecutive deltas are merged only within one run. The same
+  reducer rebuilds the view on reload, a log saved before runs carried an id
+  included. Earlier attempts are kept, and the log is deleted with the
+  session.
 - **Approvals (A1, #56).** A runner's tool request goes through `IApproval` /
   `PendingApprovals` / `resolveApproval` as a new kind, `runner_tool`, carrying
   the task id, with **no timeout** (the planner keeps its five-minute
@@ -430,3 +438,4 @@ transport is retained for take-over.
 - 2026-10-14 — U1: a paused task moved to another runner carries the paused attempt's work over to a fresh session (#94).
 - 2026-10-17 — K1/U1: a saved session records its owner and Continue never crosses runners; a Retry after any move to another runner is a carry-over, not only a paused task's; a limit counts only in a turn Ordewell started, and a runner's structured field decides over its words ([ADR-0041](../routing/0041-a-tasks-model-follows-the-runners-own-switch.md), [ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md)).
 - 2026-10-18 — U1: a held run stays open with nothing at work; the reset releases the hold whatever failed meanwhile; a refused Resume now changes no resume, and a task it sweeps along keeps waiting for its reset; a loaded plan's reset resumes only its paused tasks.
+- 2026-10-18 — O1/P1: text is kept by run — written once to the plain text, settled in its own block, merged only within its run; older logs replay as before.

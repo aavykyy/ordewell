@@ -46,9 +46,14 @@ export type TaskLogEvent =
   /** What the runner loaded from the user's and the project's setup, as its process started. */
   | { type: 'runner_loaded'; commands: RunnerCommand[]; mcpServers: RunnerMcpServer[] }
   | { type: 'turn_end'; reason: StructuredTurnEnd }
-  | { type: 'text_delta'; text: string }
-  /** A complete run of the agent's reply, authoritative over the deltas streamed for it. */
-  | { type: 'text'; text: string }
+  /**
+   * A piece of the run `runId` of the agent's reply (see `AgentEvent`). A log
+   * saved before runs carried an id has none, and opens each later run of a
+   * turn with the paragraph break that joined it.
+   */
+  | { type: 'text_delta'; runId?: string; text: string }
+  /** A complete run of the agent's reply, authoritative over the deltas streamed under its `runId`. */
+  | { type: 'text'; runId?: string; text: string }
   | { type: 'thinking_delta'; text: string; subagentId?: string }
   | { type: 'thinking'; text: string; subagentId?: string }
   /** `args` is the call's arguments as JSON, exactly as the runner announced them. */
@@ -147,9 +152,9 @@ export function toTaskLogEvent(event: StructuredEvent): TaskLogEvent | null {
     case 'turn_end':
       return { type: 'turn_end', reason: event.reason };
     case 'assistant_text_delta':
-      return { type: 'text_delta', text: event.text };
+      return { type: 'text_delta', runId: event.runId, text: event.text };
     case 'assistant_text':
-      return { type: 'text', text: event.text };
+      return { type: 'text', runId: event.runId, text: event.text };
     case 'thinking_delta':
     case 'thinking':
       return withSubagent({ type: event.type, text: event.text }, event.subagentId);
@@ -218,15 +223,16 @@ export function taskLogForSurface(events: readonly TaskLogEvent[]): TaskLogEvent
 }
 
 /**
- * Merge runs of deltas into one event each. Deltas arrive a few characters at
- * a time; merged, a batch is one message on the wire and one line on disk,
- * and the view folds to the same blocks either way.
+ * Merge consecutive deltas of one stream into one event each: of one run of
+ * text, or of one voice's thinking. Deltas arrive a few characters at a time;
+ * merged, a batch is one message on the wire and one line on disk, and the
+ * view folds to the same blocks either way.
  */
 export function coalesceTaskLog(events: readonly TaskLogEvent[]): TaskLogEvent[] {
   const out: TaskLogEvent[] = [];
   for (const event of events) {
     const last = out[out.length - 1];
-    if (last?.type === 'text_delta' && event.type === 'text_delta') {
+    if (last?.type === 'text_delta' && event.type === 'text_delta' && last.runId === event.runId) {
       out[out.length - 1] = { ...last, text: last.text + event.text };
     } else if (last?.type === 'thinking_delta' && event.type === 'thinking_delta' && last.subagentId === event.subagentId) {
       out[out.length - 1] = { ...last, text: last.text + event.text };

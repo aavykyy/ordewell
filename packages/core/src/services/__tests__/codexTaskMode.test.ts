@@ -580,9 +580,9 @@ describe('CodexAdapter task channels', () => {
       { type: 'tool_call', id: 'item_f1', name: 'Update', args: { path: 'src/sum.ts' } },
       { type: 'tool_result', id: 'item_f1', name: 'Update', output: '-return a - b;\n+return a + b;\n', success: true },
       { type: 'usage', record: { source: 'codex', model: 'gpt-5.5', inputTokens: 9000, outputTokens: 100, cachedInputTokens: 4000, contextWindow: 258400 } },
-      { type: 'assistant_text_delta', text: 'Fixed the sign in sum.ts.\n<<<ORDE' },
-      { type: 'assistant_text_delta', text: 'WELL_DONE>>>' },
-      { type: 'assistant_text', text: 'Fixed the sign in sum.ts.\n<<<ORDEWELL_DONE>>>' },
+      { type: 'assistant_text_delta', runId: 'item_m1', text: 'Fixed the sign in sum.ts.\n<<<ORDE' },
+      { type: 'assistant_text_delta', runId: 'item_m1', text: 'WELL_DONE>>>' },
+      { type: 'assistant_text', runId: 'item_m1', text: 'Fixed the sign in sum.ts.\n<<<ORDEWELL_DONE>>>' },
       { type: 'turn_end' },
     ]);
     expect(adapter.nativeSessionId()).toBe('thr-task-1');
@@ -839,6 +839,27 @@ describe('a Codex task on the structured transport', () => {
     expect(session.getOutput()).toBe('› shell(npm test)\n› Update(src/sum.ts)\nFixed the sign in sum.ts.\n<<<ORDEWELL_DONE>>>\n');
     expect(chunks.some((chunk) => chunk.includes('<<<ORDEWELL_DONE>>>'))).toBe(true);
     expect(session.nativeSessionId()).toBe('thr-task-1');
+    session.kill();
+  });
+
+  // Codex streams a message's deltas with no paragraph break before them; its
+  // completed `agentMessage` used to carry one, so the plain-text channel took
+  // the copy for a different text and wrote the message a second time.
+  it('writes each streamed message once, a paragraph apart, to the plain-text channel', async () => {
+    const message = (id: string, deltas: string[]) => [
+      ...deltas.map((delta) => line({ method: 'item/agentMessage/delta', params: { threadId: 'thr-task-1', turnId: 'turn-m', itemId: id, delta } })),
+      line({ method: 'item/completed', params: { threadId: 'thr-task-1', turnId: 'turn-m', item: { id, type: 'agentMessage', text: deltas.join('') } } }),
+    ].join('');
+    const { runner } = codexRunner([...handshake(), [
+      line({ method: 'turn/started', params: { threadId: 'thr-task-1', turn: { id: 'turn-m', status: 'inProgress', items: [] } } }),
+      message('item_m1', ['Checked ', 'the tests.']),
+      message('item_m2', ['Fixed the sign.\n', '<<<ORDEWELL_DONE>>>']),
+      line({ method: 'turn/completed', params: { threadId: 'thr-task-1', turn: { id: 'turn-m', status: 'completed', items: [] } } }),
+    ].join('')]);
+    const session = await runner.spawn(spawnOptions);
+    await new Promise<void>((resolve) => session.onTurnEnd(() => resolve()));
+
+    expect(session.getOutput()).toBe('Checked the tests.\n\nFixed the sign.\n<<<ORDEWELL_DONE>>>\n');
     session.kill();
   });
 

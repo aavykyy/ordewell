@@ -4,6 +4,7 @@ import type { ApprovalDecision } from '../../interfaces/IApproval';
 import { LineBuffer, type AgentEvent, type PlannerAsk, type PlannerStartOptions, type TaskStartOptions } from './AgentAdapter';
 import { OPENCODE_ORDEWELL, OPENCODE_SEARCH_PROVIDER } from './openCodeOrdewell';
 import { PermissionLedger, type LedgerStance, type RaisedRequest } from './permissionLedger';
+import { ReplyRuns } from './replyRuns';
 import { settleWithin } from './settleWithin';
 
 /**
@@ -244,47 +245,6 @@ export function raiseOnce(
 }
 
 /**
- * The reply's text as it streams and once each run of it completes. A message
- * can carry text on both sides of a tool call, so each run after the first
- * opens a paragraph; the break goes out with a run's first visible delta, so
- * the deltas add up to exactly the text the completed run then re-sends.
- */
-export class ReplyText {
-  private hasText = false;
-  private readonly runs = new Map<string, { held: string; lead: string | null }>();
-  private readonly completed = new Set<string>();
-
-  /** One complete run, once. */
-  complete(id: string, text: string, onEvent: OnEvent): void {
-    if (this.completed.has(id)) return;
-    this.completed.add(id);
-    // Some models open a message with text of nothing but newlines before
-    // calling a tool. It says nothing, and as a paragraph of its own it would
-    // push the real reply down by a blank one.
-    if (!text.trim()) return;
-    const lead = this.runs.get(id)?.lead ?? (this.hasText ? '\n\n' : '');
-    onEvent({ type: 'assistant_text', text: `${lead}${text}` });
-    this.hasText = true;
-  }
-
-  /** One piece of a run. A run that is only whitespace so far is held back, for the reason {@link complete} drops one. */
-  delta(id: string, delta: string, onEvent: OnEvent): void {
-    if (this.completed.has(id)) return;
-    const run = this.runs.get(id) ?? { held: '', lead: null };
-    this.runs.set(id, run);
-    if (run.lead !== null) {
-      onEvent({ type: 'assistant_text_delta', text: delta });
-      return;
-    }
-    run.held += delta;
-    if (!run.held.trim()) return;
-    run.lead = this.hasText ? '\n\n' : '';
-    this.hasText = true;
-    onEvent({ type: 'assistant_text_delta', text: `${run.lead}${run.held}` });
-  }
-}
-
-/**
  * The child sessions a turn's subagents run in. The server's stream is
  * global, so only children of the turn's own session are followed, and a
  * child's frames can arrive before the call that spawned it names it — those
@@ -328,12 +288,13 @@ export class ChildSessions<F> {
 /** What one turn has learned from the stream, as far as both versions share it. */
 export interface StreamTurn<F> {
   seen: Set<string>;
-  text: ReplyText;
+  /** The reply's runs, each under its text part's id. */
+  text: ReplyRuns;
   children: ChildSessions<F>;
 }
 
 export function streamTurn<F>(): StreamTurn<F> {
-  return { seen: new Set(), text: new ReplyText(), children: new ChildSessions<F>() };
+  return { seen: new Set(), text: new ReplyRuns(), children: new ChildSessions<F>() };
 }
 
 /** When one posted turn is over. */

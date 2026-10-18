@@ -63,7 +63,7 @@ describe('OpenCodeAdapter — turn recovery after a dead socket', () => {
     await adapter.send('goal', (e) => events.push(e));
 
     expect(events.some((e) => e.type === 'error')).toBe(false);
-    expect(events).toContainEqual({ type: 'assistant_text', text: 'the plan' });
+    expect(events).toContainEqual({ type: 'assistant_text', runId: 'p1', text: 'the plan' });
     expect(events.at(-1)).toEqual({ type: 'turn_end' });
     adapter.dispose();
   });
@@ -113,7 +113,7 @@ describe('OpenCodeAdapter — turn recovery after a dead socket', () => {
     await adapter.send('goal', (e) => events.push(e));
 
     expect(events.some((e) => e.type === 'assistant_text' && e.text === 'stale')).toBe(false);
-    expect(events).toContainEqual({ type: 'assistant_text', text: 'fresh' });
+    expect(events).toContainEqual({ type: 'assistant_text', runId: 'p1', text: 'fresh' });
     adapter.dispose();
   }, 15000);
 });

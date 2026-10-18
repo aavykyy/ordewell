@@ -28,8 +28,9 @@ export interface TaskLogView extends BlockList {
   /** What the runner reported over the attempt, subagents included. */
   readonly usage?: PlannerUsage;
   /**
-   * The block each run of deltas streams into, keyed by stream, so the run's
-   * authoritative copy replaces it instead of repeating it below.
+   * The block each stream of deltas writes into — a run of text by its id,
+   * thinking by whose it is — so the stream's authoritative copy replaces it
+   * instead of repeating it below.
    */
   readonly streams: Readonly<Record<string, string>>;
   /** The turn's latest agent text block, which a failure that repeats it takes the place of. */
@@ -40,7 +41,8 @@ export const EMPTY_TASK_LOG: TaskLogView = { blocks: [], nextId: 1, queued: [], 
 
 type Event<T extends TaskLogEvent['type']> = Extract<TaskLogEvent, { type: T }>;
 
-const TEXT_STREAM = 'text';
+/** A log saved before runs of text carried an id streams every run through one key. */
+const textStream = (runId: string | undefined) => (runId === undefined ? 'text' : `text:${runId}`);
 const thinkingStream = (subagentId: string | undefined) => `thinking:${subagentId ?? ''}`;
 
 function withoutStream(view: TaskLogView, key: string): TaskLogView {
@@ -48,8 +50,8 @@ function withoutStream(view: TaskLogView, key: string): TaskLogView {
   return { ...view, streams: Object.fromEntries(Object.entries(view.streams).filter(([k]) => k !== key)) };
 }
 
-// A later text block of the same turn opens with a paragraph break (the
-// adapter joins a turn's messages that way); as a block of its own it needs none.
+// A later run of a turn in a log saved before runs carried an id opens with
+// the paragraph break that joined it; as a block of its own it needs none.
 function blockText(text: string): string {
   return text.replace(/^\n+/, '');
 }
@@ -66,8 +68,19 @@ function openStream(view: TaskLogView, lane: Lane, key: string): number {
   return block?.id === id && (block.type === 'message' || block.type === 'thinking') && block.streaming ? i : -1;
 }
 
-function streamDelta(view: TaskLogView, lane: Lane, key: string, text: string, make: (id: string, text: string) => Streamed): TaskLogView {
-  const i = openStream(view, lane, key);
+/** The lane's block for `key`, wherever it now sits. */
+function streamBlock(view: TaskLogView, lane: Lane, key: string): number {
+  const id = view.streams[key];
+  return id === undefined ? -1 : findLastIndex(laneBlocks(view, lane), (b) => b.id === id);
+}
+
+/**
+ * One delta of `key`, into its block: the one it has wherever that sits when
+ * `anywhere`, else only while that is still the lane's latest output.
+ * Otherwise it opens a block of its own.
+ */
+function streamDelta(view: TaskLogView, lane: Lane, key: string, text: string, make: (id: string, text: string) => Streamed, anywhere = false): TaskLogView {
+  const i = anywhere ? streamBlock(view, lane, key) : openStream(view, lane, key);
   const open = laneBlocks(view, lane)[i];
   if (open?.type === 'message' || open?.type === 'thinking') return laneReplace(view, lane, i, { ...open, text: open.text + text });
   const next = appendOutput(view, lane, (id) => make(id, blockText(text)));
@@ -79,10 +92,8 @@ function streamDelta(view: TaskLogView, lane: Lane, key: string, text: string, m
  * that block now sits in the lane, and is added whole when nothing streamed.
  */
 function streamWhole(view: TaskLogView, lane: Lane, key: string, text: string, make: (id: string) => SubagentChild): TaskLogView {
-  const id = view.streams[key];
-  const blocks = laneBlocks(view, lane);
-  const i = id === undefined ? -1 : findLastIndex(blocks, (b) => b.id === id);
-  const streamed = blocks[i];
+  const i = streamBlock(view, lane, key);
+  const streamed = laneBlocks(view, lane)[i];
   const next = withoutStream(view, key);
   if (streamed?.type === 'message' || streamed?.type === 'thinking') {
     return laneReplace(next, lane, i, { ...streamed, text: blockText(text), streaming: false });
@@ -90,16 +101,24 @@ function streamWhole(view: TaskLogView, lane: Lane, key: string, text: string, m
   return appendOutput(next, lane, make);
 }
 
-function agentText(view: TaskLogView, text: string): TaskLogView {
-  const next = streamWhole(view, null, TEXT_STREAM, text, (id) => settledMessage(id, 'agent', blockText(text)));
-  // Added whole, the block took the id the view was about to hand out;
-  // otherwise it is the one the deltas were streaming into.
-  return { ...next, latestText: next.nextId > view.nextId ? `b${view.nextId}` : view.streams[TEXT_STREAM] };
+/** The turn's latest text block is the one a run opened last; a run settling elsewhere leaves it be. */
+function openedText(view: TaskLogView, next: TaskLogView): TaskLogView {
+  return next.nextId > view.nextId ? { ...next, latestText: `b${view.nextId}` } : next;
 }
 
-function agentTextDelta(view: TaskLogView, text: string): TaskLogView {
-  const next = streamDelta(view, null, TEXT_STREAM, text, (id, t) => ({ type: 'message', id, role: 'agent', text: t, streaming: true }));
-  return { ...next, latestText: next.streams[TEXT_STREAM] };
+function agentText(view: TaskLogView, { runId, text }: Event<'text'>): TaskLogView {
+  return openedText(view, streamWhole(view, null, textStream(runId), text, (id) => settledMessage(id, 'agent', blockText(text))));
+}
+
+/**
+ * A run with an id streams into its own block wherever that now sits, so a
+ * note or another run landing in the middle of it splits nothing. A log saved
+ * without ids has one stream for every run, which streams into the latest
+ * output only.
+ */
+function agentTextDelta(view: TaskLogView, { runId, text }: Event<'text_delta'>): TaskLogView {
+  const make = (id: string, t: string): Streamed => ({ type: 'message', id, role: 'agent', text: t, streaming: true });
+  return openedText(view, streamDelta(view, null, textStream(runId), text, make, runId !== undefined));
 }
 
 /**
@@ -112,7 +131,11 @@ function agentTextDelta(view: TaskLogView, text: string): TaskLogView {
 function failTurn(view: TaskLogView, message: string): TaskLogView {
   const repeated = view.blocks.find((b) => b.id === view.latestText);
   const settled = repeated?.type === 'message' && repeated.role === 'agent' && sameMessage(repeated.text, message)
-    ? withoutStream({ ...view, blocks: view.blocks.filter((b) => b !== repeated) }, TEXT_STREAM)
+    ? {
+      ...view,
+      blocks: view.blocks.filter((b) => b !== repeated),
+      streams: Object.fromEntries(Object.entries(view.streams).filter(([, id]) => id !== repeated.id)),
+    }
     : view;
   return appendOutput({ ...settled, latestText: undefined }, null, (id) => settledMessage(id, 'error', message));
 }
@@ -354,8 +377,8 @@ export function reduceTaskLog(view: TaskLogView, event: TaskLogEvent): TaskLogVi
     }));
     case 'runner_loaded': return append(view, (id) => ({ type: 'runner_loaded', id, commands: event.commands, mcpServers: event.mcpServers }));
     case 'turn_end': return endTurn(view, event);
-    case 'text_delta': return agentTextDelta(view, event.text);
-    case 'text': return agentText(view, event.text);
+    case 'text_delta': return agentTextDelta(view, event);
+    case 'text': return agentText(view, event);
     case 'thinking_delta': return thinkingDelta(view, event);
     case 'thinking': return thinkingWhole(view, event);
     case 'tool_call': return announceTool(view, event);

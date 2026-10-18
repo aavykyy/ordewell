@@ -86,11 +86,11 @@ describe('withContextWindows', () => {
     session.onEvent((e) => second.push(e));
 
     inner.emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'haiku', inputTokens: 5 } });
-    inner.emitEvent({ type: 'assistant_text', text: 'Hi' });
+    inner.emitEvent({ type: 'assistant_text', runId: 'r1', text: 'Hi' });
 
     const expected = [
       { type: 'usage', record: { source: 'claude-code', model: 'haiku', inputTokens: 5, contextWindow: 100_000 } },
-      { type: 'assistant_text', text: 'Hi' },
+      { type: 'assistant_text', runId: 'r1', text: 'Hi' },
     ];
     expect(first).toEqual(expected);
     expect(second).toEqual(expected);

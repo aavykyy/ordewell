@@ -8,6 +8,9 @@ import { fakeSpawn, sseResponse, type FakeEventStream } from '../../__tests__/ha
 import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION, OPENCODE_SEARCH_OFF } from '../openCodeOrdewell';
 import { mcpClientConfig } from '../../mcp';
 import type { ProjectMcpServer } from '../repoConfig';
+import type { StructuredEvent } from '../../../interfaces/IRunner';
+import { toTaskLogEvent } from '../../../models/TaskLog';
+import { replayTaskLog } from '../../../conversation/taskLog';
 
 /**
  * OpenCode 2.x (`opencode serve`, the `/api` surface), recorded at v2.0.22: a
@@ -345,7 +348,7 @@ describe('OpenCode 2.x — a turn', () => {
     adapter.dispose();
   });
 
-  it('opens a paragraph for text that follows a tool call in the same turn', async () => {
+  it('reports each message\'s text as a run of its own, with no paragraph break before it', async () => {
     const server = fakeServer();
     const { adapter } = await start(server, taskStart());
     const events: AgentEvent[] = [];
@@ -358,7 +361,10 @@ describe('OpenCode 2.x — a turn', () => {
     stream.push(succeeded());
     await turn;
 
-    expect(events.filter((e) => e.type === 'assistant_text').map((e) => (e as { text: string }).text)).toEqual(['First.', '\n\nSecond.']);
+    expect(events.filter((e) => e.type === 'assistant_text')).toEqual([
+      { type: 'assistant_text', runId: 'msg_a:0', text: 'First.' },
+      { type: 'assistant_text', runId: 'msg_b:0', text: 'Second.' },
+    ]);
     adapter.dispose();
   });
 
@@ -414,6 +420,42 @@ describe('OpenCode 2.x — a turn', () => {
 
     expect(events.map((e) => e.type)).toEqual(['assistant_text', 'turn_end']);
     expect(events[0]).toMatchObject({ text: 'The reply.' });
+    adapter.dispose();
+  });
+
+  // A text part's ordinal counts the message's text parts only (OpenCode
+  // 2.0.32's runner), so the read-back names the run the stream named.
+  it('reads back text whose end frame was dropped as the run it streamed as, where it streamed', async () => {
+    const server = fakeServer({
+      [`GET /api/session/${SES}/message`]: () => ({
+        data: [
+          { id: 'msg_idle', type: 'idle', outcome: 'succeeded' },
+          { id: 'msg_b', type: 'assistant', content: [{ type: 'text', text: 'Done.' }] },
+          { id: MSG, type: 'assistant', content: [{ type: 'reasoning', text: 'hmm' }, { type: 'text', text: 'Checking the tree.' }, { type: 'tool', id: 'call_1' }] },
+          { id: 'msg_user', type: 'user', text: 'go' },
+        ],
+      }),
+    });
+    const { adapter } = await start(server, taskStart());
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (e) => events.push(e));
+    const stream = await server.stream();
+    await until(() => server.requests.some((r) => r.path.endsWith('/prompt')));
+    stream.push(started());
+    stream.push(frame('session.reasoning.ended', { assistantMessageID: MSG, ordinal: 0, text: 'hmm' }));
+    stream.push(frame('session.text.delta', { assistantMessageID: MSG, ordinal: 0, delta: 'Checking ' }));
+    for (const f of call('call_1', { command: 'ls' }, 'bash')) stream.push(f);
+    stream.push(frame('session.tool.success', { assistantMessageID: MSG, id: 'call_1', content: [{ type: 'text', text: 'src' }] }));
+    stream.push(frame('session.text.ended', { assistantMessageID: 'msg_b', ordinal: 0, text: 'Done.' }));
+    stream.push(succeeded());
+    await turn;
+
+    expect(events.filter((e) => e.type === 'assistant_text')).toEqual([
+      { type: 'assistant_text', runId: 'msg_b:0', text: 'Done.' },
+      { type: 'assistant_text', runId: 'msg_a:0', text: 'Checking the tree.' },
+    ]);
+    const log = replayTaskLog(events.flatMap((e) => (e.type === 'turn_end' ? [] : toTaskLogEvent(e as StructuredEvent) ?? [])));
+    expect(log.blocks.map((b) => (b.type === 'message' ? b.text : b.type))).toEqual(['thinking', 'Checking the tree.', 'tool', 'Done.']);
     adapter.dispose();
   });
 });
@@ -841,7 +883,7 @@ describe('OpenCode 2.x — shared protocol behaviour', () => {
     stream.pushRaw(`${reply.slice(60)}data: ${JSON.stringify(succeeded())}\n\n`);
     await turn;
 
-    expect(events).toEqual([{ type: 'assistant_text', text: 'Split <<<MARKER>>>' }, { type: 'turn_end' }]);
+    expect(events).toEqual([{ type: 'assistant_text', runId: 'msg_a:0', text: 'Split <<<MARKER>>>' }, { type: 'turn_end' }]);
     adapter.dispose();
   });
 
@@ -988,7 +1030,7 @@ it('runs an OpenCode 2.x custom command through its native endpoint and waits fo
   expect(ended).toBe(false);
   stream.push(started()); stream.push(frame('session.text.ended', { assistantMessageID: MSG, ordinal: 0, text: 'Hello Bob' })); stream.push(succeeded());
   await turn;
-  expect(events.filter((e) => e.type === 'assistant_text' || e.type === 'turn_end')).toEqual([{ type: 'assistant_text', text: 'Hello Bob' }, { type: 'turn_end' }]);
+  expect(events.filter((e) => e.type === 'assistant_text' || e.type === 'turn_end')).toEqual([{ type: 'assistant_text', runId: 'msg_a:0', text: 'Hello Bob' }, { type: 'turn_end' }]);
   expect(server.requests.some((r) => r.path.endsWith('/prompt'))).toBe(false);
   adapter.dispose();
 });

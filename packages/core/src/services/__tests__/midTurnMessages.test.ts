@@ -162,7 +162,7 @@ describe('a message sent to a working task, on a runner that takes one mid-turn'
 
     task.adapter.emit({ type: 'tool_result', id: 'c1', name: 'shell', output: '', success: true });
     task.adapter.deliver(id);
-    task.adapter.emit({ type: 'assistant_text', text: 'Switching to Postgres.' });
+    task.adapter.emit({ type: 'assistant_text', runId: 'r1', text: 'Switching to Postgres.' });
     task.adapter.endTurn();
     await flushMicrotasks();
 
@@ -260,7 +260,7 @@ describe('a message sent to a working task, on a runner that takes one mid-turn'
     expect(task.statesAtTurnEnd).toEqual(['working']);
     expect(task.adapter.sent).toEqual(['Do the task']);
 
-    task.adapter.emitOutOfTurn({ type: 'message_delivered', id }, { type: 'assistant_text', text: 'On it.' }, { type: 'turn_end' });
+    task.adapter.emitOutOfTurn({ type: 'message_delivered', id }, { type: 'assistant_text', runId: 'r1', text: 'On it.' }, { type: 'turn_end' });
     expect(of(task.events, 'turn_start').at(-1)).toEqual({ type: 'turn_start', text: 'use Postgres', messageId: id });
     expect(of(task.events, 'message_delivered')).toEqual([]);
     expect(task.turnEnds).toEqual(['completed', 'completed']);

@@ -647,15 +647,17 @@ which is a task's.
 
 **Task log** (`TaskLogEvent`, `reduceTaskLog`, `TaskLogRecorder`) — what a
 structured task did, at full fidelity (ADR-0018, O1b/P1): normalized events —
-text and thinking, tool calls with their results (long ones trimmed to head
-and tail), subagents, usage, turns, the message queue, runner approvals
+text by **text run** and thinking, tool calls with their results (long ones
+trimmed to head and tail), subagents, usage, turns, the message queue, runner approvals
 (requested, decided, withdrawn), the **runner commands** a user ran and what
 they printed, the runner's own compactions, and what it loaded as it
 started — streamed live as
 `task_log` and appended to `.ordewell/sessions/<session>/tasks/<task>/<attempt>.jsonl`,
 one file per attempt, numbered from what is on disk. `reduceTaskLog` folds the
-same events into display blocks live and on reload, so the two draw alike. The
-file goes with its session. Every task attempt uses this log. The planner reads
+same events into display blocks live and on reload, so the two draw alike: each
+text run streams into a block of its own, which its complete copy settles
+wherever it now sits; a log saved before runs carried an id has one stream for
+every run, into the latest block only. The file goes with its session. Every task attempt uses this log. The planner reads
 a saved attempt with `task_output` (optional `attempt` and event-type `kinds`),
 through bounded text pages and its shared task read budget.
 *Avoid:* "transcript" (the planner conversation's saved record), "output"
@@ -1910,6 +1912,17 @@ authoritative over anything streamed inside the turn.
 thinking and possibly subagents; *Avoid:* overloading with the model's own
 providers' "turns" — a harness planner may open turns of its own, and only ones
 Ordewell opened are one of these.
+
+**Text run** (`runId` on `assistant_text` / `assistant_text_delta`, and on a
+task log's `text` / `text_delta`) — one stretch of a coding agent's reply text
+under the runner's own id for it: a Claude Code text block, a Codex
+`agentMessage`, an OpenCode text part. Its deltas and its complete copy share
+the id, the copy replacing the deltas where the run began; a read-back of what
+the stream missed reuses the id of the run it recovers. Runs carry no paragraph
+break between them — whoever joins them puts one in — and a harness planner
+streams each run as a segment of its own (`TurnReply`).
+*Avoid:* "run" alone, which is a plan's; "message" or "block" for it — a
+message holds several runs, and a block is what a surface draws.
 
 **Segment** — a stream of reply text inside one turn a surface can show as one
 growing message, keyed by `segmentId` on `planner_text_delta`. A backend that
