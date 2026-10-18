@@ -313,11 +313,9 @@ and a harness planner (ADR-0009): one nudge per turn for an empty reply
 (2) re-emits for a botched envelope — for a plan cut off by the output limit,
 the terser re-emit, after freeing context where Ordewell holds it. What the
 discarded attempt streamed is retracted before the retry answers, the plan
-display included. The families differ in exactly two explicit options: only
-an API planner can compact its context (`compactHistory`), and only a harness
-planner's reply joins every segment of its call, so it retracts them before
-settling as prose (`replyJoinsSegments`). How one call runs — tool rounds, or
-an agent's turn — is the caller's `send`.
+display included. The families differ in one explicit option: only an API
+planner can compact its context (`compactHistory`). How one call runs — tool
+rounds, or an agent's turn — is the caller's `send`.
 *Avoid:* counting a harness planner's wait for its backgrounded subagents as
 one — that turn is continued on the user's behalf, and its text stays in the
 reply; *Avoid:* counting a task-ops validation retry (the conversation's own
@@ -620,7 +618,8 @@ read by their connectors' `usageLimitReset`; OpenCode does not), the task carrie
 that time it is retried as a *Continue* of its saved session. Tasks paused on
 one runner share one wait — the latest of their resets — and resume together;
 the hold on the run is released once nothing waits on a reset, whether or not
-a task failed meanwhile (ADR-0034). A held run stays open: with nothing at work
+a task failed meanwhile (ADR-0034) — at the reset, or when the last waiting
+task is marked complete, has its resume cancelled or leaves the plan. A held run stays open: with nothing at work
 it is neither handed over nor merged at its end, and sends no
 `execution_complete`. A plan loaded after its time resumes at once; a loaded
 plan holds no run, so only its paused tasks resume and the rest of the plan
@@ -1451,11 +1450,13 @@ the task changed, since the conflict in one rolled back all of them.
 In the terminal the same four steps are the handoff overlay (`/handoff`, opened
 by `isolation_handoff` on a screen with nothing else open) and
 `ordewell handoff [review|merge|discard|cleanup]`. Merge and discard are asked
-about first, in both — the CLI takes `--yes` as having asked. A reloaded session
-gets its handoff and its per-task marks from the plan's persisted run record, not
-from a stream: the terminal reads it off the saved plan, and VS Code asks
-`Session.isolationView` whenever its webview reconnects or a session is loaded
-(the handoff card waits while a run executes). A conflicted task carries a **conflict mark** in the plan pane;
+about first, in both — the CLI takes `--yes` as having asked. A surface that was
+not listening — a reloaded session, a reconnected webview or socket — is re-told
+the handoff and the per-task marks by `Session.runSnapshot()`, not rebuilt from
+the saved run record: the daemon's socket greeting and session reads carry it to
+the terminal, and VS Code adopts it whenever its webview reconnects or a session
+is loaded (the handoff card waits while a run executes). The run is closed only
+on the Session's `run_closed`. A conflicted task carries a **conflict mark** in the plan pane;
 every other isolation state stays out of the row and appears, with the task's
 branch, only in the expanded detail.
 
@@ -1486,8 +1487,10 @@ bare order. One module
 both renders labels (`taskOrderLabel`, `taskRef`, `titledTaskRef`) and resolves
 references against the plan tree (`resolveTaskRef`) — every planner op and read
 tool, the per-turn plan block (which lists subtasks under their dotted labels),
-execution commands, the CLI and TUI commands read the same grammar. The CLI
-and TUI accept a unique id prefix as a fallback. A batch handle is the one
+execution commands, the CLI and TUI commands read the same grammar. A reference
+the user types may also be a unique prefix of a task's id
+(`resolveUserTaskRef`): the CLI, the TUI and the command seam's user controls
+read it, never a model's reference. A batch handle is the one
 reference `applyTaskOps` adds on top, and order labels and titles in a batch
 resolve against the plan as it stood before the batch began.
 *Avoid:* "#N" for a subtask, resolving an order against a flattened task list;

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTask, type LegacyPlanState } from '../../models/Task';
 import type { IRunner } from '../../interfaces/IRunner';
-import { EMPTY_RUN, reduceRun, type RunView } from '../runView';
+import { EMPTY_RUN, reduceRun } from '../runView';
+import type { RunView } from '../SessionMessage';
 import { FakeWorktreeIsolation, fakeConfig } from '../../testing';
 import { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings } from '../SettingsService';
 import { surfacePlan, type SessionMessage } from '../SessionMessage';
@@ -87,7 +88,7 @@ describe('adversarial: one rule for when the run is closed', () => {
     // A Merge all taken mid-handoff merges everything and clears the run up.
     const merged = await session.execute({ command: 'merge_all' }, { kind: 'user' });
     expect(merged.ok).toBe(true);
-    expect(merged.payload).toMatchObject({ kind: 'merge', closed: true });
+    expect(merged.payload).toMatchObject({ kind: 'merge', result: { outcome: 'merged' } });
 
     // The one word on it: the message, the joining snapshot and the folded view agree.
     expect(messages.filter((m) => m.type === 'run_closed')).toHaveLength(1);

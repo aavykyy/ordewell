@@ -286,14 +286,7 @@ describe('a hung wake-up turn whose retry follows it', () => {
 // ---------------------------------------------------------------------------
 
 describe('a hung wake-up turn whose grace fires after the plan scope has moved on', () => {
-  // ADVERSARIAL FINDING (planner turns): the hung grace timer of a wake-up turn is not
-  // cancelled when the plan scope ends. `Supervisor.turn` arms it (Supervisor.ts:260-264) and
-  // `createSession.dropPlanScope` (createSession.ts:1092) never disarms it, so HUNG_TURN_GRACE_MS
-  // later `conversation.abandonHungTurn()` reaches whatever turn holds the conversation by then:
-  // here the next plan's opening turn is abandoned mid-flight, its end announced as an error, and
-  // startPlanning rejects with PlannerTurnDiscardedError. Expected: the grace belongs to the turn
-  // it was armed for; once the scope ended, the next plan's turn is untouched and lands normally.
-  it.skip('does not abandon the next plan\'s opening turn', async () => {
+  it('does not abandon the next plan\'s opening turn', async () => {
     const env = await wokenUp();
     env.planner.state.ignoresStop = true;
 
@@ -320,7 +313,7 @@ describe('a hung wake-up turn whose grace fires after the plan scope has moved o
     expect(env.session.planState!.conversationHistory!.at(-1)).toMatchObject({ content: 'Here is the new plan.' });
   });
 
-  it.skip('does not abandon the turn of an adopted session', async () => {
+  it('does not abandon the turn of an adopted session', async () => {
     const env = await wokenUp();
     env.planner.state.ignoresStop = true;
     await vi.advanceTimersByTimeAsync(WAKE_UP_TURN_TIMEOUT_MS);

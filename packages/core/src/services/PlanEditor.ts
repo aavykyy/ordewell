@@ -162,7 +162,7 @@ export class PlanEditor {
     const runner = changes.assignedRunner ?? target.assignedRunner;
     // Listing models spawns the runner's own CLI: a move that could not be made anyway is refused first.
     if (changes.assignedRunner) this.refuseLiveRetarget(target);
-    const discovered = changes.assignedRunner || (changes.type === 'ai' && target.type === 'user') ? await this.catalog.runner(runner) : undefined;
+    const discovered = changes.assignedRunner || (changes.type === 'ai' && target.type === 'user') ? await this.discover(runner) : undefined;
     const landed = this.landedEdit(taskId, changes, discovered);
     if (!landed) return null;
     const { edit, adjustments } = landed;
@@ -276,7 +276,7 @@ export class PlanEditor {
     const draft = editableFields(given);
     const runner = draft.assignedRunner ?? plan.runners[0];
     const dependencies = (draft.dependencies ?? []).filter((id) => this.store.get(id));
-    const discovered = draft.type === 'user' ? undefined : await this.catalog.runner(runner);
+    const discovered = draft.type === 'user' ? undefined : await this.discover(runner);
     const written: Task = { ...createTask({ ...draft, assignedRunner: runner, dependencies }), taskMode: draft.taskMode };
     const outcome = resolveAssignment({ writer: 'userAdd', task: written, catalog: this.assignmentCatalog(runner, discovered) });
     if (!outcome.ok) throw new PlanEditError(outcome.error);
@@ -289,6 +289,13 @@ export class PlanEditor {
     });
     if (added) this.tellAdjusted(outcome.adjustments);
     return added;
+  }
+
+  /** What `runner` offers. One no manifest declares is refused, as every planner route refuses it. */
+  private async discover(runner: RunnerId): Promise<RunnerCatalog> {
+    const found = await this.catalog.runner(runner);
+    if (!found) throw new PlanEditError(`There is no runner "${runner}": no runner manifest declares it.`);
+    return found;
   }
 
   private refuseLiveRetarget(task: Task): void {

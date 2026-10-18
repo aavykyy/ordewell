@@ -92,3 +92,17 @@ export function resolveTaskRef<T extends RefTask<T>>(tasks: readonly T[], ref: s
   for (const { task } of walkPlan(tasks)) if (task.title === s) return task;
   return undefined;
 }
+
+/**
+ * A reference as the user types one: {@link resolveTaskRef}, then a unique
+ * prefix of a task's id at any depth. Only the user's: a model's reference
+ * that names no task is refused, never matched to the one task a fragment of
+ * it happens to fit.
+ */
+export function resolveUserTaskRef<T extends RefTask<T>>(tasks: readonly T[], ref: string | number): T | undefined {
+  const found = resolveTaskRef(tasks, ref);
+  if (found) return found;
+  const prefix = String(ref).trim();
+  const matches = prefix ? [...walkPlan(tasks)].filter(({ task }) => task.id.startsWith(prefix)) : [];
+  return matches.length === 1 ? matches[0].task : undefined;
+}

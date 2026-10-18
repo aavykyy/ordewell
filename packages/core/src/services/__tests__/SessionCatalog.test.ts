@@ -159,9 +159,15 @@ describe('SessionCatalog views', () => {
 
     const runner = await catalog.runner('codex');
 
-    expect(ids(runner.models)).toEqual(['gpt-5']);
-    expect(runner.modes).toEqual(MODES);
+    expect(ids(runner!.models)).toEqual(['gpt-5']);
+    expect(runner!.modes).toEqual(MODES);
     expect(catalog.known('codex')).toEqual([]);
+  });
+
+  it('asks nothing of a runner no manifest declares', async () => {
+    const { catalog } = setup();
+
+    expect(await catalog.runner('not-a-runner')).toBeNull();
   });
 });
 

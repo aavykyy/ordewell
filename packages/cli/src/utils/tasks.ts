@@ -1,4 +1,4 @@
-import { rejoinPlanTree, resolveTaskRef } from '@ordewell/core';
+import { rejoinPlanTree, resolveUserTaskRef } from '@ordewell/core';
 
 /** The plan tree, whatever shape the plan arrived in: a saved one keeps finished tasks in a flat execution log. */
 export function allTasksOf(plan: Record<string, unknown>): Array<import("@ordewell/core").Task> {
@@ -7,15 +7,7 @@ export function allTasksOf(plan: Record<string, unknown>): Array<import("@ordewe
   return rejoinPlanTree(tasks, executionLog);
 }
 
-/** Resolve a user-supplied identifier — a task reference (see `resolveTaskRef`) or a unique ID prefix. */
+/** Resolve a user-supplied identifier — a task reference or a unique ID prefix (see `resolveUserTaskRef`). */
 export function resolveTaskId(plan: Record<string, unknown>, identifier: string): string | undefined {
-  const allTasks = allTasksOf(plan);
-
-  const byRef = resolveTaskRef(allTasks, identifier);
-  if (byRef) return byRef.id;
-
-  const prefixMatches = allTasks.filter((t: import("@ordewell/core").Task) => typeof t.id === 'string' && t.id.startsWith(identifier));
-  if (prefixMatches.length === 1) return prefixMatches[0].id;
-
-  return undefined;
+  return resolveUserTaskRef(allTasksOf(plan), identifier)?.id;
 }

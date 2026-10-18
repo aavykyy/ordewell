@@ -158,8 +158,13 @@ export class SessionCatalog {
     };
   }
 
-  /** What a runner offers a task moved to it or added on it. Spawns the runner's CLI to list models. */
-  async runner(runner: RunnerId): Promise<RunnerCatalog> {
+  /**
+   * What a runner offers a task moved to it or added on it. Spawns the
+   * runner's CLI to list models; null for a runner no manifest declares,
+   * which has no CLI to ask.
+   */
+  async runner(runner: RunnerId): Promise<RunnerCatalog | null> {
+    if (this.deps.registry.getManifest(runner) === undefined) return null;
     return {
       models: (await this.deps.modelResolver.modelsForRunners([runner]))[runner] ?? [],
       modes: this.modes([runner])[runner],

@@ -39,8 +39,9 @@ and completion evidence.
   (a) *Plain text to `onOutput`*: the assembled agent text plus one short line
   per tool call (`› Bash(npm test)`), no JSON and no ANSI. It is only ever
   appended to: each run of reply text (ADR-0009) is written once — its
-  complete copy adds what its own deltas did not — a paragraph after the
-  turn's text before it. It feeds
+  complete copy adds what its own deltas did not, on a line of its own when
+  something else was written since — a paragraph after the turn's text before
+  it. It feeds
   the planner's live-output read (#3), usage-limit
   classification and the fallback summary handed to dependents.
   (b) *A full-fidelity view* built from the structured events as ADR-0017
@@ -233,7 +234,10 @@ and completion evidence.
   resume together. A resume is a continue (K1) of the task's saved session —
   a fresh attempt where none was saved — told the limit has reset, and once
   nothing else waits on a reset, the hold on the run is released, whether or
-  not a task failed meanwhile (ADR-0034). Its message says the limit has reset and reports what K1 did with
+  not a task failed meanwhile (ADR-0034). The last wait going any other way —
+  the task marked complete, its resume cancelled, or the task leaving the
+  plan — releases the hold the same way; a task still paused without a resume
+  time keeps only its own runner's tasks from starting. Its message says the limit has reset and reports what K1 did with
   the previous work: restored in the working tree, or a conflict fallback to
   the integration tips with the preserved branches named. The saved session
   and its working files must agree for an unattended run to carry on after a
@@ -458,3 +462,5 @@ transport is retained for take-over.
 - 2026-10-18 — O1/P1: text is kept by run — written once to the plain text, settled in its own block, merged only within its run; older logs replay as before.
 - 2026-10-18 — B1/A1: only main-thread work opens a turn; routed terminal events end it immediately, HTTP permission answers wait for delivery, and a lost OpenCode event stream gets one reconnect before the turn fails.
 - 2026-10-18 — P1: saved and live task logs join by stream position through one follow reducer, and every runner exit closes its view's turn.
+- 2026-10-18 — U1: the hold on a run is released however its last reset wait goes — Mark complete, a cancelled resume or the task leaving the plan — not only at the reset.
+- 2026-10-18 — O1: a run's late copy that adds to its deltas after another run or a tool line was written starts its addition on a line of its own.

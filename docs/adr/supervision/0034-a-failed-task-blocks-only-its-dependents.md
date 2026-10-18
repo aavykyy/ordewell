@@ -65,8 +65,11 @@ starting as usual.
   the task row's merge gate and the planner's view of the plan all read it. A
   force start reads it as forced: past a hold, a failure, a usage limit and
   the merge gate the user confirmed, never past dependencies still under way.
-  The claim then checks only what can change at the last moment: a Stop, the
-  approval and a slot (ADR-0029).
+  A force start is judged again once its run has opened, against the task as
+  it stands then: one an edit gave dependencies still under way meanwhile
+  waits for them, queued or made now. The claim then checks only what can
+  change at the last moment: a Stop, the task leaving the plan, Mark complete
+  landing it, the approval and a slot (ADR-0029).
 - **The run ends when nothing can start.** With nothing running and every task
   left failed or blocked, the run ends (`execution_complete`), saying how many
   tasks completed, failed and are blocked, and how many were skipped; the
@@ -137,3 +140,4 @@ attempt. This decides what a failure stops, not how a verdict is reached.
 - 2026-10-16 — a skipped dependency no longer lets its dependents start ahead of the work behind it: they wait until the skipped task's own unfinished ancestors are met, and the scheduler log and the command seam's refusals name those ancestors.
 - 2026-10-18 — the stored `blocked` status is gone from `TaskStatus`, and so is the code that set and cleared it; a saved one loads as pending, and the derived rule is the only blocked rule.
 - 2026-10-18 — the whole start rule is one function, with a typed reason for each wait, which every start path, the seam's refusals, the task row's merge gate and the planner's view read.
+- 2026-10-18 — a force start judged again as its run opens waits for dependencies an edit added meanwhile, queued or made now; the claim's last-moment checks are listed in full.

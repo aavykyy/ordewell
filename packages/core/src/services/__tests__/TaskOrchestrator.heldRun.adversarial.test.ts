@@ -67,8 +67,7 @@ afterEach(() => {
 });
 
 describe('adversarial: a held run whose last pause goes away', () => {
-  // ADVERSARIAL FINDING (run state): a held run is released only from inside `resumeTask`; Mark complete of the last task paused on a usage limit leaves nothing waiting on a reset, but `settleRun`'s `held` branch returns before any release, so the run stays held and the rest of the plan never starts (TaskOrchestrator.ts:2063). Expected: the hold is released once nothing waits on a reset, and the run goes on.
-  it.skip('goes on when the paused task is marked complete', async () => {
+  it('goes on when the paused task is marked complete', async () => {
     const { orchestrator, sessions, spawn, task } = setup({ maxParallelSessions: 1 });
     orchestrator.loadPlan([
       createTask({ id: 't1', order: 1, title: 'Paused', prompt: 'do first' }),
@@ -87,8 +86,26 @@ describe('adversarial: a held run whose last pause goes away', () => {
     expect(spawn.mock.calls[1][0].taskId).toBe('t2');
   });
 
-  // ADVERSARIAL FINDING (run state): cancelling the last resume on a runner disarms its wait but leaves the run `held`; nothing is waiting on a reset, yet the scheduler never resumes and the run never closes (TaskOrchestrator.ts:1599, 2063). Expected: the hold is released once nothing waits on a reset, and the run goes on.
-  it.skip('goes on when the paused task\'s resume is cancelled', async () => {
+  // The paused task still waits for the user on its runner's limit, so only
+  // a task on another runner can start (the start rule's `usage-limit` wait).
+  it('goes on when the paused task\'s resume is cancelled', async () => {
+    const { orchestrator, sessions, spawn, task } = setup({ maxParallelSessions: 1 });
+    orchestrator.loadPlan([
+      createTask({ id: 't1', order: 1, title: 'Paused', prompt: 'do first' }),
+      createTask({ id: 't2', order: 2, title: 'Next', prompt: 'do second', assignedRunner: 'codex' }),
+    ], ['claude-code', 'codex']);
+    await orchestrator.approveReview();
+    hitLimitInTurn(sessions[0]);
+    await until(() => task('t1').status === 'awaiting_user');
+
+    await orchestrator.cancelScheduledResume('t1');
+
+    expect(orchestrator.awaitsResume).toBe(false);
+    await until(() => spawn.mock.calls.length === 2);
+    expect(spawn.mock.calls[1][0].taskId).toBe('t2');
+  });
+
+  it('goes on when the paused task leaves the plan', async () => {
     const { orchestrator, sessions, spawn, task } = setup({ maxParallelSessions: 1 });
     orchestrator.loadPlan([
       createTask({ id: 't1', order: 1, title: 'Paused', prompt: 'do first' }),
@@ -98,7 +115,9 @@ describe('adversarial: a held run whose last pause goes away', () => {
     hitLimitInTurn(sessions[0]);
     await until(() => task('t1').status === 'awaiting_user');
 
-    orchestrator.cancelScheduledResume('t1');
+    // What a removal does: let the task go, then drop it from the plan.
+    await orchestrator.releaseTask('t1');
+    orchestrator.storeInstance.remove('t1');
     await orchestrator.tick();
 
     expect(orchestrator.awaitsResume).toBe(false);

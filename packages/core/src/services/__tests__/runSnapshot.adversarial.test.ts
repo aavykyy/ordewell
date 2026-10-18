@@ -3,8 +3,8 @@ import { makeSession, FakeRunnerSession } from './sessionTestKit';
 import { FakeWorktreeIsolation } from '../../testing';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import type { IRunner } from '../../interfaces/IRunner';
-import type { SessionMessage } from '../SessionMessage';
-import { reduceRun, type RunTask, type RunView } from '../runView';
+import type { RunTask, RunView, SessionMessage } from '../SessionMessage';
+import { reduceRun } from '../runView';
 
 /**
  * Adversarial: "core decides when the run is closed" (ADR-0013, ADR-0020) only
@@ -44,7 +44,7 @@ function setup() {
 /** The stream folded from the plan as it was adopted, without `mergeResult` (never kept by a snapshot). */
 function foldedFrom(early: RunView, messages: SessionMessage[]): RunView {
   const view = messages.reduce(reduceRun, early);
-  return { ...view, mergeResult: undefined };
+  return { ...view, mergeResult: null };
 }
 
 /** Marks and handoff, the fields the surfaces' conflict key and cards are drawn from. */

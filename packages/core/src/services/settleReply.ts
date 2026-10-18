@@ -66,6 +66,20 @@ export function noteRun(text: string): TurnRun {
 }
 
 /**
+ * The runs of a message written in place of a reply whose runs were `runs`
+ * (ADR-0017 A1): the narration before its tool calls stays, and the message
+ * goes last.
+ */
+export function writtenOver(runs: readonly TurnRun[] | undefined, text: string): TurnRun[] {
+  return [...(runs ?? []).filter((run) => run.narration), noteRun(text)];
+}
+
+/** A reply's runs as one text, in the order they began, a paragraph apart. */
+export function joinRuns(runs: readonly Pick<TurnRun, 'text'>[]): string {
+  return runs.map((run) => run.text).filter((text) => text).join('\n\n');
+}
+
+/**
  * Settle one planner turn's reply (ADR-0002): classify what the model said,
  * and give what cannot be settled yet its bounded corrective retries — one
  * nudge for an empty reply, {@link MAX_JSON_REPAIRS} re-emits for a botched
@@ -87,7 +101,7 @@ export async function settleReply(opts: SettleReplyOptions): Promise<Conversatio
     (attempt.runs || kept.length > 0 ? { runs: [...kept, ...own] } : {});
   const narration = (attempt: ReplyAttempt): TurnRun[] => (attempt.runs ?? []).filter((run) => run.narration);
   const prose = (attempt: ReplyAttempt) => ({ ...message(said(attempt)), ...runs(attempt, attempt.runs ?? []) });
-  const note = (attempt: ReplyAttempt, text: string) => ({ ...message(text), ...runs(attempt, [...narration(attempt), noteRun(text)]) });
+  const note = (attempt: ReplyAttempt, text: string) => ({ ...message(text), ...runs(attempt, writtenOver(attempt.runs, text)) });
   const discard = (attempt: ReplyAttempt) => {
     if (!attempt.runs) {
       opts.onProgress({ type: 'text_retracted' });

@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { runTests } from '@vscode/test-electron';
 
@@ -12,10 +14,23 @@ async function main(): Promise<void> {
     if (key === 'ELECTRON_RUN_AS_NODE' || key.startsWith('VSCODE_')) delete process.env[key];
   }
 
+  // VS Code's IPC socket lives in its user data dir, and a Unix socket path
+  // may be at most 103 characters on macOS: under a deep checkout, such as a
+  // worktree, the default `.vscode-test/user-data` overruns it and VS Code
+  // fails to start with EINVAL.
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'ow-vsc-'));
+  try {
+    await run(workspace, userData);
+  } finally {
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
+}
+
+async function run(workspace: string, userData: string): Promise<void> {
   await runTests({
     extensionDevelopmentPath: path.resolve(__dirname, '..'),
     extensionTestsPath: path.resolve(__dirname, './index.js'),
-    launchArgs: [workspace, '--disable-workspace-trust', '--skip-welcome', '--skip-release-notes'],
+    launchArgs: [workspace, `--user-data-dir=${userData}`, '--disable-workspace-trust', '--skip-welcome', '--skip-release-notes'],
     extensionTestsEnv: {
       ORDEWELL_TEST_WORKSPACE: workspace,
       // Desktop shell resolution would overwrite the synthetic runner's PATH.

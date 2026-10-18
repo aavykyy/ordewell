@@ -19,7 +19,7 @@ import { classifyRunnerStop, type TurnFailure } from './runnerExit';
 import type { PlannerLimit } from './PlannerResend';
 import type { AssignmentScope } from './AssignmentScope';
 import { PlannerBriefing, type TurnBriefing } from './PlannerBriefing';
-import { noteRun } from './settleReply';
+import { joinRuns, noteRun, writtenOver as writtenOverRuns } from './settleReply';
 import type { StartWait, StartWaitKind } from './readiness';
 import { SubagentRuns } from './SubagentRuns';
 
@@ -133,13 +133,9 @@ type ClaimedTurn = ConversationTurn & { said?: string };
 type SettleableTurn = Exclude<ClaimedTurn, { kind: 'task_query' }>;
 type CommitTurn = Exclude<SettleableTurn, { kind: 'task_ops' }>;
 
-/**
- * The runs of a message the conversation writes in place of `runs`' reply
- * (ADR-0017 A1): the narration before its tool calls stays, and the message
- * goes last.
- */
+/** {@link writtenOverRuns} for a turn that reported runs; one that reported none carries none. */
 function writtenOver(runs: readonly TurnRun[] | undefined, text: string): Pick<ConversationTurn, 'runs'> {
-  return runs ? { runs: [...runs.filter((run) => run.narration), noteRun(text)] } : {};
+  return runs ? { runs: writtenOverRuns(runs, text) } : {};
 }
 
 /** A message or entry carries runs only where the backend reported them. */
@@ -1430,7 +1426,7 @@ export class PlannerConversation {
   private said(turn: SettleableTurn, userTurn: UserTurn): { content: string; runs?: ReplyRun[] } | undefined {
     if (turn.said !== undefined) return { content: turn.said, runs: this.shown(userTurn, turn.runs, turn.said) };
     const narration = this.shown(userTurn, turn.runs ?? [], '') ?? [];
-    return narration.length > 0 ? { content: narration.map((run) => run.text).join('\n\n'), runs: narration } : undefined;
+    return narration.length > 0 ? { content: joinRuns(narration), runs: narration } : undefined;
   }
 
   /**

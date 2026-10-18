@@ -5,12 +5,12 @@ import { initialState } from '../../tui/state';
 import { resolveTaskId as resolveTaskIdInTui } from '../../tui/reducers/taskEdits';
 
 /**
- * Adversarial: task references are resolved twice in this package — once for
- * the commands that read the plan themselves (`utils/tasks.ts`, used by
- * `remove-task` and `task-assign`) and once for the TUI's task commands
- * (`tui/reducers/taskEdits.ts`). CONTEXT.md's *Task reference* entry describes
- * one grammar with one fallback ("The CLI and TUI accept a unique id prefix"),
- * so the two must agree on every reference the grammar admits.
+ * Task references are read in two places in this package — the commands that
+ * read the plan themselves (`utils/tasks.ts`, used by `remove-task` and
+ * `task-assign`) and the TUI's task commands (`tui/reducers/taskEdits.ts`) —
+ * both through core's `resolveUserTaskRef`, the grammar plus a unique id
+ * prefix, which the command seam reads the user's controls with too. The two
+ * must agree on every reference the grammar admits.
  */
 
 const task = (id: string, order: number, over: Partial<Task> = {}): Task =>

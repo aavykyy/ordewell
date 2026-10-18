@@ -95,6 +95,8 @@ class PlainTextChannel {
   /** The turn's latest complete run. */
   private latest = '';
   private atLineStart = true;
+  /** The run whose text was written last; null once a line of the channel's own followed it. */
+  private lastWriter: string | null = null;
 
   constructor(private readonly write: (text: string) => void) {}
 
@@ -115,7 +117,10 @@ class PlainTextChannel {
     this.latest = text;
     const streamed = this.written.get(runId) ?? '';
     if (text.startsWith(streamed)) {
-      this.say(runId, text.slice(streamed.length));
+      const tail = text.slice(streamed.length);
+      // A late copy's tail continues its own run, not whatever spoke since.
+      if (tail && this.lastWriter !== runId && !this.atLineStart) this.out('\n');
+      this.say(runId, tail);
       return;
     }
     // Its deltas and its copy disagree, as when the stream lost a frame: the
@@ -128,6 +133,7 @@ class PlainTextChannel {
     this.flush();
     if (!this.atLineStart) this.out('\n');
     this.out(`${text}\n`);
+    this.lastWriter = null;
   }
 
   /**
@@ -169,6 +175,7 @@ class PlainTextChannel {
   private say(runId: string, text: string): void {
     this.written.set(runId, (this.written.get(runId) ?? '') + text);
     this.out(text);
+    if (text) this.lastWriter = runId;
   }
 
   private out(text: string): void {

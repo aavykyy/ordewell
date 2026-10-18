@@ -13,7 +13,7 @@ function deps() {
     continueWithStash: vi.fn().mockResolvedValue(undefined),
     continueWithoutIsolation: vi.fn().mockResolvedValue(undefined),
     reviewRunDiff: vi.fn().mockResolvedValue('diff --git a/x b/x'),
-    execute: vi.fn().mockResolvedValue({ ok: true, message: 'Merged the run\'s landed work into your branch. Tasks waiting at a merge gate for it can start.', payload: { kind: 'merge', result: { outcome: 'merged' }, closed: true } }),
+    execute: vi.fn().mockResolvedValue({ ok: true, message: 'Merged the run\'s landed work into your branch. Tasks waiting at a merge gate for it can start.', payload: { kind: 'merge', result: { outcome: 'merged' } } }),
     discardRun: vi.fn().mockResolvedValue(undefined),
     cleanupRun: vi.fn().mockResolvedValue(undefined),
     resolveConflictAsTask: vi.fn().mockResolvedValue({ status: 'draft', tasks: [] }),

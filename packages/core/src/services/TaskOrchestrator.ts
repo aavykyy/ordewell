@@ -1064,7 +1064,7 @@ export class TaskOrchestrator {
     this.onHold.clear();
     if (reason === 'user') this.queuedStarts.clear();
     // A stopped run does not start itself again: what waited on a reset waits for the user now.
-    for (const t of this.store.allTasks.filter(waitsForReset)) this.cancelScheduledResume(t.id);
+    for (const t of this.store.allTasks.filter(waitsForReset)) this.dropResume(t.id);
     this.sayStopped(stopped);
     this.recoverOrphans();
     this.emit('onTaskChanged');
@@ -1413,6 +1413,7 @@ export class TaskOrchestrator {
    * count kept for a task that no longer exists would be inherited by nothing.
    */
   async releaseTask(taskId: string): Promise<void> {
+    this.dropResume(taskId);
     const phase = this.attempts.get(taskId)?.phase;
     if (phase === 'running' || phase === 'integrating') await this.cancelAttempt(taskId, { keep: false });
     else {
@@ -1459,6 +1460,8 @@ export class TaskOrchestrator {
       await this.landResolved(taskId, admission);
     }
 
+    // A task paused on a usage limit no longer waits on its reset.
+    this.releaseHold();
     this.emit('onTaskChanged');
     await this.tick();
   }
@@ -1496,8 +1499,8 @@ export class TaskOrchestrator {
     if (!task || task.status === 'completed' || task.status === 'skipped' || this.completing.has(taskId)) return;
     if (task.status === 'in_progress') throw new TaskControlError(`Task "${task.title}" is running: stop it before skipping it.`);
     await this.whileAdmitted(async (admission) => {
-      const resumes = this.awaitsResume;
-      this.cancelScheduledResume(taskId);
+      // Dropping its resume may release a held run, which the tick below then schedules.
+      this.dropResume(taskId);
       const ended = this.endAttempt(taskId, 'skip');
       this.verifier.clear(task);
       this.store.markSkipped(taskId, reason?.trim() || undefined);
@@ -1506,7 +1509,7 @@ export class TaskOrchestrator {
       this.emit('onTaskChanged');
       await this.runs.release(taskId, { keep: true }, ended?.integration);
       // A Stop while the worktree was kept leaves the run stopped: the skip stands, and nothing it released starts.
-      if (resumes && admission.current()) await this.start(origin);
+      if (this.awaitsResume && admission.current()) await this.start(origin);
       else await this.tick();
     });
   }
@@ -1593,18 +1596,36 @@ export class TaskOrchestrator {
   /**
    * Keep a task paused on its runner's usage limit from resuming on its own:
    * it waits for a manual retry, as one whose reset time could not be read
-   * does. What a surface's cancel calls, and what moving the task to another
-   * runner has to call first. False when no resume was scheduled for it.
+   * does. What a surface's cancel calls. A run the pause held goes on once
+   * nothing else waits on a reset. False when no resume was scheduled for it.
    */
-  cancelScheduledResume(taskId: string): boolean {
+  async cancelScheduledResume(taskId: string): Promise<boolean> {
+    if (!this.dropResume(taskId)) return false;
+    await this.tick();
+    return true;
+  }
+
+  /** {@link cancelScheduledResume} without its tick, for a caller that ticks or starts once it is done. */
+  private dropResume(taskId: string): boolean {
     const task = this.store.get(taskId);
     if (!task || !waitsForReset(task)) return false;
     const runner = this.store.resolveTaskRunner(task);
     this.store.setTaskResumeAt(taskId, undefined);
     if (this.waitingOn(runner).length === 0) this.limitWaits.disarm(runner);
+    this.releaseHold();
     this.emit('onUsageLimitWait', { taskId, runner, resumeAt: null, cancelled: true });
     this.emit('onTaskChanged');
     return true;
+  }
+
+  /**
+   * The hold a usage-limit pause put on the run is released once nothing
+   * waits on a reset (ADR-0018, U1) — however the last wait went: the reset,
+   * a cancel, Mark complete or the task leaving the plan. The run is still
+   * open, so the next tick schedules it.
+   */
+  private releaseHold(): void {
+    if (this.runState === 'held' && !this.store.allTasks.some(waitsForReset)) this.runState = 'scheduling';
   }
 
   /**
@@ -1635,7 +1656,7 @@ export class TaskOrchestrator {
     // The limit belongs to the runner's account, so a model change on that
     // same runner must keep waiting for its reset.
     if ((next.assignedRunner ?? this.store.planRunners[0]) === this.store.resolveTaskRunner(task)) return changes;
-    this.cancelScheduledResume(taskId);
+    this.dropResume(taskId);
     this.onHold.delete(taskId);
     if (this.runState === 'held') this.runState = 'scheduling';
     return { ...changes, status: 'pending', awaitingReason: undefined, resumeAt: undefined, carriedFrom: this.store.resolveTaskRunner(task) };
@@ -1800,7 +1821,7 @@ export class TaskOrchestrator {
     if (swept) {
       this.tell('info', `Task "${task.title}" did not resume now: ${refused} It still resumes on its own at its usage limit's reset.`);
     } else {
-      this.cancelScheduledResume(task.id);
+      this.dropResume(task.id);
       this.tell('warn', `Task "${task.title}" did not resume at its usage limit's reset: ${refused} Resume it once it can start.`);
     }
     return false;
@@ -1828,19 +1849,21 @@ export class TaskOrchestrator {
     const queued = this.queueBehindDependencies(task);
     if (queued) return queued;
     this.queuedStarts.delete(taskId);
-    await this.startForced(taskId, origin, FORCED_NOW);
+    return this.startForced(taskId, origin, FORCED_NOW);
   }
 
   /**
    * A forced start, from its run opening to its claim. It is judged again once
    * the run has opened, against the task as it stands then, which is what
    * the claim reads and runs. A queued one that something holds back again
-   * meanwhile goes back in the queue.
+   * meanwhile goes back in the queue; one made now that an edit gave
+   * dependencies still under way waits for them as if forced after the edit,
+   * and says so.
    */
-  private async startForced(taskId: string, origin: RunOrigin, forced: ForcedStart): Promise<void> {
+  private async startForced(taskId: string, origin: RunOrigin, forced: ForcedStart): Promise<string | undefined> {
     // A dirty tree's replay of a start made now asks again, from its dependencies on.
-    const resume = forced.queued ? () => this.startForced(taskId, origin, forced) : async () => { await this.forceStartTask(taskId, origin); };
-    await this.whileAdmitted(async (admission) => {
+    const resume = async () => { await (forced.queued ? this.startForced(taskId, origin, forced) : this.forceStartTask(taskId, origin)); };
+    return this.whileAdmitted(async (admission) => {
       if (!(await this.openForAdmitted(taskId, origin, resume, admission))) return;
       // The run may have started it while opening.
       if (this.attempts.has(taskId)) return;
@@ -1850,6 +1873,9 @@ export class TaskOrchestrator {
         this.queuedStarts.set(taskId, { pastGate: forced.pastGate });
         return;
       }
+      const task = this.store.get(taskId);
+      const requeued = !forced.queued && task ? this.queueBehindDependencies(task) : null;
+      if (requeued) return requeued;
       this.refuseClaim(taskId, admission);
       this.onHold.delete(taskId);
       this.notePastGate(taskId);
@@ -1913,10 +1939,14 @@ export class TaskOrchestrator {
     }
   }
 
-  /** A queued start the start rule holds back, at a gate it was not confirmed past or otherwise. */
+  /**
+   * A queued start the start rule holds back, at a gate it was not confirmed
+   * past or otherwise. Taken out of the queue by now, so its dependencies
+   * still under way read as `dependencies` rather than `queued`.
+   */
   private holdsQueued(taskId: string, forced: Extract<ForcedStart, { queued: true }>): boolean {
     const task = this.store.get(taskId);
-    return !!task && this.startWaits(task, forced).some((w) => QUEUED_WAITS.has(w.kind) || w.kind === 'merge-gate');
+    return !!task && this.startWaits(task, forced).some((w) => QUEUED_WAITS.has(w.kind) || w.kind === 'dependencies' || w.kind === 'merge-gate');
   }
 
   private sayQueuedAtGate(task: Readonly<Task>, queued: QueuedStart, unmerged: readonly string[]): void {

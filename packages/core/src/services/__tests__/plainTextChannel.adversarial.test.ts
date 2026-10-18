@@ -54,8 +54,7 @@ async function session(): Promise<{ session: IRunnerSession; adapter: OpenAdapte
 }
 
 describe('the plain-text channel when runs settle out of order', () => {
-  // ADVERSARIAL FINDING (plain-text channel): PlainTextChannel.block writes a run's authoritative tail after later text without a line break, so a run whose complete copy lands after a later run's (a runner's read-back completes runs in file order; a lost frame makes a copy longer than its deltas) glues onto it: output was 'One\ntw\n\nTwo lines.o'. Expected: the residual tail starts on a line of its own ('Two lines.\no') — the same line break the disagree path writes when not at line start.
-  it.skip('starts the tail of an earlier run’s late copy on its own line, after a later run spoke', async () => {
+  it('starts the tail of an earlier run’s late copy on its own line, after a later run spoke', async () => {
     const { adapter, output } = await session();
 
     adapter.emit(

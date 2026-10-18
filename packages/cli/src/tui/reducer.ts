@@ -302,9 +302,9 @@ function reduceAction(state: TuiState, action: Action): Step {
       if (action.pick !== undefined) return pickRewindTarget({ ...state, rewindTargets: action.targets }, action.pick);
       return step(refillPicker({ ...state, rewindTargets: action.targets }, ['rewind']));
 
-    // A fork holds no run, whatever the session it came from was doing — the
-    // original keeps its run, and its events are stale from here on. Its plan
-    // arrives next, onto an empty run view.
+    // A fork holds no run and no turn, whatever the session it came from was
+    // doing — the original keeps both, and its events are stale from here on.
+    // Its plan arrives next, onto an empty run view.
     case 'sessionForked':
       return step(withRun({
         ...state,
@@ -313,6 +313,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         taskView: null,
         status: 'idle',
         planner: 'idle',
+        turnGate: NO_TURN,
         planApproved: false,
         pendingApprovals: [],
         queuedPrompts: EMPTY_HOLD,

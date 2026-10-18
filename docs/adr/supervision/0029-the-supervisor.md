@@ -297,10 +297,12 @@ palette and the task-log panel, a Deny with a note included — through these
 commands as the user, and shows a refusal as the seam worded it; the chat writes
 no note of its own for them, so the timeline's line is the only one.
 The daemon's routes for these controls are thin wrappers over `Session.execute`
-as the user: each answers the command's line as `message` and a refusal as the
-400 that carries it, so the CLI prints the same words the other surfaces show.
-A task named in a route is resolved by the seam, so the CLI sends a reference as
-typed (an id, `#order` or title) and reads no plan first. The TUI writes no
+as the user: each answers a refusal as the 400 that carries the seam's line, so
+the CLI prints the same words the other surfaces show. A control's route answers
+the command's line as `message`; a task message's answers the message's `id`,
+and Merge all's the merge result, whose card says the outcome. A task named in
+a route is resolved by the seam, so the CLI sends a reference as typed (an id,
+`#order`, title, or the user's unique id prefix) and reads no plan first. The TUI writes no
 notice beside the timeline's line for a control and shows a refusal as the
 daemon worded it.
 
@@ -352,7 +354,10 @@ accepted. Each tripped guard also posts a supervisor message to the user.
   save that lands it, so there is nothing to undo. Its end is announced as the
   conversation is taken back, and nothing it streams or settles afterwards
   reaches a surface: a vendor planner restarts nothing, so the hung call
-  settles whenever it does, while the retry runs. A planner turn that ends without a reply — a dead agent — is a
+  settles whenever it does, while the retry runs. A plan scope that ends
+  first — a new plan, another session adopted — discards the wake-up turn,
+  its timeout and grace with it, so taking the conversation back never
+  reaches the next scope's turn and no failure is counted. A planner turn that ends without a reply — a dead agent — is a
   crash here, not a note.
 - **Then the run goes unsupervised**: it carries on as Off, with a visible
   notice. Wake-ups not delivered are persisted and handed over whole at the
@@ -549,3 +554,5 @@ until #30 exists.
 - 2026-10-18 — a hung turn's end is announced once, when the conversation is taken back, and nothing it streams or settles afterwards reaches a surface; a run update is told again after a turn that did not land an answer.
 - 2026-10-18 — the daemon, the CLI and the TUI send every control through the seam as the user: the daemon's routes answer each command's line and carry a refusal as the seam worded it, the CLI sends a task reference as typed and prints that line, and the TUI drops the notices that repeated the timeline's.
 - 2026-10-18 — every user control reaches the seam through `Session.execute`; the Session's per-verb control methods (Execute plan, Run task, Retry, Continue, Stop, Mark complete and not done, Resume now, force start, interrupt, approving the review, Merge all, the task-message and queued-message controls, a checkpoint answer and cancelling a scheduled resume) are gone, so a surface, the daemon's routes and the CLI's commands all take the one path, and `TaskOrchestrator.runTask` goes with them.
+- 2026-10-18 — the seam reads a task reference from the user's controls as the CLI and TUI do, a unique id prefix included; a model's references stay id, label and title.
+- 2026-10-18 — a plan scope that ends while a wake-up turn is out discards it with its timeout and grace, so its grace never abandons the next scope's turn or counts a failure there.

@@ -1,5 +1,5 @@
 import { flattenTasksWithParents, pausedOnLimit, waitsForReset, type Task, type TaskStatus } from '../models/Task';
-import { resolveTaskRef } from './TaskRefs';
+import { resolveTaskRef, resolveUserTaskRef } from './TaskRefs';
 import type { ExecutionActor, ExecutionCommandName, ExecutionRecord, SupervisorLevel } from '../models/Execution';
 import type { ApprovalDecision, ApprovalRequest, IApproval } from '../interfaces/IApproval';
 import type { IsolationMergeResult } from '../interfaces/IWorktreeIsolation';
@@ -55,9 +55,9 @@ export type CommandPayload =
   | { kind: 'queued'; line: string }
   /**
    * The user's `merge_all`, merged or stopped: what the Merge all card
-   * renders, and whether it closed the run (ADR-0013).
+   * renders. Whether it closed the run is the Session's `run_closed` (ADR-0013).
    */
-  | { kind: 'merge'; result: IsolationMergeResult; closed: boolean };
+  | { kind: 'merge'; result: IsolationMergeResult };
 
 /**
  * What a call came to: `message` is written for the caller, a model included,
@@ -179,7 +179,7 @@ export interface ExecutionHost {
   /** False once the message was delivered or taken back. */
   removeQueued(taskId: string, id: string): boolean;
   /** False when no resume was scheduled. */
-  cancelResume(taskId: string): boolean;
+  cancelResume(taskId: string): Promise<boolean>;
   /** The task waits at a checkpoint, and a runner is left to hear the answer. */
   awaitsCheckpoint(taskId: string): boolean;
   answerCheckpoint(taskId: string, approve: boolean, reason?: string): void;
@@ -187,8 +187,8 @@ export interface ExecutionHost {
   approveReview(): Promise<void>;
   /** Answer a runner's request, as its card does; false once it was answered or withdrawn. */
   answerRequest(requestId: string, decision: ApprovalDecision): boolean;
-  /** Merge all, through the queue it shares with landings; `closed`: it left nothing to hand over, so the run is gone. */
-  mergeAll(): Promise<{ result: IsolationMergeResult; closed: boolean }>;
+  /** Merge all, through the queue it shares with landings. */
+  mergeAll(): Promise<IsolationMergeResult>;
   /** Keep the call in the timeline, worded as `text`. */
   record(record: ExecutionRecord, text: string): void;
   /** A loop guard stopped a call: the user is told, as the supervisor's message. */
@@ -302,7 +302,7 @@ export class ExecutionCommands {
    */
   async run(asked: ExecutionCommand, actor: ExecutionActor, admitted?: StartAdmission): Promise<CommandOutcome> {
     if (!this.host.tasks()) return { ok: false, outcome: 'refused', message: 'There is no plan yet, so there is nothing to run or stop.' };
-    const located = 'task' in asked ? this.locate(asked.task) : undefined;
+    const located = 'task' in asked ? this.locate(asked.task, actor) : undefined;
     // A start queued before the user's Stop is what the Stop withdrew, whatever else has changed since.
     if (admitted && !admitted.current()) return this.refuse(asked, actor, located, STOPPED_BEFORE_START);
     // A paused task has no turn to message: what is sent to it resumes it, and is consented to, guarded and recorded as that resume.
@@ -391,7 +391,7 @@ export class ExecutionCommands {
    * said, to the user and to the planner's next turn.
    */
   async replay(command: ExecutionCommand, actor: ExecutionActor, admission: StartAdmission): Promise<void> {
-    const located = 'task' in command ? this.locate(command.task) : undefined;
+    const located = 'task' in command ? this.locate(command.task, actor) : undefined;
     let outcome: CommandOutcome;
     try {
       outcome = await this.run(command, actor, admission);
@@ -710,7 +710,7 @@ export class ExecutionCommands {
     if (!waitsForReset(located.task)) return { refusal: `${capitalize(label)} has no resume scheduled.` };
     return {
       act: async () => {
-        if (!this.host.cancelResume(located.task.id)) throw new Error(`${capitalize(label)} has no resume scheduled.`);
+        if (!(await this.host.cancelResume(located.task.id))) throw new Error(`${capitalize(label)} has no resume scheduled.`);
         return { message: `${capitalize(label)} no longer resumes on its own at its usage limit's reset: resume it when you choose.` };
       },
     };
@@ -891,9 +891,9 @@ export class ExecutionCommands {
     const users = actor.kind === 'user';
     return {
       act: async () => {
-        const { result, closed } = await this.host.mergeAll();
+        const result = await this.host.mergeAll();
         // Only the user's surface draws the card; a model acts on the line.
-        const payload: CommandPayload | undefined = users ? { kind: 'merge', result, closed } : undefined;
+        const payload: CommandPayload | undefined = users ? { kind: 'merge', result } : undefined;
         if (result.outcome !== 'merged') throw new Stopped(`Merge all stopped: ${mergeStopped(result)}. ${voiceOf(actor).notMerged}`, payload);
         return {
           message: `Merged the run's landed work into ${users ? 'your' : 'the user\'s'} branch. Tasks waiting at a merge gate for it can start.`,
@@ -1030,12 +1030,12 @@ export class ExecutionCommands {
   /** A reference read against the plan as the held edit leaves it, where the handles its batch gives come first. */
   private locateAsEdited(ref: string, tasks: readonly Task[] = this.host.editedTasks()): Located | undefined {
     const id = this.host.heldHandle(ref.trim());
-    return id ? this.located(id, tasks) : this.locate(ref, tasks);
+    return id ? this.located(id, tasks) : this.locate(ref, undefined, tasks);
   }
 
-  /** A reference as a caller writes one — see {@link resolveTaskRef}. */
-  private locate(ref: string, tasks: readonly Task[] = this.host.tasks() ?? []): Located | undefined {
-    const task = resolveTaskRef(tasks, ref);
+  /** A reference as a caller writes one — see {@link resolveTaskRef}; the user's as they type one ({@link resolveUserTaskRef}). */
+  private locate(ref: string, actor?: ExecutionActor, tasks: readonly Task[] = this.host.tasks() ?? []): Located | undefined {
+    const task = actor?.kind === 'user' ? resolveUserTaskRef(tasks, ref) : resolveTaskRef(tasks, ref);
     return task && this.located(task.id, tasks);
   }
 }
