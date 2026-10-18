@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.10.6] - 2026-10-18
+
 ### Changed
 
 - **Task cards give the title the full row.** The runner, model and effort sit
@@ -20,13 +22,23 @@
   writes its own "cancelled" or "Execution stopped." beside the timeline's
   line.
 - **A task moved to another runner gets a model that runner can run**, and its
-  thinking effort moves to the nearest level the new model offers.
+  thinking effort moves to the nearest level the new model offers. An edit or a
+  new task naming a runner that does not exist is refused, as is an edit that
+  would put an ops task on its runner's read-only mode.
 - **A usage-limit pause keeps the run open**, and a Retry in a finished plan
-  no longer shows the plan as completed.
+  no longer shows the plan as completed. A paused task you edit into a manual
+  one stops waiting at the reset.
 - **Changing a setting while the planner is answering no longer loses the
   turn**, and Stop keeps the planner's live context.
 - **Dependencies work across the whole plan, subtasks included**, and the
-  dependency picker keeps the choices outside its list.
+  dependency picker keeps the choices outside its list. Removing a parent
+  detaches dependencies on its descendants and releases their runners.
+- **Whether a task can start is one rule, the same one the terminal UI uses.**
+  A task with no prompt cannot be started, a force start waits for a dependency
+  an edit added meanwhile and for the planner's turn to end, marking a task
+  complete while it starts no longer starts it again, a failed ops task asks at
+  its merge gate before it starts, and a hand-added task that breaks the plan's
+  rules is refused.
 - **Run marks and cards are dropped only for the run they belong to.** A
   refused Run task, Force start or Execute keeps the previous handoff and
   marks, while the command palette's Force start clears them as the plan

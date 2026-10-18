@@ -8,6 +8,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.10.6] - 2026-10-18
+
 ### Changed
 
 - **VS Code task cards give the title the full row.** The runner, model and
@@ -22,21 +24,21 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **The collapsed Run settings show their summary on the Run line,**
   right-aligned, instead of on a line of their own.
 - **Every task control you press is kept in the timeline, and every surface
-  sends it through the same checked path.** Resume now, Force start, Mark
-  complete and Mark not done, Interrupt, a checkpoint answer, approving the
-  plan's review, Merge all, and sending, forcing or taking back a task message
-  are recorded with a line worded for you, and a refusal is the same line in
-  the terminal UI, VS Code and `ordewell`: the `ordewell` commands
-  `mark-complete`, `uncomplete`, `skip`, `run-task`, `force-start`, `retry`,
-  `cancel`, `continue`, `checkpoint`, `stop`, `run` and `approve` print it, a
-  task may be named by id, `#order`, title or a unique id prefix, and the CLI
-  reads no plan first. VS Code sends each control the same way, a Deny with a
-  note included, and shows its reason when it is refused; the chat no longer
-  writes its own "cancelled", "skipped", "marked complete" or "Execution
-  stopped." beside the timeline's line. Stop with nothing running records
-  nothing, Mark complete of a task already complete and Mark not done of one
-  that is not say why, and a message already delivered or a resume nobody
-  scheduled shows the refusal
+  sends it through the same checked path.** Resume now and Don't resume, Force
+  start, Mark complete and Mark not done, Interrupt, a checkpoint answer, a
+  request's Allow or Deny, approving the plan's review, Merge all, and sending,
+  forcing or taking back a task message are recorded with a line worded for
+  you, and a refusal is the same line in the terminal UI, VS Code and
+  `ordewell`: the `ordewell` commands `mark-complete`, `uncomplete`, `skip`,
+  `run-task`, `force-start`, `retry`, `cancel`, `continue`, `checkpoint`,
+  `stop`, `run` and `approve` print it, the commands that take a task name it
+  by id, `#order`, title or a unique id prefix, and the CLI reads no plan
+  first. VS Code sends each control the same way, a Deny with a note included,
+  and shows its reason when it is refused; the chat no longer writes its own
+  "cancelled", "skipped", "marked complete" or "Execution stopped." beside the
+  timeline's line. Stop with nothing running records nothing, Mark complete of
+  a task already complete and Mark not done of one that is not say why, and a
+  message already delivered or a resume nobody scheduled shows the refusal
   ([ADR-0029](docs/adr/supervision/0029-the-supervisor.md)).
 - **Whether a task can start is one decision, and the planner is shown its
   answer.** The scheduler, a force start, Retry, Continue, the command
@@ -60,11 +62,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   depending on a later task is allowed when it is valid. Dependency pickers
   keep the choices outside the list they show, removing a parent detaches
   dependencies on its descendants and releases their runners, and a whole-plan
-  rewrite no longer loses a task's skip reason. `ordewell task-deps` lists
-  every dependency a task has, the daemon resolves a unique id prefix for
-  checkpoints and merge gates as the CLI and terminal UI do, and the terminal
-  UI's task commands and its approval and checkpoint notices name tasks by
-  their dotted reference.
+  rewrite no longer loses a task's skip reason. A planner's removal is refused
+  while any task in the removed subtree is running or complete, not only the
+  named one. `ordewell task-deps` lists every dependency a task has, the daemon
+  resolves a unique id prefix for checkpoints and merge gates as the CLI and
+  terminal UI do, and the terminal UI's task commands and its approval and
+  checkpoint notices name tasks by their dotted reference.
 - **A task moved to another runner gets a model that runner can run.** A move
   by the planner or by hand, and the parts of a split or merge, land on a
   model the new runner offers; a submitted task paired with another runner's
@@ -107,7 +110,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   3.1.0 finds the renamed app binary) and from a VS Code terminal. `vi.waitFor`
   waits up to ten seconds and a test may run for thirty in every package, so
   tests on real git and file-system events no longer fail on a loaded machine.
-  CLAUDE.md imports AGENTS.md instead of keeping a shorter copy of it.
+  CLAUDE.md imports AGENTS.md instead of keeping a shorter copy of it, and
+  CONTRIBUTING's release steps name both changelogs, the root one and the
+  extension's.
 - **Contributors:** the plan now has one start rule
   (`readiness.startWaits`), one plan-tree module for placement and
   dependencies (`PlanTree`) and one resolver for task assignments
@@ -164,8 +169,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   ends. Marking the paused task complete, cancelling its resume or removing it
   from the plan lets the run go on, and a Resume now that cannot start is
   refused and changes nothing, so the task and the others paused on that
-  runner keep their automatic resumes. A Retry in a finished plan no longer
-  leaves the plan shown as completed
+  runner keep their automatic resumes. A task a direct edit turns into a
+  manual task never runs, so the reset ends its pause rather than resuming it.
+  A Retry in a finished plan no longer leaves the plan shown as completed
   ([ADR-0018](docs/adr/runners/0018-structured-runner-transport.md)).
 - **Changing a setting while the planner is answering no longer loses the
   reply or your message.** Picking a planner, model or effort in VS Code,
