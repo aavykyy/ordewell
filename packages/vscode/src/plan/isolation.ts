@@ -56,8 +56,14 @@ export async function handleIsolationAction(
           'Merge',
         );
         if (confirm !== 'Merge') return;
-        await deps.session.mergeRun();
-        break;
+        // The user's Merge all, through the command seam (ADR-0029) as the
+        // other controls are. A merge git stopped is an outcome the handoff
+        // card shows, not an error here; a refusal without one is thrown for
+        // the catch below.
+        const merged = await deps.session.execute({ command: 'merge_all' }, { kind: 'user' });
+        if (merged.payload?.kind === 'merge') break;
+        if (!merged.ok) throw new Error(merged.message);
+        throw new Error('Merge all answered without its result.');
       }
       case 'discard': {
         const confirm = await vscode.window.showWarningMessage(

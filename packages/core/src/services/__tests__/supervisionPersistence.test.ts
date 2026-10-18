@@ -151,7 +151,7 @@ describe('a user-started run', () => {
     const { restarted } = reload(saved);
     expect(restarted.planState!.supervision!.guards!.retries).toEqual({ t1: 1 });
 
-    await restarted.executePlan();
+    await restarted.execute({ command: 'run_plan' }, { kind: 'user' });
 
     expect(restarted.planState!.supervision!.guards!.retries).toEqual({});
   });

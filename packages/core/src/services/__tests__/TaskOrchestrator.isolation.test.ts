@@ -304,7 +304,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
     const t1 = task('t1', 1);
     orchestrator.loadPlan([t1, task('t2', 2)]);
 
-    await orchestrator.runTask('t1');
+    await orchestrator.forceStartTask('t1');
     expect(spawnedCwd('t1')).toBe('/fake-worktrees/run1/1-t1');
     pass(t1);
     await vi.waitFor(() => expect(isolation.calls.map((c) => c.op)).toContain('handoff'));
@@ -319,7 +319,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
     const handoffs: unknown[] = [];
     orchestrator.subscribe({ onIsolationHandoff: (h) => handoffs.push(h) });
     orchestrator.loadPlan([task('t1', 1)]);
-    await orchestrator.runTask('t1');
+    await orchestrator.forceStartTask('t1');
 
     await orchestrator.markTaskComplete('t1');
 
@@ -332,11 +332,11 @@ describe('TaskOrchestrator with worktree isolation', () => {
   it('decides afresh after a cancelled manual run, instead of running a discarded run in the workspace root', async () => {
     const { orchestrator, spawn } = setup();
     orchestrator.loadPlan([task('t1', 1)]);
-    await orchestrator.runTask('t1');
+    await orchestrator.forceStartTask('t1');
     await orchestrator.cancelTask('t1');
 
     await orchestrator.runs.discard();
-    await orchestrator.runTask('t1');
+    await orchestrator.forceStartTask('t1');
 
     expect(spawn.mock.calls[1][0].cwd).toBe('/fake-worktrees/run2/1-t1');
   });
@@ -371,7 +371,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
       isolation.availability = availability;
       const { orchestrator, notifications } = setup({ isolation, workspace: '/plain' });
       orchestrator.loadPlan([task('t1', 1)]);
-      await orchestrator.runTask('t1');
+      await orchestrator.forceStartTask('t1');
       return vi.mocked(notifications.info).mock.calls.map((c) => String(c[0]));
     }
 
@@ -700,7 +700,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
     it('blocks a manual task run the same way', async () => {
       const { orchestrator, spawn, observed, spawnedCwd } = dirty();
 
-      await orchestrator.runTask('t1');
+      await orchestrator.forceStartTask('t1');
       expect(spawn).not.toHaveBeenCalled();
       expect(observed).toEqual(['dirty']);
 

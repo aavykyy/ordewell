@@ -67,20 +67,20 @@ describe('GET /api/sessions/:id while a failed task is retried', () => {
 
     try {
       const live = pool.session(meta.id);
-      await live.executePlan();
+      await live.execute({ command: 'run_plan' }, { kind: 'user' });
       await vi.waitFor(() => expect(sessions).toHaveLength(1));
       sessions[0].emitEvent({ type: 'usage', record: { source: 'claude-code', inputTokens: 100, reportedCost: { amount: 1, currency: 'USD' } } });
       sessions[0].emitExit(1);
       await vi.waitFor(async () => expect((await served())[0].status).toBe('failed'));
 
-      await live.retryTask('t1');
+      await live.execute({ command: 'retry_task', task: 't1', from: 'fresh' }, { kind: 'user' });
       await vi.waitFor(() => expect(sessions).toHaveLength(2));
       sessions[1].emitEvent({ type: 'usage', record: { source: 'claude-code', inputTokens: 200, reportedCost: { amount: 2, currency: 'USD' } } });
       const during = await served();
       expect(during[0].status).toBe('in_progress');
       expect(planUsage(during)).toMatchObject({ attempts: 2, totals: { inputTokens: 300, reportedCost: { USD: 3 } } });
 
-      await live.cancelTask('t1');
+      await live.execute({ command: 'stop_task', task: 't1' }, { kind: 'user' });
       const after = await served();
       expect(after[0].status).toBe('pending');
       expect(planUsage(after)).toMatchObject({ attempts: 2, totals: { inputTokens: 300, reportedCost: { USD: 3 } } });

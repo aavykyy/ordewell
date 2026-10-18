@@ -58,7 +58,7 @@ describe('the structured transport, the only one', () => {
     sessions[1].reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(orchestrator.status).toBe('completed'));
     await orchestrator.retryTask('t2');
-    await orchestrator.runTask('t2');
+    await orchestrator.forceStartTask('t2');
     await settle();
 
     expect(requests).toHaveLength(3);
@@ -80,7 +80,7 @@ describe('the structured transport, the only one', () => {
     session.loadPlan(plan, 'Goal', '/repo');
     expect(saves(session).mock.lastCall?.[0]).not.toHaveProperty('runnerTransport');
 
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     await vi.waitFor(() => expect(requests).toHaveLength(1));
     expect(taskOf(session, 't1')).not.toHaveProperty('transport');
@@ -202,7 +202,7 @@ describe('completing through task_complete (ADR-0022)', () => {
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('failed'));
 
     await orchestrator.retryTask('t1');
-    await orchestrator.runTask('t1');
+    await orchestrator.forceStartTask('t1');
     await settle();
 
     expect(requests.map((r) => r.attempt)).toEqual([1, 2]);

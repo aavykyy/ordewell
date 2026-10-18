@@ -74,9 +74,9 @@ before each `status_update` announced while it runs, and once more when it
 ends — a hold across its spawns and git work would stall every task's status
 and let an `execution_complete` it causes overtake the update held back. All
 but reschedule, the two ways past a dirty tree and clean up or discard have a
-command at the *Command seam*, which records them; the Session's asynchronous
-per-verb controls (Resume now, force start, Mark complete and not done,
-interrupt, approve the review, Merge all) call it as the user. The
+command at the *Command seam*, which records them; every surface's control
+reaches it through `Session.execute` as the user, and the Session keeps no
+per-verb control method beside it. The
 run going on when a planner turn lets its start hold go is saved before its
 statuses go out the same way. `loadPlan` persists the plan it adopts
 directly, and `generatePlan` through the ritual. Direct (non-planner) edits go one step further
@@ -1283,7 +1283,8 @@ named, with its files, in the *Isolation handoff*.
 fast-forward); "resolver" (that names `resolveConflictAsTask`, the explicit
 `x` action a person asks for — a repair runs before anyone is asked); "auto-resolve" (implies the model's word stands in for the Verdict, which it never does).
 
-**Merge all** — the handoff's one merge, `mergeRun`: every repo's integration
+**Merge all** — the handoff's one merge, `merge_all` at the command seam
+(`TaskOrchestrator.mergeRun`): every repo's integration
 branch into what the user has checked out there, all or nothing, and only when
 every repo of the run, with work or not, is on its *base branch* (else
 `blocked`, reason `wrong-branch`, nothing merged; a repo mid-rebase is named as
@@ -1428,7 +1429,7 @@ to act on", throwing `PlanEditError`. Git stays in `WorktreeIsolation`.
 
 **Isolation handoff** — the end of an isolated run: for each repo, its integration
 branch and base ref, and the tasks that landed, broadcast as `isolation_handoff`. What
-follows is the user's: `reviewRunDiff`, `mergeRun` (a normal `git merge` into the
+follows is the user's: `reviewRunDiff`, Merge all (`merge_all`; a normal `git merge` into the
 checked-out branch, only ever on that explicit call; once everything merged, the
 run is cleared up and forgotten, so no surface offers its handoff again), `cleanupRun` (worktrees and
 task branches go, the integration branch stays) and `discardRun` (everything

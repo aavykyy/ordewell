@@ -60,6 +60,7 @@ describe('a supervised run at Act', () => {
     expect(env.session.planTasks.map((t) => t.status)).toEqual(['completed', 'completed', 'completed']);
     expect(env.session.isExecuting).toBe(false);
     expect(records(env)).toEqual([
+      expect.objectContaining({ command: 'run_plan', actor: 'user', outcome: 'done' }),
       expect.objectContaining({ command: 'retry_task', actor: 'supervisor', level: 'act', outcome: 'done', task: expect.objectContaining({ id: 't2', ref: '#2' }) }),
     ]);
     expect(supervisorSaid(env)).toEqual([
@@ -88,6 +89,7 @@ describe('a supervised run at Watch', () => {
     expect(taskOf(env.session, 't2')).toMatchObject({ prompt: 'do t2', status: 'failed' });
     expect(env.run.spawnedIds()).toEqual(['t1', 't2']);
     expect(records(env)).toEqual([
+      expect.objectContaining({ command: 'run_plan', actor: 'user', outcome: 'done' }),
       expect.objectContaining({ command: 'retry_task', actor: 'supervisor', level: 'watch', outcome: 'refused' }),
     ]);
   });

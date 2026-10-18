@@ -180,7 +180,7 @@ describe('Session phase transitions', () => {
     };
 
     session.loadPlan(plan, 'Test', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     expect(runner.spawn).toHaveBeenCalledOnce();
     expect(runner.spawn).toHaveBeenCalledWith(expect.objectContaining({ taskId: 't1' }));
@@ -207,7 +207,7 @@ describe('Session phase transitions', () => {
     };
 
     session.loadPlan(plan, 'Test', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     expect(taskOf(session, 't1')?.status).toBe('completed');
     expect(runner.spawn).toHaveBeenCalledOnce();
@@ -235,7 +235,7 @@ describe('Session phase transitions', () => {
     };
 
     session.loadPlan(plan, 'Test', '/repo');
-    await session.runTask('t1');
+    await session.execute({ command: 'run_task', task: 't1' }, { kind: 'user' });
 
     expect(session.isExecuting).toBe(true);
     expect(taskOf(session, 't1')?.status).toBe('in_progress');
@@ -268,9 +268,9 @@ describe('Session phase transitions', () => {
       runners: ['claude-code'],
       lastUpdated: new Date().toISOString(),
     }, 'Test', '/repo');
-    await session.runTask('t1');
+    await session.execute({ command: 'run_task', task: 't1' }, { kind: 'user' });
 
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     expect(runner.spawn).toHaveBeenCalledOnce();
     sessions[0].reportComplete({ status: 'done', summary: '' });
@@ -290,7 +290,7 @@ describe('Session phase transitions', () => {
       runners: ['claude-code'],
       lastUpdated: new Date().toISOString(),
     }, 'Test', '/repo');
-    await session.runTask('t1');
+    await session.execute({ command: 'run_task', task: 't1' }, { kind: 'user' });
 
     runnerSession.reportComplete({ status: 'done', summary: 'answer from the runner' });
     await vi.waitFor(() => expect(taskOf(session, 't1')?.outputSummary?.report).toBe('answer from the runner'));
@@ -321,9 +321,9 @@ describe('Session phase transitions', () => {
     }
 
     it.each([
-      ['executePlan', (s: Session) => s.executePlan()],
-      ['runTask', (s: Session) => s.runTask('t1')],
-      ['forceStartTask', (s: Session) => s.forceStartTask('t1')],
+      ['run_plan', (s: Session) => s.execute({ command: 'run_plan' }, { kind: 'user' })],
+      ['run_task', (s: Session) => s.execute({ command: 'run_task', task: 't1' }, { kind: 'user' })],
+      ['force_start', (s: Session) => s.execute({ command: 'force_start', task: 't1' }, { kind: 'user' })],
     ])('%s carries the plan map, and leaves the completion contract to the runner\'s instructions', async (_name, start) => {
       const runner = spyRunner();
       const session = makeSession({ runner });
@@ -353,7 +353,7 @@ describe('Session phase transitions', () => {
       plan.tasks[0].skills = ['tdd'];
       session.loadPlan(plan, 'Test', '/repo');
 
-      await session.runTask('t1');
+      await session.execute({ command: 'run_task', task: 't1' }, { kind: 'user' });
 
       expect(runner.spawn.mock.calls[0][0].prompt).toContain('### Skill: tdd\n\nRED then GREEN.');
       expect(roots).toEqual([[runner.spawn.mock.calls[0][0].cwd]]);
@@ -367,10 +367,13 @@ describe('Session phase transitions', () => {
     expect(session.isExecuting).toBe(false);
   });
 
-  it('executePlan clears execution log before starting', async () => {
+  it('execute clears execution log before starting', async () => {
     const session = makeSession();
     const plan: LegacyPlanState = {
-      tasks: [createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' })],
+      tasks: [
+        createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' }),
+        createTask({ id: 't2', order: 2, title: 'Task 2', prompt: 'do it too' }),
+      ],
       generatedAt: new Date().toISOString(),
       status: 'approved',
       runners: ['claude-code'],
@@ -378,15 +381,15 @@ describe('Session phase transitions', () => {
     };
 
     session.loadPlan(plan, 'Test', '/repo');
-    await session.markTaskComplete('t1');
+    await session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
     expect(session.executionLog).toHaveLength(1);
 
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     expect(session.executionLog).toHaveLength(0);
   });
 
-  it('the run is armed and executing once executePlan starts it', async () => {
+  it('the run is armed and executing once the user\'s Execute starts it', async () => {
     const session = makeSession();
 
     const plan: LegacyPlanState = {
@@ -401,7 +404,7 @@ describe('Session phase transitions', () => {
     expect(session.status).toBe('approved');
     expect(session.isExecuting).toBe(false);
 
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     expect(session.status).toBe('running');
     expect(session.isExecuting).toBe(true);
@@ -450,28 +453,28 @@ describe('currentPlanState — the live plan a surface refreshes from', () => {
   // came back as never started, and the plan pane dropped its spinner.
   it('keeps a parallel sibling in_progress after another task is marked complete', async () => {
     const { session } = twoParallel();
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     expect(statusOf(session, 't2')).toBe('in_progress');
 
-    await session.markTaskComplete('t1');
+    await session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
 
     expect(statusOf(session, 't2')).toBe('in_progress');
   });
 
   it('reports a task the mark-complete just fanned out to as in_progress', async () => {
     const { session } = twoParallel();
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
-    await session.markTaskComplete('t1');
+    await session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
 
     expect(statusOf(session, 't3')).toBe('in_progress');
   });
 
   it('moves a finished task to the execution log without duplicating it', async () => {
     const { session } = twoParallel();
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
-    await session.markTaskComplete('t1');
+    await session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
     const state = session.currentPlanState;
 
     expect(state?.phase).toBe('executing');
@@ -498,17 +501,17 @@ describe('currentPlanState — the live plan a surface refreshes from', () => {
       const state = session.currentPlanState;
       return state ? rejoinPlanTree(state.pendingTasks, state.phase === 'executing' ? state.executionLog : []).find((t) => t.id === 't1') : undefined;
     };
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     sessions[0].emitEvent({ type: 'usage', record: { source: 'claude-code', inputTokens: 100, reportedCost: { amount: 1, currency: 'USD' } } });
     sessions[0].emitExit(1);
     await vi.waitFor(() => expect(served()?.status).toBe('failed'));
 
-    await session.retryTask('t1');
+    await session.execute({ command: 'retry_task', task: 't1', from: 'fresh' }, { kind: 'user' });
     sessions[2].emitEvent({ type: 'usage', record: { source: 'claude-code', inputTokens: 200, reportedCost: { amount: 2, currency: 'USD' } } });
     expect(served()?.status).toBe('in_progress');
     expect(taskUsageSummary(served()!)).toMatchObject({ attempts: 2, totals: { inputTokens: 300, reportedCost: { USD: 3 } } });
 
-    await session.cancelTask('t1');
+    await session.execute({ command: 'stop_task', task: 't1' }, { kind: 'user' });
     expect(served()?.status).toBe('pending');
     expect(taskUsageSummary(served()!)).toMatchObject({ attempts: 2, totals: { inputTokens: 300, reportedCost: { USD: 3 } } });
   });
@@ -540,7 +543,7 @@ describe('a continue counts its runner session\'s cost on from what was counted 
     const first = spawning();
     const session = makeSession({ runner: first.runner });
     session.loadPlan(plan(), 'Goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     first.sessions[0].cost = counted;
     first.sessions[0].reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('completed'));
@@ -550,7 +553,7 @@ describe('a continue counts its runner session\'s cost on from what was counted 
     const later = spawning();
     const reloaded = makeSession({ runner: later.runner });
     reloaded.loadPlan(saved!, 'Goal', '/repo');
-    await reloaded.continueTask('t1', 'one more thing');
+    await reloaded.execute({ command: 'retry_task', task: 't1', from: 'session', message: 'one more thing' }, { kind: 'user' });
 
     expect(later.runner.spawn).toHaveBeenCalledWith(expect.objectContaining({ resumeSessionId: 'native-1', resumeCost: counted }));
   });
@@ -559,12 +562,12 @@ describe('a continue counts its runner session\'s cost on from what was counted 
     const { runner, sessions } = spawning();
     const session = makeSession({ runner });
     session.loadPlan(plan(), 'Goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     sessions[0].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-mystery', inputTokens: 1_000, contextWindow: 500_000 } });
     sessions[0].reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('completed'));
 
-    await session.continueTask('t1', 'one more thing');
+    await session.execute({ command: 'retry_task', task: 't1', from: 'session', message: 'one more thing' }, { kind: 'user' });
     sessions[1].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-mystery', inputTokens: 50_000 } });
 
     await vi.waitFor(() => expect(taskUsageSummary(taskOf(session, 't1')!).contextFill).toEqual({ usedTokens: 50_000, windowTokens: 500_000 }));
@@ -577,16 +580,16 @@ describe('a continue counts its runner session\'s cost on from what was counted 
     const { runner, sessions } = spawning();
     const session = makeSession({ runner });
     session.loadPlan(plan(), 'Goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     sessions[0].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-mystery', inputTokens: 1_000, contextWindow: 500_000 } });
     sessions[0].reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('completed'));
 
-    await session.continueTask('t1', 'one more thing');
+    await session.execute({ command: 'retry_task', task: 't1', from: 'session', message: 'one more thing' }, { kind: 'user' });
     sessions[1].reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('completed'));
 
-    await session.continueTask('t1', 'and one more');
+    await session.execute({ command: 'retry_task', task: 't1', from: 'session', message: 'and one more' }, { kind: 'user' });
     sessions[2].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-mystery', inputTokens: 50_000 } });
 
     await vi.waitFor(() => expect(taskUsageSummary(taskOf(session, 't1')!).contextFill).toEqual({ usedTokens: 50_000, windowTokens: 500_000 }));
@@ -598,17 +601,17 @@ describe('a continue counts its runner session\'s cost on from what was counted 
     const { runner, sessions } = spawning(['native-1', 'native-2']);
     const session = makeSession({ runner });
     session.loadPlan(plan(), 'Goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     sessions[0].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-mystery', inputTokens: 1_000, contextWindow: 500_000 } });
     sessions[0].reportComplete({ status: 'failed', summary: '', reason: 'no' });
     await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('failed'));
 
-    await session.retryTask('t1');
+    await session.execute({ command: 'retry_task', task: 't1', from: 'fresh' }, { kind: 'user' });
     sessions[1].reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('completed'));
     expect(taskOf(session, 't1')?.runnerSessionId).toBe('native-2');
 
-    await session.continueTask('t1', 'and one more');
+    await session.execute({ command: 'retry_task', task: 't1', from: 'session', message: 'and one more' }, { kind: 'user' });
     expect(runner.spawn.mock.calls[2][0].resumeSessionId).toBe('native-2');
     expect(runner.spawn.mock.calls[2][0].resumeWindow).toBeUndefined();
     sessions[2].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-mystery', inputTokens: 50_000 } });
@@ -621,7 +624,7 @@ describe('a continue counts its runner session\'s cost on from what was counted 
     const { runner } = spawning();
     const session = makeSession({ runner });
     session.loadPlan(plan(), 'Goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     expect(runner.spawn.mock.calls[0][0].resumeCost).toBeUndefined();
   });
 });
@@ -662,7 +665,7 @@ describe('planState.tasks — written from the store, never shared with it', () 
     });
     session.loadPlan(planOf([createTask({ id: 't1', order: 1, title: 'First', prompt: 'p' })]), 'Test', '/repo');
 
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     expect(seen).toContain('in_progress');
     expect(seen.at(-1)).toBe(taskOf(session, 't1')!.status);
@@ -1466,7 +1469,7 @@ describe('idleSince on the status_update broadcast', () => {
     session.loadPlan(onePlan(), 'Test', '/repo');
 
     vi.useFakeTimers();
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     fakeSession.emitOutput('working...');
     broadcast.mockClear();
 
@@ -1532,7 +1535,7 @@ describe('saving a run as its tasks settle', () => {
 
   it('persists live attempt usage before broadcasting the task ledgers and task total', async () => {
     const env = twoTaskRun();
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     env.order.length = 0;
     env.runnerSession('t1').emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'actual', inputTokens: 10, reportedCost: { amount: 0.5, currency: 'USD' } } });
     expect(env.order).toEqual(['save:in_progress', 'status:in_progress']);
@@ -1565,7 +1568,7 @@ describe('saving a run as its tasks settle', () => {
       tasks: [createTask({ id: 't1', order: 1, title: 'First', prompt: 'a', assignedRunner: 'opencode' })],
       generatedAt: new Date().toISOString(), status: 'approved', runners: ['opencode'], lastUpdated: new Date().toISOString(),
     }, 'Test', '/repo', { persist: false });
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     runnerSession.emitEvent({ type: 'usage', record: { source: 'opencode', model: 'opencode/big-pickle', inputTokens: 1000 } });
     runnerSession.emitExit(0);
@@ -1580,7 +1583,7 @@ describe('saving a run as its tasks settle', () => {
 
   it('saves a task\'s verdict the moment it lands, before announcing it, while the run goes on', async () => {
     const { session, saveSession, order, runnerSession } = twoTaskRun();
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     saveSession.mockClear();
     order.length = 0;
 
@@ -1595,7 +1598,7 @@ describe('saving a run as its tasks settle', () => {
 
   it('saves a failed verdict as well', async () => {
     const { session, saveSession, runnerSession } = twoTaskRun();
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     saveSession.mockClear();
 
     runnerSession('t1').emitExit(1);
@@ -1605,7 +1608,7 @@ describe('saving a run as its tasks settle', () => {
 
   it('does not save on a status change that settles nothing', async () => {
     const { session, saveSession, runnerSession } = twoTaskRun();
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     saveSession.mockClear();
 
     runnerSession('t1').emitOutput('still working');
@@ -1616,8 +1619,8 @@ describe('saving a run as its tasks settle', () => {
 
 describe('a task control naming a task the plan does not hold', () => {
   it.each([
-    ['forceStartTask', (s: Session) => s.forceStartTask('gone')],
-    ['runTask', (s: Session) => s.runTask('gone')],
+    ['forceStartTask', (s: Session) => s.execute({ command: 'force_start', task: 'gone' }, { kind: 'user' })],
+    ['run_task', (s: Session) => s.execute({ command: 'run_task', task: 'gone' }, { kind: 'user' })],
   ])('%s is refused, and the run in progress keeps its agent and its verdict', async (_name, start) => {
     const spawned: FakeRunnerSession[] = [];
     const runner = {
@@ -1641,10 +1644,10 @@ describe('a task control naming a task the plan does not hold', () => {
       runners: ['claude-code'],
       lastUpdated: new Date().toISOString(),
     }, 'Test', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(spawned).toHaveLength(1));
 
-    await expect(start(session)).rejects.toThrow(/no task "gone"/i);
+    await expect(start(session)).resolves.toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(/no task "gone"/i) });
 
     spawned[0].reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('completed'));
@@ -1664,7 +1667,7 @@ describe('executing a plan whose tasks are all completed', () => {
       lastUpdated: new Date().toISOString(),
     }, 'Test', '/repo');
 
-    await session.executePlan();
+    await session.execute({ command: 'approve_review' }, { kind: 'user' });
 
     expect(broadcast.mock.calls.filter(([msg]) => msg.type === 'execution_complete')).toHaveLength(1);
   });

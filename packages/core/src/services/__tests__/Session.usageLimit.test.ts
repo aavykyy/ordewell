@@ -16,7 +16,7 @@ describe('editing a task waiting on a usage-limit reset', () => {
     const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'off' } });
     hitLimit(env.run.of('t1'));
     await until(() => taskOf(env.session, 't1')!.resumeAt === RESUME_AT);
-    env.session.cancelScheduledResume('t1');
+    await env.session.execute({ command: 'cancel_resume', task: 't1' }, { kind: 'user' });
 
     await env.session.setTaskRunner('t1', 'codex');
 
@@ -31,7 +31,7 @@ describe('editing a task waiting on a usage-limit reset', () => {
     });
     hitLimit(env.run.of('t1'));
     await until(() => taskOf(env.session, 't1')!.resumeAt === RESUME_AT);
-    await env.session.forceStartTask('t2');
+    await env.session.execute({ command: 'force_start', task: 't2' }, { kind: 'user' });
 
     await env.session.setTaskRunner('t1', 'codex');
 

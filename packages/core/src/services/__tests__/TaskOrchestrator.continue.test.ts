@@ -280,7 +280,7 @@ describe('TaskOrchestrator.continueTask', () => {
         createTask({ id: 't1', order: 1, title: 'Parse JSON', prompt: 'ORIGINAL PROMPT BODY' }),
         createTask({ id: 't2', order: 2, title: 'Other', prompt: 'two' }),
       ]);
-      await orchestrator.runTask('t1');
+      await orchestrator.forceStartTask('t1');
       sessions[0].reportComplete({ status: 'done', summary: '' });
       await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
 
@@ -383,7 +383,7 @@ describe('a fresh start whose runner exits while starting', () => {
   });
 });
 
-describe('Session.continueTask', () => {
+describe('continuing a task in its saved session at the seam', () => {
   it('saves the continued attempt\'s start, so a reload does not show the old outcome', async () => {
     const { runner, sessions } = routingRunner();
     const session = makeSession({ runner });
@@ -395,15 +395,15 @@ describe('Session.continueTask', () => {
       lastUpdated: new Date().toISOString(),
     };
     session.loadPlan(saved, 'Goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     sessions[0].reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(saves(session).mock.lastCall?.[0].tasks[0].status).toBe('completed'));
 
-    await session.continueTask('t1', 'also handle arrays');
+    await session.execute({ command: 'retry_task', task: 't1', from: 'session', message: 'also handle arrays' }, { kind: 'user' });
 
     const last = saves(session).mock.lastCall?.[0].tasks[0];
     expect(last).toMatchObject({ status: 'in_progress', verdict: undefined });
-    await expect(session.continueTask('t1', 'again')).rejects.toBeInstanceOf(TaskControlError);
+    await expect(session.execute({ command: 'retry_task', task: 't1', from: 'session', message: 'again' }, { kind: 'user' })).resolves.toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(/is running: stop it first, or send it a message/) });
   });
 });
 
@@ -424,6 +424,6 @@ describe('a session saved before its owner or its attempts were recorded', () =>
 
     const moved = session.planTasks[0];
     expect(continuability(moved)).toEqual({ ok: false, reason: expect.stringContaining('its saved session belongs to claude-code') });
-    await expect(session.continueTask('t1', 'carry on')).rejects.toBeInstanceOf(TaskControlError);
+    await expect(session.execute({ command: 'retry_task', task: 't1', from: 'session', message: 'carry on' }, { kind: 'user' })).resolves.toMatchObject({ ok: false, outcome: 'refused', message: expect.stringContaining('its saved session belongs to claude-code') });
   });
 });

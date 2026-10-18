@@ -298,7 +298,7 @@ describe('the task-query read channel', () => {
       aiService: { continueConversation, hasActiveConversation: () => true },
     });
     session.loadPlan(planWithBodies(), 'build it', testWorkspace, { persist: false });
-    await session.executePlan(); // spawns #2 and leaves it running
+    await session.execute({ command: 'run_plan' }, { kind: 'user' }); // spawns #2 and leaves it running
     expect(session.isExecuting).toBe(true);
 
     const plan = await session.continueConversation('rename task 2');

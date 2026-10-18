@@ -66,7 +66,14 @@ function setup(tasks: Task[], opts: {
   });
   session.loadPlan(plan(tasks), 'goal', '/repo', { persist: false });
   const runnerSession = (taskId: string) => runnerSessions.find((t) => t.taskId === taskId)!;
-  return { session, seen, messages, events, runnerSession, recordsAtAnnounce };
+  return { session, seen, messages, events, runnerSession, recordsAtAnnounce, savedRecords: () => savedRecords };
+}
+
+/** Send a task message as the user's control does, answering the id of the message it queued. */
+async function sendTaskMessage(session: Session, taskId: string, text: string): Promise<string> {
+  const outcome = await session.execute({ command: 'message_task', task: taskId, text }, { kind: 'user' });
+  if (!outcome.ok || outcome.payload?.kind !== 'message') throw new Error('message_task answered without an id');
+  return outcome.payload.id;
 }
 
 /**
@@ -75,6 +82,7 @@ function setup(tasks: Task[], opts: {
  */
 async function expectSavedBeforeAnnounced(env: ReturnType<typeof setup>, control: (session: Session) => unknown): Promise<void> {
   env.seen.length = 0;
+  env.recordsAtAnnounce.length = 0;
   await control(env.session);
 
   let disk: string | undefined;
@@ -88,7 +96,7 @@ async function expectSavedBeforeAnnounced(env: ReturnType<typeof setup>, control
 describe('every user control saves before it announces', () => {
   it('announces a checkpoint status with its question after saving the waiting task', async () => {
     const env = setup([task('t1', 1)]);
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     env.seen.length = 0;
     env.messages.length = 0;
 
@@ -104,74 +112,74 @@ describe('every user control saves before it announces', () => {
       { kind: 'save', statuses: 't1:awaiting_user' },
       { kind: 'status', statuses: 't1:awaiting_user' },
     ]);
-    env.session.approveCheckpoint('t1');
+    await env.session.execute({ command: 'answer_checkpoint', task: 't1', answer: 'approve' }, { kind: 'user' });
     await expect(answered).resolves.toEqual({ kind: 'continue' });
     env.session.destroy();
   });
 
   it('retry', async () => {
     const env = setup([task('t1', 1)]);
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     env.runnerSession('t1').emitExit(1);
     await vi.waitFor(() => expect(env.session.planTasks[0].status).toBe('failed'));
 
-    await expectSavedBeforeAnnounced(env, (s) => s.retryTask('t1'));
+    await expectSavedBeforeAnnounced(env, (s) => s.execute({ command: 'retry_task', task: 't1', from: 'fresh' }, { kind: 'user' }));
     expect(env.session.planTasks[0].status).toBe('in_progress');
   });
 
   it('cancel', async () => {
     const env = setup([task('t1', 1)]);
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
-    await expectSavedBeforeAnnounced(env, (s) => s.cancelTask('t1'));
+    await expectSavedBeforeAnnounced(env, (s) => s.execute({ command: 'stop_task', task: 't1' }, { kind: 'user' }));
     expect(env.session.planTasks[0].status).toBe('pending');
   });
 
   it('mark complete, which starts the dependent', async () => {
     const env = setup([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]);
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
-    await expectSavedBeforeAnnounced(env, (s) => s.markTaskComplete('t1'));
+    await expectSavedBeforeAnnounced(env, (s) => s.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' }));
     expect(env.session.planTasks.map((t) => t.status)).toEqual(['completed', 'in_progress']);
   });
 
   it('mark not done', async () => {
     const env = setup([task('t1', 1)]);
-    await env.session.executePlan();
-    await env.session.markTaskComplete('t1');
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
+    await env.session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
 
-    await expectSavedBeforeAnnounced(env, (s) => s.markTaskIncomplete('t1'));
+    await expectSavedBeforeAnnounced(env, (s) => s.execute({ command: 'mark_not_done', task: 't1' }, { kind: 'user' }));
     expect(env.session.planTasks[0].status).not.toBe('completed');
   });
 
   it('force start', async () => {
     const env = setup([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]);
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     // Forced past its failed dependency: one still running would only queue it.
     env.runnerSession('t1').reportComplete({ status: 'failed', summary: 'broke' });
     await vi.waitFor(() => expect(env.session.planTasks[0].status).toBe('failed'));
 
-    await expectSavedBeforeAnnounced(env, (s) => s.forceStartTask('t2'));
+    await expectSavedBeforeAnnounced(env, (s) => s.execute({ command: 'force_start', task: 't2' }, { kind: 'user' }));
     expect(env.session.planTasks[1].status).toBe('in_progress');
   });
 
   it('run one task', async () => {
     const env = setup([task('t1', 1)]);
 
-    await expectSavedBeforeAnnounced(env, (s) => s.runTask('t1'));
+    await expectSavedBeforeAnnounced(env, (s) => s.execute({ command: 'run_task', task: 't1' }, { kind: 'user' }));
     expect(env.session.planTasks[0].status).toBe('in_progress');
   });
 
   it('execute', async () => {
     const env = setup([task('t1', 1)]);
 
-    await expectSavedBeforeAnnounced(env, (s) => s.executePlan());
+    await expectSavedBeforeAnnounced(env, (s) => s.execute({ command: 'run_plan' }, { kind: 'user' }));
     expect(env.session.planTasks[0].status).toBe('in_progress');
   });
 
   it('the run finishing, which saves the run as it ends before it says so', async () => {
     const env = setup([task('t1', 1)]);
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     env.runnerSession('t1').reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(env.events).toContain('execution_complete'));
@@ -182,7 +190,7 @@ describe('every user control saves before it announces', () => {
 
   it('stop', async () => {
     const env = setup([task('t1', 1)]);
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     await expectSavedBeforeAnnounced(env, (s) => s.stopExecution());
     expect(env.session.planTasks[0].status).toBe('pending');
@@ -192,7 +200,7 @@ describe('every user control saves before it announces', () => {
     const isolation = new FakeWorktreeIsolation();
     isolation.availability = { active: false, reason: 'dirty' };
     const env = setup([task('t1', 1)], { isolation });
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     await expectSavedBeforeAnnounced(env, (s) => s[control]());
     expect(env.session.planTasks[0].status).toBe('in_progress');
@@ -200,7 +208,7 @@ describe('every user control saves before it announces', () => {
 
   it.each(['cleanupRun', 'discardRun'] as const)('%s of a settled run', async (control) => {
     const env = setup([task('t1', 1)]);
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     env.runnerSession('t1').reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(env.messages.map((m) => m.type)).toContain('execution_complete'));
 
@@ -210,14 +218,14 @@ describe('every user control saves before it announces', () => {
   it('approve the review, which starts the run', async () => {
     const env = setup([task('t1', 1)]);
 
-    await expectSavedBeforeAnnounced(env, (s) => s.approveReview());
+    await expectSavedBeforeAnnounced(env, (s) => s.execute({ command: 'approve_review' }, { kind: 'user' }));
     expect(env.session.planTasks[0].status).toBe('in_progress');
   });
 
   it('reschedule after the parallel limit was raised', async () => {
     const config = fakeConfig({ maxParallelSessions: 1 });
     const env = setup([task('t1', 1), task('t2', 2)], { config });
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     config.maxParallelSessions = 2;
 
     await expectSavedBeforeAnnounced(env, (s) => s.reschedule());
@@ -226,18 +234,10 @@ describe('every user control saves before it announces', () => {
 
   it('interrupt a structured turn', async () => {
     const env = setup([task('t1', 1)]);
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
-    await expectSavedBeforeAnnounced(env, (s) => s.interruptTask('t1'));
+    await expectSavedBeforeAnnounced(env, (s) => s.execute({ command: 'interrupt_task', task: 't1' }, { kind: 'user' }));
     expect(env.session.planTasks[0].status).toBe('awaiting_user');
-  });
-
-  it.each(['forceSendQueuedTaskMessage', 'removeQueuedTaskMessage'] as const)('%s', async (control) => {
-    const env = setup([task('t1', 1)]);
-    await env.session.executePlan();
-    const id = env.session.sendTaskMessage('t1', 'later');
-
-    await expectSavedBeforeAnnounced(env, (s) => expect(s[control]('t1', id)).toBe(true));
   });
 
   it.each<[string, (s: Session, id: string) => Promise<unknown>]>([
@@ -246,31 +246,33 @@ describe('every user control saves before it announces', () => {
     ['force send a message', (s) => s.execute({ command: 'message_task', task: 't1', text: 'now', force: true }, { kind: 'user' })],
   ])('%s through the command seam, its record kept before it is told', async (_name, control) => {
     const env = setup([task('t1', 1)]);
-    await env.session.executePlan();
-    const id = env.session.sendTaskMessage('t1', 'later');
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
+    const id = await sendTaskMessage(env.session, 't1', 'later');
+    const baseline = env.savedRecords();
 
     await expectSavedBeforeAnnounced(env, async (s) => expect(await control(s, id)).toMatchObject({ ok: true }));
-    expect(env.recordsAtAnnounce).toEqual([1]);
+    expect(env.recordsAtAnnounce).toEqual([baseline + 1]);
   });
 
   it('answer a checkpoint through the command seam', async () => {
     const env = setup([task('t1', 1)]);
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     const answered = env.runnerSession('t1').callCheckpoint('Shall I proceed?');
     await vi.waitFor(() => expect(env.session.awaitsCheckpoint('t1')).toBe(true));
+    const baseline = env.savedRecords();
 
     await expectSavedBeforeAnnounced(env, async (s) => expect(await s.execute({ command: 'answer_checkpoint', task: 't1', answer: 'approve' }, { kind: 'user' })).toMatchObject({ ok: true }));
     await expect(answered).resolves.toEqual({ kind: 'continue' });
-    expect(env.recordsAtAnnounce).toEqual([1]);
+    expect(env.recordsAtAnnounce).toEqual([baseline + 1]);
   });
 
   it('merge all mid-run, which starts the ops task waiting at its gate', async () => {
     const env = setup([task('t1', 1), task('o1', 2, { ops: true, dependencies: ['t1'] })]);
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     env.runnerSession('t1').reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(env.session.mergeGate('o1')).toEqual(['t1']));
 
-    await expectSavedBeforeAnnounced(env, (s) => s.mergeRun());
+    await expectSavedBeforeAnnounced(env, (s) => s.execute({ command: 'merge_all' }, { kind: 'user' }));
     expect(env.session.planTasks.map((t) => t.status)).toEqual(['completed', 'in_progress']);
   });
 
@@ -282,7 +284,7 @@ describe('every user control saves before it announces', () => {
         continueConversation: vi.fn(() => new Promise<ConversationTurn>((resolve) => { finish = resolve; })),
       },
     });
-    await env.session.executePlan();
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
     const answered = env.session.continueConversation('how is it going?');
     env.runnerSession('t1').reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(env.session.planTasks[0].status).toBe('completed'));
@@ -322,7 +324,7 @@ describe("a user control's saves while it runs", () => {
     session.loadPlan(dialogue, 'goal', '/repo', { persist: false });
 
     const turn = session.continueConversation('and docs');
-    const starting = session.runTask('t1');
+    const starting = session.execute({ command: 'run_task', task: 't1' }, { kind: 'user' });
     await vi.waitFor(() => expect(spawns).toHaveLength(1));
     fail(new Error('planner transport failed'));
     await expect(turn).rejects.toThrow('planner transport failed');

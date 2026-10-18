@@ -576,7 +576,7 @@ describe('TaskOrchestrator', () => {
         createTask({ id: 't2', order: 2, title: 'Following', prompt: 'do following' }),
       ]);
 
-      await orchestrator.runTask('t1');
+      await orchestrator.forceStartTask('t1');
 
       expect(spawn).toHaveBeenCalledTimes(1);
       expect(spawn).toHaveBeenCalledWith(expect.objectContaining({ taskId: 't1' }));
@@ -1426,7 +1426,7 @@ describe('task attempts', () => {
     ]);
     await orchestrator.approveReview();
     orchestrator.stop();
-    await orchestrator.runTask('t1');
+    await orchestrator.forceStartTask('t1');
     sessions.at(-1)!.emitExit(1);
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('failed'));
     const before = spawn.mock.calls.length;

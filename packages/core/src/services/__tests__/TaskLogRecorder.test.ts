@@ -291,7 +291,7 @@ describe('a session’s task logs', () => {
     const files = memoryTaskLogs();
     const session = makeSession({ runner, broadcast: (m) => sent.push(m), openTaskLog: files });
     session.loadPlan(plan(), 'Goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     const task = sessions[0] as FakeRunnerSession;
     task.emitEvent({ type: 'turn_start', text: 'do it' });
@@ -308,9 +308,9 @@ describe('a session’s task logs', () => {
     const files = memoryTaskLogs();
     const session = makeSession({ runner, broadcast: (m) => sent.push(m), openTaskLog: files });
     session.loadPlan(plan(), 'Goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     sessions[0].emitOutput('working…');
-    session.markTaskComplete('t1');
+    session.execute({ command: 'mark_complete', task: 't1' }, { kind: 'user' });
 
     await vi.waitFor(() => expect(sent.some((m) => m.type === 'status_update' && m.tasks[0]?.status === 'completed')).toBe(true));
     expect(taskLogs(sent)).toEqual([]);
@@ -376,14 +376,14 @@ describe('a task log and its attempt ledger share one number', () => {
     const { runner, sessions } = failingFirst();
     const session = makeSession({ runner, sessionId: 'sess', workspaceRoot: () => baseDir, openTaskLog });
     session.loadPlan(plan(), 'Goal', baseDir, { sessionId: 'sess' });
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(runner.spawn).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('pending'));
 
-    await session.retryTask('t1');
+    await session.execute({ command: 'retry_task', task: 't1', from: 'fresh' }, { kind: 'user' });
     sessions[0].emitEvent({ type: 'usage', record: { source: 'claude-code', inputTokens: 100 } });
-    await session.cancelTask('t1');
-    await session.retryTask('t1');
+    await session.execute({ command: 'stop_task', task: 't1' }, { kind: 'user' });
+    await session.execute({ command: 'retry_task', task: 't1', from: 'fresh' }, { kind: 'user' });
     sessions[1].emitEvent({ type: 'usage', record: { source: 'claude-code', inputTokens: 200 } });
     await vi.waitFor(() => expect(ledger(session).map((u) => u.totals.inputTokens)).toEqual([undefined, 100, 200]));
 
@@ -399,10 +399,10 @@ describe('a task log and its attempt ledger share one number', () => {
     openTaskLog(location, 't1');
     const session = makeSession({ runner, sessionId: 'sess', workspaceRoot: () => baseDir, openTaskLog });
     session.loadPlan(plan(), 'Goal', baseDir, { sessionId: 'sess' });
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(runner.spawn).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('pending'));
-    await session.retryTask('t1');
+    await session.execute({ command: 'retry_task', task: 't1', from: 'fresh' }, { kind: 'user' });
 
     expect(ledger(session).map((u) => u.attempt)).toEqual([3, 4]);
     expect(session.taskLogAttempts('t1')).toEqual([1, 2, 4]);

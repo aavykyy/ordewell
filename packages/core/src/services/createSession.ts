@@ -6,7 +6,7 @@ import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
 import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome } from './plannerTools';
 import { sharedMcpServer, type OrdewellMcpServer, type PlannerToolHandler } from './mcp';
-import { ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type PlannerSubmission, type RewindTarget, type WakeUpTurn } from './PlannerConversation';
+import { ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type RewindTarget, type WakeUpTurn } from './PlannerConversation';
 import { forkPlanState, type ForkedDialogue } from './conversationFork';
 import { PlanTurns, type PlanTurnInput } from './PlanTurns';
 import { RunSupervision, runOrigin } from './RunSupervision';
@@ -672,13 +672,6 @@ export class Session {
     return this.commands.run(command, actor);
   }
 
-  /** A per-verb control through the seam as the user, its refusal thrown as the control's own error. */
-  private async userControl(command: ExecutionCommand): Promise<Extract<CommandOutcome, { ok: true }>> {
-    const outcome = await this.execute(command, { kind: 'user' });
-    if (!outcome.ok) throw new TaskControlError(outcome.message);
-    return outcome;
-  }
-
   private newTurnEffects(): TurnEffects {
     return new TurnEffects({
       replay: (command, actor, admission) => this.commands.replay(command, actor, admission),
@@ -749,7 +742,7 @@ export class Session {
       markComplete: (taskId) => this.withSave(() => this.orchestrator.markTaskComplete(taskId)),
       markNotDone: (taskId) => this.withSave(() => this.orchestrator.markTaskIncomplete(taskId)),
       interrupt: (taskId) => this.withSave(() => this.orchestrator.interruptTask(taskId)),
-      stopTask: (taskId) => this.cancelTask(taskId),
+      stopTask: (taskId) => this.withSave(() => this.orchestrator.cancelTask(taskId)),
       stopRun: () => this.stopExecution(),
       retryTask: (taskId, actor) => this.restartTask(taskId, runOrigin(actor)),
       skipTask: (taskId, reason, actor) => this.withSave(() => this.orchestrator.skipTask(taskId, reason, runOrigin(actor))),
@@ -921,11 +914,6 @@ export class Session {
     const approved = this.plan?.approvedTasks;
     if (!approved || approved.every((id) => ids.has(id))) return;
     this.plan!.approvedTasks = approved.filter((id) => ids.has(id));
-  }
-
-  private approveTask(taskId: string): void {
-    const task = this.store.get(taskId);
-    if (task) this.approve(flattenTasks([task]).map((t) => t.id));
   }
 
   /**
@@ -1483,15 +1471,6 @@ export class Session {
     return this.conversation.rewindTargets();
   }
 
-  /**
-   * Hand the planner turn in flight a validated plan or a task edit; the turn
-   * commits it as it would the same JSON in the planner's reply. False when
-   * no turn is open.
-   */
-  submitToTurn(submission: PlannerSubmission): boolean {
-    return this.conversation.submit(submission);
-  }
-
   /** A plan the planner submitted through its tool, already checked against the live catalog. */
   private submitPlanFromTool(tasks: Task[]): boolean {
     return !!this.plan && this.conversation.submit({ kind: 'plan', tasks });
@@ -1647,18 +1626,6 @@ export class Session {
     if (changes.mergeAtGatesAutomatically) this.orchestrator.runSettingsChanged();
   }
 
-  async executePlan(): Promise<void> {
-    if (this.orchestrator.hasLiveWork) {
-      const outcome = await this.execute({ command: 'run_plan' }, { kind: 'user' });
-      if (!outcome.ok) throw new TaskControlError(outcome.message);
-      return;
-    }
-    this.idlePlan();
-    // Executing is the user's approval of every task in the plan (ADR-0029).
-    this.approve(flattenTasks(this.store.planTasks).map((t) => t.id));
-    await this.runWholePlan('user');
-  }
-
   private idlePlan(): LegacyPlanState {
     if (!this.plan || !this.store.planTasks.length) throw new NoPlanError('execute');
     if (this.orchestrator.hasLiveWork) throw new AlreadyExecutingError();
@@ -1707,30 +1674,10 @@ export class Session {
     return line;
   }
 
-  async approveReview(): Promise<LegacyPlanState> {
-    if (!this.plan) throw new NoPlanError('review');
-    const plan = this.plan;
-    await this.userControl({ command: 'approve_review' });
-    return plan;
-  }
-
-  /** Answers the line saying the task waits for its dependencies, when it was queued behind them rather than started. */
-  async forceStartTask(taskId: string): Promise<string | undefined> {
-    const { payload } = await this.userControl({ command: 'force_start', task: taskId });
-    return payload?.kind === 'queued' ? payload.line : undefined;
-  }
-
   private async startOneTask(taskId: string, origin: RunOrigin): Promise<void> {
     if (!this.plan) return;
     this.requireTask(taskId);
     await this.withSave(() => this.orchestrator.forceStartTask(taskId, origin));
-  }
-
-  async runTask(taskId: string): Promise<void> {
-    if (!this.plan) return;
-    this.requireTask(taskId);
-    this.approveTask(taskId);
-    await this.withSave(() => this.orchestrator.runTask(taskId));
   }
 
   /**
@@ -1747,44 +1694,12 @@ export class Session {
     await this.withSave(() => this.orchestrator.tick());
   }
 
-  async retryTask(taskId: string): Promise<void> {
-    this.approveTask(taskId);
-    await this.restartTask(taskId, 'user');
-  }
-
   private async restartTask(taskId: string, origin: RunOrigin): Promise<void> {
     await this.withSave(() => this.orchestrator.retryTask(taskId, origin));
   }
 
-  /**
-   * Continue a finished structured task in its saved runner session with the
-   * user's message (ADR-0018, K1); throws `TaskControlError` for a task that
-   * cannot be continued.
-   */
-  async continueTask(taskId: string, message: string): Promise<void> {
-    this.approveTask(taskId);
-    await this.resumeTask(taskId, message, 'user');
-  }
-
   private async resumeTask(taskId: string, message: string, origin: RunOrigin): Promise<void> {
     await this.withSave(() => this.orchestrator.continueTask(taskId, message, origin));
-  }
-
-  async cancelTask(taskId: string): Promise<void> {
-    await this.withSave(() => this.orchestrator.cancelTask(taskId));
-  }
-
-  async markTaskComplete(taskId: string): Promise<void> {
-    await this.userControl({ command: 'mark_complete', task: taskId });
-  }
-
-  async markTaskIncomplete(taskId: string): Promise<void> {
-    await this.userControl({ command: 'mark_not_done', task: taskId });
-  }
-
-  /** Resume a task paused on a usage limit now, once the user says it has reset; see {@link TaskOrchestrator.resumeNow}. */
-  async resumeNow(taskId: string): Promise<void> {
-    await this.userControl({ command: 'retry_task', task: taskId, from: 'session' });
   }
 
   /**
@@ -1797,7 +1712,7 @@ export class Session {
   }
 
   /** Keep a task paused on a usage limit from resuming on its own; see {@link TaskOrchestrator.cancelScheduledResume}. */
-  cancelScheduledResume(taskId: string): boolean {
+  private cancelScheduledResume(taskId: string): boolean {
     return this.saved(() => this.orchestrator.cancelScheduledResume(taskId));
   }
 
@@ -1839,11 +1754,11 @@ export class Session {
     this.onNotice?.({ type: 'notice', level, message });
   }
 
-  approveCheckpoint(taskId: string): void {
+  private approveCheckpoint(taskId: string): void {
     this.saved(() => this.orchestrator.approveCheckpoint(taskId));
   }
 
-  rejectCheckpoint(taskId: string, reason?: string): void {
+  private rejectCheckpoint(taskId: string, reason?: string): void {
     this.saved(() => this.orchestrator.rejectCheckpoint(taskId, reason));
   }
 
@@ -1857,7 +1772,7 @@ export class Session {
    * `TaskControlError` for one that cannot take it. A task waiting for input
    * is back in progress, and saved so before any surface is told.
    */
-  sendTaskMessage(taskId: string, text: string): string {
+  private sendTaskMessage(taskId: string, text: string): string {
     return this.saved(() => this.orchestrator.sendTaskMessage(taskId, text));
   }
 
@@ -1865,28 +1780,26 @@ export class Session {
    * Force send (ADR-0023, F1): interrupt the task's running turn and deliver
    * this message next. Throws `TaskControlError` where a plain message would.
    */
-  forceSendTaskMessage(taskId: string, text: string): string {
+  private forceSendTaskMessage(taskId: string, text: string): string {
     return this.saved(() => this.orchestrator.forceSendTaskMessage(taskId, text));
   }
 
   /**
-   * The task runner's own command `/name args` (#66), as a turn of its own.
-   * Throws `TaskControlError` where a plain message would.
+   * The task runner's own command `/name args` (#66), as a turn of its own;
+   * not an execution control, so it carries no command at the seam and the
+   * daemon hands it straight to the runner. Throws `TaskControlError` where a
+   * plain message would.
    */
   invokeTaskCommand(taskId: string, name: string, args = ''): string {
     return this.saved(() => this.orchestrator.invokeTaskCommand(taskId, name, args));
   }
 
-  forceSendQueuedTaskMessage(taskId: string, id: string): boolean {
+  private forceSendQueuedTaskMessage(taskId: string, id: string): boolean {
     return this.saved(() => this.orchestrator.forceSendQueuedTaskMessage(taskId, id));
   }
 
-  removeQueuedTaskMessage(taskId: string, id: string): boolean {
+  private removeQueuedTaskMessage(taskId: string, id: string): boolean {
     return this.saved(() => this.orchestrator.removeQueuedTaskMessage(taskId, id));
-  }
-
-  async interruptTask(taskId: string): Promise<void> {
-    await this.userControl({ command: 'interrupt_task', task: taskId });
   }
 
   /** Replay a run a dirty tree blocked, after stashing the tracked changes. */
@@ -1934,14 +1847,6 @@ export class Session {
   /** The run's integration branch against its base ref, as a unified diff. */
   async reviewRunDiff(): Promise<string> {
     return this.runs.reviewDiff();
-  }
-
-  /** The user's Merge all, through the seam: the merge result, merged or stopped, for the Merge all card. */
-  async mergeRun(): Promise<IsolationMergeResult> {
-    const outcome = await this.execute({ command: 'merge_all' }, { kind: 'user' });
-    if (outcome.payload?.kind === 'merge') return outcome.payload.result;
-    if (!outcome.ok) throw new TaskControlError(outcome.message);
-    throw new Error('Merge all answered without its result.');
   }
 
   /**

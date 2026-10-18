@@ -79,12 +79,12 @@ describe('the session socket', () => {
   it('numbers every broadcast of a session, and greets with the number the snapshot accounts for', async () => {
     const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
     pool.adoptSavedSession(meta.id, workspace);
-    await pool.session(meta.id).markTaskComplete('t2');
+    await pool.session(meta.id).execute({ command: 'mark_complete', task: 't2' }, { kind: 'user' });
 
     const [, snapshot] = await firstFrames(port, meta.id, 2) as [unknown, RunSnapshotFrame];
     const later = firstFrames(port, meta.id, 3);
     await new Promise((resolve) => setTimeout(resolve, 50));
-    await pool.session(meta.id).markTaskIncomplete('t2');
+    await pool.session(meta.id).execute({ command: 'mark_not_done', task: 't2' }, { kind: 'user' });
     const [, again, next] = await later as [unknown, RunSnapshotFrame, SessionFrame];
 
     expect(snapshot.seq).toBeGreaterThan(0);

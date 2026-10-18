@@ -1949,28 +1949,6 @@ export class TaskOrchestrator {
     this.tell('warn', `Task "${task.title}" was force-started before the work of ${titles.join(', ')} was merged into your branch.`);
   }
 
-  /**
-   * Run exactly one task outside full-plan scheduling. The active/starting
-   * session still contributes to {@link hasLiveWork} so every surface exposes
-   * Stop and disables Execute Plan, but onVerdict cannot auto-schedule other
-   * tasks because the plan scheduler's `running` flag remains false.
-   */
-  async runTask(taskId: string): Promise<void> {
-    if (this.hasLiveWork) return;
-    const task = this.store.get(taskId);
-    if (!task || task.type !== 'ai') return;
-    this.refuseOpsDuringMerge(taskId, FORCED_NOW);
-    await this.whileAdmitted(async (admission) => {
-      if (!(await this.openForAdmitted(taskId, 'user', () => this.runTask(taskId), admission))) return;
-      if (this.attempts.has(taskId)) return;
-      this.refuseOpsDuringMerge(taskId, FORCED_NOW);
-      this.refuseClaim(taskId, admission);
-      this.onHold.delete(taskId);
-      this.notePastGate(taskId);
-      await this.claimed(taskId, admission);
-    });
-  }
-
   getCompletedCount(): number { return this.store.completedCount; }
   getTotalCount(): number { return this.store.allTasks.length; }
   isAllComplete(): boolean { return this.store.isAllComplete(); }

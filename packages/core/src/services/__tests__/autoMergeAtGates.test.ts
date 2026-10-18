@@ -56,7 +56,7 @@ describe('Merge at gates automatically', () => {
     const { session, pass, messages } = harness(iso);
     mergesAtGates(true);
     session.loadPlan(plans([change, gated]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass();
     await vi.waitFor(() => expect(merged(iso)).toHaveLength(1));
     await vi.waitFor(() => expect(session.mergeGate(gated.id)).toEqual([]));
@@ -76,7 +76,7 @@ describe('Merge at gates automatically', () => {
     // Still running, so the failure below does not end the run and merge at its end.
     const other = createTask({ id: 'x4', order: 4, title: 'Other', prompt: 'other' });
     session.loadPlan(plans([change, verify, pack, other]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass();
     await vi.waitFor(() => expect(sessions.map((s) => s.taskId)).toContain('v2'));
     sessions.find((s) => s.taskId === 'v2')!.reportComplete({ status: 'failed', summary: '', reason: 'flaky' });
@@ -95,7 +95,7 @@ describe('Merge at gates automatically', () => {
     const { session, pass } = harness(iso);
     mergesAtGates(enabled);
     session.loadPlan(plans(), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass();
     await vi.waitFor(() => expect(session.mergeGate('o2')).toEqual(['c1']));
     expect(merged(iso)).toEqual([]);
@@ -107,7 +107,7 @@ describe('Merge at gates automatically', () => {
     const { session, pass } = harness(iso);
     mergesAtGates(initial);
     session.loadPlan(plans([change, user]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     mergesAtGates(!initial);
     session.applyRunSettings({ mergeAtGatesAutomatically: !initial });
@@ -124,7 +124,7 @@ describe('Merge at gates automatically', () => {
     const { session, pass } = harness(iso);
     mergesAtGates(false);
     session.loadPlan(plans([change, user]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     mergesAtGates(true);
     pass();
@@ -142,21 +142,21 @@ describe('Merge at gates automatically', () => {
     const parallel = createTask({ id: 'c5', order: 5, prompt: 'parallel' });
     mergesAtGates(true);
     session.loadPlan(plans([change, user, second, last, parallel]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     if (first !== 'clean') iso.mergeResult = { outcome: 'conflict', repo: '.' };
     pass();
     await vi.waitFor(() => expect(merged(iso)).toHaveLength(1));
     if (first !== 'clean') {
       await vi.waitFor(() => expect(session.mergeGate('u2')).toEqual(['c1']));
       iso.mergeResult = { outcome: 'merged' };
-      if (first === 'manual') await session.mergeRun();
+      if (first === 'manual') await session.execute({ command: 'merge_all' }, { kind: 'user' });
       else {
         iso.mergedByHand.add('c1');
         await session.reschedule();
       }
     }
     expect(session.planTasks.find((t) => t.id === 'c5')!.status).toBe('in_progress');
-    await session.markTaskComplete('u2');
+    await session.execute({ command: 'mark_complete', task: 'u2' }, { kind: 'user' });
     await vi.waitFor(() => expect(spawn.mock.calls.some(([o]) => o.taskId === 'c3')).toBe(true));
     pass('c3');
     await vi.waitFor(() => expect(merged(iso)).toHaveLength(first === 'manual' ? 3 : 2));
@@ -172,7 +172,7 @@ describe('Merge at gates automatically', () => {
     const next = createTask({ id: 'c2', order: 2, prompt: 'next', dependencies: ['c1'] });
     mergesAtGates(true);
     session.loadPlan(plans([change, next]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass();
     await vi.waitFor(() => expect(session.planTasks[1].status).toBe('in_progress'));
     expect(merged(iso)).toHaveLength(0);
@@ -185,7 +185,7 @@ describe('Merge at gates automatically', () => {
     const unrelated = createTask({ id: 'o3', order: 3, ops: true, prompt: 'other ops' });
     mergesAtGates(true);
     session.loadPlan(plans([change, ops, unrelated]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass();
     await vi.waitFor(() => expect(session.mergeGate('o2')).toEqual(['c1']));
     expect(merged(iso)).toHaveLength(0);
@@ -218,7 +218,7 @@ describe('Merge at gates automatically', () => {
     const { session, pass } = harness(iso);
     mergesAtGates(false);
     session.loadPlan(plans(), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass();
     await vi.waitFor(() => expect(session.mergeGate('o2')).toEqual(['c1']));
     expect(await session.execute({ command: 'merge_all' }, { kind: 'supervisor', level: 'act' })).toMatchObject({ ok: true });
@@ -237,7 +237,7 @@ describe('Merge all at the end of the run', () => {
     const { session, pass, messages } = harness(iso);
     mergesAtGates(true);
     session.loadPlan(plans([change, next]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass();
     await vi.waitFor(() => expect(session.planTasks[1].status).toBe('in_progress'));
     pass('c2');
@@ -248,7 +248,7 @@ describe('Merge all at the end of the run', () => {
     expect(messages).toContainEqual({ type: 'isolation_merge', result: { outcome: 'merged' }, trigger: { kind: 'run_end' } });
     expect(session.isolationView()).toBeNull();
     expect(messages).toContainEqual({ type: 'run_closed' });
-    expect(session.planState!.conversationHistory!.map((e) => e.content)).toEqual(['Ordewell setting: auto-merged at the end of the run']);
+    expect(session.planState!.conversationHistory!.map((e) => e.content)).toEqual(['You started the plan.', 'Ordewell setting: auto-merged at the end of the run']);
   });
 
   it('merges what landed beside a failed task, and hands nothing over', async () => {
@@ -257,7 +257,7 @@ describe('Merge all at the end of the run', () => {
     const failing = createTask({ id: 'c3', order: 3, prompt: 'fails' });
     mergesAtGates(true);
     session.loadPlan(plans([change, failing]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass();
     await vi.waitFor(() => expect(session.planTasks[0].status).toBe('completed'));
     sessions.find((s) => s.taskId === 'c3')!.reportComplete({ status: 'failed', summary: '', reason: 'tests failed' });
@@ -276,7 +276,7 @@ describe('Merge all at the end of the run', () => {
     const { session, pass, messages, notices } = harness(iso);
     mergesAtGates(true);
     session.loadPlan(plans([change]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass();
     await vi.waitFor(() => expect(messages.some((m) => m.type === 'execution_complete')).toBe(true));
 
@@ -291,7 +291,7 @@ describe('Merge all at the end of the run', () => {
     const { session, pass, messages } = harness(iso);
     mergesAtGates(enabled);
     session.loadPlan(plans([change]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass();
     await vi.waitFor(() => expect(messages.some((m) => m.type === 'execution_complete')).toBe(true));
 
@@ -306,10 +306,10 @@ describe('Merge all at the end of the run', () => {
     const { session, pass, messages } = harness(iso);
     mergesAtGates(true);
     session.loadPlan(plans([change, user]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass();
     await vi.waitFor(() => expect(session.mergeGate('u2')).toEqual(['c1']));
-    await session.markTaskComplete('u2');
+    await session.execute({ command: 'mark_complete', task: 'u2' }, { kind: 'user' });
     await vi.waitFor(() => expect(messages.some((m) => m.type === 'execution_complete')).toBe(true));
 
     expect(merged(iso)).toHaveLength(1);
@@ -321,11 +321,11 @@ describe('Merge all at the end of the run', () => {
     const { session, pass, messages } = harness(iso);
     mergesAtGates(true);
     session.loadPlan(plans([change, user]), 'goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     pass();
     await vi.waitFor(() => expect(merged(iso)).toHaveLength(1));
     await vi.waitFor(() => expect(session.mergeGate('u2')).toEqual([]));
-    await session.markTaskComplete('u2');
+    await session.execute({ command: 'mark_complete', task: 'u2' }, { kind: 'user' });
     await vi.waitFor(() => expect(messages.some((m) => m.type === 'execution_complete')).toBe(true));
 
     expect(merged(iso)).toHaveLength(1);
@@ -343,7 +343,7 @@ describe('who opened the run', () => {
     const { session, pass, messages } = harness(iso);
     mergesAtGates(false);
     session.loadPlan(plans([change, other]), 'goal', '/repo');
-    await session.runTask('c1');
+    await session.execute({ command: 'run_task', task: 'c1' }, { kind: 'user' });
     pass();
     await vi.waitFor(() => expect(handoffs(messages)).toHaveLength(1));
 
@@ -367,7 +367,7 @@ describe('who opened the run', () => {
     const { session, pass, messages } = harness(iso);
     userSettings.supervisorLevel = 'act';
     session.loadPlan(plans([change, other]), 'goal', '/repo');
-    await session.runTask('c1');
+    await session.execute({ command: 'run_task', task: 'c1' }, { kind: 'user' });
     pass();
     await vi.waitFor(() => expect(handoffs(messages).length).toBeGreaterThan(0));
     expect(session.planState!.runSettings).toMatchObject({ supervisorLevel: 'act', supervisorRetryLimit: 2 });
@@ -375,7 +375,7 @@ describe('who opened the run', () => {
     Object.assign(userSettings, { supervisorLevel: 'watch', supervisorRetryLimit: 5 });
     const merging = session.execute({ command: 'merge_all' }, { kind: 'supervisor', level: 'act' });
     await vi.waitFor(() => expect(release).toBeDefined());
-    const executing = session.executePlan();
+    const executing = session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     await vi.waitFor(() => expect(session.planState!.runSettings).toMatchObject({ supervisorLevel: 'watch', supervisorRetryLimit: 5 }));
     release!();
@@ -410,7 +410,7 @@ describe('automatic gate merging with real git', () => {
     const { session, spawn, pass, notices } = harness(iso, root);
     mergesAtGates(true);
     session.loadPlan(plans(), 'goal', root);
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     const cwd = spawn.mock.calls[0][0].cwd!;
     writeFileSync(join(cwd, 'x'), 'runner\n');
     git(cwd, 'add', 'x');
@@ -435,7 +435,7 @@ describe('automatic gate merging with real git', () => {
     const { session } = harness(new FakeWorktreeIsolation(), root, true);
     mergesAtGates(true);
     session.loadPlan(plans(), 'goal', root);
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     const loaded = loadSession(session.sessionId, root)!;
     expect(loaded.plan).not.toHaveProperty('mergeAtGatesAutomatically');
     expect(loaded.plan.runSettings).toMatchObject({ mergeAtGatesAutomatically: true });
@@ -444,7 +444,7 @@ describe('automatic gate merging with real git', () => {
     const restored = harness().session;
     restored.loadPlan(loaded.plan, 'goal', root);
     expect(restored.planState!.runSettings).toMatchObject({ mergeAtGatesAutomatically: true });
-    await restored.executePlan();
+    await restored.execute({ command: 'run_plan' }, { kind: 'user' });
     expect(restored.planState!.runSettings).toMatchObject({ mergeAtGatesAutomatically: false });
   });
 });

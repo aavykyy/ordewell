@@ -32,6 +32,7 @@ describe('a wake-up turn at Act', () => {
     expect(env.run.of('t1').delivered).toContain('use Postgres');
     expect(taskOf(env.session, 't2')!.status).toBe('pending');
     expect(records(env).map((r) => [r.command, r.actor, r.level, r.outcome])).toEqual([
+      ['run_plan', 'user', undefined, 'done'],
       ['message_task', 'supervisor', 'act', 'done'],
       ['stop_task', 'supervisor', 'act', 'done'],
     ]);
@@ -238,7 +239,7 @@ describe('the loop guards', () => {
     env.planner.calls[1].finish(prose('Task 1 failed again.'));
     await settled();
 
-    await env.session.retryTask('t1');
+    await env.session.execute({ command: 'retry_task', task: 't1', from: 'fresh' }, { kind: 'user' });
     await failsAgain(env, 3);
 
     expect((await env.planner.tools().retryTask!({ task: '1', from: 'session', message: 'and again' }, ctx)).isError).toBeFalsy();

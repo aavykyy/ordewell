@@ -9,6 +9,14 @@ import { fakeConfig, FakeRunnerSession, flushMicrotasks } from '../../testing';
 import { fakeNotification, makeSession, saves, taskOf } from './sessionTestKit';
 import type { IRunner, IRunnerSession, StructuredEvent } from '../../interfaces/IRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
+import type { Session } from '../createSession';
+
+/** A task message through the command seam as the user, answering its id as the per-verb control did. */
+async function sendTaskMessage(session: Session, taskId: string, text: string): Promise<string> {
+  const outcome = await session.execute({ command: 'message_task', task: taskId, text }, { kind: 'user' });
+  if (!outcome.ok || outcome.payload?.kind !== 'message') throw new TaskControlError(outcome.message);
+  return outcome.payload.id;
+}
 
 function setup() {
   const sessions: FakeRunnerSession[] = [];
@@ -417,11 +425,11 @@ describe('through the Session', () => {
 
   it('saves the wait, and reports its reason and the queued messages on status updates', async () => {
     const { session, sessions, lastStatus } = sessionWith();
-    await session.forceStartTask('t1');
+    await session.execute({ command: 'force_start', task: 't1' }, { kind: 'user' });
 
-    const id = session.sendTaskMessage('t1', 'and the docs');
+    const id = await sendTaskMessage(session, 't1', 'and the docs');
     expect(lastStatus()).toMatchObject({ tasks: [{ id: 't1', status: 'in_progress', queued: [{ id, text: 'and the docs' }] }] });
-    expect(session.removeQueuedTaskMessage('t1', id)).toBe(true);
+    expect(await session.execute({ command: 'remove_queued', task: 't1', id }, { kind: 'user' })).toMatchObject({ ok: true });
 
     sessions[0].waitForInput();
     await vi.waitFor(() => expect(saves(session).mock.lastCall?.[0].tasks[0]).toMatchObject({ status: 'awaiting_user', awaitingReason: 'input' }));
@@ -430,7 +438,7 @@ describe('through the Session', () => {
 
   it('saves a task back in progress before any surface hears of the message that woke it', async () => {
     const { session, sessions, broadcast } = sessionWith();
-    await session.forceStartTask('t1');
+    await session.execute({ command: 'force_start', task: 't1' }, { kind: 'user' });
     sessions[0].waitForInput();
     await flushMicrotasks();
 
@@ -439,7 +447,7 @@ describe('through the Session', () => {
     broadcast.mockImplementation((m) => {
       if (m.type === 'status_update') savedWhenAnnounced ??= saves(session).mock.lastCall?.[0].tasks[0].status;
     });
-    session.sendTaskMessage('t1', 'go on');
+    await sendTaskMessage(session, 't1', 'go on');
 
     expect(saves(session).mock.calls.length).toBeGreaterThan(savesBefore);
     expect(savedWhenAnnounced).toBe('in_progress');
@@ -448,9 +456,9 @@ describe('through the Session', () => {
 
   it('interrupts through the Session, and refuses a task that is not running', async () => {
     const { session } = sessionWith();
-    await session.forceStartTask('t1');
+    await session.execute({ command: 'force_start', task: 't1' }, { kind: 'user' });
 
-    await session.interruptTask('t1');
+    await session.execute({ command: 'interrupt_task', task: 't1' }, { kind: 'user' });
     expect(taskOf(session, 't1')).toMatchObject({ status: 'awaiting_user', awaitingReason: 'input' });
 
     const inactive = makeSession();
@@ -461,6 +469,6 @@ describe('through the Session', () => {
       runners: ['claude-code'],
       lastUpdated: new Date().toISOString(),
     }, 'Goal', '/repo');
-    expect(() => inactive.sendTaskMessage('t1', 'hi')).toThrow(TaskControlError);
+    await expect(sendTaskMessage(inactive, 't1', 'hi')).rejects.toThrow(TaskControlError);
   });
 });

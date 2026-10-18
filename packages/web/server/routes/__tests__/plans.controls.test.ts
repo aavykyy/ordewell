@@ -23,6 +23,12 @@ async function json(res: Response): Promise<Record<string, unknown>> {
   return (await res.json()) as Record<string, unknown>;
 }
 
+/** Queue a task message through the daemon's own route, answering the id a surface reads. */
+async function queueMessage(h: Harness, taskId: string, text: string): Promise<string> {
+  const body = await json(await h.post(`tasks/${taskId}/messages`, { text }));
+  return String(body.id);
+}
+
 describe('a control from the daemon lands one execution_action line, worded by the seam', () => {
   it('Mark complete and Mark not done answer the seam\'s line', async () => {
     const h = start([task('t1', 1)]);
@@ -66,7 +72,7 @@ describe('a control from the daemon lands one execution_action line, worded by t
 
   it('Force start answers the line saying it is queued behind its dependencies', async () => {
     const h = start([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]);
-    await h.session.executePlan();
+    await h.session.execute({ command: 'run_plan' }, { kind: 'user' });
     h.forgetTimeline();
 
     const res = await h.post('tasks/t2/force-start');
@@ -87,7 +93,8 @@ describe('a control from the daemon lands one execution_action line, worded by t
 
   it('Interrupt stops the running turn', async () => {
     const h = start([task('t1', 1)]);
-    await h.session.executePlan();
+    await h.session.execute({ command: 'run_plan' }, { kind: 'user' });
+    h.forgetTimeline();
 
     const res = await h.post('tasks/t1/interrupt');
 
@@ -131,7 +138,8 @@ describe('a control from the daemon lands one execution_action line, worded by t
 
   it('answers a checkpoint through the seam, and keeps 409 for one nobody waits at', async () => {
     const h = start([task('t1', 1), task('t2', 2)]);
-    await h.session.executePlan();
+    await h.session.execute({ command: 'run_plan' }, { kind: 'user' });
+    h.forgetTimeline();
     const approved = h.latest('t1').callCheckpoint('Drop the table?');
     await vi.waitFor(() => expect(h.session.awaitsCheckpoint('t1')).toBe(true));
 
@@ -148,7 +156,7 @@ describe('a control from the daemon lands one execution_action line, worded by t
 
   it('finds the checkpoint of a task named by its order, as the seam does', async () => {
     const h = start([task('t1', 1)]);
-    await h.session.executePlan();
+    await h.session.execute({ command: 'run_plan' }, { kind: 'user' });
     const answer = h.latest('t1').callCheckpoint('Drop the table?');
     await vi.waitFor(() => expect(h.session.awaitsCheckpoint('t1')).toBe(true));
 
@@ -160,7 +168,8 @@ describe('a control from the daemon lands one execution_action line, worded by t
 
   it('rejects a checkpoint with the user\'s reason, trimmed', async () => {
     const h = start([task('t1', 1)]);
-    await h.session.executePlan();
+    await h.session.execute({ command: 'run_plan' }, { kind: 'user' });
+    h.forgetTimeline();
     const answer = h.latest('t1').callCheckpoint('Drop the table?');
     await vi.waitFor(() => expect(h.session.awaitsCheckpoint('t1')).toBe(true));
 
@@ -173,14 +182,14 @@ describe('a control from the daemon lands one execution_action line, worded by t
 
   it('force sends a message, and force sends and takes back a queued one', async () => {
     const h = start([task('t1', 1)]);
-    await h.session.executePlan();
+    await h.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     const forced = await h.post('tasks/t1/messages/now', { text: 'stop and use the cache' });
     expect(await json(forced)).toEqual({ id: 'msg-1' });
     expect(h.timeline().at(-1)!.text).toBe('You force sent task #1 "Task t1" a message: "stop and use the cache"');
 
-    const first = h.session.sendTaskMessage('t1', 'first');
-    const second = h.session.sendTaskMessage('t1', 'second');
+    const first = await queueMessage(h, 't1', 'first');
+    const second = await queueMessage(h, 't1', 'second');
     h.forgetTimeline();
     const sent = await h.post(`tasks/t1/messages/${first}/now`);
     const removed = await h.app.request(`/api/plans/s1/tasks/t1/messages/${second}`, { method: 'DELETE' });
@@ -192,8 +201,8 @@ describe('a control from the daemon lands one execution_action line, worded by t
 
   it('refuses a queued message already delivered, in the seam\'s words', async () => {
     const h = start([task('t1', 1)]);
-    await h.session.executePlan();
-    const id = h.session.sendTaskMessage('t1', 'first');
+    await h.session.execute({ command: 'run_plan' }, { kind: 'user' });
+    const id = await queueMessage(h, 't1', 'first');
     await h.post(`tasks/t1/messages/${id}/now`);
     h.forgetTimeline();
 
@@ -236,7 +245,7 @@ describe('a control from the daemon lands one execution_action line, worded by t
 
   it('answers a runner request the user allows, or denies with a note, through the seam', async () => {
     const h = start([task('t1', 1)]);
-    await h.session.executePlan();
+    await h.session.execute({ command: 'run_plan' }, { kind: 'user' });
     h.latest('t1').requestPermission('p1', 'Bash', { command: 'git push' }, [{ type: 'addRules' }]);
     h.latest('t1').requestPermission('p2', 'Bash', { command: 'rm -rf dist' });
     await vi.waitFor(() => expect(h.session.outstandingApprovals()).toHaveLength(2));

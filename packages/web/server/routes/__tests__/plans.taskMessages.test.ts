@@ -156,7 +156,7 @@ describe('force sending a message the runner already has over the daemon (ADR-00
       runners: ['claude-code'], status: 'approved', generatedAt: '2026-10-14T09:00:00Z', lastUpdated: '2026-10-14T09:00:00Z',
     };
     session.loadPlan(plan, 'build it', process.cwd());
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(runner.spawn).toHaveBeenCalled());
     const app = new Hono().route('/api/plans', plansRoute({ session: () => session } as unknown as OrchestratorPool));
     return { app, task };

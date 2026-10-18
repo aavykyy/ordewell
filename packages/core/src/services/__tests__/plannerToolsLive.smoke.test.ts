@@ -149,7 +149,7 @@ describe.runIf(live)('Claude Code planner tools — live', () => {
 
   it('edits a task that is not running through edit_plan, while another runs', async () => {
     const { session, sessions, toolCalls } = await plannedRun();
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     expect(sessions).toHaveLength(1);
 
     await session.continueConversation(
@@ -164,7 +164,7 @@ describe.runIf(live)('Claude Code planner tools — live', () => {
 
   it('reads the live output of a running task through task_output', async () => {
     const { session, sessions, toolCalls } = await plannedRun();
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     sessions[0].emitOutput('$ bash greet.sh\nhello from the runner\nbuild marker: sentinel-7391\n');
 
     await session.continueConversation(

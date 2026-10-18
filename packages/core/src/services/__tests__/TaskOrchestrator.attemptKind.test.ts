@@ -452,7 +452,7 @@ describe('attempt kinds, as the orchestrator runs them', () => {
       await completed(env, c1);
       let refused: unknown = null;
       env.isolation.mergeIntoCheckedOut = async () => {
-        refused = await env.orchestrator.runTask('o2').then(() => null, (err: unknown) => err);
+        refused = await env.orchestrator.forceStartTask('o2').then(() => null, (err: unknown) => err);
         return { outcome: 'merged' };
       };
 

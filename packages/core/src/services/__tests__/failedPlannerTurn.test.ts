@@ -115,18 +115,18 @@ describe('a planner turn that fails', () => {
       },
     });
     session.loadPlan(pausedRunPlan(), 'build it', testWorkspace, { persist: false });
-    await session.executePlan();
-    await session.cancelTask('b');
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
+    await session.execute({ command: 'stop_task', task: 'b' }, { kind: 'user' });
 
     armed = true;
     const plan = await session.continueConversation('add a docs task');
     armed = false;
 
-    // 2 pre-call + the user message + the assistant task_ops entry — the
-    // persisted turn survives the broadcast failure, and the call itself no
-    // longer fails on account of it.
-    expect(plan.conversationHistory).toHaveLength(4);
-    expect(plan.conversationHistory![3].content).toContain('Tasks updated');
+    // 2 pre-call + the user's start and stop + the user message + the
+    // assistant task_ops entry — the persisted turn survives the broadcast
+    // failure, and the call itself no longer fails on account of it.
+    expect(plan.conversationHistory).toHaveLength(6);
+    expect(plan.conversationHistory![5].content).toContain('Tasks updated');
     expect(plan.researchLog).toHaveLength(1);
     expect(errorSpy).toHaveBeenCalled();
 
@@ -223,7 +223,7 @@ describe('a failed turn after a task settled during it', () => {
     const plan = dialoguePlan();
     plan.tasks = [createTask({ id: 'a', order: 1, title: 'Setup', prompt: 'p', assignedRunner: 'claude-code' })];
     session.loadPlan(plan, 'build me a parser', testWorkspace, { persist: false });
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     finishTask = () => {
       live.get('a')!.reportComplete({ status: 'done', summary: '' });
       live.get('a')!.emitOutput(`\n`);
@@ -232,9 +232,9 @@ describe('a failed turn after a task settled during it', () => {
 
     await expect(session.continueConversation('JSON and YAML')).rejects.toThrow('planner transport down');
 
-    expect(session.planState!.conversationHistory!.map((m) => m.content)).toEqual(['build me a parser', 'Which file formats?']);
+    expect(session.planState!.conversationHistory!.map((m) => m.content)).toEqual(['build me a parser', 'Which file formats?', 'You started the plan.']);
     const onDisk = saves(session).mock.calls.at(-1)![0];
-    expect(onDisk.conversationHistory!.map((m) => m.content)).toEqual(['build me a parser', 'Which file formats?']);
+    expect(onDisk.conversationHistory!.map((m) => m.content)).toEqual(['build me a parser', 'Which file formats?', 'You started the plan.']);
     expect(onDisk.tasks[0].status).toBe('completed');
   });
 });

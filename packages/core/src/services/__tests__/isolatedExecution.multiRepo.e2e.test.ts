@@ -205,7 +205,7 @@ async function conflictedRun(env: Env, conversationHistory?: ConversationMessage
     createTask({ id: 't4', order: 4, title: 'Describe the rename in infra', prompt: 'document it', dependencies: ['t3'] }),
   ];
   session.loadPlan(plan(tasks, conversationHistory), 'goal', env.dir);
-  await session.executePlan();
+  await session.execute({ command: 'run_plan' }, { kind: 'user' });
   await vi.waitFor(() => expect(taskOf(session, 't3')!.status).toBe('awaiting_user'), { timeout: 20_000 });
   return { tipsBeforeTask3 };
 }
@@ -298,7 +298,9 @@ describe.skipIf(!hasGit)('isolated execution over a folder of three repositories
     git(roots.web, 'commit', '-q', '-am', 'user edit');
     const heads = () => REPOS.map((r) => git(roots[r], 'rev-parse', 'HEAD'));
     const before = heads();
-    const blocked = await session.mergeRun();
+    const blockedOutcome = await session.execute({ command: 'merge_all' }, { kind: 'user' });
+    if (blockedOutcome.payload?.kind !== 'merge') throw new Error('merge_all answered without its result');
+    const blocked = blockedOutcome.payload.result;
     expect(blocked).toEqual({ outcome: 'blocked', blocked: [{ repo: 'web', reason: 'conflict', files: ['web.txt'] }] });
     expect(heads()).toEqual(before);
     expect(existsSync(join(roots.api, 'endpoint.txt'))).toBe(false);
@@ -314,7 +316,7 @@ describe.skipIf(!hasGit)('isolated execution over a folder of three repositories
     git(roots.web, 'reset', '-q', '--hard', 'HEAD~1');
     const runId = env.run().id;
     const merged = { api: git(roots.api, 'rev-parse', integration), infra: git(roots.infra, 'rev-parse', integration), web: git(roots.web, 'rev-parse', integration) };
-    expect(await session.mergeRun()).toEqual({ outcome: 'merged' });
+    expect(await session.execute({ command: 'merge_all' }, { kind: 'user' })).toMatchObject({ ok: true, payload: { kind: 'merge', result: { outcome: 'merged' } } });
     for (const r of REPOS) {
       expect(isAncestor(roots[r], merged[r], 'HEAD'), r).toBe(true);
       expect(git(roots[r], 'branch', '--list', 'ordewell/*'), r).toBe('');
@@ -367,7 +369,7 @@ describe.skipIf(!hasGit)('isolated execution over a folder of three repositories
     let release = false;
     env.jobs.set('t1', { say: 'working across api and web', until: () => release, write: { 'api/api.txt': 'renamed\n', 'web/web.txt': 'renamed\n' }, answer: 'Renamed in both repositories.' });
     session.loadPlan(plan([createTask({ id: 't1', order: 1, title: 'Rename everywhere', prompt: 'rename' })], talk(['goal', 'Plan generated.'])), 'goal', env.dir);
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(env.agent.spawned).toHaveLength(1));
     const { cwd } = env.agent.spawned[0];
     expect(cwd).toBe(join(env.dir, '.ordewell', 'worktrees', env.run().id, '1-rename-everywhere'));
@@ -403,7 +405,7 @@ describe.skipIf(!hasGit)('isolated execution over a folder of three repositories
     const [rewoundFork] = saves(session).mock.calls.find((call) => call[3] === rewound.sessionId)!;
     expect(rewoundFork.conversationHistory).toHaveLength(6);
     expect(rewoundFork.isolation).toBeUndefined();
-    expect(session.planState!.conversationHistory).toHaveLength(8);
+    expect(session.planState!.conversationHistory).toHaveLength(9);
     expect(session.planState!.isolation).toEqual(record);
     expect(gitState(env.roots)).toEqual(before);
 

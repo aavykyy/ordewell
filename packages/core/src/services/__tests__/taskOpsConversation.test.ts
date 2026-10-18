@@ -255,8 +255,8 @@ describe('task_ops conversation turns', () => {
       },
     });
     session.loadPlan(pausedRunPlan(), 'build it', testWorkspace, { persist: false });
-    await session.executePlan();
-    await session.cancelTask('b');
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
+    await session.execute({ command: 'stop_task', task: 'b' }, { kind: 'user' });
 
     // The scheduler is still armed, but nothing is executing — and it is the
     // live runner, not the armed flag, that decides whether a run is active.
@@ -283,13 +283,13 @@ describe('task_ops conversation turns', () => {
       },
     });
     session.loadPlan(pausedRunPlan(), 'build it', testWorkspace, { persist: false });
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     expect(spawned).toEqual(['b']);
-    await session.cancelTask('b');
+    await session.execute({ command: 'stop_task', task: 'b' }, { kind: 'user' });
     expect(session.isExecuting).toBe(false);
 
-    await expect(session.executePlan()).resolves.toBeUndefined();
+    await expect(session.execute({ command: 'run_plan' }, { kind: 'user' })).resolves.toMatchObject({ ok: true });
     expect(spawned).toEqual(['b', 'b']);
   });
 
@@ -309,7 +309,7 @@ describe('task_ops conversation turns', () => {
       },
     });
     session.loadPlan(pausedRunPlan(), 'build it', testWorkspace, { persist: false });
-    await session.executePlan(); // spawns #2 and leaves it running
+    await session.execute({ command: 'run_plan' }, { kind: 'user' }); // spawns #2 and leaves it running
 
     const plan = await session.continueConversation('rename the sign-off step');
 
@@ -334,7 +334,7 @@ describe('task_ops conversation turns', () => {
       aiService: { startConversation: vi.fn(), continueConversation, hasActiveConversation: () => true, reset: vi.fn() },
     });
     session.loadPlan(pausedRunPlan(), 'build it', testWorkspace, { persist: false });
-    await session.executePlan(); // spawns #2 and leaves it running
+    await session.execute({ command: 'run_plan' }, { kind: 'user' }); // spawns #2 and leaves it running
 
     const plan = await session.continueConversation('rename the running step');
 
@@ -400,8 +400,8 @@ describe('task_ops conversation turns', () => {
       },
     });
     session.loadPlan(pausedRunPlan(), 'build it', testWorkspace, { persist: false });
-    await session.executePlan();
-    await session.cancelTask('b');
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
+    await session.execute({ command: 'stop_task', task: 'b' }, { kind: 'user' });
 
     await session.continueConversation('add a docs task after setup');
 
@@ -429,8 +429,8 @@ describe('task_ops conversation turns', () => {
       },
     });
     session.loadPlan(pausedRunPlan(), 'build it', testWorkspace, { persist: false });
-    await session.executePlan();
-    await session.cancelTask('b');
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
+    await session.execute({ command: 'stop_task', task: 'b' }, { kind: 'user' });
 
     await session.continueConversation('rename the sign-off step');
 
@@ -449,8 +449,8 @@ describe('task_ops conversation turns', () => {
       },
     });
     session.loadPlan(pausedRunPlan(), 'build it', testWorkspace, { persist: false });
-    await session.executePlan();
-    await session.cancelTask('b');
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
+    await session.execute({ command: 'stop_task', task: 'b' }, { kind: 'user' });
 
     await session.continueConversation('what is left?');
 
@@ -471,7 +471,7 @@ describe('task_ops conversation turns', () => {
       },
     });
     session.loadPlan(pausedRunPlan(), 'build it', testWorkspace, { persist: false });
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     await session.continueConversation('what is left?');
 
@@ -792,7 +792,7 @@ describe('a plan saved with a stored blocked task', () => {
     session.loadPlan(plan, 'build it', testWorkspace, { persist: false });
     expect(taskOf(session, 'b')!.status).toBe('pending');
 
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     expect(spawned).toContain('b');
   });
 });
@@ -814,8 +814,8 @@ describe('rearm — task_ops conversation turn', () => {
       },
     });
     session.loadPlan(pausedRunPlan(), 'build it', testWorkspace, { persist: false });
-    await session.executePlan();
-    await session.cancelTask('b');
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
+    await session.execute({ command: 'stop_task', task: 'b' }, { kind: 'user' });
 
     await session.continueConversation('re-arm task a');
 
@@ -871,7 +871,7 @@ describe('rearm — task_ops conversation turn', () => {
       },
     });
     session.loadPlan(failedRunPlan(), 'build it', testWorkspace, { persist: false });
-    await session.forceStartTask('a');
+    await session.execute({ command: 'force_start', task: 'a' }, { kind: 'user' });
 
     const result = await session.continueConversation('fix task a and try again');
 

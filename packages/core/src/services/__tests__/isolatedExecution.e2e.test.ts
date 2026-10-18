@@ -250,7 +250,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     });
     const loaded = sessionStore.loadSession('session-legacy1', root)!;
     session.loadPlan(loaded.plan, loaded.meta.goal, root, { sessionId: loaded.meta.id });
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(messages.map((m) => m.type)).toContain('isolation_handoff'), { timeout: 20_000 });
 
     expect(session.planTasks.map((t) => t.status)).toEqual(['completed', 'completed']);
@@ -264,7 +264,8 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     expect(git(root, 'branch', '--list', 'ordewell/*', '--format=%(refname:short)')).toBe(integration);
     expect(git(root, 'rev-parse', 'main')).toBe(base);
 
-    expect(await session.mergeRun()).toEqual({ outcome: 'merged' });
+    const merged = await session.execute({ command: 'merge_all' }, { kind: 'user' });
+    expect(merged).toMatchObject({ ok: true, payload: { kind: 'merge', result: { outcome: 'merged' } } });
     expect(readFileSync(join(root, 'a.txt'), 'utf8')).toBe('written by t1\n');
     expect(readFileSync(join(root, 'b.txt'), 'utf8')).toBe('written by t2\n');
   }, 30_000);

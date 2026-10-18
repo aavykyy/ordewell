@@ -77,7 +77,7 @@ describe('the plan scope ends', () => {
     } satisfies IRunner;
     const session = makeSession({ runner });
     session.loadPlan({ ...savedPlan([createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' })]), status: 'approved' }, 'first goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(session.isExecuting).toBe(true));
     runner.stopAll.mockClear();
 
@@ -97,7 +97,7 @@ describe('the plan scope ends', () => {
     const broadcast = vi.fn();
     const session = makeSession({ runner, broadcast });
     session.loadPlan({ ...savedPlan([createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' })]), status: 'approved' }, 'first goal', '/repo');
-    await session.executePlan();
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(runner.spawn).toHaveBeenCalled());
     (await runner.spawn.mock.results[0].value).reportComplete({ status: 'failed', summary: '', reason: 'broke' });
     await vi.waitFor(() => expect(session.isExecuting).toBe(false));
@@ -105,7 +105,7 @@ describe('the plan scope ends', () => {
     session.loadPlan({ ...savedPlan(), status: 'approved' }, 'other goal', '/repo', { sessionId: 'other' });
     broadcast.mockClear();
     runner.spawn.mockClear();
-    await session.retryTask('o1');
+    await session.reschedule();
 
     expect(broadcast.mock.calls.map(([m]) => m.type)).not.toContain('review_needed');
     expect(runner.spawn).not.toHaveBeenCalled();

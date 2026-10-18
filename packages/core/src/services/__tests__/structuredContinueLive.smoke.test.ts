@@ -70,7 +70,7 @@ describe.runIf(live)('continue — live', () => {
         id: 'live-1', order: 1, title: 'Name the word', taskMode: 'acceptEdits', assignedModel,
         prompt: 'Do not read, edit or run anything. Reply with exactly this sentence: The secret word is PELICAN.',
       })), 'Continue', dir);
-      await session.executePlan();
+      await session.execute({ command: 'run_plan' }, { kind: 'user' });
       await vi.waitFor(() => expect(taskOf(session, 'live-1')?.status).toBe('completed'), { timeout: TIMEOUT_MS, interval: 500 });
       const saved = taskOf(session, 'live-1')!.runnerSessionId;
       expect(saved).toBeTruthy();
@@ -80,7 +80,7 @@ describe.runIf(live)('continue — live', () => {
       rmSync(dir, { recursive: true, force: true });
       mkdirSync(dir);
 
-      await session.continueTask('live-1', 'Do not read, edit or run anything. Which secret word did you name earlier? Answer with: The word was <WORD>.');
+      await session.execute({ command: 'retry_task', task: 'live-1', from: 'session', message: 'Do not read, edit or run anything. Which secret word did you name earlier? Answer with: The word was <WORD>.' }, { kind: 'user' });
       await vi.waitFor(() => expect(taskOf(session, 'live-1')?.status).toBe('completed'), { timeout: TIMEOUT_MS, interval: 500 });
 
       const continued = taskOf(session, 'live-1')!;
@@ -108,7 +108,7 @@ describe.runIf(live)('continue — live', () => {
         runnerSessionId: randomUUID(),
       }), 'Continue', dir);
 
-      await session.continueTask('live-2', 'Reply with only the word: ok');
+      await session.execute({ command: 'retry_task', task: 'live-2', from: 'session', message: 'Reply with only the word: ok' }, { kind: 'user' });
       await vi.waitFor(() => expect(taskOf(session, 'live-2')?.status).toBe('failed'), { timeout: 60_000, interval: 250 });
 
       const failed = taskOf(session, 'live-2')!;
