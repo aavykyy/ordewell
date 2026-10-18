@@ -32,6 +32,28 @@ const pickerOf = (state: TuiState): PickerState => {
 };
 
 describe('plan pane — remove (d)', () => {
+  it('names a nested dependent by its dotted reference in the removal notice', () => {
+    const state = planPane({ tasks: [
+      task(),
+      task({ id: 't2', order: 2, subtasks: [task({ id: 'child', order: 1, title: 'Check', dependencies: ['t1'] })] }),
+    ] });
+
+    expect(press(state, 'char', 'd').state.overlay).toMatchObject({
+      kind: 'confirm', message: '1 task depends on it and will lose that dependency: #2.1 Check.',
+    });
+  });
+
+  it('warns about dependencies on a removed task’s descendants', () => {
+    const state = planPane({ tasks: [
+      task({ subtasks: [task({ id: 'child', order: 1 })] }),
+      task({ id: 't2', order: 2, title: 'Build', dependencies: ['child'] }),
+    ] });
+
+    expect(press(state, 'char', 'd').state.overlay).toMatchObject({
+      kind: 'confirm', message: '1 task depends on it and will lose that dependency: #2 Build.',
+    });
+  });
+
   it('confirms before removing rather than acting on the keypress', () => {
     const asked = press(planPane({ selectedTask: 2 }), 'char', 'd');
 
@@ -76,6 +98,33 @@ describe('plan pane — remove (d)', () => {
 });
 
 describe('plan pane — dependency picker (D)', () => {
+  it('offers the earlier sibling when D is pressed on a subtask row', () => {
+    const state = planPane({ expandedTaskId: 't2', selectedTask: 3, tasks: [
+      CHAIN[0], task({ id: 't2', order: 2, subtasks: [
+        task({ id: 'first-child', order: 1 }), task({ id: 'second-child', order: 2 }),
+      ] }),
+    ] });
+
+    const picker = pickerOf(press(state, 'char', 'D').state);
+
+    expect(picker.action).toEqual({ kind: 'set-task-deps', taskId: 'second-child' });
+    expect(picker.items).toEqual([expect.objectContaining({ id: 'first-child', label: '#2.1 Setup' })]);
+  });
+
+  it('preserves a dependency on a subtask outside the offered siblings when confirming a change', () => {
+    const state = planPane({ selectedTask: 2, tasks: [
+      task({ subtasks: [task({ id: 'child', order: 1 })] }),
+      CHAIN[1],
+      task({ id: 't3', order: 3, dependencies: ['child'] }),
+    ] });
+    const opened = press(state, 'char', 'D').state;
+    const toggled = press(opened, 'char', ' ').state;
+
+    expect(press(toggled, 'enter').effects).toEqual([expect.objectContaining({
+      taskId: 't3', changes: { dependencies: ['child', 't1'] },
+    })]);
+  });
+
   it('offers only the tasks that come before the selected one', () => {
     const picker = pickerOf(press(planPane({ selectedTask: 2 }), 'char', 'D').state);
 
@@ -116,15 +165,13 @@ describe('plan pane — dependency picker (D)', () => {
     const attempted = press(planPane({ selectedTask: 0 }), 'char', 'D');
 
     expect(attempted.state.overlay).toBeNull();
-    expect(lastMessage(attempted.state)?.text).toMatch(/no possible dependencies/i);
+    expect(lastMessage(attempted.state)?.text).toMatch(/No earlier siblings/i);
   });
 
-  it('drops a stale dependency from the preselection rather than resending it', () => {
-    // A dependency on a later task cannot be offered, so keeping it in `chosen`
-    // would silently re-submit an edit the daemon rejects.
+  it('keeps existing dependencies outside the offered range', () => {
     const state = planPane({ selectedTask: 1, tasks: [CHAIN[0], task({ id: 't2', order: 2, title: 'Build', dependencies: ['t1', 't3'] }), CHAIN[2]] });
 
-    expect(pickerOf(press(state, 'char', 'D').state).chosen).toEqual(['t1']);
+    expect(pickerOf(press(state, 'char', 'D').state).chosen).toEqual(['t1', 't3']);
   });
 
   it('opens from /task-deps with a task number', () => {

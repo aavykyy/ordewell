@@ -1,5 +1,5 @@
 import { Task, flattenTasksWithParents, RunnerId, DiscoveredModel, TaskModelAssignment, TaskMode } from '../models/Task';
-import { canSetDependencies } from './TaskOps';
+import { canSetDependencies } from './PlanTree';
 import { effectiveAllowlist } from './ModelAllowlistResolver';
 import { unavailableModeReason, type RunnerModeInfo } from './ModeResolver';
 import { NOT_STARTED } from '../taskRow/status';
@@ -193,7 +193,7 @@ function opsCheck(target: Task, isSubtask: boolean, changes: Partial<Task>): Tas
  * {@link canSetDependencies} guard the pickers and the API read.
  *
  * `tasks` is the plan tree: the target is found at any depth, and its
- * dependencies are checked among its siblings, the list its order is in.
+ * dependencies are checked against the whole plan tree.
  */
 export function validateTaskEdit(
   actor: TaskEditActor,
@@ -219,7 +219,7 @@ export function validateTaskEdit(
   }
 
   if (changes.dependencies) {
-    const depCheck = canSetDependencies(parent?.subtasks ?? tasks, taskId, changes.dependencies);
+    const depCheck = canSetDependencies(tasks, taskId, changes.dependencies);
     if (!depCheck.ok) return depCheck;
   }
 

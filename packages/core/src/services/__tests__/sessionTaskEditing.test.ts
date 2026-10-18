@@ -178,6 +178,39 @@ describe('Session.addTask', () => {
 });
 
 describe('Session.removeTask', () => {
+  it('releases a live descendant runner before removing its parent', async () => {
+    const runner = recordingRunner();
+    const session = makeSession({ runner });
+    const plan = soloPlan();
+    plan.tasks[0].type = 'user';
+    plan.tasks[0].subtasks = [createTask({ id: 'child', order: 1, prompt: 'inspect' })];
+    session.loadPlan(plan, 'goal', testWorkspace, { persist: false });
+    await session.executePlan();
+    expect(runner.spawned).toEqual(['child']);
+
+    await session.removeTask('only');
+
+    expect(runner.stopped).toEqual(['s-child']);
+    expect(session.isExecuting).toBe(false);
+  });
+
+  it('detaches dependencies on every descendant and starts the freed task', async () => {
+    const runner = recordingRunner();
+    const session = makeSession({ runner });
+    const plan = planWith();
+    plan.tasks[0].subtasks = [createTask({ id: 'child', order: 1, type: 'user', subtasks: [
+      createTask({ id: 'leaf', order: 1, type: 'user' }),
+    ] })];
+    plan.tasks[1].dependencies = ['child', 'leaf'];
+    session.loadPlan(plan, 'goal', testWorkspace, { persist: false });
+    await session.executePlan();
+
+    await session.removeTask('t1');
+
+    expect(session.planTasks[0].dependencies).toEqual([]);
+    expect(runner.spawned).toEqual(['t1', 't2']);
+  });
+
   it('detaches the removed task from everything that depended on it', async () => {
     const session = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG) });
     session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
@@ -256,6 +289,18 @@ describe('Session.updateTask on a completed task', () => {
 });
 
 describe('Session.setTaskDependencies', () => {
+  it('keeps a dependency on another task’s subtask when editing its full list', async () => {
+    const session = makeSession();
+    const plan = planWith();
+    plan.tasks[0].subtasks = [createTask({ id: 'child', order: 1, title: 'Inspect' })];
+    plan.tasks[1].dependencies = ['child'];
+    session.loadPlan(plan, 'goal', testWorkspace, { persist: false });
+
+    const state = await session.setTaskDependencies('t2', ['child', 't1']);
+
+    expect(state!.tasks[1].dependencies).toEqual(['child', 't1']);
+  });
+
   it('replaces the list', async () => {
     const session = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG) });
     session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
@@ -265,11 +310,11 @@ describe('Session.setTaskDependencies', () => {
     expect(state!.tasks.find((t) => t.id === 't2')!.dependencies).toEqual([]);
   });
 
-  it('refuses a dependency that comes after the task, saying why', async () => {
+  it('refuses a dependency cycle, saying why', async () => {
     const session = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG) });
     session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
 
-    await expect(session.setTaskDependencies('t1', ['t2'])).rejects.toThrow(/comes after it/);
+    await expect(session.setTaskDependencies('t1', ['t2'])).rejects.toThrow(/cycle/i);
     expect(session.planState!.tasks.find((t) => t.id === 't1')!.dependencies).toEqual([]);
   });
 
@@ -288,7 +333,7 @@ describe('Session.setTaskDependencies', () => {
     const session = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG) });
     session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
 
-    await expect(session.updateTask('t1', { dependencies: ['t2'] })).rejects.toThrow(/comes after it/);
+    await expect(session.updateTask('t1', { dependencies: ['t2'] })).rejects.toThrow(/cycle/i);
     await expect(session.updateTask('t2', { dependencies: ['ghost'] })).rejects.toThrow(/Unknown dependency/);
   });
 });

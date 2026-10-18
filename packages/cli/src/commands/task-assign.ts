@@ -1,5 +1,5 @@
 import { codexSandboxNotice, createSkillsService, EnvConfig } from '@ordewell/core';
-import { canSetDependencies, dependencyCandidates, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf } from '@ordewell/core/plan-utils';
+import { canSetDependencies, dependencyCandidates, resolveTaskRef, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf } from '@ordewell/core/plan-utils';
 import { assignedModelFor, effortsForTask, modelsForTask, modesForTask, runnerAccepts } from '../tui/taskAssignment';
 import { findTask, type TaskView } from '../tui/state';
 import type { ApiClient } from '../apiClient';
@@ -194,7 +194,7 @@ export async function handleTaskDeps(subArgs: string[], injectedApi?: ApiClient)
     if (!value) {
       console.log(`\nDependencies · ${namedOf(tasks, task)}\n`);
       if (candidates.length === 0) {
-        console.log(`  Nothing runs before ${refOf(tasks, task)}, so it has no possible dependencies.`);
+        console.log(`  No earlier siblings to offer as dependencies for ${refOf(tasks, task)}.`);
       }
       for (const c of candidates) {
         const chosen = task.dependencies.includes(c.id);
@@ -209,7 +209,7 @@ export async function handleTaskDeps(subArgs: string[], injectedApi?: ApiClient)
       : value.split(',').map((s) => s.trim()).filter(Boolean)
           // Accept order numbers as well as ids, matching how every other
           // task-scoped command resolves its argument.
-          .map((token) => tasks.find((t) => t.id === token || String(t.order) === token)?.id ?? token);
+          .map((token) => resolveTaskRef(tasks, token)?.id ?? token);
 
     // The same pre-flight the API applies, run here so the refusal names the
     // task rather than arriving as a bare HTTP error.

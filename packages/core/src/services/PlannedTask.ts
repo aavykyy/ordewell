@@ -1,3 +1,4 @@
+import { dependencyTargetErrors, findDependencyCycle } from './PlanTree';
 import { v4 as uuidv4 } from 'uuid';
 import { Task, RunnerId, TaskModelAssignment, DEFAULT_RUNNERS, createTask, flattenTasksWithParents, inheritedSkills, skillNames } from '../models/Task';
 import { plannedMode, type RunnerModeInfo } from './ModeResolver';
@@ -244,10 +245,10 @@ export function checkPlanInvariants(tasks: readonly Task[], runners: readonly Ru
       fail('assignedRunner', `${where} has invalid assignedRunner "${t.assignedRunner}". Expected one of: ${runners.join(', ')}`);
     }
   }
-  const ids = new Set(rows.map((r) => r.task.id));
   for (const { task: t, parent } of rows) {
-    for (const dep of t.dependencies) {
-      if (!ids.has(dep)) errors.push({ taskId: t.id, field: 'dependencies', message: `${taskWhere(t.title, parent?.title)} depends on "${dep}", which is not a task in the plan` });
+    // Self-dependencies are reported with the cycle below, including its full path.
+    for (const error of dependencyTargetErrors(tasks, t.id, t.dependencies.filter((id) => id !== t.id))) {
+      errors.push({ taskId: t.id, field: 'dependencies', message: `${taskWhere(t.title, parent?.title)}: ${error}` });
     }
   }
   const cycle = findCycle(rows.map((r) => r.task));
@@ -259,27 +260,7 @@ export function checkPlanInvariants(tasks: readonly Task[], runners: readonly Ru
 
 /** The tasks on one dependency cycle, in dependency order, or null when there is none. A self-dependency is a cycle of one. */
 export function findCycle(tasks: readonly Task[]): Task[] | null {
-  const byId = new Map(tasks.map((t) => [t.id, t]));
-  const path: string[] = [];
-  const done = new Set<string>();
-  const visit = (id: string): string[] | null => {
-    if (done.has(id)) return null;
-    const at = path.indexOf(id);
-    if (at >= 0) return path.slice(at);
-    path.push(id);
-    for (const dep of byId.get(id)?.dependencies ?? []) {
-      const hit = visit(dep);
-      if (hit) return hit;
-    }
-    path.pop();
-    done.add(id);
-    return null;
-  };
-  for (const t of tasks) {
-    const hit = visit(t.id);
-    if (hit) return hit.map((id) => byId.get(id)!);
-  }
-  return null;
+  return findDependencyCycle(tasks);
 }
 
 /** The title of a task on a dependency cycle, or null when there is none. */

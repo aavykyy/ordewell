@@ -319,6 +319,13 @@ describe('texts', () => {
     expect(titledRefs(['a', 'a1', 'ghost'], plan)).toEqual(['#1 Fix', '#1.1 Nested', 'ghost']);
   });
 
+  it('names nested dependents in a removal notice, with a fallback for a task that left the tree', () => {
+    expect(dependentsNotice([
+      { id: 'a1', order: 1, title: 'Nested' },
+      { id: 'gone', order: 3, title: 'Gone' },
+    ], plan)).toBe('2 tasks depend on it and will lose that dependency: #1.1 Nested, #3 Gone.');
+  });
+
   it.each([
     [[], null],
     [[{ order: 2, title: 'Build' }], '1 task depends on it and will lose that dependency: #2 Build.'],

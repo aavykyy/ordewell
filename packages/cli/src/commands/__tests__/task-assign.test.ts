@@ -31,7 +31,7 @@ const CATALOG = {
   orchestratorModels: [],
 };
 
-async function fakeDaemon(plan = PLAN): Promise<{ port: number; close: () => void; sent: Recorded[] }> {
+async function fakeDaemon(plan: Record<string, unknown> = PLAN): Promise<{ port: number; close: () => void; sent: Recorded[] }> {
   const sent: Recorded[] = [];
   const server = http.createServer((req, res) => {
     let raw = '';
@@ -173,6 +173,24 @@ describe('ordewell task-mode', () => {
 });
 
 describe('ordewell task-deps', () => {
+  it('sets a subtask dependency using dotted references', async () => {
+    const d = await fakeDaemon({ ...PLAN, tasks: [
+      PLAN.tasks[0], { ...PLAN.tasks[1], subtasks: [
+        { ...PLAN.tasks[1], id: 'child-a', order: 1 },
+        { ...PLAN.tasks[1], id: 'child-b', order: 2 },
+      ] },
+    ] });
+    try {
+      const { handleTaskDeps } = await import('../task-assign');
+      const result = await capture(() => handleTaskDeps([...SESSION, '2.2', '2.1'], new ApiClient(d.port)));
+
+      expect(result).toMatchObject({ exitCode: null, stderr: '' });
+      expect(updates(d.sent)).toEqual([expect.objectContaining({
+        url: expect.stringContaining('/tasks/child-b'), body: { dependencies: ['child-a'] },
+      })]);
+    } finally { d.close(); }
+  });
+
   it('accepts order numbers and resolves them to ids', async () => {
     const d = await fakeDaemon();
     const { handleTaskDeps } = await import('../task-assign');
@@ -189,11 +207,11 @@ describe('ordewell task-deps', () => {
     d.close();
   });
 
-  it('refuses a dependency that comes later in the plan, naming both tasks', async () => {
+  it('refuses a dependency cycle, naming both tasks', async () => {
     const d = await fakeDaemon();
     const { handleTaskDeps } = await import('../task-assign');
-    const { stderr, exitCode } = await capture(() => handleTaskDeps([...SESSION, '1', '3'], new ApiClient(d.port)));
-    expect(stderr).toContain('cannot depend on');
+    const { stderr, exitCode } = await capture(() => handleTaskDeps([...SESSION, '2', '3'], new ApiClient(d.port)));
+    expect(stderr).toContain('Dependency cycle');
     expect(stderr).toContain('Sign off');
     expect(exitCode).toBe(1);
     expect(updates(d.sent)).toEqual([]);
