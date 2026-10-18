@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { applyTaskOps, parseTaskOpsJson, textHasTaskOps, canMergeTasks, canSplitTask } from '../TaskOps';
 import { validateTaskEdit } from '../TaskEditValidator';
+import { blockingFailures } from '../blocking';
 import { validatePlanTasks } from '../PlanValidator';
 import { PlanParseError } from '../JsonExtractor';
 import { createTask, type Task } from '../../models/Task';
@@ -374,10 +375,10 @@ describe('applyTaskOps — rearm', () => {
   it('releases dependents blocked behind the re-armed task', () => {
     const plan = samplePlan();
     plan[0].status = 'failed';
-    plan[1].status = 'blocked'; // depends on 'a'
+    expect(blockingFailures(plan).has('b')).toBe(true); // 'b' depends on 'a'
     const res = applyTaskOps(plan, [{ op: 'rearm', taskId: 'a' }], ['claude-code']);
     expect(res.ok).toBe(true);
-    expect(res.tasks.find((t) => t.id === 'b')!.status).toBe('pending');
+    expect(blockingFailures(res.tasks).has('b')).toBe(false);
   });
 
   it('refuses to re-arm a running task', () => {

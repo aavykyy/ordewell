@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { PlanStore } from '../PlanStore';
 import { createTask } from '../../models/Task';
+import { blockingFailures } from '../blocking';
 import type { Task, TaskSnapshot } from '../../models/Task';
 
 function makeSnapshot(taskId: string, overrides: Partial<TaskSnapshot> = {}): TaskSnapshot {
@@ -96,19 +97,42 @@ describe('PlanStore execution log', () => {
       expect(store.isAnyFailed()).toBe(false);
     });
 
-    // `removeTaskFromPlan` detaches the dependency, but a 'blocked' status
-    // outlives it — and `isBlocked` reads that status alone, so the dependent
-    // would be skipped by the scheduler forever with nothing left to unblock it.
     it('remove() releases a dependent that was blocked on the removed task', () => {
       const t1 = createTask({ id: 't1', title: 'Task 1', status: 'failed' });
-      const t2 = createTask({ id: 't2', title: 'Task 2', dependencies: ['t1'], status: 'blocked' });
+      const t2 = createTask({ id: 't2', title: 'Task 2', dependencies: ['t1'] });
       store.load([t1, t2], ['claude-code']);
+      store.markFailed('t1');
+      expect(blockingFailures(store.allTasks).has('t2')).toBe(true);
 
       store.remove('t1');
 
-      expect(store.get('t2')!.status).toBe('pending');
+      expect(blockingFailures(store.allTasks).has('t2')).toBe(false);
       expect(store.get('t2')!.dependencies).toEqual([]);
     });
+  });
+});
+
+describe('PlanStore.load — a saved blocked status', () => {
+  // Files written before ADR-0034 may hold 'blocked'; nothing stores it now,
+  // so it reads as the task that was waiting, not a status with no way out.
+  const saved = (id: string, extra: Partial<Task> = {}): Task => ({ ...createTask({ id, title: id, ...extra }), status: 'blocked' } as unknown as Task);
+
+  it('reads a stored blocked task, top-level or subtask, as pending', () => {
+    const parent = { ...saved('p'), subtasks: [saved('s', { dependencies: ['x'] })] } as Task;
+    const store = new PlanStore();
+    store.load([createTask({ id: 'x', title: 'x', status: 'completed' }), parent], ['claude-code']);
+
+    expect(store.get('p')!.status).toBe('pending');
+    expect(store.get('s')!.status).toBe('pending');
+  });
+
+  it('leaves the blocked rule to the plan: a completed dependency does not block, a failed one does', () => {
+    const store = new PlanStore();
+    store.load([createTask({ id: 'a', title: 'a', status: 'completed' }), saved('b', { dependencies: ['a'] })], ['claude-code']);
+    expect(blockingFailures(store.allTasks).has('b')).toBe(false);
+
+    store.markFailed('a');
+    expect([...blockingFailures(store.allTasks).keys()]).toEqual(['b']);
   });
 });
 
@@ -190,8 +214,6 @@ describe('PlanStore completion and failure have one source', () => {
     ['markPending', (s) => { s.markFailed('e'); s.markPending('e'); }],
     ['markAwaitingUser', (s) => { s.markCompleted('e'); s.markAwaitingUser('e'); }],
     ['retry', (s) => { s.markFailed('b'); s.retry('b'); }],
-    ['blockDependents', (s) => { s.markFailed('b'); s.blockDependents('b'); }],
-    ['unblockDependents', (s) => { s.markFailed('b'); s.blockDependents('b'); s.unblockDependents('b'); }],
     ['remove', (s) => s.remove('a')],
     ['update', (s) => s.update('a', { title: 'A2' })],
     ['resetForRun (preserve)', (s) => { s.markFailed('e'); s.resetForRun(); }],

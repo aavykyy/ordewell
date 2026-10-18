@@ -117,6 +117,9 @@ export class PlanStore {
     // from a saved session is normalized at the disk-load boundary instead.
     for (const task of this._allTasks) {
       if (task.status === 'failed') task.status = 'pending';
+      // Files from before ADR-0034 stored blocked tasks; the derived rule
+      // decides that now, so an old one is the pending task it was.
+      if ((task.status as string) === 'blocked') task.status = 'pending';
       // A session saved before owners or attempts were recorded belongs to the
       // runner the task is on as it loads: noted now, a move cannot lose it.
       if (task.runnerSessionId && !task.runnerSessionOwner) task.runnerSessionOwner = sessionOwner(task) ?? task.assignedRunner;
@@ -134,11 +137,6 @@ export class PlanStore {
 
   remove(taskId: string): void {
     if (!this._taskMap.has(taskId)) return;
-    // `removeTaskFromPlan` detaches the dependency, but a dependent parked at
-    // 'blocked' would keep that status with nothing left to release it —
-    // `isBlocked` reads the status on its own, so the scheduler would skip the
-    // task forever.
-    this.unblockDependents(taskId);
     this._planTasks = removeTaskFromPlan(this._planTasks, taskId);
     this.rebuild();
     this.notifyMutate();
@@ -244,22 +242,6 @@ export class PlanStore {
     delete task.awaitingReason;
     delete task.resumeAt;
     delete task.skipReason;
-  }
-
-  blockDependents(id: string): void {
-    for (const t of this._allTasks) {
-      if (t.dependencies.includes(id) && t.status !== 'completed') {
-        t.status = 'blocked';
-      }
-    }
-  }
-
-  unblockDependents(id: string): void {
-    for (const t of this._allTasks) {
-      if (t.status === 'blocked' && t.dependencies.includes(id)) {
-        t.status = 'pending';
-      }
-    }
   }
 
   setTaskVerdict(id: string, verdict: Task['verdict']): void {

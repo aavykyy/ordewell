@@ -1187,7 +1187,6 @@ export class TaskOrchestrator {
     if (this.attempts.get(task.id) !== attempt) return;
     this.endAttempt(task.id, 'verdict');
     await this.applyLanding(task, outcome, () => {
-      this.store.unblockDependents(task.id);
       this.logAndArchive(task, task.verdict ?? verdict);
     });
     await this.afterVerdict(task.id);
@@ -1239,7 +1238,6 @@ export class TaskOrchestrator {
     if (!resolved) return;
     const { task, outcome } = resolved;
     await this.applyLanding(task, outcome, () => {
-      this.store.unblockDependents(task.id);
       if (task.verdict) this.logAndArchive(task, task.verdict);
     });
   }
@@ -1403,7 +1401,6 @@ export class TaskOrchestrator {
     this.store.setTaskOutputSummary(taskId, summarizeOutput(verdict.reason, ''));
     this.logAndArchive(task, verdict);
     if (completesTask(landing)) {
-      this.store.unblockDependents(taskId);
       this.onHold.delete(taskId);
       this.notifications.info(`Task "${task.title}" marked complete.`);
       this.say(landing.messages);
@@ -1488,7 +1485,6 @@ export class TaskOrchestrator {
       const movedFrom = this.movedFrom(task);
       this.store.retry(taskId);
       if (movedFrom) this.store.setCarriedFrom(taskId, movedFrom);
-      this.store.unblockDependents(taskId);
       this.onHold.delete(taskId);
       this.emit('onTaskChanged');
       if (movedFrom) {
@@ -1531,7 +1527,6 @@ export class TaskOrchestrator {
       this.retryCounts.set(taskId, (this.retryCounts.get(taskId) ?? 0) + 1);
       this.endAttempt(taskId, 'retry');
       this.store.retry(taskId);
-      this.store.unblockDependents(taskId);
       this.onHold.delete(taskId);
       // Claimed before anything is awaited, so a running scheduler never sees the
       // pending task and starts it afresh. Its prepare replaces the old worktree.
@@ -1811,7 +1806,7 @@ export class TaskOrchestrator {
         seen.add(id);
         const dep = this.store.get(id);
         if (dep?.status === 'failed') continue;
-        if (dep && (dep.status === 'blocked' || blocked.has(id))) walk(dep);
+        if (dep && blocked.has(id)) walk(dep);
         else waiting.add(id);
       }
     };
@@ -1963,7 +1958,7 @@ export class TaskOrchestrator {
         this.emit('onTick');
         await this.closeRun();
         this.emit('onExecutionComplete');
-      } else if (remaining.every((t) => t.status === 'failed' || t.status === 'blocked' || blocked.has(t.id))) {
+      } else if (remaining.every((t) => t.status === 'failed' || blocked.has(t.id))) {
         // Nothing left can start until a failed task is retried (ADR-0034):
         // the run ends, and a retry continues it.
         this.running = false;
@@ -2027,7 +2022,7 @@ export class TaskOrchestrator {
   private sayEndedOnFailure(blocked: ReadonlyMap<string, string[]>): void {
     const tasks = this.store.allTasks;
     const failed = tasks.filter((t) => t.status === 'failed');
-    const stuck = tasks.filter((t) => t.status === 'blocked' || blocked.has(t.id));
+    const stuck = tasks.filter((t) => blocked.has(t.id));
     const skipped = tasks.filter((t) => t.status === 'skipped').length;
     const counts = `${tasks.filter((t) => t.status === 'completed').length} completed, ${failed.length} failed, ${stuck.length} blocked${skipped > 0 ? `, ${skipped} skipped` : ''}`;
     const retry = stuck.length > 0 ? ' A blocked task starts once the failed task it waits on is retried and passes.' : '';
