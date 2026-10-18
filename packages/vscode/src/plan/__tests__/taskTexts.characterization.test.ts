@@ -10,9 +10,6 @@ function deps(gate: string[]) {
   const session = {
     mergeGate: vi.fn(() => gate),
     planState: { tasks: [createTask({ id: 'fix', order: 1, title: 'Fix' }), createTask({ id: 'ops', order: 2, title: 'Deploy', ops: true, dependencies: ['fix'] })] },
-    forceStartTask: vi.fn().mockResolvedValue(undefined),
-    markTaskComplete: vi.fn().mockResolvedValue(undefined),
-    markTaskIncomplete: vi.fn().mockResolvedValue(undefined),
     execute: vi.fn().mockResolvedValue({ ok: true, message: 'Skipped.' }),
   };
   const d = {
@@ -40,16 +37,16 @@ describe('host task texts, pinned before they move to core', () => {
     const { d, session } = deps([]);
     await handleSystemCommand('skip', 'fix', d);
     expect(session.execute).toHaveBeenCalledWith({ command: 'skip_task', task: 'fix' }, { kind: 'user' });
-    expect(session.markTaskComplete).not.toHaveBeenCalled();
+    expect(session.execute).not.toHaveBeenCalledWith(expect.objectContaining({ command: 'mark_complete' }), expect.anything());
   });
 
   it.each([
-    ['markComplete', 'markTaskComplete'],
-    ['markIncomplete', 'markTaskIncomplete'],
-  ] as const)('%s calls %s', async (command, method) => {
+    ['markComplete', 'mark_complete'],
+    ['markIncomplete', 'mark_not_done'],
+  ] as const)('%s reaches the command seam as %s', async (command, name) => {
     const { d, session } = deps([]);
     await handleSystemCommand(command, 'fix', d);
-    expect(session[method]).toHaveBeenCalledWith('fix');
+    expect(session.execute).toHaveBeenCalledWith({ command: name, task: 'fix' }, { kind: 'user' });
   });
 
   it('names the dependents a removal rewrites, in full', () => {

@@ -24,15 +24,8 @@ function harness(attempts: Record<number, TaskLogEvent[]> = { 1: attemptOne }) {
     taskLog: vi.fn((_taskId: string, attempt: number) => attempts[attempt] ?? []),
     invokeTaskCommand: vi.fn(() => 'c1'),
     execute: vi.fn(async (_command: ExecutionCommand, _actor: ExecutionActor): Promise<CommandOutcome> => ({ ok: true, message: 'done' })),
-    removeQueuedTaskMessage: vi.fn(() => true),
-    forceSendTaskMessage: vi.fn(() => 'm2'),
-    forceSendQueuedTaskMessage: vi.fn(() => true),
-    interruptTask: vi.fn(async () => {}),
-    cancelScheduledResume: vi.fn(() => true),
-    resumeNow: vi.fn(async () => {}),
     pending: [] as PendingApproval[],
     outstandingApprovals: vi.fn((): PendingApproval[] => session.pending),
-    resolveApproval: vi.fn(() => true),
   };
   const registry = new TaskLogRegistry({
     extensionUri: vscode.Uri.file('/ext'),
@@ -107,9 +100,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     const registry = new TaskLogRegistry({
       extensionUri: vscode.Uri.file('/ext'),
       session: () => ({
-        invokeTaskCommand: () => 'c', taskLogAttempts: () => [], taskLog: () => [], execute: async () => ({ ok: true, message: '' }), removeQueuedTaskMessage: () => false, interruptTask: async () => {},
-        forceSendTaskMessage: () => 'm', forceSendQueuedTaskMessage: () => false,
-        cancelScheduledResume: () => false, resumeNow: async () => {}, outstandingApprovals: () => [], resolveApproval: () => false,
+        invokeTaskCommand: () => 'c', taskLogAttempts: () => [], taskLog: () => [], execute: async () => ({ ok: true, message: '' }), outstandingApprovals: () => [],
       }),
       getTask: () => undefined,
       log: vi.fn(),
@@ -168,45 +159,41 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     expect(posted(__panels[0])[0]).toMatchObject({ type: 'init', status: { attempt: 1 } });
   });
 
-  it('sends a message through the command seam as the user, and routes a removal and an interrupt to the Session', async () => {
+  it.each([
+    ['a message', { type: 'sendTaskMessage', text: 'use Postgres' }, { command: 'message_task', task: 't1', text: 'use Postgres' }],
+    ['a removal of a queued message', { type: 'removeQueuedTaskMessage', id: 'q1' }, { command: 'remove_queued', task: 't1', id: 'q1' }],
+    ['an interrupt', { type: 'interruptTask' }, { command: 'interrupt_task', task: 't1' }],
+    ['a force send (ADR-0023, F1)', { type: 'sendTaskMessageNow', text: 'stop, use Postgres' }, { command: 'message_task', task: 't1', text: 'stop, use Postgres', force: true }],
+    ['a force send of a queued message', { type: 'sendQueuedTaskMessageNow', id: 'q1' }, { command: 'force_send_queued', task: 't1', id: 'q1' }],
+    ['a cancelled resume', { type: 'cancelResume' }, { command: 'cancel_resume', task: 't1' }],
+    ['a Resume now', { type: 'resumeNow' }, { command: 'retry_task', task: 't1', from: 'session' }],
+  ] as const)('sends %s through the command seam as the user (ADR-0029)', async (_name, msg, command) => {
     const h = harness();
     h.registry.open('t1');
 
-    __panels[0].__receive({ type: 'sendTaskMessage', text: 'use Postgres' });
-    __panels[0].__receive({ type: 'removeQueuedTaskMessage', id: 'q1' });
-    __panels[0].__receive({ type: 'interruptTask' });
+    __panels[0].__receive(msg);
 
-    await vi.waitFor(() => expect(h.session.execute).toHaveBeenCalledWith({ command: 'message_task', task: 't1', text: 'use Postgres' }, { kind: 'user' }));
-    expect(h.session.removeQueuedTaskMessage).toHaveBeenCalledWith('t1', 'q1');
-    await vi.waitFor(() => expect(h.session.interruptTask).toHaveBeenCalledWith('t1'));
+    await vi.waitFor(() => expect(h.session.execute).toHaveBeenCalledWith(command, { kind: 'user' }));
   });
 
-  it('routes a force send, new or queued, to the Session (ADR-0023, F1)', () => {
+  it.each([
+    { type: 'removeQueuedTaskMessage', id: 'q1' },
+    { type: 'sendQueuedTaskMessageNow', id: 'q1' },
+    { type: 'sendTaskMessageNow', text: 'now' },
+    { type: 'interruptTask' },
+    { type: 'cancelResume' },
+    { type: 'resumeNow' },
+    { type: 'answerApproval', id: 'ap-1', decision: { decision: 'allow' } },
+  ] as const)('shows the seam\'s refusal of %j', async (msg) => {
     const h = harness();
-    h.registry.open('t1');
-
-    __panels[0].__receive({ type: 'sendTaskMessageNow', text: 'stop, use Postgres' });
-    __panels[0].__receive({ type: 'sendQueuedTaskMessageNow', id: 'q1' });
-
-    expect(h.session.forceSendTaskMessage).toHaveBeenCalledWith('t1', 'stop, use Postgres');
-    expect(h.session.forceSendQueuedTaskMessage).toHaveBeenCalledWith('t1', 'q1');
-  });
-
-  it('says so when the runner already read the message it was asked to send now, and shows a refusal', () => {
-    const h = harness();
-    h.session.forceSendQueuedTaskMessage.mockReturnValue(false);
-    h.session.forceSendTaskMessage.mockImplementation(() => { throw new Error('Task is not running, so there is no turn to send a message to.'); });
+    h.session.execute.mockResolvedValue({ ok: false, outcome: 'refused', message: 'Task 1 has no such thing.' });
     h.registry.open('t1');
     __panels[0].__receive({ type: 'ready' });
     __panels[0].webview.postMessage.mockClear();
 
-    __panels[0].__receive({ type: 'sendQueuedTaskMessageNow', id: 'q1' });
-    __panels[0].__receive({ type: 'sendTaskMessageNow', text: 'now' });
+    __panels[0].__receive(msg);
 
-    expect(posted(__panels[0])).toEqual([
-      { type: 'showError', error: expect.stringMatching(/runner has already read that message/) },
-      { type: 'showError', error: expect.stringMatching(/no turn to send a message to/) },
-    ]);
+    await vi.waitFor(() => expect(posted(__panels[0])).toContainEqual({ type: 'showError', error: 'Task 1 has no such thing.' }));
   });
 
   it('shows the seam\u2019s refusal of a task that cannot take a message', async () => {
@@ -227,7 +214,6 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     __panels[0].__fireDispose();
 
     expect(h.session.execute).not.toHaveBeenCalled();
-    expect(h.session.interruptTask).not.toHaveBeenCalled();
 
     h.registry.open('t1');
     expect(__panels).toHaveLength(2);
@@ -304,17 +290,18 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     expect(posted(__panels[0]).find((m) => m.type === 'status')).toMatchObject({ status: { awaitingApproval: 1 } });
   });
 
-  it('answers a request with the card\'s whole decision, and says when it no longer waits', () => {
+  it('sends a request\'s answer through the seam as the user, so the timeline and the supervisor hear of it', async () => {
     const h = harness();
     h.registry.open('t1');
     __panels[0].__receive({ type: 'ready' });
 
     __panels[0].__receive({ type: 'answerApproval', id: 'ap-1', decision: { decision: 'deny', note: 'use notes/' } });
-    expect(h.session.resolveApproval).toHaveBeenCalledWith('ap-1', { decision: 'deny', note: 'use notes/' });
+    __panels[0].__receive({ type: 'answerApproval', id: 'ap-2', decision: { decision: 'allowForTask' } });
 
-    h.session.resolveApproval.mockReturnValue(false);
-    __panels[0].__receive({ type: 'answerApproval', id: 'ap-1', decision: { decision: 'allow' } });
-    expect(posted(__panels[0])).toContainEqual({ type: 'showError', error: 'That request is no longer waiting for an answer.' });
+    await vi.waitFor(() => expect(h.session.execute.mock.calls).toEqual([
+      [{ command: 'answer_approval', task: 't1', approval: 'ap-1', answer: 'deny', note: 'use notes/' }, { kind: 'user' }],
+      [{ command: 'answer_approval', task: 't1', approval: 'ap-2', answer: 'allowForTask' }, { kind: 'user' }],
+    ]));
   });
 });
 
@@ -419,42 +406,22 @@ describe('task-log tabs over a whole run (ADR-0018, V1)', () => {
     expect(__panels[0].title).toBe('Task 1 · Parse JSON5');
   });
 
-  it('says when a task paused on a usage limit resumes, and routes its cancel (#84)', () => {
+  it('says when a task paused on a usage limit resumes (#84)', () => {
     const h = harness();
     Object.assign(h.task, { status: 'awaiting_user', awaitingReason: 'usage-limit', resumeAt: new Date(Date.now() + 60 * 60_000).toISOString() });
     h.registry.open('t1');
     __panels[0].__receive({ type: 'ready' });
 
     expect(posted(__panels[0])[0]).toMatchObject({ type: 'init', status: { awaitingReason: 'usage-limit', resumes: expect.stringMatching(/^Resumes at /) } });
-
-    __panels[0].__receive({ type: 'cancelResume' });
-    expect(h.session.cancelScheduledResume).toHaveBeenCalledWith('t1');
-
-    h.session.cancelScheduledResume.mockReturnValue(false);
-    __panels[0].__receive({ type: 'cancelResume' });
-    expect(posted(__panels[0])).toContainEqual({ type: 'showError', error: 'This task has no resume scheduled.' });
   });
 
-  it('routes resume now for a task paused on a usage limit', async () => {
+  it('offers Resume now for a task paused on a usage limit', () => {
     const h = harness();
     Object.assign(h.task, { status: 'awaiting_user', awaitingReason: 'usage-limit', runnerSessionId: 'native-1' });
     h.registry.open('t1');
     __panels[0].__receive({ type: 'ready' });
 
     expect(posted(__panels[0])[0]).toMatchObject({ type: 'init', status: { continuable: true, resumable: true } });
-    __panels[0].__receive({ type: 'resumeNow' });
-    await vi.waitFor(() => expect(h.session.resumeNow).toHaveBeenCalledWith('t1'));
-  });
-
-  it('shows the Session\'s refusal of an interrupt', async () => {
-    const h = harness();
-    h.session.interruptTask.mockImplementation(async () => { throw new Error('Task 1 has no turn running.'); });
-    h.registry.open('t1');
-    __panels[0].__receive({ type: 'ready' });
-
-    __panels[0].__receive({ type: 'interruptTask' });
-
-    await vi.waitFor(() => expect(posted(__panels[0])).toContainEqual({ type: 'showError', error: 'Task 1 has no turn running.' }));
   });
 
   it('closes every tab on dispose, and a later event reaches none of them', () => {

@@ -176,11 +176,30 @@ describe('webview messages reach the session through one entry point each', () =
       expect(saved?.plan.tasks.find((t) => t.id === 't1')?.status).toBe('skipped');
     });
 
-    it('resume now resumes the task in its saved session, as the user', async () => {
-      const resumeNow = vi.spyOn(h.session, 'resumeNow').mockResolvedValue(undefined);
+    it.each([
+      ['resumeNow', { command: 'retry_task', task: 't1', from: 'session' }],
+      ['cancelResume', { command: 'cancel_resume', task: 't1' }],
+      ['markComplete', { command: 'mark_complete', task: 't1' }],
+      ['markIncomplete', { command: 'mark_not_done', task: 't1' }],
+      ['forceStart', { command: 'force_start', task: 't1' }],
+    ] as const)('%s reaches the command seam as the user', async (command, expected) => {
+      const execute = vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'done' });
+      await h.route({ type: 'sendSystemCommand', command, taskId: 't1' });
+
+      expect(execute).toHaveBeenCalledWith(expected, { kind: 'user' });
+    });
+
+    it('shows the seam\'s refusal of a control, in the seam\'s own words', async () => {
+      vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: false, outcome: 'refused', message: 'Task #1 "Parse JSON" is not running, so there is nothing to stop.' });
+      showWarningMessage.mockClear();
+
+      await h.route({ type: 'sendSystemCommand', command: 'cancel', taskId: 't1' });
       await h.route({ type: 'sendSystemCommand', command: 'resumeNow', taskId: 't1' });
 
-      expect(resumeNow).toHaveBeenCalledWith('t1');
+      expect(showWarningMessage.mock.calls.map((c) => c[0])).toEqual([
+        'Task #1 "Parse JSON" is not running, so there is nothing to stop.',
+        'Task #1 "Parse JSON" is not running, so there is nothing to stop.',
+      ]);
     });
 
     it('retry reaches the command seam as the user', async () => {
@@ -204,6 +223,25 @@ describe('webview messages reach the session through one entry point each', () =
       expect(execute).toHaveBeenCalledWith({ command: 'run_task', task: 't2' }, { kind: 'user' });
     });
 
+    it('Stop with nothing running is the seam\'s ok no-op: nothing is shown, and the runner is stopped all the same', async () => {
+      showWarningMessage.mockClear();
+
+      await h.route({ type: 'sendSystemCommand', command: 'stopExecution', taskId: '' });
+
+      expect(showWarningMessage).not.toHaveBeenCalled();
+      expect(h.deps.runner.stopAll).toHaveBeenCalled();
+    });
+
+    it('a Stop the seam refuses is shown, and stops nothing', async () => {
+      vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: false, outcome: 'refused', message: 'Could not stop the run.' });
+      showWarningMessage.mockClear();
+
+      await h.route({ type: 'sendSystemCommand', command: 'stopExecution', taskId: '' });
+
+      expect(showWarningMessage).toHaveBeenCalledWith('Could not stop the run.');
+      expect(h.deps.runner.stopAll).not.toHaveBeenCalled();
+    });
+
     it('removes a task only once the user confirms, naming what depends on it', async () => {
       showWarningMessage.mockResolvedValueOnce(undefined);
       await h.route({ type: 'removeTask', taskId: 't1' });
@@ -223,45 +261,89 @@ describe('webview messages reach the session through one entry point each', () =
       expect(h.session.planTasks.at(-1)).toMatchObject({ title: 'Docs', prompt: 'Docs', dependencies: ['t2'] });
     });
 
-    it('answers a checkpoint either way, a rejection carrying its reason', async () => {
-      const approve = vi.spyOn(h.session, 'approveCheckpoint').mockImplementation(() => {});
-      const reject = vi.spyOn(h.session, 'rejectCheckpoint').mockImplementation(() => {});
+    it('answers a checkpoint either way through the seam, a rejection carrying its reason', async () => {
+      const execute = vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'done' });
 
       await h.route({ type: 'answerCheckpoint', taskId: 't1', approved: true });
       await h.route({ type: 'answerCheckpoint', taskId: 't2', approved: false, reason: 'wrong approach' });
 
-      expect(approve).toHaveBeenCalledWith('t1');
-      expect(reject).toHaveBeenCalledWith('t2', 'wrong approach');
+      expect(execute.mock.calls).toEqual([
+        [{ command: 'answer_checkpoint', task: 't1', answer: 'approve' }, { kind: 'user' }],
+        [{ command: 'answer_checkpoint', task: 't2', answer: 'reject', reason: 'wrong approach' }, { kind: 'user' }],
+      ]);
     });
 
-    it('sends a message through the command seam as the user; takes back and interrupts on the Session', async () => {
-      const execute = vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'Sent to task #1 "Parse JSON".' });
-      const remove = vi.spyOn(h.session, 'removeQueuedTaskMessage').mockReturnValue(true);
-      const interrupt = vi.spyOn(h.session, 'interruptTask').mockResolvedValue();
+    it('sends a message, a removal, an interrupt and a force send through the command seam as the user', async () => {
+      const execute = vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'done' });
 
       await h.route({ type: 'sendTaskMessage', taskId: 't1', text: 'use Postgres' });
       await h.route({ type: 'removeQueuedTaskMessage', taskId: 't1', id: 'msg-1' });
       await h.route({ type: 'interruptTask', taskId: 't1' });
-
-      expect(execute).toHaveBeenCalledWith({ command: 'message_task', task: 't1', text: 'use Postgres' }, { kind: 'user' });
-      expect(remove).toHaveBeenCalledWith('t1', 'msg-1');
-      expect(interrupt).toHaveBeenCalledWith('t1');
-    });
-
-    it('force sends a new or a queued message through the Session, and warns when the runner already read it', async () => {
-      const now = vi.spyOn(h.session, 'forceSendTaskMessage').mockReturnValue('msg-2');
-      const queued = vi.spyOn(h.session, 'forceSendQueuedTaskMessage').mockReturnValue(false);
-      showWarningMessage.mockClear();
-
       await h.route({ type: 'sendTaskMessageNow', taskId: 't1', text: 'stop now' });
       await h.route({ type: 'sendQueuedTaskMessageNow', taskId: 't1', id: 'msg-1' });
 
-      expect(now).toHaveBeenCalledWith('t1', 'stop now');
-      expect(queued).toHaveBeenCalledWith('t1', 'msg-1');
-      expect(showWarningMessage.mock.calls.map((c) => String(c[0]))).toEqual([expect.stringContaining('runner has already read that message')]);
+      expect(execute.mock.calls).toEqual([
+        [{ command: 'message_task', task: 't1', text: 'use Postgres' }, { kind: 'user' }],
+        [{ command: 'remove_queued', task: 't1', id: 'msg-1' }, { kind: 'user' }],
+        [{ command: 'interrupt_task', task: 't1' }, { kind: 'user' }],
+        [{ command: 'message_task', task: 't1', text: 'stop now', force: true }, { kind: 'user' }],
+        [{ command: 'force_send_queued', task: 't1', id: 'msg-1' }, { kind: 'user' }],
+      ]);
     });
 
-    it('shows the Session\'s refusal of a task that cannot take a message', async () => {
+    it('tells the user when a queued message could not be taken back or sent now', async () => {
+      vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: false, outcome: 'refused', message: 'The runner has already read that message.' });
+      showWarningMessage.mockClear();
+
+      await h.route({ type: 'removeQueuedTaskMessage', taskId: 't1', id: 'msg-1' });
+      await h.route({ type: 'sendQueuedTaskMessageNow', taskId: 't1', id: 'msg-1' });
+
+      expect(showWarningMessage.mock.calls.map((c) => String(c[0]))).toEqual([
+        'The runner has already read that message.',
+        'The runner has already read that message.',
+      ]);
+    });
+
+    describe('a runner request\'s card', () => {
+      const runnerRequest = { id: 'ap-1', createdAt: '', request: { kind: 'runner_tool' as const, subject: 'Bash(npm test)', scope: 'Bash', taskId: 't1' } };
+
+      it.each([
+        [true, { command: 'answer_approval', task: 't1', approval: 'ap-1', answer: 'allow' }],
+        [false, { command: 'answer_approval', task: 't1', approval: 'ap-1', answer: 'deny' }],
+      ] as const)('is answered (granted: %s) through the seam as the user', async (granted, expected) => {
+        vi.spyOn(h.session, 'outstandingApprovals').mockReturnValue([runnerRequest]);
+        const execute = vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'done' });
+        const resolve = vi.spyOn(h.session, 'resolveApproval');
+
+        await h.route({ type: 'resolveApproval', id: 'ap-1', granted });
+
+        expect(execute).toHaveBeenCalledWith(expected, { kind: 'user' });
+        expect(resolve).not.toHaveBeenCalled();
+      });
+
+      it('shows a refused answer instead of dropping it', async () => {
+        vi.spyOn(h.session, 'outstandingApprovals').mockReturnValue([runnerRequest]);
+        vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: false, outcome: 'refused', message: 'Task #1 "Parse JSON" has no request waiting for an answer.' });
+        showWarningMessage.mockClear();
+
+        await h.route({ type: 'resolveApproval', id: 'ap-1', granted: false });
+
+        expect(showWarningMessage).toHaveBeenCalledWith('Task #1 "Parse JSON" has no request waiting for an answer.');
+      });
+
+      it('leaves a request that is not a runner\'s to the approval path', async () => {
+        vi.spyOn(h.session, 'outstandingApprovals').mockReturnValue([{ id: 'ap-2', createdAt: '', request: { kind: 'task_start', subject: 'Start #1', scope: 'task_start' } }]);
+        const execute = vi.spyOn(h.session, 'execute');
+        const resolve = vi.spyOn(h.session, 'resolveApproval').mockReturnValue(true);
+
+        await h.route({ type: 'resolveApproval', id: 'ap-2', granted: true });
+
+        expect(resolve).toHaveBeenCalledWith('ap-2', true);
+        expect(execute).not.toHaveBeenCalled();
+      });
+    });
+
+    it('shows the seam\'s refusal of a task that cannot take a message', async () => {
       showWarningMessage.mockClear();
 
       await h.route({ type: 'sendTaskMessage', taskId: 't1', text: 'hello' });
