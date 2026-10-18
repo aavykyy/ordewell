@@ -281,8 +281,17 @@ and completion evidence.
   normalized events with long tool output trimmed; a run's text events carry
   its id, and consecutive deltas are merged only within one run. The same
   reducer rebuilds the view on reload, a log saved before runs carried an id
-  included. Earlier attempts are kept, and the log is deleted with the
-  session.
+  included. Every runner exit records `runner_ended`, closing the view's
+  turn and its streaming blocks even when every tool call has returned. A
+  settled plan status wins over a stale live turn on the surfaces. Both
+  surfaces use core's pure `followTaskLog` to buffer batches during every
+  saved-log read and join that attempt's batches by the read's stream
+  position, taken synchronously with the read. A batch already covered by
+  the read is skipped even if its socket delivers it later; a newer
+  attempt's batch is kept because it belongs to another file. The view
+  follows newer attempts unless the reader picks an earlier one, and
+  ignores late batches from older attempts. Earlier attempts are kept,
+  and the log is deleted with the session.
 - **Approvals (A1, #56).** A runner's tool request goes through `IApproval` /
   `PendingApprovals` / `resolveApproval` as a new kind, `runner_tool`, carrying
   the task id, with **no timeout** (the planner keeps its five-minute
@@ -439,3 +448,4 @@ transport is retained for take-over.
 - 2026-10-17 — K1/U1: a saved session records its owner and Continue never crosses runners; a Retry after any move to another runner is a carry-over, not only a paused task's; a limit counts only in a turn Ordewell started, and a runner's structured field decides over its words ([ADR-0041](../routing/0041-a-tasks-model-follows-the-runners-own-switch.md), [ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md)).
 - 2026-10-18 — U1: a held run stays open with nothing at work; the reset releases the hold whatever failed meanwhile; a refused Resume now changes no resume, and a task it sweeps along keeps waiting for its reset; a loaded plan's reset resumes only its paused tasks.
 - 2026-10-18 — O1/P1: text is kept by run — written once to the plain text, settled in its own block, merged only within its run; older logs replay as before.
+- 2026-10-18 — P1: saved and live task logs join by stream position through one follow reducer, and every runner exit closes its view's turn.

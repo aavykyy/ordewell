@@ -71,11 +71,11 @@ describe('TaskLogRecorder', () => {
     expect(first.saved).toEqual([{ type: 'turn_start', message: 'Do it' }, note]);
     a.emitExit(0);
     recorder.note('s1', 't1', note);
-    expect(first.saved).toHaveLength(3);
+    expect(first.saved).toHaveLength(4);
 
     await recorder.wrap(handing(new FakeRunnerSession('s2', 't1'))).spawn(spawnOpts);
     recorder.note('s1', 't1', note);
-    expect(first.saved).toHaveLength(3);
+    expect(first.saved).toHaveLength(4);
     expect(second.saved).toEqual([]);
   });
 
@@ -114,6 +114,24 @@ describe('TaskLogRecorder', () => {
     expect(taskLogs(sent).flatMap((m) => m.events)).toEqual([{ type: 'text', runId: 'r1', text: 'Done.' }, { type: 'turn_end', reason: 'completed' }]);
   });
 
+  it('closes the last turn on exit even when every call already returned', async () => {
+    const session = new FakeRunnerSession('s1', 't1');
+    const file = memoryFile();
+    const sent: SessionMessage[] = [];
+    const recorder = new TaskLogRecorder({ broadcast: (m) => sent.push(m), location: () => ({ baseDir: '/ws', sessionId: 'sess' }), open: () => file });
+    await recorder.wrap(handing(session)).spawn(spawnOpts);
+    session.emitEvent({ type: 'turn_start', text: 'Do it' });
+    session.emitEvent({ type: 'assistant_text_delta', runId: 'r1', text: 'Done.' });
+    session.emitExit(0);
+    for (const events of [file.saved, taskLogs(sent).flatMap((m) => m.events)]) {
+      expect(events.at(-1)).toEqual({ type: 'runner_ended' });
+      const view = replayTaskLog(events);
+      expect(view.working).toBe(false);
+      expect(view.blocks.at(-1)).toMatchObject({ type: 'message', text: 'Done.', streaming: false });
+      expect(view.streams).toEqual({});
+    }
+  });
+
   it('flushes what is left when the session exits', async () => {
     const session = new FakeRunnerSession('s1', 't1');
     const file = memoryFile();
@@ -121,7 +139,7 @@ describe('TaskLogRecorder', () => {
     await recorder.wrap(handing(session)).spawn(spawnOpts);
     session.emitEvent({ type: 'error', message: 'boom' });
     session.emitExit(1);
-    expect(file.saved).toEqual([{ type: 'error', message: 'boom' }]);
+    expect(file.saved).toEqual([{ type: 'error', message: 'boom' }, { type: 'runner_ended' }]);
   });
 
   // The orchestrator ends a runner as soon as its task_complete call lands,
@@ -171,7 +189,7 @@ describe('TaskLogRecorder', () => {
     session.emitExit(0);
     expect(spawned).toBe(session);
     expect(open).toHaveBeenCalledWith({ baseDir: '/ws', sessionId: 'sess' }, 't1', 3);
-    expect(sent).toEqual([]);
+    expect(sent).toEqual([{ type: 'task_log', taskId: 't1', attempt: 1, events: [{ type: 'runner_ended' }] }]);
   });
 
   it('opens a new attempt’s file for every spawn of the task', async () => {

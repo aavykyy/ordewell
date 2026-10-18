@@ -96,7 +96,7 @@ export default function TaskLogApp() {
     setText('');
   };
 
-  const working = status?.working === true;
+  const working = status?.working === true && state?.kind !== 'done' && state?.kind !== 'failed';
   // Force send (ADR-0023, F1) needs a turn to interrupt; a finished task's box continues it instead.
   const canSendNow = working && canSend && !continues && !(commands.length > 0 && text.trim().startsWith('/'));
 
@@ -198,7 +198,7 @@ export default function TaskLogApp() {
       {/* Keyed by attempt so a switched-to attempt opens at its newest output. */}
       <div className="task-log-body" key={status?.attempt} ref={followRef}>
         {blocks.length === 0
-          ? <div className="task-log-empty">{status?.working ? 'Working…' : 'No output yet.'}</div>
+          ? <div className="task-log-empty">{working ? 'Working…' : 'No output yet.'}</div>
           : <ConversationBlocks blocks={blocks} detailAll={detailAll} onShowPlan={noop}
               onAnswerApproval={(id, decision) => vscode.postMessage({ type: 'answerApproval', id, decision })} />}
       </div>

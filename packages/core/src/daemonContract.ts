@@ -206,10 +206,14 @@ export interface AdoptSessionResponse extends OkResponse {
 }
 
 export interface TaskLogAttemptsResponse {
+  /** Captured with the synchronous listing, including an empty listing. */
+  position?: StreamStamp;
   attempts: number[];
 }
 
 export interface TaskLogResponse {
+  /** Captured with the synchronous log read; live batches after it are not in events. */
+  position?: StreamStamp;
   attempt: number;
   events: TaskLogEvent[];
 }

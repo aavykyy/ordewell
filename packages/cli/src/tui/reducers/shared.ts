@@ -1,4 +1,4 @@
-import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, HeldEdit, PlanUsage, PlannerUsage, ResearchLogEntry, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, TaskLogEvent } from '@ordewell/core';
+import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, HeldEdit, PlanUsage, PlannerUsage, ResearchLogEntry, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskLogEvent } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
   HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
@@ -107,9 +107,9 @@ export type Action =
   /** One planner message from the session, as it came: core's conversation view decides what it shows. */
   | { type: 'sessionMessage'; message: SessionMessage; sessionId?: string }
   /** The next events of a structured task's attempt, live (ADR-0018, P1). */
-  | { type: 'taskLog'; taskId: string; attempt: number; events: TaskLogEvent[]; sessionId?: string }
+  | { type: 'taskLog'; position?: StreamStamp; taskId: string; attempt: number; events: TaskLogEvent[]; sessionId?: string }
   /** A structured task's saved log, read when its view opens or an attempt is switched to. `attempts` is omitted when a switch already knows the list. */
-  | { type: 'taskLogLoaded'; taskId: string; attempts?: number[]; attempt: number; events: TaskLogEvent[]; sessionId?: string }
+  | { type: 'taskLogLoaded'; position?: StreamStamp; taskId: string; attempts?: number[]; attempt: number; events: TaskLogEvent[]; sessionId?: string }
   /** Open a task's saved log in the chat pane. */
   | { type: 'taskViewRequested'; taskId: string; sessionId: string }
   | { type: 'taskStarted'; taskId: string; order?: number; title: string; runner?: string; sessionId?: string }

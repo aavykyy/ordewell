@@ -1,4 +1,4 @@
-import { EMPTY_TASK_LOG, reduceTaskLog, replayTaskLog, resumeLabel, runnerToolSubject, truncateCheckpointSummary, type ApprovalDecision, type TaskLogEvent } from '@ordewell/core';
+import { EMPTY_TASK_LOG_FOLLOW, followTaskLog, resumeLabel, runnerToolSubject, truncateCheckpointSummary, type ApprovalDecision } from '@ordewell/core';
 import { commit } from '../editor';
 import type { Key } from '../keys';
 import { continuesTask, findTask, refFor, queuedTarget, resumesTask, waitingApproval, waitingCheckpoint, type TaskLogState, type TuiState } from '../state';
@@ -18,12 +18,7 @@ export function openTaskView(state: TuiState, sessionId: string, taskId: string)
   if (!task) return step(say(state, 'system', `No task ${taskId} in this plan.`));
   const taskView: TaskLogState = {
     taskId,
-    view: EMPTY_TASK_LOG,
-    attempts: [],
-    attempt: 0,
-    pending: [],
-    loaded: false,
-    followLatest: true,
+    ...EMPTY_TASK_LOG_FOLLOW,
     queuedIndex: null,
   };
   // Focus the composer: the task view's whole point is talking to the runner.
@@ -51,51 +46,17 @@ function clampQueueIndex(tv: TaskLogState): TaskLogState {
   return tv.queuedIndex <= max ? tv : { ...tv, queuedIndex: max };
 }
 
-/**
- * Fold a live batch into the shown attempt. A newer attempt either takes over
- * (the reader is following the latest) or is only recorded, so a pinned view
- * stays put while a retry runs. Batches for an attempt already left behind are
- * ignored.
- */
-function applyLive(tv: TaskLogState, attempt: number, events: TaskLogEvent[]): TaskLogState {
-  if (attempt <= 0) return tv;
-  let next = tv;
-  if (attempt > next.attempt) {
-    if (!next.followLatest) {
-      return next.attempts.includes(attempt) ? next : { ...next, attempts: [...next.attempts, attempt] };
-    }
-    next = {
-      ...next,
-      view: EMPTY_TASK_LOG,
-      attempt,
-      attempts: next.attempts.includes(attempt) ? next.attempts : [...next.attempts, attempt],
-    };
-  }
-  if (attempt < next.attempt) return next;
-  return clampQueueIndex({ ...next, view: events.reduce(reduceTaskLog, next.view) });
-}
-
-/**
- * The saved log could not be read (the view's opening call failed). Stop
- * buffering and fold what the live stream did send, so the view still works
- * rather than waiting forever for a read that is not coming.
- */
 export function taskLogAbandoned(state: TuiState): TuiState {
   const tv = state.taskView;
   if (!tv || tv.loaded) return state;
-  let next: TaskLogState = { ...tv, pending: [], loaded: true };
-  for (const batch of tv.pending) next = applyLive(next, batch.attempt, batch.events);
-  return { ...state, taskView: clampQueueIndex(next) };
+  return { ...state, taskView: clampQueueIndex({ ...tv, ...followTaskLog(tv, { type: 'loaded', attempt: tv.attempt, events: [], abandoned: true }) }) };
 }
 
-/** One live `task_log` batch: buffered until the saved log lands, then folded. */
 export function taskLogArrived(state: TuiState, action: Extract<Action, { type: 'taskLog' }>): TuiState {
   const tv = state.taskView;
   if (!tv || tv.taskId !== action.taskId) return state;
-  if (!tv.loaded) {
-    return { ...state, taskView: { ...tv, pending: [...tv.pending, { attempt: action.attempt, events: action.events }] } };
-  }
-  return { ...state, taskView: applyLive(tv, action.attempt, action.events) };
+  const next = followTaskLog(tv, { ...action, type: 'live' });
+  return { ...state, taskView: next === tv ? tv : clampQueueIndex({ ...tv, ...next }) };
 }
 
 /**
@@ -126,29 +87,10 @@ export function announceCheckpoint(state: TuiState, action: Extract<Action, { ty
   return { ...spoken, scroll: state.scroll };
 }
 
-/**
- * A saved log (or its absence): replay it, then catch up on buffered live
- * batches. A batch for the attempt just replayed is dropped — the recorder
- * appends before it broadcasts, so the file already holds it; a batch for any
- * other attempt (a retry that raced the read) is folded on top.
- */
 export function taskLogLoaded(state: TuiState, action: Extract<Action, { type: 'taskLogLoaded' }>): TuiState {
   const tv = state.taskView;
   if (!tv || tv.taskId !== action.taskId) return state;
-  const loaded: TaskLogState = action.attempt >= 1
-    ? {
-        ...tv,
-        view: replayTaskLog(action.events),
-        attempts: action.attempts ?? tv.attempts,
-        attempt: action.attempt,
-      }
-    : { ...tv, attempts: action.attempts ?? tv.attempts };
-  let next: TaskLogState = { ...loaded, pending: [], loaded: true };
-  for (const batch of tv.pending) {
-    if (batch.attempt === action.attempt) continue;
-    next = applyLive(next, batch.attempt, batch.events);
-  }
-  return { ...state, taskView: clampQueueIndex(next) };
+  return { ...state, taskView: clampQueueIndex({ ...tv, ...followTaskLog(tv, { ...action, type: 'loaded' }) }) };
 }
 
 /**
@@ -228,7 +170,7 @@ export function handleTaskViewKey(state: TuiState, key: Key): Step | null {
   if (!tv || !state.sessionId) return null;
 
   if (key.name === 'alt-left' || key.name === 'alt-right') {
-    const index = tv.attempts.indexOf(tv.attempt);
+    const index = tv.attempts.indexOf(tv.loadingAttempt ?? tv.attempt);
     if (index < 0) return null;
     const target = key.name === 'alt-left' ? index - 1 : index + 1;
     const attempt = tv.attempts[target];
@@ -236,7 +178,7 @@ export function handleTaskViewKey(state: TuiState, key: Key): Step | null {
       return step(say(state, 'system', target < 0 ? 'This is the first attempt.' : 'This is the latest attempt.'));
     }
     return step(
-      { ...state, taskView: { ...tv, followLatest: false } },
+      { ...state, taskView: { ...tv, ...followTaskLog(tv, { type: 'picked', attempt }) } },
       [{ type: 'loadTaskAttempt', sessionId: state.sessionId, taskId: tv.taskId, attempt }],
     );
   }
