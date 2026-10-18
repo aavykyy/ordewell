@@ -850,8 +850,16 @@ body {
   color: var(--text-primary);
 }
 
+.run-settings-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .run-settings-summary {
-  margin-top: 4px;
+  flex: 1;
+  min-width: 0;
+  text-align: right;
 }
 
 .setup-block-hint {
