@@ -10,7 +10,6 @@ function deps(gate: string[]) {
   const session = {
     mergeGate: vi.fn(() => gate),
     planState: { tasks: [createTask({ id: 'fix', order: 1, title: 'Fix' }), createTask({ id: 'ops', order: 2, title: 'Deploy', ops: true, dependencies: ['fix'] })] },
-    forceStartTask: vi.fn().mockResolvedValue(undefined),
     runTask: vi.fn().mockResolvedValue(undefined),
     execute: vi.fn().mockResolvedValue({ ok: true, message: 'done' }),
   };
@@ -22,17 +21,17 @@ function deps(gate: string[]) {
     persistState: vi.fn(),
     log: vi.fn(),
   } as unknown as PlanManagerDeps;
-  return { d, session };
+  return { d, session, chatProvider };
 }
 
 describe('starting a task past its merge gate (ADR-0020)', () => {
   beforeEach(() => showWarningMessage.mockReset());
 
   it.each([
-    ['forceStart', 'forceStartTask'],
+    ['forceStart'],
     // A gated Run is the same start past the gate as Force start.
-    ['runTask', 'forceStartTask'],
-  ] as const)('%s asks in a modal naming the unmerged work, and starts nothing on a cancel', async (command, method) => {
+    ['runTask'],
+  ] as const)('%s asks in a modal naming the unmerged work, and starts nothing on a cancel', async (command) => {
     showWarningMessage.mockResolvedValue(undefined);
     const { d, session } = deps(['fix']);
 
@@ -42,19 +41,20 @@ describe('starting a task past its merge gate (ADR-0020)', () => {
     expect(message).toContain('the work of #1 Fix is not merged into your branch yet');
     expect(options).toMatchObject({ modal: true });
     expect(choices).toEqual(['Start anyway']);
-    expect(session[method]).not.toHaveBeenCalled();
+    expect(session.execute).not.toHaveBeenCalled();
   });
 
   it.each([
-    ['forceStart', 'forceStartTask'],
-    ['runTask', 'forceStartTask'],
-  ] as const)('%s starts the task once the user goes ahead', async (command, method) => {
+    ['forceStart'],
+    ['runTask'],
+  ] as const)('%s force starts the task through the command seam once the user goes ahead, clearing the isolation handoff', async (command) => {
     showWarningMessage.mockResolvedValue('Start anyway');
-    const { d, session } = deps(['fix']);
+    const { d, session, chatProvider } = deps(['fix']);
 
     await handleSystemCommand(command, 'ops', d);
 
-    expect(session[method]).toHaveBeenCalledWith('ops');
+    expect(session.execute).toHaveBeenCalledWith({ command: 'force_start', task: 'ops' }, { kind: 'user' });
+    expect(chatProvider.clearIsolationHandoff).toHaveBeenCalled();
   });
 
   it('runs an ungated task through the command seam as the user', async () => {
@@ -72,6 +72,6 @@ describe('starting a task past its merge gate (ADR-0020)', () => {
     await handleSystemCommand('forceStart', 'ops', d);
 
     expect(showWarningMessage).not.toHaveBeenCalled();
-    expect(session.forceStartTask).toHaveBeenCalledWith('ops');
+    expect(session.execute).toHaveBeenCalledWith({ command: 'force_start', task: 'ops' }, { kind: 'user' });
   });
 });

@@ -15,7 +15,7 @@ import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import { SecretStore, type ApiProvider } from '../adapters/SecretStore';
 import { configureModelAllowlist } from './configureModelAllowlist';
-import { confirmPastGate, executeUserCommand, handleNewSession } from '../plan/PlanManager';
+import { executeUserCommand, forceStartPastGate, handleNewSession } from '../plan/PlanManager';
 
 export interface CommandDeps {
   session: Session;
@@ -87,9 +87,9 @@ function applyLoadedSession(
 
 export function registerCommands(context: vscode.ExtensionContext, deps: CommandDeps): void {
   // The plan pane's buttons and these commands run one path: the command seam, as the user (ADR-0029).
-  const userCommand = async (command: ExecutionCommand): Promise<void> => {
+  const userCommand = async (command: ExecutionCommand | (() => Promise<void>)): Promise<void> => {
     try {
-      await executeUserCommand(deps.session, command);
+      await (typeof command === 'function' ? command() : executeUserCommand(deps.session, command));
     } catch (err) {
       vscode.window.showErrorMessage(err instanceof Error ? err.message : String(err));
     }
@@ -252,8 +252,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         if (!picked) return;
         taskId = picked.description;
       }
-      await deps.session.markTaskComplete(taskId);
-      deps.persistState();
+      await userCommand({ command: 'mark_complete', task: taskId });
     }),
   );
   context.subscriptions.push(
@@ -275,16 +274,14 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         if (!picked) return;
         taskId = picked.description;
       }
-      await deps.session.markTaskIncomplete(taskId);
-      deps.persistState();
+      await userCommand({ command: 'mark_not_done', task: taskId });
     }),
   );
   context.subscriptions.push(
     vscode.commands.registerCommand('ordewell.forceStartTask', async (taskItem?: Task) => {
       const taskId = taskItem?.id;
-      if (!taskId || !(await confirmPastGate(taskId, deps.session))) return;
-      await deps.session.forceStartTask(taskId);
-      deps.persistState();
+      if (!taskId) return;
+      await userCommand(() => forceStartPastGate(taskId, deps));
     }),
   );
   context.subscriptions.push(

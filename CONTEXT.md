@@ -2343,7 +2343,10 @@ who asked (a model's tools, or the user's controls), and records each action
 in the timeline with who asked. A `CommandOutcome` carries a typed payload
 where a surface needs more than its line: a queued message's id, a force
 start's queued line, and the user's Merge all result with whether it closed
-the run. The user's Stop with nothing to stop is an ok no-op, recorded nowhere. No planner tool reaches into
+the run. The user's Stop with nothing to stop is an ok no-op, recorded nowhere.
+VS Code's task cards, plan bar, command palette and task-log panel send every
+control through it as the user and show a refusal's line as the seam worded it;
+the chat adds no note of its own beside the timeline's line for the control. No planner tool reaches into
 `TaskOrchestrator` directly, and the mandate (#23) plugs in here. Plan approval
 is the user's: executing the plan approves every task in it, and a task the
 user starts, retries or adds by hand is approved too (`approvedTasks` on the

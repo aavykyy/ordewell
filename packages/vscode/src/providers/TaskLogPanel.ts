@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { latestTaskCommands } from '../shared/taskCommands';
-import { canContinue, pausedOnLimit, resumeLabel, taskUsageSummary, type ApprovalAnswer, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
+import { canContinue, pausedOnLimit, resumeLabel, taskUsageSummary, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { EMPTY_TASK_LOG_FOLLOW, followTaskLog } from '@ordewell/core/plan-utils';
 import { diffConversation } from '../shared/conversationPatch';
 import { renderWebviewHtml } from './webviewHtml';
@@ -14,21 +14,11 @@ import type { HostToTaskLog, TaskLogStatus, TaskLogToHost } from '../shared/task
 export interface TaskLogSession {
   taskLogAttempts(taskId: string): number[];
   taskLog(taskId: string, attempt: number): TaskLogEvent[];
-  /** A message and a continue are execution buttons: they go through the command seam as the user (ADR-0029). */
+  /** Every control in the panel is a command at the seam, run as the user (ADR-0029). */
   execute(command: ExecutionCommand, actor: ExecutionActor): Promise<CommandOutcome>;
   invokeTaskCommand(taskId: string, name: string, args: string): string;
-  removeQueuedTaskMessage(taskId: string, id: string): boolean;
-  forceSendTaskMessage(taskId: string, text: string): string;
-  forceSendQueuedTaskMessage(taskId: string, id: string): boolean;
-  interruptTask(taskId: string): Promise<void>;
-  cancelScheduledResume(taskId: string): boolean;
-  resumeNow(taskId: string): Promise<void>;
   outstandingApprovals(): PendingApproval[];
-  resolveApproval(id: string, answer: ApprovalAnswer): boolean;
 }
-
-/** Why a pending message could not be force sent: the runner read it in the meantime (ADR-0023, F1). */
-export const ALREADY_DELIVERED = 'The runner has already read that message.';
 
 export interface TaskLogPanelDeps {
   session: TaskLogSession;
@@ -47,8 +37,9 @@ const TASK_STATE_EVENTS: ReadonlySet<SessionMessage['type']> = new Set([
  * task's saved attempt and follows it live. It loads the attempt's file on
  * open, so closing and reopening shows the full history, then folds the
  * `task_log` broadcasts the recorder streams. It never writes the log and
- * never touches the task — messaging, removing a queued message and
- * interrupting all go through the Session, exactly as the chat's controls do.
+ * never touches the task — messaging, removing a queued message, interrupting
+ * and answering a request all go through the command seam as the user,
+ * exactly as the chat's controls do.
  */
 export class TaskLogPanel {
   private follow = followTaskLog(EMPTY_TASK_LOG_FOLLOW, { type: 'opened' });
@@ -117,27 +108,23 @@ export class TaskLogPanel {
         this.controlAsync(() => this.userCommand({ command: 'message_task', task: this.taskId, text: msg.text }));
         return;
       case 'removeQueuedTaskMessage':
-        this.control(() => { this.deps.session.removeQueuedTaskMessage(this.taskId, msg.id); });
+        this.controlAsync(() => this.userCommand({ command: 'remove_queued', task: this.taskId, id: msg.id }));
         return;
       case 'sendTaskMessageNow':
-        this.control(() => { this.deps.session.forceSendTaskMessage(this.taskId, msg.text); });
+        this.controlAsync(() => this.userCommand({ command: 'message_task', task: this.taskId, text: msg.text, force: true }));
         return;
       case 'sendQueuedTaskMessageNow':
-        this.control(() => {
-          if (!this.deps.session.forceSendQueuedTaskMessage(this.taskId, msg.id)) throw new Error(ALREADY_DELIVERED);
-        });
+        this.controlAsync(() => this.userCommand({ command: 'force_send_queued', task: this.taskId, id: msg.id }));
         return;
       case 'interruptTask':
-        this.controlAsync(() => this.deps.session.interruptTask(this.taskId));
+        this.controlAsync(() => this.userCommand({ command: 'interrupt_task', task: this.taskId }));
         return;
       case 'cancelResume':
-        this.control(() => {
-          if (!this.deps.session.cancelScheduledResume(this.taskId)) throw new Error('This task has no resume scheduled.');
-        });
+        this.controlAsync(() => this.userCommand({ command: 'cancel_resume', task: this.taskId }));
         return;
       case 'resumeNow':
         this.follow = { ...this.follow, followLatest: true };
-        this.controlAsync(() => this.deps.session.resumeNow(this.taskId));
+        this.controlAsync(() => this.userCommand({ command: 'retry_task', task: this.taskId, from: 'session' }));
         return;
       case 'continueTask':
         // The continue is a new attempt: show it, even from an earlier one.
@@ -146,9 +133,13 @@ export class TaskLogPanel {
         return;
       // The card settles when the task log reports the answer.
       case 'answerApproval':
-        this.control(() => {
-          if (!this.deps.session.resolveApproval(msg.id, msg.decision)) throw new Error('That request is no longer waiting for an answer.');
-        });
+        this.controlAsync(() => this.userCommand({
+          command: 'answer_approval',
+          task: this.taskId,
+          approval: msg.id,
+          answer: msg.decision.decision,
+          ...(msg.decision.decision === 'deny' && msg.decision.note ? { note: msg.decision.note } : {}),
+        }));
         return;
     }
   }
@@ -232,8 +223,6 @@ export class TaskLogPanel {
     };
   }
 
-  // A refusal (a task not running) is the Session's answer,
-  // shown in the panel rather than swallowed by an unhandled rejection.
   private control(run: () => void): void {
     try {
       run();
@@ -242,6 +231,8 @@ export class TaskLogPanel {
     }
   }
 
+  // A refusal is the seam's answer, shown in the panel rather than swallowed
+  // by an unhandled rejection.
   private async userCommand(command: ExecutionCommand): Promise<void> {
     const outcome = await this.deps.session.execute(command, { kind: 'user' });
     if (!outcome.ok) throw new Error(outcome.message);

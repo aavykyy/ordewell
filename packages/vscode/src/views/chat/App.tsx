@@ -309,17 +309,16 @@ export default function App() {
     vscode.postMessage({ type: 'sendSystemCommand', command: 'retry', taskId });
   }, []);
 
+  // The controls below go through the command seam, which keeps each one in
+  // the timeline, a refusal too: a note written here first could only
+  // contradict that line.
   const handleSkip = useCallback((taskId: string) => {
-    const taskTitle = planRef.current?.tasks.find((t) => t.id === taskId)?.title ?? taskId;
     vscode.postMessage({ type: 'sendSystemCommand', command: 'skip', taskId });
-    pushSystem(`Task "${taskTitle}" skipped.`);
-  }, [pushSystem]);
+  }, []);
 
   const handleCancel = useCallback((taskId: string) => {
-    const taskTitle = planRef.current?.tasks.find((t) => t.id === taskId)?.title ?? taskId;
     vscode.postMessage({ type: 'sendSystemCommand', command: 'cancel', taskId });
-    pushSystem(`Task "${taskTitle}" cancelled.`);
-  }, [pushSystem]);
+  }, []);
 
   const handleCancelResend = useCallback(() => {
     vscode.postMessage({ type: 'sendSystemCommand', command: 'cancelPlannerResend' });
@@ -327,36 +326,28 @@ export default function App() {
   }, [pushSystem]);
 
   const handleCancelResume = useCallback((taskId: string) => {
-    const taskTitle = planRef.current?.tasks.find((t) => t.id === taskId)?.title ?? taskId;
     vscode.postMessage({ type: 'sendSystemCommand', command: 'cancelResume', taskId });
-    pushSystem(`Task "${taskTitle}" will not resume on its own: resume or retry it once the usage limit resets.`);
-  }, [pushSystem]);
+  }, []);
 
-  // No notice of its own, as a force start has none: the resume is announced by the host.
   const handleResumeNow = useCallback((taskId: string) => {
     vscode.postMessage({ type: 'sendSystemCommand', command: 'resumeNow', taskId });
   }, []);
 
-  // No notice of its own: the task's start comes back from the session and
-  // is announced by the host, as every start is.
   const handleForceStart = useCallback((taskId: string) => {
     vscode.postMessage({ type: 'sendSystemCommand', command: 'forceStart', taskId });
   }, []);
 
   const handleExecutePlan = useCallback(() => {
     vscode.postMessage({ type: 'sendSystemCommand', command: 'executePlan' });
-    pushSystem('Plan execution started.');
-  }, [pushSystem]);
+  }, []);
 
-  // No notice of its own: the session says how many it approved.
   const handleApproveAll = useCallback(() => {
     vscode.postMessage({ type: 'sendSystemCommand', command: 'executePlan' });
   }, []);
 
   const handleStopExecution = useCallback(() => {
     vscode.postMessage({ type: 'sendSystemCommand', command: 'stopExecution' });
-    pushSystem('Execution stopped.');
-  }, [pushSystem]);
+  }, []);
 
   const handleRunTask = useCallback((taskId: string) => {
     vscode.postMessage({ type: 'sendSystemCommand', command: 'runTask', taskId });
@@ -380,16 +371,12 @@ export default function App() {
   }, []);
 
   const handleMarkComplete = useCallback((taskId: string) => {
-    const taskTitle = planRef.current?.tasks.find((t) => t.id === taskId)?.title ?? taskId;
     vscode.postMessage({ type: 'sendSystemCommand', command: 'markComplete', taskId });
-    pushSystem(`Task "${taskTitle}" marked complete.`);
-  }, [pushSystem]);
+  }, []);
 
   const handleMarkIncomplete = useCallback((taskId: string) => {
-    const taskTitle = planRef.current?.tasks.find((t) => t.id === taskId)?.title ?? taskId;
     vscode.postMessage({ type: 'sendSystemCommand', command: 'markIncomplete', taskId });
-    pushSystem(`Task "${taskTitle}" marked not done.`);
-  }, [pushSystem]);
+  }, []);
 
   // The card answers into the same resolution every surface uses; the outcome
   // comes back as `approval_settled` and redraws the card.
@@ -439,8 +426,7 @@ export default function App() {
     }
     setIsExecuting(false);
     vscode.postMessage({ type: 'sendSystemCommand', command: 'stopExecution' });
-    pushSystem('Execution stopped.');
-  }, [isExecuting, pushSystem, stopTurn]);
+  }, [isExecuting, stopTurn]);
 
   // Esc during a planner turn, in order of intent: take back the newest queued
   // prompt, else arm a stop, else commit it. Outside a turn it is the input's.

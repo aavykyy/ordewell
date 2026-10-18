@@ -5,7 +5,7 @@ import type { SettingsChange, WebviewToHost } from '../shared/protocol';
 import { isKnownSlashCommand } from '../commands/SlashParser';
 import { handleIsolationAction } from './isolation';
 import {
-  handleAddTask, handleCheckpointAnswer, handleMergePlan, handleNewSession, handleRemoveTask,
+  handleAddTask, handleCheckpointAnswer, handleResolveApproval, handleMergePlan, handleNewSession, handleRemoveTask,
   handleSendMessage, handleSendMessageNow, handleSplitPlan, handleStopPlanning, handleSystemCommand, handleTaskControl, handleTaskEdit, type PlanManagerDeps,
 } from './PlanManager';
 
@@ -91,7 +91,7 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
       await handleAddTask(msg.draft, deps);
       return;
     case 'answerCheckpoint':
-      handleCheckpointAnswer(msg.taskId, msg.approved, msg.reason, deps);
+      await handleCheckpointAnswer(msg.taskId, msg.approved, msg.reason, deps);
       return;
     case 'getTaskCommands':
       deps.chatProvider.postMessage({ type: 'taskCommands', taskId: msg.taskId, commands: latestTaskCommands(deps.session, msg.taskId) });
@@ -132,15 +132,7 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
     // broadcasts `approval_settled`, which redraws the card with its outcome.
     case 'resolveApproval':
       try {
-        const request = deps.session.outstandingApprovals().find((pending) => pending.id === msg.id)?.request;
-        // A runner request the user denies reaches the command seam, so it is
-        // kept in the timeline; an allow must reach the approval path, which
-        // the seam never allows, and the user's own Allow is legitimate.
-        if (!msg.granted && request?.taskId) {
-          await deps.session.execute({ command: 'answer_approval', task: request.taskId, approval: msg.id, answer: 'deny' }, { kind: 'user' });
-        } else {
-          deps.session.resolveApproval(msg.id, msg.granted);
-        }
+        await handleResolveApproval(msg.id, msg.granted, deps);
       } catch (err) {
         deps.log(`Approval ${msg.id} could not be resolved: ${err instanceof Error ? err.message : String(err)}`);
       }
