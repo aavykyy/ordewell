@@ -5,6 +5,13 @@ async function main(): Promise<void> {
   const workspace = process.env.ORDEWELL_TEST_WORKSPACE;
   if (!workspace) throw new Error('ORDEWELL_TEST_WORKSPACE must point at a scratch directory');
 
+  // Run from a VS Code terminal, the editor's own ELECTRON_RUN_AS_NODE and
+  // VSCODE_* variables reach the test instance, which then starts as plain
+  // Node (or as an extension host) instead of as VS Code.
+  for (const key of Object.keys(process.env)) {
+    if (key === 'ELECTRON_RUN_AS_NODE' || key.startsWith('VSCODE_')) delete process.env[key];
+  }
+
   await runTests({
     extensionDevelopmentPath: path.resolve(__dirname, '..'),
     extensionTestsPath: path.resolve(__dirname, './index.js'),

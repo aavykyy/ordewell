@@ -22,6 +22,7 @@ npm run lint
 npm run typecheck
 npm test
 npm run test:coverage   # same tests, plus the per-file coverage floors CI enforces; writes coverage/ reports
+npm run ci              # every ci.yml step, in its order: run this before pushing
 npm run test:changed    # while iterating: only tests affected by uncommitted changes
 npm run test:quick      # every test except the real-git e2e files (*.e2e.test.ts, GitWorktreeIsolation)
 ```
@@ -30,9 +31,13 @@ npm run test:quick      # every test except the real-git e2e files (*.e2e.test.t
 core's `dist/` and runs the quick suites of cli, vscode and web in full, because
 they consume core through `dist/` and vitest cannot see the dependency. It skips
 the e2e files, so run the full suite before pushing; CI always runs it.
-Before pushing, run `npm run test:coverage` rather than `npm test`: CI fails
-on a per-file coverage floor (`packages/core/vitest.config.ts`) that plain
-`npm test` never checks. A test that depends on the time of day (a usage-limit
+Before pushing, run `npm run ci`. It runs what `.github/workflows/ci.yml`
+runs: beyond lint, typecheck and `test:coverage` (whose per-file floors in
+`packages/core/vitest.config.ts` plain `npm test` never checks), the verify
+scripts, the offline planner e2e, the VS Code integration test and packaging.
+It refuses to start when ci.yml has a step it does not know, so add any new
+step to `scripts/ci.mjs` too. The integration test downloads VS Code into
+`packages/vscode/.vscode-test` on its first run. A test that depends on the time of day (a usage-limit
 "resets 8:10pm") fails for the hour after that time; derive such a time from
 the clock, or fake it, instead of fixing it.
 

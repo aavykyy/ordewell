@@ -49,7 +49,13 @@ Extension Development Host.
 
 ## The checks
 
-Everything CI runs, you can run:
+Everything CI runs, you can run in one go, in CI's order:
+
+```bash
+npm run ci
+```
+
+Or one check at a time:
 
 ```bash
 npm run lint
@@ -116,7 +122,7 @@ not an edit to that surface.
    - Run the connector contract tests
      (`services/__tests__/runnerConnectors.contract.test.ts`) against your
      adapter, and give the adapter its own tests with a fake binary.
-   - `npm run build && npm run lint && npm run typecheck && npm run test:coverage`.
+   - `npm run ci`.
 
 There is no list to extend in `cli`, `vscode` or `web`. Two runner ids appear
 there on purpose and are not a place to add yours: the default runner
@@ -196,8 +202,8 @@ versions in lockstep.
 - While iterating, `npm run test:changed` runs only the tests affected by your
   uncommitted changes (`npm run test:quick` skips the slow real-git e2e files).
   Neither replaces the full suite: make sure
-  `npm run lint && npm run typecheck && npm run test:coverage` passes before
-  pushing. CI runs the full suite with the same per-file coverage floors.
+  `npm run ci` passes before pushing. It runs every step of CI's workflow
+  locally, the full suite with its per-file coverage floors included.
 - Describe what you changed and why. If it changes behaviour a user can see, say
   what they'll notice.
 
