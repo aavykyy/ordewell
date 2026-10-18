@@ -539,10 +539,14 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
     case 'task_output':
       return;
 
-    // Its asker already has the words, from the merge request itself; a
-    // viewer that did not ask still has to drop a run that is gone.
+    // Its asker already has the words, from the merge request itself. Whether
+    // the merge ended the run is the Session's to say, in `run_closed`.
     case 'isolation_merge':
-      if (event.result.outcome === 'merged') dispatch({ type: 'runCleared', sessionId });
+      dispatch({ type: 'isolationMerged', result: event.result, sessionId });
+      return;
+
+    case 'run_closed':
+      dispatch({ type: 'runClosed', sessionId });
       return;
 
     default: {

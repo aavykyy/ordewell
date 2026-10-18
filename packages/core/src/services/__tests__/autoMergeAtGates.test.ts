@@ -247,6 +247,7 @@ describe('Merge all at the end of the run', () => {
     expect(handoffs(messages)).toEqual([]);
     expect(messages).toContainEqual({ type: 'isolation_merge', result: { outcome: 'merged' }, trigger: { kind: 'run_end' } });
     expect(session.isolationView()).toBeNull();
+    expect(messages).toContainEqual({ type: 'run_closed' });
     expect(session.planState!.conversationHistory!.map((e) => e.content)).toEqual(['Ordewell setting: auto-merged at the end of the run']);
   });
 
@@ -265,6 +266,7 @@ describe('Merge all at the end of the run', () => {
     expect(merged(iso)).toHaveLength(1);
     expect(handoffs(messages)).toEqual([]);
     expect(session.isolationView()?.handoff.landed).toEqual([]);
+    expect(messages).not.toContainEqual({ type: 'run_closed' });
     expect(notices.map((n) => n.message)).toContainEqual(expect.stringMatching(/^The run is not cleared up: .* holds work that has not landed/));
   });
 

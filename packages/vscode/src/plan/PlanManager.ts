@@ -575,18 +575,15 @@ export function handleSessionMessage(
     case 'isolation_blocked':
       handleIsolationBlocked(msg.message, deps);
       break;
-    // What Merge all did, whether this host asked for it or another surface did,
-    // is folded onto the run view above. A full merge with nothing left to
-    // isolate is the end of the run: core has cleared it up, and the per-task
-    // marks go with the cards.
-    case 'isolation_merge':
-      if (msg.result.outcome === 'merged' && !deps.session.isolationView()) deps.chatProvider.clearIsolationHandoff();
-      break;
     // Drawn by the conversation view or the run view above, or not by this
     // surface at all. Named so a new SessionMessage variant fails to compile
-    // until someone decides what it means here.
+    // until someone decides what it means here. `isolation_merge` and
+    // `run_closed` fold onto the run view: what Merge all did, and the
+    // Session's word that the run is closed, which takes the marks and cards.
     case 'checkpoint':
     case 'isolation_handoff':
+    case 'isolation_merge':
+    case 'run_closed':
     case 'planner_message':
     case 'plan_token':
     case 'planner_text_delta':

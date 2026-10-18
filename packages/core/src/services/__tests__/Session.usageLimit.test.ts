@@ -130,3 +130,46 @@ describe('editing a task waiting on a usage-limit reset', () => {
     expect(env.run.spawnedIds()).toEqual(['t1', 't1']);
   });
 });
+
+// ADR-0034: a task on a usage limit keeps the run open, and every surface
+// takes execution_complete as the run's end.
+describe('a usage-limit pause of the last task at work', () => {
+  const ended = (env: Awaited<ReturnType<typeof supervised>>) => env.messages.filter((m) => m.type === 'execution_complete').length;
+
+  it('does not end the run: it ends once, when the plan is done after the reset', async () => {
+    const env = await supervised([task('t1', 1), task('t2', 2)], { settings: { supervisorLevel: 'off' }, config: { maxParallelSessions: 1 } });
+    hitLimit(env.run.of('t1'));
+    await until(() => taskOf(env.session, 't1')!.resumeAt === RESUME_AT);
+    await settled();
+
+    expect(ended(env)).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now());
+    await until(() => env.run.spawnedIds().length === 2);
+    env.run.of('t1').reportComplete({ status: 'done', summary: '' });
+    await until(() => env.run.spawnedIds().length === 3);
+    expect(ended(env)).toBe(0);
+    env.run.of('t2').reportComplete({ status: 'done', summary: '' });
+    await until(() => ended(env) === 1);
+  });
+
+  it('a move to another runner goes on with the plan in the run it paused', async () => {
+    const env = await supervised([task('t1', 1), task('t2', 2, { assignedRunner: 'codex' })], {
+      settings: { supervisorLevel: 'off' }, plan: { runners: ['claude-code', 'codex'] }, config: { maxParallelSessions: 1 },
+    });
+    hitLimit(env.run.of('t1'));
+    await until(() => taskOf(env.session, 't1')!.resumeAt === RESUME_AT);
+    await settled();
+
+    await env.session.setTaskRunner('t1', 'codex');
+
+    await until(() => env.run.spawnedIds().length === 2);
+    expect(env.run.runner.spawn.mock.calls[1][0]).toMatchObject({ taskId: 't1', runner: 'codex' });
+    env.run.of('t1').reportComplete({ status: 'done', summary: '' });
+    await until(() => env.run.spawnedIds().length === 3);
+    expect(env.run.spawnedIds()[2]).toBe('t2');
+    expect(ended(env)).toBe(0);
+    env.run.of('t2').reportComplete({ status: 'done', summary: '' });
+    await until(() => ended(env) === 1);
+  });
+});

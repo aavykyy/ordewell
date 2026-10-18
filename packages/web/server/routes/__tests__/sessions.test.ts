@@ -19,6 +19,7 @@ function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
     adoptSavedSession: vi.fn().mockReturnValue({ tasks: [{ id: 't1' }], runners: ['opencode'] }),
     getGoal: vi.fn().mockReturnValue('Rate limiting'),
     getPlanState: vi.fn().mockReturnValue(null),
+    runSnapshot: vi.fn().mockReturnValue(null),
     destroy: vi.fn(),
     ...overrides,
   } as unknown as OrchestratorPool;
@@ -63,6 +64,22 @@ describe('GET /api/sessions/:id', () => {
     expect(pool.getPlanState).toHaveBeenCalledWith('s1');
   });
 
+  it('carries the live session\'s run view, so a surface refreshing does not rebuild isolation from the saved record', async () => {
+    const view = { tasks: [], runMerge: null, handoff: null, mergeResult: null };
+    const pool = fakePool({ getPlanState: vi.fn().mockReturnValue(savedPlan), runSnapshot: vi.fn().mockReturnValue(view) } as Partial<OrchestratorPool>);
+
+    const res = await appWith(pool).request('/api/sessions/s1?workspace=/ws');
+
+    expect(((await res.json()) as { run?: unknown }).run).toEqual(view);
+    expect(pool.runSnapshot).toHaveBeenCalledWith('s1');
+  });
+
+  it('leaves the run view out for a session nobody holds', async () => {
+    const res = await appWith(fakePool()).request('/api/sessions/s1?workspace=/ws');
+
+    expect(await res.json()).not.toHaveProperty('run');
+  });
+
   it('falls back to the saved plan when no live session holds that id', async () => {
     const res = await appWith(fakePool()).request('/api/sessions/s1?workspace=/ws');
 
@@ -87,6 +104,15 @@ describe('POST /api/sessions/:id/load', () => {
     pool = fakePool();
     app = new Hono();
     app.route('/api/sessions', sessionsRoute(pool));
+  });
+
+  it('hands back the adopted session\'s run view', async () => {
+    const view = { tasks: [], runMerge: null, handoff: null, mergeResult: null };
+    (pool.runSnapshot as ReturnType<typeof vi.fn>).mockReturnValue(view);
+
+    const res = await app.request('/api/sessions/s1/load?workspace=/ws', { method: 'POST' });
+
+    expect(((await res.json()) as { run?: unknown }).run).toEqual(view);
   });
 
   it('registers the saved session with the pool so its tasks become live', async () => {

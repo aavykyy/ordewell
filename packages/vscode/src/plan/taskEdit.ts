@@ -13,7 +13,7 @@ export function removalPrompt(tasks: readonly Task[], taskId: string): string {
   const all = flattenTasks(tasks);
   const title = all.find((t) => t.id === taskId)?.title;
   const question = title ? `Remove "${title}"?` : 'Remove this task?';
-  const notice = dependentsNotice(dependentsOf(all, taskId));
+  const notice = dependentsNotice(dependentsOf(tasks, taskId), tasks);
   return notice ? `${question}\n\n${notice}` : question;
 }
 

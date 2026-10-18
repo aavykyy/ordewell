@@ -291,6 +291,11 @@ export type SessionMessage =
   // with the repos that stay merged. `trigger`: Ordewell ran it by itself,
   // at a merge gate or at the run's end, with merge at gates automatically on.
   | { type: 'isolation_merge'; result: IsolationMergeResult; trigger?: AutoMergeTrigger }
+  // The Session cleared the isolated run up and forgot it: a Merge all that
+  // left nothing to hand over, or a discard. Sent after the `isolation_merge`
+  // that caused it, and never for a merge that leaves the run going. The one
+  // word on it: a surface folds this rather than guessing from a merge result.
+  | { type: 'run_closed' }
   // Carries no content — see `ResearchProgress['liveness']`. Exists only so a
   // surface's idle watchdog sees the harness process working even during a
   // stretch that produces nothing visible.
@@ -496,7 +501,7 @@ export function executionSummary(tasks: readonly Task[]): ExecutionSummary {
     total: tasks.length,
     completed: tasks.filter((t) => t.status === 'completed').length,
     failed: tasks.filter((t) => t.status === 'failed').length,
-    blocked: tasks.filter((t) => t.status === 'blocked' || blocked.has(t.id)).length,
+    blocked: tasks.filter((t) => blocked.has(t.id)).length,
     skipped: tasks.filter((t) => t.status === 'skipped').length,
   };
 }

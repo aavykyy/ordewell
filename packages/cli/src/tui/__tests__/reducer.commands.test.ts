@@ -19,6 +19,14 @@ const planned: Partial<TuiState> = {
   tasks: [task({ id: 'task-a', order: 1 }), task({ id: 'task-b', order: 2, title: 'Second' })],
 };
 
+it.each([['/retry 2.1', 'child', 'taskAction'], ['/open #2', 'parent', 'openTaskLog'], ['/skip #2', 'parent', 'taskAction'], ['/retry chi', 'child', 'taskAction']])('resolves %s through the shared task reference grammar', (command, taskId, type) => {
+  const tasks = [task({ id: 'parent', order: 2, subtasks: [task({ id: 'child', order: 1 })] })];
+
+  expect(run(command, { sessionId: 'session-1', tasks }).effects).toEqual([
+    expect.objectContaining({ type, taskId }),
+  ]);
+});
+
 describe('retired mode toggles', () => {
   it.each(['/tdd on', '/verify on', '/transport terminal', '/terminal task-a'])('%s is no longer a command and goes to the planner as typed', (line) => {
     expect(run(line).effects).toEqual([{ type: 'startConversation', goal: line }]);

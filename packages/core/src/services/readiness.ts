@@ -62,7 +62,7 @@ export function selectReadyTasks(input: ReadinessInput): Readiness {
     if (!t.prompt) return false;
     if (onHold.has(t.id)) return false;
     if (!input.approved(t.id)) return false;
-    if (blockedIn(t, blocked)) return false;
+    if (blocked.has(t.id)) return false;
     if (unmetDependencies(t, store, runs).length > 0) return false;
     if (heldByMerge(t, input)) return false;
     if (mergeGate(t, store, runs).length > 0) {
@@ -84,13 +84,10 @@ export function selectReadyTasks(input: ReadinessInput): Readiness {
   };
 }
 
-/** A task is blocked when it was parked as blocked, or a dependency of it failed or is blocked (ADR-0034). */
+/** A task is blocked when a dependency of it failed or is blocked (ADR-0034). */
 export function isBlocked(task: Readonly<Task>, store: Pick<PlanStore, 'allTasks'>): boolean {
-  return blockedIn(task, blockingFailures(store.allTasks));
+  return blockingFailures(store.allTasks).has(task.id);
 }
-
-const blockedIn = (task: Readonly<Task>, blocked: ReadonlyMap<string, string[]>): boolean =>
-  task.status === 'blocked' || blocked.has(task.id);
 
 /** What the dependency rule reads of the plan. */
 type DependencyStore = Pick<PlanStore, 'allTasks' | 'get' | 'isCompleted' | 'isSkipped'>;
@@ -138,7 +135,7 @@ function waitingBehind(
   let blocked: ReadonlyMap<string, string[]> | undefined;
   const deadEnd = (id: string): boolean => {
     const task = store.get(id);
-    if (task?.status === 'failed' || task?.status === 'blocked') return true;
+    if (task?.status === 'failed') return true;
     blocked ??= blockingFailures(store.allTasks);
     return blocked.has(id);
   };
@@ -199,7 +196,7 @@ function exclusionReasons(task: Readonly<Task>, input: ReadinessInput, blocked: 
   if (task.status !== 'pending' && task.status !== 'approved') reasons.push(`status=${task.status}`);
   if (onHold.has(task.id)) reasons.push('on-hold');
   if (!input.approved(task.id)) reasons.push('unapproved');
-  if (blockedIn(task, blocked)) reasons.push('blocked');
+  if (blocked.has(task.id)) reasons.push('blocked');
   const unmet = unmetDependencies(task, store, runs);
   if (unmet.length > 0) reasons.push(`deps=${unmet.join(',')}`);
   if (mergeGate(task, store, runs).length > 0) reasons.push('merge-gate');

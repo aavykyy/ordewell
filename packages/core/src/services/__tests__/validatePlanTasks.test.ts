@@ -4,6 +4,18 @@ import { parsePlanJson, validatePlanTasks } from '../PlanValidator';
 const slice = { type: 'ai', dependencies: [], subtasks: [], sliceType: 'AFK', autonomy: 'AFK' };
 
 describe('validatePlanTasks', () => {
+  it('refuses a dependency on an ancestor even without a dependency cycle', () => {
+    const result = validatePlanTasks({ tasks: [
+      { ...slice, id: 'parent', order: 1, title: 'Parent', description: 'd', subtasks: [
+        { ...slice, id: 'child', order: 1, title: 'Child', description: 'd', dependencies: ['parent'] },
+      ] },
+    ] }, ['claude-code']);
+
+    expect(result).toMatchObject({ ok: false, errors: [
+      { taskId: 'child', field: 'dependencies', message: expect.stringContaining('ancestor or descendant') },
+    ] });
+  });
+
   it('names the task and field when a task is assigned to a runner that is not enabled', () => {
     const result = validatePlanTasks(
       { tasks: [{ ...slice, id: 'build', order: 1, title: 'Build it', description: 'd', assignedRunner: 'codex' }] },

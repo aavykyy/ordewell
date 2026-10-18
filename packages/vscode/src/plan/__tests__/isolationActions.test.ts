@@ -174,20 +174,19 @@ describe('handoff actions (ADR-0013)', () => {
 
   it('does not discard without an explicit confirmation', async () => {
     showWarningMessage.mockResolvedValue(undefined);
-    const { d, session, chatProvider } = deps();
+    const { d, session } = deps();
     await handleIsolationAction('discard', undefined, d);
 
     expect(session.discardRun).not.toHaveBeenCalled();
-    expect(chatProvider.clearIsolationHandoff).not.toHaveBeenCalled();
   });
 
-  it('discards and clears the handoff after confirmation', async () => {
+  it('discards after confirmation, and leaves the handoff to the run_closed the Session sends', async () => {
     showWarningMessage.mockResolvedValue('Discard');
     const { d, session, chatProvider } = deps();
     await handleIsolationAction('discard', undefined, d);
 
     expect(session.discardRun).toHaveBeenCalledTimes(1);
-    expect(chatProvider.clearIsolationHandoff).toHaveBeenCalledTimes(1);
+    expect(chatProvider.clearIsolationHandoff).not.toHaveBeenCalled();
   });
 
   it('cleans up the run worktrees while keeping the integration branch', async () => {

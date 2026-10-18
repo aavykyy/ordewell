@@ -86,7 +86,7 @@ describe('ops tasks and merge gates in the TUI (ADR-0020)', () => {
 
     expect(typed.state.overlay).toMatchObject({ kind: 'confirm', title: 'Merge what has landed into your branch?' });
     expect(typed.state.overlay?.kind === 'confirm' && typed.state.overlay.message).toContain('The run goes on');
-    expect(press(typed.state, 'enter').effects).toEqual([{ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration', midRun: true }]);
+    expect(press(typed.state, 'enter').effects).toEqual([{ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration' }]);
   });
 
   it('offers /handoff merge during a run without a gate, using the same confirmation', () => {
@@ -100,7 +100,7 @@ describe('ops tasks and merge gates in the TUI (ADR-0020)', () => {
 
     expect(asked.effects).toEqual([]);
     expect(asked.state.overlay).toEqual(gated.state.overlay);
-    expect(press(asked.state, 'enter').effects).toEqual([{ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration', midRun: true }]);
+    expect(press(asked.state, 'enter').effects).toEqual([{ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration' }]);
   });
 
   it('shows the unmerged landing count quietly and clears it without task status changes', () => {

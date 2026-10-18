@@ -64,14 +64,12 @@ describe('selectReadyTasks', () => {
 
   it('names every reason a pending AI task was passed over', () => {
     const held = createTask({ id: 'h1', order: 1, title: 'Held', prompt: 'x' });
-    const parked = createTask({ id: 'b1', order: 2, title: 'Parked', prompt: 'x', status: 'blocked' });
     const dep = createTask({ id: 'd1', order: 3, title: 'Dep', prompt: 'x', dependencies: ['missing'] });
 
-    const { ready, excluded } = selectReadyTasks(input([held, parked, dep], { onHold: new Set(['h1']) }));
+    const { ready, excluded } = selectReadyTasks(input([held, dep], { onHold: new Set(['h1']) }));
 
     expect(ready).toHaveLength(0);
     expect(excluded.find((e) => e.task.id === 'h1')!.reasons).toEqual(['on-hold']);
-    expect(excluded.find((e) => e.task.id === 'b1')!.reasons).toEqual(['status=blocked', 'blocked']);
     expect(excluded.find((e) => e.task.id === 'd1')!.reasons).toEqual(['deps=missing']);
   });
 
@@ -227,11 +225,6 @@ describe('behind a skipped dependency', () => {
 });
 
 describe('isBlocked', () => {
-  it('reads a parked status on its own', () => {
-    const task = createTask({ id: 't1', order: 1, title: 'Parked', prompt: 'x', status: 'blocked' });
-    expect(isBlocked(task, storeOf([task]))).toBe(true);
-  });
-
   it('reads a failed dependency', () => {
     const failed = createTask({ id: 't1', order: 1, title: 'Failed', prompt: 'x', status: 'failed' });
     const dependent = createTask({ id: 't2', order: 2, title: 'Dependent', prompt: 'x', dependencies: ['t1'] });

@@ -254,10 +254,12 @@ everything below applies per repo of the group.
   completed. Whether their work was kept (merged by hand, or with Merge all) is
   something only the user knows; Mark not done is how they say it was not.
 - **A run closes however its last attempt ends.** Cancel, Mark complete or a
-  failed spawn close a run the scheduler is not driving — a manual task run, or
-  a run held on a usage limit with attempts left — as a verdict does; an idle `tick` closes
-  it. Left open, the next run would inherit its mode. A run paused at a merge
-  gate is not closed: it waits on the user, as one waiting on a user task does.
+  failed spawn close a manual task run, which the scheduler is not driving, as
+  a verdict does; an idle `tick` closes it. Left open, the next run would
+  inherit its mode. A run paused at a merge gate is not closed: it waits on the
+  user, as one waiting on a user task does. Nor is a run held on a usage limit:
+  the reset continues it
+  ([ADR-0034](../supervision/0034-a-failed-task-blocks-only-its-dependents.md)).
 - **The planner is told.** `PlannerModes.isolatedExecution` (one-shot and
   mid-run edits) and `ConversationVariant.isolatedExecution` (the conversation)
   swap the overlap-avoidance rule for one that allows same-file parallelism and
@@ -289,11 +291,15 @@ everything below applies per repo of the group.
   confirmed first everywhere. Each surface offers Merge all mid-run whenever
   landed work is unmerged, with a quiet count; a gated task still waits for
   Merge all (ADR-0020). The stream reports isolation only as it changes,
-  so a surface that was not listening is re-told from the record:
-  `Session.isolationView` reads the marks and the handoff from the run record;
-  VS Code replays it when its webview reconnects or a session is loaded (the
-  card waits while a run executes), and the TUI and CLI read the same record
-  from the saved plan.
+  so a surface that was not listening is re-told by `Session.runSnapshot()`,
+  which carries the marks and the handoff: the socket greets with it, and the
+  session routes' load and read answers carry it, so no surface rebuilds them
+  from the saved record (`Session.isolationView` still reads the record, for
+  the handoff a VS Code merge confirmation names, and the CLI's `status` and
+  `handoff` read the saved plan). Whether a merge or a discard ended the run is
+  the Session's word, `run_closed`, which `reduceRun` folds into dropping the
+  marks, the handoff and the merge view; no surface infers it from a merge
+  result.
 - **Config.** `worktreeIsolation` (default on), an `ORDEWELL_WORKTREE_ISOLATION`
   environment override, an optional `worktreeSetupCommand`
   (`ORDEWELL_WORKTREE_SETUP`), and `workspaceRepos`
@@ -454,3 +460,5 @@ literal git command lines or private fields.
 - 2026-10-14 — a carry-over restores a usage-limit-paused attempt's work for its new runner (ADR-0018, U1).
 - 2026-10-17 — the pre-implementation spec this ADR was built from is retired: its testing decisions and out-of-scope list moved here, and the merge paragraph states the global settings and the end-of-run merge that only History held.
 - 2026-10-17 — Merge all merges only into the branch the run started on (ADR-0042).
+- 2026-10-18 — the Session says when it closed the run (`run_closed`), and a surface re-told by a load or refresh takes `runSnapshot()` instead of reading the run record.
+- 2026-10-18 — a run held on a usage limit is no longer closed when its last attempt ends; it stays open for the reset (ADR-0034).

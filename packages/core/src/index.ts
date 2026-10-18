@@ -280,3 +280,6 @@ export {
   type PlannerSelectionState,
 } from './services/selectPlanner';
 export { DEFAULT_MAX_PARALLEL, parseMaxParallel } from './utils/maxParallel';
+
+export { walkPlan, taskPlacement, subtreeIds } from './services/PlanTree';
+export type { TreeTask, TaskPlacement } from './services/PlanTree';

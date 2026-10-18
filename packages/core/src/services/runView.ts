@@ -1,6 +1,7 @@
 import { serializeTask, type RunInput, type RunTask, type RunTaskStatus, type RunView, type SerializedTask, type SerializedTaskStatus, type SurfacePlan, type SurfacePlanState, type SurfaceTask } from './SessionMessage';
 import type { IsolationHandoff } from '../interfaces/IWorktreeIsolation';
 import { rejoinPlanTree } from '../models/Task';
+import { walkPlan } from './PlanTree';
 
 export const EMPTY_RUN: RunView = { tasks: [], runMerge: null, handoff: null, mergeResult: null };
 
@@ -20,9 +21,7 @@ function split({ verdict, idleSince, isolation, checkpoint, queued, continuable,
  * plan, absent meaning none; status-only fields as the stream last said.
  */
 function refresh(previous: readonly RunTask[], tasks: readonly SerializedTask[]): RunTask[] {
-  const held = new Map<string, RunTask>();
-  const index = (list: readonly RunTask[]): void => list.forEach((t) => { held.set(t.id, t); index(t.subtasks); });
-  index(previous);
+  const held = new Map([...walkPlan(previous)].map(({ task }) => [task.id, task]));
   const fold = ({ subtasks, ...task }: SerializedTask): RunTask => {
     const was = held.get(task.id);
     const { checkpoint, ...status } = was ? split(was).status : {};
@@ -80,6 +79,10 @@ function running({ awaitingReason: _reason, resumeAt: _resumeAt, skipReason: _sk
   return { ...task, status: 'in_progress' };
 }
 
+function withoutIsolation(tasks: readonly RunTask[]): RunTask[] {
+  return tasks.map(({ isolation: _isolation, ...task }) => ({ ...task, subtasks: withoutIsolation(task.subtasks) }));
+}
+
 function handoffOf({ type: _type, ...handoff }: Extract<RunInput, { type: 'isolation_handoff' }>): IsolationHandoff {
   return handoff;
 }
@@ -124,6 +127,8 @@ export function reduceRun(view: RunView, input: RunInput): RunView {
       return input.result.outcome === 'merged'
         ? { ...view, mergeResult: input.result, handoff: null, runMerge: null }
         : { ...view, mergeResult: input.result };
+    case 'run_closed':
+      return { ...view, tasks: withoutIsolation(view.tasks), handoff: null, runMerge: null, mergeResult: null };
     // A checkpoint's whole question and every status `review_needed` implies
     // arrive in the status update that follows; `review_needed`'s own list is
     // flat, so as a plan it would lift subtasks to the top level.

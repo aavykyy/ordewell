@@ -27,3 +27,6 @@ export { DEFAULT_RUNNERS, pausedOnLimit } from './models/Task';
 export { EMPTY_RUN } from './services/runView';
 
 export * from './models/Usage';
+
+export { walkPlan, taskPlacement, subtreeIds } from './services/PlanTree';
+export type { TreeTask, TaskPlacement } from './services/PlanTree';

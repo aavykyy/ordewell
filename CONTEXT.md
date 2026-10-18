@@ -237,7 +237,8 @@ isolated run settles, *before* `execution_complete`.
 Under ADR-0014 a task's `isolation` also names the `repos` it changed and, while
 it is conflicted or failed to land, the `conflictRepo` that stopped it;
 `isolation_blocked` names the dirty `repos` of a group; and `isolation_merge`
-carries what *Merge all* did, blocked repos and all, to every surface.
+carries what *Merge all* did, blocked repos and all, to every surface;
+`run_closed` follows it when the Session cleared the run up.
 *Avoid:* "event", "progress callback" for this concept — and do not add a
 per-call progress override; the broadcast seam is the only channel.
 
@@ -583,17 +584,23 @@ holds. The limit counts only under the *in-flight rule*. When the runner's messa
 read by their connectors' `usageLimitReset`; OpenCode does not), the task carries a `resumeAt` saved with the plan, and at
 that time it is retried as a *Continue* of its saved session. Tasks paused on
 one runner share one wait — the latest of their resets — and resume together;
-the hold on the run is released once nothing waits on a reset and no task has
-failed. A plan loaded after its time resumes at once. Without a time, after a
+the hold on the run is released once nothing waits on a reset, whether or not
+a task failed meanwhile (ADR-0034). A held run stays open: with nothing at work
+it is neither handed over nor merged at its end, and sends no
+`execution_complete`. A plan loaded after its time resumes at once; a loaded
+plan holds no run, so only its paused tasks resume and the rest of the plan
+waits for Execute. Without a time, after a
 cancel or a stop, or when the resumed attempt hits the limit again at once, the
 task waits for a manual retry. *Resume now* (`resumeNow`) resumes it early, in
 its saved session, once the user says the limit has reset — from the task row,
 a message sent to it (after the reset notice), or `retry_task` from `session` —
-with every task waiting on that runner's reset. Surfaces show "Resumes at
+with every task waiting on that runner's reset. One the asked task cannot take
+(no free slot, no approval) is refused before anything changes, and a task it
+sweeps along that cannot start keeps waiting for its reset. Surfaces show "Resumes at
 8:10pm" with *Resume now* and *Don't resume*.
 A runner change, whether a direct edit or a planner edit, cancels that task's
 resume and makes it ready for the next scheduler slot on its new runner, as a
-*Carry-over*.
+*Carry-over*, and a run the pause held goes on.
 Other tasks on the old runner keep their shared wait; changing only the model
 keeps the resume because the limit belongs to the runner's account.
 *Avoid:* "rate limit" for it — a provider's per-minute throttle is retried
@@ -970,8 +977,8 @@ state that ends with the run; put it on the attempt.
 itself blocked (ADR-0034). The scheduler never starts it, its own dependents are
 blocked with it, and every surface shows it "blocked by #N", naming the failed
 tasks it waits on. Independent work keeps starting: a failure stops only what
-depends on it. Nothing is stored — the rule reads statuses and dependencies —
-so a retry of the failed task that passes, or a *Skip* of it, unblocks its
+depends on it. Nothing is stored — there is no `blocked` task status; the rule reads statuses and
+dependencies, and a plan file saved with one loads it as pending — so a retry of the failed task that passes, or a *Skip* of it, unblocks its
 dependents, which then start. A run with nothing running and only failed and blocked tasks left ends,
 counting completed, failed and blocked; a retry of a task in it continues that
 run (`TaskOrchestrator.awaitsResume`), and a planner edit made meanwhile is
@@ -1409,11 +1416,12 @@ bare order. One module
 both renders labels (`taskOrderLabel`, `taskRef`, `titledTaskRef`) and resolves
 references against the plan tree (`resolveTaskRef`) — every planner op and read
 tool, the per-turn plan block (which lists subtasks under their dotted labels),
-execution commands and the CLI read the same grammar. A batch handle is the one
+execution commands, the CLI and TUI commands read the same grammar. The CLI
+and TUI accept a unique id prefix as a fallback. A batch handle is the one
 reference `applyTaskOps` adds on top, and order labels and titles in a batch
 resolve against the plan as it stood before the batch began.
 *Avoid:* "#N" for a subtask, resolving an order against a flattened task list;
-`TaskRef` (the structural dependency-edit type below) for a written reference.
+`TaskRef` (the structural dependency-edit type) for a written reference.
 
 **Runner set** — the ordered `runners: RunnerId[]` a plan may execute across,
 carried on *the plan* and the session. Every task carries an `assignedRunner`
@@ -1467,30 +1475,35 @@ runner the plan's tasks run on. Both surfaces route through it
 (`PUT /api/plans/:s/tasks/:t` dispatches an `assignedRunner` in the body to it
 rather than writing the field), so no surface owns a second copy of the clamp.
 
+**Plan tree (`PlanTree`)** — the shared placement and dependency rules over a
+plan's task tree, including a surface's structural projection. `walkPlan` and
+`taskPlacement` return the task's siblings, ancestors, parent and dotted path;
+`subtreeIds` includes the task and all its descendants. Removing a task detaches
+dependencies on every id in its subtree and releases every descendant runner.
+`dependentsOf` names the surviving tasks whose edges that removal detaches.
+`TaskRefs` renders and resolves references using the same traversal.
+
 **Dependency edit (`dependencyCandidates` + `canSetDependencies` +
-`Session.setTaskDependencies`)** — a hand-edited dependency list is the one task
-edit that can leave a plan unschedulable, so like the runner it is not a field
-write. The rule is that dependencies point *backwards in display order*, the same
-invariant `applyTaskOps`' post-pass owns (its sole owner — `order` itself
-is not user-editable, since independent tasks fan out and position was never the
-schedule); with that, a cycle cannot be expressed and no cycle check is needed at
-the edit site. On the planner path that post-pass *repairs* rather than refuses:
-a batch declares dependencies and `repairOrder` re-slots whatever the graph now
-demands, keeping unrelated tasks in their relative order and every running or
-completed task in the exact slot it already holds — a batch that could only be
-satisfied by shifting one of those is what gets refused, naming it. The `reorder`
-op therefore survives only as deliberate re-prioritising of *independent* tasks;
-nobody has to re-declare a whole plan to move one dependency.
-`dependencyCandidates` is what a picker offers (earlier tasks only; omit the id
-for a task that does not exist yet, since a new task lands last) and
-`canSetDependencies` is what the API refuses — one rule, two readings of it, so a
-picker can never offer an edit the server rejects. Both are typed structurally
-(`TaskRef`) rather than over `Task`, because the TUI projects tasks into its own
-`TaskView`: a `Task`-only signature is what would have forced a second copy of
-the rule into the reducer. `Session.setTaskDependencies` throws rather than
-returning null so the surface can say *why* (`PUT` maps it to 400, VS Code to a
-warning, and both then re-show the accepted list — a refused edit must not leave
-an optimistic checkbox on screen).
+`Session.setTaskDependencies`)** — dependencies may name any task in the plan
+except the task itself, its ancestors and its descendants, provided no cycle
+forms. The planner and user follow this same rule, across branches and at every
+depth. `PlanTree` owns the target restrictions and cycle check; direct edits,
+planner batches and whole-plan intake all read them. A planner batch is checked
+on its final graph, so a later op may finish an earlier rewire. Its post-pass
+`repairOrder` places top-level dependencies before their dependents, keeping
+unrelated tasks in relative order and running or completed tasks in their slots;
+a batch that requires moving a pinned task is refused, naming it. Display order
+is not a requirement on a user's dependency edit.
+
+`dependencyCandidates` takes the whole tree and offers earlier siblings of the
+target (all top-level tasks when the id is omitted for a new task). Pickers may
+offer this narrower list, but keep every existing dependency when a user changes
+it, including those outside the offered list. `canSetDependencies` checks the
+whole tree, so an edit the planner could write is not refused because a picker
+cannot offer it. Both helpers are structural so the TUI's `TaskView` follows the
+same rules. `Session.setTaskDependencies` throws rather than returning null so a
+surface can say why (`PUT` maps it to 400, VS Code to a warning, and both re-show
+the accepted list after a refusal).
 
 **Hand-added task (`Session.addTask`, done by *PlanEditor*)** — async, and for the same reason
 `setTaskRunner` is: a task with no model or mode is not a lighter task but an
@@ -1516,9 +1529,7 @@ that simply dropped the task could never reach the runner session again and the
 orchestrator went on counting it as active — one of the ways "Execution is
 running" became permanent. Removing a `completed` task drops it from the
 completed set, which is safe because `removeTaskFromPlan` detaches the
-dependents in the same op; `PlanStore.remove` additionally releases any
-dependent parked at `blocked`, whose status `isBlocked` reads on its own and
-which nothing else would ever unblock.
+dependents in the same op.
 The asymmetry itself is expressed as one `actor` parameter (`'planner' |
 'direct'`) on **TaskEditValidator**'s single `validateTaskEdit`, not as two
 separate rule implementations — see below.
@@ -1535,8 +1546,9 @@ state, never swapped in for it — the same rule `applyTaskOps` enforces, for
 the path that has no ops to check. A *settled* task (`completed`,
 `in_progress`, `awaiting_user`) is kept exactly as it stands where the rewrite
 names it and put back beside its old neighbour where the rewrite leaves it out;
-every other task keeps its status, and one the rewrite adds starts `pending`. A
-planner restates tasks, it never witnessed one run, so no status is ever read
+every other task keeps its status and skip reason, and one the rewrite adds
+starts `pending`. A planner restates tasks, it never witnessed one run, so no
+status is ever read
 from a rewrite. Without this, a planner that answered "add a task" with the
 full plan echoed finished tasks as `pending` and they ran again.
 *Avoid:* "regenerating" the plan for an edit — only `generatePlan` and the
@@ -1575,7 +1587,8 @@ runner, the prompt, the slice inherited from a parent, the mode from read-only
 or not) is written there once — and reports what the planner may not set (a
 mode, read-only on a manual task) for the route to warn about or refuse.
 `checkPlanInvariants` holds the resulting tasks to the rules a plan keeps at
-every depth: unique ids, dependencies that exist, no cycle, a runner the plan may
+every depth: unique ids, dependencies that exist and name neither the task itself
+nor its ancestors or descendants, no cycle, a runner the plan may
 use, an AFK task with no user steps, a manual task HITL, and ops only on a
 top-level AI task. `validatePlanTasks` calls both on a whole plan; `applyTaskOps`
 calls `plannedTask` for each task an op makes and `checkPlanInvariants` on the
@@ -1965,9 +1978,15 @@ fields (verdict, `idleSince`, isolation, checkpoint, queued messages,
 last status update said, the checkpoint question only while the task still
 waits at it. A status update replaces every status field it covers. The daemon
 sends `Session.runSnapshot()` as a `run_snapshot` frame right after
-`connected`, so a client that joins mid-run has the run before the next update.
+`connected`, so a client that joins mid-run has the run before the next update;
+the session routes' load and read answers carry it too. Whether the run is
+closed is the Session's word, `run_closed` (a Merge all that left nothing to
+hand over, or a discard), which `reduceRun` folds into dropping the marks,
+the handoff and the merge view; a merge that leaves the run going keeps them.
 *Avoid:* a surface deciding for itself which task fields survive a plan
 refresh — the surfaces disagreed, and one dropped checkpoints and `addedBy`;
+*Avoid:* a surface guessing from a merge result, or from the saved run record,
+whether the run is closed;
 *Avoid:* "task state" for the whole of it — a task's status is one field.
 
 **Turn gate** (`TurnGate`, `followTurn`, `stopTurn`) — the stop rule, beside
@@ -2117,6 +2136,24 @@ only the level; the scheduler reads the run's settings through one
 `runSettings()` callback as it decides, and nothing is pushed to it.
 *Avoid:* "supervisor" for the module — the Supervisor is the planner
 conversation taking turns; Run supervision holds the run to its settings.
+
+**Run state** (`RunState`, in `TaskOrchestrator`; ADR-0034, ADR-0018 U1) —
+where the full-plan run stands, as one value: *idle* (no full-plan run since
+the plan loaded or the user stopped one; a task started on its own may still be
+at work), *scheduling* (ready tasks start as slots free; a run waiting on the
+user, a hold or a merge gate stays here), *held* (a usage-limit pause holds it:
+it stays open and starts nothing new until the reset, a *Resume now*, a retry,
+a skip or a move to another runner continues it), *ended on a failure* (every
+task left is failed or blocked; a retry or a skip continues it) and *finished*
+(every task completed or was skipped). `isScheduling`, `awaitsResume` and the
+plan status (`running`, `completed`, else `approved`) derive from it. One
+settle step (`settleRun`) decides, once nothing is at work and nothing can
+start, whether the run goes on, is held, waits on the user or is over; only an
+end closes the run and sends `execution_complete`. The review approval
+(`isReviewApproved`) is kept apart: it says the user signed the plan off, not
+where its run stands.
+*Avoid:* "paused" for *held* (a task is paused on a usage limit; the run is
+held), "stopped" for *ended* (Stop is the user's, and leaves the run idle).
 
 **Run origin** (`RunOrigin`: `user` / `supervisor` / `limit-reset`) — who opened
 a run, passed with the call that opens it, from the Command seam's actor down

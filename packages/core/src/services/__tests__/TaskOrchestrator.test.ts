@@ -268,12 +268,14 @@ describe('TaskOrchestrator', () => {
       expect(orchestrator.activeSessionMap).toEqual(new Map([['t2', 's2']]));
     });
 
-    it('unblocks dependents when marking a failed task complete', async () => {
+    it('lifts the block on dependents when marking a failed task complete', async () => {
       const orchestrator = makeOrchestrator();
       orchestrator.loadPlan([
         createTask({ id: 't1', order: 1, title: 'Failing', prompt: 'do', status: 'failed' }),
-        createTask({ id: 't2', order: 2, title: 'Blocked', prompt: 'do', status: 'blocked', dependencies: ['t1'] }),
+        createTask({ id: 't2', order: 2, title: 'Blocked', prompt: 'do', dependencies: ['t1'] }),
       ]);
+      orchestrator.storeInstance.markFailed('t1');
+      expect(orchestrator.getBlockedBy('t2')).toEqual(['t1']);
 
       await orchestrator.markTaskComplete('t1');
 
@@ -282,6 +284,7 @@ describe('TaskOrchestrator', () => {
       expect(t1!.status).toBe('completed');
       const t2 = orchestrator.storeInstance.get('t2');
       expect(t2!.status).toBe('pending');
+      expect(orchestrator.getBlockedBy('t2')).toEqual([]);
     });
 
     it('marks an awaiting_user task as completed', async () => {
@@ -362,6 +365,21 @@ describe('TaskOrchestrator', () => {
 
       await orchestrator.markTaskIncomplete('t1');
 
+      expect(orchestrator.status).toBe('approved');
+    });
+
+    it('a retry takes a finished plan out of the completed state too', async () => {
+      const orchestrator = makeOrchestrator();
+      orchestrator.loadPlan([
+        createTask({ id: 't1', order: 1, title: 'AI Task', prompt: 'do', status: 'pending' }),
+      ]);
+      await orchestrator.markTaskComplete('t1');
+      await orchestrator.approveReview();
+      expect(orchestrator.status).toBe('completed');
+
+      await orchestrator.retryTask('t1');
+
+      expect(orchestrator.storeInstance.get('t1')!.status).toBe('pending');
       expect(orchestrator.status).toBe('approved');
     });
   });

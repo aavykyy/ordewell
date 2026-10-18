@@ -21,7 +21,7 @@ export default function DependencyPicker({ candidates, selected, onChange, onDon
   return (
     <div className="task-dep-editor" onClick={(e) => e.stopPropagation()}>
       {candidates.length === 0 ? (
-        <div className="task-dep-editor-empty">Nothing runs before this task, so it has no possible dependencies.</div>
+        <div className="task-dep-editor-empty">No earlier siblings to offer as dependencies.</div>
       ) : (
         candidates.map((c) => (
           <label key={c.id} className="task-dep-option">

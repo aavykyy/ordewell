@@ -169,7 +169,6 @@ describe('renderPlanMap', () => {
     const tasks = [
       createTask({ id: 'a', order: 1, title: 'Done one', status: 'completed' }),
       createTask({ id: 'b', order: 2, title: 'Failed one', status: 'failed' }),
-      createTask({ id: 'c', order: 3, title: 'Blocked one', status: 'blocked' }),
       createTask({ id: 'd', order: 4, title: 'Manual one', type: 'user' }),
       createTask({ id: 'e', order: 5, title: 'Pending one' }),
       createTask({ id: 'f', order: 6, title: 'Running one', status: 'in_progress' }),
@@ -177,7 +176,6 @@ describe('renderPlanMap', () => {
     const out = renderPlanMap(tasks, 'e');
     expect(out).toMatch(/\[done\s*\] Done one/);
     expect(out).toMatch(/\[failed\s*\] Failed one/);
-    expect(out).toMatch(/\[blocked\] Blocked one/);
     expect(out).toMatch(/\[user\s*\] Manual one/);
     expect(out).toMatch(/\[NOW\s*\] Pending one/);
     expect(out).toMatch(/\[running\] Running one/);

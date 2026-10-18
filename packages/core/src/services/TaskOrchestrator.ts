@@ -127,6 +127,8 @@ export interface OrchestratorObserver {
   onIsolationBlocked?(data: { reason: 'dirty'; repos: string[] }): void;
   /** An isolated run settled; emitted before `onExecutionComplete`, which surfaces treat as terminal. */
   onIsolationHandoff?(handoff: IsolationHandoff): void;
+  /** The isolated run was cleared up and forgotten, by a Merge all that left nothing to hand over or by a discard. */
+  onRunClosed?(): void;
   /**
    * What a run says about how it isolates — the fallback to the workspace root,
    * shared paths, copies, a stash. Beside the notification channel, which a
@@ -208,12 +210,32 @@ interface TaskAttempt {
 
 type AttemptPhase = 'starting' | 'running' | 'integrating';
 
-/** A resume the user, planner or supervisor asked for before the reset; see {@link TaskOrchestrator.resumeNow}. */
+/**
+ * A resume the user, planner or supervisor asked for before the reset; see
+ * {@link TaskOrchestrator.resumeNow}. It sweeps along every other task
+ * waiting on the same runner's reset.
+ */
 interface ResumeNow {
   taskId: string;
   origin: RunOrigin;
   message?: string;
 }
+
+/**
+ * Where the full-plan run stands, as one value; every getter that reports on
+ * the run derives from it (ADR-0034; ADR-0018 U1).
+ * - `idle`: no full-plan run since the plan loaded or the user stopped one. A
+ *   task started on its own may still be at work.
+ * - `scheduling`: the scheduler drives the plan, starting ready tasks as slots
+ *   free. A run that waits on the user, a hold or a merge gate stays here.
+ * - `held`: a usage-limit pause holds the run. It stays open and starts
+ *   nothing new until the reset, a Resume now, a retry, a skip or a move to
+ *   another runner continues it.
+ * - `endedOnFailure`: the run ended with failed tasks and the tasks they
+ *   block; a retry or a skip continues it.
+ * - `finished`: every task completed or was skipped.
+ */
+type RunState = 'idle' | 'scheduling' | 'held' | 'endedOnFailure' | 'finished';
 
 /** Read-only view of a task's live attempt. */
 export interface TaskAttemptSnapshot {
@@ -295,7 +317,7 @@ export interface TaskOrchestratorOptions {
 }
 
 /**
- * The pure scheduler. Owns execution state (`running`, `planStatus`,
+ * The pure scheduler. Owns execution state (the {@link RunState},
  * `reviewApproved`, the live task attempts, the start hold) and the verifier.
  * All task-shaped state — the plan tree, the flat index, the completed set
  * — lives in {@link PlanStore}, injected at construction. The orchestrator
@@ -312,8 +334,8 @@ export class TaskOrchestrator {
   private output: TaskOutputSource;
   private attempts = new Map<string, TaskAttempt>();
   private verifier = new VerdictEngine();
-  private running = false;
-  private planStatus: 'approved' | 'running' | 'completed' = 'approved';
+  /** Changed only by start, stop, a plan load, a usage-limit pause, a move off the limit, and {@link settleRun}. */
+  private runState: RunState = 'idle';
   /** Planner turns in flight that new starts wait for (ADR-0029); running attempts carry on. */
   private startHolds = 0;
   /** Bumped by the user's Stop: a start admitted under an older generation never takes its claim. */
@@ -330,14 +352,6 @@ export class TaskOrchestrator {
    */
   private retryCounts = new Map<string, number>();
   private spawnCounts = new Map<string, number>();
-  /** A full-plan run a usage-limit pause holds: no new start until the reset resumes it. */
-  private heldOnLimit = false;
-  /**
-   * A full-plan run that ended with failed tasks and the tasks they block
-   * (ADR-0034). A retry of a failed task continues it, so what it blocked
-   * starts once it passes — without this the retried task ran alone.
-   */
-  private endedOnFailure = false;
   /** A Merge all is under way: no ops task starts until it ends (ADR-0020). */
   private merging = false;
   /** The last "waiting for Merge all" notice, so a run paused at a gate says it once, not on every tick. */
@@ -451,6 +465,7 @@ export class TaskOrchestrator {
         changed: (detached) => orchestrator.emit('onIsolationChanged', detached),
         blocked: (repos) => orchestrator.emit('onIsolationBlocked', { reason: 'dirty', repos }),
         handoff: (handoff) => orchestrator.emit('onIsolationHandoff', handoff),
+        closed: () => orchestrator.emit('onRunClosed'),
         notice: (level, message) => orchestrator.emit('onIsolationNotice', { level, message }),
       },
       liveTasks: (): ReadonlySet<string> => orchestrator.liveTaskIds(),
@@ -697,7 +712,7 @@ export class TaskOrchestrator {
   }
 
   get isRunning(): boolean {
-    return this.running || this.attempts.size > 0;
+    return this.isScheduling || this.attempts.size > 0;
   }
   /**
    * A runner is executing *right now*. Narrower than {@link isRunning}, which
@@ -710,13 +725,16 @@ export class TaskOrchestrator {
   }
   get isReviewApproved(): boolean { return this.reviewApproved; }
   /** The scheduler is driving the plan: ready tasks start on their own as slots free. Narrower than {@link isRunning}. */
-  get isScheduling(): boolean { return this.running; }
+  get isScheduling(): boolean { return this.runState === 'scheduling'; }
   /**
    * A full-plan run with nothing starting that something still resumes: a
    * usage limit's reset, or a retry of a failed task its blocked tasks wait on.
    */
-  get awaitsResume(): boolean { return !this.running && (this.heldOnLimit || this.endedOnFailure); }
-  get status(): 'approved' | 'running' | 'completed' { return this.planStatus; }
+  get awaitsResume(): boolean { return this.runState === 'held' || this.runState === 'endedOnFailure'; }
+  get status(): 'approved' | 'running' | 'completed' {
+    if (this.runState === 'scheduling') return 'running';
+    return this.runState === 'finished' ? 'completed' : 'approved';
+  }
   get activeTaskIds(): string[] { return [...this.activeSessionMap.keys()]; }
   /** Task id → session id of every attempt whose runner is up; a spawn in flight has no session yet. */
   get activeSessionMap(): Map<string, string> {
@@ -859,7 +877,7 @@ export class TaskOrchestrator {
     const handoff = this.runs.view()?.handoff;
     if (!handoff?.landed.length) return null;
     const waitingAtGate = this.store.allTasks.some((t) => this.getMergeGate(t.id).length > 0);
-    return { waitingAtGate, paused: waitingAtGate && this.running && this.attempts.size === 0, repos: handoff.repos, landed: handoff.landed };
+    return { waitingAtGate, paused: waitingAtGate && this.isScheduling && this.attempts.size === 0, repos: handoff.repos, landed: handoff.landed };
   }
 
   /**
@@ -884,13 +902,13 @@ export class TaskOrchestrator {
     for (const a of repairs) this.unawaited(this.runs.release(a.taskId, { keep: true }, a.integration), `Could not keep the worktree of task "${this.store.get(a.taskId)?.title ?? a.taskId}"`);
     // A plan committed while the scheduler runs keeps that run, and its mode
     // with it; otherwise the next start decides afresh.
-    this.runs.interrupt({ keepOpen: this.running });
+    this.runs.interrupt({ keepOpen: this.isScheduling });
     // A held or ended run belongs to the plan it was in, whose failed tasks this
-    // load gives a fresh chance: left set, the next retry would restart a run
-    // nobody started, and a usage-limit move would arm the scheduler.
-    this.heldOnLimit = false;
-    this.endedOnFailure = false;
-    this.planStatus = 'approved';
+    // load gives a fresh chance: kept, the next retry would restart a run
+    // nobody started, and a usage-limit move would arm the scheduler. A plan
+    // loaded from disk holds no run either, so at a reset only its paused
+    // tasks resume, as after any restart.
+    if (this.runState !== 'scheduling') this.runState = 'idle';
     this.reviewApproved = false;
     this.retryCounts.clear();
     this.spawnCounts.clear();
@@ -933,12 +951,12 @@ export class TaskOrchestrator {
     for (const t of flattenTasks(adopted)) {
       if (t.status === 'failed') this.store.markFailed(t.id);
     }
-    if (this.isRunning) this.planStatus = 'running';
   }
 
+  /** Start the full-plan run, or continue one that is held or ended on a failure. */
   async start(origin: RunOrigin = 'user'): Promise<void> {
     if (this.runs.blocked) return;
-    if (this.running) {
+    if (this.isScheduling) {
       console.error('[TaskOrchestrator] start() called but already running: no-op');
       return;
     }
@@ -949,19 +967,17 @@ export class TaskOrchestrator {
     }
     this.openRun(origin);
     console.log(`[TaskOrchestrator] Starting with ${this.store.allTasks.length} tasks (${this.store.allTasks.filter(t => t.type === 'ai' && t.prompt).length} AI ready)`);
-    this.running = true;
-    this.heldOnLimit = false;
-    this.endedOnFailure = false;
-    this.planStatus = 'running';
+    this.runState = 'scheduling';
     this.emit('onTaskChanged');
     await this.tick();
   }
 
-  /** A usage-limit pause holds the run: spawning more would spend the same exhausted limit. */
+  /**
+   * A usage-limit pause holds the run the scheduler drives: spawning more
+   * would spend the same exhausted limit. The run stays open (ADR-0034).
+   */
   private holdOnLimit(): void {
-    if (this.running) this.heldOnLimit = true;
-    this.running = false;
-    this.planStatus = 'approved';
+    if (this.runState === 'scheduling') this.runState = 'held';
   }
 
   /**
@@ -972,10 +988,7 @@ export class TaskOrchestrator {
    */
   stop(reason: 'user' | 'restart' = 'user'): void {
     if (reason === 'user') this.stopGeneration++;
-    this.heldOnLimit = false;
-    this.endedOnFailure = false;
-    this.running = false;
-    this.planStatus = 'approved';
+    this.runState = 'idle';
     // Let the verifier go before the runners: a killed session fires its exit
     // synchronously, and under a still-valid generation that exit is a verdict
     // — for a conflict repair, one that lands work the stop just cancelled.
@@ -1162,19 +1175,14 @@ export class TaskOrchestrator {
     const status = this.store.get(taskId)?.status;
     if (status === 'completed' || status === 'failed' || status === 'awaiting_user') this.emit('onTaskSettled', { taskId });
     this.emit('onTaskChanged');
-    if (this.running) {
+    if (this.isScheduling) {
       await this.tick();
       return;
     }
-    // The run the scheduler is not driving is closed here rather than by a
-    // tick, so what was queued behind this task starts here too.
+    // A run the scheduler is not driving settles here rather than in a tick,
+    // so what was queued behind this task starts here too.
     await this.startQueued();
-    if (this.attempts.size === 0) {
-      if (this.store.isFinished()) this.planStatus = 'completed';
-      this.emit('onTick');
-      if (this.settled) await this.closeRun();
-      this.emit('onExecutionComplete');
-    }
+    await this.settleRun('verdict');
   }
 
   /**
@@ -1187,7 +1195,6 @@ export class TaskOrchestrator {
     if (this.attempts.get(task.id) !== attempt) return;
     this.endAttempt(task.id, 'verdict');
     await this.applyLanding(task, outcome, () => {
-      this.store.unblockDependents(task.id);
       this.logAndArchive(task, task.verdict ?? verdict);
     });
     await this.afterVerdict(task.id);
@@ -1239,7 +1246,6 @@ export class TaskOrchestrator {
     if (!resolved) return;
     const { task, outcome } = resolved;
     await this.applyLanding(task, outcome, () => {
-      this.store.unblockDependents(task.id);
       if (task.verdict) this.logAndArchive(task, task.verdict);
     });
   }
@@ -1249,7 +1255,7 @@ export class TaskOrchestrator {
   }
 
   private readiness(): Readiness {
-    if (!this.running) return { ready: [], candidateCount: 0, excluded: [], gated: [] };
+    if (!this.isScheduling) return { ready: [], candidateCount: 0, excluded: [], gated: [] };
     const maxParallel = this.config.maxParallelSessions;
     const active = this.attempts.size;
     const waitingRunners = new Set(this.store.allTasks
@@ -1288,7 +1294,7 @@ export class TaskOrchestrator {
    * {@link unawaited}, never left unhandled.
    */
   runSettingsChanged(): void {
-    if (!this.runs.isOpen || !this.running) return;
+    if (!this.runs.isOpen || !this.isScheduling) return;
     this.unawaited(this.tick(), 'Could not act on the changed run settings');
   }
 
@@ -1403,7 +1409,6 @@ export class TaskOrchestrator {
     this.store.setTaskOutputSummary(taskId, summarizeOutput(verdict.reason, ''));
     this.logAndArchive(task, verdict);
     if (completesTask(landing)) {
-      this.store.unblockDependents(taskId);
       this.onHold.delete(taskId);
       this.notifications.info(`Task "${task.title}" marked complete.`);
       this.say(landing.messages);
@@ -1429,9 +1434,6 @@ export class TaskOrchestrator {
     this.store.retry(taskId);
     this.store.removeFromLog(taskId);
     this.onHold.add(taskId);
-    // A finished plan is no longer finished — leaving 'completed' would tell
-    // every surface the run is over while a task sits pending.
-    if (this.planStatus === 'completed') this.planStatus = 'approved';
 
     this.notifications.info(`Task "${task.title}" marked not done.`);
     this.emit('onTaskChanged');
@@ -1488,7 +1490,6 @@ export class TaskOrchestrator {
       const movedFrom = this.movedFrom(task);
       this.store.retry(taskId);
       if (movedFrom) this.store.setCarriedFrom(taskId, movedFrom);
-      this.store.unblockDependents(taskId);
       this.onHold.delete(taskId);
       this.emit('onTaskChanged');
       if (movedFrom) {
@@ -1531,7 +1532,6 @@ export class TaskOrchestrator {
       this.retryCounts.set(taskId, (this.retryCounts.get(taskId) ?? 0) + 1);
       this.endAttempt(taskId, 'retry');
       this.store.retry(taskId);
-      this.store.unblockDependents(taskId);
       this.onHold.delete(taskId);
       // Claimed before anything is awaited, so a running scheduler never sees the
       // pending task and starts it afresh. Its prepare replaces the old worktree.
@@ -1575,6 +1575,11 @@ export class TaskOrchestrator {
    * Run before writing assignments so cancellation sees the old runner's
    * shared wait. A session cannot cross runners, so the next attempt is a
    * carry-over of the paused attempt's files (ADR-0018, U1).
+   *
+   * The move routes the task around the limit, so a run the pause held goes
+   * on, as a retry would continue it. That run is still open — a hold never
+   * closes one — and every edit that calls this ticks once it is written,
+   * which starts the task.
    */
   releaseMovedResume(taskId: string, changes: Partial<Task>): Partial<Task> {
     const task = this.store.get(taskId);
@@ -1585,11 +1590,7 @@ export class TaskOrchestrator {
     if ((next.assignedRunner ?? this.store.planRunners[0]) === this.store.resolveTaskRunner(task)) return changes;
     this.cancelScheduledResume(taskId);
     this.onHold.delete(taskId);
-    if (this.heldOnLimit) {
-      this.running = true;
-      this.heldOnLimit = false;
-      this.planStatus = 'running';
-    }
+    if (this.runState === 'held') this.runState = 'scheduling';
     return { ...changes, status: 'pending', awaitingReason: undefined, resumeAt: undefined, carriedFrom: this.store.resolveTaskRunner(task) };
   }
 
@@ -1683,9 +1684,18 @@ export class TaskOrchestrator {
     if (!pausedOnLimit(task)) throw new TaskControlError(`Task "${task.title}" is not paused on a usage limit.`);
     const eligible = continuability(task);
     if (!eligible.ok) throw new TaskControlError(eligible.reason);
+    // Refused before the runner's wait is disarmed, so a refusal leaves every
+    // resume at the reset as it was.
+    this.refuseClaim(task, this.stopGeneration);
     const runner = this.store.resolveTaskRunner(task);
     this.limitWaits.disarm(runner);
-    await this.resumeAfterLimit(runner, { taskId, origin, message: message?.trim() || undefined });
+    try {
+      await this.resumeAfterLimit(runner, { taskId, origin, message: message?.trim() || undefined });
+    } finally {
+      // What did not resume — refused once its run opened, or swept along
+      // with no slot left — still resumes at its reset.
+      if (this.waitingOn(runner).length > 0) this.armLimitWait(runner);
+    }
   }
 
   private async resumeAfterLimit(runner: string, now?: ResumeNow): Promise<void> {
@@ -1693,34 +1703,36 @@ export class TaskOrchestrator {
     const due = [...(asked ? [asked] : []), ...this.waitingOn(runner).filter((t) => t.id !== asked?.id)];
     if (due.length === 0) return;
     this.tell('info', `The usage limit of ${runner} has reset: resuming ${quotedList(due.map((t) => t.title))}.`);
-    await Promise.all(due.map((t) => this.resumeTask(t.id, t.id === asked?.id ? now : undefined)));
+    await Promise.all(due.map((t) => this.resumeTask(t.id, now)));
   }
 
   /**
    * Retry a task paused on a usage limit, continuing its saved session where
    * it left one (ADR-0018, K1), then release the hold the pause put on the
-   * run once nothing else waits on a reset.
+   * run once nothing else waits on a reset. `now` is the Resume now that
+   * asked for it, or for another task on its runner, which sweeps it along.
    */
   private async resumeTask(taskId: string, now?: ResumeNow): Promise<void> {
     const origin = now?.origin ?? 'limit-reset';
+    const asked = now?.taskId === taskId;
     await this.whileAdmitted(async (admittedAt) => {
       const opened = await this.openFor(taskId, origin, () => this.resumeTask(taskId, now));
-      // One asked for now answers its caller as stopped; one at the reset was stopped with its run, which said so.
-      if (now && admittedAt !== this.stopGeneration) throw new TaskControlError(STOPPED_BEFORE_START);
+      // One asked for now answers its caller as stopped; any other was stopped with its run, which said so.
+      if (asked && admittedAt !== this.stopGeneration) throw new TaskControlError(STOPPED_BEFORE_START);
       if (!opened) return;
       const task = this.store.get(taskId);
-      // One asked for now resumes without a resume time; at the reset, one cancelled meanwhile stays put.
-      if (!task || !(now ? pausedOnLimit(task) : waitsForReset(task)) || this.attempts.has(taskId)) return;
-      if (now) this.refuseClaim(task, admittedAt);
-      else if (!this.mayResumeAtReset(task, admittedAt)) return;
+      // One asked for now resumes without a resume time; any other cancelled meanwhile stays put.
+      if (!task || !(asked ? pausedOnLimit(task) : waitsForReset(task)) || this.attempts.has(taskId)) return;
+      if (asked) this.refuseClaim(task, admittedAt);
+      else if (!this.mayResume(task, admittedAt, now !== undefined)) return;
       const resumeSessionId = task.runnerSessionId;
       this.retryCounts.set(taskId, (this.retryCounts.get(taskId) ?? 0) + 1);
       this.store.retry(taskId);
       this.onHold.delete(taskId);
-      const message = now?.message ? `${LIMIT_RESET_MESSAGE}\n\n${now.message}` : LIMIT_RESET_MESSAGE;
+      const message = asked && now?.message ? `${LIMIT_RESET_MESSAGE}\n\n${now.message}` : LIMIT_RESET_MESSAGE;
       const continuation = resumeSessionId ? { message, resumeSessionId } : null;
       const started = this.claimed(task, admittedAt, continuation, { autoResumed: true });
-      const resumed = this.heldOnLimit && !this.running && !this.store.allTasks.some(waitsForReset) ? this.start(origin) : Promise.resolve();
+      const resumed = this.runState === 'held' && !this.store.allTasks.some(waitsForReset) ? this.start(origin) : Promise.resolve();
       // Both are awaited even if one fails: the claimed attempt's start must not
       // be left unhandled because restarting the run threw.
       await Promise.all([resumed, started]);
@@ -1728,14 +1740,19 @@ export class TaskOrchestrator {
   }
 
   /**
-   * A resume at the limit's reset that nobody waits on cannot be refused to
-   * anyone, so one that may not claim waits for the user instead — its resume
-   * time dropped, and said — unless a Stop is why, which said so itself.
+   * A resume nobody asked for cannot be refused to anyone. At the limit's
+   * reset, one that may not claim waits for the user instead — its resume
+   * time dropped, and said. One swept along by a Resume now keeps its resume
+   * time, which its caller arms again: the reset has not come. A Stop says
+   * so itself.
    */
-  private mayResumeAtReset(task: Readonly<Task>, admittedAt: number): boolean {
+  private mayResume(task: Readonly<Task>, admittedAt: number, swept: boolean): boolean {
     const refused = this.claimRefusal(task, admittedAt);
     if (!refused) return true;
-    if (admittedAt === this.stopGeneration) {
+    if (admittedAt !== this.stopGeneration) return false;
+    if (swept) {
+      this.tell('info', `Task "${task.title}" did not resume now: ${refused} It still resumes on its own at its usage limit's reset.`);
+    } else {
       this.cancelScheduledResume(task.id);
       this.tell('warn', `Task "${task.title}" did not resume at its usage limit's reset: ${refused} Resume it once it can start.`);
     }
@@ -1786,10 +1803,10 @@ export class TaskOrchestrator {
     const waiting = this.underWayBefore(task);
     if (waiting.length === 0) return null;
     this.onHold.delete(task.id);
-    if (!this.running || isBlocked(task, this.store)) this.queuedStarts.add(task.id);
+    if (!this.isScheduling || isBlocked(task, this.store)) this.queuedStarts.add(task.id);
     const names = waiting.map((id) => `task "${this.store.get(id)?.title ?? id}"`);
     const listed = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
-    const idle = this.running || waiting.some((id) => this.attempts.has(id)) ? '' : ' Nothing is running now: run the plan to start them.';
+    const idle = this.isScheduling || waiting.some((id) => this.attempts.has(id)) ? '' : ' Nothing is running now: run the plan to start them.';
     const queued = `Task "${task.title}" is approved and starts once ${listed} ${names.length === 1 ? 'finishes' : 'finish'}.${idle}`;
     this.tell('info', queued);
     this.emit('onTaskChanged');
@@ -1811,7 +1828,7 @@ export class TaskOrchestrator {
         seen.add(id);
         const dep = this.store.get(id);
         if (dep?.status === 'failed') continue;
-        if (dep && (dep.status === 'blocked' || blocked.has(id))) walk(dep);
+        if (dep && blocked.has(id)) walk(dep);
         else waiting.add(id);
       }
     };
@@ -1832,7 +1849,7 @@ export class TaskOrchestrator {
       }
       if (this.underWayBefore(task).length > 0) continue;
       this.queuedStarts.delete(id);
-      if (this.running && !isBlocked(task, this.store)) continue;
+      if (this.isScheduling && !isBlocked(task, this.store)) continue;
       try {
         await this.forceStartTask(id);
       } catch (err) {
@@ -1893,7 +1910,6 @@ export class TaskOrchestrator {
       return;
     }
     this.reviewApproved = true;
-    this.planStatus = 'approved';
     this.emit('onTaskChanged');
     this.emit('onReviewApproved', { tasks: this.store.planTasks });
     await this.start(origin);
@@ -1906,14 +1922,7 @@ export class TaskOrchestrator {
     // Every way a dependency finishes ticks — a verdict, Mark complete, a skip,
     // a failed spawn — so a queued force start waiting on it is started here.
     await this.startQueued();
-    if (!this.running) {
-      // A run the scheduler is not driving — a manual task run, or a run held
-      // on a usage limit with attempts left — is closed by a verdict only. Ended by
-      // cancel, Mark complete or a failed spawn instead, it would stay open, and
-      // the next run would inherit its mode rather than decide its own.
-      if (this.attempts.size === 0 && this.runs.isOpen && this.settled) await this.closeRun();
-      return;
-    }
+    if (!this.isScheduling) return this.settleRun('tick');
 
     // Ahead of the run-complete check too: the turn may add work to a run
     // that would otherwise end under it. Its release ticks again.
@@ -1927,7 +1936,7 @@ export class TaskOrchestrator {
       this.autoMergeBlocked = false;
       readiness = this.readiness();
     }
-    if (!this.running) return;
+    if (!this.isScheduling) return;
     if (this.mergesAutomatically() && !this.autoMergeBlocked && !this.merging
       && ![...this.attempts.values()].some((a) => mergeExcludes(a.kind))) {
       // A skipped dependency holds nothing back once the work behind it is done, and that work still gates (see mergeGate).
@@ -1941,68 +1950,23 @@ export class TaskOrchestrator {
         readiness = this.readiness();
       }
     }
-    if (!this.running) return;
+    if (!this.isScheduling) return;
     const { ready } = readiness;
     console.log(`[TaskOrchestrator] tick(): ${ready.length} ready, ${this.attempts.size} active, held=${this.startHolds}`);
 
-    if (ready.length === 0 && this.attempts.size === 0) {
-      const remaining = this.store.allTasks.filter(t => t.status !== 'completed' && t.status !== 'skipped');
-      console.log(`[TaskOrchestrator] tick(): no work. remaining=${remaining.length}, completed=${this.store.isAllComplete()}`);
-      const remainingById = new Map(remaining.map((t) => [t.id, t]));
-      for (const { task, label } of flattenTasksWithParents(this.store.planTasks)) {
-        if (!remainingById.has(task.id)) continue;
-        console.log(`  - ${label}. ${task.title} [${task.type}/${task.status}] prompt=${!!task.prompt}`);
-      }
-      const blocked = blockingFailures(this.store.planTasks);
-      if (remaining.length === 0) {
-        // Genuinely done — stop the loop so a fresh Execute click can start it again.
-        this.running = false;
-        this.planStatus = 'completed';
-        this.sayFinished();
-        this.emit('onTaskChanged');
-        this.emit('onTick');
-        await this.closeRun();
-        this.emit('onExecutionComplete');
-      } else if (remaining.every((t) => t.status === 'failed' || t.status === 'blocked' || blocked.has(t.id))) {
-        // Nothing left can start until a failed task is retried (ADR-0034):
-        // the run ends, and a retry continues it.
-        this.running = false;
-        this.endedOnFailure = true;
-        this.planStatus = 'approved';
-        this.sayEndedOnFailure(blocked);
-        this.emit('onTaskChanged');
-        this.emit('onTick');
-        await this.closeRun();
-        this.emit('onExecutionComplete');
-      } else {
-        // Not done — just waiting on a user task, checkpoint, or held task.
-        // Keep `running` true: markTaskComplete/retryTask/forceStartTask/cancelTask
-        // all re-tick() afterward, and that only ever schedules new work while
-        // `running` is true. Flipping it false here would silently kill the
-        // scheduler and leave dependents unblocked-but-never-started.
-        // Do NOT emit onExecutionComplete here: a paused run is not a finished
-        // one, and every surface treats that signal as terminal (the TUI closes
-        // its execution stream on receipt, so a later fan-out from completing the
-        // user task would arrive to a closed socket and be invisible).
-        this.notifications.info('Remaining tasks require user action or are on hold.');
-        this.sayGate();
-        this.emit('onTaskChanged');
-        this.emit('onTick');
-      }
-      return;
-    }
+    if (ready.length === 0 && this.attempts.size === 0) return this.settleRun('tick');
 
     for (const { id } of ready) {
       // Readiness was read before this loop awaited any start: a stop, a plan
       // load, a Merge all, a user control or a concurrent tick may have come
       // since, so each id is judged again — and last with nothing awaited
       // between that and the claim.
-      if (!this.running) return;
+      if (!this.isScheduling) return;
       if (!this.stillReady(id)) continue;
       const kind = this.nextAttemptKind(id);
       if (this.merging && mergeExcludes(kind)) continue;
       if (decidesIsolation(kind) && !(await this.runs.decide(() => this.tick()))) continue;
-      if (!this.running) return;
+      if (!this.isScheduling) return;
       if (!this.stillReady(id)) continue;
       const task = this.store.get(id);
       if (!task) continue;
@@ -2016,7 +1980,69 @@ export class TaskOrchestrator {
     this.emit('onTick');
   }
 
-  /** How a run that ended on failures ends: what it finished, what failed, and what that blocks. */
+  /**
+   * The one step that decides, with nothing at work and nothing the scheduler
+   * can start, whether the run goes on, is held, waits on the user or is over
+   * (ADR-0034). Every surface takes `onExecutionComplete` as the run's end, so
+   * only an end emits it. A run the scheduler is not driving — tasks started
+   * on their own — ends on a verdict; a cancel, Mark complete or failed spawn
+   * just closes it, so the next run decides its own mode rather than inherit
+   * this one's.
+   */
+  private async settleRun(after: 'tick' | 'verdict'): Promise<void> {
+    // A retry, Mark not done or an added task since leaves the plan unfinished:
+    // still finished, it would tell every surface the run is over while a task waits.
+    if (this.runState === 'finished' && !this.store.isFinished()) this.runState = 'idle';
+    if (this.attempts.size > 0) return;
+    if (this.runState === 'held') {
+      // A task on a usage limit keeps the run open: closed, it would be handed
+      // over or merged before the work the reset resumes.
+      return;
+    }
+    if (this.runState !== 'scheduling') {
+      if (after === 'tick') {
+        if (this.runs.isOpen && this.settled) await this.closeRun();
+        return;
+      }
+      if (this.store.isFinished()) this.runState = 'finished';
+      this.emit('onTick');
+      if (this.settled) await this.closeRun();
+      this.emit('onExecutionComplete');
+      return;
+    }
+
+    const remaining = this.store.allTasks.filter(t => t.status !== 'completed' && t.status !== 'skipped');
+    console.log(`[TaskOrchestrator] tick(): no work. remaining=${remaining.length}, completed=${this.store.isAllComplete()}`);
+    const remainingById = new Map(remaining.map((t) => [t.id, t]));
+    for (const { task, label } of flattenTasksWithParents(this.store.planTasks)) {
+      if (!remainingById.has(task.id)) continue;
+      console.log(`  - ${label}. ${task.title} [${task.type}/${task.status}] prompt=${!!task.prompt}`);
+    }
+    const blocked = blockingFailures(this.store.planTasks);
+    if (remaining.length === 0) {
+      this.runState = 'finished';
+      this.sayFinished();
+    } else if (remaining.every((t) => t.status === 'failed' || blocked.has(t.id))) {
+      // Nothing left can start until a failed task is retried (ADR-0034):
+      // the run ends, and a retry continues it.
+      this.runState = 'endedOnFailure';
+      this.sayEndedOnFailure(blocked);
+    } else {
+      // Waiting on the user: a user task, a checkpoint, a held task or a merge
+      // gate. The scheduler stays armed, because the control that answers it
+      // ticks, and a tick schedules only while it is.
+      this.notifications.info('Remaining tasks require user action or are on hold.');
+      this.sayGate();
+      this.emit('onTaskChanged');
+      this.emit('onTick');
+      return;
+    }
+    this.emit('onTaskChanged');
+    this.emit('onTick');
+    await this.closeRun();
+    this.emit('onExecutionComplete');
+  }
+
   /** Skipped work is not completed work, so a run with any says so rather than that everything completed. */
   private sayFinished(): void {
     const skipped = this.store.allTasks.filter((t) => t.status === 'skipped').length;
@@ -2024,10 +2050,11 @@ export class TaskOrchestrator {
     else this.notifications.info(`Run finished: ${this.store.completedCount} completed, ${skipped} skipped.`);
   }
 
+  /** How a run that ended on failures ends: what it finished, what failed, and what that blocks. */
   private sayEndedOnFailure(blocked: ReadonlyMap<string, string[]>): void {
     const tasks = this.store.allTasks;
     const failed = tasks.filter((t) => t.status === 'failed');
-    const stuck = tasks.filter((t) => t.status === 'blocked' || blocked.has(t.id));
+    const stuck = tasks.filter((t) => blocked.has(t.id));
     const skipped = tasks.filter((t) => t.status === 'skipped').length;
     const counts = `${tasks.filter((t) => t.status === 'completed').length} completed, ${failed.length} failed, ${stuck.length} blocked${skipped > 0 ? `, ${skipped} skipped` : ''}`;
     const retry = stuck.length > 0 ? ' A blocked task starts once the failed task it waits on is retried and passes.' : '';
