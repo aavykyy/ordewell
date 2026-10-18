@@ -16,7 +16,7 @@ import type { IFileSystem } from '../../interfaces/IFileSystem';
 import type { IWebFetcher } from '../../interfaces/IWebFetcher';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import { readOnlyMode, type RunnerModeInfo } from '../ModeResolver';
-import type { IAiService, ConversationRequest, ConversationTurn, PlannerToolsOffer } from '../AiService';
+import type { IAiService, ConversationRequest, ConversationTurn, PlannerToolsOffer, TurnRun } from '../AiService';
 import {
   buildConversationSystemPrompt,
   buildPlanWithResults,
@@ -40,7 +40,7 @@ import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
 import { mcpClientConfig, sharedMcpServer, type OrdewellMcpServer } from '../mcp';
 import { instructionsBlock, repoRoot } from './repoConfig';
 import { NOT_APPROVED, decideProjectServers, fileProjectServerApprovals, heldServersNote, recordUnusable, type ProjectServerApprovals } from './projectServers';
-import { TurnReply, type ReplyRun } from './turnReply';
+import { TurnReply } from './turnReply';
 import type { IApproval } from '../../interfaces/IApproval';
 
 /**
@@ -100,7 +100,7 @@ const ONE_SHOT_ATTEMPTS = 2;
 interface HarnessTurn {
   text: string;
   /** The runs `text` joins, in the order they began. */
-  runs: ReplyRun[];
+  runs: TurnRun[];
   researchLog: ResearchStep[];
   /** The agent's own failure, verbatim. Present means the turn did not complete. */
   error?: string;
@@ -362,12 +362,20 @@ export class CliAgentAiService implements IAiService {
     // Text from turns Ordewell continued past on the user's behalf. A wait is
     // not a new user message, so the reply they read is the whole answer.
     const carried: string[] = [];
+    // Their runs, each handed to one attempt only: a discarded attempt's
+    // narration stays with the reply already.
+    const carriedRuns: TurnRun[] = [];
 
     const waits = { used: 0 };
     const send = async (text: string): Promise<ReplyAttempt> => {
-      const { turn, researchLog } = await this.runTurnAwaitingAgents(session, text, onProgress, combined, waits, (past) => carried.push(past));
+      const { turn, researchLog } = await this.runTurnAwaitingAgents(session, text, onProgress, combined, waits, (past) => {
+        carried.push(past.text);
+        // The wait that follows is a call the turn made after them.
+        carriedRuns.push(...past.runs.map((run): TurnRun => ({ ...run, narration: true })));
+      });
       return {
         text: turn.text,
+        runs: [...carriedRuns.splice(0), ...turn.runs],
         researchLog,
         aborted: turn.aborted || combined?.aborted,
         // Fail visibly, per the repo's fail-safe contract: an agent that died,
@@ -388,9 +396,6 @@ export class CliAgentAiService implements IAiService {
         send,
         onProgress,
         signal: combined,
-        // `runTurn` folds every run of text the agent's turn produced into its
-        // reply, a tool call's earlier segment included.
-        replyJoinsSegments: true,
       });
       return turn;
     } finally {
@@ -417,14 +422,14 @@ export class CliAgentAiService implements IAiService {
     onProgress: (progress: ResearchProgress) => void,
     signal: AbortSignal | undefined,
     waits: { used: number },
-    onWaitedPast?: (text: string) => void,
+    onWaitedPast?: (turn: HarnessTurn) => void,
     then?: string,
   ): Promise<{ turn: HarnessTurn; researchLog: ResearchLogEntry[] }> {
     let turn = await this.runTurn(session, message, onProgress, signal);
     const researchLog: ResearchLogEntry[] = [...turn.researchLog];
     while (turn.backgroundAgents > 0 && waits.used < MAX_AGENT_WAITS && turn.text.trim() && !turn.error && !turn.aborted && !signal?.aborted) {
       waits.used++;
-      onWaitedPast?.(turn.text);
+      onWaitedPast?.(turn);
       turn = await this.runTurn(session, waitForAgentsPrompt(turn.backgroundAgents, then), onProgress, signal);
       researchLog.push(...turn.researchLog);
     }

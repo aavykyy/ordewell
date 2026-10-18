@@ -1,4 +1,4 @@
-import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, PendingPlanTurn, ResearchStep, RunnerId, RunSettings, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, Verdict } from '../models/Task';
+import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, PendingPlanTurn, ReplyRun, ResearchStep, RunnerId, RunSettings, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, Verdict } from '../models/Task';
 import type { AttemptUsage, ModelUsage, PlanUsage, UsageTotals } from '../models/Usage';
 import type { ExecutionRecord } from '../models/Execution';
 import type { TaskLogEvent } from '../models/TaskLog';
@@ -157,8 +157,9 @@ export type PlannerTurnOutcome = 'message' | 'plan' | 'task_ops' | 'stopped' | '
  * `planner_turn_ended` with the same `turnId`; every turn-scoped message in
  * between carries it. The stream is provisional and the settled messages are
  * authoritative:
- * - `planner_message` replaces the streamed text of the turn's final segment —
- *   a surface drops what it accumulated and shows the message instead.
+ * - `planner_message` settles the streamed text of each run it carries in that
+ *   run's segment, where it streamed — a surface drops what it accumulated
+ *   there and shows the run's text instead.
  * - A reply that is a JSON envelope (plan, taskOps, taskQuery) never arrives
  *   as `planner_text_delta`; it streams as `plan_token`, the "building plan"
  *   display.
@@ -174,11 +175,14 @@ export type SessionMessage =
   | { type: 'plan_generated'; plan: SerializedPlan; goal: string; runners: RunnerId[]; turnId?: string }
   /**
    * The settled reply of a planner turn, emitted by the session once the turn
-   * is classified. Authoritative over any `planner_text_delta` of its turn's
-   * final segment. `turnId` is absent for replies sent outside a streamed turn.
+   * is classified. `turnId` is absent for replies sent outside a streamed turn.
    * `supervisor`: the supervisor said it in a wake-up turn (ADR-0029).
+   * `runs`: what the reply shows, run by run, each authoritative over its
+   * segment's `planner_text_delta`s; `content` stays the whole reply. Without
+   * runs (a note the conversation wrote, an older daemon) the message is
+   * authoritative over the turn's final segment.
    */
-  | { type: 'planner_message'; content: string; timestamp: string; turnId?: string; supervisor?: true }
+  | { type: 'planner_message'; content: string; timestamp: string; turnId?: string; supervisor?: true; runs?: ReplyRun[] }
   /**
    * A planner turn began. Emitted once per turn by whoever runs the turn,
    * before any other message carrying its `turnId`. `prompt` is the user's

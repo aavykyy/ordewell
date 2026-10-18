@@ -1,5 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { SessionMessage } from '../SessionMessage';
+import { EMPTY_CONVERSATION, reduceConversation, type ConversationView } from '../../conversation/reduce';
+import { fromTranscript } from '../../conversation/transcript';
 import { makeSession, fakeConfig } from './sessionTestKit';
 import { planJson } from './harnessTestKit';
 
@@ -36,7 +38,7 @@ function scriptCalls(...calls: Chunk[][]): void {
 
 type Streamed = Exclude<SessionMessage, { type: 'plan_generated' | 'status_update' }>;
 
-function openAiSession() {
+function openAiSession(onBroadcast: () => void = () => {}) {
   const sent: SessionMessage[] = [];
   const config = fakeConfig({
     aiProvider: 'openai',
@@ -49,7 +51,7 @@ function openAiSession() {
   // Bound one by one: the session kit spreads a partial fake, which would drop a class's prototype methods.
   const session = makeSession({
     config,
-    broadcast: (msg) => sent.push(msg),
+    broadcast: (msg) => { sent.push(msg); onBroadcast(); },
     aiService: {
       startConversation: (req) => ai.startConversation(req),
       continueConversation: (message, onProgress, signal) => ai.continueConversation(message, onProgress, signal),
@@ -60,7 +62,7 @@ function openAiSession() {
   const streamed = () => sent
     .filter((m): m is Streamed => m.type !== 'plan_generated' && m.type !== 'status_update')
     .map((m) => (m.type === 'planner_message' ? { ...m, timestamp: '<now>' } : m));
-  return { session, streamed };
+  return { session, streamed, sent };
 }
 
 function turnIdOf(messages: unknown[]): string {
@@ -92,7 +94,13 @@ describe('OpenAI planner reply stream', () => {
       { type: 'research_step_done', turnId, step: '<step>' },
       { type: 'planner_text_delta', turnId, segmentId: after, text: 'Which ' },
       { type: 'planner_text_delta', turnId, segmentId: after, text: 'store?' },
-      { type: 'planner_message', content: 'Which store?', timestamp: '<now>', turnId },
+      {
+        type: 'planner_message', content: 'Which store?', timestamp: '<now>', turnId,
+        runs: [
+          { segmentId: before, text: 'Let me look.', startedAt: expect.any(String) },
+          { segmentId: after, text: 'Which store?', startedAt: expect.any(String) },
+        ],
+      },
       { type: 'planner_turn_ended', turnId, outcome: 'message' },
     ]);
   });
@@ -242,3 +250,65 @@ describe('OpenAI planner reply stream', () => {
   });
 });
 
+
+// ADR-0017 A1: the text an API call streamed before its tool calls stays where
+// it streamed, live and after a reload, and a corrective retry keeps it.
+describe('OpenAI planner reply timeline', () => {
+  beforeEach(() => {
+    createSpy.mockReset();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-10-18T10:00:00.000Z'));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const timeline = (view: ConversationView) => view.blocks.flatMap((b) => (
+    b.type === 'message' ? [`${b.role}: ${b.text}`] : b.type === 'tool' ? [`tool: ${b.headline.keyArg}`] : b.type === 'plan' ? [`plan: ${b.status}`] : []));
+  // Each broadcast moves the clock on, so a turn's text and calls are stamped apart as they are live.
+  const ticking = () => openAiSession(() => vi.advanceTimersByTime(1000));
+  const views = (session: ReturnType<typeof openAiSession>) => {
+    const plan = session.session.planState!;
+    return {
+      live: timeline(session.sent.reduce(reduceConversation, EMPTY_CONVERSATION)),
+      reloaded: timeline(fromTranscript(plan.conversationHistory, plan.researchLog)),
+    };
+  };
+
+  it('keeps the text before a tool call above it, and the reply below, live and after a reload', async () => {
+    scriptCalls([content('Let me look.'), toolCall('c1', 'read_file', { path: 'a.ts' })], [content('Which '), content('store?')]);
+    const planner = ticking();
+
+    await planner.session.startPlanning('add persistence', ['claude-code']);
+
+    const { live, reloaded } = views(planner);
+    expect(live).toEqual(['user: add persistence', 'planner: Let me look.', 'tool: a.ts', 'planner: Which store?']);
+    expect(reloaded).toEqual(live);
+  });
+
+  it('keeps the text before a tool call when task edits the plan rejected are sent again', async () => {
+    const rejected = '{"taskOps":[{"op":"update","taskId":"#9","changes":{"title":"Nothing there"}}]}';
+    const corrected = '{"taskOps":[{"op":"update","taskId":"#1","changes":{"title":"Add the other thing"}}]}';
+    scriptCalls([content(planJson())], [content('Checking task 1.'), toolCall('c1', 'read_file', { path: 'a.ts' })], [content(rejected)], [content(corrected)]);
+    const planner = ticking();
+    await planner.session.startPlanning('add persistence', ['claude-code']);
+
+    await planner.session.continueConversation('rename task 1');
+
+    const { live, reloaded } = views(planner);
+    expect(live.slice(-4)).toEqual([
+      'user: rename task 1', 'planner: Checking task 1.', 'tool: a.ts', expect.stringMatching(/^planner: Tasks updated/),
+    ]);
+    expect(reloaded).toEqual(live);
+  });
+
+  it('keeps the text before a tool call when a botched plan is re-emitted', async () => {
+    const broken = '{"tasks":[{"id":"t1","order":1,"title":"A","description":"d","type":"ai","dependencies":[],"subtasks":[]}]}';
+    scriptCalls([content('Let me look.'), toolCall('c1', 'read_file', { path: 'a.ts' })], [content(broken)], [content(planJson())]);
+    const planner = ticking();
+
+    await planner.session.startPlanning('add persistence', ['claude-code']);
+
+    const { live, reloaded } = views(planner);
+    expect(live).toEqual(['user: add persistence', 'planner: Let me look.', 'tool: a.ts', 'plan: generated']);
+    expect(reloaded).toEqual(live);
+  });
+});

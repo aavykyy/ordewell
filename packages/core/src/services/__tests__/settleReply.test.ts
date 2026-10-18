@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { settleReply, type ReplyAttempt, type SettleReplyOptions } from '../settleReply';
 import type { ResearchProgress, ResearchStep } from '../../models/Task';
+import type { TurnRun } from '../AiService';
 
 const PLAN_JSON = JSON.stringify({
   tasks: [{
@@ -34,7 +35,6 @@ function model(...replies: ReplyAttempt[]) {
     },
     classify: { runners: ['claude-code'] },
     onProgress: (p) => { progress.push(p); timeline.push(p.type); },
-    replyJoinsSegments: false,
     ...extra,
   });
   return { sent, timeline, progress, opts };
@@ -194,29 +194,53 @@ describe('settleReply', () => {
     });
   });
 
-  // A harness agent's reply joins every run of text its call streamed, tool
-  // calls between them included, and a settled message replaces only the final
-  // segment — the earlier ones would still show beside it. An API call's reply
-  // is its final segment alone, and the text before its tool calls stays.
-  describe('a reply that joins every segment its call streamed', () => {
-    it('takes those segments back before settling as prose or on a stop', async () => {
-      const prose = model(reply('Let me look. It is in src/cache.ts.'));
-      await settleReply(prose.opts({ replyJoinsSegments: true }));
-      expect(prose.timeline).toEqual(['send', 'text_retracted']);
+  // ADR-0017 A1: settling never takes a run back. The turn carries every run
+  // its surviving calls streamed, for surfaces to settle where each streamed.
+  describe('the runs of a reply', () => {
+    const run = (segmentId: string, text: string, narration = false): TurnRun => ({
+      segmentId, text, startedAt: '2026-09-27T10:00:00.000Z', ...(narration ? { narration: true as const } : {}),
+    });
+    const note = (text: string) => ({ segmentId: expect.any(String), text, startedAt: expect.any(String) });
 
-      const stopped = model(reply('Let me look.', { aborted: true }));
-      await settleReply(stopped.opts({ replyJoinsSegments: true }));
-      expect(stopped.timeline).toEqual(['send', 'text_retracted', 'interrupted']);
+    it('are never taken back when the reply settles as prose or on a stop, and the turn carries them', async () => {
+      const runs = [run('s1', 'Let me look.', true), run('s2', 'It is in src/cache.ts.')];
+      const prose = model(reply('Let me look.\n\nIt is in src/cache.ts.', { runs }));
+      expect(await settleReply(prose.opts({ classify: undefined }))).toEqual({ kind: 'message', text: 'Let me look.\n\nIt is in src/cache.ts.', researchLog: [], runs });
+      expect(prose.timeline).toEqual(['send']);
+
+      const stopped = model(reply('Let me look.', { aborted: true, runs: runs.slice(0, 1) }));
+      expect(await settleReply(stopped.opts({ classify: undefined }))).toMatchObject({ aborted: true, runs: runs.slice(0, 1) });
+      expect(stopped.timeline).toEqual(['send', 'interrupted']);
     });
 
-    it('leaves them for a plan, whose display replaces the text, and for a final-segment reply', async () => {
-      const plan = model(reply(PLAN_JSON));
-      await settleReply(plan.opts({ replyJoinsSegments: true }));
-      expect(plan.timeline).toEqual(['send']);
+    it('lose only the discarded reply to a corrective retry: the narration before its tool calls stays', async () => {
+      const m = model(
+        reply(BROKEN_PLAN, { runs: [run('s1', 'Checking the layout.', true), run('s2', BROKEN_PLAN)] }),
+        reply('Which store?', { runs: [run('s3', 'Which store?')] }),
+      );
 
-      const finalSegment = model(reply('It is in src/cache.ts.'));
-      await settleReply(finalSegment.opts({ replyJoinsSegments: false }));
-      expect(finalSegment.timeline).toEqual(['send']);
+      const turn = await settleReply(m.opts());
+
+      expect(m.progress).toEqual([{ type: 'text_retracted', segmentId: 's2' }]);
+      expect(turn.runs).toEqual([run('s1', 'Checking the layout.', true), run('s3', 'Which store?')]);
+    });
+
+    it('of an envelope are its narration alone', async () => {
+      const m = model(reply(PLAN_JSON, { runs: [run('s1', 'Checking the layout.', true), run('s2', PLAN_JSON)] }));
+
+      const turn = await settleReply(m.opts());
+
+      expect(turn).toMatchObject({ kind: 'plan', runs: [run('s1', 'Checking the layout.', true)] });
+    });
+
+    it('end on a note written in the planner\'s place, after the narration they kept', async () => {
+      const failed = model(reply('', { failure: 'The agent exited.', runs: [run('s1', 'Reading the README.', true)] }));
+      expect((await settleReply(failed.opts())).runs).toEqual([run('s1', 'Reading the README.', true), note('The agent exited.')]);
+
+      const empty = model(reply('', { runs: [run('s1', 'Reading the README.', true)] }), reply('  '));
+      const report = await settleReply(empty.opts());
+      expect(empty.progress).toEqual([]);
+      expect(report.runs).toEqual([run('s1', 'Reading the README.', true), note(report.text)]);
     });
   });
 

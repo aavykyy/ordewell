@@ -1,6 +1,6 @@
 import { execSync } from 'child_process';
 import {
-  autonomyLevelLabel, clipboardCopyCommand, getProviderMeta, isApiProvider, isCliProvider, isUserMessage, markRequestFor, newTaskFields, TERMINAL_UI_COMMANDS, type HasBinFn, type SurfacePlan,
+  autonomyLevelLabel, clipboardCopyCommand, getProviderMeta, isApiProvider, isCliProvider, isUserMessage, markRequestFor, newTaskFields, TERMINAL_UI_COMMANDS, type HasBinFn, type SerializedConversationMessage, type SurfacePlan,
   type PlannerModelRecall,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
@@ -885,7 +885,7 @@ async function converse(deps: EffectDeps, sessionId: string, call: () => Promise
     // the prompt that queue sent, in the wrong order. The socket usually
     // delivered the same words; the backfill is dropped when it did.
     const reply = lastAssistantMessage(plan);
-    if (reply) inbound.backfill(reply.content, reply.timestamp);
+    if (reply) inbound.backfill(reply.content, reply.timestamp, reply.runs);
     deps.dispatch({ type: 'planUpdated', plan, sessionId });
   } finally {
     inbound.flush();
@@ -913,14 +913,14 @@ function restoredChat(plan: unknown, sessionId: string): Action {
  * own broadcasts, and spoken here they were a second planner line. Nothing
  * before the user's message is this turn's.
  */
-function lastAssistantMessage(plan: unknown): { content: string; timestamp?: string } | null {
+function lastAssistantMessage(plan: unknown): Pick<SerializedConversationMessage, 'content' | 'runs'> & { timestamp?: string } | null {
   const history = (plan as Pick<SurfacePlan, 'conversationHistory'> | null)?.conversationHistory ?? [];
   for (let i = history.length - 1; i >= 0; i--) {
     const entry = history[i];
     if (isUserMessage(entry)) return null;
     if (entry.role === 'assistant' && entry.kind === undefined) {
-      const { content, timestamp } = entry;
-      return { content, ...(timestamp ? { timestamp } : {}) };
+      const { content, timestamp, runs } = entry;
+      return { content, ...(timestamp ? { timestamp } : {}), ...(runs ? { runs } : {}) };
     }
   }
   return null;

@@ -10,7 +10,7 @@ describe('TurnReply', () => {
     return { turn, events };
   }
 
-  it('reports its runs in the order they began, each with its segment, its text and when it began', () => {
+  it('reports its runs in the order they began, each with its segment, its text, when it began, and whether a call followed it', () => {
     const { turn, events } = reply();
     turn.delta('a', 'Let me ');
     turn.delta('a', 'check.');
@@ -22,8 +22,8 @@ describe('TurnReply', () => {
 
     const segments = events.flatMap((e) => (e.type === 'text_delta' ? [e.segmentId] : []));
     expect(turn.runs()).toEqual([
-      { runId: 'a', segmentId: segments[0], text: 'Let me check.', startedAt: '2026-10-18T10:00:01.000Z' },
-      { runId: 'b', segmentId: segments[2], text: 'Found it.', startedAt: '2026-10-18T10:00:02.000Z' },
+      { segmentId: segments[0], text: 'Let me check.', startedAt: '2026-10-18T10:00:01.000Z', narration: true },
+      { segmentId: segments[2], text: 'Found it.', startedAt: '2026-10-18T10:00:02.000Z' },
     ]);
     expect(segments[2]).not.toBe(segments[0]);
     expect(turn.text).toBe('Let me check.\n\nFound it.');
@@ -48,7 +48,7 @@ describe('TurnReply', () => {
     expect(turn.fail('Limit reached.')).toBe('The cache is in src/cache.ts.\n\nLimit reached.');
     const [kept, ...taken] = events.flatMap((e) => (e.type === 'text_delta' ? [e.segmentId] : []));
     expect(events.filter((e) => e.type === 'text_retracted').map((e) => e.segmentId)).toEqual(taken);
-    expect(turn.runs().map((run) => [run.runId, run.segmentId])).toEqual([['a', kept]]);
+    expect(turn.runs().map((run) => [run.text, run.segmentId])).toEqual([['Reading the cache.', kept]]);
     expect(turn.text).toBe('Reading the cache.');
   });
 });

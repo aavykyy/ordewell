@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import type { ConversationRequest, ConversationTurn, IAiService } from './AiService';
+import type { ConversationRequest, ConversationTurn, IAiService, TurnRun } from './AiService';
 import { reEmitPlanPrompt, repairLoop, resubmitEditPrompt, resubmitPlanPrompt, taskOpsRejectedPrompt } from './PlanRepair';
 import { renderTaskQueryAnswer, taskQuerySignature, TASK_QUERY_ANSWER_OR_OPS, TASK_QUERY_REMINDER, TASK_READ_TOOLS_REMINDER, type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog } from './TaskQuery';
 import { taskOpsProtocol, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
@@ -8,7 +8,7 @@ import type { PlannerTurnOutcome, SessionBroadcaster, SessionNotice } from './Se
 import { TurnStream } from './replyStream';
 import type { ForkedDialogue } from './conversationFork';
 import { condensedNotice, extractSummary, keptTail, summaryRequest } from './conversationSummary';
-import type { ConversationMessage, LegacyPlanState, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
+import type { ConversationMessage, LegacyPlanState, ReplyRun, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
 import { flattenTasksWithParents, isUserMessage } from '../models/Task';
 import type { ExecutionRecord } from '../models/Execution';
 import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation } from './skillInvocation';
@@ -20,6 +20,7 @@ import { classifyRunnerStop, type TurnFailure } from './runnerExit';
 import type { PlannerLimit } from './PlannerResend';
 import type { AssignmentScope } from './AssignmentScope';
 import { flaggedTasks, runnersChangedBlock, scopeChange } from './RunnerChange';
+import { noteRun } from './settleReply';
 import type { StartWait, StartWaitKind } from './readiness';
 
 /**
@@ -124,12 +125,25 @@ type TurnAdmission = { refuseAs: string } | 'supersede';
 /**
  * A backend's turn, or the turn a submission made of it. `said` is then the
  * reply's prose, which the user reads beside the plan or edit it carried; an
- * envelope reply's text is the envelope itself, and is never shown.
+ * envelope reply's text is the envelope itself, and is never shown — what it
+ * said is the narration before its tool calls.
  */
 type ClaimedTurn = ConversationTurn & { said?: string };
 /** A turn with every read already drained — what the settle path actually commits. */
 type SettleableTurn = Exclude<ClaimedTurn, { kind: 'task_query' }>;
 type CommitTurn = Exclude<SettleableTurn, { kind: 'task_ops' }>;
+
+/**
+ * The runs of a message the conversation writes in place of `runs`' reply
+ * (ADR-0017 A1): the narration before its tool calls stays, and the message
+ * goes last.
+ */
+function writtenOver(runs: readonly TurnRun[] | undefined, text: string): Pick<ConversationTurn, 'runs'> {
+  return runs ? { runs: [...runs.filter((run) => run.narration), noteRun(text)] } : {};
+}
+
+/** A message or entry carries runs only where the backend reported them. */
+const withRuns = (runs: ReplyRun[] | undefined): { runs?: ReplyRun[] } => (runs ? { runs } : {});
 
 /** What a planner turn may change: the whole plan, or tasks through edits. */
 export type PlanChange = 'plan' | 'edit';
@@ -181,6 +195,12 @@ interface UserTurn {
   onCommit?: () => void;
   /** Surfaces were last told the turn holds an edit, so they are told when it no longer does. */
   heldShown?: boolean;
+  /**
+   * Narration of the calls whose reply the turn did not settle on — a read it
+   * answered, an attempt a corrective retry discarded. It stays where it
+   * streamed, and the reply is saved with it (ADR-0017 A1).
+   */
+  narration: TurnRun[];
 }
 
 /** A read made through a planner tool: refused once the turn's budget is gone, else answered, told to land when the budget asks it to. */
@@ -609,8 +629,10 @@ export class PlannerConversation {
     return this.host.aiService().hasActiveConversation();
   }
 
-  append(role: ConversationMessage['role'], content: string, opts: { timestamp?: string; kind?: ConversationMessage['kind'] } = {}): void {
-    this.appendEntries([{ role, content, timestamp: opts.timestamp ?? new Date().toISOString(), ...(opts.kind ? { kind: opts.kind } : {}) }]);
+  append(role: ConversationMessage['role'], content: string, opts: { timestamp?: string; kind?: ConversationMessage['kind']; runs?: ReplyRun[] } = {}): void {
+    this.appendEntries([{
+      role, content, timestamp: opts.timestamp ?? new Date().toISOString(), ...(opts.kind ? { kind: opts.kind } : {}), ...(opts.runs ? { runs: opts.runs } : {}),
+    }]);
   }
 
   private appendEntries(entries: ConversationMessage[]): void {
@@ -1023,7 +1045,7 @@ export class PlannerConversation {
     const stream = new TurnStream(turnId, (p) => this.host.onProgress(p));
     const { wakeUp, forced } = delivered;
     const turn: UserTurn = {
-      stream, planner, signal: planner.signal, plan: this.host.plan(), reads: freshReadBudget(wakeUp),
+      stream, planner, signal: planner.signal, plan: this.host.plan(), reads: freshReadBudget(wakeUp), narration: [],
       ...(wakeUp ? { wakeUp } : {}), ...(forced ? { forced } : {}),
     };
     this.openTurn = turn;
@@ -1164,13 +1186,12 @@ export class PlannerConversation {
     let current = this.claimSubmission(turn, userTurn);
     while (current.kind === 'task_query') {
       carried.push(...current.researchLog);
+      userTurn.narration.push(...current.runs ?? []);
       const spent = ai.hasActiveConversation() && !signal.aborted ? spendRead(reads, taskQuerySignature(current.query)) : 'refused';
       if (spent === 'refused') {
-        return {
-          kind: 'message',
-          text: 'The planner kept asking to read tasks instead of answering. Nothing was changed: ask again, or be more specific about the edit you want.',
-          researchLog: carried,
-        };
+        const text = 'The planner kept asking to read tasks instead of answering. Nothing was changed: ask again, or be more specific about the edit you want.';
+        // The reads' narration is the turn's already.
+        return { kind: 'message', text, researchLog: carried, ...(current.runs ? { runs: [noteRun(text)] } : {}) };
       }
       const answer = this.taskQueryAnswer(current.query);
       current = this.claimSubmission(await ai.continueConversation(
@@ -1194,13 +1215,14 @@ export class PlannerConversation {
     const submitted = userTurn.submitted;
     userTurn.submitted = undefined;
     if (!submitted || userTurn.signal.aborted) return turn;
-    const { text, researchLog } = turn;
-    // The backend settled its reply as a message and took back what it
-    // streamed, so the reply is shown again from here or not at all.
+    const { text, researchLog, runs } = turn;
+    // The backend settled its reply as a message, so the reply is shown from
+    // here, settled where its runs streamed, or not at all.
     const said = text.trim() ? { said: text } : {};
+    const shown = runs ? { runs } : {};
     return submitted.kind === 'plan'
-      ? { kind: 'plan', tasks: submitted.tasks, text, researchLog, ...said }
-      : { kind: 'task_ops', ops: submitted.ops, text, researchLog, ...said };
+      ? { kind: 'plan', tasks: submitted.tasks, text, researchLog, ...shown, ...said }
+      : { kind: 'task_ops', ops: submitted.ops, text, researchLog, ...shown, ...said };
   }
 
   /**
@@ -1225,39 +1247,36 @@ export class PlannerConversation {
     const ai = this.host.aiService();
     // A planner with tools submits through them alone, so its correctives ask for a tool call, not JSON.
     const tools = ai.plannerToolsAttached?.() ?? false;
-    const invalidOps = (errors: string[], researchLog: ConversationTurn['researchLog']): Settled => ({
-      turn: {
-        kind: 'message',
-        text: `I tried to modify the tasks, but the changes were invalid:\n- ${errors.join('\n- ')}\n\nThe plan is unchanged. Rephrase the request, or adjust the tasks manually.`,
-        researchLog,
-      },
-    });
+    const refusal = (text: string, { researchLog, runs }: SettleableTurn): Settled => ({ turn: { kind: 'message', text, researchLog, ...writtenOver(runs, text) } });
+    const invalidOps = (errors: string[], t: SettleableTurn): Settled =>
+      refusal(`I tried to modify the tasks, but the changes were invalid:\n- ${errors.join('\n- ')}\n\nThe plan is unchanged. Rephrase the request, or adjust the tasks manually.`, t);
+    const invalidPlan = (errors: string[], t: SettleableTurn): Settled =>
+      refusal(`I tried to commit a plan, but it was invalid:\n- ${errors.join('\n- ')}\n\nThe plan is unchanged. Rephrase the request, or adjust the tasks manually.`, t);
 
-    const invalidPlan = (errors: string[], researchLog: ConversationTurn['researchLog']): Settled => ({
-      turn: {
-        kind: 'message',
-        text: `I tried to commit a plan, but it was invalid:\n- ${errors.join('\n- ')}\n\nThe plan is unchanged. Rephrase the request, or adjust the tasks manually.`,
-        researchLog,
-      },
-    });
-
+    let discarding = turn;
     const settled = await repairLoop<SettleableTurn, Settled>({
       first: async () => turn,
+      // The retry answers in place of the discarded attempt's reply and the
+      // plan display it streamed, never of the narration before its calls,
+      // nor of the calls themselves: the turn lands with their research.
       resend: async (corrective) => {
-        stream.retract();
-        return this.drainTaskQueries(await ai.continueConversation(corrective, stream.sink(), signal), userTurn);
+        userTurn.narration.push(...(discarding.runs ?? []).filter((run) => run.narration));
+        stream.retract(new Set(userTurn.narration.map((run) => run.segmentId)));
+        const retry = await this.drainTaskQueries(await ai.continueConversation(corrective, stream.sink(), signal), userTurn);
+        return { ...retry, researchLog: [...discarding.researchLog, ...retry.researchLog] };
       },
       interpret: async (t) => {
+        discarding = t;
         const refused = t.kind === 'plan' || t.kind === 'task_ops' ? userTurn.wakeUp?.refused(t.kind === 'plan' ? 'plan' : 'edit') : undefined;
         if (refused) {
           this.clearHeld(userTurn);
           const errors = [refused];
-          if (!ai.hasActiveConversation() || signal.aborted) return { done: (t.kind === 'plan' ? invalidPlan : invalidOps)(errors, t.researchLog) };
+          if (!ai.hasActiveConversation() || signal.aborted) return { done: (t.kind === 'plan' ? invalidPlan : invalidOps)(errors, t) };
           return { retry: { errors, corrective: refused } };
         }
         if (t.kind === 'plan' && this.host.isExecuting()) {
           const errors = [WHOLE_PLAN_WHILE_RUNNING];
-          if (!ai.hasActiveConversation() || signal.aborted) return { done: invalidPlan(errors, t.researchLog) };
+          if (!ai.hasActiveConversation() || signal.aborted) return { done: invalidPlan(errors, t) };
           return { retry: { errors, corrective: (tools ? resubmitEditPrompt : taskOpsRejectedPrompt)(errors) } };
         }
         if (t.kind === 'plan') {
@@ -1265,7 +1284,7 @@ export class PlannerConversation {
           this.assertStillCurrent(userTurn);
           if (skills.errors.length === 0) return { done: { turn: t, skillWarnings: skills.warnings } };
           const errors = skills.errors.map((e) => e.message);
-          if (!ai.hasActiveConversation() || signal.aborted) return { done: invalidPlan(errors, t.researchLog) };
+          if (!ai.hasActiveConversation() || signal.aborted) return { done: invalidPlan(errors, t) };
           return { retry: { errors, corrective: tools ? resubmitPlanPrompt(errors) : reEmitPlanPrompt(errors.join('; ')) } };
         }
         if (t.kind !== 'task_ops') return { done: { turn: t } };
@@ -1275,12 +1294,12 @@ export class PlannerConversation {
         // No live conversation (or an abort) means no corrective re-send is
         // possible — surface the failure instead of retrying into the void.
         if (!ai.hasActiveConversation() || signal.aborted) {
-          return { done: invalidOps(applied.errors, t.researchLog) };
+          return { done: invalidOps(applied.errors, t) };
         }
         return { retry: { errors: applied.errors, corrective: (tools ? resubmitEditPrompt : taskOpsRejectedPrompt)(applied.errors) } };
       },
       maxRepairs: 2,
-      onExhausted: ({ reply, errors }) => (reply.kind === 'plan' ? invalidPlan : invalidOps)(errors, reply.researchLog),
+      onExhausted: ({ reply, errors }) => (reply.kind === 'plan' ? invalidPlan : invalidOps)(errors, reply),
     });
 
     if ('plan' in settled) return { plan: settled.plan, outcome: 'task_ops' };
@@ -1311,19 +1330,20 @@ export class PlannerConversation {
     const supervisor = userTurn.wakeUp !== undefined;
     const kind = supervisor ? { kind: 'supervisor' as const } : {};
     const voice = supervisor ? { supervisor: true as const } : {};
+    const said = this.said(turn, userTurn);
     const plan = this.host.mutate(
       () => {
         this.commitInput(userTurn);
         this.recordResearch(turn.researchLog);
         this.host.adoptTasks(result.tasks, 'edit');
-        if (turn.said) this.append('assistant', turn.said, { timestamp: now, ...kind });
+        if (said) this.append('assistant', said.content, { timestamp: now, ...kind, runs: said.runs });
         this.append('assistant', content, { timestamp: now, ...kind });
         this.recordSkillWarnings(skills.warnings, now);
         userTurn.onCommit?.();
         return true;
       },
       () => {
-        if (turn.said) this.host.broadcast({ type: 'planner_message', content: turn.said, timestamp: now, turnId, ...voice });
+        if (said) this.host.broadcast({ type: 'planner_message', content: said.content, timestamp: now, turnId, ...voice, ...withRuns(said.runs) });
         this.host.broadcast({ type: 'planner_message', content, timestamp: now, turnId, ...voice });
         this.host.broadcastPlan();
         // After the plan that carries it, so the edit is never missing from both.
@@ -1347,6 +1367,7 @@ export class PlannerConversation {
     const now = new Date().toISOString();
 
     if (turn.kind === 'plan') {
+      const said = this.said(turn, userTurn);
       return this.host.mutate(() => {
         this.commitInput(userTurn);
         this.recordResearch(turn.researchLog);
@@ -1354,13 +1375,13 @@ export class PlannerConversation {
         // capture the PRD here too so it isn't dropped with the plan preamble.
         this.host.capturePrd(turn.text);
         const count = this.host.adoptTasks(turn.tasks, 'commit');
-        if (turn.said) this.append('assistant', turn.said, { timestamp: now });
+        if (said) this.append('assistant', said.content, { timestamp: now, runs: said.runs });
         this.append('assistant', `Plan generated with ${count} task${count === 1 ? '' : 's'}.`, { timestamp: now, kind: 'plan_generated' });
         this.recordSkillWarnings(skillWarnings, now);
         userTurn.onCommit?.();
         return true;
       }, () => {
-        if (turn.said) this.host.broadcast({ type: 'planner_message', content: turn.said, timestamp: now, turnId });
+        if (said) this.host.broadcast({ type: 'planner_message', content: said.content, timestamp: now, turnId, ...withRuns(said.runs) });
         this.host.broadcastPlan(turnId);
       })!;
     }
@@ -1368,23 +1389,43 @@ export class PlannerConversation {
     // Budget models occasionally return an empty content turn after tool use —
     // surface that visibly instead of rendering a blank bubble. A stopped turn
     // is empty because it was cut short, which is not the model's fault.
-    const text = turn.text.trim()
+    const replied = turn.text.trim() !== '';
+    const text = replied
       ? turn.text
       : userTurn.signal.aborted
         ? '(Stopped before replying.)'
         : '(The planner returned an empty response. Reply to continue, or rephrase your goal.)';
+    const runs = this.shown(userTurn, replied ? turn.runs : writtenOver(turn.runs, text).runs, text);
     const supervisor = userTurn.wakeUp !== undefined;
     return this.host.mutate(
       () => {
         this.commitInput(userTurn);
         this.recordResearch(turn.researchLog);
-        this.append('assistant', text, { timestamp: now, ...(supervisor ? { kind: 'supervisor' as const } : {}) });
+        this.append('assistant', text, { timestamp: now, ...(supervisor ? { kind: 'supervisor' as const } : {}), runs });
         this.host.capturePrd(text);
         userTurn.onCommit?.();
         return true;
       },
-      () => this.host.broadcast({ type: 'planner_message', content: text, timestamp: now, turnId, ...(supervisor ? { supervisor: true } : {}) }),
+      () => this.host.broadcast({ type: 'planner_message', content: text, timestamp: now, turnId, ...(supervisor ? { supervisor: true } : {}), ...withRuns(runs) }),
     )!;
+  }
+
+  /**
+   * The runs a reply is saved and sent with (ADR-0017 A1): the narration the
+   * turn kept from calls it did not settle on, then the reply's own. None from
+   * a backend that reports no runs, whose reply then stands as one message.
+   */
+  private shown(userTurn: UserTurn, runs: readonly TurnRun[] | undefined, content: string): ReplyRun[] | undefined {
+    const kept = userTurn.narration;
+    if (!runs && kept.length === 0) return undefined;
+    return [...kept, ...(runs ?? [noteRun(content)])].map(({ segmentId, text, startedAt }) => ({ segmentId, text, startedAt }));
+  }
+
+  /** What a plan or edit turn said beside what it landed: its reply, or an envelope's narration. */
+  private said(turn: SettleableTurn, userTurn: UserTurn): { content: string; runs?: ReplyRun[] } | undefined {
+    if (turn.said !== undefined) return { content: turn.said, runs: this.shown(userTurn, turn.runs, turn.said) };
+    const narration = this.shown(userTurn, turn.runs ?? [], '') ?? [];
+    return narration.length > 0 ? { content: narration.map((run) => run.text).join('\n\n'), runs: narration } : undefined;
   }
 
   /**

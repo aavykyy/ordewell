@@ -1,20 +1,16 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { ResearchProgress } from '../../models/Task';
+import type { TurnRun } from '../AiService';
 import { opensWithJsonObject } from '../JsonExtractor';
 import { sameMessage } from '../../utils/sameMessage';
 
-/** One run of a planner turn's reply text (see `AgentEvent`), as the service reports it. */
-export interface ReplyRun {
+/**
+ * One run of a planner turn's reply text (see `AgentEvent`). Its `text` is its
+ * complete copy, or what streamed of it when none came; `startedAt`, when its
+ * first text arrived.
+ */
+interface Run extends TurnRun {
   runId: string;
-  /** The segment the run streams under on every surface. */
-  segmentId: string;
-  /** Its complete copy, or what streamed of it when none came. */
-  text: string;
-  /** When its first text arrived, as an ISO timestamp. */
-  startedAt: string;
-}
-
-interface Run extends ReplyRun {
   /** Its deltas reached the surfaces, so its complete copy is not streamed again. */
   streamed: boolean;
   /** How many of the planner's own tool calls came before it began. */
@@ -74,9 +70,11 @@ export class TurnReply {
     return joined(this.started);
   }
 
-  /** The reply's runs in the order they began. */
-  runs(): ReplyRun[] {
-    return this.started.map(({ runId, segmentId, text, startedAt }) => ({ runId, segmentId, text, startedAt }));
+  /** The reply's runs in the order they began; one a planner tool call followed is narration. */
+  runs(): TurnRun[] {
+    return this.started
+      .filter((run) => run.text)
+      .map(({ segmentId, text, startedAt, calls }) => ({ segmentId, text, startedAt, ...(calls < this.calls ? { narration: true as const } : {}) }));
   }
 
   /**

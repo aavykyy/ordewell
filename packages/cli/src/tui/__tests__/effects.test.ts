@@ -219,6 +219,27 @@ describe('planning', () => {
     expect(heard(h.actions).map((m) => m.type === 'planner_message' && m.content)).toEqual(['Looking into it.', 'Which database?']);
   });
 
+  // ADR-0017 A1: the socket streamed the runs; settled by the backfill, each
+  // takes its own segment's place rather than the whole reply landing last.
+  it('backfills a reply the socket lost with its runs, for each to settle where it streamed', async () => {
+    const runs = [
+      { segmentId: 's1', text: 'I\'ll read README.md now.', startedAt: '2026-10-18T10:00:01.000Z' },
+      { segmentId: 's2', text: 'The first line of README.md is "hello".', startedAt: '2026-10-18T10:00:03.000Z' },
+    ];
+    const content = 'I\'ll read README.md now.\n\nThe first line of README.md is "hello".';
+    const h = streaming(async () => ({
+      tasks: [],
+      conversationHistory: [
+        { role: 'user', content: 'x' },
+        { role: 'assistant', content, timestamp: '2026-10-18T10:00:05.000Z', runs },
+      ],
+    }), 'sendConversationMessage');
+
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'x' }, h.deps);
+
+    expect(heard(h.actions)).toEqual([{ type: 'planner_message', content, timestamp: '2026-10-18T10:00:05.000Z', runs }]);
+  });
+
   it('backfills the last spoken reply, not a skill-load entry that follows it', async () => {
     const skill = { invokedBy: 'planner' as const, name: 'review-plan', source: 'global' as const, path: '~/s', content: 'BODY' };
     const h = streaming(async () => ({

@@ -1,4 +1,4 @@
-import { Task, ConversationMessage, DiscoveredModel, ResearchLogEntry, ResearchProgress, RunnerId } from '../models/Task';
+import { Task, ConversationMessage, DiscoveredModel, ReplyRun, ResearchLogEntry, ResearchProgress, RunnerId } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { IFileSystem } from '../interfaces/IFileSystem';
 import { IWebFetcher } from '../interfaces/IWebFetcher';
@@ -70,6 +70,15 @@ export interface ConversationRequest {
 }
 
 /**
+ * A run of a turn's reply text, as a backend reports it. `narration`: it began
+ * before its call's last tool call, so it stays when a corrective retry
+ * discards what the call replied.
+ */
+export interface TurnRun extends ReplyRun {
+  narration?: true;
+}
+
+/**
  * One planner turn's outcome. The planner talks to the user (`message`),
  * commits a full plan (`plan`, a `{tasks:[...]}` JSON object), emits targeted
  * task edits (`task_ops`, a `{taskOps:[...]}` JSON object), or asks to read
@@ -84,11 +93,15 @@ export type ConversationTurn =
    * `failed`: the call ended without a reply (a dead agent, a usage limit),
    * and `text` says why; `usageLimit`, where the runner also said in a field
    * whether that was its usage limit (see {@link TurnFailure}).
+   * `runs`, on every kind: the reply's runs the turn's surviving calls
+   * streamed, in order, and last a note written in the planner's place when
+   * `text` is one. An envelope's own run is not among them. Absent from a
+   * backend that does not report runs.
    */
-  | { kind: 'message'; text: string; researchLog: ResearchLogEntry[]; aborted?: boolean; failed?: boolean; usageLimit?: UsageLimitSignal | false }
-  | { kind: 'plan'; tasks: Task[]; text: string; researchLog: ResearchLogEntry[] }
-  | { kind: 'task_ops'; ops: import('./TaskOps').TaskOp[]; text: string; researchLog: ResearchLogEntry[] }
-  | { kind: 'task_query'; query: import('./TaskQuery').TaskQuery; text: string; researchLog: ResearchLogEntry[] };
+  | { kind: 'message'; text: string; researchLog: ResearchLogEntry[]; aborted?: boolean; failed?: boolean; usageLimit?: UsageLimitSignal | false; runs?: TurnRun[] }
+  | { kind: 'plan'; tasks: Task[]; text: string; researchLog: ResearchLogEntry[]; runs?: TurnRun[] }
+  | { kind: 'task_ops'; ops: import('./TaskOps').TaskOp[]; text: string; researchLog: ResearchLogEntry[]; runs?: TurnRun[] }
+  | { kind: 'task_query'; query: import('./TaskQuery').TaskQuery; text: string; researchLog: ResearchLogEntry[]; runs?: TurnRun[] };
 
 export interface IAiService {
   /** Credential values from the harness planner's effective environment, for the outbound secret check. */

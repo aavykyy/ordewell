@@ -3,7 +3,7 @@ import { reduceConversation, type ConversationInput } from '../reduce';
 import { play, unkeyed } from './helpers';
 import {
   approvals, compaction, harnessSubagent, interleavedSubagents, legacyProse, parallelRound, planSnapshot, planTurn, preambledPlan, retractedAttempt, stoppedTurn,
-  streamedReply, taskOpsTurn, usageUpdates,
+  streamedReply, taskOpsTurn, toolRoundsReply, usageUpdates,
 } from './fixtures/turns';
 
 describe('reduceConversation', () => {
@@ -51,6 +51,51 @@ describe('reduceConversation', () => {
       const settled = play(retractedAttempt, earlier);
       expect(unkeyed(settled.blocks).slice(2).map((b) => (b.type === 'message' ? [b.role, b.text, b.streaming] : b.type))).toEqual([
         ['user', 'split task 3', false], 'tool', ['planner', 'Task 3 splits cleanly into 3a and 3b.', false],
+      ]);
+    });
+
+    it('settles each run of a reply where it streamed, around the calls between them', () => {
+      const midway = play(toolRoundsReply.slice(0, 7));
+      const settled = play(toolRoundsReply);
+
+      expect(unkeyed(settled.blocks).map((b) => (b.type === 'message' ? [b.role, b.text, b.streaming, b.segmentId] : b.type))).toEqual([
+        ['user', 'what does README.md start with?', false, undefined],
+        ['planner', 'I\'ll read README.md now.', false, undefined],
+        'tool',
+        ['planner', 'The first line of README.md is "hello".', false, undefined],
+      ]);
+      expect(settled.blocks.map((b) => b.id)).toEqual(midway.blocks.map((b) => b.id));
+    });
+
+    it('puts a run that never streamed last, and drops a segment the settled reply does not contain', () => {
+      const [started, first, , call, done] = toolRoundsReply;
+      const view = play([
+        started, first, call, done,
+        { type: 'planner_text_delta', turnId: 't9', segmentId: 's2', text: '{"taskQuery": ' },
+        {
+          type: 'planner_message', content: 'The planner returned an empty reply twice.', timestamp: '2026-09-27T10:02:09.000Z', turnId: 't9',
+          runs: [
+            { segmentId: 's1', text: 'I\'ll read README.md now.', startedAt: '2026-09-27T10:01:58.000Z' },
+            { segmentId: 'never-streamed', text: 'The planner returned an empty reply twice.', startedAt: '2026-09-27T10:02:09.000Z' },
+          ],
+        },
+      ]);
+
+      expect(unkeyed(view.blocks).map((b) => (b.type === 'message' ? b.text : b.type))).toEqual([
+        'what does README.md start with?', 'I\'ll read README.md now.', 'tool', 'The planner returned an empty reply twice.',
+      ]);
+    });
+
+    // The TUI backfills a reply the socket lost from the saved transcript, which keeps no turn id.
+    it('settles a backfilled reply in the segments its runs streamed under, without a turn id', () => {
+      const { content, timestamp, runs } = toolRoundsReply[7] as Extract<ConversationInput, { type: 'planner_message' }>;
+      const view = play([...toolRoundsReply.slice(0, 7), { type: 'planner_message', content, timestamp, runs }]);
+
+      expect(unkeyed(view.blocks).map((b) => (b.type === 'message' ? [b.text, b.turnId, b.segmentId] : b.type))).toEqual([
+        ['what does README.md start with?', 't9', undefined],
+        ['I\'ll read README.md now.', 't9', undefined],
+        'tool',
+        ['The first line of README.md is "hello".', 't9', undefined],
       ]);
     });
   });

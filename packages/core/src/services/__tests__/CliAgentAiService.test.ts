@@ -348,6 +348,21 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(turn.text).toContain('KPI helpers live in lib/kpis.py');
   });
 
+  it('carries the runs said before the wait ahead of the report\'s, each under the segment it streamed', async () => {
+    const { svc } = service('claude-code', [
+      fixture('claude-code', 'async-agent'),
+      fixture('claude-code', 'async-agent-report'),
+    ]);
+    const { events, onProgress } = collector();
+    const turn = await svc.startConversation(request({ onProgress }));
+
+    const streamed = [...new Set(events.flatMap((e) => (e.type === 'text_delta' && e.segmentId ? [e.segmentId] : [])))];
+    expect(turn.runs?.map((run) => run.segmentId)).toEqual(streamed);
+    expect(turn.runs?.map((run) => run.text).join('\n\n')).toBe(turn.text);
+    const before = turn.runs?.filter((run) => run.text.includes('explore the dashboard and the data layer')) ?? [];
+    expect(before).toEqual([expect.objectContaining({ narration: true })]);
+  });
+
   // A planner that answers every wait by backgrounding another agent must cost
   // a known number of turns, not an open-ended poll against a user who is
   // watching a spinner.
@@ -755,11 +770,11 @@ describe('CliAgentAiService — streamed events (#47)', () => {
     const turn = await svc.startConversation(request({ onProgress }));
 
     expect(turn).toMatchObject({ kind: 'message', text: broken });
-    // Taken back only because the settled message replaces the streamed segments, as for any prose reply.
-    expect(events.map((e) => e.type)).toEqual(['text_delta', 'text_retracted']);
+    // Settled where it streamed, as any prose reply is (ADR-0017 A1).
+    expect(events.map((e) => e.type)).toEqual(['text_delta']);
   });
 
-  it('takes back what an empty reply streamed before nudging the agent', async () => {
+  it('nudges an agent whose reply was empty, and settles on the answer alone', async () => {
     const svc = scripted(
       [{ type: 'assistant_text_delta', runId: 'r1', text: '\n' }, { type: 'assistant_text', runId: 'r1', text: '' }, { type: 'turn_end' }],
       [{ type: 'assistant_text', runId: 'r1', text: 'Which store?' }, { type: 'turn_end' }],
@@ -769,10 +784,10 @@ describe('CliAgentAiService — streamed events (#47)', () => {
     const turn = await svc.startConversation(request({ onProgress }));
 
     expect(turn.text).toBe('Which store?');
-    // First: the empty reply's own deltas taken back before the nudge. Second:
-    // the successful reply's single segment, retracted again so its settled
-    // bubble does not sit next to a leftover streamed copy of itself.
-    expect(events.map((e) => e.type)).toEqual(['text_delta', 'text_retracted', 'text_delta', 'text_retracted']);
+    // The empty reply's whitespace never shows (ReplySplitter holds it), so
+    // there is nothing to take back, and the answer settles where it streamed.
+    expect(events.map((e) => e.type)).toEqual(['text_delta', 'text_delta']);
+    expect(turn.runs?.map((run) => run.text)).toEqual(['Which store?']);
   });
 
   it('reports subagent lifecycle and usage, the subagent\'s share carried on its finish', async () => {
@@ -1900,6 +1915,20 @@ describe('CliAgentAiService — Claude Code partial messages, usage and subagent
     expect(new Set(segments.slice(0, 2)).size).toBe(1);
     expect(segments[2]).not.toBe(segments[0]);
     expect(turn.text).toBe('I\'ll read README.md now.\n\nThe first line of README.md is "hello".');
+  });
+
+  // ADR-0017 A1: the runs settle where they streamed, so none is taken back.
+  it('settles the reply with each run under its segment, the one before the Read as narration, and takes none back', async () => {
+    const { svc } = service('claude-code', [fixture('claude-code', 'stream-tool-rounds')]);
+    const { events, onProgress } = collector();
+    const turn = await svc.startConversation(request({ onProgress }));
+
+    const segments = events.flatMap((e) => (e.type === 'text_delta' ? [e.segmentId] : []));
+    expect(turn.runs).toEqual([
+      { segmentId: segments[0], text: 'I\'ll read README.md now.', startedAt: expect.any(String), narration: true },
+      { segmentId: segments[2], text: 'The first line of README.md is "hello".', startedAt: expect.any(String) },
+    ]);
+    expect(events.filter((e) => e.type === 'text_retracted')).toEqual([]);
   });
 
   // Claude Code in print mode redacts thinking: the blocks and their deltas

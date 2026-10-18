@@ -17,7 +17,7 @@ import { runResearchAgent, mapWithConcurrency, SUBAGENT_LIMITS } from './Researc
 import { SPAWN_RESEARCH_AGENT, isExecutionTool } from './researchTools';
 import { classifyOutcome } from './researchStepSummary';
 import { addUsage, type UsageTotals } from '../models/Usage';
-import type { ConversationTurn } from './AiService';
+import type { ConversationTurn, TurnRun } from './AiService';
 import type { UsageRecord } from '../models/Usage';
 import { abortScope } from '../utils/abortScope';
 
@@ -78,6 +78,8 @@ export interface ResearchTurn {
   finishReason?: string;
   /** Exact prompt tokens this turn consumed, when the provider reports usage — drives proactive compaction. */
   promptTokens?: number;
+  /** The segment `text` streamed under, where the provider streams it. */
+  segmentId?: string;
 }
 
 export interface ResearchChat {
@@ -361,7 +363,6 @@ export abstract class BaseAiService {
       onProgress,
       signal,
       compactHistory: chat.compactHistory,
-      replyJoinsSegments: false,
     });
   }
 
@@ -375,7 +376,20 @@ export abstract class BaseAiService {
   ): Promise<ReplyAttempt> {
     const researchLog: ResearchLogEntry[] = [];
     const MAX_STEPS = this.config.researchMaxSteps;
-    let turn = await chat.sendMessage(message, signal);
+    // Each model call's text is a run of the reply (ADR-0017 A1): every call
+    // before the last is narration before its tool calls, and the last one's
+    // is what the attempt replies.
+    const narration: TurnRun[] = [];
+    let last: TurnRun | undefined;
+    const call = async (send: () => Promise<ResearchTurn>): Promise<ResearchTurn> => {
+      const startedAt = new Date().toISOString();
+      const next = await send();
+      if (last) narration.push({ ...last, narration: true });
+      last = next.text.trim() ? { segmentId: next.segmentId ?? uuidv4(), text: next.text, startedAt } : undefined;
+      return next;
+    };
+    const runs = (): TurnRun[] => (last ? [...narration, last] : [...narration]);
+    let turn = await call(() => chat.sendMessage(message, signal));
 
     // Wrap-up rounds after the tool budget runs out: the pending calls are
     // answered synthetically (never executed) so the API history stays
@@ -383,7 +397,7 @@ export abstract class BaseAiService {
     // model could keep requesting tools forever.
     let wrapUpRounds = 0;
     for (let step = 0; turn.hasToolCalls; step++) {
-      if (signal?.aborted) return { text: turn.text, researchLog, aborted: true };
+      if (signal?.aborted) return { text: turn.text, researchLog, aborted: true, runs: runs() };
       if (step >= MAX_STEPS) {
         // Budget exhausted while the model still wants tools. Dropping the
         // calls here used to surface the model's preamble ("Let me read…")
@@ -410,10 +424,11 @@ export abstract class BaseAiService {
           onProgress({ type: 'tool_call', tool: tc.name, toolArgs: step.args, toolCallId: tc.id });
           onProgress({ type: 'tool_result', toolResult: notice, step, toolCallId: tc.id });
         }
-        turn = await chat.sendToolResults(
-          turn.toolCalls.map((tc) => ({ name: tc.name, output: notice, truncated: false, totalChars: notice.length, id: tc.id })),
+        const calls = turn.toolCalls;
+        turn = await call(() => chat.sendToolResults(
+          calls.map((tc) => ({ name: tc.name, output: notice, truncated: false, totalChars: notice.length, id: tc.id })),
           signal,
-        );
+        ));
         continue;
       }
       const thinking = turn.reasoning ? turn.reasoning.slice(-200) : '';
@@ -422,14 +437,14 @@ export abstract class BaseAiService {
       );
       researchLog.push(...logEntries);
       BaseAiService.appendBudgetCountdown(toolResults, MAX_STEPS - step - 1, 'reply to the user (summary, question, or plan JSON)');
-      turn = await chat.sendToolResults(toolResults, signal);
+      turn = await call(() => chat.sendToolResults(toolResults, signal));
     }
 
     // A plain-reply turn (no tool calls) never passes through the loop
     // above, so this is the first point it can notice an abort raised
     // while its HTTP call was already in flight — without it, a stale
     // turn classifies and returns as a normal plan/message after reset().
-    if (signal?.aborted) return { text: turn.text, researchLog, aborted: true };
+    if (signal?.aborted) return { text: turn.text, researchLog, aborted: true, runs: runs() };
 
     // Forced break with nothing to show: degrade to a visible failure
     // instead of an empty planner bubble.
@@ -438,10 +453,11 @@ export abstract class BaseAiService {
         text: turn.text,
         researchLog,
         failure: `I hit the research tool budget for this turn (${MAX_STEPS} rounds) before finishing. Tell me to continue, or narrow the request.`,
+        runs: runs(),
       };
     }
 
-    return { text: turn.text, researchLog, cutOff: turn.finishReason === 'length' };
+    return { text: turn.text, researchLog, cutOff: turn.finishReason === 'length', runs: runs() };
   }
 
   /**

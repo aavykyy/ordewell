@@ -1,5 +1,5 @@
 import { buildMergePrompt, buildSplitPrompt } from '../PlanPrompts';
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -1369,46 +1369,69 @@ describe('what the planner says around a plan or edit it submits', () => {
 
   const chat = (broadcast: ReturnType<typeof plannerSession>['broadcast']): ConversationView =>
     broadcast.mock.calls.reduce<ConversationView>((view, [msg]) => reduceConversation(view, msg), EMPTY_CONVERSATION);
-  const plannerLines = (view: ConversationView) => view.blocks.flatMap((b) => (b.type === 'message' && b.role === 'planner' ? [b.text] : []));
+  // Each broadcast moves the clock on, so a reload orders what the turns said
+  // and did as a real session, never two of them in one millisecond, would.
+  const ticking = (planner: ReturnType<typeof plannerSession>) => {
+    planner.broadcast.mockImplementation(() => { vi.advanceTimersByTime(1000); });
+    return planner;
+  };
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-10-18T10:00:00.000Z'));
+  });
+  afterEach(() => vi.useRealTimers());
+  // ADR-0017 A1: what the planner said before the call stays ahead of the call's row.
+  const timeline = (view: ConversationView) => view.blocks.flatMap((b) => (
+    b.type === 'message' ? [`${b.role}: ${b.text}`] : b.type === 'tool' ? [`tool: ${b.headline.name}`] : b.type === 'plan' ? [`plan: ${b.status}`] : []));
 
-  it('stays in the chat, live and on reload, after an edit_plan call lands', async () => {
-    const said = 'Updating the plan now.\n\nRenamed the second task to "Wire it in".';
-    const planner = plannerSession(fakeClaude({
+  it('stays in the chat where it was said, live and on reload, around an edit_plan call that lands', async () => {
+    const planner = ticking(plannerSession(fakeClaude({
       turn: async (mcp, message, emit) => {
         if (!message.includes('EDIT NOW')) return submitted(mcp, TWO_TASKS);
         await aroundCall(mcp!, emit, 'edit_plan', { ops: [{ op: 'update', taskId: '#2', changes: { title: 'Wire it in' } }] });
         return 'Renamed the second task to "Wire it in".';
       },
-    }));
+    })));
     await planner.session.startPlanning('add a cache', ['claude-code']);
 
     await planner.session.continueConversation('EDIT NOW');
 
     expect(planner.session.planTasks.map((t) => t.title)).toEqual(['Task a', 'Wire it in']);
-    const live = plannerLines(chat(planner.broadcast));
-    expect(live.slice(-2)).toEqual([said, 'Tasks updated:\n- Updated "Task b" (title)']);
+    const live = timeline(chat(planner.broadcast));
+    expect(live.slice(-5)).toEqual([
+      'user: EDIT NOW',
+      'planner: Updating the plan now.',
+      'tool: mcp__ordewell__edit_plan',
+      'planner: Renamed the second task to "Wire it in".',
+      'planner: Tasks updated:\n- Updated "Task b" (title)',
+    ]);
     const plan = planner.session.planState!;
-    expect(plannerLines(fromTranscript(plan.conversationHistory, plan.researchLog)).slice(-2)).toEqual(live.slice(-2));
+    expect(timeline(fromTranscript(plan.conversationHistory, plan.researchLog)).slice(-5)).toEqual(live.slice(-5));
   });
 
-  it('stays in the chat, live and on reload, after a submit_plan call lands', async () => {
-    const said = 'Updating the plan now.\n\nTwo tasks: the cache, then wiring it in.';
-    const planner = plannerSession(fakeClaude({
+  it('stays in the chat where it was said, live and on reload, around a submit_plan call that lands', async () => {
+    const planner = ticking(plannerSession(fakeClaude({
       turn: async (mcp, _message, emit) => {
         await aroundCall(mcp!, emit, 'submit_plan', { tasks: TWO_TASKS });
         return 'Two tasks: the cache, then wiring it in.';
       },
-    }));
+    })));
 
     await planner.session.startPlanning('add a cache', ['claude-code']);
 
     expect(planner.session.planTasks).toHaveLength(2);
     const view = chat(planner.broadcast);
-    expect(plannerLines(view)).toEqual([said]);
+    expect(timeline(view)).toEqual([
+      'user: add a cache',
+      'planner: Updating the plan now.',
+      'tool: mcp__ordewell__submit_plan',
+      'planner: Two tasks: the cache, then wiring it in.',
+      'plan: generated',
+    ]);
     expect(view.blocks.at(-1)).toEqual(expect.objectContaining({ type: 'plan', status: 'generated', taskCount: 2 }));
     const plan = planner.session.planState!;
     const reloaded = fromTranscript(plan.conversationHistory, plan.researchLog);
-    expect(plannerLines(reloaded)).toEqual([said]);
+    expect(timeline(reloaded)).toEqual(timeline(view));
     expect(reloaded.blocks.at(-1)).toEqual(expect.objectContaining({ type: 'plan', status: 'generated', taskCount: 2 }));
   });
 });
