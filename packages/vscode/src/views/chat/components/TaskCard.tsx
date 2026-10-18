@@ -371,29 +371,35 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
     && !!onSendMessage && !!onSendMessageNow;
 
   return (
-    <div className="task-with-controls">
+    <div className="task-with-controls task-with-controls-top">
       <div className={`task-card task-${task.type} ${expanded ? 'expanded' : ''}`}>
         <div className="task-card-header" onClick={() => setExpanded(!expanded)}>
-          <TaskCheck row={row} taskId={task.id} onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
-          <span className="task-order">{row.orderLabel}</span>
-          <span className={`task-type-badge ${task.type}`}>
-            {isUserTask ? 'Manual' : 'AI'}
+          <span className="task-card-lead">
+            <TaskCheck row={row} taskId={task.id} onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
+            <span className="task-order">{row.orderLabel}</span>
+            <span className={`task-type-badge ${task.type}`}>
+              {isUserTask ? 'Manual' : 'AI'}
+            </span>
+            {row.kind === 'ops' && (
+              <span className="task-type-badge ops" title="An ops task: it changes no repository files and runs in your checkout, once the work it depends on is merged">Ops</span>
+            )}
           </span>
-          {row.kind === 'ops' && (
-            <span className="task-type-badge ops" title="An ops task: it changes no repository files and runs in your checkout, once the work it depends on is merged">Ops</span>
-          )}
-          <button type="button" className="task-heading" aria-expanded={expanded}
-            title={expanded ? 'Collapse task details' : 'Expand task details'}
-            onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}>
-            <span className="task-title-text">{task.title}</span>
+          <div className="task-heading-block">
+            <button type="button" className="task-heading" aria-expanded={expanded}
+              title={expanded ? 'Collapse task details' : 'Expand task details'}
+              onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}>
+              <span className="task-title-text">{task.title}</span>
+            </button>
+            {/* Outside the heading button, so Open log can share its line without nesting a button in a button. */}
             <TaskAssignment task={task} />
-          </button>
-
-          {/* The host confirms removal with a real modal. A `confirm()` here would
-              never fire — VS Code sandboxes the webview without `allow-modals`. */}
-          {!isExecuting && onRemoveTask && (
-            <button className="task-remove-btn" onClick={(e) => { e.stopPropagation(); onRemoveTask(task.id); }} title="Remove task">&#10005;</button>
-          )}
+            {onOpenLog && (
+              <button type="button" className="task-log-open-btn"
+                onClick={(e) => { e.stopPropagation(); onOpenLog(task.id); }}
+                title="Open this task's log in an editor tab">
+                Open log
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Collapsed, the newest line is the whole signal — "which test is it on"
@@ -711,14 +717,6 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
           </button>
         )}
 
-        {onOpenLog && (
-          <button type="button" className="task-log-open-btn"
-            onClick={(e) => { e.stopPropagation(); onOpenLog(task.id); }}
-            title="Open this task's log in an editor tab">
-            Open log
-          </button>
-        )}
-
         {/* The awaiting reason is a badge in its own right (ADR-0018, W1): a
             task held for the user must read as such whether or not a run is
             still being drawn as active — and so must one a failure blocks. */}
@@ -748,6 +746,14 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
           </span>
         )}
         {planActions}
+
+        {/* Beside Merge and Split rather than in the header, where it held the
+            title's last stretch for a button only shown on hover. The host
+            confirms removal with a real modal: a `confirm()` here would never
+            fire — VS Code sandboxes the webview without `allow-modals`. */}
+        {!isExecuting && onRemoveTask && (
+          <button className="task-remove-btn" onClick={(e) => { e.stopPropagation(); onRemoveTask(task.id); }} title="Remove task">&#10005;</button>
+        )}
       </div>
     </div>
   );

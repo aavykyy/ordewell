@@ -24,7 +24,7 @@ describe('the assignment while a plan executes', () => {
     expect(screen.queryByLabelText(/^Mode/)).toBeNull();
     expect(container.querySelector('.task-assignment-readonly')?.textContent).toBe('Assignedcodex · GPT · high');
     // The header line under the title is there in every state.
-    expect(container.querySelector('.task-heading .task-assignment')?.textContent).toBe('codex · GPT · high');
+    expect(container.querySelector('.task-heading-block .task-assignment')?.textContent).toBe('codex · GPT · high');
   });
 
   it('replaces them on a subtask card too', () => {
@@ -43,7 +43,7 @@ describe('the assignment while a plan executes', () => {
 
     expect(screen.getByLabelText('Runner')).toBeTruthy();
     expect(container.querySelector('.task-assignment-readonly')).toBeNull();
-    expect(container.querySelector('.task-heading .task-assignment')).not.toBeNull();
+    expect(container.querySelector('.task-heading-block .task-assignment')).not.toBeNull();
   });
 
   it('shows nothing for a manual task, which no runner executes', () => {

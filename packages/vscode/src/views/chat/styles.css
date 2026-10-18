@@ -1987,6 +1987,77 @@ body.vscode-high-contrast-light .task-card.expanded {
   display: none;
 }
 
+/* A top-level card shares its column lines with the row below it, so the
+   footer starts where the title does however wide the lead badges are. */
+.task-with-controls-top {
+  display: grid;
+  grid-template-columns: [lead-start] auto [main-start] minmax(0, 1fr) [main-end];
+  column-gap: 8px;
+}
+
+.task-with-controls-top > .task-card {
+  grid-column: lead-start / main-end;
+  display: grid;
+  grid-template-columns: subgrid;
+}
+
+.task-with-controls-top > .task-card > * {
+  grid-column: 1 / -1;
+}
+
+.task-with-controls-top > .task-card > .task-card-header {
+  display: grid;
+  grid-template-columns: subgrid;
+}
+
+.task-with-controls-top > .task-footer-controls {
+  grid-column: main-start / main-end;
+  padding-left: 0;
+}
+
+.task-card-lead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-heading-block {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "title title"
+    "meta actions";
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 3px;
+  min-width: 0;
+}
+
+.task-heading-block > .task-heading {
+  grid-area: title;
+}
+
+.task-heading-block > .task-assignment {
+  grid-area: meta;
+}
+
+.task-heading-block > .task-log-open-btn {
+  grid-area: actions;
+  margin-left: 0;
+}
+
+.task-with-controls-top > .task-footer-controls > .task-remove-btn {
+  margin-left: auto;
+}
+
+.task-with-controls-top > .task-footer-controls > .task-inline-actions + .task-remove-btn {
+  margin-left: 0;
+}
+
+.task-with-controls-top:hover > .task-footer-controls > .task-remove-btn {
+  opacity: 0.7;
+}
+
 .task-heading:focus-visible {
   outline: 1px solid var(--vscode-focusBorder, var(--accent));
   outline-offset: 3px;
