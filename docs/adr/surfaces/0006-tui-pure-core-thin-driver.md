@@ -18,7 +18,10 @@ We decided to build `ordewell tui` as a **pure state core** (`state`, `reducer`,
 - **`render(state)` returns exactly `rows` lines (R1).** Layout is a pure function of state, so geometry, clipping, wrapping, scrolling and overlay content are unit-asserted. Width is measured with an ANSI- and wide-glyph-aware `width()`, not `String.length` — CJK and emoji otherwise shift every column to their right.
 - **No new dependencies (D1).** The hand-rolled renderer is small and buys exact-frame tests.
 - **The daemon is the TUI's single seam (S1).** The TUI holds no orchestration logic; it consumes `SessionMessage` over the daemon's websocket. The VS Code extension does not use the daemon: it constructs core's `Session` in-process and relays its messages over VS Code's webview messaging. What keeps the two in step is that both hosts run the same core `Session` — the daemon one per session in `OrchestratorPool`, the extension one for the window — and that a session planned in the terminal opens unchanged in VS Code through the saved-session store in `.ordewell/sessions/`, which both read and write through core. The one deviation is `skip`, which the daemon has no endpoint for — the extension implements it as "mark complete and tick", and the TUI matches that rather than inventing different semantics.
-- **The chat pane draws core's display blocks.** The TUI accumulates no presentation state of its own from `SessionMessage`s: core builds the planner conversation view once ([ADR-0017](0017-shared-conversation-view.md)), and the TUI renders its blocks — command rows, streaming reply text, subagent blocks, plan markers and the token line.
+- **The chat pane draws core's display blocks.** The TUI accumulates no presentation state of its own from `SessionMessage`s: core builds the planner conversation view once ([ADR-0017](0017-shared-conversation-view.md)), and the TUI renders its blocks — command rows, streaming reply text, subagent blocks, plan markers and the token line. Task logs likewise use core's pure
+  `followTaskLog` for saved-log reads and live batches, shared with VS Code
+  (ADR-0018 P1); the driver carries the read's stream position and each live
+  batch's position into that reducer.
 - **Secrets never reach the frame (K1).** `/key` renders its input masked and the confirmation names the provider and env var, never the key. Keys are written to the resolved `.env` via the existing `writeEnvVar`, the same file `ordewell models --set` uses.
 - **Keys unwind one layer at a time.**
   - **Ctrl-C (C1):** overlay → half-typed line → quit. A single-press quit loses a half-composed goal; a modal-only escape strands users who do not know `esc`.
@@ -50,3 +53,4 @@ We decided to build `ordewell tui` as a **pure state core** (`state`, `reducer`,
 - 2026-09-27 — the chat pane draws ADR-0017's blocks; ctrl+o, double-Esc and Esc-unsend.
 - 2026-10-09 — skill toggles replaced by skills (ADR-0024); the Context and E1 wording follows.
 - 2026-10-11 — adoption replays planner turn inputs no turn answered ([ADR-0029](../supervision/0029-the-supervisor.md)).
+- 2026-10-18 — the task-log view shares core's saved-log and live-stream follow reducer with VS Code.

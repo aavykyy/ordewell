@@ -11,6 +11,13 @@ function status(overrides: Partial<TaskLogStatus> = {}): TaskLogStatus {
 }
 
 describe('what a task log header says (ADR-0018, V1)', () => {
+  it.each([
+    ['completed', 'done', 'Done'],
+    ['failed', 'failed', 'Failed'],
+  ] as const)('a %s task wins over a stale live turn and approval', (planStatus, kind, label) => {
+    expect(taskLogState(status({ planStatus, working: true, awaitingApproval: 1, awaitingReason: 'input' }))).toEqual({ kind, label });
+  });
+
   it('a running turn reads as working, whatever the saved reason is', () => {
     expect(taskLogState(status({ working: true })).label).toBe('Working');
     expect(taskLogState(status({ working: true, awaitingReason: 'input' })).label).toBe('Working');

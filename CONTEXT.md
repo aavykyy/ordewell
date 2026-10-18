@@ -657,7 +657,13 @@ one file per attempt, numbered from what is on disk. `reduceTaskLog` folds the
 same events into display blocks live and on reload, so the two draw alike: each
 text run streams into a block of its own, which its complete copy settles
 wherever it now sits; a log saved before runs carried an id has one stream for
-every run, into the latest block only. The file goes with its session. Every task attempt uses this log. The planner reads
+every run, into the latest block only. Every runner exit records
+`runner_ended`, which closes the view's turn and
+streaming blocks even when no tool call remains open. `followTaskLog` joins a
+saved attempt with live batches by the read's stream position: both surfaces
+buffer during a read, follow newer attempts unless the reader picked an earlier
+one, and ignore late batches from older attempts. The file goes with its session.
+Every task attempt uses this log. The planner reads
 a saved attempt with `task_output` (optional `attempt` and event-type `kinds`),
 through bounded text pages and its shared task read budget.
 *Avoid:* "transcript" (the planner conversation's saved record), "output"

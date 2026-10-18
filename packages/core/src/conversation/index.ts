@@ -21,3 +21,5 @@ export { skillTokens, loadedSkillTokens } from './skillTokens';
 export type { SkillToken } from './skillTokens';
 export { markdownHtml, markdownTokens } from './markdown';
 export type { MarkdownToken } from './markdown';
+export { EMPTY_TASK_LOG_FOLLOW, followTaskLog } from './taskLogFollow';
+export type { TaskLogFollow, TaskLogFollowInput, TaskLogBatch } from './taskLogFollow';

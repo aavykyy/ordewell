@@ -351,7 +351,8 @@ function endOpenCalls(view: TaskLogView): TaskLogView {
   const blocks = view.blocks.map((block) => {
     const ended = block.type === 'subagent'
       ? (block.children.some((c) => c.type === 'tool' && c.status === 'pending') ? { ...block, children: block.children.map(endCall) } : block)
-      : block.type === 'tool' ? endCall(block) : block;
+      : block.type === 'tool' ? endCall(block)
+      : block.type === 'command' && block.status === 'running' ? { ...block, status: 'stopped' as const } : block;
     if (ended !== block) changed = true;
     return ended;
   });
@@ -395,7 +396,7 @@ export function reduceTaskLog(view: TaskLogView, event: TaskLogEvent): TaskLogVi
     case 'approval_requested': return requestApproval(view, event);
     case 'approval_decided': return decideApproval(view, event);
     case 'approval_withdrawn': return settleApproval(view, event.approvalId, (block) => ({ ...block, status: 'withdrawn' }));
-    case 'runner_ended': return endOpenCalls(view);
+    case 'runner_ended': return closeOpenBlocks({ ...endOpenCalls(view), working: false, streams: {}, latestText: undefined }, 'stopped');
     default: return view;
   }
 }

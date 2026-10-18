@@ -65,14 +65,14 @@ export function sessionsRoute(pool: OrchestratorPool) {
    */
   router.get('/:id/tasks/:taskId/log', (c) => {
     const ws = c.req.query('workspace') || process.cwd();
-    return c.json({ attempts: listTaskLogAttempts({ baseDir: ws, sessionId: c.req.param('id') }, c.req.param('taskId')) } satisfies TaskLogAttemptsResponse);
+    return c.json({ attempts: listTaskLogAttempts({ baseDir: ws, sessionId: c.req.param('id') }, c.req.param('taskId')), position: pool.streamPosition(c.req.param('id')) } satisfies TaskLogAttemptsResponse);
   });
 
   router.get('/:id/tasks/:taskId/log/:attempt', (c) => {
     const ws = c.req.query('workspace') || process.cwd();
     const attempt = Number(c.req.param('attempt'));
     if (!Number.isInteger(attempt) || attempt < 1) return refuse(c, 400, 'attempt must be a positive integer');
-    return c.json({ attempt, events: taskLogForSurface(readTaskLog({ baseDir: ws, sessionId: c.req.param('id') }, c.req.param('taskId'), attempt)) } satisfies TaskLogResponse);
+    return c.json({ attempt, events: taskLogForSurface(readTaskLog({ baseDir: ws, sessionId: c.req.param('id') }, c.req.param('taskId'), attempt)), position: pool.streamPosition(c.req.param('id')) } satisfies TaskLogResponse);
   });
 
   // The live session goes first: it persists as it changes, so a session left

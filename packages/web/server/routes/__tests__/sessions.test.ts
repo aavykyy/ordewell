@@ -20,6 +20,7 @@ function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
     getGoal: vi.fn().mockReturnValue('Rate limiting'),
     getPlanState: vi.fn().mockReturnValue(null),
     runSnapshot: vi.fn().mockReturnValue(null),
+    streamPosition: vi.fn().mockReturnValue({ stream: 'daemon', seq: 12 }),
     destroy: vi.fn(),
     ...overrides,
   } as unknown as OrchestratorPool;
@@ -233,15 +234,15 @@ describe('GET /api/sessions/:id/tasks/:taskId/log', () => {
     const qs = `?workspace=${encodeURIComponent(ws)}`;
 
     const list = await app().request(`/api/sessions/s1/tasks/t1/log${qs}`);
-    expect(await list.json()).toEqual({ attempts: [1, 2] });
+    expect(await list.json()).toEqual({ attempts: [1, 2], position: { stream: 'daemon', seq: 12 } });
 
     const second = await app().request(`/api/sessions/s1/tasks/t1/log/2${qs}`);
-    expect(await second.json()).toEqual({ attempt: 2, events: [{ type: 'text', text: 'again' }] });
+    expect(await second.json()).toEqual({ attempt: 2, events: [{ type: 'text', text: 'again' }], position: { stream: 'daemon', seq: 12 } });
   });
 
   it('answers an empty log for a task that has none, and refuses a malformed attempt', async () => {
     const qs = `?workspace=${encodeURIComponent(ws)}`;
-    expect(await (await app().request(`/api/sessions/s1/tasks/none/log${qs}`)).json()).toEqual({ attempts: [] });
+    expect(await (await app().request(`/api/sessions/s1/tasks/none/log${qs}`)).json()).toEqual({ attempts: [], position: { stream: 'daemon', seq: 12 } });
     expect((await app().request(`/api/sessions/s1/tasks/t1/log/zero${qs}`)).status).toBe(400);
   });
 });

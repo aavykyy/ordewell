@@ -32,6 +32,19 @@ describe('the task log tab (ADR-0018, V1)', () => {
     api.postMessage.mockClear();
   });
 
+  it('offers no interrupt or send-now on a settled task with a stale open turn', () => {
+    render(<TaskLogApp />);
+    init({ planStatus: 'completed', working: true });
+    expect(screen.getByText('Done')).toBeTruthy();
+    expect(screen.queryByLabelText('Interrupt')).toBeNull();
+    const input = screen.getByPlaceholderText(/Message the task/);
+    fireEvent.keyDown(input, { key: 'Escape' });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(api.postMessage).not.toHaveBeenCalledWith({ type: 'interruptTask' });
+    fireEvent.change(input, { target: { value: 'another detail' } });
+    expect(screen.getByLabelText('Send').getAttribute('title')).toBe('Send (Enter)');
+  });
+
   it('pins the task\'s whole spend below the log and follows it as usage arrives', () => {
     render(<TaskLogApp />);
     init();

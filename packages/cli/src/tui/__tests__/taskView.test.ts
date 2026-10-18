@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { replayTaskLog, type AttemptUsage, type RunnerCommand, type TaskLogEvent } from '@ordewell/core';
 import { stripAnsi, width } from '../ansi';
 import { chatPaneWidth } from '../geometry';
+import { inboundFor } from '../inbound';
 import { bodyRows, chatLayout } from '../layout';
 import { initialState, reduce } from '../reducer';
 import { render } from '../render';
@@ -93,6 +94,33 @@ describe('opening and closing the task view', () => {
 });
 
 describe('loading the log', () => {
+  it('keeps approval and turn end batches broadcast after the saved read while opening', () => {
+    const loading = opened({ taskView: notLoaded() });
+    let buffered = loading;
+    const receive = inboundFor({}, (action) => { buffered = reduce(buffered, action).state; }, 's1').execution();
+    receive({
+      type: 'task_log', taskId: 't1', attempt: 1, stream: 'daemon', seq: 12,
+      events: [
+        { type: 'text_delta', text: 'live text' },
+        { type: 'tool_call', id: 'c', name: 'Bash', args: '{}' },
+        { type: 'approval_requested', approvalId: 'ap', tool: 'Bash', args: '{}', allowForTask: false },
+        { type: 'turn_end', reason: 'completed' },
+      ],
+    });
+    const caughtUp = reduce(buffered, {
+      type: 'taskLogLoaded', taskId: 't1', attempt: 1, attempts: [1],
+      events: [{ type: 'turn_start', message: 'go' }], position: { stream: 'daemon', seq: 10 },
+    }).state;
+    expect(caughtUp.taskView?.view.working).toBe(false);
+    expect(caughtUp.taskView?.view.blocks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'message', text: 'live text' }),
+      expect.objectContaining({ type: 'tool', toolCallId: 'c' }),
+    ]));
+    expect(reduce(caughtUp, { type: 'key', key: key('ctrl-y') }).effects).toEqual([
+      { type: 'answerTaskApproval', sessionId: 's1', approvalId: 'ap', answer: { decision: 'allow' } },
+    ]);
+  });
+
   it('replays a saved attempt into the view', () => {
     const { state } = reduce(opened({ taskView: notLoaded() }), {
       type: 'taskLogLoaded', taskId: 't1', attempts: [1], attempt: 1, events, sessionId: 's1',
@@ -158,6 +186,23 @@ describe('loading the log', () => {
 
 describe('earlier attempts', () => {
   const twoAttempts = opened({ taskView: loaded({ attempts: [1, 2], attempt: 2 }) });
+
+  it('buffers a picked attempt while its saved read is in flight', () => {
+    const picking = reduce(opened({ taskView: loaded({ attempts: [1, 2], attempt: 1 }) }), {
+      type: 'key', key: key('alt-right'),
+    }).state;
+    const streamed = reduce(picking, {
+      type: 'taskLog', taskId: 't1', attempt: 2, position: { stream: 'd', seq: 8 },
+      events: [{ type: 'text_delta', text: 'live tail' }, { type: 'turn_end', reason: 'completed' }],
+    }).state;
+    const caughtUp = reduce(streamed, {
+      type: 'taskLogLoaded', taskId: 't1', attempt: 2, position: { stream: 'd', seq: 7 },
+      events: [{ type: 'turn_start', message: 'again' }],
+    }).state;
+    expect(plain(caughtUp)).toContain('live tail');
+    expect(caughtUp.taskView?.view.working).toBe(false);
+    expect(caughtUp.taskView?.followLatest).toBe(true);
+  });
 
   it('alt-left asks for the earlier attempt and stops following the latest', () => {
     const { state, effects } = reduce(twoAttempts, { type: 'key', key: key('alt-left') });
