@@ -66,6 +66,14 @@ function sentNamed(lines: string[], method: string): RpcLine[] {
   return written(lines).filter((msg) => msg.method === method);
 }
 
+/** The usage-limit capture's reset is a fixed instant, and a reset already past
+ *  is dropped as stale: pin the clock before it so the tests do not expire. */
+function beforeRecordedReset(): void {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-10-17T18:00:00.000Z'));
+}
+afterEach(() => { vi.useRealTimers(); });
+
 describe('CodexAdapter task start', () => {
   it('opens the task thread in the worktree under the manifest\'s agent settings', async () => {
     const { spawned, processDeps } = deps(handshake());
@@ -582,6 +590,7 @@ describe('CodexAdapter task channels', () => {
   });
 
   it('marks a turn that failed on the usage limit as one, with the exhausted window\'s reset', async () => {
+    beforeRecordedReset();
     const { adapter, proc } = await startedTask();
     const events: AgentEvent[] = [];
     const turn = adapter.send('fix sum', (e) => e.type !== 'runner_loaded' && events.push(e));
@@ -834,6 +843,7 @@ describe('a Codex task on the structured transport', () => {
   });
 
   it('shows a usage limit in the task log in Codex\'s words, and hands the limit and its reset to the session', async () => {
+    beforeRecordedReset();
     const { runner } = codexRunner([...handshake(), fixture('codex', 'usage-limit')]);
     const session = await runner.spawn(spawnOptions);
     const events: StructuredEvent[] = [];
