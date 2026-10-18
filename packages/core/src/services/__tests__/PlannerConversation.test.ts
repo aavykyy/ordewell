@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createTask, type ConversationMessage, type LegacyPlanState, type SkillLoad } from '../../models/Task';
+import { createTask, type ConversationMessage, type LegacyPlanState, type ResearchProgress, type SkillLoad } from '../../models/Task';
 import type { SessionMessage } from '../SessionMessage';
-import type { ConversationTurn, IAiService } from '../AiService';
+import type { ConversationTurn, IAiService, TurnRun } from '../AiService';
+import type { TaskOp } from '../TaskOps';
 import { ConversationBusyError, ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, type PlannerConversationHost } from '../PlannerConversation';
 import type { SkillInfo } from '../SkillsService';
 import type { TurnFailure } from '../runnerExit';
@@ -975,5 +976,107 @@ describe('PlannerConversation planner turn', () => {
         expect(ended(host).at(-1)?.outcome).toBe('stopped');
       });
     }
+  });
+});
+
+// ADR-0017 A1: a reply's runs are saved beside its content, where each began,
+// and every surface settles each where it streamed. Retracted text never is.
+describe('PlannerConversation reply runs', () => {
+  const run = (segmentId: string, text: string, startedAt: string, narration = false): TurnRun => ({
+    segmentId, text, startedAt, ...(narration ? { narration: true as const } : {}),
+  });
+  const saved = ({ segmentId, text, startedAt }: TurnRun) => ({ segmentId, text, startedAt });
+  const note = (text: string) => ({ segmentId: expect.any(String), text, startedAt: expect.any(String) });
+  const replies = (host: PlannerConversationHost) => vi.mocked(host.broadcast).mock.calls
+    .map(([msg]) => msg)
+    .filter((msg): msg is Extract<SessionMessage, { type: 'planner_message' }> => msg.type === 'planner_message');
+  const looking = run('s1', 'Let me look at the parser.', '2026-01-01T00:00:03Z', true);
+
+  it('saves a reply\'s runs beside its content, and sends them with the settled reply', async () => {
+    const answer = run('s2', 'Both, then.', '2026-01-01T00:00:05Z');
+    const ai = fakeAi({ continueConversation: vi.fn().mockResolvedValue({ kind: 'message', text: 'Let me look at the parser.\n\nBoth, then.', researchLog: [], runs: [looking, answer] }) });
+    const { conversation, state, host } = fakeHost(ai);
+
+    await conversation.reply('JSON and YAML');
+
+    const content = 'Let me look at the parser.\n\nBoth, then.';
+    expect(state.plan!.conversationHistory!.at(-1)).toEqual({ role: 'assistant', content, timestamp: expect.any(String), runs: [saved(looking), saved(answer)] });
+    expect(replies(host)).toEqual([expect.objectContaining({ content, runs: [saved(looking), saved(answer)] })]);
+  });
+
+  it('keeps the narration whose reply a corrective retry discards, taking back only the discarded envelope', async () => {
+    const ops: TaskOp[] = [{ op: 'remove', taskId: '#1' }];
+    const ai = fakeAi({
+      continueConversation: vi.fn()
+        .mockImplementationOnce(async (_m: string, onProgress: (p: ResearchProgress) => void) => {
+          onProgress({ type: 'text_delta', segmentId: 's1', text: 'Let me look at the parser.' });
+          onProgress({ type: 'text_delta', segmentId: 's2', text: '{"taskOps":[{"op":"remove","taskId":"#9"}]}' });
+          return { kind: 'task_ops', ops, text: '{"taskOps":[{"op":"remove","taskId":"#9"}]}', researchLog: [], runs: [looking] };
+        })
+        .mockImplementationOnce(async (_m: string, onProgress: (p: ResearchProgress) => void) => {
+          onProgress({ type: 'text_delta', segmentId: 's3', text: '{"taskOps":[{"op":"remove","taskId":"#1"}]}' });
+          return { kind: 'task_ops', ops, text: '{"taskOps":[{"op":"remove","taskId":"#1"}]}', researchLog: [], runs: [] };
+        }),
+    });
+    const { conversation, state, host } = fakeHost(ai, threeTurnPlan());
+    vi.mocked(host.validateOps)
+      .mockReturnValueOnce({ ok: false, tasks: [], errors: ['#9 does not exist'], summary: [] })
+      .mockReturnValue({ ok: true, tasks: [], errors: [], summary: ['removed #1'] });
+
+    await conversation.reply('Drop the parser task');
+
+    const progress = vi.mocked(host.onProgress).mock.calls.map(([p]) => p);
+    expect(progress.filter((p) => p.type === 'text_retracted').map((p) => p.segmentId)).toEqual(['s2']);
+    expect(state.plan!.conversationHistory!.slice(-2)).toEqual([
+      { role: 'assistant', content: 'Let me look at the parser.', timestamp: expect.any(String), runs: [saved(looking)] },
+      { role: 'assistant', content: 'Tasks updated:\n- removed #1', timestamp: expect.any(String) },
+    ]);
+  });
+
+  it('ends a stopped turn\'s runs on the note that says it stopped before replying', async () => {
+    const ai = fakeAi({ continueConversation: vi.fn() });
+    const { conversation, state } = fakeHost(ai, threeTurnPlan());
+    vi.mocked(ai.continueConversation).mockImplementation(async () => {
+      conversation.stopTurn();
+      return { kind: 'message', text: '', researchLog: [], aborted: true, runs: [looking] };
+    });
+
+    await conversation.reply('Also CSV');
+
+    expect(state.plan!.conversationHistory!.at(-1)).toEqual({
+      role: 'assistant', content: '(Stopped before replying.)', timestamp: expect.any(String), runs: [saved(looking), note('(Stopped before replying.)')],
+    });
+  });
+
+  it.each([
+    ['a plan', { kind: 'plan' as const, tasks: [createTask({ id: 'n1', order: 1, title: 'Parse JSON', prompt: 'p' })] }, { kind: 'plan_generated' }],
+    ['an edit', { kind: 'task_ops' as const, ops: [{ op: 'remove', taskId: '#1' }] as TaskOp[] }, { content: 'Tasks updated:\n- removed #1' }],
+  ])('saves the narration before %s it submitted with the reply, ahead of what landed', async (_what, submission, marker) => {
+    const submitted = run('s2', 'Submitted.', '2026-01-01T00:00:06Z');
+    const ai = fakeAi({ continueConversation: vi.fn() });
+    const { conversation, state, host } = fakeHost(ai, threeTurnPlan());
+    vi.mocked(host.validateOps).mockReturnValue({ ok: true, tasks: [], errors: [], summary: ['removed #1'] });
+    vi.mocked(ai.continueConversation).mockImplementation(async () => {
+      conversation.submit(submission);
+      return { kind: 'message', text: 'Let me look at the parser.\n\nSubmitted.', researchLog: [], runs: [looking, submitted] };
+    });
+
+    await conversation.reply('Plan it');
+
+    const [said, landed] = state.plan!.conversationHistory!.slice(-2);
+    expect(said).toEqual({ role: 'assistant', content: 'Let me look at the parser.\n\nSubmitted.', timestamp: expect.any(String), runs: [saved(looking), saved(submitted)] });
+    expect(landed).toMatchObject({ timestamp: said.timestamp, ...marker });
+    expect(replies(host)[0]).toMatchObject({ content: said.content, runs: said.runs });
+  });
+
+  it('saves a wake-up turn\'s runs with the supervisor\'s reply', async () => {
+    const answer = run('s2', 'Task 1 can be retried.', '2026-01-01T00:00:05Z');
+    const ai = fakeAi({ continueConversation: vi.fn().mockResolvedValue({ kind: 'message', text: 'Let me look at the parser.\n\nTask 1 can be retried.', researchLog: [], runs: [looking, answer] }) });
+    const { conversation, state, host } = fakeHost(ai, threeTurnPlan());
+
+    await conversation.reply({ text: '', skills: [] }, { wakeUps: ['Run update: task 1 failed'], wakeUp: { readBudget: 3, refused: () => undefined } });
+
+    expect(state.plan!.conversationHistory!.at(-1)).toMatchObject({ kind: 'supervisor', runs: [saved(looking), saved(answer)] });
+    expect(replies(host)).toEqual([expect.objectContaining({ supervisor: true, runs: [saved(looking), saved(answer)] })]);
   });
 });

@@ -348,8 +348,12 @@ from its progress notification, with the chat input locked while it runs); CLI
 "clear", which loses what was decided.
 
 **conversationHistory** — the planner dialogue persisted on the plan state:
-`{ role: 'user' | 'assistant', content, timestamp, kind? }[]`. The single source of
-truth for UI redisplay. Tool-call results are NOT stored here — they live in
+`{ role: 'user' | 'assistant', content, timestamp, kind?, runs? }[]`. The single source of
+truth for UI redisplay. A planner reply's entry keeps its **Reply runs** beside
+`content`, so a reload draws each where it streamed among the research steps;
+`content` stays the reply as the planner is told it, and is what replay,
+compaction, a fork, a rewind and PRD capture read. An entry saved without runs
+reloads as one message. Tool-call results are NOT stored here — they live in
 the AI service's in-memory tool-use history; `researchLog` remains the
 persisted tool trace. A reloaded session resumes by replaying this transcript
 into a fresh model context; the tool history is gone. Written only by
@@ -1934,15 +1938,20 @@ message holds several runs, and a block is what a surface draws.
 
 **Segment** — a stream of reply text inside one turn a surface can show as one
 growing message, keyed by `segmentId` on `planner_text_delta`. A backend that
-streams prose, then an envelope, then more prose, hands over several segments;
-the turn's final segment is the one a settled `planner_message` replaces.
+streams prose, then an envelope, then more prose, hands over several segments.
+A settled `planner_message` settles each segment its reply ran through in
+place, by the **Reply run** it carries for it, and drops one the reply no longer
+contains; a message without runs replaces the turn's final segment.
 *Avoid:* calling the segment "the reply" — only a settled `planner_message` is
 that; *Avoid:* numbering segments by arrival — ids are given by the session,
 not derived.
 
 **Retraction** — `planner_text_retracted` saying streamed text was thrown away
-for good: the reply it belonged to was discarded (a corrective retry, an
-aborted segment). Everything a segment had streamed is dropped unless a later
+for good: the reply it belonged to was discarded by a corrective retry, or a
+failed turn took back what it said after its last call. A retry takes back only
+what it answers in place of — the discarded reply and the plan display it
+streamed — never the narration before the discarded attempt's tool calls, and
+settling a reply never retracts (ADR-0017 A1). Everything a segment had streamed is dropped unless a later
 `planner_message` or a later segment of the same turn replaces it; the block
 the text was accumulating in ends and never returns from reload, because
 retracted text is saved nowhere. A segment that streamed to the plan display
@@ -1951,6 +1960,18 @@ the botched one.
 *Avoid:* "edit" — the text is not corrected, it is withdrawn whole;
 *Avoid:* treating it as an error — a retracted segment is what a bounded
 repair loop looks like to a viewer.
+
+**Reply run** (`ReplyRun`: `runs` on `planner_message` and on a reply's
+**conversationHistory** entry) — one run of a planner reply as it settles: the
+segment it streamed under, its settled text, and when it began. A reply's runs
+are every run of reply text its turn's surviving calls streamed, in order — an
+API planner's text before its tool calls and its final segment, every **Text
+run** of a harness planner's turn — and, last, a note the conversation wrote in
+the planner's place, under a segment no stream used. A backend marks a run that
+began before its call's last tool call as *narration* (`TurnRun.narration`):
+what a corrective retry keeps.
+*Avoid:* "segment" for it — the segment is the stream, the run what settles in
+it; "message" — one reply holds several runs.
 
 **Display block** (`core/src/conversation/blocks.ts`) — one thing a surface
 draws for the planner conversation or a structured task's log: a `message`

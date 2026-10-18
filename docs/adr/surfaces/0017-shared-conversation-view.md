@@ -29,9 +29,9 @@ own presentation; it never re-derives the conversation from raw messages.
 - **Turns, segments, retractions (E1).** A planner turn
   (`planner_turn_started` … `planner_turn_ended` under one `turnId`) is the
   unit of streaming. Reply text arrives as `segmentId`-keyed segments whose
-  accumulated text a settled `planner_message` replaces; a turn can retract
-  streamed text (`planner_text_retracted`) without ending. The stream stays
-  provisional and the settled messages authoritative.
+  accumulated text a settled `planner_message` settles in place; a turn can
+  retract streamed text (`planner_text_retracted`) without ending. The stream
+  stays provisional and the settled messages authoritative.
 - **One message per meaning (M1).** Thinking is `planner_thinking_delta` from
   every backend — `segmentId` where the backend streams it in segments (the API
   loops), none where it does not (harness planners) — and the view folds a run
@@ -41,9 +41,24 @@ own presentation; it never re-derives the conversation from raw messages.
   handle both, and the one that forgot (`plan --verbose`) dropped a backend's
   thinking silently.
 - **`planner_message` stays authoritative (A1).** When a turn settles, the
-  message replaces its final segment's streamed text. Streamed text is never
-  written to the transcript, so a reloaded session cannot resurrect text the
-  turn's classification overruled.
+  message carries the reply's runs: every run of reply text the turn's
+  surviving calls streamed, in order, each with its segment and the time it
+  began — for an API planner the text before its tool calls and the final
+  segment, for a harness planner every run, text from turns continued while it
+  waited for background agents included. Each run's text settles its own
+  segment in place, wherever in the turn it streamed; only a run that never
+  streamed (a note the conversation wrote in the planner's place) goes last,
+  and a segment the reply no longer contains goes. `content` stays the whole
+  reply as the planner is told it, so whatever prints, replays or compacts the
+  reply is unchanged. Settling never takes a run back. A corrective retry takes
+  back only what it answers in place of — the discarded attempt's reply and the
+  plan display it streamed — never the narration before that attempt's tool
+  calls, which stays and is saved with the turn's reply. The settled runs are
+  saved where they streamed: the reply's transcript entry keeps each run's text
+  and start time beside its content. Streamed text that was retracted or that
+  the turn's classification overruled is never written, so a reloaded session
+  cannot resurrect it. A message without runs (a note, an older daemon)
+  replaces the turn's final segment.
 - **JSON envelopes stream as `plan_token` (J1).** A reply that is a plan or
   task-ops envelope never decays into visible prose; it is the "building plan"
   display, and becomes a plan marker block when it settles.
@@ -56,12 +71,14 @@ own presentation; it never re-derives the conversation from raw messages.
   either half is unknown.
 - **The saved subset for reload (R1).** `fromTranscript` rebuilds the view a
   session reopens with from its persisted transcript, research log and pending
-  turns: settled messages, tool rows, subagent blocks and digests, then inputs
+  turns: settled messages — a reply run by run, each at the time it began among
+  the tool rows, and an entry saved without runs as one message after the
+  research it settled — tool rows, subagent blocks and digests, then inputs
   still waiting for a turn to land, and the token line. Pending user messages
   keep their skill-load notices; wake-up digests keep their run-update role.
   The live view adopts these inputs when their turn starts or its transcript
   lands, so each input is drawn once. It
-  deliberately leaves out thinking and everything that was only ever streamed —
+  deliberately leaves out thinking and everything that streamed and never settled —
   no `transcriptAt` beyond what the transcript itself records, and no reliance
   on the in-flight view. What reload shows is what was saved, not what was seen.
 - **Expansion is one toggle per surface (X1).** Collapsed is the default: a
@@ -124,6 +141,15 @@ the same word.)
   chose a single toggle, as in Claude Code. A per-block flag would also have to
   live in surface state keyed on block ids, growing with the conversation, for
   a distinction nobody asked for.
+- **One settled message per reply, replacing its final segment** (the design
+  until 2026-10-18). A harness planner's reply joins the text on both sides of
+  its tool calls, so one message could not replace one segment: the turn's
+  other segments were taken back first, and the joined reply landed after the
+  last tool row — live, and again on reload, since the transcript stamped it
+  at commit time. It read as said after the calls it announced. A corrective
+  retry took back every segment the turn still showed, an API planner's
+  narration between its tool calls included. Settling run by run keeps
+  `content` whole for everything that keys on it.
 - **Holding queued prompts in the webview.** It cannot tell whether the turn has already
   ended on the host, and the host is where a held prompt has to be sent from.
 - **A mutable queue object in core.** The TUI reducer would have had to copy it
@@ -136,3 +162,4 @@ the same word.)
 - 2026-10-11 — the pending plan edit list removed with the queue behind it ([ADR-0029](../supervision/0029-the-supervisor.md)).
 - 2026-10-11 — reload includes pending turn inputs and adopts them on replay or settlement.
 - 2026-10-16 — a surface that (re)joins a session is given its live state as well as its transcript. The session socket greets with the planner's approval requests still waiting beside the run (its held edit's preview included), and numbers every broadcast per session; the TUI tells one broadcast's copies apart by that number rather than by content, and reconciles its cards and approval prompt with the greeting on every load. A reloaded VS Code webview replays the waiting requests after the transcript, and drops a card answered while it was away. Seen live: a TUI that reconnected kept the preview of a proposed task the session had already dropped, and a webview reload erased a waiting card nothing could then answer.
+- 2026-10-18 — a reply settles run by run where each streamed, and its transcript entry keeps its runs beside its content (A1, R1); a corrective retry keeps the narration before a discarded attempt's tool calls. Seen live: a coding-agent planner's "I'll read README.md now" sat below the Read row it announced, joined with the rest of the turn, live and after a reload.

@@ -1029,11 +1029,11 @@ describe('session id stability (persist seam)', () => {
       await session.startPlanning('find the cache', ['claude-code']);
 
       const view = broadcasts.reduce(reduceConversation, EMPTY_CONVERSATION);
-      const message = view.blocks.find((b) => b.type === 'message' && b.role === 'planner');
-      expect(message).toMatchObject({ text: 'Looking. \n\nIt is in src/cache.ts.', streaming: false });
+      // Each run settles where it streamed, around the call between them (ADR-0017 A1).
+      expect(view.blocks.map((b) => (b.type === 'message' ? [b.role, b.text, b.streaming] : b.type))).toEqual([
+        ['user', 'find the cache', false], ['planner', 'Looking. ', false], 'tool', ['planner', 'It is in src/cache.ts.', false], 'usage',
+      ]);
       expect(view.blocks.some((b) => b.type === 'plan' && b.status === 'building')).toBe(false);
-      expect(view.blocks.some((b) => b.type === 'tool')).toBe(true);
-      expect(view.blocks.some((b) => b.type === 'usage')).toBe(true);
     });
 
     it('a harness planner\'s thinking arrives as the one thinking message, though it has no segment', async () => {

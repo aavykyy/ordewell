@@ -119,10 +119,10 @@ function research(log: readonly ResearchLogEntry[]): Placed[] {
 
 /**
  * The view a saved session reopens with: what its transcript and research log
- * kept, in the order it happened — messages, notices and the compaction
- * summary, plan markers, tool calls with each subagent's calls nested under
- * it, and the token line. Reasoning and streamed text were never saved, so a
- * reload has none.
+ * kept, in the order it happened — messages, each reply run by run where it
+ * began, notices and the compaction summary, plan markers, tool calls with
+ * each subagent's calls nested under it, and the token line. Reasoning and
+ * streamed text that never settled were never saved, so a reload has none.
  *
  * The research log interleaves with the transcript by time. Entries older than
  * a compaction's first kept message went with the turns it condensed.
@@ -141,7 +141,10 @@ export function fromTranscript(
   const cutoff = compacted ? (kept[0]?.timestamp ?? compacted.timestamp) : '';
 
   const placed: Placed[] = [
-    ...kept.map((entry, i) => ({ at: entry.timestamp, rank: rankOf(entry), build: fromEntry(entry, loadsAfter(kept, i)) })),
+    ...kept.flatMap((entry, i): Placed[] => (entry.runs
+      // ADR-0017 A1: each run of a reply where it streamed, among the research.
+      ? entry.runs.map((run) => ({ at: run.startedAt, rank: SETTLED, build: (id) => settledMessage(id(), roleOf(entry), run.text) }))
+      : [{ at: entry.timestamp, rank: rankOf(entry), build: fromEntry(entry, loadsAfter(kept, i)) }])),
     ...research(researchLog ?? []).filter((item) => item.at >= cutoff),
   ];
   placed.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.rank - b.rank));

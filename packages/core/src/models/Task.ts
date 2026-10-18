@@ -397,6 +397,24 @@ export interface ConversationMessage {
   execution?: ExecutionRecord;
   /** A user's message that was force sent, stopping the turn before it (ADR-0023). */
   forced?: true;
+  /**
+   * What a reply showed, run by run, where each began (ADR-0017 A1). Beside
+   * `content`, which stays the reply as the planner is told it. Absent on
+   * entries saved before runs were kept, which reload as one message.
+   */
+  runs?: ReplyRun[];
+}
+
+/**
+ * One run of a planner reply's text: the segment it streamed under, its
+ * settled text, and when it began. A run that never streamed (a message the
+ * conversation wrote in the planner's place) has a segment no stream used.
+ */
+export interface ReplyRun {
+  segmentId: string;
+  text: string;
+  /** ISO timestamp. */
+  startedAt: string;
 }
 
 /**

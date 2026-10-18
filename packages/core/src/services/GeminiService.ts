@@ -173,6 +173,7 @@ class GeminiResearchChat implements ResearchChat {
       reasoning: reasoning || undefined,
       finishReason: finishReason === 'MAX_TOKENS' ? 'length' : undefined,
       promptTokens: usageRecord?.inputTokens,
+      segmentId: textSegmentId,
     };
   }
 }

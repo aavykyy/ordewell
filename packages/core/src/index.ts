@@ -26,6 +26,7 @@ export type {
   PlanState,
   PlanStatus,
   PlannerResendState,
+  ReplyRun,
   ResearchLogEntry,
   ResearchStep,
   ResearchStepOutcome,

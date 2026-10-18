@@ -43,6 +43,29 @@ const step = (id: string, tool: ResearchStep['tool'], args: object, result: stri
 });
 
 /**
+ * A harness planner says what it will read, reads it, and answers (the
+ * recorded claude-code/stream-tool-rounds turn). Its reply joins both runs,
+ * and settles each where it streamed.
+ */
+export const toolRoundsReply: ConversationInput[] = [
+  { type: 'planner_turn_started', turnId: 't9', prompt: 'what does README.md start with?' },
+  { type: 'planner_text_delta', turnId: 't9', segmentId: 's1', text: 'I\'ll read README.md now' },
+  { type: 'planner_text_delta', turnId: 't9', segmentId: 's1', text: '.' },
+  { type: 'research_step', tool: 'read_file', toolLabel: 'Read', args: '{"path":"README.md"}', toolCallId: 'toolu_1', turnId: 't9' },
+  { type: 'research_step_done', step: step('rs-r', 'read_file', { path: 'README.md' }, 'hello', 'success', { toolLabel: 'Read', toolCallId: 'toolu_1' }), turnId: 't9' },
+  { type: 'planner_text_delta', turnId: 't9', segmentId: 's2', text: 'The first line of README.md is' },
+  { type: 'planner_text_delta', turnId: 't9', segmentId: 's2', text: ' "hello".' },
+  {
+    type: 'planner_message', content: 'I\'ll read README.md now.\n\nThe first line of README.md is "hello".', timestamp: '2026-09-27T10:02:03.000Z', turnId: 't9',
+    runs: [
+      { segmentId: 's1', text: 'I\'ll read README.md now.', startedAt: '2026-09-27T10:01:58.000Z' },
+      { segmentId: 's2', text: 'The first line of README.md is "hello".', startedAt: '2026-09-27T10:02:01.000Z' },
+    ],
+  },
+  { type: 'planner_turn_ended', turnId: 't9', outcome: 'message' },
+];
+
+/**
  * One research round of three reads run in parallel, whose results come back
  * in a different order than the calls went out, then a refused command.
  */

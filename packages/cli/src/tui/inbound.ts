@@ -1,4 +1,4 @@
-import type { RunSnapshotFrame, SessionMessage, SessionNotice, StreamStamp } from '@ordewell/core';
+import type { ReplyRun, RunSnapshotFrame, SessionMessage, SessionNotice, StreamStamp } from '@ordewell/core';
 import type { WsEvent } from '../apiClient';
 import type { Action } from './reducer';
 
@@ -249,9 +249,10 @@ export interface SessionInbound {
    * The settled reply an awaited call's plan carries. The socket usually spoke
    * it already — the daemon commits before answering — and then the same words
    * are on screen and this is dropped; when the socket lost the frame, this is
-   * the only copy there is.
+   * the only copy there is. `runs` are the entry's, so each settles in the
+   * segment it streamed under.
    */
-  backfill(content: string, timestamp?: string): void;
+  backfill(content: string, timestamp?: string, runs?: ReplyRun[]): void;
   /**
    * A redrawn transcript now holds this entry (a compaction's summary), so a
    * socket copy arriving afterwards is the broadcast the redraw already
@@ -427,9 +428,9 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
       const id = `e${++subscription}`;
       return (event) => receive('execution', id, event);
     },
-    backfill: (content, timestamp) => {
+    backfill: (content, timestamp, runs) => {
       if (shown.has(content)) return;
-      const message = { type: 'planner_message' as const, content, timestamp: timestamp ?? new Date().toISOString() };
+      const message = { type: 'planner_message' as const, content, timestamp: timestamp ?? new Date().toISOString(), ...(runs ? { runs } : {}) };
       showReply(message);
       // A copy still in flight — the REST answer can beat the socket frame —
       // is this same reply, so the next matching copy is swallowed.

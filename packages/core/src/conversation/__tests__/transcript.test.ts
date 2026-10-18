@@ -10,6 +10,48 @@ const step = (id: string, timestamp: string, fields: { tool: 'read_file' | 'spaw
 });
 
 describe('fromTranscript', () => {
+  const shape = (b: ReturnType<typeof unkeyed>[number]) => (b.type === 'message' ? `${b.role}: ${b.text}` : b.type === 'tool' ? `tool: ${b.headline.keyArg}` : b.type);
+
+  it('puts each run of a reply at the time it began, among the calls between them', () => {
+    const history: ConversationMessage[] = [
+      { role: 'user', content: 'what does README.md start with?', timestamp: '2026-09-27T10:00:00.000Z' },
+      {
+        role: 'assistant', content: 'I\'ll read README.md now.\n\nThe first line of README.md is "hello".', timestamp: '2026-09-27T10:00:09.000Z',
+        runs: [
+          { segmentId: 's1', text: 'I\'ll read README.md now.', startedAt: '2026-09-27T10:00:01.000Z' },
+          { segmentId: 's2', text: 'The first line of README.md is "hello".', startedAt: '2026-09-27T10:00:05.000Z' },
+        ],
+      },
+    ];
+    const log: ResearchLogEntry[] = [
+      { id: 'up-1', type: 'user_prompt', content: 'what does README.md start with?', timestamp: '2026-09-27T10:00:00.000Z' },
+      step('rs-1', '2026-09-27T10:00:03.000Z', { tool: 'read_file', args: '{"path":"README.md"}', result: 'hello', toolCallId: 'toolu_1' }),
+    ];
+
+    expect(unkeyed(fromTranscript(history, log).blocks).map(shape)).toEqual([
+      'user: what does README.md start with?',
+      'planner: I\'ll read README.md now.',
+      'tool: README.md',
+      'planner: The first line of README.md is "hello".',
+    ]);
+  });
+
+  it('draws a reply saved before runs were kept as one message, after the research it settled', () => {
+    const history: ConversationMessage[] = [
+      { role: 'user', content: 'what does README.md start with?', timestamp: '2026-09-27T10:00:00.000Z' },
+      { role: 'assistant', content: 'I\'ll read README.md now.\n\nThe first line of README.md is "hello".', timestamp: '2026-09-27T10:00:09.000Z' },
+    ];
+    const log: ResearchLogEntry[] = [
+      step('rs-1', '2026-09-27T10:00:03.000Z', { tool: 'read_file', args: '{"path":"README.md"}', result: 'hello', toolCallId: 'toolu_1' }),
+    ];
+
+    expect(unkeyed(fromTranscript(history, log).blocks)).toEqual([
+      { type: 'message', role: 'user', text: 'what does README.md start with?', streaming: false },
+      expect.objectContaining({ type: 'tool', status: 'ok' }),
+      { type: 'message', role: 'planner', text: 'I\'ll read README.md now.\n\nThe first line of README.md is "hello".', streaming: false },
+    ]);
+  });
+
   it('draws a planner turn that ended on its usage limit as a failure, live and on reload', () => {
     const history: ConversationMessage[] = [
       { role: 'user', content: 'build it', timestamp: '2026-10-11T10:00:00Z' },

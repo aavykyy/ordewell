@@ -158,7 +158,7 @@ class OpenAiResearchChat implements ResearchChat {
       try { args = JSON.parse(v.args); } catch { /* empty */ }
       return { name: v.name, args, id: v.id };
     });
-    return { text: content, toolCalls, hasToolCalls: toolCalls.length > 0, reasoning: reasoning || undefined, finishReason, promptTokens };
+    return { text: content, toolCalls, hasToolCalls: toolCalls.length > 0, reasoning: reasoning || undefined, finishReason, promptTokens, segmentId };
   }
 
   /**

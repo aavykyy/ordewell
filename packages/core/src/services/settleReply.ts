@@ -1,5 +1,6 @@
+import { v4 as uuidv4 } from 'uuid';
 import type { ResearchLogEntry, ResearchProgress, ResearchStep, RunnerId } from '../models/Task';
-import type { ConversationTurn } from './AiService';
+import type { ConversationTurn, TurnRun } from './AiService';
 import type { UsageLimitSignal } from './harness/AgentAdapter';
 import type { RunnerModeInfo } from './ModeResolver';
 import {
@@ -27,6 +28,12 @@ export interface ReplyAttempt {
    * calls the backend continued past on the user's behalf, joined in front.
    */
   fullText?: string;
+  /**
+   * The runs of reply text the call streamed, in order, `fullText` included.
+   * Absent from a backend that reports none, whose discarded attempt is then
+   * taken back whole.
+   */
+  runs?: TurnRun[];
 }
 
 export interface SettleReplyOptions {
@@ -51,13 +58,11 @@ export interface SettleReplyOptions {
    * harness agent owns its own, and gets the terser re-emit alone.
    */
   compactHistory?: () => number;
-  /**
-   * The reply joins every segment its call streamed — a harness agent's text
-   * around its tool calls — so a message settling it takes them all back
-   * first, since the message replaces only the final segment. An API call's
-   * reply is its final segment alone, and the text before its tool calls stays.
-   */
-  replyJoinsSegments: boolean;
+}
+
+/** A run for a message written in the planner's place: it never streamed, so a surface shows it last. */
+export function noteRun(text: string): TurnRun {
+  return { segmentId: uuidv4(), text, startedAt: new Date().toISOString() };
 }
 
 /**
@@ -68,63 +73,80 @@ export interface SettleReplyOptions {
  * planner families settle through here; how one call runs, tool rounds or an
  * agent's own turn, is the caller's `send`.
  *
- * What a discarded attempt streamed is taken back before the next one
- * answers in its place, so a surface shows the retry and never the botched
- * text beside it.
+ * A discarded attempt's reply is taken back before the next one answers in
+ * its place, so a surface shows the retry and never the botched text beside
+ * it. Nothing else ever is (ADR-0017 A1): the narration before a discarded
+ * attempt's tool calls stays where it streamed, and the settled turn carries
+ * it ahead of its own runs.
  */
 export async function settleReply(opts: SettleReplyOptions): Promise<ConversationTurn> {
   const researchLog: ResearchLogEntry[] = [];
+  const kept: TurnRun[] = [];
   const message = (text: string): Extract<ConversationTurn, { kind: 'message' }> => ({ kind: 'message', text, researchLog });
-  const retract = () => opts.onProgress({ type: 'text_retracted' });
-  const asProse = (attempt: ReplyAttempt) => {
-    if (opts.replyJoinsSegments) retract();
-    return message(said(attempt));
+  const runs = (attempt: ReplyAttempt, own: TurnRun[]): Pick<ConversationTurn, 'runs'> =>
+    (attempt.runs || kept.length > 0 ? { runs: [...kept, ...own] } : {});
+  const narration = (attempt: ReplyAttempt): TurnRun[] => (attempt.runs ?? []).filter((run) => run.narration);
+  const prose = (attempt: ReplyAttempt) => ({ ...message(said(attempt)), ...runs(attempt, attempt.runs ?? []) });
+  const note = (attempt: ReplyAttempt, text: string) => ({ ...message(text), ...runs(attempt, [...narration(attempt), noteRun(text)]) });
+  const discard = (attempt: ReplyAttempt) => {
+    if (!attempt.runs) {
+      opts.onProgress({ type: 'text_retracted' });
+      return;
+    }
+    kept.push(...narration(attempt));
+    for (const run of attempt.runs) {
+      if (!run.narration) opts.onProgress({ type: 'text_retracted', segmentId: run.segmentId });
+    }
   };
   let nudged = false;
+  let current: ReplyAttempt | undefined;
 
   // An empty reply (budget models do this after tool use; an agent can end on
   // a denied call) would leave the user facing silence. It is owed one nudge
   // per turn, outside the budget a botched envelope spends.
   const send = async (text: string): Promise<ReplyAttempt> => {
     const attempt = await opts.send(text);
+    current = attempt;
     researchLog.push(...attempt.researchLog);
     if (attempt.text.trim() || attempt.aborted || attempt.failure !== undefined || nudged) return attempt;
     nudged = true;
-    retract();
+    discard(attempt);
     return send(emptyReplyNudge(deniedStep(attempt), opts.classify !== undefined));
   };
 
   return repairLoop<ReplyAttempt, ConversationTurn>({
     first: () => send(opts.message),
     resend: (corrective) => {
-      retract();
+      if (current) discard(current);
       return send(corrective);
     },
     interpret: (attempt) => {
       if (attempt.aborted) {
-        const turn: ConversationTurn = { ...asProse(attempt), aborted: true };
+        const turn: ConversationTurn = { ...prose(attempt), aborted: true };
         opts.onProgress({ type: 'interrupted' });
         return { done: turn };
       }
       if (attempt.failure !== undefined) {
         const { usageLimit } = attempt;
-        return { done: { ...message(attempt.failure), failed: true, ...(usageLimit !== undefined && { usageLimit }) } };
+        return { done: { ...note(attempt, attempt.failure), failed: true, ...(usageLimit !== undefined && { usageLimit }) } };
       }
-      if (!attempt.text.trim()) return { done: message(emptyReplyReport(deniedStep(attempt))) };
+      if (!attempt.text.trim()) return { done: note(attempt, emptyReplyReport(deniedStep(attempt))) };
 
+      // An envelope's own run is never prose: it streamed to the plan display.
+      const envelope = { text: said(attempt), researchLog, ...runs(attempt, narration(attempt)) };
       const reply: PlannerReplyClassification = opts.classify ? classifyPlannerReply(attempt.text, opts.classify) : { kind: 'prose' };
       switch (reply.kind) {
-        case 'plan': return { done: { kind: 'plan', tasks: reply.tasks, text: said(attempt), researchLog } };
-        case 'task_ops': return { done: { kind: 'task_ops', ops: reply.ops, text: said(attempt), researchLog } };
+        case 'plan': return { done: { kind: 'plan', tasks: reply.tasks, ...envelope } };
+        case 'task_ops': return { done: { kind: 'task_ops', ops: reply.ops, ...envelope } };
         // A read is answered by the conversation, which owns the plan and the
         // catalog, so it leaves here the way a plan or an edit does.
-        case 'task_query': return { done: { kind: 'task_query', query: reply.query, text: said(attempt), researchLog } };
-        case 'prose': return { done: asProse(attempt) };
+        case 'task_query': return { done: { kind: 'task_query', query: reply.query, ...envelope } };
+        case 'prose': return { done: prose(attempt) };
       }
 
       // Left as prose, a botched attempt would read as a chat bubble while the
       // plan or edit it meant silently failed to commit.
-      if (opts.signal?.aborted) return { done: asProse(attempt) };
+      if (opts.signal?.aborted) return { done: prose(attempt) };
       const errors = [reply.error.message];
       switch (reply.kind) {
         case 'broken_task_ops': return { retry: { errors, corrective: reEmitTaskOpsPrompt(reply.error.message), cause: reply.error } };
@@ -138,7 +160,7 @@ export async function settleReply(opts: SettleReplyOptions): Promise<Conversatio
       }
     },
     maxRepairs: MAX_JSON_REPAIRS,
-    onExhausted: ({ reply }) => asProse(reply),
+    onExhausted: ({ reply }) => prose(reply),
   });
 }
 

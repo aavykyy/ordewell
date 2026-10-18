@@ -82,11 +82,12 @@ export class TurnStream {
   }
 
   /**
-   * Take back every segment the turn still shows: the owner is discarding the
-   * whole attempt, which spans every call since the last one it discarded.
+   * Take back every segment the turn still shows but `keep`: the owner is
+   * discarding the whole attempt, which spans every call since the last one
+   * it discarded, all but the narration it keeps (ADR-0017 A1).
    */
-  retract(): void {
-    this.retractWhere(() => true);
+  retract(keep: ReadonlySet<string> = new Set()): void {
+    this.retractWhere((segmentId) => !keep.has(segmentId));
   }
 
   private retractWhere(matches: (segmentId: string, owner: object) => boolean): void {

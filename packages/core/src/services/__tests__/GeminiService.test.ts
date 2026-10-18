@@ -186,6 +186,11 @@ describe('Gemini research chat streaming', () => {
     // Concatenation of a call's deltas IS the final text the loop classifies.
     expect(turn.kind).toBe('message');
     if (turn.kind === 'message') expect(turn.text).toBe(secondCallDeltas.map((p) => p.text).join(''));
+    // Each call's text is a run of the reply, under the segment it streamed: the preamble as narration.
+    expect(turn.runs?.map((run) => [run.segmentId, run.text, run.narration])).toEqual([
+      [firstSegment, 'Let me read the file.', true],
+      [secondCallDeltas[0].segmentId, 'The read came up empty. Question: the exact path?', undefined],
+    ]);
 
     // One bill per call: unspecified counters stay absent rather than zeroing.
     const usage = progress.filter((p) => p.type === 'usage');

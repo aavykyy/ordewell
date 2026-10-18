@@ -67,6 +67,39 @@ describe('runConversationTurn plan commit', () => {
   });
 });
 
+// ADR-0017 A1: an API call's text before its tool calls stays where it
+// streamed, and the reply carries it as narration ahead of the final segment.
+describe('runConversationTurn reply runs', () => {
+  const readCall = (text: string, segmentId: string): ResearchTurn => ({
+    text, segmentId, toolCalls: [{ name: 'read_file', args: { path: 'vitest.config.ts' }, id: 'c1' }], hasToolCalls: true,
+  });
+
+  it('reports each call\'s text as a run under its segment, every one before the last as narration', async () => {
+    const chat = new ScriptedChat([readCall('Let me read the config.', 's1'), { ...proseTurn('It uses Vitest.'), segmentId: 's2' }]);
+    const turn = await new TestService(fakeConfig()).runTurn(makeCtx(chat), 'which test runner?');
+
+    expect(turn).toMatchObject({ kind: 'message', text: 'It uses Vitest.' });
+    expect(turn.runs).toEqual([
+      { segmentId: 's1', text: 'Let me read the config.', startedAt: expect.any(String), narration: true },
+      { segmentId: 's2', text: 'It uses Vitest.', startedAt: expect.any(String) },
+    ]);
+  });
+
+  it('keeps the narration and drops a botched envelope\'s run when it is re-emitted', async () => {
+    const chat = new ScriptedChat([
+      readCall('Let me read the config.', 's1'),
+      { ...proseTurn('{"tasks":[{"title":"still broken"}]}'), segmentId: 's2' },
+      { ...proseTurn(PLAN_JSON), segmentId: 's3' },
+    ]);
+    const progress: import('../../models/Task').ResearchProgress[] = [];
+    const turn = await new TestService(fakeConfig()).runTurn(makeCtx(chat), 'plan it', (p) => progress.push(p));
+
+    expect(turn.kind).toBe('plan');
+    expect(progress.filter((p) => p.type === 'text_retracted')).toEqual([{ type: 'text_retracted', segmentId: 's2' }]);
+    expect(turn.runs).toEqual([{ segmentId: 's1', text: 'Let me read the config.', startedAt: expect.any(String), narration: true }]);
+  });
+});
+
 describe('runConversationTurn abort handling', () => {
   it('does not classify a plain-reply turn as a plan once the signal is aborted mid-flight', async () => {
     // Simulates Session.destroy() aborting a conversation whose LLM response

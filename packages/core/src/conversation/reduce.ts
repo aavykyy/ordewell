@@ -1,7 +1,7 @@
-import type { ResearchStep } from '../models/Task';
+import type { ReplyRun, ResearchStep } from '../models/Task';
 import type { SerializedPendingTurn, SessionMessage } from '../services/SessionMessage';
 import { isMeasured } from '../models/Usage';
-import type { DisplayBlock, MessageBlock, PlanBlock, ToolBlock } from './blocks';
+import type { DisplayBlock, MessageBlock, MessageRole, PlanBlock, ToolBlock } from './blocks';
 import { pendingTool, planMarker, settledMessage, settledTool, skillLoadBlock, toolFromStep, userMessage } from './records';
 import {
   append, appendOutput, closeOpenBlocks, findLastIndex, laneBlocks, laneOf, laneAppend, laneReplace, replaceAt, sealLane, sealed, setUsageLine,
@@ -35,7 +35,7 @@ export const EMPTY_CONVERSATION: ConversationView = { blocks: [], nextId: 1 };
 
 type Message<T extends SessionMessage['type']> = Extract<SessionMessage, { type: T }>;
 
-function isUnsettledSegment(block: DisplayBlock, turnId: string): block is MessageBlock {
+function isUnsettledSegment(block: DisplayBlock, turnId: string): block is MessageBlock & { segmentId: string } {
   return block.type === 'message' && block.turnId === turnId && block.segmentId !== undefined;
 }
 
@@ -140,8 +140,9 @@ function dropBuildingPlan(view: ConversationView, turnId: string | undefined, se
   return blocks.length === view.blocks.length ? view : { ...view, blocks };
 }
 
-function settleReply(view: ConversationView, { content, turnId, supervisor }: Message<'planner_message'>): ConversationView {
+function settleReply(view: ConversationView, { content, turnId, supervisor, runs }: Message<'planner_message'>): ConversationView {
   const role = supervisor ? 'supervisor' : 'planner';
+  if (runs) return settleRuns(view, runs, role, turnId);
   if (turnId !== undefined) {
     const i = finalSegmentIndex(view.blocks, turnId);
     if (i >= 0) {
@@ -149,6 +150,35 @@ function settleReply(view: ConversationView, { content, turnId, supervisor }: Me
     }
   }
   return append(dropBuildingPlan(view, turnId), (id) => settledMessage(id, role, content, turnId));
+}
+
+/**
+ * Settle a reply run by run (ADR-0017 A1): each run's text takes its segment's
+ * place, wherever in the turn it streamed, and only a run that never streamed
+ * goes last. A segment of the turn the reply no longer contains did not
+ * become part of it. Without a turn id (a reply a surface backfilled from the
+ * transcript) the turn is the one the runs' segments streamed in.
+ */
+function settleRuns(view: ConversationView, runs: readonly ReplyRun[], role: MessageRole, turnId: string | undefined): ConversationView {
+  const settled = new Map<number, ReplyRun>();
+  let turn = turnId;
+  for (const run of runs) {
+    const i = view.blocks.findIndex((b) => b.type === 'message' && b.segmentId === run.segmentId && b.turnId !== undefined && (turnId === undefined || b.turnId === turnId));
+    const segment = view.blocks[i];
+    if (segment?.type !== 'message') continue;
+    settled.set(i, run);
+    turn ??= segment.turnId;
+  }
+  const contained = new Set(runs.map((run) => run.segmentId));
+  const blocks = view.blocks.flatMap((block, i) => {
+    const run = settled.get(i);
+    if (run) return [settledMessage(block.id, role, run.text, turn)];
+    return turn !== undefined && isUnsettledSegment(block, turn) && !contained.has(block.segmentId) ? [] : [block];
+  });
+  const streamed = new Set(settled.values());
+  return runs
+    .filter((run) => !streamed.has(run))
+    .reduce((next, run) => append(next, (id) => settledMessage(id, role, run.text, turn)), dropBuildingPlan({ ...view, blocks }, turn));
 }
 
 // A retracted envelope takes the turn's plan display with it, or its retry
