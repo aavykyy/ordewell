@@ -61,16 +61,7 @@ describe('the gate of a pending ops task', () => {
 });
 
 describe('the gate of a failed ops task', () => {
-  // ADVERSARIAL FINDING (readiness): getMergeGate empties the gate for any
-  // task whose status has left pending/approved, so a failed ops task whose
-  // ancestor is still unmerged reports no gate although startWaits (and the
-  // planner's `waits:` note) says merge-gate. The row and the force-start
-  // confirmation read this, so a force start passes the gate without asking
-  // and a queued force start records an empty pastGate and stops at the gate
-  // when it starts. Expected: judged whatever the status, as
-  // readiness.mergeGate is — a retry of a failed ops task acts on the
-  // checkout as a first start does.
-  it.skip('is the start rule\'s gate too', async () => {
+  it('is the start rule\'s gate too', async () => {
     const { orchestrator, sessions } = setup();
     orchestrator.loadPlan([
       createTask({ id: 'c1', order: 1, title: 'Change', prompt: 'change' }),

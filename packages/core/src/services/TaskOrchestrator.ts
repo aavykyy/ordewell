@@ -910,13 +910,15 @@ export class TaskOrchestrator {
 
   /**
    * The ancestors an ops or user task waits on at its merge gate: those whose
-   * landed work is not in the user's branch yet (ADR-0020). Empty once the
-   * task has started, and for every other task.
+   * landed work is not in the user's branch yet (ADR-0020). Empty for every
+   * other task. Judged whatever the task's status but `completed` — a retry of
+   * a failed ops task acts on the checkout as a first start does — so a start
+   * the user is about to confirm is told what it would act without.
    */
   getMergeGate(taskId: string): string[] {
     const task = this.store.get(taskId);
-    const waits = task ? this.startWaits(task) : [];
-    return waitOf(waits, 'started') ? [] : waitOf(waits, 'merge-gate')?.unmerged ?? [];
+    if (!task || task.status === 'completed') return [];
+    return waitOf(this.startWaits(task), 'merge-gate')?.unmerged ?? [];
   }
 
   /**
@@ -998,10 +1000,17 @@ export class TaskOrchestrator {
       }
     }
 
+    const waitingRunners = new Set(this.store.allTasks.filter(waitsForReset).map((t) => this.store.resolveTaskRunner(t)));
     this.store.load(adopted, planRunners);
     for (const t of flattenTasks(adopted)) {
       if (t.status === 'failed') this.store.markFailed(t.id);
     }
+    // An edit that took the last task waiting on a runner's reset out of the
+    // plan — or ended its pause by re-arming it — releases the hold and
+    // disarms the wait, so the run goes on and no timer resumes a wait
+    // nothing owes (ADR-0018, U1).
+    for (const runner of waitingRunners) if (this.waitingOn(runner).length === 0) this.limitWaits.disarm(runner);
+    this.releaseHold();
   }
 
   /** Start the full-plan run, or continue one that is held or ended on a failure. */
@@ -1024,11 +1033,15 @@ export class TaskOrchestrator {
   }
 
   /**
-   * A usage-limit pause holds the run the scheduler drives: spawning more
-   * would spend the same exhausted limit. The run stays open (ADR-0034).
+   * A usage-limit pause with a reset to wait for holds the run (ADR-0018,
+   * U1): spawning more would spend the same exhausted limit, and the run
+   * stays open — neither handed over nor merged at its end — however it was
+   * started, so a task started alone keeps its run for the reset too. A pause
+   * no reset will resume holds nothing: it keeps only its own runner's tasks
+   * from starting (`readiness.usage-limit`).
    */
   private holdOnLimit(): void {
-    if (this.runState === 'scheduling') this.runState = 'held';
+    if (this.runState === 'scheduling' || this.runState === 'idle') this.runState = 'held';
   }
 
   /**
@@ -1508,8 +1521,11 @@ export class TaskOrchestrator {
       this.notifications.info(`Task "${task.title}" skipped: none of its work lands, and the tasks that depend on it go ahead without it once the work it waited on is done.`);
       this.emit('onTaskChanged');
       await this.runs.release(taskId, { keep: true }, ended?.integration);
-      // A Stop while the worktree was kept leaves the run stopped: the skip stands, and nothing it released starts.
-      if (this.awaitsResume && admission.current()) await this.start(origin);
+      // A Stop while the worktree was kept leaves the run stopped: the skip
+      // stands, and nothing it released starts. A run another task's reset
+      // still holds stays held; only one that ended on a failure starts
+      // afresh, as a retry continues it (ADR-0034).
+      if (this.runState === 'endedOnFailure' && admission.current()) await this.start(origin);
       else await this.tick();
     });
   }
@@ -1531,7 +1547,9 @@ export class TaskOrchestrator {
     const task = this.store.get(taskId);
     if (!task) return;
     await this.whileAdmitted(async (admission) => {
-      const resumes = this.awaitsResume;
+      // A retried task's own pause ends with it; that may release a held run,
+      // which the tick below then schedules (ADR-0018, U1).
+      this.dropResume(taskId);
       this.retryCounts.set(taskId, (this.retryCounts.get(taskId) ?? 0) + 1);
       const ended = this.endAttempt(taskId, 'retry');
       const movedFrom = this.movedFrom(task);
@@ -1549,8 +1567,9 @@ export class TaskOrchestrator {
       }
       // A Stop while the worktree went leaves the run stopped, the task back to not started.
       if (!admission.current()) return;
-      // A retry resumes a run that waits on one, so what the task blocked starts once it passes (ADR-0034).
-      if (resumes) await this.start(origin);
+      // A retry continues a run that ended on a failure (ADR-0034); a held
+      // run another task still owes a reset stays held.
+      if (this.runState === 'endedOnFailure') await this.start(origin);
       else await this.tick();
     });
   }
@@ -1586,7 +1605,9 @@ export class TaskOrchestrator {
       // Claimed before anything is awaited, so a running scheduler never sees the
       // pending task and starts it afresh. Its prepare replaces the old worktree.
       const started = this.claimed(taskId, admission, { message: text, resumeSessionId: resumable.sessionId });
-      const resumed = this.awaitsResume ? this.start(origin) : Promise.resolve();
+      // A continuation continues a run that ended on a failure; a run another
+      // task's reset still holds stays held.
+      const resumed = this.runState === 'endedOnFailure' ? this.start(origin) : Promise.resolve();
       // Both are awaited even if one fails: the claimed attempt's start must not
       // be left unhandled because restarting the run threw.
       await Promise.all([resumed, started]);
@@ -1673,7 +1694,6 @@ export class TaskOrchestrator {
    */
   private pauseOnLimit(task: Readonly<Task>, attempt: TaskAttempt, said: string | TurnFailure): void {
     this.store.markAwaitingUser(task.id, 'usage-limit');
-    this.holdOnLimit();
     const kept = attempt.worktree ? ': its worktree is kept' : '';
     const reset = readUsageLimitReset(attempt.runner, said);
     const relapsed = attempt.autoResumed && Date.now() - Date.parse(attempt.startedAt) < RELAPSE_MS;
@@ -1686,6 +1706,7 @@ export class TaskOrchestrator {
       return;
     }
     this.store.setTaskResumeAt(task.id, new Date(reset.getTime() + RESUME_MARGIN_MS).toISOString());
+    this.holdOnLimit();
     const resumeAt = this.armLimitWait(attempt.runner);
     this.tell('info', `Task "${task.title}" paused: ${attempt.runner} hit its usage limit. It resumes on its own at ${resumeTime(resumeAt)}${kept}.`);
     this.emit('onUsageLimitWait', { taskId: task.id, runner: attempt.runner, resumeAt: resumeAt.toISOString() });
@@ -1791,6 +1812,12 @@ export class TaskOrchestrator {
       const task = this.store.get(taskId);
       // One asked for now resumes without a resume time; any other cancelled meanwhile stays put.
       if (!task || !(asked ? pausedOnLimit(task) : waitsForReset(task)) || this.attempts.has(taskId)) return;
+      // A task a direct edit turned manual never runs, so the reset ends its
+      // pause rather than spawning a runner for it (CONTEXT.md, "Start rule").
+      if (task.type !== 'ai') {
+        this.dropResume(taskId);
+        return;
+      }
       if (asked) this.refuseClaim(taskId, admission);
       else if (!this.mayResume(task, admission, now !== undefined)) return;
       const resumeSessionId = task.runnerSessionId;
@@ -1877,6 +1904,9 @@ export class TaskOrchestrator {
       const requeued = !forced.queued && task ? this.queueBehindDependencies(task) : null;
       if (requeued) return requeued;
       this.refuseClaim(taskId, admission);
+      // A force start is the user's own act, so it ends the task's pause: its
+      // resume goes, and the hold with it once nothing else waits (U1).
+      this.dropResume(taskId);
       this.onHold.delete(taskId);
       this.notePastGate(taskId);
       await this.claimed(taskId, admission);

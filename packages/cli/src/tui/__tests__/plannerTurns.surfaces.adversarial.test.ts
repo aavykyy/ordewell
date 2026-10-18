@@ -44,8 +44,7 @@ describe('adversarial: leaving a session drops its turn gate and queue', () => {
     }
   });
 
-  // ADVERSARIAL FINDING (TUI planner turns): packages/cli/src/tui/reducer.ts:79-91 `sessionCleared` (the failed-start path) drops the queued prompts and pending approvals but not `turnGate`, unlike `sessionLoaded` (line 68), `sessionForked` (line 316) and `newSession` (reducers/commands.ts:218); the `failed` action that follows resets `planner` but never the gate. A start that failed after its `planner_turn_started` arrived leaves the old turn's gate open with no session, and the next goal's `sessionStarted` does not reset it, so the dead turn's gate survives into the new session — the state a fork was fixed to avoid. Expected: clearing a failed start resets `turnGate` to `NO_TURN` (as load, fork and new session do).
-  it.skip('clearing a failed start mid-turn drops the turn gate with the prompts', () => {
+  it('clearing a failed start mid-turn drops the turn gate with the prompts', () => {
     const cleared = reduce(turnWithQueue(), { type: 'sessionCleared' }).state;
 
     expect(cleared.turnGate.open).toBeNull();

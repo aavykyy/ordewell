@@ -45,13 +45,7 @@ describe('a direct edit is held to the plan\'s rules', () => {
 });
 
 describe('a hand-added task', () => {
-  // ADVERSARIAL FINDING (plan editing): PlanEditor.addTask resolves the
-  // assignment but never runs checkPlanInvariants, so a task the direct-edit
-  // path would refuse is added: an ops task in its runner's read-only mode, an
-  // AFK task with user steps, a manual task with an AFK slice. Expected: the
-  // same plan rules updateTask reads refuse the added task (CONTEXT.md,
-  // "Hand-added task" and "Direct edit vs planner edit").
-  it.skip('is refused when it breaks a rule the plan\'s tasks keep together', async () => {
+  it('is refused when it breaks a rule the plan\'s tasks keep together', async () => {
     const made = session();
     await expect(made.addTask({ title: 'Ops', prompt: 'deploy', ops: true, taskMode: 'plan' }))
       .rejects.toThrow(/read-only mode/);
@@ -80,12 +74,7 @@ describe('a paused task edited into a manual one', () => {
     vi.useRealTimers();
   });
 
-  // ADVERSARIAL FINDING (scheduler): a task paused on a usage limit keeps its
-  // resumeAt when a direct edit turns it into a manual task; resumeTask reads
-  // pausedOnLimit and claims it, spawning a runner for a task the start rule
-  // says never starts. Expected: the edit ends the pause (or the resume
-  // refuses a non-AI task), and nothing spawns for it at the reset.
-  it.skip('does not spawn a runner for it at its reset', async () => {
+  it('does not spawn a runner for it at its reset', async () => {
     const env = await supervised([runTask('t1', 1), runTask('t2', 2)], {
       settings: { supervisorLevel: 'off' }, config: { maxParallelSessions: 1 },
     });
@@ -105,13 +94,7 @@ describe('a paused task edited into a manual one', () => {
 });
 
 describe('a planner edit that removes a subtree', () => {
-  // ADVERSARIAL FINDING (plan editing): applyTaskOps's remove locks only the
-  // named top-level task, then removeTaskFromPlan drops its whole subtree, so
-  // a completed or running subtask is removed from the plan by the planner
-  // although the planner may not touch finished or running work. Expected:
-  // every task in the subtree is checked by the same lock rule, and the
-  // removal is refused naming the settled descendant.
-  it.skip('is refused when a subtask has completed', () => {
+  it('is refused when a subtask has completed', () => {
     const parent = createTask({
       id: 'p', order: 1, title: 'Parent', prompt: 'parent',
       subtasks: [{ ...createTask({ id: 's', order: 1, title: 'Sub', prompt: 'sub' }), status: 'completed' }],

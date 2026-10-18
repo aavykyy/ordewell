@@ -77,12 +77,14 @@ function reduceAction(state: TuiState, action: Action): Step {
     // not, holding on to the id would send every next message to a session the
     // server never had.
     case 'sessionCleared':
-      // Prompts belong to the session that raised them; the old planner is gone.
+      // Prompts belong to the session that raised them; the old planner is gone,
+      // and the turn gate it held with it.
       return step(withRun({
         ...state,
         sessionId: null,
         goal: '',
         taskView: null,
+        turnGate: NO_TURN,
         pendingApprovals: [],
         queuedPrompts: EMPTY_HOLD,
         stopArmed: false,

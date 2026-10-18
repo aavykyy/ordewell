@@ -249,16 +249,10 @@ describe('every recorded planner turn, live against its reload', () => {
     expect(live.slice(1)).toEqual(expected);
   }, 30_000);
 
-  // ADVERSARIAL FINDING (timeline): a reloaded transcript orders parallel tool
-  // rows by when each result landed, not by when the model announced the call,
-  // so the live view and the reload disagree. The recorded turn announces
-  // Read, Grep and WebFetch in that order; the results come back Grep,
-  // WebFetch, Read. Expected: the transcript keeps the announced order the
-  // live view drew.
-  it.skip('claude-code tools: parallel calls keep their announced order after a reload', async () => {
+  it('claude-code tools: parallel calls keep their announced order after a reload', async () => {
     const { live, reloaded } = await planWith(harness('claude-code', [fixture('claude-code', 'tools')]), 'look around', 'claude-code');
-    expect(live.slice(2)).toEqual(['tool: Read', 'tool: Grep', 'tool: WebFetch']);
-    expect(reloaded.slice(2)).toEqual(['tool: Read', 'tool: Grep', 'tool: WebFetch']);
+    expect(live.slice(1, 4)).toEqual(['tool: Read', 'tool: Grep', 'tool: WebFetch']);
+    expect(reloaded).toEqual(live);
   }, 30_000);
 
   it('Codex: words around the command it ran, live and reloaded', async () => {

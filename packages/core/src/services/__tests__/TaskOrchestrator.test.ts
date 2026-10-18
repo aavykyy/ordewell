@@ -540,9 +540,11 @@ describe('TaskOrchestrator', () => {
       sessions[0].emitExit(1);
       await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('awaiting_user'));
 
-      // No second task is launched into the exhausted limit.
+      // No second task is launched into the exhausted limit. The pause names
+      // no reset, so the task waits for a manual retry and keeps only its own
+      // runner's tasks from starting; the run itself is not held (ADR-0018, U1).
       expect(spawn).toHaveBeenCalledTimes(1);
-      expect(orchestrator.status).toBe('approved');
+      expect(orchestrator.status).toBe('running');
 
       await orchestrator.retryTask('t1');
       expect(spawn).toHaveBeenCalledTimes(2);

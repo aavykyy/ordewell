@@ -612,8 +612,9 @@ runners.
 
 **Usage-limit resume** (`readUsageLimitReset`, `UsageLimitWaits`,
 `cancelScheduledResume`; ADR-0018, U1) — a task whose runner stopped on its
-account's usage limit is `awaiting_user` with reason `usage-limit`, and the run
-holds. The limit counts only under the *in-flight rule*. When the runner's message names the reset (Claude Code and Codex do,
+account's usage limit is `awaiting_user` with reason `usage-limit`; a pause with
+a reset to wait for holds the run, and one without a time keeps only that
+runner's tasks from starting. The limit counts only under the *in-flight rule*. When the runner's message names the reset (Claude Code and Codex do,
 read by their connectors' `usageLimitReset`; OpenCode does not), the task carries a `resumeAt` saved with the plan, and at
 that time it is retried as a *Continue* of its saved session. Tasks paused on
 one runner share one wait — the latest of their resets — and resume together;
@@ -1031,8 +1032,9 @@ counting completed, failed and blocked; a retry of a task in it continues that
 run (`TaskOrchestrator.awaitsResume`), and a planner edit made meanwhile is
 reconciled into it rather than reloaded over it, leaving the failed task failed:
 an edit is not a retry. A task at work — force-started, or waiting on the user —
-is never blocked. A usage-limit pause holds the whole run until its reset, and a
-merge gate keeps it waiting; neither is a block.
+is never blocked. A usage-limit pause with a reset holds the whole run until it;
+one without a time keeps only its own runner's tasks from starting, and a
+merge gate keeps the run waiting; neither is a block.
 *Avoid:* "halted run" — a failure no longer halts the run; "waiting" for it — a
 task waiting on its dependencies starts on its own once they complete, a blocked
 one only after a retry or a skip.
@@ -2264,12 +2266,13 @@ conversation taking turns; Run supervision holds the run to its settings.
 where the full-plan run stands, as one value: *idle* (no full-plan run since
 the plan loaded or the user stopped one; a task started on its own may still be
 at work), *scheduling* (ready tasks start as slots free; a run waiting on the
-user, a hold or a merge gate stays here), *held* (a usage-limit pause holds it:
-it stays open and starts nothing new until the reset, a *Resume now*, a retry,
-a skip or a move to another runner continues it), *ended on a failure* (every
-task left is failed or blocked; a retry or a skip continues it) and *finished*
-(every task completed or was skipped). `isScheduling`, `awaitsResume` and the
-plan status (`running`, `completed`, else `approved`) derive from it. One
+user, a hold or a merge gate stays here), *held* (a usage-limit pause with a
+reset to wait for holds it: it stays open and starts nothing new until the
+reset, a *Resume now*, a retry, a skip or a move to another runner continues
+it), *ended on a failure* (every task left is failed or blocked; a retry or a
+skip continues it) and *finished* (every task completed or was skipped).
+`isScheduling`, `awaitsResume` and the plan status (`running`, `completed`,
+else `approved`) derive from it. One
 settle step (`settleRun`) decides, once nothing is at work and nothing can
 start, whether the run goes on, is held, waits on the user or is over; only an
 end closes the run and sends `execution_complete`. The review approval

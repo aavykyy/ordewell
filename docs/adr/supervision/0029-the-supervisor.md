@@ -284,11 +284,13 @@ deny with a note; everyone else's still only denies or escalates. Each command
 is checked, claimed and recorded as the shared ones are, and saved before any
 surface hears of it. What a command answers besides its line is a typed
 payload: the id of a queued message, the line saying a force start waits for
-its dependencies, and, for the user's Merge all, the whole merge result and
-whether the merge closed the run. A Merge all that stops is refused with that
-result, so the Merge all card can show why. A user's Stop with nothing to
-stop is answered ok and recorded nowhere, since the surface already shows
-the run stopped. A refusal is worded for who asked, in one place: a model is
+its dependencies, and, for the user's Merge all, the whole merge result. A
+Merge all that stops is refused with that result, so the Merge all card can
+show why; whether the merge closed the run is the Session's word, `run_closed`
+([ADR-0013](../isolation/0013-worktree-isolation.md)), never the payload's. A
+user's Stop with nothing to stop is answered ok and recorded nowhere, since
+the surface already shows the run stopped. A refusal is worded for who asked,
+in one place: a model is
 told the tools it calls and what to tell the user, the user the controls they
 press. Every surface's control reaches these commands through the Session's one
 `execute` as the user; the Session keeps no per-verb control method for them.
@@ -556,3 +558,4 @@ until #30 exists.
 - 2026-10-18 — every user control reaches the seam through `Session.execute`; the Session's per-verb control methods (Execute plan, Run task, Retry, Continue, Stop, Mark complete and not done, Resume now, force start, interrupt, approving the review, Merge all, the task-message and queued-message controls, a checkpoint answer and cancelling a scheduled resume) are gone, so a surface, the daemon's routes and the CLI's commands all take the one path, and `TaskOrchestrator.runTask` goes with them.
 - 2026-10-18 — the seam reads a task reference from the user's controls as the CLI and TUI do, a unique id prefix included; a model's references stay id, label and title.
 - 2026-10-18 — a plan scope that ends while a wake-up turn is out discards it with its timeout and grace, so its grace never abandons the next scope's turn or counts a failure there.
+- 2026-10-18 — the Merge all payload carries the merge result alone; whether the merge closed the run is the Session's `run_closed` ([ADR-0013](../isolation/0013-worktree-isolation.md)), and the payload cannot say it another way.

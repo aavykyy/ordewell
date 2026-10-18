@@ -21,7 +21,7 @@ function savedPlan(over: Partial<LegacyPlanState> = {}): LegacyPlanState {
       },
       {
         id: 't2', order: 2, title: 'Wire it up', type: 'ai', status: 'pending',
-        description: 'd', dependencies: ['t1'], assignedRunner: 'opencode', subtasks: [],
+        description: 'd', prompt: 'wire it up', dependencies: ['t1'], assignedRunner: 'opencode', subtasks: [],
       },
     ],
     ...over,

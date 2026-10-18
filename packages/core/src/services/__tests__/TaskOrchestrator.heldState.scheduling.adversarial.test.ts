@@ -93,13 +93,7 @@ describe('a pause with a known reset holds the run until it', () => {
 });
 
 describe('a task started on its own that pauses on a usage limit', () => {
-  // ADVERSARIAL FINDING (scheduler): holdOnLimit does nothing for a run that
-  // is not the scheduler's (a task the user started alone) and afterVerdict
-  // then settles it as an idle run: it closes the run, hands it over and
-  // sends execution_complete while the task carries a resumeAt. Expected: a
-  // run with a task waiting on a reset stays open (ADR-0018 U1), however the
-  // run was started, so no execution_complete or handoff goes out.
-  it.skip('keeps its run open and sends no execution_complete or handoff', async () => {
+  it('keeps its run open and sends no execution_complete or handoff', async () => {
     const events: string[] = [];
     const { orchestrator, sessions, task } = setup({ maxParallelSessions: 1 });
     orchestrator.subscribe({
@@ -119,13 +113,7 @@ describe('a task started on its own that pauses on a usage limit', () => {
 });
 
 describe('a pause with no reset time', () => {
-  // ADVERSARIAL FINDING (scheduler): pauseOnLimit holds the run for a pause
-  // with no resume time, and nothing releases it: every other runner's task
-  // stays unstarted though nothing waits on a reset. Expected: the hold is
-  // released as soon as no task waits on a reset, and another runner's ready
-  // task starts (ADR-0018 U1: such a pause "keeps only its own runner's tasks
-  // from starting").
-  it.skip('releases the hold, and another runner\'s task starts', async () => {
+  it('releases the hold, and another runner\'s task starts', async () => {
     const { orchestrator, sessions, spawned, task } = setup({ maxParallelSessions: 1 });
     orchestrator.loadPlan([
       createTask({ id: 't1', order: 1, title: 'Paused', prompt: 'do first' }),
@@ -143,13 +131,7 @@ describe('a pause with no reset time', () => {
 });
 
 describe('a hold another paused task still owes', () => {
-  // ADVERSARIAL FINDING (scheduler): skipTask reads awaitsResume, which is
-  // true for a held run as for an ended one, and starts the scheduler: the
-  // hold goes even though another task still waits on its reset, so a third
-  // task on a free runner starts during the hold. Expected: only the skipped
-  // task's own wait goes; the run stays held until nothing waits on a reset
-  // (CONTEXT.md, Usage-limit resume).
-  it.skip('is not released by skipping a different paused task', async () => {
+  it('is not released by skipping a different paused task', async () => {
     const { orchestrator, sessions, spawned, task } = setup({ maxParallelSessions: 2 });
     orchestrator.loadPlan([
       createTask({ id: 't1', order: 1, title: 'Paused A', prompt: 'do first' }),
@@ -173,12 +155,7 @@ describe('a hold another paused task still owes', () => {
 });
 
 describe('force-starting a paused task', () => {
-  // ADVERSARIAL FINDING (scheduler): forceStartTask claims the paused task
-  // but leaves runState held, and nothing releases it when the attempt ends:
-  // with nothing waiting on a reset the rest of the plan never starts.
-  // Expected: a force start that ends the pause releases the hold, and the
-  // next task starts once it finishes.
-  it.skip('releases the hold once the task finishes', async () => {
+  it('releases the hold once the task finishes', async () => {
     const { orchestrator, sessions, spawned, task } = setup({ maxParallelSessions: 1 });
     orchestrator.loadPlan([
       createTask({ id: 't1', order: 1, title: 'Paused', prompt: 'do first' }),
@@ -202,11 +179,7 @@ describe('force-starting a paused task', () => {
 });
 
 describe('a planner edit that ends the last pause', () => {
-  // ADVERSARIAL FINDING (scheduler): reconcilePlan adopts the edit but never
-  // goes through releaseMovedResume or releaseTask, so removing the paused
-  // task leaves the run held with nothing waiting on a reset. Expected: the
-  // task leaving the plan releases the hold, and the rest of the plan goes on.
-  it.skip('releases the hold when the paused task is removed', async () => {
+  it('releases the hold when the paused task is removed', async () => {
     const { orchestrator, sessions, spawned, task } = setup({ maxParallelSessions: 1 });
     orchestrator.loadPlan([
       createTask({ id: 't1', order: 1, title: 'Paused', prompt: 'do first' }),
@@ -227,12 +200,7 @@ describe('a planner edit that ends the last pause', () => {
     expect(spawned()).toEqual(['t1', 't2']);
   });
 
-  // ADVERSARIAL FINDING (scheduler): re-arming a paused task clears its
-  // resumeAt in the plan, but the armed UsageLimitWaits and the held run stay;
-  // nothing waits on a reset and the re-armed task never starts. Expected: an
-  // edit that ends the pause releases the hold, and the task starts as any
-  // pending task the edit unblocked does.
-  it.skip('releases the hold when the paused task is re-armed', async () => {
+  it('releases the hold when the paused task is re-armed', async () => {
     const { orchestrator, sessions, spawned, task } = setup({ maxParallelSessions: 1 });
     orchestrator.loadPlan([
       createTask({ id: 't1', order: 1, title: 'Paused', prompt: 'do first' }),

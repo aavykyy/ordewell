@@ -180,6 +180,15 @@ function isPinned(t: Task): boolean {
   return t.status === 'in_progress' || t.status === 'completed';
 }
 
+/** The first task in `parent`'s subtree execution has reached, if any: removing the parent would take it (ADR-0029). */
+function lockedInSubtree(parent: Task): string | null {
+  for (const sub of parent.subtasks ?? []) {
+    const locked = lockedTaskRefusal(sub, 'removed') ?? lockedInSubtree(sub);
+    if (locked) return locked;
+  }
+  return null;
+}
+
 /**
  * Reorder top-level tasks so every dependency comes before its dependents,
  * moving as little as possible: pinned tasks keep the exact slot they are in,
@@ -551,7 +560,9 @@ export function applyTaskOps(
         if ('error' in ref) { errors.push(`${label}: ${ref.error}`); break; }
         const target = findInTasks(tasks, ref.id);
         if (!target) { errors.push(`${label}: task "${op.taskId}" no longer exists in this batch (removed, merged, or split by an earlier op)`); break; }
-        const locked = lockedTaskRefusal(target, 'removed');
+        // Removing the task takes its whole subtree, so every task in it meets
+        // the same lock rule as the named one (ADR-0029).
+        const locked = lockedTaskRefusal(target, 'removed') ?? lockedInSubtree(target);
         if (locked) { errors.push(`${label}: ${locked}`); break; }
         tasks = removeTaskFromPlan(tasks, target.id);
         summary.push(`Removed "${target.title}"`);

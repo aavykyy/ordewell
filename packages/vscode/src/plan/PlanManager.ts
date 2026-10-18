@@ -249,12 +249,14 @@ export async function handleApprovePlan(deps: PlanManagerDeps): Promise<void> {
   plan.tasks = approvedTasks(plan.tasks);
   deps.session.loadPlan(plan, deps.getCurrentGoal(), deps.fsAdapter.getWorkspaceRoot());
   deps.chatProvider.planApproved();
-  deps.chatProvider.clearIsolationHandoff();
   saveState(plan, deps.fsAdapter.getWorkspaceRoot());
   deps.saveCurrentSession();
   try {
     deps.log('Running the plan through the command seam...');
     await executeUserCommand(deps.session, { command: 'run_plan' });
+    // Cleared only once the seam accepts it: a refused Execute replaced no run,
+    // and the Session still holds every mark and the handoff.
+    deps.chatProvider.clearIsolationHandoff();
     deps.log(`run_plan returned. isRunning=${deps.session.isExecuting}, status=${deps.session.status}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

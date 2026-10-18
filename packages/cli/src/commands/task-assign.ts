@@ -1,5 +1,5 @@
 import { codexSandboxNotice, createSkillsService, EnvConfig } from '@ordewell/core';
-import { canSetDependencies, dependencyCandidates, resolveTaskRef, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf } from '@ordewell/core/plan-utils';
+import { canSetDependencies, dependencyCandidates, resolveTaskRef, resolveUserTaskRef, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf } from '@ordewell/core/plan-utils';
 import { assignedModelFor, effortsForTask, modelsForTask, modesForTask, runnerAccepts } from '../tui/taskAssignment';
 import { findTask, type TaskView } from '../tui/state';
 import type { ApiClient } from '../apiClient';
@@ -214,9 +214,9 @@ export async function handleTaskDeps(subArgs: string[], injectedApi?: ApiClient)
     const dependencies = value.toLowerCase() === 'none'
       ? []
       : value.split(',').map((s) => s.trim()).filter(Boolean)
-          // Accept order numbers as well as ids, matching how every other
-          // task-scoped command resolves its argument.
-          .map((token) => resolveTaskRef(tasks, token)?.id ?? token);
+          // Accept order numbers and ids as every other task-scoped command
+          // resolves its argument, and the user's unique id prefix with them.
+          .map((token) => resolveUserTaskRef(tasks, token)?.id ?? token);
 
     // The same pre-flight the API applies, run here so the refusal names the
     // task rather than arriving as a bare HTTP error.

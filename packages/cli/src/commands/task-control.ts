@@ -91,17 +91,20 @@ export async function withResolvedTask(
 const PASSES_GATE: ReadonlySet<Action> = new Set<Action>(['run', 'force-start']);
 
 /**
- * A start that passes a merge gate (ADR-0020) asks first, naming the work the
- * task would act without; `--yes` is the scriptable way to have asked already.
+ * Whether a start passes a merge gate (ADR-0020): asks first, naming the work
+ * the task would act without; `--yes` is the scriptable way to have asked
+ * already. A start the user confirmed past a gate is the force start that
+ * passes it — the seam refuses `run_task` for a gated task.
  */
-async function confirmPastGate(subArgs: string[], api: ApiClient, sessionId: string, ref: string, confirm: (question: string) => Promise<boolean>): Promise<void> {
-  if (hasFlag(subArgs, '--yes')) return;
+async function confirmPastGate(subArgs: string[], api: ApiClient, sessionId: string, ref: string, confirm: (question: string) => Promise<boolean>): Promise<boolean> {
   // A daemon that cannot say (an older one, or a session it does not hold) is
   // left to answer the start itself.
   const unmerged = await api.getMergeGate(sessionId, ref).catch(() => []);
-  if (unmerged.length === 0) return;
+  if (unmerged.length === 0) return false;
+  if (hasFlag(subArgs, '--yes')) return true;
   const question = `${pastGateConfirmation(unmerged.map((d) => titledTaskRef(d)))} Start it anyway?`;
   if (!(await confirm(question))) fail('Not started: nothing was changed. Pass --yes to start it without a prompt.');
+  return true;
 }
 
 function makeHandler(action: Action, command: string = action) {
@@ -112,12 +115,13 @@ function makeHandler(action: Action, command: string = action) {
       `Usage: ordewell ${command} <task-id-or-order> [--session-id <id>] [--workspace /path]${yes}`,
       injectedApi,
       async (api, sessionId, ref) => {
-        if (PASSES_GATE.has(action)) await confirmPastGate(subArgs, api, sessionId, ref, confirm);
+        const pastGate = PASSES_GATE.has(action) ? await confirmPastGate(subArgs, api, sessionId, ref, confirm) : false;
+        const control: Action = pastGate && action === 'run' ? 'force-start' : action;
         try {
-          const { message, queued } = await api.taskControl(sessionId, ref, action);
-          console.log(message ?? queued ?? PAST_TENSE[action]);
+          const { message, queued } = await api.taskControl(sessionId, ref, control);
+          console.log(message ?? queued ?? PAST_TENSE[control]);
         } catch (err) {
-          console.error(`Failed to ${action} task: ${(err as Error).message}`);
+          console.error(`Failed to ${control} task: ${(err as Error).message}`);
           process.exit(1);
         }
       },

@@ -443,8 +443,11 @@ export class CliAgentAiService implements IAiService {
     signal?: AbortSignal,
   ): Promise<HarnessTurn> {
     const adapter = await this.ensureAdapter(session);
-    const pendingCalls = new Map<string, { tool: ResearchStep['tool']; toolLabel?: string; args: string; subagentId?: string }>();
-    const researchLog: ResearchStep[] = [];
+    // `at` is when the model announced the call, and `slot` is where that call
+    // stands in the log: a reloaded transcript places each row where the live
+    // view drew it, however the results come back.
+    const pendingCalls = new Map<string, { tool: ResearchStep['tool']; toolLabel?: string; args: string; subagentId?: string; at: string; slot: number }>();
+    const logSlots: (ResearchStep | null)[] = [];
     const reply = new TurnReply(onProgress);
     // Who streamed thinking deltas (the planner as '', or a subagent) since
     // their last complete `thinking`, which then repeats what was already sent.
@@ -464,6 +467,9 @@ export class CliAgentAiService implements IAiService {
 
     const truncate = (value: string) =>
       value.length > LOG_MAX_CHARS ? `${value.slice(0, LOG_MAX_CHARS)}\n[... truncated, total ${value.length} chars]` : value;
+
+    /** The log the turn leaves behind, in the order the calls were announced. */
+    const settledLog = () => logSlots.filter((s): s is ResearchStep => s !== null);
 
     const settle = (id: string, rawOutput: string, success: boolean, outcome: ResearchStep['outcome'], reportedBy?: string) => {
       // The other construction point for a research step (see `executeTool`).
@@ -485,9 +491,12 @@ export class CliAgentAiService implements IAiService {
         outcome,
         toolCallId: id,
         subagentId,
-        timestamp: new Date().toISOString(),
+        timestamp: call?.at ?? new Date().toISOString(),
       };
-      researchLog.push(step);
+      // A call takes the log slot it was announced in; one settled without an
+      // announcement — a permission request denied before its call — follows.
+      if (call) logSlots[call.slot] = step;
+      else logSlots.push(step);
       onProgress({ type: 'tool_result', toolResult: output, step, toolCallId: id, subagentId });
     };
 
@@ -515,7 +524,7 @@ export class CliAgentAiService implements IAiService {
           const mapped = mapAgentTool(event.name);
           const args = JSON.stringify(normalizeAgentArgs(mapped.tool, event.args));
           const subagentId = event.subagentId;
-          pendingCalls.set(event.id, { tool: mapped.tool, toolLabel: mapped.toolLabel, args, subagentId });
+          pendingCalls.set(event.id, { tool: mapped.tool, toolLabel: mapped.toolLabel, args, subagentId, at: new Date().toISOString(), slot: logSlots.push(null) - 1 });
           onProgress({ type: 'tool_call', tool: mapped.tool, toolLabel: mapped.toolLabel, toolArgs: args, toolCallId: event.id, subagentId });
           return;
         }
@@ -557,7 +566,7 @@ export class CliAgentAiService implements IAiService {
             const mapped = mapAgentTool(event.name);
             const args = JSON.stringify({ detail: event.detail });
             if (!pendingCalls.has(event.id)) {
-              pendingCalls.set(event.id, { tool: mapped.tool, toolLabel: mapped.toolLabel, args });
+              pendingCalls.set(event.id, { tool: mapped.tool, toolLabel: mapped.toolLabel, args, at: new Date().toISOString(), slot: logSlots.push(null) - 1 });
               onProgress({ type: 'tool_call', tool: mapped.tool, toolLabel: mapped.toolLabel, toolArgs: args, toolCallId: event.id });
             }
             settle(event.id, output, false, 'denied');
@@ -617,9 +626,9 @@ export class CliAgentAiService implements IAiService {
 
     if (error) {
       const failure = reply.fail(error);
-      return { text: reply.text, runs: reply.runs(), researchLog, error: failure, usageLimit, aborted: signal?.aborted, backgroundAgents };
+      return { text: reply.text, runs: reply.runs(), researchLog: settledLog(), error: failure, usageLimit, aborted: signal?.aborted, backgroundAgents };
     }
-    return { text: reply.text, runs: reply.runs(), researchLog, error, aborted: signal?.aborted, backgroundAgents };
+    return { text: reply.text, runs: reply.runs(), researchLog: settledLog(), error, aborted: signal?.aborted, backgroundAgents };
   }
 
   // --- Process lifecycle ---

@@ -7,8 +7,7 @@ import { ApiClient } from '../../apiClient';
  * passes it (ADR-0020) — the TUI's gated force start and VS Code's gated Run
  * task both send `force_start` once the user goes ahead, because the seam's
  * `run_task` refuses a gated task. The CLI's `ordewell run` asks the same
- * question, then sends `run`, which the daemon refuses: the user answered yes
- * and the start still fails.
+ * question and, once the user goes ahead, sends the force start that passes it.
  */
 
 function startServer(handler: (req: http.IncomingMessage, res: http.ServerResponse) => void): Promise<{ port: number; close: () => void }> {
@@ -57,13 +56,7 @@ async function gatedServer(hits: string[]) {
 }
 
 describe('adversarial: a gated task confirmed by the user starts, whichever control asked', () => {
-  // ADVERSARIAL FINDING (gated-run): `ordewell run <gated>` asks the merge-gate question
-  // (commands/task-control.ts:107-125) and then sends the `run` control, which the seam refuses for a gated
-  // task ("waits for Merge all", ExecutionCommands.ts:611) — the daemon route maps `run` to `run_task`
-  // (routes/plans.ts:129). VS Code converts the confirmed Run task into a force start (PlanManager.ts:532-540),
-  // and the TUI does too. Expected: once the user confirms, the start goes through as a force start, not a
-  // control the seam refuses.
-  it.skip('sends the confirmed start as a force start, as VS Code\'s gated Run task does', async () => {
+  it('sends the confirmed start as a force start, as VS Code\'s gated Run task does', async () => {
     const hits: string[] = [];
     const srv = await gatedServer(hits);
     const { handleRunTask } = await import('../task-control');
