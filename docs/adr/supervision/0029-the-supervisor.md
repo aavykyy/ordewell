@@ -188,7 +188,8 @@ waits, it is judged against the task as the held edit leaves it, with the edit
 counting as the change a retry after a failure needs: a start that could never
 run is refused while the caller still reads the answer. One refused when it
 goes through again is kept as refused, said to the user as a system line, and
-told to the planner's next turn as a run update. An edit that
+told to the planner's next turn as a run update, and to each turn after until
+one lands an answer the planner gave. An edit that
 never lands — the turn stopped, or the edit refused as it landed — drops the
 start, and the user is told; run on the unedited plan, it would not be what was
 asked. In a wake-up
@@ -338,7 +339,10 @@ accepted. Each tripped guard also posts a supervisor message to the user.
   and the turn retried once. A turn that does not end when stopped has the
   conversation taken back from it, and nothing it held lands, as nothing of a
   failed turn does: a planner turn writes nothing to the dialogue until the
-  save that lands it, so there is nothing to undo. A planner turn that ends without a reply — a dead agent — is a
+  save that lands it, so there is nothing to undo. Its end is announced as the
+  conversation is taken back, and nothing it streams or settles afterwards
+  reaches a surface: a vendor planner restarts nothing, so the hung call
+  settles whenever it does, while the retry runs. A planner turn that ends without a reply — a dead agent — is a
   crash here, not a note.
 - **Then the run goes unsupervised**: it carries on as Off, with a visible
   notice. Wake-ups not delivered are persisted and handed over whole at the
@@ -531,3 +535,4 @@ until #30 exists.
 - 2026-10-18 — the claim takes the task by id with the start's admission and reads the task as it stands, so a start that awaited its run opening runs the task as edited meanwhile; a conflict repair claims under the admission of the attempt whose work it repairs, rather than whatever Stop generation is current; a force start queued behind its dependencies waits for a planner turn's start hold, and the hold's release looks at the queue with or without a run.
 - 2026-10-18 — a planner turn holds what it writes — its inputs, the skills the planner loads, its research subagents — until the save that lands it, so a hung or failed turn has nothing to undo, whatever was saved while it ran.
 - 2026-10-18 — the user's own controls get commands at the seam: force start, Mark complete and Mark not done, interrupt, force sending or taking back a task message, cancelling a scheduled resume, a checkpoint answer and approving the review, refused to anyone but the user; the user's `answer_approval` may allow; a typed payload carries the full Merge all result and a force start's queued line; the user's Stop with nothing running is a quiet no-op; refusals are worded per actor.
+- 2026-10-18 — a hung turn's end is announced once, when the conversation is taken back, and nothing it streams or settles afterwards reaches a surface; a run update is told again after a turn that did not land an answer.

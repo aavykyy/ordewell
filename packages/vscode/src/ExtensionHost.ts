@@ -175,7 +175,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     log,
     refreshPlannerState: () => planner.sendState(),
     onApiKeySaved: async () => {
-      managerDeps.session.aiServiceInstance.reset();
+      managerDeps.session.plannerSettingsChanged();
       services.modelResolver.invalidate();
     },
   });
@@ -399,7 +399,9 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       // A raised parallel limit would otherwise wait for the next verdict to
       // be seen; a no-op while nothing runs.
       managerDeps.session.reschedule().catch((err) => log(`Reschedule failed: ${err instanceof Error ? err.message : String(err)}`));
-      managerDeps.session.aiServiceInstance.reset();
+      // A planner, model or effort picked writes these keys too: the session
+      // lets the backend go only once the planner turn in flight has ended.
+      managerDeps.session.plannerSettingsChanged();
       services.modelResolver.invalidate();
       discovery.refresh().catch((err) => log(`Model discovery refresh failed: ${err instanceof Error ? err.message : String(err)}`));
       log('Configuration changed, reset services');
