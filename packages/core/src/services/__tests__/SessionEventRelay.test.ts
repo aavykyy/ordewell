@@ -3,7 +3,7 @@ import { SessionEventRelay } from '../SessionEventRelay';
 import { PlanStore } from '../PlanStore';
 import { PlannerUsageLedger } from '../PlannerUsage';
 import type { SessionMessage, SessionNotice } from '../SessionMessage';
-import { createTask, type LegacyPlanState, type ResearchStep } from '../../models/Task';
+import { createTask, type LegacyPlanState } from '../../models/Task';
 
 function plan(): LegacyPlanState {
   return { tasks: [], generatedAt: '2026-01-01T00:00:00Z', status: 'approved', runners: ['claude-code'], lastUpdated: '2026-01-01T00:00:00Z' };
@@ -31,10 +31,6 @@ function setup() {
   });
   const types = () => sent.map((m) => m.type);
   return { relay, sent, notices, store, usage, types };
-}
-
-function step(id: string, subagentId?: string): ResearchStep {
-  return { id, tool: 'grep', args: 'x', result: '', success: true, outcome: 'success', timestamp: '2026-01-01T00:00:00Z', ...(subagentId ? { subagentId } : {}) };
 }
 
 describe('SessionEventRelay', () => {
@@ -180,34 +176,5 @@ describe('SessionEventRelay', () => {
     relay.progress({ type: 'text_retracted' });
 
     expect(sent).toEqual([]);
-  });
-
-  it('folds each subagent\'s run into the research log as one group, however the stream interleaved', () => {
-    const { relay } = setup();
-    const p = { ...plan(), researchLog: [step('a1', 'A')] };
-
-    relay.progress({ type: 'subagent_started', subagentId: 'A', brief: 'look at A' });
-    relay.progress({ type: 'subagent_started', subagentId: 'B', brief: 'look at B' });
-    relay.progress({ type: 'tool_result', step: step('b1', 'B') });
-    relay.progress({ type: 'tool_result', step: step('a1', 'A') });
-    relay.progress({ type: 'subagent_finished', subagentId: 'A', outcome: 'done', digest: 'A done' });
-    relay.flushSubagentRuns(p);
-
-    expect(p.researchLog.map((e) => e.id)).toEqual(['sa-A', 'a1', 'sa-B', 'b1']);
-    expect(p.researchLog[0]).toMatchObject({ brief: 'look at A', outcome: 'done', digest: 'A done' });
-
-    relay.flushSubagentRuns(p);
-    expect(p.researchLog).toHaveLength(4);
-  });
-
-  it('forgets a turn\'s subagent runs it is told to drop', () => {
-    const { relay } = setup();
-    const p = plan();
-
-    relay.progress({ type: 'subagent_started', subagentId: 'A', brief: 'look' });
-    relay.dropSubagentRuns();
-    relay.flushSubagentRuns(p);
-
-    expect(p.researchLog).toBeUndefined();
   });
 });

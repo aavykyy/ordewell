@@ -251,6 +251,23 @@ describe('an opening that ends on the planner\'s usage limit', () => {
     expect(session.planState!.conversationHistory!.slice(1).map((e) => e.content)).toEqual(['build a parser', 'What should it parse?']);
     expect(session.rewindTargets()).toEqual([]);
   });
+
+  // VS Code re-adopts the Session's own plan object; that save is the user's,
+  // not the opening landing, and the goal must not ride it into the dialogue.
+  it('keeps the goal out of the dialogue though the plan was saved while it was out', async () => {
+    const planner = heldPlanner();
+    const session = makeSession({ config: fakeConfig({ aiProvider: 'claude-code' }), aiService: planner.aiService });
+
+    const opened = session.startPlanning('build a parser');
+    await until(() => planner.calls.length === 1);
+    session.loadPlan(session.planState!, 'build a parser', testWorkspace);
+    planner.calls[0].finish(limited());
+    await opened;
+
+    expect(session.planState!.conversationHistory).toEqual([expect.objectContaining({ kind: 'error' })]);
+    expect(session.planState!.researchLog ?? []).toEqual([]);
+    expect(session.planState!.pendingTurns!.map((t) => t.text)).toEqual(['build a parser']);
+  });
 });
 
 describe('a planner turn whose runner says in a field whether it hit its usage limit', () => {

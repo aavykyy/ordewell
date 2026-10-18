@@ -13,7 +13,7 @@ import {
 } from './SessionMessage';
 import { surfaceStep } from '../conversation/records';
 import { planUsage } from '../models/Usage';
-import type { LegacyPlanState, ResearchLogEntry, ResearchProgress, ResearchStep, SubagentLogEntry } from '../models/Task';
+import type { LegacyPlanState, ResearchProgress } from '../models/Task';
 
 export interface SessionEventRelayDeps {
   broadcast: SessionBroadcaster;
@@ -44,17 +44,13 @@ export interface SessionEventRelayDeps {
  */
 export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onRunStarted' | 'onAutoMerge' | 'onUsageLimitWait' | 'onModelSwitched' | 'onTaskIdle' | 'onIsolationHandoff' | 'onRunClosed'>>;
 
-/** One subagent's activity seen during a turn: its log entry plus the steps it ran. */
-interface SubagentRun {
-  entry: SubagentLogEntry;
-  steps: ResearchStep[];
-}
-
 /**
  * Turns orchestrator and planner events into {@link SessionMessage}
  * broadcasts — the one place a surface's view of a Session is produced. It
- * never persists: where an event also owes a save, the Session does that
- * before handing the event on, so no surface sees state the disk lacks.
+ * never persists, and holds nothing of a planner turn: a turn keeps what it
+ * writes until it lands (`PlannerConversation`). Where an event also owes a
+ * save, the Session does that before handing the event on, so no surface sees
+ * state the disk lacks.
  */
 export class SessionEventRelay {
   private readonly broadcast: SessionBroadcaster;
@@ -66,12 +62,6 @@ export class SessionEventRelay {
   private readonly awaitingApproval: (taskId: string) => number;
   private readonly checkpointQuestion: (taskId: string) => string | undefined;
   private readonly waitsForApproval: (taskId: string) => boolean;
-  /**
-   * The in-flight turn's subagent activity, grouped one run per subagent so a
-   * replay nests each step under its own brief/result. Folded into the plan's
-   * researchLog at persist — see {@link flushSubagentRuns}.
-   */
-  private pendingSubagents: SubagentRun[] = [];
   private statusHeld = false;
   private statusOwed = false;
   /** The planner's requests announced and not yet settled, as they were announced: a surface joining now is owed them. */
@@ -218,9 +208,6 @@ export class SessionEventRelay {
         return;
       case 'tool_result':
         if (progress.step) {
-          // Child steps carry their subagent on the step itself; the initiating
-          // spawn step does not, so it stays a plain parent step.
-          if (progress.step.subagentId) this.subagentRun(progress.step.subagentId).steps.push(progress.step);
           this.broadcast({ type: 'research_step_done', step: surfaceStep(progress.step), subagentId, turnId });
         }
         return;
@@ -235,19 +222,10 @@ export class SessionEventRelay {
         if (turnId) this.broadcast({ type: 'planner_text_retracted', turnId, segmentId });
         return;
       case 'subagent_started':
-        if (subagentId) {
-          const run = this.subagentRun(subagentId);
-          run.entry.brief = progress.brief ?? run.entry.brief;
-          if (progress.model) run.entry.model = progress.model;
-          this.broadcast({ type: 'subagent_started', turnId, subagentId, brief: progress.brief ?? '', model: progress.model });
-        }
+        if (subagentId) this.broadcast({ type: 'subagent_started', turnId, subagentId, brief: progress.brief ?? '', model: progress.model });
         return;
       case 'subagent_finished':
         if (subagentId) {
-          const run = this.subagentRun(subagentId);
-          run.entry.outcome = progress.outcome ?? 'failed';
-          run.entry.digest = progress.digest ?? '';
-          if (progress.usage) run.entry.usage = progress.usage;
           this.broadcast({
             type: 'subagent_finished', turnId, subagentId,
             outcome: progress.outcome ?? 'failed', digest: progress.digest ?? '', usage: progress.usage,
@@ -263,46 +241,5 @@ export class SessionEventRelay {
       case 'interrupted':
         return;
     }
-  }
-
-  /** The run for `subagentId`, created on first sighting so a step arriving
-   * before (or without) its started event still gets a home. */
-  private subagentRun(subagentId: string): SubagentRun {
-    let run = this.pendingSubagents.find((r) => r.entry.subagentId === subagentId);
-    if (!run) {
-      run = {
-        entry: { id: `sa-${subagentId}`, type: 'subagent', subagentId, brief: '', outcome: 'failed', digest: '', timestamp: new Date().toISOString() },
-        steps: [],
-      };
-      this.pendingSubagents.push(run);
-    }
-    return run;
-  }
-
-  /**
-   * Fold the turn's subagent runs into the plan's researchLog as one contiguous
-   * group per subagent — its entry then its steps, in the order they started —
-   * so a replay nests each step under its own subagent however the live stream
-   * interleaved. A harness planner already logs its child steps through the
-   * turn's researchLog; they are pulled out of that position and re-grouped
-   * rather than duplicated.
-   */
-  flushSubagentRuns(plan: LegacyPlanState): void {
-    if (this.pendingSubagents.length === 0) return;
-    const childStepIds = new Set(this.pendingSubagents.flatMap((r) => r.steps.map((s) => s.id)));
-    const additions: ResearchLogEntry[] = [];
-    for (const run of this.pendingSubagents) {
-      additions.push(run.entry, ...run.steps);
-    }
-    plan.researchLog = [
-      ...(plan.researchLog ?? []).filter((e) => !childStepIds.has(e.id)),
-      ...additions,
-    ];
-    this.pendingSubagents = [];
-  }
-
-  /** Forget a turn's subagent runs that will never be persisted. */
-  dropSubagentRuns(): void {
-    this.pendingSubagents = [];
   }
 }
