@@ -6,6 +6,7 @@ import type { IsolationMergeResult } from '../interfaces/IWorktreeIsolation';
 import { continuability } from './continuation';
 import type { GuardTarget, GuardTrip } from './LoopGuards';
 import { STOPPED_BEFORE_START, type StartAdmission } from './TaskOrchestrator';
+import { waitOf, type StartWait } from './readiness';
 
 /** One call at the command seam, as every route words it (ADR-0029). Task references are resolved here. */
 export type ExecutionCommand =
@@ -109,12 +110,12 @@ export interface ExecutionHost {
   maxParallel(): number;
   /** The run waits on the user to stash or skip isolation before anything starts. */
   runBlocked(): boolean;
-  /** The tasks a task's dependencies still hold it back for: unmet dependencies, or the unfinished work behind a skipped one. */
-  unmetDependencies(task: Readonly<Task>): string[];
-  /** The ancestors a task would wait on at its merge gate if it started now, whatever its status (ADR-0020). */
-  mergeGate(taskId: string): string[];
-  /** The failed tasks a task not started waits on through its dependencies (ADR-0034). */
-  blockedBy(taskId: string): string[];
+  /**
+   * Every reason the task cannot start now, from the scheduler's one start
+   * rule (ADR-0034). Takes the task, not its id: one a held edit changes or
+   * adds is judged as the edit leaves it.
+   */
+  startWaits(task: Readonly<Task>): readonly StartWait[];
   /** The runner requests waiting on a task for an answer. */
   waitingRequests(taskId: string): readonly WaitingRequest[];
   /** A start is told who asked: whether a run it opens continues the last one depends on it (ADR-0029). */
@@ -500,21 +501,23 @@ export class ExecutionCommands {
         : located.paused ? 'Resume it in its saved session with retry_task from "session".' : 'Start a new attempt with retry_task.';
       return { refusal: `${capitalize(label)} ${statusWords(task)}. ${next}` };
     }
-    const failed = this.host.blockedBy(task.id).flatMap((id) => this.located(id, tasks) ?? []);
+    const waits = this.host.startWaits(task);
+    const failed = (waitOf(waits, 'blocked')?.failed ?? []).flatMap((id) => this.located(id, tasks) ?? []);
     if (failed.length > 0) {
       return { refusal: `${capitalize(label)} is blocked: ${named(failed)} failed. Retry ${failed.length === 1 ? 'it' : 'them'} first.` };
     }
     const approval = this.unapproved(located, actor);
     if (approval && 'refusal' in approval) return approval;
 
-    const unmet = this.host.unmetDependencies(task).flatMap((id) => this.located(id, tasks) ?? []);
+    const unmet = (waitOf(waits, 'dependencies') ?? waitOf(waits, 'queued'))?.waiting.flatMap((id) => this.located(id, tasks) ?? []) ?? [];
     if (unmet.length > 0) {
       const one = unmet.length === 1;
       // Work reached through a skip is not a dependency the caller can see on the task.
       const behindSkip = unmet.some((dep) => !task.dependencies.includes(dep.task.id)) ? ': skipping a task does not skip the work behind it' : '';
       return { refusal: `${capitalize(label)} depends on ${unmet.map((dep) => `${describe(dep)} (${depState(dep.task)})`).join(', ')}, which ${one ? 'has' : 'have'} not finished${behindSkip}. It can start once ${one ? 'it has' : 'they have'}.` };
     }
-    const gate = this.host.mergeGate(task.id).flatMap((id) => this.located(id, tasks) ?? []);
+    // Judged whatever the task's status: a retry of a failed ops task acts on the checkout as a first start does.
+    const gate = (waitOf(waits, 'merge-gate')?.unmerged ?? []).flatMap((id) => this.located(id, tasks) ?? []);
     if (gate.length > 0) {
       return { refusal: `${capitalize(label)} waits for Merge all: the work of ${named(gate)} is not merged into the user's branch yet. Ask the user to merge (Merge all), or to force start it.` };
     }
@@ -692,8 +695,8 @@ export class ExecutionCommands {
     if (task.status === 'skipped') return { refusal: `${capitalize(label)} is already skipped.` };
     if (actor.kind !== 'user') {
       if (!why) return { refusal: `Skipping ${label} needs a reason: it is shown to the user and told to the tasks that depend on it.` };
-      const waits = task.status === 'failed' || task.status === 'awaiting_user' || this.host.blockedBy(task.id).length > 0;
-      if (!waits) return { refusal: `${capitalize(label)} has not started and nothing blocks it: the supervisor skips only a task that failed, is blocked or is waiting for input.` };
+      const needsSomeone = task.status === 'failed' || task.status === 'awaiting_user' || waitOf(this.host.startWaits(task), 'blocked') !== undefined;
+      if (!needsSomeone) return { refusal: `${capitalize(label)} has not started and nothing blocks it: the supervisor skips only a task that failed, is blocked or is waiting for input.` };
     }
     return {
       act: async () => {

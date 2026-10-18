@@ -167,6 +167,23 @@ describe('force starting a task whose dependencies have not finished', () => {
     await until(() => env.run.spawnedIds().includes('t2'));
   });
 
+  // The race the planner turn's start hold exists to prevent (ADR-0029): the turn's edit to t2 would be refused as running.
+  it('waits while a planner turn holds new starts, and starts as the turn ends', async () => {
+    const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { ...AUTORUN_OFF, execute: false });
+    await env.session.runTask('t1');
+    await env.session.forceStartTask('t2');
+    void env.session.continueConversation('how is it going?');
+    await until(() => env.planner.calls.length === 1);
+
+    env.run.of('t1').reportComplete({ status: 'done', summary: '' });
+    await until(() => taskOf(env.session, 't1')!.status === 'completed');
+    await settled();
+    expect(env.run.spawnedIds()).toEqual(['t1']);
+
+    env.planner.calls[0].finish(prose('It is going well.'));
+    await until(() => env.run.spawnedIds().includes('t2'));
+  });
+
   it('starts once a dependency run on its own is marked complete instead, with no verdict', async () => {
     const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { ...AUTORUN_OFF, execute: false });
     await env.session.forceStartTask('t2');

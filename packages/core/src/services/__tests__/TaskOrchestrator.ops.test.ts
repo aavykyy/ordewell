@@ -200,6 +200,28 @@ describe('TaskOrchestrator: ops tasks and merge gates (ADR-0020)', () => {
       expect(env.notices).toContainEqual(expect.stringContaining('force-started before the work of "Task t1" was merged'));
     });
 
+    it('stops a force start queued behind its dependencies at the gate their landing raised, which nobody confirmed', async () => {
+      const env = setup();
+      const t1 = change('t1', 1);
+      env.orchestrator.loadPlan([t1, ops('o2', 2, { dependencies: ['t1'] })]);
+      await env.orchestrator.runTask('t1');
+      // No gate yet, so no surface asked: the start is queued behind t1.
+      expect(env.orchestrator.getMergeGate('o2')).toEqual([]);
+      expect(await env.orchestrator.forceStartTask('o2')).toMatch(/starts once task "Task t1" finishes/);
+
+      env.pass(t1);
+      await vi.waitFor(() => expect(env.status('t1')).toBe('completed'));
+      await flushMicrotasks();
+
+      expect(env.spawned('o2')).toHaveLength(0);
+      expect(env.orchestrator.storeInstance.get('o2')!.forcedPastGate).toBeUndefined();
+      expect(env.notices).toContainEqual('Task "Task o2" waits for Merge all: the work of "Task t1" is not merged into your branch yet. Merge all to start it, or force start it again to start it without that work.');
+
+      expect(await env.orchestrator.mergeRun()).toEqual({ outcome: 'merged' });
+      await vi.waitFor(() => expect(env.spawned('o2')[0]?.cwd).toBe('/repo'));
+      expect(env.orchestrator.storeInstance.get('o2')!.forcedPastGate).toBeUndefined();
+    });
+
     it('keeps a single-task run past the gate on the task, as a force start', async () => {
       const env = await gated();
 
