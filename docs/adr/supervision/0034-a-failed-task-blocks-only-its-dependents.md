@@ -31,6 +31,8 @@ starting as usual.
   block on. The rule is one pure function (`blockingFailures`,
   `packages/core/src/services/blocking.ts`) over task statuses and
   dependencies; nothing is stored, so whatever lifts a failure lifts its block.
+  There is no `blocked` task status: a plan file saved with one loads it as
+  pending.
   Subtasks follow the same rule.
 - **A skip releases them too.** A skipped dependency is as finished as a
   completed one for the blocked rule: nothing of it lands, so there is
@@ -111,3 +113,4 @@ attempt. This decides what a failure stops, not how a verdict is reached.
 - 2026-10-14 — accepted and implemented; replaces the halted run.
 - 2026-10-14 — a skipped task releases its dependents as a completed one does, without landing its work; a skip continues a run that ended on a failure; run summaries count skipped tasks.
 - 2026-10-16 — a skipped dependency no longer lets its dependents start ahead of the work behind it: they wait until the skipped task's own unfinished ancestors are met, and the scheduler log and the command seam's refusals name those ancestors.
+- 2026-10-18 — the stored `blocked` status is gone from `TaskStatus`, and so is the code that set and cleared it; a saved one loads as pending, and the derived rule is the only blocked rule.

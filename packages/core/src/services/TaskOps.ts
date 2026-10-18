@@ -738,14 +738,6 @@ export function applyTaskOps(
         if ('error' in prep) { errors.push(prep.error); break; }
         const { target, changes, check } = prep;
         tasks = updateTaskInPlan(tasks, target.id, { ...changes, status: 'pending', verdict: undefined, outputSummary: undefined, awaitingReason: undefined, resumeAt: undefined, skipReason: undefined });
-        // Dependents parked at 'blocked' by this task's earlier failure have
-        // nothing else to release them — the scheduler reads `status` directly,
-        // not a live recomputation of the dependency graph.
-        for (const dep of flattenTasks(tasks)) {
-          if (dep.status === 'blocked' && dep.dependencies.includes(target.id)) {
-            tasks = updateTaskInPlan(tasks, dep.id, { status: 'pending' });
-          }
-        }
         const clearedNote = check.clear?.length ? `; cleared ${check.clear.join(', ')}` : '';
         const fields = changedFields(target, changes, catalog);
         const changedNote = fields.length ? ` (${fields.join(', ')})` : '';

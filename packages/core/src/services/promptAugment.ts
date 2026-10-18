@@ -105,7 +105,6 @@ function planMapStatus(task: Task, isCurrent: boolean): string {
   if (task.status === 'completed') return 'done';
   if (task.status === 'failed') return 'failed';
   if (task.status === 'skipped') return 'skipped';
-  if (task.status === 'blocked') return 'blocked';
   if (task.status === 'in_progress') return 'running';
   if (task.type === 'user') return 'user';
   return 'next';

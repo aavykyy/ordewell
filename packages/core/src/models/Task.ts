@@ -44,9 +44,11 @@ export type TaskType = 'ai' | 'user';
 /**
  * `skipped` is terminal and verdict-less: the task will not be waited for, and
  * nothing it did lands. Its dependents go ahead without it once the work it
- * waited on is done.
+ * waited on is done. There is no stored `blocked`: a task is blocked when a
+ * failed dependency says so (ADR-0034), and a file that kept the old status
+ * loads as pending.
  */
-export type TaskStatus = 'pending' | 'approved' | 'in_progress' | 'completed' | 'failed' | 'blocked' | 'awaiting_user' | 'skipped';
+export type TaskStatus = 'pending' | 'approved' | 'in_progress' | 'completed' | 'failed' | 'awaiting_user' | 'skipped';
 export type TaskMode = string;
 
 /**
@@ -648,7 +650,7 @@ export function migratePlanState(raw: unknown): PlanState {
       }));
 
     const pendingTasks = raw.tasks.filter(
-      (t) => t.status !== 'completed' && t.status !== 'failed' && t.status !== 'blocked',
+      (t) => t.status !== 'completed' && t.status !== 'failed',
     );
 
     return {
@@ -894,7 +896,7 @@ export function approvalRecordOf(plan: ApprovalRecord): ApprovalRecord {
 export function waitsForApproval(task: Pick<Task, 'id' | 'type' | 'status'>, record: ApprovalRecord): boolean {
   return record.approved === true
     && task.type === 'ai'
-    && (task.status === 'pending' || task.status === 'approved' || task.status === 'blocked')
+    && (task.status === 'pending' || task.status === 'approved')
     && !(record.approvedTasks ?? []).includes(task.id);
 }
 

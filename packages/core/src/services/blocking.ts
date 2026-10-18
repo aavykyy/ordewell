@@ -7,7 +7,7 @@ export interface BlockingSubject {
 }
 
 /** Statuses of a task that has not started, the only ones a block holds back. */
-const UNSTARTED: ReadonlySet<string> = new Set(['pending', 'approved', 'blocked']);
+const UNSTARTED: ReadonlySet<string> = new Set(['pending', 'approved']);
 
 /**
  * The blocked rule (ADR-0034): a task not started yet is blocked while a

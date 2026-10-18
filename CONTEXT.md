@@ -968,8 +968,8 @@ state that ends with the run; put it on the attempt.
 itself blocked (ADR-0034). The scheduler never starts it, its own dependents are
 blocked with it, and every surface shows it "blocked by #N", naming the failed
 tasks it waits on. Independent work keeps starting: a failure stops only what
-depends on it. Nothing is stored — the rule reads statuses and dependencies —
-so a retry of the failed task that passes, or a *Skip* of it, unblocks its
+depends on it. Nothing is stored — there is no `blocked` task status; the rule reads statuses and
+dependencies, and a plan file saved with one loads it as pending — so a retry of the failed task that passes, or a *Skip* of it, unblocks its
 dependents, which then start. A run with nothing running and only failed and blocked tasks left ends,
 counting completed, failed and blocked; a retry of a task in it continues that
 run (`TaskOrchestrator.awaitsResume`), and a planner edit made meanwhile is
@@ -1514,9 +1514,7 @@ that simply dropped the task could never reach the runner session again and the
 orchestrator went on counting it as active — one of the ways "Execution is
 running" became permanent. Removing a `completed` task drops it from the
 completed set, which is safe because `removeTaskFromPlan` detaches the
-dependents in the same op; `PlanStore.remove` additionally releases any
-dependent parked at `blocked`, whose status `isBlocked` reads on its own and
-which nothing else would ever unblock.
+dependents in the same op.
 The asymmetry itself is expressed as one `actor` parameter (`'planner' |
 'direct'`) on **TaskEditValidator**'s single `validateTaskEdit`, not as two
 separate rule implementations — see below.

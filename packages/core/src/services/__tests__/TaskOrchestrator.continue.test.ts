@@ -121,7 +121,7 @@ describe('which tasks can be continued (ADR-0018, K1)', () => {
   });
 
   it('not a task still running, waiting, or never run, nor a user task', () => {
-    for (const status of ['pending', 'in_progress', 'awaiting_user', 'blocked'] as const) {
+    for (const status of ['pending', 'in_progress', 'awaiting_user'] as const) {
       expect(continuability(plan({ status, runnerSessionId: savedSessionId })).ok).toBe(false);
     }
     expect(continuability(plan({ type: 'user', status: 'completed', runnerSessionId: savedSessionId })).ok).toBe(false);

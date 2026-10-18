@@ -759,12 +759,12 @@ describe('requestSplit — planner-driven split', () => {
   });
 });
 
-/** A plan where 'a' failed and dropped its dependent 'b' to 'blocked'. */
+/** A plan where 'a' failed and its dependent 'b' waits behind it. */
 function failedRunPlan(): LegacyPlanState {
   return {
     tasks: [
       createTask({ id: 'a', order: 1, title: 'Setup', prompt: 'old prompt', status: 'failed', assignedRunner: 'claude-code' }),
-      createTask({ id: 'b', order: 2, title: 'Build', prompt: 'p', status: 'blocked', dependencies: ['a'], assignedRunner: 'claude-code' }),
+      createTask({ id: 'b', order: 2, title: 'Build', prompt: 'p', dependencies: ['a'], assignedRunner: 'claude-code' }),
     ],
     generatedAt: new Date().toISOString(),
     status: 'approved',
@@ -776,6 +776,26 @@ function failedRunPlan(): LegacyPlanState {
     ],
   };
 }
+
+describe('a plan saved with a stored blocked task', () => {
+  it('loads it as pending and runs it once its dependency is done', async () => {
+    const spawned: string[] = [];
+    const session = makeSession({ runner: recordingRunner(spawned) });
+    const plan: LegacyPlanState = {
+      ...failedRunPlan(),
+      tasks: [
+        createTask({ id: 'a', order: 1, title: 'Setup', prompt: 'p', status: 'completed', assignedRunner: 'claude-code' }),
+        { ...createTask({ id: 'b', order: 2, title: 'Build', prompt: 'p', dependencies: ['a'], assignedRunner: 'claude-code' }), status: 'blocked' } as never,
+      ],
+    };
+
+    session.loadPlan(plan, 'build it', testWorkspace, { persist: false });
+    expect(taskOf(session, 'b')!.status).toBe('pending');
+
+    await session.executePlan();
+    expect(spawned).toContain('b');
+  });
+});
 
 describe('rearm — task_ops conversation turn', () => {
   it('reaches the orchestrator during a live run without waking a cancelled/held task', async () => {

@@ -496,7 +496,7 @@ export function executionSummary(tasks: readonly Task[]): ExecutionSummary {
     total: tasks.length,
     completed: tasks.filter((t) => t.status === 'completed').length,
     failed: tasks.filter((t) => t.status === 'failed').length,
-    blocked: tasks.filter((t) => t.status === 'blocked' || blocked.has(t.id)).length,
+    blocked: tasks.filter((t) => blocked.has(t.id)).length,
     skipped: tasks.filter((t) => t.status === 'skipped').length,
   };
 }

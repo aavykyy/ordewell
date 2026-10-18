@@ -501,8 +501,8 @@ export class ExecutionCommands {
       return { refusal: `${capitalize(label)} ${statusWords(task)}. ${next}` };
     }
     const failed = this.host.blockedBy(task.id).flatMap((id) => this.located(id, tasks) ?? []);
-    if (task.status === 'blocked' || failed.length > 0) {
-      return { refusal: `${capitalize(label)} is blocked${failed.length > 0 ? `: ${named(failed)} failed. Retry ${failed.length === 1 ? 'it' : 'them'} first` : '. Ask the user to skip it or fix what blocks it'}.` };
+    if (failed.length > 0) {
+      return { refusal: `${capitalize(label)} is blocked: ${named(failed)} failed. Retry ${failed.length === 1 ? 'it' : 'them'} first.` };
     }
     const approval = this.unapproved(located, actor);
     if (approval && 'refusal' in approval) return approval;
@@ -692,7 +692,7 @@ export class ExecutionCommands {
     if (task.status === 'skipped') return { refusal: `${capitalize(label)} is already skipped.` };
     if (actor.kind !== 'user') {
       if (!why) return { refusal: `Skipping ${label} needs a reason: it is shown to the user and told to the tasks that depend on it.` };
-      const waits = task.status === 'failed' || task.status === 'blocked' || task.status === 'awaiting_user' || this.host.blockedBy(task.id).length > 0;
+      const waits = task.status === 'failed' || task.status === 'awaiting_user' || this.host.blockedBy(task.id).length > 0;
       if (!waits) return { refusal: `${capitalize(label)} has not started and nothing blocks it: the supervisor skips only a task that failed, is blocked or is waiting for input.` };
     }
     return {
@@ -841,7 +841,6 @@ const STATUS_WORDS: Record<TaskStatus, string> = {
   in_progress: 'is running',
   completed: 'has completed',
   failed: 'failed',
-  blocked: 'is blocked',
   awaiting_user: 'is waiting for the user',
   skipped: 'was skipped',
 };
