@@ -367,6 +367,21 @@ describe('TaskOrchestrator', () => {
 
       expect(orchestrator.status).toBe('approved');
     });
+
+    it('a retry takes a finished plan out of the completed state too', async () => {
+      const orchestrator = makeOrchestrator();
+      orchestrator.loadPlan([
+        createTask({ id: 't1', order: 1, title: 'AI Task', prompt: 'do', status: 'pending' }),
+      ]);
+      await orchestrator.markTaskComplete('t1');
+      await orchestrator.approveReview();
+      expect(orchestrator.status).toBe('completed');
+
+      await orchestrator.retryTask('t1');
+
+      expect(orchestrator.storeInstance.get('t1')!.status).toBe('pending');
+      expect(orchestrator.status).toBe('approved');
+    });
   });
 
   describe('forceStartTask', () => {

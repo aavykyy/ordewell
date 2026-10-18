@@ -254,10 +254,12 @@ everything below applies per repo of the group.
   completed. Whether their work was kept (merged by hand, or with Merge all) is
   something only the user knows; Mark not done is how they say it was not.
 - **A run closes however its last attempt ends.** Cancel, Mark complete or a
-  failed spawn close a run the scheduler is not driving — a manual task run, or
-  a run held on a usage limit with attempts left — as a verdict does; an idle `tick` closes
-  it. Left open, the next run would inherit its mode. A run paused at a merge
-  gate is not closed: it waits on the user, as one waiting on a user task does.
+  failed spawn close a manual task run, which the scheduler is not driving, as
+  a verdict does; an idle `tick` closes it. Left open, the next run would
+  inherit its mode. A run paused at a merge gate is not closed: it waits on the
+  user, as one waiting on a user task does. Nor is a run held on a usage limit:
+  the reset continues it
+  ([ADR-0034](../supervision/0034-a-failed-task-blocks-only-its-dependents.md)).
 - **The planner is told.** `PlannerModes.isolatedExecution` (one-shot and
   mid-run edits) and `ConversationVariant.isolatedExecution` (the conversation)
   swap the overlap-avoidance rule for one that allows same-file parallelism and
@@ -459,3 +461,4 @@ literal git command lines or private fields.
 - 2026-10-17 — the pre-implementation spec this ADR was built from is retired: its testing decisions and out-of-scope list moved here, and the merge paragraph states the global settings and the end-of-run merge that only History held.
 - 2026-10-17 — Merge all merges only into the branch the run started on (ADR-0042).
 - 2026-10-18 — the Session says when it closed the run (`run_closed`), and a surface re-told by a load or refresh takes `runSnapshot()` instead of reading the run record.
+- 2026-10-18 — a run held on a usage limit is no longer closed when its last attempt ends; it stays open for the reset (ADR-0034).

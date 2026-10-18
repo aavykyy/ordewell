@@ -584,17 +584,23 @@ holds. The limit counts only under the *in-flight rule*. When the runner's messa
 read by their connectors' `usageLimitReset`; OpenCode does not), the task carries a `resumeAt` saved with the plan, and at
 that time it is retried as a *Continue* of its saved session. Tasks paused on
 one runner share one wait — the latest of their resets — and resume together;
-the hold on the run is released once nothing waits on a reset and no task has
-failed. A plan loaded after its time resumes at once. Without a time, after a
+the hold on the run is released once nothing waits on a reset, whether or not
+a task failed meanwhile (ADR-0034). A held run stays open: with nothing at work
+it is neither handed over nor merged at its end, and sends no
+`execution_complete`. A plan loaded after its time resumes at once; a loaded
+plan holds no run, so only its paused tasks resume and the rest of the plan
+waits for Execute. Without a time, after a
 cancel or a stop, or when the resumed attempt hits the limit again at once, the
 task waits for a manual retry. *Resume now* (`resumeNow`) resumes it early, in
 its saved session, once the user says the limit has reset — from the task row,
 a message sent to it (after the reset notice), or `retry_task` from `session` —
-with every task waiting on that runner's reset. Surfaces show "Resumes at
+with every task waiting on that runner's reset. One the asked task cannot take
+(no free slot, no approval) is refused before anything changes, and a task it
+sweeps along that cannot start keeps waiting for its reset. Surfaces show "Resumes at
 8:10pm" with *Resume now* and *Don't resume*.
 A runner change, whether a direct edit or a planner edit, cancels that task's
 resume and makes it ready for the next scheduler slot on its new runner, as a
-*Carry-over*.
+*Carry-over*, and a run the pause held goes on.
 Other tasks on the old runner keep their shared wait; changing only the model
 keeps the resume because the limit belongs to the runner's account.
 *Avoid:* "rate limit" for it — a provider's per-minute throttle is retried
@@ -2117,6 +2123,24 @@ only the level; the scheduler reads the run's settings through one
 `runSettings()` callback as it decides, and nothing is pushed to it.
 *Avoid:* "supervisor" for the module — the Supervisor is the planner
 conversation taking turns; Run supervision holds the run to its settings.
+
+**Run state** (`RunState`, in `TaskOrchestrator`; ADR-0034, ADR-0018 U1) —
+where the full-plan run stands, as one value: *idle* (no full-plan run since
+the plan loaded or the user stopped one; a task started on its own may still be
+at work), *scheduling* (ready tasks start as slots free; a run waiting on the
+user, a hold or a merge gate stays here), *held* (a usage-limit pause holds it:
+it stays open and starts nothing new until the reset, a *Resume now*, a retry,
+a skip or a move to another runner continues it), *ended on a failure* (every
+task left is failed or blocked; a retry or a skip continues it) and *finished*
+(every task completed or was skipped). `isScheduling`, `awaitsResume` and the
+plan status (`running`, `completed`, else `approved`) derive from it. One
+settle step (`settleRun`) decides, once nothing is at work and nothing can
+start, whether the run goes on, is held, waits on the user or is over; only an
+end closes the run and sends `execution_complete`. The review approval
+(`isReviewApproved`) is kept apart: it says the user signed the plan off, not
+where its run stands.
+*Avoid:* "paused" for *held* (a task is paused on a usage limit; the run is
+held), "stopped" for *ended* (Stop is the user's, and leaves the run idle).
 
 **Run origin** (`RunOrigin`: `user` / `supervisor` / `limit-reset`) — who opened
 a run, passed with the call that opens it, from the Command seam's actor down
