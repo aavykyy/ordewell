@@ -1,0 +1,123 @@
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { createTask, type LegacyPlanState } from '../../models/Task';
+import { makeSession, testWorkspace, taskOf } from './sessionTestKit';
+import { hitLimit, NOW, RESUME_AT, supervised, task as runTask, until } from './supervisorTestKit';
+import type { ModelResolver } from '../ModelResolver';
+import { applyTaskOps } from '../TaskOps';
+
+/**
+ * Adversarial: every writer of a task's shape goes through the same guards.
+ * CONTEXT.md: "The user's direct edits are held to the same rules ... refused
+ * only for one the edit breaks", and the planner may not remove a task that
+ * has started or finished. A hand-added task and a planner's subtree edit are
+ * the two routes that name no existing task to lock or check.
+ */
+
+const CATALOG = {
+  'claude-code': [
+    { modelId: 'claude-sonnet-4-5', modelLabel: 'Claude Sonnet 4.5', variants: [] },
+  ],
+};
+const resolverFor = (models: unknown) =>
+  ({ modelsForRunners: vi.fn().mockResolvedValue(models) }) as unknown as Pick<ModelResolver, 'modelsForRunners'>;
+
+function planWith(): LegacyPlanState {
+  return {
+    tasks: [createTask({ id: 't1', order: 1, title: 'Setup', prompt: 'setup', assignedRunner: 'claude-code' })],
+    generatedAt: new Date().toISOString(),
+    status: 'approved',
+    runners: ['claude-code'],
+    lastUpdated: new Date().toISOString(),
+  };
+}
+
+function session() {
+  const made = makeSession({ modelResolver: resolverFor(CATALOG) });
+  made.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
+  return made;
+}
+
+describe('a direct edit is held to the plan\'s rules', () => {
+  it('refuses an ops task on its runner\'s read-only mode', async () => {
+    await expect(session().updateTask('t1', { ops: true, taskMode: 'plan' }))
+      .rejects.toThrow(/read-only mode/);
+  });
+});
+
+describe('a hand-added task', () => {
+  // ADVERSARIAL FINDING (plan editing): PlanEditor.addTask resolves the
+  // assignment but never runs checkPlanInvariants, so a task the direct-edit
+  // path would refuse is added: an ops task in its runner's read-only mode, an
+  // AFK task with user steps, a manual task with an AFK slice. Expected: the
+  // same plan rules updateTask reads refuse the added task (CONTEXT.md,
+  // "Hand-added task" and "Direct edit vs planner edit").
+  it.skip('is refused when it breaks a rule the plan\'s tasks keep together', async () => {
+    const made = session();
+    await expect(made.addTask({ title: 'Ops', prompt: 'deploy', ops: true, taskMode: 'plan' }))
+      .rejects.toThrow(/read-only mode/);
+    await expect(made.addTask({
+      title: 'Mixed',
+      prompt: 'x',
+      autonomy: 'AFK',
+      userSteps: [{ order: 1, instruction: 'sign off', completed: false }],
+    })).rejects.toThrow(/AFK/);
+    await expect(made.addTask({
+      title: 'Manual',
+      type: 'user',
+      sliceType: 'AFK',
+      userSteps: [{ order: 1, instruction: 'sign off', completed: false }],
+    })).rejects.toThrow(/HITL/);
+    expect(made.planTasks.map((t) => t.title)).toEqual(['Setup']);
+  });
+});
+
+describe('a paused task edited into a manual one', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ now: NOW, toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // ADVERSARIAL FINDING (scheduler): a task paused on a usage limit keeps its
+  // resumeAt when a direct edit turns it into a manual task; resumeTask reads
+  // pausedOnLimit and claims it, spawning a runner for a task the start rule
+  // says never starts. Expected: the edit ends the pause (or the resume
+  // refuses a non-AI task), and nothing spawns for it at the reset.
+  it.skip('does not spawn a runner for it at its reset', async () => {
+    const env = await supervised([runTask('t1', 1), runTask('t2', 2)], {
+      settings: { supervisorLevel: 'off' }, config: { maxParallelSessions: 1 },
+    });
+    hitLimit(env.run.of('t1'));
+    await until(() => taskOf(env.session, 't1')!.resumeAt === RESUME_AT);
+
+    await env.session.updateTask('t1', {
+      type: 'user',
+      userSteps: [{ order: 1, instruction: 'sign off', completed: false }],
+    });
+    expect(taskOf(env.session, 't1')).toMatchObject({ type: 'user', status: 'awaiting_user' });
+
+    await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now() + 1000);
+
+    expect(env.run.spawnedIds()).toEqual(['t1']);
+  });
+});
+
+describe('a planner edit that removes a subtree', () => {
+  // ADVERSARIAL FINDING (plan editing): applyTaskOps's remove locks only the
+  // named top-level task, then removeTaskFromPlan drops its whole subtree, so
+  // a completed or running subtask is removed from the plan by the planner
+  // although the planner may not touch finished or running work. Expected:
+  // every task in the subtree is checked by the same lock rule, and the
+  // removal is refused naming the settled descendant.
+  it.skip('is refused when a subtask has completed', () => {
+    const parent = createTask({
+      id: 'p', order: 1, title: 'Parent', prompt: 'parent',
+      subtasks: [{ ...createTask({ id: 's', order: 1, title: 'Sub', prompt: 'sub' }), status: 'completed' }],
+    });
+    const result = applyTaskOps([parent], [{ op: 'remove', taskId: 'p' }], ['claude-code']);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/completed/);
+  });
+});
