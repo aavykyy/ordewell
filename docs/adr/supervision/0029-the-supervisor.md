@@ -369,7 +369,10 @@ accepted. Each tripped guard also posts a supervisor message to the user.
   turn's wake-ups wait with its other inputs and go again in the planner's
   resend ([ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md)); one
   whose reset cannot be read leaves the run unsupervised.
-- **Undelivered wake-up batches reload after a daemon restart.**
+- **Loading a session never opens a planner turn or starts execution.**
+  Undelivered wake-up batches and user inputs are preserved for a new input;
+  the supervisor's saved debounce is not rearmed on load. Autorun applies to
+  a new plan submission, never to opening a saved session.
 
 ### Usage limits
 
@@ -559,3 +562,4 @@ until #30 exists.
 - 2026-10-18 — the seam reads a task reference from the user's controls as the CLI and TUI do, a unique id prefix included; a model's references stay id, label and title.
 - 2026-10-18 — a plan scope that ends while a wake-up turn is out discards it with its timeout and grace, so its grace never abandons the next scope's turn or counts a failure there.
 - 2026-10-18 — the Merge all payload carries the merge result alone; whether the merge closed the run is the Session's `run_closed` ([ADR-0013](../isolation/0013-worktree-isolation.md)), and the payload cannot say it another way.
+- 2026-10-18 — loading a session keeps saved planner inputs and supervisor batches idle, without rearming the supervisor debounce.

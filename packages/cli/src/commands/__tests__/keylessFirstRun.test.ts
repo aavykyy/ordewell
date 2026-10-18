@@ -224,7 +224,7 @@ describe('keyless first-run entry points at the process boundary', () => {
     });
   }
 
-  it('answers a restored pending user input once after detection, and persists its removal', async () => {
+  it('keeps restored user input idle after detection, then sends it with a new message and persists its removal', async () => {
     savePlan('restored', { pendingTurns: pending() });
     const detection = probe();
     const landed = ended('restored');
@@ -234,11 +234,15 @@ describe('keyless first-run entry points at the process boundary', () => {
 
     detection.answer();
     await detection.detection;
+    await flushMicrotasks(100);
+    expect(argvs).toEqual([]);
+    await client.sendConversationMessage('restored', 'go on');
     await landed;
 
     expect(argvs).toHaveLength(1);
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain('Use Postgres');
+    expect(prompts[0]).toContain('go on');
     expect(pool.getPlan('restored')?.pendingTurns ?? []).toEqual([]);
     expect(loadSession('restored', workspace)?.plan.pendingTurns ?? []).toEqual([]);
     await client.adoptSession('restored', workspace);
@@ -259,13 +263,13 @@ describe('keyless first-run entry points at the process boundary', () => {
   });
 
   for (const source of ['user', 'supervisor'] as const) {
-    it(`Stop cancels restored ${source} input before detection; autorun never spawns`, async () => {
+    it(`loading restored ${source} input leaves no live turn to Stop, and autorun never spawns`, async () => {
       pool.updateRunSettings({ autorun: true, supervisorLevel: 'watch' });
       savePlan('stopped', { pendingTurns: pending(source), runSettings: { mergeAtGatesAutomatically: false, supervisorLevel: 'watch' } });
       const detection = probe();
       await client.adoptSession('stopped', workspace);
 
-      expect(await client.cancelPlanning('stopped')).toEqual({ cancelled: true });
+      expect(await client.cancelPlanning('stopped')).toEqual({ cancelled: false });
       detection.answer();
       await detection.detection;
       await installedPlannerDetected();
@@ -273,6 +277,7 @@ describe('keyless first-run entry points at the process boundary', () => {
 
       expect(argvs).toEqual([]);
       expect(runner.spawn).not.toHaveBeenCalled();
+      expect(loadSession('stopped', workspace)?.plan.pendingTurns).toEqual(pending(source));
       expect(await client.cancelPlanning('stopped')).toEqual({ cancelled: false });
     });
   }
@@ -324,13 +329,17 @@ describe('keyless first-run entry points at the process boundary', () => {
     expect(argvs).toHaveLength(1);
   });
 
-  it('replays a saved supervisor wake-up through the same gate and adapter as user input', async () => {
+  it('holds a saved supervisor wake-up until user input reaches the same gate and adapter', async () => {
     savePlan('supervisor', { pendingTurns: pending('supervisor'), runSettings: { mergeAtGatesAutomatically: false, supervisorLevel: 'watch' } });
     const detection = probe();
     const landed = ended('supervisor');
     await client.adoptSession('supervisor', workspace);
     expect(argvs).toEqual([]);
     detection.answer();
+    await detection.detection;
+    await flushMicrotasks(100);
+    expect(argvs).toEqual([]);
+    await client.sendConversationMessage('supervisor', 'what happened?');
     await landed;
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain('Task t1 failed; inspect it');

@@ -101,8 +101,8 @@ the plan's owner).
 Session boundaries are hard: every way a plan stops being the Session's ends
 its **plan scope** in one place (see there). `loadPlan` of a *different* plan
 then adopts the new one (the first user send reseeds from the adopted plan's
-own transcript, and inputs the adopted plan still holds are replayed), and
-hosts call `Session.reset()` on "new session" for a full wipe with a freshly
+own transcript, and inputs the adopted plan still holds wait for a new input),
+and hosts call `Session.reset()` on "new session" for a full wipe with a freshly
 minted identity. Nothing from one session may surface in another — a
 long-lived Session (VS Code hosts exactly one) otherwise presents the previous
 session's tasks to the planner as the current plan.
@@ -622,10 +622,9 @@ the hold on the run is released once nothing waits on a reset, whether or not
 a task failed meanwhile (ADR-0034) — at the reset, or when the last waiting
 task is marked complete, has its resume cancelled or leaves the plan. A held run stays open: with nothing at work
 it is neither handed over nor merged at its end, and sends no
-`execution_complete`. A plan loaded after its time resumes at once; a loaded
-plan holds no run, so only its paused tasks resume and the rest of the plan
-waits for Execute. Without a time, after a
-cancel or a stop, or when the resumed attempt hits the limit again at once, the
+`execution_complete`. Loading a session cancels its saved resume times and
+leaves its tasks paused for the user; loading never starts work. Without a time,
+after a cancel or a stop, or when the resumed attempt hits the limit again at once, the
 task waits for a manual retry. *Resume now* (`resumeNow`) resumes it early, in
 its saved session, once the user says the limit has reset — from the task row,
 a message sent to it (after the reset notice), or `retry_task` from `session` —
@@ -669,9 +668,10 @@ tasks, the planner and the supervisor's wake-ups.
 **Planner resend** (`PlannerResend`, the plan's `plannerResend`; ADR-0044) —
 what follows a planner turn that ended on the planner's own usage limit. The
 turn shows as a failure; the inputs it took (the user's message, a wake-up)
-stay pending on the plan, and a wait is saved with it, so a reload keeps it. At
-the reset plus a minute they go again as one turn, with whatever arrived
-meanwhile; a user's message sent meanwhile is answered at once as saved, not
+stay pending on the plan, and a wait is saved with it. Loading a session holds
+these inputs for a new message instead of rearming its saved timer. During a
+live session, at the reset plus a minute they go again as one turn, with whatever
+arrived meanwhile; a user's message sent meanwhile is answered at once as saved, not
 held for hours. With no reset known, a relapse within five minutes of a
 resend, a cancel (`/resend cancel`, `ordewell resend cancel`, VS Code's *Don't
 resend*) or a planner that moved to another runner, nothing is sent on its own:
@@ -2348,8 +2348,8 @@ completed one). A batch applies whole or not at all, as `applyTaskOps` always
 has, so one refused op refuses its batch. A whole plan is refused while a task
 runs, and the planner is asked for task edits. Inputs wait on the plan
 (`pendingTurns`), saved as they arrive and dropped in the save that lands their
-turn's outcome, so a reload replays exactly what no turn answered; a turn that
-fails drops the user's inputs but leaves a wake-up batch for the next turn. A
+turn's outcome, so a reload keeps exactly what no turn answered for the next
+input without opening a turn; a turn that fails drops the user's inputs but leaves a wake-up batch for the next turn. A
 load also carries over the mid-run edits older builds queued
 (`queuedMessages`).
 *Avoid:* "pending plan edit" or "queued edit" for it — nothing waits for a

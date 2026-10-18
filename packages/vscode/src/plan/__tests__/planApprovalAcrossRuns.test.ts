@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { createSession, flattenTasks, RunnerRegistry, BufferedTaskOutputSource, createTask, RUN_SETTINGS_DEFAULTS } from '@ordewell/core';
+import { createSession, flattenTasks, RunnerRegistry, BufferedTaskOutputSource, createTask, RUN_SETTINGS_DEFAULTS, saveState } from '@ordewell/core';
 import type { IAiService, IRunner, LegacyPlanState, ModelResolver, Session, SurfacePlan } from '@ordewell/core';
 import { fakeConfig, fakeFileSystem, FakeRunnerSession } from '@ordewell/core/testing';
 import { ChatViewProvider } from '../../providers/ChatViewProvider';
@@ -37,7 +37,7 @@ function plan(): LegacyPlanState {
 }
 
 /** A VS Code window as ExtensionHost wires it: every session event goes through the host's handler. */
-function host(workspace: string) {
+function host(workspace: string, aiService?: IAiService) {
   const posts: HostToWebview[] = [];
   const chatProvider = new ChatViewProvider({ toString: () => 'file:///ext' } as unknown as vscode.Uri);
   chatProvider.postMessage = (msg) => { posts.push(msg); };
@@ -93,7 +93,7 @@ function host(workspace: string) {
     modelResolver: { getCachedRunnerModels: () => [], modelsForRunners: vi.fn().mockResolvedValue({}) } as unknown as ModelResolver,
     // No supervisor: its wake-up turns would need a planner this test has no use for.
     settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } }),
-    aiService: { reset: () => {}, hasActiveConversation: () => false } as unknown as IAiService,
+    aiService: aiService ?? { reset: () => {}, hasActiveConversation: () => false } as unknown as IAiService,
     taskOutput: new BufferedTaskOutputSource(),
     saveSession: vi.fn(),
   });
@@ -167,6 +167,39 @@ describe('VS Code: the user\'s Execute plan stays their approval after the run',
 
     expect(after.session.planState!.tasks.map((t) => t.id)).toEqual(['t1', 't2']);
     expect(await after.session.execute({ command: 'run_plan' }, PLANNER)).toMatchObject({ ok: true });
+  });
+
+  it('restores saved planner inputs and a task usage-limit pause without starting either', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    const startConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'Ready.', researchLog: [] });
+    const continueConversation = vi.fn();
+    const after = host(workspace, { reset: vi.fn(), hasActiveConversation: () => false, startConversation, continueConversation } as unknown as IAiService);
+    try {
+      const saved = plan();
+      saved.status = 'approved';
+      saved.pendingTurns = [{ id: 'saved-input', source: 'user', text: 'finish the parser', timestamp: new Date().toISOString() }];
+      const at = new Date(Date.now() + 60_000).toISOString();
+      saved.plannerResend = { runner: 'claude-code', at };
+      Object.assign(saved.tasks[0], { status: 'awaiting_user', awaitingReason: 'usage-limit', resumeAt: at, runnerSessionId: 'saved-task' });
+      saveState(saved, workspace);
+
+      after.restore();
+      await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
+
+      expect(startConversation).not.toHaveBeenCalled();
+      expect(continueConversation).not.toHaveBeenCalled();
+      expect(after.spawned).toHaveLength(0);
+      expect(after.session.isPlannerBusy).toBe(false);
+      expect(after.session.planState!.pendingTurns?.map((t) => t.text)).toEqual(['finish the parser']);
+      expect(flattenTasks(after.session.planTasks)[0].resumeAt).toBeUndefined();
+
+      await after.session.continueConversation('go on');
+      expect(startConversation).toHaveBeenCalledTimes(1);
+      expect(after.session.planState!.pendingTurns).toEqual([]);
+    } finally {
+      after.session.destroy();
+      vi.useRealTimers();
+    }
   });
 });
 

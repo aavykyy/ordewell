@@ -248,7 +248,7 @@ describe('live planner turns during a run', () => {
     expect(snapshots.at(-1)!.pendingTurns).toEqual([]);
   });
 
-  it('replays a message a background save caught mid-turn exactly once', async () => {
+  it('keeps a message a background save caught mid-turn until the user sends again', async () => {
     const { session, calls, finish } = await liveRun();
 
     const answered = session.continueConversation('rename task 2');
@@ -261,15 +261,20 @@ describe('live planner turns during a run', () => {
 
     session.loadPlan(savedMidTurn, 'build it', testWorkspace);
     await expect(answered).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
+    calls[0].finish(prose('Old reply.'));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(calls).toHaveLength(1);
+    const resumed = session.continueConversation('go on');
     expect(calls).toHaveLength(2);
+    expect(calls[1].message).toMatch(/rename task 2\n\ngo on$/);
     calls[1].finish(prose('Noted.'));
-    await vi.waitFor(() => expect(session.isPlannerBusy).toBe(false));
+    await resumed;
 
-    const said = (session.planState!.conversationHistory ?? []).filter((e) => e.content === 'rename task 2');
+    const said = (session.planState!.conversationHistory ?? []).filter((e) => e.content === 'rename task 2\n\ngo on');
     expect(said).toHaveLength(1);
   });
 
-  it('replays a message no turn answered once, after a reload', async () => {
+  it('loads unanswered messages without contacting the planner, then sends them with the next message once', async () => {
     const { aiService, calls } = heldPlanner();
     const session = makeSession({ aiService });
     const saved = runPlan([createTask({ ...first(), status: 'completed' }), second()]);
@@ -278,9 +283,13 @@ describe('live planner turns during a run', () => {
     saves(session).mockImplementation((plan) => { snapshots.push(structuredClone(plan)); });
 
     session.loadPlan(saved, 'build it', testWorkspace);
+    expect(calls).toHaveLength(0);
+    expect(session.isPlannerBusy).toBe(false);
+    const resumed = session.continueConversation('go on');
     expect(calls).toHaveLength(1);
-    expect(calls[0].message).toMatch(/rename task 2$/);
+    expect(calls[0].message).toMatch(/rename task 2\n\ngo on$/);
     calls[0].finish(ops({ op: 'update', taskId: '#2', changes: { title: 'Second, renamed' } }));
+    await resumed;
     await vi.waitFor(() => expect(taskOf(session, 't2')!.title).toBe('Second, renamed'));
     await vi.waitFor(() => expect(session.isPlannerBusy).toBe(false));
 
@@ -288,7 +297,7 @@ describe('live planner turns during a run', () => {
     expect(calls).toHaveLength(1);
   });
 
-  it('carries a mid-run edit an older build queued over as a turn', () => {
+  it('keeps an older queued edit for the next user message without starting a turn on load', () => {
     const { aiService, calls } = heldPlanner();
     const session = makeSession({ aiService });
     const saved = runPlan([first(), second()]);
@@ -296,8 +305,7 @@ describe('live planner turns during a run', () => {
 
     session.loadPlan(saved, 'build it', testWorkspace);
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0].message).toMatch(/rename task 2$/);
+    expect(calls).toHaveLength(0);
     expect(session.planState!.queuedMessages).toBeUndefined();
     expect(session.planState!.pendingTurns?.map((t) => t.source)).toEqual(['user']);
   });

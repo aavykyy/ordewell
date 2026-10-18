@@ -190,14 +190,13 @@ export class Supervisor {
   }
 
   /**
-   * Put back a save's gathered state after a restart, and re-arm the debounce
-   * from when it was due, so a batch that was inside the window is delivered.
+   * Keep a save's gathered state without waking the planner just because the
+   * session was opened (ADR-0029). A new run event may arm it again.
    */
   restore(snapshot: SupervisorSnapshot | undefined): void {
     this.disarm();
     this.policy.restore(snapshot?.policy);
     this.wakeUps = [...(snapshot?.wakeUps ?? [])];
-    this.arm();
   }
 
   /**

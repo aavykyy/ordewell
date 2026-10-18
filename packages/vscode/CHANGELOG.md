@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.10.7] - 2026-10-18
+
+### Fixed
+
+- **Loading a saved session stays idle until you ask it to continue.** Opening
+  session history or reloading VS Code no longer replays unanswered planner
+  messages, wakes the supervisor or restarts tasks at a saved usage-limit
+  reset. Unanswered messages are preserved for your next message, and paused
+  tasks wait for an explicit resume, even with autorun enabled.
+
 ## [0.10.6] - 2026-10-18
 
 ### Changed

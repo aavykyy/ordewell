@@ -34,8 +34,9 @@ ended a turn Ordewell started.**
 - At the reset plus a short margin they are **sent again as one turn**. A
   user's message sent during the wait is saved and answered at once, since its
   turn is hours off; it goes with the rest.
-- The wait is saved with the plan. A reload re-arms it, and a time already
-  passed resends at once.
+- The wait is saved with the plan. Loading a session clears its scheduled
+  resend time and holds the inputs for a new message, whether that time is
+  still ahead or already passed. Loading alone never calls the planner.
 - **Nothing is sent that no one asked for since** when no time is known: the
   reset could not be read, the resend hit the limit again within five minutes,
   the user cancelled, or the planner moved to another runner, whose account the
@@ -79,6 +80,8 @@ ended a turn Ordewell started.**
 - **Resend without being told when no reset is known.** Rejected: an unattended
   guess could resend into the limit repeatedly; the next input is a signal that
   someone is there.
+- **Re-arm saved timers on load.** Rejected: opening an old session is not
+  consent to spend tokens. The inputs survive, but wait for a new message.
 - **Keep the user's message pending without answering it.** Rejected: the send
   would not settle for hours.
 - **Treat any limit words as a limit.** The earlier behaviour; it paused work
@@ -87,3 +90,4 @@ ended a turn Ordewell started.**
 ## History
 
 - 2026-10-17 — accepted and implemented: the planner's wait and resend, `/resend cancel`, the in-flight rule, and Codex's structured limit signals.
+- 2026-10-18 — loading a session holds saved inputs for a new message instead of rearming its resend timer.

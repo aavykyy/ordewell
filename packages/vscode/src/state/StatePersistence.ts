@@ -50,9 +50,9 @@ export function restoreState(deps: PersistenceDeps): void {
       if (task.status === 'in_progress') { task.status = 'pending'; }
     }
     // Adopt the plan into the Session so its tasks are executable and the
-    // conversation can resume — a planner turn input no turn answered is
-    // replayed by the adoption. persist:false — globalState has no session id,
-    // so persisting here would fork a new session file on every reload.
+    // conversation can resume when the user sends a message. persist:false —
+    // globalState has no session id, so persisting here would fork a new
+    // session file on every reload.
     try {
       deps.session.loadPlan(saved, deps.getCurrentGoal(), deps.workspaceRoot(), { persist: false });
     } catch (err) {

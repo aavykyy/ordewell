@@ -255,12 +255,10 @@ and completion evidence.
   apply, though it counts against its retry limit. A task with no saved session
   is not resumed this way; a fresh retry starts it over. A resumed attempt,
   automatic or asked for, that hits the limit again within five minutes waits
-  for a manual retry, and says so. A plan loaded with a resume time still ahead
-  waits for it again; one that
-  passed while nothing ran — the daemon was down — resumes at once. The hold
-  lives with the run, not the plan: a loaded plan has no run, so its reset
-  resumes only the paused tasks, and the rest of the plan waits for Execute, as
-  any run does after a restart. Cancelling
+  for a manual retry, and says so. Loading a saved session clears its scheduled
+  resume times, whether still ahead or already passed, and leaves the tasks paused for the user to resume
+  explicitly. The hold lives with the run, not the plan: opening an old session
+  never starts a task or spends tokens. Cancelling
   the resume (the task row and the task view) and stopping the run
   both leave the task waiting for a manual retry, as one with no readable
   reset waits. Moving a task to another runner, through a direct edit or the
@@ -464,3 +462,4 @@ transport is retained for take-over.
 - 2026-10-18 — P1: saved and live task logs join by stream position through one follow reducer, and every runner exit closes its view's turn.
 - 2026-10-18 — U1: the hold on a run is released however its last reset wait goes — Mark complete, a cancelled resume or the task leaving the plan — not only at the reset.
 - 2026-10-18 — O1: a run's late copy that adds to its deltas after another run or a tool line was written starts its addition on a line of its own.
+- 2026-10-18 — U1: loading a session clears saved resume times and keeps paused tasks idle until explicitly resumed.

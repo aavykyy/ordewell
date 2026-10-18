@@ -119,13 +119,14 @@ describe('a control from the daemon lands one execution_action line, worded by t
   });
 
   it('cancelling a scheduled resume answers the seam\'s line, and refuses a task with none', async () => {
-    const h = start([{
-      ...task('t1', 1),
-      status: 'awaiting_user',
-      awaitingReason: 'usage-limit',
-      resumeAt: new Date(Date.now() + 3_600_000).toISOString(),
-      runnerSessionId: 'native-t1',
-    }, task('t2', 2)]);
+    const h = start([task('t1', 1), task('t2', 2)]);
+    await h.session.execute({ command: 'force_start', task: 't1' }, { kind: 'user' });
+    const limit = "You've hit your session limit · resets 8:10pm (UTC)";
+    h.latest('t1').emitEvent({ type: 'error', message: limit });
+    h.latest('t1').emitOutput(`${limit}\n`);
+    h.latest('t1').emitTurnEnd('failed');
+    await vi.waitFor(() => expect(h.session.planTasks[0].resumeAt).toBeDefined());
+    h.forgetTimeline();
 
     const cancelled = await h.post('tasks/t1/resume/cancel');
     const none = await h.post('tasks/t2/resume/cancel');

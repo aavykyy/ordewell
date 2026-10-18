@@ -2031,7 +2031,8 @@ export class Session {
     // guards' memory and any batch inside its debounce window (ADR-0029). The
     // same-object load keeps the live run's, which is fresher than the save.
     if (adopting) this.supervision.restore(plan.supervision);
-    // And a wait on the planner's usage limit, which resends at once if its time has passed.
+    // Loading is not consent to spend tokens: saved inputs wait for a new
+    // input, and saved reset times never restart work (ADR-0044).
     if (adopting) this.turns.restoreResend();
     this.goal = goal;
     this.workspace = workspace;
@@ -2050,6 +2051,9 @@ export class Session {
     // Adopting the saved session's id keeps subsequent persists writing to the
     // same file instead of forking the session under a fresh identity.
     if (opts?.sessionId) this.currentSessionId = opts.sessionId;
+    if (adopting) {
+      for (const task of flattenTasks(plan.tasks)) delete task.resumeAt;
+    }
     this.orchestrator.loadPlan(plan.tasks, plan.runners);
     // Loading normalizes statuses (a failed task gets a fresh chance) on the
     // store's copy; the adopted plan shows that result, not the caller's input.
@@ -2075,8 +2079,6 @@ export class Session {
     // A reopened session shows its token line again without waiting for the
     // next turn: announce the totals the moment the plan is adopted.
     if (this.usage.hasUsage) this.broadcast(this.usage.message());
-    // What no turn answered before the session was saved is answered now.
-    this.turns.pump();
   }
 
   destroy(): void {

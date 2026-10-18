@@ -204,7 +204,7 @@ describe('task skills checked where a planner reply lands', () => {
 });
 
 describe('a planner turn input saved on the plan', () => {
-  it('is replayed after a reload with the skills its /name tokens loaded, composed as a live send is', async () => {
+  it('waits after a reload, then goes with the next message and the skills its /name tokens loaded', async () => {
     const first = makeSession({ skillsService, aiService: { continueConversation: vi.fn(() => new Promise<never>(() => {})), hasActiveConversation: () => true } });
     first.loadPlan(twoTaskPlan(), 'build it', testWorkspace, { persist: false });
     void first.continueConversation('/review /tdd rename the step');
@@ -214,11 +214,12 @@ describe('a planner turn input saved on the plan', () => {
     const continueConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'ok', researchLog: [] });
     const reloaded = makeSession({ skillsService, aiService: { continueConversation, hasActiveConversation: () => true } });
     reloaded.loadPlan(saved, 'build it', testWorkspace, { persist: false });
-    await vi.waitFor(() => expect(continueConversation).toHaveBeenCalled());
+    expect(continueConversation).not.toHaveBeenCalled();
+    await reloaded.continueConversation('go on');
 
     const sent = String(continueConversation.mock.calls[0][0]);
     expect(sent).toContain('<skill name="review">\nREVIEW BODY\n</skill>');
     expect(sent).toContain('The user asks to use task skill "tdd"');
-    expect(sent).toMatch(/rename the step$/);
+    expect(sent).toMatch(/rename the step\n\ngo on$/);
   });
 });

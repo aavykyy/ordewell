@@ -496,7 +496,7 @@ describe('when the supervisor fails, the run does not depend on it', () => {
 });
 
 describe('undelivered wake-ups across a daemon restart', () => {
-  it('reloads a wake-up no turn answered, and delivers it once the session is adopted', async () => {
+  it('keeps an unanswered wake-up idle on adoption and delivers it with the next user message', async () => {
     const env = await wokenUp();
     const saved = structuredClone(saves(env.session).mock.calls.at(-1)![0]);
     expect(saved.pendingTurns!.map((t) => t.source)).toEqual(['supervisor']);
@@ -506,12 +506,15 @@ describe('undelivered wake-ups across a daemon restart', () => {
     const restarted = makeSession({ aiService: planner.aiService, runner: recordingRunner().runner });
     restarted.loadPlan(saved, 'build it', testWorkspace, { sessionId: env.session.sessionId });
 
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
+    expect(planner.calls).toHaveLength(0);
+    const sent = restarted.continueConversation('what happened?');
     await until(() => planner.calls.length === 1);
     expect(planner.calls[0].message).toMatch(/- task #1 "Task t1" is waiting for input/);
     planner.calls[0].finish(prose('Task 1 was waiting for input when Ordewell restarted.'));
-    await settled();
+    await sent;
     expect(restarted.planState!.pendingTurns).toEqual([]);
-    expect(restarted.planState!.conversationHistory!.at(-1)).toMatchObject({ kind: 'supervisor' });
+    expect(restarted.planState!.conversationHistory!.at(-1)).toMatchObject({ role: 'assistant' });
   });
 
   it('keeps an unsupervised run\'s wake-ups for the user\'s next message after a restart', async () => {

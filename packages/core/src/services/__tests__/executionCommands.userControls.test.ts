@@ -6,6 +6,7 @@ import type { IRunner } from '../../interfaces/IRunner';
 import type { SessionMessage } from '../SessionMessage';
 import type { ExecutionActor } from '../../models/Execution';
 import type { ExecutionCommand } from '../ExecutionCommands';
+import { hitLimit } from './supervisorTestKit';
 
 /**
  * The user's own controls at the command seam (ADR-0029): each is checked,
@@ -243,7 +244,11 @@ describe('force sending and taking back task messages', () => {
 describe('cancel_resume', () => {
   it('keeps a paused task from resuming on its own, and refuses one with no resume scheduled', async () => {
     const env = setup();
-    env.load([paused('t1', 1), task('t2', 2)]);
+    env.load([task('t1', 1), task('t2', 2)]);
+    await env.run({ command: 'force_start', task: 't1' });
+    hitLimit(env.latest('t1'));
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')!.resumeAt).toBeDefined());
+    env.messages.length = 0;
 
     expect(await env.run({ command: 'cancel_resume', task: 't1' })).toEqual({ ok: true, message: 'Task #1 "Task t1" no longer resumes on its own at its usage limit\'s reset: resume it when you choose.' });
     expect(taskOf(env.session, 't1')!.resumeAt).toBeUndefined();

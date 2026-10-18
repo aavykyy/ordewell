@@ -117,8 +117,8 @@ export function turnPrompt(batch: readonly PendingPlanTurn[]): TurnPrompt {
  * and they all go as one turn. A force send is not an answer to
  * it (ADR-0023, F5): a turn it stopped keeps its wake-ups waiting, undelivered,
  * for the supervisor's next turn. The user's Stop also drops the user's inputs
- * waiting behind the turn it stopped ({@link stopQueued}). A reload therefore
- * replays exactly what no turn answered.
+ * waiting behind the turn it stopped ({@link stopQueued}). A reload keeps
+ * what no turn answered for the next input, without opening a turn.
  */
 export class PlanTurns {
   private readonly waiters = new Map<string, Waiter>();
@@ -129,6 +129,8 @@ export class PlanTurns {
   private refusalTold: string | null = null;
   /** The user stopped the turn wake-ups waited behind: they wait for the next input to open one, not for the stop's release. */
   private quiet = false;
+  /** A loaded session stays idle even if an outgoing turn's release pumps the queue. */
+  private restored = false;
   private seq = 0;
   private readonly resend: PlannerResend;
 
@@ -170,8 +172,9 @@ export class PlanTurns {
     for (const t of plan.pendingTurns) if (t.source === 'user') this.settle(t.id, (w) => w.resolve(plan));
   }
 
-  /** A plan adopted off disk: the wait it saved is armed again. */
+  /** A plan adopted off disk keeps its inputs until a new input asks for a turn. */
   restoreResend(): void {
+    this.restored = true;
     this.resend.restore();
   }
 
@@ -223,6 +226,7 @@ export class PlanTurns {
     const plan = this.host.plan();
     if (!plan) return Promise.reject(new Error('No planning conversation to continue'));
     const entry = this.pending(input, forced);
+    this.restored = false;
     this.quiet = false;
     if (this.resend.arrived()) this.host.announce();
     const pending = plan.pendingTurns ?? [];
@@ -256,14 +260,14 @@ export class PlanTurns {
   /**
    * Start the next turn if one is due: nothing of ours is in flight, the
    * conversation is free, and inputs wait. The host calls it when any planner
-   * turn lets the conversation go, and after a load, to replay what waited.
+   * turn lets the conversation go. A loaded session waits for a new input.
    *
    * Every turn passes the planner gate here, whatever brought its input: it
    * waits for the installed-planner probe, then everything is judged afresh —
    * the plan, what still waits, and the planner in use at that moment.
    */
   pump(): void {
-    if (this.running || this.detecting || this.resend.holds()) return;
+    if (this.restored || this.running || this.detecting || this.resend.holds()) return;
     const plan = this.host.plan();
     if (!plan || this.host.conversationBusy()) return;
     const batch = this.liveBatch(plan);
@@ -350,6 +354,7 @@ export class PlanTurns {
     this.running?.release();
     this.running = null;
     this.quiet = false;
+    this.restored = false;
     for (const waiter of this.waiters.values()) waiter.reject(new PlannerTurnDiscardedError());
     this.waiters.clear();
   }

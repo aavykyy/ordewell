@@ -166,7 +166,7 @@ describe('runners changed — the planner is told on its next turn', () => {
     await session.continueConversation('go on');
     const lines = outgoing(1).split('\n').filter((l) => l.startsWith('- '));
 
-    expect(lines.find((l) => l.includes('"Resumes"'))).toContain('paused on a usage limit; resumes there at the reset unless moved');
+    expect(lines.find((l) => l.includes('"Resumes"'))).toContain('paused on a usage limit; a retry would run it there unless moved');
     expect(lines.find((l) => l.includes('"Waits"'))).toContain('paused on a usage limit; a retry would run it there unless moved');
     expect(lines.find((l) => l.includes('"Asks"'))).toContain('already running as assigned');
     expect(lines.find((l) => l.includes('"Clashed"'))).toContain('waiting for the user; what runs next runs there unless moved');

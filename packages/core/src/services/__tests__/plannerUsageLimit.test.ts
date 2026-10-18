@@ -203,19 +203,20 @@ describe('a wait on the planner\'s usage limit across a reload', () => {
     return { session, planner };
   }
 
-  it('resends at the saved time', async () => {
-    const { planner } = reopened({ plannerResend: { runner: 'claude-code', at: RESUME_AT } });
+  it.each([RESUME_AT, '2026-10-11T17:00:00.000Z'])('holds a saved resend at %s until a new message', async (at) => {
+    const { session, planner } = reopened({ plannerResend: { runner: 'claude-code', at } });
     await settled();
     expect(planner.calls).toHaveLength(0);
 
-    await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now());
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
+    expect(planner.calls).toHaveLength(0);
+    expect(session.planState!.plannerResend).toEqual({ runner: 'claude-code' });
+    const resumed = session.continueConversation('go on');
     await until(() => planner.calls.length === 1);
-    expect(planner.calls[0].message).toMatch(/rename task 1$/);
-  });
-
-  it('resends at once when its time passed while the session was closed', async () => {
-    const { planner } = reopened({ plannerResend: { runner: 'claude-code', at: '2026-10-11T17:00:00.000Z' } });
-    await until(() => planner.calls.length === 1);
+    expect(planner.calls[0].message).toMatch(/rename task 1\n\ngo on$/);
+    planner.calls[0].finish(prose('Done.'));
+    await resumed;
+    session.destroy();
   });
 
   it('keeps holding what waits for the next message when it had no time', async () => {

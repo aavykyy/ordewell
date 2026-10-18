@@ -34,8 +34,8 @@ const WAIT = 'planner';
  * supervisor): a planner turn Ordewell started that ends on it leaves its
  * inputs waiting on the plan, and they are sent again as one turn — with
  * whatever arrives meanwhile — once the limit resets. The state is saved on
- * the plan (`plannerResend`), so a reload keeps the wait, and resends at once
- * when its time has passed.
+ * the plan (`plannerResend`), but loading a session holds its inputs for a new
+ * message instead of rearming the wait (ADR-0044).
  *
  * Without a time — the reset could not be read, the resend hit the limit
  * again at once, the user cancelled it, or the planner moved to another
@@ -107,14 +107,11 @@ export class PlannerResend {
     this.resentAt = null;
   }
 
-  /** A plan adopted off disk: re-arm the wait it saved. A time already past resends at once. */
+  /** Loading a session preserves the inputs, without scheduling a model call. */
   restore(): void {
     this.reset();
     const saved = this.host.plan()?.plannerResend;
-    if (saved?.at === undefined) return;
-    const at = Date.parse(saved.at);
-    if (Number.isNaN(at)) delete saved.at;
-    else this.waits.arm(WAIT, new Date(at));
+    if (saved) delete saved.at;
   }
 
   /** The plan is gone: nothing it waited on carries over. */

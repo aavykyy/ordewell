@@ -27,9 +27,10 @@ function savedPlan(env: Env) {
 /** A session adopted from `saved`, with a planner whose turns the test answers. */
 function reload(saved: ReturnType<typeof savedPlan>) {
   const planner = heldPlanner();
-  const restarted = makeSession({ aiService: planner.aiService, runner: recordingRunner().runner });
+  const run = recordingRunner();
+  const restarted = makeSession({ aiService: planner.aiService, runner: run.runner });
   restarted.loadPlan(saved, 'build it', testWorkspace, { sessionId: 'reloaded' });
-  return { restarted, planner };
+  return { restarted, planner, run };
 }
 
 /** A one-task run whose task failed, with the supervisor woken to it at Act. */
@@ -87,8 +88,13 @@ describe('the loop guards memory across a daemon restart', () => {
     const saved = savedPlan(env);
     expect(saved.supervision!.guards!.edits!.removed).toEqual([{ title: 'task t3', prompt: 'do t3' }]);
 
-    const { restarted, planner } = reload(saved);
+    const { restarted, planner, run } = reload(saved);
     await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+    expect(planner.calls).toHaveLength(0);
+    const resumed = await restarted.execute({ command: 'retry_task', task: 't1', from: 'fresh' }, SUPERVISOR);
+    expect(resumed, JSON.stringify(resumed)).toMatchObject({ ok: true });
+    waitForInput(run.of('t1'));
     await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
     await until(() => planner.calls.length === 1);
 
@@ -119,7 +125,7 @@ describe('the loop guards memory across a daemon restart', () => {
 });
 
 describe('a wake-up inside its debounce window across a daemon restart', () => {
-  it('is delivered once the reloaded session re-arms it', async () => {
+  it('stays idle after reload, including after the saved debounce expires', async () => {
     const env = await supervised([task('t1', 1)]);
     waitForInput(env.run.of('t1'));
     await settled();
@@ -132,9 +138,7 @@ describe('a wake-up inside its debounce window across a daemon restart', () => {
     expect(planner.calls).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
-    await until(() => planner.calls.length === 1);
-
-    expect(planner.calls[0].message).toMatch(/- task #1 "Task t1" is waiting for input/);
+    expect(planner.calls).toHaveLength(0);
   });
 });
 

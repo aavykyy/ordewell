@@ -139,7 +139,7 @@ describe('OrchestratorPool default planner', () => {
   }
 
 
-  it('a restored message adopted before the probe answers waits for it, then is answered by the agent', async () => {
+  it('a restored message stays idle after detection until the user sends a new message', async () => {
     const { installation, answer } = gatedInstallation();
     const pool = new OrchestratorPool({ runnerInstallation: installation });
     void pool.detectInstalledPlanner();
@@ -152,6 +152,9 @@ describe('OrchestratorPool default planner', () => {
     expect(pool.session('restored').planState!.pendingTurns!.map((t) => t.text)).toEqual(['Postgres']);
 
     answer();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(agent).not.toHaveBeenCalled();
+    await pool.continuePlanning('restored', 'go on');
     await vi.waitFor(() => expect(agent).toHaveBeenCalledTimes(1));
     expect(vendor).not.toHaveBeenCalled();
     pool.destroyAll();
@@ -210,7 +213,7 @@ describe('OrchestratorPool default planner', () => {
     pool.destroyAll();
   });
 
-  it('Stop while a restored message waits for the probe answers true, and autorun spawns nothing once the agent is found', async () => {
+  it('a loaded message leaves no live turn to Stop, and autorun spawns nothing once the agent is found', async () => {
     const { installation, answer } = gatedInstallation();
     const runner = { spawn: vi.fn(async (opts: RunnerSpawnOptions) => new FakeRunnerSession('s1', opts.taskId)), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } satisfies IRunner;
     const pool = new OrchestratorPool({ runnerInstallation: installation, runner });
@@ -222,7 +225,7 @@ describe('OrchestratorPool default planner', () => {
     pool.adoptSavedSession('stopped', workspace);
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    expect(pool.cancelPlanning('stopped')).toBe(true);
+    expect(pool.cancelPlanning('stopped')).toBe(false);
     answer();
     await new Promise((resolve) => setTimeout(resolve, 10));
 

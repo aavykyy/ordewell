@@ -80,7 +80,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 afterEach(() => resetInstalledPlanner());
 
 describe('a restored message', () => {
-  it('waits for the probe, then is answered by the coding agent it finds, kept on the plan until then', async () => {
+  it('stays idle when the probe answers, then goes with the next user message', async () => {
     const config = keylessConfig();
     const { aiService, providers } = recordingPlanner(config);
     const probe = heldProbe();
@@ -92,13 +92,16 @@ describe('a restored message', () => {
     expect(pendingTexts(session.planState)).toEqual(['rename task 1']);
 
     probe.answer(true);
+    await settle();
+    expect(providers).toEqual([]);
+    await session.continueConversation('go on');
     await vi.waitFor(() => expect(providers).toEqual(['claude-code']));
     await vi.waitFor(() => expect(pendingTexts(session.planState)).toEqual([]));
   });
 });
 
 describe('a restored message', () => {
-  it('stays queued, with the /planner notice, when no coding agent is installed and no key is set, and goes with the next message', async () => {
+  it('stays queued silently on load, and reports a missing planner only when the user sends', async () => {
     const config = keylessConfig();
     const { aiService } = recordingPlanner(config);
     const probe = heldProbe();
@@ -107,6 +110,9 @@ describe('a restored message', () => {
 
     session.loadPlan(savedPlan(['rename task 1']), 'build it', testWorkspace);
     probe.answer(false);
+    await settle();
+    expect(notices).toEqual([]);
+    await expect(session.continueConversation('try now')).rejects.toBeInstanceOf(PlannerNotReadyError);
     await vi.waitFor(() => expect(notices.some((n) => n.includes('/planner'))).toBe(true));
 
     expect(aiService.continueConversation).not.toHaveBeenCalled();
@@ -256,7 +262,7 @@ describe('Stop while a turn waits at the gate', () => {
     return { session, runner, asked, aiService };
   }
 
-  it('cancels a restored message, so the probe answering later opens no turn and autorun starts nothing', async () => {
+  it('has no live turn to stop after loading, and the probe answering opens no turn or autorun', async () => {
     const env = autorunning();
     const probe = heldProbe();
     env.session.loadPlan(draftWithPending('Postgres'), 'build it', testWorkspace);
@@ -269,9 +275,8 @@ describe('Stop while a turn waits at the gate', () => {
 
     expect(env.asked).toEqual([]);
     expect(env.runner.spawnedIds()).toEqual([]);
-    // Dropped as a stopped turn's message is: it does not come back after another reload.
-    expect(pendingTexts(env.session.planState)).toEqual([]);
-    expect(stopped).toBe(true);
+    expect(pendingTexts(env.session.planState)).toEqual(['Postgres']);
+    expect(stopped).toBe(false);
   });
 
   it('tells a caller waiting there that its message was stopped, and a message sent after the Stop goes once the probe answers', async () => {
