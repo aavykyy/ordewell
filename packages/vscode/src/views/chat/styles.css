@@ -2031,14 +2031,23 @@ body.vscode-high-contrast-light .task-card.expanded {
 
 .task-heading-block {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
-    "title title"
-    "meta actions";
+    "title"
+    "meta";
   align-items: center;
   column-gap: 8px;
   row-gap: 3px;
   min-width: 0;
+}
+
+/* The button spans both rows, so the title and assignment lines end at its
+   edge instead of running under it. */
+.task-heading-block-with-log {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "title actions"
+    "meta actions";
 }
 
 .task-heading-block > .task-heading {
@@ -2047,10 +2056,12 @@ body.vscode-high-contrast-light .task-card.expanded {
 
 .task-heading-block > .task-assignment {
   grid-area: meta;
+  overflow: hidden;
 }
 
 .task-heading-block > .task-log-open-btn {
   grid-area: actions;
+  align-self: stretch;
   margin-left: 0;
 }
 
@@ -2090,13 +2101,14 @@ body.vscode-high-contrast-light .task-card.expanded {
   text-overflow: ellipsis;
 }
 
+/* Shrink weights make the model give way before the runner. */
 .task-assignment-runner {
-  flex-shrink: 0;
+  flex: 0 1 auto;
   max-width: 50%;
 }
 
 .task-assignment-model {
-  flex: 0 1 auto;
+  flex: 0 4 auto;
 }
 
 .task-assignment-effort {
@@ -5503,6 +5515,15 @@ body.vscode-high-contrast-light .pending-message {
   background: var(--purple-subtle);
   color: color-mix(in srgb, var(--purple) 80%, var(--text-primary));
   border: 1px solid color-mix(in srgb, var(--purple) 40%, transparent);
+}
+
+.task-log-open-btn-stacked {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  line-height: 1.15;
+  white-space: nowrap;
+  text-align: center;
 }
 
 .task-log-open-btn:hover {
