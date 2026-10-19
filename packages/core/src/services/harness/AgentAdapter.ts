@@ -271,6 +271,9 @@ export interface AgentAdapter {
   /** Kill the process and release its resources. Idempotent. */
   dispose(): void;
 
+  /** Whether the process has ended, for any reason. One that has can take no further turn. */
+  readonly exited: boolean;
+
   /**
    * Whether the Ordewell MCP server passed in the start options' `mcp` is
    * connected, as the runner itself reports it (ADR-0022, S4). Absent on an

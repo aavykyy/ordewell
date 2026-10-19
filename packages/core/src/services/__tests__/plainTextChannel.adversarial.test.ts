@@ -13,6 +13,7 @@ import type { IRunnerSession } from '../../interfaces/IRunner';
 class OpenAdapter implements TaskModeAgentAdapter {
   async mcpAttached(): Promise<boolean> { return true; }
   readonly agentId: string = 'codex';
+  readonly exited = false;
   readonly sent: string[] = [];
   private turn: { onEvent: (event: AgentEvent) => void; resolve: () => void } | null = null;
   private outOfTurn: ((event: AgentEvent) => void) | null = null;

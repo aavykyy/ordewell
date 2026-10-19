@@ -25,6 +25,7 @@ type SteerAnswer = 'accept' | 'refuse' | 'throw' | 'hold';
 class TurnEndAdapter implements TaskModeAgentAdapter {
   async mcpAttached(): Promise<boolean> { return true; }
   readonly agentId: string = 'claude-code';
+  readonly exited = false;
   readonly sent: string[] = [];
   interruptAnswer: 'ack' | 'ignore' | 'hold' = 'ack';
   private releaseInterrupt: (() => void) | null = null;

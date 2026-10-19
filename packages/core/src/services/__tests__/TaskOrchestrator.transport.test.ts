@@ -361,7 +361,7 @@ describe('a task whose MCP tools cannot attach', () => {
     const runner = new StructuredRunner({ mcp: server, createAdapter: () => {
       const id = String(++spawns);
       return {
-        agentId: 'claude-code', start: async () => {}, send,
+        agentId: 'claude-code', exited: false, start: async () => {}, send,
         nativeSessionId: () => null, dispose: () => { disposed.push(id); },
         mcpAttached: async () => false, interrupt: async () => false,
         answerPermission: () => false, onProcessExit: () => {},

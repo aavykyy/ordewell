@@ -21,6 +21,7 @@ import type { ApprovalDecision } from '../../interfaces/IApproval';
 class ScriptedAdapter implements TaskModeAgentAdapter {
   async mcpAttached(): Promise<boolean> { return true; }
   readonly agentId = 'claude-code';
+  readonly exited = false;
   readonly prompts: string[] = [];
   private turn: { onEvent: (event: AgentEvent) => void; resolve: () => void } | null = null;
   private exit: Array<(code: number) => void> = [];

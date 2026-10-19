@@ -375,7 +375,7 @@ describe('StructuredSession output', () => {
     let rejectReply: (err: Error) => void = () => {};
     let attempts = 0;
     const adapter: TaskModeAgentAdapter = {
-      agentId: 'opencode', start: async () => {}, nativeSessionId: () => null, dispose: () => {},
+      agentId: 'opencode', exited: false, start: async () => {}, nativeSessionId: () => null, dispose: () => {},
       mcpAttached: async () => true, interrupt: async () => true, onProcessExit: () => {},
       send: (_text, onEvent) => new Promise<void>((resolve) => { emit = onEvent; finish = resolve; }),
       answerPermission: () => ++attempts === 1
@@ -409,6 +409,7 @@ describe('StructuredSession output', () => {
     const decided: AgentEvent = { type: 'permission_request', id: 'per_1', name: 'bash', detail: '{}', decided: { decision: 'allow' } };
     const adapter: TaskModeAgentAdapter = {
       agentId: 'opencode',
+      exited: false,
       start: async () => {},
       send: async (_message, onEvent) => { onEvent(decided); onEvent({ type: 'turn_end' }); },
       nativeSessionId: () => null,
@@ -809,6 +810,7 @@ describe('StructuredRunner: tools or nothing (ADR-0022)', () => {
       adapters.push(record);
       return {
         agentId: 'claude-code',
+        exited: false,
         start: async (opts) => { if (opts.kind === 'task') record.mcp = opts.mcp; },
         send: async (message) => { record.sent.push(message); },
         nativeSessionId: () => null,

@@ -20,6 +20,7 @@ type Turn = { onEvent: (event: AgentEvent) => void; resolve: () => void };
 class HandAdapter implements TaskModeAgentAdapter {
   async mcpAttached(): Promise<boolean> { return true; }
   readonly agentId = 'codex';
+  readonly exited = false;
   readonly sent: string[] = [];
   readonly steered: Array<{ id: string; text: string }> = [];
   steerAnswer: (id: string, text: string) => Promise<boolean> = async () => true;
