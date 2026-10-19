@@ -423,9 +423,12 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   /** The message the last `assistant` line was part of, and how many of its blocks the lines have carried. */
   private lineMessage: { id: string; blocks: number } | null = null;
   /**
-   * The session's `total_cost_usd` as last counted. A resume starts from what
-   * was counted of that session before, and is undefined without it: the CLI
-   * restores the session's running total, which holds turns counted earlier.
+   * What has been counted of the session's running cost: a resume starts from
+   * it, and it is undefined without a kept count — the next result then only
+   * sets the baseline, since the CLI restores spend from turns before it. It
+   * grows by what each result is counted for, never by a total that includes
+   * cost the runner marked unknown, so that spend can be counted when its basis
+   * is reported; and it never lowers, since counted dollars are not un-spent.
    */
   private reportedCostUsd: number | undefined = 0;
   private reportedModelCostUsd = new Map<string, number>();
@@ -1198,30 +1201,60 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * baseline: its total includes turns counted before, and a turn's own share
    * cannot be told apart from them.
    *
-   * A zero is not a measurement: a process that crashed can end with a result
-   * whose totals are zeroed, and the next resume restores the session's saved
-   * totals whole. Counting that zero would lower the count and count the
-   * restored spend a second time, so a zero (or a missing total) leaves it be.
-   * The one real restart to zero, `/clear`, is {@link restartCount}.
+   * The running total never lowers: money already reported and counted is not
+   * un-spent because a later or resumed process remembers less of it, and
+   * counting its return would count the same dollars twice. A zero is not a
+   * measurement at all — a crash can end with one — and only `/clear` restarts
+   * the count, through {@link restartCount}. Per-model baselines never lower
+   * either, for the same reason.
+   *
+   * A report without a model breakdown is counted as a session total; one with
+   * a breakdown is counted per model. A breakdown that would count more than
+   * the session total's own growth (the count before it had no model split, or
+   * a lossy report) is counted as that growth alone, so the two shapes
+   * together still add each dollar once.
    */
   private reportSessionCost(msg: ClaudeLine, emit: (event: AgentEvent) => void): void {
     this.reportUnstreamedUsage(msg, emit);
     const total = msg.total_cost_usd;
     const canReport = this.reportedCostUsd !== undefined;
     const modelCosts = Object.entries(msg.modelUsage ?? {}).filter((entry): entry is [string, { contextWindow?: number; costUSD: number; costBasis?: 'list' | 'managed' }] => typeof entry[1].costUSD === 'number' && entry[1].costUSD > 0 && entry[1].costBasis !== 'unknown');
+    const growth = canReport && typeof total === 'number' && total > 0 ? total - this.reportedCostUsd! : undefined;
+    let emitted = 0;
+    const emitCost = (record: { model?: string; amount: number; basis?: 'list' | 'managed' }): void => {
+      if (!(record.amount > 0)) return;
+      emitted += record.amount;
+      emit({ type: 'usage', record: { source: 'claude-code', ...(record.model ? { model: record.model } : {}), aggregate: true, ...(this.billing ? { sessionBilling: this.billing } : {}), reportedCost: { amount: record.amount, currency: 'USD', kind: 'estimate', ...(record.basis ? { basis: record.basis } : {}) } } });
+    };
     if (modelCosts.length > 0) {
-      for (const [model, usage] of modelCosts) {
-        const previous = this.reportedModelCostUsd.get(model) ?? 0;
-        const amount = usage.costUSD - previous;
-        if (canReport && amount >= 0) emit({ type: 'usage', record: { source: 'claude-code', model, aggregate: true, ...(this.billing ? { sessionBilling: this.billing } : {}), reportedCost: { amount, currency: 'USD', kind: 'estimate', ...(usage.costBasis ? { basis: usage.costBasis } : {}) } } });
-        this.reportedModelCostUsd.set(model, usage.costUSD);
+      // What the breakdown says grew, per model. A model the runner marked
+      // unknown is left out entirely — its dollars were not reported.
+      const modelGrowth = modelCosts.reduce((sum, [model, usage]) => sum + Math.max(0, usage.costUSD - (this.reportedModelCostUsd.get(model) ?? 0)), 0);
+      if (canReport) {
+        if (growth !== undefined && modelGrowth > growth + 1e-9) {
+          // The breakdown is cumulative further back than the total we already
+          // counted (a kept count with no model split, or a report that gained
+          // one): only the growth over that total is new.
+          emitCost({ amount: growth });
+        } else {
+          for (const [model, usage] of modelCosts) emitCost({ model, amount: usage.costUSD - (this.reportedModelCostUsd.get(model) ?? 0), ...(usage.costBasis ? { basis: usage.costBasis } : {}) });
+        }
       }
+      for (const [model, usage] of modelCosts) this.reportedModelCostUsd.set(model, Math.max(this.reportedModelCostUsd.get(model) ?? 0, usage.costUSD));
     } else if (!Object.values(msg.modelUsage ?? {}).some((usage) => usage.costBasis === 'unknown') && typeof total === 'number' && total > 0 && canReport && total >= this.reportedCostUsd!) {
       // Without the model breakdown, a session total cannot be attributed to
       // the last model: it also includes earlier models and subagents.
-      emit({ type: 'usage', record: { source: 'claude-code', aggregate: true, ...(this.billing ? { sessionBilling: this.billing } : {}), reportedCost: { amount: total - this.reportedCostUsd!, currency: 'USD', kind: 'estimate' } } });
+      emitCost({ amount: total - this.reportedCostUsd! });
     }
-    if (typeof total === 'number' && total > 0) this.reportedCostUsd = total;
+    // A resume with no kept count takes this result as its baseline and counts
+    // none of it; the rest count what they report. A total that includes cost
+    // the runner marks unknown is not counted, so its later reporting can be.
+    if (!canReport) {
+      if (typeof total === 'number' && total > 0) this.reportedCostUsd = total;
+      else if (modelCosts.length > 0) this.reportedCostUsd = modelCosts.reduce((sum, [, usage]) => sum + usage.costUSD, 0);
+    } else {
+      this.reportedCostUsd = (this.reportedCostUsd ?? 0) + emitted;
+    }
     // A command turn (`/compact`, a model switch) can end with a result and no
     // call whose `message_start` named the model; the turn's `init` still did.
     // A synthetic message names no model at all.
