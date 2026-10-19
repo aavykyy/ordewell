@@ -120,6 +120,8 @@ interface TokenUsageBreakdown {
   outputTokens?: number;
   cachedInputTokens?: number;
   reasoningOutputTokens?: number;
+  /** Codex's `TokenUsage::total_tokens`, the count its own UI reads as in the context window. */
+  totalTokens?: number;
 }
 
 interface ThreadTokenUsageParams {
@@ -968,9 +970,12 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
    * total is `inputTokens + outputTokens`, not a sum of three — so reasoning is
    * not added a second time. Codex reports no price.
    *
-   * The main thread's context is what Codex itself shows as in its window,
-   * codex-rs `TokenUsage::tokens_in_context_window` over `last`: input and
-   * output less `reasoningOutputTokens`, the reasoning a later prompt drops.
+   * The main thread's context is what Codex itself shows as in its window:
+   * `TokenUsage::tokens_in_context_window`, which is `total_tokens` over
+   * `last` as codex-rs defines it. `total_tokens` is input plus output, and
+   * reasoning is part of output, so this is not `input + output − reasoning`
+   * (checked against codex-rs and codex-cli 0.163.0's token_count events,
+   * where `total_tokens` is `input_tokens + output_tokens`).
    */
   private emitUsage(params: ThreadTokenUsageParams | undefined, emit: (e: AgentEvent) => void): void {
     const last = params?.tokenUsage?.last;
@@ -991,7 +996,10 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       // reported window of 0 means "not known", not "no room".
       const window = params?.tokenUsage?.modelContextWindow;
       if (typeof window === 'number' && window > 0) record.contextWindow = window;
-      if (last.inputTokens !== undefined) record.contextTokens = Math.max(0, last.inputTokens + (last.outputTokens ?? 0) - (last.reasoningOutputTokens ?? 0));
+      const inContext = last.totalTokens !== undefined && last.totalTokens > 0
+        ? last.totalTokens
+        : (last.inputTokens !== undefined ? last.inputTokens + (last.outputTokens ?? 0) : undefined);
+      if (inContext !== undefined) record.contextTokens = Math.max(0, inContext);
     }
     emit({ type: 'usage', record });
   }

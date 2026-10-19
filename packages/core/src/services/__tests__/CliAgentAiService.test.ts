@@ -1380,9 +1380,9 @@ describe('CliAgentAiService — Codex', () => {
     // `total` for the turn is 26606 — the sum of the two `last` values. Emitting
     // it each update would count the first call twice.
     expect(usage.some((r) => r.inputTokens === 26606)).toBe(false);
-    // Codex's own count of the context a call leaves: input and output, less
-    // the reasoning, which a later prompt does not carry.
-    expect(usage.map((r) => r.contextTokens)).toEqual([13330, 13384]);
+    // Codex's own count of the context a call leaves: `total_tokens`, input
+    // plus output. Reasoning is part of output and stays in Codex's count.
+    expect(usage.map((r) => r.contextTokens)).toEqual([13345, 13384]);
     const first = usage[0];
     expect(first?.contextWindow).toBe(258400);
     expect(first?.model).toBe('gpt-5.6-sol');

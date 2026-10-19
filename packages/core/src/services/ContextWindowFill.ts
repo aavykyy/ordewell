@@ -76,10 +76,22 @@ export class ContextWindowFill {
 
   fill(record: UsageRecord): UsageRecord {
     // A subagent runs its own model, and a breakdown names no current one:
-    // neither says anything about the stream's own context. A compaction
-    // measures no call, so it has no window to fill.
-    if (record.subagentId || record.aggregate || record.compacted) return record;
+    // neither says anything about the stream's own context.
+    if (record.subagentId || record.aggregate) return record;
     const key = modelKey(record.source, record.model);
+    // A reset measures no call, so it reports no window; but when it names the
+    // model the new context belongs to (a turn with no call before it, as
+    // /compact or /clear has), the size it left is shown against that model's
+    // known window.
+    if (record.compacted) {
+      if (!record.model) return record;
+      const known = this.windows.get(record.source, record.model)
+        ?? this.known.get(key)
+        ?? positive(this.windows.catalog(record.source, record.model));
+      if (known === undefined) return record;
+      this.known.set(key, known);
+      return { ...record, contextWindow: known };
+    }
     const reported = record.contextWindow !== undefined && record.contextWindow > 0 ? record.contextWindow : undefined;
     if (reported !== undefined && record.model) this.windows.report(record.source, record.model, reported);
     const window = reported

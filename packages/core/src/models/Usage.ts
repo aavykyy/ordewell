@@ -45,16 +45,17 @@ export interface UsageRecord {
   /**
    * What the main model's context holds once this call is done, counted the
    * way its runner's own UI counts it, so the meter reads what the user would
-   * see there. Each runner counts it differently (the prompt with the reply,
-   * less the reasoning it drops, …), which no sum of the measures above can
-   * tell. A measure of the meter only: no total adds it. Absent, the meter
-   * reads the prompt.
+   * see there. Runners differ, and no sum of the measures above can tell.
+   * A measure of the meter only: no total adds it. Absent, the meter reads the
+   * prompt.
    */
   contextTokens?: number;
   /**
-   * The runner compacted the main model's context: no call, so the record
-   * measures nothing but `contextTokens`, the size it reported the context
-   * left at, if it did. It names no model, being about whichever runs now.
+   * The runner reset the main model's context outside a call — a compaction,
+   * or a `/clear`: no call, so the record measures nothing but `contextTokens`,
+   * the size it reported the context left at, if it did. It may name the model
+   * the new context belongs to; a record that names none is about whichever
+   * runs now.
    */
   compacted?: true;
   /** Set when a subagent made the call; its usage still counts toward the total. */
@@ -153,10 +154,22 @@ export interface PlannerUsage {
 
 export function addPlannerUsage(usage: PlannerUsage, record: UsageRecord): PlannerUsage {
   // The size before a compaction is gone, so the meter shows the size after
-  // or none until the next call — never the old one, which reads as full.
+  // or none until the next call — never the old one, which reads as full. The
+  // record may name the model the new context now belongs to: that is a switch
+  // of its own, and the old model's window does not measure it.
   if (record.compacted) {
-    const next: PlannerUsage = { ...usage, lastPromptTokens: record.contextTokens };
-    if (record.contextTokens === undefined) delete next.lastPromptTokens;
+    // A subagent's compaction says nothing about the main model, and a
+    // breakdown measures no prompt of its own.
+    if (record.subagentId || record.aggregate) return usage;
+    const next: PlannerUsage = { ...usage };
+    if (record.source !== undefined) next.source = record.source;
+    if (record.model !== undefined) {
+      if (record.source !== usage.source || record.model !== usage.model) delete next.contextWindow;
+      next.model = record.model;
+    }
+    if (record.contextTokens !== undefined) next.lastPromptTokens = record.contextTokens;
+    else delete next.lastPromptTokens;
+    if (record.contextWindow !== undefined) next.contextWindow = record.contextWindow > 0 ? record.contextWindow : undefined;
     return next;
   }
   if (record.sessionBilling && !record.reportedCost && record.inputTokens === undefined && record.outputTokens === undefined && record.cachedInputTokens === undefined && record.contextWindow === undefined) {

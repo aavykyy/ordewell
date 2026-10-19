@@ -121,6 +121,23 @@ describe('SessionWindows', () => {
     const compaction = { source: 'claude-code', compacted: true as const };
     expect(stream.fill(compaction)).toBe(compaction);
   });
+
+  it('shows a compaction that names its model against that model\'s known window', () => {
+    const windows = new SessionWindows(catalog);
+    windows.report('claude-code', 'sonnet', 1_000_000);
+    const compaction = { source: 'claude-code', model: 'sonnet', compacted: true as const, contextTokens: 3615 };
+    expect(new ContextWindowFill(windows).fill(compaction)).toEqual({ ...compaction, contextWindow: 1_000_000 });
+  });
+
+  it('does not lend a variant\'s window to its base model, or the reverse', () => {
+    const windows = new SessionWindows(catalog);
+    new ContextWindowFill(windows).fill({ source: 'claude-code', model: 'sonnet[1m]', contextWindow: 1_000_000 });
+    // The base model still reads its own catalog window…
+    expect(new ContextWindowFill(windows).fill({ source: 'claude-code', model: 'sonnet' }).contextWindow).toBe(200_000);
+    // …and a base window never measures the variant.
+    new ContextWindowFill(windows).fill({ source: 'claude-code', model: 'haiku[1m]', contextWindow: 1_000_000 });
+    expect(new ContextWindowFill(windows).fill({ source: 'claude-code', model: 'haiku' }).contextWindow).toBe(100_000);
+  });
 });
 
 describe('withContextWindows', () => {
