@@ -14,7 +14,7 @@ const model = (over: Partial<NonNullable<TaskView['assignedModel']>> = {}) =>
 const metaLine = (t: TaskView, cols: number): string =>
   planLayout(initialState({ tasks: [t], rows: 40, cols }), 40, cols)
     .lines.map(stripAnsi)
-    .find((line) => line.includes('claude-code')) ?? '';
+    .find((line) => line.includes('claude-code') && !line.startsWith('Tasks total:')) ?? '';
 
 describe('the effort on a collapsed task row', () => {
   it('shows the bare variant after the model when the pane is wide enough', () => {

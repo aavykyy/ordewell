@@ -299,7 +299,7 @@ describe('TUI end to end', () => {
     // Pinned to the chat pane's last row: above the status row, which sits above
     // the composer's empty band row and then its text.
     const input = chat.findIndex((line, i) => i > header && line.startsWith('❯'));
-    expect(chat[input - 3]).toBe('12.4k in · 3.1k out · 18% ctx');
+    expect(chat[input - 3]).toBe('ctx 36k (18%)');
   });
 
   it('ctrl+o raw bytes toggle full detail on the command rows, with the footer hint following', async () => {

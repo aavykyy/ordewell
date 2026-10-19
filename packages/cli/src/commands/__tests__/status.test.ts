@@ -94,8 +94,9 @@ describe('handleStatus --output', () => {
     const { handleStatus } = await import('../status');
     const { stdout } = await capture(() => handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)));
     const lines = stripAnsi(stdout).split('\n').map((l) => l.trim());
-    expect(lines).toContain('Tasks total: 1.5k in · 150 out · 200 cached · $0.50');
-    expect(lines).toContain('1.5k in · 150 out · 200 cached · $0.50 · ctx 25%');
+    expect(lines).toContain('Tasks total: $0.50');
+    expect(lines).toContain('ctx 50 (25%) · $0.50');
+    expect(stdout).not.toMatch(/\bin ·|cached|\bout\b/);
     expect(stdout).not.toMatch(/\d+s\b|time unknown/);
     srv.close();
   });

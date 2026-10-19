@@ -322,7 +322,8 @@ describe('the task view draws as a runner, not the planner', () => {
         ]),
       }),
     });
-    expect(plain(withUsage)).toContain('12.4k in');
+    expect(plain(withUsage)).toContain('ctx 12k');
+    expect(plain(withUsage)).not.toMatch(/12\.4k in|3\.1k out/);
   });
 
   describe('the task usage footer', () => {
@@ -338,8 +339,8 @@ describe('the task view draws as a runner, not the planner', () => {
     const withUsage = (usage: AttemptUsage[], over: Partial<TaskLogState> = {}): TuiState =>
       opened({ tasks: [task({ attemptUsage: usage })], taskView: loaded(over), rows: 24, cols: 100 });
 
-    it('pins the task\'s measures on the pane\'s bottom row, with no wall time and no cost it was not told', () => {
-      expect(bottom(withUsage([attempt(1)]))).toEqual(['12.4k in · 3.1k out · ctx 18%']);
+    it('pins the task\'s meter on the pane\'s bottom row, with no token count, no wall time and no cost it was not told', () => {
+      expect(bottom(withUsage([attempt(1)]))).toEqual(['ctx 36k (18%)']);
     });
 
     it('adds a reported cost, and never one row per model', () => {
@@ -348,21 +349,21 @@ describe('the task view draws as a runner, not the planner', () => {
         { source: 'claude-code', model: 'haiku-y', totals: { inputTokens: 2_400, outputTokens: 1_100 } },
       ];
       const state = withUsage([attempt(1, { byModel: models, totals: { inputTokens: 12_400, outputTokens: 3_100, cachedInputTokens: 2_000, reportedCost: { USD: 0.42 } } })], { view: replayTaskLog([]) });
-      expect(bottom(state, 3).map((l) => l.trim()).filter(Boolean).at(-1)).toBe('12.4k in · 3.1k out · 2k cached · $0.42 · ctx 18%');
+      expect(bottom(state, 3).map((l) => l.trim()).filter(Boolean).at(-1)).toBe('ctx 36k (18%) · $0.42');
       expect(bottom(state, 3).join('\n')).not.toContain('sonnet-x');
     });
 
     it('sums every attempt on the latest one, with the meter of its model', () => {
-      const state = withUsage([attempt(1), attempt(2, { totals: { inputTokens: 900, outputTokens: 80 }, lastPromptTokens: 100_000 })], { attempts: [1, 2], attempt: 2 });
-      expect(bottom(state)).toEqual(['13.3k in · 3.2k out · ctx 50%']);
+      const state = withUsage([attempt(1, { totals: { reportedCost: { USD: 1 } } }), attempt(2, { totals: { reportedCost: { USD: 0.5 } }, lastPromptTokens: 100_000 })], { attempts: [1, 2], attempt: 2 });
+      expect(bottom(state)).toEqual(['ctx 100k (50%) · $1.50']);
     });
 
     it('shows a past attempt\'s own numbers over the task total', () => {
       const state = withUsage(
-        [attempt(1), attempt(2, { totals: { inputTokens: 900, outputTokens: 80 }, lastPromptTokens: 100_000 })],
+        [attempt(1, { totals: { reportedCost: { USD: 1 } } }), attempt(2, { totals: { reportedCost: { USD: 0.5 } }, lastPromptTokens: 100_000 })],
         { attempts: [1, 2], attempt: 1, followLatest: false },
       );
-      expect(bottom(state, 2)).toEqual(['attempt 1: 12.4k in · 3.1k out · ctx 18%', 'task total: 13.3k in · 3.2k out · ctx 50%']);
+      expect(bottom(state, 2)).toEqual(['attempt 1: ctx 36k (18%) · $1.00', 'task total: ctx 100k (50%) · $1.50']);
     });
 
     it('keeps the task total under a log no attempt ledger matches, with the log\'s own usage over it', () => {
@@ -375,7 +376,7 @@ describe('the task view draws as a runner, not the planner', () => {
         [attempt(1), attempt(2, { totals: { inputTokens: 900, outputTokens: 80 }, lastPromptTokens: 100_000 })],
         { attempts: [3, 4], attempt: 3, followLatest: false, view },
       );
-      expect(bottom(state, 2)).toEqual(['500 in · 40 out', 'task total: 13.3k in · 3.2k out · ctx 50%']);
+      expect(bottom(state, 2)).toEqual(['ctx 500', 'task total: ctx 100k (50%)']);
     });
 
     it('keeps the scroll bound exact with the footer pinned', () => {
