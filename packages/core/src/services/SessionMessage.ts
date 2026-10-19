@@ -1,5 +1,5 @@
 import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, PendingPlanTurn, ReplyRun, ResearchStep, RunnerId, RunSettings, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, Verdict } from '../models/Task';
-import type { AttemptUsage, ModelUsage, PlanUsage, UsageTotals } from '../models/Usage';
+import type { SessionBilling, AttemptUsage, ContextFill, ModelUsage, PlanUsage, UsageTotals } from '../models/Usage';
 import type { ExecutionRecord } from '../models/Execution';
 import type { TaskLogEvent } from '../models/TaskLog';
 import type { ApprovalKind } from '../interfaces/IApproval';
@@ -235,18 +235,19 @@ export type SessionMessage =
   /**
    * The planner's running usage for the session, subagents included, emitted
    * after a model call reports usage. `totals` already contains every
-   * `bySubagent` entry. `contextFill` is the last planner prompt against the
-   * model's window, omitted when the window is unknown. Cost appears only as
+   * `bySubagent` entry. `contextFill` is the last planner prompt, with the
+   * model's window when it is known; omitted before a prompt was measured. Cost appears only as
    * reported by a provider or runner (see `UsageRecord`).
    */
   | {
       type: 'planner_usage';
+      sessionBilling?: SessionBilling;
       byModel?: ModelUsage[];
       model?: string;
       turnId?: string;
       totals: UsageTotals;
       bySubagent?: Record<string, UsageTotals>;
-      contextFill?: { usedTokens: number; windowTokens: number };
+      contextFill?: ContextFill;
     }
   /**
    * A subagent began work on `brief`. Emitted by the planner backend that

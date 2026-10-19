@@ -168,8 +168,9 @@ async function assertMark(page, mark) {
       break;
     case 'usage-line': {
       const usage = await page.locator('.usage-line').innerText();
-      check(usage.includes('in') && usage.includes('out'), 'usage-line: token counts shown');
-      check(usage.includes('context'), 'usage-line: context fill shown');
+      check(usage.includes('ctx 1.6k (<1%)'), 'usage-line: context meter shown');
+      check(usage.includes('$0.01'), 'usage-line: reported cost shown');
+      check(!/\bin\b|\bout\b|cached/.test(usage), 'usage-line: no token counts drawn');
       check(usage.includes('subagent'), 'usage-line: subagent count shown');
       check(await page.locator('.message-list .usage-line').count() === 0, 'usage-line: pinned outside the scrolling message list');
       break;
@@ -380,7 +381,7 @@ const COMBOS = [
   { width: 900, theme: 'light' },
 ];
 const REPRESENTATIVE = new Set(['plan-marker', 'approval-pending', 'usage-line', 'subagent-collapsed']);
-const CONTRAST_SELECTORS = ['.chat-msg-content', '.cmd-row-head', '.usage-line-tokens', '.approval-card-subject', '.plan-revision-chip'];
+const CONTRAST_SELECTORS = ['.chat-msg-content', '.cmd-row-head', '.usage-line-measures', '.approval-card-subject', '.plan-revision-chip'];
 
 for (const combo of COMBOS) {
   console.log(`\n== ${combo.width}px, ${combo.theme} theme ${combo.primary ? '(primary)' : ''} ==`);

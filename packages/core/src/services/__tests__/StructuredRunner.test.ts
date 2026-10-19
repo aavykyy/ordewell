@@ -784,7 +784,7 @@ describe('StructuredSession stop', () => {
     expect(JSON.parse(afterAttachCheck(proc.written)[1])).toMatchObject({ type: 'control_request', request: { subtype: 'interrupt' } });
     expect(turn.events.filter((e) => e.type === 'usage').map((e) => e.type === 'usage' && e.record)).toEqual([
       expect.objectContaining({ model: 'claude-haiku-4-5-20251001', outputTokens: 201 }),
-      expect.objectContaining({ aggregate: true, reportedCost: { amount: 0.010310099999999999, currency: 'USD' } }),
+      expect.objectContaining({ aggregate: true, reportedCost: { amount: 0.010310099999999999, currency: 'USD', kind: 'estimate', basis: 'list' } }),
       expect.objectContaining({ model: 'claude-haiku-4-5-20251001', contextWindow: 200000 }),
     ]);
     expect(turn.session.sessionCost?.()).toEqual({ sessionId: 'sess-task-checkpoint', usd: 0.010310099999999999, modelUsd: { 'claude-haiku-4-5-20251001': 0.010310099999999999 } });

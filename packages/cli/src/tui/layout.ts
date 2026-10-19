@@ -1,6 +1,6 @@
 import { firstGrapheme, pad, sanitize, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
 import { cursorInLines, type CursorPosition } from './editor';
-import { assignmentFlagText, checkpointCardLines, conversationLines, taskUsageText, tokenLine } from './blocks';
+import { assignmentFlagText, checkpointCardLines, conversationLines, tokenLine } from './blocks';
 import { chatEditorRoomFor, chatPaneWidth, planPaneWidth } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
 import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, selectedPlanRow, waitingApproval, waitingCheckpoint, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
@@ -10,7 +10,7 @@ import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { runnerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
-import { approvalLabel, getProviderMeta, isApiProvider, awaitingLabel, blockedByLabel, skippedLabel, hasHiddenDetail, resumeLabel, resumeTime, runnerForProvider, taskRowView, planUsage, taskUsageSummary, plannerContextFill, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
+import { approvalLabel, getProviderMeta, isApiProvider, awaitingLabel, blockedByLabel, skippedLabel, hasHiddenDetail, resumeLabel, resumeTime, runnerForProvider, taskRowView, tasksTotalText, taskUsageSummary, plannerContextFill, usageText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -454,13 +454,11 @@ function taskUsageFooter(state: TuiState, tv: NonNullable<TuiState['taskView']>,
   const reported = task?.attemptUsage ?? [];
   if (!task || reported.length === 0) return tokenRow(blocks, cols);
   const onScreen = tv.attempt > 0 ? reported.find((a) => a.attempt === tv.attempt) : reported.at(-1);
-  const spend = taskUsageSummary(task);
-  const total = taskUsageText({ ...spend, attempt: reported.at(-1)?.attempt ?? 0 });
-  if (onScreen === reported.at(-1)) return [style.grey(truncate(total, cols))];
-  const own = onScreen
-    ? [style.grey(truncate(`attempt ${onScreen.attempt}: ${taskUsageText({ totals: onScreen.totals, contextFill: plannerContextFill(onScreen), attempt: onScreen.attempt })}`, cols))]
-    : tokenRow(blocks, cols);
-  return [...own, style.grey(truncate(`task total: ${total}`, cols))];
+  const total = usageText(taskUsageSummary(task));
+  const totalRow = total ? [style.grey(truncate(onScreen === reported.at(-1) ? total : `task total: ${total}`, cols))] : [];
+  if (onScreen === reported.at(-1)) return totalRow;
+  const own = onScreen ? usageText({ totals: onScreen.totals, contextFill: plannerContextFill(onScreen) }) : null;
+  return [...(onScreen ? (own ? [style.grey(truncate(`attempt ${onScreen.attempt}: ${own}`, cols))] : []) : tokenRow(blocks, cols)), ...totalRow];
 }
 
 /** How far back the chat pane can be scrolled at the size it is about to be painted. */
@@ -730,18 +728,18 @@ export interface PlanLayout {
 
 export function planLayout(state: TuiState, rows: number, cols: number): PlanLayout {
   const done = state.tasks.filter((t) => t.status === 'completed').length;
-  const totalUsage = planUsage(state.tasks);
+  const totalUsage = tasksTotalText(state.tasks);
   const unmerged = state.runMerge?.handoff.landed.length ?? 0;
   const count = `${done}/${state.tasks.length}`;
   const hints = runHints(state);
   const hint = hints.find((h) => width(`Plan ${count} · ${h}`) <= cols) ?? hints.at(-1);
   const lines = [
     truncate(`${style.bold(style.brand('Plan'))} ${style.grey(`${count}${hint ? ` · ${hint}` : ''}`)}`, cols),
-    totalUsage.attempts ? style.grey(truncate(`Tasks total: ${taskUsageText(totalUsage)}`, cols)) : '',
+    totalUsage ? style.grey(truncate(totalUsage, cols)) : '',
   ];
   if (unmerged > 0) {
     const landed = style.dim(truncate(`${unmerged} landed task${unmerged === 1 ? '' : 's'} not merged: /handoff merge`, cols));
-    if (totalUsage.attempts) lines.push(landed);
+    if (totalUsage) lines.push(landed);
     else lines[1] = landed;
   }
   const firstRowLine = lines.length;

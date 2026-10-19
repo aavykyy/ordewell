@@ -1,7 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { addUsage, partedPromptUsage, type UsageTotals } from '../Usage';
+import { addUsageTotals, addUsage, partedPromptUsage, type UsageTotals } from '../Usage';
 
 describe('addUsage', () => {
+  it('keeps cost provenance per currency through roll-ups, with any estimate marking the sum', () => {
+    const estimate = addUsage({}, { source: 'claude-code', sessionBilling: { type: 'subscription', plan: 'max' }, reportedCost: { amount: 1, currency: 'USD', kind: 'estimate', basis: 'list' } });
+    const billed = addUsage({}, { source: 'openrouter', reportedCost: { amount: 2, currency: 'USD', kind: 'billed' } });
+    const totals = addUsageTotals(estimate, billed);
+    expect(totals.reportedCost).toEqual({ USD: 3 });
+    expect(totals.costProvenance).toEqual({ USD: { kind: 'estimate', billing: 'mixed' } });
+    expect(estimate.costProvenance).toEqual({ USD: { kind: 'estimate', billing: 'subscription', basis: 'list' } });
+  });
+
   it('sums the tokens of two calls', () => {
     const once = addUsage({}, { source: 'openai', inputTokens: 1200, outputTokens: 300, cachedInputTokens: 800 });
     const twice = addUsage(once, { source: 'openai', inputTokens: 50, outputTokens: 7, cachedInputTokens: 0 });

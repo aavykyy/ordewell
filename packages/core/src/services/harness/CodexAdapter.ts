@@ -16,7 +16,7 @@ import { CodexRpc, type RpcMessage, type RpcResponse } from './codexRpc';
 import { settleWithin } from './settleWithin';
 import { PermissionLedger } from './permissionLedger';
 import { ReplyRuns } from './replyRuns';
-import { codexUsageLimitSignal, mergeCodexRateLimits, type CodexRateLimits } from './codexUsageLimit';
+import { codexSessionBilling, codexUsageLimitSignal, mergeCodexRateLimits, type CodexRateLimits } from './codexUsageLimit';
 
 const HANDSHAKE_TIMEOUT_MS = 30000;
 /** Codex starts a thread's MCP servers as the thread opens; one that is not up by now is not coming. */
@@ -804,8 +804,21 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       case 'thread/tokenUsage/updated':
         this.emitUsage(msg.params as ThreadTokenUsageParams | undefined, emit);
         return;
+      case 'account/updated': {
+        const account = msg.params as { authMode?: string; planType?: string } | undefined;
+        if (account?.authMode === 'apikey') emit({ type: 'usage', record: { source: this.agentId, aggregate: true, sessionBilling: { type: 'api-key' } } });
+        else if (account?.authMode === 'chatgpt' || account?.authMode === 'chatgptAuthTokens') {
+          const plan = account.planType;
+          emit({ type: 'usage', record: { source: this.agentId, aggregate: true, sessionBilling: { type: 'subscription', ...(plan && plan !== 'unknown' ? { plan } : {}) } } });
+        }
+        return;
+      }
       case 'account/rateLimits/updated':
         this.rateLimits = mergeCodexRateLimits(this.rateLimits, msg.params);
+        {
+          const sessionBilling = codexSessionBilling(this.rateLimits);
+          if (sessionBilling) emit({ type: 'usage', record: { source: this.agentId, aggregate: true, sessionBilling } });
+        }
         return;
       case 'turn/started': {
         // A subagent runs its own turn in its own thread; its start must not

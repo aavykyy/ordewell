@@ -58,6 +58,7 @@ export interface FakeSpawnResult {
 }
 
 export interface FakeSpawnOptions {
+  claudeAccount?: { subscriptionType?: string; apiKeySource?: string };
   autoMcpAttached?: boolean;
   codexDiscovery?: (method: string) => Record<string, unknown>;
   /**
@@ -195,7 +196,7 @@ function spawner(onWrite: (written: string, proc: FakeAgentProcess, args: string
 export function fakeSpawn(replies: ScriptedReply[], options: FakeSpawnOptions = {}): FakeSpawnResult {
   const queue = [...replies];
   return spawner((chunk, proc, args) => {
-    if (answeredAttachCheck(chunk, proc, args) || answeredModelControl(chunk, proc)) return;
+    if (answeredAttachCheck(chunk, proc, args) || answeredModelControl(chunk, proc, options.claudeAccount)) return;
     let rpc: { id?: number; method?: string } = {};
     try { rpc = JSON.parse(chunk) as typeof rpc; } catch { /* another runner's input */ }
     if (rpc.method === 'skills/list' || rpc.method === 'mcpServerStatus/list') {
@@ -257,13 +258,13 @@ export const CLAUDE_INITIALIZE_COMMANDS = [
   { name: '__remote-workflow', description: '', argumentHint: '', builtin: true },
 ];
 
-function answeredModelControl(chunk: string, proc: FakeAgentProcess): boolean {
+function answeredModelControl(chunk: string, proc: FakeAgentProcess, account?: FakeSpawnOptions['claudeAccount']): boolean {
   let msg: { type?: string; request_id?: string; request?: { subtype?: string } };
   try { msg = JSON.parse(chunk) as typeof msg; } catch { return false; }
   if (msg.type !== 'control_request') return false;
   const subtype = msg.request?.subtype;
   if (subtype !== 'initialize' && subtype !== 'set_model') return false;
-  const response = subtype === 'initialize' ? { response: { commands: CLAUDE_INITIALIZE_COMMANDS, models: CLAUDE_INITIALIZE_MODELS } } : {};
+  const response = subtype === 'initialize' ? { response: { commands: CLAUDE_INITIALIZE_COMMANDS, models: CLAUDE_INITIALIZE_MODELS, ...(account ? { account } : {}) } } : {};
   proc.emitStdout(`${JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id, ...response } })}\n`);
   return true;
 }
@@ -323,15 +324,17 @@ export function fakeMcpServer(): FakeMcpServer {
 }
 
 /**
- * A fake spawn whose every process hands each stdin write to `onWrite`, with
- * the argv it was spawned under — for an agent that must answer the control
- * channel and the turns alike, however many of each a scenario sends.
+ * A fake spawn that answers model initialization like `fakeSpawn`, then hands
+ * other writes to `onWrite` with the spawn argv. Scenarios own the remaining
+ * control requests and user turns.
  */
 export function respondingSpawn(
   onWrite: (written: string, proc: FakeAgentProcess, args: string[]) => void,
   options: FakeSpawnOptions = {},
 ): FakeSpawnResult {
-  return spawner(onWrite, options);
+  return spawner((written, proc, args) => {
+    if (!answeredModelControl(written, proc, options.claudeAccount)) onWrite(written, proc, args);
+  }, options);
 }
 
 /**

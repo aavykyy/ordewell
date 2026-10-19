@@ -1084,16 +1084,20 @@ starts a fresh ledger without dropping earlier attempts. Context fill follows
 the latest main-runner model and clears on a switch until the new model reports
 both prompt tokens and its window. `planUsage` sums all task attempts,
 including subtasks, separately from the planner's own ledger. Status updates
-carry both the task ledgers and the plan roll-up; surfaces reuse their planner
-usage formatting. Surfaces show the sum of a task's attempts (*Task usage*), not one ledger. The
-plan-level *Tasks total* stays at the top. Absent measures mean unknown, never zero or an estimate.
+carry both the task ledgers and the plan roll-up; surfaces draw the texts core words
+(`usageText`, `tasksTotalText`). Surfaces show the sum of a task's attempts (*Task usage*), not one ledger. The
+plan-level *Tasks total* stays at the top. Absent measures mean unknown, never zero.
+`sessionBilling` keeps the runner-reported subscription or API-key login and its
+plan when named, even when the runner reports no cost.
 An attempt that ends stops its runner, which winds its turn down (ADR-0018,
 L1): what the runner reports meanwhile, Claude Code's cost and window among it,
 still goes into that attempt's ledger, and its wall time stays at its end.
 A runner that reports its session's running cost has that count saved with the
 attempt (`runnerSessionCost`) as its session ended, so a *Continue* of the
 session, which waits for that wind-down, counts its first turn from there;
-with no count kept, that turn only sets the baseline.
+with no count kept, that turn only sets the baseline. A result whose totals are
+zeroed (a crashed process's last) never lowers the count, and a `/clear` in the
+task's chat restarts it from zero.
 *Avoid:* attributing a session cost to its last model without a reported
 breakdown; *Avoid:* mixing planner usage into task totals; *Avoid:* "the task's
 usage" for one attempt's ledger — see *Task usage*.
@@ -1104,12 +1108,15 @@ and every model, so a stop, a model change, a move or a continue never makes
 earlier spend vanish. Its context meter is the exception, read from the latest
 attempt, because only the current model's window says how full the next prompt
 is. It is the line the TUI task view's footer, `ordewell status` and VS Code's
-task-log panel show for one task, and the plan's Tasks total shows summed
-(`12.4k in · 3.1k out · 2k cached · $0.42 · ctx 18%`): a part nobody reported,
-cost included, is left out, and the line carries no wall time. A TUI plan row
+task-log panel show for one task — the latest attempt's meter, then the cost over
+every attempt (`ctx 61k (6%) · $1.75`) — and it carries no token count and no
+wall time. A part nobody reported is left out, the cost included. The plan's
+*Tasks total* is the cost summed per currency over every attempt, subtasks
+included, followed by the runners none of whose attempts reported a cost
+(`Tasks total: $3.20 · codex reports no cost`); it has no meter. A TUI plan row
 and a VS Code task card draw none.
-*Avoid:* "attempt usage" for it; *Avoid:* an estimated cost or "cost unknown"
-filler.
+*Avoid:* "attempt usage" for it; *Avoid:* a cost estimated by Ordewell or "cost unknown"
+filler; *Avoid:* drawing a token count.
 
 **Attempt kind** (`AttemptKind`, `attemptKind.ts`) — what one attempt of a task
 is: `change`, `ops`, `repair` (a *conflict repair*, ADR-0015), `continuation`
@@ -2077,7 +2084,7 @@ it; "message" — one reply holds several runs.
 **Display block** (`core/src/conversation/blocks.ts`) — one thing a surface
 draws for the planner conversation or a structured task's log: a `message`
 (user, planner, agent, system or error), `thinking`, `tool`, `subagent`,
-`approval`, `plan` or the `usage` token line. Built once in core by
+`approval`, `plan` or the `usage` line. Built once in core by
 `reduceConversation` from the `SessionMessage` stream plus the surface's own
 `LocalEntry` lines, or by `reduceTaskLog` from a task's log; a block's `id` is stable for
 as long as the block exists, so a surface can key its UI state on it.
@@ -2135,7 +2142,7 @@ whether tool blocks show their arguments and full output, subagent blocks show
 their children and digest, and so on. Collapsed is the default: a row per call
 (`Name(keyArg)`) and one preview line. There are deliberately no per-block
 expanded states (see ADR-0017's rejected options). The TUI's ctrl+L clears the
-conversation but keeps the token line.
+conversation but keeps the usage line.
 *Avoid:* "expandable row" per block — one toggle, one place, per surface;
 *Avoid:* claiming the surfaces share the flag's key — ctrl+o is the TUI's
 spelling, not the concept.
@@ -2143,27 +2150,50 @@ spelling, not the concept.
 **Usage record** (`UsageRecord`) — what one model call consumed, as its
 provider or runner *reported* it: token counts, cached input share, the
 context window when the reporter states one, and `reportedCost` only when the
-source itself billed one. Every measure is optional because backends report
-different subsets; absent means "not reported", never zero.
-*Avoid:* filling a missing number from a price table or an estimate — prices
-go stale and a subscription runner has no per-token price at all (ADR-0017);
+source itself states one. Its `kind` distinguishes a billed amount (OpenRouter)
+from the source's own estimate (Claude Code and OpenCode); Claude Code's
+`basis` keeps `list` or `managed`, and a model marked `unknown` has no reported
+cost. A record can also carry the runner's `sessionBilling` fact: a subscription
+or API-key login, with the plan when stated. Every measure is optional because
+backends report different subsets; absent means "not reported", never zero.
+*Avoid:* filling a missing number from a price table or an estimate made by
+Ordewell — prices go stale and a subscription runner has no per-token price at
+all (ADR-0017);
 *Avoid:* treating a record as a statement about *who* called — it says nothing.
 
 **Usage totals** (`UsageTotals`, `PlannerUsage`) — the running sum of usage
 records for the session. Token counts stay absent until some record reports
 them; cost is kept per currency because two runners may bill in different ones
-and no honest exchange rate folds them together. `bySubagent` holds each
+and no honest exchange rate folds them together. `costProvenance` keeps each
+currency's cost kind, session billing and price basis: any estimate marks the sum as an
+estimate, and only a sum whose every contribution ran on a subscription is
+API-equivalent. Surfaces show `≈$7.89` for an estimate,
+`≈$7.89 API-equivalent` for a subscription equivalent, and `$7.89` for a billed
+amount. Older costs without provenance stay unclassified; they cannot establish
+that a sum is all subscription usage. The planner ledger and each attempt
+keep `sessionBilling` as a runner-session fact, saved and broadcast even when
+no cost is reported, for later budget and quota decisions. `bySubagent` holds each
 research subagent's own share, which is already counted in `totals` — never
-added twice. Surfaced as the one `usage` block, the token line, always last.
+added twice. Surfaced as the one `usage` block, always last, which every
+surface draws as the *Context fill* meter and the reported cost (`usageText`,
+worded once in core) and never as a token count: the counts stay in the ledger,
+the saved session and the broadcast.
+The planner's ledger is saved with the plan and restored on load, but not its
+runner's session count: a reloaded planner starts a fresh session seeded from
+the transcript, so its first turn is counted from zero on top of the restored
+ledger. Only the planner's in-process resume, after its process died between
+turns, carries a count (`PlannerSession.sessionCost`).
 *Avoid:* merging currencies; *Avoid:* a "grand total" that mixes the planner's
 own calls in with per-subagent sums shown alongside.
 
-**Context fill** (`plannerContextFill`) — how full the planner's own context
-window is, from its last prompt's reported input tokens against the window the
-runner reports. Derived only for the planner's own calls: a subagent runs its
-own model, whose window says nothing about the planner's. A reported window of
-0 means "not known", and then the fill is simply omitted — never shown against
-a guessed zero. The window is the reporter's own; a record that states none is
+**Context fill** (`plannerContextFill`, `ContextFill`) — how full the main
+model's context is, drawn as the tokens its last prompt used with their share of
+the window when that is known: `ctx 61k (6%)`, `ctx 61k` while the window is
+unknown (`<1%` under one percent), and nothing before any call was measured.
+Derived only from the main model's own calls: a subagent runs its own model,
+whose window says nothing about it, and a session breakdown (`aggregate`)
+measures no prompt. A reported window of 0 means "not known": the share is left
+out — never shown against a guessed zero. The window is the reporter's own; a record that states none is
 filled (`ContextWindowFill`) from the runner's own model listing or the
 provider's own models endpoint for that record's model, per record so a model
 change mid-stream reads its own window, and a window reported once is kept for

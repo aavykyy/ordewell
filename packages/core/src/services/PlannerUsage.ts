@@ -47,9 +47,9 @@ export class PlannerUsageLedger {
     this.windows = new ContextWindowFill(this.catalogWindow);
   }
 
-  /** Whether anything has been recorded — a plan with no usage says nothing. */
+  /** Whether the ledger has measures or session billing facts to broadcast. */
   get hasUsage(): boolean {
-    return isMeasured(this.usage.totals);
+    return isMeasured(this.usage.totals) || this.usage.sessionBilling !== undefined;
   }
 
   /** The value persisted onto the plan state. */

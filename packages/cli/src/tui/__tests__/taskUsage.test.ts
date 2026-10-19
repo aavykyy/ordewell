@@ -8,7 +8,7 @@ import { stripAnsi } from '../ansi';
 import type { AttemptUsage } from '@ordewell/core';
 
 const usage: AttemptUsage = { attempt: 1, runner: 'codex', startedAt: '', wallTimeMs: 5000, totals: { inputTokens: 12400, outputTokens: 3100, reportedCost: { USD: 0.42 } }, byModel: [{ source: 'codex', model: 'actual-model', totals: { inputTokens: 12400 } }], lastPromptTokens: 36000, contextWindow: 200000 };
-const TOTAL = 'Tasks total: 12.4k in · 3.1k out · $0.42';
+const TOTAL = 'Tasks total: $0.42';
 const task = (over: Partial<TaskView> = {}): TaskView => ({ id: 't', order: 1, title: 'Work', type: 'ai', status: 'completed', dependencies: [], ...over });
 const lines = (tasks: TaskView[]) => planLayout(initialState({ tasks, rows: 40, cols: 140 }), 40, 140).lines.map(stripAnsi).join('\n');
 
@@ -22,8 +22,8 @@ describe('task row accounting', () => {
     const t = task({ attemptUsage: [usage] });
     const collapsed = lines([t]);
     expect(collapsed.split('\n')).toContain(TOTAL);
-    expect(collapsed.replace(TOTAL, '')).not.toMatch(/12\.4k in|18% ctx/);
-    expect(expandedLines(t).replace(TOTAL, '')).not.toMatch(/12\.4k in|18% ctx|actual-model: /);
+    expect(collapsed.replace(TOTAL, '')).not.toMatch(/12\.4k|ctx /);
+    expect(expandedLines(t).replace(TOTAL, '')).not.toMatch(/12\.4k|ctx |actual-model: /);
   });
 
   it('keeps skills, effort and mode off a collapsed row and shows them expanded', () => {
@@ -51,7 +51,7 @@ describe('task row accounting', () => {
     const state = initialState({ tasks: [task({ id: 'parent', subtasks: [task()] })] });
     const updated = reduce(state, { type: 'statusUpdate', tasks: [{ id: 't', status: 'completed', verdict: null, attemptUsage: [usage] }] }).state;
     expect(updated.tasks[0].subtasks?.[0].attemptUsage).toEqual([usage]);
-    expect(lines(updated.tasks)).toContain('Tasks total: 12.4k in');
+    expect(lines(updated.tasks)).toContain(TOTAL);
   });
 
   it('keeps usage and unmerged landings from the same status update visible', () => {
@@ -84,6 +84,19 @@ describe('task row accounting', () => {
     const clearedText = planLayout(cleared, 40, 140).lines.map(stripAnsi).join('\n');
     expect(clearedText).not.toContain('landed task');
     expect(clearedText.split('\n')).toContain(TOTAL);
+  });
+});
+
+describe('the plan total', () => {
+  it('marks a subscription estimate in the plan total', () => {
+    const estimate: AttemptUsage = { ...usage, runner: 'claude-code', totals: { reportedCost: { USD: 7.89 }, costProvenance: { USD: { kind: 'estimate', billing: 'subscription' } } } };
+    expect(lines([task({ attemptUsage: [estimate] })]).split('\n')).toContain('Tasks total: ≈$7.89 API-equivalent');
+  });
+
+  it('names the runner whose attempts reported no cost, beside the cost of the others', () => {
+    const free: AttemptUsage = { ...usage, runner: 'codex', totals: { inputTokens: 5000 } };
+    const paid: AttemptUsage = { ...usage, runner: 'claude-code' };
+    expect(lines([task({ attemptUsage: [paid] }), task({ id: 'u', attemptUsage: [free] })]).split('\n')).toContain('Tasks total: $0.42 · codex reports no cost');
   });
 });
 

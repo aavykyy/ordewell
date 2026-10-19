@@ -176,7 +176,7 @@ class OpenAiResearchChat implements ResearchChat {
       record.cachedInputTokens = reported.prompt_tokens_details.cached_tokens;
       hasMeasure = true;
     }
-    if (reported.cost !== undefined) { record.reportedCost = { amount: reported.cost, currency: 'USD' }; hasMeasure = true; }
+    if (reported.cost !== undefined) { record.reportedCost = { amount: reported.cost, currency: 'USD', ...(record.source === 'openrouter' ? { kind: 'billed' } : {}) }; hasMeasure = true; }
     return hasMeasure ? record : undefined;
   }
 }

@@ -430,4 +430,12 @@ describe('a task row\'s usage', () => {
     expect(usage).not.toHaveProperty('byModel');
     expect(usage).not.toHaveProperty('wallTimeMs');
   });
+
+  it('carries the latest attempt\'s used tokens while its window is unknown', () => {
+    const usage = taskRowView(subject({
+      status: 'completed',
+      attemptUsage: [attempt(1, { totals: { inputTokens: 100 }, lastPromptTokens: 90, contextWindow: 100 }), attempt(2, { totals: { inputTokens: 20 }, lastPromptTokens: 20 })],
+    })).usage;
+    expect(usage?.contextFill).toEqual({ usedTokens: 20 });
+  });
 });

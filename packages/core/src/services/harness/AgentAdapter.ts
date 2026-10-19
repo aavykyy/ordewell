@@ -61,7 +61,7 @@ export type AgentEvent =
   /** `subagentId` marks a call made inside a subagent rather than by the planner itself. */
   | { type: 'tool_call'; id: string; name: string; args: Record<string, unknown>; subagentId?: string }
   | { type: 'tool_result'; id: string; name: string; output: string; success: boolean; subagentId?: string }
-  /** One model call's usage, as the agent reported it — never estimated. */
+  /** Usage and session billing facts as the agent reported them — never priced by Ordewell. */
   | { type: 'usage'; record: UsageRecord }
   /** The agent delegated `brief` to a subagent, whose events carry `subagentId` until it finishes. */
   | { type: 'subagent_started'; subagentId: string; brief: string; model?: string }

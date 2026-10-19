@@ -225,6 +225,12 @@ describe('reduceTaskLog', () => {
     });
   });
 
+  it('carries the used tokens without a window while the runner reports none', () => {
+    const view = replayTaskLog([start, { type: 'usage', record: { source: 'codex', inputTokens: 1000 } }]);
+    expect(view.blocks.at(-1)).toMatchObject({ type: 'usage', contextFill: { usedTokens: 1000 } });
+    expect(view.blocks.at(-1)).not.toHaveProperty('contextFill.windowTokens');
+  });
+
   it('draws no usage line for a report of nothing', () => {
     const view = replayTaskLog([start, { type: 'usage', record: { source: 'claude-code' } }]);
     expect(view.blocks.some((b) => b.type === 'usage')).toBe(false);

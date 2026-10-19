@@ -2,6 +2,17 @@ import { describe, it, expect } from 'vitest';
 import { PlannerUsageLedger } from '../PlannerUsage';
 
 describe('PlannerUsageLedger', () => {
+  it('saves and broadcasts billing facts without a cost, preserving the measured model context', () => {
+    const ledger = new PlannerUsageLedger();
+    ledger.record({ source: 'codex', model: 'gpt', inputTokens: 9000, contextWindow: 258400 });
+    ledger.record({ source: 'codex', aggregate: true, sessionBilling: { type: 'subscription', plan: 'plus' } });
+    const reopened = new PlannerUsageLedger();
+    reopened.restore(JSON.parse(JSON.stringify(ledger.snapshot())));
+    expect(reopened.message()).toMatchObject({ sessionBilling: { type: 'subscription', plan: 'plus' }, contextFill: { usedTokens: 9000, windowTokens: 258400 } });
+    expect(reopened.snapshot().byModel).toEqual([{ source: 'codex', model: 'gpt', totals: { inputTokens: 9000 } }]);
+    expect(reopened.snapshot().totals.reportedCost).toBeUndefined();
+  });
+
   it('sums the planner\'s calls and its subagents\' into one line, each subagent\'s share shown apart', () => {
     const ledger = new PlannerUsageLedger();
     ledger.record({ source: 'claude-code', inputTokens: 1000, outputTokens: 100, contextWindow: 200000 });
@@ -36,7 +47,7 @@ describe('PlannerUsageLedger', () => {
     expect(ledger.message().contextFill).toEqual({ usedTokens: 2000, windowTokens: 400000 });
 
     ledger.record({ source: 'opencode', model: 'opencode/unlisted', inputTokens: 3000 });
-    expect(ledger.message().contextFill).toBeUndefined();
+    expect(ledger.message().contextFill).toEqual({ usedTokens: 3000 });
   });
 
   it('keeps a reported window over the catalog\'s, on the calls that report none', () => {
@@ -55,11 +66,11 @@ describe('PlannerUsageLedger', () => {
     expect(ledger.message().contextFill).toEqual({ usedTokens: 700, windowTokens: 200000 });
   });
 
-  it('carries no turn id outside a turn, and no context fill while the window is unknown', () => {
+  it('carries no turn id outside a turn, and the used tokens without a window while it is unknown', () => {
     const ledger = new PlannerUsageLedger();
     ledger.record({ source: 'openai', inputTokens: 10 });
 
-    expect(ledger.message()).toEqual({ type: 'planner_usage', totals: { inputTokens: 10 }, byModel: [{ source: 'openai', totals: { inputTokens: 10 } }] });
+    expect(ledger.message()).toEqual({ type: 'planner_usage', totals: { inputTokens: 10 }, contextFill: { usedTokens: 10 }, byModel: [{ source: 'openai', totals: { inputTokens: 10 } }] });
   });
 
   it('has usage only once something was measured — a bare window or an empty ledger says nothing', () => {

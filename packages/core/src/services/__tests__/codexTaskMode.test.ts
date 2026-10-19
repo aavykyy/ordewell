@@ -589,6 +589,19 @@ describe('CodexAdapter task channels', () => {
     adapter.dispose();
   });
 
+  it('records an explicitly reported API-key login without inventing a cost', async () => {
+    const { adapter, proc } = await startedTask();
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('fix sum', (event) => events.push(event));
+    proc.emitStdout(line({ method: 'account/updated', params: { authMode: 'apikey', planType: null } }));
+    proc.emitStdout(fixture('codex', 'task-turn'));
+    await turn;
+    expect(events.filter((event) => event.type === 'usage' && event.record.sessionBilling)).toEqual([
+      { type: 'usage', record: { source: 'codex', aggregate: true, sessionBilling: { type: 'api-key' } } },
+    ]);
+    adapter.dispose();
+  });
+
   it('marks a turn that failed on the usage limit as one, with the exhausted window\'s reset', async () => {
     beforeRecordedReset();
     const { adapter, proc } = await startedTask();
@@ -597,7 +610,7 @@ describe('CodexAdapter task channels', () => {
     proc.emitStdout(fixture('codex', 'usage-limit'));
     await turn;
 
-    expect(events).toEqual([{
+    expect(events).toEqual([{ type: 'usage', record: { source: 'codex', aggregate: true, sessionBilling: { type: 'subscription', plan: 'plus' } } }, {
       type: 'error',
       message: "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later.",
       usageLimit: { resetsAt: '2026-10-17T20:42:55.000Z' },

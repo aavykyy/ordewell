@@ -120,7 +120,7 @@ function request(overrides: Partial<ConversationRequest> = {}): ConversationRequ
 
 /** What the service wrote to the agent, past the attach check a planner given tools opens with. */
 function writes(proc: FakeAgentProcess): string[] {
-  return proc.written.filter((line) => !line.includes('"subtype":"mcp_status"'));
+  return proc.written.filter((line) => !line.includes('"subtype":"mcp_status"') && !line.includes('"subtype":"initialize"'));
 }
 
 function collector() {
@@ -2052,12 +2052,12 @@ describe('CliAgentAiService — Claude Code partial messages, usage and subagent
     expect(usageRecords(events)).toEqual([
       { source: 'claude-code', model: 'claude-sonnet-5', inputTokens: 18604, cachedInputTokens: 9428, outputTokens: 162 },
       { source: 'claude-code', model: 'claude-sonnet-5', inputTokens: 20025, cachedInputTokens: 18602, outputTokens: 14 },
-      { source: 'claude-code', model: 'claude-sonnet-5', aggregate: true, reportedCost: { amount: 0.049754, currency: 'USD' } },
+      { source: 'claude-code', model: 'claude-sonnet-5', aggregate: true, reportedCost: { amount: 0.049754, currency: 'USD', kind: 'estimate', basis: 'list' } },
       { source: 'claude-code', model: 'claude-sonnet-5', contextWindow: 1000000 },
     ]);
     const usage = usageRecords(events).reduce(addPlannerUsage, { totals: {} });
     expect(usage.totals).toEqual({
-      inputTokens: 38629, cachedInputTokens: 28030, outputTokens: 176, reportedCost: { USD: 0.049754 },
+      inputTokens: 38629, cachedInputTokens: 28030, outputTokens: 176, reportedCost: { USD: 0.049754 }, costProvenance: { USD: { kind: 'estimate', billing: 'unknown', basis: 'list' } },
     });
     expect(plannerContextFill(usage)).toEqual({ usedTokens: 20025, windowTokens: 1000000 });
   });
@@ -2141,6 +2141,33 @@ describe('CliAgentAiService — Claude Code partial messages, usage and subagent
     expect(costs[0]).toMatchObject({ model: 'claude-sonnet-5', reportedCost: { currency: 'USD' } });
     expect(costs[0].reportedCost?.amount).toBeCloseTo(0.0943048, 10);
     expect(usageRecords(events).filter((r) => r.outputTokens !== undefined)).toHaveLength(1);
+  });
+
+  // A crashed process can end with a result whose totals are zeroed. The
+  // resume after it restores the session's saved totals whole, so the count
+  // carried across must not have dropped to 0 meanwhile.
+  it('counts every dollar once across a crash that reported zeroed totals', async () => {
+    const turn = (fields: object) => [
+      { type: 'system', subtype: 'init', session_id: 'sess-crash' },
+      { type: 'stream_event', event: { type: 'message_start', message: { model: 'claude-sonnet-5' } } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Hi.' }] } },
+      { type: 'result', session_id: 'sess-crash', ...fields },
+    ].map((l) => `${JSON.stringify(l)}\n`).join('');
+    const usage = (costUSD: number) => ({ 'claude-sonnet-5': { costUSD, contextWindow: 200000 } });
+    const { svc, spawned } = service('claude-code', [
+      turn({ subtype: 'success', total_cost_usd: 2, modelUsage: usage(2) }),
+      turn({ subtype: 'error_during_execution', is_error: true, total_cost_usd: 0, modelUsage: usage(0) }),
+      turn({ subtype: 'success', total_cost_usd: 2.5, modelUsage: usage(2.5) }),
+    ]);
+    const all: ResearchProgress[] = [];
+    const onProgress = (p: ResearchProgress) => all.push(p);
+    await svc.startConversation(request({ onProgress }));
+    await svc.continueConversation('crash here', onProgress);
+    await svc.continueConversation('and again', onProgress);
+
+    expect(spawned.lastArgs()).toContain('--resume');
+    const amounts = usageRecords(all).flatMap((r) => (r.reportedCost ? [r.reportedCost.amount] : []));
+    expect(amounts).toEqual([2, 0.5]);
   });
 
   describe('a foreground subagent', () => {

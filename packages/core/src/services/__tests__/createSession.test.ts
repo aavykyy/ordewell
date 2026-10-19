@@ -3,7 +3,7 @@ import { createTask, rejoinPlanTree, type LegacyPlanState, type Task } from '../
 import type { SkillInfo } from '../SkillsService';
 import { makeSession, FakeRunnerSession, fakeConfig, taskOf, saves, memoryTaskLogs } from './sessionTestKit';
 import { plannerContextFill, taskUsageSummary } from '../../models/Usage';
-import { scriptedAdapter, fakeMcpServer } from './harnessTestKit';
+import { scriptedAdapter, fakeMcpServer, fakeSpawn, fixture } from './harnessTestKit';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { IDLE_TIMEOUT_MS } from '../VerdictEngine';
 import type { IRunner } from '../../interfaces/IRunner';
@@ -617,7 +617,7 @@ describe('a continue counts its runner session\'s cost on from what was counted 
     sessions[2].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-mystery', inputTokens: 50_000 } });
 
     await vi.waitFor(() => expect(taskUsageSummary(taskOf(session, 't1')!).totals.inputTokens).toBe(51_000));
-    expect(taskUsageSummary(taskOf(session, 't1')!).contextFill).toBeUndefined();
+    expect(taskUsageSummary(taskOf(session, 't1')!).contextFill).toEqual({ usedTokens: 50_000 });
   });
 
   it('hands a fresh attempt no count', async () => {
@@ -846,18 +846,18 @@ describe('session id stability (persist seam)', () => {
       ]);
     });
 
-    it('leaves context fill out while the window is unknown', async () => {
+    it('carries the used tokens without a window while the window is unknown', async () => {
       const sent = await broadcastsFor([{ type: 'usage', record: { source: 'openai', inputTokens: 1000 } }]);
 
-      expect(sent).toEqual([{ type: 'planner_usage', totals: { inputTokens: 1000 }, byModel: [{ source: 'openai', totals: { inputTokens: 1000 } }] }]);
+      expect(sent).toEqual([{ type: 'planner_usage', totals: { inputTokens: 1000 }, contextFill: { usedTokens: 1000 }, byModel: [{ source: 'openai', totals: { inputTokens: 1000 } }] }]);
     });
 
-    it('treats a reported window of zero as unknown, not as no room', async () => {
+    it('treats a reported window of zero as unknown, not as no room, and still carries the used tokens', async () => {
       const sent = await broadcastsFor([
         { type: 'usage', record: { source: 'codex', inputTokens: 1000, contextWindow: 0 } },
       ]);
 
-      expect(sent).toEqual([{ type: 'planner_usage', totals: { inputTokens: 1000 }, byModel: [{ source: 'codex', totals: { inputTokens: 1000 } }] }]);
+      expect(sent).toEqual([{ type: 'planner_usage', totals: { inputTokens: 1000 }, contextFill: { usedTokens: 1000 }, byModel: [{ source: 'codex', totals: { inputTokens: 1000 } }] }]);
     });
 
     it('keeps costs reported in different currencies apart', async () => {
@@ -925,6 +925,47 @@ describe('session id stability (persist seam)', () => {
         bySubagent: { 'sa-1': { inputTokens: 900 } },
         contextFill: { usedTokens: 600, windowTokens: 200000 },
       });
+    });
+
+    // A reloaded plan's planner does not resume its old Claude Code session: it
+    // starts a fresh one seeded from the transcript (ADR-0009, T4), so its
+    // first turn is counted from zero on top of the ledger the plan restored.
+    // Whoever makes a reload resume the old session must carry its count too —
+    // its total would otherwise be counted again, or this test would fail.
+    it('counts a reloaded planner\'s first turn in full on top of the restored ledger', async () => {
+      const spawned = fakeSpawn([fixture('claude-code', 'stream-reasoning')]);
+      const cli = new CliAgentAiService(fakeConfig({ aiProvider: 'claude-code' }), {
+        spawn: spawned.spawn,
+        fetch: (async () => { throw new Error('no HTTP in this test'); }) as unknown as typeof fetch,
+        resolvePath: async () => '/usr/bin',
+        workspaceRoot: () => '/repo',
+        platform: 'linux',
+        isDirectory: () => true,
+        exists: () => true,
+        mcpServer: fakeMcpServer(),
+      });
+      const session = makeSession({
+        aiService: {
+          startConversation: (req: import('../../services/AiService').ConversationRequest) => cli.startConversation(req),
+          continueConversation: (message: string, onProgress: (p: import('../../models/Task').ResearchProgress) => void) => cli.continueConversation(message, onProgress),
+          hasActiveConversation: () => cli.hasActiveConversation(),
+          reset: () => cli.reset(),
+        },
+      });
+      const saved = smallPlan();
+      saved.status = 'draft';
+      saved.conversationHistory = [
+        { role: 'user', content: 'build it', timestamp: new Date().toISOString() },
+        { role: 'assistant', content: 'Which store?', timestamp: new Date().toISOString() },
+      ];
+      saved.plannerUsage = { totals: { inputTokens: 1500, reportedCost: { USD: 1 } } };
+      session.loadPlan(saved, 'build it', '/repo', { persist: false });
+
+      await session.continueConversation('postgres');
+
+      expect(spawned.lastArgs()).not.toContain('--resume');
+      // 0.075482 is the recorded fixture's first-turn total.
+      expect(saves(session).mock.calls.at(-1)![0].plannerUsage?.totals.reportedCost?.USD).toBeCloseTo(1.075482, 10);
     });
 
     // VS Code's Execute re-adopts the Session's own plan object, and is offered

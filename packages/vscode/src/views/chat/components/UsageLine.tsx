@@ -1,60 +1,31 @@
 import React from 'react';
-import type { UsageBlock, UsageTotals } from '@ordewell/core';
+import { contextMeterText, contextMeterTitle, costText, modelCostTitle, subagentCostTitle } from '@ordewell/core/plan-utils';
+import type { UsageBlock } from '@ordewell/core';
 
 /*
- * The token line (#53): a session-wide status pinned below the conversation.
- * Totals include every subagent (core's contract); the per-agent shares are
- * the hover, because they are the second question after "how much so far".
+ * The planner's usage line (#53): the main model's context and the cost its
+ * runner reported, pinned below the conversation. Core words both, so the
+ * surfaces agree; token counts stay in the ledger and are not drawn. The hovers
+ * are the second question: exact counts, and which model cost what.
  */
 
-export function formatCount(n: number): string {
-  return n.toLocaleString('en-US');
-}
-
-/** Four decimals at most, two at least: a session can cost a fraction of a cent or several dollars. */
-export function formatAmount(amount: number): string {
-  const [whole, frac = ''] = amount.toFixed(4).replace(/0+$/, '').split('.');
-  return `${whole}.${frac.padEnd(2, '0')}`;
-}
-
-export function formatCost(currency: string, amount: number): string {
-  const value = formatAmount(amount);
-  return currency.toLowerCase() === 'usd' ? `$${value}` : `${value} ${currency.toUpperCase()}`;
-}
-
-export function measures(totals: UsageTotals, unknown = false): string[] {
-  const parts: string[] = [];
-  if (totals.inputTokens !== undefined) parts.push(`${formatCount(totals.inputTokens)} in`);
-  else if (unknown) parts.push('unknown in');
-  if (totals.outputTokens !== undefined) parts.push(`${formatCount(totals.outputTokens)} out`);
-  else if (unknown) parts.push('unknown out');
-  if (totals.cachedInputTokens !== undefined) parts.push(`${formatCount(totals.cachedInputTokens)} cached`);
-  for (const [currency, amount] of Object.entries(totals.reportedCost ?? {})) parts.push(formatCost(currency, amount));
-  if (unknown && !Object.keys(totals.reportedCost ?? {}).length) parts.push('cost unknown');
-  return parts;
-}
-
 export default function UsageLine({ block }: { block: UsageBlock }) {
-  const models = block.byModel?.map((m) => `${m.source} / ${m.model ?? 'unattributed'}: ${measures(m.totals, true).join(' · ')}`).join('\n');
+  const meter = contextMeterText(block.contextFill);
+  const cost = costText(block.totals);
   const agents = Object.entries(block.bySubagent ?? {});
-  const agentTitle = agents
-    .map(([id, totals]) => `${id}: ${measures(totals).join(' · ') || 'no usage reported'}`)
-    .join('\n');
+  if (!meter && !cost && agents.length === 0) return null;
 
   return (
     <div className="usage-line" role="status">
-      <span className="usage-line-tokens" title={models}>{measures(block.totals).join(' · ')}</span>
-      {block.model && !block.contextFill && <span className="usage-line-context">context unknown</span>}
-      {block.contextFill && (
-        <span
-          className="usage-line-context"
-          title={`${formatCount(block.contextFill.usedTokens)} / ${formatCount(block.contextFill.windowTokens)} tokens`}
-        >
-          context {Math.round((block.contextFill.usedTokens / block.contextFill.windowTokens) * 100)}%
+      {(meter || cost) && (
+        <span className="usage-line-measures">
+          {meter && block.contextFill && <span className="usage-line-context" title={contextMeterTitle(block.contextFill)}>{meter}</span>}
+          {meter && cost && ' · '}
+          {cost && <span className="usage-line-cost" title={block.byModel && modelCostTitle(block.byModel)}>{cost}</span>}
         </span>
       )}
       {agents.length > 0 && (
-        <span className="usage-line-subagents" title={agentTitle}>
+        <span className="usage-line-subagents" title={subagentCostTitle(block.bySubagent ?? {})}>
           {agents.length} subagent{agents.length === 1 ? '' : 's'}
         </span>
       )}
