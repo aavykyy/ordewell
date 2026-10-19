@@ -475,13 +475,18 @@ function runnersOf(tasks: readonly UsageTask[]): AttemptUsage[] {
 /**
  * `Tasks total: $3.20 · codex reports no cost`: the cost over every attempt,
  * then the runners none of whose attempts reported one — codex reports no
- * price, and a price table is not Ordewell's to keep (ADR-0017 U1). A total has
+ * price, and a price table is not Ordewell's to keep (ADR-0017 U1). A runner is
+ * named only once an attempt of it has ended having reported usage: Claude
+ * Code states a cost only on a turn's last line, so a first attempt still in
+ * its turn has not said yet, and one that never ran said nothing. A total has
  * no meter: each task's own model holds its own window.
  */
 export function tasksTotalText(tasks: readonly UsageTask[]): string | null {
   const attempts = runnersOf(tasks);
   if (attempts.length === 0) return null;
-  const costless = [...new Set(attempts.map((a) => a.runner))].filter((runner) => !attempts.some((a) => a.runner === runner && Object.keys(a.totals.reportedCost ?? {}).length > 0));
+  const costed = (a: AttemptUsage): boolean => Object.keys(a.totals.reportedCost ?? {}).length > 0;
+  const costless = [...new Set(attempts.filter((a) => a.endedAt !== undefined && isMeasured(a.totals)).map((a) => a.runner))]
+    .filter((runner) => !attempts.some((a) => a.runner === runner && costed(a)));
   const note = costless.length === 0 ? [] : [`${costless.length === 1 ? costless[0] : `${costless.slice(0, -1).join(', ')} and ${costless.at(-1)}`} ${costless.length === 1 ? 'reports' : 'report'} no cost`];
   const parts = [...costParts(planUsage(tasks).totals), ...note];
   return parts.length > 0 ? `Tasks total: ${parts.join(' · ')}` : null;

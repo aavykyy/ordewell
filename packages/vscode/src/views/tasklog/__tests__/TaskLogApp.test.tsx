@@ -90,7 +90,7 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(screen.getByText('/compact keep APIs')).toBeTruthy();
     expect(screen.getByText('done')).toBeTruthy();
     expect(screen.getByText('Native context summary')).toBeTruthy();
-    expect(screen.getByText('Context compacted by the runner on its own · 12000 → 3000 tokens')).toBeTruthy();
+    expect(screen.getByText('Context compacted by the runner on its own · 12k → 3k tokens')).toBeTruthy();
     expect(screen.getByText(/Runner loaded 1 skill/)).toBeTruthy();
     expect(screen.queryByText('docs (connected)')).toBeNull();
     fireEvent.click(screen.getByText('Expand all'));

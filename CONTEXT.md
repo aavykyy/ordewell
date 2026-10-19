@@ -362,7 +362,9 @@ tags: a harness planner reports a failure as an ordinary reply, and the tags are
 how a dead agent is told apart from a summary. Anything else the turn emits —
 task ops included — is discarded, so the task list is untouched, and nothing is
 written until the summary is in hand, so a failed or stopped turn leaves the
-conversation as it was. Refused while a planner turn is in flight and when the
+conversation as it was. Only its spend is kept: the planner's *Usage totals*
+count it, condensed or not, but its calls move no *Context fill* meter, which a
+condensed conversation clears. Refused while a planner turn is in flight and when the
 conversation has two user messages or fewer; a message sent while it runs is
 refused in turn (`ConversationBusyError`, 409 from the daemon), since the reply
 would share the live context the compaction resets. **Rewind** stops at the summary
@@ -585,7 +587,9 @@ of one paused on a usage limit (see *Usage-limit resume*), that resumes its
 saved runner session (Claude's `--resume`, Codex's `thread/resume`) with
 the user's message as the next turn.
 It is verified and landed like any attempt, is not offered on conflicts, and
-leaves dependents alone, as retry does. It never crosses runners: a saved
+leaves dependents alone, as retry does. It starts once the runner of the
+attempt it continues has wound down (ADR-0018, L1), so a session never runs in
+two processes and its count starts from what that runner last reported. It never crosses runners: a saved
 session records the runner that owns it (`Task.runnerSessionOwner`, else the
 runner of the last attempt, via `sessionOwner`; a session saved with neither is
 given the task's runner as the plan loads, before a move can lose it), and
@@ -1097,9 +1101,10 @@ reports is dropped, never written to a task of the new plan that reuses an id.
 A runner that reports its session's running cost has that count saved with the
 attempt (`runnerSessionCost`) as its session ended, so a *Continue* of the
 session, which waits for that wind-down, counts its first turn from there;
-with no count kept, that turn only sets the baseline. A result whose totals are
-zeroed (a crashed process's last) never lowers the count, and a `/clear` in the
-task's chat restarts it from zero.
+with no count kept, that turn only sets the baseline. A result reporting less
+than was counted — zeroed by a crash, or a resumed session that lost turns its
+process never saved — never lowers the count, and a `/clear` in the task's chat
+restarts it from zero.
 *Avoid:* attributing a session cost to its last model without a reported
 breakdown; *Avoid:* mixing planner usage into task totals; *Avoid:* "the task's
 usage" for one attempt's ledger — see *Task usage*.
@@ -1115,7 +1120,10 @@ every attempt (`ctx 61k (6%) · $1.75`) — and it carries no token count and no
 wall time. A part nobody reported is left out, the cost included. The plan's
 *Tasks total* is the cost summed per currency over every attempt, subtasks
 included, followed by the runners none of whose attempts reported a cost
-(`Tasks total: $3.20 · codex reports no cost`); it has no meter. A TUI plan row
+(`Tasks total: $3.20 · codex reports no cost`), each named only once an attempt
+of it has ended having reported usage: Claude Code states its cost only at a
+turn's end, so a first attempt still in its turn has not said yet. It has no
+meter. A TUI plan row
 and a VS Code task card draw none. A task view or task-log panel with no attempt
 ledger — a log saved before ledgers existed — draws the loaded log's own last
 report in its place.

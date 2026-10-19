@@ -136,6 +136,41 @@ describe('Session.compactConversation', () => {
     session.destroy();
   });
 
+  it('counts what the summary turn spent, condensed or not, without moving the meter on its calls', async () => {
+    const plan = (): LegacyPlanState => ({
+      ...plannedDialogue(),
+      plannerUsage: { totals: { inputTokens: 61_000, reportedCost: { USD: 1.5 } }, source: 'openrouter', model: 'm', lastPromptTokens: 61_000, contextWindow: 1_000_000 },
+    });
+    // The summary call reads the whole conversation: its spend is the user's like any turn's.
+    const summaryCall = { source: 'openrouter', model: 'm', inputTokens: 62_000, outputTokens: 400, contextTokens: 62_400, reportedCost: { amount: 0.25, currency: 'USD', kind: 'billed' as const } };
+    const condensing = (outcome: () => ConversationTurn): PlannerFake['continueConversation'] => async (_message, onProgress) => {
+      onProgress?.({ type: 'usage', record: summaryCall });
+      return outcome();
+    };
+
+    const { planner, state } = apiStylePlanner();
+    planner.continueConversation = condensing(() => summary(SUMMARY_TEXT));
+    const session = makeSession({ aiService: planner });
+    session.loadPlan(plan(), GOAL, testWorkspace, { persist: false });
+    state.context = ['live'];
+    await session.compactConversation();
+    expect(session.planState!.plannerUsage?.totals).toMatchObject({ inputTokens: 123_000, reportedCost: { USD: 1.75 } });
+    expect(session.planState!.plannerUsage?.lastPromptTokens).toBeUndefined();
+    session.destroy();
+
+    const failing = apiStylePlanner();
+    failing.planner.continueConversation = condensing(() => reply('no summary here'));
+    const broadcast = vi.fn<(msg: SessionMessage) => void>();
+    const failed = makeSession({ aiService: failing.planner, broadcast });
+    failed.loadPlan(plan(), GOAL, testWorkspace, { persist: false });
+    failing.state.context = ['live'];
+    await expect(failed.compactConversation()).rejects.toThrow('no summary');
+    const line = broadcast.mock.calls.map(([m]) => m).filter((m) => m.type === 'planner_usage').at(-1);
+    // Not condensed: the meter keeps what the conversation's own last call left.
+    expect(line).toMatchObject({ totals: { reportedCost: { USD: 1.75 } }, contextFill: { usedTokens: 61_000, windowTokens: 1_000_000 } });
+    failed.destroy();
+  });
+
   it('keeps the meter when the conversation was not condensed', async () => {
     const { planner, state } = apiStylePlanner();
     planner.continueConversation = vi.fn().mockRejectedValue(new Error('rate limited'));

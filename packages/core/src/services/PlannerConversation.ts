@@ -770,9 +770,14 @@ export class PlannerConversation {
   private async summarize(signal: AbortSignal): Promise<string> {
     const ai = this.host.aiService();
     const request = summaryRequest(this.currentPlanLines());
-    // Only liveness gets through: streamed prose or research steps from this
-    // turn would land in the chat as if the planner had said them.
-    const onProgress = (p: ResearchProgress) => { if (p.type === 'liveness') this.host.onProgress(p); };
+    // Only liveness and spend get through: streamed prose or research steps
+    // from this turn would land in the chat as if the planner had said them.
+    // Its calls are counted like any turn's, but the context they measure is
+    // dropped as the turn ends, condensed or not, so they move no meter.
+    const onProgress = (p: ResearchProgress) => {
+      if (p.type === 'liveness') this.host.onProgress(p);
+      else if (p.type === 'usage' && p.record) this.host.onProgress({ ...p, record: { ...p.record, aggregate: true } });
+    };
     let turn: ConversationTurn;
     if (this.canContinueLive()) {
       ai.pruneContext?.();

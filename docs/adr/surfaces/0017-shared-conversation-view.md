@@ -85,7 +85,8 @@ own presentation; it never re-derives the conversation from raw messages.
   it, shows what a compaction left or nothing until the next call, and reads a
   window any stream of the Ordewell session was told for that model, saved with
   the plan. The plan's Tasks total is the cost summed per currency, followed by the runners
-  that reported none (`codex reports no cost`); a price table stays forbidden.
+  that reported none (`codex reports no cost`) once an attempt of theirs has
+  ended having reported usage; a price table stays forbidden.
 - **The saved subset for reload (R1).** `fromTranscript` rebuilds the view a
   session reopens with from its persisted transcript, research log and pending
   turns: settled messages — a reply run by run, each at the time it began among
@@ -183,4 +184,5 @@ the same word.)
 - 2026-10-19 — surfaces draw the main model's context and the reported cost only, no token count (U1). Seen live: a task whose context grew from 28k to 61k over 24 calls showed 1.19M in / 1.13M cached, because every call's full prompt, cache reads included, was added up.
 - 2026-10-19 — stated costs distinguish a source's estimate from billing, and subscription equivalents from per-call spend; the ledgers retain runner-session billing facts (U1).
 - 2026-10-19 — the meter counts a call's context as its runner does and resets on a compaction, and a window reported anywhere in the session is known to every later stream (U1). Claude Code states a window only on a turn's last line, so a task, often one long turn, showed no share for its whole run even with the planner on the same model.
-- 2026-10-19 — a plan adopted under a winding-down runner cannot take its late usage, and a turn whose calls did not stream has their tokens taken once from its result (U1). A session billing fact is kept with the source that stated it, so a planner switched before its first cost is not shown as the old one's subscription.
+- 2026-10-19 — a turn whose calls did not stream has their tokens taken once from its result (U1). A session billing fact is kept with the source that stated it, so a planner switched before its first cost is not shown as the old one's subscription.
+- 2026-10-19 — the Tasks total names a runner as reporting no cost only once an attempt of it has ended having reported usage (U1). Claude Code states a cost only at a turn's end, so a first Claude Code task read as `claude-code reports no cost` for as long as its turn ran.

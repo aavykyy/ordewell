@@ -1,5 +1,5 @@
 import {
-  diffRows, diffSummary, loadedSkillTokens, outputLines, outputPreview, usageText,
+  diffRows, diffSummary, formatTokenCount, loadedSkillTokens, outputLines, outputPreview, usageText,
   type DiffRow, type DiffStat,
   type ApprovalBlock, type ApprovalKind, type ApprovalSource, type DisplayBlock, type MessageBlock, type MessageRole, type PlanBlock,
   type CommandBlock, type CommandStatus, type CompactionBlock, type RunnerLoadedBlock,
@@ -417,15 +417,9 @@ function runnerCommandLines(block: CommandBlock, cols: number, detailAll: boolea
   return [head, ...underHeader(shown.map(style.grey))];
 }
 
-function compactCount(n: number): string {
-  if (n < 1000) return String(n);
-  const [value, unit] = n < 999_950 ? [n / 1000, 'k'] : [n / 1_000_000, 'M'];
-  return `${value.toFixed(1).replace(/\.0$/, '')}${unit}`;
-}
-
 function compactionLine(block: CompactionBlock, cols: number): string {
   const sizes = block.preTokens !== undefined && block.postTokens !== undefined
-    ? ` · ${compactCount(block.preTokens)} → ${compactCount(block.postTokens)} tokens`
+    ? ` · ${formatTokenCount(block.preTokens)} → ${formatTokenCount(block.postTokens)} tokens`
     : '';
   const text = block.trigger === 'auto' && !sizes ? '≡ Context compacted by the runner on its own' : `≡ Context compacted${sizes}`;
   return style.grey(truncate(text, cols));

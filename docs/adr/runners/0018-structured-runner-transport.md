@@ -180,10 +180,15 @@ and completion evidence.
   the runner ends a turn. A turn still open gets the soft interrupt, and what
   the runner reports as that turn closes still belongs to the attempt that
   ended: Claude Code states a turn's cost and its model's window only on its
-  `result` line, which comes after the `task_complete` call. Then the runner is
-  told nothing more is coming: Claude Code exits by itself on stdin's end, and
-  only an exit of its own saves the session's running totals for `--resume`.
-  It is killed only once the interrupt grace runs out. Nothing waits on that
+  `result` line, which comes after the `task_complete` call. What the runner
+  would still have written after that call is cut short with its turn: the
+  attempt's output is the call's summary, which the verdict already holds
+  ([ADR-0022](0022-ordewell-mcp-server.md) V4), and the completion contract
+  tells the runner nothing else it writes reaches anyone. Then a runner that
+  can end by itself is told nothing more is coming — Claude Code exits on
+  stdin's end, and only an exit of its own saves the session's running totals
+  for `--resume` — and one that cannot is killed. A runner still there once the
+  interrupt grace runs out is killed. Nothing waits on that
   wind-down but a continue of the same session (K1), which starts once it is
   over. A plan adopted under it is a new scope: what the old runner still
   reports is dropped, never written to a task of the new plan that reuses its
@@ -475,5 +480,4 @@ transport is retained for take-over.
 - 2026-10-18 — U1: the hold on a run is released however its last reset wait goes — Mark complete, a cancelled resume or the task leaving the plan — not only at the reset.
 - 2026-10-18 — O1: a run's late copy that adds to its deltas after another run or a tool line was written starts its addition on a line of its own.
 - 2026-10-18 — U1: loading a session clears saved resume times and keeps paused tasks idle until explicitly resumed.
-- 2026-10-19 — L1: an attempt's runner stops at its verdict, before the landing, by interrupting the turn and taking the runner's last report (Claude Code's cost and window) before the process goes; a continue waits for that wind-down. A plan adopted during one is a new scope, and the old runner's late reports are dropped.
-- 2026-10-19 — L1: a plan adopted under a winding-down runner cannot take the old attempt's late usage, even when a task of the new plan reuses its id.
+- 2026-10-19 — L1: an attempt's runner stops at its verdict, before the landing, by interrupting the turn and taking the runner's last report (Claude Code's cost and window) before the process goes; a continue waits for that wind-down, and what the runner would still write after `task_complete` is cut short. A plan adopted during one is a new scope, and the old runner's late reports are dropped.

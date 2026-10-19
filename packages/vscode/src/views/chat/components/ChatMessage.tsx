@@ -4,7 +4,7 @@ import type {
   ApprovalBlock, ApprovalDecision, ApprovalKind, ApprovalSource, DisplayBlock, MessageBlock, PlanBlock, SkillLoadBlock, SubagentBlock, SubagentStatus,
   ThinkingDisplayBlock, ToolBlock, ToolStatus, DiffRow, DiffStat,
 } from '@ordewell/core';
-import { diffRows, diffSummary, loadedSkillTokens, markdownHtml, outputLines, outputPreview } from '@ordewell/core/plan-utils';
+import { diffRows, diffSummary, formatTokenCount, loadedSkillTokens, markdownHtml, outputLines, outputPreview } from '@ordewell/core/plan-utils';
 
 /*
  * The planner conversation (#51 display blocks) as the webview draws it.
@@ -380,7 +380,7 @@ function Block({
     case 'runner_loaded':
       return <RunnerLoaded block={block} expanded={expanded} />;
     case 'compaction':
-      return <div className="chat-msg chat-msg-system">Context compacted{block.trigger === 'auto' ? ' by the runner on its own' : ''}{block.preTokens !== undefined && block.postTokens !== undefined ? ` · ${block.preTokens} → ${block.postTokens} tokens` : ''}</div>;
+      return <div className="chat-msg chat-msg-system">Context compacted{block.trigger === 'auto' ? ' by the runner on its own' : ''}{block.preTokens !== undefined && block.postTokens !== undefined ? ` · ${formatTokenCount(block.preTokens)} → ${formatTokenCount(block.postTokens)} tokens` : ''}</div>;
     case 'message':
       return <ChatMessage block={block} />;
     case 'thinking':
