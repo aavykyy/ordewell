@@ -271,6 +271,8 @@ interface ClaudeLine {
   tool_use_result?: unknown;
   /** Cumulative over the whole agent session — including turns before a `--resume`. */
   total_cost_usd?: number;
+  /** A turn's own token sum, as its `result` reports it; every call that streamed already reported its own. */
+  usage?: ClaudeUsage;
   modelUsage?: Record<string, { contextWindow?: number; costUSD?: number; costBasis?: 'list' | 'managed' | 'unknown' }>;
   apiKeySource?: string;
   /** `background_tasks_changed`: every background task still running, not just the change. */
@@ -427,6 +429,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    */
   private reportedCostUsd: number | undefined = 0;
   private reportedModelCostUsd = new Map<string, number>();
+  /** What this turn's streamed calls already reported, so its result only adds what did not stream. */
+  private turnCallUsage = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
   /**
    * Subagents started and not yet finished, keyed by the `Agent` call's id.
    * Kept across turns: a backgrounded one reports after its turn has ended.
@@ -1119,8 +1123,13 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       this.plannerModel = this.modelId(event.message?.model);
       this.streamingMessage = event.message?.id;
       this.followModel(this.plannerModel, emit);
-    } else if (event.type === 'message_delta' && event.usage) emit({ type: 'usage', record: usageRecord(event.usage, this.plannerModel) });
-    else if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text) {
+    } else if (event.type === 'message_delta' && event.usage) {
+      const record = usageRecord(event.usage, this.plannerModel);
+      this.turnCallUsage.inputTokens += record.inputTokens ?? 0;
+      this.turnCallUsage.cachedInputTokens += record.cachedInputTokens ?? 0;
+      this.turnCallUsage.outputTokens += record.outputTokens ?? 0;
+      emit({ type: 'usage', record });
+    } else if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text) {
       this.replyRuns.delta(`${this.streamingMessage ?? ''}:${event.index ?? 0}`, event.delta.text, emit);
     } else if (event.type === 'content_block_delta' && event.delta?.type === 'thinking_delta' && event.delta.thinking) {
       emit({ type: 'thinking_delta', text: event.delta.thinking });
@@ -1150,6 +1159,37 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   }
 
   /**
+   * A turn's `result` states its own token sum. Every call that streamed its
+   * `message_delta` usage has already reported, so only the remainder is added:
+   * all of it when nothing streamed (a recording without partial messages), or
+   * a lost call's share. It is a sum across calls, marked `aggregate` so it
+   * never moves the meter — only a call says what the context was left at.
+   */
+  private reportUnstreamedUsage(msg: ClaudeLine, emit: (event: AgentEvent) => void): void {
+    const { inputTokens: streamedInput, cachedInputTokens: streamedCached, outputTokens: streamedOutput } = this.turnCallUsage;
+    this.turnCallUsage = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
+    if (!msg.usage) return;
+    const models = Object.keys(msg.modelUsage ?? {});
+    const model = this.plannerModel ?? this.mainModel ?? (models.length === 1 ? models[0] : undefined);
+    const total = usageRecord(msg.usage, model);
+    const inputTokens = (total.inputTokens ?? 0) - streamedInput;
+    const cachedInputTokens = (total.cachedInputTokens ?? 0) - streamedCached;
+    const outputTokens = (total.outputTokens ?? 0) - streamedOutput;
+    if (inputTokens <= 0 && outputTokens <= 0) return;
+    emit({
+      type: 'usage',
+      record: {
+        source: 'claude-code',
+        ...(model ? { model } : {}),
+        aggregate: true,
+        ...(inputTokens > 0 ? { inputTokens } : {}),
+        ...(inputTokens > 0 && cachedInputTokens > 0 ? { cachedInputTokens } : {}),
+        ...(outputTokens > 0 ? { outputTokens } : {}),
+      },
+    });
+  }
+
+  /**
    * What only the result line knows: the cost, which covers every call the
    * session made — subagents included, since none of their lines carries one —
    * and the planner model's window. `total_cost_usd` is a running total, so a
@@ -1165,6 +1205,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * The one real restart to zero, `/clear`, is {@link restartCount}.
    */
   private reportSessionCost(msg: ClaudeLine, emit: (event: AgentEvent) => void): void {
+    this.reportUnstreamedUsage(msg, emit);
     const total = msg.total_cost_usd;
     const canReport = this.reportedCostUsd !== undefined;
     const modelCosts = Object.entries(msg.modelUsage ?? {}).filter((entry): entry is [string, { contextWindow?: number; costUSD: number; costBasis?: 'list' | 'managed' }] => typeof entry[1].costUSD === 'number' && entry[1].costUSD > 0 && entry[1].costBasis !== 'unknown');

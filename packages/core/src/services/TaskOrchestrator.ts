@@ -220,6 +220,12 @@ interface TaskAttempt {
    * down is still this attempt's, though the attempt has ended.
    */
   runnerStopped: boolean;
+  /**
+   * The plan scope it was claimed in. A plan loaded after it ends the scope:
+   * what the runner still reports belongs to the old plan's task, never to a
+   * task of the new one that happens to reuse its id.
+   */
+  readonly planScope: number;
 }
 
 type AttemptPhase = 'starting' | 'running' | 'integrating';
@@ -361,6 +367,8 @@ export class TaskOrchestrator {
   private store: PlanStore;
   private output: TaskOutputSource;
   private attempts = new Map<string, TaskAttempt>();
+  /** Bumped by every plan load: an ended attempt's wind-down belongs to the scope before it. */
+  private planScope = 0;
   /** Each task's runners still winding down once stopped: a continue waits for them (ADR-0018, L1). */
   private windDowns = new Map<string, Promise<void>>();
   private verifier = new VerdictEngine();
@@ -957,8 +965,13 @@ export class TaskOrchestrator {
   }
 
   loadPlan(tasks: readonly Task[], planRunners: RunnerId[] = [...DEFAULT_RUNNERS]): void {
-    this.store.load(tasks, planRunners);
+    // End what belongs to the plan being replaced before it is swapped: its
+    // ledgers are its tasks', and a task of the next plan that reuses an id
+    // must not inherit them. The bump then closes the scope, so a runner still
+    // winding down reports into nothing rather than into the next plan.
     const repairs = this.endAllAttempts('load').filter((a) => a.kind.kind === 'repair' && a.worktree);
+    this.planScope += 1;
+    this.store.load(tasks, planRunners);
     for (const a of repairs) this.unawaited(this.runs.release(a.taskId, { keep: true }, a.integration), `Could not keep the worktree of task "${this.store.get(a.taskId)?.title ?? a.taskId}"`);
     // A plan committed while the scheduler runs keeps that run, and its mode
     // with it; otherwise the next start decides afresh.
@@ -2265,6 +2278,7 @@ export class TaskOrchestrator {
       turnOutputFrom: 0,
       reminded: false,
       runnerStopped: false,
+      planScope: this.planScope,
     };
     this.spawnCounts.set(task.id, attempt.attempt);
     this.attempts.set(task.id, attempt);
@@ -2384,7 +2398,7 @@ export class TaskOrchestrator {
       // Attached before the verifier, so the summary of the call that settles
       // the attempt is captured before its verdict asks for the final text.
       session.onEvent((event) => {
-        if (event.type !== 'usage' || (this.attempts.get(task.id) !== attempt && !attempt.runnerStopped)) return;
+        if (event.type !== 'usage' || attempt.planScope !== this.planScope || (this.attempts.get(task.id) !== attempt && !attempt.runnerStopped)) return;
         this.store.recordAttemptUsage(task.id, attempt.attempt, event.record, new Date().toISOString());
         this.emit('onUsageChanged');
       });
@@ -2601,7 +2615,7 @@ export class TaskOrchestrator {
    * with that count instead.
    */
   private woundDown(attempt: TaskAttempt, session: IRunnerSession): void {
-    if (!attempt.runnerStopped || this.attempts.get(attempt.taskId) === attempt) return;
+    if (attempt.planScope !== this.planScope || !attempt.runnerStopped || this.attempts.get(attempt.taskId) === attempt) return;
     this.store.endAttemptUsage(attempt.taskId, attempt.attempt, new Date().toISOString(), session.sessionCost?.() ?? undefined, session.nativeSessionId() ?? undefined);
     this.emit('onUsageChanged');
   }

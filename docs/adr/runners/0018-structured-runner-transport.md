@@ -185,7 +185,9 @@ and completion evidence.
   only an exit of its own saves the session's running totals for `--resume`.
   It is killed only once the interrupt grace runs out. Nothing waits on that
   wind-down but a continue of the same session (K1), which starts once it is
-  over. The native session id is saved per attempt, with the count of its
+  over. A plan adopted under it is a new scope: what the old runner still
+  reports is dropped, never written to a task of the new plan that reuses its
+  id. The native session id is saved per attempt, with the count of its
   cost the session ended on.
 - **Continue (K1).** A retry that resumes the saved native session with the
   user's message as the next turn. It is verified and landed like any attempt.
@@ -473,4 +475,5 @@ transport is retained for take-over.
 - 2026-10-18 — U1: the hold on a run is released however its last reset wait goes — Mark complete, a cancelled resume or the task leaving the plan — not only at the reset.
 - 2026-10-18 — O1: a run's late copy that adds to its deltas after another run or a tool line was written starts its addition on a line of its own.
 - 2026-10-18 — U1: loading a session clears saved resume times and keeps paused tasks idle until explicitly resumed.
-- 2026-10-19 — L1: an attempt's runner stops at its verdict, before the landing, by interrupting the turn and taking the runner's last report (Claude Code's cost and window) before the process goes; a continue waits for that wind-down.
+- 2026-10-19 — L1: an attempt's runner stops at its verdict, before the landing, by interrupting the turn and taking the runner's last report (Claude Code's cost and window) before the process goes; a continue waits for that wind-down. A plan adopted during one is a new scope, and the old runner's late reports are dropped.
+- 2026-10-19 — L1: a plan adopted under a winding-down runner cannot take the old attempt's late usage, even when a task of the new plan reuses its id.

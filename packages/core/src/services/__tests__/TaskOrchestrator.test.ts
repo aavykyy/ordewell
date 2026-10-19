@@ -1826,6 +1826,40 @@ describe('what a runner reports while it winds down', () => {
     expect(ledger.runnerSessionCost).toEqual({ sessionId: 'native-1', usd: 0.5, modelUsd: { opus: 0.5 } });
   });
 
+  it('never lets a plan adopted under a winding-down runner take its late usage', async () => {
+    const runner = windingRunner();
+    const orchestrator = makeOrchestrator({ runner });
+    orchestrator.loadPlan([createTask({ id: 't', prompt: 'Work' })]);
+    await orchestrator.forceStartTask('t');
+    const [old] = runner.sessions;
+    old.cost = { sessionId: 'old-session', usd: 0, modelUsd: {} };
+
+    // The next plan reuses the id and already holds an attempt of its own.
+    const next = createTask({
+      id: 't',
+      prompt: 'Other',
+      runnerSessionId: 'next-session',
+      runnerSessionOwner: 'claude-code',
+      attemptUsage: [{
+        attempt: 1, runner: 'claude-code', startedAt: '2026-10-19T00:00:00Z', endedAt: '2026-10-19T00:01:00Z',
+        wallTimeMs: 60_000, totals: { reportedCost: { USD: 3 } }, byModel: [],
+        sessionId: 'next-session', runnerSessionCost: { sessionId: 'next-session', usd: 3, modelUsd: {} },
+      }],
+    });
+    orchestrator.stop();
+    orchestrator.loadPlan([next]);
+
+    old.emitEvent(turnCost);
+    old.cost = { sessionId: 'old-session', usd: 0.25, modelUsd: {} };
+    old.emitExit(1);
+    await flushMicrotasks();
+
+    const [ledger] = orchestrator.storeInstance.get('t')!.attemptUsage!;
+    expect(ledger.totals.reportedCost).toEqual({ USD: 3 });
+    expect(ledger.runnerSessionCost).toEqual({ sessionId: 'next-session', usd: 3, modelUsd: {} });
+    expect(ledger.sessionId).toBe('next-session');
+  });
+
   it('keeps a retry\'s ledger apart from the attempt whose runner still winds down', async () => {
     const runner = windingRunner();
     const orchestrator = makeOrchestrator({ runner });

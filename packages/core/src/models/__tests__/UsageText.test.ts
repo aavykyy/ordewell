@@ -176,6 +176,16 @@ describe('the cost alone', () => {
     expect(next.sessionBilling).toBeUndefined();
   });
 
+  it.each([false, true])('does not lend a subscription reported before any cost to another backend (aggregate: %s)', (aggregate) => {
+    // Claude Code states its login at init, before its first call. A planner
+    // switched before that call must not wear its subscription as a hat.
+    const billingOnly = addPlannerUsage({ totals: {} }, { source: 'claude-code', aggregate: true, sessionBilling: { type: 'subscription', plan: 'max' } });
+    const billed = addPlannerUsage(billingOnly, { source: 'openrouter', model: 'gpt', ...(aggregate ? { aggregate: true as const } : {}), reportedCost: { amount: 2, currency: 'USD', kind: 'billed' } });
+    expect(costText(billed.totals)).toBe('$2.00');
+    expect(billed.totals.costProvenance).toEqual({ USD: { kind: 'billed', billing: 'unknown' } });
+    expect(billed.sessionBilling).toBeUndefined();
+  });
+
   it('marks estimates and subscription equivalents through task and model totals', () => {
     const subscription = attempt(1, 'claude-code',
       { source: 'claude-code', aggregate: true, sessionBilling: { type: 'subscription', plan: 'max' } },
@@ -187,6 +197,14 @@ describe('the cost alone', () => {
     expect(tasksTotalText([{ attemptUsage: [subscription, mixed] }])).toBe('Tasks total: ≈$8.89');
     expect(usageText(mixed)).toBe('≈$1.00');
     expect(usageText(attempt(3, 'openrouter', { source: 'openrouter', reportedCost: { amount: 7.89, currency: 'USD', kind: 'billed' } }))).toBe('$7.89');
+  });
+
+  it('never calls an API-key session API-equivalent', () => {
+    const apiKey = attempt(1, 'claude-code',
+      { source: 'claude-code', aggregate: true, sessionBilling: { type: 'api-key' } },
+      { source: 'claude-code', model: 'opus', reportedCost: { amount: 7.89, currency: 'USD', kind: 'estimate', basis: 'list' } });
+    expect(usageText(apiKey)).toBe('≈$7.89');
+    expect(modelCostTitle(apiKey.byModel ?? [])).toBe("claude-code / opus: ≈$7.89 — Claude Code's estimate at list price");
   });
 
   it('is each currency as reported, or nothing', () => {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { addAttemptUsage, startAttemptUsage, endAttemptUsage, planUsage, usageLine, isMeasured, addPlannerUsage, taskUsageSummary } from '../Usage';
-import { createTask, keepExecutionState } from '../Task';
+import { createTask, keepExecutionState, type Task } from '../Task';
 import { PlanStore } from '../../services/PlanStore';
 
 const start = '2026-10-11T10:00:00Z';
@@ -78,6 +78,24 @@ describe('attempt usage', () => {
     const updated = store.snapshot();
     const rewritten = keepExecutionState(updated, [createTask({ id: 'task', title: 'Edited' })]);
     expect(rewritten[0].attemptUsage).toEqual(updated[0].attemptUsage);
+  });
+
+  it('keeps a billing fact and cost provenance through a save and a reload', () => {
+    const store = new PlanStore();
+    store.load([createTask({ id: 'task' })], ['claude-code']);
+    store.startAttemptUsage('task', 1, 'claude-code', start);
+    store.recordAttemptUsage('task', 1, {
+      source: 'claude-code', model: 'opus', inputTokens: 10,
+      sessionBilling: { type: 'subscription', plan: 'max' },
+      reportedCost: { amount: 1, currency: 'USD', kind: 'estimate', basis: 'list' },
+    }, end);
+    const saved = JSON.parse(JSON.stringify(store.snapshot())) as Task[];
+    const reloaded = new PlanStore();
+    reloaded.load(saved, ['claude-code']);
+
+    const [usage] = reloaded.get('task')!.attemptUsage!;
+    expect(usage.sessionBilling).toEqual({ type: 'subscription', plan: 'max' });
+    expect(usage.totals.costProvenance).toEqual({ USD: { kind: 'estimate', billing: 'subscription', basis: 'list' } });
   });
 
   it('applies the same model attribution and context reset to planner usage', () => {

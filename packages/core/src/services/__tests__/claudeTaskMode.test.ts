@@ -609,6 +609,40 @@ describe('ClaudeCodeAdapter in task mode', () => {
     });
   });
 
+  // A recording without `--include-partial-messages` carries a call's usage only
+  // on its `assistant` line and the turn's sum on its `result`. The result is
+  // the only complete measure there is, so it is read when no call streamed.
+  describe('a turn that reported no per-call usage', () => {
+    const calls = (events: AgentEvent[]) => events.flatMap((e) => (e.type === 'usage' && !e.record.reportedCost && !e.record.compacted && e.record.inputTokens !== undefined ? [e.record] : []));
+
+    it('counts each turn\'s tokens from its result, once', async () => {
+      const { processDeps } = deps([fixture('claude-code', 'task-background')]);
+      const adapter = new ClaudeCodeAdapter(processDeps);
+      await adapter.start(taskStart());
+      const events: AgentEvent[] = [];
+      await adapter.send('do it', (e) => events.push(e));
+
+      expect(calls(events)).toEqual([
+        { source: 'claude-code', model: 'claude-haiku-4-5-20251001', aggregate: true, inputTokens: 109076, cachedInputTokens: 98305, outputTokens: 1749 },
+        { source: 'claude-code', model: 'claude-haiku-4-5-20251001', aggregate: true, inputTokens: 47395, cachedInputTokens: 46665, outputTokens: 232 },
+      ]);
+      adapter.dispose();
+    });
+
+    it('does not count a turn\'s result again when its calls streamed', async () => {
+      const { processDeps } = deps([fixture('claude-code', 'task-checkpoint')]);
+      const adapter = new ClaudeCodeAdapter(processDeps);
+      await adapter.start(taskStart());
+      const events: AgentEvent[] = [];
+      await adapter.send('do it', (e) => events.push(e));
+
+      expect(calls(events)).toEqual([
+        { source: 'claude-code', model: 'claude-haiku-4-5-20251001', inputTokens: 21160, cachedInputTokens: 17371, outputTokens: 201, contextTokens: 21361 },
+      ]);
+      adapter.dispose();
+    });
+  });
+
   it('leaves a tool request open for someone to answer, and passes the whole request on', async () => {
     const { spawned, processDeps } = deps([fixture('claude-code', 'permission-task')]);
     const adapter = new ClaudeCodeAdapter(processDeps);

@@ -2100,6 +2100,22 @@ describe('CliAgentAiService — Claude Code partial messages, usage and subagent
     expect(costs(second.events)[0]).toBeCloseTo(0.0111424, 10);
   });
 
+  it('counts on from what the process before a restartPlanner counted', async () => {
+    const { svc, spawned } = service('claude-code', [
+      fixture('claude-code', 'stream-reasoning'),
+      fixture('claude-code', 'stream-reasoning-followup'),
+    ]);
+    const first = collector();
+    await svc.startConversation(request({ onProgress: first.onProgress }));
+    svc.restart();
+    const second = collector();
+    await svc.continueConversation('And 397?', second.onProgress);
+
+    expect(spawned.lastArgs()).toContain('--resume');
+    const costs = (events: ResearchProgress[]) => usageRecords(events).flatMap((r) => (r.reportedCost ? [r.reportedCost.amount] : []));
+    expect(costs(second.events)).toEqual([expect.closeTo(0.0111424, 10)]);
+  });
+
   it('attributes cumulative costs to the models in the runner report across a switch', async () => {
     const turn = (model: string, input: number, modelUsage: Record<string, { costUSD: number; contextWindow: number }>, total: number) => [
       { type: 'stream_event', event: { type: 'message_start', message: { model } } },
