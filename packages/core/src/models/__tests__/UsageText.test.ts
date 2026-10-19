@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  addAttemptUsage, addPlannerUsage, startAttemptUsage, plannerContextFill, usageLine, usageText, contextMeterText, contextMeterTitle,
+  addAttemptUsage, addPlannerUsage, endAttemptUsage, startAttemptUsage, plannerContextFill, usageLine, usageText, contextMeterText, contextMeterTitle,
   formatCost, formatTokenCount, costText, tasksTotalText, modelCostTitle, subagentCostTitle, taskUsageSummary, type UsageRecord,
 } from '../Usage';
 import { createTask } from '../Task';
@@ -108,6 +108,7 @@ describe('the meter follows the main model only', () => {
 
 describe('Tasks total', () => {
   const usd = (amount: number) => ({ amount, currency: 'USD' });
+  const ended = (n: number, runner: string, ...records: UsageRecord[]) => endAttemptUsage(attempt(n, runner, ...records), at);
 
   it('sums the cost per currency over every attempt, subtasks included', () => {
     const tasks = [createTask({
@@ -120,26 +121,42 @@ describe('Tasks total', () => {
   it('names the runners whose attempts reported no cost at all', () => {
     const tasks = [
       createTask({ attemptUsage: [attempt(1, 'claude-code', { source: 'claude-code', reportedCost: usd(3.2) })] }),
-      createTask({ attemptUsage: [attempt(1, 'codex', { source: 'codex', inputTokens: 10 })] }),
+      createTask({ attemptUsage: [ended(1, 'codex', { source: 'codex', inputTokens: 10 })] }),
     ];
     expect(tasksTotalText(tasks)).toBe('Tasks total: $3.20 · codex reports no cost');
   });
 
   it('does not name a runner when any of its attempts reported a cost', () => {
-    const tasks = [createTask({ attemptUsage: [attempt(1, 'opencode', { source: 'opencode', inputTokens: 1 }), attempt(2, 'opencode', { source: 'opencode', reportedCost: usd(0.1) })] })];
+    const tasks = [createTask({ attemptUsage: [ended(1, 'opencode', { source: 'opencode', inputTokens: 1 }), attempt(2, 'opencode', { source: 'opencode', reportedCost: usd(0.1) })] })];
     expect(tasksTotalText(tasks)).toBe('Tasks total: $0.10');
   });
 
   it('names several runners and carries no meter', () => {
     const tasks = [
-      createTask({ attemptUsage: [attempt(1, 'codex', { source: 'codex', inputTokens: 10, contextWindow: 100 })] }),
-      createTask({ attemptUsage: [attempt(1, 'opencode', { source: 'opencode', inputTokens: 10 })] }),
+      createTask({ attemptUsage: [ended(1, 'codex', { source: 'codex', inputTokens: 10, contextWindow: 100 })] }),
+      createTask({ attemptUsage: [ended(1, 'opencode', { source: 'opencode', inputTokens: 10 })] }),
     ];
     expect(tasksTotalText(tasks)).toBe('Tasks total: codex and opencode report no cost');
   });
 
   it('is nothing before any attempt ran', () => {
     expect(tasksTotalText([createTask({})])).toBeNull();
+  });
+
+  it('does not say a runner reports no cost before an attempt of it has ended having reported usage', () => {
+    // Claude Code states a cost only on a turn's last line: its first attempt's
+    // calls report tokens for as long as that turn runs.
+    const running = attempt(1, 'claude-code', { source: 'claude-code', model: 'opus', inputTokens: 40_000, contextTokens: 41_000 });
+    const tasks = [
+      createTask({ attemptUsage: [running] }),
+      createTask({ attemptUsage: [ended(1, 'opencode', { source: 'opencode', reportedCost: usd(0.4) })] }),
+    ];
+    expect(tasksTotalText(tasks)).toBe('Tasks total: $0.40');
+    // An attempt that never ran (its runner failed to start) says nothing about cost either.
+    const unstarted = endAttemptUsage(startAttemptUsage(1, 'codex', at), at);
+    expect(tasksTotalText([createTask({ attemptUsage: [unstarted] })])).toBeNull();
+
+    expect(tasksTotalText([...tasks, createTask({ attemptUsage: [ended(1, 'codex', { source: 'codex', inputTokens: 10 })] })])).toBe('Tasks total: $0.40 · codex reports no cost');
   });
 });
 

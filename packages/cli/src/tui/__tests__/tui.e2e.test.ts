@@ -961,7 +961,7 @@ describe('TUI end to end', () => {
 
   it('draws the planner line, the Tasks total, the task footer and a reload from the ledgers alone', async () => {
     const attempt = (n: number, runner: string, over: Partial<AttemptUsage>): AttemptUsage => {
-      const base: AttemptUsage = { attempt: n, runner, startedAt: '', wallTimeMs: 65_000, byModel: [], totals: {} };
+      const base: AttemptUsage = { attempt: n, runner, startedAt: '2026-10-19T10:00:00Z', endedAt: '2026-10-19T10:01:05Z', wallTimeMs: 65_000, byModel: [], totals: {} };
       return { ...base, ...over, totals: over.totals ?? base.totals };
     };
     const attempts = {

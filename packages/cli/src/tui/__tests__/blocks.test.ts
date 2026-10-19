@@ -93,7 +93,7 @@ describe('a task\'s runner commands in its log (#66)', () => {
   });
 
   it('marks a compaction, with the context before and after it', () => {
-    expect(plainRows([{ type: 'compaction', id: 'b1', trigger: 'manual', preTokens: 24939, postTokens: 3615 }])).toEqual(['≡ Context compacted · 24.9k → 3.6k tokens']);
+    expect(plainRows([{ type: 'compaction', id: 'b1', trigger: 'manual', preTokens: 24939, postTokens: 3615 }])).toEqual(['≡ Context compacted · 25k → 3.6k tokens']);
     expect(plainRows([{ type: 'compaction', id: 'b1', trigger: 'auto' }])).toEqual(['≡ Context compacted by the runner on its own']);
   });
 

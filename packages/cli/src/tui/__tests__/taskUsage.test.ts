@@ -94,7 +94,7 @@ describe('the plan total', () => {
   });
 
   it('names the runner whose attempts reported no cost, beside the cost of the others', () => {
-    const free: AttemptUsage = { ...usage, runner: 'codex', totals: { inputTokens: 5000 } };
+    const free: AttemptUsage = { ...usage, runner: 'codex', totals: { inputTokens: 5000 }, endedAt: '2026-10-19T10:00:05Z' };
     const paid: AttemptUsage = { ...usage, runner: 'claude-code' };
     expect(lines([task({ attemptUsage: [paid] }), task({ id: 'u', attemptUsage: [free] })]).split('\n')).toContain('Tasks total: $0.42 · codex reports no cost');
   });
