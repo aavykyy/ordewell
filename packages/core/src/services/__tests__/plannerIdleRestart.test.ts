@@ -4,7 +4,7 @@ import { CliAgentAiService } from '../harness/CliAgentAiService';
 import type { SpawnFn } from '../harness/AgentAdapter';
 import { fakeConfig, flushMicrotasks } from '../../testing';
 import { makeSession } from './sessionTestKit';
-import { fakeMcpServer, respondingSpawn } from './harnessTestKit';
+import { fakeMcpServer, fakeSpawn, fixture, respondingSpawn } from './harnessTestKit';
 
 /**
  * A Claude Code planner whose process ended while nobody was talking to it,
@@ -75,6 +75,44 @@ const reply = (text: string) => (text.includes('Use Postgres') ? 'Postgres it is
 const transcript = (session: ReturnType<typeof plannerSession>) => (session.planState?.conversationHistory ?? []).map((m) => m.content);
 
 describe('a planner whose idle process ended', () => {
+  it('replays the transcript after Codex silently replaces a missing thread', async () => {
+    const spawned = fakeSpawn([
+      fixture('codex', 'handshake'), fixture('codex', 'new-conversation'), fixture('codex', 'tools'),
+      fixture('codex', 'handshake'), fixture('codex', 'resume-rejected'),
+      fixture('codex', 'new-conversation').replace('"id":2,', '"id":3,').replaceAll('thr-codex-1', 'thr-new'),
+      (written, proc) => proc.emitStdout((JSON.parse(written) as { method: string }).method === 'initialize'
+        ? fixture('codex', 'handshake')
+        : fixture('codex', 'tools').replaceAll('thr-codex-1', 'thr-new')),
+      fixture('codex', 'new-conversation'), fixture('codex', 'tools'),
+    ]);
+    const mcp = fakeMcpServer();
+    const config = fakeConfig({ aiProvider: 'codex' });
+    const ai = new CliAgentAiService(config, {
+      spawn: spawned.spawn, resolvePath: async () => '/usr/bin', workspaceRoot: () => '/repo',
+      platform: 'linux', isDirectory: () => true, exists: () => true, mcpServer: mcp,
+    });
+    const session = makeSession({ config, aiService: ai, mcpServer: mcp, settings: () => ({ enabledRunners: ['codex'] }) });
+    try {
+      await session.startPlanning('Build inventory', ['codex']);
+      const previousReply = session.planState!.conversationHistory!.at(-1)!.content;
+      spawned.processes[0].exit(143);
+      await flushMicrotasks();
+
+      await expect(session.continueConversation('Use Postgres')).rejects.toThrow('could not be resumed');
+      expect(mcp.heldTokens()).toEqual([]);
+      await session.continueConversation('Use Postgres');
+
+      const sent = spawned.processes[2].written.map((written) => JSON.parse(written) as { method?: string; params?: { input?: { text?: string }[] } });
+      const replayed = sent.find((message) => message.method === 'turn/start')!.params!.input!.map((part) => part.text).join('\n');
+      expect(replayed).toContain('<previous_conversation>');
+      expect(replayed).toContain(previousReply);
+      expect(session.planState!.conversationHistory!.filter((message) => message.content === 'Use Postgres')).toHaveLength(1);
+      expect(sent.some((message) => message.method === 'thread/resume')).toBe(false);
+    } finally {
+      session.destroy();
+    }
+  });
+
   it('answers the next message from a restart on its own session', async () => {
     const claude = fakeClaude(reply, { resumable: true });
     const session = plannerSession(claude);

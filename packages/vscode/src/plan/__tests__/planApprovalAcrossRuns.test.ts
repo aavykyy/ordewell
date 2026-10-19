@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { createSession, flattenTasks, RunnerRegistry, BufferedTaskOutputSource, createTask, RUN_SETTINGS_DEFAULTS, saveState } from '@ordewell/core';
+import { createSession, flattenTasks, RunnerRegistry, BufferedTaskOutputSource, createTask, RUN_SETTINGS_DEFAULTS, saveState, saveSession, loadSession, loadState } from '@ordewell/core';
 import type { IAiService, IRunner, LegacyPlanState, ModelResolver, Session, SurfacePlan } from '@ordewell/core';
 import { fakeConfig, fakeFileSystem, FakeRunnerSession } from '@ordewell/core/testing';
 import { ChatViewProvider } from '../../providers/ChatViewProvider';
@@ -211,6 +211,64 @@ describe('VS Code: a window reload keeps the session\'s identity', () => {
     (vscode.window.showErrorMessage as unknown as ReturnType<typeof vi.fn>).mockReset();
   });
   afterEach(() => { fs.rmSync(workspace, { recursive: true, force: true }); });
+
+  it('keeps a restore snapshot written after its session save', () => {
+    const id = saveSession(plan(), 'build me a parser', workspace).id;
+    const snapshot = plan();
+    snapshot.tasks[0].title = 'Latest draft';
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.now() + 1000);
+      saveState(snapshot, workspace, id);
+    } finally {
+      vi.useRealTimers();
+    }
+    const after = host(workspace);
+    after.restore();
+
+    expect(after.session.planState!.tasks[0].title).toBe('Latest draft');
+    expect(after.session.sessionId).toBe(id);
+    expect(after.spawned).toEqual([]);
+  });
+
+  it('keeps the session save when both writes share a clock tick', () => {
+    const snapshot = plan();
+    const latest = structuredClone(snapshot);
+    latest.tasks[0].status = 'completed';
+    vi.useFakeTimers();
+    try {
+      saveState(snapshot, workspace, 'session-same-tick');
+      saveSession(latest, 'build me a parser', workspace, 'session-same-tick');
+    } finally {
+      vi.useRealTimers();
+    }
+    const after = host(workspace);
+    after.restore();
+
+    expect(after.status('t1')).toBe('completed');
+    expect(after.session.sessionId).toBe('session-same-tick');
+    expect(after.spawned).toEqual([]);
+  });
+
+  it('keeps a task settled after the restore snapshot when the window crashed mid-run', async () => {
+    const before = host(workspace);
+    before.saveSession.mockImplementation(saveSession);
+    before.open();
+    await handleApprovePlan(before.deps);
+    const id = before.session.sessionId;
+    before.latest('t1').reportComplete({ status: 'done', summary: 'Parsed' });
+    await vi.waitFor(() => expect(loadSession(id, workspace)!.plan.tasks[0].status).toBe('completed'));
+    expect(loadState(workspace)!.plan.tasks[0].status).not.toBe('completed');
+
+    const after = host(workspace);
+    after.saveSession.mockImplementation(saveSession);
+    after.restore();
+    await after.session.updateTask('t2', { title: 'Stream results' });
+
+    expect(loadSession(id, workspace)!.plan.tasks[0].status).toBe('completed');
+    expect(after.status('t1')).toBe('completed');
+    expect(after.spawned).toEqual([]);
+  });
 
   // Seen live: each reload went on under a new id, so the session file the
   // user reopened from history was frozen at the reload, with done tasks pending.

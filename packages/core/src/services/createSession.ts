@@ -2097,7 +2097,7 @@ export class Session {
    */
   private async adoptRun(plan: LegacyPlanState, persists: boolean): Promise<void> {
     const outcome = await this.runs.adopt(plan.isolation ?? null);
-    if (this.plan !== plan || outcome === 'unchanged') return;
+    if (this.closed || this.plan !== plan || outcome === 'unchanged') return;
     plan.isolation = this.runs.planIsolation ?? undefined;
     if (persists) this.persist();
     this.events.status(plan);
