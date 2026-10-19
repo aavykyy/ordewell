@@ -1,4 +1,5 @@
 import { hour24, lastMatch, month, placeWallTime, type WallTime } from '../../utils/wallTime';
+import type { SessionBilling } from '../../models/Usage';
 import type { UsageLimitSignal } from './AgentAdapter';
 
 const CODEX_RESET_RE = /[Tt]ry again at (?:([A-Z][a-z]{2}) (\d{1,2})(?:st|nd|rd|th)?, (\d{4}) )?(\d{1,2}):(\d{2}) ([AP]M)\./g;
@@ -29,6 +30,7 @@ interface CodexRateLimitWindow {
 
 interface CodexRateLimitSnapshot {
   limitId?: string | null;
+  planType?: string | null;
   primary?: CodexRateLimitWindow | null;
   secondary?: CodexRateLimitWindow | null;
 }
@@ -46,8 +48,14 @@ export function mergeCodexRateLimits(known: CodexRateLimits, params: unknown): C
   const id = snapshot.limitId ?? '';
   const before = known.get(id);
   const next = new Map(known);
-  next.set(id, { limitId: id, primary: snapshot.primary ?? before?.primary, secondary: snapshot.secondary ?? before?.secondary });
+  next.set(id, { limitId: id, planType: snapshot.planType ?? before?.planType, primary: snapshot.primary ?? before?.primary, secondary: snapshot.secondary ?? before?.secondary });
   return next;
+}
+
+/** A named ChatGPT plan is evidence of that login; absent limits say nothing about authentication. */
+export function codexSessionBilling(limits: CodexRateLimits): SessionBilling | undefined {
+  const plan = [...limits.values()].find((snapshot) => snapshot.planType && snapshot.planType !== 'unknown')?.planType;
+  return plan ? { type: 'subscription', plan } : undefined;
 }
 
 /**

@@ -64,9 +64,14 @@ own presentation; it never re-derives the conversation from raw messages.
   display, and becomes a plan marker block when it settles.
 - **Usage only from reports (U1).** Usage records carry only what a provider or
   runner itself reported — tokens, cached tokens, a stated context window,
-  a stated cost. No price table, no estimate: prices go stale, and a
-  subscription runner has no per-token price at all. Absent means "not
-  reported", never zero. The usage line is one `usage` block, always last. Every
+  a stated cost. A source's own estimate is shown as stated, marked `≈`; a
+  billed amount has no mark. A cost whose every contribution ran on a
+  subscription reads `≈$7.89 API-equivalent`. The ledger keeps the reported
+  cost's provenance per currency (any estimate marks the sum), and the runner's
+  session billing fact with the planner or attempt it belongs to, saved and
+  broadcast even without a cost. No price table or estimate made by Ordewell:
+  prices go stale, and a subscription runner has no per-token price at all.
+  Absent means "not reported", never zero. The usage line is one `usage` block, always last. Every
   count stays in the ledger, the saved session and the broadcast, but surfaces
   draw none of them: they draw the main model's context (`ctx 61k (6%)`, the
   share only when the window is known, nothing before a call was measured) and
@@ -170,3 +175,4 @@ the same word.)
 - 2026-10-16 — a surface that (re)joins a session is given its live state as well as its transcript. The session socket greets with the planner's approval requests still waiting beside the run (its held edit's preview included), and numbers every broadcast per session; the TUI tells one broadcast's copies apart by that number rather than by content, and reconciles its cards and approval prompt with the greeting on every load. A reloaded VS Code webview replays the waiting requests after the transcript, and drops a card answered while it was away. Seen live: a TUI that reconnected kept the preview of a proposed task the session had already dropped, and a webview reload erased a waiting card nothing could then answer.
 - 2026-10-18 — a reply settles run by run where each streamed, and its transcript entry keeps its runs beside its content (A1, R1); a corrective retry keeps the narration before a discarded attempt's tool calls. Seen live: a coding-agent planner's "I'll read README.md now" sat below the Read row it announced, joined with the rest of the turn, live and after a reload.
 - 2026-10-19 — surfaces draw the main model's context and the reported cost only, no token count (U1). Seen live: a task whose context grew from 28k to 61k over 24 calls showed 1.19M in / 1.13M cached, because every call's full prompt, cache reads included, was added up.
+- 2026-10-19 — stated costs distinguish a source's estimate from billing, and subscription equivalents from per-call spend; the ledgers retain runner-session billing facts (U1).

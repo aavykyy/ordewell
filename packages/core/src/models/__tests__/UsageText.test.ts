@@ -163,6 +163,28 @@ describe('hovers', () => {
 });
 
 describe('the cost alone', () => {
+  it('does not lend a subscription to another source after the planner switches backends', () => {
+    const first = addPlannerUsage({ totals: {} }, { source: 'claude-code', model: 'opus', sessionBilling: { type: 'subscription' }, reportedCost: { amount: 1, currency: 'USD', kind: 'estimate' } });
+    const switched = addPlannerUsage(first, { source: 'openrouter', model: 'gpt', reportedCost: { amount: 2, currency: 'USD', kind: 'billed' } });
+    const next = addPlannerUsage(switched, { source: 'openrouter', model: 'gpt', reportedCost: { amount: 3, currency: 'USD', kind: 'billed' } });
+    expect(costText(next.totals)).toBe('≈$6.00');
+    expect(costText(next.byModel![1].totals)).toBe('$5.00');
+    expect(next.sessionBilling).toBeUndefined();
+  });
+
+  it('marks estimates and subscription equivalents through task and model totals', () => {
+    const subscription = attempt(1, 'claude-code',
+      { source: 'claude-code', aggregate: true, sessionBilling: { type: 'subscription', plan: 'max' } },
+      { source: 'claude-code', aggregate: true, model: 'opus', reportedCost: { amount: 7.89, currency: 'USD', kind: 'estimate', basis: 'list' } });
+    expect(usageText(subscription)).toBe('≈$7.89 API-equivalent');
+    expect(tasksTotalText([{ attemptUsage: [subscription] }])).toBe('Tasks total: ≈$7.89 API-equivalent');
+    expect(modelCostTitle(subscription.byModel ?? [])).toBe("claude-code / opus: ≈$7.89 API-equivalent — Claude Code's estimate at list price; not billed on a subscription");
+    const mixed = attempt(2, 'opencode', { source: 'opencode', reportedCost: { amount: 1, currency: 'USD', kind: 'estimate' } });
+    expect(tasksTotalText([{ attemptUsage: [subscription, mixed] }])).toBe('Tasks total: ≈$8.89');
+    expect(usageText(mixed)).toBe('≈$1.00');
+    expect(usageText(attempt(3, 'openrouter', { source: 'openrouter', reportedCost: { amount: 7.89, currency: 'USD', kind: 'billed' } }))).toBe('$7.89');
+  });
+
   it('is each currency as reported, or nothing', () => {
     expect(costText({ reportedCost: { USD: 7.89 } })).toBe('$7.89');
     expect(costText({ inputTokens: 5 })).toBeNull();
