@@ -29,6 +29,14 @@ describe('usage line', () => {
     expect(document.querySelector('.message-list')!.contains(line)).toBe(false);
   });
 
+  it('keeps drawing the newest usage when a supervisor wake-up turn opens above the line', () => {
+    host.session(turnStarted, usage({ totals: { inputTokens: 1000 }, contextFill: { usedTokens: 1000 } }));
+    host.session({ type: 'planner_turn_started', turnId: 'w1', prompt: '', wakeUps: ['Run update: task 1 failed'], supervisor: true });
+    host.session(usage({ turnId: 'w1', totals: { inputTokens: 2000 }, contextFill: { usedTokens: 2000 } }));
+
+    expect(document.querySelector('.usage-line')!.textContent).toBe('ctx 2k');
+  });
+
   it('draws no line when neither the context nor a cost is known', () => {
     host.session(turnStarted, usage({}));
 

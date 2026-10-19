@@ -77,6 +77,24 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     })]);
   });
 
+  it('draws an old log\'s own usage when the task kept no attempt ledger', () => {
+    const h = harness({
+      1: [
+        { type: 'turn_start', message: 'x' },
+        { type: 'usage', record: { source: 'claude-code', inputTokens: 500, outputTokens: 40, contextTokens: 540, contextWindow: 200_000 } },
+        { type: 'turn_end', reason: 'completed' },
+      ],
+    });
+    h.registry.open('t1');
+    __panels[0].__receive({ type: 'ready' });
+
+    const init = posted(__panels[0])[0];
+    expect((init as { status: { usage?: unknown } }).status.usage).toEqual({
+      totals: { inputTokens: 500, outputTokens: 40 },
+      contextFill: { usedTokens: 540, windowTokens: 200_000 },
+    });
+  });
+
   it('never opens a tab by itself, and opens one titled for the task on demand', () => {
     const h = harness();
     expect(createWebviewPanel).not.toHaveBeenCalled();

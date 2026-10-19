@@ -1546,6 +1546,16 @@ describe('the token line', () => {
     expect(render(back).map(stripAnsi).join('\n')).not.toContain('reply 39');
   });
 
+  it('keeps the meter pinned while a supervisor wake-up turn opens above it', () => {
+    const state = heard(
+      80,
+      usage({ contextFill: { usedTokens: 36_000, windowTokens: 200_000 } }),
+      { type: 'planner_turn_started', turnId: 'w1', prompt: '', wakeUps: ['Run update: task 1 failed'], supervisor: true },
+    );
+
+    expect(bottomRow(state)).toBe('ctx 36k (18%)');
+  });
+
   it('takes no row until usage is reported', () => {
     const state = heard(80, ...Array.from({ length: 40 }, (_, i): SessionMessage => ({ type: 'planner_message', content: `reply ${i}`, timestamp: '' })));
 

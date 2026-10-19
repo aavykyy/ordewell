@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { latestTaskCommands } from '../shared/taskCommands';
-import { canContinue, pausedOnLimit, resumeLabel, taskUsageSummary, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
+import { canContinue, isMeasured, pausedOnLimit, resumeLabel, taskUsageSummary, usageLine, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { EMPTY_TASK_LOG_FOLLOW, followTaskLog } from '@ordewell/core/plan-utils';
 import { diffConversation } from '../shared/conversationPatch';
 import { renderWebviewHtml } from './webviewHtml';
@@ -201,6 +201,15 @@ export class TaskLogPanel {
     const task = this.deps.getTask(this.taskId);
     const resumes = task ? resumeLabel(task) : null;
     const spend = task ? taskUsageSummary(task) : undefined;
+    // A log saved before attempt ledgers still measured its own usage; it is
+    // the only report there is, and the TUI task view draws it too.
+    const logged = this.follow.view.usage;
+    const loggedLine = logged && isMeasured(logged.totals) ? usageLine(logged) : undefined;
+    const usage = spend && spend.attempts > 0
+      ? { totals: spend.totals, ...(spend.contextFill ? { contextFill: spend.contextFill } : {}) }
+      : loggedLine
+        ? { totals: loggedLine.totals, ...(loggedLine.contextFill ? { contextFill: loggedLine.contextFill } : {}) }
+        : undefined;
     return {
       commands: latestTaskCommands(this.deps.session, this.taskId),
       taskId: this.taskId,
@@ -219,7 +228,7 @@ export class TaskLogPanel {
       attempt: this.follow.attempt,
       continuable: task ? canContinue(task) : false,
       resumable: task ? pausedOnLimit(task) && canContinue(task) : false,
-      ...(spend && spend.attempts > 0 ? { usage: { totals: spend.totals, contextFill: spend.contextFill } } : {}),
+      ...(usage ? { usage } : {}),
     };
   }
 

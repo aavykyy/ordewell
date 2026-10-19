@@ -1114,7 +1114,9 @@ wall time. A part nobody reported is left out, the cost included. The plan's
 *Tasks total* is the cost summed per currency over every attempt, subtasks
 included, followed by the runners none of whose attempts reported a cost
 (`Tasks total: $3.20 · codex reports no cost`); it has no meter. A TUI plan row
-and a VS Code task card draw none.
+and a VS Code task card draw none. A task view or task-log panel with no attempt
+ledger — a log saved before ledgers existed — draws the loaded log's own last
+report in its place.
 *Avoid:* "attempt usage" for it; *Avoid:* a cost estimated by Ordewell or "cost unknown"
 filler; *Avoid:* drawing a token count.
 

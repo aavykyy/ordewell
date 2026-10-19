@@ -50,7 +50,7 @@ export interface TaskLogStatus {
   continuable: boolean;
   /** Paused on a usage limit with a saved session: Resume now is offered, and the message box resumes it. */
   resumable?: boolean;
-  /** The task's whole spend across every attempt, the meter read on the latest one; absent until an attempt reports. */
+  /** The task's whole spend across every attempt, the meter read on the latest one; a task with no attempt ledger falls back to the loaded log's own report. */
   usage?: Pick<TaskUsageSummary, 'totals' | 'contextFill'>;
 }
 
