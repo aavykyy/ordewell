@@ -41,8 +41,7 @@ interface ChatInputProps {
   /** Set while a coding agent plans: `/model set` then lists only that agent's models, not the API catalog. */
   harnessPlannerModels?: ModelOption[];
   configuredProviders?: ApiProvider[];
-  isProcessing?: boolean;
-  /** A planner turn is in flight: with text typed, Enter queues it and Ctrl+Enter sends it now. */
+  /** A planner turn is in flight: with nothing typed the button stops it; with text typed, Enter queues it and Ctrl+Enter sends it now. A run is not the composer's to stop. */
   isTurnRunning?: boolean;
   /** Send now (ADR-0023, F5), on Ctrl+Enter; with no turn running the host sends it as a plain message. */
   onSendNow?: (text: string) => void;
@@ -258,7 +257,6 @@ export default function ChatInput({
   modelOptions,
   harnessPlannerModels,
   configuredProviders = [],
-  isProcessing = false,
   isTurnRunning = false,
   onSendNow,
   onStop,
@@ -463,7 +461,7 @@ export default function ChatInput({
   }, [unsent]);
 
   const canSend = !disabled && text.trim().length > 0;
-  const canSubmit = isProcessing || canSend;
+  const canSubmit = isTurnRunning || canSend;
   // A live planner turn and something typed: Enter queues it for the turn's
   // end, Ctrl+Enter stops the turn and sends it ahead of the queue.
   const canSendNow = !!onSendNow && isTurnRunning && canSend;
@@ -472,7 +470,8 @@ export default function ChatInput({
   const queues = canSendNow && !isBuiltinSlashCommand(text.trim());
   // Stop only while a turn is live and nothing is typed, so typing a message
   // always turns the button back into Send — as the task log's composer does.
-  const stops = isProcessing && !canSend;
+  // A run alone never makes it Stop: the run has its own control.
+  const stops = isTurnRunning && !canSend;
 
   const sendNow = () => {
     if (!canSendNow) return;

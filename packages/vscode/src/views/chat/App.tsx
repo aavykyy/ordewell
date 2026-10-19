@@ -74,7 +74,6 @@ export default function App() {
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
   const setIsResearchActive = useCallback((v: boolean) => dispatch({ type: 'patchResearchActive', active: v }), []);
-  const setIsExecuting = useCallback((v: boolean) => dispatch({ type: 'patchExecuting', executing: v }), []);
   const setError = useCallback((v: string) => dispatch({ type: 'patchError', error: v }), []);
   const setIsReady = useCallback((v: boolean) => dispatch({ type: 'patchReady', ready: v }), []);
   const setRunners = useCallback((v: Updatable<RunnerId[]>) => dispatch({ type: 'patchRunners', runners: v }), []);
@@ -102,8 +101,6 @@ export default function App() {
   planRef.current = plan;
   const blocksRef = useRef(blocks);
   blocksRef.current = blocks;
-
-  const isGenerating = isResearchActive || isExecuting;
 
   useEffect(() => {
     processingRef.current = isResearchActive || isExecuting;
@@ -416,17 +413,6 @@ export default function App() {
     dispatch({ type: 'turnStopped' });
     vscode.postMessage({ type: 'stopResearch' });
   }, []);
-
-  // Stopping a run is not stopping a turn: the stale-plan gate is the turn's,
-  // and armed here it dropped every plan update after the run's stop.
-  const handleStop = useCallback(() => {
-    if (!isExecuting) {
-      stopTurn();
-      return;
-    }
-    setIsExecuting(false);
-    vscode.postMessage({ type: 'sendSystemCommand', command: 'stopExecution' });
-  }, [isExecuting, stopTurn]);
 
   // Esc during a planner turn, in order of intent: take back the newest queued
   // prompt, else arm a stop, else commit it. Outside a turn it is the input's.
@@ -1029,7 +1015,7 @@ export default function App() {
       <ChatInput
         onSend={handleSend}
         onSendNow={handleSendNow}
-        onStop={handleStop}
+        onStop={stopTurn}
         onEscape={handleEscape}
         disabled={conversationBusy}
         disabledReason={conversationBusy ? 'Compacting the conversation...' : undefined}
@@ -1037,7 +1023,6 @@ export default function App() {
         modelOptions={modelOptions}
         harnessPlannerModels={harnessPlannerModels}
         configuredProviders={configuredProviders}
-        isProcessing={isGenerating}
         isTurnRunning={isResearchActive}
         unsent={unsent}
         skills={skills}
