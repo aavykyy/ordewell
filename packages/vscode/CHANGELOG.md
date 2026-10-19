@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.10.9] - 2026-10-19
+
 ### Fixed
 
 - **Reloading the window keeps working under the same session.** A reload used
