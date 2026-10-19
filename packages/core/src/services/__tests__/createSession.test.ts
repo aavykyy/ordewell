@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createTask, rejoinPlanTree, type LegacyPlanState, type Task } from '../../models/Task';
 import type { SkillInfo } from '../SkillsService';
 import { makeSession, FakeRunnerSession, fakeConfig, taskOf, saves, memoryTaskLogs } from './sessionTestKit';
-import { contextMeterText, plannerContextFill, taskUsageSummary } from '../../models/Usage';
+import { contextMeterText, plannerContextFill, taskUsageSummary, usageText } from '../../models/Usage';
 import { scriptedAdapter, fakeMcpServer, fakeSpawn, fixture } from './harnessTestKit';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { IDLE_TIMEOUT_MS } from '../VerdictEngine';
@@ -926,6 +926,56 @@ describe('session id stability (persist seam)', () => {
         bySubagent: { 'sa-1': { inputTokens: 900 } },
         contextFill: { usedTokens: 600, windowTokens: 200000 },
       });
+    });
+
+    // A plan saved before the meter existed carries a prompt count and no
+    // window: that is what it can show. Nothing is invented for it, and a
+    // task's own line reads the same way.
+    it('loads a plan saved before context windows and the context measure without inventing one', async () => {
+      const broadcast = vi.fn();
+      const saved = smallPlan();
+      saved.tasks[0].assignedRunner = 'claude-code';
+      saved.plannerUsage = {
+        totals: { inputTokens: 1500, outputTokens: 200 },
+        source: 'claude-code',
+        model: 'claude-opus-5-5',
+        lastPromptTokens: 22_000,
+      };
+      saved.tasks[0].attemptUsage = [{
+        attempt: 1,
+        runner: 'claude-code',
+        startedAt: '2026-10-18T10:00:00.000Z',
+        endedAt: '2026-10-18T10:01:00.000Z',
+        wallTimeMs: 60_000,
+        totals: { inputTokens: 22_000 },
+        source: 'claude-code',
+        model: 'claude-opus-5-5',
+        lastPromptTokens: 22_000,
+      }];
+      const session = makeSession({ broadcast });
+      session.loadPlan(saved, 'old', '/repo', { persist: false });
+
+      const line = broadcast.mock.calls.map(([m]) => m as SessionMessage).filter((m) => m.type === 'planner_usage').at(-1);
+      expect(line?.contextFill).toEqual({ usedTokens: 22_000 });
+      expect(taskUsageSummary(taskOf(session, 't1')!).contextFill).toEqual({ usedTokens: 22_000 });
+      expect(contextMeterText(taskUsageSummary(taskOf(session, 't1')!).contextFill)).toBe('ctx 22k');
+      session.destroy();
+    });
+
+    // A plan saved before any context measure has none: the line shows the
+    // totals alone, never a ctx 0.
+    it('shows no meter for a plan saved with no context measure at all', () => {
+      const session = makeSession();
+      const saved = smallPlan();
+      saved.plannerUsage = { totals: { inputTokens: 1500 } };
+      saved.tasks[0].attemptUsage = [{
+        attempt: 1, runner: 'claude-code', startedAt: '2026-10-18T10:00:00.000Z', wallTimeMs: 0,
+        totals: { inputTokens: 1500 },
+      }];
+      session.loadPlan(saved, 'old', '/repo', { persist: false });
+      expect(taskUsageSummary(taskOf(session, 't1')!).contextFill).toBeUndefined();
+      expect(usageText(taskUsageSummary(taskOf(session, 't1')!))).toBeNull();
+      session.destroy();
     });
 
     // A reloaded plan's planner does not resume its old Claude Code session: it

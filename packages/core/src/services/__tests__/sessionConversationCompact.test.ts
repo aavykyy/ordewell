@@ -100,6 +100,59 @@ describe('Session.compactConversation', () => {
     expect(planEvent?.type === 'plan_generated' && planEvent.plan.conversationHistory).toHaveLength(5);
   });
 
+  it('clears the planner\'s context meter when the conversation is condensed', async () => {
+    const { planner, state } = apiStylePlanner();
+    const broadcast = vi.fn<(msg: SessionMessage) => void>();
+    const plan = plannedDialogue();
+    plan.plannerUsage = {
+      totals: { inputTokens: 61_000, outputTokens: 1_000, reportedCost: { USD: 1.5 } },
+      source: 'claude-code',
+      model: 'claude-opus-5-5',
+      lastPromptTokens: 61_000,
+      contextWindow: 1_000_000,
+    };
+    const session = makeSession({ aiService: planner, broadcast });
+    session.loadPlan(plan, GOAL, testWorkspace, { persist: false });
+    state.context = ['live'];
+    broadcast.mockClear();
+
+    await session.compactConversation();
+
+    const sent = broadcast.mock.calls.map(([m]) => m).filter((m) => m.type === 'planner_usage').at(-1);
+    expect(sent).toMatchObject({ type: 'planner_usage', totals: { inputTokens: 61_000, outputTokens: 1_000 } });
+    expect(sent?.contextFill).toBeUndefined();
+    const saved = saves(session).mock.calls.at(-1)![0];
+    expect(saved.plannerUsage?.lastPromptTokens).toBeUndefined();
+    expect(saved.plannerUsage?.totals).toEqual({ inputTokens: 61_000, outputTokens: 1_000, reportedCost: { USD: 1.5 } });
+
+    // A reloaded plan restores the same line: the totals, no pre-compaction size.
+    const reopened = vi.fn<(msg: SessionMessage) => void>();
+    const restored = makeSession({ broadcast: reopened });
+    restored.loadPlan(saved, GOAL, testWorkspace, { persist: false });
+    const restoredLine = reopened.mock.calls.map(([m]) => m).filter((m) => m.type === 'planner_usage').at(-1);
+    expect(restoredLine).toMatchObject({ type: 'planner_usage', totals: { inputTokens: 61_000, outputTokens: 1_000 } });
+    expect(restoredLine?.contextFill).toBeUndefined();
+    restored.destroy();
+    session.destroy();
+  });
+
+  it('keeps the meter when the conversation was not condensed', async () => {
+    const { planner, state } = apiStylePlanner();
+    planner.continueConversation = vi.fn().mockRejectedValue(new Error('rate limited'));
+    const plan = plannedDialogue();
+    plan.plannerUsage = { totals: { inputTokens: 61_000 }, source: 'claude-code', model: 'claude-opus-5-5', lastPromptTokens: 61_000, contextWindow: 1_000_000 };
+    const broadcast = vi.fn<(msg: SessionMessage) => void>();
+    const session = makeSession({ aiService: planner, broadcast });
+    session.loadPlan(plan, GOAL, testWorkspace, { persist: false });
+    state.context = ['live'];
+    broadcast.mockClear();
+
+    await expect(session.compactConversation()).rejects.toThrow('rate limited');
+
+    expect(broadcast.mock.calls.map(([m]) => m).filter((m) => m.type === 'planner_usage')).toEqual([]);
+    expect(session.planState!.plannerUsage?.lastPromptTokens).toBe(61_000);
+  });
+
   it('does not let task ops in the summary turn change the plan', async () => {
     const ops: ConversationTurn = {
       kind: 'task_ops',

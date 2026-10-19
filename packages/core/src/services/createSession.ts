@@ -1471,7 +1471,22 @@ export class Session {
     if (!this.plan) throw new ConversationEditError('No planning conversation to condense');
     const opening = this.plannerTurnMayOpen(signal);
     if (opening) await opening;
-    return this.conversation.compact(signal);
+    const compaction = await this.conversation.compact(signal);
+    // The backend's live context is gone: the next prompt replays the
+    // condensed transcript, so the size of the last call before it says
+    // nothing of how full that prompt is. It is a reset with no size stated,
+    // like a runner's compaction that reports none.
+    const usage = this.usage.snapshot();
+    if (usage.lastPromptTokens !== undefined) {
+      this.usage.record({
+        source: usage.source ?? this.config.aiProvider,
+        ...(usage.model ? { model: usage.model } : {}),
+        compacted: true,
+      });
+      this.persist();
+      this.broadcast(this.usage.message());
+    }
+    return compaction;
   }
 
   rewindTargets(): RewindTarget[] {
