@@ -1,5 +1,5 @@
 import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, PendingPlanTurn, ReplyRun, ResearchStep, RunnerId, RunSettings, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, Verdict } from '../models/Task';
-import type { AttemptUsage, ContextFill, ModelUsage, PlanUsage, UsageTotals } from '../models/Usage';
+import type { SessionBilling, AttemptUsage, ContextFill, ModelUsage, PlanUsage, UsageTotals } from '../models/Usage';
 import type { ExecutionRecord } from '../models/Execution';
 import type { TaskLogEvent } from '../models/TaskLog';
 import type { ApprovalKind } from '../interfaces/IApproval';
@@ -241,6 +241,7 @@ export type SessionMessage =
    */
   | {
       type: 'planner_usage';
+      sessionBilling?: SessionBilling;
       byModel?: ModelUsage[];
       model?: string;
       turnId?: string;

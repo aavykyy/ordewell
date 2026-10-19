@@ -104,7 +104,7 @@ describe('OpenAiService usage reporting (#49)', () => {
         inputTokens: 120,
         outputTokens: 30,
         cachedInputTokens: 80,
-        reportedCost: { amount: 0.0012, currency: 'USD' },
+        reportedCost: { amount: 0.0012, currency: 'USD', kind: 'billed' },
         contextTokens: 150,
       },
     ]);

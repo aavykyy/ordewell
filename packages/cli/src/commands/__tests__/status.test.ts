@@ -83,7 +83,7 @@ describe('handleStatus --output', () => {
     const plan = { pendingTasks: [{
       id: 't1', order: 1, type: 'ai', title: 'One', status: 'completed',
       attemptUsage: [
-        attempt(1, { totals: { inputTokens: 1000, outputTokens: 100, reportedCost: { USD: 0.5 } }, lastPromptTokens: 90, contextWindow: 100 }),
+        attempt(1, { totals: { inputTokens: 1000, outputTokens: 100, reportedCost: { USD: 0.5 }, costProvenance: { USD: { kind: 'estimate', billing: 'subscription' } } }, lastPromptTokens: 90, contextWindow: 100 }),
         attempt(2, { totals: { inputTokens: 500, outputTokens: 50, cachedInputTokens: 200 }, lastPromptTokens: 50, contextWindow: 200 }),
       ],
     }] };
@@ -94,8 +94,8 @@ describe('handleStatus --output', () => {
     const { handleStatus } = await import('../status');
     const { stdout } = await capture(() => handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)));
     const lines = stripAnsi(stdout).split('\n').map((l) => l.trim());
-    expect(lines).toContain('Tasks total: $0.50');
-    expect(lines).toContain('ctx 50 (25%) · $0.50');
+    expect(lines).toContain('Tasks total: ≈$0.50 API-equivalent');
+    expect(lines).toContain('ctx 50 (25%) · ≈$0.50 API-equivalent');
     expect(stdout).not.toMatch(/\bin ·|cached|\bout\b/);
     expect(stdout).not.toMatch(/\d+s\b|time unknown/);
     srv.close();

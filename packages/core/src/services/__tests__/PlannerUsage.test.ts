@@ -3,6 +3,17 @@ import { PlannerUsageLedger } from '../PlannerUsage';
 import { ContextWindowFill, SessionWindows } from '../ContextWindowFill';
 
 describe('PlannerUsageLedger', () => {
+  it('saves and broadcasts billing facts without a cost, preserving the measured model context', () => {
+    const ledger = new PlannerUsageLedger();
+    ledger.record({ source: 'codex', model: 'gpt', inputTokens: 9000, contextWindow: 258400 });
+    ledger.record({ source: 'codex', aggregate: true, sessionBilling: { type: 'subscription', plan: 'plus' } });
+    const reopened = new PlannerUsageLedger();
+    reopened.restore(JSON.parse(JSON.stringify(ledger.snapshot())));
+    expect(reopened.message()).toMatchObject({ sessionBilling: { type: 'subscription', plan: 'plus' }, contextFill: { usedTokens: 9000, windowTokens: 258400 } });
+    expect(reopened.snapshot().byModel).toEqual([{ source: 'codex', model: 'gpt', totals: { inputTokens: 9000 } }]);
+    expect(reopened.snapshot().totals.reportedCost).toBeUndefined();
+  });
+
   it('sums the planner\'s calls and its subagents\' into one line, each subagent\'s share shown apart', () => {
     const ledger = new PlannerUsageLedger();
     ledger.record({ source: 'claude-code', inputTokens: 1000, outputTokens: 100, contextWindow: 200000 });

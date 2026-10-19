@@ -65,7 +65,7 @@ describe('permissionReply', () => {
 describe('usageRecord', () => {
   it('counts cache writes as uncached prompt and reasoning as output', () => {
     expect(usageRecord({ input: 3, output: 10, reasoning: 5, cache: { read: 100, write: 20 } }, { model: 'p/m', cost: 0.5, subagentId: 'call_1' })).toEqual({
-      source: 'opencode', inputTokens: 123, cachedInputTokens: 100, outputTokens: 15, model: 'p/m', reportedCost: { amount: 0.5, currency: 'USD' }, subagentId: 'call_1',
+      source: 'opencode', inputTokens: 123, cachedInputTokens: 100, outputTokens: 15, model: 'p/m', reportedCost: { amount: 0.5, currency: 'USD', kind: 'estimate' }, subagentId: 'call_1',
     });
   });
 

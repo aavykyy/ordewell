@@ -62,6 +62,14 @@ describe('usage line', () => {
     expect(document.querySelector('.usage-line-cost')!.getAttribute('title')).toBe('claude-code / opus: $1.50\nclaude-code / sonnet: $0.25');
   });
 
+  it('explains a subscription estimate at list price on the cost hover', () => {
+    const totals = { reportedCost: { USD: 7.89 }, costProvenance: { USD: { kind: 'estimate' as const, billing: 'subscription' as const, basis: 'list' as const } } };
+    host.session(turnStarted, usage({ totals, byModel: [{ source: 'claude-code', model: 'opus', totals }] }));
+    const cost = document.querySelector('.usage-line-cost')!;
+    expect(cost.textContent).toBe('≈$7.89 API-equivalent');
+    expect(cost.getAttribute('title')).toBe("claude-code / opus: ≈$7.89 API-equivalent — Claude Code's estimate at list price; not billed on a subscription");
+  });
+
   it('keeps the subagent count, whose hover gives each one\'s cost or says it reported none', () => {
     host.session(turnStarted, usage({
       totals: { reportedCost: { USD: 0.5 } },

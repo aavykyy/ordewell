@@ -119,7 +119,7 @@ export function usageRecord(tokens: OpenCodeTokens | undefined, call: { model?: 
   // means a free model or one the catalog has no price for. Those cannot be
   // told apart, so 0 is left unreported: a ledger may not claim a bill of
   // nothing.
-  if (typeof call.cost === 'number' && call.cost > 0) record.reportedCost = { amount: call.cost, currency: 'USD' };
+  if (typeof call.cost === 'number' && call.cost > 0) record.reportedCost = { amount: call.cost, currency: 'USD', kind: 'estimate' };
   if (call.subagentId) record.subagentId = call.subagentId;
   else record.contextTokens = (prompt.inputTokens ?? 0) + outputTokens;
   return record;

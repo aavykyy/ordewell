@@ -3,7 +3,7 @@ import { createTask, rejoinPlanTree, type LegacyPlanState, type Task } from '../
 import type { SkillInfo } from '../SkillsService';
 import { makeSession, FakeRunnerSession, fakeConfig, taskOf, saves, memoryTaskLogs } from './sessionTestKit';
 import { contextMeterText, plannerContextFill, taskUsageSummary } from '../../models/Usage';
-import { scriptedAdapter, fakeMcpServer } from './harnessTestKit';
+import { scriptedAdapter, fakeMcpServer, fakeSpawn, fixture } from './harnessTestKit';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { IDLE_TIMEOUT_MS } from '../VerdictEngine';
 import type { IRunner } from '../../interfaces/IRunner';
@@ -926,6 +926,47 @@ describe('session id stability (persist seam)', () => {
         bySubagent: { 'sa-1': { inputTokens: 900 } },
         contextFill: { usedTokens: 600, windowTokens: 200000 },
       });
+    });
+
+    // A reloaded plan's planner does not resume its old Claude Code session: it
+    // starts a fresh one seeded from the transcript (ADR-0009, T4), so its
+    // first turn is counted from zero on top of the ledger the plan restored.
+    // Whoever makes a reload resume the old session must carry its count too —
+    // its total would otherwise be counted again, or this test would fail.
+    it('counts a reloaded planner\'s first turn in full on top of the restored ledger', async () => {
+      const spawned = fakeSpawn([fixture('claude-code', 'stream-reasoning')]);
+      const cli = new CliAgentAiService(fakeConfig({ aiProvider: 'claude-code' }), {
+        spawn: spawned.spawn,
+        fetch: (async () => { throw new Error('no HTTP in this test'); }) as unknown as typeof fetch,
+        resolvePath: async () => '/usr/bin',
+        workspaceRoot: () => '/repo',
+        platform: 'linux',
+        isDirectory: () => true,
+        exists: () => true,
+        mcpServer: fakeMcpServer(),
+      });
+      const session = makeSession({
+        aiService: {
+          startConversation: (req: import('../../services/AiService').ConversationRequest) => cli.startConversation(req),
+          continueConversation: (message: string, onProgress: (p: import('../../models/Task').ResearchProgress) => void) => cli.continueConversation(message, onProgress),
+          hasActiveConversation: () => cli.hasActiveConversation(),
+          reset: () => cli.reset(),
+        },
+      });
+      const saved = smallPlan();
+      saved.status = 'draft';
+      saved.conversationHistory = [
+        { role: 'user', content: 'build it', timestamp: new Date().toISOString() },
+        { role: 'assistant', content: 'Which store?', timestamp: new Date().toISOString() },
+      ];
+      saved.plannerUsage = { totals: { inputTokens: 1500, reportedCost: { USD: 1 } } };
+      session.loadPlan(saved, 'build it', '/repo', { persist: false });
+
+      await session.continueConversation('postgres');
+
+      expect(spawned.lastArgs()).not.toContain('--resume');
+      // 0.075482 is the recorded fixture's first-turn total.
+      expect(saves(session).mock.calls.at(-1)![0].plannerUsage?.totals.reportedCost?.USD).toBeCloseTo(1.075482, 10);
     });
 
     // VS Code's Execute re-adopts the Session's own plan object, and is offered

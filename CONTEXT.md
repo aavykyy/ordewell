@@ -1086,10 +1086,14 @@ and resets on a compaction (see *Context fill*). `planUsage` sums all task attem
 including subtasks, separately from the planner's own ledger. Status updates
 carry both the task ledgers and the plan roll-up; surfaces draw the texts core words
 (`usageText`, `tasksTotalText`). Surfaces show the sum of a task's attempts (*Task usage*), not one ledger. The
-plan-level *Tasks total* stays at the top. Absent measures mean unknown, never zero or an estimate.
+plan-level *Tasks total* stays at the top. Absent measures mean unknown, never zero.
+`sessionBilling` keeps the runner-reported subscription or API-key login and its
+plan when named, even when the runner reports no cost.
 A runner that reports its session's running cost has that count saved with the
 attempt (`runnerSessionCost`), so a *Continue* of the session counts its first
-turn from there; with no count kept, that turn only sets the baseline.
+turn from there; with no count kept, that turn only sets the baseline. A result
+whose totals are zeroed (a crashed process's last) never lowers the count, and a
+`/clear` in the task's chat restarts it from zero.
 *Avoid:* attributing a session cost to its last model without a reported
 breakdown; *Avoid:* mixing planner usage into task totals; *Avoid:* "the task's
 usage" for one attempt's ledger — see *Task usage*.
@@ -1107,7 +1111,7 @@ wall time. A part nobody reported is left out, the cost included. The plan's
 included, followed by the runners none of whose attempts reported a cost
 (`Tasks total: $3.20 · codex reports no cost`); it has no meter. A TUI plan row
 and a VS Code task card draw none.
-*Avoid:* "attempt usage" for it; *Avoid:* an estimated cost or "cost unknown"
+*Avoid:* "attempt usage" for it; *Avoid:* a cost estimated by Ordewell or "cost unknown"
 filler; *Avoid:* drawing a token count.
 
 **Attempt kind** (`AttemptKind`, `attemptKind.ts`) — what one attempt of a task
@@ -2141,26 +2145,44 @@ spelling, not the concept.
 
 **Usage record** (`UsageRecord`) — what one model call consumed, as its
 provider or runner *reported* it: token counts, cached input share, the
-context window when the reporter states one, `reportedCost` only when the
-source itself billed one, and for a main-thread call `contextTokens`, the
-context it left as that runner counts it (*Context fill*), which no total adds.
-A `compacted` record is no call: it says the runner compacted the context, with
-the size it left when the runner reported one. Every measure is optional
-because backends report different subsets; absent means "not reported", never
-zero.
-*Avoid:* filling a missing number from a price table or an estimate — prices
-go stale and a subscription runner has no per-token price at all (ADR-0017);
+context window when the reporter states one, and `reportedCost` only when the
+source itself states one. Its `kind` distinguishes a billed amount (OpenRouter)
+from the source's own estimate (Claude Code and OpenCode); Claude Code's
+`basis` keeps `list` or `managed`, and a model marked `unknown` has no reported
+cost. A record can also carry the runner's `sessionBilling` fact: a subscription
+or API-key login, with the plan when stated. A main-thread record carries
+`contextTokens`, the context its call left as that runner counts it (*Context
+fill*), which no total adds. A `compacted` record is no call: it says the runner
+compacted the context, with the size it left when the runner reported one.
+Every measure is optional because backends report different subsets; absent
+means "not reported", never zero.
+*Avoid:* filling a missing number from a price table or an estimate made by
+Ordewell — prices go stale and a subscription runner has no per-token price at
+all (ADR-0017);
 *Avoid:* treating a record as a statement about *who* called — it says nothing.
 
 **Usage totals** (`UsageTotals`, `PlannerUsage`) — the running sum of usage
 records for the session. Token counts stay absent until some record reports
 them; cost is kept per currency because two runners may bill in different ones
-and no honest exchange rate folds them together. `bySubagent` holds each
+and no honest exchange rate folds them together. `costProvenance` keeps each
+currency's cost kind, session billing and price basis: any estimate marks the sum as an
+estimate, and only a sum whose every contribution ran on a subscription is
+API-equivalent. Surfaces show `≈$7.89` for an estimate,
+`≈$7.89 API-equivalent` for a subscription equivalent, and `$7.89` for a billed
+amount. Older costs without provenance stay unclassified; they cannot establish
+that a sum is all subscription usage. The planner ledger and each attempt
+keep `sessionBilling` as a runner-session fact, saved and broadcast even when
+no cost is reported, for later budget and quota decisions. `bySubagent` holds each
 research subagent's own share, which is already counted in `totals` — never
 added twice. Surfaced as the one `usage` block, always last, which every
 surface draws as the *Context fill* meter and the reported cost (`usageText`,
 worded once in core) and never as a token count: the counts stay in the ledger,
 the saved session and the broadcast.
+The planner's ledger is saved with the plan and restored on load, but not its
+runner's session count: a reloaded planner starts a fresh session seeded from
+the transcript, so its first turn is counted from zero on top of the restored
+ledger. Only the planner's in-process resume, after its process died between
+turns, carries a count (`PlannerSession.sessionCost`).
 *Avoid:* merging currencies; *Avoid:* a "grand total" that mixes the planner's
 own calls in with per-subagent sums shown alongside.
 

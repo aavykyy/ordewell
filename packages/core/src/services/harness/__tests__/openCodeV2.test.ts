@@ -923,7 +923,7 @@ describe('OpenCode 2.x — shared protocol behaviour', () => {
 
     expect(events.filter((e) => e.type === 'usage')).toEqual([
       { type: 'usage', record: { source: 'opencode', inputTokens: 5, outputTokens: 2, contextTokens: 7 } },
-      { type: 'usage', record: { source: 'opencode', inputTokens: 7, outputTokens: 3, reportedCost: { amount: 0.002, currency: 'USD' }, subagentId: 'call_task' } },
+      { type: 'usage', record: { source: 'opencode', inputTokens: 7, outputTokens: 3, reportedCost: { amount: 0.002, currency: 'USD', kind: 'estimate' }, subagentId: 'call_task' } },
     ]);
     adapter.dispose();
   });

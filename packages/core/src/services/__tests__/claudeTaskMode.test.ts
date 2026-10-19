@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { existsSync, readFileSync, statSync } from 'fs';
+import { addAttemptUsage, startAttemptUsage, usageText } from '../../models/Usage';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
 import { CodexAdapter } from '../harness/CodexAdapter';
 import { OpenCodeAdapter } from '../harness/OpenCodeAdapter';
@@ -9,7 +10,7 @@ import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
 import { mcpClientConfig } from '../mcp';
 import { classifyRunnerStop, readUsageLimitReset } from '../runnerExit';
-import { modeIds, fakeSpawn, fixture, claudeSteerRecording, type ScriptedReply } from './harnessTestKit';
+import { modeIds, fakeSpawn, fixture, claudeSteerRecording, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
 
 /**
  * The adapter's task mode (ADR-0018, C1), against transcripts recorded from
@@ -17,8 +18,8 @@ import { modeIds, fakeSpawn, fixture, claudeSteerRecording, type ScriptedReply }
  * asserted here too, flag for flag: task mode must not have moved it.
  */
 
-function deps(replies: ScriptedReply[]) {
-  const spawned = fakeSpawn(replies);
+function deps(replies: ScriptedReply[], options: FakeSpawnOptions = {}) {
+  const spawned = fakeSpawn(replies, options);
   const processDeps: AgentProcessDeps = {
     spawn: spawned.spawn,
     fetch: (async () => { throw new Error('no HTTP in this test'); }) as unknown as typeof fetch,
@@ -396,6 +397,110 @@ describe('ClaudeCodeAdapter in task mode', () => {
       await adapter.send('go on', (e) => events.push(e));
 
       expect(costs(events)).toEqual([]);
+      adapter.dispose();
+    });
+
+    // Claude Code's cost-tracking docs: a crashed process's last result
+    // (`error_during_execution`) can carry zeroed totals. The session's saved
+    // totals come back whole on the next resume, so a count lowered to 0 here
+    // would count that spend a second time.
+    const SESSION = 'sess-crash';
+    const turnLines = (...lines: object[]) => `${[{ type: 'system', subtype: 'init', session_id: SESSION }, ...lines].map((l) => JSON.stringify(l)).join('\n')}\n`;
+    const result = (fields: object) => ({ type: 'result', session_id: SESSION, ...fields });
+    const opus = (costUSD: number) => ({ 'claude-opus-5': { costUSD, contextWindow: 200000 } });
+
+    it('does not lower the count on a crashed result whose totals are zeroed', async () => {
+      const pricedOpus = (costUSD: number) => ({ 'claude-opus-5': { costUSD, costBasis: 'list', contextWindow: 200000 } });
+      const { processDeps } = deps([
+        turnLines(result({ subtype: 'success', total_cost_usd: 2, modelUsage: pricedOpus(2) })),
+        turnLines(result({ subtype: 'error_during_execution', is_error: true, total_cost_usd: 0, modelUsage: pricedOpus(0) })),
+        turnLines(result({ subtype: 'success', total_cost_usd: 2.5, modelUsage: pricedOpus(2.5) })),
+      ], { claudeAccount: { subscriptionType: 'max', apiKeySource: 'none' } });
+      const adapter = new ClaudeCodeAdapter(processDeps);
+      await adapter.start(taskIn('plan', { resumeSessionId: SESSION, resumeCost: { sessionId: SESSION, usd: 1, modelUsd: { 'claude-opus-5': 1 } } }));
+      const events: AgentEvent[] = [];
+      await adapter.send('one', (e) => events.push(e));
+      await adapter.send('crash', (e) => events.push(e));
+      expect(adapter.sessionCost()).toEqual({ sessionId: SESSION, usd: 2, modelUsd: { 'claude-opus-5': 2 } });
+      await adapter.send('three', (e) => events.push(e));
+
+      // 1 → 2 → (crash) → 2.5: every dollar once.
+      expect(costs(events).map((r) => r.reportedCost?.amount)).toEqual([1, 0.5]);
+      const ledger = events.reduce((usage, event) => event.type === 'usage' ? addAttemptUsage(usage, event.record, '2026-10-19T18:00:01Z') : usage,
+        startAttemptUsage(1, 'claude-code', '2026-10-19T18:00:00Z'));
+      expect(ledger.sessionBilling).toEqual({ type: 'subscription', plan: 'max' });
+      expect(ledger.totals.costProvenance).toEqual({ USD: { kind: 'estimate', basis: 'list', billing: 'subscription' } });
+      expect(usageText(ledger)).toBe('≈$1.50 API-equivalent');
+      adapter.dispose();
+    });
+
+    it('does not take a crashed result with no totals at all as a lowered count', async () => {
+      const { processDeps } = deps([
+        turnLines(result({ subtype: 'error_during_execution', is_error: true })),
+        turnLines(result({ subtype: 'success', total_cost_usd: 3, modelUsage: opus(3) })),
+      ]);
+      const adapter = new ClaudeCodeAdapter(processDeps);
+      await adapter.start(taskIn('plan', { resumeSessionId: SESSION, resumeCost: { sessionId: SESSION, usd: 2, modelUsd: { 'claude-opus-5': 2 } } }));
+      const events: AgentEvent[] = [];
+      await adapter.send('crash', (e) => events.push(e));
+      await adapter.send('again', (e) => events.push(e));
+
+      expect(costs(events).map((r) => r.reportedCost?.amount)).toEqual([1]);
+      adapter.dispose();
+    });
+
+    it('keeps a resume with no kept count at its baseline through a zeroed crash result', async () => {
+      const { processDeps } = deps([
+        turnLines(result({ subtype: 'error_during_execution', is_error: true, total_cost_usd: 0, modelUsage: opus(0) })),
+        turnLines(result({ subtype: 'success', total_cost_usd: 5, modelUsage: opus(5) })),
+      ]);
+      const adapter = new ClaudeCodeAdapter(processDeps);
+      await adapter.start(taskIn('plan', { resumeSessionId: SESSION }));
+      const events: AgentEvent[] = [];
+      await adapter.send('crash', (e) => events.push(e));
+      await adapter.send('again', (e) => events.push(e));
+
+      // 5 includes the restored spend, which this turn did not make.
+      expect(costs(events)).toEqual([]);
+      adapter.dispose();
+    });
+
+    // Recorded on 2.1.303: `/clear` emits a top-level `conversation_reset`
+    // (not a `system` line) and its own result, then the session runs on under
+    // a new session id with its totals restarted from zero.
+    it('counts the turn after a /clear from zero, under the new session', async () => {
+      const NEW_SESSION = 'sess-cleared';
+      const reset = { type: 'conversation_reset', new_conversation_id: 'conv-2', uuid: 'conv-2', trigger: 'clear', user_message_uuid: 'u-1', timestamp: '2026-10-19T17:14:21.590Z', session_id: SESSION };
+      const { processDeps } = deps([
+        turnLines(result({ subtype: 'success', total_cost_usd: 4, modelUsage: opus(4) })),
+        turnLines(reset, { type: 'result', subtype: 'success', session_id: NEW_SESSION, total_cost_usd: 0, modelUsage: {} }),
+        turnLines({ type: 'result', subtype: 'success', session_id: NEW_SESSION, total_cost_usd: 0.3, modelUsage: opus(0.3) }),
+      ]);
+      const adapter = new ClaudeCodeAdapter(processDeps);
+      await adapter.start(taskIn('plan', { resumeSessionId: SESSION, resumeCost: { sessionId: SESSION, usd: 3, modelUsd: { 'claude-opus-5': 3 } } }));
+      const events: AgentEvent[] = [];
+      await adapter.send('work', (e) => events.push(e));
+      await adapter.send('/clear', (e) => events.push(e));
+      await adapter.send('fresh start', (e) => events.push(e));
+
+      expect(costs(events).map((r) => r.reportedCost?.amount)).toEqual([1, 0.3]);
+      expect(adapter.sessionCost()).toEqual({ sessionId: NEW_SESSION, usd: 0.3, modelUsd: { 'claude-opus-5': 0.3 } });
+      adapter.dispose();
+    });
+
+    it('counts a first turn after a /clear in full when the session was resumed with no count kept', async () => {
+      const reset = { type: 'conversation_reset', new_conversation_id: 'conv-2', uuid: 'conv-2', trigger: 'clear', session_id: SESSION };
+      const { processDeps } = deps([
+        turnLines(reset, { type: 'result', subtype: 'success', session_id: 'sess-cleared', total_cost_usd: 0, modelUsage: {} }),
+        turnLines({ type: 'result', subtype: 'success', session_id: 'sess-cleared', total_cost_usd: 0.3, modelUsage: opus(0.3) }),
+      ]);
+      const adapter = new ClaudeCodeAdapter(processDeps);
+      await adapter.start(taskIn('plan', { resumeSessionId: SESSION }));
+      const events: AgentEvent[] = [];
+      await adapter.send('/clear', (e) => events.push(e));
+      await adapter.send('fresh start', (e) => events.push(e));
+
+      expect(costs(events).map((r) => r.reportedCost?.amount)).toEqual([0.3]);
       adapter.dispose();
     });
   });
@@ -1062,6 +1167,35 @@ describe('ClaudeCodeAdapter runner commands', () => {
  * `message_start`, name the model it now runs (#106).
  */
 describe('ClaudeCodeAdapter model switches', () => {
+  it('records the initialized account plan and never prices a model whose cost basis is unknown', async () => {
+    const recorded = fixture('claude-code', 'task-model-before').replaceAll('"costBasis":"list"', '"costBasis":"unknown"');
+    const { processDeps } = deps([recorded], { claudeAccount: { subscriptionType: 'max', apiKeySource: 'none' } });
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskIn('default', { model: 'haiku' }));
+    let ledger = startAttemptUsage(1, 'claude-code', '2026-10-17T18:00:00Z');
+    await adapter.send('one', (event) => {
+      if (event.type === 'usage') ledger = addAttemptUsage(ledger, event.record, '2026-10-17T18:00:01Z');
+    });
+    expect(ledger.sessionBilling).toEqual({ type: 'subscription', plan: 'max' });
+    expect(ledger.totals.reportedCost).toBeUndefined();
+    expect(ledger.byModel?.some((m) => m.totals.reportedCost)).toBe(false);
+    adapter.dispose();
+  });
+
+  it('keeps the recorded subscription and list-price estimate on the attempt ledger', async () => {
+    const { processDeps } = deps([fixture('claude-code', 'task-model-before')]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskIn('default', { model: 'haiku' }));
+    let ledger = startAttemptUsage(1, 'claude-code', '2026-10-17T18:00:00Z');
+    await adapter.send('one', (event) => {
+      if (event.type === 'usage') ledger = addAttemptUsage(ledger, event.record, '2026-10-17T18:00:01Z');
+    });
+    expect(ledger.sessionBilling).toEqual({ type: 'subscription' });
+    expect(ledger.totals.costProvenance).toEqual({ USD: { kind: 'estimate', basis: 'list', billing: 'subscription' } });
+    expect(usageText(ledger)).toBe('≈$0.0019 API-equivalent');
+    adapter.dispose();
+  });
+
   const recording = () => [fixture('claude-code', 'task-model-before'), fixture('claude-code', 'task-model-command'), fixture('claude-code', 'task-model-switched')];
 
   it('reports a /model switch once the runner answers on the new model, under the ids it lists', async () => {
