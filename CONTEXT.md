@@ -1089,7 +1089,9 @@ carry both the task ledgers and the plan roll-up; surfaces draw the texts core w
 plan-level *Tasks total* stays at the top. Absent measures mean unknown, never zero or an estimate.
 A runner that reports its session's running cost has that count saved with the
 attempt (`runnerSessionCost`), so a *Continue* of the session counts its first
-turn from there; with no count kept, that turn only sets the baseline.
+turn from there; with no count kept, that turn only sets the baseline. A result
+whose totals are zeroed (a crashed process's last) never lowers the count, and a
+`/clear` in the task's chat restarts it from zero.
 *Avoid:* attributing a session cost to its last model without a reported
 breakdown; *Avoid:* mixing planner usage into task totals; *Avoid:* "the task's
 usage" for one attempt's ledger — see *Task usage*.
@@ -2157,6 +2159,11 @@ added twice. Surfaced as the one `usage` block, always last, which every
 surface draws as the *Context fill* meter and the reported cost (`usageText`,
 worded once in core) and never as a token count: the counts stay in the ledger,
 the saved session and the broadcast.
+The planner's ledger is saved with the plan and restored on load, but not its
+runner's session count: a reloaded planner starts a fresh session seeded from
+the transcript, so its first turn is counted from zero on top of the restored
+ledger. Only the planner's in-process resume, after its process died between
+turns, carries a count (`PlannerSession.sessionCost`).
 *Avoid:* merging currencies; *Avoid:* a "grand total" that mixes the planner's
 own calls in with per-subagent sums shown alongside.
 

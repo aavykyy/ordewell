@@ -488,6 +488,15 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     return { sessionId, usd: this.reportedCostUsd, modelUsd: Object.fromEntries(this.reportedModelCostUsd) };
   }
 
+  /**
+   * A cleared conversation's totals start again from zero, so what follows is
+   * all new spend, even for a resume that had no count kept.
+   */
+  private restartCount(): void {
+    this.reportedCostUsd = 0;
+    this.reportedModelCostUsd = new Map();
+  }
+
   /** A count kept for another session says nothing of this one's. */
   private countFrom(sessionId: string, counted: RunnerSessionCost | undefined): void {
     const known = counted?.sessionId === sessionId ? counted : undefined;
@@ -826,6 +835,12 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         }
         return;
 
+      // `/clear` (and `/reset`, `/new`) emit this top-level line before their
+      // own result, and a task's chat can send them. The CLI's totals restart.
+      case 'conversation_reset':
+        this.restartCount();
+        return;
+
       case 'system':
         if (msg.subtype === 'init') {
           this.clearFollowOnTimer();
@@ -1065,11 +1080,17 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * the session before; with no count kept, the first turn only sets the
    * baseline: its total includes turns counted before, and a turn's own share
    * cannot be told apart from them.
+   *
+   * A zero is not a measurement: a process that crashed can end with a result
+   * whose totals are zeroed, and the next resume restores the session's saved
+   * totals whole. Counting that zero would lower the count and count the
+   * restored spend a second time, so a zero (or a missing total) leaves it be.
+   * The one real restart to zero, `/clear`, is {@link restartCount}.
    */
   private reportSessionCost(msg: ClaudeLine, emit: (event: AgentEvent) => void): void {
     const total = msg.total_cost_usd;
     const canReport = this.reportedCostUsd !== undefined;
-    const modelCosts = Object.entries(msg.modelUsage ?? {}).filter((entry): entry is [string, { contextWindow?: number; costUSD: number }] => typeof entry[1].costUSD === 'number');
+    const modelCosts = Object.entries(msg.modelUsage ?? {}).filter((entry): entry is [string, { contextWindow?: number; costUSD: number }] => typeof entry[1].costUSD === 'number' && entry[1].costUSD > 0);
     if (modelCosts.length > 0) {
       for (const [model, usage] of modelCosts) {
         const previous = this.reportedModelCostUsd.get(model) ?? 0;
@@ -1077,12 +1098,12 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         if (canReport && amount >= 0) emit({ type: 'usage', record: { source: 'claude-code', model, aggregate: true, reportedCost: { amount, currency: 'USD' } } });
         this.reportedModelCostUsd.set(model, usage.costUSD);
       }
-    } else if (typeof total === 'number' && canReport && total >= this.reportedCostUsd!) {
+    } else if (typeof total === 'number' && total > 0 && canReport && total >= this.reportedCostUsd!) {
       // Without the model breakdown, a session total cannot be attributed to
       // the last model: it also includes earlier models and subagents.
       emit({ type: 'usage', record: { source: 'claude-code', aggregate: true, reportedCost: { amount: total - this.reportedCostUsd!, currency: 'USD' } } });
     }
-    if (typeof total === 'number') this.reportedCostUsd = total;
+    if (typeof total === 'number' && total > 0) this.reportedCostUsd = total;
     const contextWindow = this.plannerModel ? msg.modelUsage?.[this.plannerModel]?.contextWindow : undefined;
     if (contextWindow !== undefined) emit({ type: 'usage', record: { source: 'claude-code', model: this.plannerModel, contextWindow } });
   }
