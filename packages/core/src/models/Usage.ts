@@ -42,8 +42,30 @@ export interface UsageRecord {
    * (`ContextWindowFill`). Never from a table kept in Ordewell.
    */
   contextWindow?: number;
+  /**
+   * What the main model's context holds once this call is done, counted the
+   * way its runner's own UI counts it, so the meter reads what the user would
+   * see there. Each runner counts it differently (the prompt with the reply,
+   * less the reasoning it drops, …), which no sum of the measures above can
+   * tell. A measure of the meter only: no total adds it. Absent, the meter
+   * reads the prompt.
+   */
+  contextTokens?: number;
+  /**
+   * The runner compacted the main model's context: no call, so the record
+   * measures nothing but `contextTokens`, the size it reported the context
+   * left at, if it did. It names no model, being about whichever runs now.
+   */
+  compacted?: true;
   /** Set when a subagent made the call; its usage still counts toward the total. */
   subagentId?: string;
+}
+
+/** A model's window as its reporter stated it: what a plan saves of its session's windows (`SessionWindows`). */
+export interface ReportedWindow {
+  source: string;
+  model: string;
+  contextWindow: number;
 }
 
 /**
@@ -114,7 +136,9 @@ function addCost(totals: UsageTotals, currency: string, amount: number, provenan
  * What the planner has consumed over a session (#49). `totals` includes every
  * `bySubagent` entry. `lastPromptTokens` and `contextWindow` track the
  * planner's own calls only — a subagent runs its own model, whose window says
- * nothing about the planner's.
+ * nothing about the planner's. `lastPromptTokens` is the context the last call
+ * left (its `contextTokens`, else its prompt), under the name saved sessions
+ * already hold it by.
  */
 export interface PlannerUsage {
   sessionBilling?: SessionBilling;
@@ -128,6 +152,13 @@ export interface PlannerUsage {
 }
 
 export function addPlannerUsage(usage: PlannerUsage, record: UsageRecord): PlannerUsage {
+  // The size before a compaction is gone, so the meter shows the size after
+  // or none until the next call — never the old one, which reads as full.
+  if (record.compacted) {
+    const next: PlannerUsage = { ...usage, lastPromptTokens: record.contextTokens };
+    if (record.contextTokens === undefined) delete next.lastPromptTokens;
+    return next;
+  }
   if (record.sessionBilling && !record.reportedCost && record.inputTokens === undefined && record.outputTokens === undefined && record.cachedInputTokens === undefined && record.contextWindow === undefined) {
     return record.subagentId ? usage : { ...usage, sessionBilling: record.sessionBilling };
   }
@@ -147,7 +178,8 @@ export function addPlannerUsage(usage: PlannerUsage, record: UsageRecord): Plann
   if (record.source !== usage.source && !record.sessionBilling) delete next.sessionBilling;
   next.source = record.source;
   next.model = record.model;
-  if (record.inputTokens !== undefined) next.lastPromptTokens = record.inputTokens;
+  const used = record.contextTokens ?? record.inputTokens;
+  if (used !== undefined) next.lastPromptTokens = used;
   // A reported window of 0 means "not known", not "no room": keep it out so the
   // meter shows no share rather than one against a guessed zero.
   if (record.contextWindow !== undefined) next.contextWindow = record.contextWindow > 0 ? record.contextWindow : undefined;
@@ -161,7 +193,7 @@ export function isMeasured(totals: UsageTotals): boolean {
 }
 
 /**
- * The main model's context: what its last prompt occupied, against its window
+ * The main model's context: what its last call left in it, against its window
  * when that is known. A window of 0 is not known.
  */
 export interface ContextFill {
@@ -192,11 +224,12 @@ export function usageLine(usage: PlannerUsage): UsageLine {
 }
 
 /**
- * The last prompt of the main model, or undefined before one was measured.
- * `usedTokens` is the prompt total as reported, cached tokens included: a
- * cached token still occupies the window, so subtracting the cached share
- * would understate how full the context is. The window rides along only when
- * known; a window of 0 is treated as unknown — never guessed.
+ * The main model's context as its last call left it, or undefined before one
+ * was measured and after a compaction that reported no size. `usedTokens` is
+ * what that call stated as its context, else its prompt total, cached tokens
+ * included: a cached token still occupies the window, so subtracting the
+ * cached share would understate how full the context is. The window rides
+ * along only when known; a window of 0 is treated as unknown — never guessed.
  */
 export function plannerContextFill(usage: PlannerUsage): ContextFill | undefined {
   if (usage.lastPromptTokens === undefined) return undefined;

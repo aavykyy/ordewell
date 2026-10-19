@@ -967,6 +967,10 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
    * `last.outputTokens` already includes `reasoningOutputTokens` — the thread
    * total is `inputTokens + outputTokens`, not a sum of three — so reasoning is
    * not added a second time. Codex reports no price.
+   *
+   * The main thread's context is what Codex itself shows as in its window,
+   * codex-rs `TokenUsage::tokens_in_context_window` over `last`: input and
+   * output less `reasoningOutputTokens`, the reasoning a later prompt drops.
    */
   private emitUsage(params: ThreadTokenUsageParams | undefined, emit: (e: AgentEvent) => void): void {
     const last = params?.tokenUsage?.last;
@@ -987,6 +991,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       // reported window of 0 means "not known", not "no room".
       const window = params?.tokenUsage?.modelContextWindow;
       if (typeof window === 'number' && window > 0) record.contextWindow = window;
+      if (last.inputTokens !== undefined) record.contextTokens = Math.max(0, last.inputTokens + (last.outputTokens ?? 0) - (last.reasoningOutputTokens ?? 0));
     }
     emit({ type: 'usage', record });
   }
@@ -1154,7 +1159,10 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     }
     switch (item.type) {
       case 'contextCompaction':
-        if (!subagentId) emit({ type: 'compaction', trigger: this.command === 'compact' ? 'manual' : 'auto' });
+        if (subagentId) return;
+        emit({ type: 'compaction', trigger: this.command === 'compact' ? 'manual' : 'auto' });
+        // Codex states no size after it: the next call's usage is the first.
+        emit({ type: 'usage', record: { source: this.agentId, compacted: true } });
         return;
       // Codex announces the item started and completed; whichever lands first delivers.
       case 'userMessage':

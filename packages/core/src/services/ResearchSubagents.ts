@@ -119,6 +119,10 @@ function nonPromptingFs(fs: IFileSystem): IFileSystem {
   };
 }
 
+function withoutContext({ contextTokens: _context, ...record }: UsageRecord): UsageRecord {
+  return record;
+}
+
 async function runLoop(prompt: string, deps: SubagentDeps): Promise<string> {
   if (deps.signal?.aborted) return '[research agent aborted before starting]';
   const fs = nonPromptingFs(deps.fs);
@@ -126,7 +130,8 @@ async function runLoop(prompt: string, deps: SubagentDeps): Promise<string> {
     (delta) => deps.onProgress?.({ type: 'thinking', text: delta, subagentId: deps.subagentId }),
     // The record says who made the call: unstamped, the ledger would read the
     // subagent's prompt as the planner's own and measure its context by it.
-    (record) => deps.onProgress?.({ type: 'usage', record: deps.subagentId ? { ...record, subagentId: deps.subagentId } : record }),
+    // The chat states the context its call leaves; a subagent's is no meter's.
+    (record) => deps.onProgress?.({ type: 'usage', record: deps.subagentId ? { ...withoutContext(record), subagentId: deps.subagentId } : record }),
   );
   let turn = await chat.sendMessage(prompt, deps.signal);
 

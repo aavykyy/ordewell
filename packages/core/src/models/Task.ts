@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { PlanIsolation } from '../interfaces/IWorktreeIsolation';
-import type { AttemptUsage, PlannerUsage, UsageRecord, UsageTotals } from './Usage';
+import type { AttemptUsage, PlannerUsage, ReportedWindow, UsageRecord, UsageTotals } from './Usage';
 import type { ExecutionRecord, SupervisorLevel } from './Execution';
 import type { SkillSource } from '../services/SkillsService';
 import type { SupervisionMemorySnapshot } from '../services/LoopGuards';
@@ -543,6 +543,8 @@ export interface LegacyPlanState {
   isolation?: PlanIsolation;
   /** Kept so a reopened session shows the same token line (#49). */
   plannerUsage?: PlannerUsage;
+  /** The windows reported over the session, so a reopened one knows each model's from its first call. */
+  contextWindows?: ReportedWindow[];
   /** The planner hit its usage limit and the inputs its turn took wait to be sent again; absent otherwise. */
   plannerResend?: PlannerResendState;
   /**

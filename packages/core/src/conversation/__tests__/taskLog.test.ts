@@ -225,6 +225,16 @@ describe('reduceTaskLog', () => {
     });
   });
 
+  it('meters what a compaction left, or nothing until the next call, and counts the compaction in no total', () => {
+    const before = [start, { type: 'usage' as const, record: { source: 'claude-code', model: 'opus', inputTokens: 24_000, outputTokens: 939, contextTokens: 24_939, contextWindow: 200_000, reportedCost: { amount: 0.5, currency: 'USD' } } }];
+    const reported = replayTaskLog([...before, { type: 'usage', record: { source: 'claude-code', compacted: true, contextTokens: 3615 } }]);
+    expect(reported.blocks.at(-1)).toMatchObject({ type: 'usage', totals: { inputTokens: 24_000, outputTokens: 939, reportedCost: { USD: 0.5 } }, contextFill: { usedTokens: 3615, windowTokens: 200_000 } });
+
+    const unreported = replayTaskLog([...before, { type: 'usage', record: { source: 'claude-code', compacted: true } }]);
+    expect(unreported.blocks.at(-1)).toMatchObject({ type: 'usage', totals: { inputTokens: 24_000 } });
+    expect(unreported.blocks.at(-1)).not.toHaveProperty('contextFill');
+  });
+
   it('carries the used tokens without a window while the runner reports none', () => {
     const view = replayTaskLog([start, { type: 'usage', record: { source: 'codex', inputTokens: 1000 } }]);
     expect(view.blocks.at(-1)).toMatchObject({ type: 'usage', contextFill: { usedTokens: 1000 } });

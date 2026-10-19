@@ -6,7 +6,7 @@ import {
   type UsageRecord,
 } from '../models/Usage';
 import type { SessionMessage } from './SessionMessage';
-import { ContextWindowFill, type CatalogWindow } from './ContextWindowFill';
+import { ContextWindowFill, SessionWindows } from './ContextWindowFill';
 
 /** The `planner_usage` member of the session broadcast union. */
 export type PlannerUsageMessage = Extract<SessionMessage, { type: 'planner_usage' }>;
@@ -24,9 +24,9 @@ export class PlannerUsageLedger {
   private usage: PlannerUsage = { totals: {} };
   private windows: ContextWindowFill;
 
-  /** `catalogWindow` serves the window of a planner model whose backend reports none. */
-  constructor(private readonly catalogWindow: CatalogWindow = () => undefined) {
-    this.windows = new ContextWindowFill(catalogWindow);
+  /** `sessionWindows` serves the window of a planner model whose backend reports none. */
+  constructor(private readonly sessionWindows: SessionWindows = new SessionWindows()) {
+    this.windows = new ContextWindowFill(sessionWindows);
   }
 
   /** Fold one model call's record into the totals; returns the running ledger. */
@@ -38,13 +38,13 @@ export class PlannerUsageLedger {
   /** Adopt a persisted ledger (a reopened session) or start from zero. */
   restore(usage: PlannerUsage | undefined): void {
     this.usage = usage ?? { totals: {} };
-    this.windows = new ContextWindowFill(this.catalogWindow, this.usage);
+    this.windows = new ContextWindowFill(this.sessionWindows, this.usage);
   }
 
   /** Start a fresh session's ledger from zero. */
   clear(): void {
     this.usage = { totals: {} };
-    this.windows = new ContextWindowFill(this.catalogWindow);
+    this.windows = new ContextWindowFill(this.sessionWindows);
   }
 
   /** Whether the ledger has measures or session billing facts to broadcast. */

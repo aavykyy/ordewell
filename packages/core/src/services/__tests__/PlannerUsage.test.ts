@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { PlannerUsageLedger } from '../PlannerUsage';
+import { ContextWindowFill, SessionWindows } from '../ContextWindowFill';
 
 describe('PlannerUsageLedger', () => {
   it('saves and broadcasts billing facts without a cost, preserving the measured model context', () => {
@@ -39,7 +40,7 @@ describe('PlannerUsageLedger', () => {
 
   it('measures a model whose backend reports no window against its catalog window, model by model', () => {
     const catalog: Record<string, number> = { 'opencode/a': 100000, 'opencode/b': 400000 };
-    const ledger = new PlannerUsageLedger((source, model) => source === 'opencode' ? catalog[model] : undefined);
+    const ledger = new PlannerUsageLedger(new SessionWindows((source, model) => source === 'opencode' ? catalog[model] : undefined));
     ledger.record({ source: 'opencode', model: 'opencode/a', inputTokens: 1000 });
     expect(ledger.message().contextFill).toEqual({ usedTokens: 1000, windowTokens: 100000 });
 
@@ -51,7 +52,7 @@ describe('PlannerUsageLedger', () => {
   });
 
   it('keeps a reported window over the catalog\'s, on the calls that report none', () => {
-    const ledger = new PlannerUsageLedger(() => 100000);
+    const ledger = new PlannerUsageLedger(new SessionWindows(() => 100000));
     ledger.record({ source: 'claude-code', model: 'opus', inputTokens: 1000, contextWindow: 200000 });
     ledger.record({ source: 'claude-code', model: 'opus', inputTokens: 1500 });
 
@@ -59,11 +60,46 @@ describe('PlannerUsageLedger', () => {
   });
 
   it('keeps a restored ledger\'s window over the catalog\'s while the model is the same', () => {
-    const ledger = new PlannerUsageLedger(() => 100000);
+    const ledger = new PlannerUsageLedger(new SessionWindows(() => 100000));
     ledger.restore({ totals: { inputTokens: 600 }, source: 'claude-code', model: 'opus', lastPromptTokens: 600, contextWindow: 200000 });
     ledger.record({ source: 'claude-code', model: 'opus', inputTokens: 700 });
 
     expect(ledger.message().contextFill).toEqual({ usedTokens: 700, windowTokens: 200000 });
+  });
+
+  it('knows a window a task attempt was told for its model, from the planner\'s first call on it', () => {
+    const windows = new SessionWindows(() => 100000);
+    new ContextWindowFill(windows).fill({ source: 'claude-code', model: 'opus', contextWindow: 1_000_000 });
+    const ledger = new PlannerUsageLedger(windows);
+    ledger.record({ source: 'claude-code', model: 'opus', inputTokens: 60_000, outputTokens: 1000, contextTokens: 61_000 });
+
+    expect(ledger.message().contextFill).toEqual({ usedTokens: 61_000, windowTokens: 1_000_000 });
+  });
+
+  it('follows the planner\'s model only: a switch clears the meter, a subagent or a breakdown leaves it', () => {
+    const windows = new SessionWindows();
+    windows.report('claude-code', 'haiku', 200_000);
+    const ledger = new PlannerUsageLedger(windows);
+    ledger.record({ source: 'claude-code', model: 'opus', inputTokens: 5000, contextWindow: 1_000_000 });
+    ledger.record({ source: 'claude-code', model: 'haiku', inputTokens: 90_000, subagentId: 'sa1' });
+    ledger.record({ source: 'claude-code', model: 'haiku', aggregate: true, reportedCost: { amount: 1, currency: 'USD' } });
+    expect(ledger.message().contextFill).toEqual({ usedTokens: 5000, windowTokens: 1_000_000 });
+
+    ledger.record({ source: 'claude-code', model: 'haiku', contextWindow: 200_000 });
+    expect(ledger.message().contextFill).toBeUndefined();
+    ledger.record({ source: 'claude-code', model: 'haiku', inputTokens: 7000 });
+    expect(ledger.message().contextFill).toEqual({ usedTokens: 7000, windowTokens: 200_000 });
+  });
+
+  it('shows the size a compaction left, or none until the next call', () => {
+    const ledger = new PlannerUsageLedger();
+    ledger.record({ source: 'claude-code', model: 'opus', inputTokens: 150_000, contextTokens: 152_000, contextWindow: 200_000 });
+    ledger.record({ source: 'claude-code', compacted: true, contextTokens: 9000 });
+    expect(ledger.message().contextFill).toEqual({ usedTokens: 9000, windowTokens: 200_000 });
+
+    ledger.record({ source: 'claude-code', compacted: true });
+    expect(ledger.message().contextFill).toBeUndefined();
+    expect(ledger.message().totals).toEqual({ inputTokens: 150_000 });
   });
 
   it('carries no turn id outside a turn, and the used tokens without a window while it is unknown', () => {

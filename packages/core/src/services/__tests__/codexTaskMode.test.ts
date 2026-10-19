@@ -579,7 +579,7 @@ describe('CodexAdapter task channels', () => {
       { type: 'tool_result', id: 'item_c1', name: 'shell', output: '1 failing\n', success: false },
       { type: 'tool_call', id: 'item_f1', name: 'Update', args: { path: 'src/sum.ts' } },
       { type: 'tool_result', id: 'item_f1', name: 'Update', output: '-return a - b;\n+return a + b;\n', success: true },
-      { type: 'usage', record: { source: 'codex', model: 'gpt-5.5', inputTokens: 9000, outputTokens: 100, cachedInputTokens: 4000, contextWindow: 258400 } },
+      { type: 'usage', record: { source: 'codex', model: 'gpt-5.5', inputTokens: 9000, outputTokens: 100, cachedInputTokens: 4000, contextWindow: 258400, contextTokens: 9080 } },
       { type: 'assistant_text_delta', runId: 'item_m1', text: 'Fixed the sign in sum.ts.\n<<<ORDE' },
       { type: 'assistant_text_delta', runId: 'item_m1', text: 'WELL_DONE>>>' },
       { type: 'assistant_text', runId: 'item_m1', text: 'Fixed the sign in sum.ts.\n<<<ORDEWELL_DONE>>>' },
@@ -1573,6 +1573,11 @@ it('waits for Codex native compaction to finish and reports manual and automatic
   proc.emitStdout(turnStarted('next-turn') + line({ method: 'item/completed', params: { threadId: 'thr-task-1', item: { id: 'auto-item', type: 'contextCompaction' } } }) + turnCompleted('next-turn'));
   await next;
   expect(events.filter((e) => e.type === 'compaction')).toEqual([{ type: 'compaction', trigger: 'manual' }, { type: 'compaction', trigger: 'auto' }]);
+  // Codex reports no size after one, so the meter knows none until the next call.
+  expect(events.filter((e) => e.type === 'usage')).toEqual([
+    { type: 'usage', record: { source: 'codex', compacted: true } },
+    { type: 'usage', record: { source: 'codex', compacted: true } },
+  ]);
   expect(sentNamed(proc.written, 'turn/start')).toHaveLength(1);
   adapter.dispose();
 });

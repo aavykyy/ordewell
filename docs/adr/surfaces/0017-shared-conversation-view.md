@@ -77,8 +77,11 @@ own presentation; it never re-derives the conversation from raw messages.
   share only when the window is known, nothing before a call was measured) and
   the cost its runner reported, worded once in core (`usageText`) so the TUI,
   `ordewell status` and VS Code cannot disagree. The meter is derived only from
-  the main model's own calls, never a subagent's or a session breakdown's. The
-  plan's Tasks total is the cost summed per currency, followed by the runners
+  the main model's own calls, never a subagent's or a session breakdown's. It
+  counts what a call left in the context the way that runner's own UI counts
+  it, shows what a compaction left or nothing until the next call, and reads a
+  window any stream of the Ordewell session was told for that model, saved with
+  the plan. The plan's Tasks total is the cost summed per currency, followed by the runners
   that reported none (`codex reports no cost`); a price table stays forbidden.
 - **The saved subset for reload (R1).** `fromTranscript` rebuilds the view a
   session reopens with from its persisted transcript, research log and pending
@@ -176,3 +179,4 @@ the same word.)
 - 2026-10-18 — a reply settles run by run where each streamed, and its transcript entry keeps its runs beside its content (A1, R1); a corrective retry keeps the narration before a discarded attempt's tool calls. Seen live: a coding-agent planner's "I'll read README.md now" sat below the Read row it announced, joined with the rest of the turn, live and after a reload.
 - 2026-10-19 — surfaces draw the main model's context and the reported cost only, no token count (U1). Seen live: a task whose context grew from 28k to 61k over 24 calls showed 1.19M in / 1.13M cached, because every call's full prompt, cache reads included, was added up.
 - 2026-10-19 — stated costs distinguish a source's estimate from billing, and subscription equivalents from per-call spend; the ledgers retain runner-session billing facts (U1).
+- 2026-10-19 — the meter counts a call's context as its runner does and resets on a compaction, and a window reported anywhere in the session is known to every later stream (U1). Claude Code states a window only on a turn's last line, so a task, often one long turn, showed no share for its whole run even with the planner on the same model.

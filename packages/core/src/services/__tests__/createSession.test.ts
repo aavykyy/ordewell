@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createTask, rejoinPlanTree, type LegacyPlanState, type Task } from '../../models/Task';
 import type { SkillInfo } from '../SkillsService';
 import { makeSession, FakeRunnerSession, fakeConfig, taskOf, saves, memoryTaskLogs } from './sessionTestKit';
-import { plannerContextFill, taskUsageSummary } from '../../models/Usage';
+import { contextMeterText, plannerContextFill, taskUsageSummary } from '../../models/Usage';
 import { scriptedAdapter, fakeMcpServer, fakeSpawn, fixture } from './harnessTestKit';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { IDLE_TIMEOUT_MS } from '../VerdictEngine';
@@ -595,9 +595,10 @@ describe('a continue counts its runner session\'s cost on from what was counted 
     await vi.waitFor(() => expect(taskUsageSummary(taskOf(session, 't1')!).contextFill).toEqual({ usedTokens: 50_000, windowTokens: 500_000 }));
   });
 
-  // A window belongs to one runner session: a continue of a fresh attempt's
-  // session never borrows the window an earlier, different session reported.
-  it('never borrows a window from another session', async () => {
+  // A continue of a fresh attempt's session is not handed the window an
+  // earlier, different runner session ended on; the model's window is still
+  // known, because it was reported in this Ordewell session.
+  it('hands a continue no other runner session\'s window, and still knows its model\'s', async () => {
     const { runner, sessions } = spawning(['native-1', 'native-2']);
     const session = makeSession({ runner });
     session.loadPlan(plan(), 'Goal', '/repo');
@@ -617,7 +618,7 @@ describe('a continue counts its runner session\'s cost on from what was counted 
     sessions[2].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-mystery', inputTokens: 50_000 } });
 
     await vi.waitFor(() => expect(taskUsageSummary(taskOf(session, 't1')!).totals.inputTokens).toBe(51_000));
-    expect(taskUsageSummary(taskOf(session, 't1')!).contextFill).toEqual({ usedTokens: 50_000 });
+    expect(taskUsageSummary(taskOf(session, 't1')!).contextFill).toEqual({ usedTokens: 50_000, windowTokens: 500_000 });
   });
 
   it('hands a fresh attempt no count', async () => {
@@ -1620,6 +1621,55 @@ describe('saving a run as its tasks settle', () => {
     const logged = logs.files.get('t1')?.at(-1)?.find((e) => e.type === 'usage');
     expect(logged).toEqual({ type: 'usage', record: { source: 'opencode', model: 'opencode/big-pickle', inputTokens: 1000, contextWindow: 400000 } });
     session.destroy();
+  });
+
+  // Claude Code states a window only on a turn's last line, and a task is
+  // often one long turn: the planner's report on the same model is what the
+  // task's meter has from its first call, and a reload still knows it.
+  it('measures a Claude Code task on the planner\'s model against the window the planner was told, from its first call and after a reload', async () => {
+    const spawned: FakeRunnerSession[] = [];
+    const runner = () => ({
+      spawn: vi.fn(async (req: { taskId: string }) => {
+        const runnerSession = new FakeRunnerSession(`s-${req.taskId}`, req.taskId);
+        spawned.push(runnerSession);
+        return runnerSession;
+      }),
+      stop: vi.fn(), stopAll: vi.fn(), activeCount: 0,
+    }) as unknown as IRunner;
+    const session = makeSession({
+      runner: runner(),
+      aiService: {
+        startConversation: vi.fn(async (req: import('../../services/AiService').ConversationRequest) => {
+          req.onProgress({ type: 'usage', record: { source: 'claude-code', model: 'claude-opus-5-5', inputTokens: 20000, outputTokens: 500, contextTokens: 20500 } });
+          req.onProgress({ type: 'usage', record: { source: 'claude-code', model: 'claude-opus-5-5', contextWindow: 1_000_000 } });
+          return { kind: 'message' as const, text: 'Planned.', researchLog: [] };
+        }),
+        hasActiveConversation: () => true,
+        reset: vi.fn(),
+      },
+    });
+    await session.startPlanning('goal', ['claude-code']);
+    const plan = session.planState!;
+    Object.assign(plan, { status: 'approved', runners: ['claude-code'], tasks: [createTask({ id: 't1', order: 1, title: 'First', prompt: 'a', assignedRunner: 'claude-code', assignedModel: { modelId: 'claude-opus-5-5', modelLabel: 'Opus 5.5' } })] });
+    session.loadPlan(plan, 'goal', '/repo');
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
+
+    spawned[0].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-opus-5-5', inputTokens: 60000, outputTokens: 1000, contextTokens: 61000 } });
+    expect(contextMeterText(taskUsageSummary(taskOf(session, 't1')!).contextFill)).toBe('ctx 61k (6%)');
+
+    const persisted = saves(session).mock.calls.at(-1)![0] as LegacyPlanState;
+    expect(persisted.contextWindows).toEqual([{ source: 'claude-code', model: 'claude-opus-5-5', contextWindow: 1_000_000 }]);
+    session.destroy();
+
+    const restored = makeSession({ runner: runner() });
+    restored.loadPlan({
+      ...persisted, approved: undefined, approvedTasks: undefined,
+      tasks: [createTask({ id: 't2', order: 1, title: 'Second', prompt: 'b', assignedRunner: 'claude-code', assignedModel: { modelId: 'claude-opus-5-5', modelLabel: 'Opus 5.5' } })],
+    }, 'goal', '/repo', { persist: false });
+    await restored.execute({ command: 'run_plan' }, { kind: 'user' });
+    spawned[1].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-opus-5-5', inputTokens: 40000, outputTokens: 1000, contextTokens: 41000 } });
+    expect(contextMeterText(taskUsageSummary(taskOf(restored, 't2')!).contextFill)).toBe('ctx 41k (4%)');
+    restored.destroy();
   });
 
   it('saves a task\'s verdict the moment it lands, before announcing it, while the run goes on', async () => {

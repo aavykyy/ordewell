@@ -39,7 +39,7 @@ import { saveSession } from '../utils/sessionStore';
 import { listTaskLogAttempts, readTaskLog, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
 import { digestTaskLog, type TaskLogEvent } from '../models/TaskLog';
 import { TaskLogRecorder } from './TaskLogRecorder';
-import { withContextWindows, type CatalogWindow } from './ContextWindowFill';
+import { SessionWindows, withContextWindows } from './ContextWindowFill';
 import { PlannerUsageLedger } from './PlannerUsage';
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
@@ -238,9 +238,9 @@ export function createSession(deps: SessionDeps): Session {
     : { provider: () => deps.config.aiProvider, create: () => createAiService(deps.config, { workspaceRoot: deps.workspaceRoot, mcpServer }), busy });
   const aiService = () => backend.current();
   const store = new PlanStore();
-  // A window a runner or provider reports wins; this serves the rest, from
-  // the catalogs the resolver already holds.
-  const catalogWindow: CatalogWindow = (source, model) => deps.modelResolver.contextWindowFor?.(source, model);
+  // A window a runner or provider reports wins, and every later stream of the
+  // session knows it; the catalogs the resolver already holds serve the rest.
+  const windows = new SessionWindows((source, model) => deps.modelResolver.contextWindowFor?.(source, model));
   const taskLogs: TaskLogRecorder = new TaskLogRecorder({
     broadcast: deps.broadcast,
     // Read through the Session, whose id and workspace are the ones it saves
@@ -281,7 +281,7 @@ export function createSession(deps: SessionDeps): Session {
   const orchestrator = TaskOrchestrator.compose({
     config: deps.config,
     notifications: deps.notifications,
-    runner: taskLogs.wrap(runnerApprovals.wrap(withContextWindows(deps.runner, catalogWindow))),
+    runner: taskLogs.wrap(runnerApprovals.wrap(withContextWindows(deps.runner, windows))),
     store,
     output: deps.taskOutput,
     isolation: deps.isolation,
@@ -293,7 +293,7 @@ export function createSession(deps: SessionDeps): Session {
     runSettings: () => session.planState?.runSettings,
     isApproved: (taskId) => session.isApproved(taskId),
   });
-  const usage = new PlannerUsageLedger(catalogWindow);
+  const usage = new PlannerUsageLedger(windows);
   const events = new SessionEventRelay({
     broadcast: deps.broadcast, onNotice: deps.onNotice, store, orchestrator, runs: orchestrator.runs, usage,
     awaitingApproval: (taskId) => runnerApprovals.waiting(taskId),
@@ -361,6 +361,7 @@ export function createSession(deps: SessionDeps): Session {
     runs: orchestrator.runs,
     events,
     usage,
+    windows,
     approvals,
     approvalPolicy,
     taskLogs,
@@ -404,6 +405,8 @@ export interface SessionParts {
   runs: IsolationRunController;
   events: SessionEventRelay;
   usage: PlannerUsageLedger;
+  /** The windows every stream of the session reports, saved with the plan. */
+  windows: SessionWindows;
   approvals: PendingApprovals;
   approvalPolicy: ApprovalPolicy;
   /** Where the Session writes what it made of a task's event into that attempt's log. */
@@ -430,6 +433,7 @@ export interface SessionParts {
 export class Session {
   private readonly backend: PlannerBackend;
   private readonly usage: PlannerUsageLedger;
+  private readonly windows: SessionWindows;
   private readonly events: SessionEventRelay;
   private readonly planner: SessionPlanner;
   private readonly orchestrator: TaskOrchestrator;
@@ -536,6 +540,7 @@ export class Session {
     this.runs = parts.runs;
     this.events = parts.events;
     this.usage = parts.usage;
+    this.windows = parts.windows;
     this.approvals = parts.approvals;
     this.approvalPolicy = parts.approvalPolicy;
     this.taskLogs = parts.taskLogs;
@@ -1055,6 +1060,7 @@ export class Session {
     this.syncPlanTasks();
     this.plan.isolation = this.runs.planIsolation ?? undefined;
     this.plan.plannerUsage = this.usage.snapshot();
+    this.plan.contextWindows = this.windows.snapshot();
     // What supervision remembers is read here, at the one save seam, so it is
     // written in the same save as the action that changed it (ADR-0029).
     this.plan.supervision = this.supervision.snapshot();
@@ -1093,6 +1099,7 @@ export class Session {
     // Totals belong to the plan they were recorded under; a fresh plan starts
     // its ledger from zero so the previous session's line never lingers.
     this.usage.clear();
+    this.windows.clear();
     // A prompt raised by the turn we are abandoning has nobody left to serve;
     // denying it unblocks the old research loop instead of stranding it.
     this.approvals.clear(isPlannerApproval);
@@ -2048,7 +2055,10 @@ export class Session {
     // persist below writes the plan back, so a load does not zero the totals.
     // The same-object load keeps the live ledger, which holds what the turn in
     // flight spent and the save does not yet.
-    if (adopting) this.usage.restore(plan.plannerUsage);
+    if (adopting) {
+      this.usage.restore(plan.plannerUsage);
+      this.windows.restore(plan.contextWindows);
+    }
     // Adopting the saved session's id keeps subsequent persists writing to the
     // same file instead of forking the session under a fresh identity.
     if (opts?.sessionId) this.currentSessionId = opts.sessionId;

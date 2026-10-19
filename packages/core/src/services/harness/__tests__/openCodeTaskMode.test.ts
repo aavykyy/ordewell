@@ -1229,6 +1229,7 @@ it('compacts OpenCode 1.x through summarize using the assigned model and the run
   await adapter.invokeCommand!('compact', '', (e) => events.push(e));
   expect(server.requests.find((r) => r.path.endsWith('/summarize'))?.body).toEqual({ providerID: 'anthropic', modelID: 'claude-sonnet-4', auto: false });
   expect(events.filter((e) => e.type === 'compaction' || e.type === 'turn_end')).toEqual([{ type: 'compaction', trigger: 'manual' }, { type: 'turn_end' }]);
+  expect(events.filter((e) => e.type === 'usage' && e.record.compacted)).toEqual([{ type: 'usage', record: { source: 'opencode', compacted: true } }]);
   adapter.dispose();
 });
 

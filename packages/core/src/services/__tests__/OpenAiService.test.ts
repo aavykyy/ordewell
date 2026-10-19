@@ -18,6 +18,7 @@ vi.mock('openai', () => ({
 
 import { OpenAiService } from '../OpenAiService';
 import { PlannerUsageLedger } from '../PlannerUsage';
+import { SessionWindows } from '../ContextWindowFill';
 
 function streamOf(chunks: unknown[]): AsyncIterable<unknown> {
   return (async function* () {
@@ -104,6 +105,7 @@ describe('OpenAiService usage reporting (#49)', () => {
         outputTokens: 30,
         cachedInputTokens: 80,
         reportedCost: { amount: 0.0012, currency: 'USD', kind: 'billed' },
+        contextTokens: 150,
       },
     ]);
   });
@@ -117,7 +119,7 @@ describe('OpenAiService usage reporting (#49)', () => {
       ],
     );
 
-    expect(records).toEqual([{ source: 'openai', model: 'gpt-4o', inputTokens: 10, outputTokens: 2 }]);
+    expect(records).toEqual([{ source: 'openai', model: 'gpt-4o', inputTokens: 10, outputTokens: 2, contextTokens: 12 }]);
     expect(records[0]).not.toHaveProperty('reportedCost');
     expect(records[0]).not.toHaveProperty('cachedInputTokens');
   });
@@ -141,11 +143,12 @@ describe('OpenAiService usage reporting (#49)', () => {
     await service.continueConversation('go on', (p) => progress.push(p));
 
     const windows: Record<string, number> = { 'gpt-4o': 128000, 'gpt-4o-mini': 64000 };
-    const ledger = new PlannerUsageLedger((source, model) => source === 'openai' ? windows[model] : undefined);
+    const ledger = new PlannerUsageLedger(new SessionWindows((source, model) => source === 'openai' ? windows[model] : undefined));
     for (const p of progress) if (p.type === 'usage') ledger.record(p.record!);
 
     expect(ledger.message().model).toBe('gpt-4o-mini');
-    expect(ledger.message().contextFill).toEqual({ usedTokens: 30000, windowTokens: 64000 });
+    // The prompt and the reply it produced, both in the next call's prompt.
+    expect(ledger.message().contextFill).toEqual({ usedTokens: 30002, windowTokens: 64000 });
   });
 
   // A research subagent's calls must reach the ledger as the subagent's, or its
@@ -177,9 +180,9 @@ describe('OpenAiService usage reporting (#49)', () => {
     const subagentId = progress.find((p) => p.type === 'subagent_started')?.subagentId;
     expect(subagentId).toBeDefined();
     expect(progress.filter((p) => p.type === 'usage').map((p) => p.record)).toEqual([
-      { source: 'openai', model: 'gpt-4o', inputTokens: 100, outputTokens: 10 },
+      { source: 'openai', model: 'gpt-4o', inputTokens: 100, outputTokens: 10, contextTokens: 110 },
       { source: 'openai', model: 'gpt-4o-mini', inputTokens: 40, outputTokens: 4, subagentId },
-      { source: 'openai', model: 'gpt-4o', inputTokens: 150, outputTokens: 5 },
+      { source: 'openai', model: 'gpt-4o', inputTokens: 150, outputTokens: 5, contextTokens: 155 },
     ]);
   });
 });

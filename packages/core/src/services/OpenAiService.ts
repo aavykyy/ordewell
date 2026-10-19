@@ -164,7 +164,9 @@ class OpenAiResearchChat implements ResearchChat {
   /**
    * The one record for this API call, built only from what the provider
    * reported. OpenRouter's `cost` is in USD (its credits are dollar-pegged);
-   * nothing is estimated. A field the provider left out stays absent.
+   * nothing is estimated. A field the provider left out stays absent. The
+   * context the call leaves is its prompt and its completion: the API's own
+   * `total_tokens`, and the reply the next call's prompt carries.
    */
   private usageRecord(reported: StreamUsage | undefined): UsageRecord | undefined {
     if (!reported) return undefined;
@@ -177,6 +179,7 @@ class OpenAiResearchChat implements ResearchChat {
       hasMeasure = true;
     }
     if (reported.cost !== undefined) { record.reportedCost = { amount: reported.cost, currency: 'USD', ...(record.source === 'openrouter' ? { kind: 'billed' } : {}) }; hasMeasure = true; }
+    if (record.inputTokens !== undefined) record.contextTokens = record.inputTokens + (record.outputTokens ?? 0);
     return hasMeasure ? record : undefined;
   }
 }
