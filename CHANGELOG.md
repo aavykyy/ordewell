@@ -8,6 +8,42 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Every surface shows the same usage line: context and cost only**, such as
+  `ctx 61k (6%) · ≈$7.89`. The TUI, the status command and the VS Code panel
+  word it from one place in core. On a subscription the cost reads
+  `API-equivalent`, since nothing is billed per token, and an estimate a
+  runner makes itself is marked as one. The Tasks total names the runners
+  that report no cost, once one of their attempts has ended having reported
+  usage, so a missing figure is never mistaken for zero.
+- **Claude Code task attempts record the cost and context window their runner
+  reports**, so they count in the Tasks total like Codex and OpenCode attempts.
+- **The context meter shows the main model's real context from its first
+  call**, not a sum across the calls of a turn or the side calls of
+  subagents.
+
+### Changed
+
+- **A task's runner is stopped as soon as it reports completion.** Its closing
+  message after `task_complete` is cut short; the task's output is the summary
+  in that call. What the runner reports while it stops is still counted.
+- **Compaction's size line uses the same token wording as the usage line** in
+  the TUI and in VS Code (`25k → 3.6k tokens`).
+
+### Fixed
+
+- **Claude Code's counted cost stays right after a crash result and after
+  `/clear`.** A resumed session that reports less than was already counted
+  never lowers the count.
+- **Each cost is counted once.** Fixes from two review rounds cover costs that
+  were counted twice, dropped, or lost when a runner was stopped, restarted or
+  continued.
+- **The cost of the planner's own `/compact` summary turn is counted**,
+  whether the compaction succeeds or fails. It moves no context meter.
+- **The Tasks total no longer says a runner reports no cost while its first
+  attempt is still running.**
+
 ## [0.10.9] - 2026-10-19
 
 ### Fixed

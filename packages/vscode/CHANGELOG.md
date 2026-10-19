@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+### Added
+
+- **One usage line everywhere: context and cost only**, such as
+  `ctx 61k (6%) · ≈$7.89`. On a subscription the cost reads `API-equivalent`,
+  and an estimate a runner makes itself is marked as one. The Tasks total
+  names runners that report no cost.
+- **Claude Code task attempts record the cost and context window their runner
+  reports**, so they count in the Tasks total.
+- **The context meter shows the main model's real context from its first
+  call.**
+
+### Changed
+
+- **A task's runner is stopped as soon as it reports completion**; its closing
+  message is cut short, and what it reports while it stops is still counted.
+- **Compaction's size line uses the same token wording as the usage line.**
+
+### Fixed
+
+- **Claude Code's counted cost stays right after a crash result and after
+  `/clear`.**
+- **Each cost is counted once**, including the cost of the planner's own
+  `/compact` summary turn.
+- **The Tasks total no longer says a runner reports no cost while its first
+  attempt is still running.**
+
 ## [0.10.9] - 2026-10-19
 
 ### Fixed
