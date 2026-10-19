@@ -226,7 +226,7 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
 
   nativeSessionId(): string | null { return this.sessionId; }
 
-  get exited(): boolean { return this.runner.exit !== null; }
+  get exited(): boolean { return this.runner.hasExited; }
 
   onProcessExit(listener: (code: number, lastWords?: string) => void): void {
     const fire = () => listener(this.runner.exitCode, this.exitMessage());

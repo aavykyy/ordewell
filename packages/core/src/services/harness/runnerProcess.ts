@@ -48,6 +48,8 @@ export class RunnerProcess {
   private markEnded!: () => void;
   private child: ChildProcess | null = null;
   private exitStatus: RunnerExit | null = null;
+  /** The process itself reported its end, before its pipes drained; see {@link hasExited}. */
+  private exitReported = false;
   private stderrTail = '';
   private spawnEnv: NodeJS.ProcessEnv = {};
   /** Stdout readers' end-of-stream flushes, for an end the pipe itself never reports. */
@@ -123,6 +125,10 @@ export class RunnerProcess {
     // them past the runner's own death — an inherited stderr, a process
     // setsid'd out of the group that Stop's group signal cannot reach.
     child.once('exit', (code, signal) => {
+      // Liveness, unlike the turn's last words, does not wait for the pipes: a
+      // descendant holding them keeps 'close' away for the whole grace, and a
+      // runner that has exited can take no further turn meanwhile.
+      this.exitReported = true;
       const grace = setTimeout(() => {
         for (const flush of [...this.stdoutEnds]) flush();
         this.end({ code, signal });
@@ -177,6 +183,14 @@ export class RunnerProcess {
 
   /** How the process ended; null while it runs. */
   get exit(): RunnerExit | null { return this.exitStatus; }
+
+  /**
+   * Whether the process has ended, for any reason. Unlike {@link exit} this is
+   * true from its own 'exit', not only once 'close' has drained the pipes: a
+   * runner that has exited can take no further turn even while a descendant
+   * holds its stdout or stderr.
+   */
+  get hasExited(): boolean { return this.exitStatus !== null || this.exitReported; }
 
   /** The exit code a listener is told: -1 for a signal or a spawn failure. */
   get exitCode(): number { return this.exitStatus?.code ?? -1; }

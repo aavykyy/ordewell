@@ -290,7 +290,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
   }
 
   private get processEnded(): Promise<void> { return this.runner.ended; }
-  get exited(): boolean { return this.runner.exit !== null; }
+  get exited(): boolean { return this.runner.hasExited; }
 
   async start(opts: AgentStartOptions): Promise<void> {
     try {
