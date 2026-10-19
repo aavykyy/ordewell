@@ -2143,6 +2143,33 @@ describe('CliAgentAiService — Claude Code partial messages, usage and subagent
     expect(usageRecords(events).filter((r) => r.outputTokens !== undefined)).toHaveLength(1);
   });
 
+  // A crashed process can end with a result whose totals are zeroed. The
+  // resume after it restores the session's saved totals whole, so the count
+  // carried across must not have dropped to 0 meanwhile.
+  it('counts every dollar once across a crash that reported zeroed totals', async () => {
+    const turn = (fields: object) => [
+      { type: 'system', subtype: 'init', session_id: 'sess-crash' },
+      { type: 'stream_event', event: { type: 'message_start', message: { model: 'claude-sonnet-5' } } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Hi.' }] } },
+      { type: 'result', session_id: 'sess-crash', ...fields },
+    ].map((l) => `${JSON.stringify(l)}\n`).join('');
+    const usage = (costUSD: number) => ({ 'claude-sonnet-5': { costUSD, contextWindow: 200000 } });
+    const { svc, spawned } = service('claude-code', [
+      turn({ subtype: 'success', total_cost_usd: 2, modelUsage: usage(2) }),
+      turn({ subtype: 'error_during_execution', is_error: true, total_cost_usd: 0, modelUsage: usage(0) }),
+      turn({ subtype: 'success', total_cost_usd: 2.5, modelUsage: usage(2.5) }),
+    ]);
+    const all: ResearchProgress[] = [];
+    const onProgress = (p: ResearchProgress) => all.push(p);
+    await svc.startConversation(request({ onProgress }));
+    await svc.continueConversation('crash here', onProgress);
+    await svc.continueConversation('and again', onProgress);
+
+    expect(spawned.lastArgs()).toContain('--resume');
+    const amounts = usageRecords(all).flatMap((r) => (r.reportedCost ? [r.reportedCost.amount] : []));
+    expect(amounts).toEqual([2, 0.5]);
+  });
+
   describe('a foreground subagent', () => {
     const AGENT = 'toolu_01UCfgesRK1YbX7JNVCSJXJM';
     const run = async () => {

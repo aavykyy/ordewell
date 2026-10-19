@@ -398,6 +398,104 @@ describe('ClaudeCodeAdapter in task mode', () => {
       expect(costs(events)).toEqual([]);
       adapter.dispose();
     });
+
+    // Claude Code's cost-tracking docs: a crashed process's last result
+    // (`error_during_execution`) can carry zeroed totals. The session's saved
+    // totals come back whole on the next resume, so a count lowered to 0 here
+    // would count that spend a second time.
+    const SESSION = 'sess-crash';
+    const turnLines = (...lines: object[]) => `${[{ type: 'system', subtype: 'init', session_id: SESSION }, ...lines].map((l) => JSON.stringify(l)).join('\n')}\n`;
+    const result = (fields: object) => ({ type: 'result', session_id: SESSION, ...fields });
+    const opus = (costUSD: number) => ({ 'claude-opus-5': { costUSD, contextWindow: 200000 } });
+
+    it('does not lower the count on a crashed result whose totals are zeroed', async () => {
+      const { processDeps } = deps([
+        turnLines(result({ subtype: 'success', total_cost_usd: 2, modelUsage: opus(2) })),
+        turnLines(result({ subtype: 'error_during_execution', is_error: true, total_cost_usd: 0, modelUsage: opus(0) })),
+        turnLines(result({ subtype: 'success', total_cost_usd: 2.5, modelUsage: opus(2.5) })),
+      ]);
+      const adapter = new ClaudeCodeAdapter(processDeps);
+      await adapter.start(taskIn('plan', { resumeSessionId: SESSION, resumeCost: { sessionId: SESSION, usd: 1, modelUsd: { 'claude-opus-5': 1 } } }));
+      const events: AgentEvent[] = [];
+      await adapter.send('one', (e) => events.push(e));
+      await adapter.send('crash', (e) => events.push(e));
+      expect(adapter.sessionCost()).toEqual({ sessionId: SESSION, usd: 2, modelUsd: { 'claude-opus-5': 2 } });
+      await adapter.send('three', (e) => events.push(e));
+
+      // 1 → 2 → (crash) → 2.5: every dollar once.
+      expect(costs(events).map((r) => r.reportedCost?.amount)).toEqual([1, 0.5]);
+      adapter.dispose();
+    });
+
+    it('does not take a crashed result with no totals at all as a lowered count', async () => {
+      const { processDeps } = deps([
+        turnLines(result({ subtype: 'error_during_execution', is_error: true })),
+        turnLines(result({ subtype: 'success', total_cost_usd: 3, modelUsage: opus(3) })),
+      ]);
+      const adapter = new ClaudeCodeAdapter(processDeps);
+      await adapter.start(taskIn('plan', { resumeSessionId: SESSION, resumeCost: { sessionId: SESSION, usd: 2, modelUsd: { 'claude-opus-5': 2 } } }));
+      const events: AgentEvent[] = [];
+      await adapter.send('crash', (e) => events.push(e));
+      await adapter.send('again', (e) => events.push(e));
+
+      expect(costs(events).map((r) => r.reportedCost?.amount)).toEqual([1]);
+      adapter.dispose();
+    });
+
+    it('keeps a resume with no kept count at its baseline through a zeroed crash result', async () => {
+      const { processDeps } = deps([
+        turnLines(result({ subtype: 'error_during_execution', is_error: true, total_cost_usd: 0, modelUsage: opus(0) })),
+        turnLines(result({ subtype: 'success', total_cost_usd: 5, modelUsage: opus(5) })),
+      ]);
+      const adapter = new ClaudeCodeAdapter(processDeps);
+      await adapter.start(taskIn('plan', { resumeSessionId: SESSION }));
+      const events: AgentEvent[] = [];
+      await adapter.send('crash', (e) => events.push(e));
+      await adapter.send('again', (e) => events.push(e));
+
+      // 5 includes the restored spend, which this turn did not make.
+      expect(costs(events)).toEqual([]);
+      adapter.dispose();
+    });
+
+    // Recorded on 2.1.303: `/clear` emits a top-level `conversation_reset`
+    // (not a `system` line) and its own result, then the session runs on under
+    // a new session id with its totals restarted from zero.
+    it('counts the turn after a /clear from zero, under the new session', async () => {
+      const NEW_SESSION = 'sess-cleared';
+      const reset = { type: 'conversation_reset', new_conversation_id: 'conv-2', uuid: 'conv-2', trigger: 'clear', user_message_uuid: 'u-1', timestamp: '2026-10-19T17:14:21.590Z', session_id: SESSION };
+      const { processDeps } = deps([
+        turnLines(result({ subtype: 'success', total_cost_usd: 4, modelUsage: opus(4) })),
+        turnLines(reset, { type: 'result', subtype: 'success', session_id: NEW_SESSION, total_cost_usd: 0, modelUsage: {} }),
+        turnLines({ type: 'result', subtype: 'success', session_id: NEW_SESSION, total_cost_usd: 0.3, modelUsage: opus(0.3) }),
+      ]);
+      const adapter = new ClaudeCodeAdapter(processDeps);
+      await adapter.start(taskIn('plan', { resumeSessionId: SESSION, resumeCost: { sessionId: SESSION, usd: 3, modelUsd: { 'claude-opus-5': 3 } } }));
+      const events: AgentEvent[] = [];
+      await adapter.send('work', (e) => events.push(e));
+      await adapter.send('/clear', (e) => events.push(e));
+      await adapter.send('fresh start', (e) => events.push(e));
+
+      expect(costs(events).map((r) => r.reportedCost?.amount)).toEqual([1, 0.3]);
+      expect(adapter.sessionCost()).toEqual({ sessionId: NEW_SESSION, usd: 0.3, modelUsd: { 'claude-opus-5': 0.3 } });
+      adapter.dispose();
+    });
+
+    it('counts a first turn after a /clear in full when the session was resumed with no count kept', async () => {
+      const reset = { type: 'conversation_reset', new_conversation_id: 'conv-2', uuid: 'conv-2', trigger: 'clear', session_id: SESSION };
+      const { processDeps } = deps([
+        turnLines(reset, { type: 'result', subtype: 'success', session_id: 'sess-cleared', total_cost_usd: 0, modelUsage: {} }),
+        turnLines({ type: 'result', subtype: 'success', session_id: 'sess-cleared', total_cost_usd: 0.3, modelUsage: opus(0.3) }),
+      ]);
+      const adapter = new ClaudeCodeAdapter(processDeps);
+      await adapter.start(taskIn('plan', { resumeSessionId: SESSION }));
+      const events: AgentEvent[] = [];
+      await adapter.send('/clear', (e) => events.push(e));
+      await adapter.send('fresh start', (e) => events.push(e));
+
+      expect(costs(events).map((r) => r.reportedCost?.amount)).toEqual([0.3]);
+      adapter.dispose();
+    });
   });
 
   it('leaves a tool request open for someone to answer, and passes the whole request on', async () => {
