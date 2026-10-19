@@ -36,6 +36,13 @@ export type IsolationNoticeLevel = 'info' | 'warn' | 'error';
 /** How an attempt that may run in a worktree gets one: fresh, the kept one for a repair, or restoring the previous attempt's work. */
 export type AttemptIntent = 'fresh' | 'repair' | PrepareIntent;
 
+/**
+ * What adopting a persisted run found: nothing to change, landed work git
+ * shows the user has merged since, or a settled run that had nothing left to
+ * hand over and was cleared up.
+ */
+export type AdoptOutcome = 'unchanged' | 'changed' | 'cleared';
+
 export interface AttemptWorkspace {
   cwd: string;
   worktree: boolean;
@@ -237,18 +244,26 @@ export class IsolationRunController {
    * Take over a plan's persisted isolation, or none for a plan that has not
    * isolated yet. Whatever a crashed process left behind for the run — a
    * worktree still marked active, a directory no record owns — is pruned,
-   * while kept, failed and conflicted worktrees stay for the user.
+   * while kept, failed and conflicted worktrees stay for the user. Then git is
+   * asked which landed work the user has merged since the record was saved:
+   * a settled run whose landed work is all in HEAD has nothing left to hand
+   * over, so it is cleared up as Merge all would have, unless it still holds
+   * work that never landed (ADR-0013).
    *
-   * Deliberately not reported as a change: adopting is not a change to
-   * persist, and a host that adopts without persisting (VS Code's restore)
-   * would otherwise write a new session file on every reload.
+   * Deliberately not reported to the listener: adopting is not a change of the
+   * session's own, and a host that adopts without persisting (VS Code's
+   * restore) would otherwise write a new session file on every reload. What
+   * git changed is returned instead, for the caller to save where it can and
+   * announce. A plan loaded meanwhile supersedes this adoption, which then
+   * touches nothing and resolves `unchanged`.
    */
-  async adopt(state: PlanIsolation | null): Promise<void> {
+  async adopt(state: PlanIsolation | null): Promise<AdoptOutcome> {
     this.run = state?.run ?? null;
     this.resolvers = { ...(state?.resolvers ?? {}) };
-    if (!this.run) return;
+    const run = this.run;
+    if (!run) return 'unchanged';
     try {
-      const pruned = await this.isolation.pruneOrphans(this.run);
+      const pruned = await this.isolation.pruneOrphans(run);
       // Never silently: work kept back from the sweep has to be named, or the
       // user has a worktree they do not know about and a task that looks done.
       for (const task of pruned.kept) {
@@ -258,6 +273,15 @@ export class IsolationRunController {
     } catch (err) {
       this.tell('warn', `Could not prune leftover worktrees: ${err instanceof Error ? err.message : String(err)}`);
     }
+    if (this.run !== run) return 'unchanged';
+    const found = await this.findLanded(run);
+    if (this.run !== run) return 'unchanged';
+    const outcome = found ? 'changed' : 'unchanged';
+    if (this.isOpen || !this.allMerged(run) || this.holdouts(run).length > 0) return outcome;
+    if (!(await this.discardMerged(run)) || this.run !== run) return outcome;
+    this.run = null;
+    this.resolvers = {};
+    return 'cleared';
   }
 
   /** Open a run if none is, leaving whether it isolates to its first change task. */
@@ -433,8 +457,7 @@ export class IsolationRunController {
     const run = this.run;
     if (mode !== 'isolated' || !run) return;
     await this.refreshInHead();
-    const records = Object.values(run.tasks);
-    if (records.some((r) => r.status === 'merged') && handoffOf(run).landed.length === 0) {
+    if (this.allMerged(run)) {
       this.tell('info', 'Everything this run landed is merged into your branch already.');
       await this.clearMerged(run);
       return;
@@ -463,10 +486,22 @@ export class IsolationRunController {
    */
   async refreshInHead(): Promise<boolean> {
     const run = this.run;
-    if (!run || !Object.values(run.tasks).some((r) => r.status === 'merged' && !r.inHead)) return false;
+    if (!run) return false;
+    const found = await this.findLanded(run);
+    if (found) this.listener.changed();
+    return found;
+  }
+
+  /** Mark the run's landed work git finds in HEAD; true when some was found. */
+  private async findLanded(run: IsolationRun): Promise<boolean> {
+    if (!Object.values(run.tasks).some((r) => r.status === 'merged' && !r.inHead)) return false;
     const found = await this.isolation.findInHead(run).catch((): string[] => []);
-    if (found.length > 0) this.listener.changed();
     return found.length > 0;
+  }
+
+  /** The run landed something and every landing is in the user's HEAD. */
+  private allMerged(run: IsolationRun): boolean {
+    return Object.values(run.tasks).some((r) => r.status === 'merged') && handoffOf(run).landed.length === 0;
   }
 
   /**
@@ -602,7 +637,7 @@ export class IsolationRunController {
    */
   private async clearMerged(run: IsolationRun): Promise<void> {
     const live = this.liveRecords(run);
-    const unlanded = Object.values(run.tasks).filter((r) => r.status !== 'merged' && !live.includes(r));
+    const unlanded = this.holdouts(run).filter((r) => !live.includes(r));
     if (live.length > 0 || unlanded.length > 0) {
       const why = [
         ...(live.length > 0 ? [`${tasksNamed(live)} ${live.length === 1 ? 'is' : 'are'} still running or waiting on you`] : []),
@@ -612,13 +647,24 @@ export class IsolationRunController {
       this.tell('info', `The run is not cleared up: ${why.join(', and ')}, so ${one ? 'its worktree stays' : 'their worktrees stay'}, and so do the run's branches.`);
       return;
     }
+    if (await this.discardMerged(run)) this.forget();
+  }
+
+  /** The records that keep a settled run from being cleared up: live, or holding work that never landed. */
+  private holdouts(run: IsolationRun): IsolationTaskRecord[] {
+    const live = this.liveTasks();
+    return Object.values(run.tasks).filter((r) => live.has(r.taskId) || r.status !== 'merged');
+  }
+
+  /** The run's worktrees and merged branches go; false, said, when git would not let them. */
+  private async discardMerged(run: IsolationRun): Promise<boolean> {
     try {
       this.report(await this.isolation.discard(run, { integration: 'delete-merged' }));
+      return true;
     } catch (err) {
       this.tell('warn', `Merged, but could not clean up the run's worktrees and branches: ${err instanceof Error ? err.message : String(err)}`);
-      return;
+      return false;
     }
-    this.forget();
   }
 
   /** Say what a removal kept back instead of deleting: where the work went, or which worktree stayed. */

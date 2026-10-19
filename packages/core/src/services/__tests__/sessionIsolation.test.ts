@@ -7,7 +7,8 @@ import { FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
 import * as sessionStore from '../../utils/sessionStore';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import type { IRunner } from '../../interfaces/IRunner';
-import type { SessionMessage, SessionNotice } from '../SessionMessage';
+import type { RunView, SessionMessage, SessionNotice } from '../SessionMessage';
+import { reduceRun } from '../runView';
 import type { IsolationMergeResult } from '../../interfaces/IWorktreeIsolation';
 import type { ConversationTurn, IAiService } from '../AiService';
 import type { Session } from '../createSession';
@@ -324,6 +325,111 @@ describe('Session with worktree isolation', () => {
     await flushMicrotasks();
 
     expect(saves(session)).not.toHaveBeenCalled();
+  });
+
+  describe('a settled run loaded off disk', () => {
+    const record = (taskId: string, order: number, status: 'merged' | 'kept') => ({
+      taskId, order, title: `Task ${taskId}`, branch: `ordewell/old/${order}-${taskId}`, workspace: `/wt/${order}`, status,
+      repos: { '.': { worktree: `/wt/${order}`, linked: [], ...(status === 'merged' ? { changed: true } : {}) } },
+    });
+    const settled = (records: ReturnType<typeof record>[], id = 'old'): LegacyPlanState => ({
+      ...plan(records.map((r) => task(r.taskId, r.order, { status: r.status === 'merged' ? 'completed' : 'failed' }))),
+      isolation: {
+        run: {
+          id, workspaceRoot: process.cwd(), shared: [], sharedRepos: [],
+          repos: [{ path: '.', root: process.cwd(), baseRef: 'abc', baseBranch: 'main', integrationBranch: `ordewell/${id}/integration` }],
+          tasks: Object.fromEntries(records.map((r) => [r.taskId, r])),
+        },
+        resolvers: {},
+      },
+    });
+    /** What a surface holds that seeded from the snapshot at load and folded every message since. */
+    const folded = (seed: RunView, messages: SessionMessage[], from: number) => messages.slice(from).reduce(reduceRun, seed);
+
+    it('offers no Merge all once git shows everything it landed is in HEAD, and forgets the run', async () => {
+      const { session, isolation, messages } = setup();
+      isolation.mergedByHand = new Set(['t1', 't2']);
+
+      session.loadPlan(settled([record('t1', 1, 'merged'), record('t2', 2, 'merged')]), 'goal', '/repo', { sessionId: 'session-old' });
+      const seed = session.runSnapshot();
+      const from = messages.length;
+      await vi.waitFor(() => expect(messages.map((m) => m.type)).toContain('run_closed'));
+
+      expect(folded(seed, messages, from).handoff).toBeNull();
+      expect(session.runSnapshot().handoff).toBeNull();
+      expect(session.isolationView()).toBeNull();
+      expect(messages.map((m) => m.type)).not.toContain('isolation_handoff');
+      expect(isolation.calls).toContainEqual({ op: 'discard', integration: 'delete-merged' });
+      expect(saved(session)!.isolation).toBeUndefined();
+      expect(saves(session).mock.calls.every((call) => call[3] === 'session-old')).toBe(true);
+    });
+
+    it('still offers Merge all for landed work git does not find in HEAD, and only that work', async () => {
+      const { session, isolation, messages } = setup();
+      isolation.mergedByHand = new Set(['t1']);
+
+      session.loadPlan(settled([record('t1', 1, 'merged'), record('t2', 2, 'merged')]), 'goal', '/repo');
+      const seed = session.runSnapshot();
+      const from = messages.length;
+      await vi.waitFor(() => expect(saved(session)!.isolation!.run.tasks.t1.inHead).toBe(true));
+      await flushMicrotasks();
+
+      const landed = [{ taskId: 't2', order: 2, title: 'Task t2' }];
+      expect(folded(seed, messages, from).handoff?.landed).toEqual(landed);
+      expect(session.runSnapshot().handoff?.landed).toEqual(landed);
+      expect(messages.map((m) => m.type)).not.toContain('run_closed');
+      expect(isolation.calls.map((c) => c.op)).not.toContain('discard');
+      expect(saved(session)!.isolation!.run.tasks.t1.inHead).toBe(true);
+    });
+
+    it('keeps a run that holds kept worktrees, with nothing of it to merge once its landings are in HEAD', async () => {
+      const { session, isolation, messages, notices, lastStatus } = setup();
+      isolation.mergedByHand = new Set(['t1']);
+
+      session.loadPlan(settled([record('t1', 1, 'merged'), record('t2', 2, 'kept')]), 'goal', '/repo');
+      const seed = session.runSnapshot();
+      const from = messages.length;
+      await vi.waitFor(() => expect(saved(session)!.isolation!.run.tasks.t1.inHead).toBe(true));
+      await flushMicrotasks();
+
+      expect(folded(seed, messages, from).handoff).toBeNull();
+      expect(session.runSnapshot().handoff).toBeNull();
+      expect(messages.map((m) => m.type)).not.toContain('run_closed');
+      expect(isolation.calls.map((c) => c.op)).not.toContain('discard');
+      expect(session.isolationView()?.tasks.t2).toMatchObject({ state: 'kept', worktree: '/wt/2' });
+      expect(lastStatus()!.tasks.find((t) => t.id === 't2')!.isolation).toMatchObject({ state: 'kept' });
+      // Reopening a session is no occasion to repeat why its worktrees stay.
+      expect(notices).toEqual([]);
+    });
+
+    it('lets a later load\'s run alone when the look at an earlier one\'s comes back late', async () => {
+      const { session, isolation, messages } = setup();
+      isolation.mergedByHand = new Set(['t1', 't2']);
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      const findInHead = isolation.findInHead.bind(isolation);
+      let looks = 0;
+      isolation.findInHead = async (run) => {
+        if (looks++ === 0) await held;
+        return findInHead(run);
+      };
+
+      session.loadPlan(settled([record('t1', 1, 'merged'), record('t2', 2, 'merged')]), 'goal', '/repo');
+      await vi.waitFor(() => expect(looks).toBe(1));
+      session.loadPlan(settled([record('x1', 1, 'merged')], 'new'), 'other goal', '/repo');
+      await vi.waitFor(() => expect(looks).toBe(2));
+      await flushMicrotasks();
+      const savesBefore = saves(session).mock.calls.length;
+      release();
+      await flushMicrotasks();
+
+      expect(messages.map((m) => m.type)).not.toContain('run_closed');
+      expect(isolation.calls.map((c) => c.op)).not.toContain('discard');
+      expect(session.isolationView()?.handoff.landed).toEqual([{ taskId: 'x1', order: 1, title: 'Task x1' }]);
+      expect(session.runSnapshot().handoff?.landed).toEqual([{ taskId: 'x1', order: 1, title: 'Task x1' }]);
+      expect(saves(session).mock.calls.length).toBe(savesBefore);
+      expect(saved(session)!.isolation!.run.id).toBe('new');
+    });
   });
 
   it('starts a new plan without the previous plan\'s run', async () => {

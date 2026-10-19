@@ -211,7 +211,14 @@ everything below applies per repo of the group.
   leaves the run going (ADR-0020): its branches stay for the tasks still to
   land, each landed task whose tip HEAD now contains is marked merged, and a run
   that settles with all of its landed work merged that way is cleared up as
-  above instead of handed over. A handoff names only landed work not yet merged.
+  above instead of handed over. So is a settled run whose session is loaded
+  after the user merged it: the saved record cannot know what was merged since,
+  so adopting a run asks git again, and a run still holding kept or conflicted
+  work stays. A handoff names only landed work not yet merged; a repo whose
+  integration branch is gone has nothing Merge all could merge, so its landed
+  work counts as merged there, while a repo git cannot read at all counts as not
+  merged. A surface's handoff shrinks with each status update, which says what
+  landed work is still unmerged.
   `blocked`, `conflict` and `failed` — part-way or not — delete nothing. Clean-up keeps the integration
   branch for a user who has not decided; discard deletes it. `discard` takes
   `integration: 'keep' | 'delete' | 'delete-merged'`; `delete-merged` is the
@@ -235,9 +242,11 @@ everything below applies per repo of the group.
 - **Persistence.** `LegacyPlanState.isolation` holds `{ run, resolvers }`,
   written from the orchestrator at persist time like `tasks`, and saved on every
   change to it rather than at the end of the run — the record is what lets a
-  crashed process's worktrees be found again. Adopting a saved plan prunes
-  orphans without persisting: VS Code's restore adopts with `persist: false`,
-  and a write there would fork a new session file on every reload. A fork of a
+  crashed process's worktrees be found again. Adopting a saved plan is not
+  itself saved: the prune is never written, and what git shows merged since is
+  saved only where the load may save — VS Code's restore adopts with
+  `persist: false`, and without the session's id a write there would fork a new
+  session file on every reload, so it keeps the change for its next save. A fork of a
   plan must not carry the field; the branches it names belong to one plan.
 - **Resolve as a task.** `resolveConflictAsTask` adds an AI task on the
   conflicted task's runner and model whose prompt is to `git merge --no-ff` the
@@ -462,3 +471,4 @@ literal git command lines or private fields.
 - 2026-10-17 — Merge all merges only into the branch the run started on (ADR-0042).
 - 2026-10-18 — the Session says when it closed the run (`run_closed`), and a surface re-told by a load or refresh takes `runSnapshot()` instead of reading the run record.
 - 2026-10-18 — a run held on a usage limit is no longer closed when its last attempt ends; it stays open for the reset (ADR-0034).
+- 2026-10-19 — adopting a saved run asks git what the user merged since and clears up a settled run left with nothing to hand over; a gone integration branch counts as merged.

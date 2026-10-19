@@ -116,8 +116,9 @@ export interface IsolationTaskRecord {
   repairedFiles?: string[];
   /**
    * Set once the task's landed work is in the checked-out HEAD of every repo
-   * it changed — merged into the user's branch, by Merge all or by hand. What
-   * a merge gate waits for (ADR-0020).
+   * it changed — merged into the user's branch, by Merge all or by hand — or
+   * can no longer be merged there, its integration branch gone. What a merge
+   * gate waits for (ADR-0020).
    */
   inHead?: true;
 }
@@ -510,7 +511,9 @@ export interface IWorktreeIsolation {
   /**
    * Mark the landed tasks whose work the checked-out HEAD now contains in
    * every repo they changed (`git merge-base --is-ancestor`), and return their
-   * ids. Only adds marks: a task found merged stays merged.
+   * ids. A repo whose integration branch is gone counts as containing it: no
+   * Merge all could bring that work in. Only adds marks: a task found merged
+   * stays merged.
    */
   findInHead(run: IsolationRun): Promise<string[]>;
 

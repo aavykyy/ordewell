@@ -1,4 +1,4 @@
-import { serializeTask, type RunInput, type RunTask, type RunTaskStatus, type RunView, type SerializedTask, type SerializedTaskStatus, type SurfacePlan, type SurfacePlanState, type SurfaceTask } from './SessionMessage';
+import { serializeTask, type RunInput, type RunMergeView, type RunTask, type RunTaskStatus, type RunView, type SerializedTask, type SerializedTaskStatus, type SurfacePlan, type SurfacePlanState, type SurfaceTask } from './SessionMessage';
 import type { IsolationHandoff } from '../interfaces/IWorktreeIsolation';
 import { rejoinPlanTree } from '../models/Task';
 import { walkPlan } from './PlanTree';
@@ -88,6 +88,20 @@ function handoffOf({ type: _type, ...handoff }: Extract<RunInput, { type: 'isola
 }
 
 /**
+ * A status update is the newer word on which landed work is still unmerged
+ * (`runMerge`): git can find some of a handed-over run merged after all — a
+ * reloaded session asks it — and a handoff offers only what is left, or goes
+ * once nothing is. A handoff that landed nothing, offering only the clean-up
+ * of what was kept, is not about merging and stays.
+ */
+function stillToMerge(handoff: IsolationHandoff | null, runMerge: RunMergeView | undefined): IsolationHandoff | null {
+  if (!handoff?.landed.length) return handoff;
+  if (!runMerge) return null;
+  const same = runMerge.landed.length === handoff.landed.length && runMerge.landed.every((t, i) => t.taskId === handoff.landed[i].taskId);
+  return same ? handoff : { ...handoff, repos: runMerge.repos, landed: runMerge.landed };
+}
+
+/**
  * A saved plan keeps finished tasks in its execution log and the rest pending;
  * rejoined, the log wins for a task in both, being what actually happened.
  */
@@ -112,6 +126,7 @@ export function reduceRun(view: RunView, input: RunInput): RunView {
         ...view,
         tasks: applyStatus(view.tasks, new Map(input.tasks.map((t) => [t.id, t]))),
         runMerge: input.runMerge ?? null,
+        handoff: stillToMerge(view.handoff, input.runMerge),
         usage: input.usage,
       };
     case 'task_started':

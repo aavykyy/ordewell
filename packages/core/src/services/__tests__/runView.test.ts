@@ -99,6 +99,39 @@ describe('reduceRun', () => {
       expect(merged).toEqual({ ...landed, mergeResult: { outcome: 'merged' }, handoff: null, runMerge: null });
     });
 
+    describe('a handoff git has since found merged', () => {
+      const t1 = { taskId: 't1', order: 1, title: 'Task t1' };
+      const t2 = { taskId: 't2', order: 2, title: 'Task t2' };
+      const left = [{ ...repos[0], landed: [t2] }];
+      const handed = play([
+        generated([planned('t1', 1), planned('t2', 2)]),
+        { type: 'isolation_handoff', repos: [{ ...repos[0], landed: [t1, t2] }], landed: [t1, t2], deferredTo: 'supervisor' },
+      ]);
+      const status = (runMerge?: { repos: typeof left; landed: typeof t1[] }): RunInput => ({
+        type: 'status_update', tasks: [], ...(runMerge ? { runMerge: { waitingAtGate: false, paused: false, ...runMerge } } : {}),
+      });
+
+      it('offers only what the status update says is still unmerged', () => {
+        const view = reduceRun(handed, status({ repos: left, landed: [t2] }));
+
+        expect(view.handoff).toEqual({ repos: left, landed: [t2], deferredTo: 'supervisor' });
+      });
+
+      it('keeps the handoff as it was while the same work is unmerged', () => {
+        const same = reduceRun(handed, status({ repos: [{ ...repos[0], landed: [t1, t2] }], landed: [t1, t2] }));
+
+        expect(same.handoff).toBe(handed.handoff);
+      });
+
+      it('goes once a status update says nothing landed is unmerged', () => {
+        expect(reduceRun(handed, status()).handoff).toBeNull();
+      });
+
+      it('leaves a handoff that landed nothing, which offers only the clean-up', () => {
+        expect(reduceRun(landed, status()).handoff).toEqual({ repos, landed: [], deferredTo: 'supervisor' });
+      });
+    });
+
     describe('with a task marked', () => {
       const isolation = { state: 'integrated' as const, branch: 'ordewell/run/1-t1', worktree: '/wt/1', repos: ['.'] };
       const marked = play([
