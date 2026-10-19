@@ -16,7 +16,7 @@ function scheduled() {
   const session = new FakeRunnerSession();
   const runner = {
     spawn: async () => session,
-    stop: () => session.kill(),
+    stop: async () => session.kill(),
     stopAll: () => session.kill(),
     activeCount: 1,
   } satisfies IRunner;

@@ -54,8 +54,9 @@ export type AttemptEnd = 'verdict' | 'usage-limit' | 'cancel' | 'release' | 'com
 /**
  * Whether ending an attempt with this reason has to stop its own runner now.
  * A verdict and a usage limit end it too (ADR-0018, L1): its log lives in Ordewell, and
- * whatever it did after the verdict would go unverified. Stop and load reset
- * every runner at once instead.
+ * whatever it did after the verdict would go unverified. Stop lets every
+ * runner go itself before it ends the attempts; a load ends them and leaves
+ * their runners be.
  */
 export function stopsRunner(reason: AttemptEnd): boolean {
   return reason !== 'stop' && reason !== 'load';

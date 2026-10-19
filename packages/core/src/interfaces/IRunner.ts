@@ -68,7 +68,17 @@ export interface IRunnerSession {
   taskId: string;
   onOutput(callback: (text: string) => void): void;
   onExit(callback: (code: number) => void): void;
+  /** End the process at once. {@link stop} is how an attempt that is over lets it go. */
   kill(): void;
+  /**
+   * End the session the way its runner ends a turn (ADR-0018, L1): nothing
+   * more is sent, a turn still open is interrupted and given the interrupt
+   * grace to close — so what the runner reports as it closes, its cost and a
+   * last call's usage, still reaches {@link onEvent} — then the process ends,
+   * by itself where its runner can, killed once the grace runs out. Resolves
+   * once it is gone, after {@link onExit}; at once when it already is.
+   */
+  stop(): Promise<void>;
   getOutput(): string;
   write(text: string): void;
   /** `working` while a turn runs; `idle` between turns, waiting for a message. */
@@ -191,7 +201,9 @@ export interface IRunner {
     onNotice?: (message: string) => void;
   }): Promise<IRunnerSession>;
 
-  stop(sessionId: string): void;
+  /** Wind one session down ({@link IRunnerSession.stop}); resolves once its process is gone. */
+  stop(sessionId: string): Promise<void>;
+  /** Wind every session down at once, as {@link stop} does one. */
   stopAll(): void;
   activeCount: number;
 }

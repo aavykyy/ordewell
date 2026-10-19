@@ -11,7 +11,7 @@ import type { IRunner } from '../../interfaces/IRunner';
 describe('a runner command through the orchestrator', () => {
   function scheduled() {
     const session = new FakeRunnerSession();
-    const runner = { spawn: async () => session, stop: () => session.kill(), stopAll: () => session.kill(), activeCount: 1 } satisfies IRunner;
+    const runner = { spawn: async () => session, stop: async () => session.kill(), stopAll: () => session.kill(), activeCount: 1 } satisfies IRunner;
     const orchestrator = TaskOrchestrator.compose({
       config: fakeConfig(), notifications: fakeNotification(), runner,
       output: new BufferedTaskOutputSource(),

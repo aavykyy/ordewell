@@ -1089,11 +1089,15 @@ carry both the task ledgers and the plan roll-up; surfaces draw the texts core w
 plan-level *Tasks total* stays at the top. Absent measures mean unknown, never zero.
 `sessionBilling` keeps the runner-reported subscription or API-key login and its
 plan when named, even when the runner reports no cost.
+An attempt that ends stops its runner, which winds its turn down (ADR-0018,
+L1): what the runner reports meanwhile, Claude Code's cost and window among it,
+still goes into that attempt's ledger, and its wall time stays at its end.
 A runner that reports its session's running cost has that count saved with the
-attempt (`runnerSessionCost`), so a *Continue* of the session counts its first
-turn from there; with no count kept, that turn only sets the baseline. A result
-whose totals are zeroed (a crashed process's last) never lowers the count, and a
-`/clear` in the task's chat restarts it from zero.
+attempt (`runnerSessionCost`) as its session ended, so a *Continue* of the
+session, which waits for that wind-down, counts its first turn from there;
+with no count kept, that turn only sets the baseline. A result whose totals are
+zeroed (a crashed process's last) never lowers the count, and a `/clear` in the
+task's chat restarts it from zero.
 *Avoid:* attributing a session cost to its last model without a reported
 breakdown; *Avoid:* mixing planner usage into task totals; *Avoid:* "the task's
 usage" for one attempt's ledger — see *Task usage*.

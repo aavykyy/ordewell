@@ -116,9 +116,18 @@ export class FakeRunnerSession implements IRunnerSession {
 
   constructor(public id = 's1', public taskId = 't1', public sessionId: string | null = 'native-1') {}
 
+  /** `stop()` was asked for: the runner winds its turn down, still reporting, until {@link emitExit}. */
+  stopped = false;
+  private markGone!: () => void;
+  private readonly gone = new Promise<void>((resolve) => { this.markGone = resolve; });
+
   onOutput(cb: (text: string) => void): void { this.outputCbs.push(cb); }
   onExit(cb: (code: number) => void): void { this.exitCbs.push(cb); }
   kill(): void { this.killed = true; }
+  stop(): Promise<void> {
+    this.stopped = true;
+    return this.gone;
+  }
   getOutput(): string { return this.output; }
 
   emitOutput(text: string): void {
@@ -127,6 +136,7 @@ export class FakeRunnerSession implements IRunnerSession {
   }
   emitExit(code: number): void {
     for (const cb of this.exitCbs) cb(code);
+    this.markGone();
   }
   write(text: string): void {
     this.written.push(text);

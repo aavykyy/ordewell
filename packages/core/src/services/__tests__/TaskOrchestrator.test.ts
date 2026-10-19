@@ -5,7 +5,7 @@ import { createTask } from '../../models/Task';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { INotification } from '../../interfaces/INotification';
 import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
-import { fakeConfig, FakeRunnerSession, flushMicrotasks } from '../../testing';
+import { fakeConfig, FakeRunnerSession, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import type { TaskOutputSource } from '../../interfaces/TaskOutputSource';
@@ -1042,7 +1042,7 @@ describe('cancelTask', () => {
     // where a cancelled task's dependent gets spawned before the cancelled
     // task is reverted to 'pending'.
     const { sessions, spawn } = sessionRunner();
-    const stop = vi.fn(() => sessions[0].emitExit(-1));
+    const stop = vi.fn(async () => sessions[0].emitExit(-1));
     const orchestrator = makeOrchestrator({ runner: { spawn, stop } });
 
     orchestrator.loadPlan([
@@ -1717,5 +1717,180 @@ describe('persisted attempt accounting', () => {
     expect(orchestrator.storeInstance.get('t')?.attemptUsage?.[0].totals.inputTokens).toBe(10);
     expect(orchestrator.storeInstance.get('t')?.attemptUsage?.[1].totals).toEqual({});
     orchestrator.stop();
+  });
+});
+
+/**
+ * An attempt that is over stops its runner, which winds its turn down
+ * (ADR-0018, L1): Claude Code reports a turn's cost only on its `result` line,
+ * after the `task_complete` that settled the attempt.
+ */
+describe('what a runner reports while it winds down', () => {
+  /** {@link sessionRunner}, whose stop winds a session down until the test ends it with `emitExit`. */
+  function windingRunner() {
+    const runner = sessionRunner();
+    const stop = vi.fn((id: string) => runner.sessions.find((s) => s.id === id)?.stop() ?? Promise.resolve());
+    return { ...runner, stop };
+  }
+
+  const lastCall = { type: 'usage', record: { source: 'claude-code', model: 'opus', inputTokens: 2000, outputTokens: 30 } } as const;
+  const turnCost = { type: 'usage', record: { source: 'claude-code', model: 'opus', aggregate: true, reportedCost: { amount: 0.25, currency: 'USD' } } } as const;
+
+  it('lands the last call and the cost in the attempt task_complete settled, with the count its session ended on', async () => {
+    const runner = windingRunner();
+    const orchestrator = makeOrchestrator({ runner });
+    orchestrator.loadPlan([createTask({ id: 't', prompt: 'Work' })]);
+    const changed = vi.fn();
+    orchestrator.subscribe({ onUsageChanged: changed });
+    await orchestrator.forceStartTask('t');
+    const session = runner.sessions[0];
+    session.cost = { sessionId: 'native-1', usd: 0.5, modelUsd: { opus: 0.5 } };
+
+    session.reportComplete({ status: 'done', summary: 'Done.' });
+    await vi.waitFor(() => expect(orchestrator.storeInstance.get('t')!.status).toBe('completed'));
+    expect(session.stopped).toBe(true);
+    session.emitEvent(lastCall);
+    session.emitEvent(turnCost);
+    session.cost = { sessionId: 'native-1', usd: 0.75, modelUsd: { opus: 0.75 } };
+    session.emitExit(1);
+
+    const [ledger] = orchestrator.storeInstance.get('t')!.attemptUsage!;
+    expect(ledger.totals).toEqual({ inputTokens: 2000, outputTokens: 30, reportedCost: { USD: 0.25 } });
+    expect(ledger.runnerSessionCost).toEqual({ sessionId: 'native-1', usd: 0.75, modelUsd: { opus: 0.75 } });
+    expect(ledger.sessionId).toBe('native-1');
+    expect(changed).toHaveBeenCalledTimes(3);
+  });
+
+  // Whatever a runner does after its verdict would go unverified, and a landing can take a while.
+  it('stops the runner as its verdict is accepted, before the landing', async () => {
+    const runner = windingRunner();
+    const isolation = new FakeWorktreeIsolation();
+    const orchestrator = TaskOrchestrator.compose({
+      config: fakeConfig(), notifications: fakeNotification(), runner: { ...fakeTerminalRunner(), ...runner } as IRunner,
+      output: new BufferedTaskOutputSource(), isolation, workspaceRoot: () => '/repo',
+    });
+    orchestrator.loadPlan([createTask({ id: 't', prompt: 'Work' })]);
+    await orchestrator.forceStartTask('t');
+    const open = isolation.holdIntegration('t');
+
+    runner.sessions[0].reportComplete({ status: 'done', summary: 'Done.' });
+    await vi.waitFor(() => expect(isolation.taskIdsFor('integrate')).toEqual(['t']));
+
+    expect(runner.sessions[0].stopped).toBe(true);
+    expect(orchestrator.storeInstance.get('t')!.status).toBe('in_progress');
+    runner.sessions[0].emitEvent(turnCost);
+    open();
+    await vi.waitFor(() => expect(orchestrator.storeInstance.get('t')!.status).toBe('completed'));
+    expect(orchestrator.storeInstance.get('t')!.attemptUsage![0].totals.reportedCost).toEqual({ USD: 0.25 });
+  });
+
+  it.each([
+    ['cancel', (o: TaskOrchestrator) => o.cancelTask('t')],
+    ['retry', (o: TaskOrchestrator) => o.retryTask('t')],
+    ['mark complete', (o: TaskOrchestrator) => o.markTaskComplete('t')],
+    ['skip, waiting for input', (o: TaskOrchestrator, session: FakeRunnerSession) => { session.waitForInput(); return o.skipTask('t'); }],
+  ])('keeps what the runner reports as it winds down after a %s', async (_end, end) => {
+    const runner = windingRunner();
+    const orchestrator = makeOrchestrator({ runner });
+    orchestrator.loadPlan([createTask({ id: 't', prompt: 'Work' })]);
+    await orchestrator.forceStartTask('t');
+    const session = runner.sessions[0];
+    session.cost = { sessionId: 'native-1', usd: 0.5, modelUsd: { opus: 0.5 } };
+
+    await end(orchestrator, session);
+    expect(session.stopped).toBe(true);
+    session.emitEvent(lastCall);
+    session.emitEvent(turnCost);
+    session.cost = { sessionId: 'native-1', usd: 0.75, modelUsd: { opus: 0.75 } };
+    session.emitExit(1);
+
+    const ledger = orchestrator.storeInstance.get('t')!.attemptUsage!.find((u) => u.attempt === 1)!;
+    expect(ledger.totals).toEqual({ inputTokens: 2000, outputTokens: 30, reportedCost: { USD: 0.25 } });
+    expect(ledger.runnerSessionCost).toEqual({ sessionId: 'native-1', usd: 0.75, modelUsd: { opus: 0.75 } });
+  });
+
+  it('keeps what a runner that ignored the interrupt reported before it was killed', async () => {
+    const runner = windingRunner();
+    const orchestrator = makeOrchestrator({ runner });
+    orchestrator.loadPlan([createTask({ id: 't', prompt: 'Work' })]);
+    await orchestrator.forceStartTask('t');
+    const session = runner.sessions[0];
+    session.cost = { sessionId: 'native-1', usd: 0.5, modelUsd: { opus: 0.5 } };
+
+    await orchestrator.cancelTask('t');
+    session.emitEvent(lastCall);
+    session.emitExit(-1);
+
+    const [ledger] = orchestrator.storeInstance.get('t')!.attemptUsage!;
+    expect(ledger.totals).toEqual({ inputTokens: 2000, outputTokens: 30 });
+    expect(ledger.runnerSessionCost).toEqual({ sessionId: 'native-1', usd: 0.5, modelUsd: { opus: 0.5 } });
+  });
+
+  it('keeps a retry\'s ledger apart from the attempt whose runner still winds down', async () => {
+    const runner = windingRunner();
+    const orchestrator = makeOrchestrator({ runner });
+    orchestrator.loadPlan([createTask({ id: 't', prompt: 'Work' })]);
+    await orchestrator.forceStartTask('t');
+    const [first] = runner.sessions;
+
+    await orchestrator.retryTask('t');
+    await orchestrator.forceStartTask('t');
+    const second = runner.sessions[1];
+    expect(second).toBeDefined();
+    first.emitEvent(turnCost);
+    second.emitEvent(lastCall);
+    first.emitEvent(lastCall);
+    first.emitExit(1);
+    second.emitEvent(turnCost);
+
+    const ledgers = orchestrator.storeInstance.get('t')!.attemptUsage!;
+    expect(ledgers.map((u) => [u.attempt, u.totals])).toEqual([
+      [1, { inputTokens: 2000, outputTokens: 30, reportedCost: { USD: 0.25 } }],
+      [2, { inputTokens: 2000, outputTokens: 30, reportedCost: { USD: 0.25 } }],
+    ]);
+    expect(ledgers[1].endedAt).toBeUndefined();
+    orchestrator.stop();
+  });
+
+  it('continues a session only once its runner wound down, counting from what it ended on', async () => {
+    const runner = windingRunner();
+    const orchestrator = makeOrchestrator({ runner });
+    orchestrator.loadPlan([createTask({ id: 't', prompt: 'Work' })]);
+    await orchestrator.forceStartTask('t');
+    const session = runner.sessions[0];
+    session.cost = { sessionId: 'native-1', usd: 0.5, modelUsd: { opus: 0.5 } };
+    session.reportComplete({ status: 'done', summary: 'Done.' });
+    await vi.waitFor(() => expect(orchestrator.storeInstance.get('t')!.status).toBe('completed'));
+
+    const continuing = orchestrator.continueTask('t', 'Also cover the empty case');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(runner.spawn).toHaveBeenCalledTimes(1);
+    session.emitEvent(turnCost);
+    session.cost = { sessionId: 'native-1', usd: 0.75, modelUsd: { opus: 0.75 } };
+    session.emitExit(1);
+    await continuing;
+
+    expect(runner.spawn).toHaveBeenCalledTimes(2);
+    expect(runner.spawn.mock.calls[1][0]).toMatchObject({ resumeSessionId: 'native-1', resumeCost: { sessionId: 'native-1', usd: 0.75, modelUsd: { opus: 0.75 } } });
+    orchestrator.stop();
+  });
+
+  it('keeps what the runners report as they wind down after the user stops the run', async () => {
+    const runner = windingRunner();
+    const orchestrator = makeOrchestrator({ runner });
+    orchestrator.loadPlan([createTask({ id: 't', prompt: 'Work' })]);
+    await orchestrator.forceStartTask('t');
+    const session = runner.sessions[0];
+
+    orchestrator.stop();
+    expect(session.stopped).toBe(true);
+    session.emitEvent(turnCost);
+    session.cost = { sessionId: 'native-1', usd: 0.25, modelUsd: { opus: 0.25 } };
+    session.emitExit(1);
+
+    const [ledger] = orchestrator.storeInstance.get('t')!.attemptUsage!;
+    expect(ledger.totals).toEqual({ reportedCost: { USD: 0.25 } });
+    expect(ledger.runnerSessionCost).toEqual({ sessionId: 'native-1', usd: 0.25, modelUsd: { opus: 0.25 } });
+    expect(orchestrator.storeInstance.get('t')!.status).toBe('pending');
   });
 });

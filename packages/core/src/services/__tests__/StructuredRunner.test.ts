@@ -758,6 +758,162 @@ describe('StructuredSession interrupt', () => {
   });
 });
 
+/**
+ * An attempt that is over stops its runner (ADR-0018, L1). Claude Code reports
+ * its cost and its model's window only on a turn's `result` line, so a stop
+ * ends the turn the way the runner reports its end and takes that line before
+ * the process goes.
+ */
+describe('StructuredSession stop', () => {
+  /** A recorded turn cut where its `task_complete` would land: its last call's usage and its `result` not yet sent. */
+  const checkpointLines = fixture('claude-code', 'task-checkpoint').split('\n').filter(Boolean);
+  const lastCall = checkpointLines.findIndex((line) => line.includes('"message_delta"'));
+  const turnSoFar = `${checkpointLines.slice(0, lastCall).join('\n')}\n`;
+  const turnRest = `${checkpointLines.slice(lastCall).join('\n')}\n`;
+  const interruptAck = (written: string) => fixture('claude-code', 'task-interrupt-ack', { REQUEST_ID: (JSON.parse(written) as { request_id: string }).request_id }).split('\n')[0];
+
+  it('interrupts a turn still open and takes its last usage and cost before the runner exits on its own', async () => {
+    const { runner, spawned } = harness([turnSoFar, (written, proc) => proc.emitStdout(`${interruptAck(written)}\n${turnRest}`)]);
+    const turn = observe(await runner.spawn(options()));
+    await until(() => turn.chunks.join('').includes('ORDEWELL_CHECKPOINT'));
+
+    const stopped = turn.session.stop();
+    await until(() => spawned.processes[0].stdinEnded);
+
+    const proc = spawned.processes[0];
+    expect(JSON.parse(afterAttachCheck(proc.written)[1])).toMatchObject({ type: 'control_request', request: { subtype: 'interrupt' } });
+    expect(turn.events.filter((e) => e.type === 'usage').map((e) => e.type === 'usage' && e.record)).toEqual([
+      expect.objectContaining({ model: 'claude-haiku-4-5-20251001', outputTokens: 201 }),
+      expect.objectContaining({ aggregate: true, reportedCost: { amount: 0.010310099999999999, currency: 'USD', kind: 'estimate', basis: 'list' } }),
+      expect.objectContaining({ model: 'claude-haiku-4-5-20251001', contextWindow: 200000 }),
+    ]);
+    expect(turn.session.sessionCost?.()).toEqual({ sessionId: 'sess-task-checkpoint', usd: 0.010310099999999999, modelUsd: { 'claude-haiku-4-5-20251001': 0.010310099999999999 } });
+    expect(turn.exits).toEqual([]);
+    expect(proc.killed).toBe(false);
+
+    proc.exit(0);
+    await stopped;
+    expect(turn.exits).toEqual([0]);
+    expect(spawned.processes).toHaveLength(1);
+    expect(runner.activeCount).toBe(0);
+  });
+
+  it('kills a runner that ignores the interrupt once the grace runs out, never restarting it, and keeps what it counted', async () => {
+    const { runner, spawned } = harness([fixture('claude-code', 'task-checkpoint'), fixture('claude-code', 'task-interrupt')], 20);
+    const turn = observe(await runner.spawn(options()));
+    await turn.nextTurnEnd();
+    turn.session.sendMessage('Carry on');
+    await until(() => turn.events.filter((e) => e.type === 'turn_start').length === 2);
+
+    await turn.session.stop();
+
+    const proc = spawned.processes[0];
+    expect(afterAttachCheck(proc.written).map((line) => JSON.parse(line) as { type: string }).at(-1)).toMatchObject({ type: 'control_request', request: { subtype: 'interrupt' } });
+    expect(proc.stdinEnded).toBe(false);
+    expect(proc.killed).toBe(true);
+    expect(spawned.processes).toHaveLength(1);
+    expect(turn.exits).toEqual([-1]);
+    expect(turn.session.sessionCost?.()?.usd).toBe(0.010310099999999999);
+  });
+
+  it('ends the input of a runner between turns at once, and kills it when it does not exit within the grace', async () => {
+    const { runner, spawned } = harness([fixture('claude-code', 'task-no-marker')], 20);
+    const turn = observe(await runner.spawn(options()));
+    await turn.nextTurnEnd();
+
+    const stopped = turn.session.stop();
+    const proc = spawned.processes[0];
+    expect(proc.stdinEnded).toBe(true);
+    expect(afterAttachCheck(proc.written)).toHaveLength(1);
+    await stopped;
+    expect(proc.killed).toBe(true);
+    expect(turn.exits).toEqual([-1]);
+  });
+
+  it('lets an interrupted turn close before the runner is told nothing more is coming', async () => {
+    const { runner, spawned } = harness([
+      fixture('claude-code', 'task-interrupt'),
+      (written, proc) => proc.emitStdout(fixture('claude-code', 'task-interrupt-ack', { REQUEST_ID: (JSON.parse(written) as { request_id: string }).request_id })),
+    ]);
+    const turn = observe(await runner.spawn(options()));
+    await firstTurn(spawned);
+
+    const stopped = turn.session.stop();
+    const proc = spawned.processes[0];
+    expect(proc.stdinEnded).toBe(false);
+    await until(() => proc.stdinEnded);
+    expect(turn.turnEnds).toEqual(['interrupted']);
+    proc.exit(1);
+    await stopped;
+    expect(turn.exits).toEqual([1]);
+  });
+
+  it('sends a runner winding down nothing more, and a kill still ends it at once', async () => {
+    const { runner, spawned } = harness([fixture('claude-code', 'task-interrupt')]);
+    const turn = observe(await runner.spawn(options()));
+    await firstTurn(spawned);
+    const queuedId = turn.session.sendMessage('Queued before the stop');
+    // A listener told of the undelivered message answers with another, inside the stop.
+    let answerId = '';
+    turn.session.onEvent((event) => {
+      if (event.type === 'message_undelivered' && event.messageId === queuedId) answerId = turn.session.sendMessage('Then try this');
+    });
+
+    const stopped = turn.session.stop();
+    const lateId = turn.session.sendMessage('Sent while it winds down');
+    turn.session.forceSend('Forced while it winds down');
+
+    expect(turn.session.stop()).toBe(stopped);
+    expect(turn.events.filter((e) => e.type === 'message_undelivered').map((e) => e.type === 'message_undelivered' && e.messageId)).toEqual([queuedId, answerId, lateId, 'msg-4']);
+    expect(turn.session.queued()).toEqual([]);
+    turn.session.kill();
+    await stopped;
+    expect(turn.exits).toEqual([-1]);
+    expect(userTurns(spawned.processes[0].written)).toEqual(['Do the task']);
+    expect(spawned.processes).toHaveLength(1);
+  });
+
+  it('ends a runner that has no input to close as soon as its interrupted turn closed, after what it reported', async () => {
+    const adapter = { interrupts: 0, disposed: false, turn: null as ((event: AgentEvent) => void) | null };
+    const createAdapter = (): TaskModeAgentAdapter => ({
+      agentId: 'codex',
+      exited: false,
+      start: async () => {},
+      send: (_message, onEvent) => new Promise<void>((resolve) => {
+        adapter.turn = (event) => {
+          onEvent(event);
+          if (event.type === 'turn_end') resolve();
+        };
+      }),
+      nativeSessionId: () => 'thread-1',
+      dispose: () => { adapter.disposed = true; },
+      interrupt: async () => {
+        adapter.interrupts += 1;
+        setTimeout(() => {
+          adapter.turn?.({ type: 'usage', record: { source: 'codex', model: 'gpt-5.5', inputTokens: 1200, outputTokens: 40 } });
+          adapter.turn?.({ type: 'turn_end', interrupted: true });
+        }, 5);
+        return true;
+      },
+      onProcessExit: () => {},
+      answerPermission: () => false,
+      mcpAttached: async () => true,
+    });
+    const mcp = { issueTaskToken: async () => ({ url: 'http://127.0.0.1:1/mcp', token: 'tok-1' }), revoke: () => {} } as unknown as OrdewellMcpServer;
+    const runner = new StructuredRunner({ createAdapter, mcp });
+    const turn = observe(await runner.spawn(options({ runner: 'codex' })));
+    await until(() => adapter.turn !== null);
+
+    await turn.session.stop();
+
+    expect(adapter.interrupts).toBe(1);
+    expect(turn.events.filter((e) => e.type === 'usage')).toEqual([{ type: 'usage', record: { source: 'codex', model: 'gpt-5.5', inputTokens: 1200, outputTokens: 40 } }]);
+    expect(turn.turnEnds).toEqual(['interrupted']);
+    expect(adapter.disposed).toBe(true);
+    expect(turn.exits).toEqual([-1]);
+  });
+});
+
 describe('StructuredSession exit', () => {
   it('fires onExit exactly once on kill', async () => {
     const { runner, spawned } = harness([() => {}]);

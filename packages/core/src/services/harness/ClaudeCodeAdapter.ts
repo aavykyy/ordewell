@@ -627,6 +627,16 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   }
 
   /**
+   * On stdin's end the CLI exits by itself once its turn has closed, and only
+   * an exit of its own saves the session's running totals for a `--resume` to
+   * restore (checked on 2.1.303: about a second later, code 0, or 1 after an
+   * interrupted turn).
+   */
+  endInput(): void {
+    this.process?.stdin?.end();
+  }
+
+  /**
    * A `user` line written mid-turn is Claude Code's own queue (ADR-0023): the
    * CLI attaches it to the next tool result, or runs it as a turn of its own
    * after `result` — an interrupted one included — so it never lets go of one,

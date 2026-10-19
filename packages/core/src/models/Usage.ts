@@ -243,16 +243,19 @@ export function startAttemptUsage(attempt: number, runner: string, startedAt: st
   return { attempt, runner, startedAt, wallTimeMs: 0, totals: {}, byModel: [] };
 }
 
+/** What its runner reports as it winds down after the attempt ended is added without moving its end. */
 export function addAttemptUsage(usage: AttemptUsage, record: UsageRecord, now: string): AttemptUsage {
   const folded = addPlannerUsage(usage, record);
-  return { ...usage, ...folded, lastPromptTokens: folded.lastPromptTokens, contextWindow: folded.contextWindow, wallTimeMs: Math.max(0, Date.parse(now) - Date.parse(usage.startedAt)) };
+  return { ...usage, ...folded, lastPromptTokens: folded.lastPromptTokens, contextWindow: folded.contextWindow, wallTimeMs: Math.max(0, Date.parse(usage.endedAt ?? now) - Date.parse(usage.startedAt)) };
 }
 
+/** An attempt ends once; ended again once its runner wound down, it only takes the count that runner ended on. */
 export function endAttemptUsage(usage: AttemptUsage, now: string, runnerSessionCost?: RunnerSessionCost, sessionId?: string): AttemptUsage {
+  const endedAt = usage.endedAt ?? now;
   return {
     ...usage,
-    endedAt: now,
-    wallTimeMs: Math.max(0, Date.parse(now) - Date.parse(usage.startedAt)),
+    endedAt,
+    wallTimeMs: Math.max(0, Date.parse(endedAt) - Date.parse(usage.startedAt)),
     ...(sessionId ? { sessionId } : {}),
     ...(runnerSessionCost ? { runnerSessionCost } : {}),
   };

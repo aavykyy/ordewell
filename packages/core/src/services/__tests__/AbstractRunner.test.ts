@@ -21,7 +21,8 @@ describe('AbstractRunner', () => {
     old.emitExit(1);
 
     expect(runner.activeCount).toBe(1);
-    runner.stop('fixed-id');
-    expect(successor.killed).toBe(true);
+    void runner.stop('fixed-id');
+    expect(successor.stopped).toBe(true);
+    expect(old.stopped).toBe(false);
   });
 });

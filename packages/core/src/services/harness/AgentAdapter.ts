@@ -316,6 +316,12 @@ export interface TaskModeAgentAdapter extends AgentAdapter {
    */
   interrupt(timeoutMs: number): Promise<boolean>;
   /**
+   * Tell the process nothing more is coming, once its turn has closed, so it
+   * ends by itself and keeps what it saves on the way out. The process exit
+   * reports its end. Absent on a runner whose process is only ever killed.
+   */
+  endInput?(): void;
+  /**
    * Registers the listener for what the agent does after a turn has ended and
    * before the next message — a turn it opens itself when background work
    * finishes, most often. Without one that output is dropped, which is right
