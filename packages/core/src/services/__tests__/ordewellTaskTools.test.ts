@@ -21,6 +21,7 @@ import type { ApprovalDecision } from '../../interfaces/IApproval';
 class IdleAdapter implements TaskModeAgentAdapter {
   async mcpAttached(): Promise<boolean> { return true; }
   readonly agentId = 'claude-code';
+  readonly exited = false;
   start_: AgentStartOptions | undefined;
   readonly prompts: string[] = [];
   private onEvent: ((event: AgentEvent) => void) | undefined;

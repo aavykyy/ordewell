@@ -678,17 +678,35 @@ export class CliAgentAiService implements IAiService {
    * `startConversation` reseeds from Ordewell's transcript, which is the same
    * degradation `restoreChat` already performs on every surface.
    *
+   * A process can end while idle without Ordewell stopping it — the OS, the
+   * CLI itself, a sleeping machine, a signal sent to its group — and every
+   * path of ours that kills one also drops its adapter. So an adapter still
+   * held whose process has ended died on its own, and is restarted here
+   * rather than answering the next message with its exit code.
+   *
    * Also restarted when the policy's decision on the runner's own search has
    * changed since the process was spawned: the running thread would otherwise
    * keep searching unasked after Full turned Guarded. Codex 0.162 applies
    * `thread/resume`'s `config.web_search` either way (checked live).
    */
   private async ensureAdapter(session: PlannerSession): Promise<AgentAdapter> {
-    if (session.adapter && session.nativeSearch === this.nativeSearch(session)) return session.adapter;
+    const live = session.adapter;
+    if (live && !live.exited && session.nativeSearch === this.nativeSearch(session)) return live;
     session.stop();
     const start = session.start;
     if (!start) throw new Error('No active planner conversation.');
-    return this.startAdapter({ ...start.startOptions, resumeSessionId: session.nativeSessionId ?? undefined, resumeCost: session.sessionCost ?? undefined }, start.tools, session);
+    const resumeSessionId = session.nativeSessionId ?? undefined;
+    try {
+      return await this.startAdapter({ ...start.startOptions, resumeSessionId, resumeCost: session.sessionCost ?? undefined }, start.tools, session);
+    } catch (err) {
+      if (!resumeSessionId || session.discarded.aborted) throw err;
+      // Kept, the conversation would ask for the same refused session on
+      // every message. Dropped, the next one replays the transcript into a
+      // fresh context (T4), as after a reload.
+      if (this.session === session) this.session = null;
+      session.discard();
+      throw new Error(`The ${this.runner} planner's session could not be resumed (${err instanceof Error ? err.message : String(err)}). Send your message again: the planner picks the conversation up from its transcript.`);
+    }
   }
 
   /**

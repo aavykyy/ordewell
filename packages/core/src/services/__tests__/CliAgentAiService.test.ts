@@ -599,6 +599,7 @@ describe('CliAgentAiService — Claude Code', () => {
       mcpServer: fakeMcpServer(),
       createAdapter: () => ({
         agentId: 'claude-code',
+        exited: false,
         start: async () => {},
         nativeSessionId: () => null,
         dispose: () => {},
@@ -655,6 +656,50 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(spawned.processes).toHaveLength(2);
     const args = spawned.lastArgs();
     expect(args[args.indexOf('--resume') + 1]).toBe('sess-claude-1');
+  });
+
+  // 143 is 128 + SIGTERM: the CLI caught the signal and exited with the code.
+  it('restarts a planner whose process ended between turns from its own session, rather than failing the next turn', async () => {
+    const mcp = fakeMcpServer();
+    const { svc, spawned } = service('claude-code', [fixture('claude-code', 'prose'), fixture('claude-code', 'prose')], {}, {}, mcp);
+    await svc.startConversation(request());
+    spawned.processes[0].exit(143);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const turn = await svc.continueConversation('Carry on', () => {});
+
+    expect(turn).toMatchObject({ kind: 'message' });
+    expect(turn).not.toHaveProperty('failed', true);
+    expect(turn.text).toContain('in-process or Redis');
+    expect(turn.text).not.toContain('143');
+    expect(spawned.processes).toHaveLength(2);
+    const args = spawned.lastArgs();
+    expect(args[args.indexOf('--resume') + 1]).toBe('sess-claude-1');
+    expect(mcp.revoked).toEqual(['tok-1']);
+  });
+
+  it('still fails the turn its process dies in, without restarting it mid-turn', async () => {
+    const { svc, spawned } = service('claude-code', [
+      fixture('claude-code', 'prose'),
+      (_written, proc) => proc.exit(143),
+    ]);
+    await svc.startConversation(request());
+
+    const turn = await svc.continueConversation('Carry on', () => {});
+
+    expect(turn).toMatchObject({ kind: 'message', failed: true });
+    expect(turn.text).toContain('exited with code 143');
+    expect(spawned.processes).toHaveLength(1);
+  });
+
+  it('respawns nothing for a conversation reset, even once its process has ended', async () => {
+    const { svc, spawned } = service('claude-code', [fixture('claude-code', 'prose'), fixture('claude-code', 'prose')]);
+    await svc.startConversation(request());
+    spawned.processes[0].exit(143);
+    svc.reset();
+
+    await expect(svc.continueConversation('Carry on', () => {})).rejects.toThrow('No active planner conversation');
+    expect(spawned.processes).toHaveLength(1);
   });
 
   it('names the refused tool when the agent ends its turn without replying', async () => {
@@ -1237,6 +1282,27 @@ describe('CliAgentAiService — Codex', () => {
     expect(resume.method).toBe('thread/resume');
     expect(resume.params.threadId).toBe('thr-codex-1');
     expect(resume.params.sandbox).toBe('read-only');
+  });
+
+  it('resumes the thread when the app-server ended between turns', async () => {
+    const { svc, spawned } = service('codex', [
+      ...codexHandshake(),
+      fixture('codex', 'tools'),
+      fixture('codex', 'handshake'),
+      fixture('codex', 'new-conversation'),
+      fixture('codex', 'tools'),
+    ]);
+    await svc.startConversation(request({ runners: ['codex'] }));
+    spawned.processes[0].exit(143);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const turn = await svc.continueConversation('Carry on', () => {});
+
+    expect(turn).toMatchObject({ kind: 'message' });
+    expect(turn.text).not.toContain('143');
+    const resume = JSON.parse(spawned.processes[1].written[1]);
+    expect(resume.method).toBe('thread/resume');
+    expect(resume.params.threadId).toBe('thr-codex-1');
   });
 
   it('falls back to a fresh thread when the resume is rejected', async () => {
@@ -2181,6 +2247,7 @@ describe('CliAgentAiService — resource lifecycle', () => {
         processes.push(record);
         return {
           agentId: 'claude-code',
+          exited: false,
           start: async () => {
             record.startCalled = true;
             if (behavior.holdStart) await new Promise<void>((resolve) => { record.release = resolve; });

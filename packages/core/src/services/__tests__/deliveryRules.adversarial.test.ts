@@ -16,6 +16,7 @@ type Turn = { onEvent: (event: AgentEvent) => void; resolve: () => void };
 class TurnEndAdapter implements TaskModeAgentAdapter {
   async mcpAttached(): Promise<boolean> { return true; }
   readonly agentId: string = 'codex';
+  readonly exited = false;
   readonly sent: string[] = [];
   answers: ('accept' | 'refuse' | 'hold')[] = [];
   private releaseInterrupt: (() => void) | null = null;

@@ -529,6 +529,7 @@ describe('an approved project server the runner cannot hand the planner (ADR-002
         let started: PlannerStartOptions | null = null;
         return {
           agentId: 'opencode',
+          exited: false,
           start: async (opts) => { if (opts.kind === 'planner') started = opts; },
           send: async (_message, onEvent) => onEvent({ type: 'turn_end' }),
           nativeSessionId: () => null,

@@ -384,6 +384,7 @@ export function scriptedAdapter(turns: AgentEvent[][], agentId = 'claude-code'):
   const queue = [...turns];
   return () => ({
     agentId,
+    exited: false,
     start: async () => {},
     send: async (_message, onEvent) => {
       for (const event of queue.shift() ?? [{ type: 'turn_end' }]) onEvent(event);

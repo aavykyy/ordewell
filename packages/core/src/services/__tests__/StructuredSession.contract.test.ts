@@ -28,6 +28,7 @@ type Turn = { onEvent: (event: AgentEvent) => void; resolve: () => void; reject:
 class HandAdapter implements TaskModeAgentAdapter {
   async mcpAttached(): Promise<boolean> { return true; }
   readonly agentId = 'claude-code';
+  readonly exited = false;
   readonly starts: AgentStartOptions[] = [];
   readonly sent: string[] = [];
   readonly aborted: string[] = [];
