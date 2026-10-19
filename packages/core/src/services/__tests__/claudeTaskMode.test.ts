@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { existsSync, readFileSync, statSync } from 'fs';
+import { addAttemptUsage, startAttemptUsage, usageText } from '../../models/Usage';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
 import { CodexAdapter } from '../harness/CodexAdapter';
 import { OpenCodeAdapter } from '../harness/OpenCodeAdapter';
@@ -9,7 +10,7 @@ import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
 import { mcpClientConfig } from '../mcp';
 import { classifyRunnerStop, readUsageLimitReset } from '../runnerExit';
-import { modeIds, fakeSpawn, fixture, claudeSteerRecording, type ScriptedReply } from './harnessTestKit';
+import { modeIds, fakeSpawn, fixture, claudeSteerRecording, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
 
 /**
  * The adapter's task mode (ADR-0018, C1), against transcripts recorded from
@@ -17,8 +18,8 @@ import { modeIds, fakeSpawn, fixture, claudeSteerRecording, type ScriptedReply }
  * asserted here too, flag for flag: task mode must not have moved it.
  */
 
-function deps(replies: ScriptedReply[]) {
-  const spawned = fakeSpawn(replies);
+function deps(replies: ScriptedReply[], options: FakeSpawnOptions = {}) {
+  const spawned = fakeSpawn(replies, options);
   const processDeps: AgentProcessDeps = {
     spawn: spawned.spawn,
     fetch: (async () => { throw new Error('no HTTP in this test'); }) as unknown as typeof fetch,
@@ -1058,6 +1059,35 @@ describe('ClaudeCodeAdapter runner commands', () => {
  * `message_start`, name the model it now runs (#106).
  */
 describe('ClaudeCodeAdapter model switches', () => {
+  it('records the initialized account plan and never prices a model whose cost basis is unknown', async () => {
+    const recorded = fixture('claude-code', 'task-model-before').replaceAll('"costBasis":"list"', '"costBasis":"unknown"');
+    const { processDeps } = deps([recorded], { claudeAccount: { subscriptionType: 'max', apiKeySource: 'none' } });
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskIn('default', { model: 'haiku' }));
+    let ledger = startAttemptUsage(1, 'claude-code', '2026-10-17T18:00:00Z');
+    await adapter.send('one', (event) => {
+      if (event.type === 'usage') ledger = addAttemptUsage(ledger, event.record, '2026-10-17T18:00:01Z');
+    });
+    expect(ledger.sessionBilling).toEqual({ type: 'subscription', plan: 'max' });
+    expect(ledger.totals.reportedCost).toBeUndefined();
+    expect(ledger.byModel?.some((m) => m.totals.reportedCost)).toBe(false);
+    adapter.dispose();
+  });
+
+  it('keeps the recorded subscription and list-price estimate on the attempt ledger', async () => {
+    const { processDeps } = deps([fixture('claude-code', 'task-model-before')]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskIn('default', { model: 'haiku' }));
+    let ledger = startAttemptUsage(1, 'claude-code', '2026-10-17T18:00:00Z');
+    await adapter.send('one', (event) => {
+      if (event.type === 'usage') ledger = addAttemptUsage(ledger, event.record, '2026-10-17T18:00:01Z');
+    });
+    expect(ledger.sessionBilling).toEqual({ type: 'subscription' });
+    expect(ledger.totals.costProvenance).toEqual({ USD: { kind: 'estimate', basis: 'list', billing: 'subscription' } });
+    expect(usageText(ledger)).toBe('≈$0.0019 API-equivalent');
+    adapter.dispose();
+  });
+
   const recording = () => [fixture('claude-code', 'task-model-before'), fixture('claude-code', 'task-model-command'), fixture('claude-code', 'task-model-switched')];
 
   it('reports a /model switch once the runner answers on the new model, under the ids it lists', async () => {

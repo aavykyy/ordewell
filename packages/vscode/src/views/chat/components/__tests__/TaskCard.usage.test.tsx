@@ -24,6 +24,12 @@ describe('task card usage', () => {
     expect(container.textContent).not.toMatch(/\$0\.42|ctx|12[,.]4/);
   });
 
+  it('marks estimates and subscription equivalents in the plan total', () => {
+    const estimate: AttemptUsage = { ...usage, runner: 'claude-code', totals: { reportedCost: { USD: 7.89 }, costProvenance: { USD: { kind: 'estimate', billing: 'subscription' } } } };
+    const { container } = render(<PlanCardGroup run={EMPTY_RUN} tasks={[task({ attemptUsage: [estimate] })]} models={[]} />);
+    expect(container.querySelector('.plan-usage')?.textContent).toBe('Tasks total: ≈$7.89 API-equivalent');
+  });
+
   it('keeps the plan-wide Tasks total sum of all attempts', () => {
     const parent = task({ attemptUsage: [usage, { ...usage, attempt: 2 }] });
     const { container } = render(<PlanCardGroup run={EMPTY_RUN} tasks={[parent]} models={[]} />);

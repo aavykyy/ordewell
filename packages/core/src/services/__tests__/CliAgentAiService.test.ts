@@ -120,7 +120,7 @@ function request(overrides: Partial<ConversationRequest> = {}): ConversationRequ
 
 /** What the service wrote to the agent, past the attach check a planner given tools opens with. */
 function writes(proc: FakeAgentProcess): string[] {
-  return proc.written.filter((line) => !line.includes('"subtype":"mcp_status"'));
+  return proc.written.filter((line) => !line.includes('"subtype":"mcp_status"') && !line.includes('"subtype":"initialize"'));
 }
 
 function collector() {
@@ -2052,12 +2052,12 @@ describe('CliAgentAiService — Claude Code partial messages, usage and subagent
     expect(usageRecords(events)).toEqual([
       { source: 'claude-code', model: 'claude-sonnet-5', inputTokens: 18604, cachedInputTokens: 9428, outputTokens: 162 },
       { source: 'claude-code', model: 'claude-sonnet-5', inputTokens: 20025, cachedInputTokens: 18602, outputTokens: 14 },
-      { source: 'claude-code', model: 'claude-sonnet-5', aggregate: true, reportedCost: { amount: 0.049754, currency: 'USD' } },
+      { source: 'claude-code', model: 'claude-sonnet-5', aggregate: true, reportedCost: { amount: 0.049754, currency: 'USD', kind: 'estimate', basis: 'list' } },
       { source: 'claude-code', model: 'claude-sonnet-5', contextWindow: 1000000 },
     ]);
     const usage = usageRecords(events).reduce(addPlannerUsage, { totals: {} });
     expect(usage.totals).toEqual({
-      inputTokens: 38629, cachedInputTokens: 28030, outputTokens: 176, reportedCost: { USD: 0.049754 },
+      inputTokens: 38629, cachedInputTokens: 28030, outputTokens: 176, reportedCost: { USD: 0.049754 }, costProvenance: { USD: { kind: 'estimate', billing: 'unknown', basis: 'list' } },
     });
     expect(plannerContextFill(usage)).toEqual({ usedTokens: 20025, windowTokens: 1000000 });
   });

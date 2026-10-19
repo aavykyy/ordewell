@@ -46,6 +46,17 @@ describe('SessionEventRelay', () => {
     expect(update.type === 'status_update' && update.tasks.map((t) => t.status)).toEqual(['completed', 'failed', 'pending']);
   });
 
+  it('saves and broadcasts an attempt’s session billing even when its runner reports no cost', () => {
+    const { relay, sent, store } = setup();
+    const p = plan();
+    store.startAttemptUsage('t1', 1, 'codex', '2026-10-17T18:00:00Z');
+    store.recordAttemptUsage('t1', 1, { source: 'codex', aggregate: true, sessionBilling: { type: 'subscription', plan: 'plus' } }, '2026-10-17T18:00:01Z');
+    relay.status(p);
+    expect(p.tasks[0].attemptUsage?.[0].sessionBilling).toEqual({ type: 'subscription', plan: 'plus' });
+    expect(p.tasks[0].attemptUsage?.[0].totals.reportedCost).toBeUndefined();
+    expect(sent[0]).toMatchObject({ type: 'status_update', tasks: [{ id: 't1', attemptUsage: [{ sessionBilling: { type: 'subscription', plan: 'plus' }, totals: {} }] }, { id: 't2' }, { id: 't3' }] });
+  });
+
   it('says nothing about tasks when there is no plan', () => {
     const { relay, sent } = setup();
     const observer = relay.observer(() => null);

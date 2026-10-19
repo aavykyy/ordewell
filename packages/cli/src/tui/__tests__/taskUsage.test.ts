@@ -88,6 +88,11 @@ describe('task row accounting', () => {
 });
 
 describe('the plan total', () => {
+  it('marks a subscription estimate in the plan total', () => {
+    const estimate: AttemptUsage = { ...usage, runner: 'claude-code', totals: { reportedCost: { USD: 7.89 }, costProvenance: { USD: { kind: 'estimate', billing: 'subscription' } } } };
+    expect(lines([task({ attemptUsage: [estimate] })]).split('\n')).toContain('Tasks total: ≈$7.89 API-equivalent');
+  });
+
   it('names the runner whose attempts reported no cost, beside the cost of the others', () => {
     const free: AttemptUsage = { ...usage, runner: 'codex', totals: { inputTokens: 5000 } };
     const paid: AttemptUsage = { ...usage, runner: 'claude-code' };

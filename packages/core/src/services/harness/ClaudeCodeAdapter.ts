@@ -3,7 +3,7 @@ import { realpathSync } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { SubagentOutcome } from '../../models/Task';
-import { partedPromptUsage, type RunnerSessionCost, type UsageRecord } from '../../models/Usage';
+import { partedPromptUsage, type RunnerSessionCost, type SessionBilling, type UsageRecord } from '../../models/Usage';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import { findRunnerCommand, type RunnerCommand, type RunnerMcpServer, type RunnerModelRef } from '../../models/RunnerCommand';
 import { claudeThinkingArgs } from '../../plugins/resolveArgs';
@@ -237,7 +237,7 @@ interface ControlResponse {
    * `initialize`: every model the CLI offers, and the id each value runs as;
    * every command it offers.
    */
-  response?: { mcpServers?: { name?: string; status?: string }[]; models?: ClaudeModel[]; commands?: ClaudeCommand[] };
+  response?: { account?: { subscriptionType?: string; apiKeySource?: string }; mcpServers?: { name?: string; status?: string }[]; models?: ClaudeModel[]; commands?: ClaudeCommand[] };
 }
 
 interface ClaudeLine {
@@ -271,7 +271,8 @@ interface ClaudeLine {
   tool_use_result?: unknown;
   /** Cumulative over the whole agent session — including turns before a `--resume`. */
   total_cost_usd?: number;
-  modelUsage?: Record<string, { contextWindow?: number; costUSD?: number }>;
+  modelUsage?: Record<string, { contextWindow?: number; costUSD?: number; costBasis?: 'list' | 'managed' | 'unknown' }>;
+  apiKeySource?: string;
   /** `background_tasks_changed`: every background task still running, not just the change. */
   tasks?: unknown[];
   /** `task_notification`: which `Agent` call finished, how, and what it reported. */
@@ -391,6 +392,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private replyRuns = new ReplyRuns();
   /** The model answering the planner's current message, and the message's id, as its `message_start` named them. */
   private plannerModel: string | undefined;
+  private billing: SessionBilling | undefined;
   private streamingMessage: string | undefined;
   /** The message the last `assistant` line was part of, and how many of its blocks the lines have carried. */
   private lineMessage: { id: string; blocks: number } | null = null;
@@ -564,14 +566,13 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * the alias resolves to now; that id is pinned before the first turn.
    */
   protected override async handshake(opts: AgentStartOptions): Promise<void> {
-    if (opts.kind !== 'task') return;
     // Before the first turn, `initialize` is the one place the CLI lists its
     // commands with their descriptions and argument hints (checked on
     // 2.1.299); `init` names them only.
     const initialized = (await this.control({ subtype: 'initialize' }, MODEL_PIN_TIMEOUT_MS))?.response;
     this.listedCommands = initialized?.commands ?? [];
     this.listedModels = initialized?.models ?? [];
-    if (opts.flags.permissionMode !== 'plan' || !opts.model) return;
+    if (opts.kind !== 'task' || opts.flags.permissionMode !== 'plan' || !opts.model) return;
     const resolved = initialized?.models?.find((m) => m.value === opts.model)?.resolvedModel;
     if (resolved && resolved !== opts.model) await this.control({ subtype: 'set_model', model: resolved }, MODEL_PIN_TIMEOUT_MS);
   }
@@ -777,6 +778,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         return;
 
       case 'control_response': {
+        const account = msg.response?.response?.account;
+        if (account) this.reportBilling(account.apiKeySource, account.subscriptionType, emit);
         const requestId = msg.response?.request_id;
         if (requestId) this.pendingControl.get(requestId)?.(msg.response ?? null);
         return;
@@ -832,6 +835,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
           if (this.refuseOtherMode(msg, emit)) return;
           this.readLoaded(msg, emit);
           this.followModel(msg.model, emit);
+          this.reportBilling(msg.apiKeySource, undefined, emit);
         }
         if (msg.subtype === 'commands_changed' && Array.isArray(msg.commands)) this.listedCommands = msg.commands;
         if (msg.subtype === 'compact_boundary') {
@@ -1057,6 +1061,14 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     }
   }
 
+  private reportBilling(apiKeySource: string | undefined, plan: string | undefined, emit: (event: AgentEvent) => void): void {
+    const type = apiKeySource ? (apiKeySource === 'none' ? 'subscription' : 'api-key') : plan ? 'subscription' : undefined;
+    if (!type) return;
+    const knownPlan = plan ?? (this.billing?.type === type ? this.billing.plan : undefined);
+    this.billing = { type, ...(knownPlan ? { plan: knownPlan } : {}) };
+    emit({ type: 'usage', record: { source: this.agentId, aggregate: true, sessionBilling: this.billing } });
+  }
+
   /**
    * What only the result line knows: the cost, which covers every call the
    * session made — subagents included, since none of their lines carries one —
@@ -1069,18 +1081,18 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private reportSessionCost(msg: ClaudeLine, emit: (event: AgentEvent) => void): void {
     const total = msg.total_cost_usd;
     const canReport = this.reportedCostUsd !== undefined;
-    const modelCosts = Object.entries(msg.modelUsage ?? {}).filter((entry): entry is [string, { contextWindow?: number; costUSD: number }] => typeof entry[1].costUSD === 'number');
+    const modelCosts = Object.entries(msg.modelUsage ?? {}).filter((entry): entry is [string, { contextWindow?: number; costUSD: number; costBasis?: 'list' | 'managed' }] => typeof entry[1].costUSD === 'number' && entry[1].costBasis !== 'unknown');
     if (modelCosts.length > 0) {
       for (const [model, usage] of modelCosts) {
         const previous = this.reportedModelCostUsd.get(model) ?? 0;
         const amount = usage.costUSD - previous;
-        if (canReport && amount >= 0) emit({ type: 'usage', record: { source: 'claude-code', model, aggregate: true, reportedCost: { amount, currency: 'USD' } } });
+        if (canReport && amount >= 0) emit({ type: 'usage', record: { source: 'claude-code', model, aggregate: true, ...(this.billing ? { sessionBilling: this.billing } : {}), reportedCost: { amount, currency: 'USD', kind: 'estimate', ...(usage.costBasis ? { basis: usage.costBasis } : {}) } } });
         this.reportedModelCostUsd.set(model, usage.costUSD);
       }
-    } else if (typeof total === 'number' && canReport && total >= this.reportedCostUsd!) {
+    } else if (!Object.values(msg.modelUsage ?? {}).some((usage) => usage.costBasis === 'unknown') && typeof total === 'number' && canReport && total >= this.reportedCostUsd!) {
       // Without the model breakdown, a session total cannot be attributed to
       // the last model: it also includes earlier models and subagents.
-      emit({ type: 'usage', record: { source: 'claude-code', aggregate: true, reportedCost: { amount: total - this.reportedCostUsd!, currency: 'USD' } } });
+      emit({ type: 'usage', record: { source: 'claude-code', aggregate: true, ...(this.billing ? { sessionBilling: this.billing } : {}), reportedCost: { amount: total - this.reportedCostUsd!, currency: 'USD', kind: 'estimate' } } });
     }
     if (typeof total === 'number') this.reportedCostUsd = total;
     const contextWindow = this.plannerModel ? msg.modelUsage?.[this.plannerModel]?.contextWindow : undefined;

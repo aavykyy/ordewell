@@ -81,9 +81,9 @@ describe('OpenCodeAdapter — recorded event stream', () => {
     // One record per assistant message. Each recorded `tokens.total` equals
     // inputTokens + outputTokens below: 13889, 14099, 14257.
     expect(events.filter((e) => e.type === 'usage')).toEqual([
-      { type: 'usage', record: { source: 'opencode', model: 'opencode-go/deepseek-v4-flash', inputTokens: 13825, outputTokens: 64, cachedInputTokens: 1792, reportedCost: { amount: 0.001848726, currency: 'USD' } } },
-      { type: 'usage', record: { source: 'opencode', model: 'opencode-go/deepseek-v4-flash', inputTokens: 13977, outputTokens: 122, cachedInputTokens: 13824, reportedCost: { amount: 0.000137622, currency: 'USD' } } },
-      { type: 'usage', record: { source: 'opencode', model: 'opencode-go/deepseek-v4-flash', inputTokens: 14234, outputTokens: 23, cachedInputTokens: 14080, reportedCost: { amount: 0.00007914, currency: 'USD' } } },
+      { type: 'usage', record: { source: 'opencode', model: 'opencode-go/deepseek-v4-flash', inputTokens: 13825, outputTokens: 64, cachedInputTokens: 1792, reportedCost: { amount: 0.001848726, currency: 'USD', kind: 'estimate' } } },
+      { type: 'usage', record: { source: 'opencode', model: 'opencode-go/deepseek-v4-flash', inputTokens: 13977, outputTokens: 122, cachedInputTokens: 13824, reportedCost: { amount: 0.000137622, currency: 'USD', kind: 'estimate' } } },
+      { type: 'usage', record: { source: 'opencode', model: 'opencode-go/deepseek-v4-flash', inputTokens: 14234, outputTokens: 23, cachedInputTokens: 14080, reportedCost: { amount: 0.00007914, currency: 'USD', kind: 'estimate' } } },
     ]);
   });
 
@@ -92,7 +92,7 @@ describe('OpenCodeAdapter — recorded event stream', () => {
 
     // Recorded: input 3, cache.write 12147, output 23, total 12173.
     expect(events.filter((e) => e.type === 'usage')).toEqual([
-      { type: 'usage', record: { source: 'opencode', model: 'opencode-go/gpt-5.6-luna', inputTokens: 12150, outputTokens: 23, cachedInputTokens: 0, reportedCost: { amount: 0.00306495, currency: 'USD' } } },
+      { type: 'usage', record: { source: 'opencode', model: 'opencode-go/gpt-5.6-luna', inputTokens: 12150, outputTokens: 23, cachedInputTokens: 0, reportedCost: { amount: 0.00306495, currency: 'USD', kind: 'estimate' } } },
     ]);
   });
 
