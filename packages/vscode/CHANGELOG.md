@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.10.10] - 2026-10-19
+
 ### Added
 
 - **One usage line everywhere: context and cost only**, such as

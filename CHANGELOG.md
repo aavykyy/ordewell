@@ -8,6 +8,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.10.10] - 2026-10-19
+
 ### Added
 
 - **Every surface shows the same usage line: context and cost only**, such as
