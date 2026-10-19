@@ -3,7 +3,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createApp, type App } from '../app';
 import { openTerminal, type Terminal } from '../terminal';
 import { runEffect, type OrdewellApi } from '../effects';
-import { stripAnsi } from '../ansi';
+import { stripAnsi, width } from '../ansi';
+import type { AttemptUsage } from '@ordewell/core';
 import type { RewindTargetView } from '../state';
 import { messagesOf } from './chat';
 
@@ -38,13 +39,14 @@ const PLAN_TASKS = [
   { id: 't2', order: 2, title: 'Write the tests', type: 'ai', status: 'pending', dependencies: ['t1'] },
 ];
 
-function planPayload(tasks = PLAN_TASKS, question = 'Plan drafted — anything to change?') {
+function planPayload(tasks = PLAN_TASKS, question = 'Plan drafted — anything to change?', extra: Record<string, unknown> = {}) {
   return {
     conversationHistory: [
       { role: 'user', content: 'goal' },
       { role: 'assistant', content: question },
     ],
     pendingTasks: tasks,
+    ...extra,
   };
 }
 
@@ -90,6 +92,8 @@ function fakeDaemon() {
       { id: 'saved-1', goal: 'Earlier goal', taskCount: 2, status: 'completed', createdAt: '2026-07-01' },
     ]),
     getSession: vi.fn(async () => ({ meta: {}, plan: planPayload() })),
+    getTaskLogAttempts: vi.fn(async () => ({ attempts: [], position: { stream: 'test', seq: 0 } })),
+    getTaskLog: vi.fn(async () => ({ attempt: 0, events: [], position: { stream: 'test', seq: 0 } })),
     adoptSession: vi.fn(async () => ({ plan: planPayload(), goal: 'Earlier goal' })),
     deleteSession: vi.fn(async () => ({ ok: true })),
     forkConversation: vi.fn(async () => ({ sessionId: 'session-fork', goal: 'goal', plan: planPayload() })),
@@ -953,6 +957,107 @@ describe('TUI end to end', () => {
     expect(restore).toContain('\x1b[?25h');
     expect(h.input.pause).toHaveBeenCalled();
     expect(h.input.setRawMode).toHaveBeenLastCalledWith(false);
+  });
+
+  it('draws the planner line, the Tasks total, the task footer and a reload from the ledgers alone', async () => {
+    const attempt = (n: number, runner: string, over: Partial<AttemptUsage>): AttemptUsage => {
+      const base: AttemptUsage = { attempt: n, runner, startedAt: '', wallTimeMs: 65_000, byModel: [], totals: {} };
+      return { ...base, ...over, totals: over.totals ?? base.totals };
+    };
+    const attempts = {
+      t1: [attempt(1, 'claude-code', {
+        totals: { inputTokens: 5_000, reportedCost: { USD: 1.5 }, costProvenance: { USD: { kind: 'estimate', billing: 'subscription' } } },
+        lastPromptTokens: 61_143, contextWindow: 1_000_000,
+      })],
+      t2: [attempt(1, 'opencode', {
+        totals: { reportedCost: { USD: 0.1 } }, lastPromptTokens: 50_000, contextWindow: 200_000,
+      })],
+      t3: [attempt(1, 'codex', { totals: { inputTokens: 1_000 }, lastPromptTokens: 1_000, contextWindow: 100_000 })],
+    };
+    const THREE_TASKS = [
+      { ...PLAN_TASKS[0], assignedRunner: 'claude-code' },
+      { ...PLAN_TASKS[1], assignedRunner: 'opencode' },
+      { id: 't3', order: 3, title: 'Update the docs', type: 'ai', status: 'pending', dependencies: [], assignedRunner: 'codex' },
+    ];
+    const tasks = (usage: Partial<Record<keyof typeof attempts, AttemptUsage[]>> = {}) => THREE_TASKS.map((t) => ({
+      ...t,
+      ...(usage[t.id as keyof typeof attempts] ? { attemptUsage: usage[t.id as keyof typeof attempts] } : {}),
+    }));
+    const plannerUsage = {
+      totals: { inputTokens: 1_190_000, reportedCost: { USD: 7.89 }, costProvenance: { USD: { kind: 'estimate', billing: 'subscription' } } },
+      lastPromptTokens: 61_143, contextWindow: 1_000_000,
+    };
+
+    const h = harness();
+    h.daemon.mocks.startConversation.mockImplementationOnce(async () => {
+      const emit = h.daemon.emitPlanning;
+      emit({ type: 'planner_turn_started', turnId: 'p1', prompt: 'Build the login flow' });
+      emit({ type: 'planner_message', content: 'Plan drafted.', timestamp: '', turnId: 'p1' });
+      emit({ type: 'planner_usage', turnId: 'p1', ...plannerUsage, contextFill: { usedTokens: 61_143, windowTokens: 1_000_000 } });
+      emit({ type: 'planner_turn_ended', turnId: 'p1', outcome: 'plan' });
+      await Promise.resolve();
+      return planPayload(tasks());
+    });
+    h.type('Build the login flow');
+    h.type('\r');
+    await vi.waitFor(() => expect(h.screen()).toContain('Add the login route'));
+
+    expect(h.transcript()).toContain('ctx 61k (6%) · ≈$7.89 API-equivalent');
+    h.daemon.emitExecution({ type: 'status_update', tasks: [
+      { id: 't1', status: 'completed', attemptUsage: attempts.t1 },
+      { id: 't2', status: 'completed', attemptUsage: attempts.t2 },
+      { id: 't3', status: 'completed', attemptUsage: attempts.t3 },
+    ] });
+    await vi.waitFor(() => expect(h.screen()).toContain('Tasks total: ≈$1.60'));
+    h.output.columns = 140;
+    h.output.emit('resize');
+    await vi.waitFor(() => expect(h.screen()).toContain('Tasks total: ≈$1.60 · codex reports no cost'));
+    expect(h.screen()).not.toMatch(/\d+ in\b|\d+ out\b|cached|ctx unknown|cost unknown/);
+
+    h.type('/open t1');
+    h.type('\r');
+    await vi.waitFor(() => expect(h.screen()).toContain('→ Task 1'));
+    const chatLine = (text: string): boolean => h.screen().split('\n').some((line) => stripAnsi(line.split('│')[0]).trim() === text);
+    expect(chatLine('ctx 61k (6%) · ≈$1.50 API-equivalent')).toBe(true);
+
+    const retry = [attempts.t1[0], attempt(2, 'opencode', {
+      totals: { reportedCost: { USD: 0.25 } }, lastPromptTokens: 100_000, contextWindow: 200_000,
+    })];
+    h.daemon.emitExecution({ type: 'status_update', tasks: [{ id: 't1', status: 'completed', attemptUsage: retry }] });
+    await vi.waitFor(() => expect(chatLine('ctx 100k (50%) · ≈$1.75')).toBe(true));
+
+    const continued = [...retry, attempt(3, 'claude-code', {
+      totals: { reportedCost: { USD: 0.5 }, costProvenance: { USD: { kind: 'estimate', billing: 'subscription' } } },
+      lastPromptTokens: 120_000, contextWindow: 1_000_000,
+    })];
+    h.daemon.emitExecution({ type: 'status_update', tasks: [{ id: 't1', status: 'completed', attemptUsage: continued }] });
+    await vi.waitFor(() => expect(chatLine('ctx 120k (12%) · ≈$2.25')).toBe(true));
+    expect(h.screen()).toContain('Tasks total: ≈$2.35 · codex reports no cost');
+
+    h.type('\x1b');
+    await vi.waitFor(() => expect(h.app.getState().taskView).toBeNull());
+    if (h.app.getState().focus !== 'chat') h.type('\t');
+    await vi.waitFor(() => expect(h.app.getState().focus).toBe('chat'));
+
+    h.daemon.mocks.adoptSession.mockResolvedValueOnce({
+      goal: 'Build the login flow',
+      plan: planPayload(tasks({ t1: continued, t2: attempts.t2, t3: attempts.t3 }), 'Plan drafted — anything to change?', { plannerUsage }),
+    });
+    h.type('/load saved-1');
+    h.type('\r');
+    await vi.waitFor(() => expect(h.screen()).toContain('Loaded "Build the login flow".'));
+    expect(h.transcript()).toContain('ctx 61k (6%) · ≈$7.89 API-equivalent');
+    expect(h.screen()).toContain('Tasks total: ≈$2.35 · codex reports no cost');
+    h.type('/open t1');
+    h.type('\r');
+    await vi.waitFor(() => expect(h.screen()).toContain('→ Task 1'));
+    expect(chatLine('ctx 120k (12%) · ≈$2.25')).toBe(true);
+
+    h.output.columns = 40;
+    h.output.rows = 24;
+    h.output.emit('resize');
+    await vi.waitFor(() => expect(h.frames().length).toBeGreaterThan(1));
+    for (const line of h.screen().split('\n')) expect(width(line)).toBeLessThanOrEqual(40);
   });
 
   it('welcome stays top-anchored across the startup refresh, then a goal, a manual first task and a rewind through the popup carry the plan forward', async () => {
