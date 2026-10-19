@@ -81,7 +81,7 @@ function applyLoadedSession(
   // The loaded session's run is a plan no message carried: seed the run view
   // from the session, so isolation marks and a pending checkpoint come with it.
   deps.chatProvider.adoptRun(deps.session.runSnapshot());
-  saveState(loaded.plan, deps.fsAdapter.getWorkspaceRoot());
+  saveState(loaded.plan, deps.fsAdapter.getWorkspaceRoot(), loaded.meta.id);
   return true;
 }
 
