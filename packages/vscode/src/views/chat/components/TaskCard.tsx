@@ -145,7 +145,7 @@ const CHECK_STATE: Record<TaskStatusKind, 'done' | 'running' | 'stalled' | 'fail
   done: 'done', running: 'running', quiet: 'stalled', todo: 'todo', awaiting: 'todo', blocked: 'todo', failed: 'failed', skipped: 'skipped',
 };
 
-/** Minimal to-do / done indicator: empty ring → pulsing ring → filled check.
+/** Minimal to-do / done indicator: empty ring → sweeping ring → filled check.
  *  The ring is a toggle: clicking an unfinished task marks it executed, clicking
  *  a done one takes it back to not-executed. */
 export function TaskCheck({ row, taskId, onMarkComplete, onMarkIncomplete }: { row: Pick<TaskRowView, 'status' | 'mark'>; taskId?: string; onMarkComplete?: (taskId: string) => void; onMarkIncomplete?: (taskId: string) => void }) {
