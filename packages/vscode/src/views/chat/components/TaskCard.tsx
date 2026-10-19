@@ -417,7 +417,7 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
               <span className="task-type-badge ops" title="An ops task: it changes no repository files and runs in your checkout, once the work it depends on is merged">Ops</span>
             )}
           </span>
-          <div className="task-heading-block">
+          <div className={`task-heading-block${onOpenLog ? ' task-heading-block-with-log' : ''}`}>
             <button type="button" className="task-heading" aria-expanded={expanded}
               title={expanded ? 'Collapse task details' : 'Expand task details'}
               onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}>
@@ -426,10 +426,12 @@ export default function TaskCard({ task, run, models, modes, modelsByRunner, mod
             {/* Outside the heading button, so Open log can share its line without nesting a button in a button. */}
             <TaskAssignment task={task} />
             {onOpenLog && (
-              <button type="button" className="task-log-open-btn"
+              <button type="button" className="task-log-open-btn task-log-open-btn-stacked"
+                aria-label="Open log"
                 onClick={(e) => { e.stopPropagation(); onOpenLog(task.id); }}
                 title="Open this task's log in an editor tab">
-                Open log
+                <span>Open</span>
+                <span>log</span>
               </button>
             )}
           </div>
