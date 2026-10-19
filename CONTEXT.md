@@ -1092,6 +1092,8 @@ plan when named, even when the runner reports no cost.
 An attempt that ends stops its runner, which winds its turn down (ADR-0018,
 L1): what the runner reports meanwhile, Claude Code's cost and window among it,
 still goes into that attempt's ledger, and its wall time stays at its end.
+A plan loaded under that wind-down is a new scope: what the old runner still
+reports is dropped, never written to a task of the new plan that reuses an id.
 A runner that reports its session's running cost has that count saved with the
 attempt (`runnerSessionCost`) as its session ended, so a *Continue* of the
 session, which waits for that wind-down, counts its first turn from there;
@@ -2159,7 +2161,10 @@ or API-key login, with the plan when stated. A main-thread record carries
 fill*), which no total adds. A `compacted` record is no call: it says the runner
 compacted the context, with the size it left when the runner reported one.
 Every measure is optional because backends report different subsets; absent
-means "not reported", never zero.
+means "not reported", never zero. A turn's `result` states its own token sum:
+a call whose usage did not stream is taken from it once, as a turn total
+(`aggregate`) that adds to no meter — only a call says what the context was
+left at.
 *Avoid:* filling a missing number from a price table or an estimate made by
 Ordewell — prices go stale and a subscription runner has no per-token price at
 all (ADR-0017);
@@ -2176,7 +2181,9 @@ API-equivalent. Surfaces show `≈$7.89` for an estimate,
 amount. Older costs without provenance stay unclassified; they cannot establish
 that a sum is all subscription usage. The planner ledger and each attempt
 keep `sessionBilling` as a runner-session fact, saved and broadcast even when
-no cost is reported, for later budget and quota decisions. `bySubagent` holds each
+no cost is reported, for later budget and quota decisions. The fact belongs to
+the source that stated it, so a planner switched to another backend before its
+first cost is not shown as the old one's subscription. `bySubagent` holds each
 research subagent's own share, which is already counted in `totals` — never
 added twice. Surfaced as the one `usage` block, always last, which every
 surface draws as the *Context fill* meter and the reported cost (`usageText`,
@@ -2204,8 +2211,9 @@ plus completion. A record that states none is read by its prompt. A compaction
 left (Claude Code does) or nothing until the next call (Codex, OpenCode), never
 the size before; it adds nothing to any total.
 Derived only from the main model's own calls: a subagent runs its own model,
-whose window says nothing about it, a session breakdown (`aggregate`) measures
-no prompt, and a model switch clears the meter until the new model reports. A
+whose window says nothing about it, a session breakdown or a turn total
+(`aggregate`) measures no prompt, and a model switch clears the meter until the
+new model reports. A
 reported window of 0 means "not known": the share is left out — never shown
 against a guessed zero, and never kept. The window is the reporter's own; a
 window any runner or provider reports is kept for the whole Ordewell session by

@@ -160,7 +160,9 @@ export function addPlannerUsage(usage: PlannerUsage, record: UsageRecord): Plann
     return next;
   }
   if (record.sessionBilling && !record.reportedCost && record.inputTokens === undefined && record.outputTokens === undefined && record.cachedInputTokens === undefined && record.contextWindow === undefined) {
-    return record.subagentId ? usage : { ...usage, sessionBilling: record.sessionBilling };
+    // The fact belongs to the source that stated it: kept with no source, it
+    // would be lent to whichever backend reports a cost next.
+    return record.subagentId ? usage : { ...usage, sessionBilling: record.sessionBilling, source: record.source };
   }
   record = { ...record, sessionBilling: record.sessionBilling ?? (usage.source === undefined || record.source === usage.source ? usage.sessionBilling : undefined) };
   const next: PlannerUsage = { ...usage, ...(!record.subagentId && record.sessionBilling ? { sessionBilling: record.sessionBilling } : {}), totals: addUsage(usage.totals, record), byModel: addModelUsage(usage.byModel ?? [], record) };
@@ -169,8 +171,12 @@ export function addPlannerUsage(usage: PlannerUsage, record: UsageRecord): Plann
     return next;
   }
   // A session breakdown names a model without measuring any call's prompt, so
-  // it never moves the meter.
-  if (record.aggregate) return next;
+  // it never moves the meter. It still comes from a source, though: a billing
+  // fact belonging to another backend does not outlive it.
+  if (record.aggregate) {
+    if (record.source !== usage.source && !record.sessionBilling) delete next.sessionBilling;
+    return next;
+  }
   if (record.source !== usage.source || record.model !== usage.model) {
     delete next.lastPromptTokens;
     delete next.contextWindow;

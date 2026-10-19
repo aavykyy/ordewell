@@ -68,10 +68,13 @@ own presentation; it never re-derives the conversation from raw messages.
   billed amount has no mark. A cost whose every contribution ran on a
   subscription reads `≈$7.89 API-equivalent`. The ledger keeps the reported
   cost's provenance per currency (any estimate marks the sum), and the runner's
-  session billing fact with the planner or attempt it belongs to, saved and
-  broadcast even without a cost. No price table or estimate made by Ordewell:
-  prices go stale, and a subscription runner has no per-token price at all.
-  Absent means "not reported", never zero. The usage line is one `usage` block, always last. Every
+  session billing fact with the source and the planner or attempt it belongs
+  to, saved and broadcast even without a cost, so a backend switched to before
+  its first cost is not shown as the old one's subscription. No price table or
+  estimate made by Ordewell: prices go stale, and a subscription runner has no
+  per-token price at all. Absent means "not reported", never zero. A turn's
+  `result` states its own token sum: a call whose usage did not stream is taken
+  from it once, as a turn total that never moves the meter. The usage line is one `usage` block, always last. Every
   count stays in the ledger, the saved session and the broadcast, but surfaces
   draw none of them: they draw the main model's context (`ctx 61k (6%)`, the
   share only when the window is known, nothing before a call was measured) and
@@ -180,3 +183,4 @@ the same word.)
 - 2026-10-19 — surfaces draw the main model's context and the reported cost only, no token count (U1). Seen live: a task whose context grew from 28k to 61k over 24 calls showed 1.19M in / 1.13M cached, because every call's full prompt, cache reads included, was added up.
 - 2026-10-19 — stated costs distinguish a source's estimate from billing, and subscription equivalents from per-call spend; the ledgers retain runner-session billing facts (U1).
 - 2026-10-19 — the meter counts a call's context as its runner does and resets on a compaction, and a window reported anywhere in the session is known to every later stream (U1). Claude Code states a window only on a turn's last line, so a task, often one long turn, showed no share for its whole run even with the planner on the same model.
+- 2026-10-19 — a plan adopted under a winding-down runner cannot take its late usage, and a turn whose calls did not stream has their tokens taken once from its result (U1). A session billing fact is kept with the source that stated it, so a planner switched before its first cost is not shown as the old one's subscription.

@@ -11,6 +11,15 @@ describe('addUsage', () => {
     expect(estimate.costProvenance).toEqual({ USD: { kind: 'estimate', billing: 'subscription', basis: 'list' } });
   });
 
+  it('keeps a billing fact with the source that stated it when the planner switches', () => {
+    const started = addPlannerUsage({ totals: {} }, { source: 'claude-code', model: 'opus', inputTokens: 10 });
+    const switched = addPlannerUsage(started, { source: 'codex', aggregate: true, sessionBilling: { type: 'subscription', plan: 'plus' } });
+    const codex = addPlannerUsage(switched, { source: 'codex', model: 'gpt', inputTokens: 20 });
+
+    expect(codex.sessionBilling).toEqual({ type: 'subscription', plan: 'plus' });
+    expect(codex.totals.inputTokens).toBe(30);
+  });
+
   it('sums the tokens of two calls', () => {
     const once = addUsage({}, { source: 'openai', inputTokens: 1200, outputTokens: 300, cachedInputTokens: 800 });
     const twice = addUsage(once, { source: 'openai', inputTokens: 50, outputTokens: 7, cachedInputTokens: 0 });
