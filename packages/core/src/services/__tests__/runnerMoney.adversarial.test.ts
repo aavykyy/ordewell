@@ -16,12 +16,14 @@ interface Line {
   subtype?: string;
   permissionMode?: string;
   session_id?: string;
+  model?: string;
   total_cost_usd?: number;
   parent_tool_use_id?: string | null;
   usage?: Usage;
   message?: { id?: string; model?: string; usage?: Usage };
   tool_use_result?: { usage?: Usage };
   event?: { type?: string; usage?: Usage };
+  modelUsage?: Record<string, { costUSD?: number; contextWindow?: number; costBasis?: string }>;
 }
 
 interface Usage {
@@ -31,8 +33,8 @@ interface Usage {
   cache_read_input_tokens?: number;
 }
 
-function processDeps(text: string): AgentProcessDeps {
-  const spawned = fakeSpawn([text]);
+function processDeps(text: string | string[]): AgentProcessDeps {
+  const spawned = fakeSpawn(Array.isArray(text) ? text : [text]);
   return {
     spawn: spawned.spawn,
     fetch: (async () => { throw new Error('no HTTP in this test'); }) as unknown as typeof fetch,
@@ -122,4 +124,98 @@ describe('adversarial: every recorded attempt counts what its result lines repor
     expect(tokensOf(ledger)).toEqual(expectedUsage(lines));
     adapter.dispose();
   }, 30_000);
+});
+
+/**
+ * The per-model breakdown and the session total can be reported by different
+ * results: an older CLI, or a resume whose kept count had no model split. A
+ * result without a breakdown is counted as a total; once a breakdown appears,
+ * only the growth over what was already counted is new, never the cumulative
+ * per-model figure again.
+ */
+describe('adversarial: a total-only report and a per-model report count each dollar once', () => {
+  const session = 'sess-mixed';
+  const init = (): Line => ({ type: 'system', subtype: 'init', session_id: session, model: 'claude-opus-5', permissionMode: 'default' });
+  const totalOnly = (total: number): Line => ({ type: 'result', subtype: 'success', session_id: session, total_cost_usd: total, modelUsage: {} });
+  const breakdown = (total: number): Line => ({
+    type: 'result', subtype: 'success', session_id: session, total_cost_usd: total,
+    modelUsage: { 'claude-opus-5': { costUSD: total, contextWindow: 200_000, costBasis: 'list' } },
+  });
+  const text = (...lines: Line[]): string => `${lines.map((l) => JSON.stringify(l)).join('\n')}\n`;
+
+  async function costsOf(replies: string[], opts: Partial<TaskStartOptions> = {}): Promise<{ costs: number[]; cost: ReturnType<ClaudeCodeAdapter['sessionCost']> }> {
+    const adapter = new ClaudeCodeAdapter(processDeps(replies));
+    await adapter.start({ kind: 'task', cwd: '/repo', mode: 'default', flags: { permissionMode: 'default', modeSettings: {} }, ...opts });
+    const events: AgentEvent[] = [];
+    for (let i = 0; i < replies.length; i += 1) await adapter.send(`turn ${i + 1}`, (event) => events.push(event));
+    const costs = events.flatMap((event) => (event.type === 'usage' && event.record.reportedCost ? [event.record.reportedCost.amount] : []));
+    const cost = adapter.sessionCost();
+    adapter.dispose();
+    return { costs, cost };
+  }
+
+  it('counts only the growth when the breakdown appears after a total-only result', async () => {
+    const { costs, cost } = await costsOf([text(init(), totalOnly(2)), text(init(), breakdown(2.5))]);
+    expect(costs).toEqual([2, 0.5]);
+    expect(cost).toMatchObject({ usd: 2.5, modelUsd: { 'claude-opus-5': 2.5 } });
+  });
+
+  it('counts only the growth when a resume\'s kept count had no model split', async () => {
+    const { costs } = await costsOf([text(init(), breakdown(2.5))], { resumeSessionId: session, resumeCost: { sessionId: session, usd: 2, modelUsd: {} } });
+    expect(costs).toEqual([0.5]);
+  });
+
+  it('keeps counting per model when the kept count did have a split', async () => {
+    const { costs } = await costsOf([text(init(), breakdown(2.5))], { resumeSessionId: session, resumeCost: { sessionId: session, usd: 2, modelUsd: { 'claude-opus-5': 2 } } });
+    expect(costs).toEqual([0.5]);
+  });
+
+  it('counts no baseline turn of a resume that kept no count, even when the split appears later', async () => {
+    const { costs, cost } = await costsOf([text(init(), totalOnly(2)), text(init(), breakdown(2.5))], { resumeSessionId: session });
+    expect(costs).toEqual([0.5]);
+    expect(cost).toMatchObject({ usd: 2.5 });
+  });
+
+  it('does not count counted dollars again when a resumed total comes back lower', async () => {
+    // A process that dies before its session was saved can resume reporting
+    // less than what it already told Ordewell it spent. That money was spent;
+    // its return is not new spend.
+    const { costs, cost } = await costsOf(
+      [text(init(), breakdown(4)), text(init(), breakdown(5))],
+      { resumeSessionId: session, resumeCost: { sessionId: session, usd: 5, modelUsd: { 'claude-opus-5': 5 } } },
+    );
+    expect(costs).toEqual([]);
+    expect(cost).toMatchObject({ usd: 5 });
+  });
+
+  it('does not count counted dollars again when a lower total-only report is followed by another', async () => {
+    const { costs, cost } = await costsOf(
+      [text(init(), totalOnly(4)), text(init(), totalOnly(5))],
+      { resumeSessionId: session, resumeCost: { sessionId: session, usd: 5, modelUsd: {} } },
+    );
+    expect(costs).toEqual([]);
+    expect(cost).toMatchObject({ usd: 5 });
+  });
+
+  it('sets a resume\'s baseline from a first report that carries only its models', async () => {
+    const noTotal = (cost: number): Line => ({
+      type: 'result', subtype: 'success', session_id: session,
+      modelUsage: { 'claude-opus-5': { costUSD: cost, costBasis: 'list' } },
+    });
+    const { costs, cost } = await costsOf(
+      [text(init(), noTotal(2)), text(init(), breakdown(2.5))],
+      { resumeSessionId: session },
+    );
+    expect(costs).toEqual([0.5]);
+    expect(cost).toMatchObject({ usd: 2.5 });
+  });
+
+  it('counts a cost the runner marked unknown once it reports a basis, and only then', async () => {
+    const unknown = (total: number): Line => ({
+      type: 'result', subtype: 'success', session_id: session, total_cost_usd: total,
+      modelUsage: { 'claude-opus-5': { costUSD: total, costBasis: 'unknown' } },
+    });
+    const { costs } = await costsOf([text(init(), unknown(5)), text(init(), breakdown(7))]);
+    expect(costs).toEqual([7]);
+  });
 });

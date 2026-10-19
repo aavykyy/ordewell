@@ -108,6 +108,30 @@ describe('a task paused on a usage limit', () => {
     expect(spawn.mock.calls[2][0].taskId).toBe('t2');
   });
 
+  it('resumes counting the paused session on from what its wind-down reported', async () => {
+    const { orchestrator, sessions, spawn, task } = setup({ maxParallelSessions: 1 });
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
+    await orchestrator.forceStartTask('t1');
+
+    sessions[0].cost = { sessionId: 'native-1', usd: 0.5, modelUsd: {} };
+    hitLimitInTurn(sessions[0]);
+    await until(() => task('t1').status === 'awaiting_user');
+    // The limit's own turn still ends with its cost after the pause was recorded.
+    sessions[0].cost = { sessionId: 'native-1', usd: 0.75, modelUsd: {} };
+    sessions[0].emitExit(1);
+    await flushMicrotasks();
+    expect(task('t1').attemptUsage?.at(-1)?.runnerSessionCost).toMatchObject({ usd: 0.75 });
+
+    await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now());
+    await until(() => spawn.mock.calls.length === 2);
+    expect(spawn.mock.calls[1][0]).toMatchObject({
+      taskId: 't1',
+      resumeSessionId: 'native-1',
+      resumeCost: { sessionId: 'native-1', usd: 0.75, modelUsd: {} },
+    });
+    orchestrator.stop();
+  });
+
   it('holds the run until the reset even past a failure, then resumes it (ADR-0034)', async () => {
     const { orchestrator, sessions, spawn, task } = setup({ maxParallelSessions: 2 });
     orchestrator.loadPlan([
