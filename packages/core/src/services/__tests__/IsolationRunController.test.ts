@@ -432,6 +432,38 @@ describe('IsolationRunController', () => {
       expect(opened.runs.current?.id).toBe('run1');
     });
 
+    it('mints fresh for a run that starts while the load-time clear deletes the old one', async () => {
+      const { runs: first } = setup();
+      await first.decide(async () => undefined);
+      await first.attemptCwd(task('t1', 1), 'fresh');
+      await first.integrate(task('t1', 1));
+      first.interrupt();
+      const saved = structuredClone(first.planIsolation)!;
+
+      const env = setup();
+      env.isolation.mergedByHand.add('t1');
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      const real = env.isolation.discard.bind(env.isolation);
+      let entered = false;
+      env.isolation.discard = async (run, opts) => { entered = true; await held; return real(run, opts); };
+
+      const adopting = env.runs.adopt(saved);
+      await vi.waitFor(() => expect(entered).toBe(true));
+      // The user starts a run while the clear is deleting the old run's branches.
+      const deciding = env.runs.decide(async () => undefined);
+      await vi.waitFor(() => expect(env.runs.isOpen).toBe(true));
+      release();
+      await adopting;
+      await deciding;
+
+      // The run in force is the one that just opened, whole — not a record whose
+      // branches were deleted under it.
+      expect(env.runs.isolating).toBe(true);
+      expect(env.runs.current).not.toBeNull();
+      expect(env.runs.current!.tasks).toEqual({});
+    });
+
     it('leaves the last run\'s worktrees in place when a new run is minted while a task is live in it', async () => {
       const { runs, isolation, live, notifications } = setup();
       await runs.decide(async () => undefined);
