@@ -1,9 +1,8 @@
 import {
-  diffRows, diffSummary, loadedSkillTokens, outputLines, outputPreview,
+  diffRows, diffSummary, loadedSkillTokens, outputLines, outputPreview, usageText,
   type DiffRow, type DiffStat,
   type ApprovalBlock, type ApprovalKind, type ApprovalSource, type DisplayBlock, type MessageBlock, type MessageRole, type PlanBlock,
   type CommandBlock, type CommandStatus, type CompactionBlock, type RunnerLoadedBlock,
-  type UsageTotals,
   type SkillLoadBlock, type SubagentBlock, type SubagentStatus, type ThinkingDisplayBlock, type ToolBlock,
 } from '@ordewell/core';
 import { graphemes, pad, sanitize, style, truncate, width, wrap, wrapLines } from './ansi';
@@ -418,6 +417,12 @@ function runnerCommandLines(block: CommandBlock, cols: number, detailAll: boolea
   return [head, ...underHeader(shown.map(style.grey))];
 }
 
+function compactCount(n: number): string {
+  if (n < 1000) return String(n);
+  const [value, unit] = n < 999_950 ? [n / 1000, 'k'] : [n / 1_000_000, 'M'];
+  return `${value.toFixed(1).replace(/\.0$/, '')}${unit}`;
+}
+
 function compactionLine(block: CompactionBlock, cols: number): string {
   const sizes = block.preTokens !== undefined && block.postTokens !== undefined
     ? ` · ${compactCount(block.preTokens)} → ${compactCount(block.postTokens)} tokens`
@@ -516,53 +521,15 @@ export function conversationLines(blocks: readonly DisplayBlock[], cols: number,
   return lines;
 }
 
-function compactCount(n: number): string {
-  if (n < 1000) return String(n);
-  const [value, unit] = n < 999_950 ? [n / 1000, 'k'] : [n / 1_000_000, 'M'];
-  return `${value.toFixed(1).replace(/\.0$/, '')}${unit}`;
-}
-
-/** Four decimals at most, two at least: a session can cost a fraction of a cent or several dollars. */
-function formatCost(currency: string, amount: number): string {
-  const [whole, frac = ''] = amount.toFixed(4).replace(/0+$/, '').split('.');
-  const value = `${whole}.${frac.padEnd(2, '0')}`;
-  return currency.toLowerCase() === 'usd' ? `$${value}` : `${value} ${currency.toUpperCase()}`;
-}
-
 /**
- * The session's usage as one row — `12.4k in · 3.1k out · 18% ctx` — or null
- * before anything was reported. The totals already count every subagent, and
- * a cost appears only as a provider or runner reported it.
+ * The planner's usage as one row — `ctx 61k (6%) · $0.42` — or null when
+ * neither the context nor a cost is known. Core words it, so every surface
+ * agrees; the totals already count every subagent.
  */
 export function tokenLine(blocks: readonly DisplayBlock[], cols: number): string | null {
   const usage = blocks[blocks.length - 1];
-  if (usage?.type !== 'usage') return null;
-  const parts = usageMeasures(usage.totals);
-  if (usage.model && !usage.contextFill) parts.push('ctx unknown');
-  if (usage.contextFill) parts.splice(2, 0, `${Math.round((usage.contextFill.usedTokens / usage.contextFill.windowTokens) * 100)}% ctx`);
-  return parts.length > 0 ? style.grey(truncate(parts.join(' · '), cols)) : null;
-}
-
-function usageMeasures(totals: UsageTotals): string[] {
-  return [
-    ...(totals.inputTokens !== undefined ? [`${compactCount(totals.inputTokens)} in`] : []),
-    ...(totals.outputTokens !== undefined ? [`${compactCount(totals.outputTokens)} out`] : []),
-    ...(totals.cachedInputTokens !== undefined ? [`${compactCount(totals.cachedInputTokens)} cached`] : []),
-    ...Object.entries(totals.reportedCost ?? {}).map(([currency, amount]) => formatCost(currency, amount)),
-  ];
-}
-
-/**
- * `12.4k in · 3.1k out · 2k cached · $0.42 · ctx 18%`. A part nobody reported is
- * left out, a cost included; only the meter says so when it cannot be drawn.
- * Wall time is not a measure the line carries. The meter belongs to one task's
- * usage, so a plan total passes no `attempt` and shows none.
- */
-export function taskUsageText(usage: { totals: UsageTotals; contextFill?: { usedTokens: number; windowTokens: number }; attempt?: number }): string {
-  return [
-    ...usageMeasures(usage.totals),
-    ...(usage.attempt !== undefined ? [usage.contextFill ? `ctx ${Math.round((usage.contextFill.usedTokens / usage.contextFill.windowTokens) * 100)}%` : 'ctx unknown'] : []),
-  ].join(' · ');
+  const text = usage?.type === 'usage' ? usageText(usage) : null;
+  return text ? style.grey(truncate(text, cols)) : null;
 }
 
 /** A flagged assignment and what it means for the task as it stands (core words it, so every surface agrees). */

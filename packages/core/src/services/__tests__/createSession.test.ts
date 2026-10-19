@@ -617,7 +617,7 @@ describe('a continue counts its runner session\'s cost on from what was counted 
     sessions[2].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-mystery', inputTokens: 50_000 } });
 
     await vi.waitFor(() => expect(taskUsageSummary(taskOf(session, 't1')!).totals.inputTokens).toBe(51_000));
-    expect(taskUsageSummary(taskOf(session, 't1')!).contextFill).toBeUndefined();
+    expect(taskUsageSummary(taskOf(session, 't1')!).contextFill).toEqual({ usedTokens: 50_000 });
   });
 
   it('hands a fresh attempt no count', async () => {
@@ -846,18 +846,18 @@ describe('session id stability (persist seam)', () => {
       ]);
     });
 
-    it('leaves context fill out while the window is unknown', async () => {
+    it('carries the used tokens without a window while the window is unknown', async () => {
       const sent = await broadcastsFor([{ type: 'usage', record: { source: 'openai', inputTokens: 1000 } }]);
 
-      expect(sent).toEqual([{ type: 'planner_usage', totals: { inputTokens: 1000 }, byModel: [{ source: 'openai', totals: { inputTokens: 1000 } }] }]);
+      expect(sent).toEqual([{ type: 'planner_usage', totals: { inputTokens: 1000 }, contextFill: { usedTokens: 1000 }, byModel: [{ source: 'openai', totals: { inputTokens: 1000 } }] }]);
     });
 
-    it('treats a reported window of zero as unknown, not as no room', async () => {
+    it('treats a reported window of zero as unknown, not as no room, and still carries the used tokens', async () => {
       const sent = await broadcastsFor([
         { type: 'usage', record: { source: 'codex', inputTokens: 1000, contextWindow: 0 } },
       ]);
 
-      expect(sent).toEqual([{ type: 'planner_usage', totals: { inputTokens: 1000 }, byModel: [{ source: 'codex', totals: { inputTokens: 1000 } }] }]);
+      expect(sent).toEqual([{ type: 'planner_usage', totals: { inputTokens: 1000 }, contextFill: { usedTokens: 1000 }, byModel: [{ source: 'codex', totals: { inputTokens: 1000 } }] }]);
     });
 
     it('keeps costs reported in different currencies apart', async () => {

@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { planUsage, rejoinPlanTree, saveSession, type IRunner, type LegacyPlanState, type RunnerSpawnOptions, type Task } from '@ordewell/core';
+import { planUsage, rejoinPlanTree, saveSession, tasksTotalText, type IRunner, type LegacyPlanState, type RunnerSpawnOptions, type Task } from '@ordewell/core';
 import { FakeRunnerSession } from '@ordewell/core/testing';
 import { OrchestratorPool } from '../../pool/orchestratorPool';
 import { sessionsRoute } from '../sessions';
@@ -79,11 +79,14 @@ describe('GET /api/sessions/:id while a failed task is retried', () => {
       const during = await served();
       expect(during[0].status).toBe('in_progress');
       expect(planUsage(during)).toMatchObject({ attempts: 2, totals: { inputTokens: 300, reportedCost: { USD: 3 } } });
+      // The counts stay in the ledger the route serves; what is drawn of it is the cost.
+      expect(tasksTotalText(during)).toBe('Tasks total: $3.00');
 
       await live.execute({ command: 'stop_task', task: 't1' }, { kind: 'user' });
       const after = await served();
       expect(after[0].status).toBe('pending');
       expect(planUsage(after)).toMatchObject({ attempts: 2, totals: { inputTokens: 300, reportedCost: { USD: 3 } } });
+      expect(tasksTotalText(after)).toBe('Tasks total: $3.00');
     } finally {
       pool.destroyAll();
     }

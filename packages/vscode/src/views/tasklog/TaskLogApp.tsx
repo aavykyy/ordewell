@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { ConversationBlocks } from '../chat/components/ChatMessage';
 import { useFollowOutput } from '../chat/followOutput';
-import { hasHiddenDetail } from '@ordewell/core/plan-utils';
+import { contextMeterTitle, hasHiddenDetail, usageText } from '@ordewell/core/plan-utils';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type PatchedView } from '../../shared/conversationPatch';
 import type { HostToTaskLog, TaskLogStatus, TaskLogToHost } from '../../shared/taskLogProtocol';
 import { taskCommand, useRunnerCommands } from '../chat/components/RunnerCommands';
 import { taskLogState } from './taskLogState';
-import { taskUsageText } from '../chat/components/TaskUsage';
 import PendingMessages, { QUEUE_TITLE, SendKeyHint, isSendNowKey, type PendingMessage } from '../chat/components/PendingMessages';
 
 declare function acquireVsCodeApi(): { postMessage(message: TaskLogToHost): void };
@@ -28,6 +27,7 @@ export default function TaskLogApp() {
   const [view, setView] = useState<PatchedView>(EMPTY_PATCHED_VIEW);
   const [status, setStatus] = useState<TaskLogStatus | null>(null);
   const [detailAll, setDetailAll] = useState(false);
+  const usageLine = status?.usage ? usageText(status.usage) : null;
   const [text, setText] = useState('');
   const [error, setError] = useState('');
   const [stopArmed, setStopArmed] = useState(false);
@@ -203,9 +203,9 @@ export default function TaskLogApp() {
               onAnswerApproval={(id, decision) => vscode.postMessage({ type: 'answerApproval', id, decision })} />}
       </div>
 
-      {status?.usage && (
+      {usageLine && (
         <div className="usage-line" role="status">
-          <span className="usage-line-tokens">{taskUsageText(status.usage, true)}</span>
+          <span title={status?.usage?.contextFill && contextMeterTitle(status.usage.contextFill)}>{usageLine}</span>
         </div>
       )}
 

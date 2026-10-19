@@ -1,4 +1,3 @@
-import TaskUsage from './TaskUsage';
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import TaskCard from './TaskCard';
 import NewTaskCard from './NewTaskCard';
@@ -6,7 +5,7 @@ import ProposedTasks from './ProposedTasks';
 import type { TaskDraft } from './NewTaskCard';
 import type { RunnerMode, RunnerOption } from './TaskCard';
 import { Task, DiscoveredModel, TaskModelAssignment, RunTask, RunView, type AssignmentScope } from '@ordewell/core';
-import { canMergeTasks, canSplitTask, planUsage } from '@ordewell/core/plan-utils';
+import { canMergeTasks, canSplitTask, tasksTotalText } from '@ordewell/core/plan-utils';
 
 /** What each level allows, in the picker's tooltip: Act's risk is said where it is chosen (ADR-0029). */
 interface PlanCardGroupProps {
@@ -113,7 +112,7 @@ export default function PlanCardGroup({
   const [internalExpandedTaskId, setInternalExpandedTaskId] = useState<string | null>(null);
   const expandedTaskId = expandedTaskIdProp !== undefined ? expandedTaskIdProp : internalExpandedTaskId;
   const setExpandedTaskId = onExpandedTaskChange ?? setInternalExpandedTaskId;
-  const usage = planUsage(tasks);
+  const totalUsage = tasksTotalText(tasks);
   const sorted = [...tasks].sort((a, b) => a.order - b.order);
   const mergeMode = mergeSelectedIds.length > 0;
 
@@ -209,7 +208,7 @@ export default function PlanCardGroup({
 
   return (
     <div className="plan-card-group">
-      {usage.attempts > 0 && <div className="plan-usage">Tasks total: <TaskUsage usage={usage} /></div>}
+      {totalUsage && <div className="plan-usage">{totalUsage}</div>}
       {mergeMode && (
         <div className="plan-merge-banner" onKeyDown={handleMergeKeyDown}>
           <span>Merge selected tasks (<strong>{mergeSelectedIds.length}</strong> selected)</span>

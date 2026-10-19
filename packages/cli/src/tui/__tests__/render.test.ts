@@ -1511,34 +1511,38 @@ describe('the token line', () => {
   /** The chat pane's bottom row: the last body row, just above the status row. */
   const bottomRow = (state: TuiState): string => stripAnsi(render(state)[bodyRows(state) - 1]).trimEnd();
 
-  it('sits on the chat pane\'s bottom row with the totals and how full the context is', () => {
+  it('sits on the chat pane\'s bottom row with how full the context is, and no token count', () => {
     const state = heard(80, { type: 'planner_message', content: 'Which database?', timestamp: '' }, usage({ contextFill: { usedTokens: 36_000, windowTokens: 200_000 } }));
 
-    expect(bottomRow(state)).toBe('12.4k in · 3.1k out · 18% ctx');
+    expect(bottomRow(state)).toBe('ctx 36k (18%)');
   });
 
-  it('leaves out the context fill when the window is unknown', () => {
-    expect(bottomRow(heard(80, usage()))).toBe('12.4k in · 3.1k out');
+  it('draws the used tokens without a share while the window is unknown', () => {
+    expect(bottomRow(heard(80, usage({ contextFill: { usedTokens: 36_000 } })))).toBe('ctx 36k');
+  });
+
+  it('draws nothing when neither the context nor a cost is known, however many tokens were counted', () => {
+    expect(bottomRow(heard(80, usage()))).toBe('');
   });
 
   it('shows a cost only when one was reported', () => {
     const state = heard(80, usage({ totals: { inputTokens: 12_400, outputTokens: 3_100, reportedCost: { usd: 0.42 } }, contextFill: { usedTokens: 36_000, windowTokens: 200_000 } }));
 
-    expect(bottomRow(state)).toBe('12.4k in · 3.1k out · 18% ctx · $0.42');
+    expect(bottomRow(state)).toBe('ctx 36k (18%) · $0.42');
   });
 
-  it('counts what subagents used in the total', () => {
-    const state = heard(80, usage({ totals: { inputTokens: 1_500, outputTokens: 200 }, bySubagent: { sa1: { inputTokens: 500, outputTokens: 100 } } }));
+  it('counts what subagents cost in the total, once', () => {
+    const state = heard(80, usage({ totals: { inputTokens: 1_500, reportedCost: { USD: 0.3 } }, bySubagent: { sa1: { inputTokens: 500, reportedCost: { USD: 0.1 } } } }));
 
-    expect(bottomRow(state)).toBe('1.5k in · 200 out');
+    expect(bottomRow(state)).toBe('$0.30');
   });
 
   it('stays put while the transcript scrolls back beneath it', () => {
-    const long = heard(80, ...Array.from({ length: 40 }, (_, i): SessionMessage => ({ type: 'planner_message', content: `reply ${i}`, timestamp: '' })), usage());
+    const long = heard(80, ...Array.from({ length: 40 }, (_, i): SessionMessage => ({ type: 'planner_message', content: `reply ${i}`, timestamp: '' })), usage({ contextFill: { usedTokens: 36_000, windowTokens: 200_000 } }));
     const back = reduce(long, { type: 'key', key: { name: 'pageup' } }).state;
 
     expect(back.scroll).toBeGreaterThan(0);
-    expect(bottomRow(back)).toBe('12.4k in · 3.1k out');
+    expect(bottomRow(back)).toBe('ctx 36k (18%)');
     expect(render(back).map(stripAnsi).join('\n')).not.toContain('reply 39');
   });
 
@@ -1588,7 +1592,7 @@ describe('a reloaded session', () => {
     { role: 'assistant' as const, content: 'Plan generated with 1 task.', timestamp: at(8), kind: 'plan_generated' as const },
   ];
   const subagentUsage = { inputTokens: 400, outputTokens: 40 };
-  const totals = { inputTokens: 3_400, outputTokens: 240 };
+  const totals = { inputTokens: 3_400, outputTokens: 240, reportedCost: { USD: 0.02 } };
 
   const live = heard(
     80,
@@ -1632,7 +1636,7 @@ describe('a reloaded session', () => {
   it('draws what the live view drew, for everything the session saves', () => {
     expect(render(live).map(stripAnsi).join('\n')).toContain('∴ Thinking');
     expect(saved(reloaded)).toEqual(saved(live));
-    expect(saved(reloaded).at(-1)).toBe('3.4k in · 240 out · 2% ctx');
+    expect(saved(reloaded).at(-1)).toBe('ctx 3k (2%) · $0.02');
   });
 
   it('draws the same in full detail too', () => {
@@ -1646,7 +1650,7 @@ describe('queued prompts with the conversation', () => {
       80,
       { type: 'planner_turn_started', turnId: 't1', prompt: 'Add rate limiting' },
       bash('npm test'),
-      { type: 'planner_usage', totals: { inputTokens: 900, outputTokens: 80 } },
+      { type: 'planner_usage', totals: { inputTokens: 900, outputTokens: 80 }, contextFill: { usedTokens: 900 } },
     );
     const state = { ...talking, planner: 'planning' as const, queuedPrompts: ['Use SQLite'] };
     const rows = render(state).map((r) => stripAnsi(r).trimEnd());
@@ -1654,7 +1658,7 @@ describe('queued prompts with the conversation', () => {
 
     expect(rows[bubble]).toBe('◇ Use SQLite · queued · esc to unsend · ctrl-s sends now');
     expect(bubble).toBeGreaterThan(rows.findIndex((r) => r.startsWith('○ Bash(npm test)')));
-    expect(rows[bodyRows(state) - 1]).toBe('900 in · 80 out');
+    expect(rows[bodyRows(state) - 1]).toBe('ctx 900');
     expect(bubble).toBeLessThan(bodyRows(state) - 1);
   });
 });

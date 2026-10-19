@@ -5538,7 +5538,6 @@ body.vscode-high-contrast-light .pending-message {
   border-top: 1px solid var(--border-subtle);
 }
 
-.usage-line-context,
 .usage-line-subagents {
   padding: 0 6px;
   border-radius: var(--radius-full);
@@ -5948,12 +5947,11 @@ body.vscode-high-contrast-light .pending-message {
   line-height: 1;
 }
 
-.task-usage, .plan-usage {
+.plan-usage {
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
+  padding: 4px 8px;
 }
-.task-usage { margin-left: 6px; }
-.plan-usage { padding: 4px 8px; }
 
 .runner-notice {
   margin: 6px 0;
