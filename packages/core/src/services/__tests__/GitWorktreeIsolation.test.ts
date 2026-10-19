@@ -1676,6 +1676,23 @@ describe.skipIf(!hasGit)('WorktreeIsolation for merge gates and ops tasks (ADR-0
     expect(await iso.findInHead(run)).toEqual(['task-1']);
   });
 
+  it('counts work whose integration branch is gone as nothing left to merge, but not in a repo git cannot read', async () => {
+    const root = repo();
+    const { iso, run } = await landedOne(root);
+    // Deleted unmerged (a squash merge, a branch cleanup): Merge all merges by
+    // the branch's name, so no merge could bring this in again.
+    git(root, 'worktree', 'remove', '--force', join(root, '.ordewell', 'worktrees', run.id, 'integration'));
+    git(root, 'branch', '-D', run.repos[0].integrationBranch);
+    const untipped = structuredClone(run);
+    delete untipped.tasks['task-1'].repos['.'].landedTip;
+    const moved = structuredClone(run);
+    moved.repos[0].root = join(root, 'moved-away');
+
+    expect(await iso.findInHead(moved)).toEqual([]);
+    expect(await iso.findInHead(untipped)).toEqual(['task-1']);
+    expect(await iso.findInHead(run)).toEqual(['task-1']);
+  });
+
   it('holds Merge all back until a landing in flight has finished', async () => {
     const root = repo();
     let reached!: () => void;

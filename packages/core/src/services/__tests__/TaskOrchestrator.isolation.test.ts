@@ -1466,8 +1466,8 @@ describe('TaskOrchestrator with worktree isolation', () => {
       };
       orchestrator.loadPlan([task('t1', 1, { status: 'completed' }), task('t2', 2, { dependencies: ['t1'] })]);
 
-      await orchestrator.runs.adopt({ run, resolvers: {} });
-      expect(isolation.calls).toEqual([{ op: 'pruneOrphans' }]);
+      expect(await orchestrator.runs.adopt({ run, resolvers: {} })).toBe('unchanged');
+      expect(isolation.calls).toEqual([{ op: 'pruneOrphans' }, { op: 'findInHead' }]);
 
       await orchestrator.approveReview();
       expect(spawnedCwd('t2')).toBe('/fake-worktrees/old/2-t2');

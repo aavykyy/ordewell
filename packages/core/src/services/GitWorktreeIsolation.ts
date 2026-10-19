@@ -670,9 +670,21 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       if (!entry?.changed) continue;
       // A task landed before its tip was recorded counts as merged once the whole integration branch is.
       const merged = await this.tryGit(repo.root, ['merge-base', '--is-ancestor', entry.landedTip ?? repo.integrationBranch, 'HEAD']);
-      if (!merged.ok) return false;
+      if (!merged.ok && !(await this.integrationGone(repo))) return false;
     }
     return true;
+  }
+
+  /**
+   * The repo's integration branch is gone — deleted by hand, or by a squash
+   * merge's clean-up — in a repo git can read. Merge all merges that branch by
+   * name, so no merge can bring the work in again, and it is not offered as
+   * work to merge. A repo git cannot read at all (moved, or git failing)
+   * proves nothing either way and counts as not merged.
+   */
+  private async integrationGone(repo: IsolationRepo): Promise<boolean> {
+    if (!(await this.tryGit(repo.root, ['rev-parse', '--verify', '-q', 'HEAD'])).ok) return false;
+    return !(await this.tryGit(repo.root, ['rev-parse', '--verify', '-q', `refs/heads/${repo.integrationBranch}`])).ok;
   }
 
   async snapshotTree(workspaceRoot: string, exclude: readonly string[]): Promise<TreeSnapshot | null> {

@@ -1829,9 +1829,10 @@ export class Session {
   runSnapshot(): RunView {
     if (!this.plan) return EMPTY_RUN;
     const planned = reduceRun(EMPTY_RUN, { type: 'plan_snapshot', plan: surfacePlan({ ...this.plan, tasks: this.store.snapshot() }) });
-    const view = reduceRun(planned, this.events.statusMessage());
-    const held = this.sentHeld ? reduceRun(view, { type: 'plan_edit_held', held: this.sentHeld }) : view;
-    return this.sentHandoff ? reduceRun(held, { type: 'isolation_handoff', ...this.sentHandoff }) : held;
+    // The status last, as the stream's newest word: it drops what of the handoff git has found merged since it was sent.
+    const handed = this.sentHandoff ? reduceRun(planned, { type: 'isolation_handoff', ...this.sentHandoff }) : planned;
+    const view = reduceRun(handed, this.events.statusMessage());
+    return this.sentHeld ? reduceRun(view, { type: 'plan_edit_held', held: this.sentHeld }) : view;
   }
 
   /** The ancestors a task waits on at its merge gate (ADR-0020); empty when it waits for no Merge all. */
@@ -2068,17 +2069,39 @@ export class Session {
       delete (plan as unknown as Record<string, unknown>)[key];
     }
     carryOverQueuedEdits(plan);
-    // The run record is taken synchronously; only the orphan prune is awaited
-    // in the background, and git serializes it ahead of any worktree a run adds.
+    // The run record is taken synchronously; the orphan prune and the look at
+    // what the user has merged since are awaited in the background, and git
+    // serializes them ahead of any worktree a run adds.
     if (adopting) {
-      void this.runs.adopt(plan.isolation ?? null);
-      // What the surfaces were last sent is not saved; a settled run is handed over again as its resend would.
+      void this.adoptRun(plan, opts?.persist !== false || opts?.sessionId !== undefined);
+      // What the surfaces were last sent is not saved; a settled run is handed
+      // over again as its resend would, until git says what of it is merged.
       this.sentHandoff = this.owedHandoff();
     }
     if (opts?.persist !== false) this.persist();
     // A reopened session shows its token line again without waiting for the
     // next turn: announce the totals the moment the plan is adopted.
     if (this.usage.hasUsage) this.broadcast(this.usage.message());
+  }
+
+  /**
+   * Take the loaded plan's run over, then correct what the surfaces were told
+   * by what git found: the saved record cannot know what the user merged
+   * since, and its handoff would offer Merge all for work already in their
+   * branch. The status update says what landed work is still unmerged, which
+   * a handoff folds to (see `reduceRun`), and `run_closed` that the run was
+   * cleared up. Saved only where the load itself may save (`persists`), so a
+   * restore with no session file to write keeps the correction in memory for
+   * its next save. A plan loaded meanwhile is not this one's to correct.
+   * Starts nothing (ADR-0044).
+   */
+  private async adoptRun(plan: LegacyPlanState, persists: boolean): Promise<void> {
+    const outcome = await this.runs.adopt(plan.isolation ?? null);
+    if (this.plan !== plan || outcome === 'unchanged') return;
+    plan.isolation = this.runs.planIsolation ?? undefined;
+    if (persists) this.persist();
+    this.events.status(plan);
+    if (outcome === 'cleared') this.broadcast({ type: 'run_closed' });
   }
 
   destroy(): void {

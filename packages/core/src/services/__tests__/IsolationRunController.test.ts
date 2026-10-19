@@ -402,6 +402,36 @@ describe('IsolationRunController', () => {
       expect(warned).toContain('Left the worktree of task "Task t2" in place at /fake-worktrees/run1/2-t2: it holds work Ordewell could not keep (it is not a git worktree any more). Save what you need from it, then remove it with `git worktree remove --force /fake-worktrees/run1/2-t2`.');
     });
 
+    it('clears an adopted run up only while no run has opened on it and none of its tasks is live', async () => {
+      async function savedRun() {
+        const { runs } = setup();
+        await runs.decide(async () => undefined);
+        await runs.attemptCwd(task('t1', 1), 'fresh');
+        await runs.integrate(task('t1', 1));
+        runs.interrupt();
+        return structuredClone(runs.planIsolation);
+      }
+      const merged = (env: ReturnType<typeof setup>) => { env.isolation.mergedByHand.add('t1'); return env; };
+
+      const idle = merged(setup());
+      expect(await idle.runs.adopt(await savedRun())).toBe('cleared');
+      expect(idle.runs.current).toBeNull();
+      expect(idle.listener.changed).not.toHaveBeenCalled();
+      expect(idle.listener.closed).not.toHaveBeenCalled();
+
+      const liveEnv = merged(setup());
+      liveEnv.live.add('t1');
+      expect(await liveEnv.runs.adopt(await savedRun())).toBe('changed');
+      expect(ops(liveEnv.isolation)).not.toContain('discard');
+
+      const opened = merged(setup());
+      const adopting = opened.runs.adopt(await savedRun());
+      opened.runs.open();
+      expect(await adopting).toBe('changed');
+      expect(ops(opened.isolation)).not.toContain('discard');
+      expect(opened.runs.current?.id).toBe('run1');
+    });
+
     it('leaves the last run\'s worktrees in place when a new run is minted while a task is live in it', async () => {
       const { runs, isolation, live, notifications } = setup();
       await runs.decide(async () => undefined);

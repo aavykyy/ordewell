@@ -1335,7 +1335,8 @@ one checkout.
 
 **Merge gate** — where an ops task or a user task that depends on change tasks
 waits until their work is merged into the user's branch (ADR-0020): until the
-checked-out HEAD contains the integration tip each of them landed at. The
+checked-out HEAD contains the integration tip each of them landed at, or that
+repo's integration branch is gone so no merge could bring it in. The
 user's Merge all opens it, as does a merge made by hand; Force start passes it
 after a confirmation naming what is not merged, and the task keeps that choice
 (`forcedPastGate`). A force start queued behind its dependencies passes only
