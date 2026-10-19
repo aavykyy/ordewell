@@ -11,11 +11,21 @@
 - **A loaded session no longer offers Merge all for work already merged.**
   Loading a saved session re-checks git: Merge all lists only what is still
   unmerged, and a finished run whose work is all merged is cleaned up.
+- **A coding-agent planner whose process ended between turns is restarted on
+  your next message** instead of answering "The claude-code planner exited with
+  code 143."
+- **The chat's stop button stops only the planner.** With an empty composer it
+  appears while the planner is working; while tasks run and the planner is
+  idle it is the inert send arrow, and **Stop run** halts the tasks.
+- **Reloading after a crash mid-run no longer reverts finished tasks.** A
+  restore snapshot older than the saved session no longer overwrites it.
 
 ### Changed
 
 - **The Open log button on a task header spans the title and assignment
   lines** and is never overlapped by them in a narrow panel.
+- **A running task's check ring shows a sweeping progress arc** instead of a
+  faint glow. With reduced motion it is a still ring with a dot.
 
 ## [0.10.8] - 2026-10-18
 
