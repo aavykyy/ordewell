@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { existsSync, readFileSync, statSync } from 'fs';
-import { addAttemptUsage, startAttemptUsage, usageText } from '../../models/Usage';
+import { addAttemptUsage, plannerContextFill, startAttemptUsage, usageText } from '../../models/Usage';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
 import { CodexAdapter } from '../harness/CodexAdapter';
 import { OpenCodeAdapter } from '../harness/OpenCodeAdapter';
@@ -210,6 +210,87 @@ describe('task mode support', () => {
 });
 
 describe('ClaudeCodeAdapter in task mode', () => {
+  // Recorded on 2.1.303: with `--model claude-sonnet-5[1m]`, `init` names the
+  // variant the turn runs as, the message names the API's canonical id, and
+  // `modelUsage` keys the window by the variant. Using the canonical id for
+  // the meter missed the window and read the base model's catalog one instead.
+  it('counts a 1m variant under the id its init names, with the window modelUsage states for it', async () => {
+    const SESSION = 'sess-1m';
+    const init = { type: 'system', subtype: 'init', session_id: SESSION, permissionMode: 'acceptEdits', model: 'claude-sonnet-5[1m]' };
+    const messageStart = {
+      type: 'stream_event', session_id: SESSION, parent_tool_use_id: null,
+      event: { type: 'message_start', message: { model: 'claude-sonnet-5', id: 'msg_1', usage: { input_tokens: 2, cache_creation_input_tokens: 100, cache_read_input_tokens: 400, output_tokens: 1 } } },
+    };
+    const messageDelta = {
+      type: 'stream_event', session_id: SESSION, parent_tool_use_id: null,
+      event: { type: 'message_delta', usage: { input_tokens: 2, cache_creation_input_tokens: 100, cache_read_input_tokens: 400, output_tokens: 10 } },
+    };
+    const result = {
+      type: 'result', session_id: SESSION, subtype: 'success', is_error: false, result: 'ok', total_cost_usd: 0.02,
+      modelUsage: { 'claude-sonnet-5[1m]': { costUSD: 0.02, contextWindow: 1_000_000, costBasis: 'list', canonicalModel: 'claude-sonnet-5' } },
+    };
+    const { processDeps } = deps([`${[init, messageStart, messageDelta, result].map((line) => JSON.stringify(line)).join('\n')}\n`]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskStart({ model: 'claude-sonnet-5[1m]' }));
+    const events: AgentEvent[] = [];
+    await adapter.send('go', (e) => events.push(e));
+
+    const records = events.flatMap((event) => event.type === 'usage' ? [event.record] : []);
+    expect(records).toContainEqual({ source: 'claude-code', model: 'claude-sonnet-5[1m]', inputTokens: 502, cachedInputTokens: 400, outputTokens: 10, contextTokens: 512 });
+    expect(records).toContainEqual({ source: 'claude-code', model: 'claude-sonnet-5[1m]', contextWindow: 1_000_000 });
+    expect(events.filter((event) => event.type === 'model_drifted' || event.type === 'model_switched')).toEqual([]);
+    const ledger = records.reduce((usage, record) => addAttemptUsage(usage, record, '2026-10-19T18:00:01Z'),
+      startAttemptUsage(1, 'claude-code', '2026-10-19T18:00:00Z'));
+    expect(plannerContextFill(ledger)).toEqual({ usedTokens: 512, windowTokens: 1_000_000 });
+    adapter.dispose();
+  });
+
+  // A subagent runs its own model in the same stream, tagged with the call that
+  // spawned it. Its init and compaction are not the main model's, so neither
+  // may move the task's meter or its model.
+  it('does not let a subagent\'s init or compaction move the main model\'s meter', async () => {
+    const SESSION = 'sess-sub';
+    const line = (fields: object) => JSON.stringify({ session_id: SESSION, ...fields });
+    const mainStart = (id: string) => line({
+      type: 'stream_event', parent_tool_use_id: null,
+      event: { type: 'message_start', message: { model: 'claude-haiku-5-5', id, usage: { input_tokens: 1, output_tokens: 1 } } },
+    });
+    const mainDelta = (input: number) => line({
+      type: 'stream_event', parent_tool_use_id: null,
+      event: { type: 'message_delta', usage: { input_tokens: input, output_tokens: 10 } },
+    });
+    const lines = [
+      line({ type: 'system', subtype: 'init', permissionMode: 'acceptEdits', model: 'claude-haiku-5-5' }),
+      mainStart('msg_1'), mainDelta(1000),
+      // A subagent's own model and compaction, replayed with its spawning call.
+      line({ type: 'system', subtype: 'init', parent_tool_use_id: 'toolu_agent', model: 'claude-opus-5-5' }),
+      line({ type: 'system', subtype: 'compact_boundary', parent_tool_use_id: 'toolu_agent', compact_metadata: { trigger: 'auto', pre_tokens: 90_000, post_tokens: 5_000 } }),
+      line({
+        type: 'result', parent_tool_use_id: 'toolu_agent', subtype: 'success', is_error: false, result: 'subagent done', total_cost_usd: 99,
+        modelUsage: { 'claude-opus-5-5': { costUSD: 99, contextWindow: 1_000_000, costBasis: 'list' } },
+      }),
+      mainStart('msg_2'), mainDelta(2000),
+      line({
+        type: 'result', subtype: 'success', is_error: false, result: 'ok', total_cost_usd: 0.01,
+        modelUsage: { 'claude-haiku-5-5': { costUSD: 0.01, contextWindow: 200_000, costBasis: 'list' } },
+      }),
+    ];
+    const { processDeps } = deps([`${lines.join('\n')}\n`]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskStart());
+    const events: AgentEvent[] = [];
+    await adapter.send('go', (e) => events.push(e));
+
+    const records = events.flatMap((event) => event.type === 'usage' ? [event.record] : []);
+    expect(records.filter((record) => record.compacted)).toEqual([]);
+    expect(records.filter((record) => record.reportedCost?.amount === 99)).toEqual([]);
+    expect(events.filter((event) => event.type === 'model_drifted' || event.type === 'model_switched')).toEqual([]);
+    const ledger = records.reduce((usage, record) => addAttemptUsage(usage, record, '2026-10-19T18:00:01Z'),
+      startAttemptUsage(1, 'claude-code', '2026-10-19T18:00:00Z'));
+    expect(plannerContextFill(ledger)).toEqual({ usedTokens: 2010, windowTokens: 200_000 });
+    adapter.dispose();
+  });
+
   it('disables the question tool, so the agent asks in plain text and ends its turn (ADR-0018, M1)', async () => {
     const { spawned, processDeps } = deps([]);
     const adapter = new ClaudeCodeAdapter(processDeps);
@@ -485,6 +566,29 @@ describe('ClaudeCodeAdapter in task mode', () => {
 
       expect(costs(events).map((r) => r.reportedCost?.amount)).toEqual([1, 0.3]);
       expect(adapter.sessionCost()).toEqual({ sessionId: NEW_SESSION, usd: 0.3, modelUsd: { 'claude-opus-5': 0.3 } });
+      adapter.dispose();
+    });
+
+    it('clears the context meter on a /clear, before the next call', async () => {
+      const reset = { type: 'conversation_reset', new_conversation_id: 'conv-2', uuid: 'conv-2', trigger: 'clear', session_id: SESSION };
+      const start = { type: 'stream_event', parent_tool_use_id: null, event: { type: 'message_start', message: { model: 'claude-opus-5', id: 'msg-1' } } };
+      const delta = { type: 'stream_event', parent_tool_use_id: null, event: { type: 'message_delta', usage: { input_tokens: 1000, output_tokens: 10 } } };
+      const { processDeps } = deps([
+        turnLines(start, delta, result({ subtype: 'success', total_cost_usd: 1, modelUsage: opus(1) })),
+        turnLines(reset, { type: 'result', subtype: 'success', session_id: 'sess-cleared', total_cost_usd: 0, modelUsage: {} }),
+      ]);
+      const adapter = new ClaudeCodeAdapter(processDeps);
+      await adapter.start(taskIn('plan'));
+      const events: AgentEvent[] = [];
+      await adapter.send('work', (e) => events.push(e));
+      const before = events.reduce((usage, event) => event.type === 'usage' ? addAttemptUsage(usage, event.record, '2026-10-19T18:00:01Z') : usage,
+        startAttemptUsage(1, 'claude-code', '2026-10-19T18:00:00Z'));
+      expect(plannerContextFill(before)).toEqual({ usedTokens: 1010, windowTokens: 200_000 });
+
+      await adapter.send('/clear', (e) => events.push(e));
+      const after = events.reduce((usage, event) => event.type === 'usage' ? addAttemptUsage(usage, event.record, '2026-10-19T18:00:01Z') : usage,
+        startAttemptUsage(1, 'claude-code', '2026-10-19T18:00:00Z'));
+      expect(plannerContextFill(after)).toBeUndefined();
       adapter.dispose();
     });
 
@@ -1155,8 +1259,13 @@ describe('ClaudeCodeAdapter runner commands', () => {
     ]);
     // The meter reads the size the compaction left, and no total counts it.
     expect(events.filter((e) => e.type === 'usage' && e.record.compacted)).toEqual([
-      { type: 'usage', record: { source: 'claude-code', compacted: true, contextTokens: 3615 } },
+      { type: 'usage', record: { source: 'claude-code', model: 'claude-haiku-5-5', compacted: true, contextTokens: 3615 } },
     ]);
+    // The result after it states the window the turn ran against, even though a
+    // command turn made no call whose message_start could name the model.
+    const ledger = events.reduce((usage, event) => event.type === 'usage' ? addAttemptUsage(usage, event.record, '2026-10-19T18:00:01Z') : usage,
+      startAttemptUsage(1, 'claude-code', '2026-10-19T18:00:00Z'));
+    expect(plannerContextFill(ledger)).toEqual({ usedTokens: 3615, windowTokens: 1_000_000 });
     adapter.dispose();
   });
 });

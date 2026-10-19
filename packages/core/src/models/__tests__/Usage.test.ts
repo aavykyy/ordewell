@@ -86,6 +86,18 @@ describe('the context meter', () => {
     expect(plannerContextFill(addPlannerUsage(after, { source: 'claude-code', model: 'opus', inputTokens: 4000, outputTokens: 100, contextTokens: 4100 }))).toEqual({ usedTokens: 4100, windowTokens: 200_000 });
   });
 
+  it('moves the meter to the model a compaction names, not the old model\'s window', () => {
+    const after = fold(beforeCompaction, { source: 'claude-code', model: 'sonnet', compacted: true, contextTokens: 9000, contextWindow: 1_000_000 });
+    expect(plannerContextFill(after)).toEqual({ usedTokens: 9000, windowTokens: 1_000_000 });
+    expect(after.model).toBe('sonnet');
+  });
+
+  it('never moves the meter for a subagent\'s or a breakdown\'s compaction', () => {
+    const before = fold(beforeCompaction);
+    expect(plannerContextFill(addPlannerUsage(before, { source: 'claude-code', subagentId: 'sa1', compacted: true, contextTokens: 10 }))).toEqual(plannerContextFill(before));
+    expect(plannerContextFill(addPlannerUsage(before, { source: 'claude-code', aggregate: true, compacted: true, contextTokens: 10 }))).toEqual(plannerContextFill(before));
+  });
+
   it('resets an attempt\'s meter on a compaction the same way', () => {
     const start = startAttemptUsage(1, 'claude-code', '2026-10-19T10:00:00.000Z');
     const before = addAttemptUsage(start, beforeCompaction, '2026-10-19T10:01:00.000Z');

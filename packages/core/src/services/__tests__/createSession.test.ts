@@ -12,7 +12,7 @@ import { PlannerTurnDiscardedError, PlannerTurnStoppedError } from '../PlannerCo
 import type { Session } from '../createSession';
 import type { SessionMessage } from '../SessionMessage';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
-import { reduceConversation, EMPTY_CONVERSATION } from '../../conversation';
+import { reduceConversation, EMPTY_CONVERSATION, replayTaskLog } from '../../conversation';
 
 describe('model allowlist wiring', () => {
   function smallPlan(): LegacyPlanState {
@@ -1669,6 +1669,37 @@ describe('saving a run as its tasks settle', () => {
     await restored.execute({ command: 'run_plan' }, { kind: 'user' });
     spawned[1].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-opus-5-5', inputTokens: 40000, outputTokens: 1000, contextTokens: 41000 } });
     expect(contextMeterText(taskUsageSummary(taskOf(restored, 't2')!).contextFill)).toBe('ctx 41k (4%)');
+    restored.destroy();
+  });
+
+  it('shows the task log\'s meter, the attempt ledger\'s and the reloaded plan\'s as one, through a compaction', async () => {
+    const runnerSession = new FakeRunnerSession('s-t1', 't1');
+    const runner = { spawn: vi.fn(async () => runnerSession), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } as unknown as IRunner;
+    const logs = memoryTaskLogs();
+    const session = makeSession({ runner, openTaskLog: logs });
+    session.loadPlan({
+      tasks: [createTask({ id: 't1', order: 1, title: 'First', prompt: 'a', assignedRunner: 'claude-code' })],
+      generatedAt: new Date().toISOString(), status: 'approved', runners: ['claude-code'], lastUpdated: new Date().toISOString(),
+    }, 'Test', '/repo', { persist: false });
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
+
+    runnerSession.emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-opus-5-5', inputTokens: 60_000, outputTokens: 1_000, contextTokens: 61_000, contextWindow: 1_000_000 } });
+    runnerSession.emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-opus-5-5', compacted: true, contextTokens: 3_615 } });
+    runnerSession.emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-opus-5-5', inputTokens: 40_000, outputTokens: 1_000, contextTokens: 41_000 } });
+    runnerSession.reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('completed'));
+
+    const attempt = taskOf(session, 't1')!.attemptUsage!.at(-1)!;
+    const expected = { usedTokens: 41_000, windowTokens: 1_000_000 };
+    expect(plannerContextFill(attempt)).toEqual(expected);
+    // The task log a surface folds into its own line, from the events it saved.
+    expect(plannerContextFill(replayTaskLog(logs.files.get('t1')!.at(-1)!).usage!)).toEqual(expected);
+
+    const persisted = saves(session).mock.calls.at(-1)![0] as LegacyPlanState;
+    session.destroy();
+    const restored = makeSession();
+    restored.loadPlan(persisted, 'Test', '/repo', { persist: false });
+    expect(plannerContextFill(taskOf(restored, 't1')!.attemptUsage!.at(-1)!)).toEqual(expected);
     restored.destroy();
   });
 

@@ -40,6 +40,10 @@ describe('the context meter', () => {
     expect(contextMeterText({ usedTokens: 950, windowTokens: 1_000_000 })).toBe('ctx 950 (<1%)');
   });
 
+  it('shows a fill past the window as it is, never clamped', () => {
+    expect(contextMeterText({ usedTokens: 1_050_000, windowTokens: 1_000_000 })).toBe('ctx 1.1M (105%)');
+  });
+
   it('is nothing before any call was measured', () => {
     expect(contextMeterText(undefined)).toBeNull();
   });

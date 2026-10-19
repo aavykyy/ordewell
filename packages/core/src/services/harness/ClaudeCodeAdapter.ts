@@ -299,6 +299,18 @@ interface ClaudeLine {
 /** The tool Claude Code delegates to a subagent with — `Task` before it was renamed `Agent`. */
 const SUBAGENT_TOOLS = new Set(['Agent', 'Task']);
 
+/** A model id's variant suffix, as in `claude-sonnet-5[1m]`. */
+const VARIANT_SUFFIX = /^(.*?)(\[[^\]]*\])?$/;
+
+/** Whether two ids name one model, one carrying a variant suffix such as `[1m]`. */
+function sameModel(a: string | undefined, b: string | undefined): boolean {
+  if (a === undefined || b === undefined) return false;
+  if (a === b) return true;
+  const [, aBase, aVariant] = VARIANT_SUFFIX.exec(a) ?? [];
+  const [, bBase, bVariant] = VARIANT_SUFFIX.exec(b) ?? [];
+  return aBase === bBase && (aVariant === undefined || bVariant === undefined || aVariant === bVariant);
+}
+
 /**
  * Anthropic's `input_tokens` is only the uncached tail of the prompt — see
  * {@link partedPromptUsage}. The main thread's context is the whole prompt
@@ -399,6 +411,11 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private replyRuns = new ReplyRuns();
   /** The model answering the planner's current message, and the message's id, as its `message_start` named them. */
   private plannerModel: string | undefined;
+  /**
+   * The id the turn runs as, as `init` names it. A `[1m]` variant is the
+   * selected id, while a message names the API's canonical id without it.
+   */
+  private sessionModel: string | undefined;
   private billing: SessionBilling | undefined;
   private streamingMessage: string | undefined;
   /** The message the last `assistant` line was part of, and how many of its blocks the lines have carried. */
@@ -857,14 +874,26 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
 
       // `/clear` (and `/reset`, `/new`) emit this top-level line before their
       // own result, and a task's chat can send them. The CLI's totals restart.
-      case 'conversation_reset':
+      case 'conversation_reset': {
+        // A main-session reset; a subagent's own stream never restarts the
+        // task's count. `/clear` also discards the context, so the meter must
+        // not keep the size of the conversation it replaced.
+        if (subagentId) return;
         this.restartCount();
+        const resetModel = this.sessionModel ?? (this.plannerModel !== '<synthetic>' ? this.plannerModel : undefined);
+        emit({ type: 'usage', record: { source: 'claude-code', ...(resetModel ? { model: resetModel } : {}), compacted: true } });
         return;
+      }
 
       case 'system':
+        // A subagent's own init and compaction are replayed on the same stream
+        // with its spawning call. Neither names the main model or measures its
+        // context, so neither may move the task's meter or model.
+        if (subagentId && (msg.subtype === 'init' || msg.subtype === 'compact_boundary')) return;
         if (msg.subtype === 'init') {
           this.clearFollowOnTimer();
           if (this.refuseOtherMode(msg, emit)) return;
+          if (msg.model && msg.model !== '<synthetic>') this.sessionModel = msg.model;
           this.readLoaded(msg, emit);
           this.followModel(msg.model, emit);
           this.reportBilling(msg.apiKeySource, undefined, emit);
@@ -878,7 +907,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
             ...(typeof meta?.pre_tokens === 'number' ? { preTokens: meta.pre_tokens } : {}),
             ...(typeof meta?.post_tokens === 'number' ? { postTokens: meta.post_tokens } : {}),
           });
-          emit({ type: 'usage', record: { source: 'claude-code', compacted: true, ...(typeof meta?.post_tokens === 'number' ? { contextTokens: meta.post_tokens } : {}) } });
+          const model = this.sessionModel ?? (this.plannerModel !== '<synthetic>' ? this.plannerModel : undefined);
+          emit({ type: 'usage', record: { source: 'claude-code', ...(model ? { model } : {}), compacted: true, ...(typeof meta?.post_tokens === 'number' ? { contextTokens: meta.post_tokens } : {}) } });
         }
         if (msg.subtype === 'background_tasks_changed' && Array.isArray(msg.tasks)) {
           this.backgroundTaskCount = msg.tasks.length;
@@ -893,8 +923,11 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         return;
 
       case 'result':
-        // `result` closes every turn — success or failure. The final assistant
-        // text (which carries the plan JSON) already arrived as assistant
+        // `result` closes every turn — success or failure. A subagent's own
+        // result is not the task's turn, and its spend is the session's, already
+        // counted by the main result.
+        if (subagentId) return;
+        // The final assistant text (which carries the plan JSON) already arrived as assistant
         // blocks, so this only settles the turn.
         this.reportSessionCost(msg, emit);
         for (const command of this.modelCommands) command.turnsLeft = Math.max(0, command.turnsLeft - 1);
@@ -1083,7 +1116,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     // `output_tokens` is a placeholder — and the result's `usage` re-sums these
     // same calls, so either would count them twice.
     if (event.type === 'message_start') {
-      this.plannerModel = event.message?.model;
+      this.plannerModel = this.modelId(event.message?.model);
       this.streamingMessage = event.message?.id;
       this.followModel(this.plannerModel, emit);
     } else if (event.type === 'message_delta' && event.usage) emit({ type: 'usage', record: usageRecord(event.usage, this.plannerModel) });
@@ -1092,6 +1125,20 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     } else if (event.type === 'content_block_delta' && event.delta?.type === 'thinking_delta' && event.delta.thinking) {
       emit({ type: 'thinking_delta', text: event.delta.thinking });
     }
+  }
+
+  /**
+   * The id a reported model runs as. `init` names the selected value — a
+   * `[1m]` variant included — while a message names the API's canonical id
+   * without it. Keeping the variant is what lets the meter find the window
+   * `modelUsage` keys it by, and keeps that window off the base model.
+   */
+  private modelId(reported: string | undefined): string | undefined {
+    if (!reported) return undefined;
+    if (!sameModel(this.sessionModel, reported)) return reported;
+    // Both name the same model: keep whichever carries the variant suffix, so
+    // the modelUsage key and the window are the exact id that ran.
+    return this.sessionModel?.includes('[') ? this.sessionModel : reported;
   }
 
   private reportBilling(apiKeySource: string | undefined, plan: string | undefined, emit: (event: AgentEvent) => void): void {
@@ -1134,7 +1181,11 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       emit({ type: 'usage', record: { source: 'claude-code', aggregate: true, ...(this.billing ? { sessionBilling: this.billing } : {}), reportedCost: { amount: total - this.reportedCostUsd!, currency: 'USD', kind: 'estimate' } } });
     }
     if (typeof total === 'number' && total > 0) this.reportedCostUsd = total;
-    const contextWindow = this.plannerModel ? msg.modelUsage?.[this.plannerModel]?.contextWindow : undefined;
-    if (contextWindow !== undefined) emit({ type: 'usage', record: { source: 'claude-code', model: this.plannerModel, contextWindow } });
+    // A command turn (`/compact`, a model switch) can end with a result and no
+    // call whose `message_start` named the model; the turn's `init` still did.
+    // A synthetic message names no model at all.
+    const model = this.plannerModel && this.plannerModel !== '<synthetic>' ? this.plannerModel : this.sessionModel;
+    const contextWindow = model ? msg.modelUsage?.[model]?.contextWindow : undefined;
+    if (typeof contextWindow === 'number' && contextWindow > 0) emit({ type: 'usage', record: { source: 'claude-code', model, contextWindow } });
   }
 }

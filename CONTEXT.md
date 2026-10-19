@@ -1082,7 +1082,7 @@ actually ran; an unreported model stays unknown. Subagent shares are included
 in totals once. The attempt number continues across reloads. A new attempt
 starts a fresh ledger without dropping earlier attempts. Context fill follows
 the latest main-runner model, clears on a switch until the new model reports,
-and resets on a compaction (see *Context fill*). `planUsage` sums all task attempts,
+and resets on a compaction or a cleared conversation (see *Context fill*). `planUsage` sums all task attempts,
 including subtasks, separately from the planner's own ledger. Status updates
 carry both the task ledgers and the plan roll-up; surfaces draw the texts core words
 (`usageText`, `tasksTotalText`). Surfaces show the sum of a task's attempts (*Task usage*), not one ledger. The
@@ -2159,7 +2159,8 @@ cost. A record can also carry the runner's `sessionBilling` fact: a subscription
 or API-key login, with the plan when stated. A main-thread record carries
 `contextTokens`, the context its call left as that runner counts it (*Context
 fill*), which no total adds. A `compacted` record is no call: it says the runner
-compacted the context, with the size it left when the runner reported one.
+reset the context — a compaction, or a `/clear` — with the size it left when the
+runner reported one.
 Every measure is optional because backends report different subsets; absent
 means "not reported", never zero.
 *Avoid:* filling a missing number from a price table or an estimate made by
@@ -2199,12 +2200,15 @@ unknown (`<1%` under one percent), and nothing before any call was measured.
 "Used" is the record's `contextTokens`, counted the way that runner's own UI
 counts it so the meter reads what the user would see there: Claude Code's whole
 prompt (uncached, cache reads, cache writes) plus the call's output; Codex's
-"tokens in context window", input plus output less the reasoning; OpenCode's
+"tokens in context window" (`totalTokens`, input plus output, reasoning
+included as Codex's own UI counts it); OpenCode's
 sum of input, output, reasoning and both cache counts; an API planner's prompt
-plus completion. A record that states none is read by its prompt. A compaction
-(`compacted` record) resets it: the meter shows the size the runner reported it
-left (Claude Code does) or nothing until the next call (Codex, OpenCode), never
-the size before; it adds nothing to any total.
+plus completion. A record that states none is read by its prompt. A compaction,
+or a cleared conversation (`compacted` record), resets it: the meter shows the
+size the runner reported it left (Claude Code does) or nothing until the next
+call (Codex, OpenCode), never the size before; it adds nothing to any total. One
+that names the model the new context belongs to is measured against that
+model's window; one that names none is about whichever runs now.
 Derived only from the main model's own calls: a subagent runs its own model,
 whose window says nothing about it, a session breakdown (`aggregate`) measures
 no prompt, and a model switch clears the meter until the new model reports. A
@@ -2215,12 +2219,13 @@ reporter and exact model id (`SessionWindows`), saved with the plan
 (`contextWindows`), and known to every later stream of it — planner, task
 attempts and continues — so a Claude Code task, whose runner states a window
 only on a turn's last line, has one from its first call when anything in the
-session reported its model's. A record that states none is filled
-(`ContextWindowFill`), per record so a model change mid-stream reads its own
-window: first a window known for its model, then the runner's own model listing
-or the provider's own models endpoint. A task's Continue starts from the window
-its session was last measured against. Never from a table kept in Ordewell:
-neither known leaves the fill unknown.
+session reported its model's. A variant suffix is part of that id: a `[1m]`
+model's window is never used for its base model, or the base's for it. A record
+that states none is filled (`ContextWindowFill`), per record so a model change
+mid-stream reads its own window: first a window known for its model, then the
+runner's own model listing or the provider's own models endpoint. A task's
+Continue starts from the window its session was last measured against. Never
+from a table kept in Ordewell: neither known leaves the fill unknown.
 *Avoid:* calling it a percentage when either half is unknown; *Avoid:* a window
 table in Ordewell; *Avoid:* "the last prompt" for what it counts.
 
