@@ -3122,9 +3122,56 @@ body.vscode-high-contrast-light .task-card.expanded {
   transition: background var(--transition-normal), border-color var(--transition-normal);
 }
 
+/* The arc is a masked conic-gradient on a pseudo-element, so the running state
+   needs no extra DOM and the ring never changes size. */
+@property --check-arc-start {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@property --check-arc-end {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
 .task-check.running {
-  border-color: var(--accent);
-  animation: task-check-pulse 1.8s ease-in-out infinite;
+  position: relative;
+  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.task-check.running::before {
+  content: '';
+  position: absolute;
+  inset: -1.5px;
+  border-radius: inherit;
+  background: conic-gradient(
+    transparent var(--check-arc-start),
+    var(--accent) var(--check-arc-start) var(--check-arc-end),
+    transparent var(--check-arc-end)
+  );
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.5px));
+  animation: task-check-sweep 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-check.running {
+    border-color: var(--accent);
+  }
+
+  .task-check.running::before {
+    inset: 50% auto auto 50%;
+    width: 5px;
+    height: 5px;
+    margin: -2.5px 0 0 -2.5px;
+    border-radius: var(--radius-full);
+    background: var(--accent);
+    -webkit-mask: none;
+    mask: none;
+    animation: none;
+  }
 }
 
 /* No pulse: a stalled task is defined by the absence of fresh activity, so an
@@ -3195,10 +3242,10 @@ body.vscode-high-contrast-light .task-card.expanded {
   to { stroke-dashoffset: 0; }
 }
 
-@keyframes task-check-pulse {
-  0% { box-shadow: 0 0 0 0 var(--accent-glow); }
-  70% { box-shadow: 0 0 0 5px transparent; }
-  100% { box-shadow: 0 0 0 0 transparent; }
+@keyframes task-check-sweep {
+  0% { --check-arc-start: 0deg; --check-arc-end: 0deg; }
+  50% { --check-arc-start: 0deg; --check-arc-end: 360deg; }
+  100% { --check-arc-start: 360deg; --check-arc-end: 360deg; }
 }
 
 .queue-badge.done-counter {
