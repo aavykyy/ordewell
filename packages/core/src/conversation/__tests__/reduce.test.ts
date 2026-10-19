@@ -464,6 +464,20 @@ describe('reduceConversation', () => {
       ]);
     });
 
+    it('keeps the one usage line last when a wake-up turn opens above it', () => {
+      const view = play([
+        { type: 'planner_usage', totals: { inputTokens: 900 }, contextFill: { usedTokens: 900 } },
+        { type: 'planner_turn_started', turnId: 'w1', prompt: '', wakeUps: [update], supervisor: true },
+        { type: 'planner_usage', totals: { inputTokens: 1200 }, contextFill: { usedTokens: 1200 } },
+      ]);
+
+      expect(view.blocks.map((b) => b.type)).toEqual(['message', 'usage']);
+      expect(view.blocks.filter((b) => b.type === 'usage')).toHaveLength(1);
+      expect(unkeyed(view.blocks.filter((b) => b.type === 'usage'))).toEqual([
+        { type: 'usage', totals: { inputTokens: 1200 }, contextFill: { usedTokens: 1200 } },
+      ]);
+    });
+
     it('puts the run updates a user\'s turn delivers ahead of the message it adopts', () => {
       const view = play([
         { type: 'local_entry', role: 'user', text: 'what happened?' },

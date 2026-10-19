@@ -70,7 +70,11 @@ function openTurn(view: ConversationView, { turnId, prompt = '', skills = [], wa
   // A wake-up turn has no message; otherwise the run updates go ahead of the
   // message they were delivered with, where the transcript keeps them.
   const said = prompt === '' || adopted.prompt ? view : promptLine(view, turnId, prompt, skills, forced);
-  const at = prompt === '' ? said.blocks.length : findLastIndex(said.blocks, (b) => b.type === 'message' && b.role === 'user' && b.turnId === turnId);
+  // The usage line stays last (see `insertTop`), so a wake-up turn's updates
+  // land above it rather than after it.
+  const at = prompt === ''
+    ? said.blocks.length - (said.blocks.at(-1)?.type === 'usage' ? 1 : 0)
+    : findLastIndex(said.blocks, (b) => b.type === 'message' && b.role === 'user' && b.turnId === turnId);
   const updates = wakeUps.map((text, n) => settledMessage(`b${said.nextId + n}`, 'wake_up', text, turnId));
   return { ...said, blocks: [...said.blocks.slice(0, at), ...updates, ...said.blocks.slice(at)], nextId: said.nextId + updates.length };
 }

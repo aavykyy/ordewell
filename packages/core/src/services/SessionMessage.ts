@@ -235,9 +235,9 @@ export type SessionMessage =
   /**
    * The planner's running usage for the session, subagents included, emitted
    * after a model call reports usage. `totals` already contains every
-   * `bySubagent` entry. `contextFill` is the last planner prompt, with the
-   * model's window when it is known; omitted before a prompt was measured. Cost appears only as
-   * reported by a provider or runner (see `UsageRecord`).
+   * `bySubagent` entry. `contextFill` is the context the main model's last
+   * call left, with its window when known; omitted before a call was measured.
+   * Cost appears only as reported by a provider or runner (see `UsageRecord`).
    */
   | {
       type: 'planner_usage';
