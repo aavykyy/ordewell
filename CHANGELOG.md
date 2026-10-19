@@ -8,6 +8,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.10.9] - 2026-10-19
+
 ### Fixed
 
 - **Release completion waits for the top-level `ordewell` package to resolve
