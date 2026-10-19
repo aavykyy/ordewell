@@ -278,10 +278,19 @@ export class IsolationRunController {
     if (this.run !== run) return 'unchanged';
     const outcome = found ? 'changed' : 'unchanged';
     if (this.isOpen || !this.allMerged(run) || this.holdouts(run).length > 0) return outcome;
-    if (!(await this.discardMerged(run)) || this.run !== run) return outcome;
+    // The record goes before git deletes the run's worktrees and branches: a
+    // start that comes in meanwhile then mints a fresh run from HEAD instead
+    // of continuing one whose branches are being deleted under it.
+    const resolvers = this.resolvers;
     this.run = null;
     this.resolvers = {};
-    return 'cleared';
+    if (!(await this.discardMerged(run))) {
+      // Refused: the record is the one pointer to what could not be let go.
+      if (this.run === null) { this.run = run; this.resolvers = resolvers; }
+      return outcome;
+    }
+    // A start opened while git was deleting: the run in force is that one.
+    return this.isOpen ? 'changed' : 'cleared';
   }
 
   /** Open a run if none is, leaving whether it isolates to its first change task. */
