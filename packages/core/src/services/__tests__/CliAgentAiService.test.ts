@@ -1333,7 +1333,7 @@ describe('CliAgentAiService — Codex', () => {
     expect(resume.params.threadId).toBe('thr-codex-1');
   });
 
-  it('falls back to a fresh thread when the resume is rejected', async () => {
+  it('discards a rejected resume before sending into a fresh thread without its transcript', async () => {
     const controller = new AbortController();
     const { svc, spawned } = service('codex', [
       ...codexHandshake(),
@@ -1341,15 +1341,16 @@ describe('CliAgentAiService — Codex', () => {
       fixture('codex', 'handshake'),
       fixture('codex', 'resume-rejected'),
       // The fallback is the connection's third request, so Codex answers it under id 3.
-      fixture('codex', 'new-conversation').replace('"id":2,', '"id":3,'),
-      fixture('codex', 'tools'),
+      fixture('codex', 'new-conversation').replace('"id":2,', '"id":3,').replaceAll('thr-codex-1', 'thr-codex-new'),
+      fixture('codex', 'tools').replaceAll('thr-codex-1', 'thr-codex-new'),
     ]);
     await svc.startConversation(request({ runners: ['codex'], signal: controller.signal }));
-    const turn = await svc.continueConversation('Carry on', () => {});
+    await expect(svc.continueConversation('Carry on', () => {})).rejects.toThrow('could not be resumed');
 
     const methods = spawned.processes[1].written.map((line) => JSON.parse(line).method);
-    expect(methods).toEqual(['initialize', 'thread/resume', 'thread/start', 'turn/start']);
-    expect(turn.kind).toBe('message');
+    expect(methods).toEqual(['initialize', 'thread/resume', 'thread/start']);
+    expect(svc.hasActiveConversation()).toBe(false);
+    expect(spawned.processes[1].killed).toBe(true);
   });
 
   it('streams reply and reasoning deltas without double counting the completed items', async () => {
@@ -1708,25 +1709,27 @@ describe('CliAgentAiService — OpenCode', () => {
     expect(turn.text).toBe('ok');
   });
 
-  it('starts a fresh session when the resumed one is gone', async () => {
+  it('discards a missing session before sending into a fresh session without its transcript', async () => {
     const controller = new AbortController();
     const seen: string[] = [];
     let firstTurn = true;
+    let created = 0;
     const { svc } = openCodeService((url, init) => {
       seen.push(`${init?.method ?? 'GET'} ${new URL(url).pathname}`);
-      if (url.endsWith('/session') && init?.method === 'POST') return { id: 'ses_first' };
-      if (url.endsWith('/session/ses_first')) return null;
+      if (url.endsWith('/session') && init?.method === 'POST') return { id: `ses_${++created}` };
+      if (url.endsWith('/session/ses_1')) return null;
       if (firstTurn) { firstTurn = false; controller.abort(); return {}; }
       return { info: { id: 'msg_a' }, parts: [{ id: 'p1', messageID: 'msg_a', type: 'text', text: 'ok' }] };
     });
 
     await svc.startConversation(request({ runners: ['opencode'], signal: controller.signal }));
-    const turn = await svc.continueConversation('Carry on', () => {});
+    await expect(svc.continueConversation('Carry on', () => {})).rejects.toThrow('could not be resumed');
 
     // The stale id is probed, found missing, and replaced rather than used.
-    expect(seen).toContain('GET /session/ses_first');
+    expect(seen).toContain('GET /session/ses_1');
     expect(seen.filter((s) => s === 'POST /session')).toHaveLength(2);
-    expect(turn.text).toBe('ok');
+    expect(seen).not.toContain('POST /session/ses_2/message');
+    expect(svc.hasActiveConversation()).toBe(false);
   });
 
   /**

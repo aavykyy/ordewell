@@ -1,4 +1,4 @@
-import { LegacyPlanState, Session, saveState, loadState, saveSession, flattenTasks, isUserMessage } from '@ordewell/core';
+import { LegacyPlanState, Session, saveState, loadState, saveSession, loadSession, flattenTasks, isUserMessage } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 
 export interface PersistenceDeps {
@@ -30,7 +30,13 @@ export function restoreState(deps: PersistenceDeps): void {
   // shared across windows, so an unkeyed state file leaks one workspace's
   // plan into another on restore.
   const restored = loadState(deps.workspaceRoot());
-  const saved = restored?.plan;
+  // Task settlements save the session before the restore snapshot is next
+  // written. After a crash, reopening that older snapshot under the same id
+  // would overwrite completed work on the next save.
+  const latest = restored?.sessionId ? loadSession(restored.sessionId, deps.workspaceRoot()) : null;
+  const saved = latest && restored && Date.parse(latest.meta.updatedAt) >= Date.parse(restored.plan.lastUpdated)
+    ? latest.plan
+    : restored?.plan;
   const hasDialogue = (saved?.conversationHistory?.length ?? 0) > 0;
   // A planning conversation that hasn't produced tasks yet is still a session
   // worth restoring — otherwise a window reload mid-dialogue loses the chat.

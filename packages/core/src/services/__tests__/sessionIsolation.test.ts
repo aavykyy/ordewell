@@ -430,6 +430,56 @@ describe('Session with worktree isolation', () => {
       expect(saves(session).mock.calls.length).toBe(savesBefore);
       expect(saved(session)!.isolation!.run.id).toBe('new');
     });
+
+    it('does not save or broadcast a late adoption after the Session is destroyed', async () => {
+      const { session, isolation, messages } = setup();
+      isolation.mergedByHand.add('t1');
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      const discard = isolation.discard.bind(isolation);
+      let entered = false;
+      isolation.discard = async (run, options) => {
+        entered = true;
+        await held;
+        return discard(run, options);
+      };
+
+      session.loadPlan(settled([record('t1', 1, 'merged')]), 'old goal', '/repo', { sessionId: 'session-old', persist: false });
+      await vi.waitFor(() => expect(entered).toBe(true));
+      session.destroy();
+      const sent = messages.length;
+      release();
+      await flushMicrotasks();
+
+      expect(saves(session)).not.toHaveBeenCalled();
+      expect(messages).toHaveLength(sent);
+    });
+
+    it.each(['load', 'reset'] as const)('does not restore an old run after %s while its cleanup is being refused', async (boundary) => {
+      const { session, isolation, notices } = setup();
+      isolation.mergedByHand.add('t1');
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      let entered = false;
+      isolation.discard = async () => {
+        entered = true;
+        await held;
+        throw new Error('cleanup refused');
+      };
+
+      session.loadPlan(settled([record('t1', 1, 'merged')]), 'old goal', '/repo', { sessionId: 'session-old', persist: false });
+      await vi.waitFor(() => expect(entered).toBe(true));
+      if (boundary === 'reset') session.reset();
+      session.loadPlan(plan([task('x1', 1)]), 'new goal', '/repo', { sessionId: 'session-new' });
+      release();
+      await vi.waitFor(() => expect(notices.some((n) => n.message.includes('cleanup refused'))).toBe(true));
+      await flushMicrotasks();
+
+      expect(session.isolationView()).toBeNull();
+      await session.updateTask('x1', { title: 'New task' });
+      expect(saved(session)!.isolation).toBeUndefined();
+      expect(saves(session).mock.calls.at(-1)![3]).toBe('session-new');
+    });
   });
 
   it('starts a new plan without the previous plan\'s run', async () => {

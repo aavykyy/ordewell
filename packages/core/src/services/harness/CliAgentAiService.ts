@@ -697,7 +697,15 @@ export class CliAgentAiService implements IAiService {
     if (!start) throw new Error('No active planner conversation.');
     const resumeSessionId = session.nativeSessionId ?? undefined;
     try {
-      return await this.startAdapter({ ...start.startOptions, resumeSessionId, resumeCost: session.sessionCost ?? undefined }, start.tools, session);
+      const adapter = await this.startAdapter({ ...start.startOptions, resumeSessionId, resumeCost: session.sessionCost ?? undefined }, start.tools, session);
+      const resumed = adapter.nativeSessionId();
+      // Codex and OpenCode may accept a missing resume by starting fresh. That
+      // context has no transcript: let the conversation reopen it as after a
+      // refused resume, before sending the user's message (ADR-0009, T4).
+      if (resumeSessionId && resumed && resumed !== resumeSessionId) {
+        throw new Error('The runner started a different session instead.');
+      }
+      return adapter;
     } catch (err) {
       if (!resumeSessionId || session.discarded.aborted) throw err;
       // Kept, the conversation would ask for the same refused session on

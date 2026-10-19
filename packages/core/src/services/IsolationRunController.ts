@@ -167,6 +167,8 @@ export class IsolationRunController {
   private readonly liveTasks: () => ReadonlySet<string>;
 
   private run: IsolationRun | null = null;
+  /** An adoption stays scoped even while cleanup temporarily leaves no run record. */
+  private adoptions = 0;
   /** Copied paths already reported for the current run: every task gets the same copies. */
   private reportedCopies = new Set<string>();
   private reportedSetupFailures = new Set<string>();
@@ -258,6 +260,7 @@ export class IsolationRunController {
    * touches nothing and resolves `unchanged`.
    */
   async adopt(state: PlanIsolation | null): Promise<AdoptOutcome> {
+    const adoption = ++this.adoptions;
     this.run = state?.run ?? null;
     this.resolvers = { ...(state?.resolvers ?? {}) };
     const run = this.run;
@@ -284,7 +287,9 @@ export class IsolationRunController {
     const resolvers = this.resolvers;
     this.run = null;
     this.resolvers = {};
-    if (!(await this.discardMerged(run))) {
+    const discarded = await this.discardMerged(run);
+    if (this.adoptions !== adoption) return 'unchanged';
+    if (!discarded) {
       // Refused: the record is the one pointer to what could not be let go.
       if (this.run === null) { this.run = run; this.resolvers = resolvers; }
       return outcome;
