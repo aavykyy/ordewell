@@ -959,6 +959,8 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     if (session && session !== this.sessionId && !turn.children.follows(session)) return;
     if (frame.type === 'session.compacted' && session === this.sessionId) {
       onEvent({ type: 'compaction', trigger: this.manualCompaction ? 'manual' : 'auto' });
+      // OpenCode states no size after it: the next call's usage is the first.
+      onEvent({ type: 'usage', record: { source: 'opencode', compacted: true } });
       return;
     }
     if (session === this.sessionId && this.taskTurn) this.followTaskTurn(frame, this.taskTurn, onEvent);

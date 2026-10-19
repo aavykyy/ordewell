@@ -90,7 +90,7 @@ describe('Gemini research chat streaming', () => {
     // Exactly one usage record, assembled from the final chunk's counters.
     const usage = progress.filter((p) => p.type === 'usage');
     expect(usage).toHaveLength(1);
-    expect(usage[0].record).toEqual({ source: 'google', model: 'test-model', inputTokens: 120, outputTokens: 8, cachedInputTokens: 100 });
+    expect(usage[0].record).toEqual({ source: 'google', model: 'test-model', inputTokens: 120, outputTokens: 8, cachedInputTokens: 100, contextTokens: 128 });
 
     // The final text still lands on the turn the loop classifies.
     expect(turn.kind).toBe('message');
@@ -108,7 +108,7 @@ describe('Gemini research chat streaming', () => {
     await service.startConversation({ goal: 'go', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem() as IFileSystem, onProgress: (p) => progress.push(p) });
 
     expect(modelsAsked).toEqual(['gemini-2.5-pro']);
-    expect(progress.filter((p) => p.type === 'usage').map((p) => p.record)).toEqual([{ source: 'google', model: 'gemini-2.5-pro', inputTokens: 50, outputTokens: 2 }]);
+    expect(progress.filter((p) => p.type === 'usage').map((p) => p.record)).toEqual([{ source: 'google', model: 'gemini-2.5-pro', inputTokens: 50, outputTokens: 2, contextTokens: 52 }]);
   });
 
   it('follows a model switched within Gemini on the next turn, over the same history', async () => {
@@ -195,8 +195,8 @@ describe('Gemini research chat streaming', () => {
     // One bill per call: unspecified counters stay absent rather than zeroing.
     const usage = progress.filter((p) => p.type === 'usage');
     expect(usage).toHaveLength(2);
-    expect(usage[0].record).toEqual({ source: 'google', model: 'test-model', inputTokens: 40, outputTokens: 9 });
-    expect(usage[1].record).toEqual({ source: 'google', model: 'test-model', inputTokens: 55, outputTokens: 14, cachedInputTokens: 50 });
+    expect(usage[0].record).toEqual({ source: 'google', model: 'test-model', inputTokens: 40, outputTokens: 9, contextTokens: 49 });
+    expect(usage[1].record).toEqual({ source: 'google', model: 'test-model', inputTokens: 55, outputTokens: 14, cachedInputTokens: 50, contextTokens: 69 });
   });
 
   it('reports no usage when the chunks carry no usageMetadata', async () => {
@@ -252,7 +252,7 @@ describe('Gemini research chat streaming', () => {
     const usage = progress.filter((p) => p.type === 'usage');
     expect(usage).toHaveLength(1);
     // Thought tokens bill as output alongside the answer tokens.
-    expect(usage[0].record).toEqual({ source: 'google', model: 'test-model', inputTokens: 70, outputTokens: 72 });
+    expect(usage[0].record).toEqual({ source: 'google', model: 'test-model', inputTokens: 70, outputTokens: 72, contextTokens: 130 });
     expect(tasks).toHaveLength(1);
   });
 });

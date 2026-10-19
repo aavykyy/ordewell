@@ -922,7 +922,7 @@ describe('OpenCode 2.x — shared protocol behaviour', () => {
     await turn;
 
     expect(events.filter((e) => e.type === 'usage')).toEqual([
-      { type: 'usage', record: { source: 'opencode', inputTokens: 5, outputTokens: 2 } },
+      { type: 'usage', record: { source: 'opencode', inputTokens: 5, outputTokens: 2, contextTokens: 7 } },
       { type: 'usage', record: { source: 'opencode', inputTokens: 7, outputTokens: 3, reportedCost: { amount: 0.002, currency: 'USD' }, subagentId: 'call_task' } },
     ]);
     adapter.dispose();
@@ -1090,6 +1090,11 @@ it('compacts OpenCode 2.x natively and logs the completed boundary without affec
   nextStream.push(started()); nextStream.push(frame('session.compaction.ended', { reason: 'auto' })); nextStream.push(succeeded());
   await next;
   expect(events.filter((e) => e.type === 'compaction')).toEqual([{ type: 'compaction', trigger: 'manual' }, { type: 'compaction', trigger: 'auto' }]);
+  // OpenCode reports no size after one, so the meter knows none until the next call.
+  expect(events.filter((e) => e.type === 'usage' && e.record.compacted)).toEqual([
+    { type: 'usage', record: { source: 'opencode', compacted: true } },
+    { type: 'usage', record: { source: 'opencode', compacted: true } },
+  ]);
   adapter.dispose();
 });
 

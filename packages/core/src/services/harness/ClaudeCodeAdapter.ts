@@ -298,7 +298,13 @@ interface ClaudeLine {
 /** The tool Claude Code delegates to a subagent with — `Task` before it was renamed `Agent`. */
 const SUBAGENT_TOOLS = new Set(['Agent', 'Task']);
 
-/** Anthropic's `input_tokens` is only the uncached tail of the prompt — see {@link partedPromptUsage}. */
+/**
+ * Anthropic's `input_tokens` is only the uncached tail of the prompt — see
+ * {@link partedPromptUsage}. The main thread's context is the whole prompt
+ * and the reply, as Claude Code counts its last message's usage (`input_tokens
+ * + cache_creation_input_tokens + cache_read_input_tokens + output_tokens`, read
+ * in the 2.1.303 CLI) for its own context warning and auto-compaction.
+ */
 function usageRecord(usage: ClaudeUsage, model: string | undefined, subagentId?: string): UsageRecord {
   const record: UsageRecord = {
     source: 'claude-code',
@@ -307,6 +313,7 @@ function usageRecord(usage: ClaudeUsage, model: string | undefined, subagentId?:
   if (model) record.model = model;
   if (usage.output_tokens !== undefined) record.outputTokens = usage.output_tokens;
   if (subagentId) record.subagentId = subagentId;
+  else if (record.inputTokens !== undefined) record.contextTokens = record.inputTokens + (record.outputTokens ?? 0);
   return record;
 }
 
@@ -842,6 +849,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
             ...(typeof meta?.pre_tokens === 'number' ? { preTokens: meta.pre_tokens } : {}),
             ...(typeof meta?.post_tokens === 'number' ? { postTokens: meta.post_tokens } : {}),
           });
+          emit({ type: 'usage', record: { source: 'claude-code', compacted: true, ...(typeof meta?.post_tokens === 'number' ? { contextTokens: meta.post_tokens } : {}) } });
         }
         if (msg.subtype === 'background_tasks_changed' && Array.isArray(msg.tasks)) {
           this.backgroundTaskCount = msg.tasks.length;

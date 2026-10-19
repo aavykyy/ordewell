@@ -1048,6 +1048,10 @@ describe('ClaudeCodeAdapter runner commands', () => {
       { type: 'command_output', text: 'Compacted' },
       { type: 'turn_end' },
     ]);
+    // The meter reads the size the compaction left, and no total counts it.
+    expect(events.filter((e) => e.type === 'usage' && e.record.compacted)).toEqual([
+      { type: 'usage', record: { source: 'claude-code', compacted: true, contextTokens: 3615 } },
+    ]);
     adapter.dispose();
   });
 });

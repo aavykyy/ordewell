@@ -72,7 +72,7 @@ describe('usageRecord', () => {
   it('reports nothing for no counts or all zeros, and no cost for a reported 0', () => {
     expect(usageRecord(undefined, {})).toBeNull();
     expect(usageRecord({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, { cost: 0.1 })).toBeNull();
-    expect(usageRecord({ input: 1, output: 1 }, { cost: 0 })).toEqual({ source: 'opencode', inputTokens: 1, outputTokens: 1 });
+    expect(usageRecord({ input: 1, output: 1 }, { cost: 0 })).toEqual({ source: 'opencode', inputTokens: 1, outputTokens: 1, contextTokens: 2 });
   });
 });
 

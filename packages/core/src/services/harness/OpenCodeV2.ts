@@ -510,6 +510,8 @@ export class OpenCodeV2 {
       }
       if (frame.type === 'session.compaction.ended') {
         onEvent({ type: 'compaction', trigger: data.reason === 'manual' ? 'manual' : 'auto' });
+        // OpenCode states no size after it: the next call's usage is the first.
+        onEvent({ type: 'usage', record: { source: 'opencode', compacted: true } });
         return;
       }
       if (frame.type === 'session.execution.started') { turn.live = true; return; }

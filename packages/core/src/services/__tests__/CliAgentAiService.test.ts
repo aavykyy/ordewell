@@ -1380,6 +1380,9 @@ describe('CliAgentAiService — Codex', () => {
     // `total` for the turn is 26606 — the sum of the two `last` values. Emitting
     // it each update would count the first call twice.
     expect(usage.some((r) => r.inputTokens === 26606)).toBe(false);
+    // Codex's own count of the context a call leaves: input and output, less
+    // the reasoning, which a later prompt does not carry.
+    expect(usage.map((r) => r.contextTokens)).toEqual([13330, 13384]);
     const first = usage[0];
     expect(first?.contextWindow).toBe(258400);
     expect(first?.model).toBe('gpt-5.6-sol');
@@ -2043,15 +2046,16 @@ describe('CliAgentAiService — Claude Code partial messages, usage and subagent
 
   // Anthropic's `input_tokens` excludes both cache reads and cache writes, so
   // the prompt the model saw is the sum of all three; the read share is the
-  // cached one.
+  // cached one. The context a call leaves is that prompt and its reply, as
+  // Claude Code itself counts it.
   it('reports each planner call\'s usage once, and the turn\'s cost with the context window', async () => {
     const { svc } = service('claude-code', [fixture('claude-code', 'stream-tool-rounds')]);
     const { events, onProgress } = collector();
     await svc.startConversation(request({ onProgress }));
 
     expect(usageRecords(events)).toEqual([
-      { source: 'claude-code', model: 'claude-sonnet-5', inputTokens: 18604, cachedInputTokens: 9428, outputTokens: 162 },
-      { source: 'claude-code', model: 'claude-sonnet-5', inputTokens: 20025, cachedInputTokens: 18602, outputTokens: 14 },
+      { source: 'claude-code', model: 'claude-sonnet-5', inputTokens: 18604, cachedInputTokens: 9428, outputTokens: 162, contextTokens: 18766 },
+      { source: 'claude-code', model: 'claude-sonnet-5', inputTokens: 20025, cachedInputTokens: 18602, outputTokens: 14, contextTokens: 20039 },
       { source: 'claude-code', model: 'claude-sonnet-5', aggregate: true, reportedCost: { amount: 0.049754, currency: 'USD' } },
       { source: 'claude-code', model: 'claude-sonnet-5', contextWindow: 1000000 },
     ]);
@@ -2059,7 +2063,7 @@ describe('CliAgentAiService — Claude Code partial messages, usage and subagent
     expect(usage.totals).toEqual({
       inputTokens: 38629, cachedInputTokens: 28030, outputTokens: 176, reportedCost: { USD: 0.049754 },
     });
-    expect(plannerContextFill(usage)).toEqual({ usedTokens: 20025, windowTokens: 1000000 });
+    expect(plannerContextFill(usage)).toEqual({ usedTokens: 20039, windowTokens: 1000000 });
   });
 
   // A prompt of 0 would read as an empty context; absent is "not reported" (ADR-0017 U1).
@@ -2115,7 +2119,7 @@ describe('CliAgentAiService — Claude Code partial messages, usage and subagent
     expect(usage.byModel?.find((m) => m.model === 'a')?.totals.reportedCost).toEqual({ USD: 1 });
     expect(usage.byModel?.find((m) => m.model === 'b')?.totals.reportedCost).toEqual({ USD: 2 });
     expect(usage.totals.reportedCost).toEqual({ USD: 3 });
-    expect(plannerContextFill(usage)).toEqual({ usedTokens: 10, windowTokens: 200 });
+    expect(plannerContextFill(usage)).toEqual({ usedTokens: 11, windowTokens: 200 });
   });
 
   // A resumed session restores its running total (recorded: 0.0943048 on the

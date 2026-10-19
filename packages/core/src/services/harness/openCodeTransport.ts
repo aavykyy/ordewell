@@ -101,7 +101,10 @@ export interface OpenCodeTokens {
  * ({@link partedPromptUsage}): in the recordings `tokens.total` is input +
  * output + both cache counts. Its `output` excludes `reasoning` (a recorded
  * reply with text reports output 0 beside reasoning 127), and reasoning is
- * billed as output, so it is counted as output.
+ * billed as output, so it is counted as output. The main thread's context is
+ * all five counts, as OpenCode sums a step's tokens against the model's
+ * context limit itself (`input + output + reasoning + cache.read +
+ * cache.write`, read in the 2.0.32 binary) — so the prompt and output here.
  */
 export function usageRecord(tokens: OpenCodeTokens | undefined, call: { model?: string; cost?: number; subagentId?: string }): UsageRecord | null {
   if (!tokens) return null;
@@ -118,6 +121,7 @@ export function usageRecord(tokens: OpenCodeTokens | undefined, call: { model?: 
   // nothing.
   if (typeof call.cost === 'number' && call.cost > 0) record.reportedCost = { amount: call.cost, currency: 'USD' };
   if (call.subagentId) record.subagentId = call.subagentId;
+  else record.contextTokens = (prompt.inputTokens ?? 0) + outputTokens;
   return record;
 }
 

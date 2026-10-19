@@ -59,7 +59,9 @@ function tokenCount(value: unknown): number | undefined {
  * Thought tokens count as output: Gemini reports them separately from
  * candidatesTokenCount (totalTokenCount sums both), and they are tokens the
  * model ran and the invoice charges — leaving them out would understate every
- * thinking-model call.
+ * thinking-model call. The context the call leaves is its prompt and its
+ * completion, `candidatesTokenCount`: the thoughts are not part of the history
+ * the next call's prompt carries.
  */
 function usageRecordFrom(usage: Record<string, unknown> | undefined, model: string): UsageRecord | undefined {
   if (!usage) return undefined;
@@ -73,6 +75,7 @@ function usageRecordFrom(usage: Record<string, unknown> | undefined, model: stri
     ...(inputTokens !== undefined ? { inputTokens } : {}),
     ...(reportedOutput.length > 0 ? { outputTokens: reportedOutput.reduce((a, b) => a + b, 0) } : {}),
     ...(tokenCount(usage.cachedContentTokenCount) !== undefined ? { cachedInputTokens: tokenCount(usage.cachedContentTokenCount) } : {}),
+    ...(inputTokens !== undefined ? { contextTokens: inputTokens + (answerTokens ?? 0) } : {}),
   };
   const anyReported = record.inputTokens !== undefined || record.outputTokens !== undefined || record.cachedInputTokens !== undefined;
   return anyReported ? record : undefined;
