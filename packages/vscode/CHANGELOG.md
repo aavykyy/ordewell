@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Reloading the window keeps working under the same session.** A reload used
+  to start a second session file, which later reopened with completed tasks
+  shown as not done. Sessions forked by earlier reloads stay as separate
+  entries in session history, the newest file holding the run's latest state.
+- **A loaded session no longer offers Merge all for work already merged.**
+  Loading a saved session re-checks git: Merge all lists only what is still
+  unmerged, and a finished run whose work is all merged is cleaned up.
+
+### Changed
+
+- **The Open log button on a task header spans the title and assignment
+  lines** and is never overlapped by them in a narrow panel.
+
 ## [0.10.8] - 2026-10-18
 
 ### Fixed
