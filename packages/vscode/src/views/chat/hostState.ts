@@ -142,7 +142,6 @@ export type HostAction =
   | { type: 'turnRequested' }
   | { type: 'patchPlan'; plan: Updatable<SurfacePlan | null> }
   | { type: 'patchResearchActive'; active: boolean }
-  | { type: 'patchExecuting'; executing: boolean }
   | { type: 'patchError'; error: string }
   | { type: 'patchReady'; ready: boolean }
   | { type: 'patchRunners'; runners: Updatable<RunnerId[]> }
@@ -204,9 +203,6 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'patchResearchActive':
       return { ...state, isResearchActive: action.active };
-
-    case 'patchExecuting':
-      return { ...state, isExecuting: action.executing };
 
     case 'patchError':
       return { ...state, error: action.error };

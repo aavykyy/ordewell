@@ -83,12 +83,11 @@ describe('a control that goes through the command seam leaves its notice to the 
     expect(notes()).toEqual([]);
   });
 
-  it('Stop asks and writes no "Execution stopped." of its own, from the plan bar or the input', () => {
+  it('Stop asks and writes no "Execution stopped." of its own', () => {
     send({ type: 'planUpdated', plan: planOf('running', 'in_progress') });
     api.postMessage.mockClear();
 
     act(() => { fireEvent.click(screen.getByText('Stop')); });
-    act(() => { fireEvent.click(document.querySelector('.send-btn.processing')!); });
 
     expect(api.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'sendSystemCommand', command: 'stopExecution' }));
     expect(notes()).toEqual([]);

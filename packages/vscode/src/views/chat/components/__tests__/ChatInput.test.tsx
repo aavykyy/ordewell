@@ -28,7 +28,6 @@ function renderInput(props: Partial<React.ComponentProps<typeof ChatInput>> = {}
       modelOptions={props.modelOptions ?? MODELS}
       configuredProviders={props.configuredProviders ?? ['openrouter', 'google']}
       placeholder={props.placeholder}
-      isProcessing={props.isProcessing}
       {...rest}
     />,
   );
@@ -162,7 +161,7 @@ describe('ChatInput two-step model picker', () => {
 
 describe('ChatInput send/stop button', () => {
   it('shows send arrow when not processing', () => {
-    const { container } = renderInput({ isProcessing: false });
+    const { container } = renderInput({ isTurnRunning: false });
     const btn = container.querySelector('.send-btn');
     expect(btn).toBeTruthy();
     expect(btn!.getAttribute('title')).toContain('Send');
@@ -170,7 +169,7 @@ describe('ChatInput send/stop button', () => {
   });
 
   it('shows stop square when processing', () => {
-    const { container } = renderInput({ isProcessing: true });
+    const { container } = renderInput({ isTurnRunning: true });
     const btn = container.querySelector('.send-btn');
     expect(btn).toBeTruthy();
     expect(btn!.className).toContain('processing');
@@ -179,7 +178,7 @@ describe('ChatInput send/stop button', () => {
 
   it('calls onStop when clicked while processing', () => {
     const onStop = vi.fn();
-    const { container } = renderInput({ isProcessing: true, onStop });
+    const { container } = renderInput({ isTurnRunning: true, onStop });
     const btn = container.querySelector('.send-btn')!;
     fireEvent.click(btn);
     expect(onStop).toHaveBeenCalledTimes(1);
@@ -187,7 +186,7 @@ describe('ChatInput send/stop button', () => {
 
   it('does not call onSend when clicked while processing', () => {
     const onSend = vi.fn();
-    const { container } = renderInput({ isProcessing: true, onSend });
+    const { container } = renderInput({ isTurnRunning: true, onSend });
     const btn = container.querySelector('.send-btn')!;
     fireEvent.click(btn);
     expect(onSend).not.toHaveBeenCalled();
@@ -195,7 +194,7 @@ describe('ChatInput send/stop button', () => {
 
   it('calls onSend when clicked while not processing', () => {
     const onSend = vi.fn();
-    const { container } = renderInput({ isProcessing: false, onSend });
+    const { container } = renderInput({ isTurnRunning: false, onSend });
     type('hello');
     const btn = container.querySelector('.send-btn')!;
     fireEvent.click(btn);
@@ -203,14 +202,14 @@ describe('ChatInput send/stop button', () => {
   });
 
   it('is never disabled when processing', () => {
-    const { container } = renderInput({ isProcessing: true });
+    const { container } = renderInput({ isTurnRunning: true });
     const btn = container.querySelector('.send-btn')!;
     expect(btn).not.toHaveAttribute('disabled');
   });
 
   it('calls onStop when clicked while processing and disabled (plan generation)', () => {
     const onStop = vi.fn();
-    const { container } = renderInput({ isProcessing: true, disabled: true, onStop });
+    const { container } = renderInput({ isTurnRunning: true, disabled: true, onStop });
     const btn = container.querySelector('.send-btn')!;
     expect(btn).not.toHaveAttribute('disabled');
     fireEvent.click(btn);
@@ -218,7 +217,7 @@ describe('ChatInput send/stop button', () => {
   });
 
   it('is disabled when not processing and no input', () => {
-    const { container } = renderInput({ isProcessing: false });
+    const { container } = renderInput({ isTurnRunning: false });
     const btn = container.querySelector('.send-btn')!;
     expect(btn).toHaveAttribute('disabled');
   });

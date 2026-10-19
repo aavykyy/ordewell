@@ -288,22 +288,57 @@ describe('chat plan flow', () => {
     expect(screen.queryByText(/Generating plan|stale token|Stale message/)).toBeNull();
   });
 
-  it('shows stop button in plan cards and input bar during execution (isExecuting derived from plan status)', () => {
-    send({ type: 'planUpdated', plan: { ...plan, status: 'running' as const } });
+  const running = { ...plan, status: 'running' as const };
+  const sendBtn = () => document.querySelector('.send-btn') as HTMLButtonElement;
+  const stopMessages = () => api.postMessage.mock.calls.map((c) => c[0])
+    .filter((m) => m.type === 'stopResearch' || (m.type === 'sendSystemCommand' && m.command === 'stopExecution'));
+
+  it('offers Stop in the plan pane, and no stop square in the composer, while a run has an idle planner', () => {
+    send({ type: 'planUpdated', plan: running });
 
     expect(screen.queryByText('Stop')).toBeTruthy();
-    expect(processing()).toBe(true);
+    expect(processing()).toBe(false);
+    expect(sendBtn().disabled).toBe(true);
   });
 
-  it('sends stopExecution when stop button is clicked during execution', () => {
+  it('sends nothing from the composer\'s button or Enter while a run has an idle planner and nothing is typed', () => {
+    send({ type: 'planUpdated', plan: running });
     api.postMessage.mockClear();
-    send({ type: 'planUpdated', plan: { ...plan, status: 'running' as const } });
 
-    act(() => { fireEvent.click(document.querySelector('.send-btn.processing')!); });
+    fireEvent.click(sendBtn());
+    fireEvent.keyDown(textarea(), { key: 'Enter' });
 
-    expect(api.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'sendSystemCommand', command: 'stopExecution' }),
-    );
+    expect(api.postMessage).not.toHaveBeenCalled();
+  });
+
+  it('stops the run from the plan pane\'s Stop', () => {
+    send({ type: 'planUpdated', plan: running });
+    api.postMessage.mockClear();
+
+    act(() => { fireEvent.click(screen.getByText('Stop')); });
+
+    expect(stopMessages()).toEqual([expect.objectContaining({ type: 'sendSystemCommand', command: 'stopExecution' })]);
+  });
+
+  it('stops only the planner turn from the composer when a turn and a run are both live', () => {
+    send({ type: 'planUpdated', plan: running });
+    host.session(turnStarted('why is task 1 slow?'));
+    expect(processing()).toBe(true);
+    api.postMessage.mockClear();
+
+    act(() => { fireEvent.click(sendBtn()); });
+
+    expect(stopMessages()).toEqual([expect.objectContaining({ type: 'stopResearch' })]);
+  });
+
+  it('keeps Send for typed text while a run has an idle planner', () => {
+    api.postMessage.mockClear();
+    send({ type: 'planUpdated', plan: running });
+
+    type('how is it going?');
+
+    expect(api.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'sendMessage', text: 'how is it going?' }));
+    expect(stopMessages()).toEqual([]);
   });
 
   it('a run\'s status tick does not end a planner turn still answering', () => {
@@ -316,9 +351,9 @@ describe('chat plan flow', () => {
     expect(document.querySelector('.chat-msg-working')).toBeTruthy();
   });
 
-  it('keeps following the plan after the run is stopped from the input', () => {
+  it('keeps following the plan after the run is stopped from the plan pane', () => {
     send({ type: 'planUpdated', plan: { ...plan, status: 'running' as const } });
-    act(() => { fireEvent.click(document.querySelector('.send-btn.processing')!); });
+    act(() => { fireEvent.click(screen.getByText('Stop')); });
 
     send({ type: 'planUpdated', plan: { ...plan, status: 'draft' as const, tasks: [{ ...plan.tasks[0], title: 'Renamed after the stop' }] } });
 
