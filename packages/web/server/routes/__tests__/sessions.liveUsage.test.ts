@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { planUsage, rejoinPlanTree, saveSession, tasksTotalText, type IRunner, type LegacyPlanState, type RunnerSpawnOptions, type Task } from '@ordewell/core';
+import { planUsage, rejoinPlanTree, saveSession, taskUsageSummary, tasksTotalText, type IRunner, type LegacyPlanState, type RunnerSpawnOptions, type Task } from '@ordewell/core';
 import { FakeRunnerSession } from '@ordewell/core/testing';
 import { OrchestratorPool } from '../../pool/orchestratorPool';
 import { sessionsRoute } from '../sessions';
@@ -69,7 +69,7 @@ describe('GET /api/sessions/:id while a failed task is retried', () => {
       const live = pool.session(meta.id);
       await live.execute({ command: 'run_plan' }, { kind: 'user' });
       await vi.waitFor(() => expect(sessions).toHaveLength(1));
-      sessions[0].emitEvent({ type: 'usage', record: { source: 'claude-code', inputTokens: 100, reportedCost: { amount: 1, currency: 'USD' } } });
+      sessions[0].emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'claude-opus-5-5', inputTokens: 100, contextTokens: 61_000, contextWindow: 1_000_000, reportedCost: { amount: 1, currency: 'USD' } } });
       sessions[0].emitExit(1);
       await vi.waitFor(async () => expect((await served())[0].status).toBe('failed'));
 
@@ -81,12 +81,19 @@ describe('GET /api/sessions/:id while a failed task is retried', () => {
       expect(planUsage(during)).toMatchObject({ attempts: 2, totals: { inputTokens: 300, reportedCost: { USD: 3 } } });
       // The counts stay in the ledger the route serves; what is drawn of it is the cost.
       expect(tasksTotalText(during)).toBe('Tasks total: $3.00');
+      // The task's meter is served live too, read on the latest attempt, and
+      // the run snapshot a reconnecting client receives carries the same ledger.
+      expect(taskUsageSummary(during[0]).contextFill).toEqual({ usedTokens: 200 });
+      expect(during[0].attemptUsage?.[0] && taskUsageSummary({ attemptUsage: [during[0].attemptUsage[0]] }).contextFill).toEqual({ usedTokens: 61_000, windowTokens: 1_000_000 });
+      expect(taskUsageSummary(pool.runSnapshot(meta.id)!.tasks[0]).contextFill).toEqual({ usedTokens: 200 });
 
       await live.execute({ command: 'stop_task', task: 't1' }, { kind: 'user' });
       const after = await served();
       expect(after[0].status).toBe('pending');
       expect(planUsage(after)).toMatchObject({ attempts: 2, totals: { inputTokens: 300, reportedCost: { USD: 3 } } });
       expect(tasksTotalText(after)).toBe('Tasks total: $3.00');
+      expect(taskUsageSummary(after[0]).contextFill).toEqual({ usedTokens: 200 });
+      expect(taskUsageSummary(pool.runSnapshot(meta.id)!.tasks[0]).contextFill).toEqual({ usedTokens: 200 });
     } finally {
       pool.destroyAll();
     }

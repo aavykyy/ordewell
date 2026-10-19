@@ -366,6 +366,21 @@ describe('the task view draws as a runner, not the planner', () => {
       expect(bottom(state, 2)).toEqual(['attempt 1: ctx 36k (18%) · $1.00', 'task total: ctx 100k (50%) · $1.50']);
     });
 
+    it('keeps a saved log\'s usage line last, so the task view draws it after later text', () => {
+      // A log saved before attempt ledgers has only its own reports; the usage
+      // line stays pinned below the reply that followed it.
+      const view = replayTaskLog([
+        { type: 'turn_start', message: 'x' },
+        { type: 'usage', record: { source: 'claude-code', inputTokens: 500, outputTokens: 40 } },
+        { type: 'text_delta', text: 'Done.' },
+        { type: 'text', text: 'Done.' },
+        { type: 'turn_end', reason: 'completed' },
+      ]);
+      expect(view.blocks.at(-1)?.type).toBe('usage');
+      const state = withUsage([], { attempts: [1], attempt: 1, view });
+      expect(bottom(state)).toEqual(['ctx 500']);
+    });
+
     it('keeps the task total under a log no attempt ledger matches, with the log\'s own usage over it', () => {
       // A log saved before logs and ledgers shared their number: nothing ties it to a ledger.
       const view = replayTaskLog([

@@ -757,6 +757,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     this.resultHeld = false;
     this.turnClosed = false;
     this.clearFollowOnTimer();
+    // A turn names its own model on its first call; a command turn makes none,
+    // and reading the last turn's id here would report its window against the
+    // model the session has since switched to.
+    this.plannerModel = undefined;
   }
 
   /**

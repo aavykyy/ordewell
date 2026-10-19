@@ -1357,6 +1357,44 @@ describe('ClaudeCodeAdapter model switches', () => {
     adapter.dispose();
   });
 
+  // A model command's turn makes no call, and the window it reports is the
+  // one the turn's `init` names. Reading the previous turn's model there made
+  // a `/compact` right after `/model` report the old model's window last,
+  // which cleared the size the compaction had just left.
+  it('keeps the size a compaction left when it follows a model switch', async () => {
+    const SESSION = 'sess-switch-compact';
+    const A = 'claude-haiku-5-5';
+    const B = 'claude-sonnet-5-5';
+    const init = (model: string) => ({ type: 'system', subtype: 'init', session_id: SESSION, permissionMode: 'acceptEdits', model });
+    const start = { type: 'stream_event', session_id: SESSION, parent_tool_use_id: null, event: { type: 'message_start', message: { model: A, id: 'msg_1' } } };
+    const delta = { type: 'stream_event', session_id: SESSION, parent_tool_use_id: null, event: { type: 'message_delta', usage: { input_tokens: 1000, output_tokens: 10 } } };
+    const result = (modelUsage: object, cost = 0.01) => ({ type: 'result', session_id: SESSION, subtype: 'success', is_error: false, result: 'ok', total_cost_usd: cost, usage: { input_tokens: 2, output_tokens: 3 }, modelUsage });
+    const turn = (...lines: object[]) => `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`;
+    const { processDeps } = deps([
+      turn(init(A), start, delta, result({ [A]: { costUSD: 0.01, contextWindow: 200_000, costBasis: 'list' } })),
+      // `/model sonnet`: a command turn with no call, whose init still names A.
+      turn(init(A), result({ [A]: { costUSD: 0.01, contextWindow: 200_000, costBasis: 'list' } })),
+      // `/compact` after the switch: it runs on B, and the result's cumulative
+      // breakdown still contains A.
+      turn(
+        init(B),
+        { type: 'system', subtype: 'compact_boundary', session_id: SESSION, compact_metadata: { trigger: 'manual', pre_tokens: 24_939, post_tokens: 3_615 } },
+        result({ [A]: { costUSD: 0.01, contextWindow: 200_000, costBasis: 'list' }, [B]: { costUSD: 0.02, contextWindow: 1_000_000, costBasis: 'list' } }, 0.03),
+      ),
+    ]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskIn('acceptEdits'));
+    const events: AgentEvent[] = [];
+    await adapter.send('one', (e) => events.push(e));
+    await adapter.invokeCommand('model', 'sonnet', (e) => events.push(e));
+    await adapter.invokeCommand('compact', '', (e) => events.push(e));
+
+    const ledger = events.reduce((usage, event) => event.type === 'usage' ? addAttemptUsage(usage, event.record, '2026-10-19T18:00:01Z') : usage,
+      startAttemptUsage(1, 'claude-code', '2026-10-19T18:00:00Z'));
+    expect(plannerContextFill(ledger)).toEqual({ usedTokens: 3_615, windowTokens: 1_000_000 });
+    adapter.dispose();
+  });
+
   // Recorded the same way, `/model opus` straight after `/model sonnet`: the
   // second command's own `init` already reports Sonnet, the first switch.
   it('follows two /model commands back to back, each once the runner answers on its model', async () => {
