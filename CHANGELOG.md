@@ -27,12 +27,28 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **A run that starts while a loaded session's merged run is being cleaned up
   keeps its isolation** instead of silently falling back to the shared
   workspace.
+- **A coding-agent planner whose process ended between turns is restarted on
+  your next message** instead of answering "The claude-code planner exited with
+  code 143." The planner resumes its own conversation. If the runner can no
+  longer resume it (Claude Code refuses, or Codex or OpenCode would start an
+  empty session), you are asked to send the message again and the planner
+  picks the conversation up from its transcript.
+- **The VS Code chat's stop button stops only the planner.** With an empty
+  composer it appears while the planner is working; while tasks run and the
+  planner is idle it is the inert send arrow, and **Stop run** in the plan
+  pane halts the tasks.
+- **Reloading VS Code after a crash mid-run no longer reverts finished
+  tasks.** A restore snapshot older than the saved session no longer
+  overwrites it.
 
 ### Changed
 
 - **The Open log button on a task header spans the title and assignment
   lines** and is never overlapped by them. In a narrow panel the title and the
   runner, model and effort line are clipped before they reach it.
+- **A running task's check ring shows a sweeping progress arc** in the VS Code
+  chat instead of a faint glow. With reduced motion it is a still ring with a
+  dot.
 
 ## [0.10.8] - 2026-10-18
 
