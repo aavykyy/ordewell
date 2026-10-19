@@ -678,6 +678,34 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(mcp.revoked).toEqual(['tok-1']);
   });
 
+  it('restarts a planner that ended while idle even when a descendant still holds its pipes', async () => {
+    // A crashed CLI's child (a shell, an MCP server) can inherit its stdout or
+    // stderr and keep 'close' away; the process itself has still ended, so the
+    // next message must restart it rather than write into its dead stdin.
+    const answer = fixture('claude-code', 'prose');
+    const { svc, spawned } = service('claude-code', [
+      answer,
+      (_written, proc) => { if (!proc.killed) proc.emitStdout(answer); },
+    ]);
+    await svc.startConversation(request());
+
+    vi.useFakeTimers();
+    try {
+      spawned.processes[0].exitHoldingPipes(143);
+      const turn = svc.continueConversation('Carry on', () => {});
+      await vi.advanceTimersByTimeAsync(3000);
+
+      const settled = await turn;
+      expect(settled).toMatchObject({ kind: 'message' });
+      expect(settled.text).toContain('in-process or Redis');
+      expect(settled.text).not.toContain('143');
+      expect(spawned.processes).toHaveLength(2);
+      expect(spawned.lastArgs()).toContain('--resume');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('still fails the turn its process dies in, without restarting it mid-turn', async () => {
     const { svc, spawned } = service('claude-code', [
       fixture('claude-code', 'prose'),
