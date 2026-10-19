@@ -1,8 +1,8 @@
-import { assignmentFlagText, taskUsageText } from '../tui/blocks';
+import { assignmentFlagText } from '../tui/blocks';
 import { writeFileSync } from 'fs';
 import { flag, hasFlag, readLastSession } from '../utils';
 import { iconFor } from '../utils/output';
-import { blockedByLabel, blockingFailures, skippedLabel, flattenTasks, taskOrderLabel, taskRowView, planUsage, waitsForApproval, type ApprovalRecord, type AssignmentScope } from '@ordewell/core';
+import { blockedByLabel, blockingFailures, skippedLabel, flattenTasks, taskOrderLabel, taskRowView, tasksTotalText, usageText, waitsForApproval, type ApprovalRecord, type AssignmentScope } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, type SessionMeta } from '../apiClient';
@@ -101,8 +101,8 @@ function printOneSession(
   if (isolation) console.log(`Base:     ${handoffBase(isolation.handoff, 8)}`);
   console.log(`Tasks:    ${everyTask.length} total  |  ${count('completed')} done  |  ${count('failed')} failed  |  ${count('in_progress')} running  |  ${count('blocked')} blocked  |  ${count('skipped')} skipped\n`);
 
-  const usage = planUsage(allTasks);
-  if (usage.attempts) console.log(`Tasks total: ${taskUsageText(usage)}`);
+  const total = tasksTotalText(allTasks);
+  if (total) console.log(total);
   const record = servedApprovalRecord(plan);
   const approval = (row: { waitsForApproval: string | null }, ref: string) => (row.waitsForApproval
     ? `${row.waitsForApproval}: \`ordewell force-start ${ref}\` approves it, \`ordewell run\` approves all`
@@ -118,7 +118,8 @@ function printOneSession(
     if (row.assignmentFlag) console.log(`      ⚠ ${assignmentFlagText(row)}`);
     if (row.blockedBy) console.log(`      ${blockedByLabel(row.blockedBy)}`);
     if (row.status === 'skipped') console.log(`      ${skippedLabel(row.skipReason)}`);
-    if (row.usage) console.log(`      ${taskUsageText(row.usage)}`);
+    const usage = row.usage && usageText(row.usage);
+    if (usage) console.log(`      ${usage}`);
     for (const sub of t.subtasks || []) {
       const subIcon = iconFor(blocked.has(sub.id) ? 'blocked' : sub.status);
       const subModel = sub.assignedModel ? ` (${sub.assignedModel.modelLabel})` : '';
@@ -130,7 +131,8 @@ function printOneSession(
       if (subRow.assignmentFlag) console.log(`        ⚠ ${assignmentFlagText(subRow)}`);
       if (subRow.blockedBy) console.log(`        ${blockedByLabel(subRow.blockedBy)}`);
       if (subRow.status === 'skipped') console.log(`        ${skippedLabel(subRow.skipReason)}`);
-      if (subRow.usage) console.log(`        ${taskUsageText(subRow.usage)}`);
+      const subUsage = subRow.usage && usageText(subRow.usage);
+      if (subUsage) console.log(`        ${subUsage}`);
     }
   }
 }

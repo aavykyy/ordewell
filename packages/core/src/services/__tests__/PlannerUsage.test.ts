@@ -36,7 +36,7 @@ describe('PlannerUsageLedger', () => {
     expect(ledger.message().contextFill).toEqual({ usedTokens: 2000, windowTokens: 400000 });
 
     ledger.record({ source: 'opencode', model: 'opencode/unlisted', inputTokens: 3000 });
-    expect(ledger.message().contextFill).toBeUndefined();
+    expect(ledger.message().contextFill).toEqual({ usedTokens: 3000 });
   });
 
   it('keeps a reported window over the catalog\'s, on the calls that report none', () => {
@@ -55,11 +55,11 @@ describe('PlannerUsageLedger', () => {
     expect(ledger.message().contextFill).toEqual({ usedTokens: 700, windowTokens: 200000 });
   });
 
-  it('carries no turn id outside a turn, and no context fill while the window is unknown', () => {
+  it('carries no turn id outside a turn, and the used tokens without a window while it is unknown', () => {
     const ledger = new PlannerUsageLedger();
     ledger.record({ source: 'openai', inputTokens: 10 });
 
-    expect(ledger.message()).toEqual({ type: 'planner_usage', totals: { inputTokens: 10 }, byModel: [{ source: 'openai', totals: { inputTokens: 10 } }] });
+    expect(ledger.message()).toEqual({ type: 'planner_usage', totals: { inputTokens: 10 }, contextFill: { usedTokens: 10 }, byModel: [{ source: 'openai', totals: { inputTokens: 10 } }] });
   });
 
   it('has usage only once something was measured — a bare window or an empty ledger says nothing', () => {

@@ -98,34 +98,44 @@ export function addPlannerUsage(usage: PlannerUsage, record: UsageRecord): Plann
     next.bySubagent = { ...usage.bySubagent, [record.subagentId]: addUsage(usage.bySubagent?.[record.subagentId] ?? {}, record) };
     return next;
   }
-  if (!record.aggregate) {
-    if (record.source !== usage.source || record.model !== usage.model) {
-      delete next.lastPromptTokens;
-      delete next.contextWindow;
-    }
-    next.source = record.source;
-    next.model = record.model;
+  // A session breakdown names a model without measuring any call's prompt, so
+  // it never moves the meter.
+  if (record.aggregate) return next;
+  if (record.source !== usage.source || record.model !== usage.model) {
+    delete next.lastPromptTokens;
+    delete next.contextWindow;
   }
+  next.source = record.source;
+  next.model = record.model;
   if (record.inputTokens !== undefined) next.lastPromptTokens = record.inputTokens;
   // A reported window of 0 means "not known", not "no room": keep it out so the
-  // fill is omitted rather than shown against a guessed zero.
+  // meter shows no share rather than one against a guessed zero.
   if (record.contextWindow !== undefined) next.contextWindow = record.contextWindow > 0 ? record.contextWindow : undefined;
   return next;
 }
 
-/** Whether any measure was reported: a token line of nothing but blanks says nothing. */
+/** Whether any measure was reported: a usage line of nothing but blanks says nothing. */
 export function isMeasured(totals: UsageTotals): boolean {
   return totals.inputTokens !== undefined || totals.outputTokens !== undefined || totals.cachedInputTokens !== undefined
     || Object.keys(totals.reportedCost ?? {}).length > 0;
 }
 
-/** What the token line shows of a ledger — live from its broadcast, or reloaded from the saved one. */
+/**
+ * The main model's context: what its last prompt occupied, against its window
+ * when that is known. A window of 0 is not known.
+ */
+export interface ContextFill {
+  usedTokens: number;
+  windowTokens?: number;
+}
+
+/** What the usage line draws of a ledger — live from its broadcast, or reloaded from the saved one. */
 export interface UsageLine {
   byModel?: ModelUsage[];
   model?: string;
   totals: UsageTotals;
   bySubagent?: Record<string, UsageTotals>;
-  contextFill?: { usedTokens: number; windowTokens: number };
+  contextFill?: ContextFill;
 }
 
 export function usageLine(usage: PlannerUsage): UsageLine {
@@ -140,15 +150,15 @@ export function usageLine(usage: PlannerUsage): UsageLine {
 }
 
 /**
- * The last planner prompt against its window, or undefined while either is
- * unknown. `usedTokens` is the prompt total as reported, cached tokens
- * included: a cached token still occupies the window, so subtracting the
- * cached share would understate how full the context is. A window of 0 is
- * treated as unknown — never guessed.
+ * The last prompt of the main model, or undefined before one was measured.
+ * `usedTokens` is the prompt total as reported, cached tokens included: a
+ * cached token still occupies the window, so subtracting the cached share
+ * would understate how full the context is. The window rides along only when
+ * known; a window of 0 is treated as unknown — never guessed.
  */
-export function plannerContextFill(usage: PlannerUsage): { usedTokens: number; windowTokens: number } | undefined {
-  if (usage.lastPromptTokens === undefined || usage.contextWindow === undefined || usage.contextWindow <= 0) return undefined;
-  return { usedTokens: usage.lastPromptTokens, windowTokens: usage.contextWindow };
+export function plannerContextFill(usage: PlannerUsage): ContextFill | undefined {
+  if (usage.lastPromptTokens === undefined) return undefined;
+  return { usedTokens: usage.lastPromptTokens, ...(usage.contextWindow !== undefined && usage.contextWindow > 0 ? { windowTokens: usage.contextWindow } : {}) };
 }
 
 export interface ModelUsage {
@@ -270,7 +280,7 @@ export function planUsage(tasks: readonly UsageTask[]): PlanUsage {
 export interface TaskUsageSummary {
   totals: UsageTotals;
   attempts: number;
-  contextFill?: { usedTokens: number; windowTokens: number };
+  contextFill?: ContextFill;
 }
 
 export function taskUsageSummary(task: Pick<UsageTask, 'attemptUsage'>): TaskUsageSummary {
@@ -282,4 +292,90 @@ export function taskUsageSummary(task: Pick<UsageTask, 'attemptUsage'>): TaskUsa
     attempts: attempts.length,
     ...(contextFill ? { contextFill } : {}),
   };
+}
+
+// ── The text surfaces draw ───────────────────────────────────────────────────
+// Surfaces draw the main model's context and the money its runner reported,
+// never a token count, and word them here so none can disagree (ADR-0017 U1).
+
+/** `950`, `1.5k`, `61k`, `261k`, `1.2M`. */
+export function formatTokenCount(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 10_000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k`;
+  if (n < 999_500) return `${Math.round(n / 1000)}k`;
+  return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+}
+
+/** Two decimals from 1 up and up to four below it: a call can cost a fraction of a cent, a session several dollars. */
+export function formatCost(currency: string, amount: number): string {
+  const value = amount >= 1 ? amount.toFixed(2) : (([whole, frac = '']) => `${whole}.${frac.padEnd(2, '0')}`)(amount.toFixed(4).replace(/0+$/, '').split('.'));
+  return currency.toLowerCase() === 'usd' ? `$${value}` : `${value} ${currency.toUpperCase()}`;
+}
+
+/** `ctx 61k (6%)`, `ctx 61k` while the window is unknown, nothing before a call was measured. */
+export function contextMeterText(fill: ContextFill | undefined): string | null {
+  if (!fill) return null;
+  const used = `ctx ${formatTokenCount(fill.usedTokens)}`;
+  if (!fill.windowTokens) return used;
+  const share = fill.usedTokens / fill.windowTokens * 100;
+  return `${used} (${share < 1 ? '<1' : Math.round(share)}%)`;
+}
+
+/** Exact counts for the meter's hover. */
+export function contextMeterTitle(fill: ContextFill): string {
+  const used = fill.usedTokens.toLocaleString('en-US');
+  return fill.windowTokens ? `${used} of ${fill.windowTokens.toLocaleString('en-US')} tokens` : `${used} tokens`;
+}
+
+/** USD first, then the others by code, so a sum reads the same whichever attempt reported first. */
+function costParts(reportedCost: Record<string, number> | undefined): string[] {
+  const rank = (currency: string): string => (currency.toLowerCase() === 'usd' ? '' : currency.toUpperCase());
+  return Object.entries(reportedCost ?? {}).sort(([a], [b]) => rank(a).localeCompare(rank(b))).map(([currency, amount]) => formatCost(currency, amount));
+}
+
+/** The cost per currency as reported, joined by ` · `; null when none was reported. */
+export function costText(totals: UsageTotals): string | null {
+  const parts = costParts(totals.reportedCost);
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+/** The meter, then the cost, joined by ` · `; null when neither is known. */
+export function usageText(usage: { totals: UsageTotals; contextFill?: ContextFill }): string | null {
+  const parts = [contextMeterText(usage.contextFill), costText(usage.totals)].filter((p): p is string => p !== null);
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+/** Each runner/model's reported cost for the cost's hover, leaving out models with none. */
+export function modelCostTitle(byModel: readonly ModelUsage[]): string | undefined {
+  const lines = byModel.flatMap((m) => {
+    const cost = costParts(m.totals.reportedCost);
+    return cost.length > 0 ? [`${m.source} / ${m.model ?? 'unattributed'}: ${cost.join(' · ')}`] : [];
+  });
+  return lines.length > 0 ? lines.join('\n') : undefined;
+}
+
+/** Each subagent's reported cost for the subagent count's hover, or that it reported none. */
+export function subagentCostTitle(bySubagent: Readonly<Record<string, UsageTotals>>): string {
+  return Object.entries(bySubagent)
+    .map(([id, totals]) => `${id}: ${costParts(totals.reportedCost).join(' · ') || 'reported no cost'}`)
+    .join('\n');
+}
+
+function runnersOf(tasks: readonly UsageTask[]): AttemptUsage[] {
+  return tasks.flatMap((task) => [...task.attemptUsage ?? [], ...runnersOf(task.subtasks ?? [])]);
+}
+
+/**
+ * `Tasks total: $3.20 · codex reports no cost`: the cost over every attempt,
+ * then the runners none of whose attempts reported one — codex reports no
+ * price, and a price table is not Ordewell's to keep (ADR-0017 U1). A total has
+ * no meter: each task's own model holds its own window.
+ */
+export function tasksTotalText(tasks: readonly UsageTask[]): string | null {
+  const attempts = runnersOf(tasks);
+  if (attempts.length === 0) return null;
+  const costless = [...new Set(attempts.map((a) => a.runner))].filter((runner) => !attempts.some((a) => a.runner === runner && Object.keys(a.totals.reportedCost ?? {}).length > 0));
+  const note = costless.length === 0 ? [] : [`${costless.length === 1 ? costless[0] : `${costless.slice(0, -1).join(', ')} and ${costless.at(-1)}`} ${costless.length === 1 ? 'reports' : 'report'} no cost`];
+  const parts = [...costParts(planUsage(tasks).totals.reportedCost), ...note];
+  return parts.length > 0 ? `Tasks total: ${parts.join(' · ')}` : null;
 }

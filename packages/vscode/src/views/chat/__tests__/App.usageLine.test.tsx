@@ -11,58 +11,66 @@ const usage = (over: Partial<Extract<SessionMessage, { type: 'planner_usage' }>>
   type: 'planner_usage', turnId: TURN, totals: { inputTokens: 1_234, outputTokens: 567 }, ...over,
 });
 
-describe('token line', () => {
+describe('usage line', () => {
   let host: ReturnType<typeof hostBridge>;
   beforeEach(() => {
     render(<App />);
     host = hostBridge();
   });
 
-  it('sits outside the scrolling conversation and names tokens in and out', () => {
-    host.session(turnStarted, usage({}));
-
-    const line = document.querySelector('.usage-line')!;
-    expect(line).toBeTruthy();
-    expect(line.textContent).toContain('1,234 in');
-    expect(line.textContent).toContain('567 out');
-    expect(document.querySelector('.message-list')!.contains(line)).toBe(false);
-  });
-
-  it('omits cost when nothing reported one, and the context fill when unknown', () => {
-    host.session(turnStarted, usage({}));
-
-    const line = document.querySelector('.usage-line')!;
-    expect(line.textContent).not.toContain('$');
-    expect(line.textContent).not.toContain('context');
-  });
-
-  it('shows the context fill when the runner reported a window', () => {
-    host.session(turnStarted, usage({ contextFill: { usedTokens: 700, windowTokens: 10_000 } }));
-
-    const line = document.querySelector('.usage-line')!;
-    expect(line.textContent).toContain('context 7%');
-    expect(document.querySelector('.usage-line-context')!.getAttribute('title')).toBe('700 / 10,000 tokens');
-  });
-
-  it('shows cost only when reported', () => {
-    host.session(turnStarted, usage({ totals: { inputTokens: 1_234, outputTokens: 567, reportedCost: { usd: 0.0123 } } }));
-
-    expect(document.querySelector('.usage-line')!.textContent).toContain('$0.0123');
-  });
-
-  it('includes subagent usage in the totals, with its own share on hover', () => {
+  it('sits outside the scrolling conversation and draws the context and cost, no token count', () => {
     host.session(turnStarted, usage({
-      totals: { inputTokens: 500, outputTokens: 100 },
-      bySubagent: { 'sub-1': { inputTokens: 200, outputTokens: 40 } },
+      totals: { inputTokens: 1_234, outputTokens: 567, cachedInputTokens: 900, reportedCost: { usd: 0.0123 } },
+      contextFill: { usedTokens: 700, windowTokens: 10_000 },
     }));
 
     const line = document.querySelector('.usage-line')!;
-    expect(line.textContent).toContain('500 in');
-    expect(line.textContent).toContain('100 out');
+    expect(line.textContent).toBe('ctx 700 (7%) · $0.0123');
+    expect(document.querySelector('.message-list')!.contains(line)).toBe(false);
+  });
+
+  it('draws no line when neither the context nor a cost is known', () => {
+    host.session(turnStarted, usage({}));
+
+    expect(document.querySelector('.usage-line')).toBeNull();
+  });
+
+  it('draws the used tokens alone while the window is unknown', () => {
+    host.session(turnStarted, usage({ contextFill: { usedTokens: 61_143 } }));
+
+    expect(document.querySelector('.usage-line')!.textContent).toBe('ctx 61k');
+    expect(document.querySelector('.usage-line-context')!.getAttribute('title')).toBe('61,143 tokens');
+  });
+
+  it('gives the meter exact counts on hover', () => {
+    host.session(turnStarted, usage({ contextFill: { usedTokens: 61_143, windowTokens: 1_000_000 } }));
+
+    expect(document.querySelector('.usage-line-context')!.textContent).toBe('ctx 61k (6%)');
+    expect(document.querySelector('.usage-line-context')!.getAttribute('title')).toBe('61,143 of 1,000,000 tokens');
+  });
+
+  it('lists each model\'s cost on hover, leaving out those with none', () => {
+    host.session(turnStarted, usage({
+      totals: { reportedCost: { USD: 1.75 } },
+      byModel: [
+        { source: 'claude-code', model: 'opus', totals: { inputTokens: 5, reportedCost: { USD: 1.5 } } },
+        { source: 'claude-code', model: 'sonnet', totals: { reportedCost: { USD: 0.25 } } },
+        { source: 'codex', model: 'gpt', totals: { inputTokens: 9 } },
+      ],
+    }));
+
+    expect(document.querySelector('.usage-line-cost')!.getAttribute('title')).toBe('claude-code / opus: $1.50\nclaude-code / sonnet: $0.25');
+  });
+
+  it('keeps the subagent count, whose hover gives each one\'s cost or says it reported none', () => {
+    host.session(turnStarted, usage({
+      totals: { reportedCost: { USD: 0.5 } },
+      bySubagent: { 'sub-1': { inputTokens: 200, reportedCost: { USD: 0.02 } }, 'sub-2': { inputTokens: 40 } },
+    }));
+
     const agents = document.querySelector('.usage-line-subagents')!;
-    expect(agents.textContent).toContain('1 subagent');
-    expect(agents.getAttribute('title')).toContain('sub-1');
-    expect(agents.getAttribute('title')).toContain('200 in');
-    expect(agents.getAttribute('title')).toContain('40 out');
+    expect(agents.textContent).toBe('2 subagents');
+    expect(agents.getAttribute('title')).toBe('sub-1: $0.02\nsub-2: reported no cost');
+    expect(document.querySelector('.usage-line')!.textContent).not.toMatch(/\bin\b|\bout\b/);
   });
 });

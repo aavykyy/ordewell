@@ -1,5 +1,5 @@
 import type { ResearchStepOutcome, SkillLoadNotice, SubagentOutcome } from '../models/Task';
-import type { ModelUsage, UsageTotals } from '../models/Usage';
+import type { ContextFill, ModelUsage, UsageTotals } from '../models/Usage';
 import type { ApprovalKind } from '../interfaces/IApproval';
 import type { ApprovalSource } from '../services/ApprovalPolicy';
 import type { RunnerCommand, RunnerMcpServer } from '../models/RunnerCommand';
@@ -195,13 +195,13 @@ export interface RunnerLoadedBlock {
   mcpServers: readonly RunnerMcpServer[];
 }
 
-/** The token line. There is at most one, and it is always the last block. */
+/** The usage line (context and cost). Token counts ride in `totals` but are not drawn. There is at most one, and it is always the last block. */
 export interface UsageBlock {
   byModel?: ModelUsage[];
   model?: string;
   type: 'usage';
   id: string;
   totals: UsageTotals;
-  contextFill?: { usedTokens: number; windowTokens: number };
+  contextFill?: ContextFill;
   bySubagent?: Record<string, UsageTotals>;
 }

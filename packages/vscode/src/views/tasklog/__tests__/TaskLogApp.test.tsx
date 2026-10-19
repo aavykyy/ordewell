@@ -51,10 +51,14 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(screen.queryByRole('status')).toBeNull();
 
     send({ type: 'status', status: status({ usage: { totals: { inputTokens: 12400, outputTokens: 3100, cachedInputTokens: 2000, reportedCost: { USD: 0.42 } }, contextFill: { usedTokens: 36_000, windowTokens: 200_000 } } }) });
-    expect(screen.getByRole('status')).toHaveTextContent(/^12,400 in · 3,100 out · 2,000 cached · \$0\.42 · ctx 18%$/);
+    expect(screen.getByRole('status')).toHaveTextContent(/^ctx 36k \(18%\) · \$0\.42$/);
+    expect(screen.getByText(/ctx 36k/)).toHaveAttribute('title', '36,000 of 200,000 tokens');
+
+    send({ type: 'status', status: status({ usage: { totals: { inputTokens: 13000, outputTokens: 3200 }, contextFill: { usedTokens: 13_000 } } }) });
+    expect(screen.getByRole('status')).toHaveTextContent(/^ctx 13k$/);
 
     send({ type: 'status', status: status({ usage: { totals: { inputTokens: 13000, outputTokens: 3200 } } }) });
-    expect(screen.getByRole('status')).toHaveTextContent(/^13,000 in · 3,200 out · ctx unknown$/);
+    expect(screen.queryByRole('status')).toBeNull();
   });
 
   it('completes only the runner commands and sends a command with arguments', () => {
