@@ -12,6 +12,27 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 - **Release completion waits for the top-level `ordewell` package to resolve
   on npm**, as it already does for the packages it depends on.
+- **Reloading VS Code keeps working under the same session.** A window reload
+  used to start a second session file, which later reopened with completed
+  tasks shown as not done. The session's identity is now saved with the
+  workspace state and restored on reload. Sessions forked by earlier reloads
+  stay as separate entries in session history, the newest file holding the
+  run's latest state; nothing under `.ordewell/` is deleted.
+- **A loaded session no longer offers Merge all for work already merged.**
+  Loading a saved session now asks git again which of its work is in your
+  branch. Merge all lists only what is still unmerged, work whose integration
+  branch is gone counts as merged, and a finished run whose work is all merged
+  is cleaned up. A run with kept, conflicted or failed work is left alone.
+  Nothing starts as part of the check.
+- **A run that starts while a loaded session's merged run is being cleaned up
+  keeps its isolation** instead of silently falling back to the shared
+  workspace.
+
+### Changed
+
+- **The Open log button on a task header spans the title and assignment
+  lines** and is never overlapped by them. In a narrow panel the title and the
+  runner, model and effort line are clipped before they reach it.
 
 ## [0.10.8] - 2026-10-18
 
