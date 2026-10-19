@@ -44,7 +44,7 @@ export class RunnerApprovals {
       },
       stop: (sessionId) => {
         this.denySession(sessionId);
-        runner.stop(sessionId);
+        return runner.stop(sessionId);
       },
       stopAll: () => {
         this.approvals.clear(isRunnerApproval);

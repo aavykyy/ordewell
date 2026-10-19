@@ -430,7 +430,7 @@ describe('the attempt\'s verdict when a message is read mid-turn', () => {
     const session = new FakeRunnerSession();
     const runner = {
       spawn: async () => session,
-      stop: () => session.kill(),
+      stop: async () => session.kill(),
       stopAll: () => session.kill(),
       activeCount: 1,
     } satisfies IRunner;
@@ -763,7 +763,7 @@ describe('force send through the orchestrator', () => {
   function orchestratorFor(session: IRunnerSession) {
     const runner = {
       spawn: async () => session,
-      stop: () => session.kill(),
+      stop: async () => session.kill(),
       stopAll: () => session.kill(),
       activeCount: 1,
     } satisfies IRunner;

@@ -34,6 +34,7 @@ export abstract class AbstractRunnerSession implements IRunnerSession {
   }
 
   abstract kill(): void;
+  abstract stop(): Promise<void>;
   abstract getOutput(): string;
   abstract write(text: string): void;
   abstract turnState(): 'working' | 'idle';
@@ -58,18 +59,13 @@ export abstract class AbstractRunner<S extends IRunnerSession> implements IRunne
 
   get activeCount(): number { return this.sessions.size; }
 
-  stop(sessionId: string): void {
-    const session = this.sessions.get(sessionId);
-    if (!session) return;
-    session.kill();
-    this.sessions.delete(sessionId);
+  /** A session winding down stays registered until it exits, so a second stop gets the same wind-down. */
+  stop(sessionId: string): Promise<void> {
+    return this.sessions.get(sessionId)?.stop() ?? Promise.resolve();
   }
 
   stopAll(): void {
-    for (const [, session] of this.sessions) {
-      session.kill();
-    }
-    this.sessions.clear();
+    for (const session of this.sessions.values()) void session.stop();
   }
 
   protected registerSession(id: string, session: S): void {

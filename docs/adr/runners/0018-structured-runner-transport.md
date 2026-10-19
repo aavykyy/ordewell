@@ -174,9 +174,19 @@ and completion evidence.
   asks about every write. The connector compares the mode `init` reports with
   the one the plan asked for and fails the turn in plain words on a mismatch
   (ADR-0001).
-- **Lifetime (L1).** The process ends once its task passes. The log lives in
-  Ordewell, and work after the verdict would go unverified. The native session
-  id is saved per attempt.
+- **Lifetime (L1).** The process ends with its attempt, and at a verdict as
+  soon as the verdict is accepted, not once the work has landed: the log lives
+  in Ordewell, and work after the verdict would go unverified. It ends the way
+  the runner ends a turn. A turn still open gets the soft interrupt, and what
+  the runner reports as that turn closes still belongs to the attempt that
+  ended: Claude Code states a turn's cost and its model's window only on its
+  `result` line, which comes after the `task_complete` call. Then the runner is
+  told nothing more is coming: Claude Code exits by itself on stdin's end, and
+  only an exit of its own saves the session's running totals for `--resume`.
+  It is killed only once the interrupt grace runs out. Nothing waits on that
+  wind-down but a continue of the same session (K1), which starts once it is
+  over. The native session id is saved per attempt, with the count of its
+  cost the session ended on.
 - **Continue (K1).** A retry that resumes the saved native session with the
   user's message as the next turn. It is verified and landed like any attempt.
   It is offered on completed and failed structured tasks with a saved session
@@ -463,3 +473,4 @@ transport is retained for take-over.
 - 2026-10-18 — U1: the hold on a run is released however its last reset wait goes — Mark complete, a cancelled resume or the task leaving the plan — not only at the reset.
 - 2026-10-18 — O1: a run's late copy that adds to its deltas after another run or a tool line was written starts its addition on a line of its own.
 - 2026-10-18 — U1: loading a session clears saved resume times and keeps paused tasks idle until explicitly resumed.
+- 2026-10-19 — L1: an attempt's runner stops at its verdict, before the landing, by interrupting the turn and taking the runner's last report (Claude Code's cost and window) before the process goes; a continue waits for that wind-down.

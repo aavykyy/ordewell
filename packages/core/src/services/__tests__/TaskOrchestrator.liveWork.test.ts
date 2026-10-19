@@ -26,7 +26,7 @@ function killingRunner() {
   };
   const runner: IRunner = {
     spawn,
-    stop: vi.fn((id: string) => { const s = sessions.find((x) => x.id === id); if (s) kill(s); }),
+    stop: vi.fn(async (id: string) => { const s = sessions.find((x) => x.id === id); if (s) kill(s); }),
     stopAll: vi.fn(() => { for (const s of sessions) kill(s); }),
     activeCount: 0,
   };

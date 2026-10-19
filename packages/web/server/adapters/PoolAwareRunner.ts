@@ -29,13 +29,13 @@ export class PoolAwareRunner implements IRunner {
     return session;
   }
 
-  stop(sessionId: string): void {
-    this.inner.stop(sessionId);
+  stop(sessionId: string): Promise<void> {
     this.owned.delete(sessionId);
+    return this.inner.stop(sessionId);
   }
 
   stopAll(): void {
-    for (const id of this.owned) this.inner.stop(id);
+    for (const id of this.owned) void this.inner.stop(id);
     this.owned.clear();
   }
 }

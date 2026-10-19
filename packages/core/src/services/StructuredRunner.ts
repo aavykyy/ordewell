@@ -25,7 +25,10 @@ import { createTaskAdapter } from './harness/connectors';
 import { settleWithin } from './harness/settleWithin';
 import { sameMessage } from '../utils/sameMessage';
 
-/** How long a soft interrupt may take before the runner is killed and resumed instead. */
+/**
+ * How long a soft interrupt may take before the runner is killed and resumed
+ * instead, and how long a stopped session may take to wind down before it is killed.
+ */
 const DEFAULT_INTERRUPT_GRACE_MS = 5000;
 const TOOL_ARG_MAX_CHARS = 120;
 
@@ -251,6 +254,8 @@ export class StructuredSession extends AbstractRunnerSession {
   private queue: PendingMessage[] = [];
   private messageCount = 0;
   private interrupting: Promise<void> | null = null;
+  /** The wind-down once {@link stop} was asked for: the same for every caller, and nothing new is sent meanwhile. */
+  private stopping: Promise<void> | null = null;
   private lastSessionId: string | null = null;
   private lastSessionCost: RunnerSessionCost | null = null;
   private readonly structuredEmitter = new EventEmitter();
@@ -288,7 +293,7 @@ export class StructuredSession extends AbstractRunnerSession {
     // waits for that or its opening events reach nobody. Working already, so
     // a message sent in the meantime queues behind the prompt.
     this.state = 'working';
-    setImmediate(() => { if (!this.exited) this.deliver(prompt); });
+    setImmediate(() => { if (!this.exited && !this.stopping) this.deliver(prompt); });
   }
 
   getOutput(): string { return this.output; }
@@ -378,6 +383,61 @@ export class StructuredSession extends AbstractRunnerSession {
     this.baseHandleExit(-1);
   }
 
+  stop(): Promise<void> {
+    if (this.stopping) return this.stopping;
+    if (this.exited) return Promise.resolve();
+    // Set before the wind-down starts: what it says synchronously — undelivered
+    // messages, an exit — reaches listeners that may send, or stop, again.
+    let woundDown!: () => void;
+    this.stopping = new Promise<void>((resolve) => { woundDown = resolve; });
+    // A connector that throws on the way out is killed, never left half stopped.
+    void this.windDown().catch(() => this.kill()).then(woundDown);
+    return this.stopping;
+  }
+
+  /**
+   * The attempt is over (ADR-0018, L1), so what is still owed goes undelivered
+   * and every tool request unanswered at once. A turn still open is
+   * interrupted, and its close — where Claude Code reports the turn's cost and
+   * its model's window — is waited for; then the runner is told nothing more
+   * is coming and left to exit by itself. All of it within the interrupt
+   * grace: a runner still there once it runs out is killed.
+   */
+  private async windDown(): Promise<void> {
+    const adapter = this.adapterAttached ? this.adapter : null;
+    const deadline = Date.now() + this.launch.interruptGraceMs;
+    this.revokeTools();
+    this.undeliverQueued();
+    this.withdrawPermissions();
+    const open = this.turn && !this.turn.ended ? this.turn : null;
+    if (adapter && (!open || await this.turnClosed(open, adapter, deadline)) && adapter.endInput && !this.exited) {
+      adapter.endInput();
+      await this.within(this.gone(), deadline);
+    }
+    // Gone by itself, its process group may still hold what it started.
+    if (this.exited) adapter?.dispose();
+    else this.kill();
+  }
+
+  /** Whether `turn` closed within the deadline once interrupted. */
+  private async turnClosed(turn: OpenTurn, adapter: TaskModeAgentAdapter, deadline: number): Promise<boolean> {
+    const closed = new Promise<void>((resolve) => this.structuredEmitter.once('turnEnd', () => resolve()));
+    // The turn's close is what is waited for, acknowledged or not.
+    adapter.interrupt(Math.max(0, deadline - Date.now())).catch(() => false);
+    return (await this.within(closed, deadline)) && turn.ended;
+  }
+
+  /** Whether `done` settled before the deadline, or the session ended meanwhile. */
+  private within(done: Promise<void>, deadline: number): Promise<boolean> {
+    return settleWithin(done.then(() => true), { timeoutMs: Math.max(0, deadline - Date.now()), onTimeout: () => false, ended: this.gone(), onEnded: () => true });
+  }
+
+  private gone(): Promise<void> {
+    const { signal } = this.ended;
+    if (signal.aborted) return Promise.resolve();
+    return new Promise((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+  }
+
   turnState(): 'working' | 'idle' { return this.state; }
 
   onTurnEnd(listener: (reason: StructuredTurnEnd) => void): void {
@@ -407,7 +467,7 @@ export class StructuredSession extends AbstractRunnerSession {
     this.messageCount += 1;
     const id = `msg-${this.messageCount}`;
     const sender = opening.from ? { from: opening.from } : {};
-    if (this.exited) this.emitEvent({ type: 'message_undelivered', messageId: id, text, ...sender });
+    if (this.exited || this.stopping) this.emitEvent({ type: 'message_undelivered', messageId: id, text, ...sender });
     else if (this.state === 'idle' && this.adapterStarted && !this.sending) this.deliver(text, opening);
     else {
       this.state = 'working';
@@ -468,7 +528,7 @@ export class StructuredSession extends AbstractRunnerSession {
   }
 
   private runningTurn(): boolean {
-    return !this.exited && this.adapter !== null && this.turn !== null && !this.turn.ended;
+    return !this.exited && !this.stopping && this.adapter !== null && this.turn !== null && !this.turn.ended;
   }
 
   /** No runner can recall a message once offered to it, so only a queued one comes back. */
@@ -532,7 +592,8 @@ export class StructuredSession extends AbstractRunnerSession {
     if (this.interrupting) return this.interrupting;
     const turn = this.turn;
     const adapter = this.adapter;
-    if (!turn || turn.ended || !adapter) return Promise.resolve();
+    // A session winding down is interrupting its turn already.
+    if (!turn || turn.ended || !adapter || this.stopping) return Promise.resolve();
     this.interrupting = this.interruptTurn(turn, adapter).finally(() => {
       this.interrupting = null;
       this.offerNext();
@@ -548,7 +609,8 @@ export class StructuredSession extends AbstractRunnerSession {
       const settled = await settleWithin(ended.then(() => true), { timeoutMs: grace, onTimeout: () => false });
       if (settled) return;
     }
-    if (turn.ended || this.exited) return;
+    // A session winding down is ended, never restarted.
+    if (turn.ended || this.exited || this.stopping) return;
     await this.restartInterrupted(turn);
   }
 
@@ -660,7 +722,7 @@ export class StructuredSession extends AbstractRunnerSession {
   private offerNext(): void {
     const adapter = this.adapter;
     const turn = this.turn;
-    if (!adapter?.steer || !turn || turn.ended || turn.steerRefused || this.interrupting || this.exited) return;
+    if (!adapter?.steer || !turn || turn.ended || turn.steerRefused || this.interrupting || this.exited || this.stopping) return;
     if (this.queue.some((m) => m.stage === 'steering')) return;
     const next = this.queue.find((m) => m.stage === 'queued');
     // A command handed into the turn would be read as text; it and whatever
@@ -745,7 +807,8 @@ export class StructuredSession extends AbstractRunnerSession {
       }
       return;
     }
-    if (!turn && TURN_OPENING_EVENTS.has(event.type) && !('subagentId' in event && event.subagentId)) {
+    // A runner winding down opens no turn of the task's: what it still says is the closed one's tail.
+    if (!turn && !this.stopping && TURN_OPENING_EVENTS.has(event.type) && !('subagentId' in event && event.subagentId)) {
       turn = this.openTurn('');
       this.offerNext();
     }
@@ -810,7 +873,7 @@ export class StructuredSession extends AbstractRunnerSession {
    * back in Ordewell's hands: while it is on offer or owed, nothing overtakes it.
    */
   private deliverNext(): void {
-    if (this.exited || this.sending || (this.turn && !this.turn.ended)) return;
+    if (this.exited || this.stopping || this.sending || (this.turn && !this.turn.ended)) return;
     const head = this.queue[0];
     if (!head || this.queue.some((message) => message.stage !== 'queued')) return;
     this.queue.shift();

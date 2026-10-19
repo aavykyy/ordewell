@@ -215,6 +215,11 @@ interface TaskAttempt {
   turnOutputFrom: number;
   /** The completion reminder went out: once per attempt, so a second turn without `task_complete` waits for input. */
   reminded: boolean;
+  /**
+   * Its runner was told to stop (ADR-0018, L1). What it reports as it winds
+   * down is still this attempt's, though the attempt has ended.
+   */
+  runnerStopped: boolean;
 }
 
 type AttemptPhase = 'starting' | 'running' | 'integrating';
@@ -356,6 +361,8 @@ export class TaskOrchestrator {
   private store: PlanStore;
   private output: TaskOutputSource;
   private attempts = new Map<string, TaskAttempt>();
+  /** Each task's runners still winding down once stopped: a continue waits for them (ADR-0018, L1). */
+  private windDowns = new Map<string, Promise<void>>();
   private verifier = new VerdictEngine();
   /** Changed only by start, stop, a plan load, a usage-limit pause, a move off the limit, and {@link settleRun}. */
   private runState: RunState = 'idle';
@@ -1057,6 +1064,9 @@ export class TaskOrchestrator {
     // synchronously, and under a still-valid generation that exit is a verdict
     // — for a conflict repair, one that lands work the stop just cancelled.
     this.verifier.reset();
+    // Each attempt's runner winds down as any ended attempt's does, so what it
+    // reports meanwhile is still counted; whatever is still starting goes too.
+    for (const attempt of this.attempts.values()) this.stopRunner(attempt);
     this.runner.stopAll();
     // Interrupted work is kept like a failed attempt's: inspectable, and off
     // `active` so a crash-recovery prune does not sweep it away. A stopped
@@ -1189,6 +1199,8 @@ export class TaskOrchestrator {
     attempt.decided = true;
     // Read before anything is awaited: the turn an exit cut short ends a moment later.
     const stoppedMidTurn = endedByExit(verdict) ? saidInFlight(attempt) : null;
+    // Not after the landing: whatever the runner did meanwhile would go unverified (ADR-0018, L1).
+    this.stopRunner(attempt);
 
     console.error(`[TaskOrchestrator] Task ${taskRefOf(this.store.planTasks, task.id) ?? `#${task.order}`} "${task.title}" verdict=${verdict.outcome}`);
     console.error(`[TaskOrchestrator] Runner: ${task.assignedRunner}, Model: ${task.assignedModel?.modelId ?? 'default'}`);
@@ -2252,6 +2264,7 @@ export class TaskOrchestrator {
       turnError: null,
       turnOutputFrom: 0,
       reminded: false,
+      runnerStopped: false,
     };
     this.spawnCounts.set(task.id, attempt.attempt);
     this.attempts.set(task.id, attempt);
@@ -2299,6 +2312,9 @@ export class TaskOrchestrator {
       const manifest = this.registry?.get(attempt.runner)?.manifest;
       const unavailable = manifest && unavailableTaskModeMessage(manifest, task.taskMode);
       if (unavailable) throw new Error(unavailable);
+      // Resumed beside a runner still winding it down, a session would run in
+      // two processes, and count from before what the first one still reports.
+      if (kind.kind === 'continuation') await this.windDowns.get(task.id);
       const { cwd, worktree, previousWork } = await attemptCwd(kind, task, this.runs);
       attempt.cwd = cwd;
       attempt.worktree = worktree;
@@ -2368,10 +2384,11 @@ export class TaskOrchestrator {
       // Attached before the verifier, so the summary of the call that settles
       // the attempt is captured before its verdict asks for the final text.
       session.onEvent((event) => {
-        if (event.type !== 'usage' || this.attempts.get(task.id) !== attempt) return;
+        if (event.type !== 'usage' || (this.attempts.get(task.id) !== attempt && !attempt.runnerStopped)) return;
         this.store.recordAttemptUsage(task.id, attempt.attempt, event.record, new Date().toISOString());
         this.emit('onUsageChanged');
       });
+      session.onExit(() => this.woundDown(attempt, session));
       this.output.attach(task.id, session);
       this.verifier.watch(task, session);
       session.onEvent((event) => {
@@ -2556,9 +2573,37 @@ export class TaskOrchestrator {
     if (stopsRunner(reason)) {
       const task = this.store.get(taskId);
       if (task) this.verifier.clear(task);
-      if (session) this.runner.stop(session.id);
+      if (attempt) this.stopRunner(attempt);
     }
     return attempt;
+  }
+
+  /**
+   * Let the attempt's runner go the way it ends a turn (ADR-0018, L1): it
+   * winds down on its own time, bounded by its interrupt grace, and nothing
+   * here waits on it but a continue of the same task.
+   */
+  private stopRunner(attempt: TaskAttempt): void {
+    const session = attempt.session;
+    if (!session || attempt.runnerStopped) return;
+    attempt.runnerStopped = true;
+    const { taskId } = attempt;
+    // A stop that failed leaves nothing to wait for, and nothing awaits this but a continue.
+    const windDown = Promise.all([this.windDowns.get(taskId), this.runner.stop(session.id)]).catch(() => undefined).then(() => {
+      if (this.windDowns.get(taskId) === windDown) this.windDowns.delete(taskId);
+    });
+    this.windDowns.set(taskId, windDown);
+  }
+
+  /**
+   * An ended attempt's runner is gone: the count its session ended on is the
+   * one a continue of that session counts from. One still current is ended
+   * with that count instead.
+   */
+  private woundDown(attempt: TaskAttempt, session: IRunnerSession): void {
+    if (!attempt.runnerStopped || this.attempts.get(attempt.taskId) === attempt) return;
+    this.store.endAttemptUsage(attempt.taskId, attempt.attempt, new Date().toISOString(), session.sessionCost?.() ?? undefined, session.nativeSessionId() ?? undefined);
+    this.emit('onUsageChanged');
   }
 
   /** Kept on the task once the attempt ends, so a continue can resume it after a reload (ADR-0018, K1). */
