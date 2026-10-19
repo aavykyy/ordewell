@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { loadState } from '../stateStore';
+import { loadState, saveState } from '../stateStore';
+import type { LegacyPlanState } from '../../models/Task';
 
 describe('loadState', () => {
   let tmpDir: string;
@@ -19,12 +20,31 @@ describe('loadState', () => {
       },
     }));
 
-    expect(loadState(tmpDir)!.isolation).toEqual({
+    expect(loadState(tmpDir)!.plan.isolation).toEqual({
       run: {
         id: 'r1', workspaceRoot: '/work/app', shared: [], sharedRepos: [], tasks: {},
         repos: [{ path: '.', root: '/work/app', baseRef: 'abc', integrationBranch: 'ordewell/r1/integration' }],
       },
       resolvers: { r: 'c' },
     });
+  });
+
+  const plan = (): LegacyPlanState => ({ tasks: [], runners: ['claude-code'], status: 'approved', generatedAt: '', lastUpdated: '' });
+
+  it('gives back the session id the state was saved for, kept off the plan', () => {
+    saveState(plan(), tmpDir, '2026-10-18T10-05-18_review_0328b893');
+
+    const saved = loadState(tmpDir)!;
+    expect(saved.sessionId).toBe('2026-10-18T10-05-18_review_0328b893');
+    expect(saved.plan).not.toHaveProperty('sessionId');
+  });
+
+  it('still loads a state file saved without a session id', () => {
+    fs.mkdirSync(path.join(tmpDir, '.ordewell'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.ordewell', 'state.json'), JSON.stringify(plan()));
+
+    const saved = loadState(tmpDir)!;
+    expect(saved.sessionId).toBeUndefined();
+    expect(saved.plan.status).toBe('approved');
   });
 });

@@ -11,14 +11,28 @@ function getStatePath(baseDir: string): string {
   return path.join(getStateDir(baseDir), STATE_FILE);
 }
 
-export function saveState(plan: LegacyPlanState, baseDir?: string): void {
+/**
+ * The restore state a surface reopens on start. The session id sits beside the
+ * plan, not on it, so it never travels into a session file's `plan`; without
+ * it a restore would persist under a freshly minted id and fork the session.
+ */
+export interface SavedState {
+  plan: LegacyPlanState;
+  /** Absent in a state file written before the id was kept. */
+  sessionId?: string;
+}
+
+const SESSION_ID_KEY = 'sessionId';
+
+export function saveState(plan: LegacyPlanState, baseDir?: string, sessionId?: string): void {
   const statePath = getStatePath(baseDir ?? process.cwd());
   ensureDir(path.dirname(statePath));
   plan.lastUpdated = new Date().toISOString();
-  fs.writeFileSync(statePath, JSON.stringify(plan, null, 2));
+  const file = sessionId ? { ...plan, [SESSION_ID_KEY]: sessionId } : plan;
+  fs.writeFileSync(statePath, JSON.stringify(file, null, 2));
 }
 
-export function loadState(baseDir?: string, logger: ILogger = defaultLogger): LegacyPlanState | null {
+export function loadState(baseDir?: string, logger: ILogger = defaultLogger): SavedState | null {
   const dir = baseDir ?? process.cwd();
   const statePath = getStatePath(dir);
   if (!fs.existsSync(statePath)) return null;
@@ -29,10 +43,12 @@ export function loadState(baseDir?: string, logger: ILogger = defaultLogger): Le
       logger.warn('stateStore', `rejecting state from ${statePath}: old format (scalar "runner" instead of "runners" array). Please re-plan.`);
       return null;
     }
+    const sessionId: unknown = parsed[SESSION_ID_KEY];
+    delete parsed[SESSION_ID_KEY];
     const plan = parsed as LegacyPlanState;
     migratePlanStateIsolation(plan);
     migrateLoadedTasks(plan.tasks);
-    return plan;
+    return typeof sessionId === 'string' && sessionId ? { plan, sessionId } : { plan };
   } catch (err: unknown) {
     logger.warn('stateStore', `failed to load state from ${statePath}; falling back to empty state`, err);
     return null;

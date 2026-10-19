@@ -29,7 +29,8 @@ export function restoreState(deps: PersistenceDeps): void {
   // Keyed by workspace root, never process.cwd(): the extension host's cwd is
   // shared across windows, so an unkeyed state file leaks one workspace's
   // plan into another on restore.
-  const saved = loadState(deps.workspaceRoot());
+  const restored = loadState(deps.workspaceRoot());
+  const saved = restored?.plan;
   const hasDialogue = (saved?.conversationHistory?.length ?? 0) > 0;
   // A planning conversation that hasn't produced tasks yet is still a session
   // worth restoring — otherwise a window reload mid-dialogue loses the chat.
@@ -50,11 +51,12 @@ export function restoreState(deps: PersistenceDeps): void {
       if (task.status === 'in_progress') { task.status = 'pending'; }
     }
     // Adopt the plan into the Session so its tasks are executable and the
-    // conversation can resume when the user sends a message. persist:false —
-    // globalState has no session id, so persisting here would fork a new
-    // session file on every reload.
+    // conversation can resume when the user sends a message. The saved id keeps
+    // later persists in the session file the run was already writing; without
+    // it (an older state file) the Session's fresh id would fork a new one, so
+    // the restore itself never persists.
     try {
-      deps.session.loadPlan(saved, deps.getCurrentGoal(), deps.workspaceRoot(), { persist: false });
+      deps.session.loadPlan(saved, deps.getCurrentGoal(), deps.workspaceRoot(), { sessionId: restored?.sessionId, persist: false });
     } catch (err) {
       deps.log(`Restored plan could not be loaded into the session: ${err}`);
     }
@@ -73,5 +75,5 @@ export function persistState(deps: PersistenceDeps): void {
   const plan = deps.getCurrentPlan();
   if (plan.tasks.length === 0 && !(plan.conversationHistory && plan.conversationHistory.length > 0)) return;
   plan.lastUpdated = new Date().toISOString();
-  saveState(plan, deps.workspaceRoot());
+  saveState(plan, deps.workspaceRoot(), deps.session.sessionId);
 }

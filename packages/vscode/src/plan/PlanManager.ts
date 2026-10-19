@@ -78,7 +78,7 @@ export function finishPlannerTurn(
   } else {
     deps.chatProvider.setState('planDraft');
   }
-  saveState(plan, deps.fsAdapter.getWorkspaceRoot());
+  saveState(plan, deps.fsAdapter.getWorkspaceRoot(), deps.session.sessionId);
   deps.saveCurrentSession();
 }
 
@@ -249,7 +249,7 @@ export async function handleApprovePlan(deps: PlanManagerDeps): Promise<void> {
   plan.tasks = approvedTasks(plan.tasks);
   deps.session.loadPlan(plan, deps.getCurrentGoal(), deps.fsAdapter.getWorkspaceRoot());
   deps.chatProvider.planApproved();
-  saveState(plan, deps.fsAdapter.getWorkspaceRoot());
+  saveState(plan, deps.fsAdapter.getWorkspaceRoot(), deps.session.sessionId);
   deps.saveCurrentSession();
   try {
     deps.log('Running the plan through the command seam...');

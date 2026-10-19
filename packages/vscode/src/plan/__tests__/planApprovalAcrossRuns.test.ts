@@ -82,6 +82,7 @@ function host(workspace: string, aiService?: IAiService) {
     log: () => {},
   } as unknown as PlanManagerDeps;
 
+  const saveSession = vi.fn();
   cell.session = createSession({
     config: fakeConfig({ autonomousMode: true }),
     notifications: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), confirm: vi.fn().mockResolvedValue(undefined) },
@@ -95,7 +96,7 @@ function host(workspace: string, aiService?: IAiService) {
     settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } }),
     aiService: aiService ?? { reset: () => {}, hasActiveConversation: () => false } as unknown as IAiService,
     taskOutput: new BufferedTaskOutputSource(),
-    saveSession: vi.fn(),
+    saveSession,
   });
   const session = cell.session;
 
@@ -107,7 +108,7 @@ function host(workspace: string, aiService?: IAiService) {
     session.loadPlan(opened, goal, workspace, { persist: false });
     current = session.planState!;
   };
-  return { session, deps, status, latest, dock, restore, open, spawned };
+  return { session, deps, status, latest, dock, restore, open, spawned, saveSession };
 }
 
 /** Execute plan, then a run that ends with t1 failed and t2 done. */
@@ -200,6 +201,33 @@ describe('VS Code: the user\'s Execute plan stays their approval after the run',
       after.session.destroy();
       vi.useRealTimers();
     }
+  });
+});
+
+describe('VS Code: a window reload keeps the session\'s identity', () => {
+  let workspace: string;
+  beforeEach(() => {
+    workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-reload-'));
+    (vscode.window.showErrorMessage as unknown as ReturnType<typeof vi.fn>).mockReset();
+  });
+  afterEach(() => { fs.rmSync(workspace, { recursive: true, force: true }); });
+
+  // Seen live: each reload went on under a new id, so the session file the
+  // user reopened from history was frozen at the reload, with done tasks pending.
+  it('saves the rest of the run to the session file it was in before the reload', async () => {
+    const before = host(workspace);
+    await runEndedWithAFailure(before);
+    before.deps.persistState();
+    const id = before.session.sessionId;
+
+    const after = host(workspace);
+    expect(after.session.sessionId).not.toBe(id);
+    after.restore();
+    expect(after.session.sessionId).toBe(id);
+
+    await after.session.execute({ command: 'retry_task', task: 't1', from: 'fresh' }, PLANNER);
+    expect(after.saveSession).toHaveBeenCalled();
+    expect(new Set(after.saveSession.mock.calls.map((call) => call[3]))).toEqual(new Set([id]));
   });
 });
 
