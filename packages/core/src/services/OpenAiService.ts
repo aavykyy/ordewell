@@ -23,6 +23,7 @@ import type { RunnerModeInfo } from './ModeResolver';
 import { ContextCollector } from './ContextCollector';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
 import { IAiService, ConversationRequest, ConversationTurn } from './AiService';
+import type { TurnBudgets } from './PlannerBudgets';
 import { BaseAiService, ResearchChat, ResearchTurn, ToolResult, ConversationTurnContext } from './BaseAiService';
 import { toOpenAiTools, toOpenAiSubagentTools } from './researchTools';
 import { getProviderMeta, isApiProvider, stripModelPrefix } from './ProviderRegistry';
@@ -188,7 +189,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
   private client: OpenAI | null = null;
   private clientCredentials = '';
 
-  constructor(config: IConfig) { super(config); }
+  constructor(config: IConfig, turnBudgets?: TurnBudgets) { super(config, turnBudgets); }
 
   /**
    * Rebuilt whenever the key or endpoint differs from the one the client was

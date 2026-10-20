@@ -20,6 +20,7 @@ import { addUsage, type UsageTotals } from '../models/Usage';
 import type { ConversationTurn, TurnRun } from './AiService';
 import type { UsageRecord } from '../models/Usage';
 import { abortScope } from '../utils/abortScope';
+import { withTurnBudgets, type TurnBudgets } from './PlannerBudgets';
 
 /**
  * Read-only, side-effect-free tools that can share a round. Deliberately a
@@ -110,7 +111,7 @@ export abstract class BaseAiService {
   protected conversation: { ctx: ConversationTurnContext; setProgress: (fn: (p: ResearchProgress) => void) => void } | null = null;
   protected activeAbort: AbortController | null = null;
 
-  constructor(protected config: IConfig) {}
+  constructor(protected config: IConfig, protected turnBudgets?: TurnBudgets) {}
 
   abstract reset(): void;
   abstract ensureInit(): void;
@@ -365,7 +366,8 @@ export abstract class BaseAiService {
     // moment the context problem surfaces.
     const chat = withProactiveCompaction(ctx.chat);
     return settleReply({
-      message,
+      // The turn's own input carries the budgets, not the system prompt, which stays cacheable.
+      message: withTurnBudgets(this.turnBudgets, message),
       send: (text) => this.runToolRounds(chat, ctx, text, onProgress, signal),
       classify: { runners: ctx.runners, runnerModes: ctx.runnerModes, autonomousDefault: ctx.autonomousDefault },
       onProgress,

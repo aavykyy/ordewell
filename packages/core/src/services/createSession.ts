@@ -41,6 +41,8 @@ import { digestTaskLog, type TaskLogEvent } from '../models/TaskLog';
 import { TaskLogRecorder } from './TaskLogRecorder';
 import { SessionWindows, withContextWindows } from './ContextWindowFill';
 import { PlannerUsageLedger } from './PlannerUsage';
+import { plannerContextFill } from '../models/Usage';
+import { TurnBudgets, contextLine, taskReadsLine, webReadsLine } from './PlannerBudgets';
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
 import { approvalRecordOf, flattenTasks, keepExecutionState, stampOrigin, waitsForApproval, type LegacyPlanState, type PendingPlanTurn, type PlanState, type Task, type TaskSnapshot, type RunnerId } from '../models/Task';
@@ -233,9 +235,16 @@ export function createSession(deps: SessionDeps): Session {
   // so both read it once it exists.
   let conversation: PlannerConversation | undefined;
   const busy = () => conversation?.isTurnInFlight ?? false;
+  // Each source is read when a turn's input is built; the ledger, the web
+  // reads and the conversation are all made below.
+  const turnBudgets: TurnBudgets = new TurnBudgets([
+    () => contextLine(plannerContextFill(usage.snapshot())),
+    () => taskReadsLine(conversation?.readsLeft),
+    () => webReadsLine(webReads.remaining()),
+  ]);
   const backend = new PlannerBackend(deps.aiService
     ? { pinned: deps.aiService, busy }
-    : { provider: () => deps.config.aiProvider, create: () => createAiService(deps.config, { workspaceRoot: deps.workspaceRoot, mcpServer }), busy });
+    : { provider: () => deps.config.aiProvider, create: () => createAiService(deps.config, { workspaceRoot: deps.workspaceRoot, mcpServer, turnBudgets }), busy });
   const aiService = () => backend.current();
   const store = new PlanStore();
   // A window a runner or provider reports wins, and every later stream of the

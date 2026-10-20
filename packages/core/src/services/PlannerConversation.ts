@@ -585,6 +585,18 @@ export class PlannerConversation {
     return this.openTurn?.wakeUp;
   }
 
+  /**
+   * What the open turn's task reads have left, for the planner to see. A user
+   * turn counts down to the instruction to land and names the hard stop; a
+   * wake-up turn has its one budget, whole.
+   */
+  get readsLeft(): { left: number; hardStop?: number } | undefined {
+    const turn = this.openTurn;
+    if (!turn) return undefined;
+    const { reads, wakeUp } = turn;
+    return wakeUp ? { left: reads.hard - reads.answered } : { left: reads.soft - reads.answered, hardStop: reads.hard };
+  }
+
   /** A skill the planner loaded in the open turn, held with the turn; false when none is open to take it. */
   recordPlannerSkill(skill: SkillLoad): boolean {
     const turn = this.openTurn;

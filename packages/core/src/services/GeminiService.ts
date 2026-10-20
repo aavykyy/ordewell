@@ -24,6 +24,7 @@ import type { RunnerModeInfo } from './ModeResolver';
 import { ContextCollector } from './ContextCollector';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
 import { IAiService, ConversationRequest, ConversationTurn } from './AiService';
+import type { TurnBudgets } from './PlannerBudgets';
 import { BaseAiService, ResearchChat, ResearchTurn, ToolResult, ConversationTurnContext } from './BaseAiService';
 import { toGeminiToolDeclarations } from './researchTools';
 
@@ -188,7 +189,7 @@ export class GeminiService extends BaseAiService implements IAiService {
   /** The id `model` was made for; the SDK's own `model.model` is its `models/…` resource path. */
   private modelId = '';
 
-  constructor(config: IConfig) { super(config); }
+  constructor(config: IConfig, turnBudgets?: TurnBudgets) { super(config, turnBudgets); }
 
   private init(): boolean {
     const apiKey = this.config.apiKey;

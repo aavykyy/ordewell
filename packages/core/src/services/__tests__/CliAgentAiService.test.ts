@@ -5,6 +5,7 @@ import { createAiService } from '../AiService';
 import { fakeConfig, fakeFileSystem } from '../../testing';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { ConversationRequest } from '../AiService';
+import { TurnBudgets } from '../PlannerBudgets';
 import type { ResearchProgress, ResearchStep } from '../../models/Task';
 import { fakeMcpServer, fakeSpawn, fixture, openCodeFixture, planJson, scriptedAdapter, sseResponse, type FakeAgentProcess, type FakeMcpServer, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
 import type { McpToolReply, SubmitPlanArgs } from '../mcp/tools';
@@ -31,6 +32,7 @@ function service(
   overrides: Partial<IConfig> = {},
   spawnOptions: FakeSpawnOptions = {},
   mcp: FakeMcpServer = fakeMcpServer(),
+  turnBudgets?: TurnBudgets,
 ) {
   const spawned = fakeSpawn(replies, spawnOptions);
   const config = fakeConfig({ aiProvider: provider, ...overrides });
@@ -49,6 +51,7 @@ function service(
       isDirectory: () => true,
       exists: () => true,
       mcpServer: mcp,
+      turnBudgets,
     },
   );
   return { svc, spawned, config };
@@ -558,6 +561,20 @@ describe('CliAgentAiService — Claude Code', () => {
 
     expect(spawned.processes[0].killed).toBe(true);
     expect(svc.hasActiveConversation()).toBe(false);
+  });
+
+  it('appends the budget block to each message it sends the agent, and not to its system prompt', async () => {
+    let reads = 3;
+    const budgets = new TurnBudgets([() => `Task reads left for this message: ${reads}.`]);
+    const { svc, spawned } = service('claude-code', [fixture('claude-code', 'prose'), fixture('claude-code', 'prose')], {}, {}, fakeMcpServer(), budgets);
+    await svc.startConversation(request());
+    reads = 2;
+    await svc.continueConversation('Redis, please.', () => {});
+
+    const sent = writes(spawned.processes[0]);
+    expect(sent[0]).toContain('Add a cache layer\\n\\nCONTEXT AND BUDGETS (this turn):\\n- Task reads left for this message: 3.');
+    expect(sent[1]).toContain('Redis, please.\\n\\nCONTEXT AND BUDGETS (this turn):\\n- Task reads left for this message: 2.');
+    expect(spawned.lastArgs().join(' ')).not.toContain('CONTEXT AND BUDGETS');
   });
 
   it('replays a persisted transcript instead of re-running research', async () => {

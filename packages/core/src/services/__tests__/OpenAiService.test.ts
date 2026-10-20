@@ -19,6 +19,7 @@ vi.mock('openai', () => ({
 import { OpenAiService } from '../OpenAiService';
 import { PlannerUsageLedger } from '../PlannerUsage';
 import { SessionWindows } from '../ContextWindowFill';
+import { TurnBudgets } from '../PlannerBudgets';
 
 function streamOf(chunks: unknown[]): AsyncIterable<unknown> {
   return (async function* () {
@@ -184,6 +185,28 @@ describe('OpenAiService usage reporting (#49)', () => {
       { source: 'openai', model: 'gpt-4o-mini', inputTokens: 40, outputTokens: 4, subagentId },
       { source: 'openai', model: 'gpt-4o', inputTokens: 150, outputTokens: 5, contextTokens: 155 },
     ]);
+  });
+});
+
+describe('OpenAiService turn budgets', () => {
+  beforeEach(() => createSpy.mockReset());
+
+  it('puts the budget block in each turn\'s user message and never in the system prompt', async () => {
+    createSpy.mockImplementation(() => streamOf([{ choices: [{ delta: { content: 'Which store?' }, finish_reason: 'stop' }] }]));
+    let left = 40;
+    const service = new OpenAiService(cfg(), new TurnBudgets([() => `Web reads left this turn: ${left}.`]));
+    await service.startConversation({ goal: 'add a cache', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem(), onProgress: () => {} });
+    left = 39;
+    await service.continueConversation('in-process', () => {});
+
+    const messages = (createSpy.mock.calls.at(-1)?.[0] as { messages: Array<{ role: string; content: string }> }).messages;
+    const users = messages.filter((m) => m.role === 'user').map((m) => m.content);
+    expect(users).toEqual([
+      'add a cache\n\nCONTEXT AND BUDGETS (this turn):\n- Web reads left this turn: 40.',
+      'in-process\n\nCONTEXT AND BUDGETS (this turn):\n- Web reads left this turn: 39.',
+    ]);
+    expect(messages[0].role).toBe('system');
+    expect(messages[0].content).not.toContain('CONTEXT AND BUDGETS');
   });
 });
 
