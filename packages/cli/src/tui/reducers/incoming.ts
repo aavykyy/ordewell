@@ -81,7 +81,8 @@ function runTaskToView(t: RunTask): TaskView {
     continuable: t.continuable === true,
     awaitingApproval: t.awaitingApproval,
     ...(t.waitsForApproval === true ? { waitsForApproval: true } : {}),
-    ...(t.ops === true ? { ops: true } : {}),
+    // Drawn as the ops task it is by nature until the pane draws script tasks (ADR-0035).
+    ...(t.ops === true || t.type === 'script' ? { ops: true } : {}),
     ...(Array.isArray(t.skills) && t.skills.length > 0 ? { skills: t.skills.map((name) => planLabel(name)) } : {}),
     ...(t.addedBy ? { addedBy: t.addedBy } : {}),
     ...(Array.isArray(t.mergeGate) && t.mergeGate.length > 0 ? { mergeGate: t.mergeGate.map((title) => planLabel(title)) } : {}),

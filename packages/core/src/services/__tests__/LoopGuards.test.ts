@@ -59,6 +59,29 @@ describe('no identical retry', () => {
     const before = attemptShape(task('t3', { assignedModel: { modelLabel: 'Sonnet', modelId: 'sonnet' } }));
     expect(identicalRetry(t3, before, attemptShape(task('t3')))).not.toBeNull();
   });
+
+  describe('of a script task, whose body is read as a prompt is (ADR-0035)', () => {
+    const script = (over: Partial<Task> = {}): Task =>
+      createTask({ id: 't3', title: 'Push', type: 'script', commands: [['git', 'push', 'origin', 'main']], ...over });
+
+    it('refuses a retry of the same body and time limit, saying what to change', () => {
+      const trip = identicalRetry(t3, attemptShape(script()), attemptShape(script()))!;
+
+      expect(trip.refusal).toBe('Refused: task #3 "Build" failed with this same body and time limit, and an unchanged retry would run the same commands. Change something or escalate: edit its "commands", "script" or "timeoutMs" with edit_plan, then retry; or tell the user.');
+    });
+
+    it.each([
+      ['its commands', { commands: [['git', 'push', '--force-with-lease', 'origin', 'main']] }],
+      ['its body\'s kind', { commands: undefined, script: 'git push origin main' }],
+      ['its time limit', { timeoutMs: 1_200_000 }],
+    ])('lets a retry through once %s changed', (_what, change) => {
+      expect(identicalRetry(t3, attemptShape(script()), attemptShape(script(change)))).toBeNull();
+    });
+
+    it('reads a limit left out as the ten minutes it means', () => {
+      expect(identicalRetry(t3, attemptShape(script()), attemptShape(script({ timeoutMs: 600_000 })))).not.toBeNull();
+    });
+  });
 });
 
 describe('no oscillating edits', () => {

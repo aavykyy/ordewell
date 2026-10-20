@@ -61,7 +61,7 @@ const planTask = z.looseObject({
   order: z.number().optional(),
   title: z.string(),
   description: z.string().optional(),
-  type: z.enum(['ai', 'user']).optional(),
+  type: z.enum(['ai', 'user', 'script']).optional(),
   dependencies: z.array(z.string()).optional(),
   prompt: z.string().optional(),
   userSteps: z.array(z.looseObject({ order: z.number().optional(), instruction: z.string() })).optional(),
@@ -75,6 +75,11 @@ const planTask = z.looseObject({
   skills: z.array(z.string()).optional()
     .describe('Task skills (applies-to: task) by name; their bodies go in the runner\'s prompt. A subtask lists its own.'),
   subtasks: z.array(z.record(z.string(), z.unknown())).optional(),
+  // ADR-0035. Their shape is the plan's rule to judge, as the other fields' is.
+  commands: z.array(z.array(z.string())).optional()
+    .describe('A script task\'s argument vectors, run in order with no shell, stopping at the first that fails. Exactly one of commands or script.'),
+  script: z.string().optional().describe('A script task\'s script, run by the research shell. Exactly one of commands or script.'),
+  timeoutMs: z.number().optional().describe('A script task\'s time limit in milliseconds; ten minutes when left out.'),
 });
 
 const submitPlanInput = z.object({

@@ -48,6 +48,8 @@ export interface SessionOverrides {
   settings?: SessionDeps['settings'];
   sessionId?: string;
   runner?: IRunner;
+  /** What runs script tasks (ADR-0035); a real one, spawning processes, unless a test supplies one. */
+  scriptRunner?: IRunner;
   /** Defaults to the built-in manifests; a test of a host-dependent catalog marks modes unavailable on its own. */
   registry?: RunnerRegistry;
   /** Fakes go through the constructor seam — Partial so a test only stubs the calls it expects. */
@@ -106,6 +108,7 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
     config: overrides.config ?? fakeConfig(),
     notifications: fakeNotification(),
     runner,
+    scriptRunner: overrides.scriptRunner,
     registry: overrides.registry ?? new RunnerRegistry(),
     workspaceRoot: overrides.workspaceRoot ?? (() => testWorkspace),
     fsAdapter: overrides.fsAdapter ?? fakeFs(),

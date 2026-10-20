@@ -16,7 +16,9 @@ export interface Continuation {
  * keeps Merge all out — is read from this, never from loose flags.
  *
  * - `change`: a change task's attempt, in its worktree when the run isolates.
- * - `ops`: an ops task's attempt, from the workspace root (ADR-0020).
+ * - `ops`: an ops task's attempt, from the workspace root (ADR-0020). A
+ *   script task's attempt is one too (ADR-0035), though it is told nothing:
+ *   it runs its body, with no runner or prompt.
  * - `repair`: a conflict repair, in the worktree kept for it (ADR-0015).
  * - `continuation`: the task's saved runner session resumed with the user's
  *   message (ADR-0018), running where the task it continues runs.

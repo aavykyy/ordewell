@@ -306,6 +306,9 @@ export class StructuredSession extends AbstractRunnerSession {
     this.checkpointHandler = handler;
   }
 
+  /** A runner's model reports through `task_complete`; only a script task's session ends on its exit status (ADR-0035). */
+  onScriptExit(): void {}
+
   /**
    * The runner on a fresh token, attached or respawned once (ADR-0025). Done
    * once the runner reports the server connected — or once the session ended

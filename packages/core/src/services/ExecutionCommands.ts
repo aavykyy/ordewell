@@ -542,7 +542,7 @@ export class ExecutionCommands {
       return { refusal: `The plan is already running (${named(live)} ${live.length === 1 ? 'is' : 'are'} running). Start one more ready task with run_task, or wait.` };
     }
     // A new run leaves a skipped task skipped, as it leaves a completed one done.
-    const toRun = all.filter(({ task }) => task.type === 'ai' && task.status !== 'completed' && task.status !== 'skipped');
+    const toRun = all.filter(({ task }) => task.type !== 'user' && task.status !== 'completed' && task.status !== 'skipped');
     if (toRun.length === 0) return { refusal: 'Every task has already completed: there is nothing left to run.' };
     let approves: Located[] = [];
     // Autorun is the user's standing instruction: its run is the user's approval, as Execute plan is.
@@ -594,7 +594,7 @@ export class ExecutionCommands {
     }
     const waits = this.host.startWaits(task);
     // The start rule's `no-prompt`: a task with nothing to run is never started.
-    if (waitOf(waits, 'no-prompt')) return { refusal: noPromptRefusal(label) };
+    if (waitOf(waits, 'no-prompt')) return { refusal: noPromptRefusal(label, task) };
     const failed = (waitOf(waits, 'blocked')?.failed ?? []).flatMap((id) => this.located(id, tasks) ?? []);
     if (failed.length > 0) {
       return { refusal: `${capitalize(label)} is blocked: ${named(failed)} failed. Retry ${failed.length === 1 ? 'it' : 'them'} first.` };
@@ -652,7 +652,7 @@ export class ExecutionCommands {
     if (task.status === 'completed') return { refusal: `${capitalize(label)} has already completed. ${USER_VOICE.completed}` };
     // A force start goes past a hold, a failure and a gate, but not the fact
     // that there is nothing to run (ADR-0034).
-    if (waitOf(this.host.startWaits(task), 'no-prompt')) return { refusal: noPromptRefusal(label) };
+    if (waitOf(this.host.startWaits(task), 'no-prompt')) return { refusal: noPromptRefusal(label, task) };
     return {
       act: async () => {
         const queued = await this.host.forceStart(task.id);
@@ -701,6 +701,7 @@ export class ExecutionCommands {
   private prepareInterrupt(located: Located): Prepared {
     const { task } = located;
     const label = describe(located);
+    if (task.type === 'script') return { refusal: scriptHasNoTurn(label, 'interrupt') };
     if (!this.host.running(task.id)) return { refusal: `${capitalize(label)} is not running (it ${statusWords(task)}): there is no turn to interrupt.` };
     return {
       act: async () => {
@@ -792,6 +793,7 @@ export class ExecutionCommands {
     return {
       act: async () => {
         await this.host.stopTask(task.id);
+        if (task.type === 'script') return { message: `Stopped ${label}: what it was running was ended, and it is back to not started and held until it is retried. A retry runs its body again from the first step.` };
         return { message: `Stopped ${label}: it is back to not started and held until it is retried, and its open approvals were denied.${task.ops ? ' A retry is told what this attempt did.' : ''}` };
       },
     };
@@ -821,6 +823,7 @@ export class ExecutionCommands {
 
   private prepareMessage(located: Located, command: Extract<ExecutionCommand, { command: 'message_task' }>, actor: ExecutionActor): Prepared {
     const label = describe(located);
+    if (located.task.type === 'script') return { refusal: scriptHasNoTurn(label, 'message') };
     if (command.force && actor.kind !== 'user') return { refusal: usersOnly('message_task', 'Force send') };
     return {
       act: async () => {
@@ -967,7 +970,9 @@ export class ExecutionCommands {
     const subject = capitalize(this.intent(command, located));
     const how = located?.task.type === 'ai'
       ? ` It runs on ${located.task.assignedRunner}${located.task.taskMode ? ` in ${located.task.taskMode} mode` : ''}, as the plan set it.`
-      : ' Each task runs on its runner, in the mode the plan set.';
+      : located?.task.type === 'script'
+        ? ' It is a script task: Ordewell runs its body at the workspace root, with no model, as the plan holds it.'
+        : ' Each task runs on its runner, in the mode the plan set.';
     const one = approves.length === 1;
     const approving = approves.length === 0 ? '' : command.command === 'run_plan'
       ? ` Allowing approves ${named(approves)}, added since you approved the plan, and starts ${one ? 'it' : 'them'} with the rest.`
@@ -1158,7 +1163,13 @@ function capitalize(text: string): string {
 }
 
 /** A start of an AI task the plan gives no prompt: the start rule's `no-prompt`, in one wording (ADR-0034). */
-function noPromptRefusal(label: string): string {
+/** A script task runs its body with no model (ADR-0035): nothing reads a message, and no turn can be interrupted. */
+function scriptHasNoTurn(label: string, what: 'message' | 'interrupt'): string {
+  return `${capitalize(label)} is a script task: it runs no model, so there is ${what === 'message' ? 'nothing to read a message' : 'no turn to interrupt'}. Stop it, or change its body with edit_plan and retry it.`;
+}
+
+function noPromptRefusal(label: string, task: Pick<Task, 'type'>): string {
+  if (task.type === 'script') return `${capitalize(label)} has no body to run. Give it "commands" or a "script" first.`;
   return `${capitalize(label)} has no prompt, so there is nothing to run. Write one first.`;
 }
 

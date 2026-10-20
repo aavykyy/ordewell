@@ -142,7 +142,7 @@ function modeFor(write: AssignmentWrite, task: Task, moved: boolean): { ok: true
     if (unavailable) return { ok: false, error: `Mode "${task.taskMode}" of runner "${runner}" is unavailable on this host: ${unavailable}` };
     return { ok: true, mode: task.taskMode };
   }
-  const becameAi = before?.type === 'user';
+  const becameAi = before !== undefined && before.type !== 'ai';
   if (writer === 'runner' || !catalog.runnerModes || (before && !moved && !becameAi && write.readOnly === undefined)) return { ok: true, mode: task.taskMode };
   // A move carries the old runner's mode id, which says read-only only on that runner.
   const carried = prior !== undefined && task.taskMode === prior.taskMode && readOnlyOn(prior.taskMode, prior.assignedRunner, catalog);
@@ -204,7 +204,8 @@ export function resolveAssignment(write: AssignmentWrite): AssignmentOutcome {
   const live = writer !== 'runner' && !!before && !!catalog.liveRunner?.(before.id);
   if (live && moved) return { ok: false, field: 'assignedRunner', error: liveRunnerRefusal({ title }) };
   if (live && !sameAssignment(before?.assignedModel, written.assignedModel)) return { ok: false, field: 'assignedModel', error: liveModelRefusal({ title }) };
-  if (written.type === 'user') return { ok: true, task: written, adjustments: [] };
+  // A manual task runs on nothing, and a script task on no runner (ADR-0035).
+  if (written.type !== 'ai') return { ok: true, task: written, adjustments: [] };
 
   const mode = modeFor(write, written, moved);
   if (!mode.ok) return { ok: false, field: 'taskMode', error: mode.error };

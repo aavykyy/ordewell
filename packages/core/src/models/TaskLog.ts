@@ -1,5 +1,6 @@
 import type { ApprovalDecision } from '../interfaces/IApproval';
-import type { StructuredEvent, StructuredTurnEnd, TaskMessageFrom } from '../interfaces/IRunner';
+import type { ScriptRun, ScriptStatus, StructuredEvent, StructuredTurnEnd, TaskMessageFrom } from '../interfaces/IRunner';
+import { commandLine } from './ScriptTask';
 import type { SubagentOutcome, TaskSkillNotice, TaskSkillSnapshot } from './Task';
 import type { UsageRecord } from './Usage';
 import type { RunnerCommand, RunnerMcpServer, RunnerModelRef } from './RunnerCommand';
@@ -97,7 +98,13 @@ export type TaskLogEvent =
    * running any more: a task's runner is ended the moment its `task_complete`
    * lands, often before it reports that call's result.
    */
-  | { type: 'runner_ended' };
+  | { type: 'runner_ended' }
+  /** A script task's command as it ran (ADR-0035): its argument vector, or its script, once. */
+  | ({ type: 'script_run' } & ScriptRun)
+  /** What it printed; `omittedChars` on the tail of an output too long to keep, for the middle left out. */
+  | { type: 'script_output'; text: string; omittedChars?: number }
+  /** How it ended — exit code, or the signal that ended it — and after how long; `timedOut` when the task's limit ended it. */
+  | ({ type: 'script_exit'; durationMs: number; timedOut?: true } & ScriptStatus);
 
 const HEAD_LINES = 60;
 const TAIL_LINES = 40;
@@ -207,6 +214,15 @@ export function toTaskLogEvent(event: StructuredEvent): TaskLogEvent | null {
       };
     case 'command_output':
       return { type: 'command_output', text: event.text };
+    case 'script_run':
+      return 'argv' in event ? { type: 'script_run', argv: [...event.argv] } : { type: 'script_run', script: event.script };
+    case 'script_output':
+      return { type: 'script_output', text: event.text, ...(event.omittedChars ? { omittedChars: event.omittedChars } : {}) };
+    case 'script_exit':
+      return {
+        type: 'script_exit', code: event.code, signal: event.signal, durationMs: event.durationMs,
+        ...(event.timedOut ? { timedOut: true } : {}), ...(event.error !== undefined ? { error: event.error } : {}),
+      };
     // Logged once the plan's write-back settles: see `TaskLogRecorder.note`.
     case 'model_switched':
     case 'model_drifted':
@@ -224,7 +240,7 @@ export function taskLogForSurface(events: readonly TaskLogEvent[]): TaskLogEvent
 
 /**
  * Merge consecutive deltas of one stream into one event each: of one run of
- * text, or of one voice's thinking. Deltas arrive a few characters at a time;
+ * text, of one voice's thinking, or of what a script's command printed. Deltas arrive a few characters at a time;
  * merged, a batch is one message on the wire and one line on disk, and the
  * view folds to the same blocks either way.
  */
@@ -236,6 +252,8 @@ export function coalesceTaskLog(events: readonly TaskLogEvent[]): TaskLogEvent[]
       out[out.length - 1] = { ...last, text: last.text + event.text };
     } else if (last?.type === 'thinking_delta' && event.type === 'thinking_delta' && last.subagentId === event.subagentId) {
       out[out.length - 1] = { ...last, text: last.text + event.text };
+    } else if (last?.type === 'script_output' && event.type === 'script_output' && !last.omittedChars && !event.omittedChars) {
+      out[out.length - 1] = { ...last, text: last.text + event.text };
     } else {
       out.push(event);
     }
@@ -243,9 +261,25 @@ export function coalesceTaskLog(events: readonly TaskLogEvent[]): TaskLogEvent[]
   return out;
 }
 
+/** A script step as one line of a digest or a reader's text: the command as typed, or the script's first line. */
+export function scriptRunText(run: ScriptRun): string {
+  if ('argv' in run) return commandLine(run.argv);
+  const lines = run.script.trim().split('\n');
+  return lines.length > 1 ? `${lines[0]} … (${lines.length} lines)` : lines[0];
+}
+
+/** How a script step ended, as a reader says it. */
+export function scriptExitText(exit: Omit<Extract<TaskLogEvent, { type: 'script_exit' }>, 'type'>): string {
+  const seconds = `${Math.round(exit.durationMs / 100) / 10} s`;
+  if (exit.error !== undefined) return `could not start: ${exit.error}`;
+  const how = exit.signal ? `ended by ${exit.signal}` : `exited ${exit.code ?? 'unknown'}`;
+  return `${how} after ${seconds}${exit.timedOut ? ': the time limit ran out' : ''}`;
+}
+
 /**
  * What an attempt did to the world, for the retry of a task whose effects
- * outlive it (ADR-0020): one line per tool call and how it ended.
+ * outlive it (ADR-0020): one line per tool call, or per script step, and how
+ * it ended.
  */
 export function digestTaskLog(events: readonly TaskLogEvent[], maxCalls: number): string {
   const outcomes = new Map<string, boolean>();
@@ -257,12 +291,24 @@ export function digestTaskLog(events: readonly TaskLogEvent[], maxCalls: number)
     else if (event.type === 'error') lastError = event.message;
   }
   const lines: string[] = [];
+  let step: string | undefined;
   for (const event of events) {
+    if (event.type === 'script_run') {
+      if (step !== undefined) lines.push(`- ${step} → no result`);
+      step = scriptRunText(event);
+      continue;
+    }
+    if (event.type === 'script_exit' && step !== undefined) {
+      lines.push(`- ${step} → ${scriptExitText(event)}`);
+      step = undefined;
+      continue;
+    }
     if (event.type !== 'tool_call') continue;
     const outcome = outcomes.get(event.id);
     const args = event.args.length > DIGEST_ARGS_CHARS ? `${event.args.slice(0, DIGEST_ARGS_CHARS)}…` : event.args;
     lines.push(`- ${event.name} ${args} → ${outcome === undefined ? 'no result' : outcome ? 'ok' : 'failed'}`);
   }
+  if (step !== undefined) lines.push(`- ${step} → no result`);
   const omitted = lines.length - maxCalls;
   const out = omitted > 0 ? [`… ${omitted} earlier call${omitted === 1 ? '' : 's'} omitted …`, ...lines.slice(omitted)] : lines;
   const gap = (): string[] => (out.length > 0 ? [''] : []);

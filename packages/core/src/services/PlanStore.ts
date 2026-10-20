@@ -1,7 +1,7 @@
 import {
   Task, TaskSnapshot, TaskStatus, RunnerId, AwaitingReason, DEFAULT_RUNNERS, flattenTasks,
   addTaskToPlan, removeTaskFromPlan, updateTaskInPlan,
-  opsFlag, waitsForReset,
+  runsAsOps, waitsForReset,
 } from '../models/Task';
 import { startAttemptUsage, addAttemptUsage, endAttemptUsage, type RunnerSessionCost, type UsageRecord } from '../models/Usage';
 import { sessionOwner } from './continuation';
@@ -67,12 +67,13 @@ export class PlanStore {
   get(taskId: string): Readonly<Task> | undefined { return this._taskMap.get(taskId); }
 
   /**
-   * Whether a task runs as an ops task (ADR-0020). Only a top-level AI task
-   * can be one; a subtask runs with the top-level task it hangs under.
+   * Whether a task runs as an ops task (ADR-0020): a top-level AI task marked
+   * so, or a script task, which is one by nature (ADR-0035). A subtask runs
+   * with the top-level task it hangs under.
    */
   isOps(taskId: string): boolean {
     const root = this._rootMap.get(taskId);
-    return opsFlag(root?.ops, root?.type) === true;
+    return !!root && runsAsOps(root);
   }
 
   /** A copy of the task tree, detached from the store: later status changes do not reach it. */
@@ -154,7 +155,7 @@ export class PlanStore {
   }
 
   /**
-   * Run preparation as one named op: flip every AI task to 'approved'. By
+   * Run preparation as one named op: flip every AI and script task to 'approved'. By
    * default completed tasks keep their status so a reloaded half-finished plan
    * resumes the remainder instead of re-running work that already succeeded,
    * and skipped ones stay skipped: a new run is not a retry of them.
@@ -166,7 +167,7 @@ export class PlanStore {
   resetForRun(opts: { preserveCompleted?: boolean; keepScheduledResumes?: boolean } = {}): void {
     const preserveCompleted = opts.preserveCompleted ?? true;
     for (const t of this._allTasks) {
-      if (t.type !== 'ai') continue;
+      if (t.type === 'user') continue;
       if (preserveCompleted && (t.status === 'completed' || t.status === 'skipped')) continue;
       if (opts.keepScheduledResumes && waitsForReset(t)) continue;
       t.status = 'approved';

@@ -38,11 +38,13 @@ export type {
   Task,
   TaskModelAssignment,
   TaskStatus,
+  TaskType,
   VerificationCheck,
 } from './models/Task';
 export * from './models/Session';
 export * from './models/Usage';
 export * from './models/TaskLog';
+export { commandLine, scriptBodyOf, DEFAULT_SCRIPT_TIMEOUT_MS, type ScriptBody } from './models/ScriptTask';
 export * from './models/RunnerCommand';
 export * from './models/Execution';
 export * from './interfaces/IFileSystem';
@@ -206,6 +208,7 @@ export type { RunnerModeInfo } from './services/ModeResolver';
 export { AbstractRunnerSession, AbstractRunner } from './services/AbstractRunner';
 export type { RunnerSpawnOptions } from './services/AbstractRunner';
 export { StructuredRunner, StructuredSession } from './services/StructuredRunner';
+export { ScriptRunner, ScriptSession, SCRIPT_RUNNER } from './services/ScriptRunner';
 export type { StructuredRunnerDeps } from './services/StructuredRunner';
 export { continuability, canContinue } from './services/continuation';
 export type { Continuability } from './services/continuation';

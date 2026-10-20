@@ -1,11 +1,12 @@
 import type { QueuedTaskMessage, StructuredTurnEnd, TaskMessageFrom } from '../interfaces/IRunner';
 import type { ApprovalDecision } from '../interfaces/IApproval';
-import type { TaskLogEvent } from '../models/TaskLog';
+import { scriptExitText, type TaskLogEvent } from '../models/TaskLog';
+import { commandLine } from '../models/ScriptTask';
 import { addPlannerUsage, isMeasured, usageLine, type PlannerUsage } from '../models/Usage';
 import { sameMessage } from '../utils/sameMessage';
 import { mapAgentTool, normalizeAgentArgs } from '../services/harness/agentTools';
 import type { ApprovalBlock, CommandStatus, DisplayBlock, MessageBlock, SubagentChild, SubagentStatus, ThinkingDisplayBlock } from './blocks';
-import { toolHeadline } from './format';
+import { outputLines, toolHeadline } from './format';
 import {
   append, appendOutput, replaceAt, closeOpenBlocks, findLastIndex, laneAppend, laneBlocks, laneOf, laneReplace, setUsageLine, updateSubagent, sealed, sealLane,
   type BlockList, type Lane,
@@ -341,6 +342,39 @@ function unqueueMessage(view: TaskLogView, { messageId }: { messageId: string })
   return queued.length === view.queued.length ? view : { ...view, queued };
 }
 
+/**
+ * A script task's step reads as the command it is (ADR-0035): a row that its
+ * output fills as it runs, and that its exit status settles.
+ */
+function runScriptStep(view: TaskLogView, event: Event<'script_run'>): TaskLogView {
+  const [command, toolLabel] = 'argv' in event ? [commandLine(event.argv), 'Run'] : [event.script, 'Script'];
+  return appendOutput({ ...view, working: true }, null, (id) => pendingTool(id, { tool: 'bash', toolLabel, args: JSON.stringify({ command }) }));
+}
+
+function runningScriptStep(view: TaskLogView): number {
+  return findLastIndex(view.blocks, (b) => b.type === 'tool' && b.status === 'pending' && b.tool === 'bash');
+}
+
+function scriptStepOutput(view: TaskLogView, { text, omittedChars }: Event<'script_output'>): TaskLogView {
+  const said = omittedChars ? `… ${omittedChars} characters omitted …\n${text}` : text;
+  const i = runningScriptStep(view);
+  const block = view.blocks[i];
+  if (block?.type !== 'tool') return append(view, (id) => settledMessage(id, 'system', said));
+  const output = block.output + said;
+  return { ...view, blocks: replaceAt(view.blocks, i, { ...block, output, outputLineCount: outputLines(output).length }) };
+}
+
+function endScriptStep(view: TaskLogView, event: Event<'script_exit'>): TaskLogView {
+  const status = scriptExitText(event);
+  const passed = event.code === 0 && !event.signal && event.error === undefined;
+  const i = runningScriptStep(view);
+  const block = view.blocks[i];
+  const ended = { ...view, working: false };
+  if (block?.type !== 'tool') return append(ended, (id) => settledMessage(id, 'system', status));
+  const output = block.output.trim() ? `${block.output.replace(/\n+$/, '')}\n${status}` : status;
+  return { ...ended, blocks: replaceAt(view.blocks, i, finishedTool(block, output, passed ? 'success' : 'failure')) };
+}
+
 function endCall<B extends SubagentChild>(block: B): B {
   return block.type === 'tool' && block.status === 'pending' ? finishedTool(block, '', 'not_executed') as B : block;
 }
@@ -396,6 +430,9 @@ export function reduceTaskLog(view: TaskLogView, event: TaskLogEvent): TaskLogVi
     case 'approval_requested': return requestApproval(view, event);
     case 'approval_decided': return decideApproval(view, event);
     case 'approval_withdrawn': return settleApproval(view, event.approvalId, (block) => ({ ...block, status: 'withdrawn' }));
+    case 'script_run': return runScriptStep(view, event);
+    case 'script_output': return scriptStepOutput(view, event);
+    case 'script_exit': return endScriptStep(view, event);
     case 'runner_ended': return closeOpenBlocks({ ...endOpenCalls(view), working: false, streams: {}, latestText: undefined }, 'stopped');
     default: return view;
   }

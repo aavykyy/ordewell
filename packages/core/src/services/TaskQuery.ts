@@ -3,6 +3,7 @@ import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings
 import { readOnlyMode, type RunnerModeInfo } from './ModeResolver';
 import type { LiveTail, LiveTailOptions } from '../interfaces/TaskOutputSource';
 import { resolveTaskRef, taskRefOf } from './TaskRefs';
+import { commandLine, scriptBodyOf } from '../models/ScriptTask';
 
 /**
  * The planner's read channel: a `{"taskQuery":{...}}` reply asking Ordewell to
@@ -265,6 +266,7 @@ function renderField(task: Task, field: TaskQueryField, ctx: OutputRenderContext
     case 'description':
       return [`description: ${task.description || '(none)'}`];
     case 'prompt':
+      if (task.type === 'script') return scriptBodyLines(task);
       return task.prompt ? ['prompt:', task.prompt] : ['prompt: (none)'];
     case 'userSteps': {
       const steps = task.userSteps ?? [];
@@ -294,12 +296,22 @@ function renderField(task: Task, field: TaskQueryField, ctx: OutputRenderContext
   }
 }
 
+const TYPE_LABELS: Record<Task['type'], string> = { ai: 'AI', user: 'MAN', script: 'SCRIPT' };
+
+/** A script task's body in place of a prompt (ADR-0035): each command as typed, or the script, and its time limit. */
+function scriptBodyLines(task: Task): string[] {
+  const body = scriptBodyOf(task);
+  if (!body) return ['body: (none)'];
+  const limit = `timeoutMs: ${body.timeoutMs}`;
+  return 'commands' in body ? ['commands:', ...body.commands.map((argv) => `  $ ${commandLine(argv)}`), limit] : ['script:', body.script, limit];
+}
+
 function renderTask(task: Task, ref: string, fields: readonly TaskQueryField[], ctx: OutputRenderContext): string[] {
   // The tail renders after the task's other fields and before the closing
   // blank, so its budget is computed against everything already committed —
   // including this task's own bounded fields.
   const lines = [
-    `${ref} id=${task.id} "${task.title}" [${task.status}] type:${task.type === 'user' ? 'MAN' : 'AI'}`,
+    `${ref} id=${task.id} "${task.title}" [${task.status}] type:${TYPE_LABELS[task.type]}`,
     ...fields.filter((f) => f !== 'output').flatMap((f) => renderField(task, f, ctx)),
     ...(fields.includes('output') ? renderLiveOutput(task.id, ctx) : []),
     '',

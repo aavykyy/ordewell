@@ -39,6 +39,8 @@ import { saveSession } from '../utils/sessionStore';
 import { listTaskLogAttempts, readTaskLog, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
 import { digestTaskLog, type TaskLogEvent } from '../models/TaskLog';
 import { TaskLogRecorder } from './TaskLogRecorder';
+import { ScriptRunner } from './ScriptRunner';
+import { rewrittenScripts } from '../models/ScriptTask';
 import { SessionWindows, withContextWindows } from './ContextWindowFill';
 import { PlannerUsageLedger } from './PlannerUsage';
 import { plannerContextFill } from '../models/Usage';
@@ -156,6 +158,8 @@ export interface SessionDeps {
   config: IConfig;
   notifications: INotification;
   runner: IRunner;
+  /** What runs script tasks' bodies (ADR-0035); the real {@link ScriptRunner} unless a test supplies one. */
+  scriptRunner?: IRunner;
   registry: RunnerRegistry;
   /** Resolves the workspace root for the orchestrator (lazy — VS Code can change it). */
   workspaceRoot: () => string;
@@ -291,6 +295,7 @@ export function createSession(deps: SessionDeps): Session {
     config: deps.config,
     notifications: deps.notifications,
     runner: taskLogs.wrap(runnerApprovals.wrap(withContextWindows(deps.runner, windows))),
+    scriptRunner: taskLogs.wrap(deps.scriptRunner ?? new ScriptRunner()),
     store,
     output: deps.taskOutput,
     isolation: deps.isolation,
@@ -916,6 +921,13 @@ export class Session {
     const present = taskIds.filter((id) => this.store.get(id));
     if (!this.plan || present.length === 0) return;
     this.plan.approvedTasks = [...new Set([...(this.plan.approvedTasks ?? []), ...present])];
+  }
+
+  /** Take tasks out of the approval record: what they would run now is not what was approved. */
+  private withdrawApprovals(taskIds: readonly string[]): void {
+    const approved = this.plan?.approvedTasks;
+    if (!approved || !taskIds.some((id) => approved.includes(id))) return;
+    this.plan!.approvedTasks = approved.filter((id) => !taskIds.includes(id));
   }
 
   /**
@@ -1606,6 +1618,10 @@ export class Session {
     const { tasks: stamped, added } = stampOrigin(before, coerced, bySupervisor);
     coerced = this.preparePlannerTaskUpdates(stamped);
     if (bySupervisor) this.supervision.edited(before, coerced);
+    // Consent is to a body (ADR-0035): a script that will run something else
+    // than what was approved waits for approval again, read before any rule
+    // below approves what this edit wrote.
+    const rewritten = rewrittenScripts(before, coerced);
     // A run that ended on a failure is still the one a retry continues: reloaded,
     // the failed task would lose its failure and its retry would run it alone.
     if (this.orchestrator.isRunning || this.orchestrator.awaitsResume) {
@@ -1614,6 +1630,7 @@ export class Session {
       this.orchestrator.loadPlan(coerced, runners);
       this.store.resetForRun({ keepScheduledResumes: true });
     }
+    this.withdrawApprovals(rewritten);
     // Once they are in the plan: approval is only ever of a task the plan holds.
     if (bySupervisor) this.approve(added);
     // With autorun on the user said they need not approve what the planner writes in their turn; read as it lands, so turning it off first holds the task.

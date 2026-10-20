@@ -154,7 +154,8 @@ export function renderPlanMap(planTasks: readonly Task[], currentTaskId: string,
     const tag = planMapStatus(row.task, isCurrent);
     const order = row.parent ? row.label : row.label.padStart(2, ' ');
     const arrow = isCurrent ? '   ← you are here' : '';
-    const runner = row.task.assignedRunner ? ` (${row.task.assignedRunner})` : '';
+    // A script task runs on no runner (ADR-0035): what it is says more than the runner it was never given.
+    const runner = row.task.type === 'script' ? ' (script)' : row.task.assignedRunner ? ` (${row.task.assignedRunner})` : '';
     return `${order}. [${tag.padEnd(7, ' ')}] ${row.task.title}${runner}${arrow}`;
   });
 

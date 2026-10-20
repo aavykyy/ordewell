@@ -133,7 +133,7 @@ function printPlan(plan: PlanBody, sessionId: string, runners: string[], models:
   console.log(`Session: ${sessionId}\n`);
 
   for (const t of tasks) {
-    const typeIcon = t.type === 'user' ? '[MAN]' : t.ops ? '[OPS]' : '[ AI]';
+    const typeIcon = t.type === 'user' ? '[MAN]' : t.ops || t.type === 'script' ? '[OPS]' : '[ AI]';
     const deps = t.dependencies?.length ? ` ← ${t.dependencies.join(', ')}` : '';
     console.log(`  ${taskOrderLabel(t).padStart(2)}. ${typeIcon} ${t.title}${modelSuffix(t)}${deps}`);
     for (const sub of t.subtasks || []) {
@@ -146,7 +146,7 @@ function printPlan(plan: PlanBody, sessionId: string, runners: string[], models:
   if (manCount > 0) {
     console.log('\n  [MAN] = manual step: run `ordewell tui` to work through it');
   }
-  if (tasks.some((t) => t.ops)) {
+  if (tasks.some((t) => t.ops || t.type === 'script')) {
     console.log('  [OPS] = ops task: runs in your checkout once the work it depends on is merged (`ordewell handoff merge`)');
   }
 }

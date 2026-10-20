@@ -1,6 +1,6 @@
 import type { IConfig } from './interfaces/IConfig';
 import type { IFileSystem, ToolOutcome } from './interfaces/IFileSystem';
-import type { InvokedCommand, IRunnerSession, QueuedTaskMessage, StructuredEvent, StructuredTurnEnd, TaskMessageFrom } from './interfaces/IRunner';
+import type { InvokedCommand, IRunnerSession, QueuedTaskMessage, ScriptExit, StructuredEvent, StructuredTurnEnd, TaskMessageFrom } from './interfaces/IRunner';
 import type { RunnerCommand } from './models/RunnerCommand';
 import type { RunnerSessionCost } from './models/Usage';
 import type { ApprovalDecision } from './interfaces/IApproval';
@@ -153,6 +153,12 @@ export class FakeRunnerSession implements IRunnerSession {
     for (const cb of this.completeCbs) cb(report);
   }
   onToolCheckpoint(handler: (question: string, signal: AbortSignal) => Promise<CheckpointAnswer>): void { this.checkpointHandler = handler; }
+  private scriptExitCbs: Array<(exit: ScriptExit) => void> = [];
+  onScriptExit(cb: (exit: ScriptExit) => void): void { this.scriptExitCbs.push(cb); }
+  /** A script task's body ended, as `ScriptSession` hands it on (ADR-0035). */
+  reportScriptExit(exit: ScriptExit): void {
+    for (const cb of this.scriptExitCbs) cb(exit);
+  }
   /** The runner calls `checkpoint`, as `StructuredSession` relays it; settles with the answer. */
   callCheckpoint(question: string, signal: AbortSignal = new AbortController().signal): Promise<CheckpointAnswer> {
     if (!this.checkpointHandler) throw new Error('no checkpoint handler attached');
