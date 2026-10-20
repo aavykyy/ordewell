@@ -248,7 +248,10 @@ export {
   researchToolsPath,
   researchShellWarning,
 } from './services/researchShell';
-export type { ResearchShell, ResearchShellDeps, ShellDialect } from './services/researchShell';
+export type { ResearchShell, ResearchShellDeps, ShellDialect, ShellLaunch } from './services/researchShell';
+export { PlannerShellSandbox, resolvePlannerSandbox, clearPlannerSandboxCache, PLANNER_SANDBOX_DOCS } from './services/sandbox/plannerSandbox';
+export type { PlannerSandboxAvailability, PlannerSandboxDeps } from './services/sandbox/plannerSandbox';
+export type { SandboxBackend, SandboxProfile, SandboxLimits, SandboxInvocation, SandboxLaunch } from './services/sandbox/SandboxBackend';
 export { clipboardCopyCommand } from './utils/clipboard';
 export type { HasBinFn } from './utils/clipboard';
 export { RunnerRegistry } from './plugins/RunnerRegistry';

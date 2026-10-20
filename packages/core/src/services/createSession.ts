@@ -528,6 +528,8 @@ export class Session {
     };
     this.notifications = parts.notifications;
     this.onNotice = parts.onNotice;
+    // A planner shell without an OS sandbox is said once, here, rather than in every command's output (ADR-0011 B5).
+    this.fsAdapter.setNotice?.((message) => this.notice('warn', message));
     this.modelResolver = parts.modelResolver;
     this.settingsFn = parts.settings;
     this.hostSessionId = parts.hostSessionId;
@@ -1144,6 +1146,7 @@ export class Session {
     this.beginFreshPlan();
     this.catalog.reset();
     this.remintSessionId();
+    this.fsAdapter.endSession?.();
   }
 
   /** What a planner may assign right now; see {@link SessionCatalog.live}. */
@@ -2142,6 +2145,7 @@ export class Session {
     this.approvals.clear();
     this.unsubObserver?.();
     this.unsubObserver = null;
+    this.fsAdapter.endSession?.();
   }
 
   /**

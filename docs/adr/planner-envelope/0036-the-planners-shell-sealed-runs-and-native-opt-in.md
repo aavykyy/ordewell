@@ -2,7 +2,7 @@
 status: accepted
 implemented: none
 amends: ["0008", "0011", "0026"]
-note: "sealed runs need #64 first"
+note: "sealed runs are #109 and the native-shell opt-in #110, both on ADR-0011's sandbox"
 ---
 
 # 0036 — The planner's shell: sealed runs instead of refusals, and the harness's own shell as an opt-in

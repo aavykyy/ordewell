@@ -16,6 +16,7 @@ import {
   STOPPED_TOOL_RESULT,
   type GrepOptions,
   type ReadFileOpts,
+  type ShellLaunch,
   type ToolOutcome,
 } from '@ordewell/core';
 import { promises as fs } from 'fs';
@@ -224,18 +225,19 @@ export class PoolFileSystem extends BaseFileSystem {
     }
   }
 
-  protected async execBashImpl(command: string, signal?: AbortSignal): Promise<ToolOutcome> {
+  protected async execBashImpl(command: string, shell: ShellLaunch, signal?: AbortSignal): Promise<ToolOutcome> {
     // `shell: true` is required now that approved commands may legitimately
     // contain pipes; the tier classifier in core (not string filtering here)
     // is what decides whether this command was allowed to reach the shell.
     //
-    // `file: null` is that host default, unchanged on POSIX. A resolved file is
-    // the POSIX shell found on a Windows box, invoked explicitly so the command
-    // runs in the dialect `BaseFileSystem` classified it under.
-    const { file, args } = this.researchShell;
+    // `file: null` is that host default, unchanged on POSIX where no sandbox
+    // runs. A resolved file is the sandbox launcher around the POSIX shell, or
+    // the POSIX shell found on a Windows box: either way the command goes last,
+    // in the dialect `BaseFileSystem` classified it under.
+    const { file, args, env } = shell;
     const result = file === null
-      ? await run(command, [], { cwd: this.workspaceRoot, timeout: BASH_TIMEOUT_MS, shell: true, signal })
-      : await run(file, [...args, command], { cwd: this.workspaceRoot, timeout: BASH_TIMEOUT_MS, signal });
+      ? await run(command, [], { cwd: this.workspaceRoot, timeout: BASH_TIMEOUT_MS, shell: true, env, signal })
+      : await run(file, [...args, command], { cwd: this.workspaceRoot, timeout: BASH_TIMEOUT_MS, env, signal });
     const out = (result.stdout || '').trim();
     const err = (result.stderr || '').trim();
 

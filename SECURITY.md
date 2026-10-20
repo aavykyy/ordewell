@@ -43,16 +43,23 @@ their own repositories. The parts most worth your attention:
   classifier didn't anticipate. Widening the auto-run set or fixing a
   classification gap therefore changes *which* commands are trusted, never
   *whether* trust in the classifier is well-founded — that second question is
-  [ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-shell.md). That ADR is
-  accepted: on Linux (bubblewrap) and macOS (Seatbelt), the planner's commands
-  will run under a read-only sandbox beneath the classifier. Until that ships,
-  and on platforms without a sandbox, the classifier is the only barrier.
-  Bypasses of the classifier remain in scope here and will be fixed as they're
-  found; documenting the limit is not a decision to stop fixing them. Don't
-  rely on this classifier as the only barrier between the planner and
-  untrusted content in a repository — a hostile `README.md` or commit message
-  the planner reads during research should not be assumed contained by it
-  alone.
+  [ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-shell.md). On Linux
+  (bubblewrap) and macOS (Seatbelt), every command the planner's shell starts
+  runs in an OS sandbox beneath the classifier, where nothing outside a
+  per-session scratch directory can be written. On Windows, and on a Linux
+  host where bubblewrap cannot start, the classifier is the only barrier, and
+  the planner surface says so once per session. Bypasses of the classifier
+  remain in scope here and will be fixed as they're found; the sandbox bounds
+  what a misclassified command can do, it does not make the classifier's
+  mistakes acceptable. Don't rely on this classifier as the only barrier
+  between the planner and untrusted content in a repository — a hostile
+  `README.md` or commit message the planner reads during research should not
+  be assumed contained by it alone.
+- **The planner's sandbox.** A way for a planner command to write outside its
+  scratch directory where the sandbox runs, or to reach the network when it
+  ran without asking, is in scope. A command the user approved keeps the
+  network and the local services it reaches through it (ADR-0011 lists them);
+  that is what the approval grants.
 - **The local API server.** `@ordewell/web` binds `127.0.0.1` and, since
   `0.4.8`, authenticates every request against a bearer token minted at daemon
   startup and written to an owner-readable file; browser `Origin` headers are
@@ -85,6 +92,9 @@ except where [ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-s
   [ADR-0027](docs/adr/planner-envelope/0027-web-reads-in-the-planner-envelope.md),
   [ADR-0028](docs/adr/planner-envelope/0028-planners-never-run-repository-config.md),
   [ADR-0032](docs/adr/planner-envelope/0032-runner-state-outside-the-workspace.md)).
+  Their shell commands run in ADR-0011's OS sandbox where the host has one:
+  nothing outside a scratch directory can be written, and a command that runs
+  without asking has no network.
 - **Change and ops tasks run as you**, with the runner's own native tools, in
   the mode their plan assigned
   ([ADR-0020](docs/adr/isolation/0020-ops-tasks-and-merge-gates.md)). They can read and

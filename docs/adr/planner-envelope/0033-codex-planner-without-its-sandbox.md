@@ -20,8 +20,8 @@ run no command answered from memory. That was written when Codex's shell was
 its only way to read the workspace. Since ADR-0026 every planner also has
 `run_command`, which runs in Ordewell's process, outside Codex's sandbox, under
 ADR-0008's classifier. The Claude Code and OpenCode planners plan on that same
-host with no OS sandbox under their commands (ADR-0011 is not implemented
-yet). Only Codex was refused, so on stock Ubuntu a user who picked Codex as
+host with no OS sandbox under their commands: ADR-0011's sandbox is
+bubblewrap there too, and cannot start either. Only Codex was refused, so on stock Ubuntu a user who picked Codex as
 the planner got an error asking for `sudo`.
 
 Codex's own TUI does not show the problem when the user's config is
@@ -100,8 +100,9 @@ Codex task that needs a sandbox is still refused.**
 - **Fall back to another planner runner.** Rejected: the user chose Codex,
   and a silent switch would change which model plans.
 - **Turn the shell off on every host, so Codex always reads through
-  `run_command`.** Not now: on a host where the sandbox works, Codex's own
-  read-only shell is the better-contained one until ADR-0011 lands.
+  `run_command`.** Not now: on a host where Codex's sandbox works, its own
+  read-only shell is as contained as `run_command` in ADR-0011's sandbox, and
+  it is the shell Codex is built around.
 - **Hide the sandboxed modes instead of listing them as unavailable.**
   Rejected: a user would not learn why Codex offers only Full access, and a
   saved plan's task would fail with a generic "no such mode".
@@ -119,3 +120,4 @@ Codex task that needs a sandbox is still refused.**
   its sandbox-probe stub, which is removed.
 - 2026-10-13 — the probe is launched in its own process group and killed, group and all, when it times out, instead of being left running.
 - 2026-10-14 — Codex's sandboxed modes are marked unavailable in the catalog while the probe fails, so they are not assigned and a task holding one fails at spawn with the reason.
+- 2026-10-20 — ADR-0011's sandbox runs `run_command` where the host has one; on a host where Codex's sandbox cannot start, it cannot start either.

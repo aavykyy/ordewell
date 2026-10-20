@@ -129,3 +129,11 @@ describe('createStepLog', () => {
     ]);
   });
 });
+
+describe("a session's notice in the log", () => {
+  it('is printed whole, on one line, where a piped run will see it', () => {
+    const message = "The planner's shell runs without an OS sandbox on this machine: bubblewrap (bwrap) is not installed.\n\nInstall it, then restart Ordewell.";
+    expect(formatStepLine({ type: 'notice', level: 'warn', message }))
+      .toBe("! The planner's shell runs without an OS sandbox on this machine: bubblewrap (bwrap) is not installed. Install it, then restart Ordewell.");
+  });
+});
