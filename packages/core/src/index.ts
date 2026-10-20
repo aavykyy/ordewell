@@ -45,6 +45,7 @@ export * from './models/Session';
 export * from './models/Usage';
 export * from './models/TaskLog';
 export { commandLine, scriptBodyOf, scriptBodyText, scriptTaskText, timeLimitText, DEFAULT_SCRIPT_TIMEOUT_MS, type ScriptBody } from './models/ScriptTask';
+export { betweenRounds, outOfRounds, loopRoundOf, checkOf, inLoop, DEFAULT_LOOP_ROUNDS, MAX_LOOP_ROUNDS, type TaskLoop, type LoopSubject } from './models/Loop';
 export * from './models/RunnerCommand';
 export * from './models/Execution';
 export * from './interfaces/IFileSystem';
@@ -196,7 +197,7 @@ export type {
 } from './services/SessionMessage';
 export { EMPTY_RUN, reduceRun } from './services/runView';
 export { serializeTask, serializeTaskStatus, serializePlan, surfacePlan, surfacePlanState, executionSummary, truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH, type ExecutionSummary } from './services/SessionMessage';
-export { blockingFailures, type BlockingSubject } from './services/blocking';
+export { blockingFailures, repeatingChecks, planBlocks, type BlockingSubject, type PlanBlocks } from './services/blocking';
 export { summarizeToolCall, classifyOutcome } from './services/researchStepSummary';
 export * from './conversation';
 export * from './taskRow';

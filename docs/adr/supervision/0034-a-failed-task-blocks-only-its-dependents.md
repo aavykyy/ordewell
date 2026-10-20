@@ -33,7 +33,11 @@ starting as usual.
   dependencies; nothing is stored, so whatever lifts a failure lifts its block.
   There is no `blocked` task status: a plan file saved with one loads it as
   pending.
-  Subtasks follow the same rule.
+  Subtasks follow the same rule. A loop's check that failed a round with
+  rounds left is stored failed but blocks nothing yet: its body takes its
+  report as input, and its other dependents wait for it as for work under way,
+  until its loop stops or runs out of rounds
+  ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) L3).
 - **A skip releases them too.** A skipped dependency is as finished as a
   completed one for the blocked rule: nothing of it lands, so there is
   nothing of its own to wait for. The work it waited on is another matter:
@@ -54,9 +58,11 @@ starting as usual.
 - **One start rule.** Whether a task can start now, and if not why, is one
   pure function (`startWaits`, `packages/core/src/services/readiness.ts`) over
   the plan, the holds and the open isolated run. It lists every reason a task
-  waits, in a fixed order, so the first is the reason: it has started, Mark
-  complete is landing it, it has no prompt, it is outside the user's approval
-  record, it is on hold, it is blocked, its dependencies are not met (or, for
+  waits, in a fixed order, so the first is the reason: it has started (or, a
+  loop's check between rounds, its loop runs it again once its body lands),
+  Mark complete is landing it, it has no prompt, it is outside the user's
+  approval record, it is on hold, it is blocked, it is in a loop's body whose
+  check has not failed this round, its dependencies are not met (or, for
   a force start queued behind them, are still under way), a Merge all is under
   way and it is an ops task, its runner waits on a usage limit's reset, a
   planner turn holds new starts, it is at its merge gate (ADR-0020), or it is
@@ -73,7 +79,8 @@ starting as usual.
 - **The run ends when nothing can start.** With nothing running and every task
   left failed or blocked, the run ends (`execution_complete`), saying how many
   tasks completed, failed and are blocked, and how many were skipped; the
-  summary carries all four. A run whose every task completed or was skipped
+  summary carries all four. A loop's check between rounds is not a failed task
+  left: its loop still has work to start. A run whose every task completed or was skipped
   is finished.
   A task waiting on the user, on hold, at a merge gate or on a usage limit
   keeps the run open, as before.
@@ -88,7 +95,9 @@ starting as usual.
   merge gate (ADR-0020) waits for Merge all and keeps the run open. A
   usage-limit pause still holds the whole run until the limit resets, and the
   reset resumes it whether or not a task failed meanwhile.
-- **The supervisor is told.** A failure still wakes it (`task_failed`, ADR-0029).
+- **The supervisor is told.** A failure still wakes it (`task_failed`, ADR-0029);
+  a loop's check wakes it once, when its loop runs out of rounds, not for each
+  round it fails (ADR-0045).
   The run update names the tasks the failure blocks as the update goes out,
   and the run's end counts the blocked tasks.
 
@@ -141,3 +150,4 @@ attempt. This decides what a failure stops, not how a verdict is reached.
 - 2026-10-18 — the stored `blocked` status is gone from `TaskStatus`, and so is the code that set and cleared it; a saved one loads as pending, and the derived rule is the only blocked rule.
 - 2026-10-18 — the whole start rule is one function, with a typed reason for each wait, which every start path, the seam's refusals, the task row's merge gate and the planner's view read.
 - 2026-10-18 — a force start judged again as its run opens waits for dependencies an edit added meanwhile, queued or made now; the claim's last-moment checks are listed in full.
+- 2026-10-21 — a loop's check that fails a round with rounds left blocks nothing, ends no run and wakes no one until its loop stops or runs out of rounds; the start rule gains the check between rounds and the body waiting on its check ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md)).

@@ -4,6 +4,7 @@ import { Task, RunnerId, TaskModelAssignment, DEFAULT_RUNNERS, createTask, flatt
 import { taggedReadOnlyMode, type RunnerModeInfo } from './ModeResolver';
 import { resolveAssignment, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
 import { notAScriptsFields, scriptBodyErrors } from '../models/ScriptTask';
+import { loopErrors, loopSpec } from '../models/Loop';
 
 /** One reason a planned task was refused, pinned to the task and field it is about. */
 export interface PlanTaskError {
@@ -222,6 +223,9 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
   const body = bodyFields(raw, base);
   const shapeErrors = scriptBodyErrors({ type, ...body.raw }).filter((e) => body.malformed.has(e.field));
   for (const e of shapeErrors) errors.push({ taskId: id, field: e.field, message: `${where} ${e.message}` });
+  // Its body's references are kept as written: an edit resolves them against the plan, a submitted plan names its own ids.
+  const loop = loopSpec(raw.loop);
+  if ('error' in loop) errors.push({ taskId: id, field: 'loop', message: `${where} ${loop.error}` });
   // A manual task stores no ops flag, so this is the one place it can still be seen.
   if (raw.ops === true && !ai && !script) errors.push({ taskId: id, field: 'ops', message: `${where} ${opsPlacementRefusal(type, !!parent)}` });
   if (raw.taskMode !== undefined && !script) ignored.push({ taskId: id, field: 'taskMode', message: `${where}: ${MODE_NOT_THE_PLANNERS}` });
@@ -272,6 +276,7 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
     ops: script ? undefined : ops,
     skills: script ? undefined : from ? inheritedSkills(raw.skills, base.skills) : skillNames(raw.skills),
     ...body.fields,
+    ...('loop' in loop && loop.loop ? { loop: loop.loop } : {}),
   };
   let taskMode = script ? undefined : base.taskMode;
   let landedModel = assignedModel;
@@ -307,6 +312,7 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
  * any when undefined; with `runnerModes`, an ops task is held off its
  * runner's read-only mode. A script task (ADR-0035) runs exactly one
  * well-formed body, at the top level, and carries nothing a runner would read.
+ * A loop (ADR-0045) keeps its body for its check alone, on an acyclic graph.
  */
 export function checkPlanInvariants(
   tasks: readonly Task[],
@@ -344,6 +350,7 @@ export function checkPlanInvariants(
       fail('assignedRunner', `${where} has invalid assignedRunner "${t.assignedRunner}". Expected one of: ${runners.join(', ')}`);
     }
   }
+  errors.push(...loopErrors(tasks));
   for (const { task: t, parent } of rows) {
     // Self-dependencies are reported with the cycle below, including its full path.
     for (const error of dependencyTargetErrors(tasks, t.id, t.dependencies.filter((id) => id !== t.id))) {

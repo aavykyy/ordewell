@@ -5,10 +5,17 @@ import {
 } from '../models/Task';
 import { startAttemptUsage, addAttemptUsage, endAttemptUsage, type RunnerSessionCost, type UsageRecord } from '../models/Usage';
 import { sessionOwner } from './continuation';
+import { betweenRounds, loopRoundOf } from '../models/Loop';
 
 /** Deep copy of a task tree, down to the arrays the store rewrites. */
 function cloneTasks(tasks: ReadonlyArray<Readonly<Task>>): Task[] {
-  return tasks.map((t) => ({ ...t, dependencies: [...t.dependencies], ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}), subtasks: cloneTasks(t.subtasks ?? []) }));
+  return tasks.map((t) => ({
+    ...t,
+    dependencies: [...t.dependencies],
+    ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
+    ...(t.loop ? { loop: { ...t.loop, body: [...t.loop.body] } } : {}),
+    subtasks: cloneTasks(t.subtasks ?? []),
+  }));
 }
 
 /**
@@ -107,17 +114,26 @@ export class PlanStore {
     return this._allTasks.filter((t) => t.status === status).length;
   }
 
-  load(tasks: ReadonlyArray<Readonly<Task>>, runners: readonly RunnerId[]): void {
+  /**
+   * `keepFailed` adopts failed tasks as failed: an edit reconciled into a run
+   * is not a retry, and the tasks it blocks wait for one (ADR-0034).
+   */
+  load(tasks: ReadonlyArray<Readonly<Task>>, runners: readonly RunnerId[], opts: { keepFailed?: boolean } = {}): void {
     this._planTasks = cloneTasks(tasks);
     this._planRunners = [...runners];
     this.rebuild();
     // Completed tasks survive a reload so a half-finished plan resumes the
     // remainder (their output summaries still feed dependents). Failed tasks
-    // get a fresh chance. In-progress is left alone — load() also runs while
-    // a task's runner session is live (forceStartTask); orphaned in_progress
-    // from a saved session is normalized at the disk-load boundary instead.
+    // get a fresh chance, a loop's check its rounds over — but not one between
+    // rounds, whose loop resumes where it was (ADR-0045 L5). In-progress is
+    // left alone — load() also runs while a task's runner session is live
+    // (forceStartTask); orphaned in_progress from a saved session is
+    // normalized at the disk-load boundary instead.
     for (const task of this._allTasks) {
-      if (task.status === 'failed') task.status = 'pending';
+      if (task.status === 'failed' && !opts.keepFailed && !betweenRounds(task)) {
+        task.status = 'pending';
+        delete task.loopRound;
+      }
       // Files from before ADR-0034 stored blocked tasks; the derived rule
       // decides that now, so an old one is the pending task it was.
       if ((task.status as string) === 'blocked') task.status = 'pending';
@@ -170,6 +186,10 @@ export class PlanStore {
       if (t.type === 'user') continue;
       if (preserveCompleted && (t.status === 'completed' || t.status === 'skipped')) continue;
       if (opts.keepScheduledResumes && waitsForReset(t)) continue;
+      // A check between rounds runs again once its body lands, not now (ADR-0045 L5).
+      if (preserveCompleted && betweenRounds(t)) continue;
+      // A failed check runs again as a retry would run it: its rounds start over (ADR-0045 L7).
+      if (!preserveCompleted || t.status === 'failed') delete t.loopRound;
       t.status = 'approved';
       delete t.awaitingReason;
       delete t.resumeAt;
@@ -218,7 +238,12 @@ export class PlanStore {
     this.setStatus(id, 'pending');
   }
 
-  retry(id: string): void {
+  /**
+   * A new attempt of the task, from nothing it earned. A loop's check starts
+   * its rounds over (ADR-0045 L7), unless `sameRound`: a resume after a usage
+   * limit goes on with the attempt the limit cut short.
+   */
+  retry(id: string, opts: { sameRound?: boolean } = {}): void {
     const task = this._taskMap.get(id);
     if (task) {
       this.setStatus(id, 'pending');
@@ -226,7 +251,27 @@ export class PlanStore {
       task.outputSummary = undefined;
       delete task.forcedPastGate;
       delete task.carriedFrom;
+      if (!opts.sameRound) delete task.loopRound;
     }
+  }
+
+  /** A loop's check counts its rounds afresh from its next run (ADR-0045 L7). */
+  startRoundsOver(id: string): void {
+    const task = this._taskMap.get(id);
+    if (task) delete task.loopRound;
+  }
+
+  /**
+   * The loop runs its check again, as its next round (ADR-0045 L5): a new
+   * attempt, the round counted on, and nothing of the round before kept on
+   * the task — its report went to the body, and stays in its attempt's log.
+   */
+  repeat(id: string): void {
+    const task = this._taskMap.get(id);
+    if (!task) return;
+    const round = loopRoundOf(task) + 1;
+    this.retry(id);
+    task.loopRound = round;
   }
 
   /** Kept on the task: it was force-started past its merge gate, before these ancestors' work was merged (ADR-0020). */

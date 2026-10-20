@@ -80,6 +80,11 @@ const planTask = z.looseObject({
     .describe('A script task\'s argument vectors, run in order with no shell, stopping at the first that fails. Exactly one of commands or script.'),
   script: z.string().optional().describe('A script task\'s script, run by the research shell. Exactly one of commands or script.'),
   timeoutMs: z.number().optional().describe('A script task\'s time limit in milliseconds; ten minutes when left out.'),
+  // ADR-0045. Loose like the rest: the plan's rules judge the body and the rounds.
+  loop: z.looseObject({
+    body: z.array(z.string()).describe('The ids of the top-level tasks that fix what this check finds; each depends on this task.'),
+    maxRounds: z.number().optional().describe('The most times this check runs, 1 to 10; 3 when left out.'),
+  }).optional().describe('Makes this task a loop\'s check: while it fails with rounds left, Ordewell runs the body with its report, then runs it again.'),
 });
 
 const submitPlanInput = z.object({

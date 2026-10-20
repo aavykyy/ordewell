@@ -392,14 +392,16 @@ function scriptVerdict(exit: ScriptExit): Verdict {
   const command = exit.outcome !== 'passed' && exit.command !== undefined ? `\`${exit.command}\`` : undefined;
   switch (exit.outcome) {
     case 'passed':
-      return { outcome: 'pass', reason: 'Verified: every step of the script exited 0.', checks: check(true, 'every step exited 0'), decidedAt };
+      return { outcome: 'pass', reason: 'Verified: every step of the script exited 0.', checks: check(true, 'every step exited 0'), decidedAt, reported: 'done' };
     case 'failed': {
       const said = `${command ?? 'it'} ${statusText(exit.status)}`;
-      return { outcome: 'fail', reason: withTail(`The script failed: ${said}.`, exit.errorTail), checks: check(false, said), decidedAt };
+      // A step that never started found nothing about the work (ADR-0045 L2).
+      const reported = exit.status.error !== undefined ? 'blocked' : 'failed';
+      return { outcome: 'fail', reason: withTail(`The script failed: ${said}.`, exit.errorTail), checks: check(false, said), decidedAt, reported };
     }
     case 'timed-out': {
       const said = `the time limit of ${durationText(exit.timeoutMs)} ran out${command ? ` while ${command} ran` : ''}, so it was ended`;
-      return { outcome: 'fail', reason: withTail(`The script failed: ${said}.`, exit.errorTail), checks: check(false, said), decidedAt };
+      return { outcome: 'fail', reason: withTail(`The script failed: ${said}.`, exit.errorTail), checks: check(false, said), decidedAt, reported: 'failed' };
     }
     case 'stopped': {
       const said = `it was stopped${command ? ` while ${command} ran` : ''}`;
@@ -425,11 +427,13 @@ function reportedVerdict(report: TaskCompleteArgs): Verdict {
     },
   ];
   const decidedAt = new Date().toISOString();
+  // Kept apart from the outcome: `blocked` and `failed` fail alike, but only a `failed` check starts a loop's round (ADR-0045 L2).
+  const reported = report.status;
   if (report.status === 'done') {
-    return { outcome: 'pass', reason: 'Verified: the runner reported completion through task_complete. Task completed successfully.', checks, decidedAt };
+    return { outcome: 'pass', reason: 'Verified: the runner reported completion through task_complete. Task completed successfully.', checks, decidedAt, reported };
   }
   // Runners often put the why in the summary and leave `reason` out; its
   // first paragraph is their own words, where "no reason given" would not be.
   const why = report.reason?.trim() || report.summary?.trim().split(/\n\s*\n/)[0].trim() || 'no reason given';
-  return { outcome: 'fail', reason: `The runner reported the task ${report.status}: ${why}`, checks, decidedAt };
+  return { outcome: 'fail', reason: `The runner reported the task ${report.status}: ${why}`, checks, decidedAt, reported };
 }

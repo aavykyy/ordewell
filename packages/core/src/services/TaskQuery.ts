@@ -4,6 +4,7 @@ import { readOnlyMode, type RunnerModeInfo } from './ModeResolver';
 import type { LiveTail, LiveTailOptions } from '../interfaces/TaskOutputSource';
 import { resolveTaskRef, taskRefOf } from './TaskRefs';
 import { commandLine, scriptBodyOf } from '../models/ScriptTask';
+import { betweenRounds, checkOf, loopRoundOf } from '../models/Loop';
 
 /**
  * The planner's read channel: a `{"taskQuery":{...}}` reply asking Ordewell to
@@ -306,12 +307,24 @@ function scriptBodyLines(task: Task): string[] {
   return 'commands' in body ? ['commands:', ...body.commands.map((argv) => `  $ ${commandLine(argv)}`), limit] : ['script:', body.script, limit];
 }
 
-function renderTask(task: Task, ref: string, fields: readonly TaskQueryField[], ctx: OutputRenderContext): string[] {
+/** Where a task stands in a loop (ADR-0045): a check's body and round, or the check a body task runs for. */
+function loopLines(task: Task, tasks: readonly Task[]): string[] {
+  const named = (id: string) => `${taskRefOf(tasks, id) ?? id}`;
+  if (task.loop) {
+    const between = betweenRounds(task) ? `; failed round ${loopRoundOf(task)}, so its body is fixing what it found and it runs again after` : `; round ${loopRoundOf(task)}`;
+    return [`loop: body ${task.loop.body.map(named).join(', ')}; at most ${task.loop.maxRounds} rounds${between}`];
+  }
+  const check = checkOf(tasks, task.id);
+  return check ? [`loop: in the body of ${named(check.id)} "${check.title}", so it runs only when that check fails`] : [];
+}
+
+function renderTask(task: Task, ref: string, fields: readonly TaskQueryField[], ctx: OutputRenderContext, tasks: readonly Task[]): string[] {
   // The tail renders after the task's other fields and before the closing
   // blank, so its budget is computed against everything already committed —
   // including this task's own bounded fields.
   const lines = [
     `${ref} id=${task.id} "${task.title}" [${task.status}] type:${TYPE_LABELS[task.type]}`,
+    ...loopLines(task, tasks),
     ...fields.filter((f) => f !== 'output').flatMap((f) => renderField(task, f, ctx)),
     ...(fields.includes('output') ? renderLiveOutput(task.id, ctx) : []),
     '',
@@ -368,7 +381,7 @@ export function renderTaskQueryAnswer(
         body.push(`${ref}: no task matches this reference in the current plan.`, '');
         continue;
       }
-      body.push(...renderTask(task, taskRefOf(tasks, task.id) ?? `#${task.order}`, fields, ctx));
+      body.push(...renderTask(task, taskRefOf(tasks, task.id) ?? `#${task.order}`, fields, ctx, tasks));
     }
     blocks.push(['<task_detail>', ...body, '</task_detail>'].join('\n'));
   }
