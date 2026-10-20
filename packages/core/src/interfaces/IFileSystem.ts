@@ -83,4 +83,8 @@ export interface IFileSystem {
   setApproval?(approval: import('./IApproval').IApproval): void;
   /** Held credentials read live by the outbound secret check. */
   setOutboundSecrets?(secrets: () => Iterable<string>): void;
+  /** Where the filesystem tells the session, once, that the planner's shell runs without an OS sandbox here (ADR-0011 B5). */
+  setNotice?(notice: (message: string) => void): void;
+  /** The session ended: its scratch directory is removed, and the next command starts a fresh one (ADR-0011 B2). */
+  endSession?(): void;
 }

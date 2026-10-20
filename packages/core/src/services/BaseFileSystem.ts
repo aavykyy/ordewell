@@ -9,7 +9,8 @@ import {
 } from '../interfaces/IFileSystem';
 import { IApproval, DENY_ALL } from '../interfaces/IApproval';
 import { cdUnfollowed, classifyCommand, pathRefs, type CommandPolicyOptions } from './commandPolicy';
-import { resolveResearchShell, researchShellWarning, researchPolicyOptions, type ResearchShell } from './researchShell';
+import { resolveResearchShell, researchShellWarning, researchPolicyOptions, type ResearchShell, type ShellLaunch } from './researchShell';
+import { PlannerShellSandbox, sandboxedFailureNote } from './sandbox/plannerSandbox';
 import { resolveWithin, resolveRef, grantScopeFor, isInertDevice } from './pathScope';
 import { definitionPattern, referencePattern, languageForId, includeGlobFor } from './symbolPatterns';
 import { resolveAll, vetEgress, type ResolveAll } from './egressGuard';
@@ -37,7 +38,10 @@ export abstract class BaseFileSystem implements IFileSystem {
   private approval: IApproval = DENY_ALL;
   private outboundSecrets: () => Iterable<string> = () => [];
 
-  constructor(private readonly resolveWebHost: ResolveAll = resolveAll) {}
+  constructor(
+    private readonly resolveWebHost: ResolveAll = resolveAll,
+    private readonly sandbox: PlannerShellSandbox = new PlannerShellSandbox(),
+  ) {}
 
   /**
    * The interpreter `execBashImpl` will hand the command to. Owned here rather
@@ -56,13 +60,22 @@ export abstract class BaseFileSystem implements IFileSystem {
     this.outboundSecrets = secrets;
   }
 
+  setNotice(notice: (message: string) => void): void {
+    this.sandbox.setNotice(notice);
+  }
+
+  endSession(): void {
+    this.sandbox.end();
+  }
+
   abstract getWorkspaceRoot(): string;
 
   protected abstract readFileImpl(absPath: string, opts?: ReadFileOpts): Promise<ToolOutcome>;
   protected abstract globImpl(pattern: string, absRoot: string, headLimit: number): Promise<ToolOutcome>;
   protected abstract grepImpl(pattern: string, absRoot: string, opts: GrepOptions): Promise<ToolOutcome>;
   protected abstract listDirImpl(absPath: string, depth: number): Promise<ToolOutcome>;
-  protected abstract execBashImpl(command: string, signal?: AbortSignal): Promise<ToolOutcome>;
+  /** Run `command` through `shell`, appending it after `shell.args`; `shell.file: null` is `shell: true`. */
+  protected abstract execBashImpl(command: string, shell: ShellLaunch, signal?: AbortSignal): Promise<ToolOutcome>;
 
   /**
    * Resolve `p` and confirm the planner may touch it. In-workspace paths pass
@@ -275,7 +288,7 @@ export abstract class BaseFileSystem implements IFileSystem {
 
     for (const probe of wgetVersionCommands(command, this.researchShell.dialect)) {
       if (!probe) return { success: false, output: `Command refused: the wget executable cannot be checked in an uncertain working directory. ${READ_REFUSAL_HINT}`, truncated: false };
-      const version = await this.execBashImpl(probe, signal);
+      const version = await this.runShell(probe, false, signal);
       if (!version.success || !/^GNU Wget 1\./.test(version.output)) {
         return { success: false, output: `Command refused: only GNU Wget 1.x is supported; wget2 can write persistent databases. ${READ_REFUSAL_HINT}`, truncated: false };
       }
@@ -287,14 +300,33 @@ export abstract class BaseFileSystem implements IFileSystem {
       const latest = classifyCommand(command, { ...this.policyOptions(), ...this.approval.commandPolicy?.(), allow: this.approval.allowlist?.(), trustedWebResolves: pinned.resolves });
       if (latest.tier === 'refuse') return { success: false, output: `Command refused: ${latest.reason}`, truncated: false };
     }
-    const outcome = await this.execBashImpl(command, signal);
+    // The network follows the tier (ADR-0011 B3): an `ask` command got here
+    // approved, by the user, a standing grant, the allowlist or the mode, and
+    // keeps it. An `auto` one, including one approved only for the paths it
+    // names, has none.
+    return this.runShell(command, tier === 'ask', signal);
+  }
+
+  /** Every command the planner's shell starts goes through here, inside the sandbox where this host has one (ADR-0011 B1, B6). */
+  private async runShell(command: string, network: boolean, signal?: AbortSignal): Promise<ToolOutcome> {
+    let shell: ShellLaunch;
+    let sandboxed: boolean;
+    try {
+      ({ launch: shell, sandboxed } = await this.sandbox.launch(this.researchShell, { network }));
+    } catch (err) {
+      // The sandbox runs on this host, so running the command outside it is not a fallback.
+      return { success: false, output: `Command not run: the planner's sandbox could not be prepared (${err instanceof Error ? err.message : String(err)}).`, truncated: false };
+    }
+    const outcome = await this.execBashImpl(command, shell, signal);
     if (outcome.success) return outcome;
 
     // A command that failed under cmd.exe most likely failed because the tool
-    // does not exist there. Saying so turns "exited 1" into something the model
-    // can act on — and, per the fail-visibly contract, keeps a degraded research
-    // surface from reading as a repository that simply had no answer.
-    const warning = researchShellWarning(this.researchShell);
+    // does not exist there, and one that failed in the sandbox on a denied
+    // write or a missing network because of the sandbox. Saying so turns
+    // "exited 1" into something the model can act on — and, per the
+    // fail-visibly contract, keeps a limit of the shell from reading as a
+    // repository that simply had no answer.
+    const warning = sandboxed ? sandboxedFailureNote(outcome.output, network) : researchShellWarning(this.researchShell);
     return warning ? { ...outcome, output: `${outcome.output}\n\n[${warning}]` } : outcome;
   }
 }

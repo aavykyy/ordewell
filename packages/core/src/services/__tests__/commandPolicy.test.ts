@@ -914,6 +914,14 @@ describe('a command runner is classified by the command it runs', () => {
       expect(classifyCommand(cmd).tier).toBe('refuse');
     },
   );
+
+  // Ordewell launches these itself, around the shell (ADR-0011 B6); a model
+  // naming them would choose its own policy, so they stay refused.
+  it.each(['bwrap --ro-bind / / sh -c ls', "sandbox-exec -p '(version 1)(allow default)' ls", 'sandbox-exec -n no-network ls'])(
+    'refuses the sandbox launcher %s when the model types it', (cmd) => {
+      expect(classifyCommand(cmd).tier).toBe('refuse');
+    },
+  );
 });
 
 describe('sed and awk programs are read for commands they run and files they write', () => {

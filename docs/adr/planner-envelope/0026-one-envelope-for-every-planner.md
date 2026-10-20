@@ -194,8 +194,11 @@ refused from a workspace's environment files (ADR-0016).
 - **Absent is denial (T5).** A request with no approval channel, a dismissed
   card or a five-minute timeout denies. A turn's abort denies its open
   requests.
-- **The classifier is the file-write guard until ADR-0011 lands.** No planner
-  command runs in an OS sandbox yet.
+- **Two guards against file writes.** The classifier refuses them, and
+  ADR-0011's OS sandbox runs every planner command beneath it, `run_command`'s
+  included, where the host has one. Without one (Windows, a Linux host where
+  bubblewrap cannot start) the classifier is the only guard, and the planner
+  surface says so once per session.
 - **A read can still reach an address in a provider the user trusts.**
   `aws s3 ls s3://<bucket>/<prefix>` names a bucket that may belong to
   someone else, who can log the request; and a cloud read can return
@@ -278,3 +281,4 @@ refused from a workspace's environment files (ADR-0016).
 - 2026-10-13 — a server named `ordewell_x` had its tools allowed at once as Ordewell's, past the `mcp_tool` approval: Claude Code's and OpenCode's adapters matched a prefix, and OpenCode's rule was `ordewell_*`. Ordewell's tools are now told apart by exact name (ADR-0022, S3).
 - 2026-10-13 — the three adapters' copies of the permission table disagreed: Codex allowed an Ordewell tool without logging it, only OpenCode cancelled a request left open at a turn's end, and Codex named an approval's tool from a call that had already finished. One permission ledger now holds the table for every runner.
 - 2026-10-18 — the permission ledger waits for HTTP reply delivery and retains failed answers for retry.
+- 2026-10-20 — every planner command, `run_command`'s included, runs in ADR-0011's OS sandbox where the host has one.

@@ -2732,6 +2732,26 @@ escape in `sh` and a separator in cmd, so `rg pattern C:\repo\src` tokenized to
 *Avoid:* a `platform` parameter here. The question is which language, and a
 Windows box can answer POSIX.
 
+**Planner sandbox** (`services/sandbox/`, ADR-0011) — the OS sandbox every
+command of the planner's shell runs in, beneath the classifier: Seatbelt on
+macOS, bubblewrap on Linux, none on Windows. One profile for every command: the
+host readable, the session's *scratch directory* writable, and the network only
+for a command that was approved; an `auto` one has none, nor the local services
+that would act for it. A `SandboxBackend` (`probe`, `wrap`) turns the *research
+shell* and a `SandboxProfile` into the launcher to spawn, with the command
+appended last, so the string classified is the string that runs; a backend
+refuses a profile it cannot enforce. Probed once per process; where it cannot
+start, commands run on the classifier alone and the session says so once.
+Separate from Codex's *Sandbox probe*, which asks whether Codex's own sandbox
+starts. *Avoid:* "container" — sandboxes share nothing and need no daemon.
+
+**Scratch directory** — the one directory a planner command may write, set as
+its `TMPDIR`: made under the OS temporary directory on the session's first
+command, private to the user, and removed when the session ends or resets (or
+by the next process, when the one that made it was killed). The
+caches read commands write as a side effect (npm's, Go's, the XDG cache root)
+point at it. *Avoid:* "workspace" — the workspace is read-only to the planner.
+
 **Kill tree** (`utils/processTree.ts`) — the one way an agent process is stopped.
 On POSIX a runner is spawned as the leader of its own process group
 (`spawnInOwnGroup`), and SIGTERM → SIGKILL goes to the whole group: signalling

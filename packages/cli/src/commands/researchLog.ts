@@ -52,6 +52,10 @@ export function formatStepLine(event: WsEvent, options: StepLineOptions = {}): s
     return result ? `${indent}${mark} ${summary} → ${result}` : `${indent}${mark} ${summary}`;
   }
 
+  // Said once per session, such as that the planner's shell has no OS sandbox
+  // here (ADR-0011 B5): in a piped run this log is the only place it is seen.
+  if (event.type === 'notice') return `! ${oneLine(event.message, Infinity)}`;
+
   return null;
 }
 

@@ -114,6 +114,8 @@ function nonPromptingFs(fs: IFileSystem): IFileSystem {
       // Named as resolved: after a `cd`, the path as written says nothing about where it points.
       const escaping = pathRefs(command, policy).map((ref) => resolveRef(fs.getWorkspaceRoot(), ref)).find((r) => !r.inside);
       if (escaping) return outsideRefusal(escaping.abs);
+      // Only `auto` reaches the shell, so every command a subagent runs runs
+      // without the network (ADR-0011 B3): nothing it could ask for was approved.
       return fs.bash(command, signal);
     },
   };

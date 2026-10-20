@@ -1,7 +1,5 @@
 ---
 status: accepted
-implemented: none
-note: "accepted 2026-10-01; first proposed as a tracked deferral. The OS sandbox is not built yet (#64)."
 ---
 
 # 0011 — Sandboxing the planner's shell
@@ -64,33 +62,65 @@ ADR-0008 stay as they are.
   bounds what a misclassified one can do.
 - **One policy, not one per command (B2).** The whole filesystem is mounted
   read-only. One scratch directory per session is writable and set as
-  `TMPDIR`. Tools that write caches or locks as a side effect of reading are
-  pointed at it or told not to write (`GIT_OPTIONAL_LOCKS=0`, and the build
-  caches the implementation finds are needed, such as `GOCACHE`). The sandbox
-  does not narrow *reads*: read confinement stays ADR-0008's path check and
-  prompt, because an approved read outside the workspace has to work.
+  `TMPDIR`: made under the OS temporary directory, private to the user, on
+  the session's first command, and removed when the session ends or resets,
+  or by the next Ordewell process when the one that made it was killed.
+  Tools that write caches or locks as a side effect of reading are pointed at
+  it or told not to write: `GIT_OPTIONAL_LOCKS=0`, npm's cache (where it logs
+  every command) and update check, `GOCACHE`, `XDG_CACHE_HOME`, Python's
+  bytecode, and on macOS the lookup cache of Apple's `/usr/bin` shims
+  (`xcrun_db`). The sandbox does not narrow *reads*: read confinement stays
+  ADR-0008's path check and prompt, because an approved read outside the
+  workspace has to work.
 - **Network follows the tier (B3).** An `auto` command gets no network. An
   approved `ask` command keeps the network, still without writes. The
   classifier already sends network-reaching commands (`git ls-remote`, `gh`,
-  `curl`) to `ask`, and the user approved that one. Research subagents never
-  prompt (ADR-0008 T6), so all their commands run without network. The web
-  fetch tool is not a shell command and is unaffected.
+  `curl`) to `ask`, and the user approved that one, or the allowlist or the
+  approval mode did. An `auto` command approved only for an outside path it
+  names is still `auto`. Research subagents never prompt (ADR-0008 T6), so
+  all their commands run without network. Without the network a command also
+  cannot reach the local services that would write on its behalf: on macOS
+  the profile denies unix sockets with the rest of the network, and on Linux,
+  where a socket that is a file survives `--unshare-net`, the user's runtime
+  directory (its session bus), the system bus, the X server's socket
+  directory and the Docker socket are hidden. An approved command keeps them,
+  since its credentials may live behind the session bus. The web fetch tool
+  is not a shell command and is unaffected.
 - **Per platform (B4).** Linux: bubblewrap (`--ro-bind / /`, a fresh `/dev`
   and `/proc`, the scratch directory bound writable, `--unshare-net` for
-  `auto`, `--die-with-parent`). macOS: `sandbox-exec` with a profile that
-  denies `file-write*` outside the scratch directory, and `network*` for
-  `auto`. Windows: no sandbox (see B5).
+  `auto`, `--die-with-parent`), in a PID namespace of its own, which an
+  unprivileged `--proc` needs and which keeps out the host's
+  `/proc/<pid>/root` links into a writable mount namespace; in a session of
+  its own, with no terminal to type into; and with the host's System V IPC
+  out of reach. The `bwrap` used is the distribution's before one found on
+  PATH. macOS: `sandbox-exec` with a profile that denies everything by
+  default and allows every read, writes to the scratch directory and the
+  device files a shell needs, the network for an approved command, and of the
+  system services only those a read needs, with name resolution, TLS trust
+  and the keychain added for an approved command; `defaults write`, for one,
+  is refused, because cfprefsd checks the caller's sandbox. Every path
+  reaches the launcher as an argument of its own (a `-D` parameter to
+  Seatbelt), never as policy text. Windows: no sandbox (see B5).
 - **Probed once, visible when absent (B5).** The first command probes the
-  sandbox with a trivial command, the way `codexSandbox.ts` probes Codex's.
-  Where it cannot start (no `bwrap`, Ubuntu 24.04's
+  sandbox with a trivial command under the stricter of the two profiles, the
+  way `codexSandbox.ts` probes Codex's, and the answer is kept for the
+  process. Where it cannot start (no `bwrap`, Ubuntu 24.04's
   `kernel.apparmor_restrict_unprivileged_userns=1`, Windows), commands run on
-  the classifier alone, and the planner surface says so once, the way
-  `researchShellWarning` reports a degraded shell. Planning is not blocked:
-  the classifier alone is what every platform has today.
+  the classifier alone, and the planner surface says so once per session,
+  through the session's notice, with the cause and the fix. Planning is not
+  blocked: the classifier alone is what every platform had before this.
+  Where the sandbox runs but one command cannot be put in it, that command
+  does not run.
 - **The seam is `ResearchShell` (B6).** The sandbox wraps the shell
   `resolveResearchShell` returns: the launcher and its policy become the
   `file` and leading `args`, followed by the POSIX shell. `commandPolicy` keeps
-  reading `dialect` and classifies exactly the string that runs.
+  reading `dialect` and classifies exactly the string that runs. Behind it
+  sits one `SandboxBackend` (`services/sandbox/`), which turns a shell and a
+  `SandboxProfile` (what may be written and read, the network, the
+  environment, resource limits) into what to spawn. A backend refuses a
+  profile it cannot enforce rather than run under less. A sandbox shares no
+  state with another and needs no daemon, so a container, microVM or hosted
+  backend is another implementation of the interface.
 - **It does not widen anything (B7).** A sandboxed shell is not a reason for
   fewer prompts or more `auto` commands. Relaxing the classifier because a
   sandbox exists would widen ADR-0008's envelope, and that needs its own ADR,
@@ -99,6 +129,16 @@ ADR-0008 stay as they are.
   its research subagents, and the harness planners' `run_command`, which is the
   same shell ([ADR-0026](0026-one-envelope-for-every-planner.md)). Runners are
   scoped by their mode (ADR-0001).
+
+## Testing decisions
+
+Each backend's arguments are built by `wrap`, which starts nothing, tested per
+platform with the platform and the probe injected, the way
+`resolveResearchShell`'s tests inject `ResearchShellDeps`. The sandbox itself
+is tested on the host: on macOS, and on Linux where bubblewrap starts, the
+tests write outside the scratch directory, reach a local socket with and
+without the network, and run the read commands; elsewhere they skip, naming the
+probe's reason. CI's image needs no sandbox.
 
 ## Considered options
 
@@ -125,10 +165,37 @@ ADR-0008 stay as they are.
 - **A third-party sandbox wrapper library.** It would cover bubblewrap and
   Seatbelt, but adds a dependency to a core that deliberately keeps few, for
   something that is two command lines and a probe.
+- **A Seatbelt profile that allows by default and denies writes.** Rejected:
+  checked on macOS 26, a command under it could not write a file but ran
+  `defaults write`, which cfprefsd carried out, and every other service that
+  writes on request (LaunchServices, Apple events) stays reachable.
+- **A seccomp filter against unix sockets on Linux.** It would close every
+  socket that is a file for a command without the network, where hiding the
+  known services closes those alone. Not taken now: bubblewrap takes it as a
+  compiled program on a file descriptor, which needs a filter per
+  architecture and a spawn that passes extra descriptors. Worth revisiting if
+  another local service turns out to act for its callers.
 - **Replace `bash` with in-process read tools only.** Rejected for the reasons
   ADR-0008 gives for keeping a real shell: the planner's research needs the
   project's own tooling (`git log`, `npm ls`, `cargo metadata`), which no fixed
   tool set reproduces.
+
+## Consequences
+
+- A misclassified command can no longer write outside the scratch directory
+  where a sandbox runs; on hosts without one, nothing changes and the notice
+  says so.
+- On macOS, setuid programs such as `ps` and `top` cannot start, since the
+  kernel will not run one in a sandbox, and macOS's `/bin/sh` (bash 3.2) writes
+  a here-document to `/tmp` whatever `TMPDIR` says, so its own temporary file
+  names there are the one write allowed outside the scratch directory. On
+  Linux, a process listing shows only the sandbox's own processes.
+- A tool that has to write to read fails: `cargo metadata` on a crate without
+  a committed `Cargo.lock` writes one beside the manifest.
+- An approved command keeps the network, and with it every local service:
+  the keychain service on macOS, which also takes writes, and a local daemon
+  such as Docker. That is what approving a networked command trusts it with,
+  until the egress proxy (#88).
 
 ## History
 
@@ -137,3 +204,4 @@ ADR-0008 stay as they are.
   egress filtering proxy through this sandbox's network namespace planned as
   phase 2 ([ADR-0027](0027-web-reads-in-the-planner-envelope.md)).
 - 2026-10-13 — a Codex planner whose own sandbox cannot start has its shell switched off, leaving `run_command` as its only shell ([ADR-0033](0033-codex-planner-without-its-sandbox.md)).
+- 2026-10-20 — implemented (#64): bubblewrap on Linux and Seatbelt, closed by default, on macOS, behind one `SandboxBackend`; a scratch directory per session; local service sockets hidden from commands without the network.

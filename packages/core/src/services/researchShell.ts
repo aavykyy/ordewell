@@ -49,6 +49,18 @@ export interface ResearchShell {
   utilsDir: string | null;
 }
 
+/**
+ * How one command starts: the research shell itself, or the sandbox launcher
+ * around it (ADR-0011 B6). Either way the command string is appended after
+ * `args`, and `file: null` means `shell: true`.
+ */
+export interface ShellLaunch {
+  file: string | null;
+  args: readonly string[];
+  /** Undefined inherits the host's environment. */
+  env?: NodeJS.ProcessEnv;
+}
+
 const POSIX_SHELL: ResearchShell = { file: null, args: [], dialect: 'posix', utilsDir: null };
 const CMD_SHELL: ResearchShell = { file: null, args: [], dialect: 'cmd', utilsDir: null };
 

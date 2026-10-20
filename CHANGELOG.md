@@ -8,6 +8,16 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **The planner's shell runs in an OS sandbox on macOS and Linux.** Every
+  command a planner runs, through `bash`, a research subagent or
+  `run_command`, can write nothing outside a scratch directory of its
+  session, and one that runs without asking has no network. The command rules
+  are unchanged. Where no sandbox can start (Windows, a Linux host without
+  bubblewrap or with user namespaces restricted), commands run as before and
+  the planner says so once per session, with the fix.
+
 ### Changed
 
 - **The VS Code Marketplace listing is rewritten**, and the README states the

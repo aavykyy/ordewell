@@ -4,6 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
 import { BaseFileSystem } from '../BaseFileSystem';
+import { PlannerShellSandbox, type PlannerShellLaunch } from '../sandbox/plannerSandbox';
+import type { ResolveAll } from '../egressGuard';
+import { runResearchAgent } from '../ResearchSubagents';
+import type { ShellLaunch } from '../researchShell';
 import { ApprovalPolicy, effectiveApprovalMode, type ApprovalModeSetting } from '../ApprovalPolicy';
 import type { GrepOptions, ReadFileOpts, ToolOutcome } from '../../interfaces/IFileSystem';
 import { fakeSecret } from './fakeSecret';
@@ -16,6 +20,12 @@ const ROOT = '/repo';
  * authorized without touching a real disk.
  */
 class TestFileSystem extends BaseFileSystem {
+  // No real sandbox unless a test hands one in: these tests are about what is
+  // classified and confined, not about the host's sandbox.
+  constructor(resolveWebHost?: ResolveAll, sandbox = new PlannerShellSandbox(async () => ({ available: false, notice: 'no sandbox in this test' }))) {
+    super(resolveWebHost, sandbox);
+  }
+
   readCalls: string[] = [];
   grepCalls: Array<{ pattern: string; root: string; opts: GrepOptions }> = [];
   listCalls: string[] = [];
@@ -43,7 +53,7 @@ class TestFileSystem extends BaseFileSystem {
     return { success: true, output: 'D src', truncated: false };
   }
 
-  protected async execBashImpl(command: string): Promise<ToolOutcome> {
+  protected async execBashImpl(command: string, _shell?: ShellLaunch): Promise<ToolOutcome> {
     if (command.endsWith('--no-config --version')) return { success: true, output: 'GNU Wget 1.21.4', truncated: false };
     this.bashCalls.push(command);
     return { success: true, output: 'ran', truncated: false };
@@ -1015,3 +1025,133 @@ it.runIf(process.platform !== 'win32' && ['curl', 'wget'].every((binary) => spaw
     }
   },
 );
+
+/**
+ * What `bash` hands the sandbox (ADR-0011): every command it runs goes
+ * through the launch, the network follows the tier, and a sandbox that exists
+ * is never skipped.
+ */
+describe('BaseFileSystem runs the planner shell in the sandbox', () => {
+  const WRAPPED: ShellLaunch = { file: '/sandbox', args: ['--policy', '/bin/sh', '-c'], env: { TMPDIR: '/scratch' } };
+
+  class SandboxedFileSystem extends TestFileSystem {
+    launches: Array<{ network: boolean }> = [];
+    runs: Array<{ command: string; shell: ShellLaunch }> = [];
+    result: ToolOutcome = { success: true, output: 'ran', truncated: false };
+
+    constructor(launch?: (network: boolean) => Promise<PlannerShellLaunch>) {
+      const sandbox = new PlannerShellSandbox();
+      super(undefined, sandbox);
+      sandbox.launch = async (_shell, opts) => {
+        this.launches.push(opts);
+        return launch ? launch(opts.network) : { launch: WRAPPED, sandboxed: true };
+      };
+    }
+
+    protected async execBashImpl(command: string, shell: ShellLaunch): Promise<ToolOutcome> {
+      if (command.endsWith('--no-config --version')) return { success: true, output: 'GNU Wget 1.21.4', truncated: false };
+      this.runs.push({ command, shell });
+      return this.result;
+    }
+  }
+
+  it('starts the command string unchanged through the launch the sandbox built (B6)', async () => {
+    const fs = new SandboxedFileSystem();
+    await fs.bash('git log --oneline -3 | head -1');
+    expect(fs.runs).toEqual([{ command: 'git log --oneline -3 | head -1', shell: WRAPPED }]);
+  });
+
+  it('gives an auto command no network (B3)', async () => {
+    const fs = new SandboxedFileSystem();
+    await fs.bash('git status');
+    expect(fs.launches).toEqual([{ network: false }]);
+  });
+
+  it('keeps the network for an ask command once it is approved, by the user or the allowlist', async () => {
+    const asked = new SandboxedFileSystem();
+    asked.setApproval(new ApprovalPolicy({ ask: async () => true }));
+    await asked.bash('gh issue list');
+    expect(asked.launches).toEqual([{ network: true }]);
+
+    const allowlisted = new SandboxedFileSystem();
+    allowlisted.setApproval(new ApprovalPolicy({ ask: async () => false, preApproved: ['gh issue list'] }));
+    await allowlisted.bash('gh issue list');
+    expect(allowlisted.launches).toEqual([{ network: true }]);
+  });
+
+  it('gives no network to an auto command approved only for the paths it names', async () => {
+    const fs = new SandboxedFileSystem();
+    fs.setApproval(new ApprovalPolicy({ ask: async () => true }));
+    await fs.bash('cat /etc/hosts');
+    expect(fs.launches).toEqual([{ network: false }]);
+  });
+
+  it('launches nothing for a refused or a denied command', async () => {
+    const fs = new SandboxedFileSystem();
+    fs.setApproval(new ApprovalPolicy({ ask: async () => false }));
+    await fs.bash('rm -rf src');
+    await fs.bash('gh issue list');
+    expect(fs.launches).toEqual([]);
+    expect(fs.runs).toEqual([]);
+  });
+
+  it("runs wget's version check in the sandbox without the network", async () => {
+    const fs = new SandboxedFileSystem();
+    fs.setApproval(new ApprovalPolicy({ ask: async () => true }));
+    await fs.bash('wget --spider --max-redirect=0 https://93.184.216.34/a');
+    expect(fs.launches).toEqual([{ network: false }, { network: true }]);
+  });
+
+  it('runs nothing when the sandbox exists but cannot take the command', async () => {
+    const fs = new SandboxedFileSystem(async () => { throw new Error('no scratch directory'); });
+    const outcome = await fs.bash('git status');
+    expect(outcome).toEqual({ success: false, output: "Command not run: the planner's sandbox could not be prepared (no scratch directory).", truncated: false });
+    expect(fs.runs).toEqual([]);
+  });
+
+  it('says a failure looks like the sandbox when it does, and only then', async () => {
+    const fs = new SandboxedFileSystem();
+    fs.result = { success: false, output: 'Command exited 1:\ngit: Operation not permitted', truncated: false };
+    expect((await fs.bash('git status')).output).toContain("[The planner's shell is sandboxed");
+    fs.result = { success: false, output: 'Command exited 128:\nfatal: bad revision', truncated: false };
+    expect((await fs.bash('git status')).output).not.toContain('sandboxed');
+  });
+
+  it('runs the shell as before, with no note, where no sandbox runs', async () => {
+    const fs = new SandboxedFileSystem(async () => ({ launch: { file: null, args: [] }, sandboxed: false }));
+    fs.result = { success: false, output: 'Command exited 1:\ngit: Operation not permitted', truncated: false };
+    const outcome = await fs.bash('git status');
+    expect(fs.runs).toEqual([{ command: 'git status', shell: { file: null, args: [] } }]);
+    expect(outcome.output).not.toContain('sandboxed');
+  });
+
+  it("hands the session's notice and its end to the sandbox", async () => {
+    const sandbox = new PlannerShellSandbox(async () => ({ available: false, notice: 'no sandbox' }));
+    const ended = vi.spyOn(sandbox, 'end');
+    const fs = new TestFileSystem(undefined, sandbox);
+    const notices: string[] = [];
+    fs.setNotice((message) => notices.push(message));
+    await fs.bash('ls');
+    await fs.bash('git status');
+    fs.endSession();
+    expect(notices).toEqual(['no sandbox']);
+    expect(ended).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs a research subagent's commands without the network", async () => {
+    const fs = new SandboxedFileSystem();
+    fs.setApproval(new ApprovalPolicy({ ask: async () => true }));
+    let turn = 0;
+    await runResearchAgent('look', {
+      fs,
+      createChat: () => ({
+        sendMessage: async () => ({ text: '', toolCalls: [{ name: 'bash', args: { command: 'git log -1' }, id: 'c1' }], hasToolCalls: true }),
+        sendToolResults: async () => (turn++ === 0
+          ? { text: '', toolCalls: [{ name: 'bash', args: { command: 'gh issue list' }, id: 'c2' }], hasToolCalls: true }
+          : { text: 'digest', toolCalls: [], hasToolCalls: false }),
+      }),
+    });
+    expect(fs.runs.map((r) => r.command)).toEqual(['git log -1']);
+    expect(fs.launches).toEqual([{ network: false }]);
+  });
+});
