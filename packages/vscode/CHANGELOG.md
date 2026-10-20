@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **The Marketplace listing is rewritten.** Its description and overview lead
+  with planning once and running across Claude Code, Codex and OpenCode, say
+  that nothing runs until you approve the plan, and make an installed coding
+  agent the default way to plan, with API keys as a secondary note.
+
 ## [0.10.10] - 2026-10-19
 
 ### Added
