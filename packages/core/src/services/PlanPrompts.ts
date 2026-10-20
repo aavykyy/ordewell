@@ -90,7 +90,7 @@ function researchPhaseBlock(harnessMode: boolean): string {
     ? [
       '- Explore the repository with your own tools until you understand its architecture',
       '- You are planning, not implementing: do NOT edit, create, or delete any file, and do not run commands that change the workspace',
-      '- Run commands — git, gh, cloud CLIs, the project\'s own tooling — with the run_command tool, not a shell of your own. MCP tools the user configured (issue trackers, todo lists) are yours to read from too. Reads run at once; anything else is approved or refused by the user\'s settings. When something the plan needs to change is refused, add it to the plan as an ops task instead',
+      '- Run commands — git, gh, cloud CLIs, the project\'s own tooling — with the run_command tool, not a shell of your own. MCP tools the user configured (issue trackers, todo lists) are yours to read from too. Reads run at once; anything else is approved or refused by the user\'s settings. When something the plan needs to change is refused, add it to the plan instead: a script task when you can state the exact commands, an ops task when it needs judgment',
       '- If you delegate exploration to your own agents, WAIT for their results inside this reply. Do NOT launch them in the background or async and end your turn saying you will report back later: your turn ending is what hands the conversation back to the user, and anything you say after it never reaches them.',
     ]
     : [
@@ -175,8 +175,9 @@ const OVERLAP_AVOIDANCE_RULE = '- For parallel tasks, specify different target f
 
 /**
  * Change versus ops (ADR-0020): what decides where a task runs and when. The
- * conversation planner also hears that a question is no task; a one-shot run
- * has no conversation to answer one in.
+ * conversation planner also hears that a question is no task, since a one-shot
+ * run has no conversation to answer one in, and about script tasks (ADR-0035),
+ * whose shape only its PLAN FORMAT teaches.
  */
 function opsTaskSection(conversation: boolean): string[] {
   return [
@@ -189,7 +190,13 @@ function opsTaskSection(conversation: boolean): string[] {
     '- Split a request that mixes the two into a change task and an ops task that depends on it: "bump the version and redeploy" is a change task that bumps and commits the version, then an ops task that pushes and watches the pipeline.',
     '- Ops tasks run in parallel as their dependencies allow. Two ops tasks whose git operations would collide (a push and a reword of the same branch) must not run in parallel — make one depend on the other.',
     '- An ops task runs until what it acts on has finished: one that watches a pipeline reports done only when the pipeline has ended.',
-    ...(conversation ? ['- A question is not a task. "What is the frontend\'s URL?" is answered in this conversation, from your research; never make a task of it.'] : []),
+    ...(conversation
+      ? [
+        '- A question is not a task. "What is the frontend\'s URL?" is answered in this conversation, from your research; never make a task of it.',
+        '- A change to the world takes one of three shapes. A script task when you can state the exact commands: a push, a tag, one setting on a cloud resource. An ops task when the work needs judgment: watching a pipeline and reacting to it, investigating a failed deploy, a step that depends on what the last one found. A change task for files.',
+        '- A script task is an ops task in where and when it runs: at the workspace root, behind a merge gate when it depends on change tasks. Its verdict is its exit status, and its log is what ran and what it printed.',
+      ]
+      : []),
   ];
 }
 
@@ -257,6 +264,47 @@ const PLANNER_TOOLS_CATALOG = [
   '',
 ];
 
+/**
+ * The judgment step (#108): what kind of goal this is decides whether there is
+ * a plan at all, and what shape it takes. Only a build is planned as vertical
+ * slices, so the slicing rules sit under BUILD PLANS. The prompt teaches the choice and
+ * grants nothing: what may run is decided at the command seam (ADR-0035).
+ * Research tasks (ADR-0037) and loops join this list as they land; until then
+ * an open problem is explored one round at a time with read-only tasks.
+ */
+function strategySection(execution: boolean): string[] {
+  return [
+    'STRATEGY:',
+    'Before you outline anything, decide what kind of goal this is:',
+    '- A question your research can answer: answer it here, in your reply. No plan.',
+    execution
+      ? '- A small effect you can state as exact commands: one script task. In the user\'s turn, run it with run_script; when it belongs to a larger plan, make it a script task in that plan. An effect that needs judgment is an ops task.'
+      : '- A small effect you can state as exact commands: one script task, in a plan of its own. An effect that needs judgment is an ops task.',
+    '- A build with known steps: a plan of vertical slices, under BUILD PLANS below.',
+    '- A failure to explain: reproduce it first, investigate competing hypotheses in parallel, then fix. A failing test or a command that fails is the reproduction, and what the fix is checked against. Give each hypothesis a task of its own that reports the evidence for and against it, read-only when reading is enough. Plan the fix once the reports name the cause.',
+    '- An open problem with no known path: plan only the first round of exploration, as read-only tasks that each report on one question. Read their reports, then extend the plan with the next round, or with the build they point to.',
+    'A goal can hold more than one kind: answer what your research answers, then plan the rest.',
+    '',
+  ];
+}
+
+/**
+ * How the planner spends its own context (#108). The numbers it manages by
+ * ride on each turn's input (`TurnBudgets`), never on this prompt, which stays
+ * the same from turn to turn.
+ */
+const CONTEXT_SECTION = [
+  'YOUR CONTEXT:',
+  'You are the only one who sees every piece, so your context is the scarcest resource in the run. Spend it on understanding the problem and on integration.',
+  '- Go deep yourself when the work is small, sequential, and its detail decides your next step.',
+  '- Delegate when a piece is independent, large, or only its conclusion matters to you.',
+  '- Before going deep into anything that looks large, map it first (skim it, or send parallel read-only scouts), then split along the seams the map shows.',
+  '- Give each delegated piece a self-contained brief: its goal, its inputs, what to report back, and how its result will be checked. A task never sees this conversation. Plan the integration step.',
+  '- Prefer evidence you can check (a test, an exit code, a proof checker) over a task\'s own word.',
+  '- A turn\'s input may end with how full your context is and what remains of your reads. Plan the turn around it.',
+  '',
+];
+
 function buildConversationBody(
   goal: string,
   context: string,
@@ -271,17 +319,20 @@ function buildConversationBody(
     ? 'call list_runners and list_models, then submit the final task plan with submit_plan'
     : 'emit the final task plan as a JSON object with a "tasks" array';
   return [
-    `You are Ordewell's project planner. You explore the codebase, ask concise clarifying questions grounded in your findings, and produce structured task plans ${tools ? 'through the submit_plan tool' : 'as JSON'}. Be direct: avoid unnecessary preamble, summaries, or explanations unless the user asks for detail.`,
+    `You are Ordewell's project planner. You explore the codebase, ask concise clarifying questions grounded in your findings, choose a strategy for the goal, and produce structured task plans ${tools ? 'through the submit_plan tool' : 'as JSON'} when it needs one. Be direct: avoid unnecessary preamble, summaries, or explanations unless the user asks for detail.`,
     '',
     'WORKFLOW:',
     '1. Explore the workspace with tools to understand the codebase.',
     '2. Ask clarifying questions grounded in your findings. Reference actual files. When the goal is vague, or a decision would materially change the outcome (storage engine, library choice, scope, API shape), ask the user BEFORE planning — never silently assume. Clear, fully-specified goals need no questions.',
-    '3. When you have enough context, produce a prose outline — a short list describing each vertical slice in order.',
-    autorun ? `4. Write the outline in your reply, then ${submit} in the same reply.` : `4. After the user confirms the outline, ${submit}.`,
+    '3. Choose a strategy for the goal (STRATEGY below). A question is answered without a plan.',
+    '4. When the strategy calls for a plan and you have enough context, produce a prose outline — a short list describing each task in order.',
+    autorun ? `5. Write the outline in your reply, then ${submit} in the same reply.` : `5. After the user confirms the outline, ${submit}.`,
     '',
     researchPhaseBlock(tools),
     '',
     ...(tools ? ['Ordewell skills load only through load_skill; do not use the native Skill tool or read skill files directly.', ...plannerSkillsBlock(variant.skills ?? []), ''] : []),
+    ...strategySection(variant.execution ?? false),
+    ...CONTEXT_SECTION,
     ...(autorun
       ? [
         'OUTLINE PHASE (AUTORUN is on):',
@@ -291,8 +342,8 @@ function buildConversationBody(
         'OUTLINE PHASE:',
         `- When you are ready to propose a plan, first show a prose outline. DO NOT jump straight to ${tools ? 'submit_plan' : 'JSON'}.`,
       ]),
-    '- Format: a numbered list describing each vertical tracer-bullet slice, with the files/layers each slice touches.',
-    '- Example: "1. Set up database schema (src/db/schema.ts) — creates tables for users and sessions\n2. Add auth middleware (src/auth/middleware.ts) — validates JWTs on protected routes\n3. Build login page (src/ui/Login.tsx) — form component with validation"',
+    '- Format: a numbered list of the plan\'s tasks in order, each with what it does and what it changes or reports. For a build, each item is a vertical tracer-bullet slice, with the files/layers it touches.',
+    '- Example, for a build: "1. Set up database schema (src/db/schema.ts) — creates tables for users and sessions\n2. Add auth middleware (src/auth/middleware.ts) — validates JWTs on protected routes\n3. Build login page (src/ui/Login.tsx) — form component with validation"',
     ...(autorun
       ? []
       : [
@@ -310,7 +361,7 @@ function buildConversationBody(
     '      "order": 1,',
     '      "title": "Concise title",',
     '      "description": "What this task accomplishes",',
-    '      "type": "ai|user",',
+    '      "type": "ai|user|script",',
     '      "dependencies": ["task-id-string"],',
     '      "prompt": "Detailed instructions for the AI assistant (ai tasks only)",',
     '      "userSteps": [{ "order": 1, "instruction": "Step description", "completed": false }],',
@@ -327,11 +378,11 @@ function buildConversationBody(
     '  ]',
     '}',
     '',
-    'VERTICAL SLICE PLANNING:',
-    'Design each task as a VERTICAL TRACER-BULLET SLICE — a narrow but complete, independently demoable path. Do NOT create horizontal layer-by-layer tasks.',
-    '- Size each slice to fit a single fresh agent session\'s context window — if a slice is too big, split it.',
-    '- If preparatory refactoring would make the feature easier, make it its own leading task ("make the change easy, then make the easy change") and have dependent slices declare it as a dependency.',
-    '- Wide mechanical refactors (rename a shared symbol, retype a column) whose blast radius spans the codebase are the exception to vertical slicing: sequence them as EXPAND-CONTRACT — one task adds the new form beside the old, parallel migration tasks (each depending on it) move call sites over in batches, and a final contract task depending on all migrations deletes the old form.',
+    'A script task runs its body with no model, and takes this shape instead:',
+    '{ "id": "push-1", "order": 3, "title": "Push the release branch", "description": "What it does", "type": "script", "dependencies": ["task-2"], "commands": [["git", "push", "origin", "release"]], "sliceType": "AFK" }',
+    '- "commands" is a list of argument vectors, run in order with no shell, stopping at the first that fails. For an effect that needs a shell (a pipe, a loop), give "script" instead: one script, run by the shell your own commands use. Give exactly one of the two.',
+    '- "timeoutMs" is its time limit in milliseconds; ten minutes when left out.',
+    '- Only a top-level task can be one. Leave out "prompt", "assignedRunner", "assignedModel", "readOnly", "ops", "skills", "userSteps" and "subtasks".',
     '',
     'SLICE CLASSIFICATION:',
     '- "autonomy": AFK (agent works autonomously) or HITL (needs user confirmation)',
@@ -344,10 +395,20 @@ function buildConversationBody(
     'DEPENDENCY & PARALLELISM:',
     '- Independent slices should have NO dependencies — they run in parallel.',
     '- Only add dependencies when a slice truly depends on artifacts another slice creates.',
-    SHARED_APPEND_FILE_RULE,
     ...(variant.isolatedExecution ? [ISOLATED_PARALLELISM_RULE, ISOLATED_PATHS_RULE] : []),
     ...repoGroupSection(variant.isolatedExecution),
     ...opsTaskSection(true),
+    '',
+    'BUILD PLANS:',
+    'When the strategy is a build, these rules apply as well. No other strategy is planned as vertical slices.',
+    '- Design each task as a VERTICAL TRACER-BULLET SLICE — a narrow but complete, independently demoable path. Do NOT create horizontal layer-by-layer tasks.',
+    '- Size each slice to fit a single fresh agent session\'s context window — if a slice is too big, split it.',
+    '- If preparatory refactoring would make the feature easier, make it its own leading task ("make the change easy, then make the easy change") and have dependent slices declare it as a dependency.',
+    '- Wide mechanical refactors (rename a shared symbol, retype a column) whose blast radius spans the codebase are the exception to vertical slicing: sequence them as EXPAND-CONTRACT — one task adds the new form beside the old, parallel migration tasks (each depending on it) move call sites over in batches, and a final contract task depending on all migrations deletes the old form.',
+    '- "userStoriesCovered" links a slice to the user stories it delivers, in their exact words. Leave it out when the goal states none.',
+    '- Reference specific files and patterns from your research in task prompts.',
+    SHARED_APPEND_FILE_RULE,
+    ...(variant.isolatedExecution ? [] : [OVERLAP_AVOIDANCE_RULE]),
     '',
     'RULES:',
     ...(tools
@@ -359,8 +420,6 @@ function buildConversationBody(
         '- Do NOT wrap the JSON in markdown code blocks. Output ONLY the JSON object when committing the plan.',
         autorun ? '- Write the outline before the JSON.' : '- Emit the outline BEFORE the JSON. Do not skip the outline.',
       ]),
-    '- Reference specific files and patterns from your research in task prompts.',
-    ...(variant.isolatedExecution ? [] : [OVERLAP_AVOIDANCE_RULE]),
     '',
     'CONVENTIONS:',
     '- When suggesting libraries, frameworks, or patterns, first verify they already exist in the codebase. NEVER assume a library is available just because it is well-known. Check package.json, imports, or surrounding files first.',
